@@ -144,3 +144,14 @@ to run xcodebuild archive.
 - [x] package pack smoke verifies npm tarball payloads
 - [x] CI validate job runs package pack smoke
 - [x] release workflow runs package pack smoke before Sampo automation
+
+## Phase 10 - Graph-Guided Preflight
+
+- [x] graph-specific tsconfig covers tools, packages, adapters, backends, and app sources
+- [x] target release graph preset added
+- [x] package publish graph preset added
+- [x] bridge contract graph preset added
+- [x] SDK demo loop graph preset added
+- [x] graph preflight runner validates answer-ready graph anchors
+- [x] CI and release workflows run graph preflight before package publish smoke
+- [x] root test command builds package dist before recursive workspace tests

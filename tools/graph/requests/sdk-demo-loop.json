@@ -1,0 +1,15 @@
+{
+  "name": "sdk-demo-loop",
+  "description": "Phaser SDK demo loop and platform capability flow.",
+  "expectedFiles": ["apps/game-phaser/"],
+  "tsconfig": "tsconfig.graph.json",
+  "question": "What are the central SDK demo game loop flows around platform install, save data, rewards, purchases, and leaderboard actions?",
+  "draft": "Use a tour because the SDK demo loop crosses Phaser scenes, platform install, and adapter contracts.",
+  "review": "A broad gameplay and SDK integration question should use a graph tour over the full local graph.",
+  "request": {
+    "type": "tour",
+    "query": "createGame installPlatform LobbyScene GameScene ResultScene save best score coins rewarded purchase leaderboard",
+    "includeTests": true,
+    "limit": 70
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "target-release",
+  "description": "Target build, validation, smoke, and release manifest flow.",
+  "expectedFiles": ["tools/target/", "tools/smoke/"],
+  "tsconfig": "tsconfig.graph.json",
+  "question": "What are the central target build, validation, smoke, and release manifest flows?",
+  "draft": "Use a tour because the target pipeline crosses several tool modules.",
+  "review": "A broad flow question should start with tour over the current local graph dump.",
+  "request": {
+    "type": "tour",
+    "query": "target build validation release manifest smoke artifacts",
+    "includeTests": true,
+    "limit": 60
+  }
+}

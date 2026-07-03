@@ -29,6 +29,7 @@ jobs:
       - run: pnpm validate:policy
       - run: pnpm validate:targets
       - run: pnpm test
+      - run: pnpm graph:preflight
       - run: pnpm pack:packages
       - run: pnpm build:web
       - run: pnpm smoke:targets

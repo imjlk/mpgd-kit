@@ -1,0 +1,15 @@
+{
+  "name": "bridge-contracts",
+  "description": "Bridge protocol validators, fixtures, and wrapper parsing flow.",
+  "expectedFiles": ["packages/bridge-protocol/", "apps/target-ait/"],
+  "tsconfig": "tsconfig.graph.json",
+  "question": "What are the central bridge protocol validator, fixture, and wrapper parsing flows?",
+  "draft": "Use a tour because the bridge contract crosses protocol validators, fixtures, and Apps in Toss wrapper parsing.",
+  "review": "A bridge contract question should use a focused graph tour over validators, fixtures, and wrapper parsing.",
+  "request": {
+    "type": "tour",
+    "query": "assertBridgeRequest assertBridgeResponse BridgeRequest BridgeResponse bridge protocol fixture invalid valid parseBridgeRequest",
+    "includeTests": true,
+    "limit": 60
+  }
+}

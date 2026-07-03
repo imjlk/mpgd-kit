@@ -23,6 +23,7 @@ pnpm check
 pnpm validate:catalog
 pnpm validate:ads
 pnpm validate:targets
+pnpm graph:preflight
 pnpm pack:packages
 pnpm build:web
 pnpm build:ait
@@ -55,6 +56,23 @@ pnpm pack:packages
 
 This builds publishable workspaces into `dist/` and verifies the npm pack payload
 contains `dist/index.js`, `dist/index.d.ts`, and any exported JSON/native files.
+The root `pnpm test` command also builds package `dist/` output first so workspace
+tests resolve the same package entrypoints that publishing uses.
+
+## ttsc graph workflow
+
+Use graph presets before changing broad TypeScript flows:
+
+```sh
+pnpm graph:target
+pnpm graph:package
+pnpm graph:bridge
+pnpm graph:demo
+pnpm graph:preflight
+```
+
+`pnpm graph:preflight` runs every preset against `tsconfig.graph.json` and fails
+if a preset no longer returns answer-ready anchors.
 
 ## ttsc lint config
 

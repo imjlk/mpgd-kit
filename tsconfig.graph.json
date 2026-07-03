@@ -1,0 +1,17 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "types": ["node", "vite/client"],
+    "noEmit": true
+  },
+  "include": [
+    "tools/**/*.ts",
+    "packages/**/*.ts",
+    "adapters/**/*.ts",
+    "backend/**/*.ts",
+    "native-plugins/capacitor-game-services/src/**/*.ts",
+    "apps/game-phaser/src/**/*.ts",
+    "apps/target-ait/src/**/*.ts",
+    "apps/mobile-capacitor/capacitor.config.ts"
+  ]
+}

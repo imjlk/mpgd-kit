@@ -1,0 +1,15 @@
+{
+  "name": "package-publish",
+  "description": "Package build, workspace dependency ordering, and npm pack smoke flow.",
+  "expectedFiles": ["tools/package/"],
+  "tsconfig": "tsconfig.graph.json",
+  "question": "What are the central package publish readiness flows for building dist artifacts and validating npm pack payloads?",
+  "draft": "Use a tour because package publishing crosses workspace discovery, package build ordering, and pack validation tools.",
+  "review": "A broad package publish flow question should start with a graph tour over the local tool graph.",
+  "request": {
+    "type": "tour",
+    "query": "package publish pack build workspace dependencies dist exports npm pack",
+    "includeTests": true,
+    "limit": 60
+  }
+}
