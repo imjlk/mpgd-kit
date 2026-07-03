@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 
 import typia from 'typia';
@@ -47,12 +47,33 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
 
 export function writeReleaseManifest(input: GenerateReleaseManifestInput): ReleaseManifest {
   const outputPath = input.outputPath ?? 'release-output/release-manifest.json';
-  const manifest = generateReleaseManifest(input);
+  const nextManifest = generateReleaseManifest(input);
+  const manifest = mergeManifest(outputPath, nextManifest);
 
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(`${outputPath}`, `${JSON.stringify(manifest, null, 2)}\n`);
 
   return manifest;
+}
+
+function mergeManifest(outputPath: string, nextManifest: ReleaseManifest): ReleaseManifest {
+  if (!existsSync(outputPath)) {
+    return nextManifest;
+  }
+
+  const previous = assertReleaseManifest(readJsonFile(outputPath));
+
+  if (previous.releaseId !== nextManifest.releaseId) {
+    return nextManifest;
+  }
+
+  return assertReleaseManifest({
+    ...nextManifest,
+    targets: {
+      ...previous.targets,
+      ...nextManifest.targets,
+    },
+  });
 }
 
 function createBuildId(): string {
@@ -74,8 +95,16 @@ function getGitSha(): string {
 }
 
 if (isCliEntrypoint(import.meta.url)) {
-  const [target = 'web-preview', profile = 'production', artifact = 'artifacts/web-preview'] =
-    process.argv.slice(2);
-  const manifest = writeReleaseManifest({ target, profile, artifact });
+  const [
+    target = 'web-preview',
+    profile = 'production',
+    artifact = 'artifacts/web-preview',
+    outputPath,
+  ] = process.argv.slice(2);
+  const input =
+    outputPath === undefined
+      ? { target, profile, artifact }
+      : { target, profile, artifact, outputPath };
+  const manifest = writeReleaseManifest(input);
   console.log(`Release manifest: ${manifest.releaseId}`);
 }

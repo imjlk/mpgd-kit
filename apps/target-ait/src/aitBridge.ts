@@ -4,7 +4,7 @@ import {
   submitGameCenterLeaderBoardScore,
 } from '@apps-in-toss/web-framework';
 
-import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge-protocol';
+import type { BridgeRequest, BridgeResponse } from './bridgeTypes';
 
 export function installAitBridge(): void {
   const globalBridgeHost = globalThis as {

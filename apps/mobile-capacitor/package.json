@@ -23,6 +23,6 @@
   "devDependencies": {
     "@capacitor/cli": "^8.4.1",
     "ttsc": "0.16.9",
-    "typescript": "rc"
+    "typescript": "5.9.3"
   }
 }

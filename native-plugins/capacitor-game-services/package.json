@@ -9,10 +9,19 @@
       "default": "./src/index.ts"
     }
   },
+  "capacitor": {
+    "android": {
+      "src": "android"
+    },
+    "ios": {
+      "src": "ios"
+    }
+  },
   "files": [
     "src",
     "android",
-    "ios"
+    "ios",
+    "Package.swift"
   ],
   "scripts": {
     "check": "ttsc --noEmit",

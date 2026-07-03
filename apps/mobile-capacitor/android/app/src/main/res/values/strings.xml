@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">MPGD Kit</string>
+    <string name="title_activity_main">MPGD Kit</string>
+    <string name="package_name">dev.mpgd.kit</string>
+    <string name="custom_url_scheme">dev.mpgd.kit</string>
+</resources>

@@ -14,8 +14,7 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@apps-in-toss/web-framework": "^2.10.4",
-    "@mpgd/bridge-protocol": "workspace:*"
+    "@apps-in-toss/web-framework": "^2.10.4"
   },
   "devDependencies": {
     "@apps-in-toss/cli": "^2.10.4",
