@@ -6,23 +6,23 @@ import {
   type PlatformGateway,
   type PlayerIdentity,
 } from '@mpgd/platform-contract';
-import { isPolicyEnforcedGateway, type PolicyRuntimeSnapshot } from '@mpgd/policy-matrix';
+import { isTargetConfiguredGateway, type TargetRuntimeSnapshot } from '@mpgd/target-config';
 
 export const SAVE_KEY = 'save:v1';
 
 export interface DemoState {
   readonly player: PlayerIdentity;
   readonly capabilities: PlatformCapabilities;
-  readonly policyRuntime: PolicyRuntimeSnapshot | null;
+  readonly targetRuntime: TargetRuntimeSnapshot | null;
   readonly locale: MpgdLocale;
   readonly save: SaveData;
 }
 
 export async function loadDemoState(platform: PlatformGateway): Promise<DemoState> {
-  const [capabilities, player, policyRuntime] = await Promise.all([
+  const [capabilities, player, targetRuntime] = await Promise.all([
     platform.getCapabilities().catch(() => createUnsupportedCapabilities()),
     platform.identity.getPlayer().catch(() => null),
-    readPolicyRuntime(platform),
+    readTargetRuntime(platform),
   ]);
   const resolvedPlayer =
     player ??
@@ -35,7 +35,7 @@ export async function loadDemoState(platform: PlatformGateway): Promise<DemoStat
   return {
     player: resolvedPlayer,
     capabilities,
-    policyRuntime,
+    targetRuntime,
     locale: resolveMpgdLocale(capabilities),
     save: parseSaveData(loaded, resolvedPlayer.playerId),
   };
@@ -90,12 +90,12 @@ function parseSaveData(input: unknown, playerId: string): SaveData {
   };
 }
 
-async function readPolicyRuntime(
+async function readTargetRuntime(
   platform: PlatformGateway,
-): Promise<PolicyRuntimeSnapshot | null> {
-  if (!isPolicyEnforcedGateway(platform)) {
+): Promise<TargetRuntimeSnapshot | null> {
+  if (!isTargetConfiguredGateway(platform)) {
     return null;
   }
 
-  return platform.getPolicyRuntime().catch(() => null);
+  return platform.getTargetRuntime().catch(() => null);
 }

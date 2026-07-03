@@ -1,0 +1,133 @@
+{
+  "version": "2026-07-03",
+  "targets": {
+    "web-preview": {
+      "runtime": "web-preview",
+      "features": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false,
+        "leaderboard": false,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "local",
+        "localization": true
+      },
+      "monetization": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false
+      },
+      "leaderboard": {
+        "native": false
+      },
+      "release": {
+        "profile": "web-preview"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": false,
+        "requiresAitReview": false
+      }
+    },
+    "android": {
+      "runtime": "capacitor-android",
+      "features": {
+        "iap": true,
+        "rewardedAds": true,
+        "interstitialAds": true,
+        "leaderboard": true,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "native",
+        "localization": true
+      },
+      "monetization": {
+        "iap": true,
+        "rewardedAds": true,
+        "interstitialAds": true
+      },
+      "leaderboard": {
+        "native": true
+      },
+      "release": {
+        "profile": "google-play"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": true,
+        "requiresAitReview": false
+      }
+    },
+    "ios": {
+      "runtime": "capacitor-ios",
+      "features": {
+        "iap": true,
+        "rewardedAds": true,
+        "interstitialAds": true,
+        "leaderboard": true,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "native",
+        "localization": true
+      },
+      "monetization": {
+        "iap": true,
+        "rewardedAds": true,
+        "interstitialAds": true
+      },
+      "leaderboard": {
+        "native": true
+      },
+      "release": {
+        "profile": "app-store"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": true,
+        "requiresAitReview": false
+      }
+    },
+    "ait": {
+      "runtime": "apps-in-toss",
+      "features": {
+        "iap": true,
+        "rewardedAds": true,
+        "interstitialAds": true,
+        "leaderboard": true,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "none",
+        "localization": true
+      },
+      "monetization": {
+        "iap": true,
+        "rewardedAds": true,
+        "interstitialAds": true
+      },
+      "leaderboard": {
+        "native": true
+      },
+      "release": {
+        "profile": "apps-in-toss"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": false,
+        "requiresAitReview": true
+      }
+    }
+  }
+}

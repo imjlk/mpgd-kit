@@ -2,7 +2,7 @@ import Phaser from 'phaser';
 
 import { m, type MpgdLocale } from '@mpgd/i18n';
 import type { PlatformGateway } from '@mpgd/platform-contract';
-import type { PolicyFeature, PolicyFeatureRuntimeReason } from '@mpgd/policy-matrix';
+import type { FeatureAvailabilityReason, PlatformFeature } from '@mpgd/target-config';
 
 import { loadDemoState, type DemoState } from '../platform/demoState';
 
@@ -14,7 +14,7 @@ export class LobbyScene extends Phaser.Scene {
   private playerText: Phaser.GameObjects.Text | null = null;
   private saveText: Phaser.GameObjects.Text | null = null;
   private capabilityText: Phaser.GameObjects.Text | null = null;
-  private policyText: Phaser.GameObjects.Text | null = null;
+  private availabilityText: Phaser.GameObjects.Text | null = null;
   private startText: Phaser.GameObjects.Text | null = null;
 
   constructor() {
@@ -64,7 +64,7 @@ export class LobbyScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.policyText = this.add
+    this.availabilityText = this.add
       .text(480, 390, '', {
         fontFamily: 'Inter, Arial',
         fontSize: '17px',
@@ -116,10 +116,10 @@ export class LobbyScene extends Phaser.Scene {
         player: this.playerText?.text ?? null,
         save: this.saveText?.text ?? null,
         capabilities: this.capabilityText?.text ?? null,
-        policy: this.policyText?.text ?? null,
+        availability: this.availabilityText?.text ?? null,
         start: this.startText?.text ?? null,
       },
-      policyRuntime: this.state?.policyRuntime ?? null,
+      targetRuntime: this.state?.targetRuntime ?? null,
     };
   }
 
@@ -131,7 +131,7 @@ export class LobbyScene extends Phaser.Scene {
       this.playerText === null ||
       this.saveText === null ||
       this.capabilityText === null ||
-      this.policyText === null ||
+      this.availabilityText === null ||
       this.startText === null
     ) {
       return;
@@ -143,7 +143,7 @@ export class LobbyScene extends Phaser.Scene {
       this.state.capabilities.nativeIap ? 'iap' : null,
       this.state.capabilities.nativeLeaderboard ? 'leaderboard' : null,
       this.state.capabilities.cloudSave ? 'save' : null,
-      this.state.capabilities.localizedContent ? 'i18n' : null,
+      this.state.capabilities.localizedContent ? 'localization' : null,
     ].filter((label): label is CapabilityLabel => label !== null);
     const locale = this.state.locale;
     const saveSummary = m.save_summary(
@@ -164,7 +164,7 @@ export class LobbyScene extends Phaser.Scene {
     this.playerText.setText(m.player({ name: playerName }, { locale }));
     this.saveText.setText(saveSummary);
     this.capabilityText.setText(m.sdk_summary({ features: capabilitySummary }, { locale }));
-    this.policyText.setText(summarizePolicyRuntime(this.state));
+    this.availabilityText.setText(summarizeTargetRuntime(this.state));
     this.startText.setText(m.tap_to_start({}, { locale }));
   }
 }
@@ -174,55 +174,58 @@ const capabilityLabels = {
   iap: 'iap',
   leaderboard: 'leaderboard',
   save: 'save',
-  i18n: 'i18n',
+  localization: 'localization',
 } as const;
 
 type CapabilityLabel = keyof typeof capabilityLabels;
 
-function summarizePolicyRuntime(state: DemoState): string {
-  const runtime = state.policyRuntime;
+function summarizeTargetRuntime(state: DemoState): string {
+  const runtime = state.targetRuntime;
   const locale = state.locale;
 
   if (runtime === null) {
-    return m.policy_unavailable({}, { locale });
+    return m.target_config_unavailable({}, { locale });
   }
 
-  const summary = (Object.keys(policyFeatureLabels) as PolicyFeature[])
+  const summary = (Object.keys(platformFeatureLabels) as PlatformFeature[])
     .map((feature) => {
       const featureRuntime = runtime.features[feature];
-      return `${policyFeatureLabel(locale, feature)} ${reasonLabel(locale, featureRuntime.reason)}`;
+      return `${platformFeatureLabel(locale, feature)} ${reasonLabel(
+        locale,
+        featureRuntime.reason,
+      )}`;
     })
     .join('  ');
 
-  return m.policy_summary(
+  return m.target_availability_summary(
     {
-      target: runtime.policyTarget,
+      target: runtime.configTarget,
       summary,
     },
     { locale },
   );
 }
 
-const policyFeatureLabels = {
+const platformFeatureLabels = {
   iap: 'iap',
   rewardedAds: 'rewardedAds',
   interstitialAds: 'interstitialAds',
   leaderboard: 'leaderboard',
-  i18n: 'i18n',
-} satisfies Record<PolicyFeature, string>;
+  localization: 'localization',
+} satisfies Record<PlatformFeature, string>;
 
-function policyFeatureLabel(locale: MpgdLocale, feature: PolicyFeature): string {
+function platformFeatureLabel(locale: MpgdLocale, feature: PlatformFeature): string {
   switch (feature) {
     case 'iap':
-      return m.policy_feature_iap({}, { locale });
+      return m.target_feature_iap({}, { locale });
     case 'rewardedAds':
-      return m.policy_feature_rewarded_ads({}, { locale });
+      return m.target_feature_rewarded_ads({}, { locale });
     case 'interstitialAds':
-      return m.policy_feature_interstitial_ads({}, { locale });
+      return m.target_feature_interstitial_ads({}, { locale });
     case 'leaderboard':
-      return m.policy_feature_leaderboard({}, { locale });
-    case 'i18n':
-      return m.policy_feature_i18n({}, { locale });
+      return m.target_feature_leaderboard({}, { locale });
+    case 'localization':
+      return m.target_feature_localization({}, { locale });
   }
 }
 
@@ -236,18 +239,18 @@ function capabilityLabel(locale: MpgdLocale, capability: CapabilityLabel): strin
       return m.cap_leaderboard({}, { locale });
     case 'save':
       return m.cap_save({}, { locale });
-    case 'i18n':
-      return m.cap_i18n({}, { locale });
+    case 'localization':
+      return m.cap_localization({}, { locale });
   }
 }
 
-function reasonLabel(locale: MpgdLocale, reason: PolicyFeatureRuntimeReason): string {
+function reasonLabel(locale: MpgdLocale, reason: FeatureAvailabilityReason): string {
   switch (reason) {
     case 'available':
-      return m.policy_on({}, { locale });
-    case 'policy-disabled':
-      return m.policy_off({}, { locale });
+      return m.availability_on({}, { locale });
+    case 'target-disabled':
+      return m.availability_off({}, { locale });
     case 'capability-unsupported':
-      return m.policy_unsupported({}, { locale });
+      return m.availability_unsupported({}, { locale });
   }
 }

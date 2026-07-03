@@ -15,7 +15,7 @@ const ko = resolveMpgdLocale(localizedCapabilities, ['ko-KR', 'en-US']);
 const en = resolveMpgdLocale(blockedCapabilities, ['ko-KR']);
 
 assertEqual(ko, 'ko', 'Korean locale should resolve when localized content is available');
-assertEqual(en, 'en', 'Locale should fall back when localized content is policy-blocked');
+assertEqual(en, 'en', 'Locale should fall back when localized content is target-disabled');
 assertEqual(
   m.score({ score: 120 }, { locale: ko }),
   '점수 120',

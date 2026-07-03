@@ -8,8 +8,8 @@
     "tools/**/*.ts",
     "backend/**/*.ts",
     "packages/bridge-protocol/src/**/*.ts",
-    "packages/policy-matrix/src/**/*.ts",
-    "packages/policy-matrix/test/**/*.ts"
+    "packages/target-config/src/**/*.ts",
+    "packages/target-config/test/**/*.ts"
   ],
   "exclude": [
     "**/dist/**"

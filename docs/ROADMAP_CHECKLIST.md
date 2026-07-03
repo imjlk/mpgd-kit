@@ -53,7 +53,7 @@ because the current ttsc RC config loader path is more reliable with JS config f
 - [x] typia validators created
 - [x] tools/validate-product-catalog.ts written
 - [x] tools/validate-ad-placements.ts written
-- [x] tools/validate-policy-matrix.ts written
+- [x] tools/validate-target-config.ts written
 - [x] tools/target/validate-target-config.ts written
 - [x] all validation scripts execute through ttsx
 
@@ -156,49 +156,49 @@ to run xcodebuild archive.
 - [x] CI and release workflows run graph preflight before package publish smoke
 - [x] root test command builds package dist before recursive workspace tests
 
-## Phase 11 - Policy Runtime Enforcement
+## Phase 11 - Target Availability Runtime
 
-- [x] policy matrix maps runtime browser target to web-preview policy
-- [x] platform capabilities are clamped by target policy
-- [x] disabled commerce, ad, and leaderboard actions return policy-safe results
-- [x] Phaser demo installs policy-enforced gateways for every target
-- [x] Result scene disables policy-disabled feature actions
-- [x] policy validator checks platform target coverage
-- [x] graph preflight covers policy runtime flow
+- [x] target config maps runtime browser target to web-preview config
+- [x] platform capabilities are clamped by target config
+- [x] disabled commerce, ad, and leaderboard actions return unavailable/no-op results
+- [x] Phaser demo installs target-configured gateways for every target
+- [x] Result scene disables target-disabled feature actions
+- [x] target config validator checks platform target coverage
+- [x] graph preflight covers target config runtime flow
 
-## Phase 12 - Policy Feature Runtime Diagnostics
+## Phase 12 - Target Feature Availability Diagnostics
 
-- [x] policy-enforced gateways expose runtime feature snapshots
-- [x] feature snapshots distinguish policy-disabled and capability-unsupported states
-- [x] ad placement runtime state follows rewarded/interstitial policy
-- [x] Phaser lobby renders the active policy target and feature states
-- [x] Result scene test hook exposes policy-driven action states
-- [x] policy smoke verifies browser/web-preview feature behavior
-- [x] policy smoke verifies every configured release target
+- [x] target-configured gateways expose runtime feature snapshots
+- [x] feature snapshots distinguish target-disabled and capability-unsupported states
+- [x] ad placement runtime state follows rewarded/interstitial target config
+- [x] Phaser lobby renders the active config target and feature states
+- [x] Result scene test hook exposes target-config-driven action states
+- [x] target config smoke verifies browser/web-preview feature behavior
+- [x] target config smoke verifies every configured release target
 
-## Phase 13 - Policy Runtime Guardrails
+## Phase 13 - Target Availability Guardrails
 
-- [x] root test command runs policy runtime smoke
-- [x] CI validate job runs policy runtime smoke
-- [x] release validate job runs policy runtime smoke
-- [x] manual target build workflow validates policy matrix before build
-- [x] manual target build workflow runs policy runtime smoke before build
-- [x] per-target release workflows run policy runtime smoke before target release build
+- [x] root test command runs target config runtime smoke
+- [x] CI validate job runs target config runtime smoke
+- [x] release validate job runs target config runtime smoke
+- [x] manual target build workflow validates target config before build
+- [x] manual target build workflow runs target config runtime smoke before build
+- [x] per-target release workflows run target config runtime smoke before target release build
 - [x] target artifact smoke supports focused single-target validation
 - [x] CI target jobs smoke the artifacts they build
 - [x] release target jobs smoke the artifacts they build
 
-## Phase 14 - Policy Managed i18n
+## Phase 14 - Target Managed Localization
 
 - [x] platform capabilities expose localized content support
-- [x] policy matrix controls i18n availability
-- [x] policy runtime snapshots include i18n feature state
-- [x] policy enforcement clamps localized content capability
+- [x] target config controls localization availability
+- [x] target config runtime snapshots include localization feature state
+- [x] target availability clamps localized content capability
 - [x] browser, AIT, Android, and iOS mocks report localized content capability
 - [x] `@mpgd/i18n` package owns en/ko translation-key message catalogs
 - [x] Paraglide generates typed message functions from the shared catalog
-- [x] Phaser demo resolves localized UI text through policy-enforced capabilities
+- [x] Phaser demo resolves localized UI text through target-configured capabilities
 - [x] Phaser demo renders translated lobby/result messages from `@mpgd/i18n`
 - [x] package build and pack smoke include generated i18n runtime subpaths
 - [x] i18n smoke verifies locale fallback and translated message output
-- [x] policy smoke verifies i18n locale fallback and availability
+- [x] target config smoke verifies localization locale fallback and availability

@@ -23,7 +23,7 @@ Original prompt: PLEASE IMPLEMENT THIS PLAN: Phase 8 Plan: Smoke Tests, Bridge C
 - `pnpm test`
 - `pnpm validate:catalog`
 - `pnpm validate:ads`
-- `pnpm validate:policy`
+- `pnpm validate:target-config`
 - `pnpm validate:targets`
 - `pnpm smoke:targets:build`
 - `pnpm graph:inspect`

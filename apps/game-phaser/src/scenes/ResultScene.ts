@@ -3,7 +3,7 @@ import Phaser from 'phaser';
 import type { FinishedStage } from '@mpgd/game-core';
 import { m, type MpgdLocale } from '@mpgd/i18n';
 import type { PlatformGateway } from '@mpgd/platform-contract';
-import type { PolicyFeature, PolicyFeatureRuntime } from '@mpgd/policy-matrix';
+import type { FeatureAvailability, PlatformFeature } from '@mpgd/target-config';
 
 import {
   addCoinsToSave,
@@ -131,9 +131,9 @@ export class ResultScene extends Phaser.Scene {
         rewardedAd: this.getActionState('rewardedAds'),
         purchase: this.getActionState('iap'),
         leaderboard: this.getActionState('leaderboard'),
-        i18n: this.getActionState('i18n'),
+        localization: this.getActionState('localization'),
       },
-      policyRuntime: this.state?.policyRuntime ?? null,
+      targetRuntime: this.state?.targetRuntime ?? null,
     };
   }
 
@@ -294,11 +294,11 @@ export class ResultScene extends Phaser.Scene {
     this.statusText?.setText(message);
   }
 
-  private getActionState(feature: PolicyFeature): {
+  private getActionState(feature: PlatformFeature): {
     readonly enabled: boolean;
-    readonly reason: PolicyFeatureRuntime['reason'] | 'unknown';
+    readonly reason: FeatureAvailability['reason'] | 'unknown';
   } {
-    const featureRuntime = this.state?.policyRuntime?.features[feature];
+    const featureRuntime = this.state?.targetRuntime?.features[feature];
 
     if (featureRuntime !== undefined) {
       return {
@@ -313,7 +313,7 @@ export class ResultScene extends Phaser.Scene {
     };
   }
 
-  private isCapabilityEnabled(feature: PolicyFeature): boolean {
+  private isCapabilityEnabled(feature: PlatformFeature): boolean {
     if (this.state === null) {
       return false;
     }
@@ -327,19 +327,19 @@ export class ResultScene extends Phaser.Scene {
         return this.state.capabilities.interstitialAds;
       case 'leaderboard':
         return this.state.capabilities.nativeLeaderboard;
-      case 'i18n':
+      case 'localization':
         return this.state.capabilities.localizedContent;
     }
   }
 
-  private unavailableMessage(feature: PolicyFeature): string {
+  private unavailableMessage(feature: PlatformFeature): string {
     const locale = this.state?.locale ?? 'en';
     const actionName = actionLabel(locale, feature);
     const reason = this.getActionState(feature).reason;
 
     switch (reason) {
-      case 'policy-disabled':
-        return m.feature_policy_disabled({ feature: actionName }, { locale });
+      case 'target-disabled':
+        return m.feature_target_disabled({ feature: actionName }, { locale });
       case 'capability-unsupported':
         return m.feature_unsupported({ feature: actionName }, { locale });
       case 'available':
@@ -350,7 +350,7 @@ export class ResultScene extends Phaser.Scene {
   }
 }
 
-function actionLabel(locale: MpgdLocale, feature: PolicyFeature): string {
+function actionLabel(locale: MpgdLocale, feature: PlatformFeature): string {
   switch (feature) {
     case 'iap':
       return m.action_purchases({}, { locale });
@@ -360,7 +360,7 @@ function actionLabel(locale: MpgdLocale, feature: PolicyFeature): string {
       return m.action_interstitial_ads({}, { locale });
     case 'leaderboard':
       return m.action_leaderboard({}, { locale });
-    case 'i18n':
-      return m.action_i18n({}, { locale });
+    case 'localization':
+      return m.action_localization({}, { locale });
   }
 }

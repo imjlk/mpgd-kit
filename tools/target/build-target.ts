@@ -23,7 +23,7 @@ interface BuildTargetsFile {
 
 run('pnpm', ['validate:catalog'], process.env);
 run('pnpm', ['validate:ads'], process.env);
-run('pnpm', ['validate:policy'], process.env);
+run('pnpm', ['validate:target-config'], process.env);
 run('pnpm', ['validate:targets'], process.env);
 
 const config = readJsonFile('platform.targets.json') as BuildTargetsFile;

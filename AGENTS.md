@@ -53,7 +53,7 @@ Platform SDK imports belong only in:
 - `pnpm check`
 - `pnpm validate:catalog`
 - `pnpm validate:ads`
-- `pnpm validate:policy`
+- `pnpm validate:target-config`
 - `pnpm validate:targets`
 - `pnpm build:web`
 - `pnpm build:ait`

@@ -15,18 +15,21 @@ export type MessageFunction<TInputs extends Record<string, string | number>> = (
 ) => string;
 
 export interface MpgdMessages {
-  readonly action_i18n: EmptyMessage;
   readonly action_interstitial_ads: EmptyMessage;
   readonly action_leaderboard: EmptyMessage;
+  readonly action_localization: EmptyMessage;
   readonly action_purchases: EmptyMessage;
   readonly action_reward_ads: EmptyMessage;
   readonly app_title: EmptyMessage;
-  readonly cap_i18n: EmptyMessage;
+  readonly availability_off: EmptyMessage;
+  readonly availability_on: EmptyMessage;
+  readonly availability_unsupported: EmptyMessage;
   readonly cap_iap: EmptyMessage;
   readonly cap_leaderboard: EmptyMessage;
+  readonly cap_localization: EmptyMessage;
   readonly cap_rewarded_ads: EmptyMessage;
   readonly cap_save: EmptyMessage;
-  readonly feature_policy_disabled: MessageFunction<{ readonly feature: string }>;
+  readonly feature_target_disabled: MessageFunction<{ readonly feature: string }>;
   readonly feature_unavailable: MessageFunction<{ readonly feature: string }>;
   readonly feature_unsupported: MessageFunction<{ readonly feature: string }>;
   readonly leaderboard_action: EmptyMessage;
@@ -38,19 +41,6 @@ export interface MpgdMessages {
   readonly opening_purchase: EmptyMessage;
   readonly player: MessageFunction<{ readonly name: string }>;
   readonly play_again: EmptyMessage;
-  readonly policy_feature_i18n: EmptyMessage;
-  readonly policy_feature_iap: EmptyMessage;
-  readonly policy_feature_interstitial_ads: EmptyMessage;
-  readonly policy_feature_leaderboard: EmptyMessage;
-  readonly policy_feature_rewarded_ads: EmptyMessage;
-  readonly policy_off: EmptyMessage;
-  readonly policy_on: EmptyMessage;
-  readonly policy_summary: MessageFunction<{
-    readonly target: string;
-    readonly summary: string;
-  }>;
-  readonly policy_unavailable: EmptyMessage;
-  readonly policy_unsupported: EmptyMessage;
   readonly preparing_demo: EmptyMessage;
   readonly purchase_action: EmptyMessage;
   readonly purchase_completed: EmptyMessage;
@@ -74,6 +64,16 @@ export interface MpgdMessages {
   readonly status_try_again: EmptyMessage;
   readonly tap_to_start: EmptyMessage;
   readonly target: MessageFunction<{ readonly target: string }>;
+  readonly target_availability_summary: MessageFunction<{
+    readonly target: string;
+    readonly summary: string;
+  }>;
+  readonly target_config_unavailable: EmptyMessage;
+  readonly target_feature_iap: EmptyMessage;
+  readonly target_feature_interstitial_ads: EmptyMessage;
+  readonly target_feature_leaderboard: EmptyMessage;
+  readonly target_feature_localization: EmptyMessage;
+  readonly target_feature_rewarded_ads: EmptyMessage;
 }
 
 export const m: MpgdMessages;

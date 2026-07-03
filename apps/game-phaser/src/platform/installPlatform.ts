@@ -2,23 +2,23 @@ import type { AdPlacements } from '@mpgd/ad-placements';
 import adPlacementsJson from '@mpgd/ad-placements/placements.json';
 import type { PlatformGateway } from '@mpgd/platform-contract';
 import {
-  getTargetPolicy,
-  policyTargetForPlatform,
-  withPolicyEnforcement,
-  type PolicyMatrix,
-} from '@mpgd/policy-matrix';
-import policyMatrixJson from '@mpgd/policy-matrix/policy.json';
+  getTargetConfig,
+  targetConfigKeyForPlatform,
+  withTargetAvailability,
+  type TargetConfigMatrix,
+} from '@mpgd/target-config';
+import targetConfigMatrixJson from '@mpgd/target-config/targets.json';
 
 import type { RuntimeConfig } from './runtimeDetector';
 
-const policyMatrix = policyMatrixJson as PolicyMatrix;
+const targetConfigMatrix = targetConfigMatrixJson as TargetConfigMatrix;
 const adPlacements = adPlacementsJson as AdPlacements;
-const policyAdPlacements = adPlacements.placements.map((placement) => ({
+const targetAdPlacements = adPlacements.placements.map((placement) => ({
   id: placement.id,
   type: placement.type,
 }));
 const adPlacementTypes = new Map<string, 'rewarded' | 'interstitial'>(
-  policyAdPlacements.map((placement) => [placement.id, placement.type]),
+  targetAdPlacements.map((placement) => [placement.id, placement.type]),
 );
 
 export async function installPlatform(runtime: RuntimeConfig): Promise<PlatformGateway> {
@@ -51,11 +51,11 @@ export async function installPlatform(runtime: RuntimeConfig): Promise<PlatformG
     }
   }
 
-  const policyTarget = policyTargetForPlatform(runtime.target);
+  const configTarget = targetConfigKeyForPlatform(runtime.target);
 
-  return withPolicyEnforcement(gateway, getTargetPolicy(policyMatrix, policyTarget), {
-    policyTarget,
-    adPlacements: policyAdPlacements,
+  return withTargetAvailability(gateway, getTargetConfig(targetConfigMatrix, configTarget), {
+    configTarget,
+    adPlacements: targetAdPlacements,
     resolveAdPlacementType(placementId) {
       return adPlacementTypes.get(placementId);
     },

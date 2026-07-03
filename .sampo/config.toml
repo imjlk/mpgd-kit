@@ -28,7 +28,7 @@ fixed = [[
   "npm/@mpgd/product-catalog",
   "npm/@mpgd/ad-placements",
   "npm/@mpgd/analytics-schema",
-  "npm/@mpgd/policy-matrix",
+  "npm/@mpgd/target-config",
   "npm/@mpgd/release-manifest",
   "npm/@mpgd/adapter-browser",
   "npm/@mpgd/adapter-capacitor",

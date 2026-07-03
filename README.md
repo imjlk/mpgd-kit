@@ -23,10 +23,10 @@ pnpm check
 pnpm validate:catalog
 pnpm validate:ads
 pnpm validate:i18n
-pnpm validate:policy
+pnpm validate:target-config
 pnpm validate:targets
 pnpm smoke:i18n
-pnpm smoke:policy
+pnpm smoke:target-config
 pnpm graph:preflight
 pnpm pack:packages
 pnpm build:web
@@ -86,27 +86,29 @@ pnpm graph:target
 pnpm graph:package
 pnpm graph:bridge
 pnpm graph:demo
-pnpm graph:policy
+pnpm graph:target-config
 pnpm graph:preflight
 ```
 
 `pnpm graph:preflight` runs every preset against `tsconfig.graph.json` and fails
 if a preset no longer returns answer-ready anchors.
 
-## Platform policy
+## Target Config
 
-`packages/policy-matrix/policy.json` is the source of truth for platform-gated
-features such as IAP, ads, leaderboard, and i18n. The Phaser app wraps each installed
-`PlatformGateway` with policy enforcement, so disabled features are removed from
-capabilities and return unavailable/no-op results at runtime.
+`packages/target-config/targets.json` is the source of truth for target-specific
+platform feature availability, runtime metadata, release profiles, and nested
+platform policy restrictions. Features include IAP, ads, leaderboard, and
+localization. The Phaser app wraps each installed `PlatformGateway` with target
+availability, so disabled features are removed from capabilities and return
+unavailable/no-op results at runtime.
 The demo resolves localized UI text through `@mpgd/i18n` only when the
-policy-enforced gateway keeps `localizedContent` available; otherwise it falls
+target-configured gateway keeps `localizedContent` available; otherwise it falls
 back to English.
-Policy-enforced gateways also expose a runtime snapshot for demo diagnostics and
+Target-configured gateways also expose a runtime snapshot for demo diagnostics and
 smoke checks across every configured release target:
 
 ```sh
-pnpm smoke:policy
+pnpm smoke:target-config
 ```
 
 Target artifact smoke can validate either every release target or one target

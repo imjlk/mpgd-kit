@@ -1,42 +1,43 @@
 import type { PlatformGateway } from '@mpgd/platform-contract';
 
 import {
-  applyPolicyToCapabilities,
-  getTargetPolicy,
-  policyTargetForPlatform,
-  withPolicyEnforcement,
-  type PolicyMatrix,
+  applyTargetConfigToCapabilities,
+  getTargetConfig,
+  targetConfigKeyForPlatform,
+  withTargetAvailability,
+  type TargetConfig,
+  type TargetConfigMatrix,
 } from '../src/runtime';
 
-const policyMatrix = {
+const targetConfigMatrix = {
   version: 'test',
   targets: {
-    'web-preview': {
+    'web-preview': createTargetConfig({
       iap: false,
       rewardedAds: false,
       interstitialAds: false,
       leaderboard: false,
-      i18n: true,
-    },
-    android: {
+      localization: true,
+    }),
+    android: createTargetConfig({
       iap: true,
       rewardedAds: true,
       interstitialAds: true,
       leaderboard: true,
-      i18n: true,
-    },
+      localization: true,
+    }),
   },
-} satisfies PolicyMatrix;
+} satisfies TargetConfigMatrix;
 
 const delegatedCalls: string[] = [];
 const gateway = createGateway();
 
-assertEqual(policyTargetForPlatform('browser'), 'web-preview');
-assertEqual(policyTargetForPlatform('android'), 'android');
+assertEqual(targetConfigKeyForPlatform('browser'), 'web-preview');
+assertEqual(targetConfigKeyForPlatform('android'), 'android');
 
-const webPolicy = getTargetPolicy(policyMatrix, policyTargetForPlatform('browser'));
-const webGateway = withPolicyEnforcement(gateway, webPolicy, {
-  policyTarget: 'web-preview',
+const webConfig = getTargetConfig(targetConfigMatrix, targetConfigKeyForPlatform('browser'));
+const webGateway = withTargetAvailability(gateway, webConfig, {
+  configTarget: 'web-preview',
   adPlacements: [
     {
       id: 'CONTINUE_AFTER_FAIL',
@@ -50,18 +51,18 @@ const webGateway = withPolicyEnforcement(gateway, webPolicy, {
   resolveAdPlacementType,
 });
 const webCapabilities = await webGateway.getCapabilities();
-const webRuntime = await webGateway.getPolicyRuntime();
+const webRuntime = await webGateway.getTargetRuntime();
 
 assertDeepEqual(
-  applyPolicyToCapabilities(await gateway.getCapabilities(), webPolicy),
+  applyTargetConfigToCapabilities(await gateway.getCapabilities(), webConfig),
   webCapabilities,
 );
-assertEqual(webRuntime.policyTarget, 'web-preview');
-assertEqual(webRuntime.features.iap.reason, 'policy-disabled');
-assertEqual(webRuntime.features.rewardedAds.reason, 'policy-disabled');
-assertEqual(webRuntime.features.interstitialAds.reason, 'policy-disabled');
-assertEqual(webRuntime.features.leaderboard.reason, 'policy-disabled');
-assertEqual(webRuntime.features.i18n.reason, 'available');
+assertEqual(webRuntime.configTarget, 'web-preview');
+assertEqual(webRuntime.features.iap.reason, 'target-disabled');
+assertEqual(webRuntime.features.rewardedAds.reason, 'target-disabled');
+assertEqual(webRuntime.features.interstitialAds.reason, 'target-disabled');
+assertEqual(webRuntime.features.leaderboard.reason, 'target-disabled');
+assertEqual(webRuntime.features.localization.reason, 'available');
 assertDeepEqual(
   webRuntime.adPlacements.map((placement) => ({
     id: placement.id,
@@ -72,12 +73,12 @@ assertDeepEqual(
     {
       id: 'CONTINUE_AFTER_FAIL',
       enabled: false,
-      reason: 'policy-disabled',
+      reason: 'target-disabled',
     },
     {
       id: 'STAGE_END_INTERSTITIAL',
       enabled: false,
-      reason: 'policy-disabled',
+      reason: 'target-disabled',
     },
   ],
 );
@@ -127,15 +128,15 @@ assertDeepEqual(
 );
 assertEqual(await webGateway.storage.load({ key: 'save:v1' }), 'stored-save');
 
-const rewardedOnlyGateway = withPolicyEnforcement(
+const rewardedOnlyGateway = withTargetAvailability(
   gateway,
-  {
+  createTargetConfig({
     iap: true,
     rewardedAds: true,
     interstitialAds: false,
     leaderboard: true,
-    i18n: false,
-  },
+    localization: false,
+  }),
   {
     adPlacements: [
       {
@@ -150,11 +151,11 @@ const rewardedOnlyGateway = withPolicyEnforcement(
     resolveAdPlacementType,
   },
 );
-const rewardedOnlyRuntime = await rewardedOnlyGateway.getPolicyRuntime();
+const rewardedOnlyRuntime = await rewardedOnlyGateway.getTargetRuntime();
 
 assertEqual(rewardedOnlyRuntime.features.rewardedAds.reason, 'available');
-assertEqual(rewardedOnlyRuntime.features.interstitialAds.reason, 'policy-disabled');
-assertEqual(rewardedOnlyRuntime.features.i18n.reason, 'policy-disabled');
+assertEqual(rewardedOnlyRuntime.features.interstitialAds.reason, 'target-disabled');
+assertEqual(rewardedOnlyRuntime.features.localization.reason, 'target-disabled');
 assertEqual((await rewardedOnlyGateway.getCapabilities()).localizedContent, false);
 
 await rewardedOnlyGateway.ads.preload({ placementId: 'CONTINUE_AFTER_FAIL' });
@@ -182,9 +183,13 @@ assertDeepEqual(
 assertDeepEqual(delegatedCalls, ['preload:CONTINUE_AFTER_FAIL', 'showRewarded']);
 delegatedCalls.length = 0;
 
-const androidGateway = withPolicyEnforcement(gateway, getTargetPolicy(policyMatrix, 'android'), {
-  resolveAdPlacementType,
-});
+const androidGateway = withTargetAvailability(
+  gateway,
+  getTargetConfig(targetConfigMatrix, 'android'),
+  {
+    resolveAdPlacementType,
+  },
+);
 
 await androidGateway.commerce.purchase({
   productId: 'COINS_100',
@@ -203,7 +208,36 @@ await androidGateway.leaderboard.submitScore({
 });
 
 assertDeepEqual(delegatedCalls, ['purchase', 'showRewarded', 'submitScore']);
-console.log('Policy matrix runtime enforcement smoke test passed.');
+console.log('Target config runtime availability smoke test passed.');
+
+function createTargetConfig(features: TargetConfig['features']): TargetConfig {
+  return {
+    runtime: 'web-preview',
+    features,
+    capabilities: {
+      storage: 'local',
+      localization: features.localization,
+    },
+    monetization: {
+      iap: features.iap,
+      rewardedAds: features.rewardedAds,
+      interstitialAds: features.interstitialAds,
+    },
+    leaderboard: {
+      native: features.leaderboard,
+    },
+    release: {
+      profile: 'web-preview',
+    },
+    policy: {
+      externalPaymentAllowed: false,
+      remoteExecutableCodeAllowed: false,
+      installOtherAppCTAAllowed: false,
+      requiresStoreReview: false,
+      requiresAitReview: false,
+    },
+  };
+}
 
 function createGateway(): PlatformGateway {
   return {

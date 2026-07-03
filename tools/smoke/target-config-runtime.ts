@@ -3,39 +3,41 @@ import type { AdPlacements } from '../../packages/ad-placements/src/index';
 import { resolveMpgdLocale } from '../../packages/i18n/src/index';
 import type { PlatformGateway, PlatformTarget } from '../../packages/platform-contract/src/index';
 import {
-  getTargetPolicy,
-  isPolicyEnforcedGateway,
-  withPolicyEnforcement,
-  type PolicyEnforcedGateway,
-  type PolicyFeature,
-  type PolicyMatrix,
-} from '../../packages/policy-matrix/src/runtime';
+  getTargetConfig,
+  isTargetConfiguredGateway,
+  withTargetAvailability,
+  type PlatformFeature,
+  type TargetConfigMatrix,
+  type TargetConfiguredGateway,
+} from '../../packages/target-config/src/runtime';
 import { readJsonFile } from '../io';
 
-const policyMatrix = readJsonFile('packages/policy-matrix/policy.json') as PolicyMatrix;
+const targetConfigMatrix = readJsonFile(
+  'packages/target-config/targets.json',
+) as TargetConfigMatrix;
 const adPlacements = readJsonFile('packages/ad-placements/placements.json') as AdPlacements;
 
-const policyFeatures = [
+const platformFeatures = [
   'iap',
   'rewardedAds',
   'interstitialAds',
   'leaderboard',
-  'i18n',
-] as const satisfies readonly PolicyFeature[];
-const policyTargets = ['web-preview', 'android', 'ios', 'ait'] as const;
+  'localization',
+] as const satisfies readonly PlatformFeature[];
+const configTargets = ['web-preview', 'android', 'ios', 'ait'] as const;
 
-for (const target of policyTargets) {
-  await verifyPolicyTarget(target);
+for (const target of configTargets) {
+  await verifyConfigTarget(target);
 }
 
-console.log(`Policy runtime smoke passed: ${policyTargets.join(', ')}`);
+console.log(`Target config runtime smoke passed: ${configTargets.join(', ')}`);
 
-async function verifyPolicyTarget(policyTarget: (typeof policyTargets)[number]): Promise<void> {
-  const platformTarget = platformTargetForPolicy(policyTarget);
+async function verifyConfigTarget(configTarget: (typeof configTargets)[number]): Promise<void> {
+  const platformTarget = platformTargetForConfig(configTarget);
   const targetGateway = createTargetGateway(platformTarget);
-  const policy = getTargetPolicy(policyMatrix, policyTarget);
-  const gateway = withPolicyEnforcement(targetGateway.gateway, policy, {
-    policyTarget,
+  const config = getTargetConfig(targetConfigMatrix, configTarget);
+  const gateway = withTargetAvailability(targetGateway.gateway, config, {
+    configTarget,
     adPlacements: adPlacements.placements.map((placement) => ({
       id: placement.id,
       type: placement.type,
@@ -46,37 +48,40 @@ async function verifyPolicyTarget(policyTarget: (typeof policyTargets)[number]):
   });
 
   assertEqual(
-    isPolicyEnforcedGateway(gateway),
+    isTargetConfiguredGateway(gateway),
     true,
-    `${policyTarget} should expose policy runtime`,
+    `${configTarget} should expose target config runtime`,
   );
 
-  const runtime = await gateway.getPolicyRuntime();
+  const runtime = await gateway.getTargetRuntime();
 
-  assertEqual(runtime.policyTarget, policyTarget, `${policyTarget} policy target should match`);
+  assertEqual(runtime.configTarget, configTarget, `${configTarget} config target should match`);
 
-  for (const feature of policyFeatures) {
+  for (const feature of platformFeatures) {
     const featureRuntime = runtime.features[feature];
 
     assertEqual(
-      featureRuntime.policyAllowed,
-      policy[feature],
-      `${policyTarget} ${feature} policy should match`,
+      featureRuntime.targetEnabled,
+      config.features[feature],
+      `${configTarget} ${feature} config should match`,
     );
     assertEqual(
       featureRuntime.enabled,
-      featureRuntime.policyAllowed && featureRuntime.capabilitySupported,
-      `${policyTarget} ${feature} enabled state should follow policy and capability`,
+      featureRuntime.targetEnabled && featureRuntime.capabilitySupported,
+      `${configTarget} ${feature} enabled state should follow target config and capability`,
     );
   }
 
+  const expectedLocale =
+    config.features.localization && runtime.features.localization.capabilitySupported ? 'ko' : 'en';
+
   assertEqual(
     resolveMpgdLocale(runtime.capabilities, ['ko-KR']),
-    policy.i18n && runtime.features.i18n.capabilitySupported ? 'ko' : 'en',
-    `${policyTarget} i18n policy should control locale resolution`,
+    expectedLocale,
+    `${configTarget} localization feature should control locale resolution`,
   );
 
-  if (policyTarget === 'web-preview') {
+  if (configTarget === 'web-preview') {
     await verifyWebPreviewFallbacks(gateway);
     return;
   }
@@ -84,50 +89,54 @@ async function verifyPolicyTarget(policyTarget: (typeof policyTargets)[number]):
   await gateway.commerce.purchase({
     productId: 'COINS_100',
     source: 'shop',
-    idempotencyKey: `${policyTarget}-purchase`,
+    idempotencyKey: `${configTarget}-purchase`,
   });
   await gateway.ads.showRewarded({
     placementId: 'CONTINUE_AFTER_FAIL',
-    idempotencyKey: `${policyTarget}-reward`,
+    idempotencyKey: `${configTarget}-reward`,
   });
   await gateway.ads.showInterstitial?.({ placementId: 'STAGE_END_INTERSTITIAL' });
   await gateway.leaderboard.submitScore({
     leaderboardId: 'default',
     score: 1,
-    runId: `${policyTarget}-run`,
+    runId: `${configTarget}-run`,
     submittedAt: new Date().toISOString(),
   });
 
   assertDeepEqual(
     targetGateway.calls,
     ['purchase', 'showRewarded', 'showInterstitial', 'submitScore'],
-    `${policyTarget} enabled features should delegate to the platform gateway`,
+    `${configTarget} enabled features should delegate to the platform gateway`,
   );
 }
 
 async function verifyWebPreviewFallbacks(
-  gateway: PolicyEnforcedGateway,
+  gateway: TargetConfiguredGateway,
 ): Promise<void> {
-  const runtime = await gateway.getPolicyRuntime();
+  const runtime = await gateway.getTargetRuntime();
 
-  assertEqual(runtime.policyTarget, 'web-preview', 'browser should map to web-preview policy');
-  assertEqual(runtime.features.iap.reason, 'policy-disabled', 'IAP should be policy-disabled');
+  assertEqual(runtime.configTarget, 'web-preview', 'browser should map to web-preview config');
+  assertEqual(runtime.features.iap.reason, 'target-disabled', 'IAP should be target-disabled');
   assertEqual(
     runtime.features.rewardedAds.reason,
-    'policy-disabled',
-    'rewarded ads should be policy-disabled',
+    'target-disabled',
+    'rewarded ads should be target-disabled',
   );
   assertEqual(
     runtime.features.interstitialAds.reason,
-    'policy-disabled',
-    'interstitial ads should be policy-disabled',
+    'target-disabled',
+    'interstitial ads should be target-disabled',
   );
   assertEqual(
     runtime.features.leaderboard.reason,
-    'policy-disabled',
-    'leaderboard should be policy-disabled',
+    'target-disabled',
+    'leaderboard should be target-disabled',
   );
-  assertEqual(runtime.features.i18n.reason, 'available', 'i18n should be available');
+  assertEqual(
+    runtime.features.localization.reason,
+    'available',
+    'localization should be available',
+  );
   assertEqual(runtime.capabilities.rewardedAds, false, 'rewarded capability should be clamped');
   assertEqual(
     runtime.capabilities.localizedContent,
@@ -143,7 +152,7 @@ async function verifyWebPreviewFallbacks(
   assertDeepEqual(
     await gateway.ads.showRewarded({
       placementId: 'CONTINUE_AFTER_FAIL',
-      idempotencyKey: 'policy-smoke-reward',
+      idempotencyKey: 'target-config-smoke-reward',
     }),
     {
       status: 'unavailable',
@@ -155,7 +164,7 @@ async function verifyWebPreviewFallbacks(
     await gateway.leaderboard.submitScore({
       leaderboardId: 'default',
       score: 1,
-      runId: 'policy-smoke',
+      runId: 'target-config-smoke',
       submittedAt: new Date().toISOString(),
     }),
     {
@@ -262,8 +271,8 @@ function createTargetGateway(target: PlatformTarget): {
   };
 }
 
-function platformTargetForPolicy(policyTarget: (typeof policyTargets)[number]): PlatformTarget {
-  return policyTarget === 'web-preview' ? 'browser' : policyTarget;
+function platformTargetForConfig(configTarget: (typeof configTargets)[number]): PlatformTarget {
+  return configTarget === 'web-preview' ? 'browser' : configTarget;
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string): void {

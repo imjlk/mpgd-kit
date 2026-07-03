@@ -1,0 +1,15 @@
+{
+  "name": "target-config-runtime",
+  "description": "Target config runtime feature availability, diagnostics, localization, and demo action flow.",
+  "expectedFiles": ["packages/target-config/", "packages/i18n/", "apps/game-phaser/"],
+  "tsconfig": "tsconfig.graph.json",
+  "question": "What are the central target config runtime availability and diagnostics flows that gate capabilities, localization, and game actions?",
+  "draft": "Use a tour because target availability and diagnostics cross the target config package, platform installation, and Phaser result actions.",
+  "review": "A broad target config runtime question should use a graph tour over target availability helpers, diagnostics, and game action gating.",
+  "request": {
+    "type": "tour",
+    "query": "withTargetAvailability createTargetRuntimeSnapshot getTargetRuntime applyTargetConfigToCapabilities targetConfigKeyForPlatform getTargetConfig resolveMpgdLocale @mpgd/i18n m app_title installPlatform DemoState LobbyScene ResultScene capabilities localizedContent localization nativeIap rewardedAds leaderboard targetConfig",
+    "includeTests": true,
+    "limit": 70
+  }
+}
