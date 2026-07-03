@@ -30,6 +30,7 @@ jobs:
       - run: pnpm validate:targets
       - run: pnpm test
       - run: pnpm build:web
+      - run: pnpm smoke:targets
 
       - uses: actions/upload-artifact@v4
         with:

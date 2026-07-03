@@ -23,6 +23,8 @@
     "build:android": "pnpm build:target android production",
     "build:ios": "pnpm build:target ios production",
     "build:ait": "pnpm build:target ait production",
+    "smoke:targets": "node tools/run-ttsx.mjs tools/smoke/verify-target-artifacts.ts",
+    "smoke:targets:build": "node tools/run-ttsx.mjs tools/smoke/build-target-artifacts.ts",
     "release:target": "node tools/run-ttsx.mjs tools/target/release-target.ts",
     "manifest:release": "node tools/run-ttsx.mjs tools/target/generate-release-manifest.ts",
     "graph:dump": "node tools/graph/inspect-local-graph.mjs --dump",
