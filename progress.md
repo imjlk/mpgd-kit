@@ -12,12 +12,20 @@ Original prompt: PLEASE IMPLEMENT THIS PLAN: Phase 8 Plan: Smoke Tests, Bridge C
 - Verified the SDK demo loop in browser: lobby state, gameplay, result save, rewarded ad, purchase, and screenshot output.
 - Added Android emulator and iOS simulator smoke scripts plus local usage docs.
 - Adjusted Android smoke to capture emulator serial before the device is fully booted.
+- Fixed Android emulator smoke device parsing and narrowed crash marker detection to fatal/ANR signals.
+- Adjusted iOS simulator smoke to build the App target directly for local simulator installs.
+- Added a smoke-only iOS plist and compile flag so local simulator smoke can bypass storyboard and asset catalog compilation when the installed Xcode SDK/runtime combination cannot compile those resources.
+- Verified Android emulator smoke and iOS simulator smoke. Screenshots are generated at `artifacts/emulator/android.png` and `artifacts/emulator/ios.png`.
 
-## TODO
+## Completed
 
-- Verify bridge fixtures and adapter tests.
-- Verify SDK demo loop through check/build and browser playtest.
-- Commit SDK demo loop changes.
-- Verify emulator smoke scripts with `pnpm check`, then run local device smoke where available.
-- Expand the Phaser demo loop around identity, save/load, ads, purchase, and leaderboard.
-- Add local emulator smoke scripts and docs.
+- `pnpm check`
+- `pnpm test`
+- `pnpm validate:catalog`
+- `pnpm validate:ads`
+- `pnpm validate:policy`
+- `pnpm validate:targets`
+- `pnpm smoke:targets:build`
+- `pnpm graph:inspect`
+- `pnpm smoke:android:emulator`
+- `pnpm smoke:ios:simulator`

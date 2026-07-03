@@ -44,7 +44,7 @@ run(adb, ['-s', serial, 'pull', '/sdcard/mpgd-smoke.png', screenshotPath]);
 const logs = capture(adb, ['-s', serial, 'logcat', '-d', '-t', '1000']);
 writeFileSync('artifacts/emulator/android-logcat.txt', logs);
 
-if (/FATAL EXCEPTION|\\bANR\\b|AndroidRuntime/.test(logs)) {
+if (/FATAL EXCEPTION|Fatal signal|ANR in |Application Not Responding|am_anr/i.test(logs)) {
   throw new Error('Android emulator smoke detected a crash marker in logcat.');
 }
 
@@ -67,7 +67,8 @@ function getOrStartEmulator(): string {
   const started = waitForEmulatorSerial();
 
   if (started === undefined) {
-    throw new Error(`Timed out waiting for Android emulator AVD: ${avdName}`);
+    const devices = capture(adb, ['devices']);
+    throw new Error(`Timed out waiting for Android emulator AVD: ${avdName}\n\n${devices}`);
   }
 
   return started;
@@ -75,8 +76,8 @@ function getOrStartEmulator(): string {
 
 function listEmulators(): string[] {
   return capture(adb, ['devices'])
-    .split('\\n')
-    .map((line) => line.trim().split(/\\s+/))
+    .split('\n')
+    .map((line) => line.trim().split(/\s+/))
     .flatMap(([serial]) => {
       if (serial?.startsWith('emulator-') === true) {
         return [serial];

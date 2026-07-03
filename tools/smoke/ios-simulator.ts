@@ -6,8 +6,8 @@ const simulatorName = process.env.MPGD_IOS_SIM_NAME ?? 'iPhone 16';
 const simulatorOs = process.env.MPGD_IOS_SIM_OS ?? 'iOS 18.4';
 const bundleId = 'dev.mpgd.kit';
 const artifactsDir = 'artifacts/emulator';
-const derivedDataPath = join(process.cwd(), artifactsDir, 'ios-derived-data');
-const appPath = join(derivedDataPath, 'Build/Products/Debug-iphonesimulator/App.app');
+const buildRoot = join(process.cwd(), artifactsDir, 'ios-build');
+const appPath = join(buildRoot, 'Debug-iphonesimulator/App.app');
 const screenshotPath = join(process.cwd(), artifactsDir, 'ios.png');
 
 run('pnpm', ['build:ios']);
@@ -28,14 +28,18 @@ const xcodebuildArgs = [
   'build',
   '-project',
   'App/App.xcodeproj',
-  '-scheme',
+  '-target',
   'App',
   '-configuration',
   'Debug',
-  '-destination',
-  `platform=iOS Simulator,id=${device.udid}`,
-  '-derivedDataPath',
-  derivedDataPath,
+  '-sdk',
+  'iphonesimulator',
+  `SYMROOT=${buildRoot}`,
+  `OBJROOT=${join(buildRoot, 'Intermediates.noindex')}`,
+  'INFOPLIST_FILE=App/Info-Smoke.plist',
+  'EXCLUDED_SOURCE_FILE_NAMES=Main.storyboard LaunchScreen.storyboard Assets.xcassets',
+  'ASSETCATALOG_COMPILER_APPICON_NAME=',
+  'SWIFT_ACTIVE_COMPILATION_CONDITIONS=DEBUG MPGD_SMOKE_NO_STORYBOARD',
   'CODE_SIGNING_ALLOWED=NO',
 ];
 

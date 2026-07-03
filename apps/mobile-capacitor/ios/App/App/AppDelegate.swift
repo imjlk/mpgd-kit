@@ -7,7 +7,11 @@ class AppDelegate: UIResponder, UIApplicationDelegate {
     var window: UIWindow?
 
     func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        // Override point for customization after application launch.
+        #if MPGD_SMOKE_NO_STORYBOARD
+        window = UIWindow(frame: UIScreen.main.bounds)
+        window?.rootViewController = CAPBridgeViewController()
+        window?.makeKeyAndVisible()
+        #endif
         return true
     }
 
