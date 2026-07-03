@@ -67,9 +67,39 @@ export class ResultScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
-    this.addAction(480, 340, 'Reward ad +10 coins', () => this.claimReward());
-    this.addAction(480, 390, 'Buy 100 coins', () => this.buyCoins());
-    this.addAction(480, 440, 'Open leaderboard', () => this.openLeaderboard());
+    this.addAction(
+      480,
+      340,
+      this.state.capabilities.rewardedAds ? 'Reward ad +10 coins' : 'Reward ad unavailable',
+      () => {
+        void this.claimReward();
+      },
+      {
+        disabled: !this.state.capabilities.rewardedAds,
+      },
+    );
+    this.addAction(
+      480,
+      390,
+      this.state.capabilities.nativeIap ? 'Buy 100 coins' : 'Purchase unavailable',
+      () => {
+        void this.buyCoins();
+      },
+      {
+        disabled: !this.state.capabilities.nativeIap,
+      },
+    );
+    this.addAction(
+      480,
+      440,
+      this.state.capabilities.nativeLeaderboard ? 'Open leaderboard' : 'Leaderboard unavailable',
+      () => {
+        void this.openLeaderboard();
+      },
+      {
+        disabled: !this.state.capabilities.nativeLeaderboard,
+      },
+    );
     this.addAction(480, 490, 'Play again', () => this.scene.start('LobbyScene'));
 
     this.input.keyboard?.once('keydown-ENTER', () => this.scene.start('LobbyScene'));
@@ -87,21 +117,29 @@ export class ResultScene extends Phaser.Scene {
     };
   }
 
-  private addAction(x: number, y: number, label: string, callback: () => void): void {
-    this.add
+  private addAction(
+    x: number,
+    y: number,
+    label: string,
+    callback: () => void,
+    options: { readonly disabled?: boolean } = {},
+  ): void {
+    const action = this.add
       .text(x, y, label, {
         fontFamily: 'Inter, Arial',
         fontSize: '24px',
-        color: '#fff7ad',
-        backgroundColor: '#193340',
+        color: options.disabled === true ? '#94a3b8' : '#fff7ad',
+        backgroundColor: options.disabled === true ? '#24313a' : '#193340',
         padding: {
           x: 14,
           y: 8,
         },
       })
-      .setOrigin(0.5)
-      .setInteractive({ useHandCursor: true })
-      .on('pointerdown', callback);
+      .setOrigin(0.5);
+
+    if (options.disabled !== true) {
+      action.setInteractive({ useHandCursor: true }).on('pointerdown', callback);
+    }
   }
 
   private renderSave(): void {
@@ -120,17 +158,30 @@ export class ResultScene extends Phaser.Scene {
     }
 
     await persistDemoSave(this.platform, this.state.save);
-    await this.platform.leaderboard.submitScore({
+
+    if (!this.state.capabilities.nativeLeaderboard) {
+      this.setStatus('Saved. Leaderboard disabled by policy.');
+      return;
+    }
+
+    const submission = await this.platform.leaderboard.submitScore({
       leaderboardId: 'default',
       score: this.result.score.total,
       runId: this.result.session.id,
       submittedAt: new Date().toISOString(),
     });
-    this.setStatus('Saved and submitted.');
+    this.setStatus(
+      submission.submitted ? 'Saved and submitted.' : 'Saved. Leaderboard unavailable.',
+    );
   }
 
   private async claimReward(): Promise<void> {
     if (this.platform === null || this.state === null || this.result === null) {
+      return;
+    }
+
+    if (!this.state.capabilities.rewardedAds) {
+      this.setStatus('Reward ads disabled by policy.');
       return;
     }
 
@@ -159,6 +210,11 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
+    if (!this.state.capabilities.nativeIap) {
+      this.setStatus('Purchases disabled by policy.');
+      return;
+    }
+
     this.setStatus('Opening mock purchase...');
     const purchase = await this.platform.commerce.purchase({
       productId: 'COINS_100',
@@ -181,7 +237,12 @@ export class ResultScene extends Phaser.Scene {
   }
 
   private async openLeaderboard(): Promise<void> {
-    if (this.platform === null) {
+    if (this.platform === null || this.state === null) {
+      return;
+    }
+
+    if (!this.state.capabilities.nativeLeaderboard) {
+      this.setStatus('Leaderboard disabled by policy.');
       return;
     }
 

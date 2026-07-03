@@ -18,11 +18,13 @@
     "@mpgd/adapter-ait": "workspace:*",
     "@mpgd/adapter-browser": "workspace:*",
     "@mpgd/adapter-capacitor": "workspace:*",
+    "@mpgd/ad-placements": "workspace:*",
     "@mpgd/bridge-protocol": "workspace:*",
     "@mpgd/game-core": "workspace:*",
     "@mpgd/game-save": "workspace:*",
     "@mpgd/leaderboard-contract": "workspace:*",
     "@mpgd/monetization-contract": "workspace:*",
+    "@mpgd/policy-matrix": "workspace:*",
     "@mpgd/platform-contract": "workspace:*",
     "phaser": "4.2.0",
     "typia": "rc"

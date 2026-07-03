@@ -18,9 +18,11 @@
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
-    "fix": "ttsc fix"
+    "fix": "ttsc fix",
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/policy-matrix/test/policy-matrix-smoke.ts"
   },
   "dependencies": {
+    "@mpgd/platform-contract": "workspace:*",
     "typia": "rc"
   },
   "devDependencies": {

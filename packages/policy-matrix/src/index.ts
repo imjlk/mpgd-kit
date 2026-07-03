@@ -1,15 +1,7 @@
 import typia from 'typia';
 
-export interface TargetPolicy {
-  readonly iap: boolean;
-  readonly rewardedAds: boolean;
-  readonly interstitialAds: boolean;
-  readonly leaderboard: boolean;
-}
+import type { PolicyMatrix } from './runtime';
 
-export interface PolicyMatrix {
-  readonly version: string;
-  readonly targets: Record<string, TargetPolicy>;
-}
+export * from './runtime';
 
 export const assertPolicyMatrix = typia.createAssert<PolicyMatrix>();

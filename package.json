@@ -38,6 +38,7 @@
     "graph:package": "node tools/graph/inspect-local-graph.mjs --preset package-publish",
     "graph:bridge": "node tools/graph/inspect-local-graph.mjs --preset bridge-contracts",
     "graph:demo": "node tools/graph/inspect-local-graph.mjs --preset sdk-demo-loop",
+    "graph:policy": "node tools/graph/inspect-local-graph.mjs --preset policy-runtime",
     "graph:preflight": "node tools/graph/run-graph-presets.mjs",
     "sampo:add": "sampo add",
     "sampo:release:dry-run": "sampo release --dry-run",

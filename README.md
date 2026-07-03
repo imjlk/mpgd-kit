@@ -68,11 +68,19 @@ pnpm graph:target
 pnpm graph:package
 pnpm graph:bridge
 pnpm graph:demo
+pnpm graph:policy
 pnpm graph:preflight
 ```
 
 `pnpm graph:preflight` runs every preset against `tsconfig.graph.json` and fails
 if a preset no longer returns answer-ready anchors.
+
+## Platform policy
+
+`packages/policy-matrix/policy.json` is the source of truth for platform-gated
+features such as IAP, ads, and leaderboard. The Phaser app wraps each installed
+`PlatformGateway` with policy enforcement, so disabled features are removed from
+capabilities and return unavailable/no-op results at runtime.
 
 ## ttsc lint config
 

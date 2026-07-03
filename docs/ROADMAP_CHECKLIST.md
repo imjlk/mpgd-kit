@@ -155,3 +155,13 @@ to run xcodebuild archive.
 - [x] graph preflight runner validates answer-ready graph anchors
 - [x] CI and release workflows run graph preflight before package publish smoke
 - [x] root test command builds package dist before recursive workspace tests
+
+## Phase 11 - Policy Runtime Enforcement
+
+- [x] policy matrix maps runtime browser target to web-preview policy
+- [x] platform capabilities are clamped by target policy
+- [x] disabled commerce, ad, and leaderboard actions return policy-safe results
+- [x] Phaser demo installs policy-enforced gateways for every target
+- [x] Result scene disables policy-disabled feature actions
+- [x] policy validator checks platform target coverage
+- [x] graph preflight covers policy runtime flow
