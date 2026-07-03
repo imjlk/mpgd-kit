@@ -19,7 +19,9 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
+    "@mpgd/backend-entitlement-ledger": "workspace:*",
     "@mpgd/monetization-contract": "workspace:*",
+    "@mpgd/product-catalog": "workspace:*",
     "typia": "rc"
   },
   "devDependencies": {

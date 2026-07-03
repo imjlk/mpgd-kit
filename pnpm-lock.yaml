@@ -218,6 +218,12 @@ importers:
 
   backend/ad-reward-ledger:
     dependencies:
+      '@mpgd/ad-placements':
+        specifier: workspace:*
+        version: link:../../packages/ad-placements
+      '@mpgd/backend-entitlement-ledger':
+        specifier: workspace:*
+        version: link:../entitlement-ledger
       '@mpgd/monetization-contract':
         specifier: workspace:*
         version: link:../../packages/monetization-contract
@@ -234,6 +240,9 @@ importers:
 
   backend/entitlement-ledger:
     dependencies:
+      '@mpgd/product-catalog':
+        specifier: workspace:*
+        version: link:../../packages/product-catalog
       typia:
         specifier: rc
         version: 13.0.0-rc.1(@types/node@24.13.2)
@@ -247,9 +256,15 @@ importers:
 
   backend/purchase-verifier:
     dependencies:
+      '@mpgd/backend-entitlement-ledger':
+        specifier: workspace:*
+        version: link:../entitlement-ledger
       '@mpgd/monetization-contract':
         specifier: workspace:*
         version: link:../../packages/monetization-contract
+      '@mpgd/product-catalog':
+        specifier: workspace:*
+        version: link:../../packages/product-catalog
       typia:
         specifier: rc
         version: 13.0.0-rc.1(@types/node@24.13.2)

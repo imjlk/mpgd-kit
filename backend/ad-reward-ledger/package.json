@@ -19,6 +19,8 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
+    "@mpgd/ad-placements": "workspace:*",
+    "@mpgd/backend-entitlement-ledger": "workspace:*",
     "@mpgd/monetization-contract": "workspace:*",
     "typia": "rc"
   },
