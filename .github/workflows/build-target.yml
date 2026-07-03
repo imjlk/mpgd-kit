@@ -34,6 +34,18 @@ jobs:
           node-version: 24
           cache: pnpm
 
+      - if: inputs.target == 'android'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - if: inputs.target == 'android'
+        uses: android-actions/setup-android@v3
+
+      - if: inputs.target == 'android'
+        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
+
       - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - run: pnpm validate:catalog

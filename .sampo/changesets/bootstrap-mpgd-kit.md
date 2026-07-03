@@ -21,4 +21,4 @@ npm/@mpgd/backend-entitlement-ledger: minor (Added)
 npm/@mpgd/backend-ad-reward-ledger: minor (Added)
 ---
 
-Bootstrap the initial `mpgd-kit` monorepo with Phaser, platform contracts, adapters, validation tools, target build orchestration, and backend ledger skeletons.
+Bootstrap the initial `mpgd-kit` monorepo with Phaser, platform contracts, adapters, validation tools, target build orchestration, Capacitor native plugin mocks, Apps in Toss artifacts, and idempotent backend ledger flows.
