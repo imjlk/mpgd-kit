@@ -8,6 +8,7 @@ output/
 *.log
 *.ait
 apps/target-ait/.granite/
+apps/target-ait/public/game/
 apps/mobile-capacitor/www/
 apps/mobile-capacitor/android/.gradle/
 apps/mobile-capacitor/android/local.properties
