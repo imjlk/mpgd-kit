@@ -5,12 +5,12 @@
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     }
   },
   "files": [
-    "src"
+    "dist"
   ],
   "scripts": {
     "check": "ttsc --noEmit",
@@ -27,5 +27,10 @@
   "devDependencies": {
     "ttsc": "0.16.9",
     "typescript": "7.0.1-rc"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
   }
 }

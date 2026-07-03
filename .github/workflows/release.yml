@@ -33,8 +33,10 @@ jobs:
       - run: pnpm check
       - run: pnpm validate:catalog
       - run: pnpm validate:ads
+      - run: pnpm validate:policy
       - run: pnpm validate:targets
       - run: pnpm test
+      - run: pnpm pack:packages
       - run: pnpm build:web
 
       - uses: actions/upload-artifact@v4
@@ -157,6 +159,7 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm pack:packages
 
       - name: Run Sampo release automation
         id: sampo

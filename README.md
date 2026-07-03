@@ -23,6 +23,7 @@ pnpm check
 pnpm validate:catalog
 pnpm validate:ads
 pnpm validate:targets
+pnpm pack:packages
 pnpm build:web
 pnpm build:ait
 ```
@@ -41,9 +42,19 @@ Convenience scripts are also available:
 
 ```sh
 pnpm sampo:add
+pnpm sampo:release:dry-run
 pnpm sampo:release
 pnpm sampo:publish
 ```
+
+Before publishing, run the package smoke locally:
+
+```sh
+pnpm pack:packages
+```
+
+This builds publishable workspaces into `dist/` and verifies the npm pack payload
+contains `dist/index.js`, `dist/index.d.ts`, and any exported JSON/native files.
 
 ## ttsc lint config
 

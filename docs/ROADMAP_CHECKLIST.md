@@ -134,3 +134,13 @@ to run xcodebuild archive.
 - [x] release manifest artifact upload added
 - [x] Sampo config and bootstrap changeset added
 - [x] Sampo release dry-run succeeds
+
+## Phase 9 - Package Publish Readiness
+
+- [x] publishable package exports point at dist artifacts
+- [x] publishable packages declare main and types entries
+- [x] scoped npm packages set public publish access
+- [x] package build tool emits JavaScript and declarations into dist
+- [x] package pack smoke verifies npm tarball payloads
+- [x] CI validate job runs package pack smoke
+- [x] release workflow runs package pack smoke before Sampo automation

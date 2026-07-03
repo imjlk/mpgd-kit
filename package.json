@@ -23,6 +23,8 @@
     "build:android": "pnpm build:target android production",
     "build:ios": "pnpm build:target ios production",
     "build:ait": "pnpm build:target ait production",
+    "build:packages": "node tools/run-ttsx.mjs tools/package/build-packages.ts",
+    "pack:packages": "pnpm build:packages && node tools/run-ttsx.mjs tools/package/pack-packages.ts",
     "smoke:targets": "node tools/run-ttsx.mjs tools/smoke/verify-target-artifacts.ts",
     "smoke:targets:build": "node tools/run-ttsx.mjs tools/smoke/build-target-artifacts.ts",
     "smoke:android:emulator": "node tools/run-ttsx.mjs tools/smoke/android-emulator.ts",
@@ -32,6 +34,7 @@
     "graph:dump": "node tools/graph/inspect-local-graph.mjs --dump",
     "graph:inspect": "node tools/graph/inspect-local-graph.mjs",
     "sampo:add": "sampo add",
+    "sampo:release:dry-run": "sampo release --dry-run",
     "sampo:release": "sampo release",
     "sampo:publish": "sampo publish",
     "sampo:pre": "sampo pre"

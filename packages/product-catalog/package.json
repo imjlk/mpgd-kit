@@ -5,13 +5,13 @@
   "sideEffects": false,
   "exports": {
     ".": {
-      "types": "./src/index.ts",
-      "default": "./src/index.ts"
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
     },
     "./catalog.json": "./catalog.json"
   },
   "files": [
-    "src",
+    "dist",
     "catalog.json"
   ],
   "scripts": {
@@ -27,5 +27,10 @@
   "devDependencies": {
     "ttsc": "0.16.9",
     "typescript": "7.0.1-rc"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
   }
 }
