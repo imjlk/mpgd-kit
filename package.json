@@ -25,6 +25,8 @@
     "build:ait": "pnpm build:target ait production",
     "release:target": "node tools/run-ttsx.mjs tools/target/release-target.ts",
     "manifest:release": "node tools/run-ttsx.mjs tools/target/generate-release-manifest.ts",
+    "graph:dump": "node tools/graph/inspect-local-graph.mjs --dump",
+    "graph:inspect": "node tools/graph/inspect-local-graph.mjs",
     "sampo:add": "sampo add",
     "sampo:release": "sampo release",
     "sampo:publish": "sampo publish",
