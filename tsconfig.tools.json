@@ -4,5 +4,5 @@
     "types": ["node"],
     "noEmit": true
   },
-  "include": ["tools/**/*.ts", "backend/**/*.ts"]
+  "include": ["tools/**/*.ts", "backend/**/*.ts", "packages/bridge-protocol/src/**/*.ts"]
 }

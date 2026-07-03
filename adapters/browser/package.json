@@ -16,13 +16,15 @@
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
-    "fix": "ttsc fix"
+    "fix": "ttsc fix",
+    "test": "vitest run"
   },
   "dependencies": {
     "@mpgd/platform-contract": "workspace:*"
   },
   "devDependencies": {
     "ttsc": "0.16.9",
-    "typescript": "7.0.1-rc"
+    "typescript": "7.0.1-rc",
+    "vitest": "^4.0.0"
   }
 }

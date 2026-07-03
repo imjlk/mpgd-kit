@@ -1,14 +1,21 @@
-import type { BridgeMethod, BridgeResponse } from '@mpgd/bridge-protocol';
+import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge-protocol';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform-contract';
+
+export interface NativeBridge {
+  request(input: BridgeRequest): Promise<BridgeResponse>;
+}
 
 export function createCapacitorPlatformGateway(input: {
   readonly target: Extract<PlatformTarget, 'android' | 'ios'>;
   readonly appVersion: string;
   readonly buildId: string;
+  readonly bridge?: NativeBridge;
 }): PlatformGateway {
+  const bridge = input.bridge ?? CapacitorGameServices;
+
   async function request<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
-    const response = (await CapacitorGameServices.request({
+    const response = (await bridge.request({
       id: crypto.randomUUID(),
       method,
       payload,

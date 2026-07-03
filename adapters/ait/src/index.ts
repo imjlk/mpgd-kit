@@ -8,9 +8,10 @@ export interface GamePlatformBridge {
 export function createAitPlatformGateway(input: {
   readonly appVersion: string;
   readonly buildId: string;
+  readonly bridge?: GamePlatformBridge;
 }): PlatformGateway {
   async function request<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
-    const bridge = getBridge();
+    const bridge = input.bridge ?? getBridge();
 
     if (bridge === undefined) {
       throw new Error('AIT bridge is not installed.');
