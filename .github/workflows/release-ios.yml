@@ -34,9 +34,11 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm smoke:policy
       - run: pnpm build:target ios ${{ inputs.profile }}
         env:
           MPGD_RUN_IOS_ARCHIVE: ${{ inputs.archive && '1' || '0' }}
+      - run: pnpm smoke:target ios
 
       - uses: actions/upload-artifact@v4
         with:

@@ -36,9 +36,11 @@ jobs:
       - run: pnpm validate:policy
       - run: pnpm validate:targets
       - run: pnpm test
+      - run: pnpm smoke:policy
       - run: pnpm graph:preflight
       - run: pnpm pack:packages
       - run: pnpm build:web
+      - run: pnpm smoke:target web-preview
 
       - uses: actions/upload-artifact@v4
         with:
@@ -74,6 +76,7 @@ jobs:
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:android
+      - run: pnpm smoke:target android
 
       - uses: actions/upload-artifact@v4
         with:
@@ -102,6 +105,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:ios
+      - run: pnpm smoke:target ios
 
       - uses: actions/upload-artifact@v4
         with:
@@ -129,6 +133,7 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:ait
+      - run: pnpm smoke:target ait
 
       - uses: actions/upload-artifact@v4
         with:

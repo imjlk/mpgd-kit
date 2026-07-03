@@ -22,10 +22,13 @@ pnpm install
 pnpm check
 pnpm validate:catalog
 pnpm validate:ads
+pnpm validate:policy
 pnpm validate:targets
+pnpm smoke:policy
 pnpm graph:preflight
 pnpm pack:packages
 pnpm build:web
+pnpm smoke:target web-preview
 pnpm build:ait
 ```
 
@@ -86,6 +89,14 @@ smoke checks:
 
 ```sh
 pnpm smoke:policy
+```
+
+Target artifact smoke can validate either every release target or one target
+after a focused build:
+
+```sh
+pnpm smoke:targets
+pnpm smoke:target web-preview
 ```
 
 ## ttsc lint config

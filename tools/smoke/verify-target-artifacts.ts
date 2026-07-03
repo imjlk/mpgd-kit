@@ -7,19 +7,22 @@ import type { ReleaseManifest } from '@mpgd/release-manifest';
 import { readJsonFile } from '../io';
 
 const requiredTargets = ['web-preview', 'android', 'ios', 'ait'] as const;
+type SmokeTarget = (typeof requiredTargets)[number];
+
+const knownTargets = new Set<string>(requiredTargets);
 const assertReleaseManifest = typia.createAssert<ReleaseManifest>();
 
-const requiredArtifacts: Record<(typeof requiredTargets)[number], string> = {
+const requiredArtifacts: Record<SmokeTarget, string> = {
   'web-preview': 'artifacts/web-preview/index.html',
   android: 'release-output/android/app-release.aab',
   ios: 'apps/mobile-capacitor/ios',
   ait: 'release-output/ait/mpgd-kit.ait',
 };
 
-export function verifyTargetArtifacts(): void {
+export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = requiredTargets): void {
   const manifest = assertReleaseManifest(readJsonFile('artifacts/release-manifest.json'));
 
-  for (const target of requiredTargets) {
+  for (const target of targets) {
     const entry = manifest.targets[target];
 
     if (entry === undefined) {
@@ -34,7 +37,7 @@ export function verifyTargetArtifacts(): void {
     }
   }
 
-  console.log(`Target smoke passed: ${requiredTargets.join(', ')}`);
+  console.log(`Target smoke passed: ${targets.join(', ')}`);
 }
 
 function assertPathExists(path: string, label: string): void {
@@ -49,6 +52,20 @@ function assertPathExists(path: string, label: string): void {
   }
 }
 
+function readRequestedTargets(args: readonly string[]): readonly SmokeTarget[] {
+  if (args.length === 0) {
+    return requiredTargets;
+  }
+
+  return args.map((target) => {
+    if (!knownTargets.has(target)) {
+      throw new Error(`Unknown target smoke target: ${target}`);
+    }
+
+    return target as SmokeTarget;
+  });
+}
+
 if (import.meta.url === `file://${process.argv[1]}`) {
-  verifyTargetArtifacts();
+  verifyTargetArtifacts(readRequestedTargets(process.argv.slice(2)));
 }

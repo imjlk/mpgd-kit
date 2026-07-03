@@ -174,3 +174,15 @@ to run xcodebuild archive.
 - [x] Phaser lobby renders the active policy target and feature states
 - [x] Result scene test hook exposes policy-driven action states
 - [x] policy smoke verifies browser/web-preview feature behavior
+
+## Phase 13 - Policy Runtime Guardrails
+
+- [x] root test command runs policy runtime smoke
+- [x] CI validate job runs policy runtime smoke
+- [x] release validate job runs policy runtime smoke
+- [x] manual target build workflow validates policy matrix before build
+- [x] manual target build workflow runs policy runtime smoke before build
+- [x] per-target release workflows run policy runtime smoke before target release build
+- [x] target artifact smoke supports focused single-target validation
+- [x] CI target jobs smoke the artifacts they build
+- [x] release target jobs smoke the artifacts they build

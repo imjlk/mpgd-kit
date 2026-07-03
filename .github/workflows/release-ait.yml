@@ -30,7 +30,9 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm smoke:policy
       - run: pnpm build:target ait ${{ inputs.profile }}
+      - run: pnpm smoke:target ait
 
       - uses: actions/upload-artifact@v4
         with:

@@ -50,8 +50,11 @@ jobs:
       - run: pnpm check
       - run: pnpm validate:catalog
       - run: pnpm validate:ads
+      - run: pnpm validate:policy
       - run: pnpm validate:targets
+      - run: pnpm smoke:policy
       - run: pnpm build:target ${{ inputs.target }} ${{ inputs.profile }}
+      - run: pnpm smoke:target ${{ inputs.target }}
 
       - uses: actions/upload-artifact@v4
         with:
