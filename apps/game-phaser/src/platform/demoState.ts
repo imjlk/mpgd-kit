@@ -7,12 +7,15 @@ import {
 } from '@mpgd/platform-contract';
 import { isPolicyEnforcedGateway, type PolicyRuntimeSnapshot } from '@mpgd/policy-matrix';
 
+import { resolveDemoLocale, type DemoLocale } from './i18n';
+
 export const SAVE_KEY = 'save:v1';
 
 export interface DemoState {
   readonly player: PlayerIdentity;
   readonly capabilities: PlatformCapabilities;
   readonly policyRuntime: PolicyRuntimeSnapshot | null;
+  readonly locale: DemoLocale;
   readonly save: SaveData;
 }
 
@@ -34,6 +37,7 @@ export async function loadDemoState(platform: PlatformGateway): Promise<DemoStat
     player: resolvedPlayer,
     capabilities,
     policyRuntime,
+    locale: resolveDemoLocale(capabilities),
     save: parseSaveData(loaded, resolvedPlayer.playerId),
   };
 }

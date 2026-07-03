@@ -10,6 +10,7 @@ import {
   persistDemoSave,
   type DemoState,
 } from '../platform/demoState';
+import { translate } from '../platform/i18n';
 
 export class ResultScene extends Phaser.Scene {
   private platform: PlatformGateway | null = null;
@@ -25,7 +26,9 @@ export class ResultScene extends Phaser.Scene {
   create(result: FinishedStage): void {
     const platform = this.registry.get('platform') as PlatformGateway;
     const state = this.registry.get('demoState') as DemoState;
-    const status = result.cleared ? 'Cleared' : 'Try Again';
+    const status = result.cleared
+      ? translate(state.locale, 'statusCleared')
+      : translate(state.locale, 'statusTryAgain');
     const nextSave = applyScoreToSave(state.save, result.score.total, result.cleared);
 
     this.platform = platform;
@@ -45,7 +48,7 @@ export class ResultScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.add
-      .text(480, 175, `Score ${result.score.total}`, {
+      .text(480, 175, translate(state.locale, 'score', { score: result.score.total }), {
         fontFamily: 'Inter, Arial',
         fontSize: '34px',
         color: '#f8fafc',
@@ -61,7 +64,7 @@ export class ResultScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.statusText = this.add
-      .text(480, 275, 'Saving result...', {
+      .text(480, 275, translate(state.locale, 'savingResult'), {
         fontFamily: 'Inter, Arial',
         fontSize: '18px',
         color: '#9fb3c8',
@@ -71,7 +74,9 @@ export class ResultScene extends Phaser.Scene {
     this.addAction(
       480,
       340,
-      this.state.capabilities.rewardedAds ? 'Reward ad +10 coins' : 'Reward ad unavailable',
+      this.state.capabilities.rewardedAds
+        ? translate(state.locale, 'rewardAdAction')
+        : translate(state.locale, 'rewardAdUnavailable'),
       () => {
         void this.claimReward();
       },
@@ -82,7 +87,9 @@ export class ResultScene extends Phaser.Scene {
     this.addAction(
       480,
       390,
-      this.state.capabilities.nativeIap ? 'Buy 100 coins' : 'Purchase unavailable',
+      this.state.capabilities.nativeIap
+        ? translate(state.locale, 'purchaseAction')
+        : translate(state.locale, 'purchaseUnavailable'),
       () => {
         void this.buyCoins();
       },
@@ -93,7 +100,9 @@ export class ResultScene extends Phaser.Scene {
     this.addAction(
       480,
       440,
-      this.state.capabilities.nativeLeaderboard ? 'Open leaderboard' : 'Leaderboard unavailable',
+      this.state.capabilities.nativeLeaderboard
+        ? translate(state.locale, 'leaderboardAction')
+        : translate(state.locale, 'leaderboardActionUnavailable'),
       () => {
         void this.openLeaderboard();
       },
@@ -101,7 +110,9 @@ export class ResultScene extends Phaser.Scene {
         disabled: !this.state.capabilities.nativeLeaderboard,
       },
     );
-    this.addAction(480, 490, 'Play again', () => this.scene.start('LobbyScene'));
+    this.addAction(480, 490, translate(state.locale, 'playAgain'), () =>
+      this.scene.start('LobbyScene'),
+    );
 
     this.input.keyboard?.once('keydown-ENTER', () => this.scene.start('LobbyScene'));
     this.renderSave();
@@ -114,11 +125,13 @@ export class ResultScene extends Phaser.Scene {
       cleared: this.result?.cleared ?? null,
       coins: this.state?.save.coins ?? null,
       bestScore: this.state?.save.bestScore ?? null,
+      locale: this.state?.locale ?? null,
       status: this.statusText?.text ?? null,
       actions: {
         rewardedAd: this.getActionState('rewardedAds'),
         purchase: this.getActionState('iap'),
         leaderboard: this.getActionState('leaderboard'),
+        i18n: this.getActionState('i18n'),
       },
       policyRuntime: this.state?.policyRuntime ?? null,
     };
@@ -154,7 +167,10 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
-    const saveSummary = `Best ${this.state.save.bestScore}  Coins ${this.state.save.coins}`;
+    const saveSummary = translate(this.state.locale, 'saveSummary', {
+      bestScore: this.state.save.bestScore,
+      coins: this.state.save.coins,
+    });
 
     this.saveText.setText(saveSummary);
   }
@@ -167,7 +183,9 @@ export class ResultScene extends Phaser.Scene {
     await persistDemoSave(this.platform, this.state.save);
 
     if (!this.state.capabilities.nativeLeaderboard) {
-      this.setStatus(`Saved. ${this.unavailableMessage('leaderboard')}`);
+      this.setStatus(
+        `${translate(this.state.locale, 'saved')} ${this.unavailableMessage('leaderboard')}`,
+      );
       return;
     }
 
@@ -178,7 +196,12 @@ export class ResultScene extends Phaser.Scene {
       submittedAt: new Date().toISOString(),
     });
     this.setStatus(
-      submission.submitted ? 'Saved and submitted.' : 'Saved. Leaderboard unavailable.',
+      submission.submitted
+        ? translate(this.state.locale, 'savedAndSubmitted')
+        : `${translate(this.state.locale, 'saved')} ${translate(
+            this.state.locale,
+            'leaderboardUnavailable',
+          )}`,
     );
   }
 
@@ -192,7 +215,7 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
-    this.setStatus('Showing rewarded ad...');
+    this.setStatus(translate(this.state.locale, 'showingRewardedAd'));
     const reward = await this.platform.ads.showRewarded({
       placementId: 'CONTINUE_AFTER_FAIL',
       idempotencyKey: `reward-${this.result.session.id}`,
@@ -206,9 +229,9 @@ export class ResultScene extends Phaser.Scene {
       this.registry.set('demoState', this.state);
       await persistDemoSave(this.platform, this.state.save);
       this.renderSave();
-      this.setStatus('Reward granted.');
+      this.setStatus(translate(this.state.locale, 'rewardGranted'));
     } else {
-      this.setStatus(`Reward unavailable: ${reward.status}`);
+      this.setStatus(translate(this.state.locale, 'rewardUnavailable', { status: reward.status }));
     }
   }
 
@@ -222,7 +245,7 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
-    this.setStatus('Opening mock purchase...');
+    this.setStatus(translate(this.state.locale, 'openingPurchase'));
     const purchase = await this.platform.commerce.purchase({
       productId: 'COINS_100',
       source: 'result',
@@ -237,9 +260,9 @@ export class ResultScene extends Phaser.Scene {
       this.registry.set('demoState', this.state);
       await persistDemoSave(this.platform, this.state.save);
       this.renderSave();
-      this.setStatus('Purchase completed.');
+      this.setStatus(translate(this.state.locale, 'purchaseCompleted'));
     } else {
-      this.setStatus(`Purchase ${purchase.status}.`);
+      this.setStatus(translate(this.state.locale, 'purchaseStatus', { status: purchase.status }));
     }
   }
 
@@ -254,7 +277,7 @@ export class ResultScene extends Phaser.Scene {
     }
 
     await this.platform.leaderboard.open({ leaderboardId: 'default' });
-    this.setStatus('Leaderboard opened.');
+    this.setStatus(translate(this.state.locale, 'leaderboardOpened'));
   }
 
   private setStatus(message: string): void {
@@ -294,29 +317,33 @@ export class ResultScene extends Phaser.Scene {
         return this.state.capabilities.interstitialAds;
       case 'leaderboard':
         return this.state.capabilities.nativeLeaderboard;
+      case 'i18n':
+        return this.state.capabilities.localizedContent;
     }
   }
 
   private unavailableMessage(feature: PolicyFeature): string {
-    const actionName = actionLabels[feature];
+    const locale = this.state?.locale ?? 'en';
+    const actionName = translate(locale, actionLabels[feature]);
     const reason = this.getActionState(feature).reason;
 
     switch (reason) {
       case 'policy-disabled':
-        return `${actionName} disabled by policy.`;
+        return translate(locale, 'featurePolicyDisabled', { feature: actionName });
       case 'capability-unsupported':
-        return `${actionName} unsupported on this target.`;
+        return translate(locale, 'featureUnsupported', { feature: actionName });
       case 'available':
-        return `${actionName} unavailable.`;
+        return translate(locale, 'featureUnavailable', { feature: actionName });
       case 'unknown':
-        return `${actionName} unavailable.`;
+        return translate(locale, 'featureUnavailable', { feature: actionName });
     }
   }
 }
 
 const actionLabels = {
-  iap: 'Purchases',
-  rewardedAds: 'Reward ads',
-  interstitialAds: 'Interstitial ads',
-  leaderboard: 'Leaderboard',
-} satisfies Record<PolicyFeature, string>;
+  iap: 'actionPurchases',
+  rewardedAds: 'actionRewardAds',
+  interstitialAds: 'actionInterstitialAds',
+  leaderboard: 'actionLeaderboard',
+  i18n: 'actionI18n',
+} satisfies Record<PolicyFeature, Parameters<typeof translate>[1]>;

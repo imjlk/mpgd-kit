@@ -81,11 +81,13 @@ if a preset no longer returns answer-ready anchors.
 ## Platform policy
 
 `packages/policy-matrix/policy.json` is the source of truth for platform-gated
-features such as IAP, ads, and leaderboard. The Phaser app wraps each installed
+features such as IAP, ads, leaderboard, and i18n. The Phaser app wraps each installed
 `PlatformGateway` with policy enforcement, so disabled features are removed from
 capabilities and return unavailable/no-op results at runtime.
+The demo resolves localized UI text only when the policy-enforced gateway keeps
+`localizedContent` available; otherwise it falls back to English.
 Policy-enforced gateways also expose a runtime snapshot for demo diagnostics and
-smoke checks:
+smoke checks across every configured release target:
 
 ```sh
 pnpm smoke:policy

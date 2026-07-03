@@ -87,7 +87,8 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
             "achievements": false,
             "cloudSave": false,
             "socialShare": false,
-            "haptics": true
+            "haptics": true,
+            "localizedContent": true
         ]
     }
 

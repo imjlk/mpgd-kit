@@ -4,6 +4,7 @@ import type { PlatformGateway } from '@mpgd/platform-contract';
 import type { PolicyFeature, PolicyFeatureRuntimeReason } from '@mpgd/policy-matrix';
 
 import { loadDemoState, type DemoState } from '../platform/demoState';
+import { translate } from '../platform/i18n';
 
 export class LobbyScene extends Phaser.Scene {
   private ready = false;
@@ -22,7 +23,7 @@ export class LobbyScene extends Phaser.Scene {
     const platform = this.registry.get('platform') as PlatformGateway;
 
     this.add
-      .text(480, 150, 'MPGD Kit', {
+      .text(480, 150, translate('en', 'appTitle'), {
         fontFamily: 'Inter, Arial',
         fontSize: '64px',
         color: '#f8fafc',
@@ -30,7 +31,7 @@ export class LobbyScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.add
-      .text(480, 220, `Target: ${platform.target}`, {
+      .text(480, 220, translate('en', 'target', { target: platform.target }), {
         fontFamily: 'Inter, Arial',
         fontSize: '24px',
         color: '#48d6c8',
@@ -38,7 +39,7 @@ export class LobbyScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.playerText = this.add
-      .text(480, 275, 'Loading player...', {
+      .text(480, 275, translate('en', 'loadingPlayer'), {
         fontFamily: 'Inter, Arial',
         fontSize: '22px',
         color: '#f8fafc',
@@ -70,7 +71,7 @@ export class LobbyScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.startText = this.add
-      .text(480, 450, 'Preparing SDK demo...', {
+      .text(480, 450, translate('en', 'preparingDemo'), {
         fontFamily: 'Inter, Arial',
         fontSize: '28px',
         color: '#fff7ad',
@@ -106,6 +107,7 @@ export class LobbyScene extends Phaser.Scene {
       playerId: this.state?.player.playerId ?? null,
       coins: this.state?.save.coins ?? null,
       bestScore: this.state?.save.bestScore ?? null,
+      locale: this.state?.locale ?? null,
       policyRuntime: this.state?.policyRuntime ?? null,
     };
   }
@@ -124,53 +126,82 @@ export class LobbyScene extends Phaser.Scene {
 
     const playerName = this.state.player.displayName ?? this.state.player.playerId;
     const supported = [
-      this.state.capabilities.rewardedAds ? 'rewarded ads' : null,
+      this.state.capabilities.rewardedAds ? 'rewardedAds' : null,
       this.state.capabilities.nativeIap ? 'iap' : null,
       this.state.capabilities.nativeLeaderboard ? 'leaderboard' : null,
       this.state.capabilities.cloudSave ? 'save' : null,
-    ].filter((label): label is string => label !== null);
-    const saveSummary = `Best ${this.state.save.bestScore}  Coins ${this.state.save.coins}`;
-    const capabilitySummary = supported.length > 0 ? supported.join(', ') : 'mock only';
+      this.state.capabilities.localizedContent ? 'i18n' : null,
+    ].filter((label): label is CapabilityLabel => label !== null);
+    const locale = this.state.locale;
+    const saveSummary = translate(this.state.locale, 'saveSummary', {
+      bestScore: this.state.save.bestScore,
+      coins: this.state.save.coins,
+    });
+    const capabilitySummary =
+      supported.length > 0
+        ? supported
+            .map((capability) => translate(locale, capabilityLabels[capability]))
+            .join(', ')
+        : translate(this.state.locale, 'mockOnly');
 
-    this.playerText.setText(`Player: ${playerName}`);
+    this.playerText.setText(translate(this.state.locale, 'player', { name: playerName }));
     this.saveText.setText(saveSummary);
-    this.capabilityText.setText(`SDK: ${capabilitySummary}`);
+    this.capabilityText.setText(
+      translate(this.state.locale, 'sdkSummary', { features: capabilitySummary }),
+    );
     this.policyText.setText(summarizePolicyRuntime(this.state));
-    this.startText.setText('Tap or press Enter');
+    this.startText.setText(translate(this.state.locale, 'tapToStart'));
   }
 }
 
 const policyFeatureLabels = {
-  iap: 'IAP',
-  rewardedAds: 'Reward',
-  interstitialAds: 'Inter',
-  leaderboard: 'Board',
-} satisfies Record<PolicyFeature, string>;
+  iap: 'policyFeatureIap',
+  rewardedAds: 'policyFeatureRewardedAds',
+  interstitialAds: 'policyFeatureInterstitialAds',
+  leaderboard: 'policyFeatureLeaderboard',
+  i18n: 'policyFeatureI18n',
+} satisfies Record<PolicyFeature, Parameters<typeof translate>[1]>;
+
+const capabilityLabels = {
+  rewardedAds: 'capRewardedAds',
+  iap: 'capIap',
+  leaderboard: 'capLeaderboard',
+  save: 'capSave',
+  i18n: 'capI18n',
+} satisfies Record<string, Parameters<typeof translate>[1]>;
+
+type CapabilityLabel = keyof typeof capabilityLabels;
 
 function summarizePolicyRuntime(state: DemoState): string {
   const runtime = state.policyRuntime;
 
   if (runtime === null) {
-    return 'Policy: unavailable';
+    return translate(state.locale, 'policyUnavailable');
   }
 
   const summary = (Object.keys(policyFeatureLabels) as PolicyFeature[])
     .map((feature) => {
       const featureRuntime = runtime.features[feature];
-      return `${policyFeatureLabels[feature]} ${reasonLabel(featureRuntime.reason)}`;
+      return `${translate(state.locale, policyFeatureLabels[feature])} ${reasonLabel(
+        state,
+        featureRuntime.reason,
+      )}`;
     })
     .join('  ');
 
-  return `Policy ${runtime.policyTarget}: ${summary}`;
+  return translate(state.locale, 'policySummary', {
+    target: runtime.policyTarget,
+    summary,
+  });
 }
 
-function reasonLabel(reason: PolicyFeatureRuntimeReason): string {
+function reasonLabel(state: DemoState, reason: PolicyFeatureRuntimeReason): string {
   switch (reason) {
     case 'available':
-      return 'on';
+      return translate(state.locale, 'policyOn');
     case 'policy-disabled':
-      return 'off';
+      return translate(state.locale, 'policyOff');
     case 'capability-unsupported':
-      return 'n/a';
+      return translate(state.locale, 'policyUnsupported');
   }
 }

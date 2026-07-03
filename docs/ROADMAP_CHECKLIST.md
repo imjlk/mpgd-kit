@@ -174,6 +174,7 @@ to run xcodebuild archive.
 - [x] Phaser lobby renders the active policy target and feature states
 - [x] Result scene test hook exposes policy-driven action states
 - [x] policy smoke verifies browser/web-preview feature behavior
+- [x] policy smoke verifies every configured release target
 
 ## Phase 13 - Policy Runtime Guardrails
 
@@ -186,3 +187,13 @@ to run xcodebuild archive.
 - [x] target artifact smoke supports focused single-target validation
 - [x] CI target jobs smoke the artifacts they build
 - [x] release target jobs smoke the artifacts they build
+
+## Phase 14 - Policy Managed i18n
+
+- [x] platform capabilities expose localized content support
+- [x] policy matrix controls i18n availability
+- [x] policy runtime snapshots include i18n feature state
+- [x] policy enforcement clamps localized content capability
+- [x] browser, AIT, Android, and iOS mocks report localized content capability
+- [x] Phaser demo resolves localized UI text through policy-enforced capabilities
+- [x] policy smoke verifies i18n locale fallback and availability

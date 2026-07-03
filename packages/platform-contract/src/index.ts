@@ -13,6 +13,7 @@ export interface PlatformCapabilities {
   readonly cloudSave: boolean;
   readonly socialShare: boolean;
   readonly haptics: boolean;
+  readonly localizedContent: boolean;
 }
 
 export interface PlayerIdentity {
@@ -57,5 +58,6 @@ export function createUnsupportedCapabilities(): PlatformCapabilities {
     cloudSave: false,
     socialShare: false,
     haptics: false,
+    localizedContent: false,
   };
 }

@@ -5,6 +5,7 @@ export interface TargetPolicy {
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
   readonly leaderboard: boolean;
+  readonly i18n: boolean;
 }
 
 export interface PolicyMatrix {
@@ -99,6 +100,7 @@ export function applyPolicyToCapabilities(
     rewardedAds: capabilities.rewardedAds && policy.rewardedAds,
     interstitialAds: capabilities.interstitialAds && policy.interstitialAds,
     nativeLeaderboard: capabilities.nativeLeaderboard && policy.leaderboard,
+    localizedContent: capabilities.localizedContent && policy.i18n,
   };
 }
 
@@ -141,6 +143,7 @@ export function createPolicyRuntimeSnapshot(input: {
       input.capabilities,
     ),
     leaderboard: getPolicyFeatureRuntime('leaderboard', input.policy, input.capabilities),
+    i18n: getPolicyFeatureRuntime('i18n', input.policy, input.capabilities),
   } satisfies Record<PolicyFeature, PolicyFeatureRuntime>;
 
   return {
@@ -294,5 +297,7 @@ function isFeatureCapabilitySupported(
       return capabilities.interstitialAds;
     case 'leaderboard':
       return capabilities.nativeLeaderboard;
+    case 'i18n':
+      return capabilities.localizedContent;
   }
 }

@@ -40,6 +40,7 @@ export function createBrowserPlatformGateway(): PlatformGateway {
         rewardedAds: true,
         interstitialAds: true,
         cloudSave: true,
+        localizedContent: true,
       };
     },
     identity: {

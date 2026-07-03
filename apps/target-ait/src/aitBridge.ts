@@ -34,6 +34,7 @@ export function installAitBridge(): void {
               cloudSave: false,
               socialShare: true,
               haptics: true,
+              localizedContent: true,
             },
           };
 

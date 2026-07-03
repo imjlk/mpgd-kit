@@ -16,12 +16,14 @@ const policyMatrix = {
       rewardedAds: false,
       interstitialAds: false,
       leaderboard: false,
+      i18n: true,
     },
     android: {
       iap: true,
       rewardedAds: true,
       interstitialAds: true,
       leaderboard: true,
+      i18n: true,
     },
   },
 } satisfies PolicyMatrix;
@@ -59,6 +61,7 @@ assertEqual(webRuntime.features.iap.reason, 'policy-disabled');
 assertEqual(webRuntime.features.rewardedAds.reason, 'policy-disabled');
 assertEqual(webRuntime.features.interstitialAds.reason, 'policy-disabled');
 assertEqual(webRuntime.features.leaderboard.reason, 'policy-disabled');
+assertEqual(webRuntime.features.i18n.reason, 'available');
 assertDeepEqual(
   webRuntime.adPlacements.map((placement) => ({
     id: placement.id,
@@ -82,6 +85,7 @@ assertEqual(webCapabilities.nativeIap, false);
 assertEqual(webCapabilities.rewardedAds, false);
 assertEqual(webCapabilities.interstitialAds, false);
 assertEqual(webCapabilities.nativeLeaderboard, false);
+assertEqual(webCapabilities.localizedContent, true);
 assertDeepEqual(await webGateway.commerce.getProducts(), []);
 assertDeepEqual(
   await webGateway.commerce.purchase({
@@ -130,6 +134,7 @@ const rewardedOnlyGateway = withPolicyEnforcement(
     rewardedAds: true,
     interstitialAds: false,
     leaderboard: true,
+    i18n: false,
   },
   {
     adPlacements: [
@@ -149,6 +154,8 @@ const rewardedOnlyRuntime = await rewardedOnlyGateway.getPolicyRuntime();
 
 assertEqual(rewardedOnlyRuntime.features.rewardedAds.reason, 'available');
 assertEqual(rewardedOnlyRuntime.features.interstitialAds.reason, 'policy-disabled');
+assertEqual(rewardedOnlyRuntime.features.i18n.reason, 'policy-disabled');
+assertEqual((await rewardedOnlyGateway.getCapabilities()).localizedContent, false);
 
 await rewardedOnlyGateway.ads.preload({ placementId: 'CONTINUE_AFTER_FAIL' });
 await rewardedOnlyGateway.ads.preload({ placementId: 'STAGE_END_INTERSTITIAL' });
@@ -212,6 +219,7 @@ function createGateway(): PlatformGateway {
         cloudSave: true,
         socialShare: true,
         haptics: true,
+        localizedContent: true,
       };
     },
     identity: {

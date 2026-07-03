@@ -5,25 +5,29 @@
       "iap": false,
       "rewardedAds": false,
       "interstitialAds": false,
-      "leaderboard": false
+      "leaderboard": false,
+      "i18n": true
     },
     "android": {
       "iap": true,
       "rewardedAds": true,
       "interstitialAds": true,
-      "leaderboard": true
+      "leaderboard": true,
+      "i18n": true
     },
     "ios": {
       "iap": true,
       "rewardedAds": true,
       "interstitialAds": true,
-      "leaderboard": true
+      "leaderboard": true,
+      "i18n": true
     },
     "ait": {
       "iap": true,
       "rewardedAds": true,
       "interstitialAds": true,
-      "leaderboard": true
+      "leaderboard": true,
+      "i18n": true
     }
   }
 }

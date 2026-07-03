@@ -13,6 +13,7 @@ describe('adapter-browser', () => {
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
       nativeAds: false,
       cloudSave: true,
+      localizedContent: true,
     });
     await expect(gateway.identity.getPlayer()).resolves.toEqual({
       playerId: 'browser-player',
