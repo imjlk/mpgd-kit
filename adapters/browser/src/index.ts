@@ -1,8 +1,22 @@
+import type { ProductInfo } from '@mpgd/monetization-contract';
 import {
   createUnsupportedCapabilities,
   type PlatformGateway,
   type PlayerIdentity,
 } from '@mpgd/platform-contract';
+
+const mockProducts = [
+  {
+    id: 'COINS_100',
+    type: 'consumable',
+    title: '100 Coins',
+    description: 'Adds 100 demo coins.',
+    price: {
+      formatted: '$0.99',
+      currencyCode: 'USD',
+    },
+  },
+] as const satisfies readonly ProductInfo[];
 
 export function createBrowserPlatformGateway(): PlatformGateway {
   const pauseListeners = new Set<() => void>();
@@ -23,6 +37,8 @@ export function createBrowserPlatformGateway(): PlatformGateway {
     async getCapabilities() {
       return {
         ...createUnsupportedCapabilities(),
+        rewardedAds: true,
+        interstitialAds: true,
         cloudSave: true,
       };
     },
@@ -36,12 +52,13 @@ export function createBrowserPlatformGateway(): PlatformGateway {
     },
     commerce: {
       async getProducts() {
-        return [];
+        return mockProducts;
       },
       async purchase() {
         return {
-          status: 'cancelled',
-          entitlementIds: [],
+          status: 'completed',
+          transactionId: `browser-purchase-${crypto.randomUUID()}`,
+          entitlementIds: ['COINS_100'],
         };
       },
       async getEntitlements() {
@@ -52,8 +69,9 @@ export function createBrowserPlatformGateway(): PlatformGateway {
       async preload() {},
       async showRewarded() {
         return {
-          status: 'unavailable',
-          rewardGranted: false,
+          status: 'completed',
+          rewardGranted: true,
+          ledgerEntryId: `browser-reward-${crypto.randomUUID()}`,
         };
       },
       async showInterstitial() {

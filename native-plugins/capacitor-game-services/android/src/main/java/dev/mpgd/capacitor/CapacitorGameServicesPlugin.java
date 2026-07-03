@@ -5,6 +5,7 @@ import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
 import com.getcapacitor.PluginMethod;
 import com.getcapacitor.annotation.CapacitorPlugin;
+import org.json.JSONObject;
 
 @CapacitorPlugin(name = "CapacitorGameServices")
 public class CapacitorGameServicesPlugin extends Plugin {
@@ -30,24 +31,28 @@ public class CapacitorGameServicesPlugin extends Plugin {
                 call.resolve(okResponse(id, player()));
                 return;
             case "commerce.getProducts":
-                call.resolve(okResponse(id, new JSObject().put("products", new Object[] {})));
+                call.resolve(okResponse(id, new Object[] { product() }));
                 return;
             case "commerce.purchase":
                 call.resolve(okResponse(id, new JSObject()
-                    .put("status", "pending_verification")
-                    .put("transactionId", "android-mock-" + id)));
+                    .put("status", "completed")
+                    .put("transactionId", "android-mock-" + id)
+                    .put("entitlementIds", new String[] { "COINS_100" })));
                 return;
             case "commerce.restore":
+                call.resolve(okResponse(id, new JSObject().put("restoredEntitlements", new Object[] {})));
+                return;
             case "commerce.getEntitlements":
-                call.resolve(okResponse(id, new JSObject().put("entitlements", new Object[] {})));
+                call.resolve(okResponse(id, new Object[] {}));
                 return;
             case "ads.preload":
-                call.resolve(okResponse(id, new JSObject().put("preloaded", true)));
+                call.resolve(okResponse(id, new JSObject()));
                 return;
             case "ads.showRewarded":
                 call.resolve(okResponse(id, new JSObject()
-                    .put("status", "rewarded")
-                    .put("rewardClaimId", "android-reward-" + id)));
+                    .put("status", "completed")
+                    .put("rewardGranted", true)
+                    .put("ledgerEntryId", "android-reward-" + id)));
                 return;
             case "ads.showInterstitial":
                 call.resolve(okResponse(id, new JSObject().put("status", "shown")));
@@ -59,17 +64,17 @@ public class CapacitorGameServicesPlugin extends Plugin {
                 call.resolve(okResponse(id, new JSObject().put("opened", true)));
                 return;
             case "storage.load":
-                call.resolve(okResponse(id, new JSObject().put("saveData", null)));
+                call.resolve(okResponse(id, JSONObject.NULL));
                 return;
             case "storage.save":
-                call.resolve(okResponse(id, new JSObject().put("saved", true)));
+                call.resolve(okResponse(id, new JSObject()));
                 return;
             default:
                 call.resolve(errorResponse(id, "UNSUPPORTED_METHOD", "Unsupported bridge method: " + method));
         }
     }
 
-    private JSObject okResponse(String id, JSObject data) {
+    private JSObject okResponse(String id, Object data) {
         return new JSObject()
             .put("id", id)
             .put("ok", true)
@@ -101,8 +106,18 @@ public class CapacitorGameServicesPlugin extends Plugin {
 
     private JSObject player() {
         return new JSObject()
-            .put("id", "android-local-player")
-            .put("displayName", "Android Local Player")
-            .put("isGuest", true);
+            .put("playerId", "android-local-player")
+            .put("displayName", "Android Local Player");
+    }
+
+    private JSObject product() {
+        return new JSObject()
+            .put("id", "COINS_100")
+            .put("type", "consumable")
+            .put("title", "100 Coins")
+            .put("description", "Adds 100 demo coins.")
+            .put("price", new JSObject()
+                .put("formatted", "$0.99")
+                .put("currencyCode", "USD"));
     }
 }

@@ -75,6 +75,9 @@ importers:
 
   adapters/browser:
     dependencies:
+      '@mpgd/monetization-contract':
+        specifier: workspace:*
+        version: link:../../packages/monetization-contract
       '@mpgd/platform-contract':
         specifier: workspace:*
         version: link:../../packages/platform-contract
@@ -128,6 +131,9 @@ importers:
       '@mpgd/game-core':
         specifier: workspace:*
         version: link:../../packages/game-core
+      '@mpgd/game-save':
+        specifier: workspace:*
+        version: link:../../packages/game-save
       '@mpgd/leaderboard-contract':
         specifier: workspace:*
         version: link:../../packages/leaderboard-contract

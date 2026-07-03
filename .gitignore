@@ -2,6 +2,7 @@ node_modules/
 dist/
 artifacts/
 release-output/
+output/
 .turbo/
 .DS_Store
 *.log

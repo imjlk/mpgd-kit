@@ -20,6 +20,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@mpgd/monetization-contract": "workspace:*",
     "@mpgd/platform-contract": "workspace:*"
   },
   "devDependencies": {

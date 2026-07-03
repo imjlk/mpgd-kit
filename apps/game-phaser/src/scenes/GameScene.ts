@@ -8,6 +8,8 @@ import {
   type GameSession,
 } from '@mpgd/game-core';
 
+import type { DemoState } from '../platform/demoState';
+
 export class GameScene extends Phaser.Scene {
   private session: GameSession | null = null;
   private scoreText: Phaser.GameObjects.Text | null = null;
@@ -34,6 +36,15 @@ export class GameScene extends Phaser.Scene {
         color: '#f8fafc',
       })
       .setOrigin(0, 0);
+
+    const state = this.registry.get('demoState') as DemoState | undefined;
+    const progressText = `Coins ${state?.save.coins ?? 0}  Best ${state?.save.bestScore ?? 0}`;
+
+    this.add.text(32, 112, progressText, {
+      fontFamily: 'Inter, Arial',
+      fontSize: '18px',
+      color: '#9fb3c8',
+    });
 
     this.scoreText = this.add.text(32, 72, '', {
       fontFamily: 'Inter, Arial',
@@ -70,6 +81,21 @@ export class GameScene extends Phaser.Scene {
     }
 
     this.updateHud();
+  }
+
+  renderGameToText(): unknown {
+    return {
+      session: this.session,
+      target:
+        this.target === null
+          ? null
+          : {
+              x: this.target.x,
+              y: this.target.y,
+              scale: this.target.scale,
+            },
+      secondsLeft: Math.max(0, Math.ceil((this.finishAtMs - this.time.now) / 1000)),
+    };
   }
 
   private hitTarget(): void {

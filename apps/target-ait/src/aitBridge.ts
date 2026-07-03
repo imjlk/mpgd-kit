@@ -6,6 +6,8 @@ import {
 
 import type { BridgeRequest, BridgeResponse } from './bridgeTypes';
 
+const storage = new Map<string, unknown>();
+
 export function installAitBridge(): void {
   const globalBridgeHost = globalThis as {
     __GAME_PLATFORM_BRIDGE__?: {
@@ -35,6 +37,88 @@ export function installAitBridge(): void {
             },
           };
 
+        case 'identity.getPlayer':
+          return {
+            id: request.id,
+            ok: true,
+            data: {
+              playerId: 'ait-local-player',
+              displayName: 'AIT Local Player',
+            },
+          };
+
+        case 'commerce.getProducts':
+          return {
+            id: request.id,
+            ok: true,
+            data: [
+              {
+                id: 'COINS_100',
+                type: 'consumable',
+                title: '100 Coins',
+                description: 'Adds 100 demo coins.',
+                price: {
+                  formatted: '₩1,100',
+                  currencyCode: 'KRW',
+                },
+              },
+            ],
+          };
+
+        case 'commerce.purchase':
+          return {
+            id: request.id,
+            ok: true,
+            data: {
+              status: 'completed',
+              transactionId: `ait-mock-${request.id}`,
+              entitlementIds: ['COINS_100'],
+            },
+          };
+
+        case 'commerce.restore':
+          return {
+            id: request.id,
+            ok: true,
+            data: {
+              restoredEntitlements: [],
+            },
+          };
+
+        case 'commerce.getEntitlements':
+          return {
+            id: request.id,
+            ok: true,
+            data: [],
+          };
+
+        case 'ads.preload':
+          return {
+            id: request.id,
+            ok: true,
+            data: {},
+          };
+
+        case 'ads.showRewarded':
+          return {
+            id: request.id,
+            ok: true,
+            data: {
+              status: 'completed',
+              rewardGranted: true,
+              ledgerEntryId: `ait-reward-${request.id}`,
+            },
+          };
+
+        case 'ads.showInterstitial':
+          return {
+            id: request.id,
+            ok: true,
+            data: {
+              status: 'shown',
+            },
+          };
+
         case 'leaderboard.submitScore': {
           const payload = request.payload as { readonly score: number };
           const result = await submitGameCenterLeaderBoardScore({
@@ -57,6 +141,30 @@ export function installAitBridge(): void {
             ok: true,
             data: {},
           };
+
+        case 'storage.load': {
+          const payload = request.payload as { readonly key?: string };
+
+          return {
+            id: request.id,
+            ok: true,
+            data: payload.key === undefined ? null : (storage.get(payload.key) ?? null),
+          };
+        }
+
+        case 'storage.save': {
+          const payload = request.payload as { readonly key?: string; readonly value?: unknown };
+
+          if (payload.key !== undefined) {
+            storage.set(payload.key, payload.value);
+          }
+
+          return {
+            id: request.id,
+            ok: true,
+            data: {},
+          };
+        }
 
         default:
           return createBridgeError(

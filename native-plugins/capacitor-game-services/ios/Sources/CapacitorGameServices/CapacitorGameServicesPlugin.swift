@@ -23,20 +23,24 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
         case "identity.getPlayer":
             call.resolve(okResponse(id: id, data: player()))
         case "commerce.getProducts":
-            call.resolve(okResponse(id: id, data: ["products": []]))
+            call.resolve(okResponse(id: id, data: [product()]))
         case "commerce.purchase":
             call.resolve(okResponse(id: id, data: [
-                "status": "pending_verification",
-                "transactionId": "ios-mock-\(id)"
+                "status": "completed",
+                "transactionId": "ios-mock-\(id)",
+                "entitlementIds": ["COINS_100"]
             ]))
-        case "commerce.restore", "commerce.getEntitlements":
-            call.resolve(okResponse(id: id, data: ["entitlements": []]))
+        case "commerce.restore":
+            call.resolve(okResponse(id: id, data: ["restoredEntitlements": []]))
+        case "commerce.getEntitlements":
+            call.resolve(okResponse(id: id, data: []))
         case "ads.preload":
-            call.resolve(okResponse(id: id, data: ["preloaded": true]))
+            call.resolve(okResponse(id: id, data: [:]))
         case "ads.showRewarded":
             call.resolve(okResponse(id: id, data: [
-                "status": "rewarded",
-                "rewardClaimId": "ios-reward-\(id)"
+                "status": "completed",
+                "rewardGranted": true,
+                "ledgerEntryId": "ios-reward-\(id)"
             ]))
         case "ads.showInterstitial":
             call.resolve(okResponse(id: id, data: ["status": "shown"]))
@@ -45,15 +49,15 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
         case "leaderboard.open":
             call.resolve(okResponse(id: id, data: ["opened": true]))
         case "storage.load":
-            call.resolve(okResponse(id: id, data: ["saveData": NSNull()]))
+            call.resolve(okResponse(id: id, data: NSNull()))
         case "storage.save":
-            call.resolve(okResponse(id: id, data: ["saved": true]))
+            call.resolve(okResponse(id: id, data: [:]))
         default:
             call.resolve(errorResponse(id: id, code: "UNSUPPORTED_METHOD", message: "Unsupported bridge method: \(method)"))
         }
     }
 
-    private func okResponse(id: String, data: [String: Any]) -> [String: Any] {
+    private func okResponse(id: String, data: Any) -> [String: Any] {
         return [
             "id": id,
             "ok": true,
@@ -89,9 +93,21 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
 
     private func player() -> [String: Any] {
         return [
-            "id": "ios-local-player",
-            "displayName": "iOS Local Player",
-            "isGuest": true
+            "playerId": "ios-local-player",
+            "displayName": "iOS Local Player"
+        ]
+    }
+
+    private func product() -> [String: Any] {
+        return [
+            "id": "COINS_100",
+            "type": "consumable",
+            "title": "100 Coins",
+            "description": "Adds 100 demo coins.",
+            "price": [
+                "formatted": "$0.99",
+                "currencyCode": "USD"
+            ]
         ]
     }
 }
