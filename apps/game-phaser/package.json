@@ -22,6 +22,7 @@
     "@mpgd/bridge-protocol": "workspace:*",
     "@mpgd/game-core": "workspace:*",
     "@mpgd/game-save": "workspace:*",
+    "@mpgd/i18n": "workspace:*",
     "@mpgd/leaderboard-contract": "workspace:*",
     "@mpgd/monetization-contract": "workspace:*",
     "@mpgd/policy-matrix": "workspace:*",

@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -64,6 +65,8 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
 
   run('pnpm', ['exec', 'ttsc', '-p', tempConfigPath]);
   run('pnpm', ['exec', 'tsc', '-p', tempConfigPath, '--emitDeclarationOnly']);
+  copySourceRuntimeAssets(srcDir, distDir);
+  copyRuntimeAssets(srcDir, distDir);
   formatDeclarationFiles(distDir);
 
   assertFile(join(distDir, 'index.js'));
@@ -112,6 +115,52 @@ function formatDeclarationFiles(dir: string): void {
       .trimEnd()}\n`;
 
     writeFileSync(path, formatted);
+  }
+}
+
+function copySourceRuntimeAssets(srcDir: string, distDir: string): void {
+  for (const entry of readdirSync(srcDir)) {
+    const sourcePath = join(srcDir, entry);
+
+    if (statSync(sourcePath).isDirectory()) {
+      continue;
+    }
+
+    if (!entry.endsWith('.js') && !entry.endsWith('.d.ts')) {
+      continue;
+    }
+
+    copyFileSync(sourcePath, join(distDir, entry));
+  }
+}
+
+function copyRuntimeAssets(srcDir: string, distDir: string): void {
+  const generatedDir = join(srcDir, 'paraglide');
+
+  if (!existsSync(generatedDir)) {
+    return;
+  }
+
+  copyDir(generatedDir, join(distDir, 'paraglide'));
+}
+
+function copyDir(sourceDir: string, targetDir: string): void {
+  mkdirSync(targetDir, { recursive: true });
+
+  for (const entry of readdirSync(sourceDir)) {
+    if (entry === '.gitignore' || entry === '.prettierignore') {
+      continue;
+    }
+
+    const sourcePath = join(sourceDir, entry);
+    const targetPath = join(targetDir, entry);
+
+    if (statSync(sourcePath).isDirectory()) {
+      copyDir(sourcePath, targetPath);
+      continue;
+    }
+
+    copyFileSync(sourcePath, targetPath);
   }
 }
 

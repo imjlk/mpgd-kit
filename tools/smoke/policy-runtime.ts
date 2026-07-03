@@ -1,6 +1,6 @@
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
-import { resolveDemoLocale } from '../../apps/game-phaser/src/platform/i18n';
 import type { AdPlacements } from '../../packages/ad-placements/src/index';
+import { resolveMpgdLocale } from '../../packages/i18n/src/index';
 import type { PlatformGateway, PlatformTarget } from '../../packages/platform-contract/src/index';
 import {
   getTargetPolicy,
@@ -71,7 +71,7 @@ async function verifyPolicyTarget(policyTarget: (typeof policyTargets)[number]):
   }
 
   assertEqual(
-    resolveDemoLocale(runtime.capabilities, 'ko-KR'),
+    resolveMpgdLocale(runtime.capabilities, ['ko-KR']),
     policy.i18n && runtime.features.i18n.capabilitySupported ? 'ko' : 'en',
     `${policyTarget} i18n policy should control locale resolution`,
   );

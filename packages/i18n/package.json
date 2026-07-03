@@ -1,0 +1,48 @@
+{
+  "name": "@mpgd/i18n",
+  "version": "0.0.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./messages": {
+      "types": "./dist/paraglide/messages.d.ts",
+      "default": "./dist/paraglide/messages.js"
+    },
+    "./runtime": {
+      "types": "./dist/paraglide/runtime.d.ts",
+      "default": "./dist/paraglide/runtime.js"
+    }
+  },
+  "files": [
+    "dist",
+    "messages",
+    "project.inlang"
+  ],
+  "scripts": {
+    "paraglide:build": "paraglide-js compile --project ./project.inlang --outdir ./src/paraglide --emit-ts-declarations",
+    "check": "pnpm paraglide:build && ttsc --noEmit",
+    "lint": "pnpm check",
+    "format": "ttsc format",
+    "fix": "ttsc fix",
+    "test": "pnpm paraglide:build && cd ../.. && pnpm exec ttsx --no-plugins --project tsconfig.graph.json packages/i18n/test/i18n-smoke.ts"
+  },
+  "dependencies": {
+    "@mpgd/platform-contract": "workspace:*"
+  },
+  "devDependencies": {
+    "@inlang/paraglide-js": "2.20.2",
+    "@inlang/plugin-message-format": "4.4.0",
+    "@types/node": "^24.0.0",
+    "ttsc": "0.16.9",
+    "typescript": "5.9.3"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  }
+}

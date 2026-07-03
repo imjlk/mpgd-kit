@@ -1,14 +1,16 @@
 import Phaser from 'phaser';
 
+import { m, type MpgdLocale } from '@mpgd/i18n';
 import type { PlatformGateway } from '@mpgd/platform-contract';
 import type { PolicyFeature, PolicyFeatureRuntimeReason } from '@mpgd/policy-matrix';
 
 import { loadDemoState, type DemoState } from '../platform/demoState';
-import { translate } from '../platform/i18n';
 
 export class LobbyScene extends Phaser.Scene {
   private ready = false;
   private state: DemoState | null = null;
+  private titleText: Phaser.GameObjects.Text | null = null;
+  private targetText: Phaser.GameObjects.Text | null = null;
   private playerText: Phaser.GameObjects.Text | null = null;
   private saveText: Phaser.GameObjects.Text | null = null;
   private capabilityText: Phaser.GameObjects.Text | null = null;
@@ -22,16 +24,16 @@ export class LobbyScene extends Phaser.Scene {
   create(): void {
     const platform = this.registry.get('platform') as PlatformGateway;
 
-    this.add
-      .text(480, 150, translate('en', 'appTitle'), {
+    this.titleText = this.add
+      .text(480, 150, m.app_title({}, { locale: 'en' }), {
         fontFamily: 'Inter, Arial',
         fontSize: '64px',
         color: '#f8fafc',
       })
       .setOrigin(0.5);
 
-    this.add
-      .text(480, 220, translate('en', 'target', { target: platform.target }), {
+    this.targetText = this.add
+      .text(480, 220, m.target({ target: platform.target }, { locale: 'en' }), {
         fontFamily: 'Inter, Arial',
         fontSize: '24px',
         color: '#48d6c8',
@@ -39,7 +41,7 @@ export class LobbyScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.playerText = this.add
-      .text(480, 275, translate('en', 'loadingPlayer'), {
+      .text(480, 275, m.loading_player({}, { locale: 'en' }), {
         fontFamily: 'Inter, Arial',
         fontSize: '22px',
         color: '#f8fafc',
@@ -71,7 +73,7 @@ export class LobbyScene extends Phaser.Scene {
       .setOrigin(0.5);
 
     this.startText = this.add
-      .text(480, 450, translate('en', 'preparingDemo'), {
+      .text(480, 450, m.preparing_demo({}, { locale: 'en' }), {
         fontFamily: 'Inter, Arial',
         fontSize: '28px',
         color: '#fff7ad',
@@ -108,6 +110,15 @@ export class LobbyScene extends Phaser.Scene {
       coins: this.state?.save.coins ?? null,
       bestScore: this.state?.save.bestScore ?? null,
       locale: this.state?.locale ?? null,
+      text: {
+        title: this.titleText?.text ?? null,
+        target: this.targetText?.text ?? null,
+        player: this.playerText?.text ?? null,
+        save: this.saveText?.text ?? null,
+        capabilities: this.capabilityText?.text ?? null,
+        policy: this.policyText?.text ?? null,
+        start: this.startText?.text ?? null,
+      },
       policyRuntime: this.state?.policyRuntime ?? null,
     };
   }
@@ -115,6 +126,8 @@ export class LobbyScene extends Phaser.Scene {
   private renderState(): void {
     if (
       this.state === null ||
+      this.titleText === null ||
+      this.targetText === null ||
       this.playerText === null ||
       this.saveText === null ||
       this.capabilityText === null ||
@@ -133,75 +146,108 @@ export class LobbyScene extends Phaser.Scene {
       this.state.capabilities.localizedContent ? 'i18n' : null,
     ].filter((label): label is CapabilityLabel => label !== null);
     const locale = this.state.locale;
-    const saveSummary = translate(this.state.locale, 'saveSummary', {
-      bestScore: this.state.save.bestScore,
-      coins: this.state.save.coins,
-    });
-    const capabilitySummary =
-      supported.length > 0
-        ? supported
-            .map((capability) => translate(locale, capabilityLabels[capability]))
-            .join(', ')
-        : translate(this.state.locale, 'mockOnly');
-
-    this.playerText.setText(translate(this.state.locale, 'player', { name: playerName }));
-    this.saveText.setText(saveSummary);
-    this.capabilityText.setText(
-      translate(this.state.locale, 'sdkSummary', { features: capabilitySummary }),
+    const saveSummary = m.save_summary(
+      {
+        bestScore: this.state.save.bestScore,
+        coins: this.state.save.coins,
+      },
+      { locale },
     );
+    const capabilitySummary = supported.length > 0
+      ? supported.map((capability) => capabilityLabel(locale, capability)).join(', ')
+      : m.mock_only({}, { locale });
+
+    const platform = this.registry.get('platform') as PlatformGateway;
+
+    this.titleText.setText(m.app_title({}, { locale }));
+    this.targetText.setText(m.target({ target: platform.target }, { locale }));
+    this.playerText.setText(m.player({ name: playerName }, { locale }));
+    this.saveText.setText(saveSummary);
+    this.capabilityText.setText(m.sdk_summary({ features: capabilitySummary }, { locale }));
     this.policyText.setText(summarizePolicyRuntime(this.state));
-    this.startText.setText(translate(this.state.locale, 'tapToStart'));
+    this.startText.setText(m.tap_to_start({}, { locale }));
   }
 }
 
-const policyFeatureLabels = {
-  iap: 'policyFeatureIap',
-  rewardedAds: 'policyFeatureRewardedAds',
-  interstitialAds: 'policyFeatureInterstitialAds',
-  leaderboard: 'policyFeatureLeaderboard',
-  i18n: 'policyFeatureI18n',
-} satisfies Record<PolicyFeature, Parameters<typeof translate>[1]>;
-
 const capabilityLabels = {
-  rewardedAds: 'capRewardedAds',
-  iap: 'capIap',
-  leaderboard: 'capLeaderboard',
-  save: 'capSave',
-  i18n: 'capI18n',
-} satisfies Record<string, Parameters<typeof translate>[1]>;
+  rewardedAds: 'rewardedAds',
+  iap: 'iap',
+  leaderboard: 'leaderboard',
+  save: 'save',
+  i18n: 'i18n',
+} as const;
 
 type CapabilityLabel = keyof typeof capabilityLabels;
 
 function summarizePolicyRuntime(state: DemoState): string {
   const runtime = state.policyRuntime;
+  const locale = state.locale;
 
   if (runtime === null) {
-    return translate(state.locale, 'policyUnavailable');
+    return m.policy_unavailable({}, { locale });
   }
 
   const summary = (Object.keys(policyFeatureLabels) as PolicyFeature[])
     .map((feature) => {
       const featureRuntime = runtime.features[feature];
-      return `${translate(state.locale, policyFeatureLabels[feature])} ${reasonLabel(
-        state,
-        featureRuntime.reason,
-      )}`;
+      return `${policyFeatureLabel(locale, feature)} ${reasonLabel(locale, featureRuntime.reason)}`;
     })
     .join('  ');
 
-  return translate(state.locale, 'policySummary', {
-    target: runtime.policyTarget,
-    summary,
-  });
+  return m.policy_summary(
+    {
+      target: runtime.policyTarget,
+      summary,
+    },
+    { locale },
+  );
 }
 
-function reasonLabel(state: DemoState, reason: PolicyFeatureRuntimeReason): string {
+const policyFeatureLabels = {
+  iap: 'iap',
+  rewardedAds: 'rewardedAds',
+  interstitialAds: 'interstitialAds',
+  leaderboard: 'leaderboard',
+  i18n: 'i18n',
+} satisfies Record<PolicyFeature, string>;
+
+function policyFeatureLabel(locale: MpgdLocale, feature: PolicyFeature): string {
+  switch (feature) {
+    case 'iap':
+      return m.policy_feature_iap({}, { locale });
+    case 'rewardedAds':
+      return m.policy_feature_rewarded_ads({}, { locale });
+    case 'interstitialAds':
+      return m.policy_feature_interstitial_ads({}, { locale });
+    case 'leaderboard':
+      return m.policy_feature_leaderboard({}, { locale });
+    case 'i18n':
+      return m.policy_feature_i18n({}, { locale });
+  }
+}
+
+function capabilityLabel(locale: MpgdLocale, capability: CapabilityLabel): string {
+  switch (capability) {
+    case 'rewardedAds':
+      return m.cap_rewarded_ads({}, { locale });
+    case 'iap':
+      return m.cap_iap({}, { locale });
+    case 'leaderboard':
+      return m.cap_leaderboard({}, { locale });
+    case 'save':
+      return m.cap_save({}, { locale });
+    case 'i18n':
+      return m.cap_i18n({}, { locale });
+  }
+}
+
+function reasonLabel(locale: MpgdLocale, reason: PolicyFeatureRuntimeReason): string {
   switch (reason) {
     case 'available':
-      return translate(state.locale, 'policyOn');
+      return m.policy_on({}, { locale });
     case 'policy-disabled':
-      return translate(state.locale, 'policyOff');
+      return m.policy_off({}, { locale });
     case 'capability-unsupported':
-      return translate(state.locale, 'policyUnsupported');
+      return m.policy_unsupported({}, { locale });
   }
 }

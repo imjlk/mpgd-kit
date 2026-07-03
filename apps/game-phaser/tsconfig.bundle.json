@@ -10,5 +10,11 @@
     "../../packages/**/*.ts",
     "../../adapters/**/*.ts",
     "../../native-plugins/*/src/**/*.ts"
+  ],
+  "exclude": [
+    "../../adapters/**/dist/**",
+    "../../backend/**/dist/**",
+    "../../native-plugins/**/dist/**",
+    "../../packages/**/dist/**"
   ]
 }

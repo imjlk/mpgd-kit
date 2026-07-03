@@ -10,5 +10,8 @@
     "packages/bridge-protocol/src/**/*.ts",
     "packages/policy-matrix/src/**/*.ts",
     "packages/policy-matrix/test/**/*.ts"
+  ],
+  "exclude": [
+    "**/dist/**"
   ]
 }

@@ -1,14 +1,14 @@
 {
   "name": "policy-runtime",
   "description": "Policy matrix runtime capability gating, diagnostics, i18n, and demo action flow.",
-  "expectedFiles": ["packages/policy-matrix/", "apps/game-phaser/"],
+  "expectedFiles": ["packages/policy-matrix/", "packages/i18n/", "apps/game-phaser/"],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central policy matrix runtime enforcement and diagnostics flows that gate capabilities, i18n, and game actions?",
   "draft": "Use a tour because policy enforcement and diagnostics cross the policy package, platform installation, and Phaser result actions.",
   "review": "A broad policy runtime question should use a graph tour over policy helpers, diagnostics, and game action gating.",
   "request": {
     "type": "tour",
-    "query": "withPolicyEnforcement createPolicyRuntimeSnapshot getPolicyRuntime applyPolicyToCapabilities policyTargetForPlatform getTargetPolicy resolveDemoLocale translate installPlatform DemoState LobbyScene ResultScene capabilities localizedContent i18n nativeIap rewardedAds leaderboard policy",
+    "query": "withPolicyEnforcement createPolicyRuntimeSnapshot getPolicyRuntime applyPolicyToCapabilities policyTargetForPlatform getTargetPolicy resolveMpgdLocale @mpgd/i18n m app_title installPlatform DemoState LobbyScene ResultScene capabilities localizedContent i18n nativeIap rewardedAds leaderboard policy",
     "includeTests": true,
     "limit": 70
   }

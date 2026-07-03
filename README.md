@@ -22,8 +22,10 @@ pnpm install
 pnpm check
 pnpm validate:catalog
 pnpm validate:ads
+pnpm validate:i18n
 pnpm validate:policy
 pnpm validate:targets
+pnpm smoke:i18n
 pnpm smoke:policy
 pnpm graph:preflight
 pnpm pack:packages
@@ -58,9 +60,22 @@ pnpm pack:packages
 ```
 
 This builds publishable workspaces into `dist/` and verifies the npm pack payload
-contains `dist/index.js`, `dist/index.d.ts`, and any exported JSON/native files.
+contains `dist/index.js`, `dist/index.d.ts`, and every exported subpath file.
 The root `pnpm test` command also builds package `dist/` output first so workspace
 tests resolve the same package entrypoints that publishing uses.
+
+## i18n Messages
+
+`@mpgd/i18n` owns the translation-key/message catalog in
+`packages/i18n/messages`. Paraglide generates typed message functions into
+`packages/i18n/src/paraglide`, and package builds copy that runtime into
+`dist/paraglide` so consumers can import `@mpgd/i18n`, `@mpgd/i18n/messages`,
+or `@mpgd/i18n/runtime`.
+
+```sh
+pnpm i18n:build
+pnpm smoke:i18n
+```
 
 ## ttsc graph workflow
 
@@ -84,8 +99,9 @@ if a preset no longer returns answer-ready anchors.
 features such as IAP, ads, leaderboard, and i18n. The Phaser app wraps each installed
 `PlatformGateway` with policy enforcement, so disabled features are removed from
 capabilities and return unavailable/no-op results at runtime.
-The demo resolves localized UI text only when the policy-enforced gateway keeps
-`localizedContent` available; otherwise it falls back to English.
+The demo resolves localized UI text through `@mpgd/i18n` only when the
+policy-enforced gateway keeps `localizedContent` available; otherwise it falls
+back to English.
 Policy-enforced gateways also expose a runtime snapshot for demo diagnostics and
 smoke checks across every configured release target:
 

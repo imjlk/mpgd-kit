@@ -195,5 +195,10 @@ to run xcodebuild archive.
 - [x] policy runtime snapshots include i18n feature state
 - [x] policy enforcement clamps localized content capability
 - [x] browser, AIT, Android, and iOS mocks report localized content capability
+- [x] `@mpgd/i18n` package owns en/ko translation-key message catalogs
+- [x] Paraglide generates typed message functions from the shared catalog
 - [x] Phaser demo resolves localized UI text through policy-enforced capabilities
+- [x] Phaser demo renders translated lobby/result messages from `@mpgd/i18n`
+- [x] package build and pack smoke include generated i18n runtime subpaths
+- [x] i18n smoke verifies locale fallback and translated message output
 - [x] policy smoke verifies i18n locale fallback and availability

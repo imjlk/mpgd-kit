@@ -86,13 +86,19 @@ function expectedExportFiles(packageJson: PackageJson): string[] {
 
   const exportsMap = packageJson.exports as Record<string, unknown>;
 
-  return Object.entries(exportsMap).flatMap(([key, value]) => {
-    if (key === '.' || typeof value !== 'string') {
-      return [];
-    }
+  return [...new Set(Object.values(exportsMap).flatMap(readExportPaths))];
+}
 
+function readExportPaths(value: unknown): string[] {
+  if (typeof value === 'string') {
     return [value.replace(/^\.\//, '')];
-  });
+  }
+
+  if (typeof value !== 'object' || value === null) {
+    return [];
+  }
+
+  return Object.values(value as Record<string, unknown>).flatMap(readExportPaths);
 }
 
 function npmPackDryRun(cwd: string): NpmPackResult {
