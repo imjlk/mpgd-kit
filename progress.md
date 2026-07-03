@@ -11,6 +11,7 @@ Original prompt: PLEASE IMPLEMENT THIS PLAN: Phase 8 Plan: Smoke Tests, Bridge C
 - Expanded the SDK demo loop and aligned browser, AIT, Android, and iOS mock bridge responses with contract shapes.
 - Verified the SDK demo loop in browser: lobby state, gameplay, result save, rewarded ad, purchase, and screenshot output.
 - Added Android emulator and iOS simulator smoke scripts plus local usage docs.
+- Adjusted Android smoke to capture emulator serial before the device is fully booted.
 
 ## TODO
 

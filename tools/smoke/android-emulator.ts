@@ -77,8 +77,8 @@ function listEmulators(): string[] {
   return capture(adb, ['devices'])
     .split('\\n')
     .map((line) => line.trim().split(/\\s+/))
-    .flatMap(([serial, state]) => {
-      if (serial?.startsWith('emulator-') === true && state === 'device') {
+    .flatMap(([serial]) => {
+      if (serial?.startsWith('emulator-') === true) {
         return [serial];
       }
 
