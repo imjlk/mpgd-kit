@@ -165,3 +165,12 @@ to run xcodebuild archive.
 - [x] Result scene disables policy-disabled feature actions
 - [x] policy validator checks platform target coverage
 - [x] graph preflight covers policy runtime flow
+
+## Phase 12 - Policy Feature Runtime Diagnostics
+
+- [x] policy-enforced gateways expose runtime feature snapshots
+- [x] feature snapshots distinguish policy-disabled and capability-unsupported states
+- [x] ad placement runtime state follows rewarded/interstitial policy
+- [x] Phaser lobby renders the active policy target and feature states
+- [x] Result scene test hook exposes policy-driven action states
+- [x] policy smoke verifies browser/web-preview feature behavior

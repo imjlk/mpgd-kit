@@ -16,10 +16,52 @@ export type PolicyFeature = keyof TargetPolicy;
 export type PolicyAdPlacementType = 'rewarded' | 'interstitial';
 type PlatformPolicyTarget = PlatformGateway['target'];
 
+export type PolicyFeatureRuntimeReason =
+  | 'available'
+  | 'policy-disabled'
+  | 'capability-unsupported';
+
+export interface PolicyFeatureRuntime {
+  readonly feature: PolicyFeature;
+  readonly enabled: boolean;
+  readonly policyAllowed: boolean;
+  readonly capabilitySupported: boolean;
+  readonly reason: PolicyFeatureRuntimeReason;
+}
+
+export interface PolicyAdPlacementDefinition {
+  readonly id: string;
+  readonly type: PolicyAdPlacementType;
+}
+
+export interface PolicyAdPlacementRuntime {
+  readonly id: string;
+  readonly type: PolicyAdPlacementType;
+  readonly enabled: boolean;
+  readonly reason: PolicyFeatureRuntimeReason;
+}
+
+export interface PolicyRuntimeSnapshot {
+  readonly target: PlatformPolicyTarget;
+  readonly policyTarget: string;
+  readonly policy: TargetPolicy;
+  readonly capabilities: PlatformCapabilities;
+  readonly features: Record<PolicyFeature, PolicyFeatureRuntime>;
+  readonly adPlacements: readonly PolicyAdPlacementRuntime[];
+}
+
 export interface PolicyEnforcementOptions {
+  readonly policyTarget?: string;
+  readonly adPlacements?: readonly PolicyAdPlacementDefinition[];
   readonly resolveAdPlacementType?: (
     placementId: string,
   ) => PolicyAdPlacementType | undefined;
+}
+
+export interface PolicyEnforcedGateway extends PlatformGateway {
+  readonly policyTarget: string;
+  readonly policy: TargetPolicy;
+  getPolicyRuntime(): Promise<PolicyRuntimeSnapshot>;
 }
 
 export function policyTargetForPlatform(target: PlatformPolicyTarget): string {
@@ -60,11 +102,73 @@ export function applyPolicyToCapabilities(
   };
 }
 
+export function getPolicyFeatureRuntime(
+  feature: PolicyFeature,
+  policy: TargetPolicy,
+  capabilities: PlatformCapabilities,
+): PolicyFeatureRuntime {
+  const policyAllowed = policy[feature];
+  const capabilitySupported = isFeatureCapabilitySupported(feature, capabilities);
+  const enabled = policyAllowed && capabilitySupported;
+
+  return {
+    feature,
+    enabled,
+    policyAllowed,
+    capabilitySupported,
+    reason: enabled
+      ? 'available'
+      : policyAllowed
+        ? 'capability-unsupported'
+        : 'policy-disabled',
+  };
+}
+
+export function createPolicyRuntimeSnapshot(input: {
+  readonly target: PlatformPolicyTarget;
+  readonly policyTarget?: string;
+  readonly policy: TargetPolicy;
+  readonly capabilities: PlatformCapabilities;
+  readonly adPlacements?: readonly PolicyAdPlacementDefinition[];
+}): PolicyRuntimeSnapshot {
+  const policyTarget = input.policyTarget ?? policyTargetForPlatform(input.target);
+  const features = {
+    iap: getPolicyFeatureRuntime('iap', input.policy, input.capabilities),
+    rewardedAds: getPolicyFeatureRuntime('rewardedAds', input.policy, input.capabilities),
+    interstitialAds: getPolicyFeatureRuntime(
+      'interstitialAds',
+      input.policy,
+      input.capabilities,
+    ),
+    leaderboard: getPolicyFeatureRuntime('leaderboard', input.policy, input.capabilities),
+  } satisfies Record<PolicyFeature, PolicyFeatureRuntime>;
+
+  return {
+    target: input.target,
+    policyTarget,
+    policy: input.policy,
+    capabilities: input.capabilities,
+    features,
+    adPlacements: (input.adPlacements ?? []).map((placement) => {
+      const feature = placement.type === 'rewarded' ? 'rewardedAds' : 'interstitialAds';
+      const runtime = features[feature];
+
+      return {
+        id: placement.id,
+        type: placement.type,
+        enabled: runtime.enabled,
+        reason: runtime.reason,
+      };
+    }),
+  };
+}
+
 export function withPolicyEnforcement(
   gateway: PlatformGateway,
   policy: TargetPolicy,
   options: PolicyEnforcementOptions = {},
-): PlatformGateway {
+): PolicyEnforcedGateway {
+  const policyTarget = options.policyTarget ?? policyTargetForPlatform(gateway.target);
   const isAdPlacementAllowed = (
     placementId: string,
     expectedType: PolicyAdPlacementType,
@@ -94,6 +198,17 @@ export function withPolicyEnforcement(
 
   return {
     ...gateway,
+    policyTarget,
+    policy,
+    async getPolicyRuntime() {
+      return createPolicyRuntimeSnapshot({
+        target: gateway.target,
+        policyTarget,
+        policy,
+        capabilities: applyPolicyToCapabilities(await gateway.getCapabilities(), policy),
+        adPlacements: options.adPlacements ?? [],
+      });
+    },
     async getCapabilities() {
       return applyPolicyToCapabilities(await gateway.getCapabilities(), policy);
     },
@@ -117,7 +232,7 @@ export function withPolicyEnforcement(
           async getEntitlements() {
             return [];
           },
-    },
+        },
     ads: {
       async preload(input) {
         if (canPreloadAdPlacement(input.placementId)) {
@@ -158,4 +273,26 @@ export function withPolicyEnforcement(
           async open() {},
         },
   };
+}
+
+export function isPolicyEnforcedGateway(
+  gateway: PlatformGateway,
+): gateway is PolicyEnforcedGateway {
+  return typeof (gateway as Partial<PolicyEnforcedGateway>).getPolicyRuntime === 'function';
+}
+
+function isFeatureCapabilitySupported(
+  feature: PolicyFeature,
+  capabilities: PlatformCapabilities,
+): boolean {
+  switch (feature) {
+    case 'iap':
+      return capabilities.nativeIap;
+    case 'rewardedAds':
+      return capabilities.rewardedAds;
+    case 'interstitialAds':
+      return capabilities.interstitialAds;
+    case 'leaderboard':
+      return capabilities.nativeLeaderboard;
+  }
 }

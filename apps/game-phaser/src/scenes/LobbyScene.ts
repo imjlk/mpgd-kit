@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 
 import type { PlatformGateway } from '@mpgd/platform-contract';
+import type { PolicyFeature, PolicyFeatureRuntimeReason } from '@mpgd/policy-matrix';
 
 import { loadDemoState, type DemoState } from '../platform/demoState';
 
@@ -10,6 +11,7 @@ export class LobbyScene extends Phaser.Scene {
   private playerText: Phaser.GameObjects.Text | null = null;
   private saveText: Phaser.GameObjects.Text | null = null;
   private capabilityText: Phaser.GameObjects.Text | null = null;
+  private policyText: Phaser.GameObjects.Text | null = null;
   private startText: Phaser.GameObjects.Text | null = null;
 
   constructor() {
@@ -59,15 +61,23 @@ export class LobbyScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    this.policyText = this.add
+      .text(480, 390, '', {
+        fontFamily: 'Inter, Arial',
+        fontSize: '17px',
+        color: '#c7d2fe',
+      })
+      .setOrigin(0.5);
+
     this.startText = this.add
-      .text(480, 430, 'Preparing SDK demo...', {
+      .text(480, 450, 'Preparing SDK demo...', {
         fontFamily: 'Inter, Arial',
         fontSize: '28px',
         color: '#fff7ad',
       })
       .setOrigin(0.5);
 
-    this.add.image(480, 500, 'orb').setScale(0.65);
+    this.add.image(480, 510, 'orb').setScale(0.55);
 
     const start = () => {
       if (this.ready) {
@@ -96,6 +106,7 @@ export class LobbyScene extends Phaser.Scene {
       playerId: this.state?.player.playerId ?? null,
       coins: this.state?.save.coins ?? null,
       bestScore: this.state?.save.bestScore ?? null,
+      policyRuntime: this.state?.policyRuntime ?? null,
     };
   }
 
@@ -105,6 +116,7 @@ export class LobbyScene extends Phaser.Scene {
       this.playerText === null ||
       this.saveText === null ||
       this.capabilityText === null ||
+      this.policyText === null ||
       this.startText === null
     ) {
       return;
@@ -123,6 +135,42 @@ export class LobbyScene extends Phaser.Scene {
     this.playerText.setText(`Player: ${playerName}`);
     this.saveText.setText(saveSummary);
     this.capabilityText.setText(`SDK: ${capabilitySummary}`);
+    this.policyText.setText(summarizePolicyRuntime(this.state));
     this.startText.setText('Tap or press Enter');
+  }
+}
+
+const policyFeatureLabels = {
+  iap: 'IAP',
+  rewardedAds: 'Reward',
+  interstitialAds: 'Inter',
+  leaderboard: 'Board',
+} satisfies Record<PolicyFeature, string>;
+
+function summarizePolicyRuntime(state: DemoState): string {
+  const runtime = state.policyRuntime;
+
+  if (runtime === null) {
+    return 'Policy: unavailable';
+  }
+
+  const summary = (Object.keys(policyFeatureLabels) as PolicyFeature[])
+    .map((feature) => {
+      const featureRuntime = runtime.features[feature];
+      return `${policyFeatureLabels[feature]} ${reasonLabel(featureRuntime.reason)}`;
+    })
+    .join('  ');
+
+  return `Policy ${runtime.policyTarget}: ${summary}`;
+}
+
+function reasonLabel(reason: PolicyFeatureRuntimeReason): string {
+  switch (reason) {
+    case 'available':
+      return 'on';
+    case 'policy-disabled':
+      return 'off';
+    case 'capability-unsupported':
+      return 'n/a';
   }
 }

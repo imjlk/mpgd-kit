@@ -81,6 +81,12 @@ if a preset no longer returns answer-ready anchors.
 features such as IAP, ads, and leaderboard. The Phaser app wraps each installed
 `PlatformGateway` with policy enforcement, so disabled features are removed from
 capabilities and return unavailable/no-op results at runtime.
+Policy-enforced gateways also expose a runtime snapshot for demo diagnostics and
+smoke checks:
+
+```sh
+pnpm smoke:policy
+```
 
 ## ttsc lint config
 

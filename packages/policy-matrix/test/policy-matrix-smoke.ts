@@ -34,13 +34,49 @@ assertEqual(policyTargetForPlatform('android'), 'android');
 
 const webPolicy = getTargetPolicy(policyMatrix, policyTargetForPlatform('browser'));
 const webGateway = withPolicyEnforcement(gateway, webPolicy, {
+  policyTarget: 'web-preview',
+  adPlacements: [
+    {
+      id: 'CONTINUE_AFTER_FAIL',
+      type: 'rewarded',
+    },
+    {
+      id: 'STAGE_END_INTERSTITIAL',
+      type: 'interstitial',
+    },
+  ],
   resolveAdPlacementType,
 });
 const webCapabilities = await webGateway.getCapabilities();
+const webRuntime = await webGateway.getPolicyRuntime();
 
 assertDeepEqual(
   applyPolicyToCapabilities(await gateway.getCapabilities(), webPolicy),
   webCapabilities,
+);
+assertEqual(webRuntime.policyTarget, 'web-preview');
+assertEqual(webRuntime.features.iap.reason, 'policy-disabled');
+assertEqual(webRuntime.features.rewardedAds.reason, 'policy-disabled');
+assertEqual(webRuntime.features.interstitialAds.reason, 'policy-disabled');
+assertEqual(webRuntime.features.leaderboard.reason, 'policy-disabled');
+assertDeepEqual(
+  webRuntime.adPlacements.map((placement) => ({
+    id: placement.id,
+    enabled: placement.enabled,
+    reason: placement.reason,
+  })),
+  [
+    {
+      id: 'CONTINUE_AFTER_FAIL',
+      enabled: false,
+      reason: 'policy-disabled',
+    },
+    {
+      id: 'STAGE_END_INTERSTITIAL',
+      enabled: false,
+      reason: 'policy-disabled',
+    },
+  ],
 );
 assertEqual(webCapabilities.nativeIap, false);
 assertEqual(webCapabilities.rewardedAds, false);
@@ -96,9 +132,23 @@ const rewardedOnlyGateway = withPolicyEnforcement(
     leaderboard: true,
   },
   {
+    adPlacements: [
+      {
+        id: 'CONTINUE_AFTER_FAIL',
+        type: 'rewarded',
+      },
+      {
+        id: 'STAGE_END_INTERSTITIAL',
+        type: 'interstitial',
+      },
+    ],
     resolveAdPlacementType,
   },
 );
+const rewardedOnlyRuntime = await rewardedOnlyGateway.getPolicyRuntime();
+
+assertEqual(rewardedOnlyRuntime.features.rewardedAds.reason, 'available');
+assertEqual(rewardedOnlyRuntime.features.interstitialAds.reason, 'policy-disabled');
 
 await rewardedOnlyGateway.ads.preload({ placementId: 'CONTINUE_AFTER_FAIL' });
 await rewardedOnlyGateway.ads.preload({ placementId: 'STAGE_END_INTERSTITIAL' });

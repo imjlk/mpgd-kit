@@ -13,8 +13,12 @@ import type { RuntimeConfig } from './runtimeDetector';
 
 const policyMatrix = policyMatrixJson as PolicyMatrix;
 const adPlacements = adPlacementsJson as AdPlacements;
+const policyAdPlacements = adPlacements.placements.map((placement) => ({
+  id: placement.id,
+  type: placement.type,
+}));
 const adPlacementTypes = new Map<string, 'rewarded' | 'interstitial'>(
-  adPlacements.placements.map((placement) => [placement.id, placement.type]),
+  policyAdPlacements.map((placement) => [placement.id, placement.type]),
 );
 
 export async function installPlatform(runtime: RuntimeConfig): Promise<PlatformGateway> {
@@ -47,13 +51,13 @@ export async function installPlatform(runtime: RuntimeConfig): Promise<PlatformG
     }
   }
 
-  return withPolicyEnforcement(
-    gateway,
-    getTargetPolicy(policyMatrix, policyTargetForPlatform(runtime.target)),
-    {
-      resolveAdPlacementType(placementId) {
-        return adPlacementTypes.get(placementId);
-      },
+  const policyTarget = policyTargetForPlatform(runtime.target);
+
+  return withPolicyEnforcement(gateway, getTargetPolicy(policyMatrix, policyTarget), {
+    policyTarget,
+    adPlacements: policyAdPlacements,
+    resolveAdPlacementType(placementId) {
+      return adPlacementTypes.get(placementId);
     },
-  );
+  });
 }

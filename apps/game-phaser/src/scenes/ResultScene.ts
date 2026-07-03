@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 
 import type { FinishedStage } from '@mpgd/game-core';
 import type { PlatformGateway } from '@mpgd/platform-contract';
+import type { PolicyFeature, PolicyFeatureRuntime } from '@mpgd/policy-matrix';
 
 import {
   addCoinsToSave,
@@ -114,6 +115,12 @@ export class ResultScene extends Phaser.Scene {
       coins: this.state?.save.coins ?? null,
       bestScore: this.state?.save.bestScore ?? null,
       status: this.statusText?.text ?? null,
+      actions: {
+        rewardedAd: this.getActionState('rewardedAds'),
+        purchase: this.getActionState('iap'),
+        leaderboard: this.getActionState('leaderboard'),
+      },
+      policyRuntime: this.state?.policyRuntime ?? null,
     };
   }
 
@@ -160,7 +167,7 @@ export class ResultScene extends Phaser.Scene {
     await persistDemoSave(this.platform, this.state.save);
 
     if (!this.state.capabilities.nativeLeaderboard) {
-      this.setStatus('Saved. Leaderboard disabled by policy.');
+      this.setStatus(`Saved. ${this.unavailableMessage('leaderboard')}`);
       return;
     }
 
@@ -181,7 +188,7 @@ export class ResultScene extends Phaser.Scene {
     }
 
     if (!this.state.capabilities.rewardedAds) {
-      this.setStatus('Reward ads disabled by policy.');
+      this.setStatus(this.unavailableMessage('rewardedAds'));
       return;
     }
 
@@ -211,7 +218,7 @@ export class ResultScene extends Phaser.Scene {
     }
 
     if (!this.state.capabilities.nativeIap) {
-      this.setStatus('Purchases disabled by policy.');
+      this.setStatus(this.unavailableMessage('iap'));
       return;
     }
 
@@ -242,7 +249,7 @@ export class ResultScene extends Phaser.Scene {
     }
 
     if (!this.state.capabilities.nativeLeaderboard) {
-      this.setStatus('Leaderboard disabled by policy.');
+      this.setStatus(this.unavailableMessage('leaderboard'));
       return;
     }
 
@@ -253,4 +260,63 @@ export class ResultScene extends Phaser.Scene {
   private setStatus(message: string): void {
     this.statusText?.setText(message);
   }
+
+  private getActionState(feature: PolicyFeature): {
+    readonly enabled: boolean;
+    readonly reason: PolicyFeatureRuntime['reason'] | 'unknown';
+  } {
+    const featureRuntime = this.state?.policyRuntime?.features[feature];
+
+    if (featureRuntime !== undefined) {
+      return {
+        enabled: featureRuntime.enabled,
+        reason: featureRuntime.reason,
+      };
+    }
+
+    return {
+      enabled: this.isCapabilityEnabled(feature),
+      reason: 'unknown',
+    };
+  }
+
+  private isCapabilityEnabled(feature: PolicyFeature): boolean {
+    if (this.state === null) {
+      return false;
+    }
+
+    switch (feature) {
+      case 'iap':
+        return this.state.capabilities.nativeIap;
+      case 'rewardedAds':
+        return this.state.capabilities.rewardedAds;
+      case 'interstitialAds':
+        return this.state.capabilities.interstitialAds;
+      case 'leaderboard':
+        return this.state.capabilities.nativeLeaderboard;
+    }
+  }
+
+  private unavailableMessage(feature: PolicyFeature): string {
+    const actionName = actionLabels[feature];
+    const reason = this.getActionState(feature).reason;
+
+    switch (reason) {
+      case 'policy-disabled':
+        return `${actionName} disabled by policy.`;
+      case 'capability-unsupported':
+        return `${actionName} unsupported on this target.`;
+      case 'available':
+        return `${actionName} unavailable.`;
+      case 'unknown':
+        return `${actionName} unavailable.`;
+    }
+  }
 }
+
+const actionLabels = {
+  iap: 'Purchases',
+  rewardedAds: 'Reward ads',
+  interstitialAds: 'Interstitial ads',
+  leaderboard: 'Leaderboard',
+} satisfies Record<PolicyFeature, string>;
