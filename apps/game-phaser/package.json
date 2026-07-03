@@ -1,0 +1,38 @@
+{
+  "name": "@mpgd/game-phaser",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "build:prod": "vite build --mode production",
+    "preview": "vite preview",
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix",
+    "test": "vitest run --passWithNoTests"
+  },
+  "dependencies": {
+    "@mpgd/adapter-ait": "workspace:*",
+    "@mpgd/adapter-browser": "workspace:*",
+    "@mpgd/adapter-capacitor": "workspace:*",
+    "@mpgd/bridge-protocol": "workspace:*",
+    "@mpgd/game-core": "workspace:*",
+    "@mpgd/leaderboard-contract": "workspace:*",
+    "@mpgd/monetization-contract": "workspace:*",
+    "@mpgd/platform-contract": "workspace:*",
+    "phaser": "4.2.0",
+    "typia": "rc"
+  },
+  "devDependencies": {
+    "@ttsc/lint": "0.16.9",
+    "@ttsc/unplugin": "0.16.9",
+    "@types/node": "^24.0.0",
+    "ttsc": "0.16.9",
+    "typescript": "rc",
+    "vite": "^8.1.3",
+    "vitest": "^4.0.0"
+  }
+}

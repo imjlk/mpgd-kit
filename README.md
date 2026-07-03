@@ -1,0 +1,59 @@
+# mpgd-kit
+
+`mpgd-kit` is a Multi-Platform Game Distribution / Development kit.
+
+It starts with a Phaser 4 + Vite game and keeps platform concerns behind contracts and adapters:
+
+- Browser preview
+- Capacitor Android/iOS shell
+- Apps in Toss WebView target
+- Shared monetization, ads, leaderboard, save, and bridge protocols
+- Backend ledger skeletons for purchase and ad reward grants
+
+## Fixed Naming
+
+- Repository: `mpgd-kit`
+- npm scope: `@mpgd`
+
+## First Commands
+
+```sh
+pnpm install
+pnpm check
+pnpm validate:catalog
+pnpm validate:ads
+pnpm validate:targets
+pnpm build:web
+pnpm build:ait
+```
+
+## Versioning and Changesets
+
+This repo uses Sampo for changesets, SemVer bumps, changelogs, release PR automation, and npm publishing.
+
+```sh
+sampo add
+sampo release
+sampo publish
+```
+
+Convenience scripts are also available:
+
+```sh
+pnpm sampo:add
+pnpm sampo:release
+pnpm sampo:publish
+```
+
+## ttsc lint config
+
+`ttsc@0.16.9` currently evaluates this workspace reliably with `lint.config.js`, so the repo uses that file as the active `@ttsc/lint` config.
+The production strip config follows the same rule with `strip.config.js`.
+
+## Architecture Rule
+
+Game rules live outside Phaser scenes. Scenes adapt simulation state to rendering and input. Platform SDK calls live in adapters, native plugins, or target wrappers.
+
+## Apps in Toss
+
+The Apps in Toss target currently uses SDK 2.x compatible `granite.config.ts` and `ait build` scripts. SDK 3.x keeps the feature interface compatible but renames the config file to `apps-in-toss.config.ts`, so that migration should be handled as a dedicated follow-up.

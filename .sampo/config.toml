@@ -1,0 +1,39 @@
+[git]
+default_branch = "main"
+
+[github]
+repository = "imjlk/mpgd-kit"
+
+[changesets]
+tags = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"]
+
+[changelog]
+show_commit_hash = true
+show_acknowledgments = true
+show_release_date = true
+release_date_timezone = "Asia/Seoul"
+
+[packages]
+ignore_unpublished = true
+fixed = [[
+  "npm/@mpgd/game-core",
+  "npm/@mpgd/game-economy",
+  "npm/@mpgd/game-save",
+  "npm/@mpgd/game-anti-cheat",
+  "npm/@mpgd/platform-contract",
+  "npm/@mpgd/monetization-contract",
+  "npm/@mpgd/leaderboard-contract",
+  "npm/@mpgd/bridge-protocol",
+  "npm/@mpgd/product-catalog",
+  "npm/@mpgd/ad-placements",
+  "npm/@mpgd/analytics-schema",
+  "npm/@mpgd/policy-matrix",
+  "npm/@mpgd/release-manifest",
+  "npm/@mpgd/adapter-browser",
+  "npm/@mpgd/adapter-capacitor",
+  "npm/@mpgd/adapter-ait",
+  "npm/@mpgd/capacitor-game-services",
+  "npm/@mpgd/backend-purchase-verifier",
+  "npm/@mpgd/backend-entitlement-ledger",
+  "npm/@mpgd/backend-ad-reward-ledger"
+]]

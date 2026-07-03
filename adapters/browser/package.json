@@ -1,0 +1,28 @@
+{
+  "name": "@mpgd/adapter-browser",
+  "version": "0.0.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "files": [
+    "src"
+  ],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@mpgd/platform-contract": "workspace:*"
+  },
+  "devDependencies": {
+    "ttsc": "0.16.9",
+    "typescript": "7.0.1-rc"
+  }
+}

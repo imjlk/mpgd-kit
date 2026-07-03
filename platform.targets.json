@@ -1,0 +1,34 @@
+{
+  "targets": {
+    "web-preview": {
+      "kind": "web",
+      "gameApp": "apps/game-phaser",
+      "adapter": "browser",
+      "output": "artifacts/web-preview"
+    },
+    "android": {
+      "kind": "capacitor-android",
+      "gameApp": "apps/game-phaser",
+      "shellApp": "apps/mobile-capacitor",
+      "adapter": "capacitor",
+      "webDir": "apps/mobile-capacitor/www",
+      "artifact": "aab"
+    },
+    "ios": {
+      "kind": "capacitor-ios",
+      "gameApp": "apps/game-phaser",
+      "shellApp": "apps/mobile-capacitor",
+      "adapter": "capacitor",
+      "webDir": "apps/mobile-capacitor/www",
+      "artifact": "ipa"
+    },
+    "ait": {
+      "kind": "apps-in-toss",
+      "gameApp": "apps/game-phaser",
+      "wrapperApp": "apps/target-ait",
+      "adapter": "ait",
+      "webDir": "apps/target-ait/public/game",
+      "artifact": ".ait"
+    }
+  }
+}

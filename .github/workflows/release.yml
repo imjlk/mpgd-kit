@@ -1,0 +1,46 @@
+name: release
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+      - run: pnpm validate:catalog
+      - run: pnpm validate:ads
+      - run: pnpm validate:targets
+      - run: pnpm build:web
+
+      - name: Run Sampo release automation
+        id: sampo
+        uses: bruits/sampo/crates/sampo-github-action@sampo-v0.17.4
+        with:
+          command: auto
+          create-github-release: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

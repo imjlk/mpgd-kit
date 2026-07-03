@@ -1,0 +1,13 @@
+{
+  "name": "@mpgd/target-web-preview",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "check": "echo target-web-preview uses apps/game-phaser build"
+  },
+  "devDependencies": {
+    "ttsc": "0.16.9",
+    "typescript": "7.0.1-rc"
+  }
+}

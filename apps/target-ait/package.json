@@ -1,0 +1,28 @@
+{
+  "name": "@mpgd/target-ait",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "ait:build": "ait build",
+    "ait:deploy": "ait deploy --api-key \"$AIT_API_KEY\"",
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@apps-in-toss/web-framework": "^2.10.4",
+    "@mpgd/bridge-protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@apps-in-toss/cli": "^2.10.4",
+    "@ttsc/unplugin": "0.16.9",
+    "@types/node": "^24.0.0",
+    "ttsc": "0.16.9",
+    "typescript": "rc",
+    "vite": "^8.1.3"
+  }
+}

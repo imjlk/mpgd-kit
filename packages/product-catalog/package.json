@@ -1,0 +1,31 @@
+{
+  "name": "@mpgd/product-catalog",
+  "version": "0.0.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    },
+    "./catalog.json": "./catalog.json"
+  },
+  "files": [
+    "src",
+    "catalog.json"
+  ],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@mpgd/monetization-contract": "workspace:*",
+    "typia": "rc"
+  },
+  "devDependencies": {
+    "ttsc": "0.16.9",
+    "typescript": "7.0.1-rc"
+  }
+}

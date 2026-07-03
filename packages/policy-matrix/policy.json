@@ -1,0 +1,29 @@
+{
+  "version": "2026-07-03",
+  "targets": {
+    "web-preview": {
+      "iap": false,
+      "rewardedAds": false,
+      "interstitialAds": false,
+      "leaderboard": false
+    },
+    "android": {
+      "iap": true,
+      "rewardedAds": true,
+      "interstitialAds": true,
+      "leaderboard": true
+    },
+    "ios": {
+      "iap": true,
+      "rewardedAds": true,
+      "interstitialAds": true,
+      "leaderboard": true
+    },
+    "ait": {
+      "iap": true,
+      "rewardedAds": true,
+      "interstitialAds": true,
+      "leaderboard": true
+    }
+  }
+}

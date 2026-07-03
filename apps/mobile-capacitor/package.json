@@ -1,0 +1,28 @@
+{
+  "name": "@mpgd/mobile-capacitor",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "cap": "cap",
+    "sync:android": "cap sync android",
+    "sync:ios": "cap sync ios",
+    "open:android": "cap open android",
+    "open:ios": "cap open ios",
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.4.1",
+    "@capacitor/core": "^8.4.1",
+    "@capacitor/ios": "^8.4.1",
+    "@mpgd/capacitor-game-services": "workspace:*"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "^8.4.1",
+    "ttsc": "0.16.9",
+    "typescript": "rc"
+  }
+}

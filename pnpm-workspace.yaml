@@ -1,0 +1,29 @@
+packages:
+  - 'apps/*'
+  - 'packages/*'
+  - 'adapters/*'
+  - 'native-plugins/*'
+  - 'backend/*'
+allowBuilds:
+  '@sentry/cli': true
+  '@swc/core': true
+  esbuild: true
+  protobufjs: true
+minimumReleaseAgeExclude:
+  - '@ttsc/darwin-arm64@0.16.9'
+  - '@ttsc/darwin-x64@0.16.9'
+  - '@ttsc/graph@0.16.9'
+  - '@ttsc/lint@0.16.9'
+  - '@ttsc/linux-arm64@0.16.9'
+  - '@ttsc/linux-arm@0.16.9'
+  - '@ttsc/linux-x64@0.16.9'
+  - '@ttsc/paths@0.16.9'
+  - '@ttsc/strip@0.16.9'
+  - '@ttsc/unplugin@0.16.9'
+  - '@ttsc/win32-arm64@0.16.9'
+  - '@ttsc/win32-x64@0.16.9'
+  - '@typia/interface@13.0.0-rc.1'
+  - '@typia/mcp@13.0.0-rc.1'
+  - '@typia/utils@13.0.0-rc.1'
+  - ttsc@0.16.9
+  - typia@13.0.0-rc.1

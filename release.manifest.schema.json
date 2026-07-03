@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://mpgd.dev/schemas/release-manifest.schema.json",
+  "title": "MPGD Release Manifest",
+  "type": "object",
+  "required": [
+    "releaseId",
+    "gitSha",
+    "gameVersion",
+    "buildId",
+    "catalogVersion",
+    "adPlacementVersion",
+    "targets"
+  ],
+  "properties": {
+    "releaseId": { "type": "string", "minLength": 1 },
+    "gitSha": { "type": "string", "minLength": 1 },
+    "gameVersion": { "type": "string", "minLength": 1 },
+    "buildId": { "type": "string", "minLength": 1 },
+    "catalogVersion": { "type": "string", "minLength": 1 },
+    "adPlacementVersion": { "type": "string", "minLength": 1 },
+    "targets": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["artifact"],
+        "properties": {
+          "artifact": { "type": "string", "minLength": 1 },
+          "profile": { "type": "string" },
+          "versionName": { "type": "string" },
+          "versionCode": { "type": "integer" },
+          "marketingVersion": { "type": "string" },
+          "buildNumber": { "type": "string" },
+          "appName": { "type": "string" },
+          "sdkMajor": { "type": "integer" }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": false
+}

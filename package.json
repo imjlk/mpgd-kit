@@ -1,0 +1,50 @@
+{
+  "name": "mpgd-kit",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Multi-Platform Game Distribution / Development kit.",
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": ">=22.0.0"
+  },
+  "scripts": {
+    "check": "ttsc --noEmit -p tsconfig.tools.json && pnpm -r --if-present check",
+    "lint": "pnpm -r --if-present lint",
+    "format": "pnpm -r --if-present format",
+    "fix": "pnpm -r --if-present fix",
+    "test": "pnpm -r --if-present test",
+    "validate:catalog": "node tools/run-ttsx.mjs tools/validate-product-catalog.ts",
+    "validate:ads": "node tools/run-ttsx.mjs tools/validate-ad-placements.ts",
+    "validate:policy": "node tools/run-ttsx.mjs tools/validate-policy-matrix.ts",
+    "validate:targets": "node tools/run-ttsx.mjs tools/target/validate-target-config.ts",
+    "build:target": "node tools/run-ttsx.mjs tools/target/build-target.ts",
+    "build:web": "pnpm build:target web-preview production",
+    "build:android": "pnpm build:target android production",
+    "build:ios": "pnpm build:target ios production",
+    "build:ait": "pnpm build:target ait production",
+    "release:target": "node tools/run-ttsx.mjs tools/target/release-target.ts",
+    "manifest:release": "node tools/run-ttsx.mjs tools/target/generate-release-manifest.ts",
+    "sampo:add": "sampo add",
+    "sampo:release": "sampo release",
+    "sampo:publish": "sampo publish",
+    "sampo:pre": "sampo pre"
+  },
+  "devDependencies": {
+    "@mpgd/ad-placements": "workspace:*",
+    "@mpgd/policy-matrix": "workspace:*",
+    "@mpgd/product-catalog": "workspace:*",
+    "@mpgd/release-manifest": "workspace:*",
+    "@ttsc/graph": "0.16.9",
+    "@ttsc/lint": "0.16.9",
+    "@ttsc/paths": "0.16.9",
+    "@ttsc/strip": "0.16.9",
+    "@ttsc/unplugin": "0.16.9",
+    "@types/node": "^24.0.0",
+    "ttsc": "0.16.9",
+    "typescript": "rc",
+    "typia": "rc",
+    "vite": "^8.1.3",
+    "vitest": "^4.0.0"
+  }
+}

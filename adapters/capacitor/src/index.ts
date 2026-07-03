@@ -1,0 +1,64 @@
+import type { BridgeMethod, BridgeResponse } from '@mpgd/bridge-protocol';
+import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
+import type { PlatformGateway, PlatformTarget } from '@mpgd/platform-contract';
+
+export function createCapacitorPlatformGateway(input: {
+  readonly target: Extract<PlatformTarget, 'android' | 'ios'>;
+  readonly appVersion: string;
+  readonly buildId: string;
+}): PlatformGateway {
+  async function request<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
+    const response = (await CapacitorGameServices.request({
+      id: crypto.randomUUID(),
+      method,
+      payload,
+      meta: {
+        target: input.target,
+        appVersion: input.appVersion,
+        buildId: input.buildId,
+        sentAt: new Date().toISOString(),
+      },
+    })) as BridgeResponse<TData>;
+
+    if (!response.ok) {
+      throw new Error(response.error.message);
+    }
+
+    return response.data;
+  }
+
+  return {
+    target: input.target,
+    getCapabilities: () => request('runtime.getCapabilities', {}),
+    identity: {
+      getPlayer: () => request('identity.getPlayer', {}),
+    },
+    commerce: {
+      getProducts: () => request('commerce.getProducts', {}),
+      purchase: (payload) => request('commerce.purchase', payload),
+      restore: () => request('commerce.restore', {}),
+      getEntitlements: () => request('commerce.getEntitlements', {}),
+    },
+    ads: {
+      preload: (payload) => request('ads.preload', payload),
+      showRewarded: (payload) => request('ads.showRewarded', payload),
+      showInterstitial: (payload) => request('ads.showInterstitial', payload),
+    },
+    leaderboard: {
+      submitScore: (payload) => request('leaderboard.submitScore', payload),
+      open: (payload) => request('leaderboard.open', payload ?? {}),
+    },
+    lifecycle: {
+      onPause() {
+        return () => {};
+      },
+      onResume() {
+        return () => {};
+      },
+    },
+    storage: {
+      load: (payload) => request('storage.load', payload),
+      save: (payload) => request('storage.save', payload),
+    },
+  };
+}

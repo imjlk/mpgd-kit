@@ -1,0 +1,46 @@
+{
+  "version": "2026-07-03",
+  "products": [
+    {
+      "id": "COINS_100",
+      "type": "consumable",
+      "grant": {
+        "type": "currency",
+        "currency": "coin",
+        "amount": 100
+      },
+      "platformProductIds": {
+        "android": "coins_100",
+        "ios": "com.mpgd.game.coins100",
+        "ait": "coins_100"
+      }
+    },
+    {
+      "id": "COINS_500",
+      "type": "consumable",
+      "grant": {
+        "type": "currency",
+        "currency": "coin",
+        "amount": 500
+      },
+      "platformProductIds": {
+        "android": "coins_500",
+        "ios": "com.mpgd.game.coins500",
+        "ait": "coins_500"
+      }
+    },
+    {
+      "id": "REMOVE_ADS",
+      "type": "non_consumable",
+      "grant": {
+        "type": "entitlement",
+        "entitlement": "remove_ads"
+      },
+      "platformProductIds": {
+        "android": "remove_ads",
+        "ios": "com.mpgd.game.remove_ads",
+        "ait": "remove_ads"
+      }
+    }
+  ]
+}

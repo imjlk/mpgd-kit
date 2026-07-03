@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "declaration": true,
+    "paths": {
+      "@mpgd/adapter-*": ["./adapters/*/src"],
+      "@mpgd/backend-*": ["./backend/*/src"],
+      "@mpgd/capacitor-game-services": ["./native-plugins/capacitor-game-services/src"],
+      "@mpgd/*": ["./packages/*/src"]
+    }
+  }
+}

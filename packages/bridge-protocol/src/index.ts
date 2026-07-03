@@ -1,0 +1,64 @@
+import typia from 'typia';
+
+export type BridgeMethod =
+  | 'runtime.getCapabilities'
+  | 'identity.getPlayer'
+  | 'commerce.getProducts'
+  | 'commerce.purchase'
+  | 'commerce.restore'
+  | 'commerce.getEntitlements'
+  | 'ads.preload'
+  | 'ads.showRewarded'
+  | 'ads.showInterstitial'
+  | 'leaderboard.submitScore'
+  | 'leaderboard.open'
+  | 'storage.load'
+  | 'storage.save';
+
+export interface BridgeRequest<TPayload = unknown> {
+  readonly id: string;
+  readonly method: BridgeMethod;
+  readonly payload: TPayload;
+  readonly meta: {
+    readonly target: string;
+    readonly appVersion: string;
+    readonly buildId: string;
+    readonly sentAt: string;
+  };
+}
+
+export type BridgeResponse<TData = unknown> =
+  | {
+      readonly id: string;
+      readonly ok: true;
+      readonly data: TData;
+    }
+  | {
+      readonly id: string;
+      readonly ok: false;
+      readonly error: {
+        readonly code: string;
+        readonly message: string;
+        readonly retryable: boolean;
+      };
+    };
+
+export const assertBridgeRequest = typia.createAssert<BridgeRequest>();
+export const assertBridgeResponse = typia.createAssert<BridgeResponse>();
+
+export function createBridgeError(
+  id: string,
+  code: string,
+  message: string,
+  retryable = false,
+): BridgeResponse {
+  return {
+    id,
+    ok: false,
+    error: {
+      code,
+      message,
+      retryable,
+    },
+  };
+}

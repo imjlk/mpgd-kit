@@ -1,0 +1,9 @@
+node_modules/
+dist/
+artifacts/
+release-output/
+.turbo/
+.DS_Store
+*.log
+apps/mobile-capacitor/android/
+apps/mobile-capacitor/ios/
