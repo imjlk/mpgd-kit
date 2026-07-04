@@ -230,10 +230,18 @@ function assertEqual(input: unknown, expected: string, label: string): void {
 }
 
 function readText(path: string): string {
-  return readFileSync(path, 'utf8');
+  try {
+    return readFileSync(path, 'utf8');
+  } catch (error) {
+    failures.push(
+      `${path}: failed to read file: ${error instanceof Error ? error.message : String(error)}.`,
+    );
+
+    return '';
+  }
 }
 
-function readJson(path: string): unknown | null {
+function readJson(path: string): unknown {
   try {
     return JSON.parse(readText(path)) as unknown;
   } catch (error) {
