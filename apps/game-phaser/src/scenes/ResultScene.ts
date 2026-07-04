@@ -49,7 +49,7 @@ export class ResultScene extends Phaser.Scene {
     this.gameServices = createDemoGameServicesClient(platform, this.state);
     const rewardedAdEnabled = this.isRewardedContinueEnabled();
     const purchaseEnabled = this.isCoinProductEnabled();
-    const leaderboardEnabled = this.isLeaderboardEnabled();
+    const leaderboardOpenEnabled = this.isLeaderboardOpenEnabled();
 
     this.add
       .text(480, 95, status, {
@@ -112,14 +112,14 @@ export class ResultScene extends Phaser.Scene {
     this.addAction(
       480,
       440,
-      leaderboardEnabled
+      leaderboardOpenEnabled
         ? m.leaderboard_action({}, { locale: state.locale })
         : m.leaderboard_action_unavailable({}, { locale: state.locale }),
       () => {
         void this.openLeaderboard();
       },
       {
-        disabled: !leaderboardEnabled,
+        disabled: !leaderboardOpenEnabled,
       },
     );
     this.addAction(480, 490, m.play_again({}, { locale: state.locale }), () =>
@@ -321,7 +321,7 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
-    if (!this.isLeaderboardEnabled()) {
+    if (!this.isLeaderboardOpenEnabled()) {
       this.setStatus(this.unavailableMessage('leaderboard'));
       return;
     }
@@ -410,6 +410,15 @@ export class ResultScene extends Phaser.Scene {
     }
 
     return this.state.effectiveConfig?.leaderboard.enabled ?? this.state.capabilities.nativeLeaderboard;
+  }
+
+  private isLeaderboardOpenEnabled(): boolean {
+    // Devvit can submit scores but does not expose a native leaderboard UI.
+    if (this.platform?.target === 'reddit') {
+      return false;
+    }
+
+    return this.isLeaderboardEnabled();
   }
 
   private effectiveLeaderboardId(): string {
