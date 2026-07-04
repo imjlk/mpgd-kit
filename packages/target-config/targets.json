@@ -128,6 +128,38 @@
         "requiresStoreReview": false,
         "requiresAitReview": true
       }
+    },
+    "reddit": {
+      "runtime": "devvit-web",
+      "features": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false,
+        "leaderboard": true,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "native",
+        "localization": true
+      },
+      "monetization": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false
+      },
+      "leaderboard": {
+        "native": true
+      },
+      "release": {
+        "profile": "devvit"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": false,
+        "requiresAitReview": false
+      }
     }
   }
 }

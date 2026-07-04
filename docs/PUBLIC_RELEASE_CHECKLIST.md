@@ -23,7 +23,7 @@ Use this before making the repository public or announcing a package release.
 - [ ] `README.md` explains setup, validation, game-services, target config, and release flow.
 - [ ] `.gitignore` excludes generated artifacts, local credentials, signing keys, and platform build output.
 - [ ] No generated source-side `*.js` or `*.d.ts` files are present outside approved generated i18n runtime files.
-- [ ] No generated release output is tracked under `artifacts/`, `release-output/`, `apps/target-ait/public/game/`, or `apps/mobile-capacitor/www/`.
+- [ ] No generated release output is tracked under `artifacts/`, `release-output/`, `apps/target-ait/public/game/`, `apps/target-devvit/dist/`, or `apps/mobile-capacitor/www/`.
 - [ ] `pnpm validate:public` passes.
 
 ## Packages
@@ -50,6 +50,8 @@ pnpm graph:preflight
 pnpm sampo:release:dry-run
 pnpm build:web
 pnpm smoke:target web-preview
+pnpm build:devvit
+pnpm smoke:target reddit
 ```
 
 ## Manual Public Gates
@@ -61,6 +63,7 @@ pnpm smoke:target web-preview
 - [ ] Confirm Android release settings: package id, Google Play app, billing products, AdMob app/placement ids, signing keystore, and Play Games leaderboard ids.
 - [ ] Confirm iOS release settings: bundle id, App Store app, StoreKit products, AdMob app/placement ids, signing credentials, and Game Center leaderboard ids.
 - [ ] Confirm Apps in Toss release settings: app id, Toss product ids, Toss ad placement ids, review metadata, and release credentials.
+- [ ] Confirm Reddit Devvit release settings: app name, test subreddit, Devvit login state, Redis usage, and whether playtest/upload/publish are intentionally local-only.
 - [ ] Confirm placeholder IDs in `packages/catalog/catalog.json`, `packages/catalog/placements.json`, and `apps/game-services-worker/wrangler.toml` are either intentionally sample-only or replaced.
 - [ ] Confirm README/docs state that real Google Play Billing, StoreKit/App Store Server API, AdMob SSV, and Apps in Toss production verification adapters are not bundled yet.
 - [ ] Confirm emulator smoke results are attached or explicitly skipped for the public release.
@@ -70,11 +73,12 @@ pnpm smoke:target web-preview
 - [ ] For Android, run `pnpm build:android && pnpm smoke:target android`.
 - [ ] For iOS, run `pnpm build:ios && pnpm smoke:target ios`.
 - [ ] For Apps in Toss, run `pnpm build:ait && pnpm smoke:target ait`.
+- [ ] For Reddit Devvit, run `pnpm build:devvit && pnpm smoke:target reddit`.
 - [ ] Emulator smoke is optional but recommended for local release confidence.
 
 ## Known Starter Limits
 
 - The Game Services Worker is deployable, but the default config is a starter profile. Production persistence requires a D1 binding and `MPGD_STORE = "d1"`.
-- Platform SDK callbacks are treated as evidence only. Production grants should add real Google Play, App Store, AdMob SSV, and Apps in Toss backend verification.
+- Platform SDK callbacks are treated as evidence only. Production grants should add real Google Play, App Store, AdMob SSV, Apps in Toss, and Devvit payment/reward backend verification.
 - Catalog and ad placement IDs are sample defaults until replaced by a game-specific release configuration.
 - Emulator smoke currently checks install, launch, crash-free startup, screenshot capture, and embedded target config evidence. Full gameplay E2E remains a follow-up.

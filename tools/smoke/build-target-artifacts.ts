@@ -8,13 +8,14 @@ const generatedPaths = [
   'artifacts/release-manifest.json',
   'release-output/android/app-release.aab',
   'release-output/ait/mpgd-kit.ait',
+  'apps/target-devvit/dist',
 ];
 
 for (const path of generatedPaths) {
   rmSync(path, { force: true, recursive: true });
 }
 
-for (const script of ['build:web', 'build:android', 'build:ios', 'build:ait']) {
+for (const script of ['build:web', 'build:android', 'build:ios', 'build:ait', 'build:devvit']) {
   run('pnpm', [script]);
 }
 

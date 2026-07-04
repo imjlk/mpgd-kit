@@ -1,0 +1,25 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "mpgd-kit",
+  "post": {
+    "dir": "dist/client",
+    "entrypoints": {
+      "default": {
+        "entry": "index.html",
+        "height": "tall"
+      }
+    }
+  },
+  "server": {
+    "entry": "dist/server/index.cjs"
+  },
+  "permissions": {
+    "redis": true,
+    "payments": false,
+    "realtime": false
+  },
+  "scripts": {
+    "dev": "pnpm build:server -- --watch",
+    "build": "pnpm build"
+  }
+}

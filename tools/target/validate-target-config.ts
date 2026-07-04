@@ -15,7 +15,10 @@ export function validateTargetConfigFile(path = 'platform.targets.json') {
       throw new Error(`Target ${targetName} output must not be empty.`);
     }
 
-    if (target.kind === 'apps-in-toss' && !existsSync(target.wrapperApp)) {
+    if (
+      (target.kind === 'apps-in-toss' || target.kind === 'devvit-web') &&
+      !existsSync(target.wrapperApp)
+    ) {
       throw new Error(`Target ${targetName} wrapperApp does not exist: ${target.wrapperApp}`);
     }
 

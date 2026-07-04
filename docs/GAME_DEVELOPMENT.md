@@ -31,6 +31,16 @@ pnpm dev:game:ait
 Debug builds install an AIT sandbox bridge only as a fallback. If a real AIT
 bridge is already installed by the wrapper, the real bridge wins.
 
+For a local Devvit adapter sandbox, run:
+
+```sh
+pnpm dev:game:devvit
+```
+
+Debug builds install a Devvit sandbox bridge as a fallback. The release target
+uses `/api/mpgd/bridge` from `apps/target-devvit` so Reddit persistence and
+leaderboard calls stay server-side.
+
 Starter loop:
 
 ```sh
@@ -60,6 +70,8 @@ pnpm test
 pnpm validate:game-assets
 pnpm build:web
 pnpm smoke:target web-preview
+pnpm build:devvit
+pnpm smoke:target reddit
 ```
 
 Use `pnpm graph:demo` before changing broad scene/platform flows. The root
@@ -123,3 +135,7 @@ Apps in Toss game launches should treat bundle size as a first-class constraint.
 Keep the app bundle small, prefer manifest-driven assets, and move large optional
 content behind a later remote-content strategy instead of silently adding it to
 the initial WebView bundle.
+
+Devvit Web launches should treat client fetch and storage limits as first-class
+constraints. Keep persistent game state behind `/api/` endpoints and Redis-backed
+server storage rather than relying on browser-only localStorage.

@@ -16,8 +16,8 @@ export function detectRuntime(): RuntimeConfig {
   };
 }
 
-function normalizeTarget(value: string): PlatformTarget {
-  if (value === 'android' || value === 'ios' || value === 'ait') {
+export function normalizeTarget(value: string): PlatformTarget {
+  if (value === 'android' || value === 'ios' || value === 'ait' || value === 'reddit') {
     return value;
   }
 

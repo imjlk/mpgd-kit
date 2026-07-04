@@ -46,6 +46,7 @@ const requiredIgnorePatterns = [
   '.wrangler/',
   '.env',
   '.env.*',
+  '.devvit/',
   '*.pem',
   '*.key',
   '*.p8',
@@ -54,6 +55,7 @@ const requiredIgnorePatterns = [
   '*.mobileprovision',
   'apps/target-ait/.granite/',
   'apps/target-ait/public/game/',
+  'apps/target-devvit/dist/',
   'apps/mobile-capacitor/www/',
   'apps/mobile-capacitor/android/.gradle/',
   'apps/mobile-capacitor/android/local.properties',
@@ -76,6 +78,7 @@ const blockedTrackedGeneratedPrefixes = [
   'release-output/',
   'output/',
   'apps/target-ait/public/game/',
+  'apps/target-devvit/dist/',
   'apps/mobile-capacitor/www/',
   'apps/game-services-worker/dist/',
 ];

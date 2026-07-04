@@ -5,6 +5,7 @@ release-output/
 output/
 .env
 .env.*
+.devvit/
 *.pem
 *.key
 *.p8
@@ -18,6 +19,7 @@ output/
 *.ait
 apps/target-ait/.granite/
 apps/target-ait/public/game/
+apps/target-devvit/dist/
 apps/mobile-capacitor/www/
 apps/mobile-capacitor/android/.gradle/
 apps/mobile-capacitor/android/local.properties

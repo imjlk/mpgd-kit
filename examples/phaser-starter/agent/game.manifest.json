@@ -14,6 +14,11 @@
         "target": "ait",
         "server": "apps-in-toss",
         "queries": ["웹뷰 개발", "인앱 결제", "인앱 광고", "샌드박스", "심사", "저장소"]
+      },
+      {
+        "target": "reddit",
+        "server": "devvit",
+        "queries": ["Devvit Web", "devvit.json", "Vite", "Redis", "playtest", "payments"]
       }
     ]
   },

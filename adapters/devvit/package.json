@@ -1,0 +1,57 @@
+{
+  "name": "@mpgd/adapter-devvit",
+  "version": "0.1.0",
+  "description": "Reddit Devvit Web platform adapter for mpgd games.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "adapters/devvit"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "vite",
+    "typescript",
+    "devvit",
+    "reddit",
+    "game-development",
+    "game-distribution"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@mpgd/bridge": "workspace:*",
+    "@mpgd/platform": "workspace:*"
+  },
+  "devDependencies": {
+    "ttsc": "0.16.9",
+    "typescript": "7.0.1-rc",
+    "vitest": "^4.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  }
+}

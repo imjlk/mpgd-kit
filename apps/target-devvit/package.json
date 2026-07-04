@@ -1,0 +1,32 @@
+{
+  "name": "@mpgd/target-devvit",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "devvit playtest",
+    "build": "pnpm build:server",
+    "build:server": "vite build --config vite.server.config.ts",
+    "whoami": "devvit whoami",
+    "upload": "devvit upload",
+    "publish": "devvit publish",
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@devvit/web": "0.13.6",
+    "@mpgd/bridge": "workspace:*",
+    "express": "^5.2.1"
+  },
+  "devDependencies": {
+    "@ttsc/unplugin": "0.16.9",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.0.0",
+    "devvit": "0.13.6",
+    "ttsc": "0.16.9",
+    "typescript": "7.0.1-rc",
+    "vite": "^8.1.3"
+  }
+}

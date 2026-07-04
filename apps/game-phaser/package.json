@@ -18,6 +18,7 @@
     "@mpgd/adapter-ait": "workspace:*",
     "@mpgd/adapter-browser": "workspace:*",
     "@mpgd/adapter-capacitor": "workspace:*",
+    "@mpgd/adapter-devvit": "workspace:*",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/catalog": "workspace:*",
     "@mpgd/game-core": "workspace:*",

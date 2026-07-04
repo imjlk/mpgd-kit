@@ -51,6 +51,18 @@ export async function installPlatform(runtime: RuntimeConfig): Promise<PlatformG
       break;
     }
 
+    case 'reddit': {
+      const { createDevvitPlatformGateway, createDevvitSandboxBridge } = await import(
+        '@mpgd/adapter-devvit'
+      );
+      gateway = createDevvitPlatformGateway({
+        appVersion: runtime.appVersion,
+        buildId: runtime.buildId,
+        ...(runtime.debug ? { fallbackBridge: createDevvitSandboxBridge() } : {}),
+      });
+      break;
+    }
+
     default: {
       const { createBrowserPlatformGateway } = await import('@mpgd/adapter-browser');
       gateway = createBrowserPlatformGateway();

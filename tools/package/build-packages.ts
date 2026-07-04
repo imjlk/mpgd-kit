@@ -9,7 +9,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 
 import { discoverBuildablePackages, sortByWorkspaceDependencies } from './workspace';
 
@@ -21,6 +21,10 @@ const packagePaths = Object.fromEntries(
     [toPosix(relative(cacheDir, join(workspacePackage.dir, 'dist')))],
   ]),
 );
+const allowedGeneratedSourcePrefixes = [
+  'packages/i18n/src/paraglide/',
+  'packages/i18n/src/paraglideAdapter.',
+] as const;
 
 mkdirSync(cacheDir, { recursive: true });
 
@@ -68,6 +72,7 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
   copySourceRuntimeAssets(srcDir, distDir);
   copyRuntimeAssets(srcDir, distDir);
   formatDeclarationFiles(distDir);
+  removeGeneratedSourceSiblings(srcDir);
 
   assertFile(join(distDir, 'index.js'));
   assertFile(join(distDir, 'index.d.ts'));
@@ -119,27 +124,13 @@ function formatDeclarationFiles(dir: string): void {
 }
 
 function copySourceRuntimeAssets(srcDir: string, distDir: string): void {
-  for (const entry of readdirSync(srcDir)) {
-    const sourcePath = join(srcDir, entry);
-
-    if (statSync(sourcePath).isDirectory()) {
-      continue;
-    }
-
-    if (!entry.endsWith('.js') && !entry.endsWith('.d.ts')) {
-      continue;
-    }
-
-    const sourceSibling = entry.endsWith('.d.ts')
-      ? join(srcDir, `${entry.slice(0, -5)}.ts`)
-      : join(srcDir, `${entry.slice(0, -3)}.ts`);
-
+  forEachSourceBackedArtifact(srcDir, false, (sourcePath, sourceSibling) => {
     if (existsSync(sourceSibling)) {
-      continue;
+      return;
     }
 
-    copyFileSync(sourcePath, join(distDir, entry));
-  }
+    copyFileSync(sourcePath, join(distDir, basename(sourcePath)));
+  });
 }
 
 function copyRuntimeAssets(srcDir: string, distDir: string): void {
@@ -150,6 +141,47 @@ function copyRuntimeAssets(srcDir: string, distDir: string): void {
   }
 
   copyDir(generatedDir, join(distDir, 'paraglide'));
+}
+
+function removeGeneratedSourceSiblings(dir: string): void {
+  forEachSourceBackedArtifact(dir, true, (path, sourceSibling) => {
+    if (!isAllowedGeneratedSource(path) && existsSync(sourceSibling)) {
+      rmSync(path);
+    }
+  });
+}
+
+function forEachSourceBackedArtifact(
+  dir: string,
+  recursive: boolean,
+  callback: (artifactPath: string, sourceSibling: string) => void,
+): void {
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry);
+
+    if (statSync(path).isDirectory()) {
+      if (recursive) {
+        forEachSourceBackedArtifact(path, recursive, callback);
+      }
+      continue;
+    }
+
+    if (!path.endsWith('.js') && !path.endsWith('.d.ts')) {
+      continue;
+    }
+
+    const sourceSibling = path.endsWith('.d.ts')
+      ? `${path.slice(0, -5)}.ts`
+      : `${path.slice(0, -3)}.ts`;
+
+    callback(path, sourceSibling);
+  }
+}
+
+function isAllowedGeneratedSource(path: string): boolean {
+  const normalizedPath = toPosix(path);
+
+  return allowedGeneratedSourcePrefixes.some((prefix) => normalizedPath.startsWith(prefix));
 }
 
 function copyDir(sourceDir: string, targetDir: string): void {

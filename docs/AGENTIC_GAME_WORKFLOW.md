@@ -68,19 +68,33 @@ The AIT payment guide requires pending order restore and grant-completion handli
 
 Games may skip TDS, but non-game mini-apps must use TDS.
 
-## Future Devvit Target
+## Reddit Devvit Target
 
-Reddit Devvit should be introduced as a target adapter, not as a scene dependency.
+Reddit Devvit is introduced as a target adapter and wrapper, not as a scene dependency.
 
-Expected shape:
+For Devvit work, enable the official Devvit MCP server from `.mcp.json` and use
+`devvit_search` before implementation. Useful searches include:
+
+- `Devvit Web`
+- `devvit.json`
+- `Vite`
+- `Redis`
+- `playtest`
+- `payments`
+
+Implemented shape:
 
 - target-config entry
-- `adapters/devvit` or target app boundary
+- `adapters/devvit`
+- `apps/target-devvit`
 - bridge fixtures
-- game-services evidence mapping
+- `/api/mpgd/bridge` server boundary
 - smoke tests
 
-The starter manifest already reserves `reddit` in `futureTargets` so agents can plan for it without adding Devvit imports prematurely.
+The starter manifest still reserves `reddit` in `futureTargets` because the
+starter example is browser-first. Devvit SDK imports must stay in
+`apps/target-devvit`, while game-facing code should continue to use
+`PlatformGateway`.
 
 ## Validation
 

@@ -14,7 +14,7 @@ import {
   type EmbeddedTargetConfigEvidence,
 } from './embedded-target-config';
 
-const requiredTargets = ['web-preview', 'android', 'ios', 'ait'] as const;
+const requiredTargets = ['web-preview', 'android', 'ios', 'ait', 'reddit'] as const;
 type SmokeTarget = (typeof requiredTargets)[number];
 
 const knownTargets = new Set<string>(requiredTargets);
@@ -25,6 +25,7 @@ const requiredArtifacts: Record<SmokeTarget, string> = {
   android: 'release-output/android/app-release.aab',
   ios: 'apps/mobile-capacitor/ios',
   ait: 'release-output/ait/mpgd-kit.ait',
+  reddit: 'apps/target-devvit/dist/client/index.html',
 };
 
 export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = requiredTargets): void {
@@ -85,6 +86,11 @@ function readReleaseEmbeddedTargetConfig(target: SmokeTarget): EmbeddedTargetCon
           'ait wrapper webDir',
         );
       }
+    case 'reddit':
+      return readEmbeddedTargetConfigFromDirectory(
+        'apps/target-devvit/dist/client',
+        'reddit Devvit client artifact',
+      );
   }
 }
 

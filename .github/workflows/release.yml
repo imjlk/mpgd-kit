@@ -148,6 +148,38 @@ jobs:
             artifacts/**
             release-output/**
 
+  build-devvit:
+    runs-on: ubuntu-latest
+    needs: validate
+    timeout-minutes: 60
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build:devvit
+      - run: pnpm smoke:target reddit
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: devvit-release
+          path: |
+            artifacts/**
+            apps/target-devvit/dist/**
+
   release:
     runs-on: ubuntu-latest
     needs:
@@ -155,6 +187,7 @@ jobs:
       - build-android
       - build-ios
       - build-ait
+      - build-devvit
 
     steps:
       - uses: actions/checkout@v4
