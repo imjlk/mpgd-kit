@@ -1,5 +1,7 @@
 import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform-contract';
 
+import type { EffectiveTargetConfig } from './effective';
+
 export type PlatformFeature =
   | 'iap'
   | 'rewardedAds'
@@ -99,6 +101,7 @@ export interface TargetRuntimeSnapshot {
   readonly target: PlatformConfigTarget;
   readonly configTarget: string;
   readonly config: TargetConfig;
+  readonly effectiveConfig?: EffectiveTargetConfig;
   readonly capabilities: PlatformCapabilities;
   readonly features: Record<PlatformFeature, FeatureAvailability>;
   readonly adPlacements: readonly AdPlacementAvailability[];
@@ -106,6 +109,7 @@ export interface TargetRuntimeSnapshot {
 
 export interface TargetAvailabilityOptions {
   readonly configTarget?: string;
+  readonly effectiveConfig?: EffectiveTargetConfig;
   readonly adPlacements?: readonly AdPlacementDefinition[];
   readonly resolveAdPlacementType?: (placementId: string) => AdPlacementType | undefined;
 }
@@ -113,6 +117,7 @@ export interface TargetAvailabilityOptions {
 export interface TargetConfiguredGateway extends PlatformGateway {
   readonly configTarget: string;
   readonly targetConfig: TargetConfig;
+  readonly effectiveConfig?: EffectiveTargetConfig;
   getTargetRuntime(): Promise<TargetRuntimeSnapshot>;
 }
 
@@ -191,6 +196,7 @@ export function createTargetRuntimeSnapshot(input: {
   readonly target: PlatformConfigTarget;
   readonly configTarget?: string;
   readonly config: TargetConfig;
+  readonly effectiveConfig?: EffectiveTargetConfig;
   readonly capabilities: PlatformCapabilities;
   readonly adPlacements?: readonly AdPlacementDefinition[];
 }): TargetRuntimeSnapshot {
@@ -211,6 +217,7 @@ export function createTargetRuntimeSnapshot(input: {
     target: input.target,
     configTarget,
     config: input.config,
+    ...(input.effectiveConfig === undefined ? {} : { effectiveConfig: input.effectiveConfig }),
     capabilities: input.capabilities,
     features,
     adPlacements: (input.adPlacements ?? []).map((placement) => {
@@ -266,11 +273,17 @@ export function withTargetAvailability(
     ...gateway,
     configTarget,
     targetConfig: config,
+    ...(options.effectiveConfig === undefined
+      ? {}
+      : { effectiveConfig: options.effectiveConfig }),
     async getTargetRuntime() {
       return createTargetRuntimeSnapshot({
         target: gateway.target,
         configTarget,
         config,
+        ...(options.effectiveConfig === undefined
+          ? {}
+          : { effectiveConfig: options.effectiveConfig }),
         capabilities: applyTargetConfigToCapabilities(await gateway.getCapabilities(), config),
         adPlacements: options.adPlacements ?? [],
       });

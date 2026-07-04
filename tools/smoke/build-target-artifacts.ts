@@ -4,13 +4,14 @@ import { rmSync } from 'node:fs';
 import { verifyTargetArtifacts } from './verify-target-artifacts';
 
 const generatedPaths = [
+  'artifacts/target-config',
   'artifacts/release-manifest.json',
   'release-output/android/app-release.aab',
   'release-output/ait/mpgd-kit.ait',
 ];
 
 for (const path of generatedPaths) {
-  rmSync(path, { force: true });
+  rmSync(path, { force: true, recursive: true });
 }
 
 for (const script of ['build:web', 'build:android', 'build:ios', 'build:ait']) {

@@ -1,5 +1,12 @@
+import type { AdPlacements } from '@mpgd/ad-placements';
 import type { PlatformGateway } from '@mpgd/platform-contract';
+import type { ProductCatalog } from '@mpgd/product-catalog';
 
+import {
+  createEffectiveTargetConfig,
+  getEffectiveAdPlacementConfig,
+  getEffectiveProductConfig,
+} from '../src/effective';
 import {
   applyTargetConfigToCapabilities,
   getTargetConfig,
@@ -28,6 +35,52 @@ const targetConfigMatrix = {
     }),
   },
 } satisfies TargetConfigMatrix;
+const productCatalog = {
+  version: 'test-catalog',
+  products: [
+    {
+      id: 'COINS_100',
+      type: 'consumable',
+      grant: {
+        type: 'currency',
+        currency: 'coin',
+        amount: 100,
+      },
+      platformProductIds: {
+        android: 'coins_100',
+      },
+    },
+  ],
+} satisfies ProductCatalog;
+const adPlacements = {
+  version: 'test-ads',
+  placements: [
+    {
+      id: 'CONTINUE_AFTER_FAIL',
+      type: 'rewarded',
+      reward: {
+        type: 'continue',
+        amount: 1,
+      },
+      frequencyCap: {
+        cooldownSeconds: 60,
+      },
+      platformPlacementIds: {
+        android: 'reward_continue',
+      },
+    },
+    {
+      id: 'STAGE_END_INTERSTITIAL',
+      type: 'interstitial',
+      frequencyCap: {
+        cooldownSeconds: 120,
+      },
+      platformPlacementIds: {
+        android: 'inter_stage_end',
+      },
+    },
+  ],
+} satisfies AdPlacements;
 
 const delegatedCalls: string[] = [];
 const gateway = createGateway();
@@ -36,8 +89,16 @@ assertEqual(targetConfigKeyForPlatform('browser'), 'web-preview');
 assertEqual(targetConfigKeyForPlatform('android'), 'android');
 
 const webConfig = getTargetConfig(targetConfigMatrix, targetConfigKeyForPlatform('browser'));
+const webEffectiveConfig = createEffectiveTargetConfig({
+  target: 'web-preview',
+  targetConfigVersion: targetConfigMatrix.version,
+  config: webConfig,
+  catalog: productCatalog,
+  adPlacements,
+});
 const webGateway = withTargetAvailability(gateway, webConfig, {
   configTarget: 'web-preview',
+  effectiveConfig: webEffectiveConfig,
   adPlacements: [
     {
       id: 'CONTINUE_AFTER_FAIL',
@@ -52,12 +113,21 @@ const webGateway = withTargetAvailability(gateway, webConfig, {
 });
 const webCapabilities = await webGateway.getCapabilities();
 const webRuntime = await webGateway.getTargetRuntime();
+const webProduct = getEffectiveProductConfig(webEffectiveConfig, 'COINS_100');
+const webRewardedPlacement = getEffectiveAdPlacementConfig(
+  webEffectiveConfig,
+  'CONTINUE_AFTER_FAIL',
+);
 
+assertEqual(webGateway.effectiveConfig, webEffectiveConfig);
 assertDeepEqual(
   applyTargetConfigToCapabilities(await gateway.getCapabilities(), webConfig),
   webCapabilities,
 );
 assertEqual(webRuntime.configTarget, 'web-preview');
+assertEqual(webRuntime.effectiveConfig, webEffectiveConfig);
+assertEqual(webProduct?.reason, 'target-disabled');
+assertEqual(webRewardedPlacement?.reason, 'target-disabled');
 assertEqual(webRuntime.features.iap.reason, 'target-disabled');
 assertEqual(webRuntime.features.rewardedAds.reason, 'target-disabled');
 assertEqual(webRuntime.features.interstitialAds.reason, 'target-disabled');
@@ -183,12 +253,32 @@ assertDeepEqual(
 assertDeepEqual(delegatedCalls, ['preload:CONTINUE_AFTER_FAIL', 'showRewarded']);
 delegatedCalls.length = 0;
 
-const androidGateway = withTargetAvailability(
-  gateway,
-  getTargetConfig(targetConfigMatrix, 'android'),
-  {
-    resolveAdPlacementType,
-  },
+const androidConfig = getTargetConfig(targetConfigMatrix, 'android');
+const androidEffectiveConfig = createEffectiveTargetConfig({
+  target: 'android',
+  targetConfigVersion: targetConfigMatrix.version,
+  config: androidConfig,
+  catalog: productCatalog,
+  adPlacements,
+});
+const androidGateway = withTargetAvailability(gateway, androidConfig, {
+  effectiveConfig: androidEffectiveConfig,
+  resolveAdPlacementType,
+});
+
+assertEqual(getEffectiveProductConfig(androidEffectiveConfig, 'COINS_100')?.enabled, true);
+assertEqual(
+  getEffectiveProductConfig(androidEffectiveConfig, 'COINS_100')?.platformProductId,
+  'coins_100',
+);
+assertEqual(
+  getEffectiveAdPlacementConfig(androidEffectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
+  true,
+);
+assertEqual(
+  getEffectiveAdPlacementConfig(androidEffectiveConfig, 'CONTINUE_AFTER_FAIL')
+    ?.platformPlacementId,
+  'reward_continue',
 );
 
 await androidGateway.commerce.purchase({

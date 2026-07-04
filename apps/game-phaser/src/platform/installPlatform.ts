@@ -1,7 +1,10 @@
 import type { AdPlacements } from '@mpgd/ad-placements';
 import adPlacementsJson from '@mpgd/ad-placements/placements.json';
 import type { PlatformGateway } from '@mpgd/platform-contract';
+import type { ProductCatalog } from '@mpgd/product-catalog';
+import productCatalogJson from '@mpgd/product-catalog/catalog.json';
 import {
+  createEffectiveTargetConfig,
   getTargetConfig,
   targetConfigKeyForPlatform,
   withTargetAvailability,
@@ -13,6 +16,7 @@ import type { RuntimeConfig } from './runtimeDetector';
 
 const targetConfigMatrix = targetConfigMatrixJson as TargetConfigMatrix;
 const adPlacements = adPlacementsJson as AdPlacements;
+const productCatalog = productCatalogJson as ProductCatalog;
 const targetAdPlacements = adPlacements.placements.map((placement) => ({
   id: placement.id,
   type: placement.type,
@@ -52,9 +56,18 @@ export async function installPlatform(runtime: RuntimeConfig): Promise<PlatformG
   }
 
   const configTarget = targetConfigKeyForPlatform(runtime.target);
+  const targetConfig = getTargetConfig(targetConfigMatrix, configTarget);
+  const effectiveConfig = createEffectiveTargetConfig({
+    target: configTarget,
+    targetConfigVersion: targetConfigMatrix.version,
+    config: targetConfig,
+    catalog: productCatalog,
+    adPlacements,
+  });
 
-  return withTargetAvailability(gateway, getTargetConfig(targetConfigMatrix, configTarget), {
+  return withTargetAvailability(gateway, targetConfig, {
     configTarget,
+    effectiveConfig,
     adPlacements: targetAdPlacements,
     resolveAdPlacementType(placementId) {
       return adPlacementTypes.get(placementId);

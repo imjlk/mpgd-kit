@@ -34,7 +34,9 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm smoke:policy
+      - run: pnpm smoke:target-config
+      - run: pnpm smoke:effective-config
+      - run: pnpm smoke:adapter-effective-config
       - run: pnpm build:target ios ${{ inputs.profile }}
         env:
           MPGD_RUN_IOS_ARCHIVE: ${{ inputs.archive && '1' || '0' }}

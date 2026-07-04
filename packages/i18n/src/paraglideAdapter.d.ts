@@ -29,6 +29,11 @@ export interface MpgdMessages {
   readonly cap_localization: EmptyMessage;
   readonly cap_rewarded_ads: EmptyMessage;
   readonly cap_save: EmptyMessage;
+  readonly effective_config_summary: MessageFunction<{
+    readonly products: number;
+    readonly ads: number;
+    readonly storage: string;
+  }>;
   readonly feature_target_disabled: MessageFunction<{ readonly feature: string }>;
   readonly feature_unavailable: MessageFunction<{ readonly feature: string }>;
   readonly feature_unsupported: MessageFunction<{ readonly feature: string }>;

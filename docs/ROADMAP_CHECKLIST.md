@@ -202,3 +202,29 @@ to run xcodebuild archive.
 - [x] package build and pack smoke include generated i18n runtime subpaths
 - [x] i18n smoke verifies locale fallback and translated message output
 - [x] target config smoke verifies localization locale fallback and availability
+
+## Phase 15 - Effective Target Config Bundles
+
+- [x] target config package computes effective per-target config from target config, product catalog, and ad placements
+- [x] effective config includes product ids, ad placement ids, leaderboard id, storage support, localization, release profile, and nested policy restrictions
+- [x] effective config validator catches enabled products or ads with missing platform ids
+- [x] build tooling writes `artifacts/target-config/*.json`
+- [x] release manifest records target config version plus effective config path, version, and sha256 digest
+- [x] target artifact smoke verifies effective config path, digest, and target match
+
+## Phase 16 - Demo Effective Config Runtime
+
+- [x] Phaser platform installation creates effective config for the active target
+- [x] target-configured gateway exposes effective config on runtime snapshots
+- [x] lobby diagnostics render effective product/ad/storage summary
+- [x] result actions use effective product, rewarded ad placement, and leaderboard availability
+- [x] demo test hooks expose effective config and configured items
+
+## Phase 17 - Adapter Effective Config Parity
+
+- [x] browser adapter smoke verifies web-preview disables mapped products and ads
+- [x] Capacitor Android/iOS smoke verifies enabled effective config delegates purchase, rewarded ad, and leaderboard calls
+- [x] Apps in Toss smoke verifies enabled effective config delegates purchase, rewarded ad, and leaderboard calls
+- [x] root test command runs effective config and adapter parity smoke
+- [x] CI and release workflows run effective config validation and parity smoke
+- [x] graph target-config preset covers effective config generation and demo action flow

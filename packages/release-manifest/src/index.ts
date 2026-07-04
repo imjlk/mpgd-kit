@@ -3,6 +3,11 @@ import typia from 'typia';
 export interface ReleaseTargetManifest {
   readonly artifact: string;
   readonly profile?: string;
+  readonly effectiveConfig: {
+    readonly path: string;
+    readonly version: string;
+    readonly digest: string;
+  };
   readonly versionName?: string;
   readonly versionCode?: number;
   readonly marketingVersion?: string;
@@ -16,6 +21,7 @@ export interface ReleaseManifest {
   readonly gitSha: string;
   readonly gameVersion: string;
   readonly buildId: string;
+  readonly targetConfigVersion: string;
   readonly catalogVersion: string;
   readonly adPlacementVersion: string;
   readonly targets: Record<string, ReleaseTargetManifest>;

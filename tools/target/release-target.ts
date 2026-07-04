@@ -1,7 +1,9 @@
+import { validateEffectiveTargetConfigMatrix } from './effective-config';
 import { validateTargetConfigFile } from './validate-target-config';
 
 const [targetName] = process.argv.slice(2);
 const config = validateTargetConfigFile();
+validateEffectiveTargetConfigMatrix();
 
 if (targetName === undefined) {
   throw new Error('Usage: pnpm release:target <target>');

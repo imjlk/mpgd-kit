@@ -3,7 +3,12 @@ import Phaser from 'phaser';
 import type { FinishedStage } from '@mpgd/game-core';
 import { m, type MpgdLocale } from '@mpgd/i18n';
 import type { PlatformGateway } from '@mpgd/platform-contract';
-import type { FeatureAvailability, PlatformFeature } from '@mpgd/target-config';
+import {
+  getEffectiveAdPlacementConfig,
+  getEffectiveProductConfig,
+  type FeatureAvailability,
+  type PlatformFeature,
+} from '@mpgd/target-config';
 
 import {
   addCoinsToSave,
@@ -38,6 +43,9 @@ export class ResultScene extends Phaser.Scene {
     };
     this.result = result;
     this.registry.set('demoState', this.state);
+    const rewardedAdEnabled = this.isRewardedContinueEnabled();
+    const purchaseEnabled = this.isCoinProductEnabled();
+    const leaderboardEnabled = this.isLeaderboardEnabled();
 
     this.add
       .text(480, 95, status, {
@@ -74,40 +82,40 @@ export class ResultScene extends Phaser.Scene {
     this.addAction(
       480,
       340,
-      this.state.capabilities.rewardedAds
+      rewardedAdEnabled
         ? m.reward_ad_action({}, { locale: state.locale })
         : m.reward_ad_unavailable({}, { locale: state.locale }),
       () => {
         void this.claimReward();
       },
       {
-        disabled: !this.state.capabilities.rewardedAds,
+        disabled: !rewardedAdEnabled,
       },
     );
     this.addAction(
       480,
       390,
-      this.state.capabilities.nativeIap
+      purchaseEnabled
         ? m.purchase_action({}, { locale: state.locale })
         : m.purchase_unavailable({}, { locale: state.locale }),
       () => {
         void this.buyCoins();
       },
       {
-        disabled: !this.state.capabilities.nativeIap,
+        disabled: !purchaseEnabled,
       },
     );
     this.addAction(
       480,
       440,
-      this.state.capabilities.nativeLeaderboard
+      leaderboardEnabled
         ? m.leaderboard_action({}, { locale: state.locale })
         : m.leaderboard_action_unavailable({}, { locale: state.locale }),
       () => {
         void this.openLeaderboard();
       },
       {
-        disabled: !this.state.capabilities.nativeLeaderboard,
+        disabled: !leaderboardEnabled,
       },
     );
     this.addAction(480, 490, m.play_again({}, { locale: state.locale }), () =>
@@ -134,6 +142,12 @@ export class ResultScene extends Phaser.Scene {
         localization: this.getActionState('localization'),
       },
       targetRuntime: this.state?.targetRuntime ?? null,
+      effectiveConfig: this.state?.effectiveConfig ?? null,
+      configuredItems: {
+        coinProduct: this.effectiveCoinProduct(),
+        rewardedPlacement: this.effectiveRewardedPlacement(),
+        leaderboardId: this.effectiveLeaderboardId(),
+      },
     };
   }
 
@@ -185,7 +199,7 @@ export class ResultScene extends Phaser.Scene {
 
     await persistDemoSave(this.platform, this.state.save);
 
-    if (!this.state.capabilities.nativeLeaderboard) {
+    if (!this.isLeaderboardEnabled()) {
       this.setStatus(
         `${m.saved({}, { locale: this.state.locale })} ${this.unavailableMessage('leaderboard')}`,
       );
@@ -193,7 +207,7 @@ export class ResultScene extends Phaser.Scene {
     }
 
     const submission = await this.platform.leaderboard.submitScore({
-      leaderboardId: 'default',
+      leaderboardId: this.effectiveLeaderboardId(),
       score: this.result.score.total,
       runId: this.result.session.id,
       submittedAt: new Date().toISOString(),
@@ -213,7 +227,7 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
-    if (!this.state.capabilities.rewardedAds) {
+    if (!this.isRewardedContinueEnabled()) {
       this.setStatus(this.unavailableMessage('rewardedAds'));
       return;
     }
@@ -245,7 +259,7 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
-    if (!this.state.capabilities.nativeIap) {
+    if (!this.isCoinProductEnabled()) {
       this.setStatus(this.unavailableMessage('iap'));
       return;
     }
@@ -281,12 +295,12 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
-    if (!this.state.capabilities.nativeLeaderboard) {
+    if (!this.isLeaderboardEnabled()) {
       this.setStatus(this.unavailableMessage('leaderboard'));
       return;
     }
 
-    await this.platform.leaderboard.open({ leaderboardId: 'default' });
+    await this.platform.leaderboard.open({ leaderboardId: this.effectiveLeaderboardId() });
     this.setStatus(m.leaderboard_opened({}, { locale: this.state.locale }));
   }
 
@@ -330,6 +344,61 @@ export class ResultScene extends Phaser.Scene {
       case 'localization':
         return this.state.capabilities.localizedContent;
     }
+  }
+
+  private isCoinProductEnabled(): boolean {
+    if (this.state === null) {
+      return false;
+    }
+
+    if (this.state.effectiveConfig !== null) {
+      return getEffectiveProductConfig(this.state.effectiveConfig, 'COINS_100')?.enabled === true;
+    }
+
+    return this.state.capabilities.nativeIap;
+  }
+
+  private isRewardedContinueEnabled(): boolean {
+    if (this.state === null) {
+      return false;
+    }
+
+    if (this.state.effectiveConfig !== null) {
+      return (
+        getEffectiveAdPlacementConfig(this.state.effectiveConfig, 'CONTINUE_AFTER_FAIL')
+          ?.enabled === true
+      );
+    }
+
+    return this.state.capabilities.rewardedAds;
+  }
+
+  private isLeaderboardEnabled(): boolean {
+    if (this.state === null) {
+      return false;
+    }
+
+    return this.state.effectiveConfig?.leaderboard.enabled ?? this.state.capabilities.nativeLeaderboard;
+  }
+
+  private effectiveLeaderboardId(): string {
+    return this.state?.effectiveConfig?.leaderboard.defaultLeaderboardId ?? 'default';
+  }
+
+  private effectiveCoinProduct() {
+    const config = this.state?.effectiveConfig;
+
+    return config === undefined || config === null
+      ? null
+      : (getEffectiveProductConfig(config, 'COINS_100') ?? null);
+  }
+
+  private effectiveRewardedPlacement() {
+    const config = this.state?.effectiveConfig;
+
+    return config === undefined || config === null
+      ? null
+      : (getEffectiveAdPlacementConfig(config, 'CONTINUE_AFTER_FAIL') ?? null);
   }
 
   private unavailableMessage(feature: PlatformFeature): string {

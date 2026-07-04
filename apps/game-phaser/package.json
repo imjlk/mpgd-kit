@@ -25,8 +25,9 @@
     "@mpgd/i18n": "workspace:*",
     "@mpgd/leaderboard-contract": "workspace:*",
     "@mpgd/monetization-contract": "workspace:*",
-    "@mpgd/target-config": "workspace:*",
     "@mpgd/platform-contract": "workspace:*",
+    "@mpgd/product-catalog": "workspace:*",
+    "@mpgd/target-config": "workspace:*",
     "phaser": "4.2.0",
     "typia": "rc"
   },

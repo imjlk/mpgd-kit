@@ -30,7 +30,9 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm smoke:policy
+      - run: pnpm smoke:target-config
+      - run: pnpm smoke:effective-config
+      - run: pnpm smoke:adapter-effective-config
       - run: pnpm build:target ait ${{ inputs.profile }}
       - run: pnpm smoke:target ait
 

@@ -120,6 +120,7 @@ export class LobbyScene extends Phaser.Scene {
         start: this.startText?.text ?? null,
       },
       targetRuntime: this.state?.targetRuntime ?? null,
+      effectiveConfig: this.state?.effectiveConfig ?? null,
     };
   }
 
@@ -197,10 +198,24 @@ function summarizeTargetRuntime(state: DemoState): string {
     })
     .join('  ');
 
+  const effectiveConfig = state.effectiveConfig;
+  const effectiveSummary =
+    effectiveConfig === null
+      ? ''
+      : `  ${m.effective_config_summary(
+          {
+            products: effectiveConfig.monetization.products.filter((product) => product.enabled)
+              .length,
+            ads: effectiveConfig.ads.placements.filter((placement) => placement.enabled).length,
+            storage: effectiveConfig.storage.support,
+          },
+          { locale },
+        )}`;
+
   return m.target_availability_summary(
     {
       target: runtime.configTarget,
-      summary,
+      summary: `${summary}${effectiveSummary}`,
     },
     { locale },
   );

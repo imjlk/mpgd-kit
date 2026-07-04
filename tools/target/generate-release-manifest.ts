@@ -7,12 +7,15 @@ import typia from 'typia';
 import type { AdPlacements } from '@mpgd/ad-placements';
 import type { ProductCatalog } from '@mpgd/product-catalog';
 import type { ReleaseManifest } from '@mpgd/release-manifest';
+import type { TargetConfigMatrix } from '@mpgd/target-config';
 
 import { isCliEntrypoint, readJsonFile } from '../io';
+import { writeEffectiveTargetConfigs } from './effective-config';
 
 const assertProductCatalog = typia.createAssert<ProductCatalog>();
 const assertAdPlacements = typia.createAssert<AdPlacements>();
 const assertReleaseManifest = typia.createAssert<ReleaseManifest>();
+const assertTargetConfigMatrix = typia.createAssert<TargetConfigMatrix>();
 
 export interface GenerateReleaseManifestInput {
   readonly target: string;
@@ -23,22 +26,38 @@ export interface GenerateReleaseManifestInput {
 
 export function generateReleaseManifest(input: GenerateReleaseManifestInput): ReleaseManifest {
   const packageJson = readJsonFile('package.json') as { version?: string };
+  const targetConfig = assertTargetConfigMatrix(
+    readJsonFile('packages/target-config/targets.json'),
+  );
   const catalog = assertProductCatalog(readJsonFile('packages/product-catalog/catalog.json'));
   const adPlacements = assertAdPlacements(readJsonFile('packages/ad-placements/placements.json'));
+  const effectiveConfig = writeEffectiveTargetConfigs({ targets: [input.target] }).artifacts.find(
+    (artifact) => artifact.target === input.target,
+  );
   const buildId = process.env.BUILD_ID ?? createBuildId();
   const gameVersion = process.env.APP_VERSION ?? packageJson.version ?? '0.0.0';
+
+  if (effectiveConfig === undefined) {
+    throw new Error(`Failed to generate effective target config for ${input.target}.`);
+  }
 
   return assertReleaseManifest({
     releaseId: `mpgd-${gameVersion}+${buildId}`,
     gitSha: getGitSha(),
     gameVersion,
     buildId,
+    targetConfigVersion: targetConfig.version,
     catalogVersion: catalog.version,
     adPlacementVersion: adPlacements.version,
     targets: {
       [input.target]: {
         artifact: input.artifact,
         profile: input.profile,
+        effectiveConfig: {
+          path: effectiveConfig.path,
+          version: effectiveConfig.version,
+          digest: effectiveConfig.digest,
+        },
         ...(input.target === 'ait' ? { appName: 'mpgd-kit', sdkMajor: 2 } : {}),
       },
     },
@@ -61,7 +80,13 @@ function mergeManifest(outputPath: string, nextManifest: ReleaseManifest): Relea
     return nextManifest;
   }
 
-  const previous = assertReleaseManifest(readJsonFile(outputPath));
+  let previous: ReleaseManifest;
+
+  try {
+    previous = assertReleaseManifest(readJsonFile(outputPath));
+  } catch {
+    return nextManifest;
+  }
 
   if (previous.releaseId !== nextManifest.releaseId) {
     return nextManifest;

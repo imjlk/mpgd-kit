@@ -50,9 +50,12 @@ jobs:
       - run: pnpm check
       - run: pnpm validate:catalog
       - run: pnpm validate:ads
-      - run: pnpm validate:policy
+      - run: pnpm validate:target-config
+      - run: pnpm validate:effective-config
       - run: pnpm validate:targets
-      - run: pnpm smoke:policy
+      - run: pnpm smoke:target-config
+      - run: pnpm smoke:effective-config
+      - run: pnpm smoke:adapter-effective-config
       - run: pnpm build:target ${{ inputs.target }} ${{ inputs.profile }}
       - run: pnpm smoke:target ${{ inputs.target }}
 

@@ -6,7 +6,11 @@ import {
   type PlatformGateway,
   type PlayerIdentity,
 } from '@mpgd/platform-contract';
-import { isTargetConfiguredGateway, type TargetRuntimeSnapshot } from '@mpgd/target-config';
+import {
+  isTargetConfiguredGateway,
+  type EffectiveTargetConfig,
+  type TargetRuntimeSnapshot,
+} from '@mpgd/target-config';
 
 export const SAVE_KEY = 'save:v1';
 
@@ -14,6 +18,7 @@ export interface DemoState {
   readonly player: PlayerIdentity;
   readonly capabilities: PlatformCapabilities;
   readonly targetRuntime: TargetRuntimeSnapshot | null;
+  readonly effectiveConfig: EffectiveTargetConfig | null;
   readonly locale: MpgdLocale;
   readonly save: SaveData;
 }
@@ -36,6 +41,7 @@ export async function loadDemoState(platform: PlatformGateway): Promise<DemoStat
     player: resolvedPlayer,
     capabilities,
     targetRuntime,
+    effectiveConfig: targetRuntime?.effectiveConfig ?? null,
     locale: resolveMpgdLocale(capabilities),
     save: parseSaveData(loaded, resolvedPlayer.playerId),
   };

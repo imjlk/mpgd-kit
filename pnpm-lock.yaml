@@ -14,15 +14,15 @@ importers:
       '@mpgd/i18n':
         specifier: workspace:*
         version: link:packages/i18n
-      '@mpgd/target-config':
-        specifier: workspace:*
-        version: link:packages/target-config
       '@mpgd/product-catalog':
         specifier: workspace:*
         version: link:packages/product-catalog
       '@mpgd/release-manifest':
         specifier: workspace:*
         version: link:packages/release-manifest
+      '@mpgd/target-config':
+        specifier: workspace:*
+        version: link:packages/target-config
       '@ttsc/graph':
         specifier: 0.16.9
         version: 0.16.9(@types/node@24.13.2)(zod@4.4.3)
@@ -152,6 +152,9 @@ importers:
       '@mpgd/platform-contract':
         specifier: workspace:*
         version: link:../../packages/platform-contract
+      '@mpgd/product-catalog':
+        specifier: workspace:*
+        version: link:../../packages/product-catalog
       '@mpgd/target-config':
         specifier: workspace:*
         version: link:../../packages/target-config
@@ -460,22 +463,6 @@ importers:
         specifier: 7.0.1-rc
         version: 7.0.1-rc
 
-  packages/target-config:
-    dependencies:
-      '@mpgd/platform-contract':
-        specifier: workspace:*
-        version: link:../platform-contract
-      typia:
-        specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
-    devDependencies:
-      ttsc:
-        specifier: 0.16.9
-        version: 0.16.9
-      typescript:
-        specifier: 7.0.1-rc
-        version: 7.0.1-rc
-
   packages/product-catalog:
     dependencies:
       '@mpgd/monetization-contract':
@@ -494,6 +481,28 @@ importers:
 
   packages/release-manifest:
     dependencies:
+      typia:
+        specifier: rc
+        version: 13.0.0-rc.1(@types/node@24.13.2)
+    devDependencies:
+      ttsc:
+        specifier: 0.16.9
+        version: 0.16.9
+      typescript:
+        specifier: 7.0.1-rc
+        version: 7.0.1-rc
+
+  packages/target-config:
+    dependencies:
+      '@mpgd/ad-placements':
+        specifier: workspace:*
+        version: link:../ad-placements
+      '@mpgd/platform-contract':
+        specifier: workspace:*
+        version: link:../platform-contract
+      '@mpgd/product-catalog':
+        specifier: workspace:*
+        version: link:../product-catalog
       typia:
         specifier: rc
         version: 13.0.0-rc.1(@types/node@24.13.2)

@@ -1,4 +1,5 @@
-import { existsSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 
 import typia from 'typia';
 
@@ -35,9 +36,31 @@ export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = required
     if (entry.artifact.length === 0) {
       throw new Error(`Release manifest target ${target} has an empty artifact path.`);
     }
+
+    assertPathExists(entry.effectiveConfig.path, `${target} effective target config`);
+
+    const effectiveConfigContent = readFileSync(entry.effectiveConfig.path, 'utf8');
+    const effectiveConfigDigest = sha256(effectiveConfigContent);
+    const effectiveConfig = JSON.parse(effectiveConfigContent) as { readonly target?: string };
+
+    if (effectiveConfig.target !== target) {
+      throw new Error(
+        `Release manifest target ${target} points to effective config for ${String(
+          effectiveConfig.target,
+        )}.`,
+      );
+    }
+
+    if (effectiveConfigDigest !== entry.effectiveConfig.digest) {
+      throw new Error(`Release manifest target ${target} effective config digest mismatch.`);
+    }
   }
 
   console.log(`Target smoke passed: ${targets.join(', ')}`);
+}
+
+function sha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
 }
 
 function assertPathExists(path: string, label: string): void {

@@ -2,6 +2,12 @@ import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import type { AdPlacements } from '../../packages/ad-placements/src/index';
 import { resolveMpgdLocale } from '../../packages/i18n/src/index';
 import type { PlatformGateway, PlatformTarget } from '../../packages/platform-contract/src/index';
+import type { ProductCatalog } from '../../packages/product-catalog/src/index';
+import {
+  createEffectiveTargetConfig,
+  getEffectiveAdPlacementConfig,
+  getEffectiveProductConfig,
+} from '../../packages/target-config/src/effective';
 import {
   getTargetConfig,
   isTargetConfiguredGateway,
@@ -16,6 +22,7 @@ const targetConfigMatrix = readJsonFile(
   'packages/target-config/targets.json',
 ) as TargetConfigMatrix;
 const adPlacements = readJsonFile('packages/ad-placements/placements.json') as AdPlacements;
+const productCatalog = readJsonFile('packages/product-catalog/catalog.json') as ProductCatalog;
 
 const platformFeatures = [
   'iap',
@@ -36,8 +43,16 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
   const platformTarget = platformTargetForConfig(configTarget);
   const targetGateway = createTargetGateway(platformTarget);
   const config = getTargetConfig(targetConfigMatrix, configTarget);
+  const effectiveConfig = createEffectiveTargetConfig({
+    target: configTarget,
+    targetConfigVersion: targetConfigMatrix.version,
+    config,
+    catalog: productCatalog,
+    adPlacements,
+  });
   const gateway = withTargetAvailability(targetGateway.gateway, config, {
     configTarget,
+    effectiveConfig,
     adPlacements: adPlacements.placements.map((placement) => ({
       id: placement.id,
       type: placement.type,
@@ -56,6 +71,11 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
   const runtime = await gateway.getTargetRuntime();
 
   assertEqual(runtime.configTarget, configTarget, `${configTarget} config target should match`);
+  assertEqual(
+    runtime.effectiveConfig,
+    effectiveConfig,
+    `${configTarget} effective config should be exposed`,
+  );
 
   for (const feature of platformFeatures) {
     const featureRuntime = runtime.features[feature];
@@ -82,9 +102,30 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
   );
 
   if (configTarget === 'web-preview') {
+    assertEqual(
+      getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
+      'target-disabled',
+      'web-preview products should be target-disabled',
+    );
+    assertEqual(
+      getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.reason,
+      'target-disabled',
+      'web-preview ad placements should be target-disabled',
+    );
     await verifyWebPreviewFallbacks(gateway);
     return;
   }
+
+  assertEqual(
+    getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
+    true,
+    `${configTarget} products should be enabled`,
+  );
+  assertEqual(
+    getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
+    true,
+    `${configTarget} rewarded placement should be enabled`,
+  );
 
   await gateway.commerce.purchase({
     productId: 'COINS_100',

@@ -24,7 +24,9 @@ interface BuildTargetsFile {
 run('pnpm', ['validate:catalog'], process.env);
 run('pnpm', ['validate:ads'], process.env);
 run('pnpm', ['validate:target-config'], process.env);
+run('pnpm', ['validate:effective-config'], process.env);
 run('pnpm', ['validate:targets'], process.env);
+run('node', ['tools/run-ttsx.mjs', 'tools/package/build-packages.ts'], process.env);
 
 const config = readJsonFile('platform.targets.json') as BuildTargetsFile;
 const target = config.targets[targetName];

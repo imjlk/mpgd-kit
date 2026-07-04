@@ -24,7 +24,10 @@ Original prompt: PLEASE IMPLEMENT THIS PLAN: Phase 8 Plan: Smoke Tests, Bridge C
 - `pnpm validate:catalog`
 - `pnpm validate:ads`
 - `pnpm validate:target-config`
+- `pnpm validate:effective-config`
 - `pnpm validate:targets`
+- `pnpm smoke:effective-config`
+- `pnpm smoke:adapter-effective-config`
 - `pnpm smoke:targets:build`
 - `pnpm graph:inspect`
 - `pnpm smoke:android:emulator`

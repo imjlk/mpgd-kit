@@ -24,9 +24,12 @@ pnpm validate:catalog
 pnpm validate:ads
 pnpm validate:i18n
 pnpm validate:target-config
+pnpm validate:effective-config
 pnpm validate:targets
 pnpm smoke:i18n
 pnpm smoke:target-config
+pnpm smoke:effective-config
+pnpm smoke:adapter-effective-config
 pnpm graph:preflight
 pnpm pack:packages
 pnpm build:web
@@ -109,6 +112,21 @@ smoke checks across every configured release target:
 
 ```sh
 pnpm smoke:target-config
+```
+
+Effective target config combines `targets.json`, product catalog, ad placements,
+and platform target metadata into per-target SDK configuration bundles. Builds
+write those bundles to `artifacts/target-config/*.json`, and the release manifest
+records each bundle path, version, and sha256 digest. The Phaser demo receives the
+same effective config through its target-configured gateway, so purchase, rewarded
+ad, leaderboard, storage, and localization actions follow the same availability
+model that release artifacts validate.
+
+```sh
+pnpm validate:effective-config
+pnpm build:effective-config
+pnpm smoke:effective-config
+pnpm smoke:adapter-effective-config
 ```
 
 Target artifact smoke can validate either every release target or one target
