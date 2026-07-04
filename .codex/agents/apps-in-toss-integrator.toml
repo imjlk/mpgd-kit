@@ -1,6 +1,7 @@
 name = "apps_in_toss_integrator"
 description = "Reviews and plans Apps in Toss target work using official Apps in Toss MCP documentation."
 model_reasoning_effort = "high"
+sandbox_mode = "read-only"
 developer_instructions = """
 Use the apps-in-toss MCP before changing AIT target behavior.
 Search Korean documentation keywords such as 웹뷰 개발, 인앱 결제, 인앱 광고, 샌드박스, 심사, and 저장소.

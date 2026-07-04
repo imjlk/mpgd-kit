@@ -68,11 +68,17 @@ for (const file of requiredFiles) {
   }
 }
 
-for (const skillFile of requiredFiles.filter((file) => file.endsWith('/SKILL.md'))) {
+const existingFiles = new Set(requiredFiles.filter((file) => existsSync(file)));
+
+for (const skillFile of requiredFiles.filter(
+  (file) => file.endsWith('/SKILL.md') && existingFiles.has(file),
+)) {
   validateSkillFrontmatter(skillFile);
 }
 
-for (const agentFile of requiredFiles.filter((file) => file.startsWith('.codex/agents/'))) {
+for (const agentFile of requiredFiles.filter(
+  (file) => file.startsWith('.codex/agents/') && existingFiles.has(file),
+)) {
   validateAgentDefinition(agentFile);
 }
 
@@ -127,7 +133,7 @@ function validateAgentDefinition(path: string): void {
   const content = readText(path);
 
   for (const key of ['name', 'description', 'developer_instructions']) {
-    if (!content.includes(`${key} =`)) {
+    if (!new RegExp(`^${key}\\s*=`, 'm').test(content)) {
       failures.push(`${path}: missing ${key}.`);
     }
   }
@@ -217,5 +223,13 @@ function readText(path: string): string {
 }
 
 function readJson(path: string): unknown {
-  return JSON.parse(readText(path)) as unknown;
+  try {
+    return JSON.parse(readText(path)) as unknown;
+  } catch (error) {
+    failures.push(
+      `${path}: failed to parse JSON: ${error instanceof Error ? error.message : String(error)}.`,
+    );
+
+    return {};
+  }
 }
