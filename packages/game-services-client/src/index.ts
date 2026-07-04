@@ -1,3 +1,6 @@
+import { createORPCClient } from '@orpc/client';
+import { RPCLink } from '@orpc/client/fetch';
+
 import type { ClaimAdRewardRequest, ClaimAdRewardResponse } from '@mpgd/backend-ad-reward-ledger';
 import type {
   RecordLeaderboardScoreRequest,
@@ -7,6 +10,9 @@ import type {
   VerifyPurchaseRequest,
   VerifyPurchaseResponse,
 } from '@mpgd/backend-purchase-verifier';
+import {
+  type GameServicesContractClient,
+} from '@mpgd/game-services-contract';
 import type { LeaderboardScoreInput } from '@mpgd/leaderboard-contract';
 import type {
   LogicalAdPlacementId,
@@ -16,7 +22,7 @@ import type {
 } from '@mpgd/monetization-contract';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform-contract';
 
-export type LiveOpsStoreTarget = Extract<PlatformTarget, 'android' | 'ios' | 'ait'>;
+export type GameServicesStoreTarget = Extract<PlatformTarget, 'android' | 'ios' | 'ait'>;
 
 export interface PurchaseVerificationApi {
   verifyPurchase(input: VerifyPurchaseRequest): Promise<VerifyPurchaseResponse>;
@@ -30,119 +36,125 @@ export interface LeaderboardRecordApi {
   recordScore(input: RecordLeaderboardScoreRequest): Promise<RecordLeaderboardScoreResponse>;
 }
 
-export interface LiveOpsBackendApi {
+export interface GameServicesBackendApi {
   readonly purchases: PurchaseVerificationApi;
   readonly adRewards: AdRewardClaimApi;
   readonly leaderboard: LeaderboardRecordApi;
 }
 
-export const liveOpsBackendEndpoints = {
-  verifyPurchase: '/liveops/purchases/verify',
-  claimAdReward: '/liveops/ad-rewards/claim',
-  recordLeaderboardScore: '/liveops/leaderboard/record',
+export const gameServicesBackendEndpoints = {
+  verifyPurchase: '/game-services/purchases/verify',
+  claimAdReward: '/game-services/ad-rewards/claim',
+  recordLeaderboardScore: '/game-services/leaderboard/record',
 } as const;
 
-export type LiveOpsBackendEndpoint =
-  (typeof liveOpsBackendEndpoints)[keyof typeof liveOpsBackendEndpoints];
+export type GameServicesBackendEndpoint =
+  (typeof gameServicesBackendEndpoints)[keyof typeof gameServicesBackendEndpoints];
 
-export interface LiveOpsBackendTransportRequest<TBody = unknown> {
+export interface GameServicesBackendTransportRequest<TBody = unknown> {
   readonly method: 'POST';
-  readonly endpoint: LiveOpsBackendEndpoint;
+  readonly endpoint: GameServicesBackendEndpoint;
   readonly body: TBody;
 }
 
-export interface LiveOpsBackendTransportResponse<TBody = unknown> {
+export interface GameServicesBackendTransportResponse<TBody = unknown> {
   readonly status: number;
   readonly body: TBody;
 }
 
-export interface LiveOpsBackendTransport {
-  send(request: LiveOpsBackendTransportRequest): Promise<LiveOpsBackendTransportResponse>;
+export interface GameServicesBackendTransport {
+  send(request: GameServicesBackendTransportRequest): Promise<GameServicesBackendTransportResponse>;
 }
 
-export interface CreateLiveOpsHttpBackendApiInput {
-  readonly transport: LiveOpsBackendTransport;
+export interface CreateGameServicesHttpBackendApiInput {
+  readonly transport: GameServicesBackendTransport;
 }
 
-export interface CreateLiveOpsFetchBackendTransportInput {
+export interface CreateGameServicesFetchBackendTransportInput {
   readonly baseUrl: string;
-  readonly fetch?: LiveOpsFetch;
+  readonly fetch?: GameServicesFetch;
   readonly headers?: Record<string, string>;
 }
 
-export type LiveOpsFetch = (
+export interface CreateGameServicesOrpcClientInput {
+  readonly url: string;
+  readonly fetch?: typeof fetch;
+  readonly headers?: Record<string, string>;
+}
+
+export type GameServicesFetch = (
   url: string,
   init: {
     readonly method: 'POST';
     readonly headers: Record<string, string>;
     readonly body: string;
   },
-) => Promise<LiveOpsFetchResponse>;
+) => Promise<GameServicesFetchResponse>;
 
-export interface LiveOpsFetchResponse {
+export interface GameServicesFetchResponse {
   readonly ok: boolean;
   readonly status: number;
   text(): Promise<string>;
 }
 
-export class LiveOpsBackendError extends Error {
-  readonly endpoint: LiveOpsBackendEndpoint;
+export class GameServicesBackendError extends Error {
+  readonly endpoint: GameServicesBackendEndpoint;
   readonly status: number;
   readonly body: unknown;
 
-  constructor(endpoint: LiveOpsBackendEndpoint, status: number, body: unknown) {
-    super(`LiveOps backend request failed: ${endpoint} ${status}`);
-    this.name = 'LiveOpsBackendError';
+  constructor(endpoint: GameServicesBackendEndpoint, status: number, body: unknown) {
+    super(`GameServices backend request failed: ${endpoint} ${status}`);
+    this.name = 'GameServicesBackendError';
     this.endpoint = endpoint;
     this.status = status;
     this.body = body;
   }
 }
 
-export interface LiveOpsClient {
-  purchase(input: LiveOpsPurchaseInput): Promise<LiveOpsPurchaseResult>;
-  claimRewardedAd(input: LiveOpsRewardedAdInput): Promise<LiveOpsRewardedAdResult>;
+export interface GameServicesClient {
+  purchase(input: GameServicesPurchaseInput): Promise<GameServicesPurchaseResult>;
+  claimRewardedAd(input: GameServicesRewardedAdInput): Promise<GameServicesRewardedAdResult>;
   submitLeaderboardScore(
-    input: LiveOpsLeaderboardInput,
-  ): Promise<LiveOpsLeaderboardResult>;
+    input: GameServicesLeaderboardInput,
+  ): Promise<GameServicesLeaderboardResult>;
 }
 
-export interface CreateLiveOpsClientInput {
+export interface CreateGameServicesClientInput {
   readonly gateway: PlatformGateway;
-  readonly backend: LiveOpsBackendApi;
+  readonly backend: GameServicesBackendApi;
   readonly playerId: string;
-  readonly target: LiveOpsStoreTarget;
+  readonly target: GameServicesStoreTarget;
   readonly now?: () => string;
 }
 
-export interface LiveOpsPurchaseInput {
+export interface GameServicesPurchaseInput {
   readonly productId: LogicalProductId;
   readonly source: 'shop' | 'stage_fail' | 'result' | 'event';
   readonly idempotencyKey: string;
 }
 
-export interface LiveOpsPurchaseResult {
+export interface GameServicesPurchaseResult {
   readonly status: 'granted' | 'cancelled' | 'pending' | 'rejected';
   readonly purchase: PurchaseResult;
   readonly verification?: VerifyPurchaseResponse;
   readonly ledgerEntryId?: string;
 }
 
-export interface LiveOpsRewardedAdInput {
+export interface GameServicesRewardedAdInput {
   readonly placementId: LogicalAdPlacementId;
   readonly idempotencyKey: string;
 }
 
-export interface LiveOpsRewardedAdResult {
+export interface GameServicesRewardedAdResult {
   readonly status: 'granted' | 'skipped' | 'unavailable' | 'rejected';
   readonly reward: RewardedAdResult;
   readonly claim?: ClaimAdRewardResponse;
   readonly ledgerEntryId?: string;
 }
 
-export interface LiveOpsLeaderboardInput extends LeaderboardScoreInput {}
+export interface GameServicesLeaderboardInput extends LeaderboardScoreInput {}
 
-export interface LiveOpsLeaderboardResult {
+export interface GameServicesLeaderboardResult {
   readonly submitted: boolean;
   readonly platformSubmitted: boolean;
   readonly rank?: number;
@@ -150,7 +162,7 @@ export interface LiveOpsLeaderboardResult {
   readonly alreadyProcessed: boolean;
 }
 
-export function createLiveOpsClient(input: CreateLiveOpsClientInput): LiveOpsClient {
+export function createGameServicesClient(input: CreateGameServicesClientInput): GameServicesClient {
   const now = input.now ?? (() => new Date().toISOString());
 
   return {
@@ -240,36 +252,36 @@ export function createLiveOpsClient(input: CreateLiveOpsClientInput): LiveOpsCli
   };
 }
 
-export function createLiveOpsHttpBackendApi(
-  input: CreateLiveOpsHttpBackendApiInput,
-): LiveOpsBackendApi {
+export function createGameServicesHttpBackendApi(
+  input: CreateGameServicesHttpBackendApiInput,
+): GameServicesBackendApi {
   return {
     purchases: {
       async verifyPurchase(body) {
-        return sendLiveOpsBackendRequest<VerifyPurchaseRequest, VerifyPurchaseResponse>(
+        return sendGameServicesBackendRequest<VerifyPurchaseRequest, VerifyPurchaseResponse>(
           input.transport,
-          liveOpsBackendEndpoints.verifyPurchase,
+          gameServicesBackendEndpoints.verifyPurchase,
           body,
         );
       },
     },
     adRewards: {
       async claimAdReward(body) {
-        return sendLiveOpsBackendRequest<ClaimAdRewardRequest, ClaimAdRewardResponse>(
+        return sendGameServicesBackendRequest<ClaimAdRewardRequest, ClaimAdRewardResponse>(
           input.transport,
-          liveOpsBackendEndpoints.claimAdReward,
+          gameServicesBackendEndpoints.claimAdReward,
           body,
         );
       },
     },
     leaderboard: {
       async recordScore(body) {
-        return sendLiveOpsBackendRequest<
+        return sendGameServicesBackendRequest<
           RecordLeaderboardScoreRequest,
           RecordLeaderboardScoreResponse
         >(
           input.transport,
-          liveOpsBackendEndpoints.recordLeaderboardScore,
+          gameServicesBackendEndpoints.recordLeaderboardScore,
           body,
         );
       },
@@ -277,9 +289,9 @@ export function createLiveOpsHttpBackendApi(
   };
 }
 
-export function createLiveOpsFetchBackendTransport(
-  input: CreateLiveOpsFetchBackendTransportInput,
-): LiveOpsBackendTransport {
+export function createGameServicesFetchBackendTransport(
+  input: CreateGameServicesFetchBackendTransportInput,
+): GameServicesBackendTransport {
   const fetcher = input.fetch ?? readGlobalFetch();
 
   return {
@@ -301,7 +313,45 @@ export function createLiveOpsFetchBackendTransport(
   };
 }
 
-export function createLiveOpsIdempotencyKey(input: {
+export function createGameServicesOrpcClient(
+  input: CreateGameServicesOrpcClientInput,
+): GameServicesContractClient {
+  const link = new RPCLink({
+    origin: input.url,
+    ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
+    ...(input.headers === undefined
+      ? {}
+      : {
+          headers: () => input.headers,
+        }),
+  } as never);
+
+  return createORPCClient(link) as GameServicesContractClient;
+}
+
+export function createGameServicesOrpcBackendApi(
+  client: GameServicesContractClient,
+): GameServicesBackendApi {
+  return {
+    purchases: {
+      verifyPurchase(input) {
+        return client.commerce.verifyPurchase(input);
+      },
+    },
+    adRewards: {
+      claimAdReward(input) {
+        return client.ads.claimReward(input);
+      },
+    },
+    leaderboard: {
+      recordScore(input) {
+        return client.leaderboard.recordScore(input);
+      },
+    },
+  };
+}
+
+export function createGameServicesIdempotencyKey(input: {
   readonly target: PlatformTarget;
   readonly playerId: string;
   readonly action: 'purchase' | 'rewarded-ad' | 'leaderboard';
@@ -321,9 +371,9 @@ function normalizeSegment(value: string): string {
   return value.replaceAll(/[^a-zA-Z0-9_-]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 64);
 }
 
-async function sendLiveOpsBackendRequest<TRequest, TResponse>(
-  transport: LiveOpsBackendTransport,
-  endpoint: LiveOpsBackendEndpoint,
+async function sendGameServicesBackendRequest<TRequest, TResponse>(
+  transport: GameServicesBackendTransport,
+  endpoint: GameServicesBackendEndpoint,
   body: TRequest,
 ): Promise<TResponse> {
   const response = await transport.send({
@@ -333,23 +383,25 @@ async function sendLiveOpsBackendRequest<TRequest, TResponse>(
   });
 
   if (response.status < 200 || response.status >= 300) {
-    throw new LiveOpsBackendError(endpoint, response.status, response.body);
+    throw new GameServicesBackendError(endpoint, response.status, response.body);
   }
 
   return response.body as TResponse;
 }
 
-function readGlobalFetch(): LiveOpsFetch {
-  const fetcher = (globalThis as { readonly fetch?: LiveOpsFetch }).fetch;
+function readGlobalFetch(): GameServicesFetch {
+  const fetcher = (globalThis as { readonly fetch?: GameServicesFetch }).fetch;
 
   if (fetcher === undefined) {
-    throw new Error('globalThis.fetch is unavailable. Provide a LiveOps fetch implementation.');
+    throw new Error(
+      'globalThis.fetch is unavailable. Provide a GameServices fetch implementation.',
+    );
   }
 
   return fetcher;
 }
 
-async function readFetchResponseBody(response: LiveOpsFetchResponse): Promise<unknown> {
+async function readFetchResponseBody(response: GameServicesFetchResponse): Promise<unknown> {
   const text = await response.text();
 
   if (text.length === 0) {
@@ -359,6 +411,6 @@ async function readFetchResponseBody(response: LiveOpsFetchResponse): Promise<un
   return JSON.parse(text);
 }
 
-function joinUrl(baseUrl: string, endpoint: LiveOpsBackendEndpoint): string {
+function joinUrl(baseUrl: string, endpoint: GameServicesBackendEndpoint): string {
   return `${baseUrl.replace(/\/+$/g, '')}${endpoint}`;
 }

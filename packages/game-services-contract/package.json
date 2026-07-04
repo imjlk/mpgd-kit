@@ -1,0 +1,57 @@
+{
+  "name": "@mpgd/game-services-contract",
+  "version": "0.0.0",
+  "description": "oRPC contract for mpgd authoritative game services APIs.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/game-services-contract"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "vite",
+    "typescript",
+    "capacitor",
+    "apps-in-toss",
+    "game-development",
+    "game-distribution"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@mpgd/backend-ad-reward-ledger": "workspace:*",
+    "@mpgd/backend-leaderboard-ledger": "workspace:*",
+    "@mpgd/backend-purchase-verifier": "workspace:*",
+    "@orpc/contract": "2.0.0-beta.14"
+  },
+  "devDependencies": {
+    "ttsc": "0.16.9",
+    "typescript": "7.0.1-rc"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  }
+}

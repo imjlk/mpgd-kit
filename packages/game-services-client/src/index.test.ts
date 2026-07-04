@@ -2,19 +2,19 @@ import type { ProductInfo } from '@mpgd/monetization-contract';
 import type { PlatformGateway } from '@mpgd/platform-contract';
 
 import {
-  createLiveOpsClient,
-  createLiveOpsFetchBackendTransport,
-  createLiveOpsHttpBackendApi,
-  createLiveOpsIdempotencyKey,
-  liveOpsBackendEndpoints,
+  createGameServicesClient,
+  createGameServicesFetchBackendTransport,
+  createGameServicesHttpBackendApi,
+  createGameServicesIdempotencyKey,
+  gameServicesBackendEndpoints,
 } from './index';
 
 let purchaseClaims = 0;
 let rewardClaims = 0;
 let scoreRecords = 0;
-const playerId = 'player-liveops';
+const playerId = 'player-game-services';
 const gateway = createMockGateway();
-const client = createLiveOpsClient({
+const client = createGameServicesClient({
   gateway,
   playerId,
   target: 'android',
@@ -57,7 +57,7 @@ const client = createLiveOpsClient({
   },
 });
 
-const purchaseKey = createLiveOpsIdempotencyKey({
+const purchaseKey = createGameServicesIdempotencyKey({
   target: 'android',
   playerId,
   action: 'purchase',
@@ -84,7 +84,7 @@ assertEqual(
 
 const reward = await client.claimRewardedAd({
   placementId: 'CONTINUE_AFTER_FAIL',
-  idempotencyKey: createLiveOpsIdempotencyKey({
+  idempotencyKey: createGameServicesIdempotencyKey({
     target: 'android',
     playerId,
     action: 'rewarded-ad',
@@ -109,13 +109,13 @@ assertEqual(rewardClaims, 1, 'reward backend should be called after platform rew
 assertEqual(scoreRecords, 1, 'leaderboard backend should be called after platform submit');
 
 const transportCalls: string[] = [];
-const httpBackend = createLiveOpsHttpBackendApi({
+const httpBackend = createGameServicesHttpBackendApi({
   transport: {
     async send(request) {
       transportCalls.push(request.endpoint);
 
       switch (request.endpoint) {
-        case liveOpsBackendEndpoints.verifyPurchase:
+        case gameServicesBackendEndpoints.verifyPurchase:
           return {
             status: 200,
             body: {
@@ -124,7 +124,7 @@ const httpBackend = createLiveOpsHttpBackendApi({
               alreadyProcessed: false,
             },
           };
-        case liveOpsBackendEndpoints.claimAdReward:
+        case gameServicesBackendEndpoints.claimAdReward:
           return {
             status: 200,
             body: {
@@ -133,7 +133,7 @@ const httpBackend = createLiveOpsHttpBackendApi({
               alreadyProcessed: false,
             },
           };
-        case liveOpsBackendEndpoints.recordLeaderboardScore:
+        case gameServicesBackendEndpoints.recordLeaderboardScore:
           return {
             status: 200,
             body: {
@@ -169,16 +169,16 @@ assertEqual(httpScore.submitted, true, 'http backend should record score');
 assertEqual(
   transportCalls.join(','),
   [
-    liveOpsBackendEndpoints.verifyPurchase,
-    liveOpsBackendEndpoints.recordLeaderboardScore,
+    gameServicesBackendEndpoints.verifyPurchase,
+    gameServicesBackendEndpoints.recordLeaderboardScore,
   ].join(','),
   'http backend should route to typed endpoints',
 );
 
 let fetchUrl = '';
-const fetchBackend = createLiveOpsHttpBackendApi({
-  transport: createLiveOpsFetchBackendTransport({
-    baseUrl: 'https://liveops.test/api/',
+const fetchBackend = createGameServicesHttpBackendApi({
+  transport: createGameServicesFetchBackendTransport({
+    baseUrl: 'https://game-services.test/api/',
     async fetch(url, init) {
       fetchUrl = url;
       assertEqual(init.method, 'POST', 'fetch transport should use POST');
@@ -213,11 +213,11 @@ const fetchReward = await fetchBackend.adRewards.claimAdReward({
 assertEqual(fetchReward.granted, true, 'fetch backend should decode JSON response');
 assertEqual(
   fetchUrl,
-  'https://liveops.test/api/liveops/ad-rewards/claim',
+  'https://game-services.test/api/game-services/ad-rewards/claim',
   'fetch transport should join base URL and endpoint',
 );
 
-console.log('LiveOps client vertical slice smoke test passed.');
+console.log('GameServices client vertical slice smoke test passed.');
 
 function createMockGateway(): PlatformGateway {
   const product = {

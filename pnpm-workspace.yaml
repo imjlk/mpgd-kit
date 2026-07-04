@@ -9,6 +9,8 @@ allowBuilds:
   '@swc/core': true
   esbuild: true
   protobufjs: true
+  sharp: true
+  workerd: true
 minimumReleaseAgeExclude:
   - '@ttsc/darwin-arm64@0.16.9'
   - '@ttsc/darwin-x64@0.16.9'
@@ -27,3 +29,8 @@ minimumReleaseAgeExclude:
   - '@typia/utils@13.0.0-rc.1'
   - ttsc@0.16.9
   - typia@13.0.0-rc.1
+  - '@orpc/client@2.0.0-beta.14'
+  - '@orpc/contract@2.0.0-beta.14'
+  - '@orpc/interop@2.0.0-beta.14'
+  - '@orpc/server@2.0.0-beta.14'
+  - '@orpc/shared@2.0.0-beta.14'

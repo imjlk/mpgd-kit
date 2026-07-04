@@ -1,40 +1,37 @@
-import { createInMemoryEntitlementLedger } from '@mpgd/backend-entitlement-ledger';
-import { createInMemoryLeaderboardLedger } from '@mpgd/backend-leaderboard-ledger';
 import {
-  createInProcessLiveOpsBackendTransport,
-  createLiveOpsBackendApiHandler,
-} from '@mpgd/backend-liveops-api';
+  createGameServicesBackendApiHandler,
+  createInMemoryGameServicesStore,
+  createInProcessGameServicesBackendTransport,
+} from '@mpgd/backend-game-services';
 import {
-  createLiveOpsClient,
-  createLiveOpsHttpBackendApi,
-  createLiveOpsIdempotencyKey,
-} from '@mpgd/liveops-client';
+  createGameServicesClient,
+  createGameServicesHttpBackendApi,
+  createGameServicesIdempotencyKey,
+} from '@mpgd/game-services-client';
 
 import type { AdPlacements } from '../../packages/ad-placements/src/index';
 import type { ProductCatalog } from '../../packages/product-catalog/src/index';
 import { readJsonFile } from '../io';
-import { createCapableMockGateway } from './liveops/mock-gateway';
+import { createCapableMockGateway } from './game-services/mock-gateway';
 
 const catalog = readJsonFile('packages/product-catalog/catalog.json') as ProductCatalog;
 const placements = readJsonFile('packages/ad-placements/placements.json') as AdPlacements;
 
 for (const target of ['android', 'ios', 'ait'] as const) {
   const playerId = `${target}-player`;
-  const entitlementLedger = createInMemoryEntitlementLedger();
-  const leaderboardLedger = createInMemoryLeaderboardLedger();
-  const backend = createLiveOpsHttpBackendApi({
-    transport: createInProcessLiveOpsBackendTransport(
-      createLiveOpsBackendApiHandler({
+  const store = createInMemoryGameServicesStore();
+  const backend = createGameServicesHttpBackendApi({
+    transport: createInProcessGameServicesBackendTransport(
+      createGameServicesBackendApiHandler({
         catalog,
         placements,
-        entitlementLedger,
-        leaderboardLedger,
+        store,
         now: () => '2026-07-03T00:00:01.000Z',
       }),
     ),
   });
   const gateway = createCapableMockGateway({ target, playerId });
-  const client = createLiveOpsClient({
+  const client = createGameServicesClient({
     gateway,
     target,
     playerId,
@@ -43,7 +40,7 @@ for (const target of ['android', 'ios', 'ait'] as const) {
   });
 
   const runId = `${target}-run-1`;
-  const purchaseKey = createLiveOpsIdempotencyKey({
+  const purchaseKey = createGameServicesIdempotencyKey({
     target,
     playerId,
     action: 'purchase',
@@ -62,7 +59,7 @@ for (const target of ['android', 'ios', 'ait'] as const) {
   });
   const reward = await client.claimRewardedAd({
     placementId: 'CONTINUE_AFTER_FAIL',
-    idempotencyKey: createLiveOpsIdempotencyKey({
+    idempotencyKey: createGameServicesIdempotencyKey({
       target,
       playerId,
       action: 'rewarded-ad',
@@ -86,19 +83,19 @@ for (const target of ['android', 'ios', 'ait'] as const) {
   assertEqual(reward.status, 'granted', `${target} reward should be ledger-granted`);
   assertEqual(score.submitted, true, `${target} leaderboard should be ledger-recorded`);
   assertEqual(
-    entitlementLedger.listTransactions().length,
+    (await store.listEntitlementTransactions()).length,
     2,
     `${target} entitlement ledger should record purchase and reward`,
   );
   assertEqual(
-    leaderboardLedger.listTransactions().length,
+    (await store.listLeaderboardTransactions()).length,
     1,
     `${target} leaderboard ledger should record one score`,
   );
 
-  const entitlementCount = entitlementLedger.listTransactions().length;
-  const leaderboardCount = leaderboardLedger.listTransactions().length;
-  const cancelledClient = createLiveOpsClient({
+  const entitlementCount = (await store.listEntitlementTransactions()).length;
+  const leaderboardCount = (await store.listLeaderboardTransactions()).length;
+  const cancelledClient = createGameServicesClient({
     gateway: createCapableMockGateway({
       target,
       playerId,
@@ -114,7 +111,7 @@ for (const target of ['android', 'ios', 'ait'] as const) {
   const cancelledPurchase = await cancelledClient.purchase({
     productId: 'COINS_100',
     source: 'result',
-    idempotencyKey: createLiveOpsIdempotencyKey({
+    idempotencyKey: createGameServicesIdempotencyKey({
       target,
       playerId,
       action: 'purchase',
@@ -122,7 +119,7 @@ for (const target of ['android', 'ios', 'ait'] as const) {
       runId: `${target}-cancelled-purchase`,
     }),
   });
-  const skippedAdClient = createLiveOpsClient({
+  const skippedAdClient = createGameServicesClient({
     gateway: createCapableMockGateway({
       target,
       playerId,
@@ -137,7 +134,7 @@ for (const target of ['android', 'ios', 'ait'] as const) {
   });
   const skippedReward = await skippedAdClient.claimRewardedAd({
     placementId: 'CONTINUE_AFTER_FAIL',
-    idempotencyKey: createLiveOpsIdempotencyKey({
+    idempotencyKey: createGameServicesIdempotencyKey({
       target,
       playerId,
       action: 'rewarded-ad',
@@ -145,7 +142,7 @@ for (const target of ['android', 'ios', 'ait'] as const) {
       runId: `${target}-skipped-ad`,
     }),
   });
-  const failedLeaderboardClient = createLiveOpsClient({
+  const failedLeaderboardClient = createGameServicesClient({
     gateway: createCapableMockGateway({
       target,
       playerId,
@@ -170,18 +167,18 @@ for (const target of ['android', 'ios', 'ait'] as const) {
   assertEqual(skippedReward.status, 'skipped', `${target} skipped ad should stay skipped`);
   assertEqual(failedScore.submitted, false, `${target} failed platform score should stay local`);
   assertEqual(
-    entitlementLedger.listTransactions().length,
+    (await store.listEntitlementTransactions()).length,
     entitlementCount,
     `${target} failed monetization callbacks should not add grants`,
   );
   assertEqual(
-    leaderboardLedger.listTransactions().length,
+    (await store.listLeaderboardTransactions()).length,
     leaderboardCount,
     `${target} failed platform leaderboard should not be recorded`,
   );
 }
 
-console.log('LiveOps vertical slice smoke passed: android, ios, ait');
+console.log('GameServices vertical slice smoke passed: android, ios, ait');
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {

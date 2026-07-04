@@ -95,7 +95,12 @@ export function inspectWithDump(dump, props) {
 
 export function summarizeGraphResult(result) {
   const entrypointCount = result.entrypoints?.length ?? 0;
-  const anchorCount = result.answerAnchors?.length ?? result.anchors?.length ?? 0;
+  const anchorCount =
+    result.answerAnchors?.length ??
+    result.anchors?.length ??
+    result.nodes?.length ??
+    result.hits?.length ??
+    0;
   const nextAction = result.next?.action ?? 'unknown';
   return `${entrypointCount} entrypoints, ${anchorCount} anchors, next=${nextAction}`;
 }
@@ -107,6 +112,8 @@ export function graphResultFiles(result) {
       ...(result.answerAnchors ?? []),
       ...(result.anchors ?? []),
       ...(result.nearby ?? []),
+      ...(result.nodes ?? []),
+      ...(result.hits ?? []),
     ]
       .map((entry) => entry.file)
       .filter((file) => typeof file === 'string'),

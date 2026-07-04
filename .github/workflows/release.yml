@@ -42,7 +42,7 @@ jobs:
       - run: pnpm smoke:target-config
       - run: pnpm smoke:effective-config
       - run: pnpm smoke:adapter-effective-config
-      - run: pnpm smoke:liveops
+      - run: pnpm smoke:game-services
       - run: pnpm graph:preflight
       - run: pnpm pack:packages
       - run: pnpm build:web

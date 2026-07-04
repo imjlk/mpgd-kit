@@ -12,6 +12,7 @@ output/
 *.keystore
 *.mobileprovision
 .turbo/
+.wrangler/
 .DS_Store
 *.log
 *.ait

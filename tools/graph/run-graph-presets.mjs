@@ -29,7 +29,12 @@ for (const presetName of requestedPresets) {
 
   const result = inspectWithDump(dump, preset.props);
   const nextAction = result.next?.action;
-  const anchorCount = result.answerAnchors?.length ?? result.anchors?.length ?? 0;
+  const anchorCount =
+    result.answerAnchors?.length ??
+    result.anchors?.length ??
+    result.nodes?.length ??
+    result.hits?.length ??
+    0;
 
   if (nextAction !== 'answer') {
     throw new Error(`Graph preset ${presetName} did not produce answer-ready evidence.`);

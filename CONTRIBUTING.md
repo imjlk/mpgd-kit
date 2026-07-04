@@ -2,7 +2,7 @@
 
 Thanks for helping improve `mpgd-kit`. This repository is an early-stage
 Multi-Platform Game Distribution / Development kit for Phaser games, so changes
-should keep the reusable platform and liveops boundaries clear.
+should keep the reusable platform and game-services boundaries clear.
 
 ## Setup
 
@@ -37,6 +37,8 @@ pnpm validate:ads
 pnpm validate:target-config
 pnpm validate:effective-config
 pnpm validate:targets
+pnpm smoke:game-services
+pnpm smoke:game-services:worker
 pnpm graph:preflight
 pnpm sampo:release:dry-run
 ```

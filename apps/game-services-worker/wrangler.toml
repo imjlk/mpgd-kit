@@ -1,0 +1,21 @@
+"$schema" = "../../node_modules/wrangler/config-schema.json"
+name = "mpgd-game-services"
+main = "src/index.ts"
+compatibility_date = "2026-07-04"
+compatibility_flags = ["nodejs_compat"]
+workers_dev = true
+
+[vars]
+MPGD_STORE = "memory"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+# For production persistence, create a D1 database and uncomment this binding.
+# Then set MPGD_STORE = "d1" and run the SQL in migrations/0001_game_services.sql.
+#
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "mpgd-game-services"
+# database_id = "<replace-with-wrangler-d1-create-output>"

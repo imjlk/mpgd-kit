@@ -20,6 +20,7 @@ fixed = [[
   "npm/@mpgd/game-economy",
   "npm/@mpgd/game-save",
   "npm/@mpgd/game-anti-cheat",
+  "npm/@mpgd/game-services-contract",
   "npm/@mpgd/i18n",
   "npm/@mpgd/platform-contract",
   "npm/@mpgd/monetization-contract",
@@ -38,6 +39,6 @@ fixed = [[
   "npm/@mpgd/backend-entitlement-ledger",
   "npm/@mpgd/backend-ad-reward-ledger",
   "npm/@mpgd/backend-leaderboard-ledger",
-  "npm/@mpgd/backend-liveops-api",
-  "npm/@mpgd/liveops-client"
+  "npm/@mpgd/backend-game-services",
+  "npm/@mpgd/game-services-client"
 ]]

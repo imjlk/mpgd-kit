@@ -1,0 +1,25 @@
+{
+  "name": "game-services-contract",
+  "description": "Game services oRPC contract and typed client adapter surface.",
+  "expectedFiles": [
+    "packages/game-services-contract/",
+    "packages/game-services-client/",
+    "backend/game-services/"
+  ],
+  "tsconfig": "apps/game-services-worker/tsconfig.json",
+  "question": "What are the central Game Services oRPC contract and adapter symbols that connect the contract package, client package, and backend router?",
+  "draft": "Use details because this preset is meant to pin exact exported oRPC symbols rather than discover broad flow.",
+  "review": "The backend flow is covered by a separate tour; exact details handles are the smallest graph evidence that anchors the contract export plus the client and backend adapters.",
+  "request": {
+    "type": "details",
+    "handles": [
+      "packages/game-services-contract/src/index.ts#gameServicesContract:variable",
+      "packages/game-services-client/src/index.ts#createGameServicesOrpcClient:function",
+      "backend/game-services/src/index.ts#createGameServicesRouter:function"
+    ],
+    "includeExternal": false,
+    "neighbors": true,
+    "memberLimit": 24,
+    "dependencyLimit": 24
+  }
+}

@@ -6,7 +6,7 @@ Use this before making the repository public or announcing a package release.
 
 - [ ] `LICENSE`, `CONTRIBUTING.md`, `SECURITY.md`, and `CODE_OF_CONDUCT.md` are present.
 - [ ] GitHub issue templates and the pull request template are present.
-- [ ] `README.md` explains setup, validation, liveops, target config, and release flow.
+- [ ] `README.md` explains setup, validation, game-services, target config, and release flow.
 - [ ] `.gitignore` excludes generated artifacts, local credentials, signing keys, and platform build output.
 - [ ] No generated source-side `*.js` or `*.d.ts` files are present outside approved generated i18n runtime files.
 - [ ] `pnpm validate:public` passes.
@@ -29,6 +29,8 @@ pnpm validate:ads
 pnpm validate:target-config
 pnpm validate:effective-config
 pnpm validate:targets
+pnpm smoke:game-services
+pnpm smoke:game-services:worker
 pnpm graph:preflight
 pnpm sampo:release:dry-run
 pnpm build:web

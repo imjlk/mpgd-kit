@@ -1,12 +1,12 @@
 {
-  "name": "@mpgd/liveops-client",
+  "name": "@mpgd/game-services-client",
   "version": "0.0.0",
-  "description": "Reusable client orchestration for mpgd purchase, ad reward, and leaderboard liveops.",
+  "description": "Reusable client orchestration and oRPC client adapters for mpgd game services.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/imjlk/mpgd-kit.git",
-    "directory": "packages/liveops-client"
+    "directory": "packages/game-services-client"
   },
   "bugs": {
     "url": "https://github.com/imjlk/mpgd-kit/issues"
@@ -38,15 +38,17 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/liveops-client/src/index.test.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/game-services-client/src/index.test.ts"
   },
   "dependencies": {
     "@mpgd/backend-ad-reward-ledger": "workspace:*",
     "@mpgd/backend-leaderboard-ledger": "workspace:*",
     "@mpgd/backend-purchase-verifier": "workspace:*",
+    "@mpgd/game-services-contract": "workspace:*",
     "@mpgd/leaderboard-contract": "workspace:*",
     "@mpgd/monetization-contract": "workspace:*",
-    "@mpgd/platform-contract": "workspace:*"
+    "@mpgd/platform-contract": "workspace:*",
+    "@orpc/client": "2.0.0-beta.14"
   },
   "devDependencies": {
     "@mpgd/ad-placements": "workspace:*",

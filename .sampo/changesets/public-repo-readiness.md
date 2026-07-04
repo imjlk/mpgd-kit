@@ -13,7 +13,7 @@ npm/@mpgd/ad-placements: patch (Changed)
 npm/@mpgd/analytics-schema: patch (Changed)
 npm/@mpgd/target-config: patch (Changed)
 npm/@mpgd/release-manifest: patch (Changed)
-npm/@mpgd/liveops-client: patch (Changed)
+npm/@mpgd/game-services-client: patch (Changed)
 npm/@mpgd/adapter-browser: patch (Changed)
 npm/@mpgd/adapter-capacitor: patch (Changed)
 npm/@mpgd/adapter-ait: patch (Changed)
@@ -22,7 +22,7 @@ npm/@mpgd/backend-purchase-verifier: patch (Changed)
 npm/@mpgd/backend-entitlement-ledger: patch (Changed)
 npm/@mpgd/backend-ad-reward-ledger: patch (Changed)
 npm/@mpgd/backend-leaderboard-ledger: patch (Changed)
-npm/@mpgd/backend-liveops-api: patch (Changed)
+npm/@mpgd/backend-game-services: patch (Changed)
 ---
 
 Prepare the repository for public visibility with MIT licensing, package metadata, community files, issue templates, and automated public-readiness validation.

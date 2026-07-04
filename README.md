@@ -32,7 +32,8 @@ pnpm smoke:i18n
 pnpm smoke:target-config
 pnpm smoke:effective-config
 pnpm smoke:adapter-effective-config
-pnpm smoke:liveops
+pnpm smoke:game-services
+pnpm smoke:game-services:worker
 pnpm graph:preflight
 pnpm pack:packages
 pnpm build:web
@@ -55,11 +56,13 @@ Before making the repository public or publishing packages, use the
 [Public Release Checklist](docs/PUBLIC_RELEASE_CHECKLIST.md).
 
 Reusable purchase, rewarded ad, and leaderboard flows are documented in
-[LiveOps Vertical Slice](docs/LIVEOPS_VERTICAL_SLICE.md). The demo uses the same
+[Game Services Backend](docs/GAME_SERVICES_BACKEND.md). The demo uses the same
 ledger-first path: platform callbacks provide evidence, and save changes happen
-only after backend verifier or ledger APIs accept the action. Production clients
-can use the exported LiveOps fetch transport, while local demos can use the
-in-process backend handler.
+only after backend game services accept the action. Production clients can use
+the exported GameServices fetch or oRPC transports, while local demos can use the
+in-process backend handler. `apps/game-services-worker` is a Cloudflare Vite
+plugin Worker starter with HTTP, oRPC, and WorkerEntrypoint service binding
+surfaces.
 
 ## Versioning and Changesets
 
@@ -114,6 +117,7 @@ pnpm graph:target
 pnpm graph:package
 pnpm graph:bridge
 pnpm graph:demo
+pnpm graph:game-services
 pnpm graph:target-config
 pnpm graph:preflight
 ```

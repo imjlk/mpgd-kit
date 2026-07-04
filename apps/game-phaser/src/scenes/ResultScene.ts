@@ -1,8 +1,11 @@
 import Phaser from 'phaser';
 
 import type { FinishedStage } from '@mpgd/game-core';
+import {
+  createGameServicesIdempotencyKey,
+  type GameServicesClient,
+} from '@mpgd/game-services-client';
 import { m, type MpgdLocale } from '@mpgd/i18n';
-import { createLiveOpsIdempotencyKey, type LiveOpsClient } from '@mpgd/liveops-client';
 import type { PlatformGateway } from '@mpgd/platform-contract';
 import {
   getEffectiveAdPlacementConfig,
@@ -11,7 +14,7 @@ import {
   type PlatformFeature,
 } from '@mpgd/target-config';
 
-import { createDemoLiveOpsClient } from '../platform/demoLiveOps';
+import { createDemoGameServicesClient } from '../platform/demoGameServices';
 import {
   addCoinsToSave,
   applyScoreToSave,
@@ -21,7 +24,7 @@ import {
 
 export class ResultScene extends Phaser.Scene {
   private platform: PlatformGateway | null = null;
-  private liveOps: LiveOpsClient | null = null;
+  private gameServices: GameServicesClient | null = null;
   private state: DemoState | null = null;
   private statusText: Phaser.GameObjects.Text | null = null;
   private saveText: Phaser.GameObjects.Text | null = null;
@@ -46,7 +49,7 @@ export class ResultScene extends Phaser.Scene {
     };
     this.result = result;
     this.registry.set('demoState', this.state);
-    this.liveOps = createDemoLiveOpsClient(platform, this.state);
+    this.gameServices = createDemoGameServicesClient(platform, this.state);
     const rewardedAdEnabled = this.isRewardedContinueEnabled();
     const purchaseEnabled = this.isCoinProductEnabled();
     const leaderboardEnabled = this.isLeaderboardEnabled();
@@ -210,7 +213,7 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
-    const submission = await this.liveOps?.submitLeaderboardScore({
+    const submission = await this.gameServices?.submitLeaderboardScore({
       leaderboardId: this.effectiveLeaderboardId(),
       score: this.result.score.total,
       runId: this.result.session.id,
@@ -237,14 +240,14 @@ export class ResultScene extends Phaser.Scene {
     }
 
     this.setStatus(m.showing_rewarded_ad({}, { locale: this.state.locale }));
-    if (this.liveOps === null) {
+    if (this.gameServices === null) {
       this.setStatus(this.unavailableMessage('rewardedAds'));
       return;
     }
 
-    const reward = await this.liveOps.claimRewardedAd({
+    const reward = await this.gameServices.claimRewardedAd({
       placementId: 'CONTINUE_AFTER_FAIL',
-      idempotencyKey: createLiveOpsIdempotencyKey({
+      idempotencyKey: createGameServicesIdempotencyKey({
         target: this.platform.target,
         playerId: this.state.player.playerId,
         action: 'rewarded-ad',
@@ -280,15 +283,15 @@ export class ResultScene extends Phaser.Scene {
     }
 
     this.setStatus(m.opening_purchase({}, { locale: this.state.locale }));
-    if (this.liveOps === null) {
+    if (this.gameServices === null) {
       this.setStatus(this.unavailableMessage('iap'));
       return;
     }
 
-    const purchase = await this.liveOps.purchase({
+    const purchase = await this.gameServices.purchase({
       productId: 'COINS_100',
       source: 'result',
-      idempotencyKey: createLiveOpsIdempotencyKey({
+      idempotencyKey: createGameServicesIdempotencyKey({
         target: this.platform.target,
         playerId: this.state.player.playerId,
         action: 'purchase',

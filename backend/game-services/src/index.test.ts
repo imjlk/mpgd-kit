@@ -1,10 +1,18 @@
 import type { AdPlacements } from '@mpgd/ad-placements';
-import { createInMemoryEntitlementLedger } from '@mpgd/backend-entitlement-ledger';
-import { createInMemoryLeaderboardLedger } from '@mpgd/backend-leaderboard-ledger';
-import { createLiveOpsHttpBackendApi, liveOpsBackendEndpoints } from '@mpgd/liveops-client';
+import {
+  createGameServicesHttpBackendApi,
+  gameServicesBackendEndpoints,
+} from '@mpgd/game-services-client';
 import type { ProductCatalog } from '@mpgd/product-catalog';
 
-import { createInProcessLiveOpsBackendTransport, createLiveOpsBackendApiHandler } from './index';
+import {
+  createGameServicesBackend,
+  createGameServicesBackendApiHandler,
+  createGameServicesRouter,
+  createGameServicesRpcFetchHandler,
+  createInMemoryGameServicesStore,
+  createInProcessGameServicesBackendTransport,
+} from './index';
 
 const catalog = {
   version: 'test',
@@ -45,17 +53,15 @@ const placements = {
   ],
 } as const satisfies AdPlacements;
 
-const entitlementLedger = createInMemoryEntitlementLedger();
-const leaderboardLedger = createInMemoryLeaderboardLedger();
-const handler = createLiveOpsBackendApiHandler({
+const store = createInMemoryGameServicesStore();
+const handler = createGameServicesBackendApiHandler({
   catalog,
   placements,
-  entitlementLedger,
-  leaderboardLedger,
+  store,
   now: () => '2026-07-04T00:00:00.000Z',
 });
-const backend = createLiveOpsHttpBackendApi({
-  transport: createInProcessLiveOpsBackendTransport(handler),
+const backend = createGameServicesHttpBackendApi({
+  transport: createInProcessGameServicesBackendTransport(handler),
 });
 
 const purchase = await backend.purchases.verifyPurchase({
@@ -92,7 +98,7 @@ const score = await backend.leaderboard.recordScore({
 });
 const missing = await handler.handle({
   method: 'POST',
-  endpoint: '/liveops/missing' as typeof liveOpsBackendEndpoints.verifyPurchase,
+  endpoint: '/game-services/missing' as typeof gameServicesBackendEndpoints.verifyPurchase,
   body: {},
 });
 
@@ -100,11 +106,23 @@ assertEqual(purchase.verified, true, 'purchase should be verified');
 assertEqual(duplicatePurchase.alreadyProcessed, true, 'purchase should dedupe');
 assertEqual(reward.granted, true, 'reward should be granted');
 assertEqual(score.submitted, true, 'score should be recorded');
-assertEqual(entitlementLedger.listTransactions().length, 2, 'two grants should be recorded');
-assertEqual(leaderboardLedger.listTransactions().length, 1, 'one score should be recorded');
+assertEqual((await store.listEntitlementTransactions()).length, 2, 'two grants should be recorded');
+assertEqual((await store.listLeaderboardTransactions()).length, 1, 'one score should be recorded');
 assertEqual(missing.status, 404, 'unknown endpoint should fail closed');
 
-console.log('LiveOps backend API handler smoke test passed.');
+const rpcStore = createInMemoryGameServicesStore();
+const rpcBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: rpcStore,
+  now: () => '2026-07-04T00:00:00.000Z',
+});
+const rpcFetch = createGameServicesRpcFetchHandler(createGameServicesRouter(rpcBackend));
+const rpcHealth = await rpcFetch(new Request('https://game-services.test/health'));
+
+assertEqual(rpcHealth.status, 200, 'oRPC fetch handler should expose health');
+
+console.log('GameServices backend API handler smoke test passed.');
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {

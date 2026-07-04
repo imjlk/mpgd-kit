@@ -1,12 +1,12 @@
 {
-  "name": "@mpgd/backend-liveops-api",
+  "name": "@mpgd/backend-game-services",
   "version": "0.0.0",
-  "description": "Typed in-process LiveOps backend endpoint handler for mpgd demos and tests.",
+  "description": "Authoritative backend implementation, store abstraction, and oRPC handler for mpgd game services.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/imjlk/mpgd-kit.git",
-    "directory": "backend/liveops-api"
+    "directory": "backend/game-services"
   },
   "bugs": {
     "url": "https://github.com/imjlk/mpgd-kit/issues"
@@ -38,7 +38,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs backend/liveops-api/src/index.test.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs backend/game-services/src/index.test.ts"
   },
   "dependencies": {
     "@mpgd/ad-placements": "workspace:*",
@@ -46,8 +46,10 @@
     "@mpgd/backend-entitlement-ledger": "workspace:*",
     "@mpgd/backend-leaderboard-ledger": "workspace:*",
     "@mpgd/backend-purchase-verifier": "workspace:*",
-    "@mpgd/liveops-client": "workspace:*",
-    "@mpgd/product-catalog": "workspace:*"
+    "@mpgd/game-services-contract": "workspace:*",
+    "@mpgd/game-services-client": "workspace:*",
+    "@mpgd/product-catalog": "workspace:*",
+    "@orpc/server": "2.0.0-beta.14"
   },
   "devDependencies": {
     "ttsc": "0.16.9",
