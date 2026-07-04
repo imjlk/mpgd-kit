@@ -115,7 +115,7 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
         nativeAds: false,
         rewardedAds: false,
         interstitialAds: false,
-        nativeLeaderboard: false,
+        nativeLeaderboard: true,
         achievements: false,
         cloudSave: true,
         socialShare: true,
@@ -409,7 +409,11 @@ async function submitMaxLeaderboardScore(
       await delay(nextLeaderboardRetryDelay(attempt, startedAt));
       attempt += 1;
     } finally {
-      await releaseLeaderboardLock(lockKey, lockToken);
+      try {
+        await releaseLeaderboardLock(lockKey, lockToken);
+      } catch (error) {
+        console.warn(`devvit leaderboard lock release failed: ${errorMessage(error)}`);
+      }
     }
   }
 

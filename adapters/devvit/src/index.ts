@@ -129,7 +129,7 @@ export function createDevvitPlatformGateway(
         }
 
         const fallback = await loadStorageFallback(payload.key, {
-          useCachedNamespaceOnFailure: true,
+          useCachedNamespaceOnFailure: value === null,
         });
 
         return fallback ?? (value === null ? null : { value });
@@ -358,7 +358,7 @@ export function createDevvitSandboxBridge(): DevvitBridge {
             nativeAds: false,
             rewardedAds: false,
             interstitialAds: false,
-            nativeLeaderboard: false,
+            nativeLeaderboard: true,
             achievements: false,
             cloudSave: true,
             socialShare: true,

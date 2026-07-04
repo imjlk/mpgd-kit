@@ -11,6 +11,34 @@ import {
   type DevvitBridge,
 } from './index';
 
+function createLocalStorageMock(): {
+  readonly items: Map<string, string>;
+  readonly storage: Storage;
+} {
+  const items = new Map<string, string>();
+
+  return {
+    items,
+    storage: {
+      getItem(key: string) {
+        return items.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        items.set(key, value);
+      },
+      removeItem(key: string) {
+        items.delete(key);
+      },
+      key(index: number) {
+        return [...items.keys()][index] ?? null;
+      },
+      get length() {
+        return items.size;
+      },
+    } as Storage,
+  };
+}
+
 describe('adapter-devvit', () => {
   it('sends platform requests through the installed Devvit bridge', async () => {
     const requests: BridgeRequest[] = [];
@@ -189,7 +217,7 @@ describe('adapter-devvit', () => {
       displayName: 'Reddit Sandbox Player',
     });
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeLeaderboard: false,
+      nativeLeaderboard: true,
       cloudSave: true,
     });
     await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
@@ -223,24 +251,7 @@ describe('adapter-devvit', () => {
   });
 
   it('uses local fallback storage when the Devvit server reports a skipped save', async () => {
-    const localItems = new Map<string, string>();
-    const localStorageMock = {
-      getItem(key: string) {
-        return localItems.get(key) ?? null;
-      },
-      setItem(key: string, value: string) {
-        localItems.set(key, value);
-      },
-      removeItem(key: string) {
-        localItems.delete(key);
-      },
-      key(index: number) {
-        return [...localItems.keys()][index] ?? null;
-      },
-      get length() {
-        return localItems.size;
-      },
-    } as Storage;
+    const { storage: localStorageMock } = createLocalStorageMock();
     const bridge: DevvitBridge = {
       async request(input) {
         if (input.method === 'storage.save') {
@@ -290,24 +301,7 @@ describe('adapter-devvit', () => {
   });
 
   it('prefers newer local fallback storage over stale server storage', async () => {
-    const localItems = new Map<string, string>();
-    const localStorageMock = {
-      getItem(key: string) {
-        return localItems.get(key) ?? null;
-      },
-      setItem(key: string, value: string) {
-        localItems.set(key, value);
-      },
-      removeItem(key: string) {
-        localItems.delete(key);
-      },
-      key(index: number) {
-        return [...localItems.keys()][index] ?? null;
-      },
-      get length() {
-        return localItems.size;
-      },
-    } as Storage;
+    const { storage: localStorageMock } = createLocalStorageMock();
     const bridge: DevvitBridge = {
       async request(input) {
         if (input.method === 'storage.save') {
@@ -359,24 +353,7 @@ describe('adapter-devvit', () => {
   });
 
   it('namespaces local fallback storage by Devvit player', async () => {
-    const localItems = new Map<string, string>();
-    const localStorageMock = {
-      getItem(key: string) {
-        return localItems.get(key) ?? null;
-      },
-      setItem(key: string, value: string) {
-        localItems.set(key, value);
-      },
-      removeItem(key: string) {
-        localItems.delete(key);
-      },
-      key(index: number) {
-        return [...localItems.keys()][index] ?? null;
-      },
-      get length() {
-        return localItems.size;
-      },
-    } as Storage;
+    const { storage: localStorageMock } = createLocalStorageMock();
     let currentPlayerId = 'reddit-player-a';
     const bridge: DevvitBridge = {
       async request(input) {
@@ -448,24 +425,7 @@ describe('adapter-devvit', () => {
   });
 
   it('uses namespaced fallback storage when Devvit storage load fails', async () => {
-    const localItems = new Map<string, string>();
-    const localStorageMock = {
-      getItem(key: string) {
-        return localItems.get(key) ?? null;
-      },
-      setItem(key: string, value: string) {
-        localItems.set(key, value);
-      },
-      removeItem(key: string) {
-        localItems.delete(key);
-      },
-      key(index: number) {
-        return [...localItems.keys()][index] ?? null;
-      },
-      get length() {
-        return localItems.size;
-      },
-    } as Storage;
+    const { storage: localStorageMock } = createLocalStorageMock();
     const bridge: DevvitBridge = {
       async request(input) {
         if (input.method === 'identity.getPlayer') {
@@ -527,24 +487,7 @@ describe('adapter-devvit', () => {
   });
 
   it('reuses cached identity namespace when a later Devvit storage save fails', async () => {
-    const localItems = new Map<string, string>();
-    const localStorageMock = {
-      getItem(key: string) {
-        return localItems.get(key) ?? null;
-      },
-      setItem(key: string, value: string) {
-        localItems.set(key, value);
-      },
-      removeItem(key: string) {
-        localItems.delete(key);
-      },
-      key(index: number) {
-        return [...localItems.keys()][index] ?? null;
-      },
-      get length() {
-        return localItems.size;
-      },
-    } as Storage;
+    const { items: localItems, storage: localStorageMock } = createLocalStorageMock();
     let bridgeOffline = false;
     const bridge: DevvitBridge = {
       async request(input) {
@@ -612,25 +555,8 @@ describe('adapter-devvit', () => {
     }
   });
 
-  it('reuses cached identity namespace when checking fallback after a storage load', async () => {
-    const localItems = new Map<string, string>();
-    const localStorageMock = {
-      getItem(key: string) {
-        return localItems.get(key) ?? null;
-      },
-      setItem(key: string, value: string) {
-        localItems.set(key, value);
-      },
-      removeItem(key: string) {
-        localItems.delete(key);
-      },
-      key(index: number) {
-        return [...localItems.keys()][index] ?? null;
-      },
-      get length() {
-        return localItems.size;
-      },
-    } as Storage;
+  it('does not use a cached fallback namespace over a successful storage load value', async () => {
+    const { storage: localStorageMock } = createLocalStorageMock();
     let bridgeOffline = false;
     const bridge: DevvitBridge = {
       async request(input) {
@@ -670,6 +596,80 @@ describe('adapter-devvit', () => {
             data: {
               coins: 1,
             },
+          };
+        }
+
+        return {
+          id: input.id,
+          ok: true,
+          data: {},
+        };
+      },
+    };
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'build-reddit',
+      bridge,
+    });
+
+    vi.stubGlobal('localStorage', localStorageMock);
+
+    try {
+      await expect(gateway.identity.getPlayer()).resolves.toEqual({
+        playerId: 'reddit-player-a',
+      });
+      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+
+      bridgeOffline = true;
+      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
+        value: {
+          coins: 1,
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reuses cached identity namespace after an empty storage load', async () => {
+    const { storage: localStorageMock } = createLocalStorageMock();
+    let bridgeOffline = false;
+    const bridge: DevvitBridge = {
+      async request(input) {
+        if (input.method === 'identity.getPlayer') {
+          if (bridgeOffline) {
+            return createBridgeError(
+              input.id,
+              'DEVVIT_BRIDGE_NETWORK_ERROR',
+              'Devvit identity bridge failed.',
+              true,
+            );
+          }
+
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              playerId: 'reddit-player-a',
+            },
+          };
+        }
+
+        if (input.method === 'storage.save') {
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              saved: false,
+            },
+          };
+        }
+
+        if (input.method === 'storage.load') {
+          return {
+            id: input.id,
+            ok: true,
+            data: null,
           };
         }
 
