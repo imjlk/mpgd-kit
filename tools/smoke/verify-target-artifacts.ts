@@ -1,8 +1,5 @@
 import { existsSync, statSync } from 'node:fs';
-
-import typia from 'typia';
-
-import type { ReleaseManifest } from '@mpgd/release-manifest';
+import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { readJsonFile } from '../io';
 import {
@@ -14,38 +11,54 @@ import {
   type EmbeddedTargetConfigEvidence,
 } from './embedded-target-config';
 
-const requiredTargets = ['web-preview', 'android', 'ios', 'ait', 'reddit'] as const;
-type SmokeTarget = (typeof requiredTargets)[number];
+interface SmokePlatformTargetConfig {
+  readonly kind: 'web' | 'capacitor-android' | 'capacitor-ios' | 'apps-in-toss' | 'devvit-web';
+  readonly gameApp: string;
+  readonly adapter: string;
+  readonly output?: string;
+  readonly shellApp?: string;
+  readonly wrapperApp?: string;
+  readonly webDir?: string;
+  readonly artifact?: string;
+}
 
-const knownTargets = new Set<string>(requiredTargets);
-const assertReleaseManifest = typia.createAssert<ReleaseManifest>();
+interface SmokePlatformTargetsConfig {
+  readonly targets: Record<string, SmokePlatformTargetConfig>;
+}
 
-const requiredArtifacts: Record<SmokeTarget, string> = {
-  'web-preview': 'artifacts/web-preview/index.html',
-  android: 'release-output/android/app-release.aab',
-  ios: 'apps/mobile-capacitor/ios',
-  ait: 'release-output/ait/mpgd-kit.ait',
-  reddit: 'apps/target-devvit/dist/client/index.html',
-};
+interface SmokeReleaseManifest {
+  readonly targets: Record<string, {
+    readonly artifact: string;
+    readonly effectiveConfig: {
+      readonly path: string;
+      readonly digest: string;
+    };
+  }>;
+}
 
-const extraRequiredArtifacts: Partial<Record<SmokeTarget, readonly string[]>> = {
-  reddit: ['apps/target-devvit/dist/server/index.cjs'],
-};
+const platformTargetsFileEnv = 'MPGD_PLATFORM_TARGETS_FILE';
+const releaseManifestFileEnv = 'MPGD_RELEASE_MANIFEST_FILE';
 
-export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = requiredTargets): void {
-  const manifest = assertReleaseManifest(readJsonFile('artifacts/release-manifest.json'));
+const loadedPlatformTargets = loadSmokePlatformTargetsConfig();
+const configuredTargets = Object.keys(loadedPlatformTargets.config.targets);
+const knownTargets = new Set<string>(configuredTargets);
+
+export function verifyTargetArtifacts(targets: readonly string[] = configuredTargets): void {
+  const manifest = readSmokeReleaseManifest(releaseManifestPath(loadedPlatformTargets.baseDir));
 
   for (const target of targets) {
     const entry = manifest.targets[target];
+    const targetConfig = loadedPlatformTargets.config.targets[target];
 
     if (entry === undefined) {
       throw new Error(`Missing release manifest target: ${target}`);
     }
 
-    const expectedArtifact = requiredArtifacts[target];
-    assertPathExists(expectedArtifact, `${target} artifact`);
+    if (targetConfig === undefined) {
+      throw new Error(`Missing platform target config: ${target}`);
+    }
 
-    for (const extraArtifact of extraRequiredArtifacts[target] ?? []) {
+    for (const extraArtifact of extraRequiredArtifactsForTarget(target, targetConfig)) {
       assertPathExists(extraArtifact, `${target} required artifact`);
     }
 
@@ -53,6 +66,8 @@ export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = required
       throw new Error(`Release manifest target ${target} has an empty artifact path.`);
     }
 
+    const artifactPath = resolveArtifactPath(entry.artifact);
+    assertPathExists(artifactPath, `${target} artifact`);
     assertPathExists(entry.effectiveConfig.path, `${target} effective target config`);
 
     assertEmbeddedTargetConfig(
@@ -65,41 +80,71 @@ export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = required
         digest: entry.effectiveConfig.digest,
       },
     );
-    assertEmbeddedTargetConfig(readReleaseEmbeddedTargetConfig(target), {
-      target,
-      digest: entry.effectiveConfig.digest,
-    });
+    assertEmbeddedTargetConfig(
+      readReleaseEmbeddedTargetConfig(target, targetConfig, artifactPath),
+      {
+        target,
+        digest: entry.effectiveConfig.digest,
+      },
+    );
   }
 
   console.log(`Target smoke passed: ${targets.join(', ')}`);
 }
 
-function readReleaseEmbeddedTargetConfig(target: SmokeTarget): EmbeddedTargetConfigEvidence {
-  switch (target) {
-    case 'web-preview':
+function readReleaseEmbeddedTargetConfig(
+  target: string,
+  targetConfig: SmokePlatformTargetConfig,
+  artifactPath: string,
+): EmbeddedTargetConfigEvidence {
+  switch (targetConfig.kind) {
+    case 'web':
       return readEmbeddedTargetConfigFromFile(
-        `artifacts/web-preview/${embeddedTargetConfigFileName}`,
+        `${artifactPath}/${embeddedTargetConfigFileName}`,
         'web-preview artifact',
       );
-    case 'android':
-      return readEmbeddedTargetConfigFromZip(requiredArtifacts.android, 'android release AAB');
-    case 'ios':
-      return readEmbeddedTargetConfigFromDirectory(requiredArtifacts.ios, 'ios native artifact');
-    case 'ait':
+    case 'capacitor-android':
+      return readEmbeddedTargetConfigFromZip(artifactPath, `${target} release AAB`);
+    case 'capacitor-ios':
+      return readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} native artifact`);
+    case 'apps-in-toss':
       try {
-        return readEmbeddedTargetConfigFromZip(requiredArtifacts.ait, 'ait release artifact');
+        return readEmbeddedTargetConfigFromZip(artifactPath, `${target} release artifact`);
       } catch {
         return readEmbeddedTargetConfigFromDirectory(
-          'apps/target-ait/public/game',
-          'ait wrapper webDir',
+          resolveTargetPath(requireString(targetConfig.webDir, `${target}.webDir`)),
+          `${target} wrapper webDir`,
         );
       }
-    case 'reddit':
+    case 'devvit-web':
       return readEmbeddedTargetConfigFromDirectory(
-        'apps/target-devvit/dist/client',
-        'reddit Devvit client artifact',
+        resolveTargetPath(requireString(targetConfig.webDir, `${target}.webDir`)),
+        `${target} Devvit client artifact`,
       );
   }
+}
+
+function extraRequiredArtifactsForTarget(
+  target: string,
+  targetConfig: SmokePlatformTargetConfig,
+): readonly string[] {
+  if (targetConfig.kind !== 'devvit-web') {
+    return [];
+  }
+
+  return [
+    resolveTargetPath(
+      `${requireString(targetConfig.wrapperApp, `${target}.wrapperApp`)}/dist/server/index.cjs`,
+    ),
+  ];
+}
+
+function resolveArtifactPath(path: string): string {
+  return resolveFromPlatformTargetsBase(loadedPlatformTargets.baseDir, path);
+}
+
+function resolveTargetPath(path: string): string {
+  return resolveFromPlatformTargetsBase(loadedPlatformTargets.baseDir, path);
 }
 
 function assertPathExists(path: string, label: string): void {
@@ -114,9 +159,99 @@ function assertPathExists(path: string, label: string): void {
   }
 }
 
-function readRequestedTargets(args: readonly string[]): readonly SmokeTarget[] {
+function loadSmokePlatformTargetsConfig(): {
+  readonly baseDir: string;
+  readonly config: SmokePlatformTargetsConfig;
+} {
+  const path = platformTargetsFilePath();
+  const config = readJsonFile(path) as SmokePlatformTargetsConfig;
+
+  assertRecord(config, 'platform targets config');
+  assertRecord(config.targets, 'platform targets');
+
+  for (const [target, targetConfig] of Object.entries(config.targets)) {
+    assertRecord(targetConfig, `platform target ${target}`);
+    assertTargetKind(targetConfig.kind, target);
+    assertString(targetConfig.gameApp, `${target}.gameApp`);
+    assertString(targetConfig.adapter, `${target}.adapter`);
+  }
+
+  return {
+    baseDir: dirname(path),
+    config,
+  };
+}
+
+function readSmokeReleaseManifest(path: string): SmokeReleaseManifest {
+  const manifest = readJsonFile(path) as SmokeReleaseManifest;
+
+  assertRecord(manifest, 'release manifest');
+  assertRecord(manifest.targets, 'release manifest targets');
+
+  for (const [target, entry] of Object.entries(manifest.targets)) {
+    assertRecord(entry, `release manifest target ${target}`);
+    assertString(entry.artifact, `${target}.artifact`);
+    assertRecord(entry.effectiveConfig, `${target}.effectiveConfig`);
+    assertString(entry.effectiveConfig.path, `${target}.effectiveConfig.path`);
+    assertString(entry.effectiveConfig.digest, `${target}.effectiveConfig.digest`);
+  }
+
+  return manifest;
+}
+
+function platformTargetsFilePath(): string {
+  return resolve(process.env[platformTargetsFileEnv] ?? 'platform.targets.json');
+}
+
+function releaseManifestPath(baseDir: string): string {
+  return resolveFromPlatformTargetsBase(
+    baseDir,
+    process.env[releaseManifestFileEnv] ?? 'artifacts/release-manifest.json',
+  );
+}
+
+function resolveFromPlatformTargetsBase(baseDir: string, path: string): string {
+  return isAbsolute(path) ? path : resolve(baseDir, path);
+}
+
+function assertRecord(input: unknown, label: string): asserts input is Record<string, unknown> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new Error(`${label} must be an object.`);
+  }
+}
+
+function assertString(input: unknown, label: string): asserts input is string {
+  if (typeof input !== 'string' || input.length === 0) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+}
+
+function assertTargetKind(
+  input: unknown,
+  target: string,
+): asserts input is SmokePlatformTargetConfig['kind'] {
+  if (
+    input !== 'web'
+    && input !== 'capacitor-android'
+    && input !== 'capacitor-ios'
+    && input !== 'apps-in-toss'
+    && input !== 'devvit-web'
+  ) {
+    throw new Error(`Target ${target} has unsupported kind: ${String(input)}`);
+  }
+}
+
+function requireString(input: string | undefined, label: string): string {
+  if (input === undefined || input.length === 0) {
+    throw new Error(`Missing target config value: ${label}`);
+  }
+
+  return input;
+}
+
+function readRequestedTargets(args: readonly string[]): readonly string[] {
   if (args.length === 0) {
-    return requiredTargets;
+    return configuredTargets;
   }
 
   return args.map((target) => {
@@ -124,7 +259,7 @@ function readRequestedTargets(args: readonly string[]): readonly SmokeTarget[] {
       throw new Error(`Unknown target smoke target: ${target}`);
     }
 
-    return target as SmokeTarget;
+    return target;
   });
 }
 

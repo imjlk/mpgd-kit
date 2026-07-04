@@ -2,8 +2,13 @@ import { spawnSync } from 'node:child_process';
 import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import { readJsonFile } from '../io';
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
+import {
+  effectiveTargetConfigOutputDir,
+  loadPlatformTargetsConfig,
+  releaseManifestPath,
+  resolveFromPlatformTargetsBase,
+} from './platform-targets';
 
 const [targetName = 'web-preview', profile = 'production'] = process.argv.slice(2);
 
@@ -18,10 +23,6 @@ interface BuildTargetConfig {
   readonly artifact?: string;
 }
 
-interface BuildTargetsFile {
-  readonly targets: Record<string, BuildTargetConfig>;
-}
-
 run('pnpm', ['validate:catalog'], process.env);
 run('pnpm', ['validate:ads'], process.env);
 run('pnpm', ['validate:target-config'], process.env);
@@ -29,50 +30,65 @@ run('pnpm', ['validate:effective-config'], process.env);
 run('pnpm', ['validate:targets'], process.env);
 run('node', ['tools/run-ttsx.mjs', 'tools/package/build-packages.ts'], process.env);
 
-const config = readJsonFile('platform.targets.json') as BuildTargetsFile;
-const target = config.targets[targetName];
+const platformTargets = loadPlatformTargetsConfig();
+const configBaseDir = platformTargets.baseDir;
+const config = platformTargets.config;
+const target = config.targets[targetName] as BuildTargetConfig | undefined;
 
 if (target === undefined) {
   throw new Error(`Unknown target: ${targetName}`);
 }
 
+const gameApp = targetPath(target.gameApp);
 const appTarget = targetName === 'web-preview' ? 'browser' : targetName;
 const env = {
   ...process.env,
   APP_TARGET: appTarget,
   APP_VERSION: process.env.APP_VERSION ?? '0.0.0',
   BUILD_ID: process.env.BUILD_ID ?? 'local',
+  MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveTargetConfigOutputDir(configBaseDir),
 };
 
-run('pnpm', ['--dir', target.gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
-embedEffectiveTargetConfig(targetName, target.gameApp);
+run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
+embedEffectiveTargetConfig(targetName, gameApp);
 
 switch (target.kind) {
   case 'web': {
-    const output = requireString(target.output, `${targetName}.output`);
-    replaceDirectory(`${target.gameApp}/dist`, output);
-    writeManifest(targetName, profile, output, env);
+    const outputConfigPath = requireString(target.output, `${targetName}.output`);
+    const output = targetPath(outputConfigPath);
+    replaceDirectory(`${gameApp}/dist`, output);
+    writeManifest(targetName, profile, outputConfigPath, env);
     break;
   }
 
   case 'apps-in-toss': {
-    const webDir = requireString(target.webDir, `${targetName}.webDir`);
-    const wrapperApp = requireString(target.wrapperApp, `${targetName}.wrapperApp`);
-    replaceDirectory(`${target.gameApp}/dist`, webDir);
+    const webDirConfigPath = requireString(target.webDir, `${targetName}.webDir`);
+    const webDir = targetPath(webDirConfigPath);
+    const wrapperApp = targetPath(requireString(target.wrapperApp, `${targetName}.wrapperApp`));
+    replaceDirectory(`${gameApp}/dist`, webDir);
     run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
-    run('pnpm', ['--dir', wrapperApp, 'ait:build'], env);
 
-    const aitArtifact = findFileByExtension(wrapperApp, '.ait');
-    const releaseArtifact = 'release-output/ait/mpgd-kit.ait';
-    copyFile(aitArtifact, releaseArtifact);
+    let releaseArtifact = webDirConfigPath;
+
+    if (process.env.MPGD_AIT_PACKAGE_MODE !== 'skip') {
+      run('pnpm', ['--dir', wrapperApp, 'ait:build'], env);
+
+      const aitArtifact = findFileByExtension(wrapperApp, '.ait');
+      releaseArtifact = 'release-output/ait/mpgd-kit.ait';
+      copyFile(aitArtifact, targetPath(releaseArtifact));
+    } else {
+      console.warn('ait: package build skipped; release manifest points to wrapper webDir.');
+    }
+
     writeManifest(targetName, profile, releaseArtifact, env);
     break;
   }
 
   case 'devvit-web': {
-    const webDir = requireString(target.webDir, `${targetName}.webDir`);
-    const wrapperApp = requireString(target.wrapperApp, `${targetName}.wrapperApp`);
-    replaceDirectory(`${target.gameApp}/dist`, webDir);
+    const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
+    const wrapperAppConfigPath = requireString(target.wrapperApp, `${targetName}.wrapperApp`);
+    const wrapperApp = targetPath(wrapperAppConfigPath);
+    replaceDirectory(`${gameApp}/dist`, webDir);
     run(
       'pnpm',
       [
@@ -88,14 +104,14 @@ switch (target.kind) {
       ],
       env,
     );
-    writeManifest(targetName, profile, `${wrapperApp}/dist`, env);
+    writeManifest(targetName, profile, `${wrapperAppConfigPath}/dist`, env);
     break;
   }
 
   case 'capacitor-android': {
-    const webDir = requireString(target.webDir, `${targetName}.webDir`);
-    const shellApp = requireString(target.shellApp, `${targetName}.shellApp`);
-    replaceDirectory(`${target.gameApp}/dist`, webDir);
+    const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
+    const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
+    replaceDirectory(`${gameApp}/dist`, webDir);
     ensureCapacitorPlatform(shellApp, 'android', env);
     run('pnpm', ['--dir', shellApp, 'cap', 'sync', 'android'], env);
 
@@ -104,19 +120,19 @@ switch (target.kind) {
 
     const aabArtifact = `${androidProject}/app/build/outputs/bundle/release/app-release.aab`;
     const releaseArtifact = 'release-output/android/app-release.aab';
-    copyFile(aabArtifact, releaseArtifact);
+    copyFile(aabArtifact, targetPath(releaseArtifact));
     writeManifest(targetName, profile, releaseArtifact, env);
     break;
   }
 
   case 'capacitor-ios': {
-    const webDir = requireString(target.webDir, `${targetName}.webDir`);
-    const shellApp = requireString(target.shellApp, `${targetName}.shellApp`);
-    replaceDirectory(`${target.gameApp}/dist`, webDir);
+    const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
+    const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
+    replaceDirectory(`${gameApp}/dist`, webDir);
     ensureCapacitorPlatform(shellApp, 'ios', env);
     run('pnpm', ['--dir', shellApp, 'cap', 'sync', 'ios'], env);
 
-    let releaseArtifact = `${shellApp}/ios`;
+    let releaseArtifact = requireString(target.shellApp, `${targetName}.shellApp`) + '/ios';
 
     if (process.env.MPGD_RUN_IOS_ARCHIVE === '1') {
       releaseArtifact = 'release-output/ios/MPGDKit.xcarchive';
@@ -133,7 +149,7 @@ switch (target.kind) {
           '-destination',
           'generic/platform=iOS',
           '-archivePath',
-          join(process.cwd(), releaseArtifact),
+          targetPath(releaseArtifact),
           'CODE_SIGNING_ALLOWED=NO',
         ],
         env,
@@ -179,21 +195,26 @@ function writeManifest(
 ): void {
   run(
     'pnpm',
-    ['manifest:release', target, releaseProfile, artifact, 'artifacts/release-manifest.json'],
+    ['manifest:release', target, releaseProfile, artifact, releaseManifestPath(configBaseDir)],
     commandEnv,
   );
 }
 
 function embedEffectiveTargetConfig(target: string, gameApp: string): void {
-  const artifact = writeEffectiveTargetConfigs({ targets: [target] }).artifacts.find(
-    (candidate) => candidate.target === target,
-  );
+  const artifact = writeEffectiveTargetConfigs({
+    targets: [target],
+    outputDir: effectiveTargetConfigOutputDir(configBaseDir),
+  }).artifacts.find((candidate) => candidate.target === target);
 
   if (artifact === undefined) {
     throw new Error(`Failed to generate effective target config for ${target}.`);
   }
 
   copyFile(artifact.path, `${gameApp}/dist/${embeddedTargetConfigFileName}`);
+}
+
+function targetPath(path: string): string {
+  return resolveFromPlatformTargetsBase(configBaseDir, path);
 }
 
 function findFileByExtension(directory: string, extension: string): string {
