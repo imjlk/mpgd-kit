@@ -12,7 +12,11 @@ This keeps client callbacks from becoming the source of truth.
 ## Packages
 
 - `@mpgd/liveops-client`: reusable client orchestration for purchase, rewarded ad,
-  and leaderboard score flows.
+  and leaderboard score flows. It also exports typed backend endpoints,
+  `LiveOpsBackendTransport`, and a fetch transport for production HTTP calls.
+- `@mpgd/backend-liveops-api`: in-process backend endpoint handler that adapts
+  the typed transport contract to verifier and ledger packages. The demo uses it
+  as a local backend stand-in.
 - `@mpgd/backend-purchase-verifier`: verifies product availability and records
   purchase grants in the entitlement ledger.
 - `@mpgd/backend-ad-reward-ledger`: records rewarded ad grants from completed
@@ -21,8 +25,48 @@ This keeps client callbacks from becoming the source of truth.
   submissions.
 - `@mpgd/backend-entitlement-ledger`: shared idempotent grant ledger.
 
-The in-repo demo uses in-memory backend implementations. Production should replace
-the same interfaces with HTTP clients that call real backend endpoints.
+The in-repo demo uses an in-process backend handler with in-memory ledgers.
+Production should replace the in-process transport with
+`createLiveOpsFetchBackendTransport()` and serve the same endpoint contract from
+your backend.
+
+## Backend Boundary
+
+Client code should create a `LiveOpsBackendApi` through one of these transport
+paths:
+
+```ts
+import {
+  createLiveOpsFetchBackendTransport,
+  createLiveOpsHttpBackendApi,
+} from '@mpgd/liveops-client';
+
+const backend = createLiveOpsHttpBackendApi({
+  transport: createLiveOpsFetchBackendTransport({
+    baseUrl: 'https://api.example.com',
+  }),
+});
+```
+
+Local demos and tests can use the same client-facing API with an in-process
+handler:
+
+```ts
+import {
+  createInProcessLiveOpsBackendTransport,
+  createLiveOpsBackendApiHandler,
+} from '@mpgd/backend-liveops-api';
+import { createLiveOpsHttpBackendApi } from '@mpgd/liveops-client';
+
+const backend = createLiveOpsHttpBackendApi({
+  transport: createInProcessLiveOpsBackendTransport(
+    createLiveOpsBackendApiHandler({
+      catalog,
+      placements,
+    }),
+  ),
+});
+```
 
 ## Target Notes
 
@@ -43,7 +87,8 @@ the same interfaces with HTTP clients that call real backend endpoints.
 pnpm smoke:liveops
 ```
 
-The smoke runs Android, iOS, and Apps in Toss target simulations through purchase,
-rewarded ad, and leaderboard flows. It asserts that purchase and reward grants
-appear in the entitlement ledger and that leaderboard submissions appear in the
-leaderboard ledger.
+The smoke runs Android, iOS, and Apps in Toss target simulations through the
+typed backend transport. It asserts that purchase and reward grants appear in the
+entitlement ledger, leaderboard submissions appear in the leaderboard ledger,
+duplicate idempotency keys dedupe, and cancelled purchase or skipped ad callbacks
+do not create grants.

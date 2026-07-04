@@ -20,6 +20,9 @@ importers:
       '@mpgd/backend-leaderboard-ledger':
         specifier: workspace:*
         version: link:backend/leaderboard-ledger
+      '@mpgd/backend-liveops-api':
+        specifier: workspace:*
+        version: link:backend/liveops-api
       '@mpgd/backend-purchase-verifier':
         specifier: workspace:*
         version: link:backend/purchase-verifier
@@ -152,18 +155,9 @@ importers:
       '@mpgd/adapter-capacitor':
         specifier: workspace:*
         version: link:../../adapters/capacitor
-      '@mpgd/backend-ad-reward-ledger':
+      '@mpgd/backend-liveops-api':
         specifier: workspace:*
-        version: link:../../backend/ad-reward-ledger
-      '@mpgd/backend-entitlement-ledger':
-        specifier: workspace:*
-        version: link:../../backend/entitlement-ledger
-      '@mpgd/backend-leaderboard-ledger':
-        specifier: workspace:*
-        version: link:../../backend/leaderboard-ledger
-      '@mpgd/backend-purchase-verifier':
-        specifier: workspace:*
-        version: link:../../backend/purchase-verifier
+        version: link:../../backend/liveops-api
       '@mpgd/bridge-protocol':
         specifier: workspace:*
         version: link:../../packages/bridge-protocol
@@ -319,6 +313,37 @@ importers:
       '@mpgd/leaderboard-contract':
         specifier: workspace:*
         version: link:../../packages/leaderboard-contract
+    devDependencies:
+      ttsc:
+        specifier: 0.16.9
+        version: 0.16.9
+      typescript:
+        specifier: 7.0.1-rc
+        version: 7.0.1-rc
+
+  backend/liveops-api:
+    dependencies:
+      '@mpgd/ad-placements':
+        specifier: workspace:*
+        version: link:../../packages/ad-placements
+      '@mpgd/backend-ad-reward-ledger':
+        specifier: workspace:*
+        version: link:../ad-reward-ledger
+      '@mpgd/backend-entitlement-ledger':
+        specifier: workspace:*
+        version: link:../entitlement-ledger
+      '@mpgd/backend-leaderboard-ledger':
+        specifier: workspace:*
+        version: link:../leaderboard-ledger
+      '@mpgd/backend-purchase-verifier':
+        specifier: workspace:*
+        version: link:../purchase-verifier
+      '@mpgd/liveops-client':
+        specifier: workspace:*
+        version: link:../../packages/liveops-client
+      '@mpgd/product-catalog':
+        specifier: workspace:*
+        version: link:../../packages/product-catalog
     devDependencies:
       ttsc:
         specifier: 0.16.9

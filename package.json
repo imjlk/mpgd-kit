@@ -63,6 +63,7 @@
     "@mpgd/backend-ad-reward-ledger": "workspace:*",
     "@mpgd/backend-entitlement-ledger": "workspace:*",
     "@mpgd/backend-leaderboard-ledger": "workspace:*",
+    "@mpgd/backend-liveops-api": "workspace:*",
     "@mpgd/backend-purchase-verifier": "workspace:*",
     "@mpgd/i18n": "workspace:*",
     "@mpgd/monetization-contract": "workspace:*",

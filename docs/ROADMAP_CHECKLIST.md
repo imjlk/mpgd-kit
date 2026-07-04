@@ -248,3 +248,10 @@ to run xcodebuild archive.
 - [x] leaderboard submissions are recorded by backend leaderboard ledger
 - [x] Phaser demo result actions use the liveops client before mutating save state
 - [x] `pnpm smoke:liveops` validates Android, iOS, and Apps in Toss target simulations
+
+## Phase 20 - LiveOps Backend API Boundary
+
+- [x] `@mpgd/liveops-client` exposes typed backend endpoints and transport helpers
+- [x] `@mpgd/backend-liveops-api` adapts the transport contract to verifier and ledger packages
+- [x] Phaser demo uses an in-process backend handler instead of wiring ledger calls directly
+- [x] `pnpm smoke:liveops` covers duplicate idempotency, cancelled purchase, skipped ad, and failed leaderboard paths

@@ -1,4 +1,4 @@
-import type { ProductInfo } from '@mpgd/monetization-contract';
+import type { ProductInfo, PurchaseResult, RewardedAdResult } from '@mpgd/monetization-contract';
 import {
   createUnsupportedCapabilities,
   type PlatformGateway,
@@ -8,6 +8,9 @@ import {
 export function createCapableMockGateway(input: {
   readonly target: Extract<PlatformTarget, 'android' | 'ios' | 'ait'>;
   readonly playerId: string;
+  readonly purchaseResult?: PurchaseResult;
+  readonly rewardedAdResult?: RewardedAdResult;
+  readonly leaderboardSubmitted?: boolean;
 }): PlatformGateway {
   const product = {
     id: 'COINS_100',
@@ -44,7 +47,7 @@ export function createCapableMockGateway(input: {
         return [product];
       },
       async purchase(payload) {
-        return {
+        return input.purchaseResult ?? {
           status: 'completed',
           transactionId: `${input.target}-txn-${payload.idempotencyKey}`,
           entitlementIds: [],
@@ -57,7 +60,7 @@ export function createCapableMockGateway(input: {
     ads: {
       async preload() {},
       async showRewarded(payload) {
-        return {
+        return input.rewardedAdResult ?? {
           status: 'completed',
           rewardGranted: true,
           ledgerEntryId: `${input.target}-impression-${payload.idempotencyKey}`,
@@ -72,7 +75,7 @@ export function createCapableMockGateway(input: {
     leaderboard: {
       async submitScore() {
         return {
-          submitted: true,
+          submitted: input.leaderboardSubmitted ?? true,
         };
       },
       async open() {},

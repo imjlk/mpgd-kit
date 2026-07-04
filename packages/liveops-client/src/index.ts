@@ -36,6 +36,69 @@ export interface LiveOpsBackendApi {
   readonly leaderboard: LeaderboardRecordApi;
 }
 
+export const liveOpsBackendEndpoints = {
+  verifyPurchase: '/liveops/purchases/verify',
+  claimAdReward: '/liveops/ad-rewards/claim',
+  recordLeaderboardScore: '/liveops/leaderboard/record',
+} as const;
+
+export type LiveOpsBackendEndpoint =
+  (typeof liveOpsBackendEndpoints)[keyof typeof liveOpsBackendEndpoints];
+
+export interface LiveOpsBackendTransportRequest<TBody = unknown> {
+  readonly method: 'POST';
+  readonly endpoint: LiveOpsBackendEndpoint;
+  readonly body: TBody;
+}
+
+export interface LiveOpsBackendTransportResponse<TBody = unknown> {
+  readonly status: number;
+  readonly body: TBody;
+}
+
+export interface LiveOpsBackendTransport {
+  send(request: LiveOpsBackendTransportRequest): Promise<LiveOpsBackendTransportResponse>;
+}
+
+export interface CreateLiveOpsHttpBackendApiInput {
+  readonly transport: LiveOpsBackendTransport;
+}
+
+export interface CreateLiveOpsFetchBackendTransportInput {
+  readonly baseUrl: string;
+  readonly fetch?: LiveOpsFetch;
+  readonly headers?: Record<string, string>;
+}
+
+export type LiveOpsFetch = (
+  url: string,
+  init: {
+    readonly method: 'POST';
+    readonly headers: Record<string, string>;
+    readonly body: string;
+  },
+) => Promise<LiveOpsFetchResponse>;
+
+export interface LiveOpsFetchResponse {
+  readonly ok: boolean;
+  readonly status: number;
+  text(): Promise<string>;
+}
+
+export class LiveOpsBackendError extends Error {
+  readonly endpoint: LiveOpsBackendEndpoint;
+  readonly status: number;
+  readonly body: unknown;
+
+  constructor(endpoint: LiveOpsBackendEndpoint, status: number, body: unknown) {
+    super(`LiveOps backend request failed: ${endpoint} ${status}`);
+    this.name = 'LiveOpsBackendError';
+    this.endpoint = endpoint;
+    this.status = status;
+    this.body = body;
+  }
+}
+
 export interface LiveOpsClient {
   purchase(input: LiveOpsPurchaseInput): Promise<LiveOpsPurchaseResult>;
   claimRewardedAd(input: LiveOpsRewardedAdInput): Promise<LiveOpsRewardedAdResult>;
@@ -177,6 +240,67 @@ export function createLiveOpsClient(input: CreateLiveOpsClientInput): LiveOpsCli
   };
 }
 
+export function createLiveOpsHttpBackendApi(
+  input: CreateLiveOpsHttpBackendApiInput,
+): LiveOpsBackendApi {
+  return {
+    purchases: {
+      async verifyPurchase(body) {
+        return sendLiveOpsBackendRequest<VerifyPurchaseRequest, VerifyPurchaseResponse>(
+          input.transport,
+          liveOpsBackendEndpoints.verifyPurchase,
+          body,
+        );
+      },
+    },
+    adRewards: {
+      async claimAdReward(body) {
+        return sendLiveOpsBackendRequest<ClaimAdRewardRequest, ClaimAdRewardResponse>(
+          input.transport,
+          liveOpsBackendEndpoints.claimAdReward,
+          body,
+        );
+      },
+    },
+    leaderboard: {
+      async recordScore(body) {
+        return sendLiveOpsBackendRequest<
+          RecordLeaderboardScoreRequest,
+          RecordLeaderboardScoreResponse
+        >(
+          input.transport,
+          liveOpsBackendEndpoints.recordLeaderboardScore,
+          body,
+        );
+      },
+    },
+  };
+}
+
+export function createLiveOpsFetchBackendTransport(
+  input: CreateLiveOpsFetchBackendTransportInput,
+): LiveOpsBackendTransport {
+  const fetcher = input.fetch ?? readGlobalFetch();
+
+  return {
+    async send(request) {
+      const response = await fetcher(joinUrl(input.baseUrl, request.endpoint), {
+        method: request.method,
+        headers: {
+          ...(input.headers ?? {}),
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify(request.body),
+      });
+
+      return {
+        status: response.status,
+        body: await readFetchResponseBody(response),
+      };
+    },
+  };
+}
+
 export function createLiveOpsIdempotencyKey(input: {
   readonly target: PlatformTarget;
   readonly playerId: string;
@@ -195,4 +319,46 @@ export function createLiveOpsIdempotencyKey(input: {
 
 function normalizeSegment(value: string): string {
   return value.replaceAll(/[^a-zA-Z0-9_-]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 64);
+}
+
+async function sendLiveOpsBackendRequest<TRequest, TResponse>(
+  transport: LiveOpsBackendTransport,
+  endpoint: LiveOpsBackendEndpoint,
+  body: TRequest,
+): Promise<TResponse> {
+  const response = await transport.send({
+    method: 'POST',
+    endpoint,
+    body,
+  });
+
+  if (response.status < 200 || response.status >= 300) {
+    throw new LiveOpsBackendError(endpoint, response.status, response.body);
+  }
+
+  return response.body as TResponse;
+}
+
+function readGlobalFetch(): LiveOpsFetch {
+  const fetcher = (globalThis as { readonly fetch?: LiveOpsFetch }).fetch;
+
+  if (fetcher === undefined) {
+    throw new Error('globalThis.fetch is unavailable. Provide a LiveOps fetch implementation.');
+  }
+
+  return fetcher;
+}
+
+async function readFetchResponseBody(response: LiveOpsFetchResponse): Promise<unknown> {
+  const text = await response.text();
+
+  if (text.length === 0) {
+    return null;
+  }
+
+  return JSON.parse(text);
+}
+
+function joinUrl(baseUrl: string, endpoint: LiveOpsBackendEndpoint): string {
+  return `${baseUrl.replace(/\/+$/g, '')}${endpoint}`;
 }

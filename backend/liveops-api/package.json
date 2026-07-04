@@ -1,0 +1,40 @@
+{
+  "name": "@mpgd/backend-liveops-api",
+  "version": "0.0.0",
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix",
+    "test": "cd ../.. && node tools/run-ttsx.mjs backend/liveops-api/src/index.test.ts"
+  },
+  "dependencies": {
+    "@mpgd/ad-placements": "workspace:*",
+    "@mpgd/backend-ad-reward-ledger": "workspace:*",
+    "@mpgd/backend-entitlement-ledger": "workspace:*",
+    "@mpgd/backend-leaderboard-ledger": "workspace:*",
+    "@mpgd/backend-purchase-verifier": "workspace:*",
+    "@mpgd/liveops-client": "workspace:*",
+    "@mpgd/product-catalog": "workspace:*"
+  },
+  "devDependencies": {
+    "ttsc": "0.16.9",
+    "typescript": "7.0.1-rc"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  }
+}

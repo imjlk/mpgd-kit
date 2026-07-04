@@ -1,7 +1,13 @@
 import type { ProductInfo } from '@mpgd/monetization-contract';
 import type { PlatformGateway } from '@mpgd/platform-contract';
 
-import { createLiveOpsClient, createLiveOpsIdempotencyKey } from './index';
+import {
+  createLiveOpsClient,
+  createLiveOpsFetchBackendTransport,
+  createLiveOpsHttpBackendApi,
+  createLiveOpsIdempotencyKey,
+  liveOpsBackendEndpoints,
+} from './index';
 
 let purchaseClaims = 0;
 let rewardClaims = 0;
@@ -101,6 +107,115 @@ assertEqual(leaderboard.platformSubmitted, true, 'leaderboard should submit to p
 assertEqual(purchaseClaims, 2, 'purchase backend should be called for both attempts');
 assertEqual(rewardClaims, 1, 'reward backend should be called after platform reward');
 assertEqual(scoreRecords, 1, 'leaderboard backend should be called after platform submit');
+
+const transportCalls: string[] = [];
+const httpBackend = createLiveOpsHttpBackendApi({
+  transport: {
+    async send(request) {
+      transportCalls.push(request.endpoint);
+
+      switch (request.endpoint) {
+        case liveOpsBackendEndpoints.verifyPurchase:
+          return {
+            status: 200,
+            body: {
+              verified: true,
+              ledgerEntryId: 'http-purchase-ledger',
+              alreadyProcessed: false,
+            },
+          };
+        case liveOpsBackendEndpoints.claimAdReward:
+          return {
+            status: 200,
+            body: {
+              granted: true,
+              ledgerEntryId: 'http-reward-ledger',
+              alreadyProcessed: false,
+            },
+          };
+        case liveOpsBackendEndpoints.recordLeaderboardScore:
+          return {
+            status: 200,
+            body: {
+              submitted: true,
+              ledgerEntryId: 'http-score-ledger',
+              alreadyProcessed: false,
+              rank: 1,
+            },
+          };
+      }
+    },
+  },
+});
+const httpPurchase = await httpBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId,
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-http',
+  idempotencyKey: 'http-purchase',
+  purchasedAt: '2026-07-03T00:00:04.000Z',
+});
+const httpScore = await httpBackend.leaderboard.recordScore({
+  target: 'android',
+  playerId,
+  leaderboardId: 'default',
+  score: 4321,
+  runId: 'run-http',
+  submittedAt: '2026-07-03T00:00:05.000Z',
+});
+
+assertEqual(httpPurchase.verified, true, 'http backend should verify purchase');
+assertEqual(httpScore.submitted, true, 'http backend should record score');
+assertEqual(
+  transportCalls.join(','),
+  [
+    liveOpsBackendEndpoints.verifyPurchase,
+    liveOpsBackendEndpoints.recordLeaderboardScore,
+  ].join(','),
+  'http backend should route to typed endpoints',
+);
+
+let fetchUrl = '';
+const fetchBackend = createLiveOpsHttpBackendApi({
+  transport: createLiveOpsFetchBackendTransport({
+    baseUrl: 'https://liveops.test/api/',
+    async fetch(url, init) {
+      fetchUrl = url;
+      assertEqual(init.method, 'POST', 'fetch transport should use POST');
+      assertEqual(
+        init.headers['content-type'],
+        'application/json',
+        'fetch transport should send JSON',
+      );
+
+      return {
+        ok: true,
+        status: 200,
+        async text() {
+          return JSON.stringify({
+            granted: true,
+            ledgerEntryId: 'fetch-reward-ledger',
+            alreadyProcessed: false,
+          });
+        },
+      };
+    },
+  }),
+});
+const fetchReward = await fetchBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId,
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: 'fetch-reward',
+  completedAt: '2026-07-03T00:00:06.000Z',
+});
+
+assertEqual(fetchReward.granted, true, 'fetch backend should decode JSON response');
+assertEqual(
+  fetchUrl,
+  'https://liveops.test/api/liveops/ad-rewards/claim',
+  'fetch transport should join base URL and endpoint',
+);
 
 console.log('LiveOps client vertical slice smoke test passed.');
 

@@ -36,5 +36,8 @@ fixed = [[
   "npm/@mpgd/capacitor-game-services",
   "npm/@mpgd/backend-purchase-verifier",
   "npm/@mpgd/backend-entitlement-ledger",
-  "npm/@mpgd/backend-ad-reward-ledger"
+  "npm/@mpgd/backend-ad-reward-ledger",
+  "npm/@mpgd/backend-leaderboard-ledger",
+  "npm/@mpgd/backend-liveops-api",
+  "npm/@mpgd/liveops-client"
 ]]
