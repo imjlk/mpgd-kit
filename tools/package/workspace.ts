@@ -20,10 +20,16 @@ export interface WorkspacePackage {
   readonly name: string;
 }
 
-const publishableRoots = ['packages', 'adapters', 'native-plugins', 'backend'];
+const packageRoots = ['packages', 'adapters', 'native-plugins', 'backend'];
+
+export function discoverBuildablePackages(): WorkspacePackage[] {
+  return packageRoots
+    .flatMap((root) => discoverPackagesInRoot(root))
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
 
 export function discoverPublishablePackages(): WorkspacePackage[] {
-  return publishableRoots
+  return packageRoots
     .flatMap((root) => discoverPackagesInRoot(root))
     .filter((workspacePackage) => workspacePackage.packageJson.private !== true)
     .sort((left, right) => left.name.localeCompare(right.name));

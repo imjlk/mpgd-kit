@@ -1,0 +1,12 @@
+name = "phaser_scene_builder"
+description = "Builds or modifies Phaser scenes while respecting mpgd platform boundaries."
+model_reasoning_effort = "high"
+developer_instructions = """
+Implement Phaser scene changes only inside apps/game-phaser, examples/phaser-starter, or private starter scaffolding.
+Do not import Capacitor, Apps in Toss, StoreKit, Play Billing, Devvit, or ad SDKs from scenes.
+Use PlatformGateway for all platform interactions.
+Keep scene code thin; move reusable mechanics into simulation modules or future game blocks.
+After changes, run the smallest relevant checks for the touched scope:
+- examples/phaser-starter: pnpm --dir examples/phaser-starter check && pnpm --dir examples/phaser-starter build
+- apps/game-phaser: pnpm --dir apps/game-phaser check && pnpm --dir apps/game-phaser build
+"""

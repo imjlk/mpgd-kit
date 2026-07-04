@@ -16,6 +16,7 @@ distribution target gets the right adapter and validation path.
 - Effective target config bundles for products, ad placements, storage, release profile, and localization.
 - Paraglide-backed `@mpgd/i18n` translation-key/message catalog.
 - Ledger-first game-services backend contracts, client orchestration, in-memory store, D1 store, HTTP endpoints, oRPC v2 beta procedures, and Cloudflare Worker starter.
+- Agent-facing Phaser starter manifest, Codex custom agents, repository skills, and Apps in Toss MCP adapter workflow guidance.
 - Target artifact smoke tests, package pack smoke tests, public-readiness checks, and ttsc graph presets.
 
 ## Quick Start
@@ -55,7 +56,8 @@ pnpm graph:demo
   leaderboard submission, and backend ledger flow.
 
 See [Game Development Guide](docs/GAME_DEVELOPMENT.md) for boundaries and the
-starter workflow.
+starter workflow. See [Agentic Game Workflow](docs/AGENTIC_GAME_WORKFLOW.md) for
+Codex agents, skills, starter manifests, and Apps in Toss MCP guidance.
 
 ## Package Map
 
@@ -156,6 +158,7 @@ pnpm validate:target-config
 pnpm validate:effective-config
 pnpm validate:targets
 pnpm validate:game-assets
+pnpm validate:starter-workflow
 pnpm smoke:i18n
 pnpm smoke:target-config
 pnpm smoke:effective-config

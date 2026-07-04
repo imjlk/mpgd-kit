@@ -1,0 +1,85 @@
+{
+  "$schema": "./game.manifest.schema.json",
+  "id": "mpgd.phaser-starter",
+  "version": "0.1.0",
+  "engine": "phaser-4",
+  "intent": "Minimal mpgd starter showing platform, target-config, i18n, game-services, asset, and simulation boundaries.",
+  "targets": ["web-preview", "android", "ios", "ait"],
+  "futureTargets": ["reddit"],
+  "agentWorkflow": {
+    "brief": "agent/brief.template.md",
+    "acceptance": "agent/acceptance.md",
+    "mcp": [
+      {
+        "target": "ait",
+        "server": "apps-in-toss",
+        "queries": ["웹뷰 개발", "인앱 결제", "인앱 광고", "샌드박스", "심사", "저장소"]
+      }
+    ]
+  },
+  "blocks": [
+    {
+      "id": "runtime.scene.shell",
+      "kind": "scene",
+      "entry": "src/scenes/StarterScene.ts",
+      "capabilities": ["scene-shell", "i18n", "target-summary"],
+      "gotchas": [
+        "Keep dense HUD or settings in DOM overlays for downstream games.",
+        "Do not make the scene the source of truth for progression."
+      ]
+    },
+    {
+      "id": "simulation.loop.phase",
+      "kind": "simulation",
+      "entry": "src/game/simulation/state.ts",
+      "capabilities": ["deterministic-state", "fixed-boundary"],
+      "gotchas": [
+        "Save serializable state only.",
+        "Do not store Phaser objects in simulation state."
+      ]
+    },
+    {
+      "id": "platform.gateway.target-config",
+      "kind": "platform",
+      "entry": "src/platform/installStarterPlatform.ts",
+      "capabilities": ["platform-gateway", "effective-target-config", "feature-availability"],
+      "gotchas": [
+        "Keep SDK imports out of starter scenes.",
+        "Use target-config as the source of feature availability."
+      ]
+    },
+    {
+      "id": "services.backend.game-services",
+      "kind": "service",
+      "entry": "src/platform/gameServices.ts",
+      "capabilities": ["ledger-first", "http-transport", "orpc-transport"],
+      "gotchas": [
+        "Treat platform callbacks as evidence, not grants.",
+        "Require backend ledger APIs for purchase, ad reward, and leaderboard records."
+      ]
+    },
+    {
+      "id": "assets.manifest.stable-keys",
+      "kind": "asset",
+      "entry": "src/game/assets/manifest.ts",
+      "capabilities": ["stable-asset-keys", "public-assets"],
+      "gotchas": [
+        "Do not let raw file names become the gameplay API.",
+        "Register every runtime asset in the manifest."
+      ]
+    }
+  ],
+  "acceptance": {
+    "commands": [
+      "pnpm validate:starter-workflow",
+      "pnpm check",
+      "pnpm --dir examples/phaser-starter check",
+      "pnpm --dir examples/phaser-starter build"
+    ],
+    "manual": [
+      "Target, player, effective config, and backend mode render on the starter screen.",
+      "Pointer or Enter starts the play scene.",
+      "The play scene updates from serializable simulation state."
+    ]
+  }
+}

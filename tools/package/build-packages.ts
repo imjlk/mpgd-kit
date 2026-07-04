@@ -11,10 +11,10 @@ import {
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 
-import { discoverPublishablePackages, sortByWorkspaceDependencies } from './workspace';
+import { discoverBuildablePackages, sortByWorkspaceDependencies } from './workspace';
 
 const cacheDir = join('node_modules', '.cache', 'mpgd-package-build');
-const packages = discoverPublishablePackages();
+const packages = discoverBuildablePackages();
 const packagePaths = Object.fromEntries(
   packages.map((workspacePackage) => [
     workspacePackage.name,
