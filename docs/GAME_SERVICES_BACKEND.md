@@ -145,6 +145,24 @@ internal Cloudflare Worker-to-Worker calls.
 - Apps in Toss rewarded ads must follow `loadFullScreenAd` then `showFullScreenAd`;
   rewards are tied to `userEarnedReward`, not `dismissed`.
 
+## Production Gaps
+
+This repository provides the reusable contract, client orchestration, backend
+ledger boundary, memory/D1 store implementations, and a deployable Worker
+starter. Game-specific production integrations still need these pieces:
+
+- Google Play purchase token verification, acknowledgement, and consume flows.
+- App Store Server API or signed StoreKit transaction verification.
+- AdMob server-side verification callbacks for rewarded ads.
+- Apps in Toss production IAP/ad verification and partner backend callbacks.
+- Real product, ad placement, leaderboard, app, and bundle identifiers.
+- Cloudflare D1 provisioning plus `MPGD_STORE = "d1"` for persistent Worker
+  deployments.
+
+The sample catalog, sample ad placements, in-process backend, and Worker memory
+store are intentionally starter defaults. They are safe for local smoke tests,
+but should not be treated as production entitlement verification.
+
 ## Smoke
 
 ```sh

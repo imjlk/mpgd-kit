@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
@@ -41,6 +42,8 @@ const requiredIgnorePatterns = [
   'artifacts/',
   'release-output/',
   'output/',
+  '.turbo/',
+  '.wrangler/',
   '.env',
   '.env.*',
   '*.pem',
@@ -49,15 +52,88 @@ const requiredIgnorePatterns = [
   '*.jks',
   '*.keystore',
   '*.mobileprovision',
+  'apps/target-ait/.granite/',
+  'apps/target-ait/public/game/',
+  'apps/mobile-capacitor/www/',
+  'apps/mobile-capacitor/android/.gradle/',
+  'apps/mobile-capacitor/android/local.properties',
+  'apps/mobile-capacitor/android/**/build/',
+  'apps/mobile-capacitor/ios/**/build/',
+  'apps/mobile-capacitor/ios/**/xcuserdata/',
+  'apps/mobile-capacitor/ios/**/.swiftpm/',
+  'native-plugins/*/android/build/',
+  'native-plugins/*/ios/.build/',
 ];
 
 const publishableRoots = ['packages', 'adapters', 'native-plugins', 'backend'];
 const allowedGeneratedSourcePrefixes = [
+  'apps/game-phaser/src/vite-env.d.ts',
   'packages/i18n/src/paraglide/',
   'packages/i18n/src/paraglideAdapter.',
 ];
+const blockedTrackedGeneratedPrefixes = [
+  'artifacts/',
+  'release-output/',
+  'output/',
+  'apps/target-ait/public/game/',
+  'apps/mobile-capacitor/www/',
+  'apps/game-services-worker/dist/',
+];
+const binaryFileExtensions = [
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.ico',
+  '.jar',
+  '.keystore',
+  '.mobileprovision',
+  '.pdf',
+  '.zip',
+  '.tgz',
+];
+const secretPatterns = [
+  {
+    label: 'private key material',
+    pattern: /-----BEGIN (?:RSA |DSA |EC |OPENSSH |)?PRIVATE KEY-----/,
+  },
+  {
+    label: 'npm token',
+    pattern: /npm_[A-Za-z0-9]{30,}/,
+  },
+  {
+    label: 'GitHub token',
+    pattern: /gh[pousr]_[A-Za-z0-9_]{30,}/,
+  },
+  {
+    label: 'Google API key',
+    pattern: /AIza[0-9A-Za-z_-]{30,}/,
+  },
+  {
+    label: 'Cloudflare API token',
+    pattern: /[A-Za-z0-9_-]{40,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}/,
+  },
+];
+const manualGateMessages = {
+  sampleAds:
+    'Sample AdMob placement IDs are present; confirm README/docs mark them sample-only or replace them before production release.',
+  sampleProducts:
+    'Sample product catalog IDs are present; confirm they are intentional starter IDs or replace them with store product IDs.',
+  d1Placeholder:
+    'Cloudflare Worker D1 database_id is a placeholder; create/bind D1 before production deploy or keep the Worker documented as memory-only starter.',
+  mockPaths:
+    'Mock/demo-only platform paths are visible; confirm known limitations explain that real store/ad verification is not bundled yet.',
+  githubSettings:
+    'Confirm GitHub repository settings: branch protection, Actions permissions, issue/discussion settings, and repository topics.',
+  deploymentSecrets:
+    'Confirm deployment secrets: NPM_TOKEN, Cloudflare account/API token, Android signing secrets, iOS signing credentials, and Apps in Toss release credentials.',
+  secretScan:
+    'Run an external secret scanner such as gitleaks before changing repository visibility.',
+} as const;
 
 const failures: string[] = [];
+const manualGates: string[] = [];
 
 for (const file of requiredFiles) {
   if (!existsSync(file)) {
@@ -89,6 +165,11 @@ for (const root of publishableRoots) {
   collectSourceGeneratedArtifacts(root);
 }
 
+collectTrackedGeneratedArtifacts();
+collectTrackedGeneratedSourceArtifacts();
+collectSecretFindings();
+collectManualReleaseGates();
+
 if (failures.length > 0) {
   throw new Error(`Public readiness failed:\n- ${failures.join('\n- ')}`);
 }
@@ -96,6 +177,10 @@ if (failures.length > 0) {
 console.log(
   `Public readiness passed: ${discoverPublishablePackages().length} publishable packages`,
 );
+
+if (manualGates.length > 0) {
+  console.log(`Manual public release gates:\n- ${manualGates.join('\n- ')}`);
+}
 
 function readPackageJson(path: string): PackageMetadata {
   return JSON.parse(readFileSync(path, 'utf8')) as PackageMetadata;
@@ -165,6 +250,91 @@ function collectSourceGeneratedArtifacts(root: string): void {
 
     failures.push(`Generated source artifact should not be committed: ${entry}`);
   }
+}
+
+function collectTrackedGeneratedArtifacts(): void {
+  for (const file of gitLsFiles()) {
+    if (blockedTrackedGeneratedPrefixes.some((prefix) => file.startsWith(prefix))) {
+      failures.push(`Generated release/build artifact should not be tracked: ${file}`);
+    }
+  }
+}
+
+function collectTrackedGeneratedSourceArtifacts(): void {
+  for (const file of gitLsFiles()) {
+    if (!file.includes('/src/')) {
+      continue;
+    }
+
+    if (!file.endsWith('.js') && !file.endsWith('.d.ts')) {
+      continue;
+    }
+
+    if (allowedGeneratedSourcePrefixes.some((prefix) => file.startsWith(prefix))) {
+      continue;
+    }
+
+    failures.push(`Generated source artifact should not be tracked: ${file}`);
+  }
+}
+
+function collectSecretFindings(): void {
+  for (const file of gitLsFiles()) {
+    if (binaryFileExtensions.some((extension) => file.endsWith(extension))) {
+      continue;
+    }
+
+    const content = readFileSync(file, 'utf8');
+
+    for (const secret of secretPatterns) {
+      if (secret.pattern.test(content)) {
+        failures.push(`Potential ${secret.label} committed in ${file}`);
+      }
+    }
+  }
+}
+
+function collectManualReleaseGates(): void {
+  const adPlacements = readFileIfExists('packages/ad-placements/placements.json');
+  const productCatalog = readFileIfExists('packages/product-catalog/catalog.json');
+  const workerConfig = readFileIfExists('apps/game-services-worker/wrangler.toml');
+  const aitBridge = readFileIfExists('apps/target-ait/src/aitBridge.ts');
+  const i18nMessages = [
+    readFileIfExists('packages/i18n/messages/en.json'),
+    readFileIfExists('packages/i18n/messages/ko.json'),
+  ].join('\n');
+
+  if (/ca-app-pub-xxx|ca-app-pub-yyy/.test(adPlacements)) {
+    manualGates.push(manualGateMessages.sampleAds);
+  }
+
+  if (/coins_100|remove_ads/.test(productCatalog)) {
+    manualGates.push(manualGateMessages.sampleProducts);
+  }
+
+  if (workerConfig.includes('<replace-with-wrangler-d1-create-output>')) {
+    manualGates.push(manualGateMessages.d1Placeholder);
+  }
+
+  if (aitBridge.includes('ait-mock') || i18nMessages.includes('mock only')) {
+    manualGates.push(manualGateMessages.mockPaths);
+  }
+
+  manualGates.push(manualGateMessages.githubSettings);
+  manualGates.push(manualGateMessages.deploymentSecrets);
+  manualGates.push(manualGateMessages.secretScan);
+}
+
+function readFileIfExists(path: string): string {
+  return existsSync(path) ? readFileSync(path, 'utf8') : '';
+}
+
+function gitLsFiles(): string[] {
+  return execFileSync('git', ['ls-files'], {
+    encoding: 'utf8',
+  })
+    .split(/\r?\n/)
+    .filter((file) => file.length > 0);
 }
 
 function walk(root: string): string[] {
