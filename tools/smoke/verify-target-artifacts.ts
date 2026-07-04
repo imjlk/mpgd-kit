@@ -28,6 +28,10 @@ const requiredArtifacts: Record<SmokeTarget, string> = {
   reddit: 'apps/target-devvit/dist/client/index.html',
 };
 
+const extraRequiredArtifacts: Partial<Record<SmokeTarget, readonly string[]>> = {
+  reddit: ['apps/target-devvit/dist/server/index.cjs'],
+};
+
 export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = requiredTargets): void {
   const manifest = assertReleaseManifest(readJsonFile('artifacts/release-manifest.json'));
 
@@ -40,6 +44,10 @@ export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = required
 
     const expectedArtifact = requiredArtifacts[target];
     assertPathExists(expectedArtifact, `${target} artifact`);
+
+    for (const extraArtifact of extraRequiredArtifacts[target] ?? []) {
+      assertPathExists(extraArtifact, `${target} required artifact`);
+    }
 
     if (entry.artifact.length === 0) {
       throw new Error(`Release manifest target ${target} has an empty artifact path.`);

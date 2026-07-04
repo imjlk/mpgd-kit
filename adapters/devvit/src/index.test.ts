@@ -276,6 +276,69 @@ describe('adapter-devvit', () => {
     }
   });
 
+  it('prefers newer local fallback storage over stale server storage', async () => {
+    const localItems = new Map<string, string>();
+    const localStorageMock = {
+      getItem(key: string) {
+        return localItems.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        localItems.set(key, value);
+      },
+      removeItem(key: string) {
+        localItems.delete(key);
+      },
+    } as Storage;
+    const bridge: DevvitBridge = {
+      async request(input) {
+        if (input.method === 'storage.save') {
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              saved: false,
+            },
+          };
+        }
+
+        if (input.method === 'storage.load') {
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              coins: 1,
+            },
+          };
+        }
+
+        return {
+          id: input.id,
+          ok: true,
+          data: {},
+        };
+      },
+    };
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'build-reddit',
+      bridge,
+    });
+
+    vi.stubGlobal('localStorage', localStorageMock);
+
+    try {
+      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+
+      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
+        value: {
+          coins: 7,
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('treats missing Devvit storage save status as an unconfirmed save', async () => {
     const bridge: DevvitBridge = {
       async request(input) {

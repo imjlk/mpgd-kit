@@ -8,6 +8,7 @@ const redisKeyComponentPattern = /^[A-Za-z0-9:_-]{1,128}$/;
 const leaderboardUpdateMaxAttempts = 3;
 const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
+const leaderboardLockRetryBudgetMs = leaderboardLockTtlMs;
 
 app.disable('x-powered-by');
 app.use(helmet());
@@ -212,7 +213,16 @@ async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
   }
 
   const payload = optionalObjectPayload(input.payload) as { readonly value?: unknown };
-  await redis.set(key, JSON.stringify(payload.value ?? null));
+
+  try {
+    await redis.set(key, JSON.stringify(payload.value ?? null));
+  } catch (error) {
+    console.warn(`devvit storage save was not persisted for key ${key}: ${errorMessage(error)}`);
+
+    return ok(input, {
+      saved: false,
+    });
+  }
 
   return ok(input, {
     saved: true,
@@ -303,13 +313,16 @@ async function submitMaxLeaderboardScore(
   score: number,
 ): Promise<boolean> {
   const lockKey = leaderboardLockKey(redisKey, playerId);
+  const startedAt = Date.now();
+  let attempt = 0;
 
-  for (let attempt = 0; attempt < leaderboardUpdateMaxAttempts; attempt += 1) {
+  while (Date.now() - startedAt <= leaderboardLockRetryBudgetMs) {
     const lockToken = createLockToken();
     const acquiredLock = await acquireLeaderboardLock(lockKey, lockToken);
 
     if (!acquiredLock) {
-      await delay(leaderboardBackoffBaseMs * (attempt + 1));
+      await delay(nextLeaderboardRetryDelay(attempt, startedAt));
+      attempt += 1;
       continue;
     }
 
@@ -324,13 +337,16 @@ async function submitMaxLeaderboardScore(
         return true;
       }
 
-      await delay(leaderboardBackoffBaseMs * (attempt + 1));
+      await delay(nextLeaderboardRetryDelay(attempt, startedAt));
+      attempt += 1;
     } finally {
       await releaseLeaderboardLock(lockKey, lockToken);
     }
   }
 
-  throw new Error('Failed to update Devvit leaderboard score after lock contention.');
+  console.warn(`devvit leaderboard lock contention exceeded retry budget for key: ${lockKey}`);
+
+  return false;
 }
 
 function leaderboardLockKey(redisKey: string, playerId: string): string {
@@ -420,8 +436,20 @@ function delay(ms: number): Promise<void> {
   });
 }
 
+function nextLeaderboardRetryDelay(attempt: number, startedAt: number): number {
+  const elapsed = Date.now() - startedAt;
+  const remaining = Math.max(0, leaderboardLockRetryBudgetMs - elapsed);
+  const backoff = leaderboardBackoffBaseMs * (attempt + 1);
+
+  return Math.min(backoff, remaining);
+}
+
 function isValidRedisKeyComponent(value: string): boolean {
   return redisKeyComponentPattern.test(value);
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function currentPlayerId(): string | undefined {

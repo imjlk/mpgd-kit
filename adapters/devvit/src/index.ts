@@ -103,8 +103,9 @@ export function createDevvitPlatformGateway(
     storage: {
       async load(payload) {
         const value = await request<unknown | null>('storage.load', payload);
+        const fallback = loadDevvitStorageFallback(payload.key);
 
-        return value === null ? loadDevvitStorageFallback(payload.key) : { value };
+        return fallback ?? (value === null ? null : { value });
       },
       async save(payload) {
         const result = await request<DevvitStorageSaveResponse>('storage.save', payload);
