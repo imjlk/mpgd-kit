@@ -12,6 +12,10 @@ export const defaultDevvitBridgeEndpoint = '/api/mpgd/bridge';
 type BridgeErrorResponse = Extract<BridgeResponse, { readonly ok: false }>;
 type DevvitStorageSaveResponse = {
   readonly saved?: boolean;
+  readonly playerId?: string;
+};
+type DevvitPlayerResponse = {
+  readonly playerId?: string;
 };
 
 const devvitFallbackStoragePrefix = 'mpgd:devvit:fallback:';
@@ -45,6 +49,8 @@ export interface DevvitPlatformGatewayOptions {
 export function createDevvitPlatformGateway(
   input: DevvitPlatformGatewayOptions,
 ): PlatformGateway {
+  let lastResolvedStorageFallbackNamespace: string | undefined;
+
   async function request<TData>(method: BridgeMethod, payload: unknown): Promise<TData> {
     const bridge =
       input.bridge ??
@@ -102,16 +108,51 @@ export function createDevvitPlatformGateway(
     },
     storage: {
       async load(payload) {
-        const value = await request<unknown | null>('storage.load', payload);
-        const fallback = loadDevvitStorageFallback(payload.key);
+        let value: unknown | null;
+
+        try {
+          value = await request<unknown | null>('storage.load', payload);
+        } catch (error) {
+          const fallback = await loadStorageFallback(payload.key, {
+            useCachedNamespaceOnFailure: true,
+          });
+
+          if (fallback !== null) {
+            return fallback;
+          }
+
+          throw error;
+        }
+
+        const fallback = await loadStorageFallback(payload.key, {
+          useCachedNamespaceOnFailure: false,
+        });
 
         return fallback ?? (value === null ? null : { value });
       },
       async save(payload) {
-        const result = await request<DevvitStorageSaveResponse>('storage.save', payload);
+        let result: DevvitStorageSaveResponse;
+
+        try {
+          result = await request<DevvitStorageSaveResponse>('storage.save', payload);
+        } catch (error) {
+          if (
+            await saveStorageFallback(payload, undefined, {
+              useCachedNamespaceOnFailure: true,
+            })
+          ) {
+            return;
+          }
+
+          throw error;
+        }
 
         if (result.saved !== true) {
-          if (saveDevvitStorageFallback(payload)) {
+          if (
+            await saveStorageFallback(payload, result.playerId, {
+              useCachedNamespaceOnFailure: false,
+            })
+          ) {
             return;
           }
 
@@ -120,10 +161,87 @@ export function createDevvitPlatformGateway(
           );
         }
 
-        removeDevvitStorageFallback(payload.key);
+        await removeStorageFallback(payload.key, result.playerId);
       },
     },
   };
+
+  async function loadStorageFallback(
+    key: string,
+    options: { readonly useCachedNamespaceOnFailure: boolean },
+  ): Promise<{ readonly value: unknown } | null> {
+    if (!hasDevvitStorageFallbackCandidate(key, input.appVersion)) {
+      return null;
+    }
+
+    const namespace = await resolveNamespace(undefined, options);
+
+    return namespace === undefined ? null : loadDevvitStorageFallback(key, namespace);
+  }
+
+  async function saveStorageFallback(
+    payload: { readonly key: string; readonly value: unknown },
+    playerId: string | undefined,
+    options: { readonly useCachedNamespaceOnFailure: boolean },
+  ): Promise<boolean> {
+    const namespace = await resolveNamespace(playerId, options);
+
+    return namespace === undefined ? false : saveDevvitStorageFallback(payload, namespace);
+  }
+
+  async function removeStorageFallback(key: string, playerId?: string): Promise<void> {
+    const namespace = await resolveNamespace(playerId, {
+      useCachedNamespaceOnFailure: true,
+    });
+
+    if (namespace === undefined) {
+      console.warn(
+        `devvit storage fallback cleanup skipped due to unresolved namespace for key: ${key}`,
+      );
+    }
+
+    removeDevvitStorageFallback(key, namespace);
+  }
+
+  async function resolveNamespace(
+    playerId: string | undefined,
+    options: { readonly useCachedNamespaceOnFailure: boolean },
+  ): Promise<string | undefined> {
+    const namespace = storageFallbackNamespaceFromPlayerId(playerId);
+
+    if (namespace !== undefined) {
+      lastResolvedStorageFallbackNamespace = namespace;
+      return namespace;
+    }
+
+    try {
+      const resolvedNamespace = await resolveStorageFallbackNamespace();
+      lastResolvedStorageFallbackNamespace = resolvedNamespace;
+      return resolvedNamespace;
+    } catch (error) {
+      console.warn(`devvit storage fallback namespace resolution failed: ${errorMessage(error)}`);
+
+      return options.useCachedNamespaceOnFailure ? lastResolvedStorageFallbackNamespace : undefined;
+    }
+  }
+
+  async function resolveStorageFallbackNamespace(): Promise<string> {
+    const player = await request<DevvitPlayerResponse | null>('identity.getPlayer', {});
+    const playerId =
+      player !== null && typeof player.playerId === 'string' && player.playerId.length > 0
+        ? player.playerId
+        : 'anonymous';
+
+    return devvitStorageFallbackNamespace(input.appVersion, playerId);
+  }
+
+  function storageFallbackNamespaceFromPlayerId(
+    playerId: string | undefined,
+  ): string | undefined {
+    return playerId !== undefined && playerId.length > 0
+      ? devvitStorageFallbackNamespace(input.appVersion, playerId)
+      : undefined;
+  }
 }
 
 export function createDevvitFetchBridge(input: {
@@ -330,14 +448,17 @@ function ok(input: BridgeRequest, data: unknown): BridgeResponse {
   };
 }
 
-function loadDevvitStorageFallback(key: string): { readonly value: unknown } | null {
+function loadDevvitStorageFallback(
+  key: string,
+  namespace: string,
+): { readonly value: unknown } | null {
   const storage = browserLocalStorage();
 
   if (storage === undefined) {
     return null;
   }
 
-  const fallbackKey = devvitStorageFallbackKey(key);
+  const fallbackKey = devvitStorageFallbackKey(key, namespace);
   const stored = storage.getItem(fallbackKey);
 
   if (stored === null) {
@@ -354,10 +475,13 @@ function loadDevvitStorageFallback(key: string): { readonly value: unknown } | n
   }
 }
 
-function saveDevvitStorageFallback(input: {
-  readonly key: string;
-  readonly value: unknown;
-}): boolean {
+function saveDevvitStorageFallback(
+  input: {
+    readonly key: string;
+    readonly value: unknown;
+  },
+  namespace: string,
+): boolean {
   const storage = browserLocalStorage();
 
   if (storage === undefined) {
@@ -365,22 +489,55 @@ function saveDevvitStorageFallback(input: {
   }
 
   try {
-    storage.setItem(devvitStorageFallbackKey(input.key), JSON.stringify(input.value));
+    storage.setItem(devvitStorageFallbackKey(input.key, namespace), JSON.stringify(input.value));
     return true;
   } catch {
     return false;
   }
 }
 
-function removeDevvitStorageFallback(key: string): void {
+function removeDevvitStorageFallback(key: string, namespace: string | undefined): void {
   const storage = browserLocalStorage();
 
   if (storage !== undefined) {
-    storage.removeItem(devvitStorageFallbackKey(key));
+    if (namespace !== undefined) {
+      storage.removeItem(devvitStorageFallbackKey(key, namespace));
+    }
+
+    storage.removeItem(legacyDevvitStorageFallbackKey(key));
   }
 }
 
-function devvitStorageFallbackKey(key: string): string {
+function hasDevvitStorageFallbackCandidate(key: string, appVersion: string): boolean {
+  const storage = browserLocalStorage();
+
+  if (storage === undefined) {
+    return false;
+  }
+
+  const prefix = `${devvitFallbackStoragePrefix}${encodeURIComponent(appVersion)}:`;
+  const suffix = `:${encodeURIComponent(key)}`;
+
+  for (let index = 0; index < storage.length; index += 1) {
+    const candidate = storage.key(index);
+
+    if (candidate?.startsWith(prefix) === true && candidate.endsWith(suffix)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function devvitStorageFallbackNamespace(appVersion: string, playerId: string): string {
+  return `${encodeURIComponent(appVersion)}:${encodeURIComponent(playerId)}`;
+}
+
+function devvitStorageFallbackKey(key: string, namespace: string): string {
+  return `${devvitFallbackStoragePrefix}${namespace}:${encodeURIComponent(key)}`;
+}
+
+function legacyDevvitStorageFallbackKey(key: string): string {
   return `${devvitFallbackStoragePrefix}${encodeURIComponent(key)}`;
 }
 

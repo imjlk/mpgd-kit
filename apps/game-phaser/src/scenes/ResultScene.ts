@@ -326,8 +326,13 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
-    await this.platform.leaderboard.open({ leaderboardId: this.effectiveLeaderboardId() });
-    this.setStatus(m.leaderboard_opened({}, { locale: this.state.locale }));
+    try {
+      await this.platform.leaderboard.open({ leaderboardId: this.effectiveLeaderboardId() });
+      this.setStatus(m.leaderboard_opened({}, { locale: this.state.locale }));
+    } catch (error) {
+      console.warn(`leaderboard open failed: ${errorMessage(error)}`);
+      this.setStatus(this.unavailableMessage('leaderboard'));
+    }
   }
 
   private setStatus(message: string): void {
@@ -468,4 +473,8 @@ function actionLabel(locale: MpgdLocale, feature: PlatformFeature): string {
     case 'localization':
       return m.action_localization({}, { locale });
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

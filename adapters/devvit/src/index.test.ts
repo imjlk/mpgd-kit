@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 
 import {
   createDevvitFetchBridge,
@@ -227,6 +227,12 @@ describe('adapter-devvit', () => {
       removeItem(key: string) {
         localItems.delete(key);
       },
+      key(index: number) {
+        return [...localItems.keys()][index] ?? null;
+      },
+      get length() {
+        return localItems.size;
+      },
     } as Storage;
     const bridge: DevvitBridge = {
       async request(input) {
@@ -288,6 +294,12 @@ describe('adapter-devvit', () => {
       removeItem(key: string) {
         localItems.delete(key);
       },
+      key(index: number) {
+        return [...localItems.keys()][index] ?? null;
+      },
+      get length() {
+        return localItems.size;
+      },
     } as Storage;
     const bridge: DevvitBridge = {
       async request(input) {
@@ -309,6 +321,174 @@ describe('adapter-devvit', () => {
               coins: 1,
             },
           };
+        }
+
+        return {
+          id: input.id,
+          ok: true,
+          data: {},
+        };
+      },
+    };
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'build-reddit',
+      bridge,
+    });
+
+    vi.stubGlobal('localStorage', localStorageMock);
+
+    try {
+      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+
+      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
+        value: {
+          coins: 7,
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('namespaces local fallback storage by Devvit player', async () => {
+    const localItems = new Map<string, string>();
+    const localStorageMock = {
+      getItem(key: string) {
+        return localItems.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        localItems.set(key, value);
+      },
+      removeItem(key: string) {
+        localItems.delete(key);
+      },
+      key(index: number) {
+        return [...localItems.keys()][index] ?? null;
+      },
+      get length() {
+        return localItems.size;
+      },
+    } as Storage;
+    let currentPlayerId = 'reddit-player-a';
+    const bridge: DevvitBridge = {
+      async request(input) {
+        if (input.method === 'identity.getPlayer') {
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              playerId: currentPlayerId,
+            },
+          };
+        }
+
+        if (input.method === 'storage.save') {
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              saved: false,
+              playerId: currentPlayerId,
+            },
+          };
+        }
+
+        if (input.method === 'storage.load') {
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              coins: 1,
+            },
+          };
+        }
+
+        return {
+          id: input.id,
+          ok: true,
+          data: {},
+        };
+      },
+    };
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'build-reddit',
+      bridge,
+    });
+
+    vi.stubGlobal('localStorage', localStorageMock);
+
+    try {
+      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+
+      currentPlayerId = 'reddit-player-b';
+      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
+        value: {
+          coins: 1,
+        },
+      });
+
+      currentPlayerId = 'reddit-player-a';
+      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
+        value: {
+          coins: 7,
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('uses namespaced fallback storage when Devvit storage load fails', async () => {
+    const localItems = new Map<string, string>();
+    const localStorageMock = {
+      getItem(key: string) {
+        return localItems.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        localItems.set(key, value);
+      },
+      removeItem(key: string) {
+        localItems.delete(key);
+      },
+      key(index: number) {
+        return [...localItems.keys()][index] ?? null;
+      },
+      get length() {
+        return localItems.size;
+      },
+    } as Storage;
+    const bridge: DevvitBridge = {
+      async request(input) {
+        if (input.method === 'identity.getPlayer') {
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              playerId: 'reddit-player-a',
+            },
+          };
+        }
+
+        if (input.method === 'storage.save') {
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              saved: false,
+              playerId: 'reddit-player-a',
+            },
+          };
+        }
+
+        if (input.method === 'storage.load') {
+          return createBridgeError(
+            input.id,
+            'DEVVIT_BRIDGE_HTTP_ERROR',
+            'Devvit storage load failed.',
+            true,
+          );
         }
 
         return {

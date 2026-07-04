@@ -16,8 +16,22 @@
   },
   "permissions": {
     "redis": true,
+    "reddit": {
+      "enable": true
+    },
     "payments": false,
     "realtime": false
+  },
+  "menu": {
+    "items": [
+      {
+        "label": "Create mpgd game post",
+        "description": "Create a playable mpgd-kit Phaser post.",
+        "forUserType": "moderator",
+        "location": "subreddit",
+        "endpoint": "/internal/menu/create-post"
+      }
+    ]
   },
   "scripts": {
     "dev": "pnpm dev:prepare && pnpm build:server -- --watch",

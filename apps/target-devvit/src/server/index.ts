@@ -1,10 +1,12 @@
-import { createServer, context, getServerPort, redis } from '@devvit/web/server';
+import { createServer, context, getServerPort, reddit, redis } from '@devvit/web/server';
 import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 import express, { type Request, type Response } from 'express';
 import helmet from 'helmet';
 
 const app = express();
 const redisKeyComponentPattern = /^[A-Za-z0-9:_-]{1,128}$/;
+const maxStorageKeyLength = 128;
+const maxEncodedStorageKeyLength = 384;
 const leaderboardUpdateMaxAttempts = 3;
 const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
@@ -13,6 +15,34 @@ const leaderboardLockRetryBudgetMs = leaderboardLockTtlMs;
 app.disable('x-powered-by');
 app.use(helmet());
 app.use(express.json({ limit: '1mb' }));
+
+app.post('/internal/menu/create-post', async (_request: Request, response: Response): Promise<void> => {
+  try {
+    const post = await reddit.submitCustomPost({
+      title: 'mpgd-kit Phaser demo',
+      entry: 'default',
+      textFallback: {
+        text: 'Open this Reddit custom post to play the mpgd-kit Phaser demo.',
+      },
+      postData: {
+        source: 'mpgd-kit',
+        createdBy: 'devvit-menu',
+      },
+    });
+
+    response.status(200).json({
+      ok: true,
+      postId: post.id,
+      url: post.url,
+    });
+  } catch (error) {
+    console.error(`devvit custom post creation failed: ${errorMessage(error)}`, error);
+    response.status(500).json({
+      ok: false,
+      error: 'Devvit custom post creation failed.',
+    });
+  }
+});
 
 app.post('/api/mpgd/bridge', async (request: Request, response: Response): Promise<void> => {
   let bridgeRequest: BridgeRequest;
@@ -104,8 +134,14 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
       });
 
     case 'ads.preload':
-    case 'leaderboard.open':
       return ok(input, {});
+
+    case 'leaderboard.open':
+      return createBridgeError(
+        input.id,
+        'DEVVIT_LEADERBOARD_OPEN_UNAVAILABLE',
+        'Devvit leaderboard display is not implemented yet.',
+      );
 
     case 'ads.showRewarded':
       return ok(input, {
@@ -163,11 +199,11 @@ async function submitLeaderboardScore(input: BridgeRequest): Promise<BridgeRespo
   }
 
   const redisKey = leaderboardKey(leaderboardId);
-  const highScoreUpdated = await submitMaxLeaderboardScore(redisKey, playerId, payload.score);
+  const scoreUpdate = await submitMaxLeaderboardScore(redisKey, playerId, payload.score);
 
   return ok(input, {
-    submitted: true,
-    highScoreUpdated,
+    submitted: scoreUpdate !== 'failed',
+    highScoreUpdated: scoreUpdate === 'updated',
   });
 }
 
@@ -221,11 +257,13 @@ async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
 
     return ok(input, {
       saved: false,
+      playerId,
     });
   }
 
   return ok(input, {
     saved: true,
+    playerId,
   });
 }
 
@@ -277,11 +315,17 @@ function storageKey(input: BridgeRequest, playerId: string): string | BridgeResp
     return createBridgeError(input.id, 'INVALID_STORAGE_KEY', 'Storage key is required.');
   }
 
-  if (!isValidRedisKeyComponent(payload.key)) {
-    return createBridgeError(input.id, 'INVALID_STORAGE_KEY', 'Storage key format is invalid.');
+  if (payload.key.length > maxStorageKeyLength) {
+    return createBridgeError(input.id, 'INVALID_STORAGE_KEY', 'Storage key is too long.');
   }
 
-  return `mpgd:save:${playerId}:${encodeURIComponent(payload.key)}`;
+  const encodedKey = encodeURIComponent(payload.key);
+
+  if (encodedKey.length > maxEncodedStorageKeyLength) {
+    return createBridgeError(input.id, 'INVALID_STORAGE_KEY', 'Encoded storage key is too long.');
+  }
+
+  return `mpgd:save:${encodeURIComponent(playerId)}:${encodedKey}`;
 }
 
 function leaderboardIdFromPayload(
@@ -311,7 +355,7 @@ async function submitMaxLeaderboardScore(
   redisKey: string,
   playerId: string,
   score: number,
-): Promise<boolean> {
+): Promise<'updated' | 'unchanged' | 'failed'> {
   const lockKey = leaderboardLockKey(redisKey, playerId);
   const startedAt = Date.now();
   let attempt = 0;
@@ -330,11 +374,11 @@ async function submitMaxLeaderboardScore(
       const currentScore = await redis.zScore(redisKey, playerId);
 
       if (currentScore !== undefined && score <= currentScore) {
-        return false;
+        return 'unchanged';
       }
 
       if (await writeLeaderboardScoreIfLockHeld(lockKey, lockToken, redisKey, playerId, score)) {
-        return true;
+        return 'updated';
       }
 
       await delay(nextLeaderboardRetryDelay(attempt, startedAt));
@@ -346,7 +390,7 @@ async function submitMaxLeaderboardScore(
 
   console.warn(`devvit leaderboard lock contention exceeded retry budget for key: ${lockKey}`);
 
-  return false;
+  return 'failed';
 }
 
 function leaderboardLockKey(redisKey: string, playerId: string): string {
