@@ -145,10 +145,6 @@ async function submitLeaderboardScore(input: BridgeRequest): Promise<BridgeRespo
     return leaderboardId;
   }
 
-  if (playerId === undefined) {
-    return createBridgeError(input.id, 'DEVVIT_AUTH_REQUIRED', 'Devvit user identity is required.');
-  }
-
   if (typeof payload.score !== 'number' || !Number.isFinite(payload.score)) {
     return createBridgeError(
       input.id,
@@ -157,11 +153,18 @@ async function submitLeaderboardScore(input: BridgeRequest): Promise<BridgeRespo
     );
   }
 
+  if (playerId === undefined) {
+    return ok(input, {
+      submitted: false,
+    });
+  }
+
   const redisKey = leaderboardKey(leaderboardId);
-  const submitted = await submitMaxLeaderboardScore(redisKey, playerId, payload.score);
+  const highScoreUpdated = await submitMaxLeaderboardScore(redisKey, playerId, payload.score);
 
   return ok(input, {
-    submitted,
+    submitted: true,
+    highScoreUpdated,
   });
 }
 
