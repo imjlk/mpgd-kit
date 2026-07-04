@@ -13,12 +13,11 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@mpgd/ad-placements": "workspace:*",
     "@mpgd/adapter-browser": "workspace:*",
-    "@mpgd/game-services-client": "workspace:*",
+    "@mpgd/catalog": "workspace:*",
+    "@mpgd/game-services": "workspace:*",
     "@mpgd/i18n": "workspace:*",
-    "@mpgd/platform-contract": "workspace:*",
-    "@mpgd/product-catalog": "workspace:*",
+    "@mpgd/platform": "workspace:*",
     "@mpgd/target-config": "workspace:*",
     "phaser": "4.2.0"
   },

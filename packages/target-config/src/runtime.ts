@@ -1,4 +1,4 @@
-import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform-contract';
+import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform';
 
 import type { EffectiveTargetConfig } from './effective';
 

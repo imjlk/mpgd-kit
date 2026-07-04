@@ -1,6 +1,6 @@
-import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge-protocol';
+import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
-import type { PlatformGateway, PlatformTarget } from '@mpgd/platform-contract';
+import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
 export interface NativeBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;

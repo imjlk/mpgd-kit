@@ -1,9 +1,9 @@
-import type { ProductInfo } from '@mpgd/monetization-contract';
 import {
   createUnsupportedCapabilities,
   type PlatformGateway,
   type PlayerIdentity,
-} from '@mpgd/platform-contract';
+  type ProductInfo,
+} from '@mpgd/platform';
 
 const mockProducts = [
   {

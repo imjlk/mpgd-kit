@@ -1,5 +1,9 @@
-import type { AdPlacementEntry, AdPlacements } from '@mpgd/ad-placements';
-import type { ProductCatalog, ProductCatalogEntry } from '@mpgd/product-catalog';
+import type {
+  AdPlacementEntry,
+  AdPlacements,
+  ProductCatalog,
+  ProductCatalogEntry,
+} from '@mpgd/catalog';
 
 import type {
   FeatureAvailabilityReason,

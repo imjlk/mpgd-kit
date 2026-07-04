@@ -37,8 +37,8 @@ These packages must stay independent of Phaser, DOM, network calls, and platform
 - `packages/game-economy`
 - `packages/game-save`
 - `packages/game-anti-cheat`
-- `packages/product-catalog`
-- `packages/ad-placements`
+- `packages/catalog`
+- `packages/analytics`
 
 ## Platform SDK Boundary
 

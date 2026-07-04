@@ -1,7 +1,7 @@
 import {
   createGameServicesOrpcBackendApi,
   createGameServicesOrpcClient,
-} from '@mpgd/game-services-client';
+} from '@mpgd/game-services';
 
 import { createWorkerFetchHandler, createWorkerService } from './handler.js';
 

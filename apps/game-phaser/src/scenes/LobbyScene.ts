@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 
 import { m, type MpgdLocale } from '@mpgd/i18n';
-import type { PlatformGateway } from '@mpgd/platform-contract';
+import type { PlatformGateway } from '@mpgd/platform';
 import type { FeatureAvailabilityReason, PlatformFeature } from '@mpgd/target-config';
 
 import { loadDemoState, type DemoState } from '../platform/demoState';

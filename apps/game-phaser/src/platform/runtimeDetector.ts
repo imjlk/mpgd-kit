@@ -1,4 +1,4 @@
-import type { PlatformTarget } from '@mpgd/platform-contract';
+import type { PlatformTarget } from '@mpgd/platform';
 
 export interface RuntimeConfig {
   readonly target: PlatformTarget;

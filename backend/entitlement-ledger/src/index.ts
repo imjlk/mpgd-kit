@@ -1,4 +1,4 @@
-import type { ProductGrant } from '@mpgd/product-catalog';
+import type { ProductGrant } from '@mpgd/catalog';
 
 export type PurchaseIdempotencyKey = string;
 export type AdRewardIdempotencyKey = string;

@@ -1,4 +1,4 @@
-import type { LeaderboardScoreInput } from '@mpgd/leaderboard-contract';
+import type { LeaderboardScoreInput } from '@mpgd/platform';
 
 export type LeaderboardLedgerTarget = 'browser' | 'android' | 'ios' | 'ait';
 

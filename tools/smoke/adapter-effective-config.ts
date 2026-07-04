@@ -1,16 +1,10 @@
+import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import type { AdPlacements } from '@mpgd/catalog';
+import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform';
+
 import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
-import type { AdPlacements } from '../../packages/ad-placements/src/index';
-import type {
-  BridgeMethod,
-  BridgeRequest,
-  BridgeResponse,
-} from '../../packages/bridge-protocol/src/index';
-import type {
-  PlatformCapabilities,
-  PlatformGateway,
-} from '../../packages/platform-contract/src/index';
 import {
   getEffectiveAdPlacementConfig,
   getEffectiveProductConfig,
@@ -30,7 +24,7 @@ const targetConfigMatrix = readJsonFile(
 ) as TargetConfigMatrix;
 const effectiveConfigMatrix =
   loadEffectiveTargetConfigMatrix() as EffectiveTargetConfigMatrix;
-const adPlacements = readJsonFile('packages/ad-placements/placements.json') as AdPlacements;
+const adPlacements = readJsonFile('packages/catalog/placements.json') as AdPlacements;
 const targetAdPlacements = adPlacements.placements.map((placement) => ({
   id: placement.id,
   type: placement.type,

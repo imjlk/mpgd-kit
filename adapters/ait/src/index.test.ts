@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge-protocol';
+import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
 
 import { createAitPlatformGateway, createAitSandboxBridge, type GamePlatformBridge } from './index';
 

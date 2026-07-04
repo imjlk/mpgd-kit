@@ -1,8 +1,8 @@
+import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
+import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
+
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
-import type { AdPlacements } from '../../packages/ad-placements/src/index';
 import { resolveMpgdLocale } from '../../packages/i18n/src/index';
-import type { PlatformGateway, PlatformTarget } from '../../packages/platform-contract/src/index';
-import type { ProductCatalog } from '../../packages/product-catalog/src/index';
 import {
   createEffectiveTargetConfig,
   getEffectiveAdPlacementConfig,
@@ -21,8 +21,8 @@ import { readJsonFile } from '../io';
 const targetConfigMatrix = readJsonFile(
   'packages/target-config/targets.json',
 ) as TargetConfigMatrix;
-const adPlacements = readJsonFile('packages/ad-placements/placements.json') as AdPlacements;
-const productCatalog = readJsonFile('packages/product-catalog/catalog.json') as ProductCatalog;
+const adPlacements = readJsonFile('packages/catalog/placements.json') as AdPlacements;
+const productCatalog = readJsonFile('packages/catalog/catalog.json') as ProductCatalog;
 
 const platformFeatures = [
   'iap',

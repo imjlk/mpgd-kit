@@ -1,0 +1,35 @@
+{
+  "version": "2026-07-03",
+  "placements": [
+    {
+      "id": "CONTINUE_AFTER_FAIL",
+      "type": "rewarded",
+      "reward": {
+        "type": "continue",
+        "amount": 1
+      },
+      "frequencyCap": {
+        "cooldownSeconds": 60,
+        "maxPerSession": 3
+      },
+      "platformPlacementIds": {
+        "android": "ca-app-pub-xxx/reward_continue",
+        "ios": "ca-app-pub-yyy/reward_continue",
+        "ait": "ait_reward_continue"
+      }
+    },
+    {
+      "id": "STAGE_END_INTERSTITIAL",
+      "type": "interstitial",
+      "frequencyCap": {
+        "cooldownSeconds": 120,
+        "minStageInterval": 3
+      },
+      "platformPlacementIds": {
+        "android": "ca-app-pub-xxx/inter_stage_end",
+        "ios": "ca-app-pub-yyy/inter_stage_end",
+        "ait": "ait_inter_stage_end"
+      }
+    }
+  ]
+}

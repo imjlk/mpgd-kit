@@ -1,6 +1,6 @@
 import typia from 'typia';
 
-import type { LogicalAdPlacementId } from '@mpgd/monetization-contract';
+import type { LogicalAdPlacementId } from '@mpgd/platform';
 
 export type AdPlacementTarget = 'android' | 'ios' | 'ait';
 

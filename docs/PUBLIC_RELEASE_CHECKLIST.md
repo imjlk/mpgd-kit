@@ -61,7 +61,7 @@ pnpm smoke:target web-preview
 - [ ] Confirm Android release settings: package id, Google Play app, billing products, AdMob app/placement ids, signing keystore, and Play Games leaderboard ids.
 - [ ] Confirm iOS release settings: bundle id, App Store app, StoreKit products, AdMob app/placement ids, signing credentials, and Game Center leaderboard ids.
 - [ ] Confirm Apps in Toss release settings: app id, Toss product ids, Toss ad placement ids, review metadata, and release credentials.
-- [ ] Confirm placeholder IDs in `packages/product-catalog/catalog.json`, `packages/ad-placements/placements.json`, and `apps/game-services-worker/wrangler.toml` are either intentionally sample-only or replaced.
+- [ ] Confirm placeholder IDs in `packages/catalog/catalog.json`, `packages/catalog/placements.json`, and `apps/game-services-worker/wrangler.toml` are either intentionally sample-only or replaced.
 - [ ] Confirm README/docs state that real Google Play Billing, StoreKit/App Store Server API, AdMob SSV, and Apps in Toss production verification adapters are not bundled yet.
 - [ ] Confirm emulator smoke results are attached or explicitly skipped for the public release.
 

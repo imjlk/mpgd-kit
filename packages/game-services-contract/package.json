@@ -1,7 +1,7 @@
 {
   "name": "@mpgd/game-services-contract",
   "version": "0.0.0",
-  "description": "oRPC contract for mpgd authoritative game services APIs.",
+  "description": "Client, contract, server, store, and test helpers for authoritative mpgd game services.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -51,7 +51,5 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "private": true
 }

@@ -1,5 +1,5 @@
-import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge-protocol';
-import type { PlatformGateway } from '@mpgd/platform-contract';
+import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import type { PlatformGateway } from '@mpgd/platform';
 
 export interface GamePlatformBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;

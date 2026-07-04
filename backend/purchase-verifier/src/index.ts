@@ -1,6 +1,6 @@
 import type { EntitlementLedger } from '@mpgd/backend-entitlement-ledger';
-import type { LogicalProductId } from '@mpgd/monetization-contract';
-import type { ProductCatalog } from '@mpgd/product-catalog';
+import type { ProductCatalog } from '@mpgd/catalog';
+import type { LogicalProductId } from '@mpgd/platform';
 
 export type PurchaseIdempotencyKey = string;
 

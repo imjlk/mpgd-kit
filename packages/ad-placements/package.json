@@ -1,7 +1,7 @@
 {
   "name": "@mpgd/ad-placements",
   "version": "0.0.0",
-  "description": "Target-aware ad placement schema and fixtures for mpgd games.",
+  "description": "Product catalog and ad placement configuration schemas for mpgd games.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -29,10 +29,12 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./catalog.json": "./catalog.json",
     "./placements.json": "./placements.json"
   },
   "files": [
     "dist",
+    "catalog.json",
     "placements.json"
   ],
   "scripts": {
@@ -42,7 +44,7 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@mpgd/monetization-contract": "workspace:*",
+    "@mpgd/platform": "workspace:*",
     "typia": "rc"
   },
   "devDependencies": {
@@ -51,7 +53,5 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "private": true
 }

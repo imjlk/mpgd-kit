@@ -1,28 +1,29 @@
 import { createORPCClient } from '@orpc/client';
 import { RPCLink } from '@orpc/client/fetch';
 
-import type { ClaimAdRewardRequest, ClaimAdRewardResponse } from '@mpgd/backend-ad-reward-ledger';
+import { createAnalyticsReporter, type AnalyticsSink } from '@mpgd/analytics';
 import type {
-  RecordLeaderboardScoreRequest,
-  RecordLeaderboardScoreResponse,
-} from '@mpgd/backend-leaderboard-ledger';
-import type {
-  VerifyPurchaseRequest,
-  VerifyPurchaseResponse,
-} from '@mpgd/backend-purchase-verifier';
-import {
-  type GameServicesContractClient,
-} from '@mpgd/game-services-contract';
-import type { LeaderboardScoreInput } from '@mpgd/leaderboard-contract';
-import type {
+  LeaderboardScoreInput,
   LogicalAdPlacementId,
   LogicalProductId,
+  PlatformGateway,
+  PlatformTarget,
   PurchaseResult,
   RewardedAdResult,
-} from '@mpgd/monetization-contract';
-import type { PlatformGateway, PlatformTarget } from '@mpgd/platform-contract';
+} from '@mpgd/platform';
 
-export type GameServicesStoreTarget = Extract<PlatformTarget, 'android' | 'ios' | 'ait'>;
+import type {
+  GameServicesContractClient,
+} from './contract';
+import type {
+  ClaimAdRewardRequest,
+  ClaimAdRewardResponse,
+  GameServicesStoreTarget,
+  RecordLeaderboardScoreRequest,
+  RecordLeaderboardScoreResponse,
+  VerifyPurchaseRequest,
+  VerifyPurchaseResponse,
+} from './types';
 
 export interface PurchaseVerificationApi {
   verifyPurchase(input: VerifyPurchaseRequest): Promise<VerifyPurchaseResponse>;
@@ -124,6 +125,8 @@ export interface CreateGameServicesClientInput {
   readonly backend: GameServicesBackendApi;
   readonly playerId: string;
   readonly target: GameServicesStoreTarget;
+  readonly analytics?: AnalyticsSink;
+  readonly analyticsSessionId?: string;
   readonly now?: () => string;
 }
 
@@ -164,12 +167,27 @@ export interface GameServicesLeaderboardResult {
 
 export function createGameServicesClient(input: CreateGameServicesClientInput): GameServicesClient {
   const now = input.now ?? (() => new Date().toISOString());
+  const analytics = createAnalyticsReporter({
+    target: input.target,
+    sessionId: input.analyticsSessionId ?? input.playerId,
+    now,
+    ...(input.analytics === undefined ? {} : { sink: input.analytics }),
+  });
 
   return {
     async purchase(purchaseInput) {
       const purchase = await input.gateway.commerce.purchase(purchaseInput);
 
       if (purchase.status !== 'completed' || purchase.transactionId === undefined) {
+        await analytics.track({
+          name: purchase.status === 'completed' ? 'purchase_rejected' : 'purchase_completed',
+          properties: {
+            productId: purchaseInput.productId,
+            status: purchase.status,
+            reason: purchase.transactionId === undefined ? 'missing_transaction_id' : undefined,
+          },
+        });
+
         return {
           status: purchase.status === 'completed' ? 'rejected' : purchase.status,
           purchase,
@@ -185,20 +203,42 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         purchasedAt: now(),
       });
 
-      return {
+      const result = {
         status: verification.verified ? 'granted' : 'rejected',
         purchase,
         verification,
         ...(verification.ledgerEntryId === undefined
           ? {}
           : { ledgerEntryId: verification.ledgerEntryId }),
-      };
+      } satisfies GameServicesPurchaseResult;
+
+      await analytics.track({
+        name: verification.verified ? 'purchase_granted' : 'purchase_rejected',
+        properties: {
+          productId: purchaseInput.productId,
+          status: result.status,
+          ledgerEntryId: verification.ledgerEntryId,
+          alreadyProcessed: verification.alreadyProcessed,
+          reason: verification.reason,
+        },
+      });
+
+      return result;
     },
 
     async claimRewardedAd(rewardInput) {
       const reward = await input.gateway.ads.showRewarded(rewardInput);
 
       if (reward.status !== 'completed' || !reward.rewardGranted) {
+        await analytics.track({
+          name: reward.status === 'completed' ? 'rewarded_ad_rejected' : 'rewarded_ad_completed',
+          properties: {
+            placementId: rewardInput.placementId,
+            status: reward.status,
+            rewardGranted: reward.rewardGranted,
+          },
+        });
+
         return {
           status: reward.status === 'completed' ? 'rejected' : reward.status,
           reward,
@@ -216,18 +256,40 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         completedAt: now(),
       });
 
-      return {
+      const result = {
         status: claim.granted ? 'granted' : 'rejected',
         reward,
         claim,
         ...(claim.ledgerEntryId === undefined ? {} : { ledgerEntryId: claim.ledgerEntryId }),
-      };
+      } satisfies GameServicesRewardedAdResult;
+
+      await analytics.track({
+        name: claim.granted ? 'rewarded_ad_granted' : 'rewarded_ad_rejected',
+        properties: {
+          placementId: rewardInput.placementId,
+          status: result.status,
+          ledgerEntryId: claim.ledgerEntryId,
+          alreadyProcessed: claim.alreadyProcessed,
+          reason: claim.reason,
+        },
+      });
+
+      return result;
     },
 
     async submitLeaderboardScore(scoreInput) {
       const platformResult = await input.gateway.leaderboard.submitScore(scoreInput);
 
       if (!platformResult.submitted) {
+        await analytics.track({
+          name: 'leaderboard_submitted',
+          properties: {
+            leaderboardId: scoreInput.leaderboardId,
+            score: scoreInput.score,
+            submitted: false,
+          },
+        });
+
         return {
           submitted: false,
           platformSubmitted: false,
@@ -241,13 +303,27 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         ...scoreInput,
       });
 
-      return {
+      const result = {
         submitted: record.submitted,
         platformSubmitted: true,
         rank: record.rank,
         ledgerEntryId: record.ledgerEntryId,
         alreadyProcessed: record.alreadyProcessed,
-      };
+      } satisfies GameServicesLeaderboardResult;
+
+      await analytics.track({
+        name: 'leaderboard_recorded',
+        properties: {
+          leaderboardId: scoreInput.leaderboardId,
+          score: scoreInput.score,
+          submitted: result.submitted,
+          rank: result.rank,
+          ledgerEntryId: result.ledgerEntryId,
+          alreadyProcessed: result.alreadyProcessed,
+        },
+      });
+
+      return result;
     },
   };
 }

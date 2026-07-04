@@ -254,6 +254,10 @@ function collectSourceGeneratedArtifacts(root: string): void {
 
 function collectTrackedGeneratedArtifacts(): void {
   for (const file of gitLsFiles()) {
+    if (!existsSync(file)) {
+      continue;
+    }
+
     if (blockedTrackedGeneratedPrefixes.some((prefix) => file.startsWith(prefix))) {
       failures.push(`Generated release/build artifact should not be tracked: ${file}`);
     }
@@ -262,6 +266,10 @@ function collectTrackedGeneratedArtifacts(): void {
 
 function collectTrackedGeneratedSourceArtifacts(): void {
   for (const file of gitLsFiles()) {
+    if (!existsSync(file)) {
+      continue;
+    }
+
     if (!file.includes('/src/')) {
       continue;
     }
@@ -280,6 +288,10 @@ function collectTrackedGeneratedSourceArtifacts(): void {
 
 function collectSecretFindings(): void {
   for (const file of gitLsFiles()) {
+    if (!existsSync(file)) {
+      continue;
+    }
+
     if (binaryFileExtensions.some((extension) => file.endsWith(extension))) {
       continue;
     }
@@ -295,8 +307,8 @@ function collectSecretFindings(): void {
 }
 
 function collectManualReleaseGates(): void {
-  const adPlacements = readFileIfExists('packages/ad-placements/placements.json');
-  const productCatalog = readFileIfExists('packages/product-catalog/catalog.json');
+  const adPlacements = readFileIfExists('packages/catalog/placements.json');
+  const productCatalog = readFileIfExists('packages/catalog/catalog.json');
   const workerConfig = readFileIfExists('apps/game-services-worker/wrangler.toml');
   const aitBridge = readFileIfExists('apps/target-ait/src/aitBridge.ts');
   const i18nMessages = [

@@ -1,12 +1,12 @@
 {
-  "name": "@mpgd/platform-contract",
+  "name": "@mpgd/catalog",
   "version": "0.0.0",
-  "description": "Platform gateway contracts for mpgd browser, native, and Apps in Toss targets.",
+  "description": "Product catalog and ad placement configuration schemas for mpgd games.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/imjlk/mpgd-kit.git",
-    "directory": "packages/platform-contract"
+    "directory": "packages/catalog"
   },
   "bugs": {
     "url": "https://github.com/imjlk/mpgd-kit/issues"
@@ -28,10 +28,14 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./catalog.json": "./catalog.json",
+    "./placements.json": "./placements.json"
   },
   "files": [
-    "dist"
+    "dist",
+    "catalog.json",
+    "placements.json"
   ],
   "scripts": {
     "check": "ttsc --noEmit",
@@ -40,8 +44,8 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@mpgd/leaderboard-contract": "workspace:*",
-    "@mpgd/monetization-contract": "workspace:*"
+    "@mpgd/platform": "workspace:*",
+    "typia": "rc"
   },
   "devDependencies": {
     "ttsc": "0.16.9",

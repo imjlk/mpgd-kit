@@ -8,6 +8,6 @@
     "src/**/*.ts",
     "vite.config.ts",
     "granite.config.ts",
-    "../../packages/bridge-protocol/src/**/*.ts"
+    "../../packages/bridge/src/**/*.ts"
   ]
 }

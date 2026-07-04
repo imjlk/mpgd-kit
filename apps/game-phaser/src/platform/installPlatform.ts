@@ -1,8 +1,7 @@
-import type { AdPlacements } from '@mpgd/ad-placements';
-import adPlacementsJson from '@mpgd/ad-placements/placements.json';
-import type { PlatformGateway } from '@mpgd/platform-contract';
-import type { ProductCatalog } from '@mpgd/product-catalog';
-import productCatalogJson from '@mpgd/product-catalog/catalog.json';
+import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
+import productCatalogJson from '@mpgd/catalog/catalog.json';
+import adPlacementsJson from '@mpgd/catalog/placements.json';
+import type { PlatformGateway } from '@mpgd/platform';
 import {
   createEffectiveTargetConfig,
   getTargetConfig,

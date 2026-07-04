@@ -40,9 +40,9 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@mpgd/ad-placements": "workspace:*",
     "@mpgd/backend-entitlement-ledger": "workspace:*",
-    "@mpgd/monetization-contract": "workspace:*"
+    "@mpgd/catalog": "workspace:*",
+    "@mpgd/platform": "workspace:*"
   },
   "devDependencies": {
     "ttsc": "0.16.9",
@@ -50,7 +50,5 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "private": true
 }

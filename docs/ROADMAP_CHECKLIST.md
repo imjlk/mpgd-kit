@@ -44,12 +44,10 @@ because the current ttsc RC config loader path is more reliable with JS config f
 
 ## Phase 2 - Contracts And Typia Boundary
 
-- [x] packages/platform-contract written
-- [x] packages/monetization-contract written
-- [x] packages/leaderboard-contract written
-- [x] packages/bridge-protocol written
-- [x] packages/product-catalog written
-- [x] packages/ad-placements written
+- [x] packages/platform written
+- [x] packages/bridge written
+- [x] packages/catalog written
+- [x] packages/analytics written
 - [x] typia validators created
 - [x] tools/validate-product-catalog.ts written
 - [x] tools/validate-ad-placements.ts written
@@ -242,7 +240,7 @@ to run xcodebuild archive.
 
 ## Phase 19 - Ledger-First GameServices Vertical Slice
 
-- [x] reusable `@mpgd/game-services-client` orchestrates purchase, rewarded ad, and leaderboard flows
+- [x] reusable `@mpgd/game-services` orchestrates purchase, rewarded ad, and leaderboard flows
 - [x] purchase grants go through backend purchase verifier plus entitlement ledger
 - [x] rewarded ad grants go through backend ad reward ledger after platform reward evidence
 - [x] leaderboard submissions are recorded by backend leaderboard ledger
@@ -251,15 +249,15 @@ to run xcodebuild archive.
 
 ## Phase 20 - GameServices Backend API Boundary
 
-- [x] `@mpgd/game-services-client` exposes typed backend endpoints and transport helpers
-- [x] `@mpgd/backend-game-services` adapts the transport contract to verifier and ledger packages
+- [x] `@mpgd/game-services` exposes typed backend endpoints and transport helpers
+- [x] `@mpgd/game-services` adapts the transport contract to verifier and ledger packages
 - [x] Phaser demo uses an in-process backend handler instead of wiring ledger calls directly
 - [x] `pnpm smoke:game-services` covers duplicate idempotency, cancelled purchase, skipped ad, and failed leaderboard paths
 
 ## Phase 21 - oRPC Game Services Worker Starter
 
-- [x] `@mpgd/game-services-contract` defines the reusable oRPC v2 beta contract
-- [x] `@mpgd/backend-game-services` exposes async store-backed backend APIs, oRPC router, and fetch handlers
+- [x] `@mpgd/game-services` defines the reusable oRPC v2 beta contract
+- [x] `@mpgd/game-services` exposes async store-backed backend APIs, oRPC router, and fetch handlers
 - [x] `apps/game-services-worker` provides a Cloudflare WorkerEntrypoint starter for HTTP, oRPC, and service binding RPC
 - [x] `apps/game-services-worker` uses the Cloudflare Vite plugin for local dev, production build, preview, and deploy
 - [x] `pnpm smoke:game-services:worker` validates local Worker HTTP, oRPC, service binding, and Vite build surfaces

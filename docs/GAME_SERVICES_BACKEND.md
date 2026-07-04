@@ -3,7 +3,7 @@
 The reusable monetization and social path is ledger-first:
 
 1. A target adapter collects platform evidence.
-2. `@mpgd/game-services-client` submits that evidence to backend APIs.
+2. `@mpgd/game-services` submits that evidence to backend APIs.
 3. Backend game services decide whether a grant or score is accepted.
 4. Game save state changes only after the backend response is accepted.
 
@@ -17,25 +17,21 @@ verifier follow-ups, see
 
 ## Packages
 
-- `@mpgd/game-services-contract`: oRPC v2 beta contract for the authoritative
-  purchase, ad reward, leaderboard, and health procedures.
-- `@mpgd/game-services-client`: reusable client orchestration for purchase, rewarded ad,
-  and leaderboard score flows. It exports legacy-style JSON endpoint transport,
-  fetch transport, and an oRPC client adapter.
-- `@mpgd/backend-game-services`: authoritative backend implementation. It owns
-  the async `GameServicesStore` interface, memory store, JSON endpoint handler,
-  oRPC router, and fetch handler helpers.
+- `@mpgd/game-services`: reusable client orchestration, oRPC v2 beta contract,
+  authoritative backend implementation, async `GameServicesStore` interface,
+  memory store, JSON endpoint handler, oRPC router, fetch handler helpers, and
+  typed request/response contracts.
+- `@mpgd/analytics`: optional typed event sink used by game-services client and
+  server paths to record purchase, rewarded ad, and leaderboard outcomes.
+- `@mpgd/catalog`: product catalog and ad placement schemas consumed by the
+  game-services backend before any grant is accepted.
 - `apps/game-services-worker`: Cloudflare Worker starter. It exposes public
   `/game-services/*` JSON endpoints, `/rpc/*` oRPC procedures, `/health`, and
   `WorkerEntrypoint` methods for service binding RPC.
-- `@mpgd/backend-purchase-verifier`: verifies product availability and records
-  purchase grants in the entitlement ledger.
-- `@mpgd/backend-ad-reward-ledger`: records rewarded ad grants from completed
-  rewarded placements.
-- `@mpgd/backend-leaderboard-ledger`: records idempotent leaderboard score
-  submissions.
-- `@mpgd/backend-entitlement-ledger`: shared grant transaction types and
-  idempotency helpers used by stores.
+
+The lower-level verifier and ledger modules remain private workspace packages.
+They are implementation detail behind `@mpgd/game-services`, not packages a game
+developer needs to install directly.
 
 The in-repo demo uses an in-process backend handler with the memory
 `GameServicesStore`. Production should replace the in-process transport with
@@ -51,7 +47,7 @@ For direct JSON endpoints:
 import {
   createGameServicesFetchBackendTransport,
   createGameServicesHttpBackendApi,
-} from '@mpgd/game-services-client';
+} from '@mpgd/game-services';
 
 const backend = createGameServicesHttpBackendApi({
   transport: createGameServicesFetchBackendTransport({
@@ -66,7 +62,7 @@ For oRPC:
 import {
   createGameServicesOrpcBackendApi,
   createGameServicesOrpcClient,
-} from '@mpgd/game-services-client';
+} from '@mpgd/game-services';
 
 const backend = createGameServicesOrpcBackendApi(
   createGameServicesOrpcClient({
@@ -80,10 +76,10 @@ handler:
 
 ```ts
 import {
-  createInProcessGameServicesBackendTransport,
   createGameServicesBackendApiHandler,
-} from '@mpgd/backend-game-services';
-import { createGameServicesHttpBackendApi } from '@mpgd/game-services-client';
+  createGameServicesHttpBackendApi,
+  createInProcessGameServicesBackendTransport,
+} from '@mpgd/game-services';
 
 const backend = createGameServicesHttpBackendApi({
   transport: createInProcessGameServicesBackendTransport(

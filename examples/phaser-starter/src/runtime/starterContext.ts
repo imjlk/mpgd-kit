@@ -1,5 +1,5 @@
 import type { MpgdLocale } from '@mpgd/i18n';
-import type { PlayerIdentity } from '@mpgd/platform-contract';
+import type { PlayerIdentity } from '@mpgd/platform';
 import type {
   TargetConfiguredGateway,
   TargetRuntimeSnapshot,

@@ -3,8 +3,7 @@
   "description": "Game services oRPC contract, backend store, Worker starter, and smoke flow.",
   "expectedFiles": [
     "apps/game-services-worker/",
-    "backend/game-services/",
-    "packages/game-services-client/"
+    "packages/game-services/"
   ],
   "tsconfig": "apps/game-services-worker/tsconfig.json",
   "question": "What are the central Game Services backend flows for oRPC contracts, client adapters, backend store handlers, Cloudflare Worker fetch handlers, service binding methods, and local smoke tests?",

@@ -1,6 +1,6 @@
-import type { AdPlacements } from '@mpgd/ad-placements';
 import type { EntitlementLedger, EntitlementLedgerPayload } from '@mpgd/backend-entitlement-ledger';
-import type { LogicalAdPlacementId } from '@mpgd/monetization-contract';
+import type { AdPlacements } from '@mpgd/catalog';
+import type { LogicalAdPlacementId } from '@mpgd/platform';
 
 export type AdRewardIdempotencyKey = string;
 

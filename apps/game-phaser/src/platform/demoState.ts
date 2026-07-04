@@ -5,7 +5,7 @@ import {
   type PlatformCapabilities,
   type PlatformGateway,
   type PlayerIdentity,
-} from '@mpgd/platform-contract';
+} from '@mpgd/platform';
 import {
   isTargetConfiguredGateway,
   type EffectiveTargetConfig,

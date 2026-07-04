@@ -2,8 +2,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
-import type { AdPlacements } from '@mpgd/ad-placements';
-import type { ProductCatalog } from '@mpgd/product-catalog';
+import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 
 import {
   createEffectiveTargetConfigMatrix,
@@ -36,8 +35,8 @@ export interface WriteEffectiveTargetConfigsOptions {
 
 export function loadEffectiveTargetConfigMatrix(): EffectiveTargetConfigMatrix {
   const configMatrix = readJsonFile('packages/target-config/targets.json') as TargetConfigMatrix;
-  const catalog = readJsonFile('packages/product-catalog/catalog.json') as ProductCatalog;
-  const adPlacements = readJsonFile('packages/ad-placements/placements.json') as AdPlacements;
+  const catalog = readJsonFile('packages/catalog/catalog.json') as ProductCatalog;
+  const adPlacements = readJsonFile('packages/catalog/placements.json') as AdPlacements;
   const platformTargets = readJsonFile('platform.targets.json') as PlatformTargetsConfig;
 
   return createEffectiveTargetConfigMatrix({

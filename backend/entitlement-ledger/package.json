@@ -41,7 +41,7 @@
     "test": "cd ../.. && node tools/run-ttsx.mjs backend/entitlement-ledger/src/index.test.ts"
   },
   "dependencies": {
-    "@mpgd/product-catalog": "workspace:*"
+    "@mpgd/catalog": "workspace:*"
   },
   "devDependencies": {
     "ttsc": "0.16.9",
@@ -49,7 +49,5 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "private": true
 }

@@ -1,12 +1,12 @@
 {
-  "name": "@mpgd/product-catalog",
+  "name": "@mpgd/analytics",
   "version": "0.0.0",
-  "description": "Target-aware product catalog schema and fixtures for mpgd games.",
+  "description": "Typed analytics event schema and sink helpers for mpgd platform integrations.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/imjlk/mpgd-kit.git",
-    "directory": "packages/product-catalog"
+    "directory": "packages/analytics"
   },
   "bugs": {
     "url": "https://github.com/imjlk/mpgd-kit/issues"
@@ -28,12 +28,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./catalog.json": "./catalog.json"
+    }
   },
   "files": [
-    "dist",
-    "catalog.json"
+    "dist"
   ],
   "scripts": {
     "check": "ttsc --noEmit",
@@ -42,7 +40,7 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@mpgd/monetization-contract": "workspace:*",
+    "@mpgd/platform": "workspace:*",
     "typia": "rc"
   },
   "devDependencies": {

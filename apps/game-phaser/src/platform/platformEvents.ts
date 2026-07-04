@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 
-import type { PlatformGateway } from '@mpgd/platform-contract';
+import type { PlatformGateway } from '@mpgd/platform';
 
 export function installPlatformEvents(game: Phaser.Game, platform: PlatformGateway): void {
   const removePause = platform.lifecycle.onPause(() => {

@@ -1,4 +1,4 @@
-import { assertBridgeRequest, assertBridgeResponse } from '@mpgd/bridge-protocol';
+import { assertBridgeRequest, assertBridgeResponse } from '@mpgd/bridge';
 
 export const boundaryGuards = {
   assertBridgeRequest,

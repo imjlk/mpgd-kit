@@ -43,9 +43,8 @@
     "test": "cd ../.. && node tools/run-ttsx.mjs packages/target-config/test/target-config-smoke.ts"
   },
   "dependencies": {
-    "@mpgd/ad-placements": "workspace:*",
-    "@mpgd/platform-contract": "workspace:*",
-    "@mpgd/product-catalog": "workspace:*",
+    "@mpgd/catalog": "workspace:*",
+    "@mpgd/platform": "workspace:*",
     "typia": "rc"
   },
   "devDependencies": {

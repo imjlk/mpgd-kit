@@ -6,8 +6,8 @@ import {
   createGameServicesOrpcClient,
   type GameServicesClient,
   type GameServicesStoreTarget,
-} from '@mpgd/game-services-client';
-import type { PlatformGateway, PlatformTarget } from '@mpgd/platform-contract';
+} from '@mpgd/game-services';
+import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
 export type StarterBackendMode = 'disabled' | 'http' | 'orpc';
 

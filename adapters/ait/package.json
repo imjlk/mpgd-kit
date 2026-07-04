@@ -41,8 +41,8 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@mpgd/bridge-protocol": "workspace:*",
-    "@mpgd/platform-contract": "workspace:*"
+    "@mpgd/bridge": "workspace:*",
+    "@mpgd/platform": "workspace:*"
   },
   "devDependencies": {
     "ttsc": "0.16.9",

@@ -41,8 +41,8 @@
   },
   "dependencies": {
     "@mpgd/backend-entitlement-ledger": "workspace:*",
-    "@mpgd/monetization-contract": "workspace:*",
-    "@mpgd/product-catalog": "workspace:*"
+    "@mpgd/catalog": "workspace:*",
+    "@mpgd/platform": "workspace:*"
   },
   "devDependencies": {
     "ttsc": "0.16.9",
@@ -50,7 +50,5 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "private": true
 }

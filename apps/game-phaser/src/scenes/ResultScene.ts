@@ -1,12 +1,9 @@
 import Phaser from 'phaser';
 
 import type { FinishedStage } from '@mpgd/game-core';
-import {
-  createGameServicesIdempotencyKey,
-  type GameServicesClient,
-} from '@mpgd/game-services-client';
+import { createGameServicesIdempotencyKey, type GameServicesClient } from '@mpgd/game-services';
 import { m, type MpgdLocale } from '@mpgd/i18n';
-import type { PlatformGateway } from '@mpgd/platform-contract';
+import type { PlatformGateway } from '@mpgd/platform';
 import {
   getEffectiveAdPlacementConfig,
   getEffectiveProductConfig,

@@ -41,7 +41,7 @@
     "test": "cd ../.. && node tools/run-ttsx.mjs backend/leaderboard-ledger/src/index.test.ts"
   },
   "dependencies": {
-    "@mpgd/leaderboard-contract": "workspace:*"
+    "@mpgd/platform": "workspace:*"
   },
   "devDependencies": {
     "ttsc": "0.16.9",
@@ -49,7 +49,5 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "private": true
 }

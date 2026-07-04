@@ -1,5 +1,4 @@
-import type { ProductInfo } from '@mpgd/monetization-contract';
-import type { PlatformGateway } from '@mpgd/platform-contract';
+import type { PlatformGateway, ProductInfo } from '@mpgd/platform';
 
 import {
   createGameServicesClient,

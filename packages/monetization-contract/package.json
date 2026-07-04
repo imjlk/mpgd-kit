@@ -1,7 +1,7 @@
 {
   "name": "@mpgd/monetization-contract",
   "version": "0.0.0",
-  "description": "Shared IAP and ad monetization contracts for mpgd platform adapters.",
+  "description": "Shared platform gateway, monetization, ads, leaderboard, identity, lifecycle, and storage contracts for mpgd games.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -45,7 +45,5 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "private": true
 }

@@ -1,21 +1,18 @@
+import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import {
   createGameServicesBackendApiHandler,
-  createInMemoryGameServicesStore,
-  createInProcessGameServicesBackendTransport,
-} from '@mpgd/backend-game-services';
-import {
   createGameServicesClient,
   createGameServicesHttpBackendApi,
   createGameServicesIdempotencyKey,
-} from '@mpgd/game-services-client';
+  createInMemoryGameServicesStore,
+  createInProcessGameServicesBackendTransport,
+} from '@mpgd/game-services';
 
-import type { AdPlacements } from '../../packages/ad-placements/src/index';
-import type { ProductCatalog } from '../../packages/product-catalog/src/index';
 import { readJsonFile } from '../io';
 import { createCapableMockGateway } from './game-services/mock-gateway';
 
-const catalog = readJsonFile('packages/product-catalog/catalog.json') as ProductCatalog;
-const placements = readJsonFile('packages/ad-placements/placements.json') as AdPlacements;
+const catalog = readJsonFile('packages/catalog/catalog.json') as ProductCatalog;
+const placements = readJsonFile('packages/catalog/placements.json') as AdPlacements;
 
 for (const target of ['android', 'ios', 'ait'] as const) {
   const playerId = `${target}-player`;

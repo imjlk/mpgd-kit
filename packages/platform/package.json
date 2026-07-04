@@ -1,12 +1,12 @@
 {
-  "name": "@mpgd/bridge-protocol",
+  "name": "@mpgd/platform",
   "version": "0.0.0",
-  "description": "Typed bridge protocol for mpgd WebView and native target communication.",
+  "description": "Shared platform gateway, monetization, ads, leaderboard, identity, lifecycle, and storage contracts for mpgd games.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/imjlk/mpgd-kit.git",
-    "directory": "packages/bridge-protocol"
+    "directory": "packages/platform"
   },
   "bugs": {
     "url": "https://github.com/imjlk/mpgd-kit/issues"
@@ -37,11 +37,7 @@
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
-    "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/bridge-protocol/src/bridge-protocol.test.ts"
-  },
-  "dependencies": {
-    "typia": "rc"
+    "fix": "ttsc fix"
   },
   "devDependencies": {
     "ttsc": "0.16.9",

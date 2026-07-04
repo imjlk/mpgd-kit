@@ -1,4 +1,4 @@
-import type { PlatformCapabilities } from '@mpgd/platform-contract';
+import type { PlatformCapabilities } from '@mpgd/platform';
 
 import { baseLocale, locales, type Locale } from './paraglideAdapter.js';
 

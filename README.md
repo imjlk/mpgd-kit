@@ -59,29 +59,28 @@ starter workflow.
 
 ## Package Map
 
-- `@mpgd/platform-contract`: shared platform gateway surface.
+- `@mpgd/platform`: shared platform gateway surface.
+- `@mpgd/bridge`: typed native bridge request/response protocol.
 - `@mpgd/adapter-browser`, `@mpgd/adapter-capacitor`, `@mpgd/adapter-ait`: target adapters.
 - `@mpgd/target-config`: target runtime, capability, release profile, and platform policy availability.
-- `@mpgd/product-catalog`, `@mpgd/ad-placements`: sample catalog and ad placement config.
+- `@mpgd/catalog`: product catalog and ad placement config schemas plus sample JSON.
 - `@mpgd/i18n`: Paraglide-backed localized messages.
-- `@mpgd/game-services-contract`: oRPC v2 beta contract for backend game services.
-- `@mpgd/game-services-client`: client orchestration for purchase, rewarded ad, and leaderboard flows.
-- `@mpgd/backend-game-services`: HTTP/oRPC handlers, memory/D1 store, and backend service assembly.
-- `@mpgd/backend-purchase-verifier`, `@mpgd/backend-ad-reward-ledger`,
-  `@mpgd/backend-leaderboard-ledger`, `@mpgd/backend-entitlement-ledger`:
-  reusable ledger and verification primitives.
-- `@mpgd/release-manifest`: target release artifact manifest types and validators.
+- `@mpgd/analytics`: typed analytics events and sink helpers for platform integrations.
+- `@mpgd/game-services`: client orchestration, oRPC v2 beta contract, HTTP/oRPC handlers,
+  memory/D1 store integration points, and backend service assembly.
+- `@mpgd/capacitor-game-services`: Capacitor native plugin bridge surface.
 
-Pure game/economy/save/catalog packages do not import Phaser, DOM APIs, network
-clients, or platform SDKs. Platform SDK calls belong in adapters, native plugins,
-or target wrappers.
+Internal game/economy/save/release-manifest/backend-ledger packages stay private
+until their APIs become useful as standalone SDK surface. Pure packages do not
+import Phaser, DOM APIs, network clients, or platform SDKs. Platform SDK calls
+belong in adapters, native plugins, or target wrappers.
 
 ## Game Services Backend
 
 Reusable purchase, rewarded ad, and leaderboard flows are ledger-first:
 
 1. A target adapter collects platform evidence.
-2. `@mpgd/game-services-client` sends that evidence to backend APIs.
+2. `@mpgd/game-services` sends that evidence to backend APIs.
 3. Backend services decide whether a grant or score is accepted.
 4. Game save state changes only after the backend response is accepted.
 
@@ -116,8 +115,8 @@ pnpm smoke:target web-preview
 
 ## What Is Sample or Mock
 
-- `packages/product-catalog/catalog.json` uses sample product IDs.
-- `packages/ad-placements/placements.json` uses sample ad placement IDs.
+- `packages/catalog/catalog.json` uses sample product IDs.
+- `packages/catalog/placements.json` uses sample ad placement IDs.
 - Browser, Capacitor, and Apps in Toss adapters include mock or bridge-contract
   behavior suitable for local validation.
 - Worker `MPGD_STORE = "memory"` is a starter default, not production persistence.

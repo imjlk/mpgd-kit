@@ -14,10 +14,8 @@
     "test": "cd ../.. && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/index.test.ts"
   },
   "dependencies": {
-    "@mpgd/ad-placements": "workspace:*",
-    "@mpgd/backend-game-services": "workspace:*",
-    "@mpgd/game-services-client": "workspace:*",
-    "@mpgd/product-catalog": "workspace:*"
+    "@mpgd/catalog": "workspace:*",
+    "@mpgd/game-services": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.43.0",

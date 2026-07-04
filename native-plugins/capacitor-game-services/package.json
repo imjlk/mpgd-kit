@@ -52,7 +52,7 @@
   },
   "dependencies": {
     "@capacitor/core": "^8.4.1",
-    "@mpgd/bridge-protocol": "workspace:*"
+    "@mpgd/bridge": "workspace:*"
   },
   "devDependencies": {
     "ttsc": "0.16.9",

@@ -1,7 +1,6 @@
 import { implement } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 
-import type { AdPlacements } from '@mpgd/ad-placements';
 import {
   assertClaimAdRewardRequest,
   assertClaimAdRewardResponse,
@@ -31,19 +30,17 @@ import {
   type VerifyPurchaseRequest,
   type VerifyPurchaseResponse,
 } from '@mpgd/backend-purchase-verifier';
+import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import {
   gameServicesBackendEndpoints,
+  gameServicesContract,
   type GameServicesBackendApi,
   type GameServicesBackendEndpoint,
   type GameServicesBackendTransport,
   type GameServicesBackendTransportRequest,
   type GameServicesBackendTransportResponse,
-} from '@mpgd/game-services-client';
-import {
-  gameServicesContract,
   type GameServicesHealthResponse,
-} from '@mpgd/game-services-contract';
-import type { ProductCatalog } from '@mpgd/product-catalog';
+} from '@mpgd/game-services';
 
 type CorsHeaders = Record<string, string>;
 

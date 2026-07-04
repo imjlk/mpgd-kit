@@ -14,7 +14,7 @@ import {
   type RecordLeaderboardScoreRequest,
   type RecordLeaderboardScoreResponse,
 } from '@mpgd/backend-leaderboard-ledger';
-import type { GameServicesStore } from '@mpgd/backend-game-services';
+import type { GameServicesStore } from '@mpgd/game-services';
 
 type EntitlementRow = {
   ledger_entry_id: string;

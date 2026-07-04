@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 
-import type { PlatformGateway } from '@mpgd/platform-contract';
+import type { PlatformGateway } from '@mpgd/platform';
 
 import { installPlatformEvents } from '../platform/platformEvents';
 import { sceneRegistry } from './sceneRegistry';

@@ -1,9 +1,11 @@
-import type { ProductInfo, PurchaseResult, RewardedAdResult } from '@mpgd/monetization-contract';
 import {
   createUnsupportedCapabilities,
   type PlatformGateway,
   type PlatformTarget,
-} from '@mpgd/platform-contract';
+  type ProductInfo,
+  type PurchaseResult,
+  type RewardedAdResult,
+} from '@mpgd/platform';
 
 export function createCapableMockGateway(input: {
   readonly target: Extract<PlatformTarget, 'android' | 'ios' | 'ait'>;

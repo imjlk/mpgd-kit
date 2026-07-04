@@ -1,12 +1,12 @@
 import typia from 'typia';
 
-import type { ProductCatalog } from '@mpgd/product-catalog';
+import type { ProductCatalog } from '@mpgd/catalog';
 
 import { isCliEntrypoint, readJsonFile } from './io';
 
 const assertProductCatalog = typia.createAssert<ProductCatalog>();
 
-export function validateProductCatalogFile(path = 'packages/product-catalog/catalog.json') {
+export function validateProductCatalogFile(path = 'packages/catalog/catalog.json') {
   const catalog = assertProductCatalog(readJsonFile(path));
   const ids = new Set<string>();
 

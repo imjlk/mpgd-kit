@@ -1,12 +1,12 @@
 {
-  "name": "@mpgd/analytics-schema",
+  "name": "@mpgd/bridge",
   "version": "0.0.0",
-  "description": "Analytics event schema package for mpgd games.",
+  "description": "Typed native bridge protocol for mpgd platform adapters.",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/imjlk/mpgd-kit.git",
-    "directory": "packages/analytics-schema"
+    "directory": "packages/bridge"
   },
   "bugs": {
     "url": "https://github.com/imjlk/mpgd-kit/issues"
@@ -37,7 +37,8 @@
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
-    "fix": "ttsc fix"
+    "fix": "ttsc fix",
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/bridge/src/bridge-protocol.test.ts"
   },
   "dependencies": {
     "typia": "rc"

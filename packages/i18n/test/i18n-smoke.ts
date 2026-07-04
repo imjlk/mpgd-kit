@@ -1,4 +1,4 @@
-import { createUnsupportedCapabilities } from '@mpgd/platform-contract';
+import { createUnsupportedCapabilities } from '@mpgd/platform';
 
 import { m, resolveMpgdLocale } from '../src/index';
 

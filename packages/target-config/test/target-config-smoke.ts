@@ -1,6 +1,5 @@
-import type { AdPlacements } from '@mpgd/ad-placements';
-import type { PlatformGateway } from '@mpgd/platform-contract';
-import type { ProductCatalog } from '@mpgd/product-catalog';
+import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
+import type { PlatformGateway } from '@mpgd/platform';
 
 import {
   createEffectiveTargetConfig,

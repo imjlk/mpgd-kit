@@ -16,29 +16,15 @@ release_date_timezone = "Asia/Seoul"
 [packages]
 ignore_unpublished = true
 fixed = [[
-  "npm/@mpgd/game-core",
-  "npm/@mpgd/game-economy",
-  "npm/@mpgd/game-save",
-  "npm/@mpgd/game-anti-cheat",
-  "npm/@mpgd/game-services-contract",
-  "npm/@mpgd/i18n",
-  "npm/@mpgd/platform-contract",
-  "npm/@mpgd/monetization-contract",
-  "npm/@mpgd/leaderboard-contract",
-  "npm/@mpgd/bridge-protocol",
-  "npm/@mpgd/product-catalog",
-  "npm/@mpgd/ad-placements",
-  "npm/@mpgd/analytics-schema",
-  "npm/@mpgd/target-config",
-  "npm/@mpgd/release-manifest",
+  "npm/@mpgd/adapter-ait",
   "npm/@mpgd/adapter-browser",
   "npm/@mpgd/adapter-capacitor",
-  "npm/@mpgd/adapter-ait",
+  "npm/@mpgd/analytics",
+  "npm/@mpgd/bridge",
   "npm/@mpgd/capacitor-game-services",
-  "npm/@mpgd/backend-purchase-verifier",
-  "npm/@mpgd/backend-entitlement-ledger",
-  "npm/@mpgd/backend-ad-reward-ledger",
-  "npm/@mpgd/backend-leaderboard-ledger",
-  "npm/@mpgd/backend-game-services",
-  "npm/@mpgd/game-services-client"
+  "npm/@mpgd/catalog",
+  "npm/@mpgd/game-services",
+  "npm/@mpgd/i18n",
+  "npm/@mpgd/platform",
+  "npm/@mpgd/target-config"
 ]]

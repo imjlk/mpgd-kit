@@ -1,17 +1,14 @@
-import type { AdPlacements } from '@mpgd/ad-placements';
-import adPlacementsJson from '@mpgd/ad-placements/placements.json';
+import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
+import productCatalogJson from '@mpgd/catalog/catalog.json';
+import adPlacementsJson from '@mpgd/catalog/placements.json';
 import {
   createGameServicesBackendApiHandler,
-  createInProcessGameServicesBackendTransport,
-} from '@mpgd/backend-game-services';
-import {
   createGameServicesClient,
   createGameServicesHttpBackendApi,
+  createInProcessGameServicesBackendTransport,
   type GameServicesClient,
-} from '@mpgd/game-services-client';
-import type { PlatformGateway, PlatformTarget } from '@mpgd/platform-contract';
-import type { ProductCatalog } from '@mpgd/product-catalog';
-import productCatalogJson from '@mpgd/product-catalog/catalog.json';
+} from '@mpgd/game-services';
+import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
 import type { DemoState } from './demoState';
 

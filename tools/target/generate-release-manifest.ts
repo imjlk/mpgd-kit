@@ -4,8 +4,7 @@ import { dirname } from 'node:path';
 
 import typia from 'typia';
 
-import type { AdPlacements } from '@mpgd/ad-placements';
-import type { ProductCatalog } from '@mpgd/product-catalog';
+import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import type { ReleaseManifest } from '@mpgd/release-manifest';
 import type { TargetConfigMatrix } from '@mpgd/target-config';
 
@@ -29,8 +28,8 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
   const targetConfig = assertTargetConfigMatrix(
     readJsonFile('packages/target-config/targets.json'),
   );
-  const catalog = assertProductCatalog(readJsonFile('packages/product-catalog/catalog.json'));
-  const adPlacements = assertAdPlacements(readJsonFile('packages/ad-placements/placements.json'));
+  const catalog = assertProductCatalog(readJsonFile('packages/catalog/catalog.json'));
+  const adPlacements = assertAdPlacements(readJsonFile('packages/catalog/placements.json'));
   const effectiveConfig = writeEffectiveTargetConfigs({ targets: [input.target] }).artifacts.find(
     (artifact) => artifact.target === input.target,
   );

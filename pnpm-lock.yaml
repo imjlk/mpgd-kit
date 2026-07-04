@@ -8,42 +8,36 @@ importers:
 
   .:
     devDependencies:
-      '@mpgd/ad-placements':
+      '@mpgd/analytics':
         specifier: workspace:*
-        version: link:packages/ad-placements
+        version: link:packages/analytics
       '@mpgd/backend-ad-reward-ledger':
         specifier: workspace:*
         version: link:backend/ad-reward-ledger
       '@mpgd/backend-entitlement-ledger':
         specifier: workspace:*
         version: link:backend/entitlement-ledger
-      '@mpgd/backend-game-services':
-        specifier: workspace:*
-        version: link:backend/game-services
       '@mpgd/backend-leaderboard-ledger':
         specifier: workspace:*
         version: link:backend/leaderboard-ledger
       '@mpgd/backend-purchase-verifier':
         specifier: workspace:*
         version: link:backend/purchase-verifier
-      '@mpgd/game-services-client':
+      '@mpgd/bridge':
         specifier: workspace:*
-        version: link:packages/game-services-client
-      '@mpgd/game-services-contract':
+        version: link:packages/bridge
+      '@mpgd/catalog':
         specifier: workspace:*
-        version: link:packages/game-services-contract
+        version: link:packages/catalog
+      '@mpgd/game-services':
+        specifier: workspace:*
+        version: link:packages/game-services
       '@mpgd/i18n':
         specifier: workspace:*
         version: link:packages/i18n
-      '@mpgd/monetization-contract':
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:packages/monetization-contract
-      '@mpgd/platform-contract':
-        specifier: workspace:*
-        version: link:packages/platform-contract
-      '@mpgd/product-catalog':
-        specifier: workspace:*
-        version: link:packages/product-catalog
+        version: link:packages/platform
       '@mpgd/release-manifest':
         specifier: workspace:*
         version: link:packages/release-manifest
@@ -86,12 +80,12 @@ importers:
 
   adapters/ait:
     dependencies:
-      '@mpgd/bridge-protocol':
+      '@mpgd/bridge':
         specifier: workspace:*
-        version: link:../../packages/bridge-protocol
-      '@mpgd/platform-contract':
+        version: link:../../packages/bridge
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../../packages/platform-contract
+        version: link:../../packages/platform
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -105,12 +99,9 @@ importers:
 
   adapters/browser:
     dependencies:
-      '@mpgd/monetization-contract':
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../../packages/monetization-contract
-      '@mpgd/platform-contract':
-        specifier: workspace:*
-        version: link:../../packages/platform-contract
+        version: link:../../packages/platform
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -124,15 +115,15 @@ importers:
 
   adapters/capacitor:
     dependencies:
-      '@mpgd/bridge-protocol':
+      '@mpgd/bridge':
         specifier: workspace:*
-        version: link:../../packages/bridge-protocol
+        version: link:../../packages/bridge
       '@mpgd/capacitor-game-services':
         specifier: workspace:*
         version: link:../../native-plugins/capacitor-game-services
-      '@mpgd/platform-contract':
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../../packages/platform-contract
+        version: link:../../packages/platform
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -146,9 +137,6 @@ importers:
 
   apps/game-phaser:
     dependencies:
-      '@mpgd/ad-placements':
-        specifier: workspace:*
-        version: link:../../packages/ad-placements
       '@mpgd/adapter-ait':
         specifier: workspace:*
         version: link:../../adapters/ait
@@ -158,36 +146,27 @@ importers:
       '@mpgd/adapter-capacitor':
         specifier: workspace:*
         version: link:../../adapters/capacitor
-      '@mpgd/backend-game-services':
+      '@mpgd/bridge':
         specifier: workspace:*
-        version: link:../../backend/game-services
-      '@mpgd/bridge-protocol':
+        version: link:../../packages/bridge
+      '@mpgd/catalog':
         specifier: workspace:*
-        version: link:../../packages/bridge-protocol
+        version: link:../../packages/catalog
       '@mpgd/game-core':
         specifier: workspace:*
         version: link:../../packages/game-core
       '@mpgd/game-save':
         specifier: workspace:*
         version: link:../../packages/game-save
-      '@mpgd/game-services-client':
+      '@mpgd/game-services':
         specifier: workspace:*
-        version: link:../../packages/game-services-client
+        version: link:../../packages/game-services
       '@mpgd/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
-      '@mpgd/leaderboard-contract':
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../../packages/leaderboard-contract
-      '@mpgd/monetization-contract':
-        specifier: workspace:*
-        version: link:../../packages/monetization-contract
-      '@mpgd/platform-contract':
-        specifier: workspace:*
-        version: link:../../packages/platform-contract
-      '@mpgd/product-catalog':
-        specifier: workspace:*
-        version: link:../../packages/product-catalog
+        version: link:../../packages/platform
       '@mpgd/target-config':
         specifier: workspace:*
         version: link:../../packages/target-config
@@ -222,18 +201,12 @@ importers:
 
   apps/game-services-worker:
     dependencies:
-      '@mpgd/ad-placements':
+      '@mpgd/catalog':
         specifier: workspace:*
-        version: link:../../packages/ad-placements
-      '@mpgd/backend-game-services':
+        version: link:../../packages/catalog
+      '@mpgd/game-services':
         specifier: workspace:*
-        version: link:../../backend/game-services
-      '@mpgd/game-services-client':
-        specifier: workspace:*
-        version: link:../../packages/game-services-client
-      '@mpgd/product-catalog':
-        specifier: workspace:*
-        version: link:../../packages/product-catalog
+        version: link:../../packages/game-services
     devDependencies:
       '@cloudflare/vite-plugin':
         specifier: ^1.43.0
@@ -315,15 +288,15 @@ importers:
 
   backend/ad-reward-ledger:
     dependencies:
-      '@mpgd/ad-placements':
-        specifier: workspace:*
-        version: link:../../packages/ad-placements
       '@mpgd/backend-entitlement-ledger':
         specifier: workspace:*
         version: link:../entitlement-ledger
-      '@mpgd/monetization-contract':
+      '@mpgd/catalog':
         specifier: workspace:*
-        version: link:../../packages/monetization-contract
+        version: link:../../packages/catalog
+      '@mpgd/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -334,9 +307,9 @@ importers:
 
   backend/entitlement-ledger:
     dependencies:
-      '@mpgd/product-catalog':
+      '@mpgd/catalog':
         specifier: workspace:*
-        version: link:../../packages/product-catalog
+        version: link:../../packages/catalog
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -347,9 +320,6 @@ importers:
 
   backend/game-services:
     dependencies:
-      '@mpgd/ad-placements':
-        specifier: workspace:*
-        version: link:../../packages/ad-placements
       '@mpgd/backend-ad-reward-ledger':
         specifier: workspace:*
         version: link:../ad-reward-ledger
@@ -362,15 +332,12 @@ importers:
       '@mpgd/backend-purchase-verifier':
         specifier: workspace:*
         version: link:../purchase-verifier
-      '@mpgd/game-services-client':
+      '@mpgd/catalog':
         specifier: workspace:*
-        version: link:../../packages/game-services-client
-      '@mpgd/game-services-contract':
+        version: link:../../packages/catalog
+      '@mpgd/game-services':
         specifier: workspace:*
-        version: link:../../packages/game-services-contract
-      '@mpgd/product-catalog':
-        specifier: workspace:*
-        version: link:../../packages/product-catalog
+        version: link:../../packages/game-services
       '@orpc/server':
         specifier: 2.0.0-beta.14
         version: 2.0.0-beta.14
@@ -384,9 +351,9 @@ importers:
 
   backend/leaderboard-ledger:
     dependencies:
-      '@mpgd/leaderboard-contract':
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../../packages/leaderboard-contract
+        version: link:../../packages/platform
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -400,12 +367,12 @@ importers:
       '@mpgd/backend-entitlement-ledger':
         specifier: workspace:*
         version: link:../entitlement-ledger
-      '@mpgd/monetization-contract':
+      '@mpgd/catalog':
         specifier: workspace:*
-        version: link:../../packages/monetization-contract
-      '@mpgd/product-catalog':
+        version: link:../../packages/catalog
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../../packages/product-catalog
+        version: link:../../packages/platform
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -416,24 +383,21 @@ importers:
 
   examples/phaser-starter:
     dependencies:
-      '@mpgd/ad-placements':
-        specifier: workspace:*
-        version: link:../../packages/ad-placements
       '@mpgd/adapter-browser':
         specifier: workspace:*
         version: link:../../adapters/browser
-      '@mpgd/game-services-client':
+      '@mpgd/catalog':
         specifier: workspace:*
-        version: link:../../packages/game-services-client
+        version: link:../../packages/catalog
+      '@mpgd/game-services':
+        specifier: workspace:*
+        version: link:../../packages/game-services
       '@mpgd/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
-      '@mpgd/platform-contract':
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../../packages/platform-contract
-      '@mpgd/product-catalog':
-        specifier: workspace:*
-        version: link:../../packages/product-catalog
+        version: link:../../packages/platform
       '@mpgd/target-config':
         specifier: workspace:*
         version: link:../../packages/target-config
@@ -462,9 +426,9 @@ importers:
       '@capacitor/core':
         specifier: ^8.4.1
         version: 8.4.1
-      '@mpgd/bridge-protocol':
+      '@mpgd/bridge':
         specifier: workspace:*
-        version: link:../../packages/bridge-protocol
+        version: link:../../packages/bridge
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -475,9 +439,9 @@ importers:
 
   packages/ad-placements:
     dependencies:
-      '@mpgd/monetization-contract':
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../monetization-contract
+        version: link:../platform
       typia:
         specifier: rc
         version: 13.0.0-rc.1(@types/node@24.13.2)
@@ -489,7 +453,23 @@ importers:
         specifier: 7.0.1-rc
         version: 7.0.1-rc
 
-  packages/analytics-schema:
+  packages/analytics:
+    dependencies:
+      '@mpgd/platform':
+        specifier: workspace:*
+        version: link:../platform
+      typia:
+        specifier: rc
+        version: 13.0.0-rc.1(@types/node@24.13.2)
+    devDependencies:
+      ttsc:
+        specifier: 0.16.9
+        version: 0.16.9
+      typescript:
+        specifier: 7.0.1-rc
+        version: 7.0.1-rc
+
+  packages/bridge:
     dependencies:
       typia:
         specifier: rc
@@ -502,8 +482,11 @@ importers:
         specifier: 7.0.1-rc
         version: 7.0.1-rc
 
-  packages/bridge-protocol:
+  packages/catalog:
     dependencies:
+      '@mpgd/platform':
+        specifier: workspace:*
+        version: link:../platform
       typia:
         specifier: rc
         version: 13.0.0-rc.1(@types/node@24.13.2)
@@ -558,42 +541,27 @@ importers:
         specifier: 7.0.1-rc
         version: 7.0.1-rc
 
-  packages/game-services-client:
+  packages/game-services:
     dependencies:
-      '@mpgd/backend-ad-reward-ledger':
+      '@mpgd/analytics':
         specifier: workspace:*
-        version: link:../../backend/ad-reward-ledger
-      '@mpgd/backend-leaderboard-ledger':
+        version: link:../analytics
+      '@mpgd/catalog':
         specifier: workspace:*
-        version: link:../../backend/leaderboard-ledger
-      '@mpgd/backend-purchase-verifier':
+        version: link:../catalog
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../../backend/purchase-verifier
-      '@mpgd/game-services-contract':
-        specifier: workspace:*
-        version: link:../game-services-contract
-      '@mpgd/leaderboard-contract':
-        specifier: workspace:*
-        version: link:../leaderboard-contract
-      '@mpgd/monetization-contract':
-        specifier: workspace:*
-        version: link:../monetization-contract
-      '@mpgd/platform-contract':
-        specifier: workspace:*
-        version: link:../platform-contract
+        version: link:../platform
       '@orpc/client':
         specifier: 2.0.0-beta.14
         version: 2.0.0-beta.14
+      '@orpc/contract':
+        specifier: 2.0.0-beta.14
+        version: 2.0.0-beta.14
+      '@orpc/server':
+        specifier: 2.0.0-beta.14
+        version: 2.0.0-beta.14
     devDependencies:
-      '@mpgd/ad-placements':
-        specifier: workspace:*
-        version: link:../ad-placements
-      '@mpgd/backend-entitlement-ledger':
-        specifier: workspace:*
-        version: link:../../backend/entitlement-ledger
-      '@mpgd/product-catalog':
-        specifier: workspace:*
-        version: link:../product-catalog
       ttsc:
         specifier: 0.16.9
         version: 0.16.9
@@ -625,9 +593,9 @@ importers:
 
   packages/i18n:
     dependencies:
-      '@mpgd/platform-contract':
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../platform-contract
+        version: link:../platform
     devDependencies:
       '@inlang/paraglide-js':
         specifier: 2.20.2
@@ -663,30 +631,7 @@ importers:
         specifier: 7.0.1-rc
         version: 7.0.1-rc
 
-  packages/platform-contract:
-    dependencies:
-      '@mpgd/leaderboard-contract':
-        specifier: workspace:*
-        version: link:../leaderboard-contract
-      '@mpgd/monetization-contract':
-        specifier: workspace:*
-        version: link:../monetization-contract
-    devDependencies:
-      ttsc:
-        specifier: 0.16.9
-        version: 0.16.9
-      typescript:
-        specifier: 7.0.1-rc
-        version: 7.0.1-rc
-
-  packages/product-catalog:
-    dependencies:
-      '@mpgd/monetization-contract':
-        specifier: workspace:*
-        version: link:../monetization-contract
-      typia:
-        specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
+  packages/platform:
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -710,15 +655,12 @@ importers:
 
   packages/target-config:
     dependencies:
-      '@mpgd/ad-placements':
+      '@mpgd/catalog':
         specifier: workspace:*
-        version: link:../ad-placements
-      '@mpgd/platform-contract':
+        version: link:../catalog
+      '@mpgd/platform':
         specifier: workspace:*
-        version: link:../platform-contract
-      '@mpgd/product-catalog':
-        specifier: workspace:*
-        version: link:../product-catalog
+        version: link:../platform
       typia:
         specifier: rc
         version: 13.0.0-rc.1(@types/node@24.13.2)

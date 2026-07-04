@@ -1,7 +1,7 @@
 {
   "name": "@mpgd/backend-game-services",
   "version": "0.0.0",
-  "description": "Authoritative backend implementation, store abstraction, and oRPC handler for mpgd game services.",
+  "description": "Client, contract, server, store, and test helpers for authoritative mpgd game services.",
   "license": "MIT",
   "repository": {
     "type": "git",
@@ -41,14 +41,12 @@
     "test": "cd ../.. && node tools/run-ttsx.mjs backend/game-services/src/index.test.ts"
   },
   "dependencies": {
-    "@mpgd/ad-placements": "workspace:*",
     "@mpgd/backend-ad-reward-ledger": "workspace:*",
     "@mpgd/backend-entitlement-ledger": "workspace:*",
     "@mpgd/backend-leaderboard-ledger": "workspace:*",
     "@mpgd/backend-purchase-verifier": "workspace:*",
-    "@mpgd/game-services-contract": "workspace:*",
-    "@mpgd/game-services-client": "workspace:*",
-    "@mpgd/product-catalog": "workspace:*",
+    "@mpgd/catalog": "workspace:*",
+    "@mpgd/game-services": "workspace:*",
     "@orpc/server": "2.0.0-beta.14"
   },
   "devDependencies": {
@@ -57,7 +55,5 @@
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "private": true
 }
