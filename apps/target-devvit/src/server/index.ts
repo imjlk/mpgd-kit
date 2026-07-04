@@ -11,15 +11,29 @@ const maxEncodedStorageKeyLength = 384;
 const leaderboardUpdateMaxAttempts = 3;
 const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
-const leaderboardLockRetryBudgetMs = leaderboardLockTtlMs;
+const leaderboardLockTtlSeconds = Math.ceil(leaderboardLockTtlMs / 1_000);
+const leaderboardLockRetryBudgetMs = leaderboardLockTtlSeconds * 1_000;
 
 app.disable('x-powered-by');
 app.use(helmet());
 app.use(express.json({ limit: '1mb' }));
 
 app.post('/internal/menu/create-post', async (_request: Request, response: Response): Promise<void> => {
+  const subredditName = currentSubredditName();
+
+  if (subredditName === undefined) {
+    response.status(200).json({
+      showToast: {
+        text: 'Could not resolve the target subreddit for this menu action.',
+        appearance: 'neutral',
+      },
+    } satisfies UiResponse);
+    return;
+  }
+
   try {
     const post = await reddit.submitCustomPost({
+      subredditName,
       title: 'mpgd-kit Phaser demo',
       entry: 'default',
       textFallback: {
@@ -203,7 +217,14 @@ async function submitLeaderboardScore(input: BridgeRequest): Promise<BridgeRespo
   }
 
   const redisKey = leaderboardKey(leaderboardId);
-  const scoreUpdate = await submitMaxLeaderboardScore(redisKey, playerId, payload.score);
+  let scoreUpdate: 'updated' | 'unchanged' | 'failed';
+
+  try {
+    scoreUpdate = await submitMaxLeaderboardScore(redisKey, playerId, payload.score);
+  } catch (error) {
+    console.warn(`devvit leaderboard score submission failed: ${errorMessage(error)}`);
+    scoreUpdate = 'failed';
+  }
 
   return ok(input, {
     submitted: scoreUpdate !== 'failed',
@@ -421,10 +442,15 @@ function createLockToken(): string {
 async function acquireLeaderboardLock(lockKey: string, lockToken: string): Promise<boolean> {
   const result = await redis.set(lockKey, lockToken, {
     nx: true,
-    expiration: new Date(Date.now() + leaderboardLockTtlMs),
+    expiration: leaderboardLockExpirationDate(),
   });
 
   return result === 'OK';
+}
+
+function leaderboardLockExpirationDate(): Date {
+  // Devvit Redis SetOptions expects a Date and converts it to Redis EX seconds internally.
+  return new Date(Date.now() + leaderboardLockTtlSeconds * 1_000);
 }
 
 async function writeLeaderboardScoreIfLockHeld(
@@ -514,6 +540,16 @@ function currentDisplayName(fallbackDisplayName: string): string {
   };
 
   return devvitContext.username ?? fallbackDisplayName;
+}
+
+function currentSubredditName(): string | undefined {
+  const devvitContext = context as {
+    readonly subredditName?: string;
+  };
+
+  return typeof devvitContext.subredditName === 'string' && devvitContext.subredditName.length > 0
+    ? devvitContext.subredditName
+    : undefined;
 }
 
 function optionalObjectPayload(payload: unknown): Record<string, unknown> {

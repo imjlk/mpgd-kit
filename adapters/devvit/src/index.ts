@@ -129,7 +129,7 @@ export function createDevvitPlatformGateway(
         }
 
         const fallback = await loadStorageFallback(payload.key, {
-          useCachedNamespaceOnFailure: false,
+          useCachedNamespaceOnFailure: true,
         });
 
         return fallback ?? (value === null ? null : { value });
