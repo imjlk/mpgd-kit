@@ -1,4 +1,5 @@
 import { createServer, context, getServerPort, reddit, redis } from '@devvit/web/server';
+import type { UiResponse } from '@devvit/web/shared';
 import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 import express, { type Request, type Response } from 'express';
 import helmet from 'helmet';
@@ -31,16 +32,19 @@ app.post('/internal/menu/create-post', async (_request: Request, response: Respo
     });
 
     response.status(200).json({
-      ok: true,
-      postId: post.id,
-      url: post.url,
-    });
+      showToast: {
+        text: `Created mpgd game post ${post.id}.`,
+        appearance: 'success',
+      },
+    } satisfies UiResponse);
   } catch (error) {
     console.error(`devvit custom post creation failed: ${errorMessage(error)}`, error);
-    response.status(500).json({
-      ok: false,
-      error: 'Devvit custom post creation failed.',
-    });
+    response.status(200).json({
+      showToast: {
+        text: 'Could not create the mpgd game post.',
+        appearance: 'neutral',
+      },
+    } satisfies UiResponse);
   }
 });
 
@@ -97,7 +101,7 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
         nativeAds: false,
         rewardedAds: false,
         interstitialAds: false,
-        nativeLeaderboard: true,
+        nativeLeaderboard: false,
         achievements: false,
         cloudSave: true,
         socialShare: true,

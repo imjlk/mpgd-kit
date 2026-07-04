@@ -5,7 +5,7 @@ import {
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
-import type { PlatformGateway } from '@mpgd/platform';
+import type { PlatformGateway, PlayerIdentity } from '@mpgd/platform';
 
 export const defaultDevvitBridgeEndpoint = '/api/mpgd/bridge';
 
@@ -81,7 +81,11 @@ export function createDevvitPlatformGateway(
     target: 'reddit',
     getCapabilities: () => request('runtime.getCapabilities', {}),
     identity: {
-      getPlayer: () => request('identity.getPlayer', {}),
+      getPlayer: async () => {
+        const player = await request<PlayerIdentity | null>('identity.getPlayer', {});
+        rememberStorageFallbackNamespace(player);
+        return player;
+      },
     },
     commerce: {
       getProducts: () => request('commerce.getProducts', {}),
@@ -215,9 +219,7 @@ export function createDevvitPlatformGateway(
     }
 
     try {
-      const resolvedNamespace = await resolveStorageFallbackNamespace();
-      lastResolvedStorageFallbackNamespace = resolvedNamespace;
-      return resolvedNamespace;
+      return await resolveStorageFallbackNamespace();
     } catch (error) {
       console.warn(`devvit storage fallback namespace resolution failed: ${errorMessage(error)}`);
 
@@ -227,12 +229,18 @@ export function createDevvitPlatformGateway(
 
   async function resolveStorageFallbackNamespace(): Promise<string> {
     const player = await request<DevvitPlayerResponse | null>('identity.getPlayer', {});
+    return rememberStorageFallbackNamespace(player);
+  }
+
+  function rememberStorageFallbackNamespace(player: DevvitPlayerResponse | null): string {
     const playerId =
       player !== null && typeof player.playerId === 'string' && player.playerId.length > 0
         ? player.playerId
         : 'anonymous';
+    const namespace = devvitStorageFallbackNamespace(input.appVersion, playerId);
+    lastResolvedStorageFallbackNamespace = namespace;
 
-    return devvitStorageFallbackNamespace(input.appVersion, playerId);
+    return namespace;
   }
 
   function storageFallbackNamespaceFromPlayerId(
@@ -350,7 +358,7 @@ export function createDevvitSandboxBridge(): DevvitBridge {
             nativeAds: false,
             rewardedAds: false,
             interstitialAds: false,
-            nativeLeaderboard: true,
+            nativeLeaderboard: false,
             achievements: false,
             cloudSave: true,
             socialShare: true,
@@ -380,8 +388,14 @@ export function createDevvitSandboxBridge(): DevvitBridge {
           });
 
         case 'ads.preload':
-        case 'leaderboard.open':
           return ok(input, {});
+
+        case 'leaderboard.open':
+          return createBridgeError(
+            input.id,
+            'DEVVIT_LEADERBOARD_OPEN_UNAVAILABLE',
+            'Devvit leaderboard display is not implemented yet.',
+          );
 
         case 'ads.showRewarded':
           return ok(input, {

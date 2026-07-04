@@ -188,6 +188,10 @@ describe('adapter-devvit', () => {
       playerId: 'reddit-sandbox-player',
       displayName: 'Reddit Sandbox Player',
     });
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeLeaderboard: false,
+      cloudSave: true,
+    });
     await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
     await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
       value: {
@@ -212,6 +216,9 @@ describe('adapter-devvit', () => {
       }),
     ).resolves.toEqual({
       submitted: true,
+    });
+    await expect(gateway.leaderboard.open({ leaderboardId: 'default' })).rejects.toMatchObject({
+      code: 'DEVVIT_LEADERBOARD_OPEN_UNAVAILABLE',
     });
   });
 
@@ -509,6 +516,92 @@ describe('adapter-devvit', () => {
     try {
       await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
 
+      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
+        value: {
+          coins: 7,
+        },
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('reuses cached identity namespace when a later Devvit storage save fails', async () => {
+    const localItems = new Map<string, string>();
+    const localStorageMock = {
+      getItem(key: string) {
+        return localItems.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        localItems.set(key, value);
+      },
+      removeItem(key: string) {
+        localItems.delete(key);
+      },
+      key(index: number) {
+        return [...localItems.keys()][index] ?? null;
+      },
+      get length() {
+        return localItems.size;
+      },
+    } as Storage;
+    let bridgeOffline = false;
+    const bridge: DevvitBridge = {
+      async request(input) {
+        if (input.method === 'identity.getPlayer') {
+          if (bridgeOffline) {
+            return createBridgeError(
+              input.id,
+              'DEVVIT_BRIDGE_NETWORK_ERROR',
+              'Devvit identity bridge failed.',
+              true,
+            );
+          }
+
+          return {
+            id: input.id,
+            ok: true,
+            data: {
+              playerId: 'reddit-player-a',
+            },
+          };
+        }
+
+        if (input.method === 'storage.save' || input.method === 'storage.load') {
+          return createBridgeError(
+            input.id,
+            'DEVVIT_BRIDGE_NETWORK_ERROR',
+            'Devvit storage bridge failed.',
+            true,
+          );
+        }
+
+        return {
+          id: input.id,
+          ok: true,
+          data: {},
+        };
+      },
+    };
+    const gateway = createDevvitPlatformGateway({
+      appVersion: '1.2.3',
+      buildId: 'build-reddit',
+      bridge,
+    });
+
+    vi.stubGlobal('localStorage', localStorageMock);
+
+    try {
+      await expect(gateway.identity.getPlayer()).resolves.toEqual({
+        playerId: 'reddit-player-a',
+      });
+
+      bridgeOffline = true;
+      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+
+      expect(localItems.get('mpgd:devvit:fallback:1.2.3:reddit-player-a:save%3Av1')).toBe(
+        JSON.stringify({ coins: 7 }),
+      );
       await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
         value: {
           coins: 7,
