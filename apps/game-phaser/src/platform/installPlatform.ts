@@ -13,6 +13,7 @@ import targetConfigMatrixJson from '@mpgd/target-config/targets.json';
 
 import type { RuntimeConfig } from './runtimeDetector';
 
+const devvitSandboxBuildId = 'devvit-sandbox';
 const targetConfigMatrix = targetConfigMatrixJson as TargetConfigMatrix;
 const adPlacements = adPlacementsJson as AdPlacements;
 const productCatalog = productCatalogJson as ProductCatalog;
@@ -58,7 +59,7 @@ export async function installPlatform(runtime: RuntimeConfig): Promise<PlatformG
       gateway = createDevvitPlatformGateway({
         appVersion: runtime.appVersion,
         buildId: runtime.buildId,
-        ...(runtime.debug ? { fallbackBridge: createDevvitSandboxBridge() } : {}),
+        ...(shouldUseDevvitSandbox(runtime) ? { fallbackBridge: createDevvitSandboxBridge() } : {}),
       });
       break;
     }
@@ -87,4 +88,8 @@ export async function installPlatform(runtime: RuntimeConfig): Promise<PlatformG
       return adPlacementTypes.get(placementId);
     },
   });
+}
+
+function shouldUseDevvitSandbox(runtime: RuntimeConfig): boolean {
+  return runtime.debug && runtime.buildId === devvitSandboxBuildId;
 }

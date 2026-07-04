@@ -97,6 +97,14 @@ const score = await backend.leaderboard.recordScore({
   runId: 'run-1',
   submittedAt: '2026-07-04T00:00:02.000Z',
 });
+const redditScore = await backend.leaderboard.recordScore({
+  target: 'reddit',
+  playerId: 'player-1',
+  leaderboardId: 'default',
+  score: 1200,
+  runId: 'reddit-run-1',
+  submittedAt: '2026-07-04T00:00:03.000Z',
+});
 const missing = await handler.handle({
   method: 'POST',
   endpoint: '/game-services/missing' as typeof gameServicesBackendEndpoints.verifyPurchase,
@@ -112,8 +120,9 @@ assertEqual(purchase.verified, true, 'purchase should be verified');
 assertEqual(duplicatePurchase.alreadyProcessed, true, 'purchase should dedupe');
 assertEqual(reward.granted, true, 'reward should be granted');
 assertEqual(score.submitted, true, 'score should be recorded');
+assertEqual(redditScore.submitted, true, 'reddit score should be recorded');
 assertEqual((await store.listEntitlementTransactions()).length, 2, 'two grants should be recorded');
-assertEqual((await store.listLeaderboardTransactions()).length, 1, 'one score should be recorded');
+assertEqual((await store.listLeaderboardTransactions()).length, 2, 'two scores should be recorded');
 assertEqual(missing.status, 404, 'unknown endpoint should fail closed');
 assertEqual(
   invalidTransportRequest.status,

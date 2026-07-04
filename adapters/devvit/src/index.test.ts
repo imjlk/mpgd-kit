@@ -7,6 +7,7 @@ import {
   createDevvitPlatformGateway,
   createDevvitSandboxBridge,
   defaultDevvitBridgeEndpoint,
+  DevvitBridgeError,
   type DevvitBridge,
 } from './index';
 
@@ -115,12 +116,23 @@ describe('adapter-devvit', () => {
     });
 
     await expect(gateway.getCapabilities()).rejects.toThrow('Unsupported method.');
+    await expect(gateway.getCapabilities()).rejects.toMatchObject({
+      code: 'UNSUPPORTED_METHOD',
+      retryable: false,
+    } satisfies Partial<DevvitBridgeError>);
   });
 
-  it('returns structured fetch bridge errors for network and parse failures', async () => {
+  it('returns structured fetch bridge errors for network, http, and parse failures', async () => {
     const networkBridge = createDevvitFetchBridge({
       async fetch() {
         throw new TypeError('connection refused');
+      },
+    });
+    const httpBridge = createDevvitFetchBridge({
+      async fetch() {
+        return new Response('server error', {
+          status: 500,
+        });
       },
     });
     const parseBridge = createDevvitFetchBridge({
@@ -146,6 +158,13 @@ describe('adapter-devvit', () => {
       ok: false,
       error: {
         code: 'DEVVIT_BRIDGE_NETWORK_ERROR',
+        retryable: true,
+      },
+    });
+    await expect(httpBridge.request(request)).resolves.toMatchObject({
+      ok: false,
+      error: {
+        code: 'DEVVIT_BRIDGE_HTTP_ERROR',
         retryable: true,
       },
     });

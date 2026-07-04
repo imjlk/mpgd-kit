@@ -78,6 +78,22 @@ const requiredDevvitQueries = [
   'playtest',
   'payments',
 ] as const;
+const requiredMcpRequirements = [
+  {
+    target: 'ait',
+    server: 'apps-in-toss',
+    queries: requiredAitQueries,
+    name: 'Apps in Toss',
+    queryLabel: 'ait',
+  },
+  {
+    target: 'reddit',
+    server: 'devvit',
+    queries: requiredDevvitQueries,
+    name: 'Devvit',
+    queryLabel: 'reddit',
+  },
+] as const;
 
 const failures: string[] = [];
 
@@ -216,40 +232,36 @@ function assertMcpRequirements(input: unknown, label: string): void {
     return;
   }
 
-  const aitMcp = input.find((entry): entry is StarterMcpRequirement => {
+  for (const requirement of requiredMcpRequirements) {
+    assertMcpRequirement(input, label, requirement);
+  }
+}
+
+function assertMcpRequirement(
+  input: readonly unknown[],
+  label: string,
+  requirement: (typeof requiredMcpRequirements)[number],
+): void {
+  const entry = input.find((candidate): candidate is StarterMcpRequirement => {
     return (
-      typeof entry === 'object'
-      && entry !== null
-      && (entry as StarterMcpRequirement).target === 'ait'
-      && (entry as StarterMcpRequirement).server === 'apps-in-toss'
+      typeof candidate === 'object'
+      && candidate !== null
+      && (candidate as StarterMcpRequirement).target === requirement.target
+      && (candidate as StarterMcpRequirement).server === requirement.server
     );
   });
+  const queryLabel = `${label}.${requirement.queryLabel}.queries`;
 
-  if (aitMcp === undefined) {
-    failures.push(`${label} must include an Apps in Toss MCP requirement for ait.`);
-  } else {
-    assertStringArray(aitMcp.queries, `${label}.ait.queries`);
-    for (const query of requiredAitQueries) {
-      assertIncludes(aitMcp.queries, query, `${label}.ait.queries`);
-    }
+  if (entry === undefined) {
+    failures.push(
+      `${label} must include a ${requirement.name} MCP requirement for ${requirement.target}.`,
+    );
+    return;
   }
 
-  const devvitMcp = input.find((entry): entry is StarterMcpRequirement => {
-    return (
-      typeof entry === 'object'
-      && entry !== null
-      && (entry as StarterMcpRequirement).target === 'reddit'
-      && (entry as StarterMcpRequirement).server === 'devvit'
-    );
-  });
-
-  if (devvitMcp === undefined) {
-    failures.push(`${label} must include a Devvit MCP requirement for reddit.`);
-  } else {
-    assertStringArray(devvitMcp.queries, `${label}.reddit.queries`);
-    for (const query of requiredDevvitQueries) {
-      assertIncludes(devvitMcp.queries, query, `${label}.reddit.queries`);
-    }
+  assertStringArray(entry.queries, queryLabel);
+  for (const query of requirement.queries) {
+    assertIncludes(entry.queries, query, queryLabel);
   }
 }
 

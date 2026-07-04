@@ -1,11 +1,14 @@
 import { createServer, context, getServerPort, redis } from '@devvit/web/server';
 import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 import express, { type Request, type Response } from 'express';
+import helmet from 'helmet';
 
 const app = express();
 const redisKeyComponentPattern = /^[A-Za-z0-9:_-]{1,128}$/;
 const leaderboardUpdateMaxAttempts = 3;
 
+app.disable('x-powered-by');
+app.use(helmet());
 app.use(express.json({ limit: '1mb' }));
 
 app.post('/api/mpgd/bridge', async (request: Request, response: Response): Promise<void> => {
@@ -163,7 +166,13 @@ async function submitLeaderboardScore(input: BridgeRequest): Promise<BridgeRespo
 }
 
 async function loadStorage(input: BridgeRequest): Promise<BridgeResponse> {
-  const key = storageKey(input);
+  const playerId = currentPlayerId();
+
+  if (playerId === undefined) {
+    return ok(input, null);
+  }
+
+  const key = storageKey(input, playerId);
 
   if (typeof key !== 'string') {
     return key;
@@ -183,7 +192,13 @@ async function loadStorage(input: BridgeRequest): Promise<BridgeResponse> {
 }
 
 async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
-  const key = storageKey(input);
+  const playerId = currentPlayerId();
+
+  if (playerId === undefined) {
+    return ok(input, {});
+  }
+
+  const key = storageKey(input, playerId);
 
   if (typeof key !== 'string') {
     return key;
@@ -236,13 +251,8 @@ function ok(input: BridgeRequest, data: unknown): BridgeResponse {
   };
 }
 
-function storageKey(input: BridgeRequest): string | BridgeResponse {
+function storageKey(input: BridgeRequest, playerId: string): string | BridgeResponse {
   const payload = optionalObjectPayload(input.payload);
-  const playerId = currentPlayerId();
-
-  if (playerId === undefined) {
-    return createBridgeError(input.id, 'DEVVIT_AUTH_REQUIRED', 'Devvit user identity is required.');
-  }
 
   if (typeof payload.key !== 'string' || payload.key.length === 0) {
     return createBridgeError(input.id, 'INVALID_STORAGE_KEY', 'Storage key is required.');
@@ -285,6 +295,8 @@ async function submitMaxLeaderboardScore(
 ): Promise<boolean> {
   for (let attempt = 0; attempt < leaderboardUpdateMaxAttempts; attempt += 1) {
     const transaction = await redis.watch(redisKey);
+    // Devvit TxClient queues commands only after MULTI, so the compare read stays after WATCH
+    // while the conditional write is executed through the watched transaction.
     const currentScore = await redis.zScore(redisKey, playerId);
 
     if (currentScore !== undefined && score <= currentScore) {
@@ -318,7 +330,7 @@ function currentPlayerId(): string | undefined {
   };
 
   if (devvitContext.userId === undefined) {
-    console.warn('devvit context.userId is undefined; rejecting user-scoped bridge request');
+    console.warn('devvit context.userId is undefined for a user-scoped bridge request');
   }
 
   return devvitContext.userId;

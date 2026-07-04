@@ -25,6 +25,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - uses: pnpm/action-setup@v4
         with:
@@ -69,3 +71,4 @@ jobs:
           path: |
             artifacts/**
             release-output/**
+            apps/target-devvit/dist/**

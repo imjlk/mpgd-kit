@@ -18,6 +18,7 @@ import type {
 import type {
   ClaimAdRewardRequest,
   ClaimAdRewardResponse,
+  GameServicesLedgerTarget,
   GameServicesStoreTarget,
   RecordLeaderboardScoreRequest,
   RecordLeaderboardScoreResponse,
@@ -125,7 +126,7 @@ export interface CreateGameServicesClientInput {
   readonly gateway: PlatformGateway;
   readonly backend: GameServicesBackendApi;
   readonly playerId: string;
-  readonly target: GameServicesStoreTarget;
+  readonly target: GameServicesLedgerTarget;
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
   readonly now?: () => string;
@@ -195,6 +196,22 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         };
       }
 
+      if (!isGameServicesStoreTarget(input.target)) {
+        await analytics.track({
+          name: 'purchase_rejected',
+          properties: {
+            productId: purchaseInput.productId,
+            status: purchase.status,
+            reason: 'unsupported_target',
+          },
+        });
+
+        return {
+          status: 'rejected',
+          purchase,
+        };
+      }
+
       const verification = await input.backend.purchases.verifyPurchase({
         target: input.target,
         playerId: input.playerId,
@@ -242,6 +259,23 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
 
         return {
           status: reward.status === 'completed' ? 'rejected' : reward.status,
+          reward,
+        };
+      }
+
+      if (!isGameServicesStoreTarget(input.target)) {
+        await analytics.track({
+          name: 'rewarded_ad_rejected',
+          properties: {
+            placementId: rewardInput.placementId,
+            status: reward.status,
+            rewardGranted: reward.rewardGranted,
+            reason: 'unsupported_target',
+          },
+        });
+
+        return {
+          status: 'rejected',
           reward,
         };
       }
@@ -446,6 +480,10 @@ export function createGameServicesIdempotencyKey(input: {
 
 function normalizeSegment(value: string): string {
   return value.replaceAll(/[^a-zA-Z0-9_-]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 64);
+}
+
+function isGameServicesStoreTarget(target: GameServicesLedgerTarget): target is GameServicesStoreTarget {
+  return target === 'android' || target === 'ios' || target === 'ait';
 }
 
 async function sendGameServicesBackendRequest<TRequest, TResponse>(

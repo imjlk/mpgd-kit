@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "devvit playtest",
-    "build": "pnpm build:server",
+    "build": "pnpm --dir ../.. build:target reddit production",
     "build:server": "vite build --config vite.server.config.ts",
     "whoami": "devvit whoami",
     "upload": "devvit upload",
@@ -18,7 +18,8 @@
   "dependencies": {
     "@devvit/web": "0.13.6",
     "@mpgd/bridge": "workspace:*",
-    "express": "^5.2.1"
+    "express": "^5.2.1",
+    "helmet": "^8.1.0"
   },
   "devDependencies": {
     "@ttsc/unplugin": "0.16.9",

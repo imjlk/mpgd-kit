@@ -9,8 +9,24 @@ import type { PlatformGateway } from '@mpgd/platform';
 
 export const defaultDevvitBridgeEndpoint = '/api/mpgd/bridge';
 
+type BridgeErrorResponse = Extract<BridgeResponse, { readonly ok: false }>;
+
 export interface DevvitBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
+}
+
+export class DevvitBridgeError extends Error {
+  readonly code: string;
+  readonly requestId: string;
+  readonly retryable: boolean;
+
+  constructor(response: BridgeErrorResponse) {
+    super(response.error.message);
+    this.name = 'DevvitBridgeError';
+    this.code = response.error.code;
+    this.requestId = response.id;
+    this.retryable = response.error.retryable;
+  }
 }
 
 export interface DevvitPlatformGatewayOptions {
@@ -44,7 +60,7 @@ export function createDevvitPlatformGateway(
     });
 
     if (!response.ok) {
-      throw new Error(response.error.message);
+      throw new DevvitBridgeError(response);
     }
 
     return response.data as TData;
