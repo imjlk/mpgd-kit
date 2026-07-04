@@ -115,7 +115,7 @@ console.log('Starter workflow validation passed.');
 
 function validateSkillFrontmatter(path: string): void {
   const content = readText(path);
-  const match = /^---\n(?<frontmatter>[\s\S]*?)\n---/.exec(content);
+  const match = /^---\r?\n(?<frontmatter>[\s\S]*?)\r?\n---/.exec(content);
 
   if (match?.groups === undefined) {
     failures.push(`${path}: missing YAML frontmatter.`);
