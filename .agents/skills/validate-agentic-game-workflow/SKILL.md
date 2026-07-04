@@ -5,7 +5,7 @@ description: Validate agent-facing game starter manifests, Codex agents, skills,
 
 # Validate Agentic Game Workflow
 
-Use this skill when changing `.codex/agents`, `.agents/skills`, `docs/AGENTIC_GAME_WORKFLOW.md`, or `examples/phaser-starter/agent`.
+Use this skill when changing `.codex/agents`, `.agents/skills`, `docs/AGENTIC_GAME_WORKFLOW.md`, `examples/phaser-starter/AGENTS.md`, or `examples/phaser-starter/agent`.
 
 1. Verify every custom agent is narrow and boundary-aware.
 2. Verify every skill has a YAML frontmatter `name` and `description`.

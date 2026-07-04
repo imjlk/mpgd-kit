@@ -1,20 +1,18 @@
 import {
   assertEntitlementLedgerGrant,
   assertEntitlementLedgerResult,
-  assertProductGrantTransaction,
-  type EntitlementLedgerGrant,
-  type EntitlementLedgerResult,
-  type ProductGrantTransaction,
-} from '@mpgd/backend-entitlement-ledger';
-import {
   assertLeaderboardScoreTransaction,
+  assertProductGrantTransaction,
   assertRecordLeaderboardScoreRequest,
   assertRecordLeaderboardScoreResponse,
+  type EntitlementLedgerGrant,
+  type EntitlementLedgerResult,
   type LeaderboardScoreTransaction,
+  type ProductGrantTransaction,
   type RecordLeaderboardScoreRequest,
   type RecordLeaderboardScoreResponse,
-} from '@mpgd/backend-leaderboard-ledger';
-import type { GameServicesStore } from '@mpgd/game-services';
+  type GameServicesStore,
+} from '@mpgd/game-services';
 
 type EntitlementRow = {
   ledger_entry_id: string;

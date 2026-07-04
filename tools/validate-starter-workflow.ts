@@ -108,6 +108,11 @@ if (manifest !== null) {
     'pnpm validate:starter-workflow',
     `${manifestPath}: acceptance.commands`,
   );
+  assertIncludes(
+    manifest.acceptance?.commands,
+    'pnpm check',
+    `${manifestPath}: acceptance.commands`,
+  );
 }
 
 if (failures.length > 0) {
@@ -242,8 +247,15 @@ function readText(path: string): string {
 }
 
 function readJson(path: string): unknown {
+  const initialFailureCount = failures.length;
+  const content = readText(path);
+
+  if (failures.length > initialFailureCount) {
+    return null;
+  }
+
   try {
-    return JSON.parse(readText(path)) as unknown;
+    return JSON.parse(content) as unknown;
   } catch (error) {
     failures.push(
       `${path}: failed to parse JSON: ${error instanceof Error ? error.message : String(error)}.`,

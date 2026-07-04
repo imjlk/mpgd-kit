@@ -1,6 +1,8 @@
-import type { ClaimAdRewardRequest } from '@mpgd/backend-ad-reward-ledger';
-import type { RecordLeaderboardScoreRequest } from '@mpgd/backend-leaderboard-ledger';
-import type { VerifyPurchaseRequest } from '@mpgd/backend-purchase-verifier';
+import type {
+  ClaimAdRewardRequest,
+  RecordLeaderboardScoreRequest,
+  VerifyPurchaseRequest,
+} from '@mpgd/game-services';
 import { WorkerEntrypoint } from 'cloudflare:workers';
 
 import {

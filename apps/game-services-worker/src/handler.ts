@@ -6,12 +6,12 @@ import {
   createGameServicesRpcFetchHandler,
   createGameServicesRouter,
   createInMemoryGameServicesStore,
+  type ClaimAdRewardRequest,
+  type GameServicesBackendApi,
   type GameServicesStore,
+  type RecordLeaderboardScoreRequest,
+  type VerifyPurchaseRequest,
 } from '@mpgd/game-services';
-import type { ClaimAdRewardRequest } from '@mpgd/backend-ad-reward-ledger';
-import type { RecordLeaderboardScoreRequest } from '@mpgd/backend-leaderboard-ledger';
-import type { VerifyPurchaseRequest } from '@mpgd/backend-purchase-verifier';
-import type { GameServicesBackendApi } from '@mpgd/game-services';
 import type { ProductCatalog } from '@mpgd/catalog';
 
 import { createD1GameServicesStore } from './d1Store.js';
