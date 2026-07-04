@@ -7,6 +7,7 @@ import {
 import {
   createGameServicesBackend,
   createGameServicesBackendApiHandler,
+  createGameServicesHttpFetchHandler,
   createGameServicesRouter,
   createGameServicesRpcFetchHandler,
   createInMemoryGameServicesStore,
@@ -58,6 +59,7 @@ const handler = createGameServicesBackendApiHandler({
   placements,
   store,
   now: () => '2026-07-04T00:00:00.000Z',
+  version: 'test-http',
 });
 const backend = createGameServicesHttpBackendApi({
   transport: createInProcessGameServicesBackendTransport(handler),
@@ -100,6 +102,11 @@ const missing = await handler.handle({
   endpoint: '/game-services/missing' as typeof gameServicesBackendEndpoints.verifyPurchase,
   body: {},
 });
+const invalidTransportRequest = await handler.handle({
+  method: 'POST',
+  endpoint: gameServicesBackendEndpoints.verifyPurchase,
+  body: {},
+});
 
 assertEqual(purchase.verified, true, 'purchase should be verified');
 assertEqual(duplicatePurchase.alreadyProcessed, true, 'purchase should dedupe');
@@ -108,6 +115,11 @@ assertEqual(score.submitted, true, 'score should be recorded');
 assertEqual((await store.listEntitlementTransactions()).length, 2, 'two grants should be recorded');
 assertEqual((await store.listLeaderboardTransactions()).length, 1, 'one score should be recorded');
 assertEqual(missing.status, 404, 'unknown endpoint should fail closed');
+assertEqual(
+  invalidTransportRequest.status,
+  400,
+  'invalid in-process request bodies should return 400 instead of rejecting',
+);
 
 const rpcStore = createInMemoryGameServicesStore();
 const rpcBackend = createGameServicesBackend({
@@ -115,11 +127,88 @@ const rpcBackend = createGameServicesBackend({
   placements,
   store: rpcStore,
   now: () => '2026-07-04T00:00:00.000Z',
+  version: 'test-rpc',
 });
-const rpcFetch = createGameServicesRpcFetchHandler(createGameServicesRouter(rpcBackend));
+const rpcFetch = createGameServicesRpcFetchHandler(createGameServicesRouter(rpcBackend), {
+  ...(rpcBackend.version === undefined ? {} : { version: rpcBackend.version }),
+});
 const rpcHealth = await rpcFetch(new Request('https://game-services.test/health'));
+const rpcHealthBody = await rpcHealth.json() as { readonly version: string };
 
 assertEqual(rpcHealth.status, 200, 'oRPC fetch handler should expose health');
+assertEqual(rpcHealthBody.version, 'test-rpc', 'oRPC health should expose backend version');
+
+const httpFetch = createGameServicesHttpFetchHandler(handler);
+const httpHealth = await httpFetch(new Request('https://game-services.test/health'));
+const httpHealthBody = await httpHealth.json() as { readonly version: string };
+const malformedJson = await httpFetch(
+  new Request('https://game-services.test/game-services/purchases/verify', {
+    method: 'POST',
+    body: '{',
+  }),
+);
+
+assertEqual(httpHealthBody.version, 'test-http', 'HTTP health should expose handler version');
+assertEqual(malformedJson.status, 400, 'malformed JSON should return 400');
+
+const collisionStore = createInMemoryGameServicesStore();
+const collisionBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: collisionStore,
+  now: () => '2026-07-04T00:00:00.000Z',
+});
+const firstCollisionPurchase = await collisionBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player:a',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-collision-1',
+  idempotencyKey: 'b:c',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const secondCollisionPurchase = await collisionBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player:a:b',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-collision-2',
+  idempotencyKey: 'c',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const longPrefixPlayer = `${'a'.repeat(64)}-1`;
+const longPrefixTwin = `${'a'.repeat(64)}-2`;
+
+await collisionBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: longPrefixPlayer,
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-long-1',
+  idempotencyKey: 'long-prefix-1',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+await collisionBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: longPrefixTwin,
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-long-2',
+  idempotencyKey: 'long-prefix-2',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(
+  firstCollisionPurchase.alreadyProcessed,
+  false,
+  'first colon-bearing idempotency key should be new',
+);
+assertEqual(
+  secondCollisionPurchase.alreadyProcessed,
+  false,
+  'distinct colon-bearing idempotency key should not collide',
+);
+assertEqual(
+  (await collisionStore.listEntitlementTransactions()).length,
+  4,
+  'ledger entry ids should stay distinct for long shared prefixes',
+);
 
 console.log('GameServices backend API handler smoke test passed.');
 

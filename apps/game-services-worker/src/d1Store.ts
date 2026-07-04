@@ -273,22 +273,22 @@ function leaderboardFromRow(row: LeaderboardRow): LeaderboardScoreTransaction {
 function createEntitlementLedgerEntryId(grant: EntitlementLedgerGrant): string {
   return [
     'ledger',
-    grant.source,
-    normalizeIdSegment(grant.playerId),
-    normalizeIdSegment(grant.idempotencyKey),
+    encodeIdSegment(grant.source),
+    encodeIdSegment(grant.playerId),
+    encodeIdSegment(grant.idempotencyKey),
   ].join('_');
 }
 
 function createLeaderboardLedgerEntryId(request: RecordLeaderboardScoreRequest): string {
   return [
     'leaderboard',
-    normalizeIdSegment(request.target),
-    normalizeIdSegment(request.leaderboardId),
-    normalizeIdSegment(request.playerId),
-    normalizeIdSegment(request.runId),
+    encodeIdSegment(request.target),
+    encodeIdSegment(request.leaderboardId),
+    encodeIdSegment(request.playerId),
+    encodeIdSegment(request.runId),
   ].join('_');
 }
 
-function normalizeIdSegment(value: string): string {
-  return value.replaceAll(/[^a-zA-Z0-9]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 48);
+function encodeIdSegment(value: string): string {
+  return `${value.length}:${encodeURIComponent(value)}`;
 }

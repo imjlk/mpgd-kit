@@ -84,6 +84,7 @@ export function createWorkerFetchHandler(
     {
       prefix: '/rpc',
       corsHeaders,
+      ...(backend.version === undefined ? {} : { version: backend.version }),
     },
   );
   const httpFetch = createGameServicesHttpFetchHandler(
@@ -94,6 +95,7 @@ export function createWorkerFetchHandler(
     }),
     {
       corsHeaders,
+      version: productCatalog.version,
     },
   );
 
@@ -129,6 +131,7 @@ function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi
     catalog: productCatalog,
     placements: adPlacements,
     store: createWorkerStore(env),
+    version: productCatalog.version,
   });
 }
 

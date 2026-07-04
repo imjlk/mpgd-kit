@@ -35,11 +35,16 @@ export interface FrequencyCap {
   readonly minStageInterval?: number;
 }
 
-export interface AdReward {
-  readonly type: 'continue' | 'currency';
-  readonly amount: number;
-  readonly currency?: 'coin' | 'gem';
-}
+export type AdReward =
+  | {
+      readonly type: 'continue';
+      readonly amount: number;
+    }
+  | {
+      readonly type: 'currency';
+      readonly amount: number;
+      readonly currency: 'coin' | 'gem';
+    };
 
 export interface AdPlacementEntry {
   readonly id: LogicalAdPlacementId;
@@ -56,3 +61,4 @@ export interface AdPlacements {
 
 export const assertProductCatalog = typia.createAssert<ProductCatalog>();
 export const assertAdPlacements = typia.createAssert<AdPlacements>();
+export const assertProductGrant = typia.createAssert<ProductGrant>();

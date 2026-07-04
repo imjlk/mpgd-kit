@@ -104,7 +104,11 @@ describe('adapter-ait', () => {
       displayName: 'AIT Sandbox Player',
     });
     await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
-    await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({ coins: 7 });
+    await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
+      value: {
+        coins: 7,
+      },
+    });
     await expect(
       gateway.commerce.purchase({
         productId: 'COINS_100',

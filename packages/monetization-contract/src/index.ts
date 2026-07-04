@@ -1,4 +1,4 @@
-export type LogicalProductId = 'COINS_100' | 'COINS_500' | 'REMOVE_ADS' | 'VIP_MONTHLY';
+export type LogicalProductId = 'COINS_100' | 'COINS_500' | 'REMOVE_ADS';
 
 export type LogicalAdPlacementId = 'CONTINUE_AFTER_FAIL' | 'STAGE_END_INTERSTITIAL';
 
@@ -23,7 +23,7 @@ export interface Entitlement {
 }
 
 export interface PurchaseResult {
-  readonly status: 'completed' | 'cancelled' | 'pending';
+  readonly status: 'completed' | 'cancelled' | 'pending' | 'failed';
   readonly transactionId?: string;
   readonly entitlementIds: readonly string[];
 }
@@ -33,7 +33,7 @@ export interface PurchaseRestoreResult {
 }
 
 export interface RewardedAdResult {
-  readonly status: 'completed' | 'skipped' | 'unavailable';
+  readonly status: 'completed' | 'skipped' | 'unavailable' | 'failed';
   readonly rewardGranted: boolean;
   readonly ledgerEntryId?: string;
 }

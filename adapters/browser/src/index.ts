@@ -106,7 +106,7 @@ export function createBrowserPlatformGateway(): PlatformGateway {
         }
 
         const value = localStorage.getItem(`mpgd:${input.key}`);
-        return value === null ? null : JSON.parse(value);
+        return value === null ? null : { value: JSON.parse(value) };
       },
       async save(input) {
         if (typeof localStorage !== 'undefined') {

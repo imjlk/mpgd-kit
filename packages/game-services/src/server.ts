@@ -50,6 +50,7 @@ export interface CreateGameServicesBackendInput {
 }
 
 export interface GameServicesBackendApiHandler {
+  readonly version?: string;
   handle(
     request: GameServicesBackendTransportRequest,
   ): Promise<GameServicesBackendTransportResponse>;
@@ -78,6 +79,7 @@ export interface GameServicesStore {
 export interface CreateGameServicesFetchHandlerOptions {
   readonly corsHeaders?: CorsHeaders;
   readonly healthPath?: string;
+  readonly version?: string;
 }
 
 export interface CreateGameServicesRpcFetchHandlerOptions
@@ -201,6 +203,7 @@ export function createGameServicesBackend(
 ): GameServicesBackendApi {
   const store = input.store ?? createInMemoryGameServicesStore();
   const now = input.now ?? (() => new Date().toISOString());
+  const version = input.version ?? '0.0.0';
   const analytics = createAnalyticsReporter({
     target: 'server',
     sessionId: input.analyticsSessionId ?? 'game-services',
@@ -209,6 +212,7 @@ export function createGameServicesBackend(
   });
 
   return {
+    version,
     purchases: {
       async verifyPurchase(request) {
         const verification = await verifyPurchaseWithStore(request, {
@@ -287,13 +291,14 @@ export function createGameServicesBackendApiHandler(
   const backend = createGameServicesBackend(input);
 
   return {
+    ...(backend.version === undefined ? {} : { version: backend.version }),
     async handle(request) {
       if (request.method !== 'POST') {
         return errorResponse(405, 'METHOD_NOT_ALLOWED');
       }
 
       try {
-        return routeGameServicesRequest(request.endpoint, request.body, backend);
+        return await routeGameServicesRequest(request.endpoint, request.body, backend);
       } catch (error) {
         return errorResponse(
           400,
@@ -318,7 +323,7 @@ export function createGameServicesRouter(backend: GameServicesBackendApi) {
   const contract = implement(gameServicesContract).$context<GameServicesOrpcContext>();
 
   return contract.router({
-    health: contract.health.handler(() => createHealthResponse()),
+    health: contract.health.handler(() => createHealthResponse(backend.version)),
     commerce: contract.commerce.router({
       verifyPurchase: contract.commerce.verifyPurchase.handler(({ input }) => {
         return backend.purchases.verifyPurchase(input);
@@ -349,7 +354,7 @@ export function createGameServicesRpcFetchHandler(
     const requestUrl = new URL(request.url);
 
     if (requestUrl.pathname === healthPath) {
-      return jsonResponse(createHealthResponse(), 200, options.corsHeaders);
+      return jsonResponse(createHealthResponse(options.version), 200, options.corsHeaders);
     }
 
     if (request.method === 'OPTIONS') {
@@ -384,7 +389,11 @@ export function createGameServicesHttpFetchHandler(
     const requestUrl = new URL(request.url);
 
     if (requestUrl.pathname === healthPath) {
-      return jsonResponse(createHealthResponse(), 200, options.corsHeaders);
+      return jsonResponse(
+        createHealthResponse(options.version ?? handler.version),
+        200,
+        options.corsHeaders,
+      );
     }
 
     if (request.method === 'OPTIONS') {
@@ -399,13 +408,21 @@ export function createGameServicesHttpFetchHandler(
       return jsonResponse({ error: 'UNKNOWN_ENDPOINT' }, 404, options.corsHeaders);
     }
 
-    const response = await handler.handle({
-      method: 'POST',
-      endpoint: requestUrl.pathname,
-      body: await readRequestJson(request),
-    });
+    try {
+      const response = await handler.handle({
+        method: 'POST',
+        endpoint: requestUrl.pathname,
+        body: await readRequestJson(request),
+      });
 
-    return jsonResponse(response.body, response.status, options.corsHeaders);
+      return jsonResponse(response.body, response.status, options.corsHeaders);
+    } catch (error) {
+      return jsonResponse(
+        { error: error instanceof Error ? error.message : 'BAD_REQUEST' },
+        400,
+        options.corsHeaders,
+      );
+    }
   };
 }
 
@@ -488,7 +505,7 @@ async function claimAdRewardWithStore(
     completedAt: request.completedAt,
   };
 
-  if (placement.reward.currency !== undefined) {
+  if (placement.reward.type === 'currency') {
     payload.currency = placement.reward.currency;
   }
 
@@ -562,11 +579,11 @@ function errorResponse(
   };
 }
 
-function createHealthResponse(): GameServicesHealthResponse {
+function createHealthResponse(version = '0.0.0'): GameServicesHealthResponse {
   return {
     ok: true,
     service: 'game-services',
-    version: '0.0.0',
+    version,
   };
 }
 
@@ -589,39 +606,43 @@ function createEntitlementTransaction(
 }
 
 function createEntitlementIdempotencyKey(grant: EntitlementLedgerGrant): string {
-  return `${grant.source}:${grant.playerId}:${grant.idempotencyKey}`;
+  return createCompositeKey([grant.source, grant.playerId, grant.idempotencyKey]);
 }
 
 function createEntitlementLedgerEntryId(grant: EntitlementLedgerGrant): string {
   return [
     'ledger',
-    grant.source,
-    normalizeIdSegment(grant.playerId),
-    normalizeIdSegment(grant.idempotencyKey),
+    encodeIdSegment(grant.source),
+    encodeIdSegment(grant.playerId),
+    encodeIdSegment(grant.idempotencyKey),
   ].join('_');
 }
 
 function createLeaderboardRunKey(request: RecordLeaderboardScoreRequest): string {
-  return [
+  return createCompositeKey([
     request.target,
     request.leaderboardId,
     request.playerId,
     request.runId,
-  ].join(':');
+  ]);
 }
 
 function createLeaderboardLedgerEntryId(request: RecordLeaderboardScoreRequest): string {
   return [
     'leaderboard',
-    normalizeIdSegment(request.target),
-    normalizeIdSegment(request.leaderboardId),
-    normalizeIdSegment(request.playerId),
-    normalizeIdSegment(request.runId),
+    encodeIdSegment(request.target),
+    encodeIdSegment(request.leaderboardId),
+    encodeIdSegment(request.playerId),
+    encodeIdSegment(request.runId),
   ].join('_');
 }
 
-function normalizeIdSegment(value: string): string {
-  return value.replaceAll(/[^a-zA-Z0-9]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 48);
+function createCompositeKey(parts: readonly string[]): string {
+  return JSON.stringify(parts);
+}
+
+function encodeIdSegment(value: string): string {
+  return `${value.length}:${encodeURIComponent(value)}`;
 }
 
 function isGameServicesBackendEndpoint(pathname: string): pathname is GameServicesBackendEndpoint {

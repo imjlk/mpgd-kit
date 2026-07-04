@@ -64,7 +64,11 @@ export function createCapacitorPlatformGateway(input: {
       },
     },
     storage: {
-      load: (payload) => request('storage.load', payload),
+      async load(payload) {
+        const value = await request<unknown | null>('storage.load', payload);
+
+        return value === null ? null : { value };
+      },
       save: (payload) => request('storage.save', payload),
     },
   };

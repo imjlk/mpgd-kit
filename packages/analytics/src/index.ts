@@ -75,15 +75,19 @@ export function createAnalyticsReporter(input: CreateAnalyticsReporterInput): An
 
   return {
     async track(eventInput) {
-      await sink.track(
-        assertAnalyticsEvent({
-          name: eventInput.name,
-          target: input.target,
-          sessionId: input.sessionId,
-          occurredAt: eventInput.occurredAt ?? now(),
-          properties: compactProperties(eventInput.properties ?? {}),
-        }),
-      );
+      const event = assertAnalyticsEvent({
+        name: eventInput.name,
+        target: input.target,
+        sessionId: input.sessionId,
+        occurredAt: eventInput.occurredAt ?? now(),
+        properties: compactProperties(eventInput.properties ?? {}),
+      });
+
+      try {
+        await sink.track(event);
+      } catch {
+        // Analytics is best-effort and must not break gameplay or ledger flows.
+      }
     },
   };
 }

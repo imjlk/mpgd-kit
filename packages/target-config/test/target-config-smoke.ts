@@ -195,7 +195,9 @@ assertDeepEqual(
     submitted: false,
   },
 );
-assertEqual(await webGateway.storage.load({ key: 'save:v1' }), 'stored-save');
+assertDeepEqual(await webGateway.storage.load({ key: 'save:v1' }), {
+  value: 'stored-save',
+});
 
 const rewardedOnlyGateway = withTargetAvailability(
   gateway,
@@ -406,7 +408,9 @@ function createGateway(): PlatformGateway {
     },
     storage: {
       async load() {
-        return 'stored-save';
+        return {
+          value: 'stored-save',
+        };
       },
       async save() {},
     },

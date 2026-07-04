@@ -38,6 +38,7 @@ export interface LeaderboardRecordApi {
 }
 
 export interface GameServicesBackendApi {
+  readonly version?: string;
   readonly purchases: PurchaseVerificationApi;
   readonly adRewards: AdRewardClaimApi;
   readonly leaderboard: LeaderboardRecordApi;
@@ -137,7 +138,7 @@ export interface GameServicesPurchaseInput {
 }
 
 export interface GameServicesPurchaseResult {
-  readonly status: 'granted' | 'cancelled' | 'pending' | 'rejected';
+  readonly status: 'granted' | 'cancelled' | 'pending' | 'failed' | 'rejected';
   readonly purchase: PurchaseResult;
   readonly verification?: VerifyPurchaseResponse;
   readonly ledgerEntryId?: string;
@@ -149,7 +150,7 @@ export interface GameServicesRewardedAdInput {
 }
 
 export interface GameServicesRewardedAdResult {
-  readonly status: 'granted' | 'skipped' | 'unavailable' | 'rejected';
+  readonly status: 'granted' | 'skipped' | 'unavailable' | 'failed' | 'rejected';
   readonly reward: RewardedAdResult;
   readonly claim?: ClaimAdRewardResponse;
   readonly ledgerEntryId?: string;
@@ -180,7 +181,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
 
       if (purchase.status !== 'completed' || purchase.transactionId === undefined) {
         await analytics.track({
-          name: purchase.status === 'completed' ? 'purchase_rejected' : 'purchase_completed',
+          name: 'purchase_rejected',
           properties: {
             productId: purchaseInput.productId,
             status: purchase.status,
@@ -231,7 +232,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
 
       if (reward.status !== 'completed' || !reward.rewardGranted) {
         await analytics.track({
-          name: reward.status === 'completed' ? 'rewarded_ad_rejected' : 'rewarded_ad_completed',
+          name: 'rewarded_ad_rejected',
           properties: {
             placementId: rewardInput.placementId,
             status: reward.status,

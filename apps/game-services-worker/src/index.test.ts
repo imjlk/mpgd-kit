@@ -13,7 +13,9 @@ const workerService = createWorkerService(workerEnv);
 const baseUrl = 'https://game-services-worker.test';
 
 const health = await workerFetch(new Request(`${baseUrl}/health`));
+const healthBody = await health.json() as { readonly version: string };
 assertEqual(health.status, 200, 'health should return 200');
+assertEqual(healthBody.version, 'worker-default', 'health should expose worker version');
 
 const directPurchase = await postJson('/game-services/purchases/verify', {
   target: 'android',

@@ -1,7 +1,6 @@
-import type { AdPlacements } from '@mpgd/catalog';
+import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import adPlacementsJson from '@mpgd/catalog/placements.json';
 import { createBrowserPlatformGateway } from '@mpgd/adapter-browser';
-import type { ProductCatalog } from '@mpgd/catalog';
 import productCatalogJson from '@mpgd/catalog/catalog.json';
 import {
   createEffectiveTargetConfig,

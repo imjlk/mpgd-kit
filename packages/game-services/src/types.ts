@@ -137,7 +137,7 @@ export function assertClaimAdRewardResponse(
   assertBoolean(input.granted, 'granted');
   assertOptionalNonEmptyString(input.ledgerEntryId, 'ledgerEntryId');
   assertBoolean(input.alreadyProcessed, 'alreadyProcessed');
-  assertOptionalAdRewardReason(input.reason);
+  assertOptionalAdRewardReason(input.reason, 'reason');
 
   return input;
 }
@@ -178,6 +178,9 @@ export function assertEntitlementLedgerGrant(
   assertLedgerSource(input.source);
   assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
   assertNonEmptyString(input.grantedAt, 'grantedAt');
+  if (input.grant !== undefined) {
+    assertProductGrant(input.grant);
+  }
   assertPayload(input.payload);
 
   return input;
@@ -203,6 +206,9 @@ export function assertProductGrantTransaction(
   assertLedgerSource(input.source);
   assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
   assertNonEmptyString(input.grantedAt, 'grantedAt');
+  if (input.grant !== undefined) {
+    assertProductGrant(input.grant);
+  }
   assertPayload(input.payload);
 
   return input;
@@ -269,15 +275,36 @@ function assertLedgerSource(input: unknown): asserts input is EntitlementLedgerS
   }
 }
 
+function assertProductGrant(input: unknown): asserts input is ProductGrant {
+  assertRecord(input, 'grant');
+
+  if (input.type === 'currency') {
+    if (input.currency !== 'coin' && input.currency !== 'gem') {
+      throw new Error('grant.currency must be coin or gem.');
+    }
+
+    assertFiniteNumber(input.amount, 'grant.amount');
+    return;
+  }
+
+  if (input.type === 'entitlement') {
+    assertNonEmptyString(input.entitlement, 'grant.entitlement');
+    return;
+  }
+
+  throw new Error('grant.type must be currency or entitlement.');
+}
+
 function assertOptionalAdRewardReason(
   input: unknown,
+  label: string,
 ): asserts input is ClaimAdRewardResponse['reason'] {
   if (
     input !== undefined
     && input !== 'UNKNOWN_PLACEMENT'
     && input !== 'NOT_REWARDED_PLACEMENT'
   ) {
-    throw new Error('reason must be UNKNOWN_PLACEMENT or NOT_REWARDED_PLACEMENT.');
+    throw new Error(`${label} must be UNKNOWN_PLACEMENT or NOT_REWARDED_PLACEMENT.`);
   }
 }
 

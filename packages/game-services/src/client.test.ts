@@ -6,6 +6,7 @@ import {
   createGameServicesHttpBackendApi,
   createGameServicesIdempotencyKey,
   gameServicesBackendEndpoints,
+  type GameServicesBackendApi,
 } from './index';
 
 let purchaseClaims = 0;
@@ -13,47 +14,48 @@ let rewardClaims = 0;
 let scoreRecords = 0;
 const playerId = 'player-game-services';
 const gateway = createMockGateway();
+const backend = {
+  purchases: {
+    async verifyPurchase(input) {
+      purchaseClaims += 1;
+
+      return {
+        verified: true,
+        ledgerEntryId: `purchase-ledger-${input.idempotencyKey}`,
+        alreadyProcessed: purchaseClaims > 1,
+      };
+    },
+  },
+  adRewards: {
+    async claimAdReward(input) {
+      rewardClaims += 1;
+
+      return {
+        granted: true,
+        ledgerEntryId: `reward-ledger-${input.idempotencyKey}`,
+        alreadyProcessed: rewardClaims > 1,
+      };
+    },
+  },
+  leaderboard: {
+    async recordScore(input) {
+      scoreRecords += 1;
+
+      return {
+        submitted: true,
+        ledgerEntryId: `leaderboard-ledger-${input.runId}`,
+        alreadyProcessed: false,
+        rank: 1,
+      };
+    },
+  },
+} satisfies GameServicesBackendApi;
 const client = createGameServicesClient({
   gateway,
   playerId,
   target: 'android',
   now: () => '2026-07-03T00:00:00.000Z',
-  backend: {
-    purchases: {
-      async verifyPurchase(input) {
-        purchaseClaims += 1;
-
-        return {
-          verified: true,
-          ledgerEntryId: `purchase-ledger-${input.idempotencyKey}`,
-          alreadyProcessed: purchaseClaims > 1,
-        };
-      },
-    },
-    adRewards: {
-      async claimAdReward(input) {
-        rewardClaims += 1;
-
-        return {
-          granted: true,
-          ledgerEntryId: `reward-ledger-${input.idempotencyKey}`,
-          alreadyProcessed: rewardClaims > 1,
-        };
-      },
-    },
-    leaderboard: {
-      async recordScore(input) {
-        scoreRecords += 1;
-
-        return {
-          submitted: true,
-          ledgerEntryId: `leaderboard-ledger-${input.runId}`,
-          alreadyProcessed: false,
-          rank: 1,
-        };
-      },
-    },
-  },
+  backend,
 });
 
 const purchaseKey = createGameServicesIdempotencyKey({
@@ -106,6 +108,83 @@ assertEqual(leaderboard.platformSubmitted, true, 'leaderboard should submit to p
 assertEqual(purchaseClaims, 2, 'purchase backend should be called for both attempts');
 assertEqual(rewardClaims, 1, 'reward backend should be called after platform reward');
 assertEqual(scoreRecords, 1, 'leaderboard backend should be called after platform submit');
+
+const analyticsFailureClient = createGameServicesClient({
+  gateway: createMockGateway(),
+  playerId,
+  target: 'android',
+  now: () => '2026-07-03T00:00:00.000Z',
+  backend,
+  analytics: {
+    track() {
+      throw new Error('analytics unavailable');
+    },
+  },
+});
+const analyticsFailurePurchase = await analyticsFailureClient.purchase({
+  productId: 'COINS_100',
+  source: 'result',
+  idempotencyKey: 'analytics-failure-purchase',
+});
+
+assertEqual(
+  analyticsFailurePurchase.status,
+  'granted',
+  'analytics failures should not break purchases',
+);
+
+const rejectedEvents: string[] = [];
+const baseRejectedGateway = createMockGateway();
+const rejectedGateway = {
+  ...baseRejectedGateway,
+  commerce: {
+    ...baseRejectedGateway.commerce,
+    async purchase() {
+      return {
+        status: 'cancelled',
+        entitlementIds: [],
+      };
+    },
+  },
+  ads: {
+    ...baseRejectedGateway.ads,
+    async showRewarded() {
+      return {
+        status: 'skipped',
+        rewardGranted: false,
+      };
+    },
+  },
+} satisfies PlatformGateway;
+const rejectedClient = createGameServicesClient({
+  gateway: rejectedGateway,
+  playerId,
+  target: 'android',
+  now: () => '2026-07-03T00:00:00.000Z',
+  backend,
+  analytics: {
+    track(event) {
+      rejectedEvents.push(event.name);
+    },
+  },
+});
+const rejectedPurchase = await rejectedClient.purchase({
+  productId: 'COINS_100',
+  source: 'result',
+  idempotencyKey: 'cancelled-purchase',
+});
+const rejectedReward = await rejectedClient.claimRewardedAd({
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: 'skipped-reward',
+});
+
+assertEqual(rejectedPurchase.status, 'cancelled', 'cancelled purchase should pass through');
+assertEqual(rejectedReward.status, 'skipped', 'skipped rewarded ad should pass through');
+assertEqual(
+  rejectedEvents.join(','),
+  'purchase_rejected,rewarded_ad_rejected',
+  'non-completed platform flows should emit rejected analytics',
+);
 
 const transportCalls: string[] = [];
 const httpBackend = createGameServicesHttpBackendApi({

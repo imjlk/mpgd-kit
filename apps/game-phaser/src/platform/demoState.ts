@@ -43,7 +43,7 @@ export async function loadDemoState(platform: PlatformGateway): Promise<DemoStat
     targetRuntime,
     effectiveConfig: targetRuntime?.effectiveConfig ?? null,
     locale: resolveMpgdLocale(capabilities),
-    save: parseSaveData(loaded, resolvedPlayer.playerId),
+    save: parseSaveData(loaded?.value, resolvedPlayer.playerId),
   };
 }
 

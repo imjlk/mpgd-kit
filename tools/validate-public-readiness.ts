@@ -254,10 +254,6 @@ function collectSourceGeneratedArtifacts(root: string): void {
 
 function collectTrackedGeneratedArtifacts(): void {
   for (const file of gitLsFiles()) {
-    if (!existsSync(file)) {
-      continue;
-    }
-
     if (blockedTrackedGeneratedPrefixes.some((prefix) => file.startsWith(prefix))) {
       failures.push(`Generated release/build artifact should not be tracked: ${file}`);
     }
@@ -266,10 +262,6 @@ function collectTrackedGeneratedArtifacts(): void {
 
 function collectTrackedGeneratedSourceArtifacts(): void {
   for (const file of gitLsFiles()) {
-    if (!existsSync(file)) {
-      continue;
-    }
-
     if (!file.includes('/src/')) {
       continue;
     }
@@ -288,10 +280,6 @@ function collectTrackedGeneratedSourceArtifacts(): void {
 
 function collectSecretFindings(): void {
   for (const file of gitLsFiles()) {
-    if (!existsSync(file)) {
-      continue;
-    }
-
     if (binaryFileExtensions.some((extension) => file.endsWith(extension))) {
       continue;
     }
@@ -346,7 +334,7 @@ function gitLsFiles(): string[] {
     encoding: 'utf8',
   })
     .split(/\r?\n/)
-    .filter((file) => file.length > 0);
+    .filter((file) => file.length > 0 && existsSync(file));
 }
 
 function walk(root: string): string[] {

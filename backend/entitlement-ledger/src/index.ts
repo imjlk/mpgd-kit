@@ -48,6 +48,9 @@ export function assertEntitlementLedgerGrant(
   assertLedgerSource(input.source);
   assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
   assertNonEmptyString(input.grantedAt, 'grantedAt');
+  if (input.grant !== undefined) {
+    assertProductGrant(input.grant);
+  }
   assertPayload(input.payload);
 
   return input;
@@ -73,6 +76,9 @@ export function assertProductGrantTransaction(
   assertLedgerSource(input.source);
   assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
   assertNonEmptyString(input.grantedAt, 'grantedAt');
+  if (input.grant !== undefined) {
+    assertProductGrant(input.grant);
+  }
   assertPayload(input.payload);
 
   return input;
@@ -134,20 +140,24 @@ function createTransaction(grant: EntitlementLedgerGrant): ProductGrantTransacti
 }
 
 function createIdempotencyIndexKey(grant: EntitlementLedgerGrant): string {
-  return `${grant.source}:${grant.playerId}:${grant.idempotencyKey}`;
+  return createCompositeKey([grant.source, grant.playerId, grant.idempotencyKey]);
 }
 
 function createLedgerEntryId(grant: EntitlementLedgerGrant): string {
   return [
     'ledger',
-    grant.source,
-    normalizeIdSegment(grant.playerId),
-    normalizeIdSegment(grant.idempotencyKey),
+    encodeIdSegment(grant.source),
+    encodeIdSegment(grant.playerId),
+    encodeIdSegment(grant.idempotencyKey),
   ].join('_');
 }
 
-function normalizeIdSegment(value: string): string {
-  return value.replaceAll(/[^a-zA-Z0-9]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 48);
+function createCompositeKey(parts: readonly string[]): string {
+  return JSON.stringify(parts);
+}
+
+function encodeIdSegment(value: string): string {
+  return `${value.length}:${encodeURIComponent(value)}`;
 }
 
 function assertRecord(input: unknown, label: string): asserts input is Record<string, unknown> {
@@ -168,10 +178,36 @@ function assertBoolean(input: unknown, label: string): asserts input is boolean 
   }
 }
 
+function assertFiniteNumber(input: unknown, label: string): asserts input is number {
+  if (typeof input !== 'number' || !Number.isFinite(input)) {
+    throw new Error(`${label} must be a finite number.`);
+  }
+}
+
 function assertLedgerSource(input: unknown): asserts input is EntitlementLedgerSource {
   if (input !== 'purchase' && input !== 'ad_reward' && input !== 'admin') {
     throw new Error('source must be purchase, ad_reward, or admin.');
   }
+}
+
+function assertProductGrant(input: unknown): asserts input is ProductGrant {
+  assertRecord(input, 'grant');
+
+  if (input.type === 'currency') {
+    if (input.currency !== 'coin' && input.currency !== 'gem') {
+      throw new Error('grant.currency must be coin or gem.');
+    }
+
+    assertFiniteNumber(input.amount, 'grant.amount');
+    return;
+  }
+
+  if (input.type === 'entitlement') {
+    assertNonEmptyString(input.entitlement, 'grant.entitlement');
+    return;
+  }
+
+  throw new Error('grant.type must be currency or entitlement.');
 }
 
 function assertPayload(input: unknown): asserts input is EntitlementLedgerPayload {

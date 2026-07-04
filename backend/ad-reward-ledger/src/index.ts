@@ -75,7 +75,7 @@ export function claimAdReward(
     completedAt: request.completedAt,
   };
 
-  if (placement.reward.currency !== undefined) {
+  if (placement.reward.type === 'currency') {
     payload.currency = placement.reward.currency;
   }
 

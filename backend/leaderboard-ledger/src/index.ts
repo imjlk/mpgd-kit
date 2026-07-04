@@ -126,26 +126,30 @@ export function createInMemoryLeaderboardLedger(): InMemoryLeaderboardLedger {
 }
 
 function createRunKey(request: RecordLeaderboardScoreRequest): string {
-  return [
+  return createCompositeKey([
     request.target,
     request.leaderboardId,
     request.playerId,
     request.runId,
-  ].join(':');
+  ]);
 }
 
 function createLedgerEntryId(request: RecordLeaderboardScoreRequest): string {
   return [
     'leaderboard',
-    normalizeIdSegment(request.target),
-    normalizeIdSegment(request.leaderboardId),
-    normalizeIdSegment(request.playerId),
-    normalizeIdSegment(request.runId),
+    encodeIdSegment(request.target),
+    encodeIdSegment(request.leaderboardId),
+    encodeIdSegment(request.playerId),
+    encodeIdSegment(request.runId),
   ].join('_');
 }
 
-function normalizeIdSegment(value: string): string {
-  return value.replaceAll(/[^a-zA-Z0-9]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 48);
+function createCompositeKey(parts: readonly string[]): string {
+  return JSON.stringify(parts);
+}
+
+function encodeIdSegment(value: string): string {
+  return `${value.length}:${encodeURIComponent(value)}`;
 }
 
 function assertRecord(input: unknown, label: string): asserts input is Record<string, unknown> {

@@ -44,7 +44,9 @@ describe('adapter-browser', () => {
     });
 
     await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
-      coins: 25,
+      value: {
+        coins: 25,
+      },
     });
   });
 });
