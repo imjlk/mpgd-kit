@@ -10,7 +10,8 @@
   },
   "scripts": {
     "i18n:build": "pnpm --dir packages/i18n paraglide:build",
-    "check": "pnpm i18n:build && ttsc --noEmit -p tsconfig.tools.json && pnpm -r --if-present check",
+    "check": "pnpm i18n:build && ttsc --noEmit -p tsconfig.tools.json && pnpm validate:game-assets && pnpm -r --if-present check",
+    "dev:game": "pnpm --dir apps/game-phaser dev",
     "lint": "pnpm -r --if-present lint",
     "format": "pnpm -r --if-present format",
     "fix": "pnpm -r --if-present fix",
@@ -22,6 +23,7 @@
     "validate:target-config": "node tools/run-ttsx.mjs tools/validate-target-config.ts",
     "validate:effective-config": "node tools/run-ttsx.mjs tools/validate-effective-target-config.ts",
     "validate:targets": "node tools/run-ttsx.mjs tools/target/validate-target-config.ts",
+    "validate:game-assets": "node tools/run-ttsx.mjs tools/validate-game-assets.ts",
     "build:target": "pnpm i18n:build && node tools/run-ttsx.mjs tools/target/build-target.ts",
     "build:web": "pnpm build:target web-preview production",
     "build:android": "pnpm build:target android production",

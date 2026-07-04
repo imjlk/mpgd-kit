@@ -1,10 +1,6 @@
-export const assetManifest = {
-  images: {
-    orb: {
-      key: 'orb',
-      path: '/assets/ui/orb.svg',
-    },
-  },
-} as const;
-
-export type ImageAssetKey = keyof typeof assetManifest.images;
+export {
+  gameAssetManifest as assetManifest,
+  gameImageAssets,
+  listGameAssets,
+} from '../game/assets/manifest';
+export type { GameImageAssetKey as ImageAssetKey } from '../game/assets/manifest';

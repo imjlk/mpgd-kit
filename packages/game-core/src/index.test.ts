@@ -35,4 +35,31 @@ describe('game-core', () => {
 
     expect(finishStage(session, 20_000).cleared).toBe(true);
   });
+
+  it('supports stage-specific completion rules', () => {
+    let session = createGameSession({
+      id: 'custom-session',
+      seed: 7,
+      startedAtMs: 0,
+    });
+
+    for (let index = 0; index < 3; index += 1) {
+      session = recordHit(session);
+    }
+
+    session = recordMiss(recordMiss(session));
+
+    expect(
+      finishStage(session, 5_000, {
+        hitGoal: 3,
+        maxMisses: 1,
+      }).cleared,
+    ).toBe(false);
+    expect(
+      finishStage(session, 5_000, {
+        hitGoal: 3,
+        maxMisses: 2,
+      }).cleared,
+    ).toBe(true);
+  });
 });

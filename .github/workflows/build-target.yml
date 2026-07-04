@@ -53,6 +53,7 @@ jobs:
       - run: pnpm validate:target-config
       - run: pnpm validate:effective-config
       - run: pnpm validate:targets
+      - run: pnpm validate:game-assets
       - run: pnpm smoke:target-config
       - run: pnpm smoke:effective-config
       - run: pnpm smoke:adapter-effective-config

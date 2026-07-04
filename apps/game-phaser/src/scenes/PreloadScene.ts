@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 
-import { assetManifest } from '../runtime/assetManifest';
+import { gameImageAssets } from '../game/assets/manifest';
 
 export class PreloadScene extends Phaser.Scene {
   constructor() {
@@ -8,8 +8,12 @@ export class PreloadScene extends Phaser.Scene {
   }
 
   preload(): void {
-    const { orb } = assetManifest.images;
-    this.load.svg(orb.key, orb.path, { width: 96, height: 96 });
+    for (const asset of Object.values(gameImageAssets)) {
+      this.load.svg(asset.key, asset.path, {
+        width: asset.width,
+        height: asset.height,
+      });
+    }
   }
 
   create(): void {

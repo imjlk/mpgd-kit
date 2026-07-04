@@ -17,6 +17,11 @@ export interface FinishedStage {
   readonly cleared: boolean;
 }
 
+export interface FinishStageOptions {
+  readonly hitGoal?: number;
+  readonly maxMisses?: number;
+}
+
 export function createGameSession(input: {
   readonly id: string;
   readonly seed: number;
@@ -54,7 +59,13 @@ export function recordMiss(session: GameSession): GameSession {
   };
 }
 
-export function finishStage(session: GameSession, finishedAtMs: number): FinishedStage {
+export function finishStage(
+  session: GameSession,
+  finishedAtMs: number,
+  options: FinishStageOptions = {},
+): FinishedStage {
+  const hitGoal = options.hitGoal ?? 10;
+  const maxMisses = options.maxMisses ?? 5;
   const score = calculateScore({
     hits: session.hits,
     misses: session.misses,
@@ -65,6 +76,6 @@ export function finishStage(session: GameSession, finishedAtMs: number): Finishe
   return {
     session,
     score,
-    cleared: session.hits >= 10 && session.misses <= 5,
+    cleared: session.hits >= hitGoal && session.misses <= maxMisses,
   };
 }

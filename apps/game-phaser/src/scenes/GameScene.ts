@@ -8,6 +8,10 @@ import {
   type GameSession,
 } from '@mpgd/game-core';
 
+import { gameImageAssets } from '../game/assets/manifest';
+import { quickstartStage } from '../game/content/stageConfig';
+import { gameplayActionBindings, type GameplayInputEvent } from '../game/input/actions';
+import { installGameplayInput } from '../game/input/installGameplayInput';
 import type { DemoState } from '../platform/demoState';
 
 export class GameScene extends Phaser.Scene {
@@ -27,10 +31,10 @@ export class GameScene extends Phaser.Scene {
       seed: Date.now(),
       startedAtMs: this.time.now,
     });
-    this.finishAtMs = this.time.now + 15_000;
+    this.finishAtMs = this.time.now + quickstartStage.durationMs;
 
     this.add
-      .text(32, 28, 'Hit the orb', {
+      .text(32, 28, quickstartStage.title, {
         fontFamily: 'Inter, Arial',
         fontSize: '28px',
         color: '#f8fafc',
@@ -58,12 +62,10 @@ export class GameScene extends Phaser.Scene {
       color: '#fff7ad',
     });
 
-    this.target = this.add.image(480, 280, 'orb').setInteractive({ useHandCursor: true });
-    this.target.on('pointerdown', () => this.hitTarget());
-    this.input.on('pointerdown', (_pointer: Phaser.Input.Pointer, objects: unknown[]) => {
-      if (objects.length === 0) {
-        this.miss();
-      }
+    this.target = this.add.image(480, 280, gameImageAssets[quickstartStage.targetImage].key);
+    installGameplayInput(this, {
+      target: this.target,
+      onAction: (event) => this.handleInput(event),
     });
 
     this.moveTarget();
@@ -75,7 +77,10 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    if (this.time.now >= this.finishAtMs || this.session.hits >= 10) {
+    if (
+      this.time.now >= this.finishAtMs ||
+      this.session.hits >= quickstartStage.completion.hitGoal
+    ) {
       this.finish();
       return;
     }
@@ -86,6 +91,11 @@ export class GameScene extends Phaser.Scene {
   renderGameToText(): unknown {
     return {
       session: this.session,
+      stage: {
+        id: quickstartStage.id,
+        completion: quickstartStage.completion,
+        input: gameplayActionBindings,
+      },
       target:
         this.target === null
           ? null
@@ -96,6 +106,20 @@ export class GameScene extends Phaser.Scene {
             },
       secondsLeft: Math.max(0, Math.ceil((this.finishAtMs - this.time.now) / 1000)),
     };
+  }
+
+  private handleInput(event: GameplayInputEvent): void {
+    switch (event.action) {
+      case 'hit-target':
+        this.hitTarget();
+        return;
+      case 'miss':
+        this.miss();
+        return;
+      case 'return-lobby':
+        this.scene.start('LobbyScene');
+        return;
+    }
   }
 
   private hitTarget(): void {
@@ -126,9 +150,18 @@ export class GameScene extends Phaser.Scene {
 
     this.tweens.add({
       targets: this.target,
-      x: Phaser.Math.Between(140, 820),
-      y: Phaser.Math.Between(150, 460),
-      scale: Phaser.Math.FloatBetween(0.55, 0.9),
+      x: Phaser.Math.Between(
+        quickstartStage.targetBounds.minX,
+        quickstartStage.targetBounds.maxX,
+      ),
+      y: Phaser.Math.Between(
+        quickstartStage.targetBounds.minY,
+        quickstartStage.targetBounds.maxY,
+      ),
+      scale: Phaser.Math.FloatBetween(
+        quickstartStage.targetScale.min,
+        quickstartStage.targetScale.max,
+      ),
       duration: 180,
       ease: 'Sine.easeOut',
     });
@@ -140,8 +173,10 @@ export class GameScene extends Phaser.Scene {
     }
 
     const secondsLeft = Math.max(0, Math.ceil((this.finishAtMs - this.time.now) / 1000));
+    const { hitGoal, maxMisses } = quickstartStage.completion;
+
     this.scoreText.setText(
-      `Hits ${this.session.hits}/10  Misses ${this.session.misses}  Combo ${this.session.combo}`,
+      `Hits ${this.session.hits}/${hitGoal}  Misses ${this.session.misses}/${maxMisses}  Combo ${this.session.combo}`,
     );
     this.timerText.setText(`${secondsLeft}s`);
   }
@@ -151,7 +186,7 @@ export class GameScene extends Phaser.Scene {
       return;
     }
 
-    const result = finishStage(this.session, this.time.now);
+    const result = finishStage(this.session, this.time.now, quickstartStage.completion);
     this.scene.start('ResultScene', result);
     this.session = null;
   }

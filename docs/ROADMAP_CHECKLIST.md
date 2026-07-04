@@ -231,3 +231,11 @@ to run xcodebuild archive.
 - [x] graph target-config preset covers effective config generation and demo action flow
 - [x] Android emulator smoke verifies the debug APK embeds Android effective config before launch
 - [x] iOS simulator smoke verifies the simulator app embeds iOS effective config before launch
+
+## Phase 18 - Real Game Development Readiness
+
+- [x] Phaser game app separates manifest assets, authored stage config, and input actions
+- [x] `packages/game-core` supports stage-specific completion thresholds
+- [x] root `validate:game-assets` checks public asset registration and budget
+- [x] game-development guide documents the daily loop and platform readiness checks
+- [x] root `tsconfig.json` exposes the graph project for ttsc graph MCP workflows

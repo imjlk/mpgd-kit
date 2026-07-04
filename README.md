@@ -26,6 +26,7 @@ pnpm validate:i18n
 pnpm validate:target-config
 pnpm validate:effective-config
 pnpm validate:targets
+pnpm validate:game-assets
 pnpm smoke:i18n
 pnpm smoke:target-config
 pnpm smoke:effective-config
@@ -36,6 +37,17 @@ pnpm build:web
 pnpm smoke:target web-preview
 pnpm build:ait
 ```
+
+For day-to-day game work:
+
+```sh
+pnpm dev:game
+pnpm validate:game-assets
+pnpm graph:demo
+```
+
+See [Game Development Guide](docs/GAME_DEVELOPMENT.md) for the Phaser game
+module boundaries, asset workflow, and platform readiness checks.
 
 ## Versioning and Changesets
 
