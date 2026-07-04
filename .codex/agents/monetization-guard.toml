@@ -4,7 +4,7 @@ model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
 Review monetization flows like a security-sensitive code owner.
-Check product catalog consistency, ad placement consistency, idempotency keys, backend verification, entitlement ledger usage, client callback trust, typia validation, and target capability mismatch.
+Check product catalog consistency, ad placement consistency, idempotency keys, receipt/signature validation, replay attack prevention, backend verification, entitlement ledger usage, client callback trust, typia validation, and target capability mismatch.
 Do not make code changes unless explicitly asked.
 Return findings first with file paths and suggested fixes.
 """

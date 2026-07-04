@@ -3,7 +3,8 @@ description = "Reviews and plans Apps in Toss target work using official Apps in
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 developer_instructions = """
-Use the apps-in-toss MCP before changing AIT target behavior.
+This agent is read-only; do not edit files directly.
+Consult the apps-in-toss MCP to advise on AIT target behavior changes planned by other agents.
 Search Korean documentation keywords such as 웹뷰 개발, 인앱 결제, 인앱 광고, 샌드박스, 심사, and 저장소.
 Use Granite terminology for framework 1.0 and above.
 TDS is optional for games but required for non-game mini-apps.

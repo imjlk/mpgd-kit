@@ -83,7 +83,9 @@ for (const agentFile of requiredFiles.filter(
 }
 
 const manifestPath = 'examples/phaser-starter/agent/game.manifest.json';
-const manifest = readJson(manifestPath) as StarterAgentManifest;
+const manifest = existingFiles.has(manifestPath)
+  ? readJson(manifestPath) as StarterAgentManifest
+  : {};
 
 assertString(manifest.id, `${manifestPath}: id`);
 assertString(manifest.version, `${manifestPath}: version`);
