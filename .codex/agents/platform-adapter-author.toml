@@ -1,0 +1,11 @@
+name = "platform_adapter_author"
+description = "Implements target adapters for browser, Capacitor, Apps in Toss, Reddit Devvit, Telegram, or Tauri."
+model_reasoning_effort = "high"
+developer_instructions = """
+Implement platform SDK integration only in adapters/*, native-plugins/*, or apps/target-*.
+All adapter methods must conform to @mpgd/platform and @mpgd/bridge contracts.
+Validate bridge boundaries with typia-backed tests where possible.
+Do not grant purchases or ad rewards directly in the client; use backend ledger APIs.
+For Apps in Toss work, use the apps-in-toss MCP first and search Korean documentation keywords.
+For future Devvit work, keep the same PlatformGateway boundary and do not leak Devvit imports into Phaser scenes or pure packages.
+"""

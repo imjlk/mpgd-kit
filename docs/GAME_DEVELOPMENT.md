@@ -34,6 +34,7 @@ bridge is already installed by the wrapper, the real bridge wins.
 Starter loop:
 
 ```sh
+pnpm validate:starter-workflow
 pnpm --dir examples/phaser-starter dev
 pnpm --dir examples/phaser-starter check
 pnpm --dir examples/phaser-starter build
@@ -64,6 +65,21 @@ pnpm smoke:target web-preview
 Use `pnpm graph:demo` before changing broad scene/platform flows. The root
 `tsconfig.json` intentionally points at `tsconfig.graph.json` so local ttsc graph
 tools and Codex MCP graph inspection can see the same TypeScript surface.
+
+## Agentic Starter Workflow
+
+The starter includes an agent-facing brief, manifest, and acceptance loop:
+
+- `examples/phaser-starter/agent/brief.template.md`
+- `examples/phaser-starter/agent/game.manifest.json`
+- `examples/phaser-starter/agent/acceptance.md`
+- `.codex/agents/*`
+- `.agents/skills/*`
+
+Use [Agentic Game Workflow](AGENTIC_GAME_WORKFLOW.md) when asking Codex to add a
+new reusable mechanic, evolve the starter, or plan a platform adapter. The
+workflow keeps reusable blocks capability-named and keeps platform SDK imports
+behind adapters, native plugins, or target wrappers.
 
 ## Adding Gameplay
 
