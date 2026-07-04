@@ -22,6 +22,15 @@ Use `apps/game-phaser` when validating the kit itself. The demo intentionally
 exercises player identity, save/load, target feature availability, localization,
 purchase, rewarded ad, leaderboard, and backend ledger paths.
 
+For a local Apps in Toss adapter sandbox, run the demo with the AIT target:
+
+```sh
+pnpm dev:game:ait
+```
+
+Debug builds install an AIT sandbox bridge only as a fallback. If a real AIT
+bridge is already installed by the wrapper, the real bridge wins.
+
 Starter loop:
 
 ```sh

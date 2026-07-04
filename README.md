@@ -41,6 +41,7 @@ For day-to-day work on the SDK demo app:
 
 ```sh
 pnpm dev:game
+pnpm dev:game:ait
 pnpm validate:game-assets
 pnpm graph:demo
 ```

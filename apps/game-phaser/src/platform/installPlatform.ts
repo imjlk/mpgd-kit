@@ -41,10 +41,13 @@ export async function installPlatform(runtime: RuntimeConfig): Promise<PlatformG
     }
 
     case 'ait': {
-      const { createAitPlatformGateway } = await import('@mpgd/adapter-ait');
+      const { createAitPlatformGateway, createAitSandboxBridge } = await import(
+        '@mpgd/adapter-ait'
+      );
       gateway = createAitPlatformGateway({
         appVersion: runtime.appVersion,
         buildId: runtime.buildId,
+        ...(runtime.debug ? { fallbackBridge: createAitSandboxBridge() } : {}),
       });
       break;
     }

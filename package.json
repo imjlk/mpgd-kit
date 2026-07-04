@@ -31,6 +31,7 @@
     "i18n:build": "pnpm --dir packages/i18n paraglide:build",
     "check": "pnpm i18n:build && pnpm validate:public && ttsc --noEmit -p tsconfig.tools.json && pnpm validate:game-assets && pnpm -r --if-present check",
     "dev:game": "pnpm --dir apps/game-phaser dev",
+    "dev:game:ait": "APP_TARGET=ait APP_VERSION=0.0.0-dev BUILD_ID=ait-sandbox pnpm --dir apps/game-phaser dev",
     "lint": "pnpm -r --if-present lint",
     "format": "pnpm -r --if-present format",
     "fix": "pnpm -r --if-present fix",
