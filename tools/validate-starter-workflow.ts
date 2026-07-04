@@ -84,14 +84,12 @@ const requiredMcpRequirements = [
     server: 'apps-in-toss',
     queries: requiredAitQueries,
     name: 'Apps in Toss',
-    queryLabel: 'ait',
   },
   {
     target: 'reddit',
     server: 'devvit',
     queries: requiredDevvitQueries,
     name: 'Devvit',
-    queryLabel: 'reddit',
   },
 ] as const;
 
@@ -250,7 +248,7 @@ function assertMcpRequirement(
       && (candidate as StarterMcpRequirement).server === requirement.server
     );
   });
-  const queryLabel = `${label}.${requirement.queryLabel}.queries`;
+  const queryLabel = `${label}.${requirement.target}.queries`;
 
   if (entry === undefined) {
     failures.push(
