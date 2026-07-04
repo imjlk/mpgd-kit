@@ -320,12 +320,11 @@ async function submitMaxLeaderboardScore(
         return false;
       }
 
-      await redis.zAdd(redisKey, {
-        member: playerId,
-        score,
-      });
+      if (await writeLeaderboardScoreIfLockHeld(lockKey, lockToken, redisKey, playerId, score)) {
+        return true;
+      }
 
-      return true;
+      await delay(leaderboardBackoffBaseMs * (attempt + 1));
     } finally {
       await releaseLeaderboardLock(lockKey, lockToken);
     }
@@ -362,6 +361,32 @@ async function acquireLeaderboardLock(lockKey: string, lockToken: string): Promi
   });
 
   return result === 'OK';
+}
+
+async function writeLeaderboardScoreIfLockHeld(
+  lockKey: string,
+  lockToken: string,
+  redisKey: string,
+  playerId: string,
+  score: number,
+): Promise<boolean> {
+  const transaction = await redis.watch(lockKey);
+  const currentToken = await redis.get(lockKey);
+
+  if (currentToken !== lockToken) {
+    await transaction.unwatch();
+    return false;
+  }
+
+  await transaction.multi();
+  await transaction.zAdd(redisKey, {
+    member: playerId,
+    score,
+  });
+
+  const results = await transaction.exec();
+
+  return Array.isArray(results) && results.length > 0;
 }
 
 async function releaseLeaderboardLock(lockKey: string, lockToken: string): Promise<void> {

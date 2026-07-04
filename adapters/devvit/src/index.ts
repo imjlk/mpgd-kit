@@ -10,6 +10,11 @@ import type { PlatformGateway } from '@mpgd/platform';
 export const defaultDevvitBridgeEndpoint = '/api/mpgd/bridge';
 
 type BridgeErrorResponse = Extract<BridgeResponse, { readonly ok: false }>;
+type DevvitStorageSaveResponse = {
+  readonly saved?: boolean;
+};
+
+const devvitFallbackStoragePrefix = 'mpgd:devvit:fallback:';
 
 export interface DevvitBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
@@ -99,9 +104,23 @@ export function createDevvitPlatformGateway(
       async load(payload) {
         const value = await request<unknown | null>('storage.load', payload);
 
-        return value === null ? null : { value };
+        return value === null ? loadDevvitStorageFallback(payload.key) : { value };
       },
-      save: (payload) => request('storage.save', payload),
+      async save(payload) {
+        const result = await request<DevvitStorageSaveResponse>('storage.save', payload);
+
+        if (result.saved !== true) {
+          if (saveDevvitStorageFallback(payload)) {
+            return;
+          }
+
+          throw new Error(
+            'Devvit storage save was not persisted and local fallback storage is unavailable.',
+          );
+        }
+
+        removeDevvitStorageFallback(payload.key);
+      },
     },
   };
 }
@@ -278,7 +297,9 @@ export function createDevvitSandboxBridge(): DevvitBridge {
             storage.set(key, payload.value);
           }
 
-          return ok(input, {});
+          return ok(input, {
+            saved: key !== undefined,
+          });
         }
 
         default:
@@ -306,4 +327,66 @@ function ok(input: BridgeRequest, data: unknown): BridgeResponse {
     ok: true,
     data,
   };
+}
+
+function loadDevvitStorageFallback(key: string): { readonly value: unknown } | null {
+  const storage = browserLocalStorage();
+
+  if (storage === undefined) {
+    return null;
+  }
+
+  const fallbackKey = devvitStorageFallbackKey(key);
+  const stored = storage.getItem(fallbackKey);
+
+  if (stored === null) {
+    return null;
+  }
+
+  try {
+    return {
+      value: JSON.parse(stored),
+    };
+  } catch {
+    storage.removeItem(fallbackKey);
+    return null;
+  }
+}
+
+function saveDevvitStorageFallback(input: {
+  readonly key: string;
+  readonly value: unknown;
+}): boolean {
+  const storage = browserLocalStorage();
+
+  if (storage === undefined) {
+    return false;
+  }
+
+  try {
+    storage.setItem(devvitStorageFallbackKey(input.key), JSON.stringify(input.value));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function removeDevvitStorageFallback(key: string): void {
+  const storage = browserLocalStorage();
+
+  if (storage !== undefined) {
+    storage.removeItem(devvitStorageFallbackKey(key));
+  }
+}
+
+function devvitStorageFallbackKey(key: string): string {
+  return `${devvitFallbackStoragePrefix}${encodeURIComponent(key)}`;
+}
+
+function browserLocalStorage(): Storage | undefined {
+  try {
+    return globalThis.localStorage;
+  } catch {
+    return undefined;
+  }
 }

@@ -11,7 +11,8 @@
     }
   },
   "server": {
-    "entry": "dist/server/index.cjs"
+    "dir": "dist/server",
+    "entry": "index.cjs"
   },
   "permissions": {
     "redis": true,
