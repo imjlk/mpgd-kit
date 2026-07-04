@@ -12,6 +12,35 @@ clear boundaries:
 - `apps/game-phaser/src/scenes` adapts state into Phaser objects, cameras, tweens,
   and scene transitions.
 
+## Starter vs Demo
+
+Use `examples/phaser-starter` when starting a new game. It is a private example
+workspace that shows the reusable mpgd wiring without inheriting the demo game's
+score, coin, result, or mock purchase loop.
+
+Use `apps/game-phaser` when validating the kit itself. The demo intentionally
+exercises player identity, save/load, target feature availability, localization,
+purchase, rewarded ad, leaderboard, and backend ledger paths.
+
+Starter loop:
+
+```sh
+pnpm --dir examples/phaser-starter dev
+pnpm --dir examples/phaser-starter check
+pnpm --dir examples/phaser-starter build
+```
+
+To connect the starter to a local or deployed game-services backend, set:
+
+```sh
+VITE_MPGD_GAME_SERVICES_URL=http://localhost:5173
+VITE_MPGD_GAME_SERVICES_TARGET=android
+VITE_MPGD_GAME_SERVICES_TRANSPORT=http
+```
+
+Use `VITE_MPGD_GAME_SERVICES_TRANSPORT=orpc` with a `/rpc` URL when testing the
+oRPC client path.
+
 ## Daily Loop
 
 ```sh

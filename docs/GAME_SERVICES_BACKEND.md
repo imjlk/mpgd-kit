@@ -9,6 +9,12 @@ The reusable monetization and social path is ledger-first:
 
 This keeps client callbacks from becoming the source of truth.
 
+For deployment steps, D1 setup, public HTTP/oRPC smoke, and service binding
+examples, see [Cloudflare Worker Deploy Runbook](CLOUDFLARE_WORKER_DEPLOY.md).
+For real Google Play, App Store, AdMob SSV, Apps in Toss, and leaderboard
+verifier follow-ups, see
+[Production Integration Roadmap](PRODUCTION_INTEGRATION_ROADMAP.md).
+
 ## Packages
 
 - `@mpgd/game-services-contract`: oRPC v2 beta contract for the authoritative

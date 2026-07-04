@@ -1,0 +1,32 @@
+{
+  "name": "@mpgd/example-phaser-starter",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Minimal Phaser starter showing mpgd platform, i18n, target-config, and game-services wiring.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@mpgd/ad-placements": "workspace:*",
+    "@mpgd/adapter-browser": "workspace:*",
+    "@mpgd/game-services-client": "workspace:*",
+    "@mpgd/i18n": "workspace:*",
+    "@mpgd/platform-contract": "workspace:*",
+    "@mpgd/product-catalog": "workspace:*",
+    "@mpgd/target-config": "workspace:*",
+    "phaser": "4.2.0"
+  },
+  "devDependencies": {
+    "@ttsc/unplugin": "0.16.9",
+    "@types/node": "^24.0.0",
+    "ttsc": "0.16.9",
+    "typescript": "rc",
+    "vite": "^8.1.3"
+  }
+}

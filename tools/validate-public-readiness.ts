@@ -127,7 +127,7 @@ const manualGateMessages = {
   githubSettings:
     'Confirm GitHub repository settings: branch protection, Actions permissions, issue/discussion settings, and repository topics.',
   deploymentSecrets:
-    'Confirm deployment secrets: NPM_TOKEN, Cloudflare account/API token, Android signing secrets, iOS signing credentials, and Apps in Toss release credentials.',
+    'Confirm deployment credentials: npm OIDC trusted publishing/provenance, Cloudflare deploy auth, Android signing secrets, iOS signing credentials, and Apps in Toss release credentials. Use NPM_TOKEN only for a non-OIDC fallback.',
   secretScan:
     'Run an external secret scanner such as gitleaks before changing repository visibility.',
 } as const;

@@ -2,6 +2,20 @@
 
 Use this before making the repository public or announcing a package release.
 
+## Current Public Repo Status
+
+- GitHub repository visibility is public.
+- GitHub topics are set for Phaser, Vite, TypeScript, Capacitor, Apps in Toss,
+  Cloudflare Workers, and game development discovery.
+- GitHub Issues, Discussions, and security policy are enabled.
+- The main branch has force-push and delete protection enabled.
+- Required PR checks and required reviews are not enforced yet. Keep this as an
+  explicit follow-up once the public contribution flow is settled.
+- `gitleaks detect --source . --redact --verbose` was run before public polish
+  work and reported no leaks.
+- npm publishing policy is trusted publishing/OIDC with provenance. Token-based
+  publishing should be treated as a fallback, not the default path.
+
 ## Repository
 
 - [ ] `LICENSE`, `CONTRIBUTING.md`, `SECURITY.md`, and `CODE_OF_CONDUCT.md` are present.
@@ -42,7 +56,7 @@ pnpm smoke:target web-preview
 
 - [ ] Run an external secret scanner such as `gitleaks detect --source .` before changing repository visibility.
 - [ ] Confirm GitHub repository settings: branch protection, default branch, Actions permissions, issue/discussion settings, and repository topics.
-- [ ] Confirm npm publishing settings: `NPM_TOKEN`, package access, provenance policy, and Sampo release automation permissions.
+- [ ] Confirm npm publishing settings: OIDC trusted publishing, provenance policy, package access, and Sampo release automation permissions. Use `NPM_TOKEN` only for a fallback publish path.
 - [ ] Confirm Cloudflare Worker settings: account id, API token, D1 database binding, and whether `MPGD_STORE` should stay `memory` for demo-only deploys.
 - [ ] Confirm Android release settings: package id, Google Play app, billing products, AdMob app/placement ids, signing keystore, and Play Games leaderboard ids.
 - [ ] Confirm iOS release settings: bundle id, App Store app, StoreKit products, AdMob app/placement ids, signing credentials, and Game Center leaderboard ids.

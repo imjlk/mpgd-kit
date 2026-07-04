@@ -4,6 +4,7 @@ packages:
   - 'adapters/*'
   - 'native-plugins/*'
   - 'backend/*'
+  - 'examples/*'
 allowBuilds:
   '@sentry/cli': true
   '@swc/core': true
