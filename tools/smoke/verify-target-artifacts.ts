@@ -1,11 +1,18 @@
-import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, statSync } from 'node:fs';
 
 import typia from 'typia';
 
 import type { ReleaseManifest } from '@mpgd/release-manifest';
 
 import { readJsonFile } from '../io';
+import {
+  assertEmbeddedTargetConfig,
+  embeddedTargetConfigFileName,
+  readEmbeddedTargetConfigFromDirectory,
+  readEmbeddedTargetConfigFromFile,
+  readEmbeddedTargetConfigFromZip,
+  type EmbeddedTargetConfigEvidence,
+} from './embedded-target-config';
 
 const requiredTargets = ['web-preview', 'android', 'ios', 'ait'] as const;
 type SmokeTarget = (typeof requiredTargets)[number];
@@ -39,28 +46,46 @@ export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = required
 
     assertPathExists(entry.effectiveConfig.path, `${target} effective target config`);
 
-    const effectiveConfigContent = readFileSync(entry.effectiveConfig.path, 'utf8');
-    const effectiveConfigDigest = sha256(effectiveConfigContent);
-    const effectiveConfig = JSON.parse(effectiveConfigContent) as { readonly target?: string };
-
-    if (effectiveConfig.target !== target) {
-      throw new Error(
-        `Release manifest target ${target} points to effective config for ${String(
-          effectiveConfig.target,
-        )}.`,
-      );
-    }
-
-    if (effectiveConfigDigest !== entry.effectiveConfig.digest) {
-      throw new Error(`Release manifest target ${target} effective config digest mismatch.`);
-    }
+    assertEmbeddedTargetConfig(
+      readEmbeddedTargetConfigFromFile(
+        entry.effectiveConfig.path,
+        `${target} effective target config artifact`,
+      ),
+      {
+        target,
+        digest: entry.effectiveConfig.digest,
+      },
+    );
+    assertEmbeddedTargetConfig(readReleaseEmbeddedTargetConfig(target), {
+      target,
+      digest: entry.effectiveConfig.digest,
+    });
   }
 
   console.log(`Target smoke passed: ${targets.join(', ')}`);
 }
 
-function sha256(content: string): string {
-  return createHash('sha256').update(content).digest('hex');
+function readReleaseEmbeddedTargetConfig(target: SmokeTarget): EmbeddedTargetConfigEvidence {
+  switch (target) {
+    case 'web-preview':
+      return readEmbeddedTargetConfigFromFile(
+        `artifacts/web-preview/${embeddedTargetConfigFileName}`,
+        'web-preview artifact',
+      );
+    case 'android':
+      return readEmbeddedTargetConfigFromZip(requiredArtifacts.android, 'android release AAB');
+    case 'ios':
+      return readEmbeddedTargetConfigFromDirectory(requiredArtifacts.ios, 'ios native artifact');
+    case 'ait':
+      try {
+        return readEmbeddedTargetConfigFromZip(requiredArtifacts.ait, 'ait release artifact');
+      } catch {
+        return readEmbeddedTargetConfigFromDirectory(
+          'apps/target-ait/public/game',
+          'ait wrapper webDir',
+        );
+      }
+  }
 }
 
 function assertPathExists(path: string, label: string): void {

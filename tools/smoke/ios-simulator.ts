@@ -1,6 +1,11 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+
+import {
+  assertEmbeddedTargetConfig,
+  readEmbeddedTargetConfigFromDirectory,
+} from './embedded-target-config';
 
 const simulatorName = process.env.MPGD_IOS_SIM_NAME ?? 'iPhone 16';
 const simulatorOs = process.env.MPGD_IOS_SIM_OS ?? 'iOS 18.4';
@@ -48,6 +53,10 @@ run('xcodebuild', xcodebuildArgs, 'apps/mobile-capacitor/ios');
 if (!existsSync(appPath)) {
   throw new Error(`Missing iOS simulator app: ${appPath}`);
 }
+
+const embeddedConfig = readEmbeddedTargetConfigFromDirectory(appPath, 'iOS simulator app');
+assertEmbeddedTargetConfig(embeddedConfig, { target: 'ios' });
+writeFileSync('artifacts/emulator/ios-effective-target.json', embeddedConfig.content);
 
 run('xcrun', ['simctl', 'install', device.udid, appPath]);
 run('xcrun', ['simctl', 'launch', device.udid, bundleId]);

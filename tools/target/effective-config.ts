@@ -22,6 +22,8 @@ export interface EffectiveTargetConfigArtifact {
   readonly version: string;
 }
 
+export const embeddedTargetConfigFileName = 'mpgd-effective-target.json';
+
 export interface EffectiveTargetConfigArtifactIndex {
   readonly version: string;
   readonly artifacts: readonly EffectiveTargetConfigArtifact[];

@@ -3,6 +3,11 @@ import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
+import {
+  assertEmbeddedTargetConfig,
+  readEmbeddedTargetConfigFromZip,
+} from './embedded-target-config';
+
 const defaultAndroidHome = join(homedir(), 'Library/Android/sdk');
 const androidHome = process.env.ANDROID_HOME ?? process.env.ANDROID_SDK_ROOT ?? defaultAndroidHome;
 const adb = join(androidHome, 'platform-tools', 'adb');
@@ -18,6 +23,11 @@ assertExecutable(emulator, 'emulator');
 
 run('pnpm', ['build:android']);
 run('./gradlew', ['assembleDebug', '--no-daemon'], 'apps/mobile-capacitor/android');
+mkdirSync('artifacts/emulator', { recursive: true });
+
+const embeddedConfig = readEmbeddedTargetConfigFromZip(debugApk, 'Android debug APK');
+assertEmbeddedTargetConfig(embeddedConfig, { target: 'android' });
+writeFileSync('artifacts/emulator/android-effective-target.json', embeddedConfig.content);
 
 const serial = getOrStartEmulator();
 run(adb, ['-s', serial, 'wait-for-device']);
@@ -37,7 +47,6 @@ run(adb, [
   '1',
 ]);
 sleep(5_000);
-mkdirSync('artifacts/emulator', { recursive: true });
 run(adb, ['-s', serial, 'shell', 'screencap', '-p', '/sdcard/mpgd-smoke.png']);
 run(adb, ['-s', serial, 'pull', '/sdcard/mpgd-smoke.png', screenshotPath]);
 

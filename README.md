@@ -116,11 +116,12 @@ pnpm smoke:target-config
 
 Effective target config combines `targets.json`, product catalog, ad placements,
 and platform target metadata into per-target SDK configuration bundles. Builds
-write those bundles to `artifacts/target-config/*.json`, and the release manifest
-records each bundle path, version, and sha256 digest. The Phaser demo receives the
-same effective config through its target-configured gateway, so purchase, rewarded
-ad, leaderboard, storage, and localization actions follow the same availability
-model that release artifacts validate.
+write those bundles to `artifacts/target-config/*.json`, embed the active bundle
+as `mpgd-effective-target.json` in each target's web/native payload, and record
+each bundle path, version, and sha256 digest in the release manifest. The Phaser
+demo receives the same effective config through its target-configured gateway, so
+purchase, rewarded ad, leaderboard, storage, and localization actions follow the
+same availability model that release artifacts validate.
 
 ```sh
 pnpm validate:effective-config

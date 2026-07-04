@@ -209,8 +209,9 @@ to run xcodebuild archive.
 - [x] effective config includes product ids, ad placement ids, leaderboard id, storage support, localization, release profile, and nested policy restrictions
 - [x] effective config validator catches enabled products or ads with missing platform ids
 - [x] build tooling writes `artifacts/target-config/*.json`
+- [x] build tooling embeds active `mpgd-effective-target.json` into each target payload
 - [x] release manifest records target config version plus effective config path, version, and sha256 digest
-- [x] target artifact smoke verifies effective config path, digest, and target match
+- [x] target artifact smoke verifies effective config path, digest, target match, and embedded payload match
 
 ## Phase 16 - Demo Effective Config Runtime
 
@@ -228,3 +229,5 @@ to run xcodebuild archive.
 - [x] root test command runs effective config and adapter parity smoke
 - [x] CI and release workflows run effective config validation and parity smoke
 - [x] graph target-config preset covers effective config generation and demo action flow
+- [x] Android emulator smoke verifies the debug APK embeds Android effective config before launch
+- [x] iOS simulator smoke verifies the simulator app embeds iOS effective config before launch

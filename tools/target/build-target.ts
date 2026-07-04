@@ -3,6 +3,7 @@ import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 
 import { readJsonFile } from '../io';
+import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 
 const [targetName = 'web-preview', profile = 'production'] = process.argv.slice(2);
 
@@ -44,6 +45,7 @@ const env = {
 };
 
 run('pnpm', ['--dir', target.gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
+embedEffectiveTargetConfig(targetName, target.gameApp);
 
 switch (target.kind) {
   case 'web': {
@@ -157,6 +159,18 @@ function writeManifest(
     ['manifest:release', target, releaseProfile, artifact, 'artifacts/release-manifest.json'],
     commandEnv,
   );
+}
+
+function embedEffectiveTargetConfig(target: string, gameApp: string): void {
+  const artifact = writeEffectiveTargetConfigs({ targets: [target] }).artifacts.find(
+    (candidate) => candidate.target === target,
+  );
+
+  if (artifact === undefined) {
+    throw new Error(`Failed to generate effective target config for ${target}.`);
+  }
+
+  copyFile(artifact.path, `${gameApp}/dist/${embeddedTargetConfigFileName}`);
 }
 
 function findFileByExtension(directory: string, extension: string): string {
