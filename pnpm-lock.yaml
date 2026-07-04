@@ -11,9 +11,30 @@ importers:
       '@mpgd/ad-placements':
         specifier: workspace:*
         version: link:packages/ad-placements
+      '@mpgd/backend-ad-reward-ledger':
+        specifier: workspace:*
+        version: link:backend/ad-reward-ledger
+      '@mpgd/backend-entitlement-ledger':
+        specifier: workspace:*
+        version: link:backend/entitlement-ledger
+      '@mpgd/backend-leaderboard-ledger':
+        specifier: workspace:*
+        version: link:backend/leaderboard-ledger
+      '@mpgd/backend-purchase-verifier':
+        specifier: workspace:*
+        version: link:backend/purchase-verifier
       '@mpgd/i18n':
         specifier: workspace:*
         version: link:packages/i18n
+      '@mpgd/liveops-client':
+        specifier: workspace:*
+        version: link:packages/liveops-client
+      '@mpgd/monetization-contract':
+        specifier: workspace:*
+        version: link:packages/monetization-contract
+      '@mpgd/platform-contract':
+        specifier: workspace:*
+        version: link:packages/platform-contract
       '@mpgd/product-catalog':
         specifier: workspace:*
         version: link:packages/product-catalog
@@ -131,6 +152,18 @@ importers:
       '@mpgd/adapter-capacitor':
         specifier: workspace:*
         version: link:../../adapters/capacitor
+      '@mpgd/backend-ad-reward-ledger':
+        specifier: workspace:*
+        version: link:../../backend/ad-reward-ledger
+      '@mpgd/backend-entitlement-ledger':
+        specifier: workspace:*
+        version: link:../../backend/entitlement-ledger
+      '@mpgd/backend-leaderboard-ledger':
+        specifier: workspace:*
+        version: link:../../backend/leaderboard-ledger
+      '@mpgd/backend-purchase-verifier':
+        specifier: workspace:*
+        version: link:../../backend/purchase-verifier
       '@mpgd/bridge-protocol':
         specifier: workspace:*
         version: link:../../packages/bridge-protocol
@@ -146,6 +179,9 @@ importers:
       '@mpgd/leaderboard-contract':
         specifier: workspace:*
         version: link:../../packages/leaderboard-contract
+      '@mpgd/liveops-client':
+        specifier: workspace:*
+        version: link:../../packages/liveops-client
       '@mpgd/monetization-contract':
         specifier: workspace:*
         version: link:../../packages/monetization-contract
@@ -257,9 +293,6 @@ importers:
       '@mpgd/monetization-contract':
         specifier: workspace:*
         version: link:../../packages/monetization-contract
-      typia:
-        specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -273,9 +306,19 @@ importers:
       '@mpgd/product-catalog':
         specifier: workspace:*
         version: link:../../packages/product-catalog
-      typia:
-        specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
+    devDependencies:
+      ttsc:
+        specifier: 0.16.9
+        version: 0.16.9
+      typescript:
+        specifier: 7.0.1-rc
+        version: 7.0.1-rc
+
+  backend/leaderboard-ledger:
+    dependencies:
+      '@mpgd/leaderboard-contract':
+        specifier: workspace:*
+        version: link:../../packages/leaderboard-contract
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -295,9 +338,6 @@ importers:
       '@mpgd/product-catalog':
         specifier: workspace:*
         version: link:../../packages/product-catalog
-      typia:
-        specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -431,6 +471,43 @@ importers:
 
   packages/leaderboard-contract:
     devDependencies:
+      ttsc:
+        specifier: 0.16.9
+        version: 0.16.9
+      typescript:
+        specifier: 7.0.1-rc
+        version: 7.0.1-rc
+
+  packages/liveops-client:
+    dependencies:
+      '@mpgd/backend-ad-reward-ledger':
+        specifier: workspace:*
+        version: link:../../backend/ad-reward-ledger
+      '@mpgd/backend-leaderboard-ledger':
+        specifier: workspace:*
+        version: link:../../backend/leaderboard-ledger
+      '@mpgd/backend-purchase-verifier':
+        specifier: workspace:*
+        version: link:../../backend/purchase-verifier
+      '@mpgd/leaderboard-contract':
+        specifier: workspace:*
+        version: link:../leaderboard-contract
+      '@mpgd/monetization-contract':
+        specifier: workspace:*
+        version: link:../monetization-contract
+      '@mpgd/platform-contract':
+        specifier: workspace:*
+        version: link:../platform-contract
+    devDependencies:
+      '@mpgd/ad-placements':
+        specifier: workspace:*
+        version: link:../ad-placements
+      '@mpgd/backend-entitlement-ledger':
+        specifier: workspace:*
+        version: link:../../backend/entitlement-ledger
+      '@mpgd/product-catalog':
+        specifier: workspace:*
+        version: link:../product-catalog
       ttsc:
         specifier: 0.16.9
         version: 0.16.9

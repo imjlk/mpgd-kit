@@ -21,8 +21,7 @@
   "dependencies": {
     "@mpgd/ad-placements": "workspace:*",
     "@mpgd/backend-entitlement-ledger": "workspace:*",
-    "@mpgd/monetization-contract": "workspace:*",
-    "typia": "rc"
+    "@mpgd/monetization-contract": "workspace:*"
   },
   "devDependencies": {
     "ttsc": "0.16.9",

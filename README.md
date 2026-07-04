@@ -31,6 +31,7 @@ pnpm smoke:i18n
 pnpm smoke:target-config
 pnpm smoke:effective-config
 pnpm smoke:adapter-effective-config
+pnpm smoke:liveops
 pnpm graph:preflight
 pnpm pack:packages
 pnpm build:web
@@ -48,6 +49,11 @@ pnpm graph:demo
 
 See [Game Development Guide](docs/GAME_DEVELOPMENT.md) for the Phaser game
 module boundaries, asset workflow, and platform readiness checks.
+
+Reusable purchase, rewarded ad, and leaderboard flows are documented in
+[LiveOps Vertical Slice](docs/LIVEOPS_VERTICAL_SLICE.md). The demo uses the same
+ledger-first path: platform callbacks provide evidence, and save changes happen
+only after backend verifier or ledger APIs accept the action.
 
 ## Versioning and Changesets
 

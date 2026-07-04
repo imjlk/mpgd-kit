@@ -1,5 +1,5 @@
 {
-  "name": "@mpgd/backend-purchase-verifier",
+  "name": "@mpgd/liveops-client",
   "version": "0.0.0",
   "type": "module",
   "sideEffects": false,
@@ -16,14 +16,21 @@
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
-    "fix": "ttsc fix"
+    "fix": "ttsc fix",
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/liveops-client/src/index.test.ts"
   },
   "dependencies": {
-    "@mpgd/backend-entitlement-ledger": "workspace:*",
+    "@mpgd/backend-ad-reward-ledger": "workspace:*",
+    "@mpgd/backend-leaderboard-ledger": "workspace:*",
+    "@mpgd/backend-purchase-verifier": "workspace:*",
+    "@mpgd/leaderboard-contract": "workspace:*",
     "@mpgd/monetization-contract": "workspace:*",
-    "@mpgd/product-catalog": "workspace:*"
+    "@mpgd/platform-contract": "workspace:*"
   },
   "devDependencies": {
+    "@mpgd/ad-placements": "workspace:*",
+    "@mpgd/backend-entitlement-ledger": "workspace:*",
+    "@mpgd/product-catalog": "workspace:*",
     "ttsc": "0.16.9",
     "typescript": "7.0.1-rc"
   },

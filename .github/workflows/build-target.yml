@@ -57,6 +57,7 @@ jobs:
       - run: pnpm smoke:target-config
       - run: pnpm smoke:effective-config
       - run: pnpm smoke:adapter-effective-config
+      - run: pnpm smoke:liveops
       - run: pnpm build:target ${{ inputs.target }} ${{ inputs.profile }}
       - run: pnpm smoke:target ${{ inputs.target }}
 

@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 
 import type { FinishedStage } from '@mpgd/game-core';
 import { m, type MpgdLocale } from '@mpgd/i18n';
+import { createLiveOpsIdempotencyKey, type LiveOpsClient } from '@mpgd/liveops-client';
 import type { PlatformGateway } from '@mpgd/platform-contract';
 import {
   getEffectiveAdPlacementConfig,
@@ -10,6 +11,7 @@ import {
   type PlatformFeature,
 } from '@mpgd/target-config';
 
+import { createDemoLiveOpsClient } from '../platform/demoLiveOps';
 import {
   addCoinsToSave,
   applyScoreToSave,
@@ -19,6 +21,7 @@ import {
 
 export class ResultScene extends Phaser.Scene {
   private platform: PlatformGateway | null = null;
+  private liveOps: LiveOpsClient | null = null;
   private state: DemoState | null = null;
   private statusText: Phaser.GameObjects.Text | null = null;
   private saveText: Phaser.GameObjects.Text | null = null;
@@ -43,6 +46,7 @@ export class ResultScene extends Phaser.Scene {
     };
     this.result = result;
     this.registry.set('demoState', this.state);
+    this.liveOps = createDemoLiveOpsClient(platform, this.state);
     const rewardedAdEnabled = this.isRewardedContinueEnabled();
     const purchaseEnabled = this.isCoinProductEnabled();
     const leaderboardEnabled = this.isLeaderboardEnabled();
@@ -206,14 +210,14 @@ export class ResultScene extends Phaser.Scene {
       return;
     }
 
-    const submission = await this.platform.leaderboard.submitScore({
+    const submission = await this.liveOps?.submitLeaderboardScore({
       leaderboardId: this.effectiveLeaderboardId(),
       score: this.result.score.total,
       runId: this.result.session.id,
       submittedAt: new Date().toISOString(),
     });
     this.setStatus(
-      submission.submitted
+      submission?.submitted === true
         ? m.saved_and_submitted({}, { locale: this.state.locale })
         : `${m.saved({}, { locale: this.state.locale })} ${m.leaderboard_unavailable(
             {},
@@ -233,12 +237,23 @@ export class ResultScene extends Phaser.Scene {
     }
 
     this.setStatus(m.showing_rewarded_ad({}, { locale: this.state.locale }));
-    const reward = await this.platform.ads.showRewarded({
+    if (this.liveOps === null) {
+      this.setStatus(this.unavailableMessage('rewardedAds'));
+      return;
+    }
+
+    const reward = await this.liveOps.claimRewardedAd({
       placementId: 'CONTINUE_AFTER_FAIL',
-      idempotencyKey: `reward-${this.result.session.id}`,
+      idempotencyKey: createLiveOpsIdempotencyKey({
+        target: this.platform.target,
+        playerId: this.state.player.playerId,
+        action: 'rewarded-ad',
+        subjectId: 'CONTINUE_AFTER_FAIL',
+        runId: this.result.session.id,
+      }),
     });
 
-    if (reward.rewardGranted) {
+    if (reward.status === 'granted') {
       this.state = {
         ...this.state,
         save: addCoinsToSave(this.state.save, 10),
@@ -249,7 +264,7 @@ export class ResultScene extends Phaser.Scene {
       this.setStatus(m.reward_granted({}, { locale: this.state.locale }));
     } else {
       this.setStatus(
-        m.reward_unavailable({ status: reward.status }, { locale: this.state.locale }),
+        m.reward_unavailable({ status: reward.reward.status }, { locale: this.state.locale }),
       );
     }
   }
@@ -265,16 +280,27 @@ export class ResultScene extends Phaser.Scene {
     }
 
     this.setStatus(m.opening_purchase({}, { locale: this.state.locale }));
-    const purchase = await this.platform.commerce.purchase({
+    if (this.liveOps === null) {
+      this.setStatus(this.unavailableMessage('iap'));
+      return;
+    }
+
+    const purchase = await this.liveOps.purchase({
       productId: 'COINS_100',
       source: 'result',
-      idempotencyKey: `purchase-${this.result.session.id}`,
+      idempotencyKey: createLiveOpsIdempotencyKey({
+        target: this.platform.target,
+        playerId: this.state.player.playerId,
+        action: 'purchase',
+        subjectId: 'COINS_100',
+        runId: this.result.session.id,
+      }),
     });
 
-    if (purchase.status === 'completed') {
+    if (purchase.status === 'granted') {
       this.state = {
         ...this.state,
-        save: addCoinsToSave(this.state.save, 100),
+        save: addCoinsToSave(this.state.save, this.coinPurchaseAmount()),
       };
       this.registry.set('demoState', this.state);
       await persistDemoSave(this.platform, this.state.save);
@@ -282,7 +308,7 @@ export class ResultScene extends Phaser.Scene {
       this.setStatus(m.purchase_completed({}, { locale: this.state.locale }));
     } else {
       const statusMessage = m.purchase_status(
-        { status: purchase.status },
+        { status: purchase.purchase.status },
         { locale: this.state.locale },
       );
 
@@ -399,6 +425,16 @@ export class ResultScene extends Phaser.Scene {
     return config === undefined || config === null
       ? null
       : (getEffectiveAdPlacementConfig(config, 'CONTINUE_AFTER_FAIL') ?? null);
+  }
+
+  private coinPurchaseAmount(): number {
+    const grant = this.effectiveCoinProduct()?.grant;
+
+    if (grant?.type === 'currency' && grant.currency === 'coin') {
+      return grant.amount;
+    }
+
+    return 0;
   }
 
   private unavailableMessage(feature: PlatformFeature): string {

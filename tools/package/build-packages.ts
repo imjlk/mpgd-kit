@@ -130,6 +130,14 @@ function copySourceRuntimeAssets(srcDir: string, distDir: string): void {
       continue;
     }
 
+    const sourceSibling = entry.endsWith('.d.ts')
+      ? join(srcDir, `${entry.slice(0, -5)}.ts`)
+      : join(srcDir, `${entry.slice(0, -3)}.ts`);
+
+    if (existsSync(sourceSibling)) {
+      continue;
+    }
+
     copyFileSync(sourcePath, join(distDir, entry));
   }
 }

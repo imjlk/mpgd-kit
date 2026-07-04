@@ -1,5 +1,5 @@
 {
-  "name": "@mpgd/backend-entitlement-ledger",
+  "name": "@mpgd/backend-leaderboard-ledger",
   "version": "0.0.0",
   "type": "module",
   "sideEffects": false,
@@ -17,10 +17,10 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs backend/entitlement-ledger/src/index.test.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs backend/leaderboard-ledger/src/index.test.ts"
   },
   "dependencies": {
-    "@mpgd/product-catalog": "workspace:*"
+    "@mpgd/leaderboard-contract": "workspace:*"
   },
   "devDependencies": {
     "ttsc": "0.16.9",

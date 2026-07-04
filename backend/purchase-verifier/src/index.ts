@@ -1,5 +1,3 @@
-import typia from 'typia';
-
 import type { EntitlementLedger } from '@mpgd/backend-entitlement-ledger';
 import type { LogicalProductId } from '@mpgd/monetization-contract';
 import type { ProductCatalog } from '@mpgd/product-catalog';
@@ -18,6 +16,7 @@ export interface VerifyPurchaseRequest {
 export interface VerifyPurchaseResponse {
   readonly verified: boolean;
   readonly ledgerEntryId?: string;
+  readonly alreadyProcessed: boolean;
   readonly reason?: string;
 }
 
@@ -27,8 +26,31 @@ export interface VerifyPurchaseContext {
   readonly now?: () => string;
 }
 
-export const assertVerifyPurchaseRequest = typia.createAssert<VerifyPurchaseRequest>();
-export const assertVerifyPurchaseResponse = typia.createAssert<VerifyPurchaseResponse>();
+export function assertVerifyPurchaseRequest(
+  input: VerifyPurchaseRequest,
+): VerifyPurchaseRequest {
+  assertRecord(input, 'VerifyPurchaseRequest');
+  assertStoreTarget(input.target);
+  assertNonEmptyString(input.playerId, 'playerId');
+  assertNonEmptyString(input.productId, 'productId');
+  assertNonEmptyString(input.platformTransactionId, 'platformTransactionId');
+  assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
+  assertNonEmptyString(input.purchasedAt, 'purchasedAt');
+
+  return input;
+}
+
+export function assertVerifyPurchaseResponse(
+  input: VerifyPurchaseResponse,
+): VerifyPurchaseResponse {
+  assertRecord(input, 'VerifyPurchaseResponse');
+  assertBoolean(input.verified, 'verified');
+  assertOptionalNonEmptyString(input.ledgerEntryId, 'ledgerEntryId');
+  assertBoolean(input.alreadyProcessed, 'alreadyProcessed');
+  assertOptionalNonEmptyString(input.reason, 'reason');
+
+  return input;
+}
 
 export function verifyPurchase(
   input: VerifyPurchaseRequest,
@@ -40,6 +62,7 @@ export function verifyPurchase(
   if (product === undefined) {
     return assertVerifyPurchaseResponse({
       verified: false,
+      alreadyProcessed: false,
       reason: 'UNKNOWN_PRODUCT',
     });
   }
@@ -49,6 +72,7 @@ export function verifyPurchase(
   if (platformProductId === undefined) {
     return assertVerifyPurchaseResponse({
       verified: false,
+      alreadyProcessed: false,
       reason: 'PRODUCT_NOT_AVAILABLE_ON_TARGET',
     });
   }
@@ -72,5 +96,39 @@ export function verifyPurchase(
   return assertVerifyPurchaseResponse({
     verified: true,
     ledgerEntryId: grant.ledgerEntryId,
+    alreadyProcessed: grant.alreadyProcessed,
   });
+}
+
+function assertRecord(input: unknown, label: string): asserts input is Record<string, unknown> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new Error(`${label} must be an object.`);
+  }
+}
+
+function assertStoreTarget(input: unknown): asserts input is VerifyPurchaseRequest['target'] {
+  if (input !== 'android' && input !== 'ios' && input !== 'ait') {
+    throw new Error('target must be android, ios, or ait.');
+  }
+}
+
+function assertNonEmptyString(input: unknown, label: string): asserts input is string {
+  if (typeof input !== 'string' || input.length === 0) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+}
+
+function assertOptionalNonEmptyString(
+  input: unknown,
+  label: string,
+): asserts input is string | undefined {
+  if (input !== undefined) {
+    assertNonEmptyString(input, label);
+  }
+}
+
+function assertBoolean(input: unknown, label: string): asserts input is boolean {
+  if (typeof input !== 'boolean') {
+    throw new Error(`${label} must be a boolean.`);
+  }
 }

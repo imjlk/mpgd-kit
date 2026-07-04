@@ -9,6 +9,7 @@
     "vite.config.ts",
     "../../packages/**/*.ts",
     "../../adapters/**/*.ts",
+    "../../backend/**/*.ts",
     "../../native-plugins/*/src/**/*.ts"
   ],
   "exclude": [

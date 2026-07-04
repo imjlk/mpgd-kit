@@ -7,9 +7,9 @@
   "include": [
     "tools/**/*.ts",
     "backend/**/*.ts",
-    "packages/bridge-protocol/src/**/*.ts",
-    "packages/target-config/src/**/*.ts",
-    "packages/target-config/test/**/*.ts"
+    "packages/**/*.ts",
+    "adapters/**/*.ts",
+    "native-plugins/capacitor-game-services/src/**/*.ts"
   ],
   "exclude": [
     "**/dist/**"

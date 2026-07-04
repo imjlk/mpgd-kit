@@ -239,3 +239,12 @@ to run xcodebuild archive.
 - [x] root `validate:game-assets` checks public asset registration and budget
 - [x] game-development guide documents the daily loop and platform readiness checks
 - [x] root `tsconfig.json` exposes the graph project for ttsc graph MCP workflows
+
+## Phase 19 - Ledger-First LiveOps Vertical Slice
+
+- [x] reusable `@mpgd/liveops-client` orchestrates purchase, rewarded ad, and leaderboard flows
+- [x] purchase grants go through backend purchase verifier plus entitlement ledger
+- [x] rewarded ad grants go through backend ad reward ledger after platform reward evidence
+- [x] leaderboard submissions are recorded by backend leaderboard ledger
+- [x] Phaser demo result actions use the liveops client before mutating save state
+- [x] `pnpm smoke:liveops` validates Android, iOS, and Apps in Toss target simulations
