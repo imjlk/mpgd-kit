@@ -48,6 +48,7 @@ const requiredFiles = [
   'examples/phaser-starter/AGENTS.md',
   'examples/phaser-starter/agent/brief.template.md',
   'examples/phaser-starter/agent/acceptance.md',
+  'examples/phaser-starter/agent/game.manifest.schema.json',
   'examples/phaser-starter/agent/game.manifest.json',
 ] as const;
 
@@ -84,28 +85,30 @@ for (const agentFile of requiredFiles.filter(
 
 const manifestPath = 'examples/phaser-starter/agent/game.manifest.json';
 const manifest = existingFiles.has(manifestPath)
-  ? readJson(manifestPath) as StarterAgentManifest
-  : {};
+  ? readJson(manifestPath) as StarterAgentManifest | null
+  : null;
 
-assertString(manifest.id, `${manifestPath}: id`);
-assertString(manifest.version, `${manifestPath}: version`);
-assertEqual(manifest.engine, 'phaser-4', `${manifestPath}: engine`);
-assertStringArray(manifest.targets, `${manifestPath}: targets`);
-assertIncludes(manifest.targets, 'ait', `${manifestPath}: targets`);
-assertIncludes(manifest.targets, 'web-preview', `${manifestPath}: targets`);
-assertStringArray(manifest.futureTargets, `${manifestPath}: futureTargets`);
-assertIncludes(manifest.futureTargets, 'reddit', `${manifestPath}: futureTargets`);
+if (manifest !== null) {
+  assertString(manifest.id, `${manifestPath}: id`);
+  assertString(manifest.version, `${manifestPath}: version`);
+  assertEqual(manifest.engine, 'phaser-4', `${manifestPath}: engine`);
+  assertStringArray(manifest.targets, `${manifestPath}: targets`);
+  assertIncludes(manifest.targets, 'ait', `${manifestPath}: targets`);
+  assertIncludes(manifest.targets, 'web-preview', `${manifestPath}: targets`);
+  assertStringArray(manifest.futureTargets, `${manifestPath}: futureTargets`);
+  assertIncludes(manifest.futureTargets, 'reddit', `${manifestPath}: futureTargets`);
 
-assertString(manifest.agentWorkflow?.brief, `${manifestPath}: agentWorkflow.brief`);
-assertString(manifest.agentWorkflow?.acceptance, `${manifestPath}: agentWorkflow.acceptance`);
-assertMcpRequirements(manifest.agentWorkflow?.mcp, `${manifestPath}: agentWorkflow.mcp`);
-assertBlocks(manifest.blocks, `${manifestPath}: blocks`);
-assertStringArray(manifest.acceptance?.commands, `${manifestPath}: acceptance.commands`);
-assertIncludes(
-  manifest.acceptance?.commands,
-  'pnpm validate:starter-workflow',
-  `${manifestPath}: acceptance.commands`,
-);
+  assertString(manifest.agentWorkflow?.brief, `${manifestPath}: agentWorkflow.brief`);
+  assertString(manifest.agentWorkflow?.acceptance, `${manifestPath}: agentWorkflow.acceptance`);
+  assertMcpRequirements(manifest.agentWorkflow?.mcp, `${manifestPath}: agentWorkflow.mcp`);
+  assertBlocks(manifest.blocks, `${manifestPath}: blocks`);
+  assertStringArray(manifest.acceptance?.commands, `${manifestPath}: acceptance.commands`);
+  assertIncludes(
+    manifest.acceptance?.commands,
+    'pnpm validate:starter-workflow',
+    `${manifestPath}: acceptance.commands`,
+  );
+}
 
 if (failures.length > 0) {
   throw new Error(`Starter workflow validation failed:\n- ${failures.join('\n- ')}`);
@@ -175,6 +178,12 @@ function assertBlocks(input: unknown, label: string): void {
 
   for (const [index, rawBlock] of input.entries()) {
     const blockLabel = `${label}[${index}]`;
+
+    if (typeof rawBlock !== 'object' || rawBlock === null) {
+      failures.push(`${blockLabel} must be an object.`);
+      continue;
+    }
+
     const block = rawBlock as StarterBlock;
     assertString(block.id, `${blockLabel}.id`);
     assertString(block.kind, `${blockLabel}.kind`);
@@ -224,7 +233,7 @@ function readText(path: string): string {
   return readFileSync(path, 'utf8');
 }
 
-function readJson(path: string): unknown {
+function readJson(path: string): unknown | null {
   try {
     return JSON.parse(readText(path)) as unknown;
   } catch (error) {
@@ -232,6 +241,6 @@ function readJson(path: string): unknown {
       `${path}: failed to parse JSON: ${error instanceof Error ? error.message : String(error)}.`,
     );
 
-    return {};
+    return null;
   }
 }

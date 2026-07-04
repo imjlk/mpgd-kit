@@ -1,0 +1,159 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/imjlk/mpgd-kit/examples/phaser-starter/agent/game.manifest.schema.json",
+  "title": "MPGD Phaser Starter Agent Manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "version",
+    "engine",
+    "intent",
+    "targets",
+    "futureTargets",
+    "agentWorkflow",
+    "blocks",
+    "acceptance"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "engine": {
+      "const": "phaser-4"
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "targets": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "futureTargets": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "agentWorkflow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["brief", "acceptance", "mcp"],
+      "properties": {
+        "brief": {
+          "type": "string",
+          "minLength": 1
+        },
+        "acceptance": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mcp": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mcpRequirement"
+          }
+        }
+      }
+    },
+    "blocks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/block"
+      },
+      "minItems": 1
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["commands", "manual"],
+      "properties": {
+        "commands": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "manual": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      }
+    }
+  },
+  "$defs": {
+    "mcpRequirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["target", "server", "queries"],
+      "properties": {
+        "target": {
+          "type": "string"
+        },
+        "server": {
+          "type": "string"
+        },
+        "queries": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        }
+      }
+    },
+    "block": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind", "entry", "capabilities", "gotchas"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z]+(\\.[a-z0-9-]+)+$"
+        },
+        "kind": {
+          "type": "string",
+          "minLength": 1
+        },
+        "entry": {
+          "type": "string",
+          "minLength": 1
+        },
+        "capabilities": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "gotchas": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      }
+    }
+  }
+}
