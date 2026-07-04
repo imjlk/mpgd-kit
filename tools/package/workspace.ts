@@ -22,16 +22,16 @@ export interface WorkspacePackage {
 
 const packageRoots = ['packages', 'adapters', 'native-plugins', 'backend'];
 
-export function discoverBuildablePackages(): WorkspacePackage[] {
-  return packageRoots
-    .flatMap((root) => discoverPackagesInRoot(root))
-    .sort((left, right) => left.name.localeCompare(right.name));
-}
-
 export function discoverPublishablePackages(): WorkspacePackage[] {
   return packageRoots
     .flatMap((root) => discoverPackagesInRoot(root))
     .filter((workspacePackage) => workspacePackage.packageJson.private !== true)
+    .sort((left, right) => left.name.localeCompare(right.name));
+}
+
+export function discoverBuildablePackages(): WorkspacePackage[] {
+  return packageRoots
+    .flatMap((root) => discoverPackagesInRoot(root))
     .sort((left, right) => left.name.localeCompare(right.name));
 }
 

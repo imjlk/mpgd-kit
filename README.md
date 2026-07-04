@@ -10,7 +10,7 @@ distribution target gets the right adapter and validation path.
 ## What Works Today
 
 - Phaser 4 browser game shell and validation demo.
-- Browser preview, Capacitor Android/iOS, and Apps in Toss WebView target builds.
+- Browser preview, Capacitor Android/iOS, Apps in Toss WebView, and Reddit Devvit Web target builds.
 - `PlatformGateway` contracts for identity, storage, IAP, ads, leaderboard, and lifecycle.
 - Target-specific feature availability through `@mpgd/target-config`.
 - Effective target config bundles for products, ad placements, storage, release profile, and localization.
@@ -43,6 +43,7 @@ For day-to-day work on the SDK demo app:
 ```sh
 pnpm dev:game
 pnpm dev:game:ait
+pnpm dev:game:devvit
 pnpm validate:game-assets
 pnpm graph:demo
 ```
@@ -63,7 +64,8 @@ Codex agents, skills, starter manifests, and Apps in Toss MCP guidance.
 
 - `@mpgd/platform`: shared platform gateway surface.
 - `@mpgd/bridge`: typed native bridge request/response protocol.
-- `@mpgd/adapter-browser`, `@mpgd/adapter-capacitor`, `@mpgd/adapter-ait`: target adapters.
+- `@mpgd/adapter-browser`, `@mpgd/adapter-capacitor`, `@mpgd/adapter-ait`,
+  `@mpgd/adapter-devvit`: target adapters.
 - `@mpgd/target-config`: target runtime, capability, release profile, and platform policy availability.
 - `@mpgd/catalog`: product catalog and ad placement config schemas plus sample JSON.
 - `@mpgd/i18n`: Paraglide-backed localized messages.
@@ -113,13 +115,15 @@ pnpm validate:target-config
 pnpm validate:effective-config
 pnpm build:web
 pnpm smoke:target web-preview
+pnpm build:devvit
+pnpm smoke:target reddit
 ```
 
 ## What Is Sample or Mock
 
 - `packages/catalog/catalog.json` uses sample product IDs.
 - `packages/catalog/placements.json` uses sample ad placement IDs.
-- Browser, Capacitor, and Apps in Toss adapters include mock or bridge-contract
+- Browser, Capacitor, Apps in Toss, and Devvit adapters include mock or bridge-contract
   behavior suitable for local validation.
 - Worker `MPGD_STORE = "memory"` is a starter default, not production persistence.
 - The in-repo backend verifier accepts sample evidence. Real Google Play, App
@@ -132,6 +136,7 @@ pnpm smoke:target web-preview
 - StoreKit/App Store signed transaction or Server API verification.
 - AdMob rewarded ad server-side verification callbacks.
 - Apps in Toss production IAP/ad callback verification.
+- Devvit production payments/ad reward mapping and publish/playtest credentials.
 - Real product, ad placement, leaderboard, app, package, and bundle IDs.
 - Cloudflare D1 provisioning and deployment credentials for persistent Worker
   deployments.
@@ -170,6 +175,8 @@ pnpm pack:packages
 pnpm build:web
 pnpm smoke:target web-preview
 pnpm build:ait
+pnpm build:devvit
+pnpm smoke:target reddit
 ```
 
 Package versioning and release PRs use Sampo:
@@ -207,3 +214,11 @@ The Apps in Toss target currently uses SDK 2.x compatible `granite.config.ts`
 and `ait build` scripts. SDK 3.x keeps the feature interface compatible but
 renames the config file to `apps-in-toss.config.ts`, so that migration should be
 handled as a dedicated follow-up.
+
+## Reddit Devvit
+
+The Reddit target uses Devvit Web 0.13.x. `pnpm build:devvit` builds the Phaser
+game with `APP_TARGET=reddit`, copies it to `apps/target-devvit/dist/client`,
+builds the Devvit server bridge to CJS, and writes the release manifest. Live
+`devvit playtest`, `devvit upload`, and `devvit publish` remain local commands
+because they depend on Reddit auth state in `~/.devvit/token`.

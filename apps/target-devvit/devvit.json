@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
+  "name": "mpgd-kit",
+  "post": {
+    "dir": "dist/client",
+    "entrypoints": {
+      "default": {
+        "entry": "index.html",
+        "height": "tall"
+      }
+    }
+  },
+  "server": {
+    "dir": "dist/server",
+    "entry": "index.cjs"
+  },
+  "permissions": {
+    "redis": true,
+    "reddit": {
+      "enable": true
+    },
+    "payments": false,
+    "realtime": false
+  },
+  "menu": {
+    "items": [
+      {
+        "label": "Create mpgd game post",
+        "description": "Create a playable mpgd-kit Phaser post.",
+        "forUserType": "moderator",
+        "location": "subreddit",
+        "endpoint": "/internal/menu/create-post"
+      }
+    ]
+  },
+  "scripts": {
+    "dev": "pnpm dev:prepare && pnpm build:server -- --watch",
+    "build": "pnpm build"
+  }
+}

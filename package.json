@@ -32,6 +32,7 @@
     "check": "pnpm i18n:build && pnpm validate:public && ttsc --noEmit -p tsconfig.tools.json && pnpm validate:game-assets && pnpm validate:starter-workflow && pnpm -r --if-present check",
     "dev:game": "pnpm --dir apps/game-phaser dev",
     "dev:game:ait": "APP_TARGET=ait APP_VERSION=0.0.0-dev BUILD_ID=ait-sandbox pnpm --dir apps/game-phaser dev",
+    "dev:game:devvit": "APP_TARGET=reddit APP_VERSION=0.0.0-dev BUILD_ID=devvit-sandbox pnpm --dir apps/game-phaser dev",
     "lint": "pnpm -r --if-present lint",
     "format": "pnpm -r --if-present format",
     "fix": "pnpm -r --if-present fix",
@@ -51,6 +52,7 @@
     "build:android": "pnpm build:target android production",
     "build:ios": "pnpm build:target ios production",
     "build:ait": "pnpm build:target ait production",
+    "build:devvit": "pnpm build:target reddit production",
     "build:effective-config": "node tools/run-ttsx.mjs tools/target/generate-effective-target-config.ts",
     "build:packages": "pnpm i18n:build && node tools/run-ttsx.mjs tools/package/build-packages.ts",
     "pack:packages": "pnpm build:packages && node tools/run-ttsx.mjs tools/package/pack-packages.ts",
@@ -84,6 +86,7 @@
   },
   "devDependencies": {
     "@mpgd/analytics": "workspace:*",
+    "@mpgd/adapter-devvit": "workspace:*",
     "@mpgd/backend-ad-reward-ledger": "workspace:*",
     "@mpgd/backend-entitlement-ledger": "workspace:*",
     "@mpgd/backend-leaderboard-ledger": "workspace:*",

@@ -5,6 +5,7 @@ import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform';
 import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
+import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
 import {
   getEffectiveAdPlacementConfig,
   getEffectiveProductConfig,
@@ -32,13 +33,16 @@ const targetAdPlacements = adPlacements.placements.map((placement) => ({
 const adPlacementTypes = new Map<string, 'rewarded' | 'interstitial'>(
   targetAdPlacements.map((placement) => [placement.id, placement.type]),
 );
+type AdapterBridgeTarget = 'android' | 'ios' | 'ait' | 'reddit';
+type CapacitorBridgeTarget = Extract<AdapterBridgeTarget, 'android' | 'ios'>;
 
 await verifyBrowserAdapter();
 await verifyCapacitorAdapter('android');
 await verifyCapacitorAdapter('ios');
 await verifyAitAdapter();
+await verifyDevvitAdapter();
 
-console.log('Adapter effective target config smoke passed: browser, android, ios, ait');
+console.log('Adapter effective target config smoke passed: browser, android, ios, ait, reddit');
 
 async function verifyBrowserAdapter(): Promise<void> {
   const gateway = wrapGateway('web-preview', createBrowserPlatformGateway());
@@ -70,7 +74,7 @@ async function verifyBrowserAdapter(): Promise<void> {
   );
 }
 
-async function verifyCapacitorAdapter(target: 'android' | 'ios'): Promise<void> {
+async function verifyCapacitorAdapter(target: CapacitorBridgeTarget): Promise<void> {
   const bridge = createRecordingBridge(target);
   const gateway = wrapGateway(
     target,
@@ -167,6 +171,45 @@ async function verifyAitAdapter(): Promise<void> {
   );
 }
 
+async function verifyDevvitAdapter(): Promise<void> {
+  const bridge = createRecordingBridge('reddit');
+  const gateway = wrapGateway(
+    'reddit',
+    createDevvitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'build-reddit',
+      bridge,
+    }),
+  );
+  const runtime = await gateway.getTargetRuntime();
+  const effectiveConfig = requireEffectiveConfig(runtime.effectiveConfig, 'reddit');
+
+  assertEqual(effectiveConfig.target, 'reddit', 'reddit effective target');
+  assertEqual(
+    getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
+    false,
+    'reddit product should be disabled',
+  );
+  assertEqual(
+    getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
+    false,
+    'reddit rewarded placement should be disabled',
+  );
+
+  await gateway.leaderboard.submitScore({
+    leaderboardId: 'default',
+    score: 1,
+    runId: 'reddit-parity-run',
+    submittedAt: new Date().toISOString(),
+  });
+
+  assertDeepEqual(
+    bridge.methods.slice(1),
+    ['leaderboard.submitScore'],
+    'reddit adapter should delegate enabled leaderboard actions',
+  );
+}
+
 function requireEffectiveConfig(
   config: EffectiveTargetConfig | undefined,
   target: string,
@@ -196,7 +239,7 @@ function wrapGateway(configTarget: string, gateway: PlatformGateway) {
   });
 }
 
-function createRecordingBridge(target: 'android' | 'ios' | 'ait') {
+function createRecordingBridge(target: AdapterBridgeTarget) {
   const methods: BridgeMethod[] = [];
 
   return {
@@ -213,7 +256,10 @@ function createRecordingBridge(target: 'android' | 'ios' | 'ait') {
   };
 }
 
-function responseDataForMethod(target: 'android' | 'ios' | 'ait', method: BridgeMethod): unknown {
+function responseDataForMethod(
+  target: AdapterBridgeTarget,
+  method: BridgeMethod,
+): unknown {
   switch (method) {
     case 'runtime.getCapabilities':
       return enabledCapabilities(target);
@@ -237,8 +283,9 @@ function responseDataForMethod(target: 'android' | 'ios' | 'ait', method: Bridge
       return [];
     case 'ads.preload':
     case 'leaderboard.open':
-    case 'storage.save':
       return undefined;
+    case 'storage.save':
+      return target === 'reddit' ? {} : undefined;
     case 'ads.showRewarded':
       return {
         status: 'completed',
@@ -257,17 +304,17 @@ function responseDataForMethod(target: 'android' | 'ios' | 'ait', method: Bridge
   }
 }
 
-function enabledCapabilities(target: 'android' | 'ios' | 'ait'): PlatformCapabilities {
+function enabledCapabilities(target: AdapterBridgeTarget): PlatformCapabilities {
   return {
-    nativeIap: true,
-    nativeAds: true,
-    rewardedAds: true,
-    interstitialAds: true,
+    nativeIap: target !== 'reddit',
+    nativeAds: target !== 'reddit',
+    rewardedAds: target !== 'reddit',
+    interstitialAds: target !== 'reddit',
     nativeLeaderboard: true,
     achievements: false,
-    cloudSave: false,
-    socialShare: target === 'ait',
-    haptics: true,
+    cloudSave: target === 'reddit',
+    socialShare: target === 'ait' || target === 'reddit',
+    haptics: target !== 'reddit',
     localizedContent: true,
   };
 }

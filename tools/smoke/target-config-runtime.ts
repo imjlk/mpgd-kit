@@ -31,7 +31,7 @@ const platformFeatures = [
   'leaderboard',
   'localization',
 ] as const satisfies readonly PlatformFeature[];
-const configTargets = ['web-preview', 'android', 'ios', 'ait'] as const;
+const configTargets = ['web-preview', 'android', 'ios', 'ait', 'reddit'] as const;
 
 for (const target of configTargets) {
   await verifyConfigTarget(target);
@@ -113,6 +113,59 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       'web-preview ad placements should be target-disabled',
     );
     await verifyWebPreviewFallbacks(gateway);
+    return;
+  }
+
+  if (configTarget === 'reddit') {
+    assertEqual(
+      getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
+      'target-disabled',
+      'reddit products should be target-disabled',
+    );
+    assertEqual(
+      getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.reason,
+      'target-disabled',
+      'reddit ad placements should be target-disabled',
+    );
+    assertEqual(
+      runtime.features.leaderboard.reason,
+      'available',
+      'reddit leaderboard should be available',
+    );
+    assertDeepEqual(
+      await gateway.commerce.purchase({
+        productId: 'COINS_100',
+        source: 'shop',
+        idempotencyKey: 'reddit-purchase',
+      }),
+      {
+        status: 'cancelled',
+        entitlementIds: [],
+      },
+      'reddit purchase should be disabled',
+    );
+    assertDeepEqual(
+      await gateway.ads.showRewarded({
+        placementId: 'CONTINUE_AFTER_FAIL',
+        idempotencyKey: 'reddit-reward',
+      }),
+      {
+        status: 'unavailable',
+        rewardGranted: false,
+      },
+      'reddit rewarded ad should be unavailable',
+    );
+    await gateway.leaderboard.submitScore({
+      leaderboardId: 'default',
+      score: 1,
+      runId: 'reddit-run',
+      submittedAt: new Date().toISOString(),
+    });
+    assertDeepEqual(
+      targetGateway.calls,
+      ['submitScore'],
+      'reddit should delegate enabled leaderboard actions',
+    );
     return;
   }
 
@@ -233,15 +286,17 @@ function createTargetGateway(target: PlatformTarget): {
     gateway: {
       target,
       async getCapabilities() {
+        const isReddit = target === 'reddit';
+
         return {
-          nativeIap: true,
-          nativeAds: true,
-          rewardedAds: true,
-          interstitialAds: true,
+          nativeIap: !isReddit,
+          nativeAds: !isReddit,
+          rewardedAds: !isReddit,
+          interstitialAds: !isReddit,
           nativeLeaderboard: true,
           achievements: false,
-          cloudSave: false,
-          socialShare: target === 'ait',
+          cloudSave: isReddit,
+          socialShare: target === 'ait' || target === 'reddit',
           haptics: target === 'android' || target === 'ios' || target === 'ait',
           localizedContent: true,
         };

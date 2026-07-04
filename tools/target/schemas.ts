@@ -1,6 +1,11 @@
 import typia from 'typia';
 
-export type TargetKind = 'web' | 'capacitor-android' | 'capacitor-ios' | 'apps-in-toss';
+export type TargetKind =
+  | 'web'
+  | 'capacitor-android'
+  | 'capacitor-ios'
+  | 'apps-in-toss'
+  | 'devvit-web';
 
 export interface BaseTargetConfig {
   readonly kind: TargetKind;
@@ -27,10 +32,18 @@ export interface AppsInTossTargetConfig extends BaseTargetConfig {
   readonly artifact: '.ait';
 }
 
+export interface DevvitTargetConfig extends BaseTargetConfig {
+  readonly kind: 'devvit-web';
+  readonly wrapperApp: string;
+  readonly webDir: string;
+  readonly artifact: 'devvit';
+}
+
 export type PlatformTargetConfig =
   | WebTargetConfig
   | CapacitorTargetConfig
-  | AppsInTossTargetConfig;
+  | AppsInTossTargetConfig
+  | DevvitTargetConfig;
 
 export interface PlatformTargetsConfig {
   readonly targets: Record<string, PlatformTargetConfig>;

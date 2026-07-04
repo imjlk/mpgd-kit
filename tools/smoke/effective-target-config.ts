@@ -27,6 +27,28 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     return;
   }
 
+  if (target === 'reddit') {
+    assertEqual(
+      config.monetization.products.every((product) => !product.enabled),
+      true,
+      'reddit products should be disabled until Devvit payments are wired',
+    );
+    assertEqual(
+      config.ads.placements.every((placement) => !placement.enabled),
+      true,
+      'reddit ads should be disabled until Devvit ad rewards are wired',
+    );
+    assertEqual(config.leaderboard.enabled, true, 'reddit leaderboard should be enabled');
+    assertEqual(
+      config.leaderboard.defaultLeaderboardId,
+      'default',
+      'reddit leaderboard id should be stable',
+    );
+    assertEqual(config.storage.support, 'native', 'reddit should use Devvit server storage');
+    assertEqual(config.localization.enabled, true, 'reddit localization should be enabled');
+    return;
+  }
+
   assertEqual(
     config.monetization.products.every((product) => product.enabled),
     true,

@@ -14,7 +14,7 @@ import {
   type EmbeddedTargetConfigEvidence,
 } from './embedded-target-config';
 
-const requiredTargets = ['web-preview', 'android', 'ios', 'ait'] as const;
+const requiredTargets = ['web-preview', 'android', 'ios', 'ait', 'reddit'] as const;
 type SmokeTarget = (typeof requiredTargets)[number];
 
 const knownTargets = new Set<string>(requiredTargets);
@@ -25,6 +25,11 @@ const requiredArtifacts: Record<SmokeTarget, string> = {
   android: 'release-output/android/app-release.aab',
   ios: 'apps/mobile-capacitor/ios',
   ait: 'release-output/ait/mpgd-kit.ait',
+  reddit: 'apps/target-devvit/dist/client/index.html',
+};
+
+const extraRequiredArtifacts: Partial<Record<SmokeTarget, readonly string[]>> = {
+  reddit: ['apps/target-devvit/dist/server/index.cjs'],
 };
 
 export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = requiredTargets): void {
@@ -39,6 +44,10 @@ export function verifyTargetArtifacts(targets: readonly SmokeTarget[] = required
 
     const expectedArtifact = requiredArtifacts[target];
     assertPathExists(expectedArtifact, `${target} artifact`);
+
+    for (const extraArtifact of extraRequiredArtifacts[target] ?? []) {
+      assertPathExists(extraArtifact, `${target} required artifact`);
+    }
 
     if (entry.artifact.length === 0) {
       throw new Error(`Release manifest target ${target} has an empty artifact path.`);
@@ -85,6 +94,11 @@ function readReleaseEmbeddedTargetConfig(target: SmokeTarget): EmbeddedTargetCon
           'ait wrapper webDir',
         );
       }
+    case 'reddit':
+      return readEmbeddedTargetConfigFromDirectory(
+        'apps/target-devvit/dist/client',
+        'reddit Devvit client artifact',
+      );
   }
 }
 

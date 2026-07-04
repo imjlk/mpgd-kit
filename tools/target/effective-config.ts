@@ -219,6 +219,7 @@ function toEffectivePlatformTargetMetadata(
         webDir: config.webDir,
       };
     case 'apps-in-toss':
+    case 'devvit-web':
       return {
         ...base,
         artifact: config.artifact,
@@ -237,6 +238,8 @@ function platformKindForRuntime(runtime: EffectiveTargetConfig['runtime']): stri
       return 'capacitor-ios';
     case 'apps-in-toss':
       return 'apps-in-toss';
+    case 'devvit-web':
+      return 'devvit-web';
   }
 }
 

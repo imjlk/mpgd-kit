@@ -7,7 +7,10 @@ import type {
 } from '@mpgd/platform';
 
 export type GameServicesStoreTarget = Extract<PlatformTarget, 'android' | 'ios' | 'ait'>;
-export type GameServicesLedgerTarget = Extract<PlatformTarget, 'browser' | 'android' | 'ios' | 'ait'>;
+export type GameServicesLedgerTarget = Extract<
+  PlatformTarget,
+  'browser' | 'android' | 'ios' | 'ait' | 'reddit'
+>;
 
 export type PurchaseIdempotencyKey = string;
 export type AdRewardIdempotencyKey = string;
@@ -237,8 +240,14 @@ function assertStoreTarget(input: unknown): asserts input is GameServicesStoreTa
 }
 
 function assertLeaderboardTarget(input: unknown): asserts input is GameServicesLedgerTarget {
-  if (input !== 'browser' && input !== 'android' && input !== 'ios' && input !== 'ait') {
-    throw new Error('target must be browser, android, ios, or ait.');
+  if (
+    input !== 'browser'
+    && input !== 'android'
+    && input !== 'ios'
+    && input !== 'ait'
+    && input !== 'reddit'
+  ) {
+    throw new Error('target must be browser, android, ios, ait, or reddit.');
   }
 }
 

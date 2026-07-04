@@ -258,6 +258,15 @@ to run xcodebuild archive.
 
 - [x] `@mpgd/game-services` defines the reusable oRPC v2 beta contract
 - [x] `@mpgd/game-services` exposes async store-backed backend APIs, oRPC router, and fetch handlers
+
 - [x] `apps/game-services-worker` provides a Cloudflare WorkerEntrypoint starter for HTTP, oRPC, and service binding RPC
 - [x] `apps/game-services-worker` uses the Cloudflare Vite plugin for local dev, production build, preview, and deploy
 - [x] `pnpm smoke:game-services:worker` validates local Worker HTTP, oRPC, service binding, and Vite build surfaces
+
+## Phase 22 - Reddit Devvit Web Target
+
+- [x] `@mpgd/adapter-devvit` added without Devvit SDK imports
+- [x] `reddit` target config added with Devvit Web runtime metadata
+- [x] `apps/target-devvit` wrapper added with `/api/mpgd/bridge`
+- [x] `pnpm build:devvit` builds Phaser client artifacts and Devvit server CJS bundle
+- [x] target config, effective config, adapter parity, and target artifact smoke cover `reddit`

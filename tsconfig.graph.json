@@ -12,6 +12,7 @@
     "native-plugins/capacitor-game-services/src/**/*.ts",
     "apps/game-phaser/src/**/*.ts",
     "apps/target-ait/src/**/*.ts",
+    "apps/target-devvit/src/**/*.ts",
     "apps/mobile-capacitor/capacitor.config.ts"
   ],
   "exclude": [

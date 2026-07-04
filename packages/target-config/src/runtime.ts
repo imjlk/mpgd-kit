@@ -16,9 +16,15 @@ export type TargetRuntimeKind =
   | 'web-preview'
   | 'capacitor-android'
   | 'capacitor-ios'
-  | 'apps-in-toss';
+  | 'apps-in-toss'
+  | 'devvit-web';
 
-export type ReleaseProfile = 'web-preview' | 'google-play' | 'app-store' | 'apps-in-toss';
+export type ReleaseProfile =
+  | 'web-preview'
+  | 'google-play'
+  | 'app-store'
+  | 'apps-in-toss'
+  | 'devvit';
 
 export type StorageSupport = 'local' | 'native' | 'none';
 

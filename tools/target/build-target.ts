@@ -8,7 +8,7 @@ import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './eff
 const [targetName = 'web-preview', profile = 'production'] = process.argv.slice(2);
 
 interface BuildTargetConfig {
-  readonly kind: 'web' | 'capacitor-android' | 'capacitor-ios' | 'apps-in-toss';
+  readonly kind: 'web' | 'capacitor-android' | 'capacitor-ios' | 'apps-in-toss' | 'devvit-web';
   readonly gameApp: string;
   readonly adapter: string;
   readonly output?: string;
@@ -66,6 +66,29 @@ switch (target.kind) {
     const releaseArtifact = 'release-output/ait/mpgd-kit.ait';
     copyFile(aitArtifact, releaseArtifact);
     writeManifest(targetName, profile, releaseArtifact, env);
+    break;
+  }
+
+  case 'devvit-web': {
+    const webDir = requireString(target.webDir, `${targetName}.webDir`);
+    const wrapperApp = requireString(target.wrapperApp, `${targetName}.wrapperApp`);
+    replaceDirectory(`${target.gameApp}/dist`, webDir);
+    run(
+      'pnpm',
+      [
+        '--dir',
+        wrapperApp,
+        'exec',
+        'vite',
+        'build',
+        '--config',
+        'vite.server.config.ts',
+        '--mode',
+        profile,
+      ],
+      env,
+    );
+    writeManifest(targetName, profile, `${wrapperApp}/dist`, env);
     break;
   }
 

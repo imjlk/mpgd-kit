@@ -29,6 +29,14 @@
       "adapter": "ait",
       "webDir": "apps/target-ait/public/game",
       "artifact": ".ait"
+    },
+    "reddit": {
+      "kind": "devvit-web",
+      "gameApp": "apps/game-phaser",
+      "wrapperApp": "apps/target-devvit",
+      "adapter": "devvit",
+      "webDir": "apps/target-devvit/dist/client",
+      "artifact": "devvit"
     }
   }
 }

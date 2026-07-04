@@ -31,7 +31,17 @@ interface StarterMcpRequirement {
   readonly queries?: unknown;
 }
 
+interface McpConfig {
+  readonly mcpServers?: unknown;
+}
+
+interface McpServerConfig {
+  readonly command?: unknown;
+  readonly args?: unknown;
+}
+
 const requiredFiles = [
+  '.mcp.json',
   '.codex/config.toml',
   '.codex/agents/codebase-explorer.toml',
   '.codex/agents/phaser-scene-builder.toml',
@@ -60,6 +70,28 @@ const requiredAitQueries = [
   '심사',
   '저장소',
 ] as const;
+const requiredDevvitQueries = [
+  'Devvit Web',
+  'devvit.json',
+  'Vite',
+  'Redis',
+  'playtest',
+  'payments',
+] as const;
+const requiredMcpRequirements = [
+  {
+    target: 'ait',
+    server: 'apps-in-toss',
+    queries: requiredAitQueries,
+    name: 'Apps in Toss',
+  },
+  {
+    target: 'reddit',
+    server: 'devvit',
+    queries: requiredDevvitQueries,
+    name: 'Devvit',
+  },
+] as const;
 
 const failures: string[] = [];
 
@@ -81,6 +113,10 @@ for (const agentFile of requiredFiles.filter(
   (file) => file.startsWith('.codex/agents/') && existingFiles.has(file),
 )) {
   validateAgentDefinition(agentFile);
+}
+
+if (existingFiles.has('.mcp.json')) {
+  validateMcpConfig('.mcp.json');
 }
 
 const manifestPath = 'examples/phaser-starter/agent/game.manifest.json';
@@ -149,29 +185,81 @@ function validateAgentDefinition(path: string): void {
   }
 }
 
+function validateMcpConfig(path: string): void {
+  const config = readJson(path) as McpConfig | null;
+
+  if (config === null) {
+    return;
+  }
+
+  if (typeof config.mcpServers !== 'object' || config.mcpServers === null) {
+    failures.push(`${path}: mcpServers must be an object.`);
+    return;
+  }
+
+  const servers = config.mcpServers as Record<string, McpServerConfig>;
+
+  assertMcpServerCommand(servers['ttsc-graph'], '@ttsc/graph', `${path}: ttsc-graph`);
+  assertMcpServerCommand(servers.devvit, '@devvit/mcp', `${path}: devvit`);
+}
+
+function assertMcpServerCommand(
+  server: McpServerConfig | undefined,
+  packageName: string,
+  label: string,
+): void {
+  if (server === undefined) {
+    failures.push(`${label} MCP server is required.`);
+    return;
+  }
+
+  assertEqual(server.command, 'npx', `${label}.command`);
+
+  if (!Array.isArray(server.args)) {
+    failures.push(`${label}.args must be an array.`);
+    return;
+  }
+
+  assertIncludes(server.args, '-y', `${label}.args`);
+  assertIncludes(server.args, packageName, `${label}.args`);
+}
+
 function assertMcpRequirements(input: unknown, label: string): void {
   if (!Array.isArray(input)) {
     failures.push(`${label} must be an array.`);
     return;
   }
 
-  const aitMcp = input.find((entry): entry is StarterMcpRequirement => {
+  for (const requirement of requiredMcpRequirements) {
+    assertMcpRequirement(input, label, requirement);
+  }
+}
+
+function assertMcpRequirement(
+  input: readonly unknown[],
+  label: string,
+  requirement: (typeof requiredMcpRequirements)[number],
+): void {
+  const entry = input.find((candidate): candidate is StarterMcpRequirement => {
     return (
-      typeof entry === 'object'
-      && entry !== null
-      && (entry as StarterMcpRequirement).target === 'ait'
-      && (entry as StarterMcpRequirement).server === 'apps-in-toss'
+      typeof candidate === 'object'
+      && candidate !== null
+      && (candidate as StarterMcpRequirement).target === requirement.target
+      && (candidate as StarterMcpRequirement).server === requirement.server
     );
   });
+  const queryLabel = `${label}.${requirement.target}.queries`;
 
-  if (aitMcp === undefined) {
-    failures.push(`${label} must include an Apps in Toss MCP requirement for ait.`);
+  if (entry === undefined) {
+    failures.push(
+      `${label} must include a ${requirement.name} MCP requirement for ${requirement.target}.`,
+    );
     return;
   }
 
-  assertStringArray(aitMcp.queries, `${label}.ait.queries`);
-  for (const query of requiredAitQueries) {
-    assertIncludes(aitMcp.queries, query, `${label}.ait.queries`);
+  assertStringArray(entry.queries, queryLabel);
+  for (const query of requirement.queries) {
+    assertIncludes(entry.queries, query, queryLabel);
   }
 }
 

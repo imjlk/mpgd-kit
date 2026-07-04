@@ -27,7 +27,7 @@ export function createDemoGameServicesClient(
   platform: PlatformGateway,
   state: DemoState,
 ): GameServicesClient | null {
-  if (!isStoreGameServicesTarget(platform.target)) {
+  if (!isDemoGameServicesTarget(platform.target)) {
     return null;
   }
 
@@ -39,8 +39,8 @@ export function createDemoGameServicesClient(
   });
 }
 
-function isStoreGameServicesTarget(
+function isDemoGameServicesTarget(
   target: PlatformTarget,
-): target is 'android' | 'ios' | 'ait' {
-  return target === 'android' || target === 'ios' || target === 'ait';
+): target is 'android' | 'ios' | 'ait' | 'reddit' {
+  return target === 'android' || target === 'ios' || target === 'ait' || target === 'reddit';
 }
