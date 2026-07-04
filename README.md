@@ -19,6 +19,7 @@ It starts with a Phaser 4 + Vite game and keeps platform concerns behind contrac
 
 ```sh
 pnpm install
+pnpm validate:public
 pnpm check
 pnpm validate:catalog
 pnpm validate:ads
@@ -50,6 +51,9 @@ pnpm graph:demo
 See [Game Development Guide](docs/GAME_DEVELOPMENT.md) for the Phaser game
 module boundaries, asset workflow, and platform readiness checks.
 
+Before making the repository public or publishing packages, use the
+[Public Release Checklist](docs/PUBLIC_RELEASE_CHECKLIST.md).
+
 Reusable purchase, rewarded ad, and leaderboard flows are documented in
 [LiveOps Vertical Slice](docs/LIVEOPS_VERTICAL_SLICE.md). The demo uses the same
 ledger-first path: platform callbacks provide evidence, and save changes happen
@@ -79,6 +83,7 @@ pnpm sampo:publish
 Before publishing, run the package smoke locally:
 
 ```sh
+pnpm validate:public
 pnpm pack:packages
 ```
 

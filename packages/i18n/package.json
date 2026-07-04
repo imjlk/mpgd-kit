@@ -1,6 +1,27 @@
 {
   "name": "@mpgd/i18n",
   "version": "0.0.0",
+  "description": "Paraglide-backed message catalog for mpgd demos and target-aware UI.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/i18n"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "vite",
+    "typescript",
+    "capacitor",
+    "apps-in-toss",
+    "game-development",
+    "game-distribution"
+  ],
   "type": "module",
   "sideEffects": false,
   "exports": {

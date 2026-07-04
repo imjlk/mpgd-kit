@@ -34,6 +34,7 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm validate:public
       - run: pnpm smoke:target-config
       - run: pnpm smoke:effective-config
       - run: pnpm smoke:adapter-effective-config

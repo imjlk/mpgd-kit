@@ -3,6 +3,14 @@ dist/
 artifacts/
 release-output/
 output/
+.env
+.env.*
+*.pem
+*.key
+*.p8
+*.jks
+*.keystore
+*.mobileprovision
 .turbo/
 .DS_Store
 *.log

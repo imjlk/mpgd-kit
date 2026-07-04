@@ -2,7 +2,26 @@
   "name": "mpgd-kit",
   "private": true,
   "version": "0.0.0",
-  "description": "Multi-Platform Game Distribution / Development kit.",
+  "description": "Multi-Platform Game Distribution / Development kit for Phaser games.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "vite",
+    "typescript",
+    "capacitor",
+    "apps-in-toss",
+    "game-development",
+    "game-distribution"
+  ],
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {
@@ -10,7 +29,7 @@
   },
   "scripts": {
     "i18n:build": "pnpm --dir packages/i18n paraglide:build",
-    "check": "pnpm i18n:build && ttsc --noEmit -p tsconfig.tools.json && pnpm validate:game-assets && pnpm -r --if-present check",
+    "check": "pnpm i18n:build && pnpm validate:public && ttsc --noEmit -p tsconfig.tools.json && pnpm validate:game-assets && pnpm -r --if-present check",
     "dev:game": "pnpm --dir apps/game-phaser dev",
     "lint": "pnpm -r --if-present lint",
     "format": "pnpm -r --if-present format",
@@ -24,6 +43,7 @@
     "validate:effective-config": "node tools/run-ttsx.mjs tools/validate-effective-target-config.ts",
     "validate:targets": "node tools/run-ttsx.mjs tools/target/validate-target-config.ts",
     "validate:game-assets": "node tools/run-ttsx.mjs tools/validate-game-assets.ts",
+    "validate:public": "node tools/run-ttsx.mjs tools/validate-public-readiness.ts",
     "build:target": "pnpm i18n:build && node tools/run-ttsx.mjs tools/target/build-target.ts",
     "build:web": "pnpm build:target web-preview production",
     "build:android": "pnpm build:target android production",

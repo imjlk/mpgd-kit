@@ -1,6 +1,27 @@
 {
   "name": "@mpgd/monetization-contract",
   "version": "0.0.0",
+  "description": "Shared IAP and ad monetization contracts for mpgd platform adapters.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/monetization-contract"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "vite",
+    "typescript",
+    "capacitor",
+    "apps-in-toss",
+    "game-development",
+    "game-distribution"
+  ],
   "type": "module",
   "sideEffects": false,
   "exports": {

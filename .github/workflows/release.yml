@@ -30,6 +30,7 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - run: pnpm validate:public
       - run: pnpm check
       - run: pnpm validate:catalog
       - run: pnpm validate:ads

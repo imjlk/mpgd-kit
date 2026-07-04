@@ -1,6 +1,27 @@
 {
   "name": "@mpgd/backend-entitlement-ledger",
   "version": "0.0.0",
+  "description": "Idempotent entitlement ledger primitives for mpgd backend flows.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "backend/entitlement-ledger"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "vite",
+    "typescript",
+    "capacitor",
+    "apps-in-toss",
+    "game-development",
+    "game-distribution"
+  ],
   "type": "module",
   "sideEffects": false,
   "exports": {

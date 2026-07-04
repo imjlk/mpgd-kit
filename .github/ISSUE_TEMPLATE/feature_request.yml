@@ -1,0 +1,40 @@
+name: Feature request
+description: Propose a reusable capability or platform integration.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What game-development or distribution problem does this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposal
+      description: Describe the API, package, target, or workflow change.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - platform contract
+        - adapter
+        - target config
+        - liveops/backend
+        - game demo
+        - release tooling
+        - docs
+        - other
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Link related docs, SDK behavior, or target constraints.

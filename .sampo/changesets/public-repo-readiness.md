@@ -1,0 +1,28 @@
+---
+npm/@mpgd/game-core: patch (Changed)
+npm/@mpgd/game-economy: patch (Changed)
+npm/@mpgd/game-save: patch (Changed)
+npm/@mpgd/game-anti-cheat: patch (Changed)
+npm/@mpgd/i18n: patch (Changed)
+npm/@mpgd/platform-contract: patch (Changed)
+npm/@mpgd/monetization-contract: patch (Changed)
+npm/@mpgd/leaderboard-contract: patch (Changed)
+npm/@mpgd/bridge-protocol: patch (Changed)
+npm/@mpgd/product-catalog: patch (Changed)
+npm/@mpgd/ad-placements: patch (Changed)
+npm/@mpgd/analytics-schema: patch (Changed)
+npm/@mpgd/target-config: patch (Changed)
+npm/@mpgd/release-manifest: patch (Changed)
+npm/@mpgd/liveops-client: patch (Changed)
+npm/@mpgd/adapter-browser: patch (Changed)
+npm/@mpgd/adapter-capacitor: patch (Changed)
+npm/@mpgd/adapter-ait: patch (Changed)
+npm/@mpgd/capacitor-game-services: patch (Changed)
+npm/@mpgd/backend-purchase-verifier: patch (Changed)
+npm/@mpgd/backend-entitlement-ledger: patch (Changed)
+npm/@mpgd/backend-ad-reward-ledger: patch (Changed)
+npm/@mpgd/backend-leaderboard-ledger: patch (Changed)
+npm/@mpgd/backend-liveops-api: patch (Changed)
+---
+
+Prepare the repository for public visibility with MIT licensing, package metadata, community files, issue templates, and automated public-readiness validation.
