@@ -178,6 +178,29 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
 
   return {
     async purchase(purchaseInput) {
+      const target = input.target;
+
+      if (!isGameServicesStoreTarget(target)) {
+        const purchase = {
+          status: 'failed',
+          entitlementIds: [],
+        } satisfies PurchaseResult;
+
+        await analytics.track({
+          name: 'purchase_rejected',
+          properties: {
+            productId: purchaseInput.productId,
+            status: purchase.status,
+            reason: 'unsupported_target',
+          },
+        });
+
+        return {
+          status: 'rejected',
+          purchase,
+        };
+      }
+
       const purchase = await input.gateway.commerce.purchase(purchaseInput);
 
       if (purchase.status !== 'completed' || purchase.transactionId === undefined) {
@@ -196,24 +219,8 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         };
       }
 
-      if (!isGameServicesStoreTarget(input.target)) {
-        await analytics.track({
-          name: 'purchase_rejected',
-          properties: {
-            productId: purchaseInput.productId,
-            status: purchase.status,
-            reason: 'unsupported_target',
-          },
-        });
-
-        return {
-          status: 'rejected',
-          purchase,
-        };
-      }
-
       const verification = await input.backend.purchases.verifyPurchase({
-        target: input.target,
+        target,
         playerId: input.playerId,
         productId: purchaseInput.productId,
         platformTransactionId: purchase.transactionId,
@@ -245,6 +252,30 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
     },
 
     async claimRewardedAd(rewardInput) {
+      const target = input.target;
+
+      if (!isGameServicesStoreTarget(target)) {
+        const reward = {
+          status: 'unavailable',
+          rewardGranted: false,
+        } satisfies RewardedAdResult;
+
+        await analytics.track({
+          name: 'rewarded_ad_rejected',
+          properties: {
+            placementId: rewardInput.placementId,
+            status: reward.status,
+            rewardGranted: reward.rewardGranted,
+            reason: 'unsupported_target',
+          },
+        });
+
+        return {
+          status: 'rejected',
+          reward,
+        };
+      }
+
       const reward = await input.gateway.ads.showRewarded(rewardInput);
 
       if (reward.status !== 'completed' || !reward.rewardGranted) {
@@ -263,25 +294,8 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         };
       }
 
-      if (!isGameServicesStoreTarget(input.target)) {
-        await analytics.track({
-          name: 'rewarded_ad_rejected',
-          properties: {
-            placementId: rewardInput.placementId,
-            status: reward.status,
-            rewardGranted: reward.rewardGranted,
-            reason: 'unsupported_target',
-          },
-        });
-
-        return {
-          status: 'rejected',
-          reward,
-        };
-      }
-
       const claim = await input.backend.adRewards.claimAdReward({
-        target: input.target,
+        target,
         playerId: input.playerId,
         placementId: rewardInput.placementId,
         ...(reward.ledgerEntryId === undefined

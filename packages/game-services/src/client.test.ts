@@ -186,6 +186,89 @@ assertEqual(
   'non-completed platform flows should emit rejected analytics',
 );
 
+let unsupportedPurchaseCalls = 0;
+let unsupportedRewardCalls = 0;
+const purchaseClaimsBeforeUnsupported = purchaseClaims;
+const rewardClaimsBeforeUnsupported = rewardClaims;
+const unsupportedBaseGateway = createMockGateway();
+const unsupportedGateway = {
+  ...unsupportedBaseGateway,
+  target: 'reddit',
+  commerce: {
+    ...unsupportedBaseGateway.commerce,
+    async purchase() {
+      unsupportedPurchaseCalls += 1;
+
+      return {
+        status: 'completed',
+        transactionId: 'unexpected-unsupported-transaction',
+        entitlementIds: [],
+      };
+    },
+  },
+  ads: {
+    ...unsupportedBaseGateway.ads,
+    async showRewarded() {
+      unsupportedRewardCalls += 1;
+
+      return {
+        status: 'completed',
+        rewardGranted: true,
+        ledgerEntryId: 'unexpected-unsupported-impression',
+      };
+    },
+  },
+} satisfies PlatformGateway;
+const unsupportedClient = createGameServicesClient({
+  gateway: unsupportedGateway,
+  playerId,
+  target: 'reddit',
+  now: () => '2026-07-03T00:00:00.000Z',
+  backend,
+});
+const unsupportedPurchase = await unsupportedClient.purchase({
+  productId: 'COINS_100',
+  source: 'result',
+  idempotencyKey: 'unsupported-purchase',
+});
+const unsupportedReward = await unsupportedClient.claimRewardedAd({
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: 'unsupported-reward',
+});
+
+assertEqual(unsupportedPurchase.status, 'rejected', 'unsupported target purchase should reject');
+assertEqual(
+  unsupportedPurchase.purchase.status,
+  'failed',
+  'unsupported target purchase should return a failed platform result without a platform call',
+);
+assertEqual(unsupportedReward.status, 'rejected', 'unsupported target rewarded ad should reject');
+assertEqual(
+  unsupportedReward.reward.status,
+  'unavailable',
+  'unsupported target rewarded ad should return unavailable without a platform call',
+);
+assertEqual(
+  unsupportedPurchaseCalls,
+  0,
+  'unsupported target purchase should not call platform commerce',
+);
+assertEqual(
+  unsupportedRewardCalls,
+  0,
+  'unsupported target rewarded ad should not call platform ads',
+);
+assertEqual(
+  purchaseClaims,
+  purchaseClaimsBeforeUnsupported,
+  'unsupported target purchase should not call purchase backend',
+);
+assertEqual(
+  rewardClaims,
+  rewardClaimsBeforeUnsupported,
+  'unsupported target rewarded ad should not call ad reward backend',
+);
+
 const transportCalls: string[] = [];
 const httpBackend = createGameServicesHttpBackendApi({
   transport: {

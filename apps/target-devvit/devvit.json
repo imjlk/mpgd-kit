@@ -19,7 +19,7 @@
     "realtime": false
   },
   "scripts": {
-    "dev": "pnpm build:server -- --watch",
+    "dev": "pnpm dev:prepare && pnpm build:server -- --watch",
     "build": "pnpm build"
   }
 }

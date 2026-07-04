@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "devvit playtest",
+    "dev:prepare": "pnpm --dir ../.. build:target reddit staging",
     "build": "pnpm --dir ../.. build:target reddit production",
     "build:server": "vite build --config vite.server.config.ts",
     "whoami": "devvit whoami",

@@ -6,6 +6,8 @@ import helmet from 'helmet';
 const app = express();
 const redisKeyComponentPattern = /^[A-Za-z0-9:_-]{1,128}$/;
 const leaderboardUpdateMaxAttempts = 3;
+const leaderboardBackoffBaseMs = 25;
+const leaderboardLockTtlMs = 2_000;
 
 app.disable('x-powered-by');
 app.use(helmet());
@@ -198,7 +200,9 @@ async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
   const playerId = currentPlayerId();
 
   if (playerId === undefined) {
-    return ok(input, {});
+    return ok(input, {
+      saved: false,
+    });
   }
 
   const key = storageKey(input, playerId);
@@ -210,7 +214,9 @@ async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
   const payload = optionalObjectPayload(input.payload) as { readonly value?: unknown };
   await redis.set(key, JSON.stringify(payload.value ?? null));
 
-  return ok(input, {});
+  return ok(input, {
+    saved: true,
+  });
 }
 
 function parseBridgeRequest(input: unknown): BridgeRequest {
@@ -296,31 +302,97 @@ async function submitMaxLeaderboardScore(
   playerId: string,
   score: number,
 ): Promise<boolean> {
-  for (let attempt = 0; attempt < leaderboardUpdateMaxAttempts; attempt += 1) {
-    const transaction = await redis.watch(redisKey);
-    // Devvit TxClient queues commands only after MULTI, so the compare read stays after WATCH
-    // while the conditional write is executed through the watched transaction.
-    const currentScore = await redis.zScore(redisKey, playerId);
+  const lockKey = leaderboardLockKey(redisKey, playerId);
 
-    if (currentScore !== undefined && score <= currentScore) {
+  for (let attempt = 0; attempt < leaderboardUpdateMaxAttempts; attempt += 1) {
+    const lockToken = createLockToken();
+    const acquiredLock = await acquireLeaderboardLock(lockKey, lockToken);
+
+    if (!acquiredLock) {
+      await delay(leaderboardBackoffBaseMs * (attempt + 1));
+      continue;
+    }
+
+    try {
+      const currentScore = await redis.zScore(redisKey, playerId);
+
+      if (currentScore !== undefined && score <= currentScore) {
+        return false;
+      }
+
+      await redis.zAdd(redisKey, {
+        member: playerId,
+        score,
+      });
+
+      return true;
+    } finally {
+      await releaseLeaderboardLock(lockKey, lockToken);
+    }
+  }
+
+  throw new Error('Failed to update Devvit leaderboard score after lock contention.');
+}
+
+function leaderboardLockKey(redisKey: string, playerId: string): string {
+  return `${redisKey}:lock:${encodeURIComponent(playerId)}`;
+}
+
+function createLockToken(): string {
+  const cryptoImpl = globalThis.crypto;
+
+  if (typeof cryptoImpl?.randomUUID === 'function') {
+    return cryptoImpl.randomUUID();
+  }
+
+  if (typeof cryptoImpl?.getRandomValues === 'function') {
+    const values = new Uint32Array(4);
+    cryptoImpl.getRandomValues(values);
+
+    return Array.from(values, (value) => value.toString(36).padStart(7, '0')).join('');
+  }
+
+  throw new Error('Web Crypto is required to create a Devvit leaderboard lock token.');
+}
+
+async function acquireLeaderboardLock(lockKey: string, lockToken: string): Promise<boolean> {
+  const result = await redis.set(lockKey, lockToken, {
+    nx: true,
+    expiration: new Date(Date.now() + leaderboardLockTtlMs),
+  });
+
+  return result === 'OK';
+}
+
+async function releaseLeaderboardLock(lockKey: string, lockToken: string): Promise<void> {
+  for (let attempt = 0; attempt < leaderboardUpdateMaxAttempts; attempt += 1) {
+    const transaction = await redis.watch(lockKey);
+    const currentToken = await redis.get(lockKey);
+
+    if (currentToken !== lockToken) {
       await transaction.unwatch();
-      return false;
+      return;
     }
 
     await transaction.multi();
-    await transaction.zAdd(redisKey, {
-      member: playerId,
-      score,
-    });
+    await transaction.del(lockKey);
 
     const results = await transaction.exec();
 
     if (Array.isArray(results) && results.length > 0) {
-      return true;
+      return;
     }
+
+    await delay(leaderboardBackoffBaseMs * (attempt + 1));
   }
 
-  throw new Error('Failed to update Devvit leaderboard score after concurrent writes.');
+  console.warn(`devvit leaderboard lock release exhausted retries for key: ${lockKey}`);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
 }
 
 function isValidRedisKeyComponent(value: string): boolean {
@@ -331,10 +403,6 @@ function currentPlayerId(): string | undefined {
   const devvitContext = context as {
     readonly userId?: string;
   };
-
-  if (devvitContext.userId === undefined) {
-    console.warn('devvit context.userId is undefined for a user-scoped bridge request');
-  }
 
   return devvitContext.userId;
 }
