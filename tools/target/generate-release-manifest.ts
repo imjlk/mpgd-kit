@@ -10,6 +10,7 @@ import type { TargetConfigMatrix } from '@mpgd/target-config';
 
 import { isCliEntrypoint, readJsonFile } from '../io';
 import { writeEffectiveTargetConfigs } from './effective-config';
+import { effectiveTargetConfigOutputDir } from './platform-targets';
 
 const assertProductCatalog = typia.createAssert<ProductCatalog>();
 const assertAdPlacements = typia.createAssert<AdPlacements>();
@@ -30,9 +31,10 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
   );
   const catalog = assertProductCatalog(readJsonFile('packages/catalog/catalog.json'));
   const adPlacements = assertAdPlacements(readJsonFile('packages/catalog/placements.json'));
-  const effectiveConfig = writeEffectiveTargetConfigs({ targets: [input.target] }).artifacts.find(
-    (artifact) => artifact.target === input.target,
-  );
+  const effectiveConfig = writeEffectiveTargetConfigs({
+    targets: [input.target],
+    outputDir: effectiveTargetConfigOutputDir(),
+  }).artifacts.find((artifact) => artifact.target === input.target);
   const buildId = process.env.BUILD_ID ?? createBuildId();
   const gameVersion = process.env.APP_VERSION ?? packageJson.version ?? '0.0.0';
 

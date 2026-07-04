@@ -3,13 +3,14 @@ import typia from 'typia';
 import type { TargetConfig, TargetConfigMatrix } from '@mpgd/target-config';
 
 import { isCliEntrypoint, readJsonFile } from './io';
+import { platformTargetsFilePath } from './target/platform-targets';
 import { assertPlatformTargetsConfig } from './target/schemas';
 
 const assertTargetConfigMatrix = typia.createAssert<TargetConfigMatrix>();
 
 export function validateTargetConfigMatrixFile(
   path = 'packages/target-config/targets.json',
-  targetsPath = 'platform.targets.json',
+  targetsPath = platformTargetsFilePath(),
 ) {
   const configMatrix = assertTargetConfigMatrix(readJsonFile(path));
   const platformTargets = assertPlatformTargetsConfig(readJsonFile(targetsPath));
