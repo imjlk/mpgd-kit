@@ -31,6 +31,10 @@ Use this before making the repository public or announcing a package release.
 - [ ] Publishable package metadata includes `description`, `license`, `repository`, `bugs`, `homepage`, and `keywords`.
 - [ ] Publishable packages expose `dist/index.js` and `dist/index.d.ts`.
 - [ ] Sampo changesets cover public package additions and behavior changes.
+- [ ] PRs merging to `main` explicitly include a Sampo changeset when they change a published package contract, or state why no changeset is needed.
+- [ ] New publishable npm packages are registered with one local initial publish before being added to Sampo/OIDC release automation.
+- [ ] npm Trusted Publishing/OIDC is configured per package for `.github/workflows/release.yml` before relying on automated publishes.
+- [ ] `@mpgd/adapter-devvit` has been initial-published locally and verified with `npm view @mpgd/adapter-devvit version` before the first automated Devvit adapter release.
 - [ ] `pnpm pack:packages` passes.
 
 ## Validation
@@ -58,7 +62,7 @@ pnpm smoke:target reddit
 
 - [ ] Run an external secret scanner such as `gitleaks detect --source .` before changing repository visibility.
 - [ ] Confirm GitHub repository settings: branch protection, default branch, Actions permissions, issue/discussion settings, and repository topics.
-- [ ] Confirm npm publishing settings: OIDC trusted publishing, provenance policy, package access, and Sampo release automation permissions. Use `NPM_TOKEN` only for a fallback publish path.
+- [ ] Confirm npm publishing settings: package access, local initial publish for new packages, OIDC trusted publishing, provenance policy, and Sampo release automation permissions. Use token-based publishing only for the initial registration or a documented fallback path.
 - [ ] Confirm Cloudflare Worker settings: account id, API token, D1 database binding, and whether `MPGD_STORE` should stay `memory` for demo-only deploys.
 - [ ] Confirm Android release settings: package id, Google Play app, billing products, AdMob app/placement ids, signing keystore, and Play Games leaderboard ids.
 - [ ] Confirm iOS release settings: bundle id, App Store app, StoreKit products, AdMob app/placement ids, signing credentials, and Game Center leaderboard ids.
