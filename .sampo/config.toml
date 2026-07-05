@@ -19,6 +19,7 @@ fixed = [[
   "npm/@mpgd/adapter-ait",
   "npm/@mpgd/adapter-browser",
   "npm/@mpgd/adapter-capacitor",
+  "npm/@mpgd/adapter-devvit",
   "npm/@mpgd/analytics",
   "npm/@mpgd/bridge",
   "npm/@mpgd/capacitor-game-services",

@@ -48,6 +48,16 @@ Platform SDK imports belong only in:
 - `native-plugins/*`
 - `apps/target-*`
 
+## Release And Changesets
+
+- For PR-based work that will merge to `main`, add a Sampo changeset under `.sampo/changesets/` whenever the PR changes a publishable package's public API, runtime behavior, package metadata, generated release artifacts, or user-facing integration contract.
+- If a PR intentionally does not need a changeset, state that in the PR summary or final handoff.
+- Keep changesets focused on publishable packages. Do not add changesets for docs-only, private app-only, CI-only, or generated-output-only changes unless they affect a published package contract.
+- Before merging a newly added publishable npm package to `main`, register the package with one local initial publish using the intended starting version. Use the maintainer's local npm auth environment, loaded through `mise`, and verify with `npm view <package> version` afterward. If the package is not ready for initial publish yet, keep it non-publishable, for example with npm `"private": true`, until the registration is complete.
+- A PR that introduces a new publishable package must include its `.sampo/config.toml` release-group entry in the same PR once initial publish and OIDC readiness are done. Otherwise, keep the package private until a follow-up PR can safely add it to Sampo release automation.
+- After the initial local publish, configure npm Trusted Publishing/OIDC for `.github/workflows/release.yml` and use Sampo changesets for subsequent releases.
+- `@mpgd/adapter-devvit` was initial-published as `0.1.0` and has npm Trusted Publishing/OIDC configured for `.github/workflows/release.yml`; keep that setting aligned before relying on automated Devvit adapter releases.
+
 ## Preferred Commands
 
 - `pnpm check`
