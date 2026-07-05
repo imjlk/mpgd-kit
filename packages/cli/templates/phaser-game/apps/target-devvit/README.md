@@ -4,6 +4,8 @@ This directory is the Reddit Devvit app root for `__GAME_NAME__`.
 
 `devvit.json` belongs to the generated game, not to the mpgd-kit checkout. That keeps the
 Reddit app name, menu entry, upload history, and playtest state owned by this game.
+Its `name` is generated as a Devvit-safe slug; edit it before `pnpm devvit:init`
+if you want a different Reddit app name.
 
 ## First Playtest
 

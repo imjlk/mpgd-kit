@@ -6,6 +6,9 @@
   "scripts": {
     "dev": "devvit playtest",
     "dev:prepare": "pnpm --dir ../.. build:target reddit staging",
+    "dev:client": "APP_TARGET=reddit APP_VERSION=0.0.0-dev BUILD_ID=devvit-watch pnpm --dir ../.. exec vite build --mode staging --watch --outDir apps/target-devvit/dist/client",
+    "dev:server": "pnpm build:server -- --watch",
+    "dev:watch": "sh -c 'pnpm run dev:client & pnpm run dev:server & wait'",
     "build": "pnpm --dir ../.. build:target reddit production",
     "build:server": "vite build --config vite.server.config.ts",
     "whoami": "devvit whoami",

@@ -1,6 +1,11 @@
 import { createServer, context, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { UiResponse } from '@devvit/web/shared';
-import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
+import {
+  assertBridgeRequest,
+  createBridgeError,
+  type BridgeRequest,
+  type BridgeResponse,
+} from '@mpgd/bridge';
 import {
   createBridgeRpcFetchHandler,
   createBridgeRpcRouter,
@@ -27,13 +32,12 @@ const expressManagedResponseHeaders = new Set([
 
 app.disable('x-powered-by');
 app.use(helmet());
-app.use(express.json({ limit: '1mb' }));
 
 const bridgeRpcFetchHandler = createBridgeRpcFetchHandler(
   createBridgeRpcRouter(handleBridgeRequest),
 );
 
-app.use(defaultBridgeRpcEndpoint, async (
+app.use(defaultBridgeRpcEndpoint, express.raw({ type: '*/*', limit: '1mb' }), async (
   request: ExpressRequest,
   response: ExpressResponse,
 ): Promise<void> => {
@@ -53,6 +57,8 @@ app.use(defaultBridgeRpcEndpoint, async (
     );
   }
 });
+
+app.use(express.json({ limit: '1mb' }));
 
 app.post('/internal/menu/create-post', async (
   _request: ExpressRequest,
@@ -108,7 +114,7 @@ app.post('/api/mpgd/bridge', async (
   let bridgeRequest: BridgeRequest;
 
   try {
-    bridgeRequest = parseBridgeRequest(request.body);
+    bridgeRequest = assertBridgeRequest(request.body);
   } catch (error) {
     response.status(400).json(
       createBridgeError(
@@ -174,7 +180,7 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
 
       return ok(input, {
         playerId,
-        displayName: currentDisplayName(playerId),
+        displayName: await currentDisplayName(playerId),
       });
     }
 
@@ -332,30 +338,6 @@ async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
     saved: true,
     playerId,
   });
-}
-
-function parseBridgeRequest(input: unknown): BridgeRequest {
-  if (typeof input !== 'object' || input === null) {
-    throw new TypeError('Bridge request must be an object.');
-  }
-
-  const request = input as Partial<BridgeRequest>;
-
-  if (typeof request.id !== 'string' || typeof request.method !== 'string') {
-    throw new TypeError('Bridge request id and method are required.');
-  }
-
-  return {
-    id: request.id,
-    method: request.method,
-    payload: request.payload ?? {},
-    meta: request.meta ?? {
-      target: 'reddit',
-      appVersion: 'unknown',
-      buildId: 'unknown',
-      sentAt: new Date().toISOString(),
-    },
-  } as BridgeRequest;
 }
 
 function requestIdFromBody(input: unknown): string {
@@ -580,12 +562,18 @@ function currentPlayerId(): string | undefined {
   return devvitContext.userId;
 }
 
-function currentDisplayName(fallbackDisplayName: string): string {
-  const devvitContext = context as {
-    readonly username?: string;
-  };
+async function currentDisplayName(fallbackDisplayName: string): Promise<string> {
+  try {
+    const username = await reddit.getCurrentUsername();
 
-  return devvitContext.username ?? fallbackDisplayName;
+    if (typeof username === 'string' && username.length > 0) {
+      return username;
+    }
+  } catch (error) {
+    console.warn(`devvit username lookup failed: ${errorMessage(error)}`);
+  }
+
+  return fallbackDisplayName;
 }
 
 function currentSubredditName(): string | undefined {
@@ -627,10 +615,21 @@ function expressRequestToFetchRequest(request: ExpressRequest): Request {
       headers.set('content-type', 'application/json');
     }
 
-    init.body = JSON.stringify(request.body ?? null);
+    init.body = requestBodyToBodyInit(request.body);
   }
 
   return new Request(expressRequestUrl(request), init);
+}
+
+function requestBodyToBodyInit(input: unknown): BodyInit {
+  if (input instanceof Uint8Array) {
+    const body = new Uint8Array(input.byteLength);
+    body.set(input);
+
+    return body.buffer as ArrayBuffer;
+  }
+
+  return JSON.stringify(input ?? null);
 }
 
 function expressRequestUrl(request: ExpressRequest): string {

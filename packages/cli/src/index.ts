@@ -592,7 +592,7 @@ function createGameApp(input: {
     [
       '  mpgd target build-all',
       `--targets-file ${path.join(appDir, 'mpgd.targets.json')}`,
-      '--targets web,ait,reddit',
+      `--targets ${defaultMatrixTargets}`,
       '--ait-variant wrapper',
       '--kit-path <path-to-mpgd-kit>',
     ].join(' '),
@@ -658,6 +658,7 @@ function createTemplateContext(input: {
 
   return {
     gameName: input.gameName,
+    devvitAppName: toDevvitAppName(input.gameName),
     gameTitle: title,
     packageName: input.packageName,
     dependencyVersion: input.dependencyVersion,
@@ -729,7 +730,7 @@ function walkTemplateDir(
     }
 
     files.push({
-      relativePath,
+      relativePath: templateOutputPath(relativePath),
       content: readFileSync(path.join(templateDir, relativePath), 'utf8'),
     });
   }
@@ -746,6 +747,7 @@ function renderTemplate(
 ): string {
   return content
     .replaceAll('__GAME_NAME__', context.gameName)
+    .replaceAll('__DEVVIT_APP_NAME__', context.devvitAppName)
     .replaceAll('__GAME_TITLE__', context.gameTitle)
     .replaceAll('__PACKAGE_NAME__', context.packageName)
     .replaceAll('__MPGD_DEPENDENCY_VERSION__', context.dependencyVersion)
@@ -759,6 +761,12 @@ function renderTemplate(
     .replaceAll('__CAMEL_NAME__', context.camelName);
 }
 
+function templateOutputPath(relativePath: string): string {
+  return path.basename(relativePath) === 'gitignore'
+    ? path.join(path.dirname(relativePath), '.gitignore')
+    : relativePath;
+}
+
 function toPascalCase(value: string): string {
   return value
     .split('-')
@@ -770,6 +778,23 @@ function toPascalCase(value: string): string {
 function toCamelCase(value: string): string {
   const pascal = toPascalCase(value);
   return `${pascal[0]?.toLowerCase() ?? ''}${pascal.slice(1)}`;
+}
+
+function toDevvitAppName(gameName: string): string {
+  let appName = gameName
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  if (appName.length < 3) {
+    appName = `${appName}-game`;
+  }
+
+  if (appName.length > 16) {
+    appName = appName.slice(0, 16).replace(/-+$/g, '');
+  }
+
+  return appName.length >= 3 ? appName : 'mpgd-game';
 }
 
 function toTemplatePath(value: string): string {

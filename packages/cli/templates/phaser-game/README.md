@@ -59,6 +59,9 @@ This starter owns its Devvit app root in `apps/target-devvit`. That directory
 contains the generated game's `devvit.json`, server bridge, menu entry, and
 Devvit CLI scripts. It intentionally does not point at the kit demo app, because
 Reddit app names, uploads, and playtests belong to each individual game.
+The generated `devvit.json` app name is a Devvit-safe slug derived from the game
+directory name; edit it before `devvit:init` if you need a different Reddit app
+name.
 
 First-time Devvit setup:
 

@@ -34,7 +34,7 @@
     ]
   },
   "scripts": {
-    "dev": "pnpm dev:prepare && pnpm build:server -- --watch",
+    "dev": "pnpm dev:prepare && pnpm dev:watch",
     "build": "pnpm build"
   }
 }

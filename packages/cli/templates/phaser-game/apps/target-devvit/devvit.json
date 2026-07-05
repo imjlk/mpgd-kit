@@ -1,6 +1,6 @@
 {
   "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
-  "name": "__GAME_NAME__",
+  "name": "__DEVVIT_APP_NAME__",
   "post": {
     "dir": "dist/client",
     "entrypoints": {
@@ -34,7 +34,7 @@
     ]
   },
   "scripts": {
-    "dev": "pnpm dev:prepare && pnpm build:server -- --watch",
+    "dev": "pnpm dev:prepare && pnpm dev:watch",
     "build": "pnpm build"
   }
 }
