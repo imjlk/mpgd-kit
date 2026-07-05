@@ -9,6 +9,8 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    env:
+      IS_RELEASE_PR: ${{ github.event_name == 'pull_request' && startsWith(github.head_ref, 'release/') }}
 
     steps:
       - uses: actions/checkout@v5
@@ -25,32 +27,52 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+
+      - name: Validate release PR package metadata
+        if: ${{ env.IS_RELEASE_PR == 'true' }}
+        run: pnpm validate:public && pnpm pack:packages
+
       - run: pnpm check
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm validate:catalog
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm validate:ads
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm validate:target-config
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm validate:effective-config
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm validate:targets
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm test
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: tar -czf package-dist.tgz packages/*/dist adapters/*/dist backend/*/dist native-plugins/*/dist
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - uses: actions/upload-artifact@v6
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
         with:
           name: package-dist-ci
           path: package-dist.tgz
       - run: pnpm graph:preflight
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm pack:packages:prepared
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm build:web
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target web-preview
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
 
       - uses: actions/upload-artifact@v6
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
         with:
           name: web-preview-ci
           path: |
             artifacts/**
 
   build-android:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release/') }}
     runs-on: ubuntu-latest
     needs: validate
 
@@ -94,6 +116,7 @@ jobs:
             release-output/**
 
   build-ios:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release/') }}
     runs-on: macos-26
     needs: validate
 
@@ -128,6 +151,7 @@ jobs:
             artifacts/**
 
   build-ait:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release/') }}
     runs-on: ubuntu-latest
     needs: validate
 
@@ -163,6 +187,7 @@ jobs:
             release-output/**
 
   build-devvit:
+    if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release/') }}
     runs-on: ubuntu-latest
     needs: validate
     timeout-minutes: 30
