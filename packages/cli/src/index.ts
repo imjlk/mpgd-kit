@@ -682,7 +682,7 @@ function createTemplateContext(input: {
     workspaceI18nBuildPrefix: input.workspace
       ? `pnpm --dir ${workspacePrefix} i18n:build && `
       : '',
-    defaultKitPath: input.kitPath === undefined ? '../mpgd-kit' : workspacePrefix,
+    defaultKitPath: kitPath === undefined ? '../mpgd-kit' : workspacePrefix,
     pnpmWorkspaceKitPackages: input.workspace
       ? [
           `  - '${workspacePrefix}/packages/*'`,
