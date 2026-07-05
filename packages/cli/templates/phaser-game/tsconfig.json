@@ -1,0 +1,27 @@
+{
+__TSCONFIG_EXTENDS_LINE__
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "strict": true,
+    "strictNullChecks": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["vite/client", "node"],
+    "noEmit": true
+  },
+  "include": [
+    "src/**/*.ts",
+    "vite.config.ts"__TSCONFIG_WORKSPACE_INCLUDES__
+  ],
+  "exclude": [
+    "dist"__TSCONFIG_WORKSPACE_EXCLUDES__
+  ]
+}

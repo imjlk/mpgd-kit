@@ -16,6 +16,7 @@
     "../../adapters/**/dist/**",
     "../../backend/**/dist/**",
     "../../native-plugins/**/dist/**",
+    "../../packages/cli/templates/**",
     "../../packages/**/dist/**"
   ]
 }

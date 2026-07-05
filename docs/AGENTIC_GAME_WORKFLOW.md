@@ -10,8 +10,17 @@ The repository separates four concerns:
 - `@mpgd/target-config` describes target feature availability.
 - `@mpgd/game-services` owns authoritative purchase, ad reward, and leaderboard ledger flows.
 - `examples/phaser-starter/agent` gives agents a brief, manifest, and acceptance loop for new games.
+- `@mpgd/cli` provides a Gunshi CLI for starter generation and target
+  build/smoke matrix orchestration.
+- `@mpgd/create-game` provides the create-package wrapper for
+  `npm create @mpgd/game` / `pnpm create @mpgd/game`.
 
-The starter remains private. New public packages should be added only when their API is stable enough to publish. If a new public package is added, create a Sampo changeset and publish the new package locally first; already-published fixed packages can flow through the GitHub OIDC release workflow.
+Generated game projects remain private by default. The public packages are the
+generator and reusable SDK surfaces. New publishable packages should be added
+only when their API is stable enough to publish; add a Sampo changeset, perform
+the initial local npm registration, configure npm Trusted Publishing/OIDC, and
+include the package in `.sampo/config.toml` release groups before relying on the
+GitHub release workflow.
 
 ## Custom Agents
 
@@ -100,6 +109,10 @@ starter example is browser-first. Devvit SDK imports must stay in
 
 ```sh
 pnpm validate:starter-workflow
+pnpm create @mpgd/game my-game
+pnpm --dir my-game dev
+
+pnpm mpgd game create examples/my-game --title "My Game" --workspace --kit-path .
 pnpm --dir examples/phaser-starter check
 pnpm --dir examples/phaser-starter build
 ```

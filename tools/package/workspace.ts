@@ -7,6 +7,7 @@ export interface PackageJson {
   readonly version?: string;
   readonly exports?: unknown;
   readonly files?: readonly string[];
+  readonly bin?: string | Record<string, string>;
   readonly main?: string;
   readonly types?: string;
   readonly dependencies?: Record<string, string>;

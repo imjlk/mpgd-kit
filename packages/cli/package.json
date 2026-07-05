@@ -1,0 +1,64 @@
+{
+  "name": "@mpgd/cli",
+  "version": "0.1.0",
+  "description": "Gunshi CLI for mpgd-kit starter generation and target workflow orchestration.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/cli"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "vite",
+    "typescript",
+    "capacitor",
+    "apps-in-toss",
+    "devvit",
+    "game-development",
+    "game-distribution",
+    "cli"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "templates"
+  ],
+  "bin": {
+    "mpgd": "./dist/bin.js"
+  },
+  "scripts": {
+    "check": "ttsc --noEmit -p tsconfig.json",
+    "lint": "ttsc --noEmit -p tsconfig.json",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@gunshi/plugin-completion": "^0.35.1",
+    "@gunshi/plugin-i18n": "^0.35.1",
+    "@gunshi/resources": "^0.35.1",
+    "gunshi": "^0.35.1"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "ttsc": "0.16.9",
+    "typescript": "7.0.1-rc"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  }
+}

@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 
 import { discoverPublishablePackages, type PackageJson } from './workspace';
 
@@ -28,6 +28,8 @@ for (const workspacePackage of discoverPublishablePackages()) {
     'package.json',
     'dist/index.js',
     'dist/index.d.ts',
+    ...expectedBinFiles(workspacePackage.packageJson),
+    ...expectedTemplateFiles(workspacePackage.dir, workspacePackage.packageJson),
     ...expectedExportFiles(workspacePackage.packageJson),
   ];
 
@@ -87,6 +89,45 @@ function expectedExportFiles(packageJson: PackageJson): string[] {
   const exportsMap = packageJson.exports as Record<string, unknown>;
 
   return [...new Set(Object.values(exportsMap).flatMap(readExportPaths))];
+}
+
+function expectedBinFiles(packageJson: PackageJson): string[] {
+  if (typeof packageJson.bin === 'string') {
+    return [packageJson.bin.replace(/^\.\//, '')];
+  }
+
+  if (typeof packageJson.bin !== 'object' || packageJson.bin === null) {
+    return [];
+  }
+
+  return Object.values(packageJson.bin).map((value) => value.replace(/^\.\//, ''));
+}
+
+function expectedTemplateFiles(packageDir: string, packageJson: PackageJson): string[] {
+  if (packageJson.files?.includes('templates') !== true) {
+    return [];
+  }
+
+  const templatesDir = join(packageDir, 'templates');
+
+  if (!existsSync(templatesDir)) {
+    return [];
+  }
+
+  return readdirSync(templatesDir)
+    .map((entry) => join(templatesDir, entry))
+    .filter((entry) => statSync(entry).isDirectory())
+    .map((templateDir) => {
+      const packageJsonPath = join(templateDir, 'package.json');
+
+      if (!existsSync(packageJsonPath)) {
+        throw new Error(
+          `${packageJson.name ?? 'package'} template ${relative(packageDir, templateDir)} must include package.json`,
+        );
+      }
+
+      return relative(packageDir, packageJsonPath).split('\\').join('/');
+    });
 }
 
 function readExportPaths(value: unknown): string[] {

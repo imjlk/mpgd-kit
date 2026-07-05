@@ -24,6 +24,8 @@ fixed = [[
   "npm/@mpgd/bridge",
   "npm/@mpgd/capacitor-game-services",
   "npm/@mpgd/catalog",
+  "npm/@mpgd/cli",
+  "npm/@mpgd/create-game",
   "npm/@mpgd/game-services",
   "npm/@mpgd/i18n",
   "npm/@mpgd/platform",

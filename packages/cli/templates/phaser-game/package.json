@@ -1,0 +1,35 @@
+{
+  "name": "__PACKAGE_NAME__",
+  "private": true,
+  "version": "0.0.0",
+  "description": "__GAME_TITLE__ mpgd Phaser game.",
+  "type": "module",
+  "scripts": {
+    "dev": "__WORKSPACE_I18N_BUILD_PREFIX__vite --host 0.0.0.0",
+    "build": "__WORKSPACE_I18N_BUILD_PREFIX__vite build",
+    "check": "ttsc --noEmit -p tsconfig.json",
+    "lint": "ttsc --noEmit -p tsconfig.json",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@mpgd/adapter-ait": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/adapter-browser": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/adapter-capacitor": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/adapter-devvit": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/analytics": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/catalog": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/game-services": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/i18n": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/platform": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/target-config": "__MPGD_DEPENDENCY_VERSION__",
+    "phaser": "4.2.0"
+  },
+  "devDependencies": {
+    "@ttsc/unplugin": "0.16.9",
+    "@types/node": "^24.0.0",
+    "ttsc": "0.16.9",
+    "typescript": "7.0.1-rc",
+    "vite": "^8.1.3"
+  }
+}

@@ -569,6 +569,47 @@ importers:
         specifier: 7.0.1-rc
         version: 7.0.1-rc
 
+  packages/cli:
+    dependencies:
+      '@gunshi/plugin-completion':
+        specifier: ^0.35.1
+        version: 0.35.1(@gunshi/plugin-i18n@0.35.1)(cac@6.7.14)
+      '@gunshi/plugin-i18n':
+        specifier: ^0.35.1
+        version: 0.35.1
+      '@gunshi/resources':
+        specifier: ^0.35.1
+        version: 0.35.1
+      gunshi:
+        specifier: ^0.35.1
+        version: 0.35.1
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.2
+      ttsc:
+        specifier: 0.16.9
+        version: 0.16.9
+      typescript:
+        specifier: 7.0.1-rc
+        version: 7.0.1-rc
+
+  packages/create-game:
+    dependencies:
+      '@mpgd/cli':
+        specifier: workspace:*
+        version: link:../cli
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.2
+      ttsc:
+        specifier: 0.16.9
+        version: 0.16.9
+      typescript:
+        specifier: 7.0.1-rc
+        version: 7.0.1-rc
+
   packages/game-anti-cheat:
     devDependencies:
       ttsc:
@@ -1621,6 +1662,21 @@ packages:
 
   '@bcoe/v8-coverage@0.2.3':
     resolution: {integrity: sha512-0hYQ8SB4Db5zvZB4axdMHGwEaQjkZzFjQiN9LVYvIFB2nSUHW9tYpxWriPrWDASIxiaXax83REcLxuSdnGPZtw==}
+
+  '@bomb.sh/tab@0.0.15':
+    resolution: {integrity: sha512-Y90ub44TAvbdO9P8mcD/XPyQjFhiR5xmd4Fk7JErmWmEWEUimNnjWiBrVZ16Tj3GA1rLZ+uvCN2V/pzLawv31g==}
+    hasBin: true
+    peerDependencies:
+      cac: ^6.7.14
+      citty: ^0.1.6 || ^0.2.0
+      commander: ^13.1.0
+    peerDependenciesMeta:
+      cac:
+        optional: true
+      citty:
+        optional: true
+      commander:
+        optional: true
 
   '@borewit/text-codec@0.2.2':
     resolution: {integrity: sha512-DDaRehssg1aNrH4+2hnj1B7vnUGEjU6OIlyRdkMd0aUdIUvKXrJfXsy8LVtXAy7DRvYVluWbMspsRhz2lcW0mQ==}
@@ -2867,6 +2923,29 @@ packages:
     peerDependencies:
       react: '*'
       react-native: '*'
+
+  '@gunshi/plugin-completion@0.35.1':
+    resolution: {integrity: sha512-oKWRmjV4IYPTG5VJR/ivdl41KE/S5ha2p9Vl7MpriEZHeAwvRn+9Zd7RGgi7Bwod43mshnyK8q782K0RP2J1UA==}
+    engines: {node: '>= 22'}
+    peerDependencies:
+      '@gunshi/plugin-i18n': 0.35.1
+
+  '@gunshi/plugin-i18n@0.35.1':
+    resolution: {integrity: sha512-fmLDCceUnpx/O/6/CZKve2JB9sSAEPE7ZU6zcyjfohQiU9XeOVGIJXj3VBYx5VDJzT9DxjzXTnWcwKxUW5cE+Q==}
+    engines: {node: '>= 22'}
+    peerDependencies:
+      '@gunshi/plugin-global': 0.35.1
+    peerDependenciesMeta:
+      '@gunshi/plugin-global':
+        optional: true
+
+  '@gunshi/plugin@0.35.1':
+    resolution: {integrity: sha512-N6q4zIDiuRU0CM1CpTPFLUzxOW3T2XsUtnEjxFCIp+sTGfbH0jkejUKeUWynZfX5Blao5Ww45K4f66giQ6AJFA==}
+    engines: {node: '>= 22'}
+
+  '@gunshi/resources@0.35.1':
+    resolution: {integrity: sha512-DFanFtk1cqQDNIWB5FPL04MK7q4KfMHy68S8zRPZJtiC+LCOwbCLGMaYXo7GjuBnuEnAiQTj3LG5GdlFSX+1nA==}
+    engines: {node: '>= 22'}
 
   '@hapi/hoek@9.3.0':
     resolution: {integrity: sha512-/c6rf4UJlmHlC9b5BaNvzAcFv7HZ2QHaV0D4/HNlBdvFnvQq8RI4kYdhyPCl7Xj+oWvTWQ8ujhqS53LIgAe6KQ==}
@@ -6138,6 +6217,10 @@ packages:
 
   graceful-fs@4.2.11:
     resolution: {integrity: sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==}
+
+  gunshi@0.35.1:
+    resolution: {integrity: sha512-Fn+IZReFITpU1lfjLdQG9WXk5+NqolwR1Q6gnSeEicstlZZfVKqnANCo4YbR4ml3/4JkyJSi3vYmxb9XdCeN3g==}
+    engines: {node: '>= 22'}
 
   has-flag@4.0.0:
     resolution: {integrity: sha512-EykJT/Q1KjTWctppgIAgfSO0tKVuZUjhgMr17kqTumMl6Afv3EISleU7qZUzoXDFTAHTDC4NOoG/ZxU3EvlMPQ==}
@@ -11785,6 +11868,10 @@ snapshots:
 
   '@bcoe/v8-coverage@0.2.3': {}
 
+  '@bomb.sh/tab@0.0.15(cac@6.7.14)':
+    optionalDependencies:
+      cac: 6.7.14
+
   '@borewit/text-codec@0.2.2': {}
 
   '@capacitor/android@8.4.1(@capacitor/core@8.4.1)':
@@ -12958,6 +13045,24 @@ snapshots:
     dependencies:
       react: 18.2.0
       react-native: 0.72.6(@babel/core@7.29.7)(@babel/preset-env@7.28.5(@babel/core@7.29.7))(react@18.2.0)
+
+  '@gunshi/plugin-completion@0.35.1(@gunshi/plugin-i18n@0.35.1)(cac@6.7.14)':
+    dependencies:
+      '@bomb.sh/tab': 0.0.15(cac@6.7.14)
+      '@gunshi/plugin': 0.35.1
+      '@gunshi/plugin-i18n': 0.35.1
+    transitivePeerDependencies:
+      - cac
+      - citty
+      - commander
+
+  '@gunshi/plugin-i18n@0.35.1':
+    dependencies:
+      '@gunshi/plugin': 0.35.1
+
+  '@gunshi/plugin@0.35.1': {}
+
+  '@gunshi/resources@0.35.1': {}
 
   '@hapi/hoek@9.3.0': {}
 
@@ -16891,6 +16996,8 @@ snapshots:
   gopd@1.2.0: {}
 
   graceful-fs@4.2.11: {}
+
+  gunshi@0.35.1: {}
 
   has-flag@4.0.0: {}
 

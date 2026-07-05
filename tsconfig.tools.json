@@ -12,6 +12,7 @@
     "native-plugins/capacitor-game-services/src/**/*.ts"
   ],
   "exclude": [
-    "**/dist/**"
+    "**/dist/**",
+    "packages/cli/templates/**"
   ]
 }
