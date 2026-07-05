@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { join, relative } from 'node:path';
 
 import { discoverPublishablePackages, type PackageJson } from './workspace';
 
@@ -29,7 +29,7 @@ for (const workspacePackage of discoverPublishablePackages()) {
     'dist/index.js',
     'dist/index.d.ts',
     ...expectedBinFiles(workspacePackage.packageJson),
-    ...expectedTemplateFiles(workspacePackage.packageJson),
+    ...expectedTemplateFiles(workspacePackage.dir, workspacePackage.packageJson),
     ...expectedExportFiles(workspacePackage.packageJson),
   ];
 
@@ -103,12 +103,23 @@ function expectedBinFiles(packageJson: PackageJson): string[] {
   return Object.values(packageJson.bin).map((value) => value.replace(/^\.\//, ''));
 }
 
-function expectedTemplateFiles(packageJson: PackageJson): string[] {
+function expectedTemplateFiles(packageDir: string, packageJson: PackageJson): string[] {
   if (packageJson.files?.includes('templates') !== true) {
     return [];
   }
 
-  return ['templates/phaser-game/package.json'];
+  const templatesDir = join(packageDir, 'templates');
+
+  if (!existsSync(templatesDir)) {
+    return [];
+  }
+
+  return readdirSync(templatesDir)
+    .map((entry) => join(templatesDir, entry))
+    .filter((entry) => statSync(entry).isDirectory())
+    .map((templateDir) => relative(packageDir, join(templateDir, 'package.json')))
+    .map((entry) => entry.split('\\').join('/'))
+    .filter((entry) => existsSync(join(packageDir, entry)));
 }
 
 function readExportPaths(value: unknown): string[] {

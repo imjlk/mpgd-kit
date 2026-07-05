@@ -23,7 +23,7 @@ export default defineConfig(({ mode }) => {
       outDir: 'dist',
       assetsDir: 'assets',
       emptyOutDir: true,
-      rollupOptions: {
+      rolldownOptions: {
         output: {
           entryFileNames: 'assets/game.js',
           chunkFileNames: 'assets/[name].js',

@@ -542,6 +542,7 @@ function createGameApp(input: {
 
   const packageName = input.packageName ?? gameName;
   assertValidPackageName(packageName);
+  assertValidDependencyVersion(input.dependencyVersion);
 
   if (existsSync(appDir)) {
     throw new Error(`Game directory already exists: ${appDir}`);
@@ -600,6 +601,14 @@ function assertValidPackageName(name: string): void {
   if (!/^(?:@[a-z][a-z0-9-]*\/)?[a-z][a-z0-9-]*$/.test(name)) {
     throw new Error(
       'Package name must be kebab-case, optionally scoped, for example: @scope/puzzle-one',
+    );
+  }
+}
+
+function assertValidDependencyVersion(version: string): void {
+  if (!/^(?:workspace:\*|[~^]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.test(version)) {
+    throw new Error(
+      'Dependency version must be workspace:* or a semver version/range such as ^0.1.0.',
     );
   }
 }
@@ -779,6 +788,14 @@ function preparePlatformTargetsFile(input: {
   const gameRoot = path.dirname(input.targetsFile);
   const outputFile =
     input.outputFile ?? path.join(gameRoot, '.mpgd.targets.generated.json');
+  const outputDir = path.dirname(outputFile);
+
+  if (path.resolve(outputDir) !== path.resolve(gameRoot)) {
+    throw new Error(
+      '--resolved-targets-file must stay beside the source targets file so relative target paths keep their meaning.',
+    );
+  }
+
   const rendered = replaceTargetTokens(parsed, {
     gameRoot,
     kitPath: input.kitPath,
@@ -972,10 +989,12 @@ function runPnpm(args: readonly string[], commandEnv: NodeJS.ProcessEnv): void {
     throw new Error('Missing MPGD_KIT_PATH. Pass --kit-path or set MPGD_KIT_PATH.');
   }
 
-  const result = spawnSync('pnpm', [...args], {
+  const command = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const result = spawnSync(command, [...args], {
     cwd: kitPath,
     env: commandEnv,
     stdio: 'inherit',
+    shell: process.platform === 'win32',
   });
 
   if (result.error !== undefined) {

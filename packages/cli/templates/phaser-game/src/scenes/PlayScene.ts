@@ -16,7 +16,6 @@ export class PlayScene extends Phaser.Scene {
   private rewardText!: Phaser.GameObjects.Text;
   private analyticsText!: Phaser.GameObjects.Text;
   private context!: StarterContext;
-  private readonly rewardIdempotencyKey = createClientId('starter-reward');
   private lastScore = -1;
   private lastAnalyticsCount = -1;
 
@@ -95,7 +94,7 @@ export class PlayScene extends Phaser.Scene {
     try {
       const result = await this.context.platform.ads.showRewarded({
         placementId: rewardedPlacementId,
-        idempotencyKey: this.rewardIdempotencyKey,
+        idempotencyKey: createClientId('starter-reward'),
       });
 
       await this.context.analytics.track({

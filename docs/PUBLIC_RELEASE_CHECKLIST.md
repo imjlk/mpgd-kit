@@ -32,13 +32,13 @@ Use this before making the repository public or announcing a package release.
 - [ ] Publishable packages expose `dist/index.js` and `dist/index.d.ts`.
 - [ ] Sampo changesets cover public package additions and behavior changes.
 - [ ] PRs merging to `main` explicitly include a Sampo changeset when they change a published package contract, or state why no changeset is needed.
-- [ ] New publishable npm packages are registered with one local initial publish before being merged as publishable packages. Keep unfinished new packages private until that registration is complete.
+- [x] New publishable npm packages are registered with one local initial publish before being merged as publishable packages. Keep unfinished new packages private until that registration is complete.
 - [ ] New publishable package PRs include the package in `.sampo/config.toml` release groups once initial publish and OIDC readiness are done, or intentionally keep the package private.
 - [ ] npm Trusted Publishing/OIDC is configured per package for `.github/workflows/release.yml` before relying on automated publishes.
 - [x] `@mpgd/adapter-devvit` has been initial-published locally and verified with `npm view @mpgd/adapter-devvit version` before the first automated Devvit adapter release.
 - [x] `@mpgd/adapter-devvit` npm Trusted Publishing/OIDC is configured for `.github/workflows/release.yml` before adding it to the Sampo fixed release group.
-- [ ] `@mpgd/cli` has been initial-published locally and verified with `npm view @mpgd/cli version` before the first automated CLI release.
-- [ ] `@mpgd/create-game` has been initial-published locally and verified with `npm view @mpgd/create-game version` before the first automated create-package release.
+- [x] `@mpgd/cli` has been initial-published locally and verified with `npm view @mpgd/cli version` before the first automated CLI release.
+- [x] `@mpgd/create-game` has been initial-published locally and verified with `npm view @mpgd/create-game version` before the first automated create-package release.
 - [ ] `@mpgd/cli` and `@mpgd/create-game` npm Trusted Publishing/OIDC are configured for `.github/workflows/release.yml`.
 - [ ] `pnpm pack:packages` passes.
 

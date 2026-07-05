@@ -9,7 +9,13 @@ export class LobbyScene extends Phaser.Scene {
   }
 
   create(): void {
-    const context = this.registry.get(starterContextKey) as StarterContext;
+    const rawContext = this.registry.get(starterContextKey);
+
+    if (rawContext === undefined || rawContext === null) {
+      throw new Error('Starter context is missing from Phaser registry.');
+    }
+
+    const context = rawContext as StarterContext;
     const locale = context.locale;
     const features = Object.values(context.runtime.features)
       .filter((feature) => feature.enabled)

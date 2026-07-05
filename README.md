@@ -25,6 +25,7 @@ Create a standalone game starter:
 
 ```sh
 pnpm create @mpgd/game my-game
+pnpm --dir my-game install
 pnpm --dir my-game dev
 ```
 
