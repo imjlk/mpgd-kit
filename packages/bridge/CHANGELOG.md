@@ -1,5 +1,11 @@
 # @mpgd/bridge
 
+## 0.2.0 — 2026-07-06
+
+### Added
+
+- [02d8cfd](https://github.com/imjlk/mpgd-kit/commit/02d8cfd5e7669e29f7c99754fb98773aa807bc4c) Add Devvit oRPC bridge transport. — Thanks @imjlk!
+
 ## 0.1.0 — 2026-07-04
 
 ### Changed
