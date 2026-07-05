@@ -128,15 +128,46 @@ function captureZipStdout(command: string, args: readonly string[]): string {
     throw result.error;
   }
 
-  if (result.status !== 0 && result.stdout.trim().length === 0) {
+  if (result.status !== 0) {
+    const tolerated =
+      result.status !== null
+      && isToleratedZipPrefixWarning(command, args, result.status, result.stderr);
+
+    if (result.stdout.trim().length !== 0 && tolerated) {
+      return result.stdout;
+    }
+
     const stderr = result.stderr.trim();
     const detail = stderr.length > 0 ? `: ${stderr}` : '.';
-    const message = `${command} ${args.join(' ')} failed with exit code ${result.status}${detail}`;
+    const status =
+      result.status === null
+        ? `signal ${result.signal ?? 'unknown'}`
+        : `exit code ${result.status}`;
+    const message = `${command} ${args.join(' ')} failed with ${status}${detail}`;
 
     throw new Error(message);
   }
 
   return result.stdout;
+}
+
+function isToleratedZipPrefixWarning(
+  command: string,
+  args: readonly string[],
+  status: number,
+  stderr: string,
+): boolean {
+  if (command !== 'unzip' || status !== 1) {
+    return false;
+  }
+
+  const mode = args[0];
+
+  return (
+    (mode === '-Z1' || mode === '-p')
+    && stderr.includes('extra bytes at beginning or within zipfile')
+    && stderr.includes('(attempting to process anyway)')
+  );
 }
 
 function assertPathExists(path: string, label: string): void {

@@ -50,10 +50,6 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
       throw new Error(`Missing platform target config: ${target}`);
     }
 
-    for (const extraArtifact of extraRequiredArtifactsForTarget(target, targetConfig)) {
-      assertPathExists(extraArtifact, `${target} required artifact`);
-    }
-
     if (entry.artifact.length === 0) {
       throw new Error(`Release manifest target ${target} has an empty artifact path.`);
     }
@@ -64,8 +60,12 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     assertPathExists(artifactPath, `${target} artifact`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);
 
-    for (const requiredFile of requiredFilesForTarget(target, targetConfig, artifactPath)) {
+    for (const requiredFile of requiredFilesForTarget(targetConfig, artifactPath)) {
       assertFileExists(requiredFile, `${target} required file`);
+    }
+
+    for (const extraArtifact of extraRequiredArtifactsForTarget(targetConfig, artifactPath)) {
+      assertFileExists(extraArtifact, `${target} required artifact`);
     }
 
     assertEmbeddedTargetConfig(
@@ -110,35 +110,27 @@ function readReleaseEmbeddedTargetConfig(
         return readEmbeddedTargetConfigFromZip(artifactPath, `${target} release artifact`);
       }
 
-      return readEmbeddedTargetConfigFromDirectory(
-        resolveTargetPath(requireString(targetConfig.webDir, `${target}.webDir`)),
-        `${target} wrapper webDir`,
-      );
+      return readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} release artifact`);
     case 'devvit-web':
       return readEmbeddedTargetConfigFromDirectory(
-        resolveTargetPath(requireString(targetConfig.webDir, `${target}.webDir`)),
+        `${artifactPath}/client`,
         `${target} Devvit client artifact`,
       );
   }
 }
 
 function extraRequiredArtifactsForTarget(
-  target: string,
   targetConfig: SmokePlatformTargetConfig,
+  artifactPath: string,
 ): readonly string[] {
   if (targetConfig.kind !== 'devvit-web') {
     return [];
   }
 
-  return [
-    resolveTargetPath(
-      `${requireString(targetConfig.wrapperApp, `${target}.wrapperApp`)}/dist/server/index.cjs`,
-    ),
-  ];
+  return [`${artifactPath}/server/index.cjs`];
 }
 
 function requiredFilesForTarget(
-  target: string,
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
 ): readonly string[] {
@@ -152,9 +144,7 @@ function requiredFilesForTarget(
 
       return [`${artifactPath}/index.html`];
     case 'devvit-web':
-      return [
-        `${resolveTargetPath(requireString(targetConfig.webDir, `${target}.webDir`))}/index.html`,
-      ];
+      return [`${artifactPath}/client/index.html`];
     case 'capacitor-android':
     case 'capacitor-ios':
       return [];
@@ -162,10 +152,6 @@ function requiredFilesForTarget(
 }
 
 function resolveArtifactPath(path: string): string {
-  return resolveFromPlatformTargetsBase(loadedPlatformTargets.baseDir, path);
-}
-
-function resolveTargetPath(path: string): string {
   return resolveFromPlatformTargetsBase(loadedPlatformTargets.baseDir, path);
 }
 
@@ -260,14 +246,6 @@ function assertTargetKind(
   ) {
     throw new Error(`Target ${target} has unsupported kind: ${String(input)}`);
   }
-}
-
-function requireString(input: string | undefined, label: string): string {
-  if (input === undefined || input.length === 0) {
-    throw new Error(`Missing target config value: ${label}`);
-  }
-
-  return input;
 }
 
 function readRequestedTargets(args: readonly string[]): readonly string[] {
