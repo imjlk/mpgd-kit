@@ -5,9 +5,16 @@ import {
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
+import {
+  createBridgeOrpcClient,
+  defaultBridgeRpcEndpoint,
+  type BridgeRpcClient,
+  type BridgeRpcEndpoint,
+} from '@mpgd/bridge/orpc';
 import type { PlatformGateway, PlayerIdentity } from '@mpgd/platform';
 
 export const defaultDevvitBridgeEndpoint = '/api/mpgd/bridge';
+export const defaultDevvitRpcEndpoint = defaultBridgeRpcEndpoint;
 
 type BridgeErrorResponse = Extract<BridgeResponse, { readonly ok: false }>;
 type DevvitStorageSaveResponse = {
@@ -44,6 +51,7 @@ export interface DevvitPlatformGatewayOptions {
   readonly bridge?: DevvitBridge;
   readonly fallbackBridge?: DevvitBridge;
   readonly endpoint?: string;
+  readonly rpcEndpoint?: BridgeRpcEndpoint;
 }
 
 export function createDevvitPlatformGateway(
@@ -56,7 +64,9 @@ export function createDevvitPlatformGateway(
       input.bridge ??
       getBridge() ??
       input.fallbackBridge ??
-      createDevvitFetchBridge({ endpoint: input.endpoint });
+      (input.endpoint === undefined
+        ? createDevvitOrpcBridge({ endpoint: input.rpcEndpoint })
+        : createDevvitFetchBridge({ endpoint: input.endpoint }));
 
     const response = await bridge.request({
       id: generateRequestId(),
@@ -250,6 +260,32 @@ export function createDevvitPlatformGateway(
       ? devvitStorageFallbackNamespace(input.appVersion, playerId)
       : undefined;
   }
+}
+
+export function createDevvitOrpcBridge(input: {
+  readonly endpoint?: BridgeRpcEndpoint | undefined;
+  readonly fetch?: typeof fetch | undefined;
+  readonly client?: BridgeRpcClient | undefined;
+} = {}): DevvitBridge {
+  const client = input.client ?? createBridgeOrpcClient({
+    url: input.endpoint ?? defaultDevvitRpcEndpoint,
+    ...(input.fetch === undefined ? {} : { fetch: input.fetch }),
+  });
+
+  return {
+    async request(bridgeRequest) {
+      try {
+        return await client.request(bridgeRequest);
+      } catch (error) {
+        return createBridgeError(
+          bridgeRequest.id,
+          'DEVVIT_BRIDGE_NETWORK_ERROR',
+          `Devvit oRPC bridge request failed: ${errorMessage(error)}`,
+          true,
+        );
+      }
+    },
+  };
 }
 
 export function createDevvitFetchBridge(input: {
