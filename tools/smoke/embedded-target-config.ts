@@ -128,8 +128,12 @@ function captureZipStdout(command: string, args: readonly string[]): string {
     throw result.error;
   }
 
-  if (result.status !== 0 && result.stdout.trim().length === 0) {
-    throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}.`);
+  if (result.status !== 0) {
+    const stderr = result.stderr.trim();
+    const detail = stderr.length > 0 ? `: ${stderr}` : '.';
+    const message = `${command} ${args.join(' ')} failed with exit code ${result.status}${detail}`;
+
+    throw new Error(message);
   }
 
   return result.stdout;

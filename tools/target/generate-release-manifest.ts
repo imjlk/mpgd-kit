@@ -1,6 +1,6 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, isAbsolute, relative } from 'node:path';
 
 import typia from 'typia';
 
@@ -10,7 +10,7 @@ import type { TargetConfigMatrix } from '@mpgd/target-config';
 
 import { isCliEntrypoint, readJsonFile } from '../io';
 import { writeEffectiveTargetConfigs } from './effective-config';
-import { effectiveTargetConfigOutputDir } from './platform-targets';
+import { effectiveTargetConfigOutputDir, loadPlatformTargetsConfig } from './platform-targets';
 
 const assertProductCatalog = typia.createAssert<ProductCatalog>();
 const assertAdPlacements = typia.createAssert<AdPlacements>();
@@ -25,6 +25,7 @@ export interface GenerateReleaseManifestInput {
 }
 
 export function generateReleaseManifest(input: GenerateReleaseManifestInput): ReleaseManifest {
+  const platformTargets = loadPlatformTargetsConfig();
   const packageJson = readJsonFile('package.json') as { version?: string };
   const targetConfig = assertTargetConfigMatrix(
     readJsonFile('packages/target-config/targets.json'),
@@ -33,7 +34,7 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
   const adPlacements = assertAdPlacements(readJsonFile('packages/catalog/placements.json'));
   const effectiveConfig = writeEffectiveTargetConfigs({
     targets: [input.target],
-    outputDir: effectiveTargetConfigOutputDir(),
+    outputDir: effectiveTargetConfigOutputDir(platformTargets.baseDir),
   }).artifacts.find((artifact) => artifact.target === input.target);
   const buildId = process.env.BUILD_ID ?? createBuildId();
   const gameVersion = process.env.APP_VERSION ?? packageJson.version ?? '0.0.0';
@@ -55,7 +56,7 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
         artifact: input.artifact,
         profile: input.profile,
         effectiveConfig: {
-          path: effectiveConfig.path,
+          path: toPortablePath(platformTargets.baseDir, effectiveConfig.path),
           version: effectiveConfig.version,
           digest: effectiveConfig.digest,
         },
@@ -68,7 +69,10 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
 export function writeReleaseManifest(input: GenerateReleaseManifestInput): ReleaseManifest {
   const outputPath = input.outputPath ?? 'release-output/release-manifest.json';
   const nextManifest = generateReleaseManifest(input);
-  const manifest = mergeManifest(outputPath, nextManifest);
+  const manifest = makeEffectiveConfigPathsPortable(
+    mergeManifest(outputPath, nextManifest),
+    loadPlatformTargetsConfig().baseDir,
+  );
 
   mkdirSync(dirname(outputPath), { recursive: true });
   writeFileSync(`${outputPath}`, `${JSON.stringify(manifest, null, 2)}\n`);
@@ -100,6 +104,45 @@ function mergeManifest(outputPath: string, nextManifest: ReleaseManifest): Relea
       ...nextManifest.targets,
     },
   });
+}
+
+function makeEffectiveConfigPathsPortable(
+  manifest: ReleaseManifest,
+  baseDir: string,
+): ReleaseManifest {
+  return assertReleaseManifest({
+    ...manifest,
+    targets: Object.fromEntries(
+      Object.entries(manifest.targets).map(([target, entry]) => [
+        target,
+        {
+          ...entry,
+          effectiveConfig: {
+            ...entry.effectiveConfig,
+            path: toPortablePath(baseDir, entry.effectiveConfig.path),
+          },
+        },
+      ]),
+    ),
+  });
+}
+
+function toPortablePath(baseDir: string, path: string): string {
+  if (!isAbsolute(path)) {
+    return path;
+  }
+
+  const relativePath = relative(baseDir, path);
+
+  if (
+    relativePath.length > 0
+    && !relativePath.startsWith('..')
+    && !isAbsolute(relativePath)
+  ) {
+    return relativePath;
+  }
+
+  return path;
 }
 
 function createBuildId(): string {
