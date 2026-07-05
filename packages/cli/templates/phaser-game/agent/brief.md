@@ -16,5 +16,8 @@ Useful commands:
 pnpm dev
 pnpm check
 pnpm build
-pnpm --dir ../mpgd-kit mpgd target build-all --targets-file "$PWD/mpgd.targets.json" --targets web,ait --ait-variant wrapper
+pnpm --dir ../mpgd-kit mpgd target build-all --targets-file "$PWD/mpgd.targets.json" --targets web,ait,reddit --ait-variant wrapper
+pnpm devvit:login
+pnpm devvit:init
+pnpm devvit:playtest
 ```

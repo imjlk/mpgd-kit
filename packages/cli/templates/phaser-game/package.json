@@ -7,6 +7,16 @@
   "scripts": {
     "dev": "__WORKSPACE_I18N_BUILD_PREFIX__vite --host 0.0.0.0",
     "build": "__WORKSPACE_I18N_BUILD_PREFIX__vite build",
+    "build:devvit": "pnpm exec mpgd target build reddit production --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
+    "build:devvit:staging": "pnpm exec mpgd target build reddit staging --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
+    "smoke:devvit": "pnpm exec mpgd target smoke reddit --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
+    "devvit:init": "pnpm --dir apps/target-devvit run init",
+    "devvit:login": "pnpm --dir apps/target-devvit exec devvit login",
+    "devvit:login:copy-paste": "pnpm --dir apps/target-devvit exec devvit login --copy-paste",
+    "devvit:whoami": "pnpm --dir apps/target-devvit run whoami",
+    "devvit:upload": "pnpm --dir apps/target-devvit run upload",
+    "devvit:playtest": "pnpm --dir apps/target-devvit run dev",
+    "devvit:publish": "pnpm --dir apps/target-devvit run publish",
     "check": "ttsc --noEmit -p tsconfig.json",
     "lint": "ttsc --noEmit -p tsconfig.json",
     "format": "ttsc format",
@@ -26,6 +36,7 @@
     "phaser": "4.2.0"
   },
   "devDependencies": {
+    "@mpgd/cli": "__MPGD_DEPENDENCY_VERSION__",
     "@ttsc/unplugin": "0.16.9",
     "@types/node": "^24.0.0",
     "ttsc": "0.16.9",

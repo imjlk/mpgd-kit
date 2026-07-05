@@ -10,7 +10,7 @@
   "platformBoundary": "PlatformGateway",
   "mcpRequirements": {
     "ait": "Use apps-in-toss MCP before Apps in Toss SDK or review-flow changes.",
-    "reddit": "Use Devvit documentation/MCP before Devvit SDK or publish-flow changes."
+    "reddit": "Use Devvit documentation/MCP before Devvit SDK or publish-flow changes. Keep Reddit deployment files in apps/target-devvit."
   },
   "blocks": [
     {
@@ -20,6 +20,10 @@
     {
       "id": "runtime.platform.gateway",
       "owner": "src/platform/installPlatform.ts"
+    },
+    {
+      "id": "platform.devvit.app-root",
+      "owner": "apps/target-devvit"
     },
     {
       "id": "services.backend.game-services",
