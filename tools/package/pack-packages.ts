@@ -28,6 +28,8 @@ for (const workspacePackage of discoverPublishablePackages()) {
     'package.json',
     'dist/index.js',
     'dist/index.d.ts',
+    ...expectedBinFiles(workspacePackage.packageJson),
+    ...expectedTemplateFiles(workspacePackage.packageJson),
     ...expectedExportFiles(workspacePackage.packageJson),
   ];
 
@@ -87,6 +89,26 @@ function expectedExportFiles(packageJson: PackageJson): string[] {
   const exportsMap = packageJson.exports as Record<string, unknown>;
 
   return [...new Set(Object.values(exportsMap).flatMap(readExportPaths))];
+}
+
+function expectedBinFiles(packageJson: PackageJson): string[] {
+  if (typeof packageJson.bin === 'string') {
+    return [packageJson.bin.replace(/^\.\//, '')];
+  }
+
+  if (typeof packageJson.bin !== 'object' || packageJson.bin === null) {
+    return [];
+  }
+
+  return Object.values(packageJson.bin).map((value) => value.replace(/^\.\//, ''));
+}
+
+function expectedTemplateFiles(packageJson: PackageJson): string[] {
+  if (packageJson.files?.includes('templates') !== true) {
+    return [];
+  }
+
+  return ['templates/phaser-game/package.json'];
 }
 
 function readExportPaths(value: unknown): string[] {

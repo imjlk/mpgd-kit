@@ -21,14 +21,34 @@ distribution target gets the right adapter and validation path.
 
 ## Quick Start
 
+Create a standalone game starter:
+
 ```sh
-pnpm install
-pnpm --dir examples/phaser-starter dev
+pnpm create @mpgd/game my-game
+pnpm --dir my-game dev
 ```
 
-The starter is the smallest "new game" path. It wires `PlatformGateway`,
-target-config/effective-config, i18n, asset manifest loading, and optional game
-services client creation without copying the demo game's score/coin loop.
+Under npm/pnpm/yarn/bun create conventions, the `@mpgd/game` initializer is
+provided by the `@mpgd/create-game` package. The reusable command implementation
+lives in `@mpgd/cli`.
+
+For local kit development inside this repository:
+
+```sh
+pnpm install
+pnpm mpgd game create examples/my-game --title "My Game" --workspace
+pnpm --dir examples/my-game check
+pnpm --dir examples/my-game build
+pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait --ait-variant wrapper --kit-path .
+pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait --kit-path .
+```
+
+Use `--workspace` for local kit development. Omit it when generating an external
+game repo that should consume published `@mpgd/*` packages.
+
+The starter wires `PlatformGateway`, target-config/effective-config, i18n, asset
+manifest loading, and optional game-services client creation without copying the
+demo game's score/coin loop.
 
 For a minimum repo confidence check:
 
@@ -73,6 +93,10 @@ Codex agents, skills, starter manifests, and Apps in Toss MCP guidance.
 - `@mpgd/game-services`: client orchestration, oRPC v2 beta contract, HTTP/oRPC handlers,
   memory/D1 store integration points, and backend service assembly.
 - `@mpgd/capacitor-game-services`: Capacitor native plugin bridge surface.
+- `@mpgd/cli`: Gunshi-based local CLI surfaced as `pnpm mpgd` for starter
+  generation and target build/smoke matrix orchestration.
+- `@mpgd/create-game`: thin create-package wrapper for
+  `npm create @mpgd/game` / `pnpm create @mpgd/game`.
 
 Internal game/economy/save/release-manifest/backend-ledger packages stay private
 until their APIs become useful as standalone SDK surface. Pure packages do not
@@ -117,6 +141,14 @@ pnpm build:web
 pnpm smoke:target web-preview
 pnpm build:devvit
 pnpm smoke:target reddit
+```
+
+For generated games, prefer the CLI wrapper so `${MPGD_KIT_PATH}` target-file
+tokens are resolved before the existing target scripts run:
+
+```sh
+pnpm mpgd target build-all --targets-file ./mpgd.targets.json --targets web,ait --ait-variant wrapper --kit-path <path-to-mpgd-kit>
+pnpm mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,ait --kit-path <path-to-mpgd-kit>
 ```
 
 ## What Is Sample or Mock

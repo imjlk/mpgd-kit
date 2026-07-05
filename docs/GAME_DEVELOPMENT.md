@@ -14,9 +14,23 @@ clear boundaries:
 
 ## Starter vs Demo
 
-Use `examples/phaser-starter` when starting a new game. It is a private example
-workspace that shows the reusable mpgd wiring without inheriting the demo game's
-score, coin, result, or mock purchase loop.
+Use the create package when starting a new standalone game:
+
+```sh
+pnpm create @mpgd/game my-game
+pnpm --dir my-game install
+pnpm --dir my-game dev
+pnpm --dir my-game check
+pnpm --dir my-game build
+```
+
+The `@mpgd/game` initializer name resolves to the public `@mpgd/create-game`
+package. The reusable command implementation lives in `@mpgd/cli`.
+
+Use `examples/phaser-starter` when developing the starter inside this
+repository. It is a private example workspace that shows the reusable mpgd
+wiring without inheriting the demo game's score, coin, result, or mock purchase
+loop.
 
 Use `apps/game-phaser` when validating the kit itself. The demo intentionally
 exercises player identity, save/load, target feature availability, localization,
@@ -44,11 +58,30 @@ leaderboard calls stay server-side.
 Starter loop:
 
 ```sh
+pnpm mpgd game create examples/my-game --title "My Game" --workspace --kit-path .
 pnpm validate:starter-workflow
 pnpm --dir examples/phaser-starter dev
 pnpm --dir examples/phaser-starter check
 pnpm --dir examples/phaser-starter build
 ```
+
+The generated starter includes browser, Capacitor, Apps in Toss, and Reddit
+Devvit adapter selection through `APP_TARGET`, local translation keys,
+best-effort analytics, optional game-services client wiring, and a rewarded ad
+smoke action. It stays intentionally small; real scoring, economy, content, and
+save models should be added by each game.
+
+Use the kit CLI for generated target builds because it resolves
+`${MPGD_KIT_PATH}` tokens in the game's `mpgd.targets.json` before invoking the
+existing kit target scripts:
+
+```sh
+pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait --ait-variant wrapper --kit-path .
+pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait --kit-path .
+```
+
+For a private sibling game repo, run the same commands from the game repo or kit
+checkout and pass an absolute or relative `--targets-file` plus `--kit-path`.
 
 To connect the starter to a local or deployed game-services backend, set:
 

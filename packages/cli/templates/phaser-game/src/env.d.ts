@@ -1,0 +1,12 @@
+/// <reference types="vite/client" />
+
+declare const __APP_TARGET__: string;
+declare const __APP_VERSION__: string;
+declare const __BUILD_ID__: string;
+declare const __DEBUG_BUILD__: boolean;
+
+interface ImportMetaEnv {
+  readonly VITE_MPGD_GAME_SERVICES_URL?: string;
+  readonly VITE_MPGD_GAME_SERVICES_TARGET?: string;
+  readonly VITE_MPGD_GAME_SERVICES_TRANSPORT?: string;
+}

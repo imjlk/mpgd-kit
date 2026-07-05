@@ -16,6 +16,7 @@
     "apps/mobile-capacitor/capacitor.config.ts"
   ],
   "exclude": [
-    "**/dist/**"
+    "**/dist/**",
+    "packages/cli/templates/**"
   ]
 }

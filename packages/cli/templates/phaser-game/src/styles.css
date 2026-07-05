@@ -1,0 +1,31 @@
+html,
+body,
+#game {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  overflow: hidden;
+  background: #07111f;
+  color: #ffffff;
+  font-family: Arial, sans-serif;
+}
+
+canvas {
+  display: block;
+}
+
+.boot-error {
+  box-sizing: border-box;
+  width: min(720px, calc(100vw - 32px));
+  margin: 20vh auto 0;
+  padding: 20px;
+  border: 1px solid #dc2626;
+  border-radius: 8px;
+  background: #1f1111;
+  color: #fecaca;
+  font-size: 16px;
+  line-height: 1.5;
+}

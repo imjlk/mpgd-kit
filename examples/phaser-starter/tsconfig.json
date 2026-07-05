@@ -12,6 +12,7 @@
   ],
   "exclude": [
     "../../adapters/**/dist/**",
+    "../../packages/cli/templates/**",
     "../../packages/**/dist/**"
   ]
 }
