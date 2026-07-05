@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/platform",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Shared platform gateway, monetization, ads, leaderboard, identity, lifecycle, and storage contracts for mpgd games.",
   "license": "MIT",
   "repository": {

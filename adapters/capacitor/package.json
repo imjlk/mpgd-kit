@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/adapter-capacitor",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Capacitor platform adapter for mpgd Android and iOS shells.",
   "license": "MIT",
   "repository": {
