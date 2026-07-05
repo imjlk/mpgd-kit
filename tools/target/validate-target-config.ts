@@ -1,13 +1,22 @@
 import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
 
 import { isCliEntrypoint, readJsonFile } from '../io';
+import { loadPlatformTargetsConfig, resolveFromPlatformTargetsBase } from './platform-targets';
 import { assertPlatformTargetsConfig } from './schemas';
 
-export function validateTargetConfigFile(path = 'platform.targets.json') {
-  const config = assertPlatformTargetsConfig(readJsonFile(path));
+export function validateTargetConfigFile(path?: string) {
+  const loadedConfig = path === undefined
+    ? loadPlatformTargetsConfig()
+    : {
+        baseDir: dirname(resolve(path)),
+        config: assertPlatformTargetsConfig(readJsonFile(path)),
+        path: resolve(path),
+      };
+  const config = assertPlatformTargetsConfig(loadedConfig.config);
 
   for (const [targetName, target] of Object.entries(config.targets)) {
-    if (!existsSync(target.gameApp)) {
+    if (!existsSync(resolvePath(target.gameApp))) {
       throw new Error(`Target ${targetName} gameApp does not exist: ${target.gameApp}`);
     }
 
@@ -17,20 +26,24 @@ export function validateTargetConfigFile(path = 'platform.targets.json') {
 
     if (
       (target.kind === 'apps-in-toss' || target.kind === 'devvit-web') &&
-      !existsSync(target.wrapperApp)
+      !existsSync(resolvePath(target.wrapperApp))
     ) {
       throw new Error(`Target ${targetName} wrapperApp does not exist: ${target.wrapperApp}`);
     }
 
     if (
       (target.kind === 'capacitor-android' || target.kind === 'capacitor-ios') &&
-      !existsSync(target.shellApp)
+      !existsSync(resolvePath(target.shellApp))
     ) {
       throw new Error(`Target ${targetName} shellApp does not exist: ${target.shellApp}`);
     }
   }
 
   return config;
+
+  function resolvePath(pathValue: string): string {
+    return resolveFromPlatformTargetsBase(loadedConfig.baseDir, pathValue);
+  }
 }
 
 if (isCliEntrypoint(import.meta.url)) {
