@@ -50,7 +50,8 @@ export interface DevvitPlatformGatewayOptions {
   readonly buildId: string;
   readonly bridge?: DevvitBridge;
   readonly fallbackBridge?: DevvitBridge;
-  readonly endpoint?: BridgeRpcEndpoint;
+  readonly endpoint?: string;
+  readonly rpcEndpoint?: BridgeRpcEndpoint;
 }
 
 export function createDevvitPlatformGateway(
@@ -63,7 +64,9 @@ export function createDevvitPlatformGateway(
       input.bridge ??
       getBridge() ??
       input.fallbackBridge ??
-      createDevvitOrpcBridge({ endpoint: input.endpoint });
+      (input.endpoint === undefined
+        ? createDevvitOrpcBridge({ endpoint: input.rpcEndpoint })
+        : createDevvitFetchBridge({ endpoint: input.endpoint }));
 
     const response = await bridge.request({
       id: generateRequestId(),

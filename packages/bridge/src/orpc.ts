@@ -5,7 +5,12 @@ import { oc, type as orpcType, type RouterContractClient } from '@orpc/contract'
 import { implement } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 
-import type { BridgeRequest, BridgeResponse } from './index';
+import {
+  assertBridgeRequest,
+  createBridgeError,
+  type BridgeRequest,
+  type BridgeResponse,
+} from './index';
 
 export type BridgeRpcEndpoint = StandardUrl;
 export type BridgeRpcPrefix = `/${string}`;
@@ -54,7 +59,22 @@ export function createBridgeRpcRouter(handleRequest: BridgeRpcRequestHandler) {
   const contract = implement(bridgeRpcContract);
 
   return contract.router({
-    request: contract.request.handler(({ input }) => handleRequest(input)),
+    request: contract.request.handler(({ input }) => {
+      let request: BridgeRequest;
+
+      try {
+        request = assertBridgeRequest(input);
+      } catch (error) {
+        return createBridgeError(
+          bridgeRequestIdFromInput(input),
+          'INVALID_BRIDGE_REQUEST',
+          `Bridge RPC request failed runtime validation: ${errorMessage(error)}`,
+          false,
+        );
+      }
+
+      return handleRequest(request);
+    }),
   });
 }
 
@@ -103,4 +123,20 @@ export function createBridgeRpcFetchHandler(
       );
     }
   };
+}
+
+function bridgeRequestIdFromInput(input: unknown): string {
+  if (typeof input === 'object' && input !== null && 'id' in input) {
+    const id = (input as { readonly id?: unknown }).id;
+
+    if (typeof id === 'string' && id.length > 0) {
+      return id;
+    }
+  }
+
+  return 'unknown';
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }

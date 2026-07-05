@@ -644,7 +644,7 @@ async function sendFetchResponse(
   response: ExpressResponse,
   fetchResponse: Response,
 ): Promise<void> {
-  fetchResponse.headers.forEach((value, key) => {
+  fetchResponse.headers.forEach((value: string, key: string) => {
     if (!expressManagedResponseHeaders.has(key.toLowerCase())) {
       response.setHeader(key, value);
     }

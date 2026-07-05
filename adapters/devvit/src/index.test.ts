@@ -165,6 +165,95 @@ describe('adapter-devvit', () => {
     }
   });
 
+  it('preserves legacy Devvit fetch endpoint overrides', async () => {
+    let fetchUrl = '';
+    let fetchMethod = '';
+    let bridgeRequest: BridgeRequest | undefined;
+
+    vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
+      fetchUrl = String(url);
+      fetchMethod = init?.method ?? 'GET';
+      const parsedRequest = JSON.parse(String(init?.body)) as BridgeRequest;
+      bridgeRequest = parsedRequest;
+
+      return new Response(
+        JSON.stringify({
+          id: parsedRequest.id,
+          ok: true,
+          data: {
+            playerId: 'legacy-fetch-player',
+          },
+        } satisfies BridgeResponse),
+        {
+          status: 200,
+          headers: {
+            'content-type': 'application/json',
+          },
+        },
+      );
+    });
+
+    try {
+      const gateway = createDevvitPlatformGateway({
+        appVersion: '1.2.3',
+        buildId: 'build-reddit',
+        endpoint: defaultDevvitBridgeEndpoint,
+      });
+
+      await expect(gateway.identity.getPlayer()).resolves.toEqual({
+        playerId: 'legacy-fetch-player',
+      });
+      expect(fetchUrl).toBe(defaultDevvitBridgeEndpoint);
+      expect(fetchMethod).toBe('POST');
+      expect(bridgeRequest).toMatchObject({
+        method: 'identity.getPlayer',
+        payload: {},
+      });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('allows overriding the Devvit oRPC endpoint separately', async () => {
+    let fetchUrl = '';
+    const rpcEndpoint = '/api/custom-rpc';
+    const handler = createBridgeRpcFetchHandler(
+      createBridgeRpcRouter((input) => {
+        return {
+          id: input.id,
+          ok: true,
+          data: {
+            playerId: 'custom-orpc-player',
+          },
+        } satisfies BridgeResponse;
+      }),
+      {
+        prefix: rpcEndpoint,
+      },
+    );
+
+    vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
+      fetchUrl = String(url);
+
+      return handler(new Request(`https://reddit.test${fetchUrl}`, init));
+    });
+
+    try {
+      const gateway = createDevvitPlatformGateway({
+        appVersion: '1.2.3',
+        buildId: 'build-reddit',
+        rpcEndpoint,
+      });
+
+      await expect(gateway.identity.getPlayer()).resolves.toEqual({
+        playerId: 'custom-orpc-player',
+      });
+      expect(fetchUrl.startsWith(rpcEndpoint)).toBe(true);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('allows explicit Devvit oRPC clients to back the bridge interface', async () => {
     const bridge = createDevvitOrpcBridge({
       client: {
