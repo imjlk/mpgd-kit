@@ -32,9 +32,9 @@ Use this before making the repository public or announcing a package release.
 - [ ] Publishable packages expose `dist/index.js` and `dist/index.d.ts`.
 - [ ] Sampo changesets cover public package additions and behavior changes.
 - [ ] PRs merging to `main` explicitly include a Sampo changeset when they change a published package contract, or state why no changeset is needed.
-- [ ] New publishable npm packages are registered with one local initial publish before being added to Sampo/OIDC release automation.
+- [ ] New publishable npm packages are registered with one local initial publish before being merged as publishable packages. Keep unfinished new packages private until that registration is complete.
 - [ ] npm Trusted Publishing/OIDC is configured per package for `.github/workflows/release.yml` before relying on automated publishes.
-- [ ] `@mpgd/adapter-devvit` has been initial-published locally and verified with `npm view @mpgd/adapter-devvit version` before the first automated Devvit adapter release.
+- [x] `@mpgd/adapter-devvit` has been initial-published locally and verified with `npm view @mpgd/adapter-devvit version` before the first automated Devvit adapter release.
 - [ ] `pnpm pack:packages` passes.
 
 ## Validation
