@@ -36,6 +36,7 @@ Use this before making the repository public or announcing a package release.
 - [ ] New publishable package PRs include the package in `.sampo/config.toml` release groups once initial publish and OIDC readiness are done, or intentionally keep the package private.
 - [ ] npm Trusted Publishing/OIDC is configured per package for `.github/workflows/release.yml` before relying on automated publishes.
 - [x] `@mpgd/adapter-devvit` has been initial-published locally and verified with `npm view @mpgd/adapter-devvit version` before the first automated Devvit adapter release.
+- [x] `@mpgd/adapter-devvit` npm Trusted Publishing/OIDC is configured for `.github/workflows/release.yml` before adding it to the Sampo fixed release group.
 - [ ] `pnpm pack:packages` passes.
 
 ## Validation

@@ -56,7 +56,7 @@ Platform SDK imports belong only in:
 - Before merging a newly added publishable npm package to `main`, register the package with one local initial publish using the intended starting version. Use the maintainer's local npm auth environment, loaded through `mise`, and verify with `npm view <package> version` afterward. If the package is not ready for initial publish yet, keep it non-publishable, for example with npm `"private": true`, until the registration is complete.
 - A PR that introduces a new publishable package must include its `.sampo/config.toml` release-group entry in the same PR once initial publish and OIDC readiness are done. Otherwise, keep the package private until a follow-up PR can safely add it to Sampo release automation.
 - After the initial local publish, configure npm Trusted Publishing/OIDC for `.github/workflows/release.yml` and use Sampo changesets for subsequent releases.
-- `@mpgd/adapter-devvit` was initial-published as `0.1.0`; keep its npm Trusted Publishing/OIDC settings aligned with `.github/workflows/release.yml` before relying on automated Devvit adapter releases.
+- `@mpgd/adapter-devvit` was initial-published as `0.1.0` and has npm Trusted Publishing/OIDC configured for `.github/workflows/release.yml`; keep that setting aligned before relying on automated Devvit adapter releases.
 
 ## Preferred Commands
 
