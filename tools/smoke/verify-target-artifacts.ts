@@ -1,6 +1,8 @@
 import { existsSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, resolve } from 'node:path';
 
+import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
+
 import { readJsonFile } from '../io';
 import {
   assertEmbeddedTargetConfig,
@@ -24,16 +26,6 @@ interface SmokePlatformTargetConfig {
 
 interface SmokePlatformTargetsConfig {
   readonly targets: Record<string, SmokePlatformTargetConfig>;
-}
-
-interface SmokeReleaseManifest {
-  readonly targets: Record<string, {
-    readonly artifact: string;
-    readonly effectiveConfig: {
-      readonly path: string;
-      readonly digest: string;
-    };
-  }>;
 }
 
 const platformTargetsFileEnv = 'MPGD_PLATFORM_TARGETS_FILE';
@@ -67,12 +59,18 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     }
 
     const artifactPath = resolveArtifactPath(entry.artifact);
+    const effectiveConfigPath = resolveArtifactPath(entry.effectiveConfig.path);
+
     assertPathExists(artifactPath, `${target} artifact`);
-    assertPathExists(entry.effectiveConfig.path, `${target} effective target config`);
+    assertPathExists(effectiveConfigPath, `${target} effective target config`);
+
+    for (const requiredFile of requiredFilesForTarget(target, targetConfig, artifactPath)) {
+      assertFileExists(requiredFile, `${target} required file`);
+    }
 
     assertEmbeddedTargetConfig(
       readEmbeddedTargetConfigFromFile(
-        entry.effectiveConfig.path,
+        effectiveConfigPath,
         `${target} effective target config artifact`,
       ),
       {
@@ -139,6 +137,30 @@ function extraRequiredArtifactsForTarget(
   ];
 }
 
+function requiredFilesForTarget(
+  target: string,
+  targetConfig: SmokePlatformTargetConfig,
+  artifactPath: string,
+): readonly string[] {
+  switch (targetConfig.kind) {
+    case 'web':
+      return [`${artifactPath}/index.html`];
+    case 'apps-in-toss':
+      if (artifactPath.endsWith('.ait')) {
+        return [];
+      }
+
+      return [`${artifactPath}/index.html`];
+    case 'devvit-web':
+      return [
+        `${resolveTargetPath(requireString(targetConfig.webDir, `${target}.webDir`))}/index.html`,
+      ];
+    case 'capacitor-android':
+    case 'capacitor-ios':
+      return [];
+  }
+}
+
 function resolveArtifactPath(path: string): string {
   return resolveFromPlatformTargetsBase(loadedPlatformTargets.baseDir, path);
 }
@@ -156,6 +178,18 @@ function assertPathExists(path: string, label: string): void {
 
   if (!stat.isFile() && !stat.isDirectory()) {
     throw new Error(`${label} is not a file or directory: ${path}`);
+  }
+}
+
+function assertFileExists(path: string, label: string): void {
+  if (!existsSync(path)) {
+    throw new Error(`Missing ${label}: ${path}`);
+  }
+
+  const stat = statSync(path);
+
+  if (!stat.isFile()) {
+    throw new Error(`${label} is not a file: ${path}`);
   }
 }
 
@@ -182,21 +216,8 @@ function loadSmokePlatformTargetsConfig(): {
   };
 }
 
-function readSmokeReleaseManifest(path: string): SmokeReleaseManifest {
-  const manifest = readJsonFile(path) as SmokeReleaseManifest;
-
-  assertRecord(manifest, 'release manifest');
-  assertRecord(manifest.targets, 'release manifest targets');
-
-  for (const [target, entry] of Object.entries(manifest.targets)) {
-    assertRecord(entry, `release manifest target ${target}`);
-    assertString(entry.artifact, `${target}.artifact`);
-    assertRecord(entry.effectiveConfig, `${target}.effectiveConfig`);
-    assertString(entry.effectiveConfig.path, `${target}.effectiveConfig.path`);
-    assertString(entry.effectiveConfig.digest, `${target}.effectiveConfig.digest`);
-  }
-
-  return manifest;
+function readSmokeReleaseManifest(path: string): ReleaseManifest {
+  return assertReleaseManifest(readJsonFile(path));
 }
 
 function platformTargetsFilePath(): string {
