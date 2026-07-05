@@ -23,6 +23,8 @@ const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
 const leaderboardLockTtlSeconds = Math.ceil(leaderboardLockTtlMs / 1_000);
 const leaderboardLockRetryBudgetMs = leaderboardLockTtlSeconds * 1_000;
+const gameName = '__GAME_NAME__';
+const gameTitle = __GAME_TITLE_TS_LITERAL__;
 const expressManagedResponseHeaders = new Set([
   'connection',
   'content-encoding',
@@ -79,20 +81,20 @@ app.post('/internal/menu/create-post', async (
   try {
     const post = await reddit.submitCustomPost({
       subredditName,
-      title: '__GAME_TITLE__',
+      title: gameTitle,
       entry: 'default',
       textFallback: {
-        text: 'Open this Reddit custom post to play __GAME_TITLE__.',
+        text: `Open this Reddit custom post to play ${gameTitle}.`,
       },
       postData: {
-        source: '__GAME_NAME__',
+        source: gameName,
         createdBy: 'devvit-menu',
       },
     });
 
     response.status(200).json({
       showToast: {
-        text: `Created __GAME_TITLE__ post ${post.id}.`,
+        text: `Created ${gameTitle} post ${post.id}.`,
         appearance: 'success',
       },
     } satisfies UiResponse);
@@ -100,7 +102,7 @@ app.post('/internal/menu/create-post', async (
     console.error(`devvit custom post creation failed: ${errorMessage(error)}`, error);
     response.status(200).json({
       showToast: {
-        text: 'Could not create the __GAME_TITLE__ post.',
+        text: `Could not create the ${gameTitle} post.`,
         appearance: 'neutral',
       },
     } satisfies UiResponse);
@@ -374,7 +376,7 @@ function storageKey(input: BridgeRequest, playerId: string): string | BridgeResp
     return createBridgeError(input.id, 'INVALID_STORAGE_KEY', 'Encoded storage key is too long.');
   }
 
-  return `__GAME_NAME__:save:${encodeURIComponent(playerId)}:${encodedKey}`;
+  return `${gameName}:save:${encodeURIComponent(playerId)}:${encodedKey}`;
 }
 
 function leaderboardIdFromPayload(
@@ -397,7 +399,7 @@ function leaderboardIdFromPayload(
 }
 
 function leaderboardKey(leaderboardId: string): string {
-  return `__GAME_NAME__:leaderboard:${encodeURIComponent(leaderboardId)}`;
+  return `${gameName}:leaderboard:${encodeURIComponent(leaderboardId)}`;
 }
 
 async function submitMaxLeaderboardScore(

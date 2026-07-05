@@ -660,6 +660,7 @@ function createTemplateContext(input: {
     gameName: input.gameName,
     devvitAppName: toDevvitAppName(input.gameName),
     gameTitle: title,
+    gameTitleTsLiteral: toJavaScriptStringLiteral(title),
     packageName: input.packageName,
     dependencyVersion: input.dependencyVersion,
     tsconfigExtendsLine: input.workspace
@@ -689,6 +690,7 @@ function createTemplateContext(input: {
           `  - '${workspacePrefix}/packages/*'`,
           `  - '${workspacePrefix}/adapters/*'`,
           `  - '${workspacePrefix}/native-plugins/*'`,
+          `  - '${workspacePrefix}/backend/*'`,
         ].join('\n')
       : '',
     pascalName: toPascalCase(input.gameName),
@@ -748,6 +750,7 @@ function renderTemplate(
   return content
     .replaceAll('__GAME_NAME__', context.gameName)
     .replaceAll('__DEVVIT_APP_NAME__', context.devvitAppName)
+    .replaceAll('__GAME_TITLE_TS_LITERAL__', context.gameTitleTsLiteral)
     .replaceAll('__GAME_TITLE__', context.gameTitle)
     .replaceAll('__PACKAGE_NAME__', context.packageName)
     .replaceAll('__MPGD_DEPENDENCY_VERSION__', context.dependencyVersion)
@@ -795,6 +798,10 @@ function toDevvitAppName(gameName: string): string {
   }
 
   return appName.length >= 3 ? appName : 'mpgd-game';
+}
+
+function toJavaScriptStringLiteral(value: string): string {
+  return JSON.stringify(value);
 }
 
 function toTemplatePath(value: string): string {
