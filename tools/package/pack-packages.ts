@@ -117,9 +117,17 @@ function expectedTemplateFiles(packageDir: string, packageJson: PackageJson): st
   return readdirSync(templatesDir)
     .map((entry) => join(templatesDir, entry))
     .filter((entry) => statSync(entry).isDirectory())
-    .map((templateDir) => relative(packageDir, join(templateDir, 'package.json')))
-    .map((entry) => entry.split('\\').join('/'))
-    .filter((entry) => existsSync(join(packageDir, entry)));
+    .map((templateDir) => {
+      const packageJsonPath = join(templateDir, 'package.json');
+
+      if (!existsSync(packageJsonPath)) {
+        throw new Error(
+          `${packageJson.name ?? 'package'} template ${relative(packageDir, templateDir)} must include package.json`,
+        );
+      }
+
+      return relative(packageDir, packageJsonPath).split('\\').join('/');
+    });
 }
 
 function readExportPaths(value: unknown): string[] {
