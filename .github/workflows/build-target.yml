@@ -21,7 +21,7 @@ on:
 
 jobs:
   build:
-    runs-on: ${{ inputs.target == 'ios' && 'macos-15' || 'ubuntu-latest' }}
+    runs-on: ${{ inputs.target == 'ios' && 'macos-26' || 'ubuntu-latest' }}
 
     steps:
       - uses: actions/checkout@v5

@@ -38,6 +38,11 @@ jobs:
       - run: pnpm validate:effective-config
       - run: pnpm validate:targets
       - run: pnpm test
+      - run: tar -czf package-dist.tgz packages/*/dist adapters/*/dist backend/*/dist native-plugins/*/dist
+      - uses: actions/upload-artifact@v6
+        with:
+          name: package-dist-release
+          path: package-dist.tgz
       - run: pnpm graph:preflight
       - run: pnpm pack:packages:prepared
       - run: pnpm build:web
@@ -79,7 +84,13 @@ jobs:
 
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-dist-release
+      - run: tar -xzf package-dist.tgz
       - run: pnpm build:android
+        env:
+          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target android
 
       - uses: actions/upload-artifact@v6
@@ -90,7 +101,7 @@ jobs:
             release-output/**
 
   build-ios:
-    runs-on: macos-15
+    runs-on: macos-26
     needs: validate
 
     steps:
@@ -109,7 +120,13 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-dist-release
+      - run: tar -xzf package-dist.tgz
       - run: pnpm build:ios
+        env:
+          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target ios
 
       - uses: actions/upload-artifact@v6
@@ -138,7 +155,13 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-dist-release
+      - run: tar -xzf package-dist.tgz
       - run: pnpm build:ait
+        env:
+          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target ait
 
       - uses: actions/upload-artifact@v6
@@ -171,7 +194,13 @@ jobs:
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
+      - uses: actions/download-artifact@v7
+        with:
+          name: package-dist-release
+      - run: tar -xzf package-dist.tgz
       - run: pnpm build:devvit
+        env:
+          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target reddit
 
       - uses: actions/upload-artifact@v6
