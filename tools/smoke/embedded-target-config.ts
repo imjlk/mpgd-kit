@@ -44,14 +44,14 @@ export function readEmbeddedTargetConfigFromZip(
 ): EmbeddedTargetConfigEvidence {
   assertPathExists(path, label);
 
-  const entries = capture('unzip', ['-Z1', path]).split('\n');
+  const entries = captureZipStdout('unzip', ['-Z1', path]).split('\n');
   const entry = entries.find((candidate) => basename(candidate) === embeddedTargetConfigFileName);
 
   if (entry === undefined) {
     throw new Error(`Missing embedded target config in ${label}: ${path}`);
   }
 
-  return createEvidence(label, `${path}:${entry}`, capture('unzip', ['-p', path, entry]));
+  return createEvidence(label, `${path}:${entry}`, captureZipStdout('unzip', ['-p', path, entry]));
 }
 
 export function assertEmbeddedTargetConfig(
@@ -117,7 +117,7 @@ function findEmbeddedTargetConfig(root: string): string | undefined {
   return undefined;
 }
 
-function capture(command: string, args: readonly string[]): string {
+function captureZipStdout(command: string, args: readonly string[]): string {
   const result = spawnSync(command, [...args], {
     cwd: process.cwd(),
     env: process.env,
@@ -128,7 +128,7 @@ function capture(command: string, args: readonly string[]): string {
     throw result.error;
   }
 
-  if (result.status !== 0) {
+  if (result.status !== 0 && result.stdout.trim().length === 0) {
     throw new Error(`${command} ${args.join(' ')} failed with exit code ${result.status}.`);
   }
 

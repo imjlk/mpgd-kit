@@ -108,14 +108,14 @@ function readReleaseEmbeddedTargetConfig(
     case 'capacitor-ios':
       return readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} native artifact`);
     case 'apps-in-toss':
-      try {
+      if (artifactPath.endsWith('.ait')) {
         return readEmbeddedTargetConfigFromZip(artifactPath, `${target} release artifact`);
-      } catch {
-        return readEmbeddedTargetConfigFromDirectory(
-          resolveTargetPath(requireString(targetConfig.webDir, `${target}.webDir`)),
-          `${target} wrapper webDir`,
-        );
       }
+
+      return readEmbeddedTargetConfigFromDirectory(
+        resolveTargetPath(requireString(targetConfig.webDir, `${target}.webDir`)),
+        `${target} wrapper webDir`,
+      );
     case 'devvit-web':
       return readEmbeddedTargetConfigFromDirectory(
         resolveTargetPath(requireString(targetConfig.webDir, `${target}.webDir`)),

@@ -134,6 +134,10 @@ switch (target.kind) {
 
     let releaseArtifact = requireString(target.shellApp, `${targetName}.shellApp`) + '/ios';
 
+    if (process.env.MPGD_RUN_IOS_ARCHIVE === '1' && process.env.MPGD_RUN_IOS_SIMULATOR_BUILD === '1') {
+      throw new Error('Set only one of MPGD_RUN_IOS_ARCHIVE or MPGD_RUN_IOS_SIMULATOR_BUILD.');
+    }
+
     if (process.env.MPGD_RUN_IOS_ARCHIVE === '1') {
       releaseArtifact = 'release-output/ios/MPGDKit.xcarchive';
       run(
@@ -155,9 +159,39 @@ switch (target.kind) {
         env,
         `${shellApp}/ios`,
       );
+    } else if (process.env.MPGD_RUN_IOS_SIMULATOR_BUILD === '1') {
+      const buildRoot = targetPath('release-output/ios-simulator-build');
+      const builtApp = `${buildRoot}/Release-iphonesimulator/App.app`;
+      releaseArtifact = 'release-output/ios/App.app';
+
+      rmSync(buildRoot, { recursive: true, force: true });
+      run(
+        'xcodebuild',
+        [
+          'build',
+          '-project',
+          'App/App.xcodeproj',
+          '-target',
+          'App',
+          '-configuration',
+          'Release',
+          '-sdk',
+          'iphonesimulator',
+          `SYMROOT=${buildRoot}`,
+          `OBJROOT=${join(buildRoot, 'Intermediates.noindex')}`,
+          'INFOPLIST_FILE=App/Info-Smoke.plist',
+          'EXCLUDED_SOURCE_FILE_NAMES=Main.storyboard LaunchScreen.storyboard Assets.xcassets',
+          'ASSETCATALOG_COMPILER_APPICON_NAME=',
+          'SWIFT_ACTIVE_COMPILATION_CONDITIONS=MPGD_SMOKE_NO_STORYBOARD',
+          'CODE_SIGNING_ALLOWED=NO',
+        ],
+        env,
+        `${shellApp}/ios`,
+      );
+      replaceDirectory(builtApp, targetPath(releaseArtifact));
     } else {
       console.warn(
-        'ios: cap sync completed; set MPGD_RUN_IOS_ARCHIVE=1 to run xcodebuild archive.',
+        'ios: cap sync completed; set MPGD_RUN_IOS_SIMULATOR_BUILD=1 for a simulator .app or MPGD_RUN_IOS_ARCHIVE=1 for an xcarchive.',
       );
     }
 
