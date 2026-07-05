@@ -18,10 +18,11 @@ pnpm build:devvit
 pnpm devvit:playtest
 ```
 
-`devvit:init` is a one-time App Directory registration step. Login proves who you are;
-init creates or links the Reddit-side app record for the `name` in `devvit.json`.
-After that, use `pnpm devvit:playtest`, `pnpm devvit:upload`, and
-`pnpm devvit:publish` from the game root.
+`devvit:init` performs the first App Directory upload/link step with Devvit's
+copy-paste flow. Login proves who you are; init uploads and links the
+Reddit-side app record for the `name` in `devvit.json`. After that, use
+`pnpm devvit:playtest`, `pnpm devvit:upload`, and `pnpm devvit:publish` from the
+game root.
 
 The client bundle is copied into `dist/client` by the mpgd target build. The server bridge is
 compiled to `dist/server/index.cjs` and keeps Devvit SDK imports out of Phaser scenes.

@@ -74,10 +74,11 @@ pnpm build:devvit
 pnpm devvit:playtest
 ```
 
-`devvit:login` authenticates your Reddit account. `devvit:init` is a one-time
-App Directory registration step for the app name in
-`apps/target-devvit/devvit.json`. After init, use `pnpm devvit:playtest`,
-`pnpm devvit:upload`, and `pnpm devvit:publish` from this game root.
+`devvit:login` authenticates your Reddit account. `devvit:init` performs the
+first App Directory upload/link step for the app name in
+`apps/target-devvit/devvit.json` using Devvit's copy-paste flow. After init, use
+`pnpm devvit:playtest`, `pnpm devvit:upload`, and `pnpm devvit:publish` from
+this game root.
 
 ## Target Ownership Notes
 
