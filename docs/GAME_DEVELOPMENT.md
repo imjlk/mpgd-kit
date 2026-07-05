@@ -18,10 +18,11 @@ Use the create package when starting a new standalone game:
 
 ```sh
 pnpm create @mpgd/game my-game
-pnpm --dir my-game install
-pnpm --dir my-game dev
-pnpm --dir my-game check
-pnpm --dir my-game build
+cd my-game
+pnpm install --filter . --filter ./apps/target-devvit
+pnpm dev
+pnpm check
+pnpm build
 ```
 
 The `@mpgd/game` initializer name resolves to the public `@mpgd/create-game`
@@ -59,6 +60,11 @@ Starter loop:
 
 ```sh
 pnpm mpgd game create examples/my-game --title "My Game" --workspace --kit-path .
+cd examples/my-game
+pnpm install --filter . --filter ./apps/target-devvit
+pnpm check
+pnpm build
+cd ../..
 pnpm validate:starter-workflow
 pnpm --dir examples/phaser-starter dev
 pnpm --dir examples/phaser-starter check
@@ -71,13 +77,20 @@ best-effort analytics, optional game-services client wiring, and a rewarded ad
 smoke action. It stays intentionally small; real scoring, economy, content, and
 save models should be added by each game.
 
+Generated games own their Reddit Devvit app root in `apps/target-devvit`.
+Run `pnpm devvit:login`, `pnpm devvit:init`, and `pnpm devvit:playtest` from the
+game root when you are ready to create the Reddit-side app record and test it.
+The starter still uses kit reference shells for Apps in Toss and Capacitor
+artifact smoke checks; copy or create game-owned shells before real Toss,
+App Store, or Google Play submission metadata is needed.
+
 Use the kit CLI for generated target builds because it resolves
 `${MPGD_KIT_PATH}` tokens in the game's `mpgd.targets.json` before invoking the
 existing kit target scripts:
 
 ```sh
-pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait --ait-variant wrapper --kit-path .
-pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait --kit-path .
+pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait,reddit --ait-variant wrapper --kit-path .
+pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait,reddit --kit-path .
 ```
 
 For a private sibling game repo, run the same commands from the game repo or kit

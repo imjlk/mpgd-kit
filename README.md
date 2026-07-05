@@ -38,10 +38,12 @@ For local kit development inside this repository:
 ```sh
 pnpm install
 pnpm mpgd game create examples/my-game --title "My Game" --workspace
-pnpm --dir examples/my-game check
-pnpm --dir examples/my-game build
-pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait --ait-variant wrapper --kit-path .
-pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait --kit-path .
+cd examples/my-game
+pnpm install --filter . --filter ./apps/target-devvit
+pnpm check
+pnpm build
+pnpm exec mpgd target build-all --targets-file ./mpgd.targets.json --targets web,ait,reddit --ait-variant wrapper --kit-path ../..
+pnpm exec mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,ait,reddit --kit-path ../..
 ```
 
 Use `--workspace` for local kit development. Omit it when generating an external
@@ -148,9 +150,19 @@ For generated games, prefer the CLI wrapper so `${MPGD_KIT_PATH}` target-file
 tokens are resolved before the existing target scripts run:
 
 ```sh
-pnpm mpgd target build-all --targets-file ./mpgd.targets.json --targets web,ait --ait-variant wrapper --kit-path <path-to-mpgd-kit>
-pnpm mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,ait --kit-path <path-to-mpgd-kit>
+pnpm mpgd target build-all --targets-file ./mpgd.targets.json --targets web,ait,reddit --ait-variant wrapper --kit-path <path-to-mpgd-kit>
+pnpm mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,ait,reddit --kit-path <path-to-mpgd-kit>
 ```
+
+Generated Phaser starters own their Reddit Devvit app root in
+`apps/target-devvit`; run `pnpm devvit:init` once after login before live
+playtest/upload. Apps in Toss and Capacitor targets currently use kit reference
+shells for smoke artifacts, so production app metadata should be moved into
+game-owned wrappers before store or Toss submission.
+
+The starter dependency range is derived from the released `@mpgd/cli` package
+version. Release PRs that bump the fixed public package group therefore update
+new starter `@mpgd/*` pins without a separate hard-coded template version edit.
 
 ## What Is Sample or Mock
 

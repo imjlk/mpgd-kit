@@ -1,0 +1,12 @@
+node_modules/
+dist/
+apps/*/dist/
+artifacts/
+release-output/
+.mpgd.targets.generated.json
+.env
+.env.*
+apps/*/.env
+.DS_Store
+*.log
+*.ait

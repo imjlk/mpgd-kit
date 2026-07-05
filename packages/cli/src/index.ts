@@ -1,5 +1,12 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -13,8 +20,8 @@ const packageRoot = resolvePackageRoot(sourceDir);
 const detectedKitRoot = resolveDefaultKitRoot();
 const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
 const cliVersion = readPackageVersion(packageRoot);
-const defaultMatrixTargets = 'web,ait';
-const defaultDependencyVersion = '^0.1.0';
+const defaultMatrixTargets = 'web,ait,reddit';
+const defaultDependencyVersion = `^${cliVersion}`;
 
 const supportedBuildTargets = [
   'browser',
@@ -535,7 +542,7 @@ function createGameApp(input: {
   readonly kitPath?: string;
   readonly dryRun: boolean;
 }): void {
-  const appDir = path.resolve(process.cwd(), input.directory);
+  const appDir = resolveAppDirectory(input.directory);
   const gameName = path.basename(appDir);
 
   assertValidGameName(gameName);
@@ -577,14 +584,15 @@ function createGameApp(input: {
 
   console.log(`Created ${appDir}`);
   console.log('Next steps:');
-  console.log(`  pnpm --dir ${appDir} install`);
-  console.log(`  pnpm --dir ${appDir} dev`);
+  console.log(`  cd ${appDir}`);
+  console.log('  pnpm install --filter . --filter ./apps/target-devvit');
+  console.log('  pnpm dev');
   console.log('Target builds require an mpgd-kit checkout:');
   console.log(
     [
       '  mpgd target build-all',
       `--targets-file ${path.join(appDir, 'mpgd.targets.json')}`,
-      '--targets web,ait',
+      `--targets ${defaultMatrixTargets}`,
       '--ait-variant wrapper',
       '--kit-path <path-to-mpgd-kit>',
     ].join(' '),
@@ -595,6 +603,17 @@ function assertValidGameName(name: string): void {
   if (!/^[a-z][a-z0-9-]*$/.test(name)) {
     throw new Error('Game directory basename must use kebab-case, for example: puzzle-one');
   }
+}
+
+function resolveAppDirectory(directory: string): string {
+  const resolved = path.resolve(process.cwd(), directory);
+  const parent = path.dirname(resolved);
+
+  if (!existsSync(parent)) {
+    return resolved;
+  }
+
+  return path.join(realpathSync(parent), path.basename(resolved));
 }
 
 function assertValidPackageName(name: string): void {
@@ -639,7 +658,9 @@ function createTemplateContext(input: {
 
   return {
     gameName: input.gameName,
+    devvitAppName: toDevvitAppName(input.gameName),
     gameTitle: title,
+    gameTitleTsLiteral: toJavaScriptStringLiteral(title),
     packageName: input.packageName,
     dependencyVersion: input.dependencyVersion,
     tsconfigExtendsLine: input.workspace
@@ -655,12 +676,22 @@ function createTemplateContext(input: {
     tsconfigWorkspaceExcludes: input.workspace
       ? [
           `,\n    "${workspacePrefix}/packages/**/dist/**"`,
+          `,\n    "${workspacePrefix}/packages/cli/templates/**"`,
           `,\n    "${workspacePrefix}/adapters/**/dist/**"`,
           `,\n    "${workspacePrefix}/native-plugins/**/dist/**"`,
         ].join('')
       : '',
     workspaceI18nBuildPrefix: input.workspace
       ? `pnpm --dir ${workspacePrefix} i18n:build && `
+      : '',
+    defaultKitPath: kitPath === undefined ? '../mpgd-kit' : workspacePrefix,
+    pnpmWorkspaceKitPackages: input.workspace
+      ? [
+          `  - '${workspacePrefix}/packages/*'`,
+          `  - '${workspacePrefix}/adapters/*'`,
+          `  - '${workspacePrefix}/native-plugins/*'`,
+          `  - '${workspacePrefix}/backend/*'`,
+        ].join('\n')
       : '',
     pascalName: toPascalCase(input.gameName),
     camelName: toCamelCase(input.gameName),
@@ -701,7 +732,7 @@ function walkTemplateDir(
     }
 
     files.push({
-      relativePath,
+      relativePath: templateOutputPath(relativePath),
       content: readFileSync(path.join(templateDir, relativePath), 'utf8'),
     });
   }
@@ -718,6 +749,8 @@ function renderTemplate(
 ): string {
   return content
     .replaceAll('__GAME_NAME__', context.gameName)
+    .replaceAll('__DEVVIT_APP_NAME__', context.devvitAppName)
+    .replaceAll('__GAME_TITLE_TS_LITERAL__', context.gameTitleTsLiteral)
     .replaceAll('__GAME_TITLE__', context.gameTitle)
     .replaceAll('__PACKAGE_NAME__', context.packageName)
     .replaceAll('__MPGD_DEPENDENCY_VERSION__', context.dependencyVersion)
@@ -725,8 +758,16 @@ function renderTemplate(
     .replaceAll('__TSCONFIG_WORKSPACE_INCLUDES__', context.tsconfigWorkspaceIncludes)
     .replaceAll('__TSCONFIG_WORKSPACE_EXCLUDES__', context.tsconfigWorkspaceExcludes)
     .replaceAll('__WORKSPACE_I18N_BUILD_PREFIX__', context.workspaceI18nBuildPrefix)
+    .replaceAll('__DEFAULT_KIT_PATH__', context.defaultKitPath)
+    .replaceAll('__PNPM_WORKSPACE_KIT_PACKAGES__', context.pnpmWorkspaceKitPackages)
     .replaceAll('__PASCAL_NAME__', context.pascalName)
     .replaceAll('__CAMEL_NAME__', context.camelName);
+}
+
+function templateOutputPath(relativePath: string): string {
+  return path.basename(relativePath) === 'gitignore'
+    ? path.join(path.dirname(relativePath), '.gitignore')
+    : relativePath;
 }
 
 function toPascalCase(value: string): string {
@@ -740,6 +781,27 @@ function toPascalCase(value: string): string {
 function toCamelCase(value: string): string {
   const pascal = toPascalCase(value);
   return `${pascal[0]?.toLowerCase() ?? ''}${pascal.slice(1)}`;
+}
+
+function toDevvitAppName(gameName: string): string {
+  let appName = gameName
+    .replace(/[^a-z0-9-]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+
+  if (appName.length < 3) {
+    appName = `${appName}-game`;
+  }
+
+  if (appName.length > 16) {
+    appName = appName.slice(0, 16).replace(/-+$/g, '');
+  }
+
+  return appName.length >= 3 ? appName : 'mpgd-game';
+}
+
+function toJavaScriptStringLiteral(value: string): string {
+  return JSON.stringify(value);
 }
 
 function toTemplatePath(value: string): string {

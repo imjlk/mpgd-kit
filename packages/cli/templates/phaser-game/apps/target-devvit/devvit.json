@@ -1,6 +1,6 @@
 {
   "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
-  "name": "mpgd-kit",
+  "name": "__DEVVIT_APP_NAME__",
   "post": {
     "dir": "dist/client",
     "entrypoints": {
@@ -25,8 +25,8 @@
   "menu": {
     "items": [
       {
-        "label": "Create mpgd game post",
-        "description": "Create a playable mpgd-kit Phaser post.",
+        "label": "Create __GAME_TITLE__ post",
+        "description": "Create a playable __GAME_TITLE__ post.",
         "forUserType": "moderator",
         "location": "subreddit",
         "endpoint": "/internal/menu/create-post"

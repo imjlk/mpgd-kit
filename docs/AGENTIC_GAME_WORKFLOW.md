@@ -14,6 +14,9 @@ The repository separates four concerns:
   build/smoke matrix orchestration.
 - `@mpgd/create-game` provides the create-package wrapper for
   `npm create @mpgd/game` / `pnpm create @mpgd/game`.
+- Generated games own their Reddit Devvit app root in `apps/target-devvit`.
+  Apps in Toss and Capacitor shells remain kit reference shells for smoke builds
+  until a game creates production-owned wrappers and app metadata.
 
 Generated game projects remain private by default. The public packages are the
 generator and reusable SDK surfaces. New publishable packages should be added
@@ -100,10 +103,8 @@ Implemented shape:
 - `/api/mpgd/bridge` server boundary
 - smoke tests
 
-The starter manifest still reserves `reddit` in `futureTargets` because the
-starter example is browser-first. Devvit SDK imports must stay in
-`apps/target-devvit`, while game-facing code should continue to use
-`PlatformGateway`.
+Generated games keep Devvit SDK imports in their own `apps/target-devvit`
+directory, while game-facing code should continue to use `PlatformGateway`.
 
 ## Validation
 

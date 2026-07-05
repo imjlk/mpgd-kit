@@ -33,9 +33,9 @@
     "reddit": {
       "kind": "devvit-web",
       "gameApp": ".",
-      "wrapperApp": "${MPGD_KIT_PATH}/apps/target-devvit",
+      "wrapperApp": "apps/target-devvit",
       "adapter": "devvit",
-      "webDir": "${MPGD_KIT_PATH}/apps/target-devvit/dist/client",
+      "webDir": "apps/target-devvit/dist/client",
       "artifact": "devvit"
     }
   }

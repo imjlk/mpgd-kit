@@ -1,0 +1,7 @@
+packages:
+  - '.'
+  - 'apps/*'
+__PNPM_WORKSPACE_KIT_PACKAGES__
+allowBuilds:
+  esbuild: true
+  protobufjs: true

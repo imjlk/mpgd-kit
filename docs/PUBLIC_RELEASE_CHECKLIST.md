@@ -40,6 +40,7 @@ Use this before making the repository public or announcing a package release.
 - [x] `@mpgd/cli` has been initial-published locally and verified with `npm view @mpgd/cli version` before the first automated CLI release.
 - [x] `@mpgd/create-game` has been initial-published locally and verified with `npm view @mpgd/create-game version` before the first automated create-package release.
 - [ ] `@mpgd/cli` and `@mpgd/create-game` npm Trusted Publishing/OIDC are configured for `.github/workflows/release.yml`.
+- [ ] Create-game template dependency pins are still derived from the released `@mpgd/cli` version, so Sampo release PR version bumps move generated `@mpgd/*` ranges together with the fixed package group.
 - [ ] `pnpm pack:packages` passes.
 
 ## Validation

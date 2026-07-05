@@ -23,6 +23,8 @@ const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
 const leaderboardLockTtlSeconds = Math.ceil(leaderboardLockTtlMs / 1_000);
 const leaderboardLockRetryBudgetMs = leaderboardLockTtlSeconds * 1_000;
+const gameName = '__GAME_NAME__';
+const gameTitle = __GAME_TITLE_TS_LITERAL__;
 const expressManagedResponseHeaders = new Set([
   'connection',
   'content-encoding',
@@ -79,20 +81,20 @@ app.post('/internal/menu/create-post', async (
   try {
     const post = await reddit.submitCustomPost({
       subredditName,
-      title: 'mpgd-kit Phaser demo',
+      title: gameTitle,
       entry: 'default',
       textFallback: {
-        text: 'Open this Reddit custom post to play the mpgd-kit Phaser demo.',
+        text: `Open this Reddit custom post to play ${gameTitle}.`,
       },
       postData: {
-        source: 'mpgd-kit',
+        source: gameName,
         createdBy: 'devvit-menu',
       },
     });
 
     response.status(200).json({
       showToast: {
-        text: `Created mpgd game post ${post.id}.`,
+        text: `Created ${gameTitle} post ${post.id}.`,
         appearance: 'success',
       },
     } satisfies UiResponse);
@@ -100,7 +102,7 @@ app.post('/internal/menu/create-post', async (
     console.error(`devvit custom post creation failed: ${errorMessage(error)}`, error);
     response.status(200).json({
       showToast: {
-        text: 'Could not create the mpgd game post.',
+        text: `Could not create the ${gameTitle} post.`,
         appearance: 'neutral',
       },
     } satisfies UiResponse);
@@ -374,7 +376,7 @@ function storageKey(input: BridgeRequest, playerId: string): string | BridgeResp
     return createBridgeError(input.id, 'INVALID_STORAGE_KEY', 'Encoded storage key is too long.');
   }
 
-  return `mpgd:save:${encodeURIComponent(playerId)}:${encodedKey}`;
+  return `${gameName}:save:${encodeURIComponent(playerId)}:${encodedKey}`;
 }
 
 function leaderboardIdFromPayload(
@@ -397,7 +399,7 @@ function leaderboardIdFromPayload(
 }
 
 function leaderboardKey(leaderboardId: string): string {
-  return `mpgd:leaderboard:${encodeURIComponent(leaderboardId)}`;
+  return `${gameName}:leaderboard:${encodeURIComponent(leaderboardId)}`;
 }
 
 async function submitMaxLeaderboardScore(
