@@ -23,12 +23,14 @@ interface BuildTargetConfig {
   readonly artifact?: string;
 }
 
-run('pnpm', ['validate:catalog'], process.env);
-run('pnpm', ['validate:ads'], process.env);
-run('pnpm', ['validate:target-config'], process.env);
-run('pnpm', ['validate:effective-config'], process.env);
-run('pnpm', ['validate:targets'], process.env);
-run('node', ['tools/run-ttsx.mjs', 'tools/package/build-packages.ts'], process.env);
+if (process.env.MPGD_SKIP_BUILD_TARGET_PREFLIGHT !== '1') {
+  run('pnpm', ['validate:catalog'], process.env);
+  run('pnpm', ['validate:ads'], process.env);
+  run('pnpm', ['validate:target-config'], process.env);
+  run('pnpm', ['validate:effective-config'], process.env);
+  run('pnpm', ['validate:targets'], process.env);
+  run('node', ['tools/run-ttsx.mjs', 'tools/package/build-packages.ts'], process.env);
+}
 
 const platformTargets = loadPlatformTargetsConfig();
 const configBaseDir = platformTargets.baseDir;

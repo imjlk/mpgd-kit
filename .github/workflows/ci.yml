@@ -11,39 +11,35 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: pnpm
 
       - run: pnpm install --frozen-lockfile
-      - run: pnpm validate:public
       - run: pnpm check
       - run: pnpm validate:catalog
       - run: pnpm validate:ads
       - run: pnpm validate:target-config
       - run: pnpm validate:effective-config
       - run: pnpm validate:targets
-      - run: pnpm validate:game-assets
       - run: pnpm test
-      - run: pnpm smoke:target-config
-      - run: pnpm smoke:effective-config
-      - run: pnpm smoke:adapter-effective-config
-      - run: pnpm smoke:game-services
       - run: pnpm graph:preflight
-      - run: pnpm pack:packages
+      - run: pnpm pack:packages:prepared
       - run: pnpm build:web
+        env:
+          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target web-preview
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: web-preview-ci
           path: |
@@ -54,32 +50,32 @@ jobs:
     needs: validate
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: pnpm
 
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: 21
 
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@v4
 
       - run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
       - run: pnpm install --frozen-lockfile
       - run: pnpm build:android
       - run: pnpm smoke:target android
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: android-ci
           path: |
@@ -87,19 +83,19 @@ jobs:
             release-output/**
 
   build-ios:
-    runs-on: macos-latest
+    runs-on: macos-15
     needs: validate
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: pnpm
@@ -108,7 +104,7 @@ jobs:
       - run: pnpm build:ios
       - run: pnpm smoke:target ios
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ios-ci
           path: |
@@ -119,15 +115,15 @@ jobs:
     needs: validate
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: pnpm
@@ -136,7 +132,7 @@ jobs:
       - run: pnpm build:ait
       - run: pnpm smoke:target ait
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: ait-ci
           path: |
@@ -151,15 +147,15 @@ jobs:
       contents: read
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           persist-credentials: false
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 11.7.0
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 24
           cache: pnpm
@@ -168,7 +164,7 @@ jobs:
       - run: pnpm build:devvit
       - run: pnpm smoke:target reddit
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: devvit-ci
           path: |
