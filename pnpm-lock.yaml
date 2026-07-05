@@ -533,6 +533,15 @@ importers:
 
   packages/bridge:
     dependencies:
+      '@orpc/client':
+        specifier: 2.0.0-beta.14
+        version: 2.0.0-beta.14
+      '@orpc/contract':
+        specifier: 2.0.0-beta.14
+        version: 2.0.0-beta.14
+      '@orpc/server':
+        specifier: 2.0.0-beta.14
+        version: 2.0.0-beta.14
       typia:
         specifier: rc
         version: 13.0.0-rc.1(@types/node@24.13.2)

@@ -1,12 +1,15 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
+import { createBridgeRpcFetchHandler, createBridgeRpcRouter } from '@mpgd/bridge/orpc';
 
 import {
   createDevvitFetchBridge,
+  createDevvitOrpcBridge,
   createDevvitPlatformGateway,
   createDevvitSandboxBridge,
   defaultDevvitBridgeEndpoint,
+  defaultDevvitRpcEndpoint,
   DevvitBridgeError,
   type DevvitBridge,
 } from './index';
@@ -118,6 +121,112 @@ describe('adapter-devvit', () => {
       url: defaultDevvitBridgeEndpoint,
       init: {
         method: 'POST',
+      },
+    });
+  });
+
+  it('uses the Devvit oRPC bridge endpoint by default', async () => {
+    let fetchUrl = '';
+    let fetchMethod = '';
+    const handler = createBridgeRpcFetchHandler(
+      createBridgeRpcRouter((input) => {
+        return {
+          id: input.id,
+          ok: true,
+          data: {
+            playerId: 'orpc-player',
+            displayName: 'oRPC Player',
+          },
+        } satisfies BridgeResponse;
+      }),
+    );
+
+    vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
+      fetchUrl = String(url);
+      fetchMethod = init?.method ?? 'GET';
+
+      return handler(new Request(`https://reddit.test${fetchUrl}`, init));
+    });
+
+    try {
+      const gateway = createDevvitPlatformGateway({
+        appVersion: '1.2.3',
+        buildId: 'build-reddit',
+      });
+
+      await expect(gateway.identity.getPlayer()).resolves.toEqual({
+        playerId: 'orpc-player',
+        displayName: 'oRPC Player',
+      });
+      expect(fetchUrl.startsWith(defaultDevvitRpcEndpoint)).toBe(true);
+      expect(fetchMethod).toBe('POST');
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('allows explicit Devvit oRPC clients to back the bridge interface', async () => {
+    const bridge = createDevvitOrpcBridge({
+      client: {
+        request(input) {
+          return Promise.resolve({
+            id: input.id,
+            ok: true,
+            data: {
+              playerId: 'explicit-orpc-player',
+            },
+          } satisfies BridgeResponse);
+        },
+      },
+    });
+
+    await expect(
+      bridge.request({
+        id: 'request-1',
+        method: 'identity.getPlayer',
+        payload: {},
+        meta: {
+          target: 'reddit',
+          appVersion: '1.0.0',
+          buildId: 'test',
+          sentAt: '2026-07-04T00:00:00.000Z',
+        },
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      data: {
+        playerId: 'explicit-orpc-player',
+      },
+    });
+  });
+
+  it('wraps thrown Devvit oRPC client errors as bridge responses', async () => {
+    const bridge = createDevvitOrpcBridge({
+      client: {
+        request() {
+          return Promise.reject(new TypeError('request failed'));
+        },
+      },
+    });
+
+    await expect(
+      bridge.request({
+        id: 'request-1',
+        method: 'identity.getPlayer',
+        payload: {},
+        meta: {
+          target: 'reddit',
+          appVersion: '1.0.0',
+          buildId: 'test',
+          sentAt: '2026-07-04T00:00:00.000Z',
+        },
+      }),
+    ).resolves.toMatchObject({
+      id: 'request-1',
+      ok: false,
+      error: {
+        code: 'DEVVIT_BRIDGE_NETWORK_ERROR',
+        retryable: true,
       },
     });
   });

@@ -1,7 +1,12 @@
 import { createServer, context, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { UiResponse } from '@devvit/web/shared';
 import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
-import express, { type Request, type Response } from 'express';
+import {
+  createBridgeRpcFetchHandler,
+  createBridgeRpcRouter,
+  defaultBridgeRpcEndpoint,
+} from '@mpgd/bridge/orpc';
+import express, { type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
 import helmet from 'helmet';
 
 const app = express();
@@ -13,12 +18,46 @@ const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
 const leaderboardLockTtlSeconds = Math.ceil(leaderboardLockTtlMs / 1_000);
 const leaderboardLockRetryBudgetMs = leaderboardLockTtlSeconds * 1_000;
+const expressManagedResponseHeaders = new Set([
+  'connection',
+  'content-encoding',
+  'content-length',
+  'transfer-encoding',
+]);
 
 app.disable('x-powered-by');
 app.use(helmet());
 app.use(express.json({ limit: '1mb' }));
 
-app.post('/internal/menu/create-post', async (_request: Request, response: Response): Promise<void> => {
+const bridgeRpcFetchHandler = createBridgeRpcFetchHandler(
+  createBridgeRpcRouter(handleBridgeRequest),
+);
+
+app.use(defaultBridgeRpcEndpoint, async (
+  request: ExpressRequest,
+  response: ExpressResponse,
+): Promise<void> => {
+  try {
+    const fetchResponse = await bridgeRpcFetchHandler(expressRequestToFetchRequest(request));
+    await sendFetchResponse(response, fetchResponse);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Devvit oRPC request failed.';
+    console.error(`devvit oRPC internal error: ${message}`, error);
+    response.status(500).json(
+      createBridgeError(
+        requestIdFromBody(request.body),
+        'DEVVIT_BRIDGE_INTERNAL_ERROR',
+        'Devvit bridge request failed.',
+        true,
+      ),
+    );
+  }
+});
+
+app.post('/internal/menu/create-post', async (
+  _request: ExpressRequest,
+  response: ExpressResponse,
+): Promise<void> => {
   const subredditName = currentSubredditName();
 
   if (subredditName === undefined) {
@@ -62,7 +101,10 @@ app.post('/internal/menu/create-post', async (_request: Request, response: Respo
   }
 });
 
-app.post('/api/mpgd/bridge', async (request: Request, response: Response): Promise<void> => {
+app.post('/api/mpgd/bridge', async (
+  request: ExpressRequest,
+  response: ExpressResponse,
+): Promise<void> => {
   let bridgeRequest: BridgeRequest;
 
   try {
@@ -562,4 +604,52 @@ function optionalObjectPayload(payload: unknown): Record<string, unknown> {
   }
 
   return payload as Record<string, unknown>;
+}
+
+function expressRequestToFetchRequest(request: ExpressRequest): Request {
+  const headers = new Headers();
+
+  for (const [key, value] of Object.entries(request.headers)) {
+    if (typeof value === 'string') {
+      headers.set(key, value);
+    } else if (Array.isArray(value)) {
+      headers.set(key, value.join(', '));
+    }
+  }
+
+  const init: RequestInit = {
+    method: request.method,
+    headers,
+  };
+
+  if (request.method !== 'GET' && request.method !== 'HEAD') {
+    if (!headers.has('content-type')) {
+      headers.set('content-type', 'application/json');
+    }
+
+    init.body = JSON.stringify(request.body ?? null);
+  }
+
+  return new Request(expressRequestUrl(request), init);
+}
+
+function expressRequestUrl(request: ExpressRequest): string {
+  const host = request.get('host') ?? 'localhost';
+  const protocol = request.protocol || 'https';
+
+  return `${protocol}://${host}${request.originalUrl}`;
+}
+
+async function sendFetchResponse(
+  response: ExpressResponse,
+  fetchResponse: Response,
+): Promise<void> {
+  fetchResponse.headers.forEach((value, key) => {
+    if (!expressManagedResponseHeaders.has(key.toLowerCase())) {
+      response.setHeader(key, value);
+    }
+  });
+
+  response.status(fetchResponse.status);
+  response.send(await fetchResponse.text());
 }

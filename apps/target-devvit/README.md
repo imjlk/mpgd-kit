@@ -7,6 +7,11 @@ The root `pnpm build:devvit` command builds `apps/game-phaser` with
 to `apps/target-devvit/dist/client`, and builds the Devvit server bundle to
 `apps/target-devvit/dist/server/index.cjs`.
 
+The game client talks to the Devvit server through the shared
+`@mpgd/bridge/orpc` contract at `/api/mpgd/rpc`. The older JSON bridge endpoint
+at `/api/mpgd/bridge` remains available for compatibility, but new
+`PlatformGateway` traffic uses the oRPC transport by default.
+
 Local Reddit playtest still needs a Devvit login token:
 
 ```bash
