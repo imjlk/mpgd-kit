@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
@@ -153,7 +153,7 @@ function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly st
   const packageFile = `${artifactPath}/App/CapApp-SPM/Package.swift`;
 
   if (!existsSync(packageFile)) {
-    if (existsSync(`${artifactPath}/App/App.xcodeproj`)) {
+    if (isIosSyncArtifact(artifactPath) || existsSync(`${artifactPath}/App/App.xcodeproj`)) {
       throw new Error(`Missing iOS Swift package manifest: ${packageFile}`);
     }
 
@@ -166,6 +166,10 @@ function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly st
   return [...packageFileContents.matchAll(/\.package\([^)]*\bpath:\s*"([^"]+)"/gu)].map(
     (match) => resolve(packageFileDir, requireStringMatch(match[1], packageFile)),
   );
+}
+
+function isIosSyncArtifact(artifactPath: string): boolean {
+  return basename(artifactPath) === 'capacitor-sync';
 }
 
 function requiredFilesForTarget(
