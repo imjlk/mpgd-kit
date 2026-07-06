@@ -7,6 +7,7 @@ pnpm check
 pnpm build
 pnpm --dir ../mpgd-kit mpgd target build-all --targets-file "$PWD/mpgd.targets.json" --targets web,ait,reddit --ait-variant wrapper
 pnpm --dir ../mpgd-kit mpgd target smoke-all --targets-file "$PWD/mpgd.targets.json" --targets web,ait,reddit
+pnpm --dir ../mpgd-kit mpgd target doctor --targets-file "$PWD/mpgd.targets.json" --targets web,ait,reddit
 ```
 
 For Apps in Toss changes, use the apps-in-toss MCP before implementation and

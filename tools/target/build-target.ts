@@ -1,6 +1,15 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, join, relative } from 'node:path';
 
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 import {
@@ -79,7 +88,9 @@ switch (target.kind) {
       releaseArtifact = 'release-output/ait/mpgd-kit.ait';
       copyFile(aitArtifact, targetPath(releaseArtifact));
     } else {
-      console.warn('ait: package build skipped; release manifest points to wrapper webDir.');
+      releaseArtifact = 'release-output/ait/wrapper-web';
+      replaceDirectory(`${wrapperApp}/dist`, targetPath(releaseArtifact));
+      console.warn('ait: package build skipped; release manifest points to copied wrapper dist.');
     }
 
     writeManifest(targetName, profile, releaseArtifact, env);
@@ -195,6 +206,9 @@ switch (target.kind) {
       console.warn(
         'ios: cap sync completed; set MPGD_RUN_IOS_SIMULATOR_BUILD=1 for a simulator .app or MPGD_RUN_IOS_ARCHIVE=1 for an xcarchive.',
       );
+      releaseArtifact = 'release-output/ios/capacitor-sync';
+      replaceDirectory(`${shellApp}/ios`, targetPath(releaseArtifact));
+      copyIosSyncSwiftPackage(shellApp, releaseArtifact, '@mpgd/capacitor-game-services');
     }
 
     writeManifest(targetName, profile, releaseArtifact, env);
@@ -206,6 +220,56 @@ function replaceDirectory(source: string, destination: string): void {
   rmSync(destination, { recursive: true, force: true });
   mkdirSync(destination, { recursive: true });
   cpSync(source, destination, { recursive: true });
+}
+
+function replaceDirectoryWithoutNodeModules(source: string, destination: string): void {
+  rmSync(destination, { recursive: true, force: true });
+  mkdirSync(destination, { recursive: true });
+  cpSync(source, destination, {
+    recursive: true,
+    filter: (sourcePath) => {
+      const sourceRelativePath = relative(source, sourcePath);
+
+      return (
+        sourceRelativePath.length === 0
+        || !sourceRelativePath.split(/[\\/]+/u).includes('node_modules')
+      );
+    },
+  });
+}
+
+function copyIosSyncSwiftPackage(
+  shellApp: string,
+  releaseArtifact: string,
+  packageName: string,
+): void {
+  const linkedPackage = `${shellApp}/node_modules/${packageName}`;
+  let resolvedPackage: string;
+
+  try {
+    resolvedPackage = realpathSync(linkedPackage);
+  } catch {
+    throw new Error(`Missing iOS Swift package dependency: ${linkedPackage}`);
+  }
+
+  replaceDirectoryWithoutNodeModules(
+    resolvedPackage,
+    targetPath(`${releaseArtifact}/node_modules/${packageName}`),
+  );
+  rewriteIosSyncSwiftPackagePath(releaseArtifact, packageName);
+}
+
+function rewriteIosSyncSwiftPackagePath(releaseArtifact: string, packageName: string): void {
+  const packageFile = targetPath(`${releaseArtifact}/App/CapApp-SPM/Package.swift`);
+  const contents = readFileSync(packageFile, 'utf8');
+  const shellRelativePath = `path: "../../../node_modules/${packageName}"`;
+  const artifactRelativePath = `path: "../../node_modules/${packageName}"`;
+
+  if (!contents.includes(shellRelativePath)) {
+    throw new Error(`Missing iOS Swift package reference for ${packageName}: ${packageFile}`);
+  }
+
+  writeFileSync(packageFile, contents.replace(shellRelativePath, artifactRelativePath));
 }
 
 function copyFile(source: string, destination: string): void {

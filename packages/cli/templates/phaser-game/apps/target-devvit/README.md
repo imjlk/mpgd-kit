@@ -10,7 +10,7 @@ if you want a different Reddit app name.
 ## First Playtest
 
 ```sh
-pnpm install --filter . --filter ./apps/target-devvit
+pnpm install -w
 pnpm devvit:login
 pnpm devvit:whoami
 pnpm devvit:init

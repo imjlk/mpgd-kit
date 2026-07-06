@@ -1,5 +1,5 @@
-import { existsSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { existsSync, readFileSync, statSync } from 'node:fs';
+import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
@@ -57,15 +57,21 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     const artifactPath = resolveArtifactPath(entry.artifact);
     const effectiveConfigPath = resolveArtifactPath(entry.effectiveConfig.path);
 
+    assertPathInsideTargetBase(artifactPath, `${target} artifact`);
     assertPathExists(artifactPath, `${target} artifact`);
+    assertPathInsideTargetBase(effectiveConfigPath, `${target} effective target config`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);
 
     for (const requiredFile of requiredFilesForTarget(targetConfig, artifactPath)) {
       assertFileExists(requiredFile, `${target} required file`);
     }
 
-    for (const extraArtifact of extraRequiredArtifactsForTarget(targetConfig, artifactPath)) {
-      assertFileExists(extraArtifact, `${target} required artifact`);
+    for (const extraFile of extraRequiredFilesForTarget(targetConfig, artifactPath)) {
+      assertFileExists(extraFile, `${target} required file`);
+    }
+
+    for (const extraArtifact of extraRequiredPathsForTarget(targetConfig, artifactPath)) {
+      assertPathExists(extraArtifact, `${target} required artifact`);
     }
 
     assertEmbeddedTargetConfig(
@@ -110,7 +116,10 @@ function readReleaseEmbeddedTargetConfig(
         return readEmbeddedTargetConfigFromZip(artifactPath, `${target} release artifact`);
       }
 
-      return readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} release artifact`);
+      return readEmbeddedTargetConfigFromDirectory(
+        `${artifactPath}/game`,
+        `${target} wrapper game artifact`,
+      );
     case 'devvit-web':
       return readEmbeddedTargetConfigFromDirectory(
         `${artifactPath}/client`,
@@ -119,15 +128,58 @@ function readReleaseEmbeddedTargetConfig(
   }
 }
 
-function extraRequiredArtifactsForTarget(
+function extraRequiredFilesForTarget(
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
 ): readonly string[] {
-  if (targetConfig.kind !== 'devvit-web') {
+  if (targetConfig.kind === 'devvit-web') {
+    return [`${artifactPath}/server/index.cjs`];
+  }
+
+  return [];
+}
+
+function extraRequiredPathsForTarget(
+  targetConfig: SmokePlatformTargetConfig,
+  artifactPath: string,
+): readonly string[] {
+  if (targetConfig.kind === 'capacitor-ios') {
+    return localSwiftPackagePathsForIosArtifact(artifactPath);
+  }
+
+  return [];
+}
+
+function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly string[] {
+  const packageFile = `${artifactPath}/App/CapApp-SPM/Package.swift`;
+
+  if (!existsSync(packageFile)) {
+    if (isIosSyncArtifact(artifactPath) || existsSync(`${artifactPath}/App/App.xcodeproj`)) {
+      throw new Error(`Missing iOS Swift package manifest: ${packageFile}`);
+    }
+
     return [];
   }
 
-  return [`${artifactPath}/server/index.cjs`];
+  const packageFileDir = dirname(packageFile);
+  const packageFileContents = readFileSync(packageFile, 'utf8');
+
+  const packageMatches = packageFileContents.matchAll(/\.package\([^)]*\bpath:\s*"([^"]+)"/gu);
+  const packagePaths = [...packageMatches].map((match) =>
+    resolve(packageFileDir, requireStringMatch(match[1], packageFile)),
+  );
+
+  if (isIosSyncArtifact(artifactPath)) {
+    for (const packagePath of packagePaths) {
+      assertPathInside(packagePath, artifactPath, 'iOS sync Swift package');
+    }
+  }
+
+  return packagePaths;
+}
+
+function isIosSyncArtifact(artifactPath: string): boolean {
+  return basename(artifactPath) === 'capacitor-sync';
 }
 
 function requiredFilesForTarget(
@@ -142,7 +194,7 @@ function requiredFilesForTarget(
         return [];
       }
 
-      return [`${artifactPath}/index.html`];
+      return [`${artifactPath}/index.html`, `${artifactPath}/game/index.html`];
     case 'devvit-web':
       return [`${artifactPath}/client/index.html`];
     case 'capacitor-android':
@@ -167,6 +219,22 @@ function assertPathExists(path: string, label: string): void {
   }
 }
 
+function assertPathInsideTargetBase(path: string, label: string): void {
+  assertPathInside(
+    path,
+    loadedPlatformTargets.baseDir,
+    `${label} must stay under the target config dir`,
+  );
+}
+
+function assertPathInside(path: string, baseDir: string, label: string): void {
+  const relativePath = relative(baseDir, path);
+
+  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error(`${label}: ${path}`);
+  }
+}
+
 function assertFileExists(path: string, label: string): void {
   if (!existsSync(path)) {
     throw new Error(`Missing ${label}: ${path}`);
@@ -177,6 +245,14 @@ function assertFileExists(path: string, label: string): void {
   if (!stat.isFile()) {
     throw new Error(`${label} is not a file: ${path}`);
   }
+}
+
+function requireStringMatch(input: string | undefined, source: string): string {
+  if (input === undefined || input.length === 0) {
+    throw new Error(`Failed to read local package path from ${source}`);
+  }
+
+  return input;
 }
 
 function loadSmokePlatformTargetsConfig(): {

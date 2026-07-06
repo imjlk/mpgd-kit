@@ -18,6 +18,10 @@
       "owner": "src/game/state.ts"
     },
     {
+      "id": "assets.manifest.phaser-loader",
+      "owner": "src/assets/manifest.ts"
+    },
+    {
       "id": "runtime.platform.gateway",
       "owner": "src/platform/installPlatform.ts"
     },

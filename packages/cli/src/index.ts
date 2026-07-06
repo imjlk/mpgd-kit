@@ -412,6 +412,33 @@ const targetCommand = defineI18n({
         });
       },
     }),
+    doctor: defineI18n({
+      name: 'doctor',
+      description: 'Verify existing target artifacts and game-owned output paths.',
+      resource: commandResource(
+        {
+          en: 'Verify existing target artifacts and game-owned output paths.',
+          ko: '기존 타깃 산출물과 게임 소유 출력 경로를 검증합니다.',
+        },
+        matrixArgResources(),
+      ),
+      args: {
+        targets: {
+          type: 'string',
+          required: false,
+          default: 'all',
+          description: 'Comma-separated target list, or all.',
+        },
+        ...targetConfigArgs(),
+      },
+      run: (ctx) => {
+        runTargetMatrix({
+          action: 'smoke',
+          targets: parseTargetList(readOptionalString(ctx.values.targets) ?? 'all'),
+          env: createTargetCommandEnv(ctx.values),
+        });
+      },
+    }),
   },
   run: () => {
     console.log('Use "mpgd target build <target>" or "mpgd target smoke <target>".');
@@ -585,7 +612,7 @@ function createGameApp(input: {
   console.log(`Created ${appDir}`);
   console.log('Next steps:');
   console.log(`  cd ${appDir}`);
-  console.log('  pnpm install --filter . --filter ./apps/target-devvit');
+  console.log('  pnpm install -w');
   console.log('  pnpm dev');
   console.log('Target builds require an mpgd-kit checkout:');
   console.log(

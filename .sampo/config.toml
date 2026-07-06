@@ -28,6 +28,7 @@ fixed = [[
   "npm/@mpgd/create-game",
   "npm/@mpgd/game-services",
   "npm/@mpgd/i18n",
+  "npm/@mpgd/phaser-assets",
   "npm/@mpgd/platform",
   "npm/@mpgd/target-config"
 ]]

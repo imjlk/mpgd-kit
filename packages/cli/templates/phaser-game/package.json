@@ -33,6 +33,7 @@
     "@mpgd/game-services": "__MPGD_DEPENDENCY_VERSION__",
     "@mpgd/i18n": "__MPGD_DEPENDENCY_VERSION__",
     "@mpgd/platform": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/phaser-assets": "__MPGD_DEPENDENCY_VERSION__",
     "@mpgd/target-config": "__MPGD_DEPENDENCY_VERSION__",
     "phaser": "4.2.0"
   },

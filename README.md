@@ -157,8 +157,10 @@ pnpm mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,ait,
 Generated Phaser starters own their Reddit Devvit app root in
 `apps/target-devvit`; run `pnpm devvit:init` once after login before live
 playtest/upload. Apps in Toss and Capacitor targets currently use kit reference
-shells for smoke artifacts, so production app metadata should be moved into
-game-owned wrappers before store or Toss submission.
+shells for smoke builds, but release artifacts and manifests are copied back
+under the game app's `artifacts/` and `release-output/` directories. Production
+app metadata should still move into game-owned wrappers before store or Toss
+submission.
 
 The starter dependency range is derived from the released `@mpgd/cli` package
 version. Release PRs that bump the fixed public package group therefore update
