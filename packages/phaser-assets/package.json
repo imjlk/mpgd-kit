@@ -1,0 +1,56 @@
+{
+  "name": "@mpgd/phaser-assets",
+  "version": "0.3.2",
+  "description": "Target-portable Phaser asset manifest and loader helpers for mpgd games.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/phaser-assets"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "assets",
+    "vite",
+    "apps-in-toss",
+    "capacitor",
+    "devvit"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "test": "vitest run",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "peerDependencies": {
+    "phaser": ">=4.0.0 <5"
+  },
+  "devDependencies": {
+    "phaser": "4.2.0",
+    "ttsc": "0.16.9",
+    "typescript": "7.0.1-rc",
+    "vitest": "^4.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  }
+}
