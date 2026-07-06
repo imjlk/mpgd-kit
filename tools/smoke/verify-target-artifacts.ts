@@ -243,7 +243,7 @@ function verifyMicrosoftStorePwaManifest(artifactPath: string): void {
     assertString(icon.src, `Microsoft Store PWA manifest icon ${index} src`);
     assertString(icon.sizes, `Microsoft Store PWA manifest icon ${index} sizes`);
 
-    const iconPath = resolve(dirname(manifestPath), icon.src);
+    const iconPath = resolveArtifactWebFilePath(artifactPath, dirname(manifestPath), icon.src);
 
     assertPathInside(
       iconPath,
@@ -257,11 +257,46 @@ function verifyMicrosoftStorePwaManifest(artifactPath: string): void {
 function hasManifestLink(html: string): boolean {
   const linkTags = html.match(/<link\b[^>]*>/giu) ?? [];
 
-  return linkTags.some(
-    (tag) =>
-      /\brel=["']manifest["']/iu.test(tag)
-      && /\bhref=["']\/?manifest\.webmanifest["']/iu.test(tag),
-  );
+  return linkTags.some((tag) => {
+    const rel = readHtmlAttribute(tag, 'rel');
+    const href = readHtmlAttribute(tag, 'href');
+
+    return (
+      rel?.split(/\s+/u).some((token) => token.toLowerCase() === 'manifest') === true
+      && normalizeLocalWebPath(href ?? '') === 'manifest.webmanifest'
+    );
+  });
+}
+
+function resolveArtifactWebFilePath(
+  artifactPath: string,
+  relativeBaseDir: string,
+  path: string,
+): string {
+  const normalizedPath = normalizeLocalWebPath(path);
+
+  if (normalizedPath.length === 0) {
+    return resolve(relativeBaseDir, path);
+  }
+
+  if (path.trimStart().startsWith('/')) {
+    return resolve(artifactPath, normalizedPath);
+  }
+
+  return resolve(relativeBaseDir, normalizedPath);
+}
+
+function normalizeLocalWebPath(path: string): string {
+  const trimmedPath = path.trim();
+  const pathWithoutQuery = trimmedPath.split(/[?#]/u, 1)[0] ?? '';
+  const withoutLeadingRoot = pathWithoutQuery.replace(/^\/+/u, '');
+
+  return withoutLeadingRoot.replace(/^(?:\.\/)+/u, '');
+}
+
+function readHtmlAttribute(tag: string, name: string): string | undefined {
+  const match = tag.match(new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, 'iu'));
+  return match?.[2];
 }
 
 function resolveArtifactPath(path: string): string {
