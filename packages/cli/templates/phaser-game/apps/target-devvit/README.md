@@ -19,8 +19,9 @@ pnpm devvit:playtest
 ```
 
 `devvit:init` performs the first App Directory upload/link step with Devvit's
-copy-paste flow. Login proves who you are; init uploads and links the
-Reddit-side app record for the `name` in `devvit.json`. After that, use
+logged-in account. It may open a browser for authorization. Use
+`pnpm devvit:init:copy-paste` from the game root if the browser flow is not
+available and the CLI asks for a manual code. After that, use
 `pnpm devvit:playtest`, `pnpm devvit:upload`, and `pnpm devvit:publish` from the
 game root.
 

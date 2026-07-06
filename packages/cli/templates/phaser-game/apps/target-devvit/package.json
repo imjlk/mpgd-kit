@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "init": "devvit upload --copy-paste --config devvit.json",
+    "init": "devvit upload --config devvit.json",
+    "init:copy-paste": "devvit upload --copy-paste --config devvit.json",
     "dev": "devvit playtest --config devvit.json",
     "dev:prepare": "pnpm --dir ../.. build:devvit:staging",
     "dev:client": "APP_TARGET=reddit APP_VERSION=0.0.0-dev BUILD_ID=devvit-watch pnpm --dir ../.. exec vite build --mode staging --watch --outDir apps/target-devvit/dist/client",
