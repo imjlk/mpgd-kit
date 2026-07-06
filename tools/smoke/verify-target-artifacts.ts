@@ -1,4 +1,4 @@
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
@@ -66,7 +66,7 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     }
 
     for (const extraArtifact of extraRequiredArtifactsForTarget(targetConfig, artifactPath)) {
-      assertFileExists(extraArtifact, `${target} required artifact`);
+      assertPathExists(extraArtifact, `${target} required artifact`);
     }
 
     assertEmbeddedTargetConfig(
@@ -125,10 +125,29 @@ function extraRequiredArtifactsForTarget(
   artifactPath: string,
 ): readonly string[] {
   if (targetConfig.kind !== 'devvit-web') {
+    if (targetConfig.kind === 'capacitor-ios') {
+      return localSwiftPackagePathsForIosArtifact(artifactPath);
+    }
+
     return [];
   }
 
   return [`${artifactPath}/server/index.cjs`];
+}
+
+function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly string[] {
+  const packageFile = `${artifactPath}/App/CapApp-SPM/Package.swift`;
+
+  if (!existsSync(packageFile)) {
+    return [];
+  }
+
+  const packageFileDir = dirname(packageFile);
+  const packageFileContents = readFileSync(packageFile, 'utf8');
+
+  return [...packageFileContents.matchAll(/\.package\([^)]*\bpath:\s*"([^"]+)"/gu)].map(
+    (match) => resolve(packageFileDir, requireStringMatch(match[1], packageFile)),
+  );
 }
 
 function requiredFilesForTarget(
@@ -186,6 +205,14 @@ function assertFileExists(path: string, label: string): void {
   if (!stat.isFile()) {
     throw new Error(`${label} is not a file: ${path}`);
   }
+}
+
+function requireStringMatch(input: string | undefined, source: string): string {
+  if (input === undefined || input.length === 0) {
+    throw new Error(`Failed to read local package path from ${source}`);
+  }
+
+  return input;
 }
 
 function loadSmokePlatformTargetsConfig(): {
