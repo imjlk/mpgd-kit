@@ -167,10 +167,10 @@ submission.
 Microsoft Store support is modeled as a PWA/web target, not a separate native
 SDK adapter. `pnpm build:microsoft-store` builds the Phaser game with the
 browser gateway, embeds the `microsoft-store` effective target config, and
-writes `artifacts/microsoft-store` for PWABuilder packaging and Partner Center
-submission. A dedicated Microsoft Store commerce adapter should be added only
-when wiring Microsoft Edge's Digital Goods API and Payment Request API through
-backend ledger verification.
+writes `artifacts/microsoft-store` with a linked web app manifest for
+PWABuilder packaging and Partner Center submission. A dedicated Microsoft Store
+commerce adapter should be added only when wiring Microsoft Edge's Digital Goods
+API and Payment Request API through backend ledger verification.
 
 The starter dependency range is derived from the released `@mpgd/cli` package
 version. Release PRs that bump the fixed public package group therefore update
@@ -290,7 +290,9 @@ guidance is to package an existing PWA with PWABuilder and submit the generated
 package through Partner Center. The repo therefore treats `microsoft-store` as a
 store-reviewed web artifact that reuses `@mpgd/adapter-browser`; Store-specific
 commerce remains disabled until a Digital Goods API/Payment Request integration
-is added behind `PlatformGateway` and backend ledger APIs.
+is added behind `PlatformGateway` and backend ledger APIs. The artifact includes
+a linked `manifest.webmanifest`; game projects should replace the starter icon
+and manifest metadata before Store submission.
 
 Official references:
 

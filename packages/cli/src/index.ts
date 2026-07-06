@@ -20,8 +20,17 @@ const packageRoot = resolvePackageRoot(sourceDir);
 const detectedKitRoot = resolveDefaultKitRoot();
 const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
 const cliVersion = readPackageVersion(packageRoot);
-const defaultMatrixTargets = 'web,microsoft-store,ait,reddit';
+const recommendedMatrixTargets = 'web,microsoft-store,ait,reddit';
 const defaultDependencyVersion = `^${cliVersion}`;
+const recommendedMatrixTargetOrder = ['web-preview', 'microsoft-store', 'ait', 'reddit'] as const;
+const allMatrixTargetOrder = [
+  'web-preview',
+  'microsoft-store',
+  'android',
+  'ios',
+  'ait',
+  'reddit',
+] as const;
 
 const supportedBuildTargets = [
   'browser',
@@ -350,7 +359,6 @@ const targetCommand = defineI18n({
         targets: {
           type: 'string',
           required: false,
-          default: defaultMatrixTargets,
           description: 'Comma-separated target list, or all.',
         },
         profile: {
@@ -376,12 +384,13 @@ const targetCommand = defineI18n({
       run: (ctx) => {
         const aitVariant = readOptionalString(ctx.values['ait-variant']);
         const iosVariant = readOptionalString(ctx.values['ios-variant']);
+        const env = createTargetCommandEnv(ctx.values);
 
         runTargetMatrix({
           action: 'build',
-          targets: parseTargetList(readOptionalString(ctx.values.targets)),
+          targets: parseTargetList(readOptionalString(ctx.values.targets), env),
           profile: readOptionalString(ctx.values.profile) ?? 'production',
-          env: createTargetCommandEnv(ctx.values),
+          env,
           ...(aitVariant === undefined ? {} : { aitVariant }),
           ...(iosVariant === undefined ? {} : { iosVariant }),
         });
@@ -401,16 +410,17 @@ const targetCommand = defineI18n({
         targets: {
           type: 'string',
           required: false,
-          default: defaultMatrixTargets,
           description: 'Comma-separated target list, or all.',
         },
         ...targetConfigArgs(),
       },
       run: (ctx) => {
+        const env = createTargetCommandEnv(ctx.values);
+
         runTargetMatrix({
           action: 'smoke',
-          targets: parseTargetList(readOptionalString(ctx.values.targets)),
-          env: createTargetCommandEnv(ctx.values),
+          targets: parseTargetList(readOptionalString(ctx.values.targets), env),
+          env,
         });
       },
     }),
@@ -434,10 +444,12 @@ const targetCommand = defineI18n({
         ...targetConfigArgs(),
       },
       run: (ctx) => {
+        const env = createTargetCommandEnv(ctx.values);
+
         runTargetMatrix({
           action: 'smoke',
-          targets: parseTargetList(readOptionalString(ctx.values.targets) ?? 'all'),
-          env: createTargetCommandEnv(ctx.values),
+          targets: parseTargetList(readOptionalString(ctx.values.targets) ?? 'all', env),
+          env,
         });
       },
     }),
@@ -621,7 +633,7 @@ function createGameApp(input: {
     [
       '  mpgd target build-all',
       `--targets-file ${path.join(appDir, 'mpgd.targets.json')}`,
-      `--targets ${defaultMatrixTargets}`,
+      `--targets ${recommendedMatrixTargets}`,
       '--ait-variant wrapper',
       '--kit-path <path-to-mpgd-kit>',
     ].join(' '),
@@ -1037,11 +1049,15 @@ function withTargetVariantEnv(
   return env;
 }
 
-function parseTargetList(value: string | undefined): readonly string[] {
-  const raw = value ?? defaultMatrixTargets;
+function parseTargetList(value: string | undefined, env: NodeJS.ProcessEnv): readonly string[] {
+  const raw = (value ?? 'default').trim();
 
   if (raw === 'all') {
-    return ['web-preview', 'microsoft-store', 'android', 'ios', 'ait', 'reddit'];
+    return configuredTargetsForOrder(env, allMatrixTargetOrder, 'all');
+  }
+
+  if (raw === 'default') {
+    return configuredTargetsForOrder(env, recommendedMatrixTargetOrder, 'default');
   }
 
   const targets = raw
@@ -1055,6 +1071,59 @@ function parseTargetList(value: string | undefined): readonly string[] {
   }
 
   return [...new Set(targets)];
+}
+
+function configuredTargetsForOrder(
+  env: NodeJS.ProcessEnv,
+  order: readonly string[],
+  label: string,
+): readonly string[] {
+  const configuredTargets = readConfiguredBuildTargets(env);
+  const targets = order.filter((target) => configuredTargets.has(target));
+
+  if (targets.length === 0) {
+    throw new Error(`No ${label} targets are configured in ${readConfiguredTargetsFile(env)}.`);
+  }
+
+  return targets;
+}
+
+function readConfiguredBuildTargets(env: NodeJS.ProcessEnv): ReadonlySet<string> {
+  const file = readConfiguredTargetsFile(env);
+  const parsed = readJsonForCli(file);
+
+  assertJsonObject(parsed, `targets file ${file}`);
+  assertJsonObject(parsed.targets, `targets in ${file}`);
+
+  const targets = new Set<string>();
+
+  for (const target of Object.keys(parsed.targets)) {
+    const normalized = normalizeConfiguredBuildTarget(target);
+
+    if (normalized !== undefined) {
+      targets.add(normalized);
+    }
+  }
+
+  return targets;
+}
+
+function readConfiguredTargetsFile(env: NodeJS.ProcessEnv): string {
+  const file = env.MPGD_PLATFORM_TARGETS_FILE;
+
+  if (file === undefined || file.length === 0) {
+    throw new Error('Missing MPGD_PLATFORM_TARGETS_FILE.');
+  }
+
+  return file;
+}
+
+function normalizeConfiguredBuildTarget(target: string): string | undefined {
+  try {
+    return normalizeBuildTarget(target);
+  } catch {
+    return undefined;
+  }
 }
 
 function normalizeBuildTarget(target: string): string {
@@ -1075,6 +1144,12 @@ function normalizeBuildTarget(target: string): string {
   }
 
   return target;
+}
+
+function assertJsonObject(input: unknown, label: string): asserts input is Record<string, unknown> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new Error(`${label} must be an object.`);
+  }
 }
 
 function runPnpm(args: readonly string[], commandEnv: NodeJS.ProcessEnv): void {

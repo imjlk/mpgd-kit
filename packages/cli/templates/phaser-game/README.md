@@ -103,7 +103,9 @@ this game root.
 
 - Browser preview is fully game-owned and writes to `artifacts/web-preview`.
 - Microsoft Store is a game-owned PWA target that reuses the browser adapter and
-  writes to `artifacts/microsoft-store` for PWABuilder packaging.
+  writes to `artifacts/microsoft-store` with `manifest.webmanifest` for
+  PWABuilder packaging. Replace the starter icon and manifest metadata before
+  Store submission.
 - Reddit Devvit is game-owned in `apps/target-devvit`.
 - Apps in Toss currently uses the kit reference wrapper at
   `${MPGD_KIT_PATH}/apps/target-ait` for smoke packaging. Before a real Toss
