@@ -1,5 +1,14 @@
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readdirSync, realpathSync, rmSync } from 'node:fs';
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
@@ -199,7 +208,7 @@ switch (target.kind) {
       );
       releaseArtifact = 'release-output/ios/capacitor-sync';
       replaceDirectory(`${shellApp}/ios`, targetPath(releaseArtifact));
-      copyIosSyncSwiftPackage(shellApp, '@mpgd/capacitor-game-services');
+      copyIosSyncSwiftPackage(shellApp, releaseArtifact, '@mpgd/capacitor-game-services');
     }
 
     writeManifest(targetName, profile, releaseArtifact, env);
@@ -229,7 +238,11 @@ function replaceDirectoryWithoutNodeModules(source: string, destination: string)
   });
 }
 
-function copyIosSyncSwiftPackage(shellApp: string, packageName: string): void {
+function copyIosSyncSwiftPackage(
+  shellApp: string,
+  releaseArtifact: string,
+  packageName: string,
+): void {
   const linkedPackage = `${shellApp}/node_modules/${packageName}`;
   let resolvedPackage: string;
 
@@ -241,8 +254,22 @@ function copyIosSyncSwiftPackage(shellApp: string, packageName: string): void {
 
   replaceDirectoryWithoutNodeModules(
     resolvedPackage,
-    targetPath(`release-output/ios/node_modules/${packageName}`),
+    targetPath(`${releaseArtifact}/node_modules/${packageName}`),
   );
+  rewriteIosSyncSwiftPackagePath(releaseArtifact, packageName);
+}
+
+function rewriteIosSyncSwiftPackagePath(releaseArtifact: string, packageName: string): void {
+  const packageFile = targetPath(`${releaseArtifact}/App/CapApp-SPM/Package.swift`);
+  const contents = readFileSync(packageFile, 'utf8');
+  const shellRelativePath = `path: "../../../node_modules/${packageName}"`;
+  const artifactRelativePath = `path: "../../node_modules/${packageName}"`;
+
+  if (!contents.includes(shellRelativePath)) {
+    throw new Error(`Missing iOS Swift package reference for ${packageName}: ${packageFile}`);
+  }
+
+  writeFileSync(packageFile, contents.replace(shellRelativePath, artifactRelativePath));
 }
 
 function copyFile(source: string, destination: string): void {

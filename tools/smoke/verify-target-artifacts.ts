@@ -59,6 +59,7 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
 
     assertPathInsideTargetBase(artifactPath, `${target} artifact`);
     assertPathExists(artifactPath, `${target} artifact`);
+    assertPathInsideTargetBase(effectiveConfigPath, `${target} effective target config`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);
 
     for (const requiredFile of requiredFilesForTarget(targetConfig, artifactPath)) {
@@ -163,9 +164,18 @@ function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly st
   const packageFileDir = dirname(packageFile);
   const packageFileContents = readFileSync(packageFile, 'utf8');
 
-  return [...packageFileContents.matchAll(/\.package\([^)]*\bpath:\s*"([^"]+)"/gu)].map(
-    (match) => resolve(packageFileDir, requireStringMatch(match[1], packageFile)),
+  const packageMatches = packageFileContents.matchAll(/\.package\([^)]*\bpath:\s*"([^"]+)"/gu);
+  const packagePaths = [...packageMatches].map((match) =>
+    resolve(packageFileDir, requireStringMatch(match[1], packageFile)),
   );
+
+  if (isIosSyncArtifact(artifactPath)) {
+    for (const packagePath of packagePaths) {
+      assertPathInside(packagePath, artifactPath, 'iOS sync Swift package');
+    }
+  }
+
+  return packagePaths;
 }
 
 function isIosSyncArtifact(artifactPath: string): boolean {
@@ -210,10 +220,18 @@ function assertPathExists(path: string, label: string): void {
 }
 
 function assertPathInsideTargetBase(path: string, label: string): void {
-  const relativePath = relative(loadedPlatformTargets.baseDir, path);
+  assertPathInside(
+    path,
+    loadedPlatformTargets.baseDir,
+    `${label} must stay under the target config dir`,
+  );
+}
+
+function assertPathInside(path: string, baseDir: string, label: string): void {
+  const relativePath = relative(baseDir, path);
 
   if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
-    throw new Error(`${label} must stay under the target config dir: ${path}`);
+    throw new Error(`${label}: ${path}`);
   }
 }
 

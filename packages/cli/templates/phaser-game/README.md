@@ -65,10 +65,11 @@ Capacitor wrappers.
 ## Assets
 
 Static assets live under `src/assets` and are declared in
-`src/assets/manifest.ts`. Use stable manifest keys in scenes and build URLs with
-`createPhaserAssetUrl('./file', import.meta.url)`. The starter keeps Vite
-`base: './'` so generated asset URLs stay portable across web preview, Apps in
-Toss, Devvit, Android, and iOS bundles.
+`src/assets/manifest.ts`. Use stable manifest keys in scenes and pass Vite-
+emitted URLs into the manifest with `?url` imports, or keep static
+`new URL('./file', import.meta.url)` calls directly in the manifest module. The
+starter keeps Vite `base: './'` so generated asset URLs stay portable across web
+preview, Apps in Toss, Devvit, Android, and iOS bundles.
 
 ## Reddit Devvit
 

@@ -57,10 +57,6 @@ export type PhaserAsset<TKey extends string = string> =
 
 export type PhaserAssetManifest<TAsset extends PhaserAsset = PhaserAsset> = readonly TAsset[];
 
-export function createPhaserAssetUrl(path: string, baseUrl: string | URL): string {
-  return new URL(path, baseUrl).href;
-}
-
 export function definePhaserAssetManifest<const TAsset extends PhaserAssetManifest>(
   assets: TAsset,
 ): TAsset {

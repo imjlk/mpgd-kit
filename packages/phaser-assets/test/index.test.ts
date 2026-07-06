@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { createPhaserAssetUrl, definePhaserAssetManifest } from '../src/index';
+import { definePhaserAssetManifest } from '../src/index';
 
 describe('phaser asset manifest helpers', () => {
   it('preserves valid manifests', () => {
@@ -8,12 +8,12 @@ describe('phaser asset manifest helpers', () => {
       {
         kind: 'image',
         key: 'demo.marker',
-        url: createPhaserAssetUrl('../fixtures/marker.svg', import.meta.url),
+        url: new URL('../fixtures/marker.svg', import.meta.url).href,
       },
       {
         kind: 'json',
         key: 'demo.config',
-        url: createPhaserAssetUrl('../fixtures/config.json', import.meta.url),
+        url: new URL('../fixtures/config.json', import.meta.url).href,
       },
     ] as const);
 
