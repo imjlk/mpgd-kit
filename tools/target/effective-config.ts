@@ -55,8 +55,15 @@ export function loadEffectiveTargetConfigMatrix(): EffectiveTargetConfigMatrix {
 
 export function validateEffectiveTargetConfigMatrix(
   matrix = loadEffectiveTargetConfigMatrix(),
+  targets: readonly string[] = Object.keys(matrix.targets),
 ): EffectiveTargetConfigMatrix {
-  for (const config of Object.values(matrix.targets)) {
+  for (const target of targets) {
+    const config = matrix.targets[target];
+
+    if (config === undefined) {
+      throw new Error(`Unknown effective target config target: ${target}`);
+    }
+
     validateEffectiveTargetConfig(config);
   }
 
@@ -66,9 +73,12 @@ export function validateEffectiveTargetConfigMatrix(
 export function writeEffectiveTargetConfigs(
   options: WriteEffectiveTargetConfigsOptions = {},
 ): EffectiveTargetConfigArtifactIndex {
-  const matrix = validateEffectiveTargetConfigMatrix();
+  const matrix = loadEffectiveTargetConfigMatrix();
   const outputDir = options.outputDir ?? 'artifacts/target-config';
   const targets = options.targets ?? Object.keys(matrix.targets);
+
+  validateEffectiveTargetConfigMatrix(matrix, targets);
+
   const artifacts = targets.map((target) => {
     const config = matrix.targets[target];
 

@@ -32,11 +32,16 @@ interface BuildTargetConfig {
   readonly artifact?: string;
 }
 
+const targetScopedEnv = {
+  ...process.env,
+  MPGD_TARGET_CONFIG_TARGETS: targetName,
+};
+
 if (process.env.MPGD_SKIP_BUILD_TARGET_PREFLIGHT !== '1') {
   run('pnpm', ['validate:catalog'], process.env);
   run('pnpm', ['validate:ads'], process.env);
-  run('pnpm', ['validate:target-config'], process.env);
-  run('pnpm', ['validate:effective-config'], process.env);
+  run('pnpm', ['validate:target-config'], targetScopedEnv);
+  run('pnpm', ['validate:effective-config'], targetScopedEnv);
   run('pnpm', ['validate:targets'], process.env);
   run('node', ['tools/run-ttsx.mjs', 'tools/package/build-packages.ts'], process.env);
 }
@@ -51,10 +56,11 @@ if (target === undefined) {
 }
 
 const gameApp = targetPath(target.gameApp);
-const appTarget = appTargetForBuild(target);
+const appTarget = appTargetForBuild(target, targetName);
 const env = {
   ...process.env,
   APP_TARGET: appTarget,
+  MPGD_CONFIG_TARGET: targetName,
   APP_VERSION: process.env.APP_VERSION ?? '0.0.0',
   BUILD_ID: process.env.BUILD_ID ?? 'local',
   MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveTargetConfigOutputDir(configBaseDir),
@@ -222,8 +228,8 @@ function replaceDirectory(source: string, destination: string): void {
   cpSync(source, destination, { recursive: true });
 }
 
-function appTargetForBuild(target: BuildTargetConfig): string {
-  return target.kind === 'web' ? 'browser' : targetName;
+function appTargetForBuild(target: BuildTargetConfig, name: string): string {
+  return target.kind === 'web' ? 'browser' : name;
 }
 
 function replaceDirectoryWithoutNodeModules(source: string, destination: string): void {
