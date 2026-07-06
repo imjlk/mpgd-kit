@@ -65,7 +65,11 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
       assertFileExists(requiredFile, `${target} required file`);
     }
 
-    for (const extraArtifact of extraRequiredArtifactsForTarget(targetConfig, artifactPath)) {
+    for (const extraFile of extraRequiredFilesForTarget(targetConfig, artifactPath)) {
+      assertFileExists(extraFile, `${target} required file`);
+    }
+
+    for (const extraArtifact of extraRequiredPathsForTarget(targetConfig, artifactPath)) {
       assertPathExists(extraArtifact, `${target} required artifact`);
     }
 
@@ -111,7 +115,10 @@ function readReleaseEmbeddedTargetConfig(
         return readEmbeddedTargetConfigFromZip(artifactPath, `${target} release artifact`);
       }
 
-      return readEmbeddedTargetConfigFromDirectory(artifactPath, `${target} release artifact`);
+      return readEmbeddedTargetConfigFromDirectory(
+        `${artifactPath}/game`,
+        `${target} wrapper game artifact`,
+      );
     case 'devvit-web':
       return readEmbeddedTargetConfigFromDirectory(
         `${artifactPath}/client`,
@@ -120,25 +127,36 @@ function readReleaseEmbeddedTargetConfig(
   }
 }
 
-function extraRequiredArtifactsForTarget(
+function extraRequiredFilesForTarget(
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
 ): readonly string[] {
-  if (targetConfig.kind !== 'devvit-web') {
-    if (targetConfig.kind === 'capacitor-ios') {
-      return localSwiftPackagePathsForIosArtifact(artifactPath);
-    }
-
-    return [];
+  if (targetConfig.kind === 'devvit-web') {
+    return [`${artifactPath}/server/index.cjs`];
   }
 
-  return [`${artifactPath}/server/index.cjs`];
+  return [];
+}
+
+function extraRequiredPathsForTarget(
+  targetConfig: SmokePlatformTargetConfig,
+  artifactPath: string,
+): readonly string[] {
+  if (targetConfig.kind === 'capacitor-ios') {
+    return localSwiftPackagePathsForIosArtifact(artifactPath);
+  }
+
+  return [];
 }
 
 function localSwiftPackagePathsForIosArtifact(artifactPath: string): readonly string[] {
   const packageFile = `${artifactPath}/App/CapApp-SPM/Package.swift`;
 
   if (!existsSync(packageFile)) {
+    if (existsSync(`${artifactPath}/App/App.xcodeproj`)) {
+      throw new Error(`Missing iOS Swift package manifest: ${packageFile}`);
+    }
+
     return [];
   }
 
@@ -162,7 +180,7 @@ function requiredFilesForTarget(
         return [];
       }
 
-      return [`${artifactPath}/index.html`];
+      return [`${artifactPath}/index.html`, `${artifactPath}/game/index.html`];
     case 'devvit-web':
       return [`${artifactPath}/client/index.html`];
     case 'capacitor-android':

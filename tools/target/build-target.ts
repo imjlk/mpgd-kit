@@ -80,8 +80,8 @@ switch (target.kind) {
       copyFile(aitArtifact, targetPath(releaseArtifact));
     } else {
       releaseArtifact = 'release-output/ait/wrapper-web';
-      replaceDirectory(webDir, targetPath(releaseArtifact));
-      console.warn('ait: package build skipped; release manifest points to copied wrapper webDir.');
+      replaceDirectory(`${wrapperApp}/dist`, targetPath(releaseArtifact));
+      console.warn('ait: package build skipped; release manifest points to copied wrapper dist.');
     }
 
     writeManifest(targetName, profile, releaseArtifact, env);
