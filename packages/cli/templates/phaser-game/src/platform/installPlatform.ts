@@ -71,7 +71,7 @@ export async function installPlatform(runtime: RuntimeConfig): Promise<TargetCon
     }
   }
 
-  const configTarget = targetConfigKeyForPlatform(runtime.target);
+  const configTarget = runtime.configTarget || targetConfigKeyForPlatform(runtime.target);
   const targetConfig = getTargetConfig(targetConfigMatrix, configTarget);
   const effectiveConfig = createEffectiveTargetConfig({
     target: configTarget,

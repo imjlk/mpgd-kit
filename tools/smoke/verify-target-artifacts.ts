@@ -62,7 +62,7 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     assertPathInsideTargetBase(effectiveConfigPath, `${target} effective target config`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);
 
-    for (const requiredFile of requiredFilesForTarget(targetConfig, artifactPath)) {
+    for (const requiredFile of requiredFilesForTarget(target, targetConfig, artifactPath)) {
       assertFileExists(requiredFile, `${target} required file`);
     }
 
@@ -72,6 +72,10 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
 
     for (const extraArtifact of extraRequiredPathsForTarget(targetConfig, artifactPath)) {
       assertPathExists(extraArtifact, `${target} required artifact`);
+    }
+
+    if (target === 'microsoft-store') {
+      verifyMicrosoftStorePwaManifest(artifactPath);
     }
 
     assertEmbeddedTargetConfig(
@@ -183,12 +187,15 @@ function isIosSyncArtifact(artifactPath: string): boolean {
 }
 
 function requiredFilesForTarget(
+  target: string,
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
 ): readonly string[] {
   switch (targetConfig.kind) {
     case 'web':
-      return [`${artifactPath}/index.html`];
+      return target === 'microsoft-store'
+        ? [`${artifactPath}/index.html`, `${artifactPath}/manifest.webmanifest`]
+        : [`${artifactPath}/index.html`];
     case 'apps-in-toss':
       if (artifactPath.endsWith('.ait')) {
         return [];
@@ -201,6 +208,95 @@ function requiredFilesForTarget(
     case 'capacitor-ios':
       return [];
   }
+}
+
+function verifyMicrosoftStorePwaManifest(artifactPath: string): void {
+  const indexPath = `${artifactPath}/index.html`;
+  const manifestPath = `${artifactPath}/manifest.webmanifest`;
+  const indexHtml = readFileSync(indexPath, 'utf8');
+
+  if (!hasManifestLink(indexHtml)) {
+    throw new Error(`Microsoft Store artifact must link manifest.webmanifest from ${indexPath}.`);
+  }
+
+  const manifest = readJsonFile(manifestPath);
+
+  assertRecord(manifest, 'Microsoft Store PWA manifest');
+  assertString(manifest.name, 'Microsoft Store PWA manifest name');
+  assertString(manifest.short_name, 'Microsoft Store PWA manifest short_name');
+  assertString(manifest.description, 'Microsoft Store PWA manifest description');
+  assertString(manifest.start_url, 'Microsoft Store PWA manifest start_url');
+  assertString(manifest.scope, 'Microsoft Store PWA manifest scope');
+
+  if (manifest.display !== 'standalone') {
+    throw new Error('Microsoft Store PWA manifest display must be standalone.');
+  }
+
+  assertArray(manifest.icons, 'Microsoft Store PWA manifest icons');
+
+  if (manifest.icons.length === 0) {
+    throw new Error('Microsoft Store PWA manifest must include at least one icon.');
+  }
+
+  for (const [index, icon] of manifest.icons.entries()) {
+    assertRecord(icon, `Microsoft Store PWA manifest icon ${index}`);
+    assertString(icon.src, `Microsoft Store PWA manifest icon ${index} src`);
+    assertString(icon.sizes, `Microsoft Store PWA manifest icon ${index} sizes`);
+
+    const iconPath = resolveArtifactWebFilePath(artifactPath, dirname(manifestPath), icon.src);
+
+    assertPathInside(
+      iconPath,
+      artifactPath,
+      `Microsoft Store PWA manifest icon ${index} must stay inside artifact`,
+    );
+    assertFileExists(iconPath, `Microsoft Store PWA manifest icon ${index}`);
+  }
+}
+
+function hasManifestLink(html: string): boolean {
+  const linkTags = html.match(/<link\b[^>]*>/giu) ?? [];
+
+  return linkTags.some((tag) => {
+    const rel = readHtmlAttribute(tag, 'rel');
+    const href = readHtmlAttribute(tag, 'href');
+
+    return (
+      rel?.split(/\s+/u).some((token) => token.toLowerCase() === 'manifest') === true
+      && normalizeLocalWebPath(href ?? '') === 'manifest.webmanifest'
+    );
+  });
+}
+
+function resolveArtifactWebFilePath(
+  artifactPath: string,
+  relativeBaseDir: string,
+  path: string,
+): string {
+  const normalizedPath = normalizeLocalWebPath(path);
+
+  if (normalizedPath.length === 0) {
+    return resolve(relativeBaseDir, path);
+  }
+
+  if (path.trimStart().startsWith('/')) {
+    return resolve(artifactPath, normalizedPath);
+  }
+
+  return resolve(relativeBaseDir, normalizedPath);
+}
+
+function normalizeLocalWebPath(path: string): string {
+  const trimmedPath = path.trim();
+  const pathWithoutQuery = trimmedPath.split(/[?#]/u, 1)[0] ?? '';
+  const withoutLeadingRoot = pathWithoutQuery.replace(/^\/+/u, '');
+
+  return withoutLeadingRoot.replace(/^(?:\.\/)+/u, '');
+}
+
+function readHtmlAttribute(tag: string, name: string): string | undefined {
+  const match = tag.match(new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, 'iu'));
+  return match?.[2];
 }
 
 function resolveArtifactPath(path: string): string {
@@ -306,6 +402,12 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 function assertString(input: unknown, label: string): asserts input is string {
   if (typeof input !== 'string' || input.length === 0) {
     throw new Error(`${label} must be a non-empty string.`);
+  }
+}
+
+function assertArray(input: unknown, label: string): asserts input is unknown[] {
+  if (!Array.isArray(input)) {
+    throw new Error(`${label} must be an array.`);
   }
 }
 

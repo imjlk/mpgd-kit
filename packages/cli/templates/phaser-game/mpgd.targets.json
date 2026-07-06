@@ -6,6 +6,12 @@
       "adapter": "browser",
       "output": "artifacts/web-preview"
     },
+    "microsoft-store": {
+      "kind": "web",
+      "gameApp": ".",
+      "adapter": "browser",
+      "output": "artifacts/microsoft-store"
+    },
     "android": {
       "kind": "capacitor-android",
       "gameApp": ".",

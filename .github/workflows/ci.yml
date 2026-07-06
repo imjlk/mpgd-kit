@@ -60,11 +60,17 @@ jobs:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target web-preview
         if: ${{ env.IS_RELEASE_PR != 'true' }}
+      - run: pnpm build:microsoft-store
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        env:
+          MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
+      - run: pnpm smoke:target microsoft-store
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
 
       - uses: actions/upload-artifact@v6
         if: ${{ env.IS_RELEASE_PR != 'true' }}
         with:
-          name: web-preview-ci
+          name: web-preview-and-microsoft-store-ci
           path: |
             artifacts/**
 

@@ -60,6 +60,8 @@ pnpm graph:preflight
 pnpm sampo:release:dry-run
 pnpm build:web
 pnpm smoke:target web-preview
+pnpm build:microsoft-store
+pnpm smoke:target microsoft-store
 pnpm build:devvit
 pnpm smoke:target reddit
 ```
@@ -73,6 +75,7 @@ pnpm smoke:target reddit
 - [ ] Confirm Android release settings: package id, Google Play app, billing products, AdMob app/placement ids, signing keystore, and Play Games leaderboard ids.
 - [ ] Confirm iOS release settings: bundle id, App Store app, StoreKit products, AdMob app/placement ids, signing credentials, and Game Center leaderboard ids.
 - [ ] Confirm Apps in Toss release settings: app id, Toss product ids, Toss ad placement ids, review metadata, and release credentials.
+- [ ] Confirm Microsoft Store release settings: Partner Center app reservation, PWA manifest/icons, PWABuilder package output, Store listing metadata, age ratings, and whether Digital Goods API commerce is intentionally disabled. Use Microsoft's PWA Store and Digital Goods API docs as the policy source before enabling Store commerce.
 - [ ] Confirm Reddit Devvit release settings: app name, test subreddit, Devvit login state, Redis usage, and whether playtest/upload/publish are intentionally local-only.
 - [ ] Confirm placeholder IDs in `packages/catalog/catalog.json`, `packages/catalog/placements.json`, and `apps/game-services-worker/wrangler.toml` are either intentionally sample-only or replaced.
 - [ ] Confirm README/docs state that real Google Play Billing, StoreKit/App Store Server API, AdMob SSV, and Apps in Toss production verification adapters are not bundled yet.
@@ -82,6 +85,7 @@ pnpm smoke:target reddit
 
 - [ ] For Android, run `pnpm build:android && pnpm smoke:target android`.
 - [ ] For iOS, run `pnpm build:ios && pnpm smoke:target ios`.
+- [ ] For Microsoft Store, run `pnpm build:microsoft-store && pnpm smoke:target microsoft-store`, then package the PWA with PWABuilder.
 - [ ] For Apps in Toss, run `pnpm build:ait && pnpm smoke:target ait`.
 - [ ] For Reddit Devvit, run `pnpm build:devvit && pnpm smoke:target reddit`.
 - [ ] Emulator smoke is optional but recommended for local release confidence.

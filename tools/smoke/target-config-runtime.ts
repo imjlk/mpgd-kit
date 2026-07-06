@@ -31,7 +31,14 @@ const platformFeatures = [
   'leaderboard',
   'localization',
 ] as const satisfies readonly PlatformFeature[];
-const configTargets = ['web-preview', 'android', 'ios', 'ait', 'reddit'] as const;
+const configTargets = [
+  'web-preview',
+  'microsoft-store',
+  'android',
+  'ios',
+  'ait',
+  'reddit',
+] as const;
 
 for (const target of configTargets) {
   await verifyConfigTarget(target);
@@ -101,18 +108,18 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
     `${configTarget} localization feature should control locale resolution`,
   );
 
-  if (configTarget === 'web-preview') {
+  if (configTarget === 'web-preview' || configTarget === 'microsoft-store') {
     assertEqual(
       getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
       'target-disabled',
-      'web-preview products should be target-disabled',
+      `${configTarget} products should be target-disabled`,
     );
     assertEqual(
       getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.reason,
       'target-disabled',
-      'web-preview ad placements should be target-disabled',
+      `${configTarget} ad placements should be target-disabled`,
     );
-    await verifyWebPreviewFallbacks(gateway);
+    await verifyBrowserOnlyFallbacks(gateway, configTarget);
     return;
   }
 
@@ -204,12 +211,13 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
   );
 }
 
-async function verifyWebPreviewFallbacks(
+async function verifyBrowserOnlyFallbacks(
   gateway: TargetConfiguredGateway,
+  configTarget: 'web-preview' | 'microsoft-store',
 ): Promise<void> {
   const runtime = await gateway.getTargetRuntime();
 
-  assertEqual(runtime.configTarget, 'web-preview', 'browser should map to web-preview config');
+  assertEqual(runtime.configTarget, configTarget, 'browser-only config target should match');
   assertEqual(runtime.features.iap.reason, 'target-disabled', 'IAP should be target-disabled');
   assertEqual(
     runtime.features.rewardedAds.reason,
@@ -240,7 +248,7 @@ async function verifyWebPreviewFallbacks(
   assertEqual(
     runtime.adPlacements.every((placement) => !placement.enabled),
     true,
-    'all web-preview ad placements should be disabled',
+    `all ${configTarget} ad placements should be disabled`,
   );
   assertDeepEqual(await gateway.commerce.getProducts(), [], 'IAP products should be hidden');
   assertDeepEqual(
@@ -368,7 +376,9 @@ function createTargetGateway(target: PlatformTarget): {
 }
 
 function platformTargetForConfig(configTarget: (typeof configTargets)[number]): PlatformTarget {
-  return configTarget === 'web-preview' ? 'browser' : configTarget;
+  return configTarget === 'web-preview' || configTarget === 'microsoft-store'
+    ? 'browser'
+    : configTarget;
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string): void {

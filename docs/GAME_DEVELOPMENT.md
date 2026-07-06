@@ -91,8 +91,8 @@ Use the kit CLI for generated target builds because it resolves
 existing kit target scripts:
 
 ```sh
-pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait,reddit --ait-variant wrapper --kit-path .
-pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,ait,reddit --kit-path .
+pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --targets web,microsoft-store,ait,reddit --ait-variant wrapper --kit-path .
+pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,microsoft-store,ait,reddit --kit-path .
 ```
 
 For a private sibling game repo, run the same commands from the game repo or kit
@@ -118,6 +118,8 @@ pnpm test
 pnpm validate:game-assets
 pnpm build:web
 pnpm smoke:target web-preview
+pnpm build:microsoft-store
+pnpm smoke:target microsoft-store
 pnpm build:devvit
 pnpm smoke:target reddit
 ```

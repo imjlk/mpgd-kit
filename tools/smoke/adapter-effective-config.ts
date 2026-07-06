@@ -37,12 +37,15 @@ type AdapterBridgeTarget = 'android' | 'ios' | 'ait' | 'reddit';
 type CapacitorBridgeTarget = Extract<AdapterBridgeTarget, 'android' | 'ios'>;
 
 await verifyBrowserAdapter();
+await verifyMicrosoftStoreAdapter();
 await verifyCapacitorAdapter('android');
 await verifyCapacitorAdapter('ios');
 await verifyAitAdapter();
 await verifyDevvitAdapter();
 
-console.log('Adapter effective target config smoke passed: browser, android, ios, ait, reddit');
+console.log(
+  'Adapter effective target config smoke passed: browser, microsoft-store, android, ios, ait, reddit',
+);
 
 async function verifyBrowserAdapter(): Promise<void> {
   const gateway = wrapGateway('web-preview', createBrowserPlatformGateway());
@@ -71,6 +74,36 @@ async function verifyBrowserAdapter(): Promise<void> {
       entitlementIds: [],
     },
     'browser purchase should be target-disabled',
+  );
+}
+
+async function verifyMicrosoftStoreAdapter(): Promise<void> {
+  const gateway = wrapGateway('microsoft-store', createBrowserPlatformGateway());
+  const runtime = await gateway.getTargetRuntime();
+  const effectiveConfig = requireEffectiveConfig(runtime.effectiveConfig, 'microsoft-store');
+
+  assertEqual(effectiveConfig.target, 'microsoft-store', 'microsoft-store effective target');
+  assertEqual(
+    getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
+    false,
+    'microsoft-store product should be disabled until Digital Goods API is wired',
+  );
+  assertEqual(
+    getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
+    false,
+    'microsoft-store rewarded placement should be disabled',
+  );
+  assertDeepEqual(
+    await gateway.commerce.purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'microsoft-store-parity-purchase',
+    }),
+    {
+      status: 'cancelled',
+      entitlementIds: [],
+    },
+    'microsoft-store purchase should be target-disabled',
   );
 }
 

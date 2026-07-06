@@ -11,19 +11,19 @@ for (const [target, config] of Object.entries(matrix.targets)) {
 console.log(`Effective target config smoke passed: ${Object.keys(matrix.targets).join(', ')}`);
 
 function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): void {
-  if (target === 'web-preview') {
+  if (target === 'web-preview' || target === 'microsoft-store') {
     assertEqual(
       config.monetization.products.every((product) => !product.enabled),
       true,
-      'web-preview products should be disabled',
+      `${target} products should be disabled`,
     );
     assertEqual(
       config.ads.placements.every((placement) => !placement.enabled),
       true,
-      'web-preview ads should be disabled',
+      `${target} ads should be disabled`,
     );
-    assertEqual(config.localization.enabled, true, 'web-preview localization should be enabled');
-    assertEqual(config.storage.support, 'local', 'web-preview should use local storage');
+    assertEqual(config.localization.enabled, true, `${target} localization should be enabled`);
+    assertEqual(config.storage.support, 'local', `${target} should use local storage`);
     return;
   }
 

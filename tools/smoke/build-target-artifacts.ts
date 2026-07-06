@@ -5,6 +5,7 @@ import { verifyTargetArtifacts } from './verify-target-artifacts';
 
 const generatedPaths = [
   'artifacts/target-config',
+  'artifacts/microsoft-store',
   'artifacts/release-manifest.json',
   'release-output/android/app-release.aab',
   'release-output/ait/mpgd-kit.ait',
@@ -15,7 +16,14 @@ for (const path of generatedPaths) {
   rmSync(path, { force: true, recursive: true });
 }
 
-for (const script of ['build:web', 'build:android', 'build:ios', 'build:ait', 'build:devvit']) {
+for (const script of [
+  'build:web',
+  'build:microsoft-store',
+  'build:android',
+  'build:ios',
+  'build:ait',
+  'build:devvit',
+]) {
   run('pnpm', [script]);
 }
 

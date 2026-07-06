@@ -31,16 +31,16 @@ platform-specific artifacts. Keep an `mpgd-kit` checkout nearby and pass it with
 pnpm exec mpgd target build-all \
   --targets-file ./mpgd.targets.json \
   --kit-path ../mpgd-kit \
-  --targets web,ait,reddit \
+  --targets web,microsoft-store,ait,reddit \
   --ait-variant wrapper
 pnpm exec mpgd target smoke-all \
   --targets-file ./mpgd.targets.json \
   --kit-path ../mpgd-kit \
-  --targets web,ait,reddit
+  --targets web,microsoft-store,ait,reddit
 pnpm exec mpgd target doctor \
   --targets-file ./mpgd.targets.json \
   --kit-path ../mpgd-kit \
-  --targets web,ait,reddit
+  --targets web,microsoft-store,ait,reddit
 ```
 
 When developing the kit itself, the same commands work through the repository
@@ -50,7 +50,7 @@ script:
 pnpm --dir ../mpgd-kit mpgd target build-all \
   --targets-file "$PWD/mpgd.targets.json" \
   --kit-path ../mpgd-kit \
-  --targets web,ait,reddit \
+  --targets web,microsoft-store,ait,reddit \
   --ait-variant wrapper
 ```
 
@@ -102,6 +102,10 @@ this game root.
 ## Target Ownership Notes
 
 - Browser preview is fully game-owned and writes to `artifacts/web-preview`.
+- Microsoft Store is a game-owned PWA target that reuses the browser adapter and
+  writes to `artifacts/microsoft-store` with `manifest.webmanifest` for
+  PWABuilder packaging. Replace the starter icon and manifest metadata before
+  Store submission.
 - Reddit Devvit is game-owned in `apps/target-devvit`.
 - Apps in Toss currently uses the kit reference wrapper at
   `${MPGD_KIT_PATH}/apps/target-ait` for smoke packaging. Before a real Toss

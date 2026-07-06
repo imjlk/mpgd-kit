@@ -13,6 +13,7 @@ export default defineConfig(({ mode }) => {
     ],
     define: {
       __APP_TARGET__: JSON.stringify(process.env.APP_TARGET ?? 'browser'),
+      __MPGD_CONFIG_TARGET__: JSON.stringify(process.env.MPGD_CONFIG_TARGET ?? ''),
       __APP_VERSION__: JSON.stringify(process.env.APP_VERSION ?? '0.0.0-dev'),
       __BUILD_ID__: JSON.stringify(process.env.BUILD_ID ?? 'local'),
       __DEBUG_BUILD__: JSON.stringify(!isProduction),

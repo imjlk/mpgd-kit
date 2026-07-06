@@ -14,24 +14,52 @@ export function validateTargetConfigMatrixFile(
 ) {
   const configMatrix = assertTargetConfigMatrix(readJsonFile(path));
   const platformTargets = assertPlatformTargetsConfig(readJsonFile(targetsPath));
+  const targets = readTargetFilterFromEnv('MPGD_TARGET_CONFIG_TARGETS');
 
-  for (const [target, config] of Object.entries(configMatrix.targets)) {
+  for (const target of targets ?? Object.keys(configMatrix.targets)) {
+    const config = configMatrix.targets[target];
+
+    if (config === undefined) {
+      throw new Error(`Missing target config for target: ${target}`);
+    }
+
     validateTargetConfigConsistency(target, config);
   }
 
-  for (const target of Object.keys(platformTargets.targets)) {
-    if (configMatrix.targets[target] === undefined) {
-      throw new Error(`Missing target config for configured platform target: ${target}`);
+  if (targets === undefined) {
+    for (const target of Object.keys(platformTargets.targets)) {
+      if (configMatrix.targets[target] === undefined) {
+        throw new Error(`Missing target config for configured platform target: ${target}`);
+      }
     }
-  }
 
-  for (const target of Object.keys(configMatrix.targets)) {
-    if (platformTargets.targets[target] === undefined) {
-      throw new Error(`Target config is not configured in platform.targets.json: ${target}`);
+    for (const target of Object.keys(configMatrix.targets)) {
+      if (platformTargets.targets[target] === undefined) {
+        throw new Error(`Target config is not configured in platform.targets.json: ${target}`);
+      }
+    }
+  } else {
+    for (const target of targets) {
+      if (platformTargets.targets[target] === undefined) {
+        throw new Error(`Target config is not configured in platform.targets.json: ${target}`);
+      }
     }
   }
 
   return configMatrix;
+}
+
+function readTargetFilterFromEnv(name: string): readonly string[] | undefined {
+  const raw = process.env[name];
+
+  if (raw === undefined || raw.trim().length === 0) {
+    return undefined;
+  }
+
+  return raw
+    .split(',')
+    .map((target) => target.trim())
+    .filter((target) => target.length > 0);
 }
 
 function validateTargetConfigConsistency(target: string, config: TargetConfig): void {
@@ -60,7 +88,10 @@ function validateTargetConfigConsistency(target: string, config: TargetConfig): 
     throw new Error('AIT target must require AppsInToss review.');
   }
 
-  if ((target === 'android' || target === 'ios') && !config.policy.requiresStoreReview) {
+  if (
+    (target === 'android' || target === 'ios' || target === 'microsoft-store')
+    && !config.policy.requiresStoreReview
+  ) {
     throw new Error(`Store target ${target} must require store review.`);
   }
 }
