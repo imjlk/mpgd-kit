@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/create-game",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Create a Phaser game starter wired for mpgd-kit targets.",
   "license": "MIT",
   "repository": {

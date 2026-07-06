@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.3.1 — 2026-07-06
+
+### Fixed
+
+- [fd54514](https://github.com/imjlk/mpgd-kit/commit/fd545149b93c0aabfaed609b00ee433c7b951602) Sort generated Phaser starter catalog imports so `ttsc` checks pass immediately after game creation. — Thanks @imjlk!
+
 ## 0.3.0 — 2026-07-06
 
 ### Changed

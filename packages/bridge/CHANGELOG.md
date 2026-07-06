@@ -1,5 +1,11 @@
 # @mpgd/bridge
 
+## 0.3.1 — 2026-07-06
+
+### Patch changes
+
+- Bumped due to fixed dependency group policy
+
 ## 0.3.0 — 2026-07-06
 
 ### Minor changes
