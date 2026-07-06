@@ -106,16 +106,28 @@ export function summarizeGraphResult(result) {
 }
 
 export function graphResultFiles(result) {
-  return new Set(
-    [
-      ...(result.entrypoints ?? []),
-      ...(result.answerAnchors ?? []),
-      ...(result.anchors ?? []),
-      ...(result.nearby ?? []),
-      ...(result.nodes ?? []),
-      ...(result.hits ?? []),
-    ]
-      .map((entry) => entry.file)
-      .filter((file) => typeof file === 'string'),
-  );
+  const files = new Set();
+  collectGraphResultFiles(result, files);
+  return files;
+}
+
+function collectGraphResultFiles(value, files) {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectGraphResultFiles(entry, files);
+    }
+    return;
+  }
+
+  if (typeof value !== 'object' || value === null) {
+    return;
+  }
+
+  if (typeof value.file === 'string') {
+    files.add(value.file);
+  }
+
+  for (const entry of Object.values(value)) {
+    collectGraphResultFiles(entry, files);
+  }
 }
