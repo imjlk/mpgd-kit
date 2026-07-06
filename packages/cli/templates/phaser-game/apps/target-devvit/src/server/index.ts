@@ -480,7 +480,7 @@ async function acquireLeaderboardLock(lockKey: string, lockToken: string): Promi
 
 function leaderboardLockExpirationDate(): Date {
   // Devvit Redis SetOptions expects a Date and converts it to Redis EX seconds internally.
-  return new Date(Date.now() + leaderboardLockTtlSeconds * 1_000);
+  return new Date(Date.now() + leaderboardLockTtlMs);
 }
 
 async function writeLeaderboardScoreIfLockHeld(
@@ -613,11 +613,11 @@ function expressRequestToFetchRequest(request: ExpressRequest): Request {
   };
 
   if (request.method !== 'GET' && request.method !== 'HEAD') {
-    if (!headers.has('content-type')) {
+    init.body = requestBodyToBodyInit(request.body);
+
+    if (!headers.has('content-type') && !(request.body instanceof Uint8Array)) {
       headers.set('content-type', 'application/json');
     }
-
-    init.body = requestBodyToBodyInit(request.body);
   }
 
   return new Request(expressRequestUrl(request), init);
