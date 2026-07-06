@@ -79,7 +79,9 @@ switch (target.kind) {
       releaseArtifact = 'release-output/ait/mpgd-kit.ait';
       copyFile(aitArtifact, targetPath(releaseArtifact));
     } else {
-      console.warn('ait: package build skipped; release manifest points to wrapper webDir.');
+      releaseArtifact = 'release-output/ait/wrapper-web';
+      replaceDirectory(webDir, targetPath(releaseArtifact));
+      console.warn('ait: package build skipped; release manifest points to copied wrapper webDir.');
     }
 
     writeManifest(targetName, profile, releaseArtifact, env);

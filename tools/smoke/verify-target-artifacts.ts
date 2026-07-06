@@ -1,5 +1,5 @@
 import { existsSync, statSync } from 'node:fs';
-import { dirname, isAbsolute, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
@@ -57,6 +57,7 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     const artifactPath = resolveArtifactPath(entry.artifact);
     const effectiveConfigPath = resolveArtifactPath(entry.effectiveConfig.path);
 
+    assertPathInsideTargetBase(artifactPath, `${target} artifact`);
     assertPathExists(artifactPath, `${target} artifact`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);
 
@@ -164,6 +165,14 @@ function assertPathExists(path: string, label: string): void {
 
   if (!stat.isFile() && !stat.isDirectory()) {
     throw new Error(`${label} is not a file or directory: ${path}`);
+  }
+}
+
+function assertPathInsideTargetBase(path: string, label: string): void {
+  const relativePath = relative(loadedPlatformTargets.baseDir, path);
+
+  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error(`${label} must stay under the target config dir: ${path}`);
   }
 }
 

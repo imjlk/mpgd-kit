@@ -37,6 +37,10 @@ pnpm exec mpgd target smoke-all \
   --targets-file ./mpgd.targets.json \
   --kit-path ../mpgd-kit \
   --targets web,ait,reddit
+pnpm exec mpgd target doctor \
+  --targets-file ./mpgd.targets.json \
+  --kit-path ../mpgd-kit \
+  --targets web,ait,reddit
 ```
 
 When developing the kit itself, the same commands work through the repository
@@ -53,6 +57,10 @@ pnpm --dir ../mpgd-kit mpgd target build-all \
 `mpgd.targets.json` contains `${MPGD_KIT_PATH}` tokens. The CLI resolves them
 into `.mpgd.targets.generated.json` before calling the kit's existing target
 build and smoke scripts.
+
+`mpgd target doctor` verifies that release manifest artifact paths stay under
+this game directory, even when a build used the kit reference Apps in Toss or
+Capacitor wrappers.
 
 ## Assets
 
