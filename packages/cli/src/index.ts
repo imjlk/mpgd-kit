@@ -585,7 +585,7 @@ function createGameApp(input: {
   console.log(`Created ${appDir}`);
   console.log('Next steps:');
   console.log(`  cd ${appDir}`);
-  console.log('  pnpm install --filter . --filter ./apps/target-devvit');
+  console.log('  pnpm install -w');
   console.log('  pnpm dev');
   console.log('Target builds require an mpgd-kit checkout:');
   console.log(

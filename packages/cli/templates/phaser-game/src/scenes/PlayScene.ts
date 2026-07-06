@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 
 import type { LogicalAdPlacementId } from '@mpgd/platform';
 
+import { starterAssetKeys } from '../assets/manifest';
 import { createStarterRunState, stepStarterRunState, type StarterRunState } from '../game/state';
 import { t } from '../i18n/messages';
 import { starterContextKey, type StarterContext } from '../runtime/gameContext';
@@ -11,7 +12,7 @@ const rewardedPlacementId = 'CONTINUE_AFTER_FAIL' satisfies LogicalAdPlacementId
 
 export class PlayScene extends Phaser.Scene {
   private state: StarterRunState = createStarterRunState();
-  private marker!: Phaser.GameObjects.Arc;
+  private marker!: Phaser.GameObjects.Image;
   private scoreText!: Phaser.GameObjects.Text;
   private rewardText!: Phaser.GameObjects.Text;
   private analyticsText!: Phaser.GameObjects.Text;
@@ -26,7 +27,7 @@ export class PlayScene extends Phaser.Scene {
   create(): void {
     this.context = this.registry.get(starterContextKey) as StarterContext;
 
-    this.marker = this.add.circle(480, 250, 34, 0x2dd4bf);
+    this.marker = this.add.image(480, 250, starterAssetKeys.marker).setDisplaySize(72, 72);
     this.scoreText = this.add
       .text(480, 86, '', {
         color: '#ffffff',

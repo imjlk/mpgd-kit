@@ -1,5 +1,5 @@
 packages:
-  - '.'
+  - './package.json'
   - 'apps/*'
 __PNPM_WORKSPACE_KIT_PACKAGES__
 allowBuilds:
