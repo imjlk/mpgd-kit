@@ -33,6 +33,38 @@
         "requiresAitReview": false
       }
     },
+    "microsoft-store": {
+      "runtime": "microsoft-store-pwa",
+      "features": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false,
+        "leaderboard": false,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "local",
+        "localization": true
+      },
+      "monetization": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false
+      },
+      "leaderboard": {
+        "native": false
+      },
+      "release": {
+        "profile": "microsoft-store"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": true,
+        "requiresAitReview": false
+      }
+    },
     "android": {
       "runtime": "capacitor-android",
       "features": {

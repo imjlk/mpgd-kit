@@ -51,7 +51,7 @@ if (target === undefined) {
 }
 
 const gameApp = targetPath(target.gameApp);
-const appTarget = targetName === 'web-preview' ? 'browser' : targetName;
+const appTarget = appTargetForBuild(target);
 const env = {
   ...process.env,
   APP_TARGET: appTarget,
@@ -220,6 +220,10 @@ function replaceDirectory(source: string, destination: string): void {
   rmSync(destination, { recursive: true, force: true });
   mkdirSync(destination, { recursive: true });
   cpSync(source, destination, { recursive: true });
+}
+
+function appTargetForBuild(target: BuildTargetConfig): string {
+  return target.kind === 'web' ? 'browser' : targetName;
 }
 
 function replaceDirectoryWithoutNodeModules(source: string, destination: string): void {

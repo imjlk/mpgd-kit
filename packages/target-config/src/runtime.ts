@@ -14,6 +14,7 @@ type PlatformConfigTarget = PlatformGateway['target'];
 
 export type TargetRuntimeKind =
   | 'web-preview'
+  | 'microsoft-store-pwa'
   | 'capacitor-android'
   | 'capacitor-ios'
   | 'apps-in-toss'
@@ -21,6 +22,7 @@ export type TargetRuntimeKind =
 
 export type ReleaseProfile =
   | 'web-preview'
+  | 'microsoft-store'
   | 'google-play'
   | 'app-store'
   | 'apps-in-toss'

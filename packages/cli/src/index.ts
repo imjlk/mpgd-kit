@@ -20,13 +20,15 @@ const packageRoot = resolvePackageRoot(sourceDir);
 const detectedKitRoot = resolveDefaultKitRoot();
 const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
 const cliVersion = readPackageVersion(packageRoot);
-const defaultMatrixTargets = 'web,ait,reddit';
+const defaultMatrixTargets = 'web,microsoft-store,ait,reddit';
 const defaultDependencyVersion = `^${cliVersion}`;
 
 const supportedBuildTargets = [
   'browser',
   'web',
   'web-preview',
+  'microsoft-store',
+  'msstore',
   'android',
   'ios',
   'ait',
@@ -1039,7 +1041,7 @@ function parseTargetList(value: string | undefined): readonly string[] {
   const raw = value ?? defaultMatrixTargets;
 
   if (raw === 'all') {
-    return ['web-preview', 'android', 'ios', 'ait', 'reddit'];
+    return ['web-preview', 'microsoft-store', 'android', 'ios', 'ait', 'reddit'];
   }
 
   const targets = raw
@@ -1058,6 +1060,10 @@ function parseTargetList(value: string | undefined): readonly string[] {
 function normalizeBuildTarget(target: string): string {
   if (target === 'browser' || target === 'web') {
     return 'web-preview';
+  }
+
+  if (target === 'msstore') {
+    return 'microsoft-store';
   }
 
   if (target === 'devvit') {

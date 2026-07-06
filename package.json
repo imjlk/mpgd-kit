@@ -51,6 +51,7 @@
     "create:game": "node tools/run-ttsx.mjs --mpgd-cli packages/cli/src/bin.ts game create",
     "build:target": "pnpm i18n:build && node tools/run-ttsx.mjs tools/target/build-target.ts",
     "build:web": "pnpm build:target web-preview production",
+    "build:microsoft-store": "pnpm build:target microsoft-store production",
     "build:android": "pnpm build:target android production",
     "build:ios": "pnpm build:target ios production",
     "build:ait": "pnpm build:target ait production",

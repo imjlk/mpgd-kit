@@ -5,7 +5,7 @@
     "title": "__GAME_TITLE__",
     "engine": "phaser-4"
   },
-  "targets": ["web-preview", "android", "ios", "ait", "reddit"],
+  "targets": ["web-preview", "microsoft-store", "android", "ios", "ait", "reddit"],
   "futureTargets": ["telegram", "tauri"],
   "platformBoundary": "PlatformGateway",
   "mcpRequirements": {

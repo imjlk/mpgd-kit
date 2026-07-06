@@ -131,8 +131,10 @@ if (manifest !== null) {
   assertStringArray(manifest.targets, `${manifestPath}: targets`);
   assertIncludes(manifest.targets, 'ait', `${manifestPath}: targets`);
   assertIncludes(manifest.targets, 'web-preview', `${manifestPath}: targets`);
+  assertIncludes(manifest.targets, 'microsoft-store', `${manifestPath}: targets`);
+  assertIncludes(manifest.targets, 'reddit', `${manifestPath}: targets`);
   assertStringArray(manifest.futureTargets, `${manifestPath}: futureTargets`);
-  assertIncludes(manifest.futureTargets, 'reddit', `${manifestPath}: futureTargets`);
+  assertIncludes(manifest.futureTargets, 'telegram', `${manifestPath}: futureTargets`);
 
   assertString(manifest.agentWorkflow?.brief, `${manifestPath}: agentWorkflow.brief`);
   assertString(manifest.agentWorkflow?.acceptance, `${manifestPath}: agentWorkflow.acceptance`);

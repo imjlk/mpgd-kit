@@ -1,32 +1,32 @@
-name: build-target
+name: release-microsoft-store
 
 on:
   workflow_dispatch:
     inputs:
-      target:
-        type: choice
-        required: true
-        options:
-          - web-preview
-          - microsoft-store
-          - android
-          - ios
-          - ait
-          - reddit
       profile:
         type: choice
         required: true
+        default: production
         options:
           - staging
           - production
 
+permissions:
+  contents: read
+
+concurrency:
+  group: release-microsoft-store-${{ inputs.profile }}
+  cancel-in-progress: false
+
 jobs:
   build:
-    runs-on: ${{ inputs.target == 'ios' && 'macos-26' || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v5
         with:
+          fetch-depth: 0
           persist-credentials: false
 
       - uses: pnpm/action-setup@v6
@@ -37,18 +37,6 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-
-      - if: inputs.target == 'android'
-        uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: 21
-
-      - if: inputs.target == 'android'
-        uses: android-actions/setup-android@v4
-
-      - if: inputs.target == 'android'
-        run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm validate:public
@@ -63,13 +51,13 @@ jobs:
       - run: pnpm smoke:effective-config
       - run: pnpm smoke:adapter-effective-config
       - run: pnpm smoke:game-services
-      - run: pnpm build:target ${{ inputs.target }} ${{ inputs.profile }}
-      - run: pnpm smoke:target ${{ inputs.target }}
+      - run: pnpm build:target microsoft-store "${PROFILE}"
+        env:
+          PROFILE: ${{ inputs.profile }}
+      - run: pnpm smoke:target microsoft-store
 
       - uses: actions/upload-artifact@v6
         with:
-          name: ${{ inputs.target }}-${{ inputs.profile }}
+          name: microsoft-store-${{ inputs.profile }}
           path: |
             artifacts/**
-            release-output/**
-            apps/target-devvit/dist/**

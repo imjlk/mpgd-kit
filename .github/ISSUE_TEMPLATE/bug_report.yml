@@ -28,6 +28,7 @@ body:
       label: Target
       options:
         - web-preview
+        - microsoft-store
         - android
         - ios
         - ait

@@ -42,8 +42,8 @@ cd examples/my-game
 pnpm install --filter . --filter ./apps/target-devvit
 pnpm check
 pnpm build
-pnpm exec mpgd target build-all --targets-file ./mpgd.targets.json --targets web,ait,reddit --ait-variant wrapper --kit-path ../..
-pnpm exec mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,ait,reddit --kit-path ../..
+pnpm exec mpgd target build-all --targets-file ./mpgd.targets.json --targets web,microsoft-store,ait,reddit --ait-variant wrapper --kit-path ../..
+pnpm exec mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,microsoft-store,ait,reddit --kit-path ../..
 ```
 
 Use `--workspace` for local kit development. Omit it when generating an external
@@ -142,6 +142,8 @@ pnpm validate:target-config
 pnpm validate:effective-config
 pnpm build:web
 pnpm smoke:target web-preview
+pnpm build:microsoft-store
+pnpm smoke:target microsoft-store
 pnpm build:devvit
 pnpm smoke:target reddit
 ```
@@ -150,8 +152,8 @@ For generated games, prefer the CLI wrapper so `${MPGD_KIT_PATH}` target-file
 tokens are resolved before the existing target scripts run:
 
 ```sh
-pnpm mpgd target build-all --targets-file ./mpgd.targets.json --targets web,ait,reddit --ait-variant wrapper --kit-path <path-to-mpgd-kit>
-pnpm mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,ait,reddit --kit-path <path-to-mpgd-kit>
+pnpm mpgd target build-all --targets-file ./mpgd.targets.json --targets web,microsoft-store,ait,reddit --ait-variant wrapper --kit-path <path-to-mpgd-kit>
+pnpm mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,microsoft-store,ait,reddit --kit-path <path-to-mpgd-kit>
 ```
 
 Generated Phaser starters own their Reddit Devvit app root in
@@ -161,6 +163,14 @@ shells for smoke builds, but release artifacts and manifests are copied back
 under the game app's `artifacts/` and `release-output/` directories. Production
 app metadata should still move into game-owned wrappers before store or Toss
 submission.
+
+Microsoft Store support is modeled as a PWA/web target, not a separate native
+SDK adapter. `pnpm build:microsoft-store` builds the Phaser game with the
+browser gateway, embeds the `microsoft-store` effective target config, and
+writes `artifacts/microsoft-store` for PWABuilder packaging and Partner Center
+submission. A dedicated Microsoft Store commerce adapter should be added only
+when wiring Microsoft Edge's Digital Goods API and Payment Request API through
+backend ledger verification.
 
 The starter dependency range is derived from the released `@mpgd/cli` package
 version. Release PRs that bump the fixed public package group therefore update
@@ -183,6 +193,7 @@ new starter `@mpgd/*` pins without a separate hard-coded template version edit.
 - StoreKit/App Store signed transaction or Server API verification.
 - AdMob rewarded ad server-side verification callbacks.
 - Apps in Toss production IAP/ad callback verification.
+- Microsoft Store Digital Goods API and Payment Request integration.
 - Devvit production payments/ad reward mapping and publish/playtest credentials.
 - Real product, ad placement, leaderboard, app, package, and bundle IDs.
 - Cloudflare D1 provisioning and deployment credentials for persistent Worker
@@ -221,6 +232,8 @@ pnpm graph:preflight
 pnpm pack:packages
 pnpm build:web
 pnpm smoke:target web-preview
+pnpm build:microsoft-store
+pnpm smoke:target microsoft-store
 pnpm build:ait
 pnpm build:devvit
 pnpm smoke:target reddit
@@ -269,3 +282,18 @@ game with `APP_TARGET=reddit`, copies it to `apps/target-devvit/dist/client`,
 builds the Devvit server bridge to CJS, and writes the release manifest. Live
 `devvit playtest`, `devvit upload`, and `devvit publish` remain local commands
 because they depend on Reddit auth state in `~/.devvit/token`.
+
+## Microsoft Store
+
+The Microsoft Store target is a PWA distribution path. Microsoft's current
+guidance is to package an existing PWA with PWABuilder and submit the generated
+package through Partner Center. The repo therefore treats `microsoft-store` as a
+store-reviewed web artifact that reuses `@mpgd/adapter-browser`; Store-specific
+commerce remains disabled until a Digital Goods API/Payment Request integration
+is added behind `PlatformGateway` and backend ledger APIs.
+
+Official references:
+
+- [Publish a PWA to the Microsoft Store](https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/microsoft-store)
+- [Turn your website into a high quality PWA](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/pwa/turn-your-website-pwa)
+- [Provide in-app purchases with Digital Goods API](https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/digital-goods-api)

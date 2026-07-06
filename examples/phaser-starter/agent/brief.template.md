@@ -15,9 +15,11 @@ Use this brief when asking an agent to build a new game from `examples/phaser-st
 ## Platform Targets
 
 - Browser preview:
+- Microsoft Store PWA:
 - Android Capacitor:
 - iOS Capacitor:
 - Apps in Toss:
+- Reddit Devvit:
 - Future targets:
 
 ## Reusable Blocks

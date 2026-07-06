@@ -7,6 +7,8 @@
   "scripts": {
     "dev": "__WORKSPACE_I18N_BUILD_PREFIX__vite --host 0.0.0.0",
     "build": "__WORKSPACE_I18N_BUILD_PREFIX__vite build",
+    "build:microsoft-store": "pnpm exec mpgd target build microsoft-store production --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
+    "smoke:microsoft-store": "pnpm exec mpgd target smoke microsoft-store --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "build:devvit": "pnpm exec mpgd target build reddit production --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "build:devvit:staging": "pnpm exec mpgd target build reddit staging --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "smoke:devvit": "pnpm exec mpgd target smoke reddit --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",

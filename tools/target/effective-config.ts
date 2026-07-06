@@ -232,6 +232,7 @@ function toEffectivePlatformTargetMetadata(
 function platformKindForRuntime(runtime: EffectiveTargetConfig['runtime']): string {
   switch (runtime) {
     case 'web-preview':
+    case 'microsoft-store-pwa':
       return 'web';
     case 'capacitor-android':
       return 'capacitor-android';

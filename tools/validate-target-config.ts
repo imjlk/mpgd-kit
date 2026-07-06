@@ -60,7 +60,10 @@ function validateTargetConfigConsistency(target: string, config: TargetConfig): 
     throw new Error('AIT target must require AppsInToss review.');
   }
 
-  if ((target === 'android' || target === 'ios') && !config.policy.requiresStoreReview) {
+  if (
+    (target === 'android' || target === 'ios' || target === 'microsoft-store')
+    && !config.policy.requiresStoreReview
+  ) {
     throw new Error(`Store target ${target} must require store review.`);
   }
 }
