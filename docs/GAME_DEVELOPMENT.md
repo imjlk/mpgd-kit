@@ -81,8 +81,10 @@ Generated games own their Reddit Devvit app root in `apps/target-devvit`.
 Run `pnpm devvit:login`, `pnpm devvit:init`, and `pnpm devvit:playtest` from the
 game root when you are ready to create the Reddit-side app record and test it.
 The starter still uses kit reference shells for Apps in Toss and Capacitor
-artifact smoke checks; copy or create game-owned shells before real Toss,
-App Store, or Google Play submission metadata is needed.
+artifact smoke checks. The final smoke artifacts are copied back under the
+game app's `artifacts/` and `release-output/` directories, but copy or create
+game-owned shells before real Toss, App Store, or Google Play submission
+metadata is needed.
 
 Use the kit CLI for generated target builds because it resolves
 `${MPGD_KIT_PATH}` tokens in the game's `mpgd.targets.json` before invoking the

@@ -195,6 +195,8 @@ switch (target.kind) {
       console.warn(
         'ios: cap sync completed; set MPGD_RUN_IOS_SIMULATOR_BUILD=1 for a simulator .app or MPGD_RUN_IOS_ARCHIVE=1 for an xcarchive.',
       );
+      releaseArtifact = 'release-output/ios/capacitor-sync';
+      replaceDirectory(`${shellApp}/ios`, targetPath(releaseArtifact));
     }
 
     writeManifest(targetName, profile, releaseArtifact, env);

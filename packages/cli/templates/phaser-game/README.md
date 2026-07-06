@@ -91,7 +91,8 @@ this game root.
   review metadata are not shared with the kit demo.
 - Android and iOS currently use the kit reference Capacitor shell at
   `${MPGD_KIT_PATH}/apps/mobile-capacitor`. That is useful for local artifact
-  checks, but production apps should own their bundle ID/package ID, signing,
+  checks, and final artifacts are copied back to this game's `release-output/`
+  directory. Production apps should own their bundle ID/package ID, signing,
   icons, and store metadata in a game-specific shell.
 
 ## Game Services
