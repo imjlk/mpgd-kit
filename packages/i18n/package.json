@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/i18n",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "Paraglide-backed message catalog for mpgd demos and target-aware UI.",
   "license": "MIT",
   "repository": {

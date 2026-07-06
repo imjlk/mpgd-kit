@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.3.2 — 2026-07-06
+
+### Changed
+
+- [80d35a2](https://github.com/imjlk/mpgd-kit/commit/80d35a2749094424c2d131c0ff1ba9fdae535714) Split generated Devvit init commands into browser-auth default and copy-paste fallback. — Thanks @imjlk!
+
 ## 0.3.1 — 2026-07-06
 
 ### Fixed
