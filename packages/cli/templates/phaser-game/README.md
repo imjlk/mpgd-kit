@@ -76,7 +76,8 @@ pnpm devvit:playtest
 
 `devvit:login` authenticates your Reddit account. `devvit:init` performs the
 first App Directory upload/link step for the app name in
-`apps/target-devvit/devvit.json` using Devvit's copy-paste flow. After init, use
+`apps/target-devvit/devvit.json`. Use `pnpm devvit:init:copy-paste` if browser
+authorization is not available in the current terminal session. After init, use
 `pnpm devvit:playtest`, `pnpm devvit:upload`, and `pnpm devvit:publish` from
 this game root.
 

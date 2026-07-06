@@ -11,6 +11,7 @@
     "build:devvit:staging": "pnpm exec mpgd target build reddit staging --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "smoke:devvit": "pnpm exec mpgd target smoke reddit --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "devvit:init": "pnpm --dir apps/target-devvit run init",
+    "devvit:init:copy-paste": "pnpm --dir apps/target-devvit run init:copy-paste",
     "devvit:login": "pnpm --dir apps/target-devvit exec devvit login",
     "devvit:login:copy-paste": "pnpm --dir apps/target-devvit exec devvit login --copy-paste",
     "devvit:whoami": "pnpm --dir apps/target-devvit run whoami",
