@@ -8,7 +8,7 @@ const generatedPaths = [
   'artifacts/microsoft-store',
   'artifacts/release-manifest.json',
   'release-output/android/app-release.aab',
-  'release-output/ait/mpgd-kit.ait',
+  'release-output/ait',
   'apps/target-devvit/dist',
 ];
 
