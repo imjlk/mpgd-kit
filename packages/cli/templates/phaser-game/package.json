@@ -20,6 +20,12 @@
     "devvit:upload": "pnpm --dir apps/target-devvit run upload",
     "devvit:playtest": "pnpm --dir apps/target-devvit run dev",
     "devvit:publish": "pnpm --dir apps/target-devvit run publish",
+    "legal:build": "pnpm exec mpgd legal build",
+    "legal:check": "pnpm exec mpgd legal check",
+    "pages:build": "pnpm legal:build && pnpm --dir apps/target-cloudflare-pages run build",
+    "pages:dev": "pnpm legal:build && pnpm --dir apps/target-cloudflare-pages run dev",
+    "pages:preview": "pnpm legal:build && pnpm --dir apps/target-cloudflare-pages run preview",
+    "pages:types": "pnpm --dir apps/target-cloudflare-pages run types",
     "check": "ttsc --noEmit -p tsconfig.json",
     "lint": "ttsc --noEmit -p tsconfig.json",
     "format": "ttsc format",
@@ -31,6 +37,7 @@
     "@mpgd/adapter-capacitor": "__MPGD_DEPENDENCY_VERSION__",
     "@mpgd/adapter-devvit": "__MPGD_DEPENDENCY_VERSION__",
     "@mpgd/analytics": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/bridge": "__MPGD_DEPENDENCY_VERSION__",
     "@mpgd/catalog": "__MPGD_DEPENDENCY_VERSION__",
     "@mpgd/game-services": "__MPGD_DEPENDENCY_VERSION__",
     "@mpgd/i18n": "__MPGD_DEPENDENCY_VERSION__",
@@ -40,11 +47,13 @@
     "phaser": "4.2.0"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260707.1",
     "@mpgd/cli": "__MPGD_DEPENDENCY_VERSION__",
     "@ttsc/unplugin": "0.16.9",
     "@types/node": "^24.0.0",
     "ttsc": "0.16.9",
     "typescript": "7.0.1-rc",
-    "vite": "^8.1.3"
+    "vite": "^8.1.3",
+    "wrangler": "^4.107.0"
   }
 }

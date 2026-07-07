@@ -1,0 +1,28 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "__GAME_NAME__",
+  "compatibility_date": "2026-07-07",
+  "compatibility_flags": ["nodejs_compat"],
+  "pages_build_output_dir": "./dist",
+  "observability": {
+    "enabled": true,
+    "logs": {
+      "enabled": true,
+      "head_sampling_rate": 1
+    },
+    "traces": {
+      "enabled": true,
+      "head_sampling_rate": 0.01
+    }
+  },
+
+  // Bind an authoritative game-services Worker when this Pages host should
+  // expose /api/game-services/* locally or in production:
+  //
+  // "services": [
+  //   {
+  //     "binding": "GAME_SERVICES",
+  //     "service": "mpgd-game-services"
+  //   }
+  // ]
+}
