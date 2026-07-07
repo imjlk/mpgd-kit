@@ -16,19 +16,6 @@ release_date_timezone = "Asia/Seoul"
 [packages]
 ignore_unpublished = true
 fixed = [[
-  "npm/@mpgd/adapter-ait",
-  "npm/@mpgd/adapter-browser",
-  "npm/@mpgd/adapter-capacitor",
-  "npm/@mpgd/adapter-devvit",
-  "npm/@mpgd/analytics",
-  "npm/@mpgd/bridge",
-  "npm/@mpgd/capacitor-game-services",
-  "npm/@mpgd/catalog",
   "npm/@mpgd/cli",
   "npm/@mpgd/create-game",
-  "npm/@mpgd/game-services",
-  "npm/@mpgd/i18n",
-  "npm/@mpgd/phaser-assets",
-  "npm/@mpgd/platform",
-  "npm/@mpgd/target-config"
 ]]

@@ -23,7 +23,7 @@
   },
   "dependencies": {
     "@devvit/web": "0.13.6",
-    "@mpgd/bridge": "__MPGD_DEPENDENCY_VERSION__",
+    "@mpgd/bridge": "__MPGD_DEPENDENCY_VERSION_BRIDGE__",
     "express": "^5.2.1",
     "helmet": "^8.1.0"
   },

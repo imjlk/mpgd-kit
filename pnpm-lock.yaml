@@ -590,6 +590,42 @@ importers:
         specifier: ^0.35.1
         version: 0.35.1
     devDependencies:
+      '@mpgd/adapter-ait':
+        specifier: workspace:*
+        version: link:../../adapters/ait
+      '@mpgd/adapter-browser':
+        specifier: workspace:*
+        version: link:../../adapters/browser
+      '@mpgd/adapter-capacitor':
+        specifier: workspace:*
+        version: link:../../adapters/capacitor
+      '@mpgd/adapter-devvit':
+        specifier: workspace:*
+        version: link:../../adapters/devvit
+      '@mpgd/analytics':
+        specifier: workspace:*
+        version: link:../analytics
+      '@mpgd/bridge':
+        specifier: workspace:*
+        version: link:../bridge
+      '@mpgd/catalog':
+        specifier: workspace:*
+        version: link:../catalog
+      '@mpgd/game-services':
+        specifier: workspace:*
+        version: link:../game-services
+      '@mpgd/i18n':
+        specifier: workspace:*
+        version: link:../i18n
+      '@mpgd/phaser-assets':
+        specifier: workspace:*
+        version: link:../phaser-assets
+      '@mpgd/platform':
+        specifier: workspace:*
+        version: link:../platform
+      '@mpgd/target-config':
+        specifier: workspace:*
+        version: link:../target-config
       '@types/node':
         specifier: ^24.0.0
         version: 24.13.2

@@ -22,6 +22,21 @@ const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
 const cliVersion = readPackageVersion(packageRoot);
 const recommendedMatrixTargets = 'web,microsoft-store,ait,reddit';
 const defaultDependencyVersion = `^${cliVersion}`;
+const mpgdTemplateDependencyPackages = [
+  { name: '@mpgd/adapter-ait', packageDir: 'adapters/ait' },
+  { name: '@mpgd/adapter-browser', packageDir: 'adapters/browser' },
+  { name: '@mpgd/adapter-capacitor', packageDir: 'adapters/capacitor' },
+  { name: '@mpgd/adapter-devvit', packageDir: 'adapters/devvit' },
+  { name: '@mpgd/analytics', packageDir: 'packages/analytics' },
+  { name: '@mpgd/bridge', packageDir: 'packages/bridge' },
+  { name: '@mpgd/catalog', packageDir: 'packages/catalog' },
+  { name: '@mpgd/cli', packageDir: 'packages/cli' },
+  { name: '@mpgd/game-services', packageDir: 'packages/game-services' },
+  { name: '@mpgd/i18n', packageDir: 'packages/i18n' },
+  { name: '@mpgd/phaser-assets', packageDir: 'packages/phaser-assets' },
+  { name: '@mpgd/platform', packageDir: 'packages/platform' },
+  { name: '@mpgd/target-config', packageDir: 'packages/target-config' },
+] as const;
 const recommendedMatrixTargetOrder = ['web-preview', 'microsoft-store', 'ait', 'reddit'] as const;
 const allMatrixTargetOrder = [
   'web-preview',
@@ -182,8 +197,7 @@ const gameCommand = defineI18n({
         'dependency-version': {
           type: 'string',
           required: false,
-          default: defaultDependencyVersion,
-          description: 'Version range for @mpgd packages.',
+          description: 'Override version range for every @mpgd package.',
         },
         workspace: {
           type: 'boolean',
@@ -209,14 +223,14 @@ const gameCommand = defineI18n({
         const dependencyVersion =
           ctx.values.workspace === true
             ? 'workspace:*'
-            : (readOptionalString(ctx.values['dependency-version']) ?? defaultDependencyVersion);
+            : readOptionalString(ctx.values['dependency-version']);
         const kitPath = readGameCreateKitPath(ctx.values, ctx.values.workspace === true);
 
         createGameApp({
           directory,
           ...(title === undefined ? {} : { title }),
           ...(packageName === undefined ? {} : { packageName }),
-          dependencyVersion,
+          ...(dependencyVersion === undefined ? {} : { dependencyVersion }),
           workspace: ctx.values.workspace === true,
           ...(kitPath === undefined ? {} : { kitPath }),
           dryRun: ctx.values['dry-run'] === true,
@@ -797,7 +811,7 @@ function createGameApp(input: {
   readonly directory: string;
   readonly title?: string;
   readonly packageName?: string;
-  readonly dependencyVersion: string;
+  readonly dependencyVersion?: string;
   readonly workspace: boolean;
   readonly kitPath?: string;
   readonly dryRun: boolean;
@@ -809,7 +823,9 @@ function createGameApp(input: {
 
   const packageName = input.packageName ?? gameName;
   assertValidPackageName(packageName);
-  assertValidDependencyVersion(input.dependencyVersion);
+  if (input.dependencyVersion !== undefined) {
+    assertValidDependencyVersion(input.dependencyVersion);
+  }
 
   if (existsSync(appDir)) {
     throw new Error(`Game directory already exists: ${appDir}`);
@@ -818,7 +834,7 @@ function createGameApp(input: {
   const context = createTemplateContext({
     gameName,
     packageName,
-    dependencyVersion: input.dependencyVersion,
+    ...(input.dependencyVersion === undefined ? {} : { dependencyVersion: input.dependencyVersion }),
     appDir,
     workspace: input.workspace,
     ...(input.kitPath === undefined ? {} : { kitPath: input.kitPath }),
@@ -885,17 +901,21 @@ function assertValidPackageName(name: string): void {
 }
 
 function assertValidDependencyVersion(version: string): void {
-  if (!/^(?:workspace:\*|[~^]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.test(version)) {
+  if (!isValidDependencyVersion(version)) {
     throw new Error(
       'Dependency version must be workspace:* or a semver version/range such as ^0.1.0.',
     );
   }
 }
 
+function isValidDependencyVersion(version: string): boolean {
+  return /^(?:workspace:\*|[~^]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/.test(version);
+}
+
 function createTemplateContext(input: {
   readonly gameName: string;
   readonly packageName: string;
-  readonly dependencyVersion: string;
+  readonly dependencyVersion?: string;
   readonly appDir: string;
   readonly workspace: boolean;
   readonly kitPath?: string;
@@ -923,7 +943,14 @@ function createTemplateContext(input: {
     gameTitleTsLiteral: toJavaScriptStringLiteral(title),
     legalLastUpdated: new Date().toISOString().slice(0, 10),
     packageName: input.packageName,
-    dependencyVersion: input.dependencyVersion,
+    defaultDependencyVersion: input.dependencyVersion ?? defaultDependencyVersion,
+    mpgdDependencyVersionReplacements: resolveMpgdDependencyVersionReplacements({
+      ...(input.dependencyVersion === undefined
+        ? {}
+        : { overrideVersion: input.dependencyVersion }),
+      workspace: input.workspace,
+      ...(kitPath === undefined ? {} : { kitPath }),
+    }),
     tsconfigExtendsLine: input.workspace
       ? `  "extends": "${workspacePrefix}/tsconfig.base.json",`
       : '',
@@ -957,6 +984,71 @@ function createTemplateContext(input: {
     pascalName: toPascalCase(input.gameName),
     camelName: toCamelCase(input.gameName),
   };
+}
+
+function resolveMpgdDependencyVersionReplacements(input: {
+  readonly overrideVersion?: string;
+  readonly workspace: boolean;
+  readonly kitPath?: string;
+}): readonly MpgdDependencyVersionReplacement[] {
+  const packageJson = readPackageJsonOrUndefined(packageRoot, { strictParse: true });
+  const kitRoot = input.kitPath ?? detectedKitRoot;
+
+  return mpgdTemplateDependencyPackages.map((dependency) => {
+    const version =
+      input.overrideVersion
+      ?? (input.workspace ? 'workspace:*' : undefined)
+      ?? resolvePublishedTemplateDependencyVersion(dependency.name, packageJson)
+      ?? resolveWorkspaceTemplateDependencyVersion(kitRoot, dependency.packageDir)
+      ?? defaultDependencyVersion;
+
+    return {
+      placeholder: mpgdDependencyVersionPlaceholder(dependency.name),
+      version,
+    };
+  });
+}
+
+interface MpgdDependencyVersionReplacement {
+  readonly placeholder: string;
+  readonly version: string;
+}
+
+function resolvePublishedTemplateDependencyVersion(
+  packageName: string,
+  packageJson: PackageJson | undefined,
+): string | undefined {
+  if (packageName === '@mpgd/cli') {
+    return `^${cliVersion}`;
+  }
+
+  const version = packageJson?.devDependencies?.[packageName];
+
+  return version !== undefined && version !== 'workspace:*' && isValidDependencyVersion(version)
+    ? version
+    : undefined;
+}
+
+function resolveWorkspaceTemplateDependencyVersion(
+  kitRoot: string | undefined,
+  packageDir: string,
+): string | undefined {
+  if (kitRoot === undefined) {
+    return undefined;
+  }
+
+  const version = readPackageVersion(path.join(kitRoot, packageDir));
+
+  return version === '0.0.0' ? undefined : `^${version}`;
+}
+
+function mpgdDependencyVersionPlaceholder(packageName: string): string {
+  return `__MPGD_DEPENDENCY_VERSION_${
+    packageName
+      .replace(/^@mpgd\//, '')
+      .replaceAll('-', '_')
+      .toUpperCase()
+  }__`;
 }
 
 function assertValidGameTitle(title: string): void {
@@ -1008,14 +1100,14 @@ function renderTemplate(
   content: string,
   context: ReturnType<typeof createTemplateContext>,
 ): string {
-  return content
+  let rendered = content
     .replaceAll('__GAME_NAME__', context.gameName)
     .replaceAll('__DEVVIT_APP_NAME__', context.devvitAppName)
     .replaceAll('__GAME_TITLE_TS_LITERAL__', context.gameTitleTsLiteral)
     .replaceAll('__GAME_TITLE__', context.gameTitle)
     .replaceAll('__LEGAL_LAST_UPDATED__', context.legalLastUpdated)
     .replaceAll('__PACKAGE_NAME__', context.packageName)
-    .replaceAll('__MPGD_DEPENDENCY_VERSION__', context.dependencyVersion)
+    .replaceAll('__MPGD_DEPENDENCY_VERSION__', context.defaultDependencyVersion)
     .replaceAll('__TSCONFIG_EXTENDS_LINE__', context.tsconfigExtendsLine)
     .replaceAll('__TSCONFIG_WORKSPACE_INCLUDES__', context.tsconfigWorkspaceIncludes)
     .replaceAll('__TSCONFIG_WORKSPACE_EXCLUDES__', context.tsconfigWorkspaceExcludes)
@@ -1024,6 +1116,12 @@ function renderTemplate(
     .replaceAll('__PNPM_WORKSPACE_KIT_PACKAGES__', context.pnpmWorkspaceKitPackages)
     .replaceAll('__PASCAL_NAME__', context.pascalName)
     .replaceAll('__CAMEL_NAME__', context.camelName);
+
+  for (const replacement of context.mpgdDependencyVersionReplacements) {
+    rendered = rendered.replaceAll(replacement.placeholder, replacement.version);
+  }
+
+  return rendered;
 }
 
 function templateOutputPath(relativePath: string): string {
@@ -1080,6 +1178,7 @@ interface PackageJson {
   readonly name?: string;
   readonly version?: string;
   readonly scripts?: Record<string, string>;
+  readonly devDependencies?: Record<string, string>;
 }
 
 function createTargetCommandEnv(values: TargetCommandEnvInput): NodeJS.ProcessEnv {
