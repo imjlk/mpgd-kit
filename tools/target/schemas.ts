@@ -11,6 +11,16 @@ export interface BaseTargetConfig {
   readonly kind: TargetKind;
   readonly gameApp: string;
   readonly adapter: string;
+  readonly metadata?: TargetReleaseMetadata;
+}
+
+export interface TargetReleaseMetadata {
+  readonly appName?: string;
+  readonly displayName?: string;
+  readonly primaryColor?: string;
+  readonly packageId?: string;
+  readonly bundleId?: string;
+  readonly sdkMajor?: number;
 }
 
 export interface WebTargetConfig extends BaseTargetConfig {

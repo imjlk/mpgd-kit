@@ -26,6 +26,7 @@ export interface GenerateReleaseManifestInput {
 
 export function generateReleaseManifest(input: GenerateReleaseManifestInput): ReleaseManifest {
   const platformTargets = loadPlatformTargetsConfig();
+  const targetMetadata = readTargetReleaseMetadata(platformTargets.config.targets[input.target]);
   const packageJson = readJsonFile('package.json') as { version?: string };
   const targetConfig = assertTargetConfigMatrix(
     readJsonFile('packages/target-config/targets.json'),
@@ -60,7 +61,14 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
           version: effectiveConfig.version,
           digest: effectiveConfig.digest,
         },
-        ...(input.target === 'ait' ? { appName: 'mpgd-kit', sdkMajor: 2 } : {}),
+        ...(input.target === 'ait'
+          ? {
+              appName: readOptionalString(process.env.MPGD_AIT_APP_NAME)
+                ?? targetMetadata.appName
+                ?? 'mpgd-kit',
+              sdkMajor: readSdkMajor(process.env.MPGD_AIT_SDK_MAJOR, targetMetadata.sdkMajor),
+            }
+          : {}),
       },
     },
   });
@@ -150,6 +158,52 @@ function createBuildId(): string {
   const date = now.toISOString().slice(0, 10).replaceAll('-', '');
   const time = now.toISOString().slice(11, 19).replaceAll(':', '');
   return `${date}.${time}`;
+}
+
+function readTargetReleaseMetadata(input: unknown): {
+  readonly appName?: string | undefined;
+  readonly sdkMajor?: number | undefined;
+} {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    return {};
+  }
+
+  const metadata = (input as { readonly metadata?: unknown }).metadata;
+
+  if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) {
+    return {};
+  }
+
+  return {
+    appName: readOptionalString((metadata as { readonly appName?: unknown }).appName),
+    sdkMajor: readOptionalNumber((metadata as { readonly sdkMajor?: unknown }).sdkMajor),
+  };
+}
+
+function readOptionalString(input: unknown): string | undefined {
+  if (typeof input !== 'string') {
+    return undefined;
+  }
+
+  const trimmed = input.trim();
+
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function readOptionalNumber(input: unknown): number | undefined {
+  return typeof input === 'number' && Number.isInteger(input) ? input : undefined;
+}
+
+function readSdkMajor(envValue: string | undefined, metadataValue: number | undefined): number {
+  if (envValue !== undefined && envValue.length > 0) {
+    const trimmed = envValue.trim();
+
+    if (/^[1-9]\d*$/u.test(trimmed)) {
+      return Number.parseInt(trimmed, 10);
+    }
+  }
+
+  return metadataValue ?? 2;
 }
 
 function getGitSha(): string {

@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -18,6 +19,7 @@ import {
   releaseManifestPath,
   resolveFromPlatformTargetsBase,
 } from './platform-targets';
+import type { TargetReleaseMetadata } from './schemas';
 
 const [targetName = 'web-preview', profile = 'production'] = process.argv.slice(2);
 
@@ -25,6 +27,7 @@ interface BuildTargetConfig {
   readonly kind: 'web' | 'capacitor-android' | 'capacitor-ios' | 'apps-in-toss' | 'devvit-web';
   readonly gameApp: string;
   readonly adapter: string;
+  readonly metadata?: TargetReleaseMetadata;
   readonly output?: string;
   readonly shellApp?: string;
   readonly wrapperApp?: string;
@@ -57,8 +60,9 @@ if (target === undefined) {
 
 const gameApp = targetPath(target.gameApp);
 const appTarget = appTargetForBuild(target, targetName);
-const env = {
+const env: NodeJS.ProcessEnv = {
   ...process.env,
+  ...targetReleaseMetadataEnv(target),
   APP_TARGET: appTarget,
   MPGD_CONFIG_TARGET: targetName,
   APP_VERSION: process.env.APP_VERSION ?? '0.0.0',
@@ -88,10 +92,11 @@ switch (target.kind) {
     let releaseArtifact = webDirConfigPath;
 
     if (process.env.MPGD_AIT_PACKAGE_MODE !== 'skip') {
+      removeFilesByExtension(wrapperApp, '.ait');
       run('pnpm', ['--dir', wrapperApp, 'ait:build'], env);
 
       const aitArtifact = findFileByExtension(wrapperApp, '.ait');
-      releaseArtifact = 'release-output/ait/mpgd-kit.ait';
+      releaseArtifact = `release-output/ait/${safeArtifactFileStem(env.MPGD_AIT_APP_NAME ?? 'mpgd-kit')}.ait`;
       copyFile(aitArtifact, targetPath(releaseArtifact));
     } else {
       releaseArtifact = 'release-output/ait/wrapper-web';
@@ -232,6 +237,63 @@ function appTargetForBuild(target: BuildTargetConfig, name: string): string {
   return target.kind === 'web' ? 'browser' : name;
 }
 
+function targetReleaseMetadataEnv(target: BuildTargetConfig): NodeJS.ProcessEnv {
+  const metadata = target.metadata;
+
+  if (metadata === undefined) {
+    return {};
+  }
+
+  const env: NodeJS.ProcessEnv = {};
+
+  assignEnv(env, 'MPGD_TARGET_APP_NAME', metadata.appName);
+  assignEnv(env, 'MPGD_TARGET_DISPLAY_NAME', metadata.displayName);
+  assignEnv(env, 'MPGD_TARGET_PRIMARY_COLOR', metadata.primaryColor);
+  assignEnv(env, 'MPGD_TARGET_PACKAGE_ID', metadata.packageId);
+  assignEnv(env, 'MPGD_TARGET_BUNDLE_ID', metadata.bundleId);
+
+  assignSdkMajorEnv(env, 'MPGD_TARGET_SDK_MAJOR', metadata.sdkMajor, 'metadata.sdkMajor');
+
+  if (target.kind === 'apps-in-toss') {
+    assignEnv(env, 'MPGD_AIT_APP_NAME', metadata.appName);
+    assignEnv(env, 'MPGD_AIT_DISPLAY_NAME', metadata.displayName);
+    assignEnv(env, 'MPGD_AIT_PRIMARY_COLOR', metadata.primaryColor);
+
+    assignSdkMajorEnv(env, 'MPGD_AIT_SDK_MAJOR', metadata.sdkMajor, 'metadata.sdkMajor');
+  }
+
+  return env;
+}
+
+function assignEnv(env: NodeJS.ProcessEnv, key: string, value: string | undefined): void {
+  if (value === undefined) {
+    return;
+  }
+
+  const trimmed = value.trim();
+
+  if (trimmed.length > 0) {
+    env[key] = trimmed;
+  }
+}
+
+function assignSdkMajorEnv(
+  env: NodeJS.ProcessEnv,
+  key: string,
+  value: number | undefined,
+  label: string,
+): void {
+  if (value === undefined) {
+    return;
+  }
+
+  if (!Number.isInteger(value) || value < 1) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+
+  env[key] = String(value);
+}
+
 function replaceDirectoryWithoutNodeModules(source: string, destination: string): void {
   rmSync(destination, { recursive: true, force: true });
   mkdirSync(destination, { recursive: true });
@@ -285,6 +347,30 @@ function rewriteIosSyncSwiftPackagePath(releaseArtifact: string, packageName: st
 function copyFile(source: string, destination: string): void {
   mkdirSync(dirname(destination), { recursive: true });
   cpSync(source, destination);
+}
+
+function removeFilesByExtension(directory: string, extension: string): void {
+  if (!existsSync(directory)) {
+    return;
+  }
+
+  for (const file of readdirSync(directory)) {
+    const target = `${directory}/${file}`;
+
+    if (file.endsWith(extension) && statSync(target).isFile()) {
+      rmSync(target, { force: true });
+    }
+  }
+}
+
+function safeArtifactFileStem(value: string): string {
+  const stem = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9_-]+/gu, '-')
+    .replace(/^[._-]+|[._-]+$/gu, '');
+
+  return stem.length === 0 ? 'mpgd-kit' : stem;
 }
 
 function ensureCapacitorPlatform(
