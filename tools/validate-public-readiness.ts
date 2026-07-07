@@ -142,6 +142,7 @@ const manualGateMessages = {
 
 const failures: string[] = [];
 const manualGates: string[] = [];
+const targetConfigFilterEnvName = 'MPGD_TARGET_CONFIG_TARGETS';
 
 for (const file of requiredFiles) {
   if (!existsSync(file)) {
@@ -313,9 +314,25 @@ function collectCatalogReadiness(): void {
 
 function collectTargetConfigReadiness(): void {
   try {
-    validateTargetConfigMatrixFile();
+    withEnvUnset(targetConfigFilterEnvName, () => validateTargetConfigMatrixFile());
   } catch (error) {
     failures.push(`Target config public readiness failed: ${errorMessage(error)}`);
+  }
+}
+
+function withEnvUnset<T>(name: string, callback: () => T): T {
+  const previous = process.env[name];
+
+  delete process.env[name];
+
+  try {
+    return callback();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = previous;
+    }
   }
 }
 
