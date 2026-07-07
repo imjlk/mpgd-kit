@@ -1,6 +1,5 @@
 ---
-"@mpgd/cli": patch
-"@mpgd/release-manifest": patch
+npm/@mpgd/cli: patch (Changed)
 ---
 
 Add optional target release metadata plumbing so Apps in Toss builds can pass
