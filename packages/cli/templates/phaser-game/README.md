@@ -99,6 +99,30 @@ authorization is not available in the current terminal session. After init, use
 `pnpm devvit:playtest`, `pnpm devvit:upload`, and `pnpm devvit:publish` from
 this game root.
 
+## Apps in Toss
+
+Use the target-aware local loop while developing game code for Apps in Toss:
+
+```sh
+pnpm dev:ait
+pnpm build:ait
+pnpm smoke:ait
+```
+
+The kit reference wrapper includes the Apps in Toss community devtools package
+for SDK mock and device debugging while the wrapper is still kit-owned:
+
+```sh
+pnpm ait:wrapper:dev
+pnpm ait:wrapper:dev:phone
+pnpm ait:devtools:mcp
+```
+
+`ait:wrapper:dev` runs the kit wrapper with the community Vite plugin enabled.
+Use `ait:wrapper:dev:plain` to disable the devtools plugin. `ait:wrapper:dev:phone`
+uses the devtools tunnel flow for phone sandbox checks, and `ait:devtools:mcp`
+starts the community MCP bridge for supported on-device debugging flows.
+
 ## Target Ownership Notes
 
 - Browser preview is fully game-owned and writes to `artifacts/web-preview`.

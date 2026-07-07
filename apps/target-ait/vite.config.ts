@@ -1,8 +1,12 @@
+import aitDevtools from '@ait-co/devtools/unplugin';
 import ttsc from '@ttsc/unplugin/vite';
 import { defineConfig } from 'vite';
 
-export default defineConfig({
+export default defineConfig(({ command }) => ({
   plugins: [
+    ...(command === 'serve' && process.env.MPGD_AIT_DEVTOOLS !== '0'
+      ? [aitDevtools.vite()]
+      : []),
     ttsc({
       project: 'tsconfig.bundle.json',
       plugins: false,
@@ -13,4 +17,4 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
   },
-});
+}));
