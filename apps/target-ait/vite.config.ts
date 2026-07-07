@@ -2,8 +2,11 @@ import aitDevtools from '@ait-co/devtools/unplugin';
 import ttsc from '@ttsc/unplugin/vite';
 import { defineConfig } from 'vite';
 
-const aitDevtoolsTunnel = process.env.AIT_TUNNEL
-  ? { cdp: Boolean(process.env.AIT_TUNNEL_CDP) }
+const isTruthyEnv = (value: string | undefined): boolean =>
+  value !== undefined && value !== '' && value !== '0' && value.toLowerCase() !== 'false';
+
+const aitDevtoolsTunnel = isTruthyEnv(process.env.AIT_TUNNEL)
+  ? { cdp: isTruthyEnv(process.env.AIT_TUNNEL_CDP) }
   : false;
 
 export default defineConfig(({ command, isPreview }) => ({

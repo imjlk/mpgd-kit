@@ -14,6 +14,7 @@
     "ait:wrapper:dev:plain": "pnpm --dir ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}/apps/target-ait run dev:plain",
     "ait:wrapper:dev:phone": "pnpm --dir ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}/apps/target-ait run dev:phone",
     "ait:devtools:mcp": "pnpm --dir ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}/apps/target-ait run devtools:mcp",
+    "ait:devtools:mcp:mobile": "pnpm --dir ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}/apps/target-ait run devtools:mcp:mobile",
     "build:microsoft-store": "pnpm exec mpgd target build microsoft-store production --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "smoke:microsoft-store": "pnpm exec mpgd target smoke microsoft-store --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "build:devvit": "pnpm exec mpgd target build reddit production --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",

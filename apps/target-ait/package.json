@@ -11,6 +11,7 @@
     "ait:build": "ait build",
     "ait:deploy": "ait deploy --api-key \"$AIT_API_KEY\"",
     "devtools:mcp": "pnpm exec devtools-mcp",
+    "devtools:mcp:mobile": "pnpm exec devtools-mcp --target=mobile",
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
