@@ -78,6 +78,10 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
       verifyMicrosoftStorePwaManifest(artifactPath);
     }
 
+    if (targetConfig.kind === 'devvit-web') {
+      verifyDevvitWebManifest(target, targetConfig, artifactPath);
+    }
+
     assertEmbeddedTargetConfig(
       readEmbeddedTargetConfigFromFile(
         effectiveConfigPath,
@@ -254,6 +258,96 @@ function verifyMicrosoftStorePwaManifest(artifactPath: string): void {
   }
 }
 
+function verifyDevvitWebManifest(
+  target: string,
+  targetConfig: SmokePlatformTargetConfig,
+  artifactPath: string,
+): void {
+  const wrapperAppConfigPath = requireStringMatch(targetConfig.wrapperApp, `${target}.wrapperApp`);
+  const wrapperApp = resolveFromPlatformTargetsBase(
+    loadedPlatformTargets.baseDir,
+    wrapperAppConfigPath,
+  );
+  const manifestPath = `${wrapperApp}/devvit.json`;
+  const manifest = readJsonFile(manifestPath);
+  const label = `${target} Devvit manifest`;
+
+  assertRecord(manifest, label);
+  assertNoTemplatePlaceholders(manifest, label);
+  assertString(manifest.name, `${label} name`);
+  assertDevvitAppName(manifest.name, `${label} name`);
+
+  const post = manifest.post;
+  assertRecord(post, `${label} post`);
+  assertString(post.dir, `${label} post.dir`);
+  const postDir = resolveDevvitManifestDirectory(wrapperApp, post.dir, `${label} post.dir`);
+  const expectedPostDir = resolve(artifactPath, 'client');
+  assertPathEqual(postDir, expectedPostDir, `${label} post.dir must target the built client`);
+
+  const entrypoints = post.entrypoints;
+  assertRecord(entrypoints, `${label} post.entrypoints`);
+  const defaultEntrypoint = entrypoints.default;
+  assertRecord(defaultEntrypoint, `${label} default post entrypoint`);
+  const defaultPostEntry = defaultEntrypoint.entry ?? 'index.html';
+  assertString(defaultPostEntry, `${label} default post entry`);
+  const defaultPostEntryPath = resolveDevvitManifestFile(
+    postDir,
+    defaultPostEntry,
+    `${label} default post entry`,
+    {
+      allowQueryString: true,
+    },
+  );
+
+  assertPathEqual(
+    defaultPostEntryPath,
+    resolve(expectedPostDir, 'index.html'),
+    `${label} default post entry must target the built client index`,
+  );
+  assertFileExists(defaultPostEntryPath, `${label} default post entry`);
+
+  const server = manifest.server;
+  assertRecord(server, `${label} server`);
+  const serverDirConfig = server.dir === undefined ? 'dist/server' : server.dir;
+
+  assertString(serverDirConfig, `${label} server.dir`);
+  assertString(server.entry, `${label} server.entry`);
+  const serverDir = resolveDevvitManifestDirectory(
+    wrapperApp,
+    serverDirConfig,
+    `${label} server.dir`,
+  );
+  const expectedServerDir = resolve(artifactPath, 'server');
+  assertPathEqual(serverDir, expectedServerDir, `${label} server.dir must target the built server`);
+  const serverEntryPath = resolveDevvitManifestFile(
+    serverDir,
+    server.entry,
+    `${label} server entry`,
+  );
+
+  assertPathEqual(
+    serverEntryPath,
+    resolve(expectedServerDir, 'index.cjs'),
+    `${label} server entry must target the built CommonJS server`,
+  );
+  assertFileExists(serverEntryPath, `${label} server entry`);
+
+  const permissions = manifest.permissions;
+  assertRecord(permissions, `${label} permissions`);
+  assertBooleanValue(permissions.redis, true, `${label} permissions.redis`);
+  assertDisabledDevvitPermission(permissions.payments, `${label} permissions.payments`);
+  assertDisabledDevvitPermission(permissions.realtime, `${label} permissions.realtime`);
+  assertEnabledRedditPermission(permissions.reddit, `${label} permissions.reddit`);
+
+  const menu = manifest.menu;
+  assertRecord(menu, `${label} menu`);
+  assertArray(menu.items, `${label} menu.items`);
+
+  if (!menu.items.some(isCreatePostMenuItem)) {
+    throw new Error(`${label} must expose a subreddit create-post menu item.`);
+  }
+}
+
 function hasManifestLink(html: string): boolean {
   const linkTags = html.match(/<link\b[^>]*>/giu) ?? [];
 
@@ -294,6 +388,69 @@ function normalizeLocalWebPath(path: string): string {
   return withoutLeadingRoot.replace(/^(?:\.\/)+/u, '');
 }
 
+function resolveDevvitManifestDirectory(
+  wrapperApp: string,
+  path: string,
+  label: string,
+): string {
+  const normalizedPath = normalizeDevvitManifestRelativePath(path, label);
+  const directory = resolve(wrapperApp, normalizedPath);
+
+  assertPathInside(directory, wrapperApp, `${label} must stay inside wrapper app`);
+
+  return directory;
+}
+
+function resolveDevvitManifestFile(
+  baseDir: string,
+  path: string,
+  label: string,
+  options: { readonly allowQueryString?: boolean } = {},
+): string {
+  const normalizedPath = normalizeDevvitManifestRelativePath(path, label, options);
+  const file = resolve(baseDir, normalizedPath);
+
+  assertPathInside(file, baseDir, `${label} must stay inside its Devvit directory`);
+
+  return file;
+}
+
+function normalizeDevvitManifestRelativePath(
+  path: string,
+  label: string,
+  options: { readonly allowQueryString?: boolean } = {},
+): string {
+  const trimmedPath = path.trim();
+  const queryIndex = trimmedPath.indexOf('?');
+  const pathWithoutQuery = options.allowQueryString && queryIndex >= 0
+    ? trimmedPath.slice(0, queryIndex)
+    : trimmedPath;
+
+  if (trimmedPath.length === 0 || pathWithoutQuery.length === 0) {
+    throw new Error(`${label} must be a non-empty Devvit manifest path.`);
+  }
+
+  if (pathWithoutQuery.startsWith('/')) {
+    throw new Error(`${label} must be a relative Devvit manifest path.`);
+  }
+
+  if (trimmedPath.includes('#') || (!options.allowQueryString && trimmedPath.includes('?'))) {
+    const disallowedParts = options.allowQueryString
+      ? 'hash fragments'
+      : 'hash fragments or query strings';
+
+    throw new Error(`${label} must not include ${disallowedParts}.`);
+  }
+
+  const normalizedPath = pathWithoutQuery.replace(/^(?:\.\/)+/u, '');
+
+  if (normalizedPath.length === 0) {
+    throw new Error(`${label} must include a file or directory path.`);
+  }
+
+  return normalizedPath;
+}
+
 function readHtmlAttribute(tag: string, name: string): string | undefined {
   const match = tag.match(new RegExp(`\\b${name}\\s*=\\s*(["'])(.*?)\\1`, 'iu'));
   return match?.[2];
@@ -328,6 +485,12 @@ function assertPathInside(path: string, baseDir: string, label: string): void {
 
   if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
     throw new Error(`${label}: ${path}`);
+  }
+}
+
+function assertPathEqual(actual: string, expected: string, label: string): void {
+  if (actual !== expected) {
+    throw new Error(`${label}. Expected ${expected}, got ${actual}.`);
   }
 }
 
@@ -409,6 +572,97 @@ function assertArray(input: unknown, label: string): asserts input is unknown[] 
   if (!Array.isArray(input)) {
     throw new Error(`${label} must be an array.`);
   }
+}
+
+function assertBooleanValue(input: unknown, expected: boolean, label: string): void {
+  if (input !== expected) {
+    throw new Error(`${label} must be ${String(expected)}.`);
+  }
+}
+
+function assertDisabledDevvitPermission(input: unknown, label: string): void {
+  if (input !== undefined && input !== false) {
+    throw new Error(`${label} must be false or omitted.`);
+  }
+}
+
+function assertDevvitAppName(input: string, label: string): void {
+  if (input.length < 3 || input.length > 16 || !/^[a-z][a-z0-9-]*$/u.test(input)) {
+    throw new Error(`${label} must be a 3-16 character lowercase slug starting with a letter.`);
+  }
+}
+
+function assertNoTemplatePlaceholders(input: unknown, label: string): void {
+  if (typeof input === 'string') {
+    if (/__[A-Z0-9_]+__/u.test(input)) {
+      throw new Error(`${label} contains an unreplaced template placeholder.`);
+    }
+
+    return;
+  }
+
+  if (Array.isArray(input)) {
+    for (const [index, value] of input.entries()) {
+      assertNoTemplatePlaceholders(value, `${label}[${index}]`);
+    }
+
+    return;
+  }
+
+  if (typeof input === 'object' && input !== null) {
+    for (const [key, value] of Object.entries(input)) {
+      assertNoTemplatePlaceholders(value, `${label}.${key}`);
+    }
+  }
+}
+
+function assertEnabledRedditPermission(input: unknown, label: string): void {
+  if (input === true) {
+    return;
+  }
+
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new Error(`${label} must enable the Reddit API.`);
+  }
+
+  const config = input as Record<string, unknown>;
+
+  if (config.enable === undefined || config.enable === true) {
+    return;
+  }
+
+  if (config.enable === false) {
+    throw new Error(`${label} must enable the Reddit API.`);
+  }
+
+  throw new Error(`${label}.enable must be a boolean when present.`);
+}
+
+function isCreatePostMenuItem(input: unknown): boolean {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    return false;
+  }
+
+  const item = input as Record<string, unknown>;
+
+  return (
+    isSubredditMenuLocation(item.location)
+    && isNonEmptyString(item.label)
+    && item.endpoint === '/internal/menu/create-post'
+    && isSupportedCreatePostMenuUserType(item.forUserType)
+  );
+}
+
+function isSupportedCreatePostMenuUserType(input: unknown): boolean {
+  return input === undefined || input === 'moderator' || input === 'user';
+}
+
+function isNonEmptyString(input: unknown): input is string {
+  return typeof input === 'string' && input.trim().length > 0;
+}
+
+function isSubredditMenuLocation(input: unknown): boolean {
+  return input === 'subreddit' || (Array.isArray(input) && input.includes('subreddit'));
 }
 
 function assertTargetKind(
