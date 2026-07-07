@@ -193,26 +193,31 @@ function rewriteGameBundleUrl(url: string): string {
 }
 
 function rewriteAndValidateGamePath(path: string, originalUrl: string): string {
+  rejectEncodedTraversal(path, originalUrl);
+
   const normalizedPath = path.startsWith('/') && !path.startsWith(gameBundleBasePath)
     ? path.slice(1)
     : path;
   const resolvedUrl = new URL(normalizedPath, `${window.location.origin}${gameBundleBasePath}`);
-  const encodedPathname = resolvedUrl.pathname.toLowerCase();
-
-  if (
-    encodedPathname.includes('%25') ||
-    encodedPathname.includes('%2e') ||
-    encodedPathname.includes('%2f') ||
-    encodedPathname.includes('%5c')
-  ) {
-    throw new Error(`Game bundle asset URL contains encoded path traversal: ${originalUrl}`);
-  }
 
   if (resolvedUrl.origin !== window.location.origin || !resolvedUrl.pathname.startsWith(gameBundleBasePath)) {
     throw new Error(`Game bundle asset URL escapes the bundle base path: ${originalUrl}`);
   }
 
   return `${resolvedUrl.pathname}${resolvedUrl.search}${resolvedUrl.hash}`;
+}
+
+function rejectEncodedTraversal(path: string, originalUrl: string): void {
+  const rawPath = path.toLowerCase();
+
+  if (
+    rawPath.includes('%25') ||
+    rawPath.includes('%2e') ||
+    rawPath.includes('%2f') ||
+    rawPath.includes('%5c')
+  ) {
+    throw new Error(`Game bundle asset URL contains encoded path traversal: ${originalUrl}`);
+  }
 }
 
 function createGameMount(source: Element): HTMLElement {

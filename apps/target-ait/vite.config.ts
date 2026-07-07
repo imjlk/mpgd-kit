@@ -12,7 +12,7 @@ const aitDevtoolsTunnel = isTruthyEnv(process.env.AIT_TUNNEL)
 export default defineConfig(({ command, isPreview }) => ({
   plugins: [
     ...(command === 'serve' && !isPreview && process.env.MPGD_AIT_DEVTOOLS !== '0'
-      ? [aitDevtools.vite({ tunnel: aitDevtoolsTunnel })]
+      ? [aitDevtools.vite({ mcp: true, tunnel: aitDevtoolsTunnel })]
       : []),
     ttsc({
       project: 'tsconfig.bundle.json',
