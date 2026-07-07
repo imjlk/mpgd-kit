@@ -121,11 +121,14 @@ pnpm ait:devtools:mcp:mobile
 ```
 
 `ait:wrapper:dev` runs the kit wrapper with the community Vite plugin enabled.
-Use `ait:wrapper:dev:plain` to disable the devtools plugin. `ait:wrapper:dev:phone`
-uses the devtools tunnel and CDP relay for phone sandbox checks, and
-`ait:devtools:mcp:mobile` starts the community MCP bridge in the phone tunnel
-mode after the wrapper prints the tunnel URLs. Use `ait:devtools:mcp` for the
-default local or relay debugging mode. The kit intentionally leaves
+It loads the last game bundle copied by `pnpm build:ait` from the wrapper's
+`public/game` directory, so run `pnpm build:ait` again after game changes before
+opening a wrapper devtools session. Use `ait:wrapper:dev:plain` to disable the
+devtools plugin. `ait:wrapper:dev:phone` uses the devtools tunnel and CDP relay
+for phone sandbox checks, and `ait:devtools:mcp:mobile` starts the community MCP
+bridge in the phone tunnel mode after the wrapper prints the tunnel URLs. Use
+`ait:devtools:mcp` for the default local or relay debugging mode. The kit
+intentionally leaves
 `cloudflared` postinstall disabled; the first phone tunnel session downloads the
 binary lazily through the community devtools package instead of during ordinary
 workspace install.
