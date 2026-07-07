@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "vite --host 0.0.0.0",
     "dev:plain": "MPGD_AIT_DEVTOOLS=0 vite --host 0.0.0.0",
-    "dev:phone": "AIT_TUNNEL=1 vite --host 0.0.0.0",
+    "dev:phone": "AIT_TUNNEL=1 AIT_TUNNEL_CDP=1 vite --host 0.0.0.0",
     "build": "vite build",
     "ait:build": "ait build",
     "ait:deploy": "ait deploy --api-key \"$AIT_API_KEY\"",

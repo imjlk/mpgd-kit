@@ -121,8 +121,9 @@ pnpm ait:devtools:mcp
 
 `ait:wrapper:dev` runs the kit wrapper with the community Vite plugin enabled.
 Use `ait:wrapper:dev:plain` to disable the devtools plugin. `ait:wrapper:dev:phone`
-uses the devtools tunnel flow for phone sandbox checks, and `ait:devtools:mcp`
-starts the community MCP bridge for supported on-device debugging flows.
+uses the devtools tunnel and CDP relay for phone sandbox checks, and
+`ait:devtools:mcp` starts the community MCP bridge for supported on-device
+debugging flows.
 
 ## Target Ownership Notes
 
