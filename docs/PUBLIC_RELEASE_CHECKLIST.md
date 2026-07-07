@@ -88,7 +88,7 @@ pnpm smoke:target reddit
 - [ ] For iOS, run `pnpm build:ios && pnpm smoke:target ios`.
 - [ ] For Microsoft Store, run `pnpm build:microsoft-store && pnpm smoke:target microsoft-store`, then package the PWA with PWABuilder.
 - [ ] For Apps in Toss, run `pnpm build:ait && pnpm smoke:target ait`.
-- [ ] For Reddit Devvit, run `pnpm build:devvit && pnpm smoke:target reddit`.
+- [ ] For Reddit Devvit, run `pnpm build:devvit && pnpm smoke:target reddit` to verify the Devvit manifest, client/server artifact paths, permissions, menu entry, and embedded target config.
 - [ ] Emulator smoke is optional but recommended for local release confidence.
 
 ## Known Starter Limits
