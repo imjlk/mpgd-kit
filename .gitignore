@@ -18,6 +18,8 @@ output/
 .DS_Store
 *.log
 *.ait
+apps/target-ait/.ait_relay
+apps/target-ait/.ait_urls
 apps/target-ait/.granite/
 apps/target-ait/public/game/
 apps/target-devvit/dist/
