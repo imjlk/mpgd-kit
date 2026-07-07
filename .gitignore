@@ -14,6 +14,7 @@ output/
 *.mobileprovision
 .turbo/
 .wrangler/
+.playwright-mcp/
 .DS_Store
 *.log
 *.ait

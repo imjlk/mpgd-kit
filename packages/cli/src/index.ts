@@ -52,6 +52,7 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
     version: cliVersion,
     subCommands: {
       game: gameCommand,
+      legal: legalCommand,
       target: targetCommand,
       kit: kitCommand,
     },
@@ -225,6 +226,65 @@ const gameCommand = defineI18n({
   },
   run: () => {
     console.log('Use "mpgd game create <directory>".');
+  },
+});
+
+const defaultLegalDir = 'legal';
+const defaultLegalOutDir = 'artifacts/legal-site';
+const legalPageSlugs = ['privacy', 'support', 'terms'] as const;
+const legalPageFileList = legalPageSlugs.map((slug) => `${slug}.html`).join(', ');
+
+const legalCommand = defineI18n({
+  name: 'legal',
+  description: 'Build static legal/support pages for store and release evidence.',
+  resource: commandResource({
+    en: 'Build static legal/support pages for store and release evidence.',
+    ko: '스토어와 출시 증빙용 정적 약관/지원 페이지를 빌드합니다.',
+  }),
+  subCommands: {
+    build: defineI18n({
+      name: 'build',
+      description: 'Build privacy, support, and terms HTML pages.',
+      resource: commandResource(
+        {
+          en: 'Build privacy, support, and terms HTML pages.',
+          ko: 'privacy, support, terms HTML 페이지를 빌드합니다.',
+        },
+        legalArgResources(),
+      ),
+      args: legalArgs(),
+      run: (ctx) => {
+        const result = buildLegalSite({
+          ...resolveLegalCommandOptions(ctx.values),
+          check: false,
+        });
+
+        console.log(`Built legal site: ${result.outDir}`);
+      },
+    }),
+    check: defineI18n({
+      name: 'check',
+      description: 'Check generated legal pages are current.',
+      resource: commandResource(
+        {
+          en: 'Check generated legal pages are current.',
+          ko: '생성된 legal 페이지가 최신인지 확인합니다.',
+        },
+        legalArgResources(),
+      ),
+      args: legalArgs(),
+      run: (ctx) => {
+        const result = buildLegalSite({
+          ...resolveLegalCommandOptions(ctx.values),
+          check: true,
+        });
+
+        console.log(`Legal site checked: ${result.outDir}`);
+      },
+    }),
+  },
+  run: () => {
+    console.log('Use "mpgd legal build" or "mpgd legal check".');
   },
 });
 
@@ -574,6 +634,165 @@ function matrixArgResources(): Record<string, LocalizedText> {
   };
 }
 
+function legalArgs() {
+  return {
+    'legal-dir': {
+      type: 'string',
+      required: false,
+      default: defaultLegalDir,
+      description: `Directory containing ${legalPageFileList}.`,
+    },
+    'out-dir': {
+      type: 'string',
+      required: false,
+      default: defaultLegalOutDir,
+      description: 'Output directory for the static legal site.',
+    },
+  } as const;
+}
+
+function legalArgResources(): Record<string, LocalizedText> {
+  return {
+    'legal-dir': {
+      en: `Directory containing ${legalPageFileList}.`,
+      ko: `${legalPageFileList} 이 있는 디렉터리.`,
+    },
+    'out-dir': {
+      en: 'Output directory for the static legal site.',
+      ko: '정적 legal 사이트 출력 디렉터리.',
+    },
+  };
+}
+
+function resolveLegalCommandOptions(values: Record<string, unknown>): {
+  readonly legalDir: string;
+  readonly outDir: string;
+} {
+  return {
+    legalDir: readOptionalString(values['legal-dir']) ?? defaultLegalDir,
+    outDir: readOptionalString(values['out-dir']) ?? defaultLegalOutDir,
+  };
+}
+
+interface BuildLegalSiteResult {
+  readonly outDir: string;
+}
+
+function buildLegalSite(input: {
+  readonly legalDir: string;
+  readonly outDir: string;
+  readonly check: boolean;
+}): BuildLegalSiteResult {
+  const legalDir = path.resolve(process.cwd(), input.legalDir);
+  const outDir = path.resolve(process.cwd(), input.outDir);
+  const outputs = createLegalSiteOutputs(legalDir, outDir);
+
+  if (input.check) {
+    const stale = outputs.filter((output) => {
+      if (!existsSync(output.file)) {
+        return true;
+      }
+
+      return readFileSync(output.file, 'utf8') !== output.content;
+    });
+
+    if (stale.length > 0) {
+      throw new Error(
+        [
+          'Legal site output is stale. Run "mpgd legal build".',
+          ...stale.map((output) => `- ${path.relative(process.cwd(), output.file)}`),
+        ].join('\n'),
+      );
+    }
+
+    return {
+      outDir,
+    };
+  }
+
+  for (const output of outputs) {
+    mkdirSync(path.dirname(output.file), { recursive: true });
+    writeFileSync(output.file, output.content);
+  }
+
+  return {
+    outDir,
+  };
+}
+
+function createLegalSiteOutputs(
+  legalDir: string,
+  outDir: string,
+): readonly { readonly file: string; readonly content: string }[] {
+  const relativeLegalDir = path.relative(process.cwd(), legalDir);
+  const relativeOutDir = path.relative(process.cwd(), outDir);
+
+  if (relativeLegalDir.startsWith('..') || path.isAbsolute(relativeLegalDir)) {
+    throw new Error(`legal-dir must be inside the project root: ${legalDir}`);
+  }
+
+  if (relativeOutDir.startsWith('..') || path.isAbsolute(relativeOutDir)) {
+    throw new Error(`out-dir must be inside the project root: ${outDir}`);
+  }
+
+  const sourceRoot = toTemplatePath(relativeLegalDir || '.');
+  const outputs = legalPageSlugs.map((slug) => {
+    const sourceFile = path.join(legalDir, `${slug}.html`);
+
+    if (!existsSync(sourceFile)) {
+      throw new Error(`Missing legal page source: ${sourceFile}`);
+    }
+
+    return {
+      file: path.join(outDir, slug, 'index.html'),
+      content: normalizeLegalHtml(readFileSync(sourceFile, 'utf8'), sourceFile),
+    };
+  });
+
+  return [
+    ...outputs,
+    {
+      file: path.join(outDir, '_headers'),
+      content: [
+        '/*',
+        '  X-Content-Type-Options: nosniff',
+        '  Referrer-Policy: strict-origin-when-cross-origin',
+        '  Cache-Control: public, max-age=300',
+        '',
+      ].join('\n'),
+    },
+    {
+      file: path.join(outDir, '_redirects'),
+      content: [
+        '/ /support/ 302',
+        '/privacy /privacy/ 301',
+        '/support /support/ 301',
+        '/terms /terms/ 301',
+        '',
+      ].join('\n'),
+    },
+    {
+      file: path.join(outDir, 'legal-site.json'),
+      content: `${JSON.stringify({
+        version: 1,
+        pages: legalPageSlugs.map((slug) => ({
+          slug,
+          path: `/${slug}/`,
+          source: `${sourceRoot}/${slug}.html`,
+        })),
+      }, null, 2)}\n`,
+    },
+  ];
+}
+
+function normalizeLegalHtml(content: string, sourceFile: string): string {
+  if (!/^<!doctype html>/iu.test(content) || !/<html[\s>]/iu.test(content)) {
+    throw new Error(`${sourceFile} must be a complete HTML document.`);
+  }
+
+  return content.endsWith('\n') ? content : `${content}\n`;
+}
+
 function createGameApp(input: {
   readonly directory: string;
   readonly title?: string;
@@ -702,6 +921,7 @@ function createTemplateContext(input: {
     devvitAppName: toDevvitAppName(input.gameName),
     gameTitle: title,
     gameTitleTsLiteral: toJavaScriptStringLiteral(title),
+    legalLastUpdated: new Date().toISOString().slice(0, 10),
     packageName: input.packageName,
     dependencyVersion: input.dependencyVersion,
     tsconfigExtendsLine: input.workspace
@@ -793,6 +1013,7 @@ function renderTemplate(
     .replaceAll('__DEVVIT_APP_NAME__', context.devvitAppName)
     .replaceAll('__GAME_TITLE_TS_LITERAL__', context.gameTitleTsLiteral)
     .replaceAll('__GAME_TITLE__', context.gameTitle)
+    .replaceAll('__LEGAL_LAST_UPDATED__', context.legalLastUpdated)
     .replaceAll('__PACKAGE_NAME__', context.packageName)
     .replaceAll('__MPGD_DEPENDENCY_VERSION__', context.dependencyVersion)
     .replaceAll('__TSCONFIG_EXTENDS_LINE__', context.tsconfigExtendsLine)

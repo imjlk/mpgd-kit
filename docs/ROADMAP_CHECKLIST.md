@@ -270,3 +270,10 @@ to run xcodebuild archive.
 - [x] `apps/target-devvit` wrapper added with `/api/mpgd/bridge`
 - [x] `pnpm build:devvit` builds Phaser client artifacts and Devvit server CJS bundle
 - [x] target config, effective config, adapter parity, and target artifact smoke cover `reddit`
+
+## Phase 23 - Cloudflare Pages Host And Legal Site
+
+- [x] `@mpgd/bridge/cloudflare-pages` provides a Pages advanced-mode host helper
+- [x] Phaser starters include HTML legal/support/terms sources and `mpgd legal build/check`
+- [x] Phaser starters include a TypeScript Cloudflare Pages host that bundles to `_worker.js`
+- [x] Pages host routes bridge JSON, bridge oRPC, optional game-services service binding proxy, and static assets

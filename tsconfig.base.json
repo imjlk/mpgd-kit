@@ -15,6 +15,7 @@
     "isolatedModules": true,
     "declaration": true,
     "paths": {
+      "@mpgd/bridge/cloudflare-pages": ["./packages/bridge/src/cloudflare-pages.ts"],
       "@mpgd/bridge/orpc": ["./packages/bridge/src/orpc.ts"],
       "@mpgd/catalog/*": ["./packages/catalog/*"],
       "@mpgd/game-services/*": ["./packages/game-services/src/*"],

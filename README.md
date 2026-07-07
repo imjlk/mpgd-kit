@@ -125,7 +125,27 @@ Read:
 
 - [Game Services Backend](docs/GAME_SERVICES_BACKEND.md)
 - [Cloudflare Worker Deploy Runbook](docs/CLOUDFLARE_WORKER_DEPLOY.md)
+- [Cloudflare Pages Host Runbook](docs/CLOUDFLARE_PAGES_HOST.md)
 - [Production Integration Roadmap](docs/PRODUCTION_INTEGRATION_ROADMAP.md)
+
+## Cloudflare Pages Host and Legal Site
+
+`@mpgd/bridge/cloudflare-pages` exposes a reusable Pages advanced-mode host
+helper. New game starters include `legal/privacy.html`, `legal/support.html`,
+`legal/terms.html`, `mpgd legal build/check`, and
+`apps/target-cloudflare-pages` for local Pages validation. The worker source is
+TypeScript and bundles to Cloudflare's required `dist/_worker.js` output while
+static legal pages stay in stable `/privacy/`, `/support/`, and `/terms/`
+paths.
+
+Cloudflare Pages is a host option for web/PWA targets that need same-origin APIs
+or stable legal URLs. Native SDK capabilities remain target-adapter work:
+Apps in Toss leaderboard APIs belong in the AIT wrapper, and Devvit
+leaderboard/storage APIs belong in the Devvit wrapper. Authoritative grants and
+score records still go through `@mpgd/game-services`.
+The default Pages bridge intentionally does not expose cloud save or player
+identity from client-controlled headers; add a custom bridge handler when a game
+has authenticated identity/session infrastructure.
 
 ## Target Config and Release Targets
 
