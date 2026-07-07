@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { discoverPublishablePackages } from './package/workspace';
+import { validateEffectiveTargetConfigMatrix } from './target/effective-config';
 
 interface PackageMetadata {
   readonly name?: string;
@@ -171,6 +172,7 @@ for (const root of publishableRoots) {
 
 collectTrackedGeneratedArtifacts();
 collectTrackedGeneratedSourceArtifacts();
+collectEffectiveTargetConfigReadiness();
 collectSecretFindings();
 collectManualReleaseGates();
 
@@ -282,6 +284,14 @@ function collectTrackedGeneratedSourceArtifacts(): void {
   }
 }
 
+function collectEffectiveTargetConfigReadiness(): void {
+  try {
+    validateEffectiveTargetConfigMatrix();
+  } catch (error) {
+    failures.push(`Effective target config release readiness failed: ${errorMessage(error)}`);
+  }
+}
+
 function collectSecretFindings(): void {
   for (const file of gitLsFiles()) {
     if (binaryFileExtensions.some((extension) => file.endsWith(extension))) {
@@ -296,6 +306,10 @@ function collectSecretFindings(): void {
       }
     }
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function collectManualReleaseGates(): void {
