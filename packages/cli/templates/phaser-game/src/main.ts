@@ -16,6 +16,11 @@ async function bootstrap(): Promise<void> {
   let locale: Locale = 'en';
 
   try {
+    if (__APP_TARGET__ === 'ait') {
+      const { install } = await import('@ait-co/polyfill');
+      await install();
+    }
+
     const runtimeConfig = detectRuntime();
     const platform = await installPlatform(runtimeConfig);
     const runtime = await platform.getTargetRuntime();

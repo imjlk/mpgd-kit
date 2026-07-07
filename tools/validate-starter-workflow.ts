@@ -153,6 +153,8 @@ if (manifest !== null) {
   );
 }
 
+validatePhaserTemplateAITPolyfill();
+
 if (failures.length > 0) {
   throw new Error(`Starter workflow validation failed:\n- ${failures.join('\n- ')}`);
 }
@@ -203,6 +205,123 @@ function validateMcpConfig(path: string): void {
 
   assertMcpServerCommand(servers['ttsc-graph'], '@ttsc/graph', `${path}: ttsc-graph`);
   assertMcpServerCommand(servers.devvit, '@devvit/mcp', `${path}: devvit`);
+}
+
+function validatePhaserTemplateAITPolyfill(): void {
+  const packagePath = 'packages/cli/templates/phaser-game/package.json';
+  const mainPath = 'packages/cli/templates/phaser-game/src/main.ts';
+  const workspacePath = 'packages/cli/templates/phaser-game/pnpm-workspace.yaml';
+  const readmePath = 'packages/cli/templates/phaser-game/README.md';
+
+  if (!existsSync(packagePath)) {
+    failures.push(`${packagePath}: required for the AIT polyfill starter flow.`);
+  } else {
+    const packageJson = readJson(packagePath) as { readonly dependencies?: Record<string, unknown> }
+      | null;
+
+    if (packageJson !== null) {
+      assertString(
+        packageJson.dependencies?.['@ait-co/polyfill'],
+        `${packagePath}: dependencies.@ait-co/polyfill`,
+      );
+      assertString(
+        packageJson.dependencies?.['@apps-in-toss/web-framework'],
+        `${packagePath}: dependencies.@apps-in-toss/web-framework`,
+      );
+    }
+  }
+
+  if (!existsSync(mainPath)) {
+    failures.push(`${mainPath}: required for the AIT polyfill starter flow.`);
+  } else {
+    const initialFailureCount = failures.length;
+    const mainContent = readText(mainPath);
+
+    if (failures.length === initialFailureCount) {
+      const polyfillImportIndex = mainContent.search(/await\s+import\('@ait-co\/polyfill'\)/);
+      const aitTargetGateIndex =
+        polyfillImportIndex === -1
+          ? -1
+          : findWrappingBlockPatternIndex(
+              mainContent,
+              /if\s*\(\s*__APP_TARGET__\s*===\s*['"]ait['"]\s*\)/g,
+              polyfillImportIndex,
+            );
+      const installDestructureIndex = mainContent.search(
+        /const\s+\{\s*install\s*\}\s*=\s*await\s+import\('@ait-co\/polyfill'\)/,
+      );
+      const installCallIndex =
+        installDestructureIndex === -1
+          ? -1
+          : findPatternIndex(mainContent, /await\s+install\(\)/, installDestructureIndex);
+      const polyfillInstallIndex =
+        installDestructureIndex !== -1 && installCallIndex !== -1 ? installCallIndex : -1;
+      const bootstrapIndex = mainContent.indexOf('await bootstrap();');
+      const runtimeDetectionIndex = mainContent.indexOf('detectRuntime();');
+
+      if (polyfillImportIndex === -1) {
+        failures.push(`${mainPath}: must dynamically import @ait-co/polyfill for AIT builds.`);
+      } else if (aitTargetGateIndex === -1) {
+        failures.push(`${mainPath}: must gate @ait-co/polyfill to AIT target.`);
+      }
+      if (polyfillInstallIndex === -1) {
+        failures.push(`${mainPath}: must await @ait-co/polyfill install before bootstrap work.`);
+      }
+      if (bootstrapIndex === -1) {
+        failures.push(
+          `${mainPath}: must call await bootstrap() for the AIT polyfill starter flow.`,
+        );
+      }
+      if (runtimeDetectionIndex === -1) {
+        failures.push(`${mainPath}: must call detectRuntime() after polyfill install.`);
+      } else if (polyfillInstallIndex !== -1 && polyfillInstallIndex > runtimeDetectionIndex) {
+        failures.push(`${mainPath}: polyfill install must precede runtime detection.`);
+      }
+    }
+  }
+
+  if (!existsSync(workspacePath)) {
+    failures.push(`${workspacePath}: required for the AIT polyfill starter flow.`);
+  } else {
+    const initialFailureCount = failures.length;
+    const workspace = readText(workspacePath);
+
+    if (failures.length === initialFailureCount) {
+      for (const requiredText of [
+        "'@sentry/cli': true",
+        "'@swc/core': true",
+        'cloudflared: false',
+        'esbuild: true',
+        'protobufjs: true',
+      ]) {
+        if (!workspace.includes(requiredText)) {
+          failures.push(`${workspacePath}: allowBuilds must include ${requiredText}.`);
+        }
+      }
+    }
+  }
+
+  if (!existsSync(readmePath)) {
+    failures.push(`${readmePath}: required for the AIT polyfill starter flow.`);
+  } else {
+    const initialFailureCount = failures.length;
+    const readme = readText(readmePath);
+
+    if (failures.length === initialFailureCount) {
+      for (const requiredText of [
+        '@ait-co/polyfill',
+        'install()',
+        '@apps-in-toss/web-framework',
+        '`__APP_TARGET__` is `ait',
+        'navigator.clipboard',
+        'granite.config.ts',
+      ]) {
+        if (!readme.includes(requiredText)) {
+          failures.push(`${readmePath}: must document ${requiredText} for the AIT polyfill flow.`);
+        }
+      }
+    }
+  }
 }
 
 function assertMcpServerCommand(
@@ -322,6 +441,58 @@ function assertEqual(input: unknown, expected: string, label: string): void {
   if (input !== expected) {
     failures.push(`${label} must be ${expected}.`);
   }
+}
+
+function findPatternIndex(content: string, pattern: RegExp, startIndex: number): number {
+  const safeStartIndex = Math.max(startIndex, 0);
+  const match = pattern.exec(content.slice(safeStartIndex));
+
+  return match === null ? -1 : safeStartIndex + match.index;
+}
+
+function findWrappingBlockPatternIndex(
+  content: string,
+  pattern: RegExp,
+  targetIndex: number,
+): number {
+  let matchedIndex = -1;
+
+  for (const match of content.slice(0, Math.max(targetIndex, 0)).matchAll(pattern)) {
+    const patternIndex = match.index;
+    const blockStartIndex = content.indexOf('{', patternIndex);
+
+    if (blockStartIndex === -1 || blockStartIndex > targetIndex) {
+      continue;
+    }
+
+    const blockEndIndex = findMatchingBraceIndex(content, blockStartIndex);
+
+    if (blockEndIndex !== -1 && targetIndex < blockEndIndex) {
+      matchedIndex = patternIndex;
+    }
+  }
+
+  return matchedIndex;
+}
+
+function findMatchingBraceIndex(content: string, openBraceIndex: number): number {
+  let depth = 0;
+
+  for (let index = openBraceIndex; index < content.length; index += 1) {
+    const char = content[index];
+
+    if (char === '{') {
+      depth += 1;
+    } else if (char === '}') {
+      depth -= 1;
+    }
+
+    if (depth === 0) {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 function readText(path: string): string {

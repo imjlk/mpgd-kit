@@ -133,6 +133,19 @@ intentionally leaves
 binary lazily through the community devtools package instead of during ordinary
 workspace install.
 
+The starter also installs `@apps-in-toss/web-framework` and awaits
+`install()` from `@ait-co/polyfill` only when `__APP_TARGET__` is `ait`. In the
+Apps in Toss WebView runtime, standard Web APIs such as `navigator.clipboard`,
+`navigator.geolocation`, `navigator.share`, `navigator.vibrate`, network status,
+and `_blank` `window.open` calls route through the Apps in Toss SDK. Plain
+browser, Microsoft Store, Reddit, Android, and iOS builds do not import the AIT
+SDK chunk and keep their native browser behavior. `pnpm dev:ait` is useful for
+checking the AIT-gated bundle path, but SDK-backed API behavior should be
+verified in the Apps in Toss sandbox or a game-owned devtools setup. If your
+game uses permission-gated APIs such as clipboard or geolocation, declare the
+matching permissions in the game-owned Apps in Toss `granite.config.ts` before
+submission.
+
 ## Target Ownership Notes
 
 - Browser preview is fully game-owned and writes to `artifacts/web-preview`.
