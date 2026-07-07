@@ -114,6 +114,7 @@ for SDK mock and device debugging while the wrapper is still kit-owned:
 
 ```sh
 pnpm ait:wrapper:dev
+pnpm ait:wrapper:dev:plain
 pnpm ait:wrapper:dev:phone
 pnpm ait:devtools:mcp
 ```

@@ -2,9 +2,9 @@ import aitDevtools from '@ait-co/devtools/unplugin';
 import ttsc from '@ttsc/unplugin/vite';
 import { defineConfig } from 'vite';
 
-export default defineConfig(({ command }) => ({
+export default defineConfig(({ command, isPreview }) => ({
   plugins: [
-    ...(command === 'serve' && process.env.MPGD_AIT_DEVTOOLS !== '0'
+    ...(command === 'serve' && !isPreview && process.env.MPGD_AIT_DEVTOOLS !== '0'
       ? [aitDevtools.vite()]
       : []),
     ttsc({
