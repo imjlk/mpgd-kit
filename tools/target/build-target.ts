@@ -87,6 +87,7 @@ switch (target.kind) {
     const webDir = targetPath(webDirConfigPath);
     const wrapperApp = targetPath(requireString(target.wrapperApp, `${targetName}.wrapperApp`));
     replaceDirectory(`${gameApp}/dist`, webDir);
+    mirrorAitRuntimeAssets(gameApp, wrapperApp);
     run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
 
     let releaseArtifact = webDirConfigPath;
@@ -231,6 +232,17 @@ function replaceDirectory(source: string, destination: string): void {
   rmSync(destination, { recursive: true, force: true });
   mkdirSync(destination, { recursive: true });
   cpSync(source, destination, { recursive: true });
+}
+
+function mirrorAitRuntimeAssets(gameApp: string, wrapperApp: string): void {
+  const sourceAssets = `${gameApp}/dist/assets`;
+  const destinationAssets = `${wrapperApp}/public/assets`;
+
+  if (existsSync(sourceAssets)) {
+    replaceDirectory(sourceAssets, destinationAssets);
+  } else {
+    rmSync(destinationAssets, { recursive: true, force: true });
+  }
 }
 
 function appTargetForBuild(target: BuildTargetConfig, name: string): string {

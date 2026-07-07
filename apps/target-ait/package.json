@@ -5,9 +5,13 @@
   "type": "module",
   "scripts": {
     "dev": "vite --host 0.0.0.0",
+    "dev:plain": "MPGD_AIT_DEVTOOLS=0 vite --host 0.0.0.0",
+    "dev:phone": "AIT_TUNNEL=1 AIT_TUNNEL_CDP=1 vite --host 0.0.0.0",
     "build": "vite build",
     "ait:build": "ait build",
     "ait:deploy": "ait deploy --api-key \"$AIT_API_KEY\"",
+    "devtools:mcp": "pnpm exec devtools-mcp",
+    "devtools:mcp:mobile": "pnpm exec devtools-mcp --target=mobile",
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
@@ -17,6 +21,7 @@
     "@apps-in-toss/web-framework": "^2.10.4"
   },
   "devDependencies": {
+    "@ait-co/devtools": "^0.1.137",
     "@apps-in-toss/cli": "^2.10.4",
     "@ttsc/unplugin": "0.16.9",
     "@types/node": "^24.0.0",

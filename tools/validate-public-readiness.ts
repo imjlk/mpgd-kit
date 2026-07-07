@@ -82,6 +82,7 @@ const blockedTrackedGeneratedPrefixes = [
   'artifacts/',
   'release-output/',
   'output/',
+  'apps/target-ait/public/assets/',
   'apps/target-ait/public/game/',
   'apps/target-devvit/dist/',
   'apps/mobile-capacitor/www/',

@@ -99,6 +99,40 @@ authorization is not available in the current terminal session. After init, use
 `pnpm devvit:playtest`, `pnpm devvit:upload`, and `pnpm devvit:publish` from
 this game root.
 
+## Apps in Toss
+
+Use the target-aware local loop while developing game code for Apps in Toss:
+
+```sh
+pnpm dev:ait
+pnpm build:ait
+pnpm smoke:ait
+```
+
+The kit reference wrapper includes the Apps in Toss community devtools package
+for SDK mock and device debugging while the wrapper is still kit-owned:
+
+```sh
+pnpm ait:wrapper:dev
+pnpm ait:wrapper:dev:plain
+pnpm ait:wrapper:dev:phone
+pnpm ait:devtools:mcp
+pnpm ait:devtools:mcp:mobile
+```
+
+`ait:wrapper:dev` runs the kit wrapper with the community Vite plugin enabled.
+It loads the last game bundle copied by `pnpm build:ait` from the wrapper's
+`public/game` directory, so run `pnpm build:ait` again after game changes before
+opening a wrapper devtools session. Use `ait:wrapper:dev:plain` to disable the
+devtools plugin. `ait:wrapper:dev:phone` uses the devtools tunnel and CDP relay
+for phone sandbox checks, and `ait:devtools:mcp:mobile` starts the community MCP
+bridge in the phone tunnel mode after the wrapper prints the tunnel URLs. Use
+`ait:devtools:mcp` for the default local or relay debugging mode. The kit
+intentionally leaves
+`cloudflared` postinstall disabled; the first phone tunnel session downloads the
+binary lazily through the community devtools package instead of during ordinary
+workspace install.
+
 ## Target Ownership Notes
 
 - Browser preview is fully game-owned and writes to `artifacts/web-preview`.
