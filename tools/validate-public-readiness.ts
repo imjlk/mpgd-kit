@@ -4,6 +4,9 @@ import { join, relative } from 'node:path';
 
 import { discoverPublishablePackages } from './package/workspace';
 import { validateEffectiveTargetConfigMatrix } from './target/effective-config';
+import { validateAdPlacementsFile } from './validate-ad-placements';
+import { validateProductCatalogFile } from './validate-product-catalog';
+import { validateTargetConfigMatrixFile } from './validate-target-config';
 
 interface PackageMetadata {
   readonly name?: string;
@@ -172,6 +175,8 @@ for (const root of publishableRoots) {
 
 collectTrackedGeneratedArtifacts();
 collectTrackedGeneratedSourceArtifacts();
+collectCatalogReadiness();
+collectTargetConfigReadiness();
 collectEffectiveTargetConfigReadiness();
 collectSecretFindings();
 collectManualReleaseGates();
@@ -289,6 +294,28 @@ function collectEffectiveTargetConfigReadiness(): void {
     validateEffectiveTargetConfigMatrix();
   } catch (error) {
     failures.push(`Effective target config release readiness failed: ${errorMessage(error)}`);
+  }
+}
+
+function collectCatalogReadiness(): void {
+  try {
+    validateProductCatalogFile();
+  } catch (error) {
+    failures.push(`Product catalog public readiness failed: ${errorMessage(error)}`);
+  }
+
+  try {
+    validateAdPlacementsFile();
+  } catch (error) {
+    failures.push(`Ad placement public readiness failed: ${errorMessage(error)}`);
+  }
+}
+
+function collectTargetConfigReadiness(): void {
+  try {
+    validateTargetConfigMatrixFile();
+  } catch (error) {
+    failures.push(`Target config public readiness failed: ${errorMessage(error)}`);
   }
 }
 
