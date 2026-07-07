@@ -292,7 +292,7 @@ function productPlatformId(
     return undefined;
   }
 
-  return product.platformProductIds[target];
+  return normalizePlatformId(product.platformProductIds[target]);
 }
 
 function adPlacementPlatformId(
@@ -303,7 +303,17 @@ function adPlacementPlatformId(
     return undefined;
   }
 
-  return placement.platformPlacementIds[target];
+  return normalizePlatformId(placement.platformPlacementIds[target]);
+}
+
+function normalizePlatformId(platformId: string | undefined): string | undefined {
+  if (platformId === undefined) {
+    return undefined;
+  }
+
+  const trimmed = platformId.trim();
+
+  return trimmed.length === 0 ? undefined : trimmed;
 }
 
 function isStoreBackedTarget(target: string): target is 'android' | 'ios' | 'ait' {

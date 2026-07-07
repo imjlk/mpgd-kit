@@ -20,6 +20,12 @@ export function validateAdPlacementsFile(path = 'packages/catalog/placements.jso
     if (placement.type === 'rewarded' && placement.reward === undefined) {
       throw new Error(`Rewarded placement ${placement.id} must define reward.`);
     }
+
+    for (const [target, platformPlacementId] of Object.entries(placement.platformPlacementIds)) {
+      if (platformPlacementId.trim().length === 0) {
+        throw new Error(`Ad placement ${placement.id} has blank platform ID for ${target}.`);
+      }
+    }
   }
 
   return adPlacements;

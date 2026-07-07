@@ -25,6 +25,7 @@ Use this before making the repository public or announcing a package release.
 - [ ] No generated source-side `*.js` or `*.d.ts` files are present outside approved generated i18n runtime files.
 - [ ] No generated release output is tracked under `artifacts/`, `release-output/`, `apps/target-ait/public/game/`, `apps/target-devvit/dist/`, or `apps/mobile-capacitor/www/`.
 - [ ] `pnpm validate:public` passes.
+- [ ] Effective target config validation passes as part of `pnpm validate:public`, including store-backed product and ad placement IDs for enabled targets.
 
 ## Packages
 

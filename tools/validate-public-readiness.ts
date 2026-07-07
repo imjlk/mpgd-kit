@@ -3,6 +3,10 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { discoverPublishablePackages } from './package/workspace';
+import { validateEffectiveTargetConfigMatrix } from './target/effective-config';
+import { validateAdPlacementsFile } from './validate-ad-placements';
+import { validateProductCatalogFile } from './validate-product-catalog';
+import { validateTargetConfigMatrixFile } from './validate-target-config';
 
 interface PackageMetadata {
   readonly name?: string;
@@ -138,6 +142,7 @@ const manualGateMessages = {
 
 const failures: string[] = [];
 const manualGates: string[] = [];
+const targetConfigFilterEnvName = 'MPGD_TARGET_CONFIG_TARGETS';
 
 for (const file of requiredFiles) {
   if (!existsSync(file)) {
@@ -171,6 +176,9 @@ for (const root of publishableRoots) {
 
 collectTrackedGeneratedArtifacts();
 collectTrackedGeneratedSourceArtifacts();
+collectCatalogReadiness();
+collectTargetConfigReadiness();
+collectEffectiveTargetConfigReadiness();
 collectSecretFindings();
 collectManualReleaseGates();
 
@@ -282,6 +290,52 @@ function collectTrackedGeneratedSourceArtifacts(): void {
   }
 }
 
+function collectEffectiveTargetConfigReadiness(): void {
+  try {
+    validateEffectiveTargetConfigMatrix();
+  } catch (error) {
+    failures.push(`Effective target config release readiness failed: ${errorMessage(error)}`);
+  }
+}
+
+function collectCatalogReadiness(): void {
+  try {
+    validateProductCatalogFile();
+  } catch (error) {
+    failures.push(`Product catalog public readiness failed: ${errorMessage(error)}`);
+  }
+
+  try {
+    validateAdPlacementsFile();
+  } catch (error) {
+    failures.push(`Ad placement public readiness failed: ${errorMessage(error)}`);
+  }
+}
+
+function collectTargetConfigReadiness(): void {
+  try {
+    withEnvUnset(targetConfigFilterEnvName, () => validateTargetConfigMatrixFile());
+  } catch (error) {
+    failures.push(`Target config public readiness failed: ${errorMessage(error)}`);
+  }
+}
+
+function withEnvUnset<T>(name: string, callback: () => T): T {
+  const previous = process.env[name];
+
+  delete process.env[name];
+
+  try {
+    return callback();
+  } finally {
+    if (previous === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = previous;
+    }
+  }
+}
+
 function collectSecretFindings(): void {
   for (const file of gitLsFiles()) {
     if (binaryFileExtensions.some((extension) => file.endsWith(extension))) {
@@ -296,6 +350,10 @@ function collectSecretFindings(): void {
       }
     }
   }
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function collectManualReleaseGates(): void {

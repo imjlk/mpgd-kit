@@ -282,6 +282,59 @@ assertEqual(
   'reward_continue',
 );
 
+const blankEffectiveConfig = createEffectiveTargetConfig({
+  target: 'android',
+  targetConfigVersion: targetConfigMatrix.version,
+  config: androidConfig,
+  catalog: {
+    version: 'blank-catalog',
+    products: [
+      {
+        id: 'COINS_100',
+        type: 'consumable',
+        grant: {
+          type: 'currency',
+          currency: 'coin',
+          amount: 100,
+        },
+        platformProductIds: {
+          android: ' ',
+        },
+      },
+    ],
+  },
+  adPlacements: {
+    version: 'blank-ads',
+    placements: [
+      {
+        id: 'CONTINUE_AFTER_FAIL',
+        type: 'rewarded',
+        reward: {
+          type: 'continue',
+          amount: 1,
+        },
+        frequencyCap: {
+          cooldownSeconds: 60,
+        },
+        platformPlacementIds: {
+          android: '',
+        },
+      },
+    ],
+  },
+});
+
+const blankProductConfig = getEffectiveProductConfig(blankEffectiveConfig, 'COINS_100');
+assertEqual(blankProductConfig?.reason, 'missing-platform-id');
+assertEqual(blankProductConfig?.platformProductId, undefined);
+
+const blankAdPlacementConfig = getEffectiveAdPlacementConfig(
+  blankEffectiveConfig,
+  'CONTINUE_AFTER_FAIL',
+);
+assertEqual(blankAdPlacementConfig?.reason, 'missing-platform-id');
+assertEqual(blankAdPlacementConfig?.platformPlacementId, undefined);
+
 await androidGateway.commerce.purchase({
   productId: 'COINS_100',
   source: 'shop',

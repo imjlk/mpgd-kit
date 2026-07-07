@@ -20,6 +20,12 @@ export function validateProductCatalogFile(path = 'packages/catalog/catalog.json
     if (Object.keys(product.platformProductIds).length === 0) {
       throw new Error(`Product ${product.id} has no platformProductIds.`);
     }
+
+    for (const [target, platformProductId] of Object.entries(product.platformProductIds)) {
+      if (platformProductId.trim().length === 0) {
+        throw new Error(`Product ${product.id} has blank platformProductId for ${target}.`);
+      }
+    }
   }
 
   return catalog;
