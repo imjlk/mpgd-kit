@@ -92,6 +92,25 @@ const backend = createGameServicesHttpBackendApi({
 });
 ```
 
+## Ledger Idempotency Contract
+
+`@mpgd/game-services` treats platform callbacks as evidence, not as the grant
+authority. Stores backing `GameServicesStore` must preserve these idempotency
+dimensions:
+
+- Purchase and ad reward entitlement grants dedupe by `source`, `playerId`, and
+  `idempotencyKey`. A purchase and rewarded-ad grant may use the same
+  `idempotencyKey` for the same player without colliding because their `source`
+  values differ.
+- Duplicate entitlement grants return the original `ledgerEntryId` with
+  `alreadyProcessed: true`. Platform transaction ids, impression ids, and other
+  payload fields are evidence payload, not entitlement idempotency dimensions.
+- Leaderboard records dedupe by `target`, `leaderboardId`, `playerId`, and
+  `runId`. Retries with a different score, submission timestamp, or
+  `platformSubmissionId` reuse the original `ledgerEntryId`.
+- `ledgerEntryId` values are stable opaque strings. Do not parse them for game
+  state decisions; persist and compare the idempotency dimensions instead.
+
 ## Cloudflare Worker Starter
 
 `apps/game-services-worker` is a Cloudflare Vite plugin Worker starter. Vite

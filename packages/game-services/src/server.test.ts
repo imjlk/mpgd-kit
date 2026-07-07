@@ -219,6 +219,196 @@ assertEqual(
   'ledger entry ids should stay distinct for long shared prefixes',
 );
 
+const idempotencyStore = createInMemoryGameServicesStore();
+const idempotencyBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: idempotencyStore,
+  now: () => '2026-07-04T00:00:00.000Z',
+});
+const sharedKeyPurchase = await idempotencyBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-shared',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-shared-key',
+  idempotencyKey: 'shared-key',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const duplicateSharedKeyPurchase = await idempotencyBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-shared',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-shared-key-retry',
+  idempotencyKey: 'shared-key',
+  purchasedAt: '2026-07-04T00:00:00.500Z',
+});
+const sharedKeyReward = await idempotencyBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-shared',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-shared-key',
+  idempotencyKey: 'shared-key',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+const duplicateReward = await idempotencyBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-shared',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-shared-key-retry',
+  idempotencyKey: 'shared-key',
+  completedAt: '2026-07-04T00:00:02.000Z',
+});
+const firstLeaderboardRun = await idempotencyBackend.leaderboard.recordScore({
+  target: 'android',
+  playerId: 'player-shared',
+  leaderboardId: 'default',
+  score: 1000,
+  runId: 'run-shared',
+  platformSubmissionId: 'submission-1',
+  submittedAt: '2026-07-04T00:00:03.000Z',
+});
+const duplicateLeaderboardRun = await idempotencyBackend.leaderboard.recordScore({
+  target: 'android',
+  playerId: 'player-shared',
+  leaderboardId: 'default',
+  score: 2000,
+  runId: 'run-shared',
+  platformSubmissionId: 'submission-2',
+  submittedAt: '2026-07-04T00:00:04.000Z',
+});
+const crossTargetLeaderboardRun = await idempotencyBackend.leaderboard.recordScore({
+  target: 'reddit',
+  playerId: 'player-shared',
+  leaderboardId: 'default',
+  score: 3000,
+  runId: 'run-shared',
+  platformSubmissionId: 'submission-reddit',
+  submittedAt: '2026-07-04T00:00:04.500Z',
+});
+const colonLeaderboardRun = await idempotencyBackend.leaderboard.recordScore({
+  target: 'android',
+  playerId: 'player:a',
+  leaderboardId: 'leaderboard:b',
+  score: 500,
+  runId: 'run:c',
+  submittedAt: '2026-07-04T00:00:05.000Z',
+});
+const colonLeaderboardTwin = await idempotencyBackend.leaderboard.recordScore({
+  target: 'android',
+  playerId: 'b:player',
+  leaderboardId: 'leaderboard',
+  score: 600,
+  runId: 'a:run:c',
+  submittedAt: '2026-07-04T00:00:06.000Z',
+});
+const storedLeaderboardRun = await idempotencyStore.getLeaderboardTransaction(
+  firstLeaderboardRun.ledgerEntryId,
+);
+if (storedLeaderboardRun === undefined) {
+  throw new Error('leaderboard retry should leave the original transaction readable');
+}
+
+assertEqual(
+  sharedKeyPurchase.alreadyProcessed,
+  false,
+  'purchase with shared key should create its own entitlement grant',
+);
+assertEqual(
+  sharedKeyReward.alreadyProcessed,
+  false,
+  'ad reward with same key should not collide with purchase source',
+);
+assertEqual(
+  sharedKeyPurchase.ledgerEntryId === sharedKeyReward.ledgerEntryId,
+  false,
+  'purchase and ad reward ledger entries should stay source-scoped',
+);
+assertEqual(
+  duplicateSharedKeyPurchase.alreadyProcessed,
+  true,
+  'duplicate purchase should be idempotent for source, player, and key',
+);
+assertEqual(
+  duplicateSharedKeyPurchase.ledgerEntryId,
+  sharedKeyPurchase.ledgerEntryId,
+  'duplicate purchase should ignore changed platform transaction evidence',
+);
+assertEqual(
+  duplicateReward.alreadyProcessed,
+  true,
+  'duplicate ad reward should be idempotent for source, player, and key',
+);
+assertEqual(
+  duplicateReward.ledgerEntryId,
+  sharedKeyReward.ledgerEntryId,
+  'duplicate ad reward should reuse the original ledger entry id',
+);
+assertEqual(
+  firstLeaderboardRun.alreadyProcessed,
+  false,
+  'first leaderboard run should create a score ledger record',
+);
+assertEqual(
+  duplicateLeaderboardRun.alreadyProcessed,
+  true,
+  'leaderboard retries should dedupe by target, leaderboard, player, and run',
+);
+assertEqual(
+  duplicateLeaderboardRun.ledgerEntryId,
+  firstLeaderboardRun.ledgerEntryId,
+  'leaderboard retry should reuse the original ledger entry id',
+);
+assertEqual(
+  storedLeaderboardRun.score,
+  1000,
+  'leaderboard retry should not mutate the original score',
+);
+assertEqual(
+  storedLeaderboardRun.platformSubmissionId,
+  'submission-1',
+  'leaderboard retry should not mutate the original submission id',
+);
+assertEqual(
+  storedLeaderboardRun.submittedAt,
+  '2026-07-04T00:00:03.000Z',
+  'leaderboard retry should not mutate the original submission time',
+);
+assertEqual(
+  crossTargetLeaderboardRun.alreadyProcessed,
+  false,
+  'same leaderboard run on another target should create a separate ledger record',
+);
+assertEqual(
+  crossTargetLeaderboardRun.ledgerEntryId === firstLeaderboardRun.ledgerEntryId,
+  false,
+  'leaderboard target should be part of the idempotency dimensions',
+);
+assertEqual(
+  colonLeaderboardRun.alreadyProcessed,
+  false,
+  'colon-bearing leaderboard run should be accepted as new',
+);
+assertEqual(
+  colonLeaderboardTwin.alreadyProcessed,
+  false,
+  'distinct colon-bearing leaderboard run should not collide',
+);
+assertEqual(
+  colonLeaderboardRun.ledgerEntryId === colonLeaderboardTwin.ledgerEntryId,
+  false,
+  'leaderboard ledger entry ids should encode ambiguous separators safely',
+);
+assertEqual(
+  (await idempotencyStore.listEntitlementTransactions()).length,
+  2,
+  'source-scoped entitlement idempotency should store two unique grants',
+);
+assertEqual(
+  (await idempotencyStore.listLeaderboardTransactions()).length,
+  4,
+  'leaderboard idempotency should store four unique run records',
+);
+
 console.log('GameServices backend API handler smoke test passed.');
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
