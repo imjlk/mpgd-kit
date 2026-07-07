@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
@@ -354,8 +355,10 @@ function removeFilesByExtension(directory: string, extension: string): void {
   }
 
   for (const file of readdirSync(directory)) {
-    if (file.endsWith(extension)) {
-      rmSync(`${directory}/${file}`, { force: true });
+    const target = `${directory}/${file}`;
+
+    if (file.endsWith(extension) && statSync(target).isFile()) {
+      rmSync(target, { force: true });
     }
   }
 }
