@@ -52,6 +52,18 @@
     "gunshi": "^0.35.1"
   },
   "devDependencies": {
+    "@mpgd/adapter-ait": "workspace:*",
+    "@mpgd/adapter-browser": "workspace:*",
+    "@mpgd/adapter-capacitor": "workspace:*",
+    "@mpgd/adapter-devvit": "workspace:*",
+    "@mpgd/analytics": "workspace:*",
+    "@mpgd/bridge": "workspace:*",
+    "@mpgd/catalog": "workspace:*",
+    "@mpgd/game-services": "workspace:*",
+    "@mpgd/i18n": "workspace:*",
+    "@mpgd/phaser-assets": "workspace:*",
+    "@mpgd/platform": "workspace:*",
+    "@mpgd/target-config": "workspace:*",
     "@types/node": "^24.0.0",
     "ttsc": "0.16.9",
     "typescript": "7.0.1-rc"

@@ -15,7 +15,7 @@
     "types": "wrangler types --path ./src/worker-configuration.d.ts"
   },
   "dependencies": {
-    "@mpgd/bridge": "__MPGD_DEPENDENCY_VERSION__"
+    "@mpgd/bridge": "__MPGD_DEPENDENCY_VERSION_BRIDGE__"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260707.1",
