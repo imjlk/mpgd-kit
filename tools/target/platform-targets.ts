@@ -14,7 +14,7 @@ export interface LoadedPlatformTargetsConfig {
 }
 
 export function platformTargetsFilePath(
-  path = process.env[platformTargetsFileEnv] ?? 'platform.targets.json',
+  path = process.env[platformTargetsFileEnv] ?? 'mpgd.targets.json',
 ): string {
   return resolve(path);
 }

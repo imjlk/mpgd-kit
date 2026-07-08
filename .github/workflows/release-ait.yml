@@ -31,6 +31,9 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
       - run: pnpm validate:public
+      - run: pnpm validate:target-config
+      - run: pnpm validate:effective-config
+      - run: pnpm validate:targets
       - run: pnpm smoke:target-config
       - run: pnpm smoke:effective-config
       - run: pnpm smoke:adapter-effective-config
@@ -41,5 +44,5 @@ jobs:
         with:
           name: ait-${{ inputs.profile }}
           path: |
-            artifacts/**
-            release-output/**
+            examples/phaser-starter/artifacts/**
+            examples/phaser-starter/release-output/**

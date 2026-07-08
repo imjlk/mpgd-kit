@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
 import { readJsonFile } from '../io';
+import { platformTargetsFilePath } from '../target/platform-targets';
 import {
   assertEmbeddedTargetConfig,
   embeddedTargetConfigFileName,
@@ -28,7 +29,6 @@ interface SmokePlatformTargetsConfig {
   readonly targets: Record<string, SmokePlatformTargetConfig>;
 }
 
-const platformTargetsFileEnv = 'MPGD_PLATFORM_TARGETS_FILE';
 const releaseManifestFileEnv = 'MPGD_RELEASE_MANIFEST_FILE';
 
 const loadedPlatformTargets = loadSmokePlatformTargetsConfig();
@@ -57,7 +57,7 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     const artifactPath = resolveArtifactPath(entry.artifact);
     const effectiveConfigPath = resolveArtifactPath(entry.effectiveConfig.path);
 
-    assertPathInsideTargetBase(artifactPath, `${target} artifact`);
+    assertArtifactPathAllowed(target, targetConfig, artifactPath);
     assertPathExists(artifactPath, `${target} artifact`);
     assertPathInsideTargetBase(effectiveConfigPath, `${target} effective target config`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);
@@ -263,11 +263,7 @@ function verifyDevvitWebManifest(
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
 ): void {
-  const wrapperAppConfigPath = requireStringMatch(targetConfig.wrapperApp, `${target}.wrapperApp`);
-  const wrapperApp = resolveFromPlatformTargetsBase(
-    loadedPlatformTargets.baseDir,
-    wrapperAppConfigPath,
-  );
+  const wrapperApp = resolveWrapperApp(target, targetConfig);
   const manifestPath = `${wrapperApp}/devvit.json`;
   const manifest = readJsonFile(manifestPath);
   const label = `${target} Devvit manifest`;
@@ -480,6 +476,27 @@ function assertPathInsideTargetBase(path: string, label: string): void {
   );
 }
 
+function assertArtifactPathAllowed(
+  target: string,
+  targetConfig: SmokePlatformTargetConfig,
+  artifactPath: string,
+): void {
+  if (targetConfig.kind !== 'devvit-web') {
+    assertPathInsideTargetBase(artifactPath, `${target} artifact`);
+    return;
+  }
+
+  const wrapperApp = resolveWrapperApp(target, targetConfig);
+
+  assertPathInside(artifactPath, wrapperApp, `${target} artifact must stay under wrapper app`);
+}
+
+function resolveWrapperApp(target: string, targetConfig: SmokePlatformTargetConfig): string {
+  const wrapperAppConfigPath = requireStringMatch(targetConfig.wrapperApp, `${target}.wrapperApp`);
+
+  return resolveFromPlatformTargetsBase(loadedPlatformTargets.baseDir, wrapperAppConfigPath);
+}
+
 function assertPathInside(path: string, baseDir: string, label: string): void {
   const relativePath = relative(baseDir, path);
 
@@ -539,10 +556,6 @@ function loadSmokePlatformTargetsConfig(): {
 
 function readSmokeReleaseManifest(path: string): ReleaseManifest {
   return assertReleaseManifest(readJsonFile(path));
-}
-
-function platformTargetsFilePath(): string {
-  return resolve(process.env[platformTargetsFileEnv] ?? 'platform.targets.json');
 }
 
 function releaseManifestPath(baseDir: string): string {

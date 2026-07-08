@@ -26,7 +26,7 @@ because the current ttsc RC config loader path is more reliable with JS config f
 
 ## Phase 1 - Phaser 4 App
 
-- [x] apps/game-phaser created
+- [x] examples/phaser-starter created
 - [x] Phaser 4.2.0 exact pinned
 - [x] Vite configured
 - [x] @ttsc/unplugin/vite connected
@@ -38,9 +38,9 @@ because the current ttsc RC config loader path is more reliable with JS config f
 - [x] createGame.ts created
 - [x] installPlatform.ts created
 - [x] browser mock adapter connected
-- [x] pnpm --dir apps/game-phaser dev succeeds
-- [x] pnpm --dir apps/game-phaser build succeeds
-- [x] pnpm --dir apps/game-phaser check succeeds
+- [x] pnpm --dir examples/phaser-starter dev succeeds
+- [x] pnpm --dir examples/phaser-starter build succeeds
+- [x] pnpm --dir examples/phaser-starter check succeeds
 
 ## Phase 2 - Contracts And Typia Boundary
 
@@ -70,7 +70,7 @@ because the current ttsc RC config loader path is more reliable with JS config f
 - [x] request(input: BridgeRequest): Promise<BridgeResponse> defined
 - [x] Android mock native response implemented
 - [x] iOS mock native response implemented
-- [x] game-phaser build output copied to www
+- [x] configured game build output copied to www
 - [x] cap sync android succeeds
 - [x] cap sync ios succeeds
 
@@ -85,14 +85,14 @@ loading compatibility. The root project toolchain remains TypeScript 7 RC.
 - [x] granite.config.ts written
 - [x] aitBridge.ts written
 - [x] globalThis.__GAME_PLATFORM_BRIDGE__ injected
-- [x] game-phaser build output copied to public/game
+- [x] configured game build output copied to public/game
 - [x] AIT wrapper build succeeds
 - [x] ait build succeeds
 - [x] sandbox README written
 
 ## Phase 5 - Build Orchestration
 
-- [x] platform.targets.json written
+- [x] starter `mpgd.targets.json` target build config written
 - [x] release.manifest.schema.json written
 - [x] tools/target/build-target.ts written
 - [x] tools/target/generate-release-manifest.ts written
@@ -234,7 +234,7 @@ to run xcodebuild archive.
 
 - [x] Phaser game app separates manifest assets, authored stage config, and input actions
 - [x] `packages/game-core` supports stage-specific completion thresholds
-- [x] root `validate:game-assets` checks public asset registration and budget
+- [x] starter asset loading keeps Phaser asset registration manifest-driven
 - [x] game-development guide documents the daily loop and platform readiness checks
 - [x] root `tsconfig.json` exposes the graph project for ttsc graph MCP workflows
 

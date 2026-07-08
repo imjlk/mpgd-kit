@@ -49,5 +49,5 @@ jobs:
         with:
           name: android-${{ inputs.profile }}
           path: |
-            artifacts/**
-            release-output/**
+            examples/phaser-starter/artifacts/**
+            examples/phaser-starter/release-output/**

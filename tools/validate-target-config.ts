@@ -35,13 +35,13 @@ export function validateTargetConfigMatrixFile(
 
     for (const target of Object.keys(configMatrix.targets)) {
       if (platformTargets.targets[target] === undefined) {
-        throw new Error(`Target config is not configured in platform.targets.json: ${target}`);
+        throw new Error(`Target config is not configured in the target build config: ${target}`);
       }
     }
   } else {
     for (const target of targets) {
       if (platformTargets.targets[target] === undefined) {
-        throw new Error(`Target config is not configured in platform.targets.json: ${target}`);
+        throw new Error(`Target config is not configured in the target build config: ${target}`);
       }
     }
   }
