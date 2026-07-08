@@ -384,9 +384,18 @@ importers:
 
   examples/phaser-starter:
     dependencies:
+      '@mpgd/adapter-ait':
+        specifier: workspace:*
+        version: link:../../adapters/ait
       '@mpgd/adapter-browser':
         specifier: workspace:*
         version: link:../../adapters/browser
+      '@mpgd/adapter-capacitor':
+        specifier: workspace:*
+        version: link:../../adapters/capacitor
+      '@mpgd/adapter-devvit':
+        specifier: workspace:*
+        version: link:../../adapters/devvit
       '@mpgd/catalog':
         specifier: workspace:*
         version: link:../../packages/catalog

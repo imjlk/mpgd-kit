@@ -13,7 +13,10 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
+    "@mpgd/adapter-ait": "workspace:*",
     "@mpgd/adapter-browser": "workspace:*",
+    "@mpgd/adapter-capacitor": "workspace:*",
+    "@mpgd/adapter-devvit": "workspace:*",
     "@mpgd/catalog": "workspace:*",
     "@mpgd/game-services": "workspace:*",
     "@mpgd/i18n": "workspace:*",
