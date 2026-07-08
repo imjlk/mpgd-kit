@@ -1,3 +1,4 @@
+import type { AnalyticsEvent } from '@mpgd/analytics';
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import {
   createGameServicesHttpBackendApi,
@@ -120,9 +121,20 @@ assertEqual(purchase.verified, true, 'purchase should be verified');
 assertEqual(duplicatePurchase.alreadyProcessed, true, 'purchase should dedupe');
 assertEqual(reward.granted, true, 'reward should be granted');
 assertEqual(score.submitted, true, 'score should be recorded');
+assertEqual(score.rank, 1, 'first leaderboard score should start at rank one');
 assertEqual(redditScore.submitted, true, 'reddit score should be recorded');
+assertEqual(
+  redditScore.rank,
+  1,
+  'higher cross-target score should rank ahead within the shared leaderboard id',
+);
 assertEqual((await store.listEntitlementTransactions()).length, 2, 'two grants should be recorded');
 assertEqual((await store.listLeaderboardTransactions()).length, 2, 'two scores should be recorded');
+assertEqual(
+  (await store.listLeaderboardTransactions())[0]?.ledgerEntryId,
+  redditScore.ledgerEntryId,
+  'leaderboard transactions should sort higher scores first across targets',
+);
 assertEqual(missing.status, 404, 'unknown endpoint should fail closed');
 assertEqual(
   invalidTransportRequest.status,
@@ -156,9 +168,67 @@ const malformedJson = await httpFetch(
     body: '{',
   }),
 );
+const methodNotAllowed = await httpFetch(
+  new Request('https://game-services.test/game-services/purchases/verify', {
+    method: 'GET',
+  }),
+);
+const corsFetch = createGameServicesHttpFetchHandler(handler, {
+  corsHeaders: {
+    'access-control-allow-headers': 'content-type',
+    'access-control-allow-methods': 'POST, OPTIONS',
+    'access-control-allow-origin': 'https://game.example',
+  },
+});
+const corsPreflight = await corsFetch(
+  new Request('https://game-services.test/game-services/purchases/verify', {
+    method: 'OPTIONS',
+    headers: {
+      'access-control-request-headers': 'content-type',
+      'access-control-request-method': 'POST',
+      origin: 'https://game.example',
+    },
+  }),
+);
+const corsPost = await corsFetch(
+  new Request('https://game-services.test/game-services/purchases/verify', {
+    method: 'POST',
+    body: '{}',
+  }),
+);
+const corsHealth = await corsFetch(new Request('https://game-services.test/health'));
 
 assertEqual(httpHealthBody.version, 'test-http', 'HTTP health should expose handler version');
 assertEqual(malformedJson.status, 400, 'malformed JSON should return 400');
+assertEqual(methodNotAllowed.status, 405, 'HTTP handler should reject non-POST writes');
+assertEqual(corsPreflight.status, 204, 'HTTP handler should answer CORS preflight');
+assertEqual(corsPost.status, 400, 'HTTP handler should reject invalid CORS POST bodies');
+assertEqual(corsHealth.status, 200, 'HTTP handler should answer CORS health checks');
+assertEqual(
+  corsPreflight.headers.get('access-control-allow-origin'),
+  'https://game.example',
+  'HTTP handler should include configured CORS headers on preflight',
+);
+assertEqual(
+  corsPreflight.headers.get('access-control-allow-methods'),
+  'POST, OPTIONS',
+  'HTTP handler should include configured CORS methods on preflight',
+);
+assertEqual(
+  corsPreflight.headers.get('access-control-allow-headers'),
+  'content-type',
+  'HTTP handler should include configured CORS request headers on preflight',
+);
+assertEqual(
+  corsPost.headers.get('access-control-allow-origin'),
+  'https://game.example',
+  'HTTP handler should include configured CORS headers on error responses',
+);
+assertEqual(
+  corsHealth.headers.get('access-control-allow-origin'),
+  'https://game.example',
+  'HTTP handler should include configured CORS headers on successful responses',
+);
 
 const collisionStore = createInMemoryGameServicesStore();
 const collisionBackend = createGameServicesBackend({
@@ -407,6 +477,187 @@ assertEqual(
   (await idempotencyStore.listLeaderboardTransactions()).length,
   4,
   'leaderboard idempotency should store four unique run records',
+);
+
+const analyticsEvents: AnalyticsEvent[] = [];
+const analyticsBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  analyticsSessionId: 'server-session',
+  analytics: {
+    track(event) {
+      analyticsEvents.push(event);
+    },
+  },
+  now: () => '2026-07-04T00:00:00.000Z',
+});
+const unknownProduct = await analyticsBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'analytics-player',
+  productId: 'COINS_500',
+  platformTransactionId: 'txn-unknown-product',
+  idempotencyKey: 'analytics-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const unknownPlacement = await analyticsBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'analytics-player',
+  placementId: 'STAGE_END_INTERSTITIAL',
+  platformImpressionId: 'impression-unknown-placement',
+  idempotencyKey: 'analytics-reward',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+const analyticsLeaderboard = await analyticsBackend.leaderboard.recordScore({
+  target: 'android',
+  playerId: 'analytics-player',
+  leaderboardId: 'default',
+  score: 900,
+  runId: 'analytics-run',
+  submittedAt: '2026-07-04T00:00:02.000Z',
+});
+const analyticsPurchase = await analyticsBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'analytics-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-analytics-success',
+  idempotencyKey: 'analytics-purchase-success',
+  purchasedAt: '2026-07-04T00:00:03.000Z',
+});
+const analyticsReward = await analyticsBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'analytics-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-analytics-success',
+  idempotencyKey: 'analytics-reward-success',
+  completedAt: '2026-07-04T00:00:04.000Z',
+});
+
+assertEqual(unknownProduct.verified, false, 'unknown products should be rejected');
+assertEqual(
+  unknownProduct.reason,
+  'UNKNOWN_PRODUCT',
+  'unknown product rejection should preserve reason',
+);
+assertEqual(unknownPlacement.granted, false, 'unknown placements should be rejected');
+assertEqual(
+  unknownPlacement.reason,
+  'UNKNOWN_PLACEMENT',
+  'unknown placement rejection should preserve reason',
+);
+assertEqual(analyticsLeaderboard.submitted, true, 'analytics backend should record scores');
+assertEqual(analyticsPurchase.verified, true, 'analytics backend should verify known products');
+assertEqual(analyticsReward.granted, true, 'analytics backend should grant known rewards');
+assertEqual(
+  analyticsEvents.map((event) => event.name).join(','),
+  'purchase_rejected,rewarded_ad_rejected,leaderboard_recorded,purchase_granted,rewarded_ad_granted',
+  'backend should emit analytics for rejected and granted purchase/reward outcomes',
+);
+assertEqual(
+  analyticsEvents.map((event) => event.sessionId).join(','),
+  'server-session,server-session,server-session,server-session,server-session',
+  'backend analytics should use the configured session id',
+);
+assertEqual(
+  analyticsEvents[0]?.properties.reason,
+  'UNKNOWN_PRODUCT',
+  'purchase analytics should include rejection reason',
+);
+assertEqual(
+  analyticsEvents[1]?.properties.reason,
+  'UNKNOWN_PLACEMENT',
+  'reward analytics should include rejection reason',
+);
+assertEqual(
+  analyticsEvents[2]?.properties.leaderboardId,
+  'default',
+  'leaderboard analytics should include the leaderboard id',
+);
+assertEqual(
+  analyticsEvents[2]?.properties.score,
+  900,
+  'leaderboard analytics should include the submitted score',
+);
+assertEqual(
+  analyticsEvents[2]?.properties.ledgerEntryId,
+  analyticsLeaderboard.ledgerEntryId,
+  'leaderboard analytics should include the ledger entry id',
+);
+assertEqual(
+  analyticsEvents[2]?.properties.alreadyProcessed,
+  false,
+  'leaderboard analytics should include idempotency state',
+);
+assertEqual(analyticsEvents[2]?.properties.rank, 1, 'leaderboard analytics should include rank');
+assertEqual(
+  analyticsEvents[3]?.properties.ledgerEntryId,
+  analyticsPurchase.ledgerEntryId,
+  'granted purchase analytics should include the ledger entry id',
+);
+assertEqual(
+  analyticsEvents[3]?.properties.alreadyProcessed,
+  false,
+  'granted purchase analytics should include idempotency state',
+);
+assertEqual(
+  analyticsEvents[4]?.properties.ledgerEntryId,
+  analyticsReward.ledgerEntryId,
+  'granted reward analytics should include the ledger entry id',
+);
+assertEqual(
+  analyticsEvents[4]?.properties.alreadyProcessed,
+  false,
+  'granted reward analytics should include idempotency state',
+);
+
+const failingAnalyticsBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  analytics: {
+    track() {
+      throw new Error('analytics sink unavailable');
+    },
+  },
+  now: () => '2026-07-04T00:00:00.000Z',
+});
+const analyticsFailureScore = await failingAnalyticsBackend.leaderboard.recordScore({
+  target: 'android',
+  playerId: 'failing-analytics-player',
+  leaderboardId: 'default',
+  score: 700,
+  runId: 'failing-analytics-run',
+  submittedAt: '2026-07-04T00:00:03.000Z',
+});
+const analyticsFailurePurchase = await failingAnalyticsBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'failing-analytics-purchase-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-failing-analytics',
+  idempotencyKey: 'failing-analytics-purchase',
+  purchasedAt: '2026-07-04T00:00:04.000Z',
+});
+const analyticsFailureReward = await failingAnalyticsBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'failing-analytics-reward-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-failing-analytics',
+  idempotencyKey: 'failing-analytics-reward',
+  completedAt: '2026-07-04T00:00:05.000Z',
+});
+
+assertEqual(
+  analyticsFailureScore.submitted,
+  true,
+  'analytics failures should not break backend leaderboard writes',
+);
+assertEqual(
+  analyticsFailurePurchase.verified,
+  true,
+  'analytics failures should not break backend purchase verification',
+);
+assertEqual(
+  analyticsFailureReward.granted,
+  true,
+  'analytics failures should not break backend ad reward claims',
 );
 
 console.log('GameServices backend API handler smoke test passed.');
