@@ -4,6 +4,7 @@ import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
 import { readJsonFile } from '../io';
+import { platformTargetsFilePath } from '../target/platform-targets';
 import {
   assertEmbeddedTargetConfig,
   embeddedTargetConfigFileName,
@@ -28,7 +29,6 @@ interface SmokePlatformTargetsConfig {
   readonly targets: Record<string, SmokePlatformTargetConfig>;
 }
 
-const platformTargetsFileEnv = 'MPGD_PLATFORM_TARGETS_FILE';
 const releaseManifestFileEnv = 'MPGD_RELEASE_MANIFEST_FILE';
 
 const loadedPlatformTargets = loadSmokePlatformTargetsConfig();
@@ -539,10 +539,6 @@ function loadSmokePlatformTargetsConfig(): {
 
 function readSmokeReleaseManifest(path: string): ReleaseManifest {
   return assertReleaseManifest(readJsonFile(path));
-}
-
-function platformTargetsFilePath(): string {
-  return resolve(process.env[platformTargetsFileEnv] ?? 'mpgd.targets.json');
 }
 
 function releaseManifestPath(baseDir: string): string {
