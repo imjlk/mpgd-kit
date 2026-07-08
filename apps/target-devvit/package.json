@@ -6,7 +6,7 @@
   "scripts": {
     "dev": "devvit playtest",
     "dev:prepare": "pnpm --dir ../.. build:target reddit staging",
-    "dev:client": "APP_TARGET=reddit APP_VERSION=0.0.0-dev BUILD_ID=devvit-watch pnpm --dir ../game-phaser exec vite build --mode staging --watch --outDir ../target-devvit/dist/client",
+    "dev:client": "APP_TARGET=reddit APP_VERSION=0.0.0-dev BUILD_ID=devvit-watch pnpm --dir ../../examples/phaser-starter exec vite build --mode staging --watch --outDir ../../apps/target-devvit/dist/client",
     "dev:server": "vite build --config vite.server.config.ts --watch",
     "dev:watch": "concurrently --kill-others --success first \"pnpm run dev:client\" \"pnpm run dev:server\"",
     "build": "pnpm --dir ../.. build:target reddit production",

@@ -542,7 +542,7 @@ function readSmokeReleaseManifest(path: string): ReleaseManifest {
 }
 
 function platformTargetsFilePath(): string {
-  return resolve(process.env[platformTargetsFileEnv] ?? 'platform.targets.json');
+  return resolve(process.env[platformTargetsFileEnv] ?? 'mpgd.targets.json');
 }
 
 function releaseManifestPath(baseDir: string): string {

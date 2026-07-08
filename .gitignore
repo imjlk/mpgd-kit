@@ -3,6 +3,7 @@ dist/
 artifacts/
 release-output/
 output/
+.mpgd.targets.generated.json
 .env
 .env.*
 .devvit/

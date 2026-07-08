@@ -10,7 +10,7 @@
     "adapters/**/*.ts",
     "backend/**/*.ts",
     "native-plugins/capacitor-game-services/src/**/*.ts",
-    "apps/game-phaser/src/**/*.ts",
+    "examples/phaser-starter/src/**/*.ts",
     "apps/target-ait/src/**/*.ts",
     "apps/target-devvit/src/**/*.ts",
     "apps/mobile-capacitor/capacitor.config.ts"

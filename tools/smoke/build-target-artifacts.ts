@@ -4,11 +4,8 @@ import { rmSync } from 'node:fs';
 import { verifyTargetArtifacts } from './verify-target-artifacts';
 
 const generatedPaths = [
-  'artifacts/target-config',
-  'artifacts/microsoft-store',
-  'artifacts/release-manifest.json',
-  'release-output/android/app-release.aab',
-  'release-output/ait',
+  'examples/phaser-starter/artifacts',
+  'examples/phaser-starter/release-output',
   'apps/target-devvit/dist',
 ];
 

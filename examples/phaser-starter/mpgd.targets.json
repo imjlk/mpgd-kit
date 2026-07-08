@@ -2,46 +2,46 @@
   "targets": {
     "web-preview": {
       "kind": "web",
-      "gameApp": "apps/game-phaser",
+      "gameApp": ".",
       "adapter": "browser",
       "output": "artifacts/web-preview"
     },
     "microsoft-store": {
       "kind": "web",
-      "gameApp": "apps/game-phaser",
+      "gameApp": ".",
       "adapter": "browser",
       "output": "artifacts/microsoft-store"
     },
     "android": {
       "kind": "capacitor-android",
-      "gameApp": "apps/game-phaser",
-      "shellApp": "apps/mobile-capacitor",
+      "gameApp": ".",
+      "shellApp": "../../apps/mobile-capacitor",
       "adapter": "capacitor",
-      "webDir": "apps/mobile-capacitor/www",
+      "webDir": "../../apps/mobile-capacitor/www",
       "artifact": "aab"
     },
     "ios": {
       "kind": "capacitor-ios",
-      "gameApp": "apps/game-phaser",
-      "shellApp": "apps/mobile-capacitor",
+      "gameApp": ".",
+      "shellApp": "../../apps/mobile-capacitor",
       "adapter": "capacitor",
-      "webDir": "apps/mobile-capacitor/www",
+      "webDir": "../../apps/mobile-capacitor/www",
       "artifact": "ipa"
     },
     "ait": {
       "kind": "apps-in-toss",
-      "gameApp": "apps/game-phaser",
-      "wrapperApp": "apps/target-ait",
+      "gameApp": ".",
+      "wrapperApp": "../../apps/target-ait",
       "adapter": "ait",
-      "webDir": "apps/target-ait/public/game",
+      "webDir": "../../apps/target-ait/public/game",
       "artifact": ".ait"
     },
     "reddit": {
       "kind": "devvit-web",
-      "gameApp": "apps/game-phaser",
-      "wrapperApp": "apps/target-devvit",
+      "gameApp": ".",
+      "wrapperApp": "../../apps/target-devvit",
       "adapter": "devvit",
-      "webDir": "apps/target-devvit/dist/client",
+      "webDir": "../../apps/target-devvit/dist/client",
       "artifact": "devvit"
     }
   }
