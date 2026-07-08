@@ -3,6 +3,11 @@ packages:
   - 'apps/*'
 __PNPM_WORKSPACE_KIT_PACKAGES__
 allowBuilds:
+  '@sentry/cli': true
+  '@swc/core': true
+  # @ait-co/devtools lazily installs cloudflared when the phone tunnel starts;
+  # keep default workspace installs free of external binary downloads.
+  cloudflared: false
   esbuild: true
   protobufjs: true
   sharp: true
