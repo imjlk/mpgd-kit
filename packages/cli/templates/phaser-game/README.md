@@ -133,6 +133,27 @@ intentionally leaves
 binary lazily through the community devtools package instead of during ordinary
 workspace install.
 
+The starter includes `@ait-co/console-cli`, the Apps in Toss community console
+CLI, as a dev dependency for project-local console automation:
+
+```sh
+pnpm ait:console:login
+pnpm ait:console:whoami
+pnpm ait:console:init
+# add the real logo, thumbnail, and screenshot files referenced by aitcc.yaml
+pnpm ait:console:register
+pnpm ait:console:status
+pnpm build:ait:package
+pnpm ait:console:deploy -- release-output/ait/YOUR_APP.ait
+```
+
+`ait:console:init` creates the game-owned `aitcc.yaml` context, and
+`ait:console:register` creates the mini-app and writes its `miniAppId` back to
+that file. Before registration, add the real logo, thumbnail, and screenshot
+files referenced by `aitcc.yaml` under `./assets/`. Use `pnpm build:ait` for the
+kit wrapper smoke loop, and run `pnpm build:ait:package` before console deploys
+so `release-output/ait/` contains the `.ait` bundle you pass after `--`.
+
 The starter also installs `@apps-in-toss/web-framework` and awaits
 `install()` from `@ait-co/polyfill` only when `__APP_TARGET__` is `ait`. In the
 Apps in Toss WebView runtime, standard Web APIs such as `navigator.clipboard`,

@@ -154,6 +154,7 @@ if (manifest !== null) {
 }
 
 validatePhaserTemplateAITPolyfill();
+validatePhaserTemplateAITConsoleCli();
 
 if (failures.length > 0) {
   throw new Error(`Starter workflow validation failed:\n- ${failures.join('\n- ')}`);
@@ -318,6 +319,70 @@ function validatePhaserTemplateAITPolyfill(): void {
       ]) {
         if (!readme.includes(requiredText)) {
           failures.push(`${readmePath}: must document ${requiredText} for the AIT polyfill flow.`);
+        }
+      }
+    }
+  }
+}
+
+function validatePhaserTemplateAITConsoleCli(): void {
+  const packagePath = 'packages/cli/templates/phaser-game/package.json';
+  const readmePath = 'packages/cli/templates/phaser-game/README.md';
+
+  if (!existsSync(packagePath)) {
+    failures.push(`${packagePath}: required for the AIT console CLI starter flow.`);
+  } else {
+    const packageJson = readJson(packagePath) as {
+      readonly devDependencies?: Record<string, unknown>;
+      readonly scripts?: Record<string, unknown>;
+    } | null;
+
+    if (packageJson !== null) {
+      assertString(
+        packageJson.devDependencies?.['@ait-co/console-cli'],
+        `${packagePath}: devDependencies.@ait-co/console-cli`,
+      );
+
+      for (const [scriptName, scriptValue] of Object.entries({
+        'build:ait:package':
+          'pnpm exec mpgd target build ait production --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}',
+        'ait:console:login': 'aitcc login',
+        'ait:console:whoami': 'aitcc whoami',
+        'ait:console:init': 'aitcc app init',
+        'ait:console:register': 'aitcc app register',
+        'ait:console:status': 'aitcc app status',
+        'ait:console:deploy': 'aitcc app deploy',
+      })) {
+        assertEqual(
+          packageJson.scripts?.[scriptName],
+          scriptValue,
+          `${packagePath}: ${scriptName}`,
+        );
+      }
+    }
+  }
+
+  if (!existsSync(readmePath)) {
+    failures.push(`${readmePath}: required for the AIT console CLI starter flow.`);
+  } else {
+    const initialFailureCount = failures.length;
+    const readme = readText(readmePath);
+
+    if (failures.length === initialFailureCount) {
+      for (const requiredText of [
+        '@ait-co/console-cli',
+        'aitcc.yaml',
+        'pnpm ait:console:login',
+        'pnpm ait:console:whoami',
+        'pnpm ait:console:init',
+        'pnpm ait:console:register',
+        'pnpm ait:console:status',
+        'pnpm build:ait:package',
+        'pnpm ait:console:deploy -- release-output/ait/YOUR_APP.ait',
+        './assets/',
+      ]) {
+        if (!readme.includes(requiredText)) {
+          failures.push(`${readmePath}: must document ${requiredText} for the AIT console flow.`);
         }
       }
     }
