@@ -73,6 +73,7 @@ const requiredIgnorePatterns = [
 
 const publishableRoots = ['packages', 'adapters', 'native-plugins', 'backend'];
 const allowedGeneratedSourcePrefixes = [
+  'examples/phaser-starter/src/env.d.ts',
   'packages/cli/templates/phaser-game/src/env.d.ts',
   'packages/i18n/src/paraglide/',
   'packages/i18n/src/paraglideAdapter.',
