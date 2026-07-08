@@ -61,23 +61,23 @@ pnpm check
 pnpm test
 ```
 
-For day-to-day work on the SDK demo app:
+For day-to-day work on the in-repo starter:
 
 ```sh
 pnpm dev:game
-pnpm dev:game:ait
-pnpm dev:game:devvit
-pnpm validate:game-assets
-pnpm graph:demo
+pnpm --dir examples/phaser-starter check
+pnpm --dir examples/phaser-starter build
+pnpm graph:starter
 ```
 
-## Demo App vs Starter
+## Starter And Target Configs
 
 - `examples/phaser-starter` is the clean starting point for a new game.
-  It is private, not publishable, and intentionally small.
-- `apps/game-phaser` is the SDK validation demo. It exercises player identity,
-  save/load, target feature availability, localized UI, purchases, rewarded ads,
-  leaderboard submission, and backend ledger flow.
+  It is private, not publishable, and intentionally small. The repo's root
+  target build scripts use this example's `mpgd.targets.json` so the kit does
+  not own a separate sample game app.
+- Generated games own their own `mpgd.targets.json`. The CLI resolves that file
+  into a local generated target config before invoking the kit target tools.
 
 See [Game Development Guide](docs/GAME_DEVELOPMENT.md) for boundaries and the
 starter workflow. See [Agentic Game Workflow](docs/AGENTIC_GAME_WORKFLOW.md) for
@@ -240,7 +240,6 @@ pnpm validate:i18n
 pnpm validate:target-config
 pnpm validate:effective-config
 pnpm validate:targets
-pnpm validate:game-assets
 pnpm validate:starter-workflow
 pnpm smoke:i18n
 pnpm smoke:target-config
@@ -279,7 +278,7 @@ Use graph presets before changing broad TypeScript flows:
 pnpm graph:target
 pnpm graph:package
 pnpm graph:bridge
-pnpm graph:demo
+pnpm graph:starter
 pnpm graph:game-services
 pnpm graph:target-config
 pnpm graph:preflight
@@ -297,8 +296,9 @@ handled as a dedicated follow-up.
 
 ## Reddit Devvit
 
-The Reddit target uses Devvit Web 0.13.x. `pnpm build:devvit` builds the Phaser
-game with `APP_TARGET=reddit`, copies it to `apps/target-devvit/dist/client`,
+The Reddit target uses Devvit Web 0.13.x. `pnpm build:devvit` builds the
+configured Phaser game with `APP_TARGET=reddit`, copies it to
+`apps/target-devvit/dist/client`,
 builds the Devvit server bridge to CJS, and writes the release manifest. Live
 `devvit playtest`, `devvit upload`, and `devvit publish` remain local commands
 because they depend on Reddit auth state in `~/.devvit/token`.

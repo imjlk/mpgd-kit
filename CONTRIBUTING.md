@@ -13,7 +13,7 @@ pnpm test
 pnpm graph:preflight
 ```
 
-Use `pnpm dev:game` for the Phaser demo loop.
+Use `pnpm dev:game` for the in-repo Phaser starter loop.
 
 ## Development Rules
 

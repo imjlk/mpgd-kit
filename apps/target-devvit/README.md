@@ -2,10 +2,11 @@
 
 Reddit Devvit Web wrapper for the Phaser game target.
 
-The root `pnpm build:devvit` command builds `apps/game-phaser` with
+The root `pnpm build:devvit` command builds the configured game app with
 `APP_TARGET=reddit`, embeds the effective target config, copies the game bundle
 to `apps/target-devvit/dist/client`, and builds the Devvit server bundle to
-`apps/target-devvit/dist/server/index.cjs`.
+`apps/target-devvit/dist/server/index.cjs`. In this repository that configured
+game app is `examples/phaser-starter`.
 
 The game client talks to the Devvit server through the shared
 `@mpgd/bridge/orpc` contract at `/api/mpgd/rpc`. The older JSON bridge endpoint
