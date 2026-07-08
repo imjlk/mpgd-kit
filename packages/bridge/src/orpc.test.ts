@@ -6,8 +6,11 @@ import {
   defaultBridgeRpcEndpoint,
 } from './orpc';
 
+const handledRequestIds: string[] = [];
 const handler = createBridgeRpcFetchHandler(
   createBridgeRpcRouter((request) => {
+    handledRequestIds.push(request.id);
+
     if (request.method !== 'identity.getPlayer') {
       return {
         id: request.id,
@@ -31,9 +34,15 @@ const handler = createBridgeRpcFetchHandler(
 );
 
 let fetchUrl = '';
+let fetchTestHeader = '';
 const client = createBridgeOrpcClient({
+  headers: {
+    'x-mpgd-bridge-test': 'orpc-contract',
+  },
   fetch(url, init) {
     fetchUrl = String(url);
+    fetchTestHeader = new Headers(init?.headers).get('x-mpgd-bridge-test') ?? '';
+
     return handler(new Request(`https://bridge.test${url}`, init));
   },
 });
@@ -56,6 +65,7 @@ assertEqual(
   true,
   'oRPC client should use bridge endpoint',
 );
+assertEqual(fetchTestHeader, 'orpc-contract', 'oRPC client should send configured headers');
 assertDeepEqual(response, {
   id: request.id,
   ok: true,
@@ -94,6 +104,11 @@ assertDeepEqual(missingIdResponse, {
     retryable: false,
   },
 } satisfies BridgeResponse);
+assertEqual(
+  handledRequestIds.join(','),
+  'request-1',
+  'invalid bridge requests should fail validation before reaching the handler',
+);
 
 const notFoundResponse = await handler(
   new Request('https://bridge.test/api/mpgd/missing/request', {
