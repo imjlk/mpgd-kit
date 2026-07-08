@@ -9131,7 +9131,6 @@ packages:
     resolution: {integrity: sha512-eS+Xp7OvMbv2mqQiok1SmPPmEEqEe3oJhaoWpiUiOOvRSTQ2bIcufZpRydnNX+MDPqL/qRM7R4kkDUymjCpffg==}
     hasBin: true
 
-
   ufo@1.6.4:
     resolution: {integrity: sha512-JFNbkD1Svwe0KvGi8GOeLcP4kAWQ609twvCdcHxq1oSL8svv39ZuSvajcD8B+5D0eL4+s1Is2D/O6KN3qcTeRA==}
 

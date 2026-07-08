@@ -1,5 +1,15 @@
 # @mpgd/target-config
 
+## 0.3.3 — 2026-07-08
+
+### Added
+
+- [bb96043](https://github.com/imjlk/mpgd-kit/commit/bb96043a56aa7777a3d15028f7e3c68976504637) Add a Microsoft Store PWA target that reuses the browser adapter, ships effective target config and web app manifest metadata, and is available from generated Phaser game target builds while keeping matrix defaults compatible with older target files. — Thanks @imjlk!
+
+### Fixed
+
+- [f6410ad](https://github.com/imjlk/mpgd-kit/commit/f6410ad7765c0ff9f9d68b6578335d5d73f056fe) Treat blank platform product and ad placement IDs as missing in effective target configs. — Thanks @imjlk!
+
 ## 0.3.2 — 2026-07-06
 
 ### Patch changes
