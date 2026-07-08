@@ -263,11 +263,7 @@ function verifyDevvitWebManifest(
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
 ): void {
-  const wrapperAppConfigPath = requireStringMatch(targetConfig.wrapperApp, `${target}.wrapperApp`);
-  const wrapperApp = resolveFromPlatformTargetsBase(
-    loadedPlatformTargets.baseDir,
-    wrapperAppConfigPath,
-  );
+  const wrapperApp = resolveWrapperApp(target, targetConfig);
   const manifestPath = `${wrapperApp}/devvit.json`;
   const manifest = readJsonFile(manifestPath);
   const label = `${target} Devvit manifest`;
@@ -490,13 +486,15 @@ function assertArtifactPathAllowed(
     return;
   }
 
-  const wrapperAppConfigPath = requireStringMatch(targetConfig.wrapperApp, `${target}.wrapperApp`);
-  const wrapperApp = resolveFromPlatformTargetsBase(
-    loadedPlatformTargets.baseDir,
-    wrapperAppConfigPath,
-  );
+  const wrapperApp = resolveWrapperApp(target, targetConfig);
 
   assertPathInside(artifactPath, wrapperApp, `${target} artifact must stay under wrapper app`);
+}
+
+function resolveWrapperApp(target: string, targetConfig: SmokePlatformTargetConfig): string {
+  const wrapperAppConfigPath = requireStringMatch(targetConfig.wrapperApp, `${target}.wrapperApp`);
+
+  return resolveFromPlatformTargetsBase(loadedPlatformTargets.baseDir, wrapperAppConfigPath);
 }
 
 function assertPathInside(path: string, baseDir: string, label: string): void {
