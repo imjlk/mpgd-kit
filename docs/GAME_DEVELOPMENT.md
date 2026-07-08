@@ -58,6 +58,50 @@ best-effort analytics, optional game-services client wiring, and a rewarded ad
 smoke action. It stays intentionally small; real scoring, economy, content, and
 save models should be added by each game.
 
+## Viewport And UI Composition
+
+Use the rendered container or `visualViewport` size as the source of truth for
+layout, not the target name or user agent. Reddit Devvit can appear as a narrow
+mobile card, a wider desktop embed, or a resized playtest frame, so game UI
+should treat it as an embedded webview and then choose layout from measured
+space.
+
+`@mpgd/target-config` exports target viewport helpers for this first pass:
+
+```ts
+import { resolveTargetViewportPlan } from '@mpgd/target-config';
+
+const viewport = resolveTargetViewportPlan({
+  width: window.visualViewport?.width ?? window.innerWidth,
+  height: window.visualViewport?.height ?? window.innerHeight,
+  runtime: runtime.config.runtime,
+});
+```
+
+The default width classes are:
+
+- `compact`: `<= 599px`, covering phones and narrow Devvit embeds.
+- `medium`: `600px` through `899px`, covering larger phones, small tablets, and
+  moderate embeds.
+- `expanded`: `>= 900px`, covering desktop-like canvases and wide embeds.
+
+Portrait and landscape are intentionally simple: `portrait` means height is
+greater than width, and `landscape` means width is greater than or equal to
+height. That keeps the same rule usable for Phaser scenes, DOM overlays, Apps in
+Toss WebViews, Capacitor shells, and Devvit Web cards.
+
+Recommended composition:
+
+- Compact or portrait: keep primary controls at the bottom, put secondary
+  panels behind a drawer or below the board, and reserve safe-area padding.
+- Medium landscape: keep the primary play surface centered; side controls are
+  acceptable only when hit targets remain large.
+- Expanded landscape: side panels and side controls are fine, but the primary
+  play surface should stay readable without relying on page scroll.
+- Devvit: design compact-first, avoid assuming the card has full browser height,
+  and keep persistent state behind `/api/` and server storage as described
+  below.
+
 Generated games own their Reddit Devvit app root in `apps/target-devvit`.
 Run `pnpm devvit:login`, `pnpm devvit:init`, and `pnpm devvit:playtest` from the
 game root when you are ready to create the Reddit-side app record and test it.

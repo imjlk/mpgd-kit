@@ -37,6 +37,18 @@ export class StarterScene extends Phaser.Scene {
       .text(
         480,
         264,
+        `Viewport: ${context.viewport.layout.sizeClass} ${context.viewport.layout.orientation} - controls ${context.viewport.composition.primaryControls}`,
+        {
+          color: '#d6dee8',
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '18px',
+        },
+      )
+      .setOrigin(0.5);
+    this.add
+      .text(
+        480,
+        306,
         m.effective_config_summary(
           {
             products: effectiveConfig?.monetization.products.length ?? 0,
@@ -53,21 +65,21 @@ export class StarterScene extends Phaser.Scene {
       )
       .setOrigin(0.5);
     this.add
-      .text(480, 306, m.player({ name: context.player.displayName ?? context.player.playerId }, { locale }), {
+      .text(480, 348, m.player({ name: context.player.displayName ?? context.player.playerId }, { locale }), {
         color: '#d6dee8',
         fontFamily: 'Arial, sans-serif',
         fontSize: '18px',
       })
       .setOrigin(0.5);
     this.add
-      .text(480, 346, backendText, {
+      .text(480, 388, backendText, {
         color: context.gameServices.client === undefined ? '#f59e0b' : '#2dd4bf',
         fontFamily: 'Arial, sans-serif',
         fontSize: '18px',
       })
       .setOrigin(0.5);
     this.add
-      .text(480, 430, m.tap_to_start({}, { locale }), {
+      .text(480, 452, m.tap_to_start({}, { locale }), {
         color: '#ffffff',
         fontFamily: 'Arial, sans-serif',
         fontSize: '22px',

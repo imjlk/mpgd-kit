@@ -13,8 +13,21 @@ body {
   font-family: Arial, sans-serif;
 }
 
+#game {
+  box-sizing: border-box;
+  min-width: 0;
+  min-height: 0;
+  touch-action: none;
+  padding:
+    env(safe-area-inset-top)
+    env(safe-area-inset-right)
+    env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
 canvas {
   display: block;
+  touch-action: none;
 }
 
 .boot-error {

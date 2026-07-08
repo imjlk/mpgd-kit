@@ -14,6 +14,7 @@ import {
   type TargetConfig,
   type TargetConfigMatrix,
 } from '../src/runtime';
+import { resolveTargetViewportPlan, targetViewportShellForConfig } from '../src/viewport';
 
 const targetConfigMatrix = {
   version: 'test',
@@ -86,6 +87,7 @@ const gateway = createGateway();
 
 assertEqual(targetConfigKeyForPlatform('browser'), 'web-preview');
 assertEqual(targetConfigKeyForPlatform('android'), 'android');
+assertViewportPlans();
 
 const webConfig = getTargetConfig(targetConfigMatrix, targetConfigKeyForPlatform('browser'));
 const webEffectiveConfig = createEffectiveTargetConfig({
@@ -480,6 +482,92 @@ function resolveAdPlacementType(placementId: string): 'rewarded' | 'interstitial
   }
 
   return undefined;
+}
+
+function assertViewportPlans(): void {
+  const compactDevvitDimensions = {
+    width: 412,
+    height: 732,
+  };
+  const mediumTabletDimensions = {
+    width: 768,
+    height: 1024,
+  };
+  const desktopDevvitDimensions = {
+    width: 960,
+    height: 540,
+  };
+  const phoneWebViewDimensions = {
+    width: 390,
+    height: 844,
+  };
+  const desktopBrowserDimensions = {
+    width: 1280,
+    height: 720,
+  };
+  const compactDevvit = resolveTargetViewportPlan({
+    ...compactDevvitDimensions,
+    runtime: 'devvit-web',
+  });
+  const mediumTablet = resolveTargetViewportPlan({
+    ...mediumTabletDimensions,
+    runtime: 'web-preview',
+  });
+  const desktopDevvit = resolveTargetViewportPlan({
+    ...desktopDevvitDimensions,
+    runtime: 'devvit-web',
+  });
+  const phoneWebView = resolveTargetViewportPlan({
+    ...phoneWebViewDimensions,
+    runtime: 'capacitor-ios',
+  });
+  const desktopBrowser = resolveTargetViewportPlan({
+    ...desktopBrowserDimensions,
+    runtime: 'web-preview',
+  });
+
+  assertEqual(compactDevvit.layout.shell, 'embedded-webview');
+  assertEqual(compactDevvit.layout.orientation, 'portrait');
+  assertEqual(compactDevvit.layout.sizeClass, 'compact');
+  assertEqual(compactDevvit.composition.primaryControls, 'bottom');
+  assertEqual(compactDevvit.composition.secondaryPanels, 'drawer');
+  assertEqual(compactDevvit.composition.safeAreaAware, true);
+  assertEqual(mediumTablet.layout.shell, 'browser');
+  assertEqual(mediumTablet.layout.orientation, 'portrait');
+  assertEqual(mediumTablet.layout.sizeClass, 'medium');
+  assertEqual(mediumTablet.composition.primaryControls, 'bottom');
+  assertEqual(mediumTablet.composition.secondaryPanels, 'below');
+  assertEqual(mediumTablet.composition.safeAreaAware, false);
+  assertEqual(desktopDevvit.layout.shell, 'embedded-webview');
+  assertEqual(desktopDevvit.layout.orientation, 'landscape');
+  assertEqual(desktopDevvit.layout.sizeClass, 'expanded');
+  assertEqual(desktopDevvit.composition.primaryControls, 'side');
+  assertEqual(desktopDevvit.composition.secondaryPanels, 'side');
+  assertEqual(desktopDevvit.composition.safeAreaAware, true);
+  assertEqual(phoneWebView.layout.shell, 'mobile-webview');
+  assertEqual(phoneWebView.layout.orientation, 'portrait');
+  assertEqual(phoneWebView.layout.sizeClass, 'compact');
+  assertEqual(phoneWebView.composition.primaryControls, 'bottom');
+  assertEqual(phoneWebView.composition.secondaryPanels, 'drawer');
+  assertEqual(phoneWebView.composition.safeAreaAware, true);
+  assertEqual(desktopBrowser.layout.shell, 'browser');
+  assertEqual(desktopBrowser.layout.orientation, 'landscape');
+  assertEqual(desktopBrowser.layout.sizeClass, 'expanded');
+  assertEqual(desktopBrowser.composition.primaryControls, 'side');
+  assertEqual(desktopBrowser.composition.secondaryPanels, 'side');
+  assertEqual(desktopBrowser.composition.safeAreaAware, false);
+  assertEqual(
+    targetViewportShellForConfig(
+      createTargetConfig({
+        iap: false,
+        rewardedAds: false,
+        interstitialAds: false,
+        leaderboard: false,
+        localization: true,
+      }),
+    ),
+    'browser',
+  );
 }
 
 function assertEqual(actual: unknown, expected: unknown): void {

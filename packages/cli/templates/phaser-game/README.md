@@ -71,6 +71,33 @@ emitted URLs into the manifest with `?url` imports, or keep static
 starter keeps Vite `base: './'` so generated asset URLs stay portable across web
 preview, Apps in Toss, Devvit, Android, and iOS bundles.
 
+## Viewport And Controls
+
+The starter computes an initial viewport plan with `@mpgd/target-config`:
+
+```ts
+const viewport = resolveTargetViewportPlan({
+  width: window.visualViewport?.width ?? window.innerWidth,
+  height: window.visualViewport?.height ?? window.innerHeight,
+  runtime: runtime.config.runtime,
+});
+```
+
+Use this as a starting point for game-specific layout:
+
+- `compact` is `<= 599px`: phone and narrow Devvit/card layouts. Prefer bottom
+  controls and drawers.
+- `medium` is `600px` through `899px`: larger phones, small tablets, and
+  moderate embeds. Keep the play surface centered and only add side controls
+  when touch targets remain comfortable.
+- `expanded` is `>= 900px`: desktop-like layouts. Side controls and panels are
+  acceptable.
+
+Orientation is measured from the container: height greater than width is
+`portrait`; width greater than or equal to height is `landscape`. Devvit should
+be treated as an embedded webview, so do not assume desktop Reddit always means
+an expanded game surface.
+
 ## Reddit Devvit
 
 This starter owns its Devvit app root in `apps/target-devvit`. That directory
