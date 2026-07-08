@@ -1,5 +1,14 @@
 # @mpgd/bridge
 
+## 0.4.0 — 2026-07-08
+
+### Added
+
+- [11e5573](https://github.com/imjlk/mpgd-kit/commit/11e5573be744d61348cb0e502fc60e26bf34eec8) Add a Cloudflare Pages advanced-mode host helper for bridge JSON, bridge oRPC,
+  optional game-services service binding proxy, and static asset fallback, plus
+  generated Phaser game legal/support/terms HTML sources with `mpgd legal
+  build/check` and a TypeScript Pages host that bundles to `_worker.js`. — Thanks @imjlk!
+
 ## 0.3.2 — 2026-07-06
 
 ### Patch changes

@@ -1,5 +1,12 @@
 # @mpgd/game-services
 
+## 0.3.3 — 2026-07-08
+
+### Changed
+
+- [09fc2d9](https://github.com/imjlk/mpgd-kit/commit/09fc2d9e44041325de0a91a07fb355ac3014f290) Document and regression-test the game-services ledger idempotency contract for
+  source-scoped entitlement grants and leaderboard run records. — Thanks @imjlk!
+
 ## 0.3.2 — 2026-07-06
 
 ### Patch changes
