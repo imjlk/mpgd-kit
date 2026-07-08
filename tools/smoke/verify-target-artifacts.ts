@@ -57,7 +57,7 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     const artifactPath = resolveArtifactPath(entry.artifact);
     const effectiveConfigPath = resolveArtifactPath(entry.effectiveConfig.path);
 
-    assertPathInsideTargetBase(artifactPath, `${target} artifact`);
+    assertArtifactPathAllowed(target, targetConfig, artifactPath);
     assertPathExists(artifactPath, `${target} artifact`);
     assertPathInsideTargetBase(effectiveConfigPath, `${target} effective target config`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);
@@ -478,6 +478,25 @@ function assertPathInsideTargetBase(path: string, label: string): void {
     loadedPlatformTargets.baseDir,
     `${label} must stay under the target config dir`,
   );
+}
+
+function assertArtifactPathAllowed(
+  target: string,
+  targetConfig: SmokePlatformTargetConfig,
+  artifactPath: string,
+): void {
+  if (targetConfig.kind !== 'devvit-web') {
+    assertPathInsideTargetBase(artifactPath, `${target} artifact`);
+    return;
+  }
+
+  const wrapperAppConfigPath = requireStringMatch(targetConfig.wrapperApp, `${target}.wrapperApp`);
+  const wrapperApp = resolveFromPlatformTargetsBase(
+    loadedPlatformTargets.baseDir,
+    wrapperAppConfigPath,
+  );
+
+  assertPathInside(artifactPath, wrapperApp, `${target} artifact must stay under wrapper app`);
 }
 
 function assertPathInside(path: string, baseDir: string, label: string): void {
