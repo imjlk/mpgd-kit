@@ -4,7 +4,7 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "check": "echo target-web-preview uses apps/game-phaser build"
+    "check": "echo target-web-preview is produced by target tooling"
   },
   "devDependencies": {
     "ttsc": "0.16.9",

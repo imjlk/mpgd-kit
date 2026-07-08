@@ -72,7 +72,7 @@ jobs:
         with:
           name: web-preview-and-microsoft-store-ci
           path: |
-            artifacts/**
+            examples/phaser-starter/artifacts/**
 
   build-android:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release/') }}
@@ -115,8 +115,8 @@ jobs:
         with:
           name: android-ci
           path: |
-            artifacts/**
-            release-output/**
+            examples/phaser-starter/artifacts/**
+            examples/phaser-starter/release-output/**
 
   build-ios:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release/') }}
@@ -151,7 +151,7 @@ jobs:
         with:
           name: ios-ci
           path: |
-            artifacts/**
+            examples/phaser-starter/artifacts/**
 
   build-ait:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release/') }}
@@ -186,8 +186,8 @@ jobs:
         with:
           name: ait-ci
           path: |
-            artifacts/**
-            release-output/**
+            examples/phaser-starter/artifacts/**
+            examples/phaser-starter/release-output/**
 
   build-devvit:
     if: ${{ github.event_name != 'pull_request' || !startsWith(github.head_ref, 'release/') }}
@@ -225,5 +225,5 @@ jobs:
         with:
           name: devvit-ci
           path: |
-            artifacts/**
+            examples/phaser-starter/artifacts/**
             apps/target-devvit/dist/**
