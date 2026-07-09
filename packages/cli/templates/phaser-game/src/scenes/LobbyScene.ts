@@ -45,14 +45,30 @@ export class LobbyScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     this.add
-      .text(480, 258, t(locale, 'backend', { mode: context.gameServices.mode }), {
+      .text(
+        480,
+        258,
+        t(locale, 'viewport', {
+          sizeClass: context.viewport.layout.sizeClass,
+          orientation: context.viewport.layout.orientation,
+          controls: context.viewport.recommendation.primaryControls,
+        }),
+        {
+          color: '#d6dee8',
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '18px',
+        },
+      )
+      .setOrigin(0.5);
+    this.add
+      .text(480, 300, t(locale, 'backend', { mode: context.gameServices.mode }), {
         color: context.gameServices.mode === 'disabled' ? '#f59e0b' : '#2dd4bf',
         fontFamily: 'Arial, sans-serif',
         fontSize: '18px',
       })
       .setOrigin(0.5);
     this.add
-      .text(480, 336, t(locale, 'tapToStart'), {
+      .text(480, 342, t(locale, 'tapToStart'), {
         color: '#ffffff',
         fontFamily: 'Arial, sans-serif',
         fontSize: '22px',

@@ -58,6 +58,89 @@ best-effort analytics, optional game-services client wiring, and a rewarded ad
 smoke action. It stays intentionally small; real scoring, economy, content, and
 save models should be added by each game.
 
+## Viewport And UI Composition
+
+Use the rendered game container size as the source of truth for layout, not the
+target name or user agent. `visualViewport` and `window.innerWidth` are useful
+fallbacks, but the container is the safest measurement when a target shell adds
+chrome, padding, safe-area insets, iframe constraints, or a resized playtest
+frame. Reddit Devvit can appear as a narrow mobile card, a wider desktop embed,
+or a resized playtest frame, so game UI should treat it as an embedded webview
+and then choose layout from measured space.
+
+`@mpgd/target-config` exports target viewport helpers for this first pass:
+
+```ts
+import { resolveTargetViewportPlan } from '@mpgd/target-config';
+
+const measured = measureGameViewport();
+const viewport = resolveTargetViewportPlan({
+  width: measured.width,
+  height: measured.height,
+  source: measured.source,
+  runtime: runtime.config.runtime,
+});
+```
+
+For browser-hosted games, measure the mount element first:
+
+```ts
+function measureGameViewport() {
+  const rect = document.querySelector<HTMLElement>('#game')?.getBoundingClientRect();
+
+  if (rect !== undefined && rect.width > 0 && rect.height > 0) {
+    return { width: rect.width, height: rect.height, source: 'container' as const };
+  }
+
+  const visualViewport = window.visualViewport;
+
+  if (
+    visualViewport !== undefined &&
+    visualViewport !== null &&
+    visualViewport.width > 0 &&
+    visualViewport.height > 0
+  ) {
+    return {
+      width: visualViewport.width,
+      height: visualViewport.height,
+      source: 'visual-viewport' as const,
+    };
+  }
+
+  return { width: window.innerWidth, height: window.innerHeight, source: 'window' as const };
+}
+```
+
+`resolveTargetViewportPlan` is intentionally a pure helper. It classifies
+measured dimensions and target shell family, then returns starter
+recommendations such as bottom controls for compact/portrait layouts. Games
+should override those recommendations when their playfield has stronger
+constraints.
+
+The default width classes are:
+
+- `compact`: `<= 599px`, covering phones and narrow Devvit embeds.
+- `medium`: `600px` through `899px`, covering larger phones, small tablets, and
+  moderate embeds.
+- `expanded`: `>= 900px`, covering desktop-like canvases and wide embeds.
+
+Portrait and landscape are intentionally simple: `portrait` means height is
+greater than width, and `landscape` means width is greater than or equal to
+height. That keeps the same rule usable for Phaser scenes, DOM overlays, Apps in
+Toss WebViews, Capacitor shells, and Devvit Web cards.
+
+Recommended starter composition:
+
+- Compact or portrait: keep primary controls at the bottom, put secondary
+  panels behind a drawer or below the board, and reserve safe-area padding.
+- Medium landscape: keep the primary play surface centered; side controls are
+  acceptable only when hit targets remain large.
+- Expanded landscape: side panels and side controls are fine, but the primary
+  play surface should stay readable without relying on page scroll.
+- Devvit: design compact-first, avoid assuming the card has full browser height,
+  and keep persistent state behind `/api/` and server storage as described
+  below.
+
 Generated games own their Reddit Devvit app root in `apps/target-devvit`.
 Run `pnpm devvit:login`, `pnpm devvit:init`, and `pnpm devvit:playtest` from the
 game root when you are ready to create the Reddit-side app record and test it.

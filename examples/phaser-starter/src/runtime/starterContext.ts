@@ -3,6 +3,7 @@ import type { PlayerIdentity } from '@mpgd/platform';
 import type {
   TargetConfiguredGateway,
   TargetRuntimeSnapshot,
+  TargetViewportPlan,
 } from '@mpgd/target-config';
 
 import type { StarterGameServices } from '../platform/gameServices';
@@ -10,6 +11,7 @@ import type { StarterGameServices } from '../platform/gameServices';
 export interface StarterContext {
   readonly platform: TargetConfiguredGateway;
   readonly runtime: TargetRuntimeSnapshot;
+  readonly viewport: TargetViewportPlan;
   readonly player: PlayerIdentity;
   readonly locale: MpgdLocale;
   readonly gameServices: StarterGameServices;

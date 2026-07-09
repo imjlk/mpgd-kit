@@ -14,6 +14,11 @@ import {
   type TargetConfig,
   type TargetConfigMatrix,
 } from '../src/runtime';
+import {
+  resolveTargetViewportPlan,
+  resolveTargetViewportSizeClass,
+  targetViewportShellForConfig,
+} from '../src/viewport';
 
 const targetConfigMatrix = {
   version: 'test',
@@ -86,6 +91,7 @@ const gateway = createGateway();
 
 assertEqual(targetConfigKeyForPlatform('browser'), 'web-preview');
 assertEqual(targetConfigKeyForPlatform('android'), 'android');
+assertViewportPlans();
 
 const webConfig = getTargetConfig(targetConfigMatrix, targetConfigKeyForPlatform('browser'));
 const webEffectiveConfig = createEffectiveTargetConfig({
@@ -480,6 +486,113 @@ function resolveAdPlacementType(placementId: string): 'rewarded' | 'interstitial
   }
 
   return undefined;
+}
+
+function assertViewportPlans(): void {
+  const compactDevvitDimensions = {
+    width: 412,
+    height: 732,
+  };
+  const mediumTabletDimensions = {
+    width: 768,
+    height: 1024,
+  };
+  const desktopDevvitDimensions = {
+    width: 960,
+    height: 540,
+  };
+  const phoneWebViewDimensions = {
+    width: 390,
+    height: 844,
+  };
+  const desktopBrowserDimensions = {
+    width: 1280,
+    height: 720,
+  };
+  const landscapePhoneBrowserDimensions = {
+    width: 844,
+    height: 390,
+  };
+  const compactDevvit = resolveTargetViewportPlan({
+    ...compactDevvitDimensions,
+    runtime: 'devvit-web',
+    source: 'container',
+  });
+  const mediumTablet = resolveTargetViewportPlan({
+    ...mediumTabletDimensions,
+    runtime: 'web-preview',
+  });
+  const desktopDevvit = resolveTargetViewportPlan({
+    ...desktopDevvitDimensions,
+    runtime: 'devvit-web',
+  });
+  const phoneWebView = resolveTargetViewportPlan({
+    ...phoneWebViewDimensions,
+    runtime: 'capacitor-ios',
+  });
+  const desktopBrowser = resolveTargetViewportPlan({
+    ...desktopBrowserDimensions,
+    runtime: 'web-preview',
+  });
+  const landscapePhoneBrowser = resolveTargetViewportPlan({
+    ...landscapePhoneBrowserDimensions,
+    runtime: 'web-preview',
+  });
+
+  assertEqual(compactDevvit.layout.shell, 'embedded-webview');
+  assertEqual(compactDevvit.layout.source, 'container');
+  assertEqual(compactDevvit.layout.orientation, 'portrait');
+  assertEqual(compactDevvit.layout.sizeClass, 'compact');
+  assertEqual(compactDevvit.layout.shortSide, 412);
+  assertEqual(compactDevvit.layout.longSide, 732);
+  assertEqual(compactDevvit.recommendation.primaryControls, 'bottom');
+  assertEqual(compactDevvit.recommendation.secondaryPanels, 'drawer');
+  assertEqual(compactDevvit.recommendation.safeAreaAware, true);
+  assertEqual(mediumTablet.layout.shell, 'browser');
+  assertEqual(mediumTablet.layout.orientation, 'portrait');
+  assertEqual(mediumTablet.layout.sizeClass, 'medium');
+  assertEqual(mediumTablet.recommendation.primaryControls, 'bottom');
+  assertEqual(mediumTablet.recommendation.secondaryPanels, 'below');
+  assertEqual(mediumTablet.recommendation.safeAreaAware, false);
+  assertEqual(desktopDevvit.layout.shell, 'embedded-webview');
+  assertEqual(desktopDevvit.layout.orientation, 'landscape');
+  assertEqual(desktopDevvit.layout.sizeClass, 'expanded');
+  assertEqual(desktopDevvit.recommendation.primaryControls, 'side');
+  assertEqual(desktopDevvit.recommendation.secondaryPanels, 'side');
+  assertEqual(desktopDevvit.recommendation.safeAreaAware, true);
+  assertEqual(phoneWebView.layout.shell, 'mobile-webview');
+  assertEqual(phoneWebView.layout.orientation, 'portrait');
+  assertEqual(phoneWebView.layout.sizeClass, 'compact');
+  assertEqual(phoneWebView.recommendation.primaryControls, 'bottom');
+  assertEqual(phoneWebView.recommendation.secondaryPanels, 'drawer');
+  assertEqual(phoneWebView.recommendation.safeAreaAware, true);
+  assertEqual(desktopBrowser.layout.shell, 'browser');
+  assertEqual(desktopBrowser.layout.orientation, 'landscape');
+  assertEqual(desktopBrowser.layout.sizeClass, 'expanded');
+  assertEqual(desktopBrowser.recommendation.primaryControls, 'side');
+  assertEqual(desktopBrowser.recommendation.secondaryPanels, 'side');
+  assertEqual(desktopBrowser.recommendation.safeAreaAware, false);
+  assertEqual(landscapePhoneBrowser.layout.shell, 'browser');
+  assertEqual(landscapePhoneBrowser.layout.orientation, 'landscape');
+  assertEqual(landscapePhoneBrowser.layout.sizeClass, 'medium');
+  assertEqual(landscapePhoneBrowser.recommendation.primaryControls, 'side');
+  assertEqual(landscapePhoneBrowser.recommendation.secondaryPanels, 'side');
+  assertEqual(landscapePhoneBrowser.recommendation.safeAreaAware, true);
+  assertEqual(resolveTargetViewportSizeClass(599), 'compact');
+  assertEqual(resolveTargetViewportSizeClass(600), 'medium');
+  assertEqual(resolveTargetViewportSizeClass(900), 'expanded');
+  assertEqual(
+    targetViewportShellForConfig(
+      createTargetConfig({
+        iap: false,
+        rewardedAds: false,
+        interstitialAds: false,
+        leaderboard: false,
+        localization: true,
+      }),
+    ),
+    'browser',
+  );
 }
 
 function assertEqual(actual: unknown, expected: unknown): void {

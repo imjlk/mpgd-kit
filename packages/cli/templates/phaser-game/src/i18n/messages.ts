@@ -3,6 +3,7 @@ import type { Locale } from '@mpgd/i18n';
 export type GameMessageKey =
   | 'title'
   | 'target'
+  | 'viewport'
   | 'backend'
   | 'features'
   | 'featuresNone'
@@ -19,6 +20,7 @@ const messages = {
   en: {
     title: '__GAME_TITLE__',
     target: 'Target: {target}',
+    viewport: 'Viewport: {sizeClass} {orientation} - controls {controls}',
     backend: 'Game Services: {mode}',
     features: 'Features: {features}',
     featuresNone: 'none',
@@ -34,6 +36,7 @@ const messages = {
   ko: {
     title: '__GAME_TITLE__',
     target: '타깃: {target}',
+    viewport: '뷰포트: {sizeClass} {orientation} - 컨트롤 {controls}',
     backend: 'Game Services: {mode}',
     features: '기능: {features}',
     featuresNone: '없음',
