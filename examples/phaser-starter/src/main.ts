@@ -56,7 +56,12 @@ function measureGameViewport(): {
 
   const visualViewport = window.visualViewport;
 
-  if (visualViewport !== null && visualViewport.width > 0 && visualViewport.height > 0) {
+  if (
+    visualViewport !== undefined &&
+    visualViewport !== null &&
+    visualViewport.width > 0 &&
+    visualViewport.height > 0
+  ) {
     return {
       width: visualViewport.width,
       height: visualViewport.height,
