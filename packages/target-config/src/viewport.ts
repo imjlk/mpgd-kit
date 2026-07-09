@@ -108,11 +108,16 @@ export function resolveTargetViewportRecommendation(
   layout: TargetViewportLayout,
 ): TargetViewportRecommendation {
   const narrowOrPortrait = layout.sizeClass === 'compact' || layout.orientation === 'portrait';
+  const browserSafeAreaRisk =
+    layout.shell === 'browser' &&
+    layout.orientation === 'landscape' &&
+    layout.shortSide <= defaultTargetViewportBreakpoints.compactMaxWidth;
 
   return {
     primaryControls: narrowOrPortrait ? 'bottom' : 'side',
     secondaryPanels: resolveTargetViewportPanelPlacement(layout),
-    safeAreaAware: layout.shell !== 'browser' || layout.sizeClass === 'compact',
+    safeAreaAware:
+      layout.shell !== 'browser' || layout.sizeClass === 'compact' || browserSafeAreaRisk,
   };
 }
 

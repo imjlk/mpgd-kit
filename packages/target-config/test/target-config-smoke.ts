@@ -509,6 +509,10 @@ function assertViewportPlans(): void {
     width: 1280,
     height: 720,
   };
+  const landscapePhoneBrowserDimensions = {
+    width: 844,
+    height: 390,
+  };
   const compactDevvit = resolveTargetViewportPlan({
     ...compactDevvitDimensions,
     runtime: 'devvit-web',
@@ -528,6 +532,10 @@ function assertViewportPlans(): void {
   });
   const desktopBrowser = resolveTargetViewportPlan({
     ...desktopBrowserDimensions,
+    runtime: 'web-preview',
+  });
+  const landscapePhoneBrowser = resolveTargetViewportPlan({
+    ...landscapePhoneBrowserDimensions,
     runtime: 'web-preview',
   });
 
@@ -564,6 +572,12 @@ function assertViewportPlans(): void {
   assertEqual(desktopBrowser.recommendation.primaryControls, 'side');
   assertEqual(desktopBrowser.recommendation.secondaryPanels, 'side');
   assertEqual(desktopBrowser.recommendation.safeAreaAware, false);
+  assertEqual(landscapePhoneBrowser.layout.shell, 'browser');
+  assertEqual(landscapePhoneBrowser.layout.orientation, 'landscape');
+  assertEqual(landscapePhoneBrowser.layout.sizeClass, 'medium');
+  assertEqual(landscapePhoneBrowser.recommendation.primaryControls, 'side');
+  assertEqual(landscapePhoneBrowser.recommendation.secondaryPanels, 'side');
+  assertEqual(landscapePhoneBrowser.recommendation.safeAreaAware, true);
   assertEqual(resolveTargetViewportSizeClass(599), 'compact');
   assertEqual(resolveTargetViewportSizeClass(600), 'medium');
   assertEqual(resolveTargetViewportSizeClass(900), 'expanded');
