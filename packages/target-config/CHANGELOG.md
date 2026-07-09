@@ -1,5 +1,11 @@
 # @mpgd/target-config
 
+## 0.4.0 — 2026-07-10
+
+### Added
+
+- [53f4e59](https://github.com/imjlk/mpgd-kit/commit/53f4e59ab9f2f82545981f4c19df6ff582378e86) Add viewport orientation policy planning and starter guidance. — Thanks @imjlk!
+
 ## 0.3.4 — 2026-07-09
 
 ### Added
