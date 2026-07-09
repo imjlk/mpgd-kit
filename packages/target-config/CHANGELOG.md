@@ -1,5 +1,11 @@
 # @mpgd/target-config
 
+## 0.3.4 — 2026-07-09
+
+### Added
+
+- [fcb9501](https://github.com/imjlk/mpgd-kit/commit/fcb950101e70315d7c96e60f717b197082e416c2) Add target viewport breakpoint helpers and generated Phaser starter guidance for compact, medium, expanded, portrait, landscape, and Devvit embedded-webview layouts. The Phaser starter now measures the game container first and uses target viewport recommendations for control/panel placement. — Thanks @imjlk!
+
 ## 0.3.3 — 2026-07-08
 
 ### Added
