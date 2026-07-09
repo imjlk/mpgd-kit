@@ -9,6 +9,8 @@ Boundaries:
 - Purchases, rewarded ad grants, and leaderboard records should go through
   backend ledger APIs before mutating durable game save state.
 - Platform SDK imports belong in adapters or target wrappers.
+- Orientation policy should be chosen before adding resize behavior; treat
+  locked modes as soft prompts unless a platform adapter supports hard locks.
 
 Useful commands:
 

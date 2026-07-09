@@ -21,3 +21,6 @@ after login before upload or playtest.
 For Microsoft Store changes, keep the first pass as a PWA/web target that uses
 the browser adapter. Add a dedicated Store commerce adapter only when wiring
 Digital Goods API and Payment Request through backend ledger verification.
+
+Verify the first screen reports the viewport orientation policy, and treat
+locked orientation modes as soft prompts instead of unsafe WebView hard locks.

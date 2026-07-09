@@ -155,6 +155,7 @@ if (manifest !== null) {
 
 validatePhaserTemplateAITPolyfill();
 validatePhaserTemplateAITConsoleCli();
+validatePhaserTemplateOrientationPolicy();
 
 if (failures.length > 0) {
   throw new Error(`Starter workflow validation failed:\n- ${failures.join('\n- ')}`);
@@ -389,6 +390,177 @@ function validatePhaserTemplateAITConsoleCli(): void {
   }
 }
 
+function validatePhaserTemplateOrientationPolicy(): void {
+  const mainPath = 'packages/cli/templates/phaser-game/src/main.ts';
+  const pwaManifestPath = 'packages/cli/templates/phaser-game/public/manifest.webmanifest';
+  const readmePath = 'packages/cli/templates/phaser-game/README.md';
+  const messagesPath = 'packages/cli/templates/phaser-game/src/i18n/messages.ts';
+  const lobbyScenePath = 'packages/cli/templates/phaser-game/src/scenes/LobbyScene.ts';
+  const agentManifestPath = 'packages/cli/templates/phaser-game/agent/game-manifest.json';
+  const agentBriefPath = 'packages/cli/templates/phaser-game/agent/brief.md';
+  const agentAcceptancePath = 'packages/cli/templates/phaser-game/agent/acceptance.md';
+  let orientationPolicyMode: string | undefined;
+
+  if (!existsSync(mainPath)) {
+    failures.push(`${mainPath}: required for the viewport orientation starter flow.`);
+  } else {
+    const mainContent = readText(mainPath);
+    const policyMatch =
+      /mode:\s*['"](?<mode>responsive|prefer-landscape|prefer-portrait|lock-landscape|lock-portrait)['"]/.exec(
+        mainContent,
+      );
+
+    orientationPolicyMode = policyMatch?.groups?.mode;
+    if (orientationPolicyMode === undefined) {
+      failures.push(`${mainPath}: must define a viewport orientation policy mode.`);
+    }
+    assertIncludesText(
+      mainContent,
+      'satisfies TargetViewportOrientationPolicy',
+      `${mainPath}: orientation policy must be typed with TargetViewportOrientationPolicy.`,
+    );
+    assertIncludesText(
+      mainContent,
+      'orientationPolicy,',
+      `${mainPath}: resolveTargetViewportPlan input must include orientationPolicy.`,
+    );
+    assertIncludesText(
+      mainContent,
+      "source: 'container'",
+      `${mainPath}: viewport measurement must prefer the game container before fallbacks.`,
+    );
+    assertIncludesText(
+      mainContent,
+      "source: 'visual-viewport'",
+      `${mainPath}: viewport measurement must keep visualViewport fallback.`,
+    );
+  }
+
+  if (!existsSync(pwaManifestPath)) {
+    failures.push(`${pwaManifestPath}: required for installed web shell orientation policy.`);
+  } else {
+    const pwaManifest = readJson(pwaManifestPath) as { readonly orientation?: unknown } | null;
+
+    if (pwaManifest !== null) {
+      const expectedOrientation = resolvePwaManifestOrientation(orientationPolicyMode);
+
+      // Responsive mode intentionally leaves PWA orientation unconstrained; an undefined
+      // policy already fails the main.ts validation above.
+      if (expectedOrientation !== undefined) {
+        assertEqual(
+          pwaManifest.orientation,
+          expectedOrientation,
+          `${pwaManifestPath}: orientation`,
+        );
+      }
+    }
+  }
+
+  if (!existsSync(readmePath)) {
+    failures.push(`${readmePath}: required for the viewport orientation starter flow.`);
+  } else {
+    const readme = readText(readmePath);
+
+    for (const requiredText of [
+      'orientationPolicy',
+      'prefer-landscape',
+      'prefer-portrait',
+      'lock-landscape',
+      'lock-portrait',
+      '"orientation": "landscape"',
+      'runtime contract',
+      'soft rotate prompt',
+    ]) {
+      assertIncludesText(
+        readme,
+        requiredText,
+        `${readmePath}: must document ${requiredText} for orientation policy.`,
+      );
+    }
+  }
+
+  if (!existsSync(messagesPath)) {
+    failures.push(`${messagesPath}: required for orientation policy status text.`);
+  } else {
+    const messages = readText(messagesPath);
+
+    for (const requiredText of ['orientationPolicy', 'orientationMismatch']) {
+      assertIncludesText(
+        messages,
+        requiredText,
+        `${messagesPath}: must include ${requiredText} message.`,
+      );
+    }
+  }
+
+  if (!existsSync(lobbyScenePath)) {
+    failures.push(`${lobbyScenePath}: required for orientation policy status text.`);
+  } else {
+    const lobbyScene = readText(lobbyScenePath);
+
+    for (const requiredText of [
+      'context.viewport.orientation',
+      'shouldShowRotatePrompt',
+      'preferredOrientation',
+      'orientationMismatch',
+      'orientationPolicy',
+    ]) {
+      assertIncludesText(
+        lobbyScene,
+        requiredText,
+        `${lobbyScenePath}: must include ${requiredText} for orientation policy rendering.`,
+      );
+    }
+  }
+
+  if (!existsSync(agentManifestPath)) {
+    failures.push(`${agentManifestPath}: required for generated starter agent workflow.`);
+  } else {
+    const agentManifest = readJson(agentManifestPath) as { readonly blocks?: unknown } | null;
+
+    if (agentManifest !== null) {
+      assertTemplateAgentBlock(
+        agentManifest.blocks,
+        'runtime.viewport.orientation-policy',
+        'src/main.ts',
+        `${agentManifestPath}: blocks`,
+      );
+    }
+  }
+
+  if (!existsSync(agentBriefPath)) {
+    failures.push(`${agentBriefPath}: required for generated starter agent workflow.`);
+  } else {
+    const agentBrief = readText(agentBriefPath);
+
+    for (const requiredText of ['Orientation policy', 'soft prompts', 'resize behavior']) {
+      assertIncludesText(
+        agentBrief,
+        requiredText,
+        `${agentBriefPath}: must guide ${requiredText}.`,
+      );
+    }
+  }
+
+  if (!existsSync(agentAcceptancePath)) {
+    failures.push(`${agentAcceptancePath}: required for generated starter agent workflow.`);
+  } else {
+    const agentAcceptance = readText(agentAcceptancePath);
+
+    for (const requiredText of [
+      'viewport orientation policy',
+      'soft prompts',
+      'WebView hard locks',
+    ]) {
+      assertIncludesText(
+        agentAcceptance,
+        requiredText,
+        `${agentAcceptancePath}: must check ${requiredText}.`,
+      );
+    }
+  }
+}
+
 function assertMcpServerCommand(
   server: McpServerConfig | undefined,
   packageName: string,
@@ -505,6 +677,57 @@ function assertIncludes(input: unknown, expected: string, label: string): void {
 function assertEqual(input: unknown, expected: string, label: string): void {
   if (input !== expected) {
     failures.push(`${label} must be ${expected}.`);
+  }
+}
+
+function assertIncludesText(content: string, expected: string, label: string): void {
+  if (!content.includes(expected)) {
+    failures.push(`${label} Missing text: ${expected}.`);
+  }
+}
+
+function assertTemplateAgentBlock(
+  input: unknown,
+  expectedId: string,
+  expectedOwner: string,
+  label: string,
+): void {
+  if (!Array.isArray(input)) {
+    failures.push(`${label} must be an array.`);
+    return;
+  }
+
+  const block = input.find((candidate): candidate is { readonly id?: unknown; readonly owner?: unknown } => {
+    return (
+      typeof candidate === 'object'
+      && candidate !== null
+      && (candidate as { readonly id?: unknown }).id === expectedId
+    );
+  });
+
+  if (block === undefined) {
+    failures.push(`${label} must include ${expectedId}.`);
+    return;
+  }
+
+  assertEqual(block.owner, expectedOwner, `${label}.${expectedId}.owner`);
+}
+
+function resolvePwaManifestOrientation(mode: string | undefined): string | undefined {
+  switch (mode) {
+    case 'prefer-landscape':
+    case 'lock-landscape':
+      return 'landscape';
+    case 'prefer-portrait':
+    case 'lock-portrait':
+      return 'portrait';
+    case 'responsive':
+    case undefined:
+      return undefined;
+    default:
+      // Defensive fallback for future policy modes added outside this validator.
+      failures.push(`Unknown viewport orientation policy mode: ${mode}.`);
+      return undefined;
   }
 }
 

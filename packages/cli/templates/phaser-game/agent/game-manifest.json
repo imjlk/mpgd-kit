@@ -26,6 +26,10 @@
       "owner": "src/platform/installPlatform.ts"
     },
     {
+      "id": "runtime.viewport.orientation-policy",
+      "owner": "src/main.ts"
+    },
+    {
       "id": "platform.devvit.app-root",
       "owner": "apps/target-devvit"
     },
