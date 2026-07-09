@@ -68,7 +68,7 @@ export class LobbyScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
     this.add
-      .text(480, 374, t(locale, 'tapToStart'), {
+      .text(480, 342, t(locale, 'tapToStart'), {
         color: '#ffffff',
         fontFamily: 'Arial, sans-serif',
         fontSize: '22px',
