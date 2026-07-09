@@ -60,23 +60,57 @@ save models should be added by each game.
 
 ## Viewport And UI Composition
 
-Use the rendered container or `visualViewport` size as the source of truth for
-layout, not the target name or user agent. Reddit Devvit can appear as a narrow
-mobile card, a wider desktop embed, or a resized playtest frame, so game UI
-should treat it as an embedded webview and then choose layout from measured
-space.
+Use the rendered game container size as the source of truth for layout, not the
+target name or user agent. `visualViewport` and `window.innerWidth` are useful
+fallbacks, but the container is the safest measurement when a target shell adds
+chrome, padding, safe-area insets, iframe constraints, or a resized playtest
+frame. Reddit Devvit can appear as a narrow mobile card, a wider desktop embed,
+or a resized playtest frame, so game UI should treat it as an embedded webview
+and then choose layout from measured space.
 
 `@mpgd/target-config` exports target viewport helpers for this first pass:
 
 ```ts
 import { resolveTargetViewportPlan } from '@mpgd/target-config';
 
+const measured = measureGameViewport();
 const viewport = resolveTargetViewportPlan({
-  width: window.visualViewport?.width ?? window.innerWidth,
-  height: window.visualViewport?.height ?? window.innerHeight,
+  width: measured.width,
+  height: measured.height,
+  source: measured.source,
   runtime: runtime.config.runtime,
 });
 ```
+
+For browser-hosted games, measure the mount element first:
+
+```ts
+function measureGameViewport() {
+  const rect = document.querySelector<HTMLElement>('#game')?.getBoundingClientRect();
+
+  if (rect !== undefined && rect.width > 0 && rect.height > 0) {
+    return { width: rect.width, height: rect.height, source: 'container' as const };
+  }
+
+  const visualViewport = window.visualViewport;
+
+  if (visualViewport !== undefined && visualViewport.width > 0 && visualViewport.height > 0) {
+    return {
+      width: visualViewport.width,
+      height: visualViewport.height,
+      source: 'visual-viewport' as const,
+    };
+  }
+
+  return { width: window.innerWidth, height: window.innerHeight, source: 'window' as const };
+}
+```
+
+`resolveTargetViewportPlan` is intentionally a pure helper. It classifies
+measured dimensions and target shell family, then returns starter
+recommendations such as bottom controls for compact/portrait layouts. Games
+should override those recommendations when their playfield has stronger
+constraints.
 
 The default width classes are:
 
@@ -90,7 +124,7 @@ greater than width, and `landscape` means width is greater than or equal to
 height. That keeps the same rule usable for Phaser scenes, DOM overlays, Apps in
 Toss WebViews, Capacitor shells, and Devvit Web cards.
 
-Recommended composition:
+Recommended starter composition:
 
 - Compact or portrait: keep primary controls at the bottom, put secondary
   panels behind a drawer or below the board, and reserve safe-area padding.

@@ -3,6 +3,7 @@ import type { TargetConfig, TargetRuntimeKind } from './runtime';
 export type TargetViewportOrientation = 'portrait' | 'landscape';
 export type TargetViewportSizeClass = 'compact' | 'medium' | 'expanded';
 export type TargetViewportShell = 'browser' | 'mobile-webview' | 'embedded-webview';
+export type TargetViewportMeasurementSource = 'container' | 'visual-viewport' | 'window' | 'unknown';
 export type TargetViewportControlPlacement = 'bottom' | 'side';
 export type TargetViewportPanelPlacement = 'below' | 'side' | 'drawer';
 
@@ -15,26 +16,33 @@ export interface TargetViewportInput {
   readonly width: number;
   readonly height: number;
   readonly runtime?: TargetRuntimeKind;
+  readonly source?: TargetViewportMeasurementSource;
 }
 
 export interface TargetViewportLayout {
   readonly width: number;
   readonly height: number;
+  readonly shortSide: number;
+  readonly longSide: number;
   readonly aspectRatio: number;
   readonly orientation: TargetViewportOrientation;
   readonly sizeClass: TargetViewportSizeClass;
   readonly shell: TargetViewportShell;
+  readonly source: TargetViewportMeasurementSource;
 }
 
-export interface TargetViewportComposition {
+export interface TargetViewportRecommendation {
   readonly primaryControls: TargetViewportControlPlacement;
   readonly secondaryPanels: TargetViewportPanelPlacement;
   readonly safeAreaAware: boolean;
 }
 
+/** @deprecated Use {@link TargetViewportRecommendation} instead. */
+export type TargetViewportComposition = TargetViewportRecommendation;
+
 export interface TargetViewportPlan {
   readonly layout: TargetViewportLayout;
-  readonly composition: TargetViewportComposition;
+  readonly recommendation: TargetViewportRecommendation;
 }
 
 export const defaultTargetViewportBreakpoints = {
@@ -79,16 +87,36 @@ export function resolveTargetViewportLayout(
   return {
     width,
     height,
+    shortSide: Math.min(width, height),
+    longSide: Math.max(width, height),
     aspectRatio,
     orientation: width >= height ? 'landscape' : 'portrait',
-    sizeClass: viewportSizeClass(width, normalizedBreakpoints),
+    sizeClass: classifyTargetViewportSize(width, normalizedBreakpoints),
     shell: input.runtime === undefined ? 'browser' : targetViewportShellForRuntime(input.runtime),
+    source: input.source ?? 'unknown',
   };
 }
 
+export function resolveTargetViewportSizeClass(
+  width: number,
+  breakpoints: TargetViewportBreakpoints = defaultTargetViewportBreakpoints,
+): TargetViewportSizeClass {
+  return classifyTargetViewportSize(
+    normalizeViewportDimension(width, 'width'),
+    normalizeTargetViewportBreakpoints(breakpoints),
+  );
+}
+
+/** @deprecated Use {@link resolveTargetViewportRecommendation} instead. */
 export function resolveTargetViewportComposition(
   layout: TargetViewportLayout,
 ): TargetViewportComposition {
+  return resolveTargetViewportRecommendation(layout);
+}
+
+export function resolveTargetViewportRecommendation(
+  layout: TargetViewportLayout,
+): TargetViewportRecommendation {
   const narrowOrPortrait = layout.sizeClass === 'compact' || layout.orientation === 'portrait';
 
   return {
@@ -106,11 +134,11 @@ export function resolveTargetViewportPlan(
 
   return {
     layout,
-    composition: resolveTargetViewportComposition(layout),
+    recommendation: resolveTargetViewportRecommendation(layout),
   };
 }
 
-function viewportSizeClass(
+function classifyTargetViewportSize(
   width: number,
   breakpoints: TargetViewportBreakpoints,
 ): TargetViewportSizeClass {
@@ -151,8 +179,10 @@ function normalizeTargetViewportBreakpoints(
     'expandedMinWidth',
   );
 
-  if (compactMaxWidth >= expandedMinWidth) {
-    throw new Error('compactMaxWidth must be smaller than expandedMinWidth.');
+  if (compactMaxWidth + 1 >= expandedMinWidth) {
+    throw new Error(
+      'compactMaxWidth must leave at least one integer width below expandedMinWidth for medium viewports.',
+    );
   }
 
   return {

@@ -73,17 +73,23 @@ preview, Apps in Toss, Devvit, Android, and iOS bundles.
 
 ## Viewport And Controls
 
-The starter computes an initial viewport plan with `@mpgd/target-config`:
+The starter computes an initial viewport plan with `@mpgd/target-config`.
+Measure the game container first, then fall back to `visualViewport` or
+`window.innerWidth`:
 
 ```ts
+const measured = measureGameViewport();
 const viewport = resolveTargetViewportPlan({
-  width: window.visualViewport?.width ?? window.innerWidth,
-  height: window.visualViewport?.height ?? window.innerHeight,
+  width: measured.width,
+  height: measured.height,
+  source: measured.source,
   runtime: runtime.config.runtime,
 });
 ```
 
-Use this as a starting point for game-specific layout:
+Use this as a starting point for game-specific layout. The returned
+recommendation is not a hard target rule; override it when your playfield or
+input model needs a different UI arrangement.
 
 - `compact` is `<= 599px`: phone and narrow Devvit/card layouts. Prefer bottom
   controls and drawers.

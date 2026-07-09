@@ -51,7 +51,7 @@ export class LobbyScene extends Phaser.Scene {
         t(locale, 'viewport', {
           sizeClass: context.viewport.layout.sizeClass,
           orientation: context.viewport.layout.orientation,
-          controls: context.viewport.composition.primaryControls,
+          controls: context.viewport.recommendation.primaryControls,
         }),
         {
           color: '#d6dee8',

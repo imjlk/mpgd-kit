@@ -53,5 +53,6 @@
   "target_feature_interstitial_ads": "Inter",
   "target_feature_leaderboard": "Board",
   "target_feature_localization": "Localization",
-  "target_feature_rewarded_ads": "Reward"
+  "target_feature_rewarded_ads": "Reward",
+  "viewport": "Viewport: {sizeClass} {orientation} - controls {controls}"
 }

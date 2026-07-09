@@ -7,7 +7,13 @@ body,
 }
 
 body {
+  box-sizing: border-box;
   overflow: hidden;
+  padding:
+    env(safe-area-inset-top)
+    env(safe-area-inset-right)
+    env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
   background: #07111f;
   color: #ffffff;
   font-family: Arial, sans-serif;
@@ -18,11 +24,6 @@ body {
   min-width: 0;
   min-height: 0;
   touch-action: none;
-  padding:
-    env(safe-area-inset-top)
-    env(safe-area-inset-right)
-    env(safe-area-inset-bottom)
-    env(safe-area-inset-left);
 }
 
 canvas {

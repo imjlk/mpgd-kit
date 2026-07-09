@@ -79,6 +79,11 @@ export interface MpgdMessages {
   readonly target_feature_leaderboard: EmptyMessage;
   readonly target_feature_localization: EmptyMessage;
   readonly target_feature_rewarded_ads: EmptyMessage;
+  readonly viewport: MessageFunction<{
+    readonly controls: string;
+    readonly orientation: string;
+    readonly sizeClass: string;
+  }>;
 }
 
 export const m: MpgdMessages;

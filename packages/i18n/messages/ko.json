@@ -53,5 +53,6 @@
   "target_feature_interstitial_ads": "전면광고",
   "target_feature_leaderboard": "랭킹",
   "target_feature_localization": "다국어",
-  "target_feature_rewarded_ads": "보상광고"
+  "target_feature_rewarded_ads": "보상광고",
+  "viewport": "뷰포트: {sizeClass} {orientation} - 컨트롤 {controls}"
 }

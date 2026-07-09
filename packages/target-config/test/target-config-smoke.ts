@@ -14,7 +14,11 @@ import {
   type TargetConfig,
   type TargetConfigMatrix,
 } from '../src/runtime';
-import { resolveTargetViewportPlan, targetViewportShellForConfig } from '../src/viewport';
+import {
+  resolveTargetViewportPlan,
+  resolveTargetViewportSizeClass,
+  targetViewportShellForConfig,
+} from '../src/viewport';
 
 const targetConfigMatrix = {
   version: 'test',
@@ -508,6 +512,7 @@ function assertViewportPlans(): void {
   const compactDevvit = resolveTargetViewportPlan({
     ...compactDevvitDimensions,
     runtime: 'devvit-web',
+    source: 'container',
   });
   const mediumTablet = resolveTargetViewportPlan({
     ...mediumTabletDimensions,
@@ -527,35 +532,41 @@ function assertViewportPlans(): void {
   });
 
   assertEqual(compactDevvit.layout.shell, 'embedded-webview');
+  assertEqual(compactDevvit.layout.source, 'container');
   assertEqual(compactDevvit.layout.orientation, 'portrait');
   assertEqual(compactDevvit.layout.sizeClass, 'compact');
-  assertEqual(compactDevvit.composition.primaryControls, 'bottom');
-  assertEqual(compactDevvit.composition.secondaryPanels, 'drawer');
-  assertEqual(compactDevvit.composition.safeAreaAware, true);
+  assertEqual(compactDevvit.layout.shortSide, 412);
+  assertEqual(compactDevvit.layout.longSide, 732);
+  assertEqual(compactDevvit.recommendation.primaryControls, 'bottom');
+  assertEqual(compactDevvit.recommendation.secondaryPanels, 'drawer');
+  assertEqual(compactDevvit.recommendation.safeAreaAware, true);
   assertEqual(mediumTablet.layout.shell, 'browser');
   assertEqual(mediumTablet.layout.orientation, 'portrait');
   assertEqual(mediumTablet.layout.sizeClass, 'medium');
-  assertEqual(mediumTablet.composition.primaryControls, 'bottom');
-  assertEqual(mediumTablet.composition.secondaryPanels, 'below');
-  assertEqual(mediumTablet.composition.safeAreaAware, false);
+  assertEqual(mediumTablet.recommendation.primaryControls, 'bottom');
+  assertEqual(mediumTablet.recommendation.secondaryPanels, 'below');
+  assertEqual(mediumTablet.recommendation.safeAreaAware, false);
   assertEqual(desktopDevvit.layout.shell, 'embedded-webview');
   assertEqual(desktopDevvit.layout.orientation, 'landscape');
   assertEqual(desktopDevvit.layout.sizeClass, 'expanded');
-  assertEqual(desktopDevvit.composition.primaryControls, 'side');
-  assertEqual(desktopDevvit.composition.secondaryPanels, 'side');
-  assertEqual(desktopDevvit.composition.safeAreaAware, true);
+  assertEqual(desktopDevvit.recommendation.primaryControls, 'side');
+  assertEqual(desktopDevvit.recommendation.secondaryPanels, 'side');
+  assertEqual(desktopDevvit.recommendation.safeAreaAware, true);
   assertEqual(phoneWebView.layout.shell, 'mobile-webview');
   assertEqual(phoneWebView.layout.orientation, 'portrait');
   assertEqual(phoneWebView.layout.sizeClass, 'compact');
-  assertEqual(phoneWebView.composition.primaryControls, 'bottom');
-  assertEqual(phoneWebView.composition.secondaryPanels, 'drawer');
-  assertEqual(phoneWebView.composition.safeAreaAware, true);
+  assertEqual(phoneWebView.recommendation.primaryControls, 'bottom');
+  assertEqual(phoneWebView.recommendation.secondaryPanels, 'drawer');
+  assertEqual(phoneWebView.recommendation.safeAreaAware, true);
   assertEqual(desktopBrowser.layout.shell, 'browser');
   assertEqual(desktopBrowser.layout.orientation, 'landscape');
   assertEqual(desktopBrowser.layout.sizeClass, 'expanded');
-  assertEqual(desktopBrowser.composition.primaryControls, 'side');
-  assertEqual(desktopBrowser.composition.secondaryPanels, 'side');
-  assertEqual(desktopBrowser.composition.safeAreaAware, false);
+  assertEqual(desktopBrowser.recommendation.primaryControls, 'side');
+  assertEqual(desktopBrowser.recommendation.secondaryPanels, 'side');
+  assertEqual(desktopBrowser.recommendation.safeAreaAware, false);
+  assertEqual(resolveTargetViewportSizeClass(599), 'compact');
+  assertEqual(resolveTargetViewportSizeClass(600), 'medium');
+  assertEqual(resolveTargetViewportSizeClass(900), 'expanded');
   assertEqual(
     targetViewportShellForConfig(
       createTargetConfig({

@@ -37,7 +37,14 @@ export class StarterScene extends Phaser.Scene {
       .text(
         480,
         264,
-        `Viewport: ${context.viewport.layout.sizeClass} ${context.viewport.layout.orientation} - controls ${context.viewport.composition.primaryControls}`,
+        m.viewport(
+          {
+            controls: context.viewport.recommendation.primaryControls,
+            orientation: context.viewport.layout.orientation,
+            sizeClass: context.viewport.layout.sizeClass,
+          },
+          { locale },
+        ),
         {
           color: '#d6dee8',
           fontFamily: 'Arial, sans-serif',
