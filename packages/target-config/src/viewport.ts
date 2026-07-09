@@ -37,9 +37,6 @@ export interface TargetViewportRecommendation {
   readonly safeAreaAware: boolean;
 }
 
-/** @deprecated Use {@link TargetViewportRecommendation} instead. */
-export type TargetViewportComposition = TargetViewportRecommendation;
-
 export interface TargetViewportPlan {
   readonly layout: TargetViewportLayout;
   readonly recommendation: TargetViewportRecommendation;
@@ -105,13 +102,6 @@ export function resolveTargetViewportSizeClass(
     normalizeViewportDimension(width, 'width'),
     normalizeTargetViewportBreakpoints(breakpoints),
   );
-}
-
-/** @deprecated Use {@link resolveTargetViewportRecommendation} instead. */
-export function resolveTargetViewportComposition(
-  layout: TargetViewportLayout,
-): TargetViewportComposition {
-  return resolveTargetViewportRecommendation(layout);
 }
 
 export function resolveTargetViewportRecommendation(
