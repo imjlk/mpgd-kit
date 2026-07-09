@@ -25,6 +25,8 @@
   "loading_player": "Loading player...",
   "mock_only": "mock only",
   "opening_purchase": "Opening mock purchase...",
+  "viewport_orientation_policy": "Orientation policy: {mode}",
+  "viewport_orientation_mismatch": "Rotate to {orientation} for {mode}",
   "player": "Player: {name}",
   "play_again": "Play again",
   "preparing_demo": "Preparing SDK demo...",

@@ -84,6 +84,9 @@ const viewport = resolveTargetViewportPlan({
   height: measured.height,
   source: measured.source,
   runtime: runtime.config.runtime,
+  orientationPolicy: {
+    mode: 'prefer-landscape',
+  },
 });
 ```
 
@@ -103,6 +106,15 @@ Orientation is measured from the container: height greater than width is
 `portrait`; width greater than or equal to height is `landscape`. Devvit should
 be treated as an embedded webview, so do not assume desktop Reddit always means
 an expanded game surface.
+
+Orientation policy is a runtime contract, not a guarantee that every shell can
+hard-lock the device. Use `responsive` when both orientations are playable,
+`prefer-landscape` or `prefer-portrait` when layout guidance should favor one
+orientation, and `lock-landscape` or `lock-portrait` when the game should show a
+soft rotate prompt on mismatch. The generated PWA manifest also declares
+`"orientation": "landscape"` for installed web and Microsoft Store shells; keep
+that manifest value aligned with the runtime policy if you make a portrait-first
+game.
 
 ## Reddit Devvit
 

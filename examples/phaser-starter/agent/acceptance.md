@@ -12,11 +12,12 @@ pnpm --dir examples/phaser-starter build
 
 ## Manual
 
-- The first screen shows app title, target, effective config, player, and game-services mode.
+- The first screen shows app title, target, viewport orientation policy, effective config, player, and game-services mode.
 - Pointer or Enter starts `PlayScene`.
 - `PlayScene` animates from serializable simulation state.
 - No scene imports Capacitor, Apps in Toss, StoreKit, Play Billing, Devvit, or ad SDK modules.
 - Any purchase, rewarded ad, or leaderboard feature remains behind `PlatformGateway` and `@mpgd/game-services`.
+- Orientation locks are soft prompts unless a platform adapter explicitly supplies hard-lock support.
 
 ## Apps in Toss Target
 

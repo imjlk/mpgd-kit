@@ -15,6 +15,7 @@ import {
   type TargetConfigMatrix,
 } from '../src/runtime';
 import {
+  resolveTargetViewportOrientationPlan,
   resolveTargetViewportPlan,
   resolveTargetViewportSizeClass,
   targetViewportShellForConfig,
@@ -545,6 +546,10 @@ function assertViewportPlans(): void {
   assertEqual(compactDevvit.layout.sizeClass, 'compact');
   assertEqual(compactDevvit.layout.shortSide, 412);
   assertEqual(compactDevvit.layout.longSide, 732);
+  assertEqual(compactDevvit.orientation.mode, 'responsive');
+  assertEqual(compactDevvit.orientation.isMismatch, false);
+  assertEqual(compactDevvit.orientation.shouldShowRotatePrompt, false);
+  assertEqual(compactDevvit.orientation.shouldLetterbox, false);
   assertEqual(compactDevvit.recommendation.primaryControls, 'bottom');
   assertEqual(compactDevvit.recommendation.secondaryPanels, 'drawer');
   assertEqual(compactDevvit.recommendation.safeAreaAware, true);
@@ -578,6 +583,52 @@ function assertViewportPlans(): void {
   assertEqual(landscapePhoneBrowser.recommendation.primaryControls, 'side');
   assertEqual(landscapePhoneBrowser.recommendation.secondaryPanels, 'side');
   assertEqual(landscapePhoneBrowser.recommendation.safeAreaAware, true);
+  assertDeepEqual(
+    resolveTargetViewportOrientationPlan(compactDevvit.layout, {
+      mode: 'lock-landscape',
+    }),
+    {
+      mode: 'lock-landscape',
+      preferredOrientation: 'landscape',
+      lockedOrientation: 'landscape',
+      mismatchBehavior: 'show-rotate-prompt',
+      isMismatch: true,
+      shouldLetterbox: false,
+      shouldShowRotatePrompt: true,
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportOrientationPlan(landscapePhoneBrowser.layout, {
+      mode: 'prefer-portrait',
+      mismatchBehavior: 'letterbox',
+    }),
+    {
+      mode: 'prefer-portrait',
+      preferredOrientation: 'portrait',
+      mismatchBehavior: 'letterbox',
+      isMismatch: true,
+      shouldLetterbox: true,
+      shouldShowRotatePrompt: false,
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportPlan({
+      ...compactDevvitDimensions,
+      runtime: 'devvit-web',
+      orientationPolicy: {
+        mode: 'lock-portrait',
+      },
+    }).orientation,
+    {
+      mode: 'lock-portrait',
+      preferredOrientation: 'portrait',
+      lockedOrientation: 'portrait',
+      mismatchBehavior: 'show-rotate-prompt',
+      isMismatch: false,
+      shouldLetterbox: false,
+      shouldShowRotatePrompt: false,
+    },
+  );
   assertEqual(resolveTargetViewportSizeClass(599), 'compact');
   assertEqual(resolveTargetViewportSizeClass(600), 'medium');
   assertEqual(resolveTargetViewportSizeClass(900), 'expanded');
