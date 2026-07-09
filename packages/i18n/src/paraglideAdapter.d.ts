@@ -84,6 +84,11 @@ export interface MpgdMessages {
     readonly orientation: string;
     readonly sizeClass: string;
   }>;
+  readonly viewport_orientation_mismatch: MessageFunction<{
+    readonly mode: string;
+    readonly orientation: string;
+  }>;
+  readonly viewport_orientation_policy: MessageFunction<{ readonly mode: string }>;
 }
 
 export const m: MpgdMessages;

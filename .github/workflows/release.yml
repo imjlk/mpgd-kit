@@ -6,7 +6,12 @@ on:
       - main
   workflow_dispatch: {}
 
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
 permissions:
+  actions: write
   contents: write
   pull-requests: write
   id-token: write
@@ -42,3 +47,22 @@ jobs:
           create-github-release: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Queue release PR validation
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          release_pr="$(
+            gh pr list \
+              --repo "${GITHUB_REPOSITORY}" \
+              --head release/main \
+              --state open \
+              --json number \
+              --jq '.[0].number // empty'
+          )"
+          if [ -n "${release_pr}" ]; then
+            gh workflow run ci.yml --ref release/main --field release_pr_metadata_only=true
+          else
+            echo "No open release/main PR found; skipping release PR validation dispatch."
+          fi

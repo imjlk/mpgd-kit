@@ -1,6 +1,16 @@
 import type { TargetConfig, TargetRuntimeKind } from './runtime';
 
 export type TargetViewportOrientation = 'portrait' | 'landscape';
+export type TargetViewportOrientationPolicyMode =
+  | 'responsive'
+  | 'prefer-landscape'
+  | 'prefer-portrait'
+  | 'lock-landscape'
+  | 'lock-portrait';
+export type TargetViewportOrientationMismatchBehavior =
+  | 'continue'
+  | 'letterbox'
+  | 'show-rotate-prompt';
 export type TargetViewportSizeClass = 'compact' | 'medium' | 'expanded';
 export type TargetViewportShell = 'browser' | 'mobile-webview' | 'embedded-webview';
 export type TargetViewportMeasurementSource = 'container' | 'visual-viewport' | 'window' | 'unknown';
@@ -17,6 +27,7 @@ export interface TargetViewportInput {
   readonly height: number;
   readonly runtime?: TargetRuntimeKind;
   readonly source?: TargetViewportMeasurementSource;
+  readonly orientationPolicy?: TargetViewportOrientationPolicy;
 }
 
 export interface TargetViewportLayout {
@@ -37,15 +48,73 @@ export interface TargetViewportRecommendation {
   readonly safeAreaAware: boolean;
 }
 
+export interface TargetViewportOrientationPolicy {
+  readonly mode: TargetViewportOrientationPolicyMode;
+  readonly mismatchBehavior?: TargetViewportOrientationMismatchBehavior;
+}
+
+export interface TargetViewportOrientationPlan {
+  readonly mode: TargetViewportOrientationPolicyMode;
+  readonly preferredOrientation?: TargetViewportOrientation;
+  readonly lockedOrientation?: TargetViewportOrientation;
+  readonly mismatchBehavior: TargetViewportOrientationMismatchBehavior;
+  readonly isMismatch: boolean;
+  readonly shouldLetterbox: boolean;
+  readonly shouldShowRotatePrompt: boolean;
+}
+
 export interface TargetViewportPlan {
   readonly layout: TargetViewportLayout;
   readonly recommendation: TargetViewportRecommendation;
+  readonly orientation: TargetViewportOrientationPlan;
+}
+
+interface TargetViewportOrientationPolicyModeDescriptor {
+  readonly preferredOrientation: TargetViewportOrientation | undefined;
+  readonly lockedOrientation: TargetViewportOrientation | undefined;
+  readonly isLocked: boolean;
 }
 
 export const defaultTargetViewportBreakpoints = {
   compactMaxWidth: 599,
   expandedMinWidth: 900,
 } as const satisfies TargetViewportBreakpoints;
+
+export const defaultTargetViewportOrientationPolicy = {
+  mode: 'responsive',
+  mismatchBehavior: 'continue',
+} as const satisfies TargetViewportOrientationPolicy;
+
+const targetViewportOrientationPolicyModeDescriptors = {
+  responsive: {
+    preferredOrientation: undefined,
+    lockedOrientation: undefined,
+    isLocked: false,
+  },
+  'prefer-landscape': {
+    preferredOrientation: 'landscape',
+    lockedOrientation: undefined,
+    isLocked: false,
+  },
+  'prefer-portrait': {
+    preferredOrientation: 'portrait',
+    lockedOrientation: undefined,
+    isLocked: false,
+  },
+  'lock-landscape': {
+    preferredOrientation: 'landscape',
+    lockedOrientation: 'landscape',
+    isLocked: true,
+  },
+  'lock-portrait': {
+    preferredOrientation: 'portrait',
+    lockedOrientation: 'portrait',
+    isLocked: true,
+  },
+} as const satisfies Record<
+  TargetViewportOrientationPolicyMode,
+  TargetViewportOrientationPolicyModeDescriptor
+>;
 
 export function targetViewportShellForRuntime(
   runtime: TargetRuntimeKind,
@@ -121,6 +190,29 @@ export function resolveTargetViewportRecommendation(
   };
 }
 
+export function resolveTargetViewportOrientationPlan(
+  layout: Pick<TargetViewportLayout, 'orientation'>,
+  policy: TargetViewportOrientationPolicy = defaultTargetViewportOrientationPolicy,
+): TargetViewportOrientationPlan {
+  const normalizedPolicy = normalizeTargetViewportOrientationPolicy(policy);
+  const descriptor = targetViewportOrientationPolicyModeDescriptors[normalizedPolicy.mode];
+  const preferredOrientation = descriptor.preferredOrientation;
+  const lockedOrientation = descriptor.lockedOrientation;
+  const isMismatch =
+    preferredOrientation !== undefined && layout.orientation !== preferredOrientation;
+  const mismatchBehavior = normalizedPolicy.mismatchBehavior;
+
+  return {
+    mode: normalizedPolicy.mode,
+    ...(preferredOrientation === undefined ? {} : { preferredOrientation }),
+    ...(lockedOrientation === undefined ? {} : { lockedOrientation }),
+    mismatchBehavior,
+    isMismatch,
+    shouldLetterbox: isMismatch && mismatchBehavior === 'letterbox',
+    shouldShowRotatePrompt: isMismatch && mismatchBehavior === 'show-rotate-prompt',
+  };
+}
+
 export function resolveTargetViewportPlan(
   input: TargetViewportInput,
   breakpoints: TargetViewportBreakpoints = defaultTargetViewportBreakpoints,
@@ -130,6 +222,7 @@ export function resolveTargetViewportPlan(
   return {
     layout,
     recommendation: resolveTargetViewportRecommendation(layout),
+    orientation: resolveTargetViewportOrientationPlan(layout, input.orientationPolicy),
   };
 }
 
@@ -160,6 +253,19 @@ function resolveTargetViewportPanelPlacement(
   }
 
   return 'side';
+}
+
+function normalizeTargetViewportOrientationPolicy(
+  policy: TargetViewportOrientationPolicy,
+): Required<TargetViewportOrientationPolicy> {
+  const descriptor = targetViewportOrientationPolicyModeDescriptors[policy.mode];
+
+  return {
+    mode: policy.mode,
+    mismatchBehavior:
+      policy.mismatchBehavior ??
+      (descriptor.isLocked ? 'show-rotate-prompt' : 'continue'),
+  };
 }
 
 function normalizeTargetViewportBreakpoints(

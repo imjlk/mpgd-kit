@@ -25,6 +25,8 @@
   "loading_player": "플레이어 불러오는 중...",
   "mock_only": "목업 전용",
   "opening_purchase": "목업 구매 여는 중...",
+  "viewport_orientation_policy": "방향 정책: {mode}",
+  "viewport_orientation_mismatch": "{mode}: {orientation} 방향으로 회전",
   "player": "플레이어: {name}",
   "play_again": "다시 플레이",
   "preparing_demo": "SDK 데모 준비 중...",

@@ -2,7 +2,10 @@ import './styles.css';
 
 import { createAnalyticsReporter, createBufferedAnalyticsSink } from '@mpgd/analytics';
 import { resolveMpgdLocale, type Locale } from '@mpgd/i18n';
-import { resolveTargetViewportPlan } from '@mpgd/target-config';
+import {
+  resolveTargetViewportPlan,
+  type TargetViewportOrientationPolicy,
+} from '@mpgd/target-config';
 
 import { t } from './i18n/messages';
 import { createClientId } from './runtime/id';
@@ -25,9 +28,13 @@ async function bootstrap(): Promise<void> {
     const runtimeConfig = detectRuntime();
     const platform = await installPlatform(runtimeConfig);
     const runtime = await platform.getTargetRuntime();
+    const orientationPolicy = {
+      mode: 'prefer-landscape',
+    } as const satisfies TargetViewportOrientationPolicy;
     const viewport = resolveTargetViewportPlan({
       ...measureGameViewport(),
       runtime: runtime.config.runtime,
+      orientationPolicy,
     });
     const player =
       (await platform.identity.getPlayer()) ?? {

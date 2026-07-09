@@ -27,10 +27,11 @@
       "id": "runtime.scene.shell",
       "kind": "scene",
       "entry": "src/scenes/StarterScene.ts",
-      "capabilities": ["scene-shell", "i18n", "target-summary"],
+      "capabilities": ["scene-shell", "i18n", "target-summary", "viewport-orientation-summary"],
       "gotchas": [
         "Keep dense HUD or settings in DOM overlays for downstream games.",
-        "Do not make the scene the source of truth for progression."
+        "Do not make the scene the source of truth for progression.",
+        "Treat orientation locks as soft prompts unless the active platform adapter explicitly supports hard locking."
       ]
     },
     {
@@ -47,10 +48,16 @@
       "id": "platform.gateway.target-config",
       "kind": "platform",
       "entry": "src/platform/installStarterPlatform.ts",
-      "capabilities": ["platform-gateway", "effective-target-config", "feature-availability"],
+      "capabilities": [
+        "platform-gateway",
+        "effective-target-config",
+        "feature-availability",
+        "viewport-orientation-policy"
+      ],
       "gotchas": [
         "Keep SDK imports out of starter scenes.",
-        "Use target-config as the source of feature availability."
+        "Use target-config as the source of feature availability.",
+        "Choose responsive, preferred, or locked orientation policy before adding resize behavior."
       ]
     },
     {
@@ -84,7 +91,8 @@
     "manual": [
       "Target, player, effective config, and backend mode render on the starter screen.",
       "Pointer or Enter starts the play scene.",
-      "The play scene updates from serializable simulation state."
+      "The play scene updates from serializable simulation state.",
+      "Viewport orientation policy is visible and does not force unsafe WebView hard locks."
     ]
   }
 }

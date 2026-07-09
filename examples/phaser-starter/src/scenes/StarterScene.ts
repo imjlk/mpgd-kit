@@ -12,6 +12,22 @@ export class StarterScene extends Phaser.Scene {
     const context = this.registry.get('starterContext') as StarterContext;
     const locale = context.locale;
     const effectiveConfig = context.runtime.effectiveConfig;
+    const orientation = context.viewport.orientation;
+    const orientationText =
+      orientation.shouldShowRotatePrompt && orientation.preferredOrientation !== undefined
+        ? m.viewport_orientation_mismatch(
+            {
+              mode: orientation.mode,
+              orientation: orientation.preferredOrientation,
+            },
+            { locale },
+          )
+        : m.viewport_orientation_policy(
+            {
+              mode: orientation.mode,
+            },
+            { locale },
+          );
     const backendText =
       context.gameServices.mode === 'disabled'
         ? 'Game Services: disabled'
@@ -55,7 +71,19 @@ export class StarterScene extends Phaser.Scene {
     this.add
       .text(
         480,
-        306,
+        304,
+        orientationText,
+        {
+          color: orientation.shouldShowRotatePrompt ? '#f59e0b' : '#d6dee8',
+          fontFamily: 'Arial, sans-serif',
+          fontSize: '18px',
+        },
+      )
+      .setOrigin(0.5);
+    this.add
+      .text(
+        480,
+        346,
         m.effective_config_summary(
           {
             products: effectiveConfig?.monetization.products.length ?? 0,
@@ -72,21 +100,21 @@ export class StarterScene extends Phaser.Scene {
       )
       .setOrigin(0.5);
     this.add
-      .text(480, 348, m.player({ name: context.player.displayName ?? context.player.playerId }, { locale }), {
+      .text(480, 388, m.player({ name: context.player.displayName ?? context.player.playerId }, { locale }), {
         color: '#d6dee8',
         fontFamily: 'Arial, sans-serif',
         fontSize: '18px',
       })
       .setOrigin(0.5);
     this.add
-      .text(480, 388, backendText, {
+      .text(480, 428, backendText, {
         color: context.gameServices.client === undefined ? '#f59e0b' : '#2dd4bf',
         fontFamily: 'Arial, sans-serif',
         fontSize: '18px',
       })
       .setOrigin(0.5);
     this.add
-      .text(480, 452, m.tap_to_start({}, { locale }), {
+      .text(480, 490, m.tap_to_start({}, { locale }), {
         color: '#ffffff',
         fontFamily: 'Arial, sans-serif',
         fontSize: '22px',

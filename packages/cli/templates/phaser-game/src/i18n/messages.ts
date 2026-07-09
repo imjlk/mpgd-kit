@@ -4,6 +4,8 @@ export type GameMessageKey =
   | 'title'
   | 'target'
   | 'viewport'
+  | 'orientationPolicy'
+  | 'orientationMismatch'
   | 'backend'
   | 'features'
   | 'featuresNone'
@@ -21,6 +23,8 @@ const messages = {
     title: '__GAME_TITLE__',
     target: 'Target: {target}',
     viewport: 'Viewport: {sizeClass} {orientation} - controls {controls}',
+    orientationPolicy: 'Orientation policy: {mode}',
+    orientationMismatch: 'Rotate to {orientation} for {mode}',
     backend: 'Game Services: {mode}',
     features: 'Features: {features}',
     featuresNone: 'none',
@@ -37,6 +41,8 @@ const messages = {
     title: '__GAME_TITLE__',
     target: '타깃: {target}',
     viewport: '뷰포트: {sizeClass} {orientation} - 컨트롤 {controls}',
+    orientationPolicy: '방향 정책: {mode}',
+    orientationMismatch: '{mode}: {orientation} 방향으로 회전',
     backend: 'Game Services: {mode}',
     features: '기능: {features}',
     featuresNone: '없음',

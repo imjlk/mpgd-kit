@@ -15,6 +15,7 @@ This starter is the minimal private template for new mpgd Phaser games.
 - Do not import platform SDKs from scenes or simulation modules.
 - Use `PlatformGateway` for identity, storage, commerce, ads, leaderboard, lifecycle, and capabilities.
 - Use `@mpgd/game-services` for authoritative purchase, ad reward, and leaderboard flows.
+- Choose the viewport orientation policy before adding resize or rotate-prompt behavior.
 - Update `agent/game.manifest.json` when adding starter capabilities.
 
 ## Checks
