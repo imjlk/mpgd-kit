@@ -698,7 +698,7 @@ await assertRejects(
     idempotencyKey: 'notification-oversized-template',
     templateData: oversizedTemplateData(),
   }),
-  'templateData must contain at most 128 entries',
+  'templateData must not contain more than 128 entries',
   'template data should enforce its entry bound before reading values',
 );
 await assertRejects(

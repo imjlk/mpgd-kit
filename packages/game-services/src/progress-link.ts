@@ -1,3 +1,5 @@
+import { assertOwnEnumerablePropertyLimit } from './validation';
+
 export type GameProgressValue =
   | null
   | boolean
@@ -466,7 +468,7 @@ function normalizeMetricMap(
   validate?: (value: number, fieldLabel: string) => void,
 ): Readonly<Record<string, number>> {
   assertRecord(input, label);
-  assertOwnPropertyLimit(input, gameProgressLimits.maxMetricEntries, label);
+  assertOwnEnumerablePropertyLimit(input, gameProgressLimits.maxMetricEntries, label);
   const inputEntries = Object.entries(input);
   const entries = inputEntries.map(([key, value]) => {
     const normalizedKey = normalizeIdentifier(key, `${label} key`);
@@ -624,7 +626,7 @@ function normalizeGameProgressValue(
   }
 
   assertRecord(input, label);
-  assertOwnPropertyLimit(input, gameProgressLimits.maxPayloadNodes, label);
+  assertOwnEnumerablePropertyLimit(input, gameProgressLimits.maxPayloadNodes, label);
   const entries = Object.entries(input)
     .sort(([left], [right]) => compareCodeUnits(left, right))
     .map(([key, value]) => {
@@ -696,24 +698,6 @@ function assertOnlyFields(
 function assertCollectionLimit(length: number, maximum: number, label: string): void {
   if (length > maximum) {
     throw new Error(`${label} must not contain more than ${String(maximum)} entries.`);
-  }
-}
-
-function assertOwnPropertyLimit(
-  input: Record<string, unknown>,
-  maximum: number,
-  label: string,
-): void {
-  let propertyCount = 0;
-
-  for (const key in input) {
-    if (Object.hasOwn(input, key)) {
-      propertyCount += 1;
-
-      if (propertyCount > maximum) {
-        throw new Error(`${label} must not contain more than ${String(maximum)} entries.`);
-      }
-    }
   }
 }
 

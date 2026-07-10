@@ -1,5 +1,7 @@
 import type { NotificationTopic, PlatformTarget } from '@mpgd/platform';
 
+import { assertOwnEnumerablePropertyLimit } from './validation';
+
 const platformTargets = new Set<PlatformTarget>([
   'browser',
   'android',
@@ -16,6 +18,7 @@ const notificationTopics = new Set<NotificationTopic>([
 ]);
 const defaultClaimLeaseMs = 5 * 60 * 1_000;
 const maxCompletionAttempts = 3;
+const maxNotificationTemplateDataEntries = 128;
 
 export type NotificationTemplateValue = string | number | boolean;
 export type NotificationTemplateData = Readonly<Record<string, NotificationTemplateValue>>;
@@ -512,7 +515,7 @@ function normalizeNotificationDeliveryClaimResult(
 
 function normalizeTemplateData(input: unknown): NotificationTemplateData {
   assertRecord(input, 'templateData');
-  assertOwnPropertyLimit(input, 128, 'templateData');
+  assertOwnEnumerablePropertyLimit(input, maxNotificationTemplateDataEntries, 'templateData');
   const inputEntries = Object.entries(input);
 
   const entries = inputEntries.map(([key, value]) => {
@@ -669,24 +672,6 @@ function attachSecondaryError(primary: unknown, secondary: unknown): void {
 function assertRecord(input: unknown, label: string): asserts input is Record<string, unknown> {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     throw new Error(`${label} must be an object.`);
-  }
-}
-
-function assertOwnPropertyLimit(
-  input: Record<string, unknown>,
-  maximum: number,
-  label: string,
-): void {
-  let propertyCount = 0;
-
-  for (const key in input) {
-    if (Object.hasOwn(input, key)) {
-      propertyCount += 1;
-
-      if (propertyCount > maximum) {
-        throw new Error(`${label} must contain at most ${String(maximum)} entries.`);
-      }
-    }
   }
 }
 
