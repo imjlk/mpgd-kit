@@ -37,6 +37,14 @@
       "types": "./dist/contract.d.ts",
       "default": "./dist/contract.js"
     },
+    "./notification-delivery": {
+      "types": "./dist/notification-delivery.d.ts",
+      "default": "./dist/notification-delivery.js"
+    },
+    "./progress-link": {
+      "types": "./dist/progress-link.d.ts",
+      "default": "./dist/progress-link.js"
+    },
     "./server": {
       "types": "./dist/server.d.ts",
       "default": "./dist/server.js"
@@ -54,7 +62,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/game-services/src/client.test.ts && node tools/run-ttsx.mjs packages/game-services/src/server.test.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/game-services/src/client.test.ts && node tools/run-ttsx.mjs packages/game-services/src/server.test.ts && node tools/run-ttsx.mjs packages/game-services/src/progress-link.test.ts && node tools/run-ttsx.mjs packages/game-services/src/notification-delivery.test.ts"
   },
   "dependencies": {
     "@mpgd/analytics": "workspace:*",
