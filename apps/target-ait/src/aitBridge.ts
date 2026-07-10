@@ -15,6 +15,8 @@ import type {
   ShareResult,
 } from '../../../packages/platform/src/index';
 
+declare const __MPGD_AIT_APP_NAME__: string;
+
 import {
   resolveAitGameIdentity,
   type AitGameUserKeyProvider,

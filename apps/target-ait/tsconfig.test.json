@@ -10,7 +10,6 @@
     "src/aitBridge.test.ts",
     "src/aitIdentity.ts",
     "src/aitIdentity.test.ts",
-    "src/bridgeTypes.ts",
-    "src/env.d.ts"
+    "src/bridgeTypes.ts"
   ]
 }
