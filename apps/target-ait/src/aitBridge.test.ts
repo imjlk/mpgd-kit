@@ -93,4 +93,20 @@ const invalidDeepLink = await shareIntent(
 
 assert.deepEqual(invalidDeepLink, { status: 'unavailable' });
 
+const protocolRelativeDeepLink = await shareIntent(
+  {
+    ...sharePayload,
+    deepLink: '//other.example/daily',
+  },
+  {
+    appName: 'mpgd-kit',
+    async getTossShareLink() {
+      throw new Error('protocol-relative links must not reach the Toss link provider');
+    },
+    async share() {},
+  },
+);
+
+assert.deepEqual(protocolRelativeDeepLink, { status: 'unavailable' });
+
 console.log('Apps in Toss bridge tests passed.');

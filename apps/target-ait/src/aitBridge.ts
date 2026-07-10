@@ -437,7 +437,11 @@ function toAitDeepLink(input: string, appNameInput: string): string | undefined 
     return undefined;
   }
 
-  if (input.startsWith('/') && !input.startsWith('//')) {
+  if (input.startsWith('//')) {
+    return undefined;
+  }
+
+  if (input.startsWith('/')) {
     const baseUrl = new URL('https://mpgd.invalid');
     const parsed = new URL(input, baseUrl);
 
