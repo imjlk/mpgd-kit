@@ -32,11 +32,13 @@ const launchEntries = new Set<LaunchEntry>([
   'friend-challenge',
 ]);
 const defaultAitShareDependencies: AitShareDependencies = {
+  appName: typeof __MPGD_AIT_APP_NAME__ === 'string' ? __MPGD_AIT_APP_NAME__ : 'mpgd-kit',
   getTossShareLink,
   share,
 };
 
 export interface AitShareDependencies {
+  readonly appName: string;
   readonly getTossShareLink: typeof getTossShareLink;
   readonly share: typeof share;
 }
@@ -356,9 +358,15 @@ export async function shareIntent(
     return { status: 'unavailable' };
   }
 
+  const aitDeepLink = toAitDeepLink(intent.deepLink, dependencies.appName);
+
+  if (aitDeepLink === undefined) {
+    return { status: 'unavailable' };
+  }
+
   try {
     const tossLink = await dependencies.getTossShareLink(
-      intent.deepLink,
+      aitDeepLink,
       typeof intent.previewImageUrl === 'string' && intent.previewImageUrl.startsWith('https://')
         ? intent.previewImageUrl
         : undefined,
@@ -418,6 +426,43 @@ function inboundSearchParams(): URLSearchParams {
 
 function nonEmptyParam(value: string | null): string | undefined {
   return value === null || value.length === 0 ? undefined : value;
+}
+
+function toAitDeepLink(input: string, appNameInput: string): string | undefined {
+  const appName = appNameInput.trim();
+
+  if (!/^[A-Za-z0-9-]+$/u.test(appName)) {
+    return undefined;
+  }
+
+  if (input.startsWith('/') && !input.startsWith('//')) {
+    const baseUrl = new URL('https://mpgd.invalid');
+    const parsed = new URL(input, baseUrl);
+
+    if (parsed.origin !== baseUrl.origin) {
+      return undefined;
+    }
+
+    return `intoss://${appName}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  }
+
+  let parsed: URL;
+
+  try {
+    parsed = new URL(input);
+  } catch {
+    return undefined;
+  }
+
+  if (parsed.protocol === 'intoss:') {
+    return parsed.hostname === appName ? input : undefined;
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return undefined;
+  }
+
+  return `intoss://${appName}${parsed.pathname}${parsed.search}${parsed.hash}`;
 }
 
 function isAbortError(error: unknown): boolean {

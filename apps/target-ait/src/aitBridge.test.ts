@@ -10,6 +10,7 @@ const sharePayload = {
 const abortError = { name: 'AbortError' };
 
 const cancelledWhileCreatingLink = await shareIntent(sharePayload, {
+  appName: 'mpgd-kit',
   async getTossShareLink() {
     throw abortError;
   },
@@ -20,6 +21,7 @@ const cancelledWhileCreatingLink = await shareIntent(sharePayload, {
 assert.deepEqual(cancelledWhileCreatingLink, { status: 'cancelled' });
 
 const cancelledWhileSharing = await shareIntent(sharePayload, {
+  appName: 'mpgd-kit',
   async getTossShareLink() {
     return 'https://toss.im/_ul/daily';
   },
@@ -39,6 +41,7 @@ try {
   const unavailable = await shareIntent(
     sharePayload,
     {
+      appName: 'mpgd-kit',
       async getTossShareLink() {
         throw new Error('bridge unavailable');
       },
@@ -52,5 +55,42 @@ try {
 }
 
 assert.equal(warningCount, 1, 'ordinary share errors should retain warning behavior');
+
+const generatedPaths: string[] = [];
+const sharedFromHttps = await shareIntent(
+  {
+    ...sharePayload,
+    deepLink: 'https://game.example/daily?challengeToken=signed-token#result',
+  },
+  {
+    appName: 'mpgd-kit',
+    async getTossShareLink(path) {
+      generatedPaths.push(path);
+      return 'https://toss.im/_ul/daily';
+    },
+    async share() {},
+  },
+);
+
+assert.deepEqual(sharedFromHttps, { status: 'shared' });
+assert.deepEqual(generatedPaths, [
+  'intoss://mpgd-kit/daily?challengeToken=signed-token#result',
+]);
+
+const invalidDeepLink = await shareIntent(
+  {
+    ...sharePayload,
+    deepLink: 'javascript:alert(1)',
+  },
+  {
+    appName: 'mpgd-kit',
+    async getTossShareLink() {
+      throw new Error('invalid deep links must not reach the Toss link provider');
+    },
+    async share() {},
+  },
+);
+
+assert.deepEqual(invalidDeepLink, { status: 'unavailable' });
 
 console.log('Apps in Toss bridge tests passed.');

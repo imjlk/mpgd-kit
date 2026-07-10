@@ -160,7 +160,7 @@ export function createMpgdCloudflarePagesBridgeHandler<
           nativeLeaderboard: false,
           achievements: false,
           cloudSave: false,
-          socialShare: true,
+          socialShare: false,
           haptics: false,
           localizedContent: true,
         });

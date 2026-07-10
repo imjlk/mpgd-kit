@@ -54,6 +54,11 @@ assertEqual(
   false,
   'default capabilities should not expose unauthenticated cloud save',
 );
+assertEqual(
+  (capabilities as { readonly data: { readonly socialShare: boolean } }).data.socialShare,
+  false,
+  'default capabilities should not advertise unavailable server-side sharing',
+);
 
 const client = createBridgeOrpcClient({
   fetch: (url, init) => fetchHandler(new Request(new URL(String(url), baseUrl), init), env),

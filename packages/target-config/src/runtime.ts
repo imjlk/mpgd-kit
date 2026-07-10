@@ -387,6 +387,8 @@ export function withTargetAvailability(
   const requestIdentityUpgrade = gatewayIdentity.requestUpgrade?.bind(gatewayIdentity);
   const shareOutbound = gatewaySharing?.share?.bind(gatewaySharing);
   const readInboundShare = gatewaySharing?.readInboundShare?.bind(gatewaySharing);
+  const exposeOutboundShare = sharingAvailable && shareOutbound !== undefined;
+  const exposeInboundShare = inboundShareAvailable && readInboundShare !== undefined;
   const identity: PlatformGateway['identity'] = {
     getPlayer: gatewayIdentity.getPlayer.bind(gatewayIdentity),
     ...(getIdentitySession === undefined ? {} : { getSession: getIdentitySession }),
@@ -396,21 +398,11 @@ export function withTargetAvailability(
   };
   const presentation = presentationAvailable ? gatewayPresentation : undefined;
   const sharing: PlatformGateway['sharing'] =
-    gatewaySharing === undefined || (!sharingAvailable && !inboundShareAvailable)
+    !exposeOutboundShare && !exposeInboundShare
       ? undefined
       : {
-          async share(input) {
-            return sharingAvailable && shareOutbound !== undefined
-              ? shareOutbound(input)
-              : {
-                  status: 'unavailable',
-                };
-          },
-          async readInboundShare() {
-            return inboundShareAvailable && readInboundShare !== undefined
-              ? readInboundShare()
-              : null;
-          },
+          ...(exposeOutboundShare ? { share: shareOutbound } : {}),
+          ...(exposeInboundShare ? { readInboundShare } : {}),
         };
   const notifications = notificationsAvailable ? gatewayNotifications : undefined;
   const isAdPlacementAllowed = (

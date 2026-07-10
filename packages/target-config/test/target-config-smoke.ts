@@ -273,17 +273,7 @@ const inboundOnlyGateway = withTargetAvailability(gateway, {
   },
 });
 
-assertDeepEqual(
-  await inboundOnlyGateway.sharing?.share?.({
-    kind: 'friend-challenge',
-    title: 'Challenge',
-    text: 'Try this puzzle.',
-    deepLink: 'https://example.test/challenge',
-  }),
-  {
-    status: 'unavailable',
-  },
-);
+assertEqual(inboundOnlyGateway.sharing?.share, undefined);
 assertDeepEqual(await inboundOnlyGateway.sharing?.readInboundShare?.(), {
   puzzleId: 'daily-1',
 });
