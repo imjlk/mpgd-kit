@@ -22,6 +22,7 @@ export default defineConfig({
     ssr: 'src/server/index.ts',
     outDir: 'dist/server',
     target: 'node22',
+    minify: 'esbuild',
     sourcemap: false,
     emptyOutDir: true,
     rollupOptions: {
@@ -29,7 +30,7 @@ export default defineConfig({
       output: {
         format: 'cjs',
         entryFileNames: 'index.cjs',
-        inlineDynamicImports: true,
+        codeSplitting: false,
       },
     },
   },
