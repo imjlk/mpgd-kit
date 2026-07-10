@@ -112,14 +112,19 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
 
   for (const integration of targetIntegrations) {
     const integrationRuntime = runtime.integrations[integration];
-    const expectedRuntimeState = integrationRuntime.adapterSupported
-      ? integrationRuntime.configuredState
-      : 'unsupported';
+    const expectedConfiguredState = integrationConfig[integration];
+    const expectedAdapterSupported = supportsIntegration(targetGateway.gateway, integration);
+    const expectedRuntimeState = expectedAdapterSupported ? expectedConfiguredState : 'unsupported';
 
     assertEqual(
       integrationRuntime.configuredState,
-      integrationConfig[integration],
+      expectedConfiguredState,
       `${configTarget} ${integration} configured state should match`,
+    );
+    assertEqual(
+      integrationRuntime.adapterSupported,
+      expectedAdapterSupported,
+      `${configTarget} ${integration} adapter support should match gateway methods`,
     );
     assertEqual(
       integrationRuntime.state,
@@ -476,6 +481,30 @@ function platformTargetForConfig(configTarget: (typeof configTargets)[number]): 
   return configTarget === 'web-preview' || configTarget === 'microsoft-store'
     ? 'browser'
     : configTarget;
+}
+
+function supportsIntegration(
+  gateway: PlatformGateway,
+  integration: (typeof targetIntegrations)[number],
+): boolean {
+  switch (integration) {
+    case 'identityUpgrade':
+      return typeof gateway.identity.requestUpgrade === 'function';
+    case 'presentation':
+      return (
+        typeof gateway.presentation?.getLaunchIntent === 'function'
+        && typeof gateway.presentation?.requestGameSurface === 'function'
+      );
+    case 'sharing':
+      return typeof gateway.sharing?.share === 'function';
+    case 'inboundShare':
+      return typeof gateway.sharing?.readInboundShare === 'function';
+    case 'notifications':
+      return (
+        typeof gateway.notifications?.getStatus === 'function'
+        && typeof gateway.notifications?.requestSubscription === 'function'
+      );
+  }
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string): void {
