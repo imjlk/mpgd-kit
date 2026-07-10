@@ -121,6 +121,7 @@ interface ProgressPayloadBudget {
 const snapshotFields = new Set(['completedIds', 'bestTimesMs', 'bestScores', 'activeProgress']);
 const activeProgressFields = new Set(['id', 'updatedAt', 'payload']);
 
+/** Process-local test helper. Production services must provide a durable store. */
 export class InMemoryProgressLinkStore implements ProgressLinkStore {
   private readonly progressByPlayerId = new Map<string, GameProgressSnapshot>();
   private readonly reconciliationsByIdempotencyKey = new Map<
@@ -227,6 +228,11 @@ export function createProgressLinkService(input: {
       const context = normalizeServerResolvedPlayerContext(contextInput);
       const metadata = normalizeGuestProgressHandoffMetadata(handoffInput);
       await verifyProgressHandoff(input.handoffVerifier, context, metadata, now);
+      // These validations deliberately stay at separate trust boundaries: the
+      // client request, verifier output, store input, and store output may each
+      // come from independently implemented code. Payload limits keep every
+      // traversal bounded while preventing a typed-but-unvalidated value from
+      // skipping runtime validation.
       const guestProgress = normalizeGameProgressSnapshot(handoffInput.guestProgress);
       const verifiedProgress = normalizeGameProgressSnapshot(
         await input.progressVerifier.verify({
@@ -300,6 +306,8 @@ export function mergeGameProgressSnapshots(
   serverInput: GameProgressSnapshot,
   guestInput: GameProgressSnapshot,
 ): GameProgressSnapshot {
+  // This exported helper is also a runtime boundary; TypeScript types alone do
+  // not prove that either snapshot came from a trusted or validated source.
   const server = normalizeGameProgressSnapshot(serverInput);
   const guest = normalizeGameProgressSnapshot(guestInput);
   const activeProgress = selectActiveProgress(server.activeProgress, guest.activeProgress);
@@ -724,6 +732,10 @@ function normalizeIdentifier(input: unknown, label: string): string {
     throw new Error(
       `${label} must not exceed ${String(gameProgressLimits.maxIdentifierLength)} characters.`,
     );
+  }
+
+  if (/[\x00-\x1F\x7F]/u.test(input)) {
+    throw new Error(`${label} must not contain control characters.`);
   }
 
   return input;

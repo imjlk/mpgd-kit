@@ -348,6 +348,14 @@ assertThrows(
 assertThrows(
   () => normalizeGameProgressSnapshot({
     ...emptyProgress,
+    completedIds: ['stage-1\nforged-log-entry'],
+  }),
+  'must not contain control characters',
+  'progress identifiers should reject control characters',
+);
+assertThrows(
+  () => normalizeGameProgressSnapshot({
+    ...emptyProgress,
     completedIds: sparseCompletedIds,
   }),
   'must be a non-empty',
