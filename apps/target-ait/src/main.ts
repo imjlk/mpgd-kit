@@ -1,5 +1,5 @@
 import './styles.css';
-import { installAitBridge } from './aitBridge';
+import { installAitBridge, type InstallAitBridgeOptions } from './aitBridge';
 
 const gameBundleBasePath = '/game/';
 const gameBundleIndexPath = `${gameBundleBasePath}index.html`;
@@ -14,12 +14,25 @@ const safeScriptAttributes = new Set([
   'type',
 ]);
 
-installAitBridge();
+installAitBridge(identityBridgeOptions());
 
 const app = document.querySelector<HTMLDivElement>('#app');
 
 if (app !== null) {
   void loadGameBundle(app);
+}
+
+function identityBridgeOptions(): InstallAitBridgeOptions {
+  if (import.meta.env.VITE_MPGD_AIT_MOCK_IDENTITY !== '1') {
+    return {};
+  }
+
+  return {
+    getUserKeyForGame: async () => ({
+      type: 'HASH',
+      hash: 'ait-local-player',
+    }),
+  };
 }
 
 async function loadGameBundle(app: HTMLDivElement): Promise<void> {

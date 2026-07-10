@@ -290,7 +290,9 @@ if a preset no longer returns answer-ready anchors.
 ## Apps in Toss
 
 The Apps in Toss target currently uses SDK 2.x compatible `granite.config.ts`
-and `ait build` scripts. SDK 3.x keeps the feature interface compatible but
+and `ait build` scripts. Its wrapper resolves the game-specific player id with
+`getUserKeyForGame`; Toss app 5.232.0 or newer and a game-category mini-app are
+required outside the explicit plain-browser mock command. SDK 3.x keeps the feature interface compatible but
 renames the config file to `apps-in-toss.config.ts`, so that migration should be
 handled as a dedicated follow-up.
 
