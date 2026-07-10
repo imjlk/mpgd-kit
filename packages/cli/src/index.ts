@@ -1236,8 +1236,8 @@ function resolveGameOwnedMonetizationFiles(
 
   if (configuredCatalog !== undefined && configuredPlacements !== undefined) {
     return {
-      MPGD_PRODUCT_CATALOG_FILE: path.resolve(configuredCatalog),
-      MPGD_AD_PLACEMENTS_FILE: path.resolve(configuredPlacements),
+      MPGD_PRODUCT_CATALOG_FILE: path.resolve(gameRoot, configuredCatalog),
+      MPGD_AD_PLACEMENTS_FILE: path.resolve(gameRoot, configuredPlacements),
     };
   }
 
