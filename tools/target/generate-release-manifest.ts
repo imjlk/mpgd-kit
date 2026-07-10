@@ -102,7 +102,7 @@ function mergeManifest(outputPath: string, nextManifest: ReleaseManifest): Relea
     return nextManifest;
   }
 
-  if (previous.releaseId !== nextManifest.releaseId) {
+  if (!hasMatchingReleaseContract(previous, nextManifest)) {
     return nextManifest;
   }
 
@@ -113,6 +113,17 @@ function mergeManifest(outputPath: string, nextManifest: ReleaseManifest): Relea
       ...nextManifest.targets,
     },
   });
+}
+
+function hasMatchingReleaseContract(
+  previous: ReleaseManifest,
+  next: ReleaseManifest,
+): boolean {
+  return previous.releaseId === next.releaseId
+    && previous.gitSha === next.gitSha
+    && previous.targetConfigVersion === next.targetConfigVersion
+    && previous.catalogVersion === next.catalogVersion
+    && previous.adPlacementVersion === next.adPlacementVersion;
 }
 
 function makeEffectiveConfigPathsPortable(
