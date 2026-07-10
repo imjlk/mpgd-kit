@@ -125,14 +125,14 @@ describe('adapter-capacitor', () => {
       gateway.presentation?.requestGameSurface({ entry: 'daily' }),
     ).resolves.toBe('already-fullscreen');
     await expect(
-      gateway.sharing?.share({
+      gateway.sharing?.share?.({
         kind: 'invite',
         title: 'Invite',
         text: 'Play with me',
         deepLink: 'mpgd://invite',
       }),
     ).resolves.toEqual({ status: 'unavailable' });
-    await expect(gateway.sharing?.readInboundShare()).resolves.toBeNull();
+    await expect(gateway.sharing?.readInboundShare?.()).resolves.toBeNull();
     await expect(gateway.notifications?.getStatus('daily-ready')).resolves.toBe(
       'configuration-required',
     );

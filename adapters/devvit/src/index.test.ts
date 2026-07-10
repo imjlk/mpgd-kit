@@ -424,14 +424,14 @@ describe('adapter-devvit', () => {
       gateway.presentation?.requestGameSurface({ entry: 'daily' }),
     ).resolves.toBe('unavailable');
     await expect(
-      gateway.sharing?.share({
+      gateway.sharing?.share?.({
         kind: 'invite',
         title: 'Invite',
         text: 'Play this post',
         deepLink: 'https://reddit.com/r/example/comments/post',
       }),
     ).resolves.toEqual({ status: 'unavailable' });
-    await expect(gateway.sharing?.readInboundShare()).resolves.toBeNull();
+    await expect(gateway.sharing?.readInboundShare?.()).resolves.toBeNull();
     await expect(gateway.notifications?.getStatus('daily-ready')).resolves.toBe(
       'approval-required',
     );

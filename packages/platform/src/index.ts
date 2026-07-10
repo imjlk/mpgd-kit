@@ -173,8 +173,8 @@ export interface InboundShare {
 }
 
 export interface ShareAdapter {
-  share(intent: ShareIntent): Promise<ShareResult>;
-  readInboundShare(): Promise<InboundShare | null>;
+  share?(intent: ShareIntent): Promise<ShareResult>;
+  readInboundShare?(): Promise<InboundShare | null>;
 }
 
 export type NotificationTopic = 'daily-ready' | 'streak-at-risk' | 'friend-challenge';

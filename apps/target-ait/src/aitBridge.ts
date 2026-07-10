@@ -9,7 +9,11 @@ import {
 
 // The AIT packager treats workspace dependencies as runtime packages. Keep this
 // shared contract as a source-only type import so it is erased before packaging.
-import type { LaunchEntry, LaunchIntent } from '../../../packages/platform/src/index';
+import type {
+  LaunchEntry,
+  LaunchIntent,
+  ShareResult,
+} from '../../../packages/platform/src/index';
 
 import {
   resolveAitGameIdentity,
@@ -27,6 +31,15 @@ const launchEntries = new Set<LaunchEntry>([
   'leaderboard',
   'friend-challenge',
 ]);
+const defaultAitShareDependencies: AitShareDependencies = {
+  getTossShareLink,
+  share,
+};
+
+export interface AitShareDependencies {
+  readonly getTossShareLink: typeof getTossShareLink;
+  readonly share: typeof share;
+}
 
 export interface InstallAitBridgeOptions {
   readonly getUserKeyForGame?: AitGameUserKeyProvider;
@@ -325,9 +338,10 @@ function getLaunchIntent(): LaunchIntent {
   };
 }
 
-async function shareIntent(payload: unknown): Promise<{
-  readonly status: 'shared' | 'unavailable';
-}> {
+export async function shareIntent(
+  payload: unknown,
+  dependencies: AitShareDependencies = defaultAitShareDependencies,
+): Promise<ShareResult> {
   if (typeof payload !== 'object' || payload === null) {
     return { status: 'unavailable' };
   }
@@ -343,15 +357,19 @@ async function shareIntent(payload: unknown): Promise<{
   }
 
   try {
-    const tossLink = await getTossShareLink(
+    const tossLink = await dependencies.getTossShareLink(
       intent.deepLink,
       typeof intent.previewImageUrl === 'string' && intent.previewImageUrl.startsWith('https://')
         ? intent.previewImageUrl
         : undefined,
     );
-    await share({ message: `${intent.text}\n${tossLink}` });
+    await dependencies.share({ message: `${intent.text}\n${tossLink}` });
     return { status: 'shared' };
   } catch (error) {
+    if (isAbortError(error)) {
+      return { status: 'cancelled' };
+    }
+
     console.warn('AIT share failed; returning unavailable.', error);
     return { status: 'unavailable' };
   }
@@ -400,6 +418,19 @@ function inboundSearchParams(): URLSearchParams {
 
 function nonEmptyParam(value: string | null): string | undefined {
   return value === null || value.length === 0 ? undefined : value;
+}
+
+function isAbortError(error: unknown): boolean {
+  try {
+    return (
+      typeof error === 'object'
+      && error !== null
+      && 'name' in error
+      && error.name === 'AbortError'
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isGameCenterSupported(): boolean {

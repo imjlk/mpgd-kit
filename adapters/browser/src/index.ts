@@ -33,6 +33,7 @@ export function createBrowserPlatformGateway(
 ): PlatformGateway {
   const pauseListeners = new Set<() => void>();
   const resumeListeners = new Set<() => void>();
+  const shareSupported = canShare(options);
 
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
@@ -52,7 +53,7 @@ export function createBrowserPlatformGateway(
         rewardedAds: true,
         interstitialAds: true,
         cloudSave: true,
-        socialShare: canShare(options),
+        socialShare: shareSupported,
         localizedContent: true,
       };
     },
@@ -86,9 +87,13 @@ export function createBrowserPlatformGateway(
       },
     },
     sharing: {
-      async share(intent) {
-        return shareFromBrowser(intent, options);
-      },
+      ...(shareSupported
+        ? {
+            async share(intent: ShareIntent) {
+              return shareFromBrowser(intent, options);
+            },
+          }
+        : {}),
       async readInboundShare() {
         return inboundShareFromUrl(resolveBrowserUrl(options.locationHref));
       },

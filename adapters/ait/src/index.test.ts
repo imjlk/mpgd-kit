@@ -115,7 +115,7 @@ describe('adapter-ait', () => {
       gateway.presentation?.requestGameSurface({ entry: 'daily' }),
     ).resolves.toBe('already-fullscreen');
     await expect(
-      gateway.sharing?.share({
+      gateway.sharing?.share?.({
         kind: 'daily-result',
         title: 'Daily result',
         text: "I finished today's puzzle.",
@@ -124,7 +124,7 @@ describe('adapter-ait', () => {
     ).resolves.toEqual({
       status: 'shared',
     });
-    await expect(gateway.sharing?.readInboundShare()).resolves.toBeNull();
+    await expect(gateway.sharing?.readInboundShare?.()).resolves.toBeNull();
     await expect(gateway.notifications?.getStatus('daily-ready')).resolves.toBe(
       'configuration-required',
     );

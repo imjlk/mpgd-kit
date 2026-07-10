@@ -274,7 +274,7 @@ const inboundOnlyGateway = withTargetAvailability(gateway, {
 });
 
 assertDeepEqual(
-  await inboundOnlyGateway.sharing?.share({
+  await inboundOnlyGateway.sharing?.share?.({
     kind: 'friend-challenge',
     title: 'Challenge',
     text: 'Try this puzzle.',
@@ -284,7 +284,7 @@ assertDeepEqual(
     status: 'unavailable',
   },
 );
-assertDeepEqual(await inboundOnlyGateway.sharing?.readInboundShare(), {
+assertDeepEqual(await inboundOnlyGateway.sharing?.readInboundShare?.(), {
   puzzleId: 'daily-1',
 });
 assertDeepEqual(delegatedCalls, ['readInboundShare']);
@@ -293,9 +293,11 @@ delegatedCalls.length = 0;
 const partialSharingGateway = {
   ...gateway,
   sharing: {
-    share: gateway.sharing?.share,
+    async share() {
+      return { status: 'shared' } as const;
+    },
   },
-} as unknown as PlatformGateway;
+} satisfies PlatformGateway;
 const partialSharingRuntime = createTargetRuntimeSnapshot({
   target: 'browser',
   config: {
@@ -315,6 +317,34 @@ const partialSharingRuntime = createTargetRuntimeSnapshot({
 
 assertEqual(partialSharingRuntime.integrations.sharing.state, 'available');
 assertEqual(partialSharingRuntime.integrations.inboundShare.state, 'unsupported');
+
+const inboundSharingGateway = {
+  ...gateway,
+  sharing: {
+    async readInboundShare() {
+      return { puzzleId: 'daily-1' };
+    },
+  },
+} satisfies PlatformGateway;
+const inboundSharingRuntime = createTargetRuntimeSnapshot({
+  target: 'browser',
+  config: {
+    ...webConfig,
+    integrations: {
+      identityUpgrade: 'disabled',
+      presentation: 'disabled',
+      sharing: 'available',
+      inboundShare: 'available',
+      notifications: 'unsupported',
+      presentationMode: 'fullscreen',
+    },
+  },
+  capabilities: await inboundSharingGateway.getCapabilities(),
+  gateway: inboundSharingGateway,
+});
+
+assertEqual(inboundSharingRuntime.integrations.sharing.state, 'unsupported');
+assertEqual(inboundSharingRuntime.integrations.inboundShare.state, 'available');
 
 const upgradeOnlyIdentityGateway = {
   ...gateway,
@@ -423,13 +453,13 @@ assertEqual(androidNotifications.adapterSupported, true);
 assertEqual(androidGateway.notifications, undefined);
 await androidGateway.identity.requestUpgrade?.({ reason: 'save' });
 await androidGateway.presentation?.requestGameSurface({ entry: 'daily' });
-await androidGateway.sharing?.share({
+await androidGateway.sharing?.share?.({
   kind: 'daily-result',
   title: 'Daily result',
   text: "Finished today's puzzle.",
   deepLink: 'https://example.test/daily',
 });
-await androidGateway.sharing?.readInboundShare();
+await androidGateway.sharing?.readInboundShare?.();
 assertDeepEqual(delegatedCalls, [
   'requestUpgrade',
   'requestGameSurface',

@@ -385,6 +385,8 @@ export function withTargetAvailability(
   const notificationsAvailable = isIntegrationAvailable('notifications');
   const getIdentitySession = gatewayIdentity.getSession?.bind(gatewayIdentity);
   const requestIdentityUpgrade = gatewayIdentity.requestUpgrade?.bind(gatewayIdentity);
+  const shareOutbound = gatewaySharing?.share?.bind(gatewaySharing);
+  const readInboundShare = gatewaySharing?.readInboundShare?.bind(gatewaySharing);
   const identity: PlatformGateway['identity'] = {
     getPlayer: gatewayIdentity.getPlayer.bind(gatewayIdentity),
     ...(getIdentitySession === undefined ? {} : { getSession: getIdentitySession }),
@@ -398,14 +400,16 @@ export function withTargetAvailability(
       ? undefined
       : {
           async share(input) {
-            return sharingAvailable
-              ? gatewaySharing.share(input)
+            return sharingAvailable && shareOutbound !== undefined
+              ? shareOutbound(input)
               : {
                   status: 'unavailable',
                 };
           },
           async readInboundShare() {
-            return inboundShareAvailable ? gatewaySharing.readInboundShare() : null;
+            return inboundShareAvailable && readInboundShare !== undefined
+              ? readInboundShare()
+              : null;
           },
         };
   const notifications = notificationsAvailable ? gatewayNotifications : undefined;

@@ -13,8 +13,11 @@ describe('adapter-browser', () => {
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
       nativeAds: false,
       cloudSave: true,
+      socialShare: false,
       localizedContent: true,
     });
+    expect(gateway.sharing?.share).toBeUndefined();
+    expect(gateway.sharing?.readInboundShare).toBeTypeOf('function');
     await expect(gateway.identity.getPlayer()).resolves.toEqual({
       playerId: 'browser-player',
       displayName: 'Browser Player',
@@ -40,7 +43,7 @@ describe('adapter-browser', () => {
     await expect(
       gateway.presentation?.requestGameSurface({ entry: 'daily', puzzleId: 'daily-1' }),
     ).resolves.toBe('already-fullscreen');
-    await expect(gateway.sharing?.readInboundShare()).resolves.toEqual({
+    await expect(gateway.sharing?.readInboundShare?.()).resolves.toEqual({
       puzzleId: 'daily-1',
       challengeToken: 'signed-token',
     });
@@ -66,10 +69,12 @@ describe('adapter-browser', () => {
       },
     });
 
-    await expect(shareGateway.sharing?.share(shareIntent)).resolves.toEqual({
+    await expect(shareGateway.getCapabilities()).resolves.toMatchObject({ socialShare: true });
+    await expect(shareGateway.sharing?.share?.(shareIntent)).resolves.toEqual({
       status: 'shared',
     });
-    await expect(clipboardGateway.sharing?.share(shareIntent)).resolves.toEqual({
+    await expect(clipboardGateway.getCapabilities()).resolves.toMatchObject({ socialShare: true });
+    await expect(clipboardGateway.sharing?.share?.(shareIntent)).resolves.toEqual({
       status: 'shared',
     });
     expect(shares).toEqual([
@@ -89,7 +94,7 @@ describe('adapter-browser', () => {
       locationHref: 'https://game.example/?queryParams=%7Binvalid',
     });
 
-    await expect(gateway.sharing?.readInboundShare()).resolves.toBeNull();
+    await expect(gateway.sharing?.readInboundShare?.()).resolves.toBeNull();
     await expect(gateway.notifications?.getStatus('daily-ready')).resolves.toBe('unsupported');
     await expect(
       gateway.notifications?.requestSubscription('daily-ready'),

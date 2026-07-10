@@ -296,6 +296,16 @@ async function verifyBrowserOnlyFallbacks(
     'leaderboard should be target-disabled',
   );
   assertEqual(
+    runtime.integrations.sharing.state,
+    'unsupported',
+    'browser outbound sharing should require Web Share or clipboard support',
+  );
+  assertEqual(
+    runtime.integrations.inboundShare.state,
+    'available',
+    'browser inbound sharing should remain available through URL parsing',
+  );
+  assertEqual(
     runtime.features.localization.reason,
     'available',
     'localization should be available',
