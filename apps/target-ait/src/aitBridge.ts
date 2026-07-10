@@ -1,14 +1,24 @@
 import {
+  getUserKeyForGame,
   isMinVersionSupported,
   openGameCenterLeaderboard,
   submitGameCenterLeaderBoardScore,
 } from '@apps-in-toss/web-framework';
 
+import {
+  resolveAitGameIdentity,
+  type AitGameUserKeyProvider,
+} from './aitIdentity';
 import type { BridgeRequest, BridgeResponse } from './bridgeTypes';
 
 const storage = new Map<string, unknown>();
 
-export function installAitBridge(): void {
+export interface InstallAitBridgeOptions {
+  readonly getUserKeyForGame?: AitGameUserKeyProvider;
+}
+
+export function installAitBridge(options: InstallAitBridgeOptions = {}): void {
+  const gameUserKeyProvider = options.getUserKeyForGame ?? getUserKeyForGame;
   const globalBridgeHost = globalThis as {
     __GAME_PLATFORM_BRIDGE__?: {
       request(input: unknown): Promise<BridgeResponse>;
@@ -38,15 +48,23 @@ export function installAitBridge(): void {
             },
           };
 
-        case 'identity.getPlayer':
+        case 'identity.getPlayer': {
+          const identity = await resolveAitGameIdentity(gameUserKeyProvider);
+
+          if (!identity.ok) {
+            return {
+              id: request.id,
+              ok: false,
+              error: identity.error,
+            };
+          }
+
           return {
             id: request.id,
             ok: true,
-            data: {
-              playerId: 'ait-local-player',
-              displayName: 'AIT Local Player',
-            },
+            data: identity.player,
           };
+        }
 
         case 'commerce.getProducts':
           return {
