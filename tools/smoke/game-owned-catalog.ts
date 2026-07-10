@@ -217,6 +217,7 @@ try {
   assert.match(runValidator('tools/validate-product-catalog.ts'), /Product catalog game-v1/u);
   assert.match(runValidator('tools/validate-ad-placements.ts'), /Ad placements game-ads-v1/u);
   await assertViteCatalogAliasesWithRelativeEnv();
+  await assertViteCatalogAliasesFallBackWhenInitCwdMisses();
   assertTargetBuildCatalogEnvUsesCallerBase();
 
   const matrix = validateEffectiveTargetConfigMatrix(loadEffectiveTargetConfigMatrix());
@@ -367,10 +368,37 @@ async function assertViteCatalogAliasesWithRelativeEnv(): Promise<void> {
   }
 }
 
+async function assertViteCatalogAliasesFallBackWhenInitCwdMisses(): Promise<void> {
+  process.env.INIT_CWD = join(tempDir, 'missing-init-cwd');
+  process.env.PWD = process.cwd();
+  process.env.MPGD_PRODUCT_CATALOG_FILE = relative(process.cwd(), catalogFile);
+  process.env.MPGD_AD_PLACEMENTS_FILE = relative(process.cwd(), placementsFile);
+
+  try {
+    await assertViteCatalogAliases('examples/phaser-starter/vite.config.ts');
+    await assertViteCatalogAliases('packages/cli/templates/phaser-game/vite.config.ts');
+  } finally {
+    process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
+    process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
+    restoreEnv('INIT_CWD', previousInitCwd);
+    restoreEnv('PWD', previousPwd);
+  }
+}
+
 function assertTargetBuildCatalogEnvUsesCallerBase(): void {
   const callerDir = join(tempDir, 'caller-game');
+  const shadowDir = join(tempDir, 'shadow-caller');
+  const callerCatalogFile = join(callerDir, 'mpgd.catalog.json');
+  const callerPlacementsFile = join(callerDir, 'mpgd.ad-placements.json');
+  const shadowCatalogFile = join(shadowDir, 'mpgd.catalog.json');
+  const shadowPlacementsFile = join(shadowDir, 'mpgd.ad-placements.json');
 
   mkdirSync(callerDir);
+  mkdirSync(shadowDir);
+  writeFileSync(callerCatalogFile, '{}\n');
+  writeFileSync(callerPlacementsFile, '{}\n');
+  writeFileSync(shadowCatalogFile, '{}\n');
+  writeFileSync(shadowPlacementsFile, '{}\n');
 
   const normalizedEnvFromPwd = normalizeMonetizationCatalogEnv({
     MPGD_PRODUCT_CATALOG_FILE: relative(callerDir, catalogFile),
@@ -385,11 +413,21 @@ function assertTargetBuildCatalogEnvUsesCallerBase(): void {
     },
     callerDir,
   );
+  const normalizedEnvFromConflictingBases = normalizeMonetizationCatalogEnv(
+    {
+      MPGD_PRODUCT_CATALOG_FILE: 'mpgd.catalog.json',
+      MPGD_AD_PLACEMENTS_FILE: 'mpgd.ad-placements.json',
+      PWD: shadowDir,
+    },
+    callerDir,
+  );
 
   assert.equal(normalizedEnvFromPwd.MPGD_PRODUCT_CATALOG_FILE, catalogFile);
   assert.equal(normalizedEnvFromPwd.MPGD_AD_PLACEMENTS_FILE, placementsFile);
   assert.equal(normalizedEnvFromTargetsBase.MPGD_PRODUCT_CATALOG_FILE, catalogFile);
   assert.equal(normalizedEnvFromTargetsBase.MPGD_AD_PLACEMENTS_FILE, placementsFile);
+  assert.equal(normalizedEnvFromConflictingBases.MPGD_PRODUCT_CATALOG_FILE, callerCatalogFile);
+  assert.equal(normalizedEnvFromConflictingBases.MPGD_AD_PLACEMENTS_FILE, callerPlacementsFile);
 }
 
 interface ViteUserConfig {

@@ -43,9 +43,9 @@ function resolveConfiguredBaseDir(
   adPlacementsFile: string,
 ): string {
   const candidates = [
+    fallbackBaseDir,
     readConfiguredEnvPath(baseEnv.INIT_CWD),
     readConfiguredEnvPath(baseEnv.PWD),
-    fallbackBaseDir,
     process.cwd(),
   ];
 
@@ -59,9 +59,7 @@ function resolveConfiguredBaseDir(
     }
   }
 
-  return readConfiguredEnvPath(baseEnv.INIT_CWD)
-    ?? readConfiguredEnvPath(baseEnv.PWD)
-    ?? fallbackBaseDir;
+  return fallbackBaseDir;
 }
 
 function configuredFileExists(baseDir: string, file: string): boolean {

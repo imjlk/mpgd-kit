@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import ttsc from '@ttsc/unplugin/vite';
@@ -57,8 +58,8 @@ function createCatalogAliases(): Record<string, string> {
   }
 
   return {
-    '@mpgd/catalog/catalog.json': resolveCatalogPath(productCatalogFile),
-    '@mpgd/catalog/placements.json': resolveCatalogPath(adPlacementsFile),
+    '@mpgd/catalog/catalog.json': resolveCatalogPath(productCatalogFile, adPlacementsFile),
+    '@mpgd/catalog/placements.json': resolveCatalogPath(adPlacementsFile, productCatalogFile),
   };
 }
 
@@ -67,6 +68,26 @@ function readConfiguredPath(value: string | undefined): string | undefined {
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
 
-function resolveCatalogPath(path: string): string {
-  return resolve(process.env.INIT_CWD ?? process.env.PWD ?? process.cwd(), path);
+function resolveCatalogPath(path: string, pairedPath: string): string {
+  return resolve(resolveCatalogBaseDir(path, pairedPath), path);
+}
+
+function resolveCatalogBaseDir(path: string, pairedPath: string): string {
+  const candidates = [
+    process.env.INIT_CWD,
+    process.env.PWD,
+    process.cwd(),
+  ];
+
+  for (const candidate of candidates) {
+    if (
+      candidate !== undefined
+      && existsSync(resolve(candidate, path))
+      && existsSync(resolve(candidate, pairedPath))
+    ) {
+      return candidate;
+    }
+  }
+
+  return process.env.INIT_CWD ?? process.env.PWD ?? process.cwd();
 }
