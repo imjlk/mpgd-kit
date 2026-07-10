@@ -1,8 +1,14 @@
 export type PlatformTarget = 'browser' | 'android' | 'ios' | 'ait' | 'reddit' | 'telegram' | 'tauri';
 
-export type LogicalProductId = 'COINS_100' | 'COINS_500' | 'REMOVE_ADS';
+export type StarterLogicalProductId = 'COINS_100' | 'COINS_500' | 'REMOVE_ADS';
 
-export type LogicalAdPlacementId = 'CONTINUE_AFTER_FAIL' | 'STAGE_END_INTERSTITIAL';
+export type LogicalProductId = StarterLogicalProductId | (string & Record<never, never>);
+
+export type StarterLogicalAdPlacementId = 'CONTINUE_AFTER_FAIL' | 'STAGE_END_INTERSTITIAL';
+
+export type LogicalAdPlacementId =
+  | StarterLogicalAdPlacementId
+  | (string & Record<never, never>);
 
 export type ProductType = 'consumable' | 'non_consumable' | 'subscription';
 
