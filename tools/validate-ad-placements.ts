@@ -2,11 +2,12 @@ import typia from 'typia';
 
 import type { AdPlacements } from '@mpgd/catalog';
 
+import { adPlacementsFilePath } from './catalog-paths';
 import { isCliEntrypoint, readJsonFile } from './io';
 
 const assertAdPlacements = typia.createAssert<AdPlacements>();
 
-export function validateAdPlacementsFile(path = 'packages/catalog/placements.json') {
+export function validateAdPlacementsFile(path = adPlacementsFilePath()) {
   const adPlacements = assertAdPlacements(readJsonFile(path));
   const ids = new Set<string>();
 

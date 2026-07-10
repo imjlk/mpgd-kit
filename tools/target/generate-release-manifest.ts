@@ -8,6 +8,7 @@ import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import type { ReleaseManifest } from '@mpgd/release-manifest';
 import type { TargetConfigMatrix } from '@mpgd/target-config';
 
+import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import { isCliEntrypoint, readJsonFile } from '../io';
 import { writeEffectiveTargetConfigs } from './effective-config';
 import { effectiveTargetConfigOutputDir, loadPlatformTargetsConfig } from './platform-targets';
@@ -31,8 +32,8 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
   const targetConfig = assertTargetConfigMatrix(
     readJsonFile('packages/target-config/targets.json'),
   );
-  const catalog = assertProductCatalog(readJsonFile('packages/catalog/catalog.json'));
-  const adPlacements = assertAdPlacements(readJsonFile('packages/catalog/placements.json'));
+  const catalog = assertProductCatalog(readJsonFile(productCatalogFilePath()));
+  const adPlacements = assertAdPlacements(readJsonFile(adPlacementsFilePath()));
   const effectiveConfig = writeEffectiveTargetConfigs({
     targets: [input.target],
     outputDir: effectiveTargetConfigOutputDir(platformTargets.baseDir),
