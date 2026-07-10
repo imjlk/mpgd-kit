@@ -30,6 +30,31 @@ export type ReleaseProfile =
 
 export type StorageSupport = 'local' | 'native' | 'none';
 
+export type TargetIntegration =
+  | 'identityUpgrade'
+  | 'presentation'
+  | 'sharing'
+  | 'inboundShare'
+  | 'notifications';
+
+export type IntegrationAvailabilityState =
+  | 'available'
+  | 'disabled'
+  | 'approval-required'
+  | 'configuration-required'
+  | 'unsupported';
+
+export type PresentationMode = 'fullscreen' | 'inline-expanded';
+
+export interface TargetIntegrationConfig {
+  readonly identityUpgrade: IntegrationAvailabilityState;
+  readonly presentation: IntegrationAvailabilityState;
+  readonly sharing: IntegrationAvailabilityState;
+  readonly inboundShare: IntegrationAvailabilityState;
+  readonly notifications: IntegrationAvailabilityState;
+  readonly presentationMode: PresentationMode;
+}
+
 export interface TargetFeatureConfig {
   readonly iap: boolean;
   readonly rewardedAds: boolean;
@@ -73,6 +98,7 @@ export interface TargetConfig {
   readonly leaderboard: TargetLeaderboardConfig;
   readonly release: TargetReleaseConfig;
   readonly policy: TargetPolicyRestrictions;
+  readonly integrations?: TargetIntegrationConfig;
 }
 
 export interface TargetConfigMatrix {
@@ -105,13 +131,22 @@ export interface AdPlacementAvailability {
   readonly reason: FeatureAvailabilityReason;
 }
 
+export interface IntegrationAvailability {
+  readonly integration: TargetIntegration;
+  readonly state: IntegrationAvailabilityState;
+  readonly configuredState: IntegrationAvailabilityState;
+  readonly adapterSupported: boolean;
+}
+
 export interface TargetRuntimeSnapshot {
   readonly target: PlatformConfigTarget;
   readonly configTarget: string;
   readonly config: TargetConfig;
   readonly effectiveConfig?: EffectiveTargetConfig;
+  readonly presentationMode: PresentationMode;
   readonly capabilities: PlatformCapabilities;
   readonly features: Record<PlatformFeature, FeatureAvailability>;
+  readonly integrations: Record<TargetIntegration, IntegrationAvailability>;
   readonly adPlacements: readonly AdPlacementAvailability[];
 }
 
@@ -136,6 +171,63 @@ export const platformFeatures = [
   'leaderboard',
   'localization',
 ] as const satisfies readonly PlatformFeature[];
+
+export const targetIntegrations = [
+  'identityUpgrade',
+  'presentation',
+  'sharing',
+  'inboundShare',
+  'notifications',
+] as const satisfies readonly TargetIntegration[];
+
+export const defaultTargetIntegrationConfig = {
+  identityUpgrade: 'disabled',
+  presentation: 'disabled',
+  sharing: 'disabled',
+  inboundShare: 'disabled',
+  notifications: 'unsupported',
+  presentationMode: 'fullscreen',
+} as const satisfies TargetIntegrationConfig;
+
+const integrationAvailabilityStates = new Set<IntegrationAvailabilityState>([
+  'available',
+  'disabled',
+  'approval-required',
+  'configuration-required',
+  'unsupported',
+]);
+
+export function normalizeTargetIntegrationConfig(
+  config: Partial<TargetIntegrationConfig> | undefined,
+): TargetIntegrationConfig {
+  if (config === undefined) {
+    return defaultTargetIntegrationConfig;
+  }
+
+  return {
+    identityUpgrade: normalizeIntegrationAvailabilityState(
+      config.identityUpgrade,
+      defaultTargetIntegrationConfig.identityUpgrade,
+    ),
+    presentation: normalizeIntegrationAvailabilityState(
+      config.presentation,
+      defaultTargetIntegrationConfig.presentation,
+    ),
+    sharing: normalizeIntegrationAvailabilityState(
+      config.sharing,
+      defaultTargetIntegrationConfig.sharing,
+    ),
+    inboundShare: normalizeIntegrationAvailabilityState(
+      config.inboundShare,
+      defaultTargetIntegrationConfig.inboundShare,
+    ),
+    notifications: normalizeIntegrationAvailabilityState(
+      config.notifications,
+      defaultTargetIntegrationConfig.notifications,
+    ),
+    presentationMode: normalizePresentationMode(config.presentationMode),
+  };
+}
 
 export function targetConfigKeyForPlatform(target: PlatformConfigTarget): string {
   return target === 'browser' ? 'web-preview' : target;
@@ -200,6 +292,15 @@ export function getFeatureAvailability(
   };
 }
 
+export function getIntegrationAvailability(
+  integration: TargetIntegration,
+  config: TargetConfig,
+  gateway?: PlatformGateway,
+): IntegrationAvailability {
+  const integrations = normalizeTargetIntegrationConfig(config.integrations);
+  return createIntegrationAvailability(integration, integrations[integration], gateway);
+}
+
 export function createTargetRuntimeSnapshot(input: {
   readonly target: PlatformConfigTarget;
   readonly configTarget?: string;
@@ -207,6 +308,7 @@ export function createTargetRuntimeSnapshot(input: {
   readonly effectiveConfig?: EffectiveTargetConfig;
   readonly capabilities: PlatformCapabilities;
   readonly adPlacements?: readonly AdPlacementDefinition[];
+  readonly gateway?: PlatformGateway;
 }): TargetRuntimeSnapshot {
   const configTarget = input.configTarget ?? targetConfigKeyForPlatform(input.target);
   const features = {
@@ -220,14 +322,30 @@ export function createTargetRuntimeSnapshot(input: {
     leaderboard: getFeatureAvailability('leaderboard', input.config, input.capabilities),
     localization: getFeatureAvailability('localization', input.config, input.capabilities),
   } satisfies Record<PlatformFeature, FeatureAvailability>;
+  const integrationConfig = normalizeTargetIntegrationConfig(input.config.integrations);
+  const integrationEntries = targetIntegrations.map((integration) => {
+    const availability = createIntegrationAvailability(
+      integration,
+      integrationConfig[integration],
+      input.gateway,
+    );
+
+    return [integration, availability] as const;
+  });
+  const integrations = Object.fromEntries(integrationEntries) as Record<
+    TargetIntegration,
+    IntegrationAvailability
+  >;
 
   return {
     target: input.target,
     configTarget,
     config: input.config,
     ...(input.effectiveConfig === undefined ? {} : { effectiveConfig: input.effectiveConfig }),
+    presentationMode: integrationConfig.presentationMode,
     capabilities: input.capabilities,
     features,
+    integrations,
     adPlacements: (input.adPlacements ?? []).map((placement) => {
       const feature = placement.type === 'rewarded' ? 'rewardedAds' : 'interstitialAds';
       const availability = features[feature];
@@ -248,6 +366,49 @@ export function withTargetAvailability(
   options: TargetAvailabilityOptions = {},
 ): TargetConfiguredGateway {
   const configTarget = options.configTarget ?? targetConfigKeyForPlatform(gateway.target);
+  const {
+    identity: gatewayIdentity,
+    presentation: gatewayPresentation,
+    sharing: gatewaySharing,
+    notifications: gatewayNotifications,
+    ...gatewayWithoutIntegrations
+  } = gateway;
+  const integrations = normalizeTargetIntegrationConfig(config.integrations);
+  const isIntegrationAvailable = (integration: TargetIntegration): boolean => (
+    createIntegrationAvailability(integration, integrations[integration], gateway).state
+      === 'available'
+  );
+  const identityUpgradeAvailable = isIntegrationAvailable('identityUpgrade');
+  const presentationAvailable = isIntegrationAvailable('presentation');
+  const sharingAvailable = isIntegrationAvailable('sharing');
+  const inboundShareAvailable = isIntegrationAvailable('inboundShare');
+  const notificationsAvailable = isIntegrationAvailable('notifications');
+  const getIdentitySession = gatewayIdentity.getSession?.bind(gatewayIdentity);
+  const requestIdentityUpgrade = gatewayIdentity.requestUpgrade?.bind(gatewayIdentity);
+  const identity: PlatformGateway['identity'] = {
+    getPlayer: gatewayIdentity.getPlayer.bind(gatewayIdentity),
+    ...(getIdentitySession === undefined ? {} : { getSession: getIdentitySession }),
+    ...(!identityUpgradeAvailable || requestIdentityUpgrade === undefined
+      ? {}
+      : { requestUpgrade: requestIdentityUpgrade }),
+  };
+  const presentation = presentationAvailable ? gatewayPresentation : undefined;
+  const sharing: PlatformGateway['sharing'] =
+    gatewaySharing === undefined || (!sharingAvailable && !inboundShareAvailable)
+      ? undefined
+      : {
+          async share(input) {
+            return sharingAvailable
+              ? gatewaySharing.share(input)
+              : {
+                  status: 'unavailable',
+                };
+          },
+          async readInboundShare() {
+            return inboundShareAvailable ? gatewaySharing.readInboundShare() : null;
+          },
+        };
+  const notifications = notificationsAvailable ? gatewayNotifications : undefined;
   const isAdPlacementAllowed = (
     placementId: string,
     expectedType: AdPlacementType,
@@ -278,7 +439,11 @@ export function withTargetAvailability(
   };
 
   return {
-    ...gateway,
+    ...gatewayWithoutIntegrations,
+    identity,
+    ...(presentation === undefined ? {} : { presentation }),
+    ...(sharing === undefined ? {} : { sharing }),
+    ...(notifications === undefined ? {} : { notifications }),
     configTarget,
     targetConfig: config,
     ...(options.effectiveConfig === undefined
@@ -294,6 +459,7 @@ export function withTargetAvailability(
           : { effectiveConfig: options.effectiveConfig }),
         capabilities: applyTargetConfigToCapabilities(await gateway.getCapabilities(), config),
         adPlacements: options.adPlacements ?? [],
+        gateway,
       });
     },
     async getCapabilities() {
@@ -384,4 +550,66 @@ function isFeatureCapabilitySupported(
     case 'localization':
       return capabilities.localizedContent;
   }
+}
+
+function isIntegrationAdapterSupported(
+  integration: TargetIntegration,
+  gateway: PlatformGateway | undefined,
+): boolean {
+  if (gateway === undefined) {
+    return false;
+  }
+
+  switch (integration) {
+    case 'identityUpgrade':
+      return typeof gateway.identity.requestUpgrade === 'function';
+    case 'presentation':
+      return (
+        typeof gateway.presentation?.getLaunchIntent === 'function'
+        && typeof gateway.presentation?.requestGameSurface === 'function'
+      );
+    case 'sharing':
+      return typeof gateway.sharing?.share === 'function';
+    case 'inboundShare':
+      return typeof gateway.sharing?.readInboundShare === 'function';
+    case 'notifications':
+      return (
+        typeof gateway.notifications?.getStatus === 'function'
+        && typeof gateway.notifications?.requestSubscription === 'function'
+      );
+  }
+}
+
+function createIntegrationAvailability(
+  integration: TargetIntegration,
+  configuredState: IntegrationAvailabilityState,
+  gateway: PlatformGateway | undefined,
+): IntegrationAvailability {
+  const adapterSupported = isIntegrationAdapterSupported(integration, gateway);
+
+  return {
+    integration,
+    state: adapterSupported ? configuredState : 'unsupported',
+    configuredState,
+    adapterSupported,
+  };
+}
+
+function normalizeIntegrationAvailabilityState(
+  input: IntegrationAvailabilityState | undefined,
+  fallback: IntegrationAvailabilityState,
+): IntegrationAvailabilityState {
+  if (input !== undefined && integrationAvailabilityStates.has(input)) {
+    return input;
+  }
+
+  return fallback;
+}
+
+function normalizePresentationMode(input: PresentationMode | undefined): PresentationMode {
+  if (input === 'inline-expanded' || input === 'fullscreen') {
+    return input;
+  }
+
+  return defaultTargetIntegrationConfig.presentationMode;
 }

@@ -8,11 +8,14 @@ import {
 } from '../src/effective';
 import {
   applyTargetConfigToCapabilities,
+  createTargetRuntimeSnapshot,
   getTargetConfig,
+  normalizeTargetIntegrationConfig,
   targetConfigKeyForPlatform,
   withTargetAvailability,
   type TargetConfig,
   type TargetConfigMatrix,
+  type TargetIntegrationConfig,
 } from '../src/runtime';
 import {
   resolveTargetViewportOrientationPlan,
@@ -31,13 +34,23 @@ const targetConfigMatrix = {
       leaderboard: false,
       localization: true,
     }),
-    android: createTargetConfig({
-      iap: true,
-      rewardedAds: true,
-      interstitialAds: true,
-      leaderboard: true,
-      localization: true,
-    }),
+    android: createTargetConfig(
+      {
+        iap: true,
+        rewardedAds: true,
+        interstitialAds: true,
+        leaderboard: true,
+        localization: true,
+      },
+      {
+        identityUpgrade: 'available',
+        presentation: 'available',
+        sharing: 'available',
+        inboundShare: 'available',
+        notifications: 'configuration-required',
+        presentationMode: 'fullscreen',
+      },
+    ),
   },
 } satisfies TargetConfigMatrix;
 const productCatalog = {
@@ -132,6 +145,7 @@ assertDeepEqual(
 );
 assertEqual(webRuntime.configTarget, 'web-preview');
 assertEqual(webRuntime.effectiveConfig, webEffectiveConfig);
+assertEqual(webRuntime.presentationMode, 'fullscreen');
 assertEqual(webProduct?.reason, 'target-disabled');
 assertEqual(webRewardedPlacement?.reason, 'target-disabled');
 assertEqual(webRuntime.features.iap.reason, 'target-disabled');
@@ -139,6 +153,39 @@ assertEqual(webRuntime.features.rewardedAds.reason, 'target-disabled');
 assertEqual(webRuntime.features.interstitialAds.reason, 'target-disabled');
 assertEqual(webRuntime.features.leaderboard.reason, 'target-disabled');
 assertEqual(webRuntime.features.localization.reason, 'available');
+assertDeepEqual(webEffectiveConfig.integrations, {
+  identityUpgrade: 'disabled',
+  presentation: 'disabled',
+  sharing: 'disabled',
+  inboundShare: 'disabled',
+  notifications: 'unsupported',
+  presentationMode: 'fullscreen',
+});
+assertDeepEqual(
+  normalizeTargetIntegrationConfig({
+    identityUpgrade: 'available',
+  }),
+  {
+    identityUpgrade: 'available',
+    presentation: 'disabled',
+    sharing: 'disabled',
+    inboundShare: 'disabled',
+    notifications: 'unsupported',
+    presentationMode: 'fullscreen',
+  },
+);
+assertDeepEqual(webRuntime.integrations.identityUpgrade, {
+  integration: 'identityUpgrade',
+  state: 'disabled',
+  configuredState: 'disabled',
+  adapterSupported: true,
+});
+assertDeepEqual(webRuntime.integrations.notifications, {
+  integration: 'notifications',
+  state: 'unsupported',
+  configuredState: 'unsupported',
+  adapterSupported: true,
+});
 assertDeepEqual(
   webRuntime.adPlacements.map((placement) => ({
     id: placement.id,
@@ -205,6 +252,95 @@ assertDeepEqual(
 assertDeepEqual(await webGateway.storage.load({ key: 'save:v1' }), {
   value: 'stored-save',
 });
+assertDeepEqual(await webGateway.identity.getSession?.(), {
+  identityLevel: 'guest',
+  trustLevel: 'local',
+});
+assertEqual(webGateway.identity.requestUpgrade, undefined);
+assertEqual(webGateway.presentation, undefined);
+assertEqual(webGateway.sharing, undefined);
+assertEqual(webGateway.notifications, undefined);
+
+const inboundOnlyGateway = withTargetAvailability(gateway, {
+  ...webConfig,
+  integrations: {
+    identityUpgrade: 'disabled',
+    presentation: 'disabled',
+    sharing: 'disabled',
+    inboundShare: 'available',
+    notifications: 'unsupported',
+    presentationMode: 'fullscreen',
+  },
+});
+
+assertDeepEqual(
+  await inboundOnlyGateway.sharing?.share({
+    kind: 'friend-challenge',
+    title: 'Challenge',
+    text: 'Try this puzzle.',
+    deepLink: 'https://example.test/challenge',
+  }),
+  {
+    status: 'unavailable',
+  },
+);
+assertDeepEqual(await inboundOnlyGateway.sharing?.readInboundShare(), {
+  puzzleId: 'daily-1',
+});
+assertDeepEqual(delegatedCalls, ['readInboundShare']);
+delegatedCalls.length = 0;
+
+const partialSharingGateway = {
+  ...gateway,
+  sharing: {
+    share: gateway.sharing?.share,
+  },
+} as unknown as PlatformGateway;
+const partialSharingRuntime = createTargetRuntimeSnapshot({
+  target: 'browser',
+  config: {
+    ...webConfig,
+    integrations: {
+      identityUpgrade: 'disabled',
+      presentation: 'disabled',
+      sharing: 'available',
+      inboundShare: 'available',
+      notifications: 'unsupported',
+      presentationMode: 'fullscreen',
+    },
+  },
+  capabilities: await partialSharingGateway.getCapabilities(),
+  gateway: partialSharingGateway,
+});
+
+assertEqual(partialSharingRuntime.integrations.sharing.state, 'available');
+assertEqual(partialSharingRuntime.integrations.inboundShare.state, 'unsupported');
+
+const upgradeOnlyIdentityGateway = {
+  ...gateway,
+  identity: {
+    getPlayer: gateway.identity.getPlayer,
+    requestUpgrade: gateway.identity.requestUpgrade,
+  },
+} as PlatformGateway;
+const upgradeOnlyIdentityRuntime = createTargetRuntimeSnapshot({
+  target: 'browser',
+  config: {
+    ...webConfig,
+    integrations: {
+      identityUpgrade: 'available',
+      presentation: 'disabled',
+      sharing: 'disabled',
+      inboundShare: 'disabled',
+      notifications: 'unsupported',
+      presentationMode: 'fullscreen',
+    },
+  },
+  capabilities: await upgradeOnlyIdentityGateway.getCapabilities(),
+  gateway: upgradeOnlyIdentityGateway,
+});
+
+assertEqual(upgradeOnlyIdentityRuntime.integrations.identityUpgrade.state, 'available');
 
 const rewardedOnlyGateway = withTargetAvailability(
   gateway,
@@ -273,6 +409,34 @@ const androidGateway = withTargetAvailability(gateway, androidConfig, {
   effectiveConfig: androidEffectiveConfig,
   resolveAdPlacementType,
 });
+const androidRuntime = await androidGateway.getTargetRuntime();
+
+assertEqual(androidRuntime.presentationMode, 'fullscreen');
+assertEqual(androidEffectiveConfig.integrations.identityUpgrade, 'available');
+assertEqual(androidRuntime.integrations.identityUpgrade.state, 'available');
+assertEqual(androidRuntime.integrations.presentation.state, 'available');
+assertEqual(androidRuntime.integrations.sharing.state, 'available');
+assertEqual(androidRuntime.integrations.inboundShare.state, 'available');
+const androidNotifications = androidRuntime.integrations.notifications;
+assertEqual(androidNotifications.state, 'configuration-required');
+assertEqual(androidNotifications.adapterSupported, true);
+assertEqual(androidGateway.notifications, undefined);
+await androidGateway.identity.requestUpgrade?.({ reason: 'save' });
+await androidGateway.presentation?.requestGameSurface({ entry: 'daily' });
+await androidGateway.sharing?.share({
+  kind: 'daily-result',
+  title: 'Daily result',
+  text: "Finished today's puzzle.",
+  deepLink: 'https://example.test/daily',
+});
+await androidGateway.sharing?.readInboundShare();
+assertDeepEqual(delegatedCalls, [
+  'requestUpgrade',
+  'requestGameSurface',
+  'share',
+  'readInboundShare',
+]);
+delegatedCalls.length = 0;
 
 assertEqual(getEffectiveProductConfig(androidEffectiveConfig, 'COINS_100')?.enabled, true);
 assertEqual(
@@ -361,7 +525,10 @@ await androidGateway.leaderboard.submitScore({
 assertDeepEqual(delegatedCalls, ['purchase', 'showRewarded', 'submitScore']);
 console.log('Target config runtime availability smoke test passed.');
 
-function createTargetConfig(features: TargetConfig['features']): TargetConfig {
+function createTargetConfig(
+  features: TargetConfig['features'],
+  integrations?: TargetIntegrationConfig,
+): TargetConfig {
   return {
     runtime: 'web-preview',
     features,
@@ -387,6 +554,7 @@ function createTargetConfig(features: TargetConfig['features']): TargetConfig {
       requiresStoreReview: false,
       requiresAitReview: false,
     },
+    ...(integrations === undefined ? {} : { integrations }),
   };
 }
 
@@ -411,6 +579,19 @@ function createGateway(): PlatformGateway {
       async getPlayer() {
         return {
           playerId: 'test-player',
+        };
+      },
+      async getSession() {
+        return {
+          identityLevel: 'guest',
+          trustLevel: 'local',
+        };
+      },
+      async requestUpgrade() {
+        delegatedCalls.push('requestUpgrade');
+        return {
+          status: 'completed',
+          reloadExpected: false,
         };
       },
     },
@@ -473,6 +654,41 @@ function createGateway(): PlatformGateway {
         };
       },
       async save() {},
+    },
+    presentation: {
+      async getLaunchIntent() {
+        return {
+          entry: 'home',
+        };
+      },
+      async requestGameSurface() {
+        delegatedCalls.push('requestGameSurface');
+        return 'already-fullscreen';
+      },
+    },
+    sharing: {
+      async share() {
+        delegatedCalls.push('share');
+        return {
+          status: 'shared',
+        };
+      },
+      async readInboundShare() {
+        delegatedCalls.push('readInboundShare');
+        return {
+          puzzleId: 'daily-1',
+        };
+      },
+    },
+    notifications: {
+      async getStatus() {
+        delegatedCalls.push('getNotificationStatus');
+        return 'not-subscribed';
+      },
+      async requestSubscription() {
+        delegatedCalls.push('requestNotificationSubscription');
+        return 'subscribed';
+      },
     },
   };
 }
