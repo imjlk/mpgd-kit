@@ -1,3 +1,5 @@
+import { resolve } from 'node:path';
+
 import ttsc from '@ttsc/unplugin/vite';
 import { defineConfig } from 'vite';
 
@@ -12,6 +14,9 @@ export default defineConfig(({ mode }) => {
         plugins: false,
       }),
     ],
+    resolve: {
+      alias: createCatalogAliases(),
+    },
     define: {
       __APP_TARGET__: JSON.stringify(process.env.APP_TARGET ?? 'browser'),
       __MPGD_CONFIG_TARGET__: JSON.stringify(process.env.MPGD_CONFIG_TARGET ?? ''),
@@ -36,3 +41,28 @@ export default defineConfig(({ mode }) => {
     },
   };
 });
+
+function createCatalogAliases(): Record<string, string> {
+  const productCatalogFile = readConfiguredPath(process.env.MPGD_PRODUCT_CATALOG_FILE);
+  const adPlacementsFile = readConfiguredPath(process.env.MPGD_AD_PLACEMENTS_FILE);
+
+  if ((productCatalogFile === undefined) !== (adPlacementsFile === undefined)) {
+    throw new Error(
+      'MPGD_PRODUCT_CATALOG_FILE and MPGD_AD_PLACEMENTS_FILE must be configured together.',
+    );
+  }
+
+  if (productCatalogFile === undefined || adPlacementsFile === undefined) {
+    return {};
+  }
+
+  return {
+    '@mpgd/catalog/catalog.json': resolve(productCatalogFile),
+    '@mpgd/catalog/placements.json': resolve(adPlacementsFile),
+  };
+}
+
+function readConfiguredPath(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized === undefined || normalized.length === 0 ? undefined : normalized;
+}

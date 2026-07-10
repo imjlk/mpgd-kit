@@ -12,8 +12,14 @@ export function validateAdPlacementsFile(path = adPlacementsFilePath()) {
   const ids = new Set<string>();
 
   for (const placement of adPlacements.placements) {
-    if (placement.id.trim().length === 0) {
+    const trimmedId = placement.id.trim();
+
+    if (trimmedId.length === 0) {
       throw new Error('Ad placement id must be non-empty.');
+    }
+
+    if (trimmedId !== placement.id) {
+      throw new Error(`Ad placement id has leading or trailing whitespace: ${placement.id}`);
     }
 
     if (ids.has(placement.id)) {

@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import {
@@ -15,6 +16,8 @@ const catalogFile = join(tempDir, 'mpgd.catalog.json');
 const placementsFile = join(tempDir, 'mpgd.ad-placements.json');
 const blankCatalogFile = join(tempDir, 'blank.catalog.json');
 const blankPlacementsFile = join(tempDir, 'blank.ad-placements.json');
+const paddedCatalogFile = join(tempDir, 'padded.catalog.json');
+const paddedPlacementsFile = join(tempDir, 'padded.ad-placements.json');
 const previousCatalogFile = process.env.MPGD_PRODUCT_CATALOG_FILE;
 const previousPlacementsFile = process.env.MPGD_AD_PLACEMENTS_FILE;
 
@@ -118,6 +121,44 @@ try {
       ],
     }, null, 2)}\n`,
   );
+  writeFileSync(
+    paddedCatalogFile,
+    `${JSON.stringify({
+      version: 'padded-products',
+      products: [
+        {
+          id: 'SUDOKU_HINT_PACK ',
+          type: 'consumable',
+          grant: {
+            type: 'currency',
+            currency: 'gem',
+            amount: 1,
+          },
+          platformProductIds: {
+            ait: 'ait_padded_product',
+          },
+        },
+      ],
+    }, null, 2)}\n`,
+  );
+  writeFileSync(
+    paddedPlacementsFile,
+    `${JSON.stringify({
+      version: 'padded-ads',
+      placements: [
+        {
+          id: ' SUDOKU_HINT_REWARDED',
+          type: 'interstitial',
+          frequencyCap: {
+            cooldownSeconds: 120,
+          },
+          platformPlacementIds: {
+            ait: 'ait_padded_placement',
+          },
+        },
+      ],
+    }, null, 2)}\n`,
+  );
 
   assertHalfConfiguredEnvThrows({
     ...process.env,
@@ -147,6 +188,29 @@ try {
     },
     /Ad placement id must be non-empty/u,
   );
+  assertValidatorFailure(
+    'tools/validate-product-catalog.ts',
+    {
+      ...process.env,
+      MPGD_PRODUCT_CATALOG_FILE: paddedCatalogFile,
+      MPGD_AD_PLACEMENTS_FILE: placementsFile,
+    },
+    /Product id has leading or trailing whitespace/u,
+  );
+  assertValidatorFailure(
+    'tools/validate-ad-placements.ts',
+    {
+      ...process.env,
+      MPGD_PRODUCT_CATALOG_FILE: catalogFile,
+      MPGD_AD_PLACEMENTS_FILE: paddedPlacementsFile,
+    },
+    /Ad placement id has leading or trailing whitespace/u,
+  );
+  assertValidatorSuccess('tools/validate-public-readiness.ts', {
+    ...process.env,
+    MPGD_PRODUCT_CATALOG_FILE: blankCatalogFile,
+    MPGD_AD_PLACEMENTS_FILE: blankPlacementsFile,
+  });
 
   process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
   process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
@@ -155,6 +219,8 @@ try {
   assert.equal(adPlacementsFilePath(), placementsFile);
   assert.match(runValidator('tools/validate-product-catalog.ts'), /Product catalog game-v1/u);
   assert.match(runValidator('tools/validate-ad-placements.ts'), /Ad placements game-ads-v1/u);
+  await assertViteCatalogAliases('examples/phaser-starter/vite.config.ts');
+  await assertViteCatalogAliases('packages/cli/templates/phaser-game/vite.config.ts');
 
   const matrix = validateEffectiveTargetConfigMatrix(loadEffectiveTargetConfigMatrix());
 
@@ -267,4 +333,78 @@ function assertValidatorFailure(
 
   assert.notEqual(result.status, 0, `Expected ${script} to fail.`);
   assert.match(output, pattern);
+}
+
+function assertValidatorSuccess(script: string, env: NodeJS.ProcessEnv): void {
+  const result = spawnSync(process.execPath, ['tools/run-ttsx.mjs', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env,
+  });
+
+  if (result.error !== undefined) {
+    throw result.error;
+  }
+
+  assert.equal(result.status, 0, result.stderr || result.stdout);
+}
+
+async function assertViteCatalogAliases(configPath: string): Promise<void> {
+  const config = await loadViteConfig(configPath);
+  const alias = config.resolve?.alias;
+
+  assert.equal(
+    readAlias(alias, '@mpgd/catalog/catalog.json'),
+    catalogFile,
+    `${configPath} product catalog alias`,
+  );
+  assert.equal(
+    readAlias(alias, '@mpgd/catalog/placements.json'),
+    placementsFile,
+    `${configPath} ad placements alias`,
+  );
+}
+
+interface ViteUserConfig {
+  readonly resolve?: {
+    readonly alias?: ViteAlias;
+  };
+}
+
+type ViteAlias =
+  | Record<string, string>
+  | readonly {
+      readonly find: string | RegExp;
+      readonly replacement: string;
+    }[];
+
+async function loadViteConfig(configPath: string): Promise<ViteUserConfig> {
+  const configModule = await import(pathToFileURL(resolve(configPath)).href) as {
+    readonly default: unknown;
+  };
+  const configExport = configModule.default;
+  const config = typeof configExport === 'function'
+    ? await (configExport as (env: { readonly mode: string }) => unknown)({
+      mode: 'production',
+    })
+    : configExport;
+
+  assert.ok(
+    typeof config === 'object' && config !== null && !Array.isArray(config),
+    `${configPath} should export a Vite config object`,
+  );
+
+  return config as ViteUserConfig;
+}
+
+function readAlias(alias: ViteAlias | undefined, specifier: string): string | undefined {
+  if (alias === undefined) {
+    return undefined;
+  }
+
+  if (Array.isArray(alias)) {
+    return alias.find((entry) => entry.find === specifier)?.replacement;
+  }
+
+  return (alias as Record<string, string>)[specifier];
 }
