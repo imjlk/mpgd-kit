@@ -219,6 +219,12 @@ function readSdkMajor(envValue: string | undefined, metadataValue: number | unde
 }
 
 function getGitSha(): string {
+  const configuredGitSha = readOptionalString(process.env.MPGD_SOURCE_GIT_SHA);
+
+  if (configuredGitSha !== undefined) {
+    return configuredGitSha;
+  }
+
   try {
     return execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
       encoding: 'utf8',

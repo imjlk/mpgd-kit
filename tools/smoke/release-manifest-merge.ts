@@ -11,6 +11,7 @@ const firstCatalogFile = join(tempDir, 'catalog-v1.json');
 const secondCatalogFile = join(tempDir, 'catalog-v2.json');
 const placementsFile = join(tempDir, 'placements.json');
 const manifestFile = join(tempDir, 'release-manifest.json');
+const matchingManifestFile = join(tempDir, 'matching-release-manifest.json');
 const effectiveConfigDir = join(tempDir, 'target-config');
 
 try {
@@ -18,12 +19,23 @@ try {
   writeFileSync(secondCatalogFile, catalogJson('game-v2'));
   writeFileSync(placementsFile, placementsJson('ads-v1'));
 
-  runManifest('web-preview', firstCatalogFile);
-  runManifest('microsoft-store', secondCatalogFile);
+  runManifest('web-preview', firstCatalogFile, matchingManifestFile);
+  runManifest('microsoft-store', firstCatalogFile, matchingManifestFile);
 
-  const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as ReleaseManifest;
+  const matchingManifest = readManifest(matchingManifestFile);
+
+  assert.deepEqual(Object.keys(matchingManifest.targets).sort(), [
+    'microsoft-store',
+    'web-preview',
+  ]);
+
+  runManifest('web-preview', firstCatalogFile, manifestFile);
+  runManifest('microsoft-store', secondCatalogFile, manifestFile);
+
+  const manifest = readManifest(manifestFile);
 
   assert.equal(manifest.catalogVersion, 'game-v2');
+  assert.equal(manifest.gitSha, 'game-source-sha');
   assert.deepEqual(Object.keys(manifest.targets), ['microsoft-store']);
 } finally {
   rmSync(tempDir, { force: true, recursive: true });
@@ -31,7 +43,7 @@ try {
 
 console.log('Release manifest merge resets when the monetization contract changes.');
 
-function runManifest(target: string, catalogFile: string): void {
+function runManifest(target: string, catalogFile: string, outputFile: string): void {
   const result = spawnSync(
     process.execPath,
     [
@@ -40,7 +52,7 @@ function runManifest(target: string, catalogFile: string): void {
       target,
       'production',
       `artifacts/${target}`,
-      manifestFile,
+      outputFile,
     ],
     {
       cwd: process.cwd(),
@@ -52,6 +64,7 @@ function runManifest(target: string, catalogFile: string): void {
         MPGD_PRODUCT_CATALOG_FILE: catalogFile,
         MPGD_AD_PLACEMENTS_FILE: placementsFile,
         MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveConfigDir,
+        MPGD_SOURCE_GIT_SHA: 'game-source-sha',
       },
     },
   );
@@ -60,7 +73,15 @@ function runManifest(target: string, catalogFile: string): void {
     throw result.error;
   }
 
-  assert.equal(result.status, 0, result.stderr || result.stdout);
+  assert.equal(
+    result.status,
+    0,
+    `Manifest subprocess exited with status ${String(result.status)}:\n${result.stderr || result.stdout || '(no output)'}`,
+  );
+}
+
+function readManifest(path: string): ReleaseManifest {
+  return JSON.parse(readFileSync(path, 'utf8')) as ReleaseManifest;
 }
 
 function catalogJson(version: string): string {
