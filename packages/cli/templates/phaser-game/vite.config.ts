@@ -57,12 +57,16 @@ function createCatalogAliases(): Record<string, string> {
   }
 
   return {
-    '@mpgd/catalog/catalog.json': resolve(productCatalogFile),
-    '@mpgd/catalog/placements.json': resolve(adPlacementsFile),
+    '@mpgd/catalog/catalog.json': resolveCatalogPath(productCatalogFile),
+    '@mpgd/catalog/placements.json': resolveCatalogPath(adPlacementsFile),
   };
 }
 
 function readConfiguredPath(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
+}
+
+function resolveCatalogPath(path: string): string {
+  return resolve(process.env.INIT_CWD ?? process.cwd(), path);
 }

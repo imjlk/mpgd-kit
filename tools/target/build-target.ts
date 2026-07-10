@@ -10,7 +10,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
 
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 import {
@@ -62,6 +62,7 @@ const gameApp = targetPath(target.gameApp);
 const appTarget = appTargetForBuild(target, targetName);
 const env: NodeJS.ProcessEnv = {
   ...process.env,
+  ...normalizeMonetizationCatalogEnv(process.env),
   ...targetReleaseMetadataEnv(target),
   APP_TARGET: appTarget,
   MPGD_CONFIG_TARGET: targetName,
@@ -247,6 +248,31 @@ function mirrorAitRuntimeAssets(gameApp: string, wrapperApp: string): void {
 
 function appTargetForBuild(target: BuildTargetConfig, name: string): string {
   return target.kind === 'web' ? 'browser' : name;
+}
+
+function normalizeMonetizationCatalogEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const productCatalogFile = readConfiguredEnvPath(baseEnv.MPGD_PRODUCT_CATALOG_FILE);
+  const adPlacementsFile = readConfiguredEnvPath(baseEnv.MPGD_AD_PLACEMENTS_FILE);
+
+  if ((productCatalogFile === undefined) !== (adPlacementsFile === undefined)) {
+    throw new Error(
+      'MPGD_PRODUCT_CATALOG_FILE and MPGD_AD_PLACEMENTS_FILE must be configured together.',
+    );
+  }
+
+  if (productCatalogFile === undefined || adPlacementsFile === undefined) {
+    return {};
+  }
+
+  return {
+    MPGD_PRODUCT_CATALOG_FILE: resolve(productCatalogFile),
+    MPGD_AD_PLACEMENTS_FILE: resolve(adPlacementsFile),
+  };
+}
+
+function readConfiguredEnvPath(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
 
 function targetReleaseMetadataEnv(target: BuildTargetConfig): NodeJS.ProcessEnv {

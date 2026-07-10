@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
 import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
@@ -20,6 +20,7 @@ const paddedCatalogFile = join(tempDir, 'padded.catalog.json');
 const paddedPlacementsFile = join(tempDir, 'padded.ad-placements.json');
 const previousCatalogFile = process.env.MPGD_PRODUCT_CATALOG_FILE;
 const previousPlacementsFile = process.env.MPGD_AD_PLACEMENTS_FILE;
+const previousInitCwd = process.env.INIT_CWD;
 
 try {
   writeFileSync(
@@ -213,8 +214,7 @@ try {
   assert.equal(adPlacementsFilePath(), placementsFile);
   assert.match(runValidator('tools/validate-product-catalog.ts'), /Product catalog game-v1/u);
   assert.match(runValidator('tools/validate-ad-placements.ts'), /Ad placements game-ads-v1/u);
-  await assertViteCatalogAliases('examples/phaser-starter/vite.config.ts');
-  await assertViteCatalogAliases('packages/cli/templates/phaser-game/vite.config.ts');
+  await assertViteCatalogAliasesWithRelativeEnv();
 
   const matrix = validateEffectiveTargetConfigMatrix(loadEffectiveTargetConfigMatrix());
 
@@ -269,6 +269,7 @@ try {
 } finally {
   restoreEnv('MPGD_PRODUCT_CATALOG_FILE', previousCatalogFile);
   restoreEnv('MPGD_AD_PLACEMENTS_FILE', previousPlacementsFile);
+  restoreEnv('INIT_CWD', previousInitCwd);
   rmSync(tempDir, { force: true, recursive: true });
 }
 
@@ -343,6 +344,21 @@ async function assertViteCatalogAliases(configPath: string): Promise<void> {
     placementsFile,
     `${configPath} ad placements alias`,
   );
+}
+
+async function assertViteCatalogAliasesWithRelativeEnv(): Promise<void> {
+  process.env.INIT_CWD = process.cwd();
+  process.env.MPGD_PRODUCT_CATALOG_FILE = relative(process.cwd(), catalogFile);
+  process.env.MPGD_AD_PLACEMENTS_FILE = relative(process.cwd(), placementsFile);
+
+  try {
+    await assertViteCatalogAliases('examples/phaser-starter/vite.config.ts');
+    await assertViteCatalogAliases('packages/cli/templates/phaser-game/vite.config.ts');
+  } finally {
+    process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
+    process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
+    restoreEnv('INIT_CWD', previousInitCwd);
+  }
 }
 
 interface ViteUserConfig {
