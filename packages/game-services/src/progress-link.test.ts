@@ -375,13 +375,10 @@ assertThrows(
 assertThrows(
   () => normalizeGameProgressSnapshot({
     ...emptyProgress,
-    bestScores: Object.fromEntries(Array.from(
-      { length: gameProgressLimits.maxMetricEntries + 1 },
-      (_, index) => [`mode-${String(index)}`, index],
-    )),
+    bestScores: oversizedMetricMap(),
   }),
   'must not contain more than',
-  'metric maps should have a fixed entry bound',
+  'metric maps should enforce their entry bound before reading values',
 );
 
 let deeplyNestedPayload: unknown = true;
@@ -460,6 +457,22 @@ function progressWithPayload(payload: unknown): GameProgressSnapshot {
       payload,
     },
   } as unknown as GameProgressSnapshot;
+}
+
+function oversizedMetricMap(): Readonly<Record<string, number>> {
+  const metricMap: Record<string, number> = {};
+
+  for (let index = 0; index <= gameProgressLimits.maxMetricEntries; index += 1) {
+    Object.defineProperty(metricMap, `mode-${String(index)}`, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        throw new Error('oversized metric values must not be materialized');
+      },
+    });
+  }
+
+  return metricMap;
 }
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {

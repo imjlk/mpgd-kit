@@ -466,8 +466,8 @@ function normalizeMetricMap(
   validate?: (value: number, fieldLabel: string) => void,
 ): Readonly<Record<string, number>> {
   assertRecord(input, label);
+  assertOwnPropertyLimit(input, gameProgressLimits.maxMetricEntries, label);
   const inputEntries = Object.entries(input);
-  assertCollectionLimit(inputEntries.length, gameProgressLimits.maxMetricEntries, label);
   const entries = inputEntries.map(([key, value]) => {
     const normalizedKey = normalizeIdentifier(key, `${label} key`);
 

@@ -695,6 +695,15 @@ await assertRejects(
 await assertRejects(
   () => deliveryService.deliver({
     ...androidRequest,
+    idempotencyKey: 'notification-oversized-template',
+    templateData: oversizedTemplateData(),
+  }),
+  'templateData must contain at most 128 entries',
+  'template data should enforce its entry bound before reading values',
+);
+await assertRejects(
+  () => deliveryService.deliver({
+    ...androidRequest,
     target: 'unknown-target',
     idempotencyKey: 'notification-invalid-target',
   } as unknown as NotificationDeliveryRequest),
@@ -740,6 +749,22 @@ function createDurableTestProvider(): NotificationDeliveryProvider {
       return receipt;
     },
   };
+}
+
+function oversizedTemplateData(): Readonly<Record<string, string>> {
+  const templateData: Record<string, string> = {};
+
+  for (let index = 0; index <= 128; index += 1) {
+    Object.defineProperty(templateData, `field-${String(index)}`, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        throw new Error('oversized template values must not be materialized');
+      },
+    });
+  }
+
+  return templateData;
 }
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {

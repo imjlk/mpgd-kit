@@ -512,11 +512,8 @@ function normalizeNotificationDeliveryClaimResult(
 
 function normalizeTemplateData(input: unknown): NotificationTemplateData {
   assertRecord(input, 'templateData');
+  assertOwnPropertyLimit(input, 128, 'templateData');
   const inputEntries = Object.entries(input);
-
-  if (inputEntries.length > 128) {
-    throw new Error('templateData must contain at most 128 entries.');
-  }
 
   const entries = inputEntries.map(([key, value]) => {
     const normalizedKey = normalizeIdentifier(key, 'templateData key');
@@ -672,6 +669,24 @@ function attachSecondaryError(primary: unknown, secondary: unknown): void {
 function assertRecord(input: unknown, label: string): asserts input is Record<string, unknown> {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     throw new Error(`${label} must be an object.`);
+  }
+}
+
+function assertOwnPropertyLimit(
+  input: Record<string, unknown>,
+  maximum: number,
+  label: string,
+): void {
+  let propertyCount = 0;
+
+  for (const key in input) {
+    if (Object.hasOwn(input, key)) {
+      propertyCount += 1;
+
+      if (propertyCount > maximum) {
+        throw new Error(`${label} must contain at most ${String(maximum)} entries.`);
+      }
+    }
   }
 }
 
