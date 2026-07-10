@@ -36,6 +36,7 @@ try {
 
   assert.equal(manifest.catalogVersion, 'game-v2');
   assert.equal(manifest.gitSha, 'game-source-sha');
+  assert.match(manifest.kitGitSha, /^[0-9a-f]{40}$/u);
   assert.deepEqual(Object.keys(manifest.targets), ['microsoft-store']);
 } finally {
   rmSync(tempDir, { force: true, recursive: true });

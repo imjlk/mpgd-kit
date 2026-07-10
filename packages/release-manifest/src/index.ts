@@ -18,7 +18,10 @@ export interface ReleaseTargetManifest {
 
 export interface ReleaseManifest {
   readonly releaseId: string;
+  /** Revision of the downstream game source used for this build. */
   readonly gitSha: string;
+  /** Revision of mpgd-kit that generated the target artifacts. */
+  readonly kitGitSha: string;
   readonly gameVersion: string;
   readonly buildId: string;
   readonly targetConfigVersion: string;

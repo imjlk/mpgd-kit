@@ -47,7 +47,8 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
 
   return assertReleaseManifest({
     releaseId: `mpgd-${gameVersion}+${buildId}`,
-    gitSha: getGitSha(),
+    gitSha: getSourceGitSha(),
+    kitGitSha: getKitGitSha(),
     gameVersion,
     buildId,
     targetConfigVersion: targetConfig.version,
@@ -121,6 +122,7 @@ function hasMatchingReleaseContract(
 ): boolean {
   return previous.releaseId === next.releaseId
     && previous.gitSha === next.gitSha
+    && previous.kitGitSha === next.kitGitSha
     && previous.targetConfigVersion === next.targetConfigVersion
     && previous.catalogVersion === next.catalogVersion
     && previous.adPlacementVersion === next.adPlacementVersion;
@@ -218,15 +220,19 @@ function readSdkMajor(envValue: string | undefined, metadataValue: number | unde
   return metadataValue ?? 2;
 }
 
-function getGitSha(): string {
+function getSourceGitSha(): string {
   const configuredGitSha = readOptionalString(process.env.MPGD_SOURCE_GIT_SHA);
 
   if (configuredGitSha !== undefined) {
     return configuredGitSha;
   }
 
+  return getKitGitSha();
+}
+
+function getKitGitSha(): string {
   try {
-    return execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
+    return execFileSync('git', ['rev-parse', 'HEAD'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
