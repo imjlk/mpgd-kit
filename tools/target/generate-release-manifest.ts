@@ -40,6 +40,7 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
   }).artifacts.find((artifact) => artifact.target === input.target);
   const buildId = process.env.BUILD_ID ?? createBuildId();
   const gameVersion = process.env.APP_VERSION ?? packageJson.version ?? '0.0.0';
+  const kitGitSha = getKitGitSha();
 
   if (effectiveConfig === undefined) {
     throw new Error(`Failed to generate effective target config for ${input.target}.`);
@@ -47,8 +48,8 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
 
   return assertReleaseManifest({
     releaseId: `mpgd-${gameVersion}+${buildId}`,
-    gitSha: getSourceGitSha(),
-    kitGitSha: getKitGitSha(),
+    gitSha: getSourceGitSha(kitGitSha),
+    kitGitSha,
     gameVersion,
     buildId,
     targetConfigVersion: targetConfig.version,
@@ -220,14 +221,14 @@ function readSdkMajor(envValue: string | undefined, metadataValue: number | unde
   return metadataValue ?? 2;
 }
 
-function getSourceGitSha(): string {
+function getSourceGitSha(kitGitSha: string): string {
   const configuredGitSha = readOptionalString(process.env.MPGD_SOURCE_GIT_SHA);
 
   if (configuredGitSha !== undefined) {
     return configuredGitSha;
   }
 
-  return getKitGitSha();
+  return kitGitSha;
 }
 
 function getKitGitSha(): string {
