@@ -13,12 +13,32 @@
       {
         "target": "ait",
         "server": "apps-in-toss",
-        "queries": ["웹뷰 개발", "인앱 결제", "인앱 광고", "샌드박스", "심사", "저장소"]
+        "queries": [
+          "웹뷰 개발",
+          "인앱 결제",
+          "인앱 광고",
+          "사용자 식별키",
+          "공유 링크",
+          "알림 동의",
+          "샌드박스",
+          "심사",
+          "저장소"
+        ]
       },
       {
         "target": "reddit",
         "server": "devvit",
-        "queries": ["Devvit Web", "devvit.json", "Vite", "Redis", "playtest", "payments"]
+        "queries": [
+          "Devvit Web",
+          "devvit.json",
+          "Vite",
+          "view modes entry points",
+          "showShareSheet getShareData",
+          "push notifications",
+          "Redis",
+          "playtest",
+          "payments"
+        ]
       }
     ]
   },
@@ -71,6 +91,16 @@
       ]
     },
     {
+      "id": "platform.gateway.bootstrap-intents",
+      "kind": "platform",
+      "entry": "src/main.ts",
+      "capabilities": ["identity-session", "launch-intent"],
+      "gotchas": [
+        "Fall back to a local guest and home intent when an older host does not implement additive methods.",
+        "Use the server-verified session player ID for backend services when it is available."
+      ]
+    },
+    {
       "id": "assets.manifest.stable-keys",
       "kind": "asset",
       "entry": "src/game/assets/manifest.ts",
@@ -90,6 +120,7 @@
     ],
     "manual": [
       "Target, player, effective config, and backend mode render on the starter screen.",
+      "Starter context resolves an identity session and launch intent without scene-level SDK imports.",
       "Pointer or Enter starts the play scene.",
       "The play scene updates from serializable simulation state.",
       "Viewport orientation policy is visible and does not force unsafe WebView hard locks."

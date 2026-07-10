@@ -432,7 +432,7 @@ export function createDevvitSandboxBridge(): DevvitBridge {
             nativeLeaderboard: true,
             achievements: false,
             cloudSave: true,
-            socialShare: true,
+            socialShare: false,
             haptics: false,
             localizedContent: true,
           });
@@ -462,7 +462,7 @@ export function createDevvitSandboxBridge(): DevvitBridge {
           });
 
         case 'presentation.requestGameSurface':
-          return ok(input, 'already-fullscreen');
+          return ok(input, 'unavailable');
 
         case 'share.share':
           return ok(input, {

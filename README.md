@@ -14,6 +14,7 @@ distribution target gets the right adapter and validation path.
 - `PlatformGateway` contracts for identity, storage, IAP, ads, leaderboard, and lifecycle.
 - Target-specific feature availability through `@mpgd/target-config`.
 - Effective target config bundles for products, ad placements, storage, release profile, and localization.
+- Stateful cross-platform identity, launch, share, and notification contracts; see [Shared Platform Game Flow](docs/PLATFORM_GAME_FLOW.md).
 - Paraglide-backed `@mpgd/i18n` translation-key/message catalog.
 - Ledger-first game-services backend contracts, client orchestration, in-memory store, D1 store, HTTP endpoints, oRPC v2 beta procedures, and Cloudflare Worker starter.
 - Agent-facing Phaser starter manifest, Codex custom agents, repository skills, and Apps in Toss MCP adapter workflow guidance.

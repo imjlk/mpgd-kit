@@ -166,7 +166,7 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
         nativeLeaderboard: true,
         achievements: false,
         cloudSave: true,
-        socialShare: true,
+        socialShare: false,
         haptics: false,
         localizedContent: true,
       });
@@ -207,7 +207,7 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
 
       return ok(input, {
         status: authenticated ? 'completed' : 'unavailable',
-        reloadExpected: !authenticated,
+        reloadExpected: false,
       });
     }
 
@@ -215,7 +215,7 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
       return ok(input, { entry: 'home' });
 
     case 'presentation.requestGameSurface':
-      return ok(input, 'already-fullscreen');
+      return ok(input, 'unavailable');
 
     case 'share.share':
       return ok(input, { status: 'unavailable' });

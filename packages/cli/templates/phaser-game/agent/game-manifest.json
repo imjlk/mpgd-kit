@@ -26,6 +26,10 @@
       "owner": "src/platform/installPlatform.ts"
     },
     {
+      "id": "platform.gateway.bootstrap-intents",
+      "owner": "src/main.ts"
+    },
+    {
       "id": "runtime.viewport.orientation-policy",
       "owner": "src/main.ts"
     },

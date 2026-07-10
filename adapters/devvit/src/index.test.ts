@@ -422,7 +422,7 @@ describe('adapter-devvit', () => {
     await expect(gateway.presentation?.getLaunchIntent()).resolves.toEqual({ entry: 'home' });
     await expect(
       gateway.presentation?.requestGameSurface({ entry: 'daily' }),
-    ).resolves.toBe('already-fullscreen');
+    ).resolves.toBe('unavailable');
     await expect(
       gateway.sharing?.share({
         kind: 'invite',
@@ -441,6 +441,7 @@ describe('adapter-devvit', () => {
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
       nativeLeaderboard: true,
       cloudSave: true,
+      socialShare: false,
     });
     await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
     await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
