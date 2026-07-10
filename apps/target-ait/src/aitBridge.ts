@@ -6,7 +6,10 @@ import {
   share,
   submitGameCenterLeaderBoardScore,
 } from '@apps-in-toss/web-framework';
-import type { LaunchEntry, LaunchIntent } from '@mpgd/platform';
+
+// The AIT packager treats workspace dependencies as runtime packages. Keep this
+// shared contract as a source-only type import so it is erased before packaging.
+import type { LaunchEntry, LaunchIntent } from '../../../packages/platform/src/index';
 
 import {
   resolveAitGameIdentity,
