@@ -17,10 +17,66 @@ const previousCatalogFile = process.env.MPGD_PRODUCT_CATALOG_FILE;
 const previousPlacementsFile = process.env.MPGD_AD_PLACEMENTS_FILE;
 
 try {
-  writeFileSync(catalogFile, `${JSON.stringify({ version: 'game-v1', products: [] }, null, 2)}\n`);
+  writeFileSync(
+    catalogFile,
+    `${JSON.stringify({
+      version: 'game-v1',
+      products: [
+        {
+          id: 'SUDOKU_HINT_PACK',
+          type: 'consumable',
+          grant: {
+            type: 'currency',
+            currency: 'gem',
+            amount: 5,
+          },
+          platformProductIds: {
+            android: 'android_sudoku_hint_pack',
+            ios: 'ios.sudoku.hint-pack',
+            ait: 'ait_sudoku_hint_pack',
+          },
+        },
+      ],
+    }, null, 2)}\n`,
+  );
   writeFileSync(
     placementsFile,
-    `${JSON.stringify({ version: 'game-ads-v1', placements: [] }, null, 2)}\n`,
+    `${JSON.stringify({
+      version: 'game-ads-v1',
+      placements: [
+        {
+          id: 'SUDOKU_HINT_REWARDED',
+          type: 'rewarded',
+          reward: {
+            type: 'currency',
+            currency: 'gem',
+            amount: 1,
+          },
+          frequencyCap: {
+            cooldownSeconds: 60,
+            maxPerSession: 3,
+          },
+          platformPlacementIds: {
+            android: 'android_sudoku_hint_rewarded',
+            ios: 'ios_sudoku_hint_rewarded',
+            ait: 'ait_sudoku_hint_rewarded',
+          },
+        },
+        {
+          id: 'SUDOKU_STAGE_END_INTERSTITIAL',
+          type: 'interstitial',
+          frequencyCap: {
+            cooldownSeconds: 120,
+            minStageInterval: 3,
+          },
+          platformPlacementIds: {
+            android: 'android_sudoku_stage_end',
+            ios: 'ios_sudoku_stage_end',
+            ait: 'ait_sudoku_stage_end',
+          },
+        },
+      ],
+    }, null, 2)}\n`,
   );
 
   process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
@@ -38,8 +94,49 @@ try {
   const ait = matrix.targets.ait;
 
   assert.ok(ait !== undefined, 'Expected "ait" target in the config matrix');
-  assert.deepEqual(ait.monetization.products, []);
-  assert.deepEqual(ait.ads.placements, []);
+  assert.deepEqual(ait.monetization.products, [
+    {
+      id: 'SUDOKU_HINT_PACK',
+      type: 'consumable',
+      grant: {
+        type: 'currency',
+        currency: 'gem',
+        amount: 5,
+      },
+      enabled: true,
+      reason: 'available',
+      platformProductId: 'ait_sudoku_hint_pack',
+    },
+  ]);
+  assert.deepEqual(ait.ads.placements, [
+    {
+      id: 'SUDOKU_HINT_REWARDED',
+      type: 'rewarded',
+      reward: {
+        type: 'currency',
+        currency: 'gem',
+        amount: 1,
+      },
+      frequencyCap: {
+        cooldownSeconds: 60,
+        maxPerSession: 3,
+      },
+      enabled: true,
+      reason: 'available',
+      platformPlacementId: 'ait_sudoku_hint_rewarded',
+    },
+    {
+      id: 'SUDOKU_STAGE_END_INTERSTITIAL',
+      type: 'interstitial',
+      frequencyCap: {
+        cooldownSeconds: 120,
+        minStageInterval: 3,
+      },
+      enabled: true,
+      reason: 'available',
+      platformPlacementId: 'ait_sudoku_stage_end',
+    },
+  ]);
 } finally {
   restoreEnv('MPGD_PRODUCT_CATALOG_FILE', previousCatalogFile);
   restoreEnv('MPGD_AD_PLACEMENTS_FILE', previousPlacementsFile);
