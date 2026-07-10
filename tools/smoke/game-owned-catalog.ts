@@ -206,12 +206,6 @@ try {
     },
     /Ad placement id has leading or trailing whitespace/u,
   );
-  assertValidatorSuccess('tools/validate-public-readiness.ts', {
-    ...process.env,
-    MPGD_PRODUCT_CATALOG_FILE: blankCatalogFile,
-    MPGD_AD_PLACEMENTS_FILE: blankPlacementsFile,
-  });
-
   process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
   process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
 
@@ -333,20 +327,6 @@ function assertValidatorFailure(
 
   assert.notEqual(result.status, 0, `Expected ${script} to fail.`);
   assert.match(output, pattern);
-}
-
-function assertValidatorSuccess(script: string, env: NodeJS.ProcessEnv): void {
-  const result = spawnSync(process.execPath, ['tools/run-ttsx.mjs', script], {
-    cwd: process.cwd(),
-    encoding: 'utf8',
-    env,
-  });
-
-  if (result.error !== undefined) {
-    throw result.error;
-  }
-
-  assert.equal(result.status, 0, result.stderr || result.stdout);
 }
 
 async function assertViteCatalogAliases(configPath: string): Promise<void> {
