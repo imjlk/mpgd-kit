@@ -10,9 +10,10 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, relative } from 'node:path';
 
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
+import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
 import {
   effectiveTargetConfigOutputDir,
   loadPlatformTargetsConfig,
@@ -35,23 +36,25 @@ interface BuildTargetConfig {
   readonly artifact?: string;
 }
 
+const platformTargets = loadPlatformTargetsConfig();
+const configBaseDir = platformTargets.baseDir;
+const config = platformTargets.config;
+const monetizationCatalogEnv = normalizeMonetizationCatalogEnv(process.env, configBaseDir);
 const targetScopedEnv = {
   ...process.env,
+  ...monetizationCatalogEnv,
   MPGD_TARGET_CONFIG_TARGETS: targetName,
 };
 
 if (process.env.MPGD_SKIP_BUILD_TARGET_PREFLIGHT !== '1') {
-  run('pnpm', ['validate:catalog'], process.env);
-  run('pnpm', ['validate:ads'], process.env);
+  run('pnpm', ['validate:catalog'], targetScopedEnv);
+  run('pnpm', ['validate:ads'], targetScopedEnv);
   run('pnpm', ['validate:target-config'], targetScopedEnv);
   run('pnpm', ['validate:effective-config'], targetScopedEnv);
-  run('pnpm', ['validate:targets'], process.env);
+  run('pnpm', ['validate:targets'], targetScopedEnv);
   run('node', ['tools/run-ttsx.mjs', 'tools/package/build-packages.ts'], process.env);
 }
 
-const platformTargets = loadPlatformTargetsConfig();
-const configBaseDir = platformTargets.baseDir;
-const config = platformTargets.config;
 const target = config.targets[targetName] as BuildTargetConfig | undefined;
 
 if (target === undefined) {
@@ -62,7 +65,7 @@ const gameApp = targetPath(target.gameApp);
 const appTarget = appTargetForBuild(target, targetName);
 const env: NodeJS.ProcessEnv = {
   ...process.env,
-  ...normalizeMonetizationCatalogEnv(process.env),
+  ...monetizationCatalogEnv,
   ...targetReleaseMetadataEnv(target),
   APP_TARGET: appTarget,
   MPGD_CONFIG_TARGET: targetName,
@@ -72,7 +75,7 @@ const env: NodeJS.ProcessEnv = {
 };
 
 run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
-embedEffectiveTargetConfig(targetName, gameApp);
+embedEffectiveTargetConfig(targetName, gameApp, env);
 
 switch (target.kind) {
   case 'web': {
@@ -250,31 +253,6 @@ function appTargetForBuild(target: BuildTargetConfig, name: string): string {
   return target.kind === 'web' ? 'browser' : name;
 }
 
-function normalizeMonetizationCatalogEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  const productCatalogFile = readConfiguredEnvPath(baseEnv.MPGD_PRODUCT_CATALOG_FILE);
-  const adPlacementsFile = readConfiguredEnvPath(baseEnv.MPGD_AD_PLACEMENTS_FILE);
-
-  if ((productCatalogFile === undefined) !== (adPlacementsFile === undefined)) {
-    throw new Error(
-      'MPGD_PRODUCT_CATALOG_FILE and MPGD_AD_PLACEMENTS_FILE must be configured together.',
-    );
-  }
-
-  if (productCatalogFile === undefined || adPlacementsFile === undefined) {
-    return {};
-  }
-
-  return {
-    MPGD_PRODUCT_CATALOG_FILE: resolve(productCatalogFile),
-    MPGD_AD_PLACEMENTS_FILE: resolve(adPlacementsFile),
-  };
-}
-
-function readConfiguredEnvPath(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized === undefined || normalized.length === 0 ? undefined : normalized;
-}
-
 function targetReleaseMetadataEnv(target: BuildTargetConfig): NodeJS.ProcessEnv {
   const metadata = target.metadata;
 
@@ -434,17 +412,54 @@ function writeManifest(
   );
 }
 
-function embedEffectiveTargetConfig(target: string, gameApp: string): void {
-  const artifact = writeEffectiveTargetConfigs({
+function embedEffectiveTargetConfig(
+  target: string,
+  gameApp: string,
+  commandEnv: NodeJS.ProcessEnv,
+): void {
+  const artifact = withProcessEnv(commandEnv, [
+    'MPGD_PRODUCT_CATALOG_FILE',
+    'MPGD_AD_PLACEMENTS_FILE',
+  ], () => writeEffectiveTargetConfigs({
     targets: [target],
     outputDir: effectiveTargetConfigOutputDir(configBaseDir),
-  }).artifacts.find((candidate) => candidate.target === target);
+  })).artifacts.find((candidate) => candidate.target === target);
 
   if (artifact === undefined) {
     throw new Error(`Failed to generate effective target config for ${target}.`);
   }
 
   copyFile(artifact.path, `${gameApp}/dist/${embeddedTargetConfigFileName}`);
+}
+
+function withProcessEnv<T>(
+  env: NodeJS.ProcessEnv,
+  keys: readonly string[],
+  callback: () => T,
+): T {
+  const previousValues = new Map(keys.map((key) => [key, process.env[key]]));
+
+  for (const key of keys) {
+    const value = env[key];
+
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  }
+
+  try {
+    return callback();
+  } finally {
+    for (const [key, value] of previousValues) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
+  }
 }
 
 function targetPath(path: string): string {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -10,6 +10,7 @@ import {
   loadEffectiveTargetConfigMatrix,
   validateEffectiveTargetConfigMatrix,
 } from '../target/effective-config';
+import { normalizeMonetizationCatalogEnv } from '../target/monetization-catalog-env';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-game-catalog-'));
 const catalogFile = join(tempDir, 'mpgd.catalog.json');
@@ -21,6 +22,7 @@ const paddedPlacementsFile = join(tempDir, 'padded.ad-placements.json');
 const previousCatalogFile = process.env.MPGD_PRODUCT_CATALOG_FILE;
 const previousPlacementsFile = process.env.MPGD_AD_PLACEMENTS_FILE;
 const previousInitCwd = process.env.INIT_CWD;
+const previousPwd = process.env.PWD;
 
 try {
   writeFileSync(
@@ -215,6 +217,7 @@ try {
   assert.match(runValidator('tools/validate-product-catalog.ts'), /Product catalog game-v1/u);
   assert.match(runValidator('tools/validate-ad-placements.ts'), /Ad placements game-ads-v1/u);
   await assertViteCatalogAliasesWithRelativeEnv();
+  assertTargetBuildCatalogEnvUsesCallerBase();
 
   const matrix = validateEffectiveTargetConfigMatrix(loadEffectiveTargetConfigMatrix());
 
@@ -270,6 +273,7 @@ try {
   restoreEnv('MPGD_PRODUCT_CATALOG_FILE', previousCatalogFile);
   restoreEnv('MPGD_AD_PLACEMENTS_FILE', previousPlacementsFile);
   restoreEnv('INIT_CWD', previousInitCwd);
+  restoreEnv('PWD', previousPwd);
   rmSync(tempDir, { force: true, recursive: true });
 }
 
@@ -347,7 +351,8 @@ async function assertViteCatalogAliases(configPath: string): Promise<void> {
 }
 
 async function assertViteCatalogAliasesWithRelativeEnv(): Promise<void> {
-  process.env.INIT_CWD = process.cwd();
+  delete process.env.INIT_CWD;
+  process.env.PWD = process.cwd();
   process.env.MPGD_PRODUCT_CATALOG_FILE = relative(process.cwd(), catalogFile);
   process.env.MPGD_AD_PLACEMENTS_FILE = relative(process.cwd(), placementsFile);
 
@@ -358,7 +363,33 @@ async function assertViteCatalogAliasesWithRelativeEnv(): Promise<void> {
     process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
     process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
     restoreEnv('INIT_CWD', previousInitCwd);
+    restoreEnv('PWD', previousPwd);
   }
+}
+
+function assertTargetBuildCatalogEnvUsesCallerBase(): void {
+  const callerDir = join(tempDir, 'caller-game');
+
+  mkdirSync(callerDir);
+
+  const normalizedEnvFromPwd = normalizeMonetizationCatalogEnv({
+    MPGD_PRODUCT_CATALOG_FILE: relative(callerDir, catalogFile),
+    MPGD_AD_PLACEMENTS_FILE: relative(callerDir, placementsFile),
+    PWD: callerDir,
+  });
+  const normalizedEnvFromTargetsBase = normalizeMonetizationCatalogEnv(
+    {
+      MPGD_PRODUCT_CATALOG_FILE: relative(callerDir, catalogFile),
+      MPGD_AD_PLACEMENTS_FILE: relative(callerDir, placementsFile),
+      PWD: process.cwd(),
+    },
+    callerDir,
+  );
+
+  assert.equal(normalizedEnvFromPwd.MPGD_PRODUCT_CATALOG_FILE, catalogFile);
+  assert.equal(normalizedEnvFromPwd.MPGD_AD_PLACEMENTS_FILE, placementsFile);
+  assert.equal(normalizedEnvFromTargetsBase.MPGD_PRODUCT_CATALOG_FILE, catalogFile);
+  assert.equal(normalizedEnvFromTargetsBase.MPGD_AD_PLACEMENTS_FILE, placementsFile);
 }
 
 interface ViteUserConfig {

@@ -68,5 +68,5 @@ function readConfiguredPath(value: string | undefined): string | undefined {
 }
 
 function resolveCatalogPath(path: string): string {
-  return resolve(process.env.INIT_CWD ?? process.cwd(), path);
+  return resolve(process.env.INIT_CWD ?? process.env.PWD ?? process.cwd(), path);
 }
