@@ -79,6 +79,17 @@ try {
     }, null, 2)}\n`,
   );
 
+  assertHalfConfiguredEnvThrows({
+    ...process.env,
+    MPGD_PRODUCT_CATALOG_FILE: catalogFile,
+    MPGD_AD_PLACEMENTS_FILE: undefined,
+  });
+  assertHalfConfiguredEnvThrows({
+    ...process.env,
+    MPGD_PRODUCT_CATALOG_FILE: undefined,
+    MPGD_AD_PLACEMENTS_FILE: placementsFile,
+  });
+
   process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
   process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
 
@@ -152,6 +163,17 @@ function restoreEnv(key: string, value: string | undefined): void {
   }
 
   process.env[key] = value;
+}
+
+function assertHalfConfiguredEnvThrows(env: NodeJS.ProcessEnv): void {
+  assert.throws(
+    () => productCatalogFilePath(env),
+    /MPGD_PRODUCT_CATALOG_FILE and MPGD_AD_PLACEMENTS_FILE must be configured together/u,
+  );
+  assert.throws(
+    () => adPlacementsFilePath(env),
+    /MPGD_PRODUCT_CATALOG_FILE and MPGD_AD_PLACEMENTS_FILE must be configured together/u,
+  );
 }
 
 function runValidator(script: string): string {

@@ -106,6 +106,7 @@ function runCliCapture(
       cwd: process.cwd(),
       encoding: 'utf8',
       env,
+      timeout: 30_000,
     },
   );
 
