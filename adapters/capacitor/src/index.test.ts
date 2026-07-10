@@ -81,4 +81,72 @@ describe('adapter-capacitor', () => {
 
     await expect(gateway.commerce.getProducts()).rejects.toThrow('Store unavailable.');
   });
+
+  it('delegates shared launch, identity, share, and notification flows', async () => {
+    const methods: string[] = [];
+    const bridge: NativeBridge = {
+      async request(input) {
+        methods.push(input.method);
+
+        const dataByMethod: Partial<Record<typeof input.method, unknown>> = {
+          'identity.getSession': {
+            identityLevel: 'platform-anonymous',
+            playerId: 'android-local-player',
+            trustLevel: 'local',
+          },
+          'presentation.getLaunchIntent': { entry: 'home' },
+          'presentation.requestGameSurface': 'already-fullscreen',
+          'share.share': { status: 'unavailable' },
+          'share.readInboundShare': null,
+          'notifications.getStatus': 'configuration-required',
+          'notifications.requestSubscription': 'unavailable',
+        };
+
+        return {
+          id: input.id,
+          ok: true,
+          data: dataByMethod[input.method],
+        } satisfies BridgeResponse;
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android',
+      appVersion: '1.2.3',
+      buildId: 'build-android',
+      bridge,
+    });
+
+    await expect(gateway.identity.getSession?.()).resolves.toMatchObject({
+      identityLevel: 'platform-anonymous',
+      trustLevel: 'local',
+    });
+    await expect(gateway.presentation?.getLaunchIntent()).resolves.toEqual({ entry: 'home' });
+    await expect(
+      gateway.presentation?.requestGameSurface({ entry: 'daily' }),
+    ).resolves.toBe('already-fullscreen');
+    await expect(
+      gateway.sharing?.share({
+        kind: 'invite',
+        title: 'Invite',
+        text: 'Play with me',
+        deepLink: 'mpgd://invite',
+      }),
+    ).resolves.toEqual({ status: 'unavailable' });
+    await expect(gateway.sharing?.readInboundShare()).resolves.toBeNull();
+    await expect(gateway.notifications?.getStatus('daily-ready')).resolves.toBe(
+      'configuration-required',
+    );
+    await expect(
+      gateway.notifications?.requestSubscription('daily-ready'),
+    ).resolves.toBe('unavailable');
+    expect(methods).toEqual([
+      'identity.getSession',
+      'presentation.getLaunchIntent',
+      'presentation.requestGameSurface',
+      'share.share',
+      'share.readInboundShare',
+      'notifications.getStatus',
+      'notifications.requestSubscription',
+    ]);
+  });
 });

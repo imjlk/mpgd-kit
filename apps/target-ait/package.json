@@ -19,7 +19,8 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@apps-in-toss/web-framework": "^2.10.4"
+    "@apps-in-toss/web-framework": "^2.10.4",
+    "@mpgd/platform": "workspace:*"
   },
   "devDependencies": {
     "@ait-co/devtools": "^0.1.137",

@@ -184,6 +184,51 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
       });
     }
 
+    case 'identity.getSession': {
+      const playerId = currentPlayerId();
+
+      return ok(
+        input,
+        playerId === undefined
+          ? {
+              identityLevel: 'guest',
+              trustLevel: 'local',
+            }
+          : {
+              identityLevel: 'authenticated',
+              playerId,
+              trustLevel: 'server-verified',
+            },
+      );
+    }
+
+    case 'identity.requestUpgrade': {
+      const authenticated = currentPlayerId() !== undefined;
+
+      return ok(input, {
+        status: authenticated ? 'completed' : 'unavailable',
+        reloadExpected: !authenticated,
+      });
+    }
+
+    case 'presentation.getLaunchIntent':
+      return ok(input, { entry: 'home' });
+
+    case 'presentation.requestGameSurface':
+      return ok(input, 'already-fullscreen');
+
+    case 'share.share':
+      return ok(input, { status: 'unavailable' });
+
+    case 'share.readInboundShare':
+      return ok(input, null);
+
+    case 'notifications.getStatus':
+      return ok(input, 'approval-required');
+
+    case 'notifications.requestSubscription':
+      return ok(input, 'unavailable');
+
     case 'commerce.getProducts':
     case 'commerce.getEntitlements':
       return ok(input, []);

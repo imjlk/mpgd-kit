@@ -11,7 +11,18 @@ import {
   type BridgeRpcClient,
   type BridgeRpcEndpoint,
 } from '@mpgd/bridge/orpc';
-import type { PlatformGateway, PlayerIdentity } from '@mpgd/platform';
+import type {
+  IdentitySession,
+  IdentityUpgradeResult,
+  InboundShare,
+  LaunchIntent,
+  NotificationSubscriptionResult,
+  NotificationSubscriptionStatus,
+  PlatformGateway,
+  PlayerIdentity,
+  PresentationResult,
+  ShareResult,
+} from '@mpgd/platform';
 
 export const defaultDevvitBridgeEndpoint = '/api/mpgd/bridge';
 export const defaultDevvitRpcEndpoint = defaultBridgeRpcEndpoint;
@@ -96,6 +107,30 @@ export function createDevvitPlatformGateway(
         rememberStorageFallbackNamespace(player);
         return player;
       },
+      getSession: async () => {
+        const session = await request<IdentitySession>('identity.getSession', {});
+        rememberStorageFallbackNamespace(
+          session.playerId === undefined ? null : { playerId: session.playerId },
+        );
+        return session;
+      },
+      requestUpgrade: (payload) =>
+        request<IdentityUpgradeResult>('identity.requestUpgrade', payload),
+    },
+    presentation: {
+      getLaunchIntent: () => request<LaunchIntent>('presentation.getLaunchIntent', {}),
+      requestGameSurface: (payload) =>
+        request<PresentationResult>('presentation.requestGameSurface', payload),
+    },
+    sharing: {
+      share: (payload) => request<ShareResult>('share.share', payload),
+      readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
+    },
+    notifications: {
+      getStatus: (topic) =>
+        request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
+      requestSubscription: (topic) =>
+        request<NotificationSubscriptionResult>('notifications.requestSubscription', { topic }),
     },
     commerce: {
       getProducts: () => request('commerce.getProducts', {}),
@@ -407,6 +442,41 @@ export function createDevvitSandboxBridge(): DevvitBridge {
             playerId: 'reddit-sandbox-player',
             displayName: 'Reddit Sandbox Player',
           });
+
+        case 'identity.getSession':
+          return ok(input, {
+            identityLevel: 'authenticated',
+            playerId: 'reddit-sandbox-player',
+            trustLevel: 'server-verified',
+          });
+
+        case 'identity.requestUpgrade':
+          return ok(input, {
+            status: 'completed',
+            reloadExpected: false,
+          });
+
+        case 'presentation.getLaunchIntent':
+          return ok(input, {
+            entry: 'home',
+          });
+
+        case 'presentation.requestGameSurface':
+          return ok(input, 'already-fullscreen');
+
+        case 'share.share':
+          return ok(input, {
+            status: 'unavailable',
+          });
+
+        case 'share.readInboundShare':
+          return ok(input, null);
+
+        case 'notifications.getStatus':
+          return ok(input, 'approval-required');
+
+        case 'notifications.requestSubscription':
+          return ok(input, 'unavailable');
 
         case 'commerce.getProducts':
         case 'commerce.getEntitlements':
