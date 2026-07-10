@@ -12,6 +12,8 @@ const placementsFile = join(gameRoot, 'mpgd.ad-placements.json');
 const autoCaptureFile = join(fixtureRoot, 'captured-auto-env.json');
 const explicitCaptureFile = join(fixtureRoot, 'captured-explicit-env.json');
 const absoluteCaptureFile = join(fixtureRoot, 'captured-absolute-env.json');
+const paddedCaptureFile = join(fixtureRoot, 'captured-padded-env.json');
+const blankCaptureFile = join(fixtureRoot, 'captured-blank-env.json');
 
 try {
   rmSync(fixtureRoot, { force: true, recursive: true });
@@ -69,6 +71,20 @@ writeFileSync(process.env.MPGD_CAPTURE_FILE, JSON.stringify({
       MPGD_AD_PLACEMENTS_FILE: placementsFile,
     }),
     'explicit absolute',
+  );
+  assertReleaseInputs(
+    runCliCapture(paddedCaptureFile, {
+      MPGD_PRODUCT_CATALOG_FILE: '  mpgd.catalog.json  ',
+      MPGD_AD_PLACEMENTS_FILE: '  mpgd.ad-placements.json  ',
+    }),
+    'padded explicit relative',
+  );
+  assertReleaseInputs(
+    runCliCapture(blankCaptureFile, {
+      MPGD_PRODUCT_CATALOG_FILE: '   ',
+      MPGD_AD_PLACEMENTS_FILE: '   ',
+    }),
+    'blank explicit fallback',
   );
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });

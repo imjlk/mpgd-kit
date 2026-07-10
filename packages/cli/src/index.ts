@@ -1225,8 +1225,8 @@ function resolveGameOwnedMonetizationFiles(
   gameRoot: string,
   baseEnv: NodeJS.ProcessEnv,
 ): NodeJS.ProcessEnv {
-  const configuredCatalog = readOptionalString(baseEnv.MPGD_PRODUCT_CATALOG_FILE);
-  const configuredPlacements = readOptionalString(baseEnv.MPGD_AD_PLACEMENTS_FILE);
+  const configuredCatalog = readConfiguredPath(baseEnv.MPGD_PRODUCT_CATALOG_FILE);
+  const configuredPlacements = readConfiguredPath(baseEnv.MPGD_AD_PLACEMENTS_FILE);
 
   if ((configuredCatalog === undefined) !== (configuredPlacements === undefined)) {
     throw new Error(
@@ -1260,6 +1260,11 @@ function resolveGameOwnedMonetizationFiles(
     MPGD_PRODUCT_CATALOG_FILE: catalogFile,
     MPGD_AD_PLACEMENTS_FILE: placementsFile,
   };
+}
+
+function readConfiguredPath(value: string | undefined): string | undefined {
+  const normalized = value?.trim();
+  return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
 
 function readSourceGitSha(gameRoot: string): string {
