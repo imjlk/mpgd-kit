@@ -1,23 +1,19 @@
 import { existsSync } from 'node:fs';
 import { isAbsolute, resolve } from 'node:path';
 
+import { configuredMonetizationCatalogFilePaths, readConfiguredPath } from '../catalog-paths';
+
 export function normalizeMonetizationCatalogEnv(
   baseEnv: NodeJS.ProcessEnv,
   fallbackBaseDir = process.cwd(),
 ): NodeJS.ProcessEnv {
-  const productCatalogFile = readConfiguredEnvPath(baseEnv.MPGD_PRODUCT_CATALOG_FILE);
-  const adPlacementsFile = readConfiguredEnvPath(baseEnv.MPGD_AD_PLACEMENTS_FILE);
+  const configuredFiles = configuredMonetizationCatalogFilePaths(baseEnv);
 
-  if ((productCatalogFile === undefined) !== (adPlacementsFile === undefined)) {
-    throw new Error(
-      'MPGD_PRODUCT_CATALOG_FILE and MPGD_AD_PLACEMENTS_FILE must be configured together.',
-    );
-  }
-
-  if (productCatalogFile === undefined || adPlacementsFile === undefined) {
+  if (configuredFiles === undefined) {
     return {};
   }
 
+  const { productCatalogFile, adPlacementsFile } = configuredFiles;
   const callerCwd = resolveConfiguredBaseDir(
     baseEnv,
     fallbackBaseDir,
@@ -31,11 +27,6 @@ export function normalizeMonetizationCatalogEnv(
   };
 }
 
-function readConfiguredEnvPath(value: string | undefined): string | undefined {
-  const normalized = value?.trim();
-  return normalized === undefined || normalized.length === 0 ? undefined : normalized;
-}
-
 function resolveConfiguredBaseDir(
   baseEnv: NodeJS.ProcessEnv,
   fallbackBaseDir: string,
@@ -44,8 +35,8 @@ function resolveConfiguredBaseDir(
 ): string {
   const candidates = [
     fallbackBaseDir,
-    readConfiguredEnvPath(baseEnv.INIT_CWD),
-    readConfiguredEnvPath(baseEnv.PWD),
+    readConfiguredPath(baseEnv.INIT_CWD),
+    readConfiguredPath(baseEnv.PWD),
     process.cwd(),
   ];
 

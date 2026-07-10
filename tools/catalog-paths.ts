@@ -17,6 +17,15 @@ export function adPlacementsFilePath(env: NodeJS.ProcessEnv = process.env): stri
 export function monetizationCatalogFilePaths(
   env: NodeJS.ProcessEnv = process.env,
 ): MonetizationCatalogFiles {
+  return configuredMonetizationCatalogFilePaths(env) ?? {
+    productCatalogFile: defaultProductCatalogFile,
+    adPlacementsFile: defaultAdPlacementsFile,
+  };
+}
+
+export function configuredMonetizationCatalogFilePaths(
+  env: NodeJS.ProcessEnv = process.env,
+): MonetizationCatalogFiles | undefined {
   const productCatalogFile = readConfiguredPath(env.MPGD_PRODUCT_CATALOG_FILE);
   const adPlacementsFile = readConfiguredPath(env.MPGD_AD_PLACEMENTS_FILE);
 
@@ -26,13 +35,14 @@ export function monetizationCatalogFilePaths(
     );
   }
 
-  return {
-    productCatalogFile: productCatalogFile ?? defaultProductCatalogFile,
-    adPlacementsFile: adPlacementsFile ?? defaultAdPlacementsFile,
-  };
+  if (productCatalogFile === undefined || adPlacementsFile === undefined) {
+    return undefined;
+  }
+
+  return { productCatalogFile, adPlacementsFile };
 }
 
-function readConfiguredPath(value: string | undefined): string | undefined {
+export function readConfiguredPath(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
