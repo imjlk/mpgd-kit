@@ -12,6 +12,10 @@ export function validateAdPlacementsFile(path = adPlacementsFilePath()) {
   const ids = new Set<string>();
 
   for (const placement of adPlacements.placements) {
+    if (placement.id.trim().length === 0) {
+      throw new Error('Ad placement id must be non-empty.');
+    }
+
     if (ids.has(placement.id)) {
       throw new Error(`Duplicate ad placement id: ${placement.id}`);
     }

@@ -12,6 +12,10 @@ export function validateProductCatalogFile(path = productCatalogFilePath()) {
   const ids = new Set<string>();
 
   for (const product of catalog.products) {
+    if (product.id.trim().length === 0) {
+      throw new Error('Product id must be non-empty.');
+    }
+
     if (ids.has(product.id)) {
       throw new Error(`Duplicate product id: ${product.id}`);
     }

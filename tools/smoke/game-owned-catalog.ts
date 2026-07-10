@@ -13,6 +13,8 @@ import {
 const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-game-catalog-'));
 const catalogFile = join(tempDir, 'mpgd.catalog.json');
 const placementsFile = join(tempDir, 'mpgd.ad-placements.json');
+const blankCatalogFile = join(tempDir, 'blank.catalog.json');
+const blankPlacementsFile = join(tempDir, 'blank.ad-placements.json');
 const previousCatalogFile = process.env.MPGD_PRODUCT_CATALOG_FILE;
 const previousPlacementsFile = process.env.MPGD_AD_PLACEMENTS_FILE;
 
@@ -78,6 +80,44 @@ try {
       ],
     }, null, 2)}\n`,
   );
+  writeFileSync(
+    blankCatalogFile,
+    `${JSON.stringify({
+      version: 'blank-products',
+      products: [
+        {
+          id: '   ',
+          type: 'consumable',
+          grant: {
+            type: 'currency',
+            currency: 'gem',
+            amount: 1,
+          },
+          platformProductIds: {
+            ait: 'ait_blank_product',
+          },
+        },
+      ],
+    }, null, 2)}\n`,
+  );
+  writeFileSync(
+    blankPlacementsFile,
+    `${JSON.stringify({
+      version: 'blank-ads',
+      placements: [
+        {
+          id: '   ',
+          type: 'interstitial',
+          frequencyCap: {
+            cooldownSeconds: 120,
+          },
+          platformPlacementIds: {
+            ait: 'ait_blank_placement',
+          },
+        },
+      ],
+    }, null, 2)}\n`,
+  );
 
   assertHalfConfiguredEnvThrows({
     ...process.env,
@@ -89,6 +129,24 @@ try {
     MPGD_PRODUCT_CATALOG_FILE: undefined,
     MPGD_AD_PLACEMENTS_FILE: placementsFile,
   });
+  assertValidatorFailure(
+    'tools/validate-product-catalog.ts',
+    {
+      ...process.env,
+      MPGD_PRODUCT_CATALOG_FILE: blankCatalogFile,
+      MPGD_AD_PLACEMENTS_FILE: placementsFile,
+    },
+    /Product id must be non-empty/u,
+  );
+  assertValidatorFailure(
+    'tools/validate-ad-placements.ts',
+    {
+      ...process.env,
+      MPGD_PRODUCT_CATALOG_FILE: catalogFile,
+      MPGD_AD_PLACEMENTS_FILE: blankPlacementsFile,
+    },
+    /Ad placement id must be non-empty/u,
+  );
 
   process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
   process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
@@ -189,4 +247,24 @@ function runValidator(script: string): string {
 
   assert.equal(result.status, 0, result.stderr || result.stdout);
   return result.stdout;
+}
+
+function assertValidatorFailure(
+  script: string,
+  env: NodeJS.ProcessEnv,
+  pattern: RegExp,
+): void {
+  const result = spawnSync(process.execPath, ['tools/run-ttsx.mjs', script], {
+    cwd: process.cwd(),
+    encoding: 'utf8',
+    env,
+  });
+  const output = result.stderr || result.stdout;
+
+  if (result.error !== undefined) {
+    throw result.error;
+  }
+
+  assert.notEqual(result.status, 0, `Expected ${script} to fail.`);
+  assert.match(output, pattern);
 }
