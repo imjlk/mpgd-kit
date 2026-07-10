@@ -1,6 +1,6 @@
 import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform';
 
-import type { EffectiveTargetConfig } from './effective';
+import type { EffectiveTargetConfig } from './effective.js';
 
 export type PlatformFeature =
   | 'iap'
