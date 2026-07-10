@@ -1185,6 +1185,7 @@ function createTargetCommandEnv(values: TargetCommandEnvInput): NodeJS.ProcessEn
   const targetsFile = path.resolve(
     readOptionalString(values['targets-file']) ?? 'mpgd.targets.json',
   );
+  const gameRoot = path.dirname(targetsFile);
   const kitPath = resolveKitPathForTarget(values);
   const resolvedTargetsFile = readOptionalString(values['resolved-targets-file']);
   const preparedTargetsFile = preparePlatformTargetsFile({
@@ -1197,9 +1198,97 @@ function createTargetCommandEnv(values: TargetCommandEnvInput): NodeJS.ProcessEn
 
   return {
     ...process.env,
+    ...createGameOwnedReleaseEnv(gameRoot, process.env),
     MPGD_KIT_PATH: kitPath,
     MPGD_PLATFORM_TARGETS_FILE: preparedTargetsFile,
   };
+}
+
+function createGameOwnedReleaseEnv(
+  gameRoot: string,
+  baseEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const monetizationFiles = resolveGameOwnedMonetizationFiles(gameRoot, baseEnv);
+  const sourceGitSha = readOptionalString(baseEnv.MPGD_SOURCE_GIT_SHA)
+    ?? readSourceGitSha(gameRoot);
+  const appVersion = readOptionalString(baseEnv.APP_VERSION)
+    ?? readGamePackageVersion(gameRoot);
+
+  return {
+    ...monetizationFiles,
+    MPGD_SOURCE_GIT_SHA: sourceGitSha,
+    ...(appVersion === undefined ? {} : { APP_VERSION: appVersion }),
+  };
+}
+
+function resolveGameOwnedMonetizationFiles(
+  gameRoot: string,
+  baseEnv: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const configuredCatalog = readOptionalString(baseEnv.MPGD_PRODUCT_CATALOG_FILE);
+  const configuredPlacements = readOptionalString(baseEnv.MPGD_AD_PLACEMENTS_FILE);
+
+  if ((configuredCatalog === undefined) !== (configuredPlacements === undefined)) {
+    throw new Error(
+      'MPGD_PRODUCT_CATALOG_FILE and MPGD_AD_PLACEMENTS_FILE must be configured together.',
+    );
+  }
+
+  if (configuredCatalog !== undefined && configuredPlacements !== undefined) {
+    return {
+      MPGD_PRODUCT_CATALOG_FILE: path.resolve(configuredCatalog),
+      MPGD_AD_PLACEMENTS_FILE: path.resolve(configuredPlacements),
+    };
+  }
+
+  const catalogFile = path.join(gameRoot, 'mpgd.catalog.json');
+  const placementsFile = path.join(gameRoot, 'mpgd.ad-placements.json');
+  const hasCatalog = existsSync(catalogFile);
+  const hasPlacements = existsSync(placementsFile);
+
+  if (hasCatalog !== hasPlacements) {
+    throw new Error(
+      `Game target builds must provide both mpgd.catalog.json and mpgd.ad-placements.json: ${gameRoot}`,
+    );
+  }
+
+  if (!hasCatalog) {
+    return {};
+  }
+
+  return {
+    MPGD_PRODUCT_CATALOG_FILE: catalogFile,
+    MPGD_AD_PLACEMENTS_FILE: placementsFile,
+  };
+}
+
+function readSourceGitSha(gameRoot: string): string {
+  const result = spawnSync('git', ['-C', gameRoot, 'rev-parse', '--short', 'HEAD'], {
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+  });
+
+  if (result.error !== undefined || result.status !== 0) {
+    return 'uncommitted';
+  }
+
+  return result.stdout.trim() || 'uncommitted';
+}
+
+function readGamePackageVersion(gameRoot: string): string | undefined {
+  const packageFile = path.join(gameRoot, 'package.json');
+
+  if (!existsSync(packageFile)) {
+    return undefined;
+  }
+
+  const packageJson = readJsonForCli(packageFile);
+
+  if (typeof packageJson !== 'object' || packageJson === null || Array.isArray(packageJson)) {
+    return undefined;
+  }
+
+  return readOptionalString((packageJson as { readonly version?: unknown }).version);
 }
 
 function preparePlatformTargetsFile(input: {
