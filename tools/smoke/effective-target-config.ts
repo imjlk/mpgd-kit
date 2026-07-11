@@ -1,8 +1,16 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { EffectiveTargetConfig, TargetIntegrationConfig } from '@mpgd/target-config';
 
 // Runtime source import is intentional: smoke runs before package dist is rebuilt.
 import { targetIntegrations } from '../../packages/target-config/src/runtime';
-import { validateEffectiveTargetConfigMatrix } from '../target/effective-config';
+import {
+  validateEffectiveTargetConfigMatrix,
+  writeEffectiveTargetConfigs,
+} from '../target/effective-config';
+import { assertPlatformTargetsConfig } from '../target/schemas';
 
 const matrix = validateEffectiveTargetConfigMatrix();
 const webStoreIntegrationConfig = {
@@ -60,7 +68,91 @@ for (const expectedTarget of Object.keys(expectedIntegrations)) {
   }
 }
 
+verifyGameOwnedIntegrationOverrides();
+
 console.log(`Effective target config smoke passed: ${Object.keys(matrix.targets).join(', ')}`);
+
+function verifyGameOwnedIntegrationOverrides(): void {
+  const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-target-integrations-'));
+  const targetsPath = join(tempDir, 'mpgd.targets.json');
+  const outputDir = join(tempDir, 'artifacts');
+  const previousTargetsPath = process.env.MPGD_PLATFORM_TARGETS_FILE;
+  const platformTargets = {
+    targets: {
+      reddit: {
+        kind: 'devvit-web',
+        gameApp: '.',
+        wrapperApp: '.',
+        adapter: 'devvit',
+        webDir: '.',
+        artifact: 'devvit',
+        integrations: {
+          notifications: 'disabled',
+          presentationMode: 'fullscreen',
+        },
+      },
+    },
+  } as const;
+
+  assertPlatformTargetsConfig(platformTargets);
+  const invalidPlatformTargets = {
+    targets: {
+      reddit: {
+        ...platformTargets.targets.reddit,
+        integrations: {
+          notifications: 'not-a-readiness-state',
+        },
+      },
+    },
+  } as const;
+
+  assertThrows(() => assertPlatformTargetsConfig(invalidPlatformTargets));
+
+  writeFileSync(targetsPath, `${JSON.stringify(invalidPlatformTargets, null, 2)}\n`);
+  process.env.MPGD_PLATFORM_TARGETS_FILE = targetsPath;
+  assertThrows(() => writeEffectiveTargetConfigs({ targets: ['reddit'], outputDir }));
+
+  writeFileSync(targetsPath, `${JSON.stringify(platformTargets, null, 2)}\n`);
+
+  try {
+    writeEffectiveTargetConfigs({
+      targets: ['reddit'],
+      outputDir,
+    });
+    const artifact = JSON.parse(
+      readFileSync(join(outputDir, 'reddit.json'), 'utf8'),
+    ) as EffectiveTargetConfig;
+
+    assertEqual(
+      artifact.integrations.identityUpgrade,
+      'configuration-required',
+      'reddit identity upgrade should inherit the generic target config',
+    );
+    assertEqual(
+      artifact.integrations.sharing,
+      'configuration-required',
+      'reddit sharing should inherit the generic target config',
+    );
+    assertEqual(
+      artifact.integrations.notifications,
+      'disabled',
+      'reddit notifications should use the game-owned target override',
+    );
+    assertEqual(
+      artifact.integrations.presentationMode,
+      'fullscreen',
+      'reddit presentation mode should use the game-owned target override',
+    );
+  } finally {
+    if (previousTargetsPath === undefined) {
+      delete process.env.MPGD_PLATFORM_TARGETS_FILE;
+    } else {
+      process.env.MPGD_PLATFORM_TARGETS_FILE = previousTargetsPath;
+    }
+
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
 
 function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): void {
   const expectedIntegrationConfig = expectedIntegrations[target];
@@ -149,4 +241,14 @@ function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(`${message}. Expected ${String(expected)}, got ${String(actual)}.`);
   }
+}
+
+function assertThrows(callback: () => void): void {
+  try {
+    callback();
+  } catch {
+    return;
+  }
+
+  throw new Error('Expected callback to throw.');
 }

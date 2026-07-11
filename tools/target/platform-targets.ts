@@ -73,6 +73,7 @@ function assertPlatformTargetConfigShape(
   assertTargetKind(input.kind, target);
   assertString(input.gameApp, `${target}.gameApp`);
   assertString(input.adapter, `${target}.adapter`);
+  assertTargetIntegrations(input.integrations, target);
 
   switch (input.kind) {
     case 'web':
@@ -90,6 +91,50 @@ function assertPlatformTargetConfigShape(
       assertString(input.webDir, `${target}.webDir`);
       assertString(input.artifact, `${target}.artifact`);
       break;
+  }
+}
+
+function assertTargetIntegrations(input: unknown, target: string): void {
+  if (input === undefined) {
+    return;
+  }
+
+  assertRecord(input, `${target}.integrations`);
+
+  for (const integration of [
+    'identityUpgrade',
+    'presentation',
+    'sharing',
+    'inboundShare',
+    'notifications',
+  ] as const) {
+    const state = input[integration];
+
+    if (state !== undefined) {
+      assertIntegrationAvailabilityState(state, `${target}.integrations.${integration}`);
+    }
+  }
+
+  const presentationMode = input.presentationMode;
+
+  if (
+    presentationMode !== undefined
+    && presentationMode !== 'fullscreen'
+    && presentationMode !== 'inline-expanded'
+  ) {
+    throw new Error(`${target}.integrations.presentationMode has an unsupported value.`);
+  }
+}
+
+function assertIntegrationAvailabilityState(input: unknown, label: string): void {
+  if (
+    input !== 'available'
+    && input !== 'disabled'
+    && input !== 'approval-required'
+    && input !== 'configuration-required'
+    && input !== 'unsupported'
+  ) {
+    throw new Error(`${label} has an unsupported value.`);
   }
 }
 

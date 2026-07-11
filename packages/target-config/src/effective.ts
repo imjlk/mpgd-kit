@@ -28,6 +28,7 @@ export interface EffectivePlatformTargetMetadata {
   readonly artifact?: string;
   readonly output?: string;
   readonly webDir?: string;
+  readonly integrations?: Partial<TargetIntegrationConfig>;
 }
 
 export interface EffectiveTargetConfigSources {
@@ -134,6 +135,10 @@ export function createEffectiveTargetConfig(
     createEffectiveAdPlacementConfig(input.target, input.config, placement),
   );
   const leaderboardEnabled = input.config.features.leaderboard;
+  const integrations = normalizeTargetIntegrationConfig({
+    ...normalizeTargetIntegrationConfig(input.config.integrations),
+    ...input.platformTarget?.integrations,
+  });
 
   return {
     version: effectiveTargetConfigVersion({
@@ -146,7 +151,7 @@ export function createEffectiveTargetConfig(
     release: input.config.release,
     features: input.config.features,
     capabilities: input.config.capabilities,
-    integrations: normalizeTargetIntegrationConfig(input.config.integrations),
+    integrations,
     policy: input.config.policy,
     sources: {
       targetConfig: input.targetConfigVersion,

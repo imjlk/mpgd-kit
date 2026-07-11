@@ -425,6 +425,21 @@ const androidEffectiveConfig = createEffectiveTargetConfig({
   catalog: productCatalog,
   adPlacements,
 });
+const androidTargetOverrideEffectiveConfig = createEffectiveTargetConfig({
+  target: 'android',
+  targetConfigVersion: targetConfigMatrix.version,
+  config: androidConfig,
+  catalog: productCatalog,
+  adPlacements,
+  platformTarget: {
+    kind: 'capacitor-android',
+    adapter: 'capacitor',
+    integrations: {
+      notifications: 'disabled',
+      presentationMode: 'inline-expanded',
+    },
+  },
+});
 const androidGateway = withTargetAvailability(gateway, androidConfig, {
   effectiveConfig: androidEffectiveConfig,
   resolveAdPlacementType,
@@ -433,6 +448,14 @@ const androidRuntime = await androidGateway.getTargetRuntime();
 
 assertEqual(androidRuntime.presentationMode, 'fullscreen');
 assertEqual(androidEffectiveConfig.integrations.identityUpgrade, 'available');
+assertDeepEqual(androidTargetOverrideEffectiveConfig.integrations, {
+  identityUpgrade: 'available',
+  presentation: 'available',
+  sharing: 'available',
+  inboundShare: 'available',
+  notifications: 'disabled',
+  presentationMode: 'inline-expanded',
+});
 assertEqual(androidRuntime.integrations.identityUpgrade.state, 'available');
 assertEqual(androidRuntime.integrations.presentation.state, 'available');
 assertEqual(androidRuntime.integrations.sharing.state, 'available');

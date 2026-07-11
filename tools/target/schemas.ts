@@ -1,5 +1,7 @@
 import typia from 'typia';
 
+import type { TargetIntegrationConfig } from '@mpgd/target-config';
+
 export type TargetKind =
   | 'web'
   | 'capacitor-android'
@@ -12,6 +14,7 @@ export interface BaseTargetConfig {
   readonly gameApp: string;
   readonly adapter: string;
   readonly metadata?: TargetReleaseMetadata;
+  readonly integrations?: Partial<TargetIntegrationConfig>;
 }
 
 export interface TargetReleaseMetadata {
