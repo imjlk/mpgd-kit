@@ -11,6 +11,8 @@ import {
 import {
   getTargetConfig,
   isTargetConfiguredGateway,
+  normalizeTargetIntegrationConfig,
+  targetIntegrations,
   withTargetAvailability,
   type PlatformFeature,
   type TargetConfigMatrix,
@@ -98,6 +100,65 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       `${configTarget} ${feature} enabled state should follow target config and capability`,
     );
   }
+
+  const integrationConfig = normalizeTargetIntegrationConfig(config.integrations);
+  const expectedPresentationMode = integrationConfig.presentationMode;
+
+  assertEqual(
+    runtime.presentationMode,
+    expectedPresentationMode,
+    `${configTarget} presentation mode should match its runtime surface`,
+  );
+
+  for (const integration of targetIntegrations) {
+    const integrationRuntime = runtime.integrations[integration];
+    const expectedConfiguredState = integrationConfig[integration];
+    const expectedAdapterSupported = supportsIntegration(targetGateway.gateway, integration);
+    const expectedRuntimeState = expectedAdapterSupported ? expectedConfiguredState : 'unsupported';
+
+    assertEqual(
+      integrationRuntime.configuredState,
+      expectedConfiguredState,
+      `${configTarget} ${integration} configured state should match`,
+    );
+    assertEqual(
+      integrationRuntime.adapterSupported,
+      expectedAdapterSupported,
+      `${configTarget} ${integration} adapter support should match gateway methods`,
+    );
+    assertEqual(
+      integrationRuntime.state,
+      expectedRuntimeState,
+      `${configTarget} ${integration} runtime state should include adapter support`,
+    );
+  }
+
+  assertEqual(
+    gateway.identity.getSession !== undefined,
+    targetGateway.gateway.identity.getSession !== undefined,
+    `${configTarget} should preserve identity session lookup`,
+  );
+  assertEqual(
+    gateway.identity.requestUpgrade !== undefined,
+    runtime.integrations.identityUpgrade.state === 'available',
+    `${configTarget} identity upgrade should be clamped by availability`,
+  );
+  assertEqual(
+    gateway.presentation !== undefined,
+    runtime.integrations.presentation.state === 'available',
+    `${configTarget} presentation should be clamped by availability`,
+  );
+  assertEqual(
+    gateway.sharing !== undefined,
+    runtime.integrations.sharing.state === 'available' ||
+      runtime.integrations.inboundShare.state === 'available',
+    `${configTarget} sharing should be clamped by outbound and inbound availability`,
+  );
+  assertEqual(
+    gateway.notifications !== undefined,
+    runtime.integrations.notifications.state === 'available',
+    `${configTarget} notifications should be clamped by availability`,
+  );
 
   const expectedLocale =
     config.features.localization && runtime.features.localization.capabilitySupported ? 'ko' : 'en';
@@ -235,6 +296,16 @@ async function verifyBrowserOnlyFallbacks(
     'leaderboard should be target-disabled',
   );
   assertEqual(
+    runtime.integrations.sharing.state,
+    'unsupported',
+    'browser outbound sharing should require Web Share or clipboard support',
+  );
+  assertEqual(
+    runtime.integrations.inboundShare.state,
+    'available',
+    'browser inbound sharing should remain available through URL parsing',
+  );
+  assertEqual(
     runtime.features.localization.reason,
     'available',
     'localization should be available',
@@ -316,6 +387,19 @@ function createTargetGateway(target: PlatformTarget): {
             displayName: `${target} Player`,
           };
         },
+        async getSession() {
+          return {
+            identityLevel: 'platform-anonymous',
+            playerId: `${target}-player`,
+            trustLevel: 'platform-asserted',
+          };
+        },
+        async requestUpgrade() {
+          return {
+            status: 'unavailable',
+            reloadExpected: false,
+          };
+        },
       },
       commerce: {
         async getProducts() {
@@ -371,6 +455,34 @@ function createTargetGateway(target: PlatformTarget): {
         },
         async save() {},
       },
+      presentation: {
+        async getLaunchIntent() {
+          return {
+            entry: 'home',
+          };
+        },
+        async requestGameSurface() {
+          return 'already-fullscreen';
+        },
+      },
+      sharing: {
+        async share() {
+          return {
+            status: 'shared',
+          };
+        },
+        async readInboundShare() {
+          return null;
+        },
+      },
+      notifications: {
+        async getStatus() {
+          return 'not-subscribed';
+        },
+        async requestSubscription() {
+          return 'subscribed';
+        },
+      },
     },
   };
 }
@@ -379,6 +491,30 @@ function platformTargetForConfig(configTarget: (typeof configTargets)[number]): 
   return configTarget === 'web-preview' || configTarget === 'microsoft-store'
     ? 'browser'
     : configTarget;
+}
+
+function supportsIntegration(
+  gateway: PlatformGateway,
+  integration: (typeof targetIntegrations)[number],
+): boolean {
+  switch (integration) {
+    case 'identityUpgrade':
+      return typeof gateway.identity.requestUpgrade === 'function';
+    case 'presentation':
+      return (
+        typeof gateway.presentation?.getLaunchIntent === 'function'
+        && typeof gateway.presentation?.requestGameSurface === 'function'
+      );
+    case 'sharing':
+      return typeof gateway.sharing?.share === 'function';
+    case 'inboundShare':
+      return typeof gateway.sharing?.readInboundShare === 'function';
+    case 'notifications':
+      return (
+        typeof gateway.notifications?.getStatus === 'function'
+        && typeof gateway.notifications?.requestSubscription === 'function'
+      );
+  }
 }
 
 function assertEqual(actual: unknown, expected: unknown, message: string): void {

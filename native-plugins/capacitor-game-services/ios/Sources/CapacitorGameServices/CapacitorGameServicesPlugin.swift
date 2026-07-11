@@ -22,6 +22,29 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
             call.resolve(okResponse(id: id, data: capabilities()))
         case "identity.getPlayer":
             call.resolve(okResponse(id: id, data: player()))
+        case "identity.getSession":
+            call.resolve(okResponse(id: id, data: [
+                "identityLevel": "platform-anonymous",
+                "playerId": "ios-local-player",
+                "trustLevel": "local"
+            ]))
+        case "identity.requestUpgrade":
+            call.resolve(okResponse(id: id, data: [
+                "status": "unavailable",
+                "reloadExpected": false
+            ]))
+        case "presentation.getLaunchIntent":
+            call.resolve(okResponse(id: id, data: ["entry": "home"]))
+        case "presentation.requestGameSurface":
+            call.resolve(okResponse(id: id, data: "already-fullscreen"))
+        case "share.share":
+            call.resolve(okResponse(id: id, data: ["status": "unavailable"]))
+        case "share.readInboundShare":
+            call.resolve(okResponse(id: id, data: NSNull()))
+        case "notifications.getStatus":
+            call.resolve(okResponse(id: id, data: "configuration-required"))
+        case "notifications.requestSubscription":
+            call.resolve(okResponse(id: id, data: "unavailable"))
         case "commerce.getProducts":
             call.resolve(okResponse(id: id, data: [product()]))
         case "commerce.purchase":

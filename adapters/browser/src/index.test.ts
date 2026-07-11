@@ -13,12 +13,92 @@ describe('adapter-browser', () => {
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
       nativeAds: false,
       cloudSave: true,
+      socialShare: false,
       localizedContent: true,
     });
+    expect(gateway.sharing?.share).toBeUndefined();
+    expect(gateway.sharing?.readInboundShare).toBeTypeOf('function');
     await expect(gateway.identity.getPlayer()).resolves.toEqual({
       playerId: 'browser-player',
       displayName: 'Browser Player',
     });
+  });
+
+  it('exposes a local guest session and fullscreen launch intent', async () => {
+    const gateway = createBrowserPlatformGateway({
+      locationHref:
+        'https://game.example/play?entry=friend-challenge&puzzleId=daily-1&challengeToken=signed-token',
+    });
+
+    await expect(gateway.identity.getSession?.()).resolves.toEqual({
+      identityLevel: 'guest',
+      playerId: 'browser-player',
+      trustLevel: 'local',
+    });
+    await expect(gateway.presentation?.getLaunchIntent()).resolves.toEqual({
+      entry: 'friend-challenge',
+      puzzleId: 'daily-1',
+      referralToken: 'signed-token',
+    });
+    await expect(
+      gateway.presentation?.requestGameSurface({ entry: 'daily', puzzleId: 'daily-1' }),
+    ).resolves.toBe('already-fullscreen');
+    await expect(gateway.sharing?.readInboundShare?.()).resolves.toEqual({
+      puzzleId: 'daily-1',
+      challengeToken: 'signed-token',
+    });
+  });
+
+  it('uses Web Share and falls back to clipboard', async () => {
+    const shares: ShareData[] = [];
+    const clipboard: string[] = [];
+    const shareIntent = {
+      kind: 'friend-challenge',
+      title: 'Daily challenge',
+      text: 'Can you beat me?',
+      deepLink: 'https://game.example/?challengeToken=signed-token',
+    } as const;
+    const shareGateway = createBrowserPlatformGateway({
+      async share(data) {
+        shares.push(data);
+      },
+    });
+    const clipboardGateway = createBrowserPlatformGateway({
+      async writeClipboardText(text) {
+        clipboard.push(text);
+      },
+    });
+
+    await expect(shareGateway.getCapabilities()).resolves.toMatchObject({ socialShare: true });
+    await expect(shareGateway.sharing?.share?.(shareIntent)).resolves.toEqual({
+      status: 'shared',
+    });
+    await expect(clipboardGateway.getCapabilities()).resolves.toMatchObject({ socialShare: true });
+    await expect(clipboardGateway.sharing?.share?.(shareIntent)).resolves.toEqual({
+      status: 'shared',
+    });
+    expect(shares).toEqual([
+      {
+        title: 'Daily challenge',
+        text: 'Can you beat me?',
+        url: 'https://game.example/?challengeToken=signed-token',
+      },
+    ]);
+    expect(clipboard).toEqual([
+      'Can you beat me?\nhttps://game.example/?challengeToken=signed-token',
+    ]);
+  });
+
+  it('ignores malformed nested inbound share data and reports notifications unsupported', async () => {
+    const gateway = createBrowserPlatformGateway({
+      locationHref: 'https://game.example/?queryParams=%7Binvalid',
+    });
+
+    await expect(gateway.sharing?.readInboundShare?.()).resolves.toBeNull();
+    await expect(gateway.notifications?.getStatus('daily-ready')).resolves.toBe('unsupported');
+    await expect(
+      gateway.notifications?.requestSubscription('daily-ready'),
+    ).resolves.toBe('unavailable');
   });
 
   it('persists save data through localStorage when available', async () => {

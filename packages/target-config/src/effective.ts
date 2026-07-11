@@ -5,15 +5,17 @@ import type {
   ProductCatalogEntry,
 } from '@mpgd/catalog';
 
-import type {
-  FeatureAvailabilityReason,
-  TargetCapabilityConfig,
-  TargetConfig,
-  TargetConfigMatrix,
-  TargetFeatureConfig,
-  TargetPolicyRestrictions,
-  TargetReleaseConfig,
-  TargetRuntimeKind,
+import {
+  normalizeTargetIntegrationConfig,
+  type FeatureAvailabilityReason,
+  type TargetCapabilityConfig,
+  type TargetConfig,
+  type TargetConfigMatrix,
+  type TargetFeatureConfig,
+  type TargetIntegrationConfig,
+  type TargetPolicyRestrictions,
+  type TargetReleaseConfig,
+  type TargetRuntimeKind,
 } from './runtime';
 
 export type EffectiveAvailabilityReason =
@@ -89,6 +91,7 @@ export interface EffectiveTargetConfig {
   readonly release: TargetReleaseConfig;
   readonly features: TargetFeatureConfig;
   readonly capabilities: TargetCapabilityConfig;
+  readonly integrations: TargetIntegrationConfig;
   readonly policy: TargetPolicyRestrictions;
   readonly sources: EffectiveTargetConfigSources;
   readonly monetization: EffectiveMonetizationConfig;
@@ -143,6 +146,7 @@ export function createEffectiveTargetConfig(
     release: input.config.release,
     features: input.config.features,
     capabilities: input.config.capabilities,
+    integrations: normalizeTargetIntegrationConfig(input.config.integrations),
     policy: input.config.policy,
     sources: {
       targetConfig: input.targetConfigVersion,

@@ -1,5 +1,5 @@
 import type { MpgdLocale } from '@mpgd/i18n';
-import type { PlayerIdentity } from '@mpgd/platform';
+import type { IdentitySession, LaunchIntent, PlayerIdentity } from '@mpgd/platform';
 import type {
   TargetConfiguredGateway,
   TargetRuntimeSnapshot,
@@ -13,6 +13,8 @@ export interface StarterContext {
   readonly runtime: TargetRuntimeSnapshot;
   readonly viewport: TargetViewportPlan;
   readonly player: PlayerIdentity;
+  readonly identitySession: IdentitySession;
+  readonly launchIntent: LaunchIntent;
   readonly locale: MpgdLocale;
   readonly gameServices: StarterGameServices;
 }

@@ -102,8 +102,95 @@ export interface PlayerIdentity {
   readonly avatarUrl?: string;
 }
 
+export type IdentityLevel = 'guest' | 'platform-anonymous' | 'authenticated';
+
+export type IdentityTrustLevel = 'local' | 'platform-asserted' | 'server-verified';
+
+export interface IdentitySession {
+  readonly identityLevel: IdentityLevel;
+  readonly playerId?: string;
+  readonly trustLevel: IdentityTrustLevel;
+}
+
+export type IdentityUpgradeReason = 'save' | 'leaderboard' | 'share' | 'notifications';
+
+export interface IdentityUpgradeResult {
+  readonly status: 'completed' | 'cancelled' | 'unavailable';
+  readonly reloadExpected: boolean;
+}
+
 export interface IdentityAdapter {
   getPlayer(): Promise<PlayerIdentity | null>;
+  getSession?(): Promise<IdentitySession>;
+  requestUpgrade?(input: {
+    readonly reason: IdentityUpgradeReason;
+  }): Promise<IdentityUpgradeResult>;
+}
+
+export type LaunchEntry =
+  | 'home'
+  | 'daily'
+  | 'practice'
+  | 'free-play'
+  | 'continue'
+  | 'leaderboard'
+  | 'friend-challenge';
+
+export interface LaunchIntent {
+  readonly entry: LaunchEntry;
+  readonly puzzleId?: string;
+  readonly referralToken?: string;
+}
+
+export type PresentationResult = 'opened' | 'already-fullscreen' | 'unavailable';
+
+export interface PresentationAdapter {
+  getLaunchIntent(): Promise<LaunchIntent>;
+  requestGameSurface(intent: LaunchIntent): Promise<PresentationResult>;
+}
+
+export interface SharePayload {
+  readonly puzzleId?: string;
+  readonly challengeToken?: string;
+}
+
+export interface ShareIntent {
+  readonly kind: 'daily-result' | 'friend-challenge' | 'invite';
+  readonly title: string;
+  readonly text: string;
+  readonly deepLink: string;
+  readonly payload?: SharePayload;
+  readonly previewImageUrl?: string;
+}
+
+export interface ShareResult {
+  readonly status: 'shared' | 'cancelled' | 'unavailable';
+}
+
+export interface InboundShare {
+  readonly puzzleId?: string;
+  readonly challengeToken?: string;
+}
+
+export interface ShareAdapter {
+  share?(intent: ShareIntent): Promise<ShareResult>;
+  readInboundShare?(): Promise<InboundShare | null>;
+}
+
+export type NotificationTopic = 'daily-ready' | 'streak-at-risk' | 'friend-challenge';
+
+export type NotificationSubscriptionStatus =
+  | 'subscribed'
+  | 'not-subscribed'
+  | 'approval-required'
+  | 'configuration-required'
+  | 'unsupported';
+
+export type NotificationSubscriptionResult = 'subscribed' | 'rejected' | 'unavailable';
+
+export interface NotificationSubscriptionAdapter {
+  getStatus(topic: NotificationTopic): Promise<NotificationSubscriptionStatus>;
+  requestSubscription(topic: NotificationTopic): Promise<NotificationSubscriptionResult>;
 }
 
 export interface LifecycleAdapter {
@@ -129,6 +216,9 @@ export interface PlatformGateway {
   readonly leaderboard: LeaderboardAdapter;
   readonly lifecycle: LifecycleAdapter;
   readonly storage: StorageAdapter;
+  readonly presentation?: PresentationAdapter;
+  readonly sharing?: ShareAdapter;
+  readonly notifications?: NotificationSubscriptionAdapter;
 }
 
 export function createUnsupportedCapabilities(): PlatformCapabilities {

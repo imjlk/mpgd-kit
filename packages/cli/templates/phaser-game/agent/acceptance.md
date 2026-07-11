@@ -12,6 +12,8 @@ pnpm --dir ../mpgd-kit mpgd target doctor --targets-file "$PWD/mpgd.targets.json
 
 For Apps in Toss changes, use the apps-in-toss MCP before implementation and
 keep SDK calls inside adapters or target wrappers.
+Resolve identity and launch intents during bootstrap, treat inbound share data as
+untrusted, and keep notification delivery on the server.
 
 For Reddit Devvit changes, keep Devvit SDK calls inside the target wrapper and
 continue to expose game-facing behavior through `PlatformGateway`. The Devvit

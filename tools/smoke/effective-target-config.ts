@@ -1,16 +1,88 @@
-import type { EffectiveTargetConfig } from '@mpgd/target-config';
+import type { EffectiveTargetConfig, TargetIntegrationConfig } from '@mpgd/target-config';
 
+// Runtime source import is intentional: smoke runs before package dist is rebuilt.
+import { targetIntegrations } from '../../packages/target-config/src/runtime';
 import { validateEffectiveTargetConfigMatrix } from '../target/effective-config';
 
 const matrix = validateEffectiveTargetConfigMatrix();
+const webStoreIntegrationConfig = {
+  identityUpgrade: 'disabled',
+  presentation: 'available',
+  sharing: 'available',
+  inboundShare: 'available',
+  notifications: 'unsupported',
+  presentationMode: 'fullscreen',
+} as const satisfies TargetIntegrationConfig;
+const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
+  'web-preview': webStoreIntegrationConfig,
+  'microsoft-store': webStoreIntegrationConfig,
+  android: {
+    identityUpgrade: 'configuration-required',
+    presentation: 'available',
+    sharing: 'configuration-required',
+    inboundShare: 'configuration-required',
+    notifications: 'configuration-required',
+    presentationMode: 'fullscreen',
+  },
+  ios: {
+    identityUpgrade: 'configuration-required',
+    presentation: 'available',
+    sharing: 'configuration-required',
+    inboundShare: 'configuration-required',
+    notifications: 'configuration-required',
+    presentationMode: 'fullscreen',
+  },
+  ait: {
+    identityUpgrade: 'configuration-required',
+    presentation: 'available',
+    sharing: 'available',
+    inboundShare: 'available',
+    notifications: 'configuration-required',
+    presentationMode: 'fullscreen',
+  },
+  reddit: {
+    identityUpgrade: 'configuration-required',
+    presentation: 'configuration-required',
+    sharing: 'configuration-required',
+    inboundShare: 'configuration-required',
+    notifications: 'approval-required',
+    presentationMode: 'inline-expanded',
+  },
+};
 
 for (const [target, config] of Object.entries(matrix.targets)) {
   verifyEffectiveConfig(target, config);
 }
 
+for (const expectedTarget of Object.keys(expectedIntegrations)) {
+  if (matrix.targets[expectedTarget] === undefined) {
+    throw new Error(`Stale integration expectation for removed target ${expectedTarget}.`);
+  }
+}
+
 console.log(`Effective target config smoke passed: ${Object.keys(matrix.targets).join(', ')}`);
 
 function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): void {
+  const expectedIntegrationConfig = expectedIntegrations[target];
+
+  if (expectedIntegrationConfig === undefined) {
+    throw new Error(`Missing expected integration config for ${target}.`);
+  }
+
+  for (const integration of targetIntegrations) {
+    assertEqual(
+      config.integrations[integration],
+      expectedIntegrationConfig[integration],
+      `${target} ${integration} state should match readiness`,
+    );
+  }
+
+  assertEqual(
+    config.integrations.presentationMode,
+    expectedIntegrationConfig.presentationMode,
+    `${target} presentation mode should match its runtime surface`,
+  );
+
   if (target === 'web-preview' || target === 'microsoft-store') {
     assertEqual(
       config.monetization.products.every((product) => !product.enabled),

@@ -414,9 +414,34 @@ describe('adapter-devvit', () => {
       playerId: 'reddit-sandbox-player',
       displayName: 'Reddit Sandbox Player',
     });
+    await expect(gateway.identity.getSession?.()).resolves.toEqual({
+      identityLevel: 'authenticated',
+      playerId: 'reddit-sandbox-player',
+      trustLevel: 'server-verified',
+    });
+    await expect(gateway.presentation?.getLaunchIntent()).resolves.toEqual({ entry: 'home' });
+    await expect(
+      gateway.presentation?.requestGameSurface({ entry: 'daily' }),
+    ).resolves.toBe('unavailable');
+    await expect(
+      gateway.sharing?.share?.({
+        kind: 'invite',
+        title: 'Invite',
+        text: 'Play this post',
+        deepLink: 'https://reddit.com/r/example/comments/post',
+      }),
+    ).resolves.toEqual({ status: 'unavailable' });
+    await expect(gateway.sharing?.readInboundShare?.()).resolves.toBeNull();
+    await expect(gateway.notifications?.getStatus('daily-ready')).resolves.toBe(
+      'approval-required',
+    );
+    await expect(
+      gateway.notifications?.requestSubscription('daily-ready'),
+    ).resolves.toBe('unavailable');
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
       nativeLeaderboard: true,
       cloudSave: true,
+      socialShare: false,
     });
     await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
     await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({

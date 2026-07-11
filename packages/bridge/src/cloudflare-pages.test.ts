@@ -54,6 +54,11 @@ assertEqual(
   false,
   'default capabilities should not expose unauthenticated cloud save',
 );
+assertEqual(
+  (capabilities as { readonly data: { readonly socialShare: boolean } }).data.socialShare,
+  false,
+  'default capabilities should not advertise unavailable server-side sharing',
+);
 
 const client = createBridgeOrpcClient({
   fetch: (url, init) => fetchHandler(new Request(new URL(String(url), baseUrl), init), env),
@@ -66,6 +71,88 @@ const player = await client.request({
 });
 
 assertEqual(player.ok ? player.data : undefined, null, 'default oRPC identity should be anonymous');
+
+const session = await client.request({
+  id: 'session-1',
+  method: 'identity.getSession',
+  payload: {},
+  meta: requestMeta(),
+});
+assertDeepEqual(
+  session.ok ? session.data : undefined,
+  {
+    identityLevel: 'guest',
+    trustLevel: 'local',
+  },
+  'default oRPC identity session should stay local and anonymous',
+);
+
+const platformFlowFallbacks = [
+  {
+    method: 'identity.getSession',
+    payload: {},
+    expected: { identityLevel: 'guest', trustLevel: 'local' },
+  },
+  {
+    method: 'identity.requestUpgrade',
+    payload: { reason: 'save' },
+    expected: { status: 'unavailable', reloadExpected: false },
+  },
+  {
+    method: 'presentation.getLaunchIntent',
+    payload: {},
+    expected: { entry: 'home' },
+  },
+  {
+    method: 'presentation.requestGameSurface',
+    payload: { entry: 'home' },
+    expected: 'already-fullscreen',
+  },
+  {
+    method: 'share.share',
+    payload: {
+      kind: 'daily-result',
+      title: 'Daily result',
+      text: 'Finished the daily puzzle.',
+      deepLink: 'https://game.example/daily',
+    },
+    expected: { status: 'unavailable' },
+  },
+  {
+    method: 'share.readInboundShare',
+    payload: {},
+    expected: null,
+  },
+  {
+    method: 'notifications.getStatus',
+    payload: { topic: 'daily-ready' },
+    expected: 'unsupported',
+  },
+  {
+    method: 'notifications.requestSubscription',
+    payload: { topic: 'daily-ready' },
+    expected: 'unavailable',
+  },
+] as const satisfies readonly {
+  readonly method: BridgeRequest['method'];
+  readonly payload: unknown;
+  readonly expected: unknown;
+}[];
+
+for (const [index, fallback] of platformFlowFallbacks.entries()) {
+  const response = await postBridge({
+    id: `platform-flow-${String(index)}`,
+    method: fallback.method,
+    payload: fallback.payload,
+    meta: requestMeta(),
+  });
+
+  assertDeepEqual(
+    response.ok ? response.data : undefined,
+    fallback.expected,
+    `${fallback.method} should return its conservative Pages fallback`,
+  );
+}
 
 const gameServicesResponse = await fetchHandler(
   new Request(`${baseUrl}${defaultCloudflarePagesGameServicesPrefix}/rpc`, {
@@ -232,5 +319,14 @@ function createGameServicesBinding(
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}.`);
+  }
+}
+
+function assertDeepEqual(actual: unknown, expected: unknown, message: string): void {
+  const actualJson = JSON.stringify(actual);
+  const expectedJson = JSON.stringify(expected);
+
+  if (actualJson !== expectedJson) {
+    throw new Error(`${message}: expected ${expectedJson}, received ${actualJson}.`);
   }
 }

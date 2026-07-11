@@ -37,6 +37,10 @@ Do not name blocks after existing games or brands.
 ## Required mpgd Wiring
 
 - `PlatformGateway`
+- bootstrap identity session and launch intent
+- keep identity upgrades and presentation transitions behind optional gateway adapters
+- keep outbound share behind the gateway and treat inbound share payloads as untrusted
+- keep notification subscription behind the gateway and actual delivery on the server
 - effective target config
 - target viewport and orientation policy
 - i18n locale resolution
@@ -53,6 +57,7 @@ Manual playtest:
 
 - Open the starter.
 - Verify the target, player, effective config summary, and backend mode render.
+- Verify bootstrap resolves `identitySession` and `launchIntent` before creating Phaser scenes.
 - Verify the viewport orientation policy renders and does not assume hard locking in WebViews.
 - Start the play scene.
 - Verify the simulation loop advances without scene-local gameplay rules becoming the source of truth.

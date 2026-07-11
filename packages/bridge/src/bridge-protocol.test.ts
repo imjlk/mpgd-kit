@@ -3,6 +3,7 @@ import {
   validBridgeErrorResponse,
   validBridgeOkResponse,
   validBridgeRequest,
+  validNewBridgeRequests,
 } from './fixtures';
 import { assertBridgeRequest, assertBridgeResponse, createBridgeError } from './index';
 
@@ -12,6 +13,13 @@ assertDoesNotThrow(
   () => assertBridgeResponse(validBridgeErrorResponse),
   'error response should pass',
 );
+
+for (const validRequest of validNewBridgeRequests) {
+  assertDoesNotThrow(
+    () => assertBridgeRequest(validRequest),
+    `${validRequest.method} request should pass`,
+  );
+}
 
 for (const invalidRequest of invalidBridgeRequests) {
   assertThrows(() => assertBridgeRequest(invalidRequest), 'invalid request should fail');

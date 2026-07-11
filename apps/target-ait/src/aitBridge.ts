@@ -1,9 +1,21 @@
 import {
+  getTossShareLink,
   getUserKeyForGame,
   isMinVersionSupported,
   openGameCenterLeaderboard,
+  share,
   submitGameCenterLeaderBoardScore,
 } from '@apps-in-toss/web-framework';
+
+// The AIT packager treats workspace dependencies as runtime packages. Keep this
+// shared contract as a source-only type import so it is erased before packaging.
+import type {
+  LaunchEntry,
+  LaunchIntent,
+  ShareResult,
+} from '../../../packages/platform/src/index';
+
+declare const __MPGD_AIT_APP_NAME__: string;
 
 import {
   resolveAitGameIdentity,
@@ -12,6 +24,26 @@ import {
 import type { BridgeRequest, BridgeResponse } from './bridgeTypes';
 
 const storage = new Map<string, unknown>();
+const launchEntries = new Set<LaunchEntry>([
+  'home',
+  'daily',
+  'practice',
+  'free-play',
+  'continue',
+  'leaderboard',
+  'friend-challenge',
+]);
+const defaultAitShareDependencies: AitShareDependencies = {
+  appName: typeof __MPGD_AIT_APP_NAME__ === 'string' ? __MPGD_AIT_APP_NAME__ : 'mpgd-kit',
+  getTossShareLink,
+  share,
+};
+
+export interface AitShareDependencies {
+  readonly appName: string;
+  readonly getTossShareLink: typeof getTossShareLink;
+  readonly share: typeof share;
+}
 
 export interface InstallAitBridgeOptions {
   readonly getUserKeyForGame?: AitGameUserKeyProvider;
@@ -65,6 +97,33 @@ export function installAitBridge(options: InstallAitBridgeOptions = {}): void {
             data: identity.player,
           };
         }
+
+        case 'identity.getSession':
+          return ok(request, await getIdentitySession(gameUserKeyProvider));
+
+        case 'identity.requestUpgrade':
+          return ok(request, {
+            status: 'unavailable',
+            reloadExpected: false,
+          });
+
+        case 'presentation.getLaunchIntent':
+          return ok(request, getLaunchIntent());
+
+        case 'presentation.requestGameSurface':
+          return ok(request, 'already-fullscreen');
+
+        case 'share.share':
+          return ok(request, await shareIntent(request.payload));
+
+        case 'share.readInboundShare':
+          return ok(request, readInboundShare());
+
+        case 'notifications.getStatus':
+          return ok(request, 'configuration-required');
+
+        case 'notifications.requestSubscription':
+          return ok(request, 'unavailable');
 
         case 'commerce.getProducts':
           return {
@@ -225,6 +284,204 @@ function createBridgeError(
       retryable,
     },
   };
+}
+
+function ok(request: BridgeRequest, data: unknown): BridgeResponse {
+  return {
+    id: request.id,
+    ok: true,
+    data,
+  };
+}
+
+async function getIdentitySession(
+  gameUserKeyProvider: AitGameUserKeyProvider,
+): Promise<{
+  readonly identityLevel: 'guest' | 'platform-anonymous';
+  readonly playerId?: string;
+  readonly trustLevel: 'local' | 'platform-asserted';
+}> {
+  const identity = await resolveAitGameIdentity(gameUserKeyProvider);
+
+  if (!identity.ok) {
+    return {
+      identityLevel: 'guest',
+      trustLevel: 'local',
+    };
+  }
+
+  return {
+    identityLevel: 'platform-anonymous',
+    playerId: identity.player.playerId,
+    trustLevel: 'platform-asserted',
+  };
+}
+
+function getLaunchIntent(): LaunchIntent {
+  const params = inboundSearchParams();
+  const challengeToken = nonEmptyParam(params.get('challengeToken'));
+  const puzzleId = nonEmptyParam(params.get('puzzleId'));
+  const requestedEntry = nonEmptyParam(params.get('entry'));
+  let entry: LaunchEntry;
+
+  if (
+    requestedEntry !== undefined
+    && launchEntries.has(requestedEntry as LaunchEntry)
+  ) {
+    entry = requestedEntry as LaunchEntry;
+  } else if (challengeToken === undefined) {
+    entry = 'home';
+  } else {
+    entry = 'friend-challenge';
+  }
+
+  return {
+    entry,
+    ...(puzzleId === undefined ? {} : { puzzleId }),
+    ...(challengeToken === undefined ? {} : { referralToken: challengeToken }),
+  };
+}
+
+export async function shareIntent(
+  payload: unknown,
+  dependencies: AitShareDependencies = defaultAitShareDependencies,
+): Promise<ShareResult> {
+  if (typeof payload !== 'object' || payload === null) {
+    return { status: 'unavailable' };
+  }
+
+  const intent = payload as {
+    readonly text?: unknown;
+    readonly deepLink?: unknown;
+    readonly previewImageUrl?: unknown;
+  };
+
+  if (typeof intent.text !== 'string' || typeof intent.deepLink !== 'string') {
+    return { status: 'unavailable' };
+  }
+
+  const aitDeepLink = toAitDeepLink(intent.deepLink, dependencies.appName);
+
+  if (aitDeepLink === undefined) {
+    return { status: 'unavailable' };
+  }
+
+  try {
+    const tossLink = await dependencies.getTossShareLink(
+      aitDeepLink,
+      typeof intent.previewImageUrl === 'string' && intent.previewImageUrl.startsWith('https://')
+        ? intent.previewImageUrl
+        : undefined,
+    );
+    await dependencies.share({ message: `${intent.text}\n${tossLink}` });
+    return { status: 'shared' };
+  } catch (error) {
+    if (isAbortError(error)) {
+      return { status: 'cancelled' };
+    }
+
+    console.warn('AIT share failed; returning unavailable.', error);
+    return { status: 'unavailable' };
+  }
+}
+
+function readInboundShare(): {
+  readonly puzzleId?: string;
+  readonly challengeToken?: string;
+} | null {
+  const params = inboundSearchParams();
+  const puzzleId = nonEmptyParam(params.get('puzzleId'));
+  const challengeToken = nonEmptyParam(params.get('challengeToken'));
+
+  return puzzleId === undefined && challengeToken === undefined
+    ? null
+    : {
+        ...(puzzleId === undefined ? {} : { puzzleId }),
+        ...(challengeToken === undefined ? {} : { challengeToken }),
+      };
+}
+
+function inboundSearchParams(): URLSearchParams {
+  const params = new URLSearchParams(globalThis.location?.search ?? '');
+  const nested = params.get('queryParams');
+
+  if (nested === null) {
+    return params;
+  }
+
+  try {
+    const parsed = JSON.parse(nested) as unknown;
+
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'string' && !params.has(key)) {
+          params.set(key, value);
+        }
+      }
+    }
+  } catch {
+    // Deep-link payloads are untrusted; malformed nested query data is ignored.
+  }
+
+  return params;
+}
+
+function nonEmptyParam(value: string | null): string | undefined {
+  return value === null || value.length === 0 ? undefined : value;
+}
+
+function toAitDeepLink(input: string, appNameInput: string): string | undefined {
+  const appName = appNameInput.trim();
+
+  if (!/^[A-Za-z0-9-]+$/u.test(appName)) {
+    return undefined;
+  }
+
+  if (input.startsWith('//')) {
+    return undefined;
+  }
+
+  if (input.startsWith('/')) {
+    const baseUrl = new URL('https://mpgd.invalid');
+    const parsed = new URL(input, baseUrl);
+
+    if (parsed.origin !== baseUrl.origin) {
+      return undefined;
+    }
+
+    return `intoss://${appName}${parsed.pathname}${parsed.search}${parsed.hash}`;
+  }
+
+  let parsed: URL;
+
+  try {
+    parsed = new URL(input);
+  } catch {
+    return undefined;
+  }
+
+  if (parsed.protocol === 'intoss:') {
+    return parsed.hostname === appName ? input : undefined;
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return undefined;
+  }
+
+  return `intoss://${appName}${parsed.pathname}${parsed.search}${parsed.hash}`;
+}
+
+function isAbortError(error: unknown): boolean {
+  try {
+    return (
+      typeof error === 'object'
+      && error !== null
+      && 'name' in error
+      && error.name === 'AbortError'
+    );
+  } catch {
+    return false;
+  }
 }
 
 function isGameCenterSupported(): boolean {

@@ -1,5 +1,15 @@
 import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
-import type { PlatformGateway } from '@mpgd/platform';
+import type {
+  IdentitySession,
+  IdentityUpgradeResult,
+  InboundShare,
+  LaunchIntent,
+  NotificationSubscriptionResult,
+  NotificationSubscriptionStatus,
+  PlatformGateway,
+  PresentationResult,
+  ShareResult,
+} from '@mpgd/platform';
 
 export interface GamePlatformBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
@@ -42,6 +52,24 @@ export function createAitPlatformGateway(input: {
     getCapabilities: () => request('runtime.getCapabilities', {}),
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),
+      getSession: () => request<IdentitySession>('identity.getSession', {}),
+      requestUpgrade: (payload) =>
+        request<IdentityUpgradeResult>('identity.requestUpgrade', payload),
+    },
+    presentation: {
+      getLaunchIntent: () => request<LaunchIntent>('presentation.getLaunchIntent', {}),
+      requestGameSurface: (payload) =>
+        request<PresentationResult>('presentation.requestGameSurface', payload),
+    },
+    sharing: {
+      share: (payload) => request<ShareResult>('share.share', payload),
+      readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
+    },
+    notifications: {
+      getStatus: (topic) =>
+        request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
+      requestSubscription: (topic) =>
+        request<NotificationSubscriptionResult>('notifications.requestSubscription', { topic }),
     },
     commerce: {
       getProducts: () => request('commerce.getProducts', {}),
@@ -106,6 +134,41 @@ export function createAitSandboxBridge(): GamePlatformBridge {
             playerId: 'ait-sandbox-player',
             displayName: 'AIT Sandbox Player',
           });
+
+        case 'identity.getSession':
+          return ok(input, {
+            identityLevel: 'platform-anonymous',
+            playerId: 'ait-sandbox-player',
+            trustLevel: 'platform-asserted',
+          });
+
+        case 'identity.requestUpgrade':
+          return ok(input, {
+            status: 'unavailable',
+            reloadExpected: false,
+          });
+
+        case 'presentation.getLaunchIntent':
+          return ok(input, {
+            entry: 'home',
+          });
+
+        case 'presentation.requestGameSurface':
+          return ok(input, 'already-fullscreen');
+
+        case 'share.share':
+          return ok(input, {
+            status: 'shared',
+          });
+
+        case 'share.readInboundShare':
+          return ok(input, null);
+
+        case 'notifications.getStatus':
+          return ok(input, 'configuration-required');
+
+        case 'notifications.requestSubscription':
+          return ok(input, 'unavailable');
 
         case 'commerce.getProducts':
           return ok(input, [

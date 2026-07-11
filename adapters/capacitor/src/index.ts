@@ -1,6 +1,17 @@
 import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
-import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
+import type {
+  IdentitySession,
+  IdentityUpgradeResult,
+  InboundShare,
+  LaunchIntent,
+  NotificationSubscriptionResult,
+  NotificationSubscriptionStatus,
+  PlatformGateway,
+  PlatformTarget,
+  PresentationResult,
+  ShareResult,
+} from '@mpgd/platform';
 
 export interface NativeBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
@@ -39,6 +50,24 @@ export function createCapacitorPlatformGateway(input: {
     getCapabilities: () => request('runtime.getCapabilities', {}),
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),
+      getSession: () => request<IdentitySession>('identity.getSession', {}),
+      requestUpgrade: (payload) =>
+        request<IdentityUpgradeResult>('identity.requestUpgrade', payload),
+    },
+    presentation: {
+      getLaunchIntent: () => request<LaunchIntent>('presentation.getLaunchIntent', {}),
+      requestGameSurface: (payload) =>
+        request<PresentationResult>('presentation.requestGameSurface', payload),
+    },
+    sharing: {
+      share: (payload) => request<ShareResult>('share.share', payload),
+      readInboundShare: () => request<InboundShare | null>('share.readInboundShare', {}),
+    },
+    notifications: {
+      getStatus: (topic) =>
+        request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
+      requestSubscription: (topic) =>
+        request<NotificationSubscriptionResult>('notifications.requestSubscription', { topic }),
     },
     commerce: {
       getProducts: () => request('commerce.getProducts', {}),

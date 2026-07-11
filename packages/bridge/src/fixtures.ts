@@ -12,6 +12,17 @@ export const validBridgeRequest: BridgeRequest = {
   },
 };
 
+export const validNewBridgeRequests = [
+  createBridgeRequest('identity.getSession'),
+  createBridgeRequest('identity.requestUpgrade'),
+  createBridgeRequest('presentation.getLaunchIntent'),
+  createBridgeRequest('presentation.requestGameSurface'),
+  createBridgeRequest('share.share'),
+  createBridgeRequest('share.readInboundShare'),
+  createBridgeRequest('notifications.getStatus'),
+  createBridgeRequest('notifications.requestSubscription'),
+] satisfies readonly BridgeRequest[];
+
 export const validBridgeOkResponse: BridgeResponse<{ readonly nativeAds: boolean }> = {
   id: validBridgeRequest.id,
   ok: true,
@@ -47,3 +58,11 @@ export const invalidBridgeRequests: readonly unknown[] = [
     },
   },
 ];
+
+function createBridgeRequest(method: BridgeRequest['method']): BridgeRequest {
+  return {
+    ...validBridgeRequest,
+    id: `bridge-request-${method}`,
+    method,
+  };
+}

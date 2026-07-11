@@ -160,7 +160,7 @@ export function createMpgdCloudflarePagesBridgeHandler<
           nativeLeaderboard: false,
           achievements: false,
           cloudSave: false,
-          socialShare: true,
+          socialShare: false,
           haptics: false,
           localizedContent: true,
         });
@@ -168,6 +168,40 @@ export function createMpgdCloudflarePagesBridgeHandler<
       case 'identity.getPlayer': {
         return ok(input.bridgeRequest, null);
       }
+
+      case 'identity.getSession':
+        return ok(input.bridgeRequest, {
+          identityLevel: 'guest',
+          trustLevel: 'local',
+        });
+
+      case 'identity.requestUpgrade':
+        return ok(input.bridgeRequest, {
+          status: 'unavailable',
+          reloadExpected: false,
+        });
+
+      case 'presentation.getLaunchIntent':
+        return ok(input.bridgeRequest, {
+          entry: 'home',
+        });
+
+      case 'presentation.requestGameSurface':
+        return ok(input.bridgeRequest, 'already-fullscreen');
+
+      case 'share.share':
+        return ok(input.bridgeRequest, {
+          status: 'unavailable',
+        });
+
+      case 'share.readInboundShare':
+        return ok(input.bridgeRequest, null);
+
+      case 'notifications.getStatus':
+        return ok(input.bridgeRequest, 'unsupported');
+
+      case 'notifications.requestSubscription':
+        return ok(input.bridgeRequest, 'unavailable');
 
       case 'commerce.getProducts':
       case 'commerce.getEntitlements':

@@ -30,6 +30,35 @@ public class CapacitorGameServicesPlugin extends Plugin {
             case "identity.getPlayer":
                 call.resolve(okResponse(id, player()));
                 return;
+            case "identity.getSession":
+                call.resolve(okResponse(id, new JSObject()
+                    .put("identityLevel", "platform-anonymous")
+                    .put("playerId", "android-local-player")
+                    .put("trustLevel", "local")));
+                return;
+            case "identity.requestUpgrade":
+                call.resolve(okResponse(id, new JSObject()
+                    .put("status", "unavailable")
+                    .put("reloadExpected", false)));
+                return;
+            case "presentation.getLaunchIntent":
+                call.resolve(okResponse(id, new JSObject().put("entry", "home")));
+                return;
+            case "presentation.requestGameSurface":
+                call.resolve(okResponse(id, "already-fullscreen"));
+                return;
+            case "share.share":
+                call.resolve(okResponse(id, new JSObject().put("status", "unavailable")));
+                return;
+            case "share.readInboundShare":
+                call.resolve(okResponse(id, JSONObject.NULL));
+                return;
+            case "notifications.getStatus":
+                call.resolve(okResponse(id, "configuration-required"));
+                return;
+            case "notifications.requestSubscription":
+                call.resolve(okResponse(id, "unavailable"));
+                return;
             case "commerce.getProducts":
                 call.resolve(okResponse(id, new Object[] { product() }));
                 return;

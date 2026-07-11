@@ -1,8 +1,12 @@
 import {
   createUnsupportedCapabilities,
+  type IdentitySession,
+  type LaunchEntry,
+  type LaunchIntent,
   type PlatformGateway,
   type PlayerIdentity,
   type ProductInfo,
+  type ShareIntent,
 } from '@mpgd/platform';
 
 const mockProducts = [
@@ -18,9 +22,18 @@ const mockProducts = [
   },
 ] as const satisfies readonly ProductInfo[];
 
-export function createBrowserPlatformGateway(): PlatformGateway {
+export interface BrowserPlatformGatewayOptions {
+  readonly locationHref?: string;
+  readonly share?: (data: ShareData) => Promise<void>;
+  readonly writeClipboardText?: (text: string) => Promise<void>;
+}
+
+export function createBrowserPlatformGateway(
+  options: BrowserPlatformGatewayOptions = {},
+): PlatformGateway {
   const pauseListeners = new Set<() => void>();
   const resumeListeners = new Set<() => void>();
+  const shareSupported = canShare(options);
 
   if (typeof document !== 'undefined') {
     document.addEventListener('visibilitychange', () => {
@@ -40,6 +53,7 @@ export function createBrowserPlatformGateway(): PlatformGateway {
         rewardedAds: true,
         interstitialAds: true,
         cloudSave: true,
+        socialShare: shareSupported,
         localizedContent: true,
       };
     },
@@ -49,6 +63,47 @@ export function createBrowserPlatformGateway(): PlatformGateway {
           playerId: 'browser-player',
           displayName: 'Browser Player',
         };
+      },
+      async getSession(): Promise<IdentitySession> {
+        return {
+          identityLevel: 'guest',
+          playerId: 'browser-player',
+          trustLevel: 'local',
+        };
+      },
+      async requestUpgrade() {
+        return {
+          status: 'unavailable',
+          reloadExpected: false,
+        };
+      },
+    },
+    presentation: {
+      async getLaunchIntent() {
+        return launchIntentFromUrl(resolveBrowserUrl(options.locationHref));
+      },
+      async requestGameSurface() {
+        return 'already-fullscreen';
+      },
+    },
+    sharing: {
+      ...(shareSupported
+        ? {
+            async share(intent: ShareIntent) {
+              return shareFromBrowser(intent, options);
+            },
+          }
+        : {}),
+      async readInboundShare() {
+        return inboundShareFromUrl(resolveBrowserUrl(options.locationHref));
+      },
+    },
+    notifications: {
+      async getStatus() {
+        return 'unsupported';
+      },
+      async requestSubscription() {
+        return 'unavailable';
       },
     },
     commerce: {
@@ -115,4 +170,155 @@ export function createBrowserPlatformGateway(): PlatformGateway {
       },
     },
   };
+}
+
+const launchEntries = new Set<LaunchEntry>([
+  'home',
+  'daily',
+  'practice',
+  'free-play',
+  'continue',
+  'leaderboard',
+  'friend-challenge',
+]);
+
+function launchIntentFromUrl(url: URL | undefined): LaunchIntent {
+  const params = mergedSearchParams(url);
+  const requestedEntry = params.get('entry');
+  const inbound = inboundShareFromParams(params);
+  let entry: LaunchEntry;
+
+  if (requestedEntry !== null && launchEntries.has(requestedEntry as LaunchEntry)) {
+    entry = requestedEntry as LaunchEntry;
+  } else if (inbound?.challengeToken === undefined) {
+    entry = 'home';
+  } else {
+    entry = 'friend-challenge';
+  }
+
+  return {
+    entry,
+    ...(inbound?.puzzleId === undefined ? {} : { puzzleId: inbound.puzzleId }),
+    ...(inbound?.challengeToken === undefined
+      ? {}
+      : { referralToken: inbound.challengeToken }),
+  };
+}
+
+function inboundShareFromUrl(url: URL | undefined) {
+  return inboundShareFromParams(mergedSearchParams(url));
+}
+
+function inboundShareFromParams(params: URLSearchParams) {
+  const puzzleId = nonEmptyParam(params.get('puzzleId'));
+  const challengeToken = nonEmptyParam(params.get('challengeToken'));
+
+  if (puzzleId === undefined && challengeToken === undefined) {
+    return null;
+  }
+
+  return {
+    ...(puzzleId === undefined ? {} : { puzzleId }),
+    ...(challengeToken === undefined ? {} : { challengeToken }),
+  };
+}
+
+function mergedSearchParams(url: URL | undefined): URLSearchParams {
+  const params = new URLSearchParams(url?.search ?? '');
+  const nestedParams = params.get('queryParams');
+
+  if (nestedParams === null) {
+    return params;
+  }
+
+  try {
+    const parsed = JSON.parse(nestedParams) as unknown;
+
+    if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+      for (const [key, value] of Object.entries(parsed)) {
+        if (typeof value === 'string' && !params.has(key)) {
+          params.set(key, value);
+        }
+      }
+    }
+  } catch {
+    // Inbound query payloads are untrusted. Invalid nested data is ignored.
+  }
+
+  return params;
+}
+
+async function shareFromBrowser(
+  intent: ShareIntent,
+  options: BrowserPlatformGatewayOptions,
+) {
+  const share = options.share ?? globalThis.navigator?.share?.bind(globalThis.navigator);
+
+  if (share !== undefined) {
+    try {
+      await share({
+        title: intent.title,
+        text: intent.text,
+        url: intent.deepLink,
+      });
+
+      return { status: 'shared' } as const;
+    } catch (error) {
+      if (isAbortError(error)) {
+        return { status: 'cancelled' } as const;
+      }
+
+      console.warn('Browser share failed; falling back to clipboard.', error);
+    }
+  }
+
+  const writeClipboardText =
+    options.writeClipboardText
+    ?? globalThis.navigator?.clipboard?.writeText?.bind(globalThis.navigator.clipboard);
+
+  if (writeClipboardText === undefined) {
+    return { status: 'unavailable' } as const;
+  }
+
+  try {
+    await writeClipboardText(`${intent.text}\n${intent.deepLink}`);
+    return { status: 'shared' } as const;
+  } catch {
+    return { status: 'unavailable' } as const;
+  }
+}
+
+function canShare(options: BrowserPlatformGatewayOptions): boolean {
+  return (
+    options.share !== undefined
+    || options.writeClipboardText !== undefined
+    || typeof globalThis.navigator?.share === 'function'
+    || typeof globalThis.navigator?.clipboard?.writeText === 'function'
+  );
+}
+
+function resolveBrowserUrl(locationHref: string | undefined): URL | undefined {
+  const href = locationHref ?? globalThis.location?.href;
+
+  if (href === undefined) {
+    return undefined;
+  }
+
+  try {
+    return new URL(href);
+  } catch {
+    return undefined;
+  }
+}
+
+function nonEmptyParam(value: string | null): string | undefined {
+  return value === null || value.length === 0 ? undefined : value;
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof DOMException !== 'undefined' && error instanceof DOMException
+    ? error.name === 'AbortError'
+    : typeof error === 'object'
+      && error !== null
+      && (error as { readonly name?: unknown }).name === 'AbortError';
 }

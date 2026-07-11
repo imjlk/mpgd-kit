@@ -103,6 +103,34 @@ describe('adapter-ait', () => {
       playerId: 'ait-sandbox-player',
       displayName: 'AIT Sandbox Player',
     });
+    await expect(gateway.identity.getSession?.()).resolves.toEqual({
+      identityLevel: 'platform-anonymous',
+      playerId: 'ait-sandbox-player',
+      trustLevel: 'platform-asserted',
+    });
+    await expect(gateway.presentation?.getLaunchIntent()).resolves.toEqual({
+      entry: 'home',
+    });
+    await expect(
+      gateway.presentation?.requestGameSurface({ entry: 'daily' }),
+    ).resolves.toBe('already-fullscreen');
+    await expect(
+      gateway.sharing?.share?.({
+        kind: 'daily-result',
+        title: 'Daily result',
+        text: "I finished today's puzzle.",
+        deepLink: 'intoss://game/daily',
+      }),
+    ).resolves.toEqual({
+      status: 'shared',
+    });
+    await expect(gateway.sharing?.readInboundShare?.()).resolves.toBeNull();
+    await expect(gateway.notifications?.getStatus('daily-ready')).resolves.toBe(
+      'configuration-required',
+    );
+    await expect(
+      gateway.notifications?.requestSubscription('daily-ready'),
+    ).resolves.toBe('unavailable');
     await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
     await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
       value: {

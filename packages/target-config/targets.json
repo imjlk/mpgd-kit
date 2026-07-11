@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-03",
+  "version": "2026-07-10",
   "targets": {
     "web-preview": {
       "runtime": "web-preview",
@@ -24,6 +24,14 @@
       },
       "release": {
         "profile": "web-preview"
+      },
+      "integrations": {
+        "identityUpgrade": "disabled",
+        "presentation": "available",
+        "sharing": "available",
+        "inboundShare": "available",
+        "notifications": "unsupported",
+        "presentationMode": "fullscreen"
       },
       "policy": {
         "externalPaymentAllowed": false,
@@ -57,6 +65,14 @@
       "release": {
         "profile": "microsoft-store"
       },
+      "integrations": {
+        "identityUpgrade": "disabled",
+        "presentation": "available",
+        "sharing": "available",
+        "inboundShare": "available",
+        "notifications": "unsupported",
+        "presentationMode": "fullscreen"
+      },
       "policy": {
         "externalPaymentAllowed": false,
         "remoteExecutableCodeAllowed": false,
@@ -88,6 +104,14 @@
       },
       "release": {
         "profile": "google-play"
+      },
+      "integrations": {
+        "identityUpgrade": "configuration-required",
+        "presentation": "available",
+        "sharing": "configuration-required",
+        "inboundShare": "configuration-required",
+        "notifications": "configuration-required",
+        "presentationMode": "fullscreen"
       },
       "policy": {
         "externalPaymentAllowed": false,
@@ -121,6 +145,14 @@
       "release": {
         "profile": "app-store"
       },
+      "integrations": {
+        "identityUpgrade": "configuration-required",
+        "presentation": "available",
+        "sharing": "configuration-required",
+        "inboundShare": "configuration-required",
+        "notifications": "configuration-required",
+        "presentationMode": "fullscreen"
+      },
       "policy": {
         "externalPaymentAllowed": false,
         "remoteExecutableCodeAllowed": false,
@@ -153,6 +185,14 @@
       "release": {
         "profile": "apps-in-toss"
       },
+      "integrations": {
+        "identityUpgrade": "configuration-required",
+        "presentation": "available",
+        "sharing": "available",
+        "inboundShare": "available",
+        "notifications": "configuration-required",
+        "presentationMode": "fullscreen"
+      },
       "policy": {
         "externalPaymentAllowed": false,
         "remoteExecutableCodeAllowed": false,
@@ -184,6 +224,14 @@
       },
       "release": {
         "profile": "devvit"
+      },
+      "integrations": {
+        "identityUpgrade": "configuration-required",
+        "presentation": "configuration-required",
+        "sharing": "configuration-required",
+        "inboundShare": "configuration-required",
+        "notifications": "approval-required",
+        "presentationMode": "inline-expanded"
       },
       "policy": {
         "externalPaymentAllowed": false,

@@ -1,6 +1,7 @@
 import './styles.css';
 
 import { resolveMpgdLocale } from '@mpgd/i18n';
+import type { IdentitySession, LaunchIntent, PlatformGateway } from '@mpgd/platform';
 import {
   resolveTargetViewportPlan,
   type TargetViewportOrientationPolicy,
@@ -27,10 +28,14 @@ const player =
     playerId: 'local-player',
     displayName: 'Local Player',
   };
+const [identitySession, launchIntent] = await Promise.all([
+  resolveIdentitySession(platform, player.playerId),
+  resolveLaunchIntent(platform),
+]);
 const locale = resolveMpgdLocale(runtime.capabilities);
 const gameServices = createStarterGameServices({
   gateway: platform,
-  playerId: player.playerId,
+  playerId: identitySession.playerId ?? player.playerId,
 });
 
 createStarterGame({
@@ -40,10 +45,41 @@ createStarterGame({
     runtime,
     viewport,
     player,
+    identitySession,
+    launchIntent,
     locale,
     gameServices,
   },
 });
+
+async function resolveIdentitySession(
+  platform: PlatformGateway,
+  fallbackPlayerId: string,
+): Promise<IdentitySession> {
+  try {
+    return (await platform.identity.getSession?.()) ?? createGuestSession(fallbackPlayerId);
+  } catch (error) {
+    console.warn('[platform] identity session unavailable; using guest fallback.', error);
+    return createGuestSession(fallbackPlayerId);
+  }
+}
+
+async function resolveLaunchIntent(platform: PlatformGateway): Promise<LaunchIntent> {
+  try {
+    return (await platform.presentation?.getLaunchIntent()) ?? { entry: 'home' };
+  } catch (error) {
+    console.warn('[platform] launch intent unavailable; using home fallback.', error);
+    return { entry: 'home' };
+  }
+}
+
+function createGuestSession(playerId: string): IdentitySession {
+  return {
+    identityLevel: 'guest',
+    playerId,
+    trustLevel: 'local',
+  };
+}
 
 function measureGameViewport(): {
   readonly width: number;

@@ -17,6 +17,8 @@ pnpm --dir examples/phaser-starter build
 - `PlayScene` animates from serializable simulation state.
 - No scene imports Capacitor, Apps in Toss, StoreKit, Play Billing, Devvit, or ad SDK modules.
 - Any purchase, rewarded ad, or leaderboard feature remains behind `PlatformGateway` and `@mpgd/game-services`.
+- Identity upgrade, launch, share, and notification-subscription calls remain behind `PlatformGateway`.
+- Inbound share payloads are treated as untrusted, and progress linking plus notification delivery remain server-owned.
 - Orientation locks are soft prompts unless a platform adapter explicitly supplies hard-lock support.
 
 ## Apps in Toss Target
@@ -29,5 +31,8 @@ Before changing AIT behavior, use the apps-in-toss MCP and search Korean docs fo
 - `샌드박스`
 - `심사`
 - `저장소`
+- `사용자 식별키`
+- `공유 링크`
+- `알림 동의`
 
 AIT IAP and ad callbacks are evidence only. Backend ledger APIs remain the source of truth for grants.
