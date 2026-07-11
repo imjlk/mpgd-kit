@@ -1,5 +1,19 @@
 # @mpgd/target-config
 
+## 0.5.0 — 2026-07-11
+
+### Fixed
+
+- [001c3b5](https://github.com/imjlk/mpgd-kit/commit/001c3b59abb0a435ad318aaddf24753fd09f7eee) Emit Node ESM-compatible relative specifiers from the target-config package and verify the built package can be imported directly. — Thanks @imjlk!
+
+### Added
+
+- [3b7a57f](https://github.com/imjlk/mpgd-kit/commit/3b7a57fb4472e00626650b265387611326219e3f) Add backward-compatible, stateful integration readiness and presentation-mode data to target config, effective config, and runtime snapshots. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.3.3, platform@0.4.0
+
 ## 0.4.0 — 2026-07-10
 
 ### Added
