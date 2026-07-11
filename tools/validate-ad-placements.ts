@@ -2,15 +2,26 @@ import typia from 'typia';
 
 import type { AdPlacements } from '@mpgd/catalog';
 
+import { adPlacementsFilePath } from './catalog-paths';
 import { isCliEntrypoint, readJsonFile } from './io';
 
 const assertAdPlacements = typia.createAssert<AdPlacements>();
 
-export function validateAdPlacementsFile(path = 'packages/catalog/placements.json') {
+export function validateAdPlacementsFile(path = adPlacementsFilePath()) {
   const adPlacements = assertAdPlacements(readJsonFile(path));
   const ids = new Set<string>();
 
   for (const placement of adPlacements.placements) {
+    const trimmedId = placement.id.trim();
+
+    if (trimmedId.length === 0) {
+      throw new Error('Ad placement id must be non-empty.');
+    }
+
+    if (trimmedId !== placement.id) {
+      throw new Error(`Ad placement id has leading or trailing whitespace: ${placement.id}`);
+    }
+
     if (ids.has(placement.id)) {
       throw new Error(`Duplicate ad placement id: ${placement.id}`);
     }

@@ -2,15 +2,26 @@ import typia from 'typia';
 
 import type { ProductCatalog } from '@mpgd/catalog';
 
+import { productCatalogFilePath } from './catalog-paths';
 import { isCliEntrypoint, readJsonFile } from './io';
 
 const assertProductCatalog = typia.createAssert<ProductCatalog>();
 
-export function validateProductCatalogFile(path = 'packages/catalog/catalog.json') {
+export function validateProductCatalogFile(path = productCatalogFilePath()) {
   const catalog = assertProductCatalog(readJsonFile(path));
   const ids = new Set<string>();
 
   for (const product of catalog.products) {
+    const trimmedId = product.id.trim();
+
+    if (trimmedId.length === 0) {
+      throw new Error('Product id must be non-empty.');
+    }
+
+    if (trimmedId !== product.id) {
+      throw new Error(`Product id has leading or trailing whitespace: ${product.id}`);
+    }
+
     if (ids.has(product.id)) {
       throw new Error(`Duplicate product id: ${product.id}`);
     }

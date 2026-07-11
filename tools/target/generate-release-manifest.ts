@@ -8,6 +8,7 @@ import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import type { ReleaseManifest } from '@mpgd/release-manifest';
 import type { TargetConfigMatrix } from '@mpgd/target-config';
 
+import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import { isCliEntrypoint, readJsonFile } from '../io';
 import { writeEffectiveTargetConfigs } from './effective-config';
 import { effectiveTargetConfigOutputDir, loadPlatformTargetsConfig } from './platform-targets';
@@ -31,8 +32,8 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
   const targetConfig = assertTargetConfigMatrix(
     readJsonFile('packages/target-config/targets.json'),
   );
-  const catalog = assertProductCatalog(readJsonFile('packages/catalog/catalog.json'));
-  const adPlacements = assertAdPlacements(readJsonFile('packages/catalog/placements.json'));
+  const catalog = assertProductCatalog(readJsonFile(productCatalogFilePath()));
+  const adPlacements = assertAdPlacements(readJsonFile(adPlacementsFilePath()));
   const effectiveConfig = writeEffectiveTargetConfigs({
     targets: [input.target],
     outputDir: effectiveTargetConfigOutputDir(platformTargets.baseDir),
@@ -101,7 +102,7 @@ function mergeManifest(outputPath: string, nextManifest: ReleaseManifest): Relea
     return nextManifest;
   }
 
-  if (previous.releaseId !== nextManifest.releaseId) {
+  if (!hasMatchingReleaseContract(previous, nextManifest)) {
     return nextManifest;
   }
 
@@ -112,6 +113,17 @@ function mergeManifest(outputPath: string, nextManifest: ReleaseManifest): Relea
       ...nextManifest.targets,
     },
   });
+}
+
+function hasMatchingReleaseContract(
+  previous: ReleaseManifest,
+  next: ReleaseManifest,
+): boolean {
+  return previous.releaseId === next.releaseId
+    && previous.gitSha === next.gitSha
+    && previous.targetConfigVersion === next.targetConfigVersion
+    && previous.catalogVersion === next.catalogVersion
+    && previous.adPlacementVersion === next.adPlacementVersion;
 }
 
 function makeEffectiveConfigPathsPortable(
@@ -207,6 +219,12 @@ function readSdkMajor(envValue: string | undefined, metadataValue: number | unde
 }
 
 function getGitSha(): string {
+  const configuredGitSha = readOptionalString(process.env.MPGD_SOURCE_GIT_SHA);
+
+  if (configuredGitSha !== undefined) {
+    return configuredGitSha;
+  }
+
   try {
     return execFileSync('git', ['rev-parse', '--short', 'HEAD'], {
       encoding: 'utf8',

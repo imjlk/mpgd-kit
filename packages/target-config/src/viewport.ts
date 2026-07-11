@@ -1,4 +1,4 @@
-import type { TargetConfig, TargetRuntimeKind } from './runtime';
+import type { TargetConfig, TargetRuntimeKind } from './runtime.js';
 
 export type TargetViewportOrientation = 'portrait' | 'landscape';
 export type TargetViewportOrientationPolicyMode =

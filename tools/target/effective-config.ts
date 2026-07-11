@@ -11,6 +11,7 @@ import {
   type EffectiveTargetConfigMatrix,
 } from '../../packages/target-config/src/effective';
 import type { TargetConfigMatrix } from '../../packages/target-config/src/runtime';
+import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import { readJsonFile } from '../io';
 import { loadPlatformTargetsConfig } from './platform-targets';
 import type { PlatformTargetConfig, PlatformTargetsConfig } from './schemas';
@@ -36,8 +37,8 @@ export interface WriteEffectiveTargetConfigsOptions {
 
 export function loadEffectiveTargetConfigMatrix(): EffectiveTargetConfigMatrix {
   const configMatrix = readJsonFile('packages/target-config/targets.json') as TargetConfigMatrix;
-  const catalog = readJsonFile('packages/catalog/catalog.json') as ProductCatalog;
-  const adPlacements = readJsonFile('packages/catalog/placements.json') as AdPlacements;
+  const catalog = readJsonFile(productCatalogFilePath()) as ProductCatalog;
+  const adPlacements = readJsonFile(adPlacementsFilePath()) as AdPlacements;
   const platformTargets = loadPlatformTargetsConfig().config as PlatformTargetsConfig;
 
   return createEffectiveTargetConfigMatrix({

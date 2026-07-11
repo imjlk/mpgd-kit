@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
+import { defaultAdPlacementsFile, defaultProductCatalogFile } from './catalog-paths';
 import { discoverPublishablePackages } from './package/workspace';
 import { validateEffectiveTargetConfigMatrix } from './target/effective-config';
 import { validateAdPlacementsFile } from './validate-ad-placements';
@@ -144,6 +145,10 @@ const manualGateMessages = {
 const failures: string[] = [];
 const manualGates: string[] = [];
 const targetConfigFilterEnvName = 'MPGD_TARGET_CONFIG_TARGETS';
+const monetizationCatalogEnvNames = [
+  'MPGD_PRODUCT_CATALOG_FILE',
+  'MPGD_AD_PLACEMENTS_FILE',
+] as const;
 
 for (const file of requiredFiles) {
   if (!existsSync(file)) {
@@ -293,7 +298,7 @@ function collectTrackedGeneratedSourceArtifacts(): void {
 
 function collectEffectiveTargetConfigReadiness(): void {
   try {
-    validateEffectiveTargetConfigMatrix();
+    withEnvUnset(monetizationCatalogEnvNames, () => validateEffectiveTargetConfigMatrix());
   } catch (error) {
     failures.push(`Effective target config release readiness failed: ${errorMessage(error)}`);
   }
@@ -301,13 +306,13 @@ function collectEffectiveTargetConfigReadiness(): void {
 
 function collectCatalogReadiness(): void {
   try {
-    validateProductCatalogFile();
+    validateProductCatalogFile(defaultProductCatalogFile);
   } catch (error) {
     failures.push(`Product catalog public readiness failed: ${errorMessage(error)}`);
   }
 
   try {
-    validateAdPlacementsFile();
+    validateAdPlacementsFile(defaultAdPlacementsFile);
   } catch (error) {
     failures.push(`Ad placement public readiness failed: ${errorMessage(error)}`);
   }
@@ -321,18 +326,26 @@ function collectTargetConfigReadiness(): void {
   }
 }
 
-function withEnvUnset<T>(name: string, callback: () => T): T {
-  const previous = process.env[name];
+function withEnvUnset<T>(
+  names: string | readonly string[],
+  callback: () => T,
+): T {
+  const targetNames = typeof names === 'string' ? [names] : names;
+  const previous = new Map(targetNames.map((name) => [name, process.env[name]]));
 
-  delete process.env[name];
+  for (const name of targetNames) {
+    delete process.env[name];
+  }
 
   try {
     return callback();
   } finally {
-    if (previous === undefined) {
-      delete process.env[name];
-    } else {
-      process.env[name] = previous;
+    for (const [name, value] of previous) {
+      if (value === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = value;
+      }
     }
   }
 }

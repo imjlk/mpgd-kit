@@ -16,7 +16,7 @@ import {
   type TargetPolicyRestrictions,
   type TargetReleaseConfig,
   type TargetRuntimeKind,
-} from './runtime';
+} from './runtime.js';
 
 export type EffectiveAvailabilityReason =
   | FeatureAvailabilityReason
