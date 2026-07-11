@@ -1,5 +1,15 @@
 # @mpgd/adapter-browser
 
+## 0.4.0 — 2026-07-11
+
+### Added
+
+- [ecd7a9c](https://github.com/imjlk/mpgd-kit/commit/ecd7a9c6dc79f585d767518b060baffb792ec112) Add shared identity-session, launch/presentation, share, inbound-link, and notification-subscription contracts with safe browser, Apps in Toss, Capacitor, and Devvit adapter behavior. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.4.0
+
 ## 0.3.2 — 2026-07-06
 
 ### Patch changes

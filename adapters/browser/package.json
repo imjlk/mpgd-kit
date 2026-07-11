@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/adapter-browser",
-  "version": "0.3.2",
+  "version": "0.4.0",
   "description": "Browser preview platform adapter for mpgd games.",
   "license": "MIT",
   "repository": {

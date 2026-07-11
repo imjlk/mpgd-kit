@@ -1,5 +1,15 @@
 # @mpgd/catalog
 
+## 0.3.3 — 2026-07-11
+
+### Changed
+
+- [84b3f83](https://github.com/imjlk/mpgd-kit/commit/84b3f836041c5c3513f3b2bf8b2c5414adfded0a) Allow games to define their own logical product and ad placement identifiers while preserving the starter identifiers as suggested literals. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.4.0
+
 ## 0.3.2 — 2026-07-06
 
 ### Patch changes

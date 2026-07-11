@@ -1,5 +1,19 @@
 # @mpgd/cli
 
+## 0.6.0 — 2026-07-11
+
+### Fixed
+
+- [68c3d28](https://github.com/imjlk/mpgd-kit/commit/68c3d28b14508e32ddfd0fd3c5f3ed8147d4b40f) Resolve game-owned product catalogs, ad placements, package versions, and source revisions from the target config location so direct CLI builds match workspace wrapper builds. — Thanks @imjlk!
+
+### Added
+
+- [e15576b](https://github.com/imjlk/mpgd-kit/commit/e15576b36b2f2e01ae5a02b5bbbd2f9a5e180d71) Teach generated Phaser starters to resolve identity sessions and launch intents with legacy-host fallbacks and include readiness-accurate Devvit bridge responses. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.4.0, adapter-browser@0.4.0, adapter-capacitor@0.4.0, adapter-devvit@0.4.0, analytics@0.3.3, bridge@0.5.0, catalog@0.3.3, game-services@0.4.0, i18n@0.4.1, platform@0.4.0, target-config@0.5.0
+
 ## 0.5.0 — 2026-07-10
 
 ### Changed
