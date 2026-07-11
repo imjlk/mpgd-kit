@@ -136,7 +136,7 @@ export function createEffectiveTargetConfig(
   );
   const leaderboardEnabled = input.config.features.leaderboard;
   const integrations = normalizeTargetIntegrationConfig({
-    ...normalizeTargetIntegrationConfig(input.config.integrations),
+    ...input.config.integrations,
     ...input.platformTarget?.integrations,
   });
 

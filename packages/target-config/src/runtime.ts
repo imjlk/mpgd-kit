@@ -180,6 +180,19 @@ export const targetIntegrations = [
   'notifications',
 ] as const satisfies readonly TargetIntegration[];
 
+export const integrationAvailabilityStates = [
+  'available',
+  'disabled',
+  'approval-required',
+  'configuration-required',
+  'unsupported',
+] as const satisfies readonly IntegrationAvailabilityState[];
+
+export const presentationModes = [
+  'fullscreen',
+  'inline-expanded',
+] as const satisfies readonly PresentationMode[];
+
 export const defaultTargetIntegrationConfig = {
   identityUpgrade: 'disabled',
   presentation: 'disabled',
@@ -189,13 +202,10 @@ export const defaultTargetIntegrationConfig = {
   presentationMode: 'fullscreen',
 } as const satisfies TargetIntegrationConfig;
 
-const integrationAvailabilityStates = new Set<IntegrationAvailabilityState>([
-  'available',
-  'disabled',
-  'approval-required',
-  'configuration-required',
-  'unsupported',
-]);
+const integrationAvailabilityStateSet = new Set<IntegrationAvailabilityState>(
+  integrationAvailabilityStates,
+);
+const presentationModeSet = new Set<PresentationMode>(presentationModes);
 
 export function normalizeTargetIntegrationConfig(
   config: Partial<TargetIntegrationConfig> | undefined,
@@ -595,7 +605,7 @@ function normalizeIntegrationAvailabilityState(
   input: IntegrationAvailabilityState | undefined,
   fallback: IntegrationAvailabilityState,
 ): IntegrationAvailabilityState {
-  if (input !== undefined && integrationAvailabilityStates.has(input)) {
+  if (input !== undefined && integrationAvailabilityStateSet.has(input)) {
     return input;
   }
 
@@ -603,7 +613,7 @@ function normalizeIntegrationAvailabilityState(
 }
 
 function normalizePresentationMode(input: PresentationMode | undefined): PresentationMode {
-  if (input === 'inline-expanded' || input === 'fullscreen') {
+  if (input !== undefined && presentationModeSet.has(input)) {
     return input;
   }
 

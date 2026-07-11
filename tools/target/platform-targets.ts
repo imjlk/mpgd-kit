@@ -1,11 +1,24 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 
+import {
+  integrationAvailabilityStates,
+  presentationModes,
+  targetIntegrations,
+  type IntegrationAvailabilityState,
+  type PresentationMode,
+} from '../../packages/target-config/src/runtime';
 import { readJsonFile } from '../io';
 import type { PlatformTargetConfig, PlatformTargetsConfig } from './schemas';
 
 export const platformTargetsFileEnv = 'MPGD_PLATFORM_TARGETS_FILE';
 export const releaseManifestFileEnv = 'MPGD_RELEASE_MANIFEST_FILE';
 export const effectiveTargetConfigOutputDirEnv = 'MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR';
+
+const targetIntegrationConfigKeys = new Set<string>([...targetIntegrations, 'presentationMode']);
+const integrationAvailabilityStateSet = new Set<IntegrationAvailabilityState>(
+  integrationAvailabilityStates,
+);
+const presentationModeSet = new Set<PresentationMode>(presentationModes);
 
 export interface LoadedPlatformTargetsConfig {
   readonly path: string;
@@ -101,13 +114,13 @@ function assertTargetIntegrations(input: unknown, target: string): void {
 
   assertRecord(input, `${target}.integrations`);
 
-  for (const integration of [
-    'identityUpgrade',
-    'presentation',
-    'sharing',
-    'inboundShare',
-    'notifications',
-  ] as const) {
+  for (const key of Object.keys(input)) {
+    if (!targetIntegrationConfigKeys.has(key)) {
+      throw new Error(`${target}.integrations.${key} is not a recognized integration key.`);
+    }
+  }
+
+  for (const integration of targetIntegrations) {
     const state = input[integration];
 
     if (state !== undefined) {
@@ -119,21 +132,14 @@ function assertTargetIntegrations(input: unknown, target: string): void {
 
   if (
     presentationMode !== undefined
-    && presentationMode !== 'fullscreen'
-    && presentationMode !== 'inline-expanded'
+    && !presentationModeSet.has(presentationMode as PresentationMode)
   ) {
     throw new Error(`${target}.integrations.presentationMode has an unsupported value.`);
   }
 }
 
 function assertIntegrationAvailabilityState(input: unknown, label: string): void {
-  if (
-    input !== 'available'
-    && input !== 'disabled'
-    && input !== 'approval-required'
-    && input !== 'configuration-required'
-    && input !== 'unsupported'
-  ) {
+  if (!integrationAvailabilityStateSet.has(input as IntegrationAvailabilityState)) {
     throw new Error(`${label} has an unsupported value.`);
   }
 }

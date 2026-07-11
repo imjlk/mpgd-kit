@@ -93,8 +93,6 @@ function verifyGameOwnedIntegrationOverrides(): void {
       },
     },
   } as const;
-
-  assertPlatformTargetsConfig(platformTargets);
   const invalidPlatformTargets = {
     targets: {
       reddit: {
@@ -105,16 +103,41 @@ function verifyGameOwnedIntegrationOverrides(): void {
       },
     },
   } as const;
-
-  assertThrows(() => assertPlatformTargetsConfig(invalidPlatformTargets));
-
-  writeFileSync(targetsPath, `${JSON.stringify(invalidPlatformTargets, null, 2)}\n`);
-  process.env.MPGD_PLATFORM_TARGETS_FILE = targetsPath;
-  assertThrows(() => writeEffectiveTargetConfigs({ targets: ['reddit'], outputDir }));
-
-  writeFileSync(targetsPath, `${JSON.stringify(platformTargets, null, 2)}\n`);
+  const unknownIntegrationPlatformTargets = {
+    targets: {
+      reddit: {
+        ...platformTargets.targets.reddit,
+        integrations: {
+          presntation: 'available',
+        },
+      },
+    },
+  } as const;
 
   try {
+    assertPlatformTargetsConfig(platformTargets);
+    assertThrows(
+      () => assertPlatformTargetsConfig(invalidPlatformTargets),
+      'typia should reject an invalid game-owned integration state',
+      'notifications',
+    );
+
+    process.env.MPGD_PLATFORM_TARGETS_FILE = targetsPath;
+    writeFileSync(targetsPath, `${JSON.stringify(invalidPlatformTargets, null, 2)}\n`);
+    assertThrows(
+      () => writeEffectiveTargetConfigs({ targets: ['reddit'], outputDir }),
+      'the platform target loader should reject an invalid integration state',
+      'unsupported value',
+    );
+
+    writeFileSync(targetsPath, `${JSON.stringify(unknownIntegrationPlatformTargets, null, 2)}\n`);
+    assertThrows(
+      () => writeEffectiveTargetConfigs({ targets: ['reddit'], outputDir }),
+      'the platform target loader should reject an unknown integration key',
+      'not a recognized integration key',
+    );
+
+    writeFileSync(targetsPath, `${JSON.stringify(platformTargets, null, 2)}\n`);
     writeEffectiveTargetConfigs({
       targets: ['reddit'],
       outputDir,
@@ -243,12 +266,25 @@ function assertEqual<T>(actual: T, expected: T, message: string): void {
   }
 }
 
-function assertThrows(callback: () => void): void {
+function assertThrows(
+  callback: () => unknown,
+  message: string,
+  expectedMessage: string,
+): void {
   try {
     callback();
-  } catch {
+  } catch (error) {
+    const actualMessage = error instanceof Error ? error.message : String(error);
+
+    if (!actualMessage.includes(expectedMessage)) {
+      throw new Error(
+        `${message}. Expected an error containing "${expectedMessage}", got "${actualMessage}".`,
+        { cause: error },
+      );
+    }
+
     return;
   }
 
-  throw new Error('Expected callback to throw.');
+  throw new Error(`${message}. Expected callback to throw.`);
 }
