@@ -218,6 +218,7 @@ try {
   assert.match(runValidator('tools/validate-ad-placements.ts'), /Ad placements game-ads-v1/u);
   await assertViteCatalogAliasesWithRelativeEnv();
   await assertViteCatalogAliasesFallBackWhenInitCwdMisses();
+  await assertViteCatalogAliasesPreferGameRoot();
   assertTargetBuildCatalogEnvUsesCallerBase();
 
   const matrix = validateEffectiveTargetConfigMatrix(loadEffectiveTargetConfigMatrix());
@@ -335,18 +336,22 @@ function assertValidatorFailure(
   assert.match(output, pattern);
 }
 
-async function assertViteCatalogAliases(configPath: string): Promise<void> {
+async function assertViteCatalogAliases(
+  configPath: string,
+  expectedCatalogFile = catalogFile,
+  expectedPlacementsFile = placementsFile,
+): Promise<void> {
   const config = await loadViteConfig(configPath);
   const alias = config.resolve?.alias;
 
   assert.equal(
     readAlias(alias, '@mpgd/catalog/catalog.json'),
-    catalogFile,
+    expectedCatalogFile,
     `${configPath} product catalog alias`,
   );
   assert.equal(
     readAlias(alias, '@mpgd/catalog/placements.json'),
-    placementsFile,
+    expectedPlacementsFile,
     `${configPath} ad placements alias`,
   );
 }
@@ -378,6 +383,46 @@ async function assertViteCatalogAliasesFallBackWhenInitCwdMisses(): Promise<void
     await assertViteCatalogAliases('examples/phaser-starter/vite.config.ts');
     await assertViteCatalogAliases('packages/cli/templates/phaser-game/vite.config.ts');
   } finally {
+    process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
+    process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
+    restoreEnv('INIT_CWD', previousInitCwd);
+    restoreEnv('PWD', previousPwd);
+  }
+}
+
+async function assertViteCatalogAliasesPreferGameRoot(): Promise<void> {
+  const repoRoot = process.cwd();
+  const gameRoot = join(tempDir, 'vite-game');
+  const shadowRoot = join(tempDir, 'vite-shadow');
+
+  mkdirSync(gameRoot);
+  mkdirSync(shadowRoot);
+
+  for (const root of [gameRoot, shadowRoot]) {
+    writeFileSync(join(root, 'mpgd.catalog.json'), '{}\n');
+    writeFileSync(join(root, 'mpgd.ad-placements.json'), '{}\n');
+  }
+
+  try {
+    process.env.INIT_CWD = `  ${shadowRoot}  `;
+    process.env.PWD = shadowRoot;
+    process.env.MPGD_PRODUCT_CATALOG_FILE = 'mpgd.catalog.json';
+    process.env.MPGD_AD_PLACEMENTS_FILE = 'mpgd.ad-placements.json';
+    process.chdir(gameRoot);
+    const resolvedGameRoot = process.cwd();
+
+    await assertViteCatalogAliases(
+      join(repoRoot, 'examples/phaser-starter/vite.config.ts'),
+      join(resolvedGameRoot, 'mpgd.catalog.json'),
+      join(resolvedGameRoot, 'mpgd.ad-placements.json'),
+    );
+    await assertViteCatalogAliases(
+      join(repoRoot, 'packages/cli/templates/phaser-game/vite.config.ts'),
+      join(resolvedGameRoot, 'mpgd.catalog.json'),
+      join(resolvedGameRoot, 'mpgd.ad-placements.json'),
+    );
+  } finally {
+    process.chdir(repoRoot);
     process.env.MPGD_PRODUCT_CATALOG_FILE = catalogFile;
     process.env.MPGD_AD_PLACEMENTS_FILE = placementsFile;
     restoreEnv('INIT_CWD', previousInitCwd);

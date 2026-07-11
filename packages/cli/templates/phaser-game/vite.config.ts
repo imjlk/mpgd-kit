@@ -73,10 +73,11 @@ function resolveCatalogPath(path: string, pairedPath: string): string {
 }
 
 function resolveCatalogBaseDir(path: string, pairedPath: string): string {
+  const fallbackBaseDir = process.cwd();
   const candidates = [
-    process.env.INIT_CWD,
-    process.env.PWD,
-    process.cwd(),
+    fallbackBaseDir,
+    readConfiguredPath(process.env.INIT_CWD),
+    readConfiguredPath(process.env.PWD),
   ];
 
   for (const candidate of candidates) {
@@ -89,5 +90,5 @@ function resolveCatalogBaseDir(path: string, pairedPath: string): string {
     }
   }
 
-  return process.env.INIT_CWD ?? process.env.PWD ?? process.cwd();
+  return fallbackBaseDir;
 }
