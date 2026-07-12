@@ -162,6 +162,7 @@ validatePhaserTemplateDevvitSurfaces();
 validatePhaserTemplateBuildGateways();
 validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
+validatePhaserTemplateLocalePolicy();
 validatePhaserTemplateAcceptanceCommand();
 validateAppIconPipeline();
 
@@ -1025,6 +1026,33 @@ function validatePhaserTemplateOrientationPolicy(): void {
       );
     }
   }
+}
+
+function validatePhaserTemplateLocalePolicy(): void {
+  const mainPath = 'packages/cli/templates/phaser-game/src/main.ts';
+
+  if (!existsSync(mainPath)) {
+    failures.push(`${mainPath}: required for target-aware locale resolution.`);
+    return;
+  }
+
+  const mainContent = readText(mainPath);
+
+  assertIncludesText(
+    mainContent,
+    'resolveTargetMpgdLocale',
+    `${mainPath}: generated games must use the target-aware locale resolver.`,
+  );
+  assertIncludesText(
+    mainContent,
+    'runtime.effectiveConfig?.localization.fallbackLocale',
+    `${mainPath}: generated games must prefer the effective target locale fallback.`,
+  );
+  assertIncludesText(
+    mainContent,
+    'runtime.config.localization.fallbackLocale',
+    `${mainPath}: generated games must preserve the base target locale fallback.`,
+  );
 }
 
 function assertMcpServerCommand(

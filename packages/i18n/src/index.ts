@@ -10,7 +10,7 @@ export interface ResolveTargetMpgdLocaleInput {
   readonly capabilities: Pick<PlatformCapabilities, 'localizedContent'>;
   readonly savedLocale?: unknown;
   readonly preferredLocales?: readonly string[];
-  readonly fallbackLocale: string;
+  readonly fallbackLocale: MpgdLocale;
 }
 
 export function isMpgdLocale(input: string): input is MpgdLocale {
@@ -46,7 +46,7 @@ export function resolveMpgdLocale(
 
 /** Resolves locale policy without assigning defaults to specific platform names. */
 export function resolveTargetMpgdLocale(input: ResolveTargetMpgdLocaleInput): MpgdLocale {
-  const fallbackLocale = normalizeMpgdLocale(input.fallbackLocale) ?? baseLocale;
+  const fallbackLocale = input.fallbackLocale;
 
   if (!input.capabilities.localizedContent) {
     return fallbackLocale;
@@ -79,5 +79,5 @@ function readPreferredLocales(): readonly string[] {
   }
 
   const navigatorLanguage = globalThis.navigator?.language;
-  return navigatorLanguage === undefined ? [baseLocale] : [navigatorLanguage];
+  return navigatorLanguage === undefined ? [] : [navigatorLanguage];
 }

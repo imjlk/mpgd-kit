@@ -6,6 +6,7 @@ import {
   getEffectiveAdPlacementConfig,
   getEffectiveProductConfig,
 } from '../src/effective';
+import { assertTargetConfigMatrix } from '../src/index';
 import {
   applyTargetConfigToCapabilities,
   createTargetRuntimeSnapshot,
@@ -53,6 +54,27 @@ const targetConfigMatrix = {
     ),
   },
 } satisfies TargetConfigMatrix;
+
+let invalidFallbackRejected = false;
+
+try {
+  assertTargetConfigMatrix({
+    ...targetConfigMatrix,
+    targets: {
+      ...targetConfigMatrix.targets,
+      'web-preview': {
+        ...targetConfigMatrix.targets['web-preview'],
+        localization: {
+          fallbackLocale: 'kr',
+        },
+      },
+    },
+  });
+} catch {
+  invalidFallbackRejected = true;
+}
+
+assertEqual(invalidFallbackRejected, true);
 const productCatalog = {
   version: 'test-catalog',
   products: [

@@ -1,3 +1,4 @@
+import type { MpgdLocale } from '@mpgd/i18n';
 import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform';
 
 import type { EffectiveTargetConfig } from './effective.js';
@@ -69,7 +70,7 @@ export interface TargetCapabilityConfig {
 }
 
 export interface TargetLocalizationConfig {
-  readonly fallbackLocale: string;
+  readonly fallbackLocale: MpgdLocale;
 }
 
 export interface TargetMonetizationConfig {

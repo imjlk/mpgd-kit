@@ -781,6 +781,9 @@ importers:
       '@mpgd/catalog':
         specifier: workspace:*
         version: link:../catalog
+      '@mpgd/i18n':
+        specifier: workspace:*
+        version: link:../i18n
       '@mpgd/platform':
         specifier: workspace:*
         version: link:../platform
