@@ -1,0 +1,8 @@
+{
+  "brand": {
+    "appIcon": {
+      "source": "public/icon.svg",
+      "backgroundColor": "#0f172a"
+    }
+  }
+}

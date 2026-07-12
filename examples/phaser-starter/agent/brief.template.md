@@ -51,6 +51,8 @@ Do not name blocks after existing games or brands.
 ## Acceptance
 
 - `pnpm validate:starter-workflow`
+- `pnpm game:icons:generate`
+- `pnpm game:icons:verify`
 - `pnpm --dir examples/phaser-starter check`
 - `pnpm --dir examples/phaser-starter build`
 

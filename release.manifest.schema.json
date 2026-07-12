@@ -27,10 +27,33 @@
       "type": "object",
       "additionalProperties": {
         "type": "object",
-        "required": ["artifact"],
+        "required": ["artifact", "effectiveConfig", "iconManifest"],
         "properties": {
           "artifact": { "type": "string", "minLength": 1 },
           "profile": { "type": "string" },
+          "effectiveConfig": {
+            "type": "object",
+            "required": ["path", "version", "digest"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "version": { "type": "string", "minLength": 1 },
+              "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+            },
+            "additionalProperties": false
+          },
+          "iconManifest": {
+            "type": "object",
+            "required": ["path", "digest", "sourceSha256", "generatorVersion", "targetProfile", "targetProfileVersion"],
+            "properties": {
+              "path": { "type": "string", "minLength": 1 },
+              "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "generatorVersion": { "type": "string", "minLength": 1 },
+              "targetProfile": { "type": "string", "minLength": 1 },
+              "targetProfileVersion": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+          },
           "versionName": { "type": "string" },
           "versionCode": { "type": "integer" },
           "marketingVersion": { "type": "string" },

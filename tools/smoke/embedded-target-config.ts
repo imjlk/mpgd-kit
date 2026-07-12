@@ -54,6 +54,40 @@ export function readEmbeddedTargetConfigFromZip(
   return createEvidence(label, `${path}:${entry}`, captureZipStdout('unzip', ['-p', path, entry]));
 }
 
+export function readNamedTextFromDirectory(
+  root: string,
+  fileName: string,
+  label: string,
+): { readonly source: string; readonly content: string } {
+  assertPathExists(root, label);
+  const path = findNamedFile(root, fileName);
+
+  if (path === undefined) {
+    throw new Error(`Missing ${fileName} in ${label}: ${root}`);
+  }
+
+  return { source: path, content: readFileSync(path, 'utf8') };
+}
+
+export function readNamedTextFromZip(
+  path: string,
+  fileName: string,
+  label: string,
+): { readonly source: string; readonly content: string } {
+  assertPathExists(path, label);
+  const entries = captureZipStdout('unzip', ['-Z1', path]).split('\n');
+  const entry = entries.find((candidate) => basename(candidate) === fileName);
+
+  if (entry === undefined) {
+    throw new Error(`Missing ${fileName} in ${label}: ${path}`);
+  }
+
+  return {
+    source: `${path}:${entry}`,
+    content: captureZipStdout('unzip', ['-p', path, entry]),
+  };
+}
+
 export function assertEmbeddedTargetConfig(
   evidence: EmbeddedTargetConfigEvidence,
   expected: {
@@ -95,11 +129,15 @@ function createEvidence(
 }
 
 function findEmbeddedTargetConfig(root: string): string | undefined {
+  return findNamedFile(root, embeddedTargetConfigFileName);
+}
+
+function findNamedFile(root: string, fileName: string): string | undefined {
   for (const entry of readdirSync(root)) {
     const path = join(root, entry);
     const stat = statSync(path);
 
-    if (stat.isFile() && entry === embeddedTargetConfigFileName) {
+    if (stat.isFile() && entry === fileName) {
       return path;
     }
 
@@ -107,7 +145,7 @@ function findEmbeddedTargetConfig(root: string): string | undefined {
       continue;
     }
 
-    const found = findEmbeddedTargetConfig(path);
+    const found = findNamedFile(path, fileName);
 
     if (found !== undefined) {
       return found;

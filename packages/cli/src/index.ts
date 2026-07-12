@@ -242,9 +242,69 @@ const gameCommand = defineI18n({
         });
       },
     }),
+    icons: defineI18n({
+      name: 'icons',
+      description: 'Generate and verify target app icons from the game brand source.',
+      resource: commandResource({
+        en: 'Generate and verify target app icons from the game brand source.',
+        ko: '게임 브랜드 원본에서 타깃별 앱 아이콘을 생성하고 검증합니다.',
+      }),
+      subCommands: Object.fromEntries(
+        (['generate', 'verify', 'inspect'] as const).map((action) => [
+          action,
+          defineI18n({
+            name: action,
+            description: `${action} target app icon assets.`,
+            resource: commandResource({
+              en: `${action} target app icon assets.`,
+              ko: `타깃 앱 아이콘 자산을 ${action}합니다.`,
+            }),
+            args: {
+              game: {
+                type: 'positional',
+                required: true,
+                description: 'Game root containing mpgd.game.json and mpgd.targets.json.',
+              },
+              targets: {
+                type: 'string',
+                required: false,
+                description: 'Comma-separated target names. Defaults to every configured target.',
+              },
+              profile: {
+                type: 'string',
+                required: false,
+                default: action === 'verify' ? 'production' : 'development',
+                description: 'Validation profile (development or production).',
+              },
+              'kit-path': {
+                type: 'string',
+                required: false,
+                description: 'Path to the mpgd-kit checkout.',
+              },
+            },
+            run: (ctx) => {
+              const positionals = readLocalPositionals(ctx.positionals, ['game', 'icons', action]);
+              const gameRoot = path.resolve(readRequiredPositional(positionals, 0, 'game'));
+              const env = createTargetCommandEnv({
+                'targets-file': path.join(gameRoot, 'mpgd.targets.json'),
+                'kit-path': ctx.values['kit-path'],
+              });
+              const targets = readOptionalString(ctx.values.targets) ?? '';
+              const profile = readOptionalString(ctx.values.profile)
+                ?? (action === 'verify' ? 'production' : 'development');
+
+              runPnpm([`game:icons:${action}`, '--', targets, profile], env);
+            },
+          }),
+        ]),
+      ),
+      run: () => {
+        console.log('Use "mpgd game icons generate <game>", verify, or inspect.');
+      },
+    }),
   },
   run: () => {
-    console.log('Use "mpgd game create <directory>".');
+    console.log('Use "mpgd game create <directory>" or "mpgd game icons generate <game>".');
   },
 });
 

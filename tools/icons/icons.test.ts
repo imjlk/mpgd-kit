@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { randomBytes } from 'node:crypto';
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { deflateSync } from 'node:zlib';
@@ -58,6 +66,7 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
     repeated.manifest.outputs.map((output) => output.sha256),
     firstDigests,
   );
+  assert.equal(existsSync(requireResult(results, 'reddit').manifestPath), true);
 
   writeFileSync(join(repeated.outputDir, 'icon-any-192.png'), 'stale');
   await assert.rejects(
@@ -102,6 +111,10 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   assert.equal(ait.width, 600);
   assert.equal(ait.opaque, true);
   await assertOpaque(join(requireResult(results, 'ait').outputDir, 'console-icon-600.png'));
+  await assertCornerColor(
+    join(requireResult(results, 'ait').outputDir, 'console-icon-600.png'),
+    [255, 255, 255, 255],
+  );
 
   const ios = requireFirstOutput(requireResult(results, 'ios'));
   assert.equal(ios.width, 1024);
@@ -110,6 +123,11 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
 
   const android = requireResult(results, 'android');
   const shell = join(gameRoot, 'native-shell');
+  const existingLauncher = join(shell, 'android/app/src/main/res/mipmap-mdpi/ic_launcher.png');
+  const starterBytes = Buffer.from('starter-icon');
+
+  mkdirSync(join(existingLauncher, '..'), { recursive: true });
+  writeFileSync(existingLauncher, starterBytes);
   const restore = await stageNativeIconResources(android, shell);
   const adaptiveXml = await readUtf8(
     join(shell, 'android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml'),
@@ -117,7 +135,25 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
 
   assert.match(adaptiveXml, /adaptive-icon/u);
   assert.match(adaptiveXml, /ic_launcher_foreground/u);
+  assert.notDeepEqual(readFileSync(existingLauncher), starterBytes);
   restore();
+  assert.deepEqual(readFileSync(existingLauncher), starterBytes);
+
+  writeFileSync(join(gameRoot, 'assets/icon.svg'), simpleSvg('#dc2626'));
+  const changedResults = await Promise.all(
+    Object.entries(targets).map(([targetName, target]) =>
+      generateTargetIcons({ gameRoot, targetName, target, profile: 'development' }),
+    ),
+  );
+  const changedSourceDigests = new Set(
+    changedResults.map((result) => result.manifest.canonicalSource.sha256),
+  );
+
+  assert.equal(changedSourceDigests.size, 1);
+  assert.notEqual(
+    changedResults[0]?.manifest.canonicalSource.sha256,
+    results[0]?.manifest.canonicalSource.sha256,
+  );
 }
 
 async function testPngAndOverrides(parent: string): Promise<void> {
@@ -223,7 +259,13 @@ async function testPngAndOverrides(parent: string): Promise<void> {
 
   const androidTarget = {
     ...requireTarget(createTargets(gameRoot), 'android'),
-    icon: { profile: 'android', variants: { monochrome: 'assets/maskable.png' } },
+    icon: {
+      profile: 'android',
+      variants: {
+        androidForeground: 'assets/maskable.png',
+        monochrome: 'assets/maskable.png',
+      },
+    },
   } satisfies PlatformTargetConfig;
   const android = await generateTargetIcons({
     gameRoot,
@@ -231,6 +273,8 @@ async function testPngAndOverrides(parent: string): Promise<void> {
     target: androidTarget,
     profile: 'production',
   });
+  assert.equal(android.manifest.variantSources.androidForeground?.format, 'png');
+  assert.equal(android.manifest.variantSources.monochrome?.format, 'png');
   const tamperedAndroidManifest = {
     ...android.manifest,
     variantSources: {},
@@ -555,6 +599,25 @@ async function assertOpaque(path: string): Promise<void> {
 
   for (let index = info.channels - 1; index < data.length; index += info.channels) {
     assert.equal(data[index], 255, `${path} contains a non-opaque pixel.`);
+  }
+}
+
+async function assertCornerColor(
+  path: string,
+  expected: readonly [number, number, number, number],
+): Promise<void> {
+  const { data, info } = await sharp(path).ensureAlpha().raw().toBuffer({
+    resolveWithObject: true,
+  });
+  const cornerOffsets = [
+    0,
+    (info.width - 1) * info.channels,
+    (info.height - 1) * info.width * info.channels,
+    (info.width * info.height - 1) * info.channels,
+  ];
+
+  for (const offset of cornerOffsets) {
+    assert.deepEqual([...data.subarray(offset, offset + info.channels)], expected);
   }
 }
 

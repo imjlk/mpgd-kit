@@ -8,6 +8,14 @@ export interface ReleaseTargetManifest {
     readonly version: string;
     readonly digest: string;
   };
+  readonly iconManifest: {
+    readonly path: string;
+    readonly digest: string;
+    readonly sourceSha256: string;
+    readonly generatorVersion: string;
+    readonly targetProfile: string;
+    readonly targetProfileVersion: string;
+  };
   readonly versionName?: string;
   readonly versionCode?: number;
   readonly marketingVersion?: string;

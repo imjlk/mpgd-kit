@@ -125,6 +125,8 @@
   "acceptance": {
     "commands": [
       "pnpm validate:starter-workflow",
+      "pnpm game:icons:generate",
+      "pnpm game:icons:verify",
       "pnpm check",
       "pnpm --dir examples/phaser-starter check",
       "pnpm --dir examples/phaser-starter build"

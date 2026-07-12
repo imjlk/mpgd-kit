@@ -1,9 +1,11 @@
 node_modules/
 dist/
 apps/*/dist/
+apps/target-devvit/generated/
 artifacts/
 release-output/
 .mpgd.targets.generated.json
+.mpgd/
 .env
 .env.*
 apps/*/.env

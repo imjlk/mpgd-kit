@@ -60,6 +60,8 @@ const requiredFiles = [
   'examples/phaser-starter/agent/acceptance.md',
   'examples/phaser-starter/agent/game.manifest.schema.json',
   'examples/phaser-starter/agent/game.manifest.json',
+  'examples/phaser-starter/mpgd.game.json',
+  'packages/cli/templates/phaser-game/mpgd.game.json',
 ] as const;
 
 const requiredAitQueries = [
@@ -159,6 +161,7 @@ validatePhaserTemplateDevvitPostOperations();
 validatePhaserTemplateDevvitSurfaces();
 validatePhaserTemplateBuildGateways();
 validatePhaserTemplateOrientationPolicy();
+validateAppIconPipeline();
 
 if (failures.length > 0) {
   throw new Error(`Starter workflow validation failed:\n- ${failures.join('\n- ')}`);
@@ -220,6 +223,64 @@ function validatePhaserTemplateBuildGateways(): void {
       "import { createBuildGateway } from '#mpgd-platform-gateway'",
       `${installPath}: build-selected gateway.`,
     );
+  }
+}
+
+function validateAppIconPipeline(): void {
+  for (const path of [
+    'examples/phaser-starter/mpgd.game.json',
+    'packages/cli/templates/phaser-game/mpgd.game.json',
+  ]) {
+    const config = readJson(path) as {
+      readonly brand?: { readonly appIcon?: { readonly source?: unknown } };
+    } | null;
+
+    if (config !== null) {
+      assertString(config.brand?.appIcon?.source, `${path}: brand.appIcon.source`);
+    }
+  }
+
+  for (const path of [
+    'examples/phaser-starter/mpgd.targets.json',
+    'packages/cli/templates/phaser-game/mpgd.targets.json',
+  ]) {
+    const config = readJson(path) as {
+      readonly targets?: Record<string, { readonly icon?: { readonly profile?: unknown } }>;
+    } | null;
+
+    if (config === null || config.targets === undefined) {
+      continue;
+    }
+
+    for (const [target, targetConfig] of Object.entries(config.targets)) {
+      assertString(targetConfig.icon?.profile, `${path}: ${target}.icon.profile`);
+    }
+  }
+
+  for (const path of [
+    'apps/target-devvit/devvit.json',
+    'packages/cli/templates/phaser-game/apps/target-devvit/devvit.json',
+  ]) {
+    const config = readJson(path) as {
+      readonly marketingAssets?: { readonly icon?: unknown };
+    } | null;
+
+    if (config !== null) {
+      assertEqual(
+        config.marketingAssets?.icon,
+        'generated/marketing-icon.png',
+        `${path}: marketingAssets.icon`,
+      );
+    }
+  }
+
+  const packagePath = 'packages/cli/templates/phaser-game/package.json';
+  const packageJson = readJson(packagePath) as {
+    readonly scripts?: Record<string, unknown>;
+  } | null;
+
+  for (const script of ['icons:generate', 'icons:verify', 'icons:inspect']) {
+    assertString(packageJson?.scripts?.[script], `${packagePath}: scripts.${script}`);
   }
 }
 

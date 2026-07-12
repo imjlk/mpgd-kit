@@ -1,6 +1,9 @@
 {
   "$schema": "https://developers.reddit.com/schema/config-file.v1.json",
   "name": "__DEVVIT_APP_NAME__",
+  "marketingAssets": {
+    "icon": "generated/marketing-icon.png"
+  },
   "post": {
     "dir": "dist/client",
     "entrypoints": {

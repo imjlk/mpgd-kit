@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import typia from 'typia';
@@ -63,6 +64,7 @@ function generateReleaseManifestWithKitGitSha(
   }).artifacts.find((artifact) => artifact.target === input.target);
   const buildId = process.env.BUILD_ID ?? createBuildId();
   const gameVersion = process.env.APP_VERSION ?? packageJson.version ?? '0.0.0';
+  const iconManifest = readIconManifestEvidence();
 
   if (effectiveConfig === undefined) {
     throw new Error(`Failed to generate effective target config for ${input.target}.`);
@@ -86,6 +88,7 @@ function generateReleaseManifestWithKitGitSha(
           version: effectiveConfig.version,
           digest: effectiveConfig.digest,
         },
+        iconManifest,
         ...(input.target === 'ait'
           ? {
               appName: readOptionalString(process.env.MPGD_AIT_APP_NAME)
@@ -97,6 +100,69 @@ function generateReleaseManifestWithKitGitSha(
       },
     },
   });
+}
+
+function readIconManifestEvidence(): ReleaseManifest['targets'][string]['iconManifest'] {
+  const path = readOptionalString(process.env.MPGD_ICON_MANIFEST_PATH);
+
+  if (path === undefined) {
+    throw new Error('MPGD_ICON_MANIFEST_PATH is required when generating a release manifest.');
+  }
+
+  const bytes = readFileBytes(path);
+  const parsed = JSON.parse(bytes.toString('utf8')) as unknown;
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Invalid icon manifest: ${path}`);
+  }
+
+  const manifest = parsed as Record<string, unknown>;
+  const canonicalSource = manifest.canonicalSource;
+
+  if (
+    typeof canonicalSource !== 'object'
+    || canonicalSource === null
+    || Array.isArray(canonicalSource)
+  ) {
+    throw new Error(`Invalid icon manifest canonicalSource: ${path}`);
+  }
+
+  const canonicalSourceRecord = canonicalSource as Record<string, unknown>;
+
+  return {
+    path: 'mpgd-icon-manifest.json',
+    digest: createHash('sha256').update(bytes).digest('hex'),
+    sourceSha256: requireManifestString(canonicalSourceRecord, 'sha256', path),
+    generatorVersion: requireManifestString(manifest, 'generatorVersion', path),
+    targetProfile: requireManifestString(manifest, 'targetProfile', path),
+    targetProfileVersion: requireManifestString(manifest, 'targetProfileVersion', path),
+  };
+}
+
+function readFileBytes(path: string): Buffer {
+  try {
+    return readFileSync(path);
+  } catch (error) {
+    throw new Error(`Failed to read icon manifest ${path}: ${formatError(error)}`);
+  }
+}
+
+function requireManifestString(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+): string {
+  const value = record[key];
+
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Invalid icon manifest ${key}: ${path}`);
+  }
+
+  return value;
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function writeReleaseManifest(input: GenerateReleaseManifestInput): ReleaseManifest {
@@ -156,7 +222,25 @@ function hasMatchingReleaseContract(
     && previous.kitGitSha === next.kitGitSha
     && previous.targetConfigVersion === next.targetConfigVersion
     && previous.catalogVersion === next.catalogVersion
-    && previous.adPlacementVersion === next.adPlacementVersion;
+    && previous.adPlacementVersion === next.adPlacementVersion
+    && hasMatchingIconContract(previous, next);
+}
+
+function hasMatchingIconContract(
+  previous: ReleaseManifest,
+  next: ReleaseManifest,
+): boolean {
+  const nextIconManifest = Object.values(next.targets)[0]?.iconManifest;
+
+  if (nextIconManifest === undefined) {
+    return false;
+  }
+
+  return Object.values(previous.targets).every(
+    (target) =>
+      target.iconManifest.sourceSha256 === nextIconManifest.sourceSha256
+      && target.iconManifest.generatorVersion === nextIconManifest.generatorVersion,
+  );
 }
 
 function makeEffectiveConfigPathsPortable(

@@ -5,7 +5,7 @@ const config: AppsInTossWebConfig = {
   brand: {
     displayName: readEnvString(process.env.MPGD_AIT_DISPLAY_NAME) ?? 'MPGD Kit',
     primaryColor: readEnvString(process.env.MPGD_AIT_PRIMARY_COLOR) ?? '#101820',
-    icon: 'icon.png',
+    icon: readEnvString(process.env.MPGD_AIT_BRAND_ICON_URL) ?? 'generated/console-icon.png',
   },
   permissions: [],
   web: {

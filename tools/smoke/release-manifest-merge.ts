@@ -18,9 +18,11 @@ const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-release-manifest-'));
 const firstCatalogFile = join(tempDir, 'catalog-v1.json');
 const secondCatalogFile = join(tempDir, 'catalog-v2.json');
 const placementsFile = join(tempDir, 'placements.json');
+const iconManifestFile = join(tempDir, 'icon-manifest.json');
 const manifestFile = join(tempDir, 'release-manifest.json');
 const matchingManifestFile = join(tempDir, 'matching-release-manifest.json');
 const kitMismatchManifestFile = join(tempDir, 'kit-mismatch-release-manifest.json');
+const iconMismatchManifestFile = join(tempDir, 'icon-mismatch-release-manifest.json');
 const snapshotManifestFile = join(tempDir, 'snapshot-release-manifest.json');
 const failedGitManifestFile = join(tempDir, 'failed-git-release-manifest.json');
 const emptyGitManifestFile = join(tempDir, 'empty-git-release-manifest.json');
@@ -47,6 +49,7 @@ try {
   writeFileSync(firstCatalogFile, catalogJson('game-v1'));
   writeFileSync(secondCatalogFile, catalogJson('game-v2'));
   writeFileSync(placementsFile, placementsJson('ads-v1'));
+  writeFileSync(iconManifestFile, iconManifestJson());
 
   runManifest('web-preview', firstCatalogFile, matchingManifestFile, {
     kitGitShas: [firstKitGitSha],
@@ -111,6 +114,20 @@ try {
   assert.equal(kitMismatchManifest.gitSha, 'game-source-sha');
   assert.equal(kitMismatchManifest.kitGitSha, secondKitGitSha);
   assert.deepEqual(Object.keys(kitMismatchManifest.targets), ['microsoft-store']);
+
+  runManifest('web-preview', firstCatalogFile, iconMismatchManifestFile, {
+    iconSourceSha: 'a'.repeat(64),
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  runManifest('microsoft-store', firstCatalogFile, iconMismatchManifestFile, {
+    iconSourceSha: 'b'.repeat(64),
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  assert.deepEqual(Object.keys(readManifest(iconMismatchManifestFile).targets), [
+    'microsoft-store',
+  ]);
 
   const kitRevisionReadCount = runManifest('web-preview', firstCatalogFile, snapshotManifestFile, {
     kitGitShas: [firstKitGitSha, secondKitGitSha],
@@ -232,6 +249,7 @@ interface RunManifestOptions {
   readonly gitExitCode?: number;
   readonly gitStatusOutput?: string;
   readonly gitTopLevel?: string;
+  readonly iconSourceSha?: string;
   readonly kitGitShas: readonly [string, string?];
   readonly kitPath?: string;
   readonly sourceGitSha?: string;
@@ -278,6 +296,7 @@ function spawnManifest(
   options: RunManifestOptions,
 ) {
   manifestRunCount += 1;
+  writeFileSync(iconManifestFile, iconManifestJson(options.iconSourceSha));
   const gitCounterFile = join(tempDir, `git-read-count-${manifestRunCount}.txt`);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -286,6 +305,7 @@ function spawnManifest(
     MPGD_PRODUCT_CATALOG_FILE: catalogFile,
     MPGD_AD_PLACEMENTS_FILE: placementsFile,
     MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: options.effectiveConfigDir ?? effectiveConfigDir,
+    MPGD_ICON_MANIFEST_PATH: iconManifestFile,
     MPGD_KIT_PATH: options.kitPath ?? process.cwd(),
     MPGD_TEST_DIRTY_WHEN_PATH_EXISTS: options.dirtyWhenPathExists ?? '',
     MPGD_TEST_GIT_COUNTER_FILE: gitCounterFile,
@@ -442,4 +462,17 @@ function catalogJson(version: string): string {
 
 function placementsJson(version: string): string {
   return `${JSON.stringify({ version, placements: [] }, null, 2)}\n`;
+}
+
+function iconManifestJson(sourceSha = 'a'.repeat(64)): string {
+  return `${JSON.stringify({
+    schemaVersion: 1,
+    canonicalSource: { path: 'assets/icon.svg', sha256: sourceSha, format: 'svg' },
+    renderSource: { path: 'assets/icon.svg', sha256: sourceSha, format: 'svg' },
+    generatorVersion: '1.0.0',
+    targetProfile: 'fixture',
+    targetProfileVersion: '1.0.0',
+    outputs: [],
+    warnings: [],
+  }, null, 2)}\n`;
 }
