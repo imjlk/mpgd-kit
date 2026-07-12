@@ -6,6 +6,13 @@ export { baseLocale, locales, m, type Locale } from './paraglideAdapter.js';
 
 export type MpgdLocale = Locale;
 
+export interface ResolveTargetMpgdLocaleInput {
+  readonly capabilities: Pick<PlatformCapabilities, 'localizedContent'>;
+  readonly savedLocale?: unknown;
+  readonly preferredLocales?: readonly string[];
+  readonly fallbackLocale: MpgdLocale;
+}
+
 export function isMpgdLocale(input: string): input is MpgdLocale {
   return (locales as readonly string[]).includes(input);
 }
@@ -30,11 +37,30 @@ export function resolveMpgdLocale(
   capabilities: Pick<PlatformCapabilities, 'localizedContent'>,
   preferredLocales = readPreferredLocales(),
 ): MpgdLocale {
-  if (!capabilities.localizedContent) {
-    return baseLocale;
+  return resolveTargetMpgdLocale({
+    capabilities,
+    preferredLocales,
+    fallbackLocale: baseLocale,
+  });
+}
+
+/** Resolves locale policy without assigning defaults to specific platform names. */
+export function resolveTargetMpgdLocale(input: ResolveTargetMpgdLocaleInput): MpgdLocale {
+  const fallbackLocale = input.fallbackLocale;
+
+  if (!input.capabilities.localizedContent) {
+    return fallbackLocale;
   }
 
-  for (const preferredLocale of preferredLocales) {
+  if (typeof input.savedLocale === 'string') {
+    const savedLocale = normalizeMpgdLocale(input.savedLocale);
+
+    if (savedLocale !== null) {
+      return savedLocale;
+    }
+  }
+
+  for (const preferredLocale of input.preferredLocales ?? readPreferredLocales()) {
     const locale = normalizeMpgdLocale(preferredLocale);
 
     if (locale !== null) {
@@ -42,7 +68,7 @@ export function resolveMpgdLocale(
     }
   }
 
-  return baseLocale;
+  return fallbackLocale;
 }
 
 function readPreferredLocales(): readonly string[] {
@@ -53,5 +79,5 @@ function readPreferredLocales(): readonly string[] {
   }
 
   const navigatorLanguage = globalThis.navigator?.language;
-  return navigatorLanguage === undefined ? [baseLocale] : [navigatorLanguage];
+  return navigatorLanguage === undefined ? [] : [navigatorLanguage];
 }

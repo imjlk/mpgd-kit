@@ -6,6 +6,7 @@ import {
   getEffectiveAdPlacementConfig,
   getEffectiveProductConfig,
 } from '../src/effective';
+import { assertTargetConfigMatrix } from '../src/index';
 import {
   applyTargetConfigToCapabilities,
   createTargetRuntimeSnapshot,
@@ -53,6 +54,27 @@ const targetConfigMatrix = {
     ),
   },
 } satisfies TargetConfigMatrix;
+
+let invalidFallbackRejected = false;
+
+try {
+  assertTargetConfigMatrix({
+    ...targetConfigMatrix,
+    targets: {
+      ...targetConfigMatrix.targets,
+      'web-preview': {
+        ...targetConfigMatrix.targets['web-preview'],
+        localization: {
+          fallbackLocale: 'kr',
+        },
+      },
+    },
+  });
+} catch {
+  invalidFallbackRejected = true;
+}
+
+assertEqual(invalidFallbackRejected, true);
 const productCatalog = {
   version: 'test-catalog',
   products: [
@@ -153,6 +175,10 @@ assertEqual(webRuntime.features.rewardedAds.reason, 'target-disabled');
 assertEqual(webRuntime.features.interstitialAds.reason, 'target-disabled');
 assertEqual(webRuntime.features.leaderboard.reason, 'target-disabled');
 assertEqual(webRuntime.features.localization.reason, 'available');
+assertDeepEqual(webEffectiveConfig.localization, {
+  enabled: true,
+  fallbackLocale: 'en',
+});
 assertDeepEqual(webEffectiveConfig.integrations, {
   identityUpgrade: 'disabled',
   presentation: 'disabled',
@@ -594,6 +620,9 @@ function createTargetConfig(
     capabilities: {
       storage: 'local',
       localization: features.localization,
+    },
+    localization: {
+      fallbackLocale: 'en',
     },
     monetization: {
       iap: features.iap,

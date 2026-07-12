@@ -44,6 +44,7 @@
   },
   "dependencies": {
     "@mpgd/catalog": "workspace:*",
+    "@mpgd/i18n": "workspace:*",
     "@mpgd/platform": "workspace:*",
     "typia": "rc"
   },

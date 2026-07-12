@@ -1,7 +1,7 @@
 import './styles.css';
 
 import { createAnalyticsReporter, createBufferedAnalyticsSink } from '@mpgd/analytics';
-import { resolveMpgdLocale, type Locale } from '@mpgd/i18n';
+import { resolveTargetMpgdLocale, type Locale } from '@mpgd/i18n';
 import type { IdentitySession, LaunchIntent, PlatformGateway } from '@mpgd/platform';
 import {
   resolveTargetViewportPlan,
@@ -49,7 +49,12 @@ async function bootstrap(): Promise<void> {
       resolveIdentitySession(platform, player.playerId),
       resolveLaunchIntent(platform),
     ]);
-    locale = resolveMpgdLocale(runtime.capabilities);
+    locale = resolveTargetMpgdLocale({
+      capabilities: runtime.capabilities,
+      fallbackLocale:
+        runtime.effectiveConfig?.localization.fallbackLocale
+        ?? runtime.config.localization.fallbackLocale,
+    });
     const analyticsSink = createBufferedAnalyticsSink();
     const analytics = createAnalyticsReporter({
       target: platform.target,

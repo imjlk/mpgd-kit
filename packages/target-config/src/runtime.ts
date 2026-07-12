@@ -1,3 +1,4 @@
+import type { MpgdLocale } from '@mpgd/i18n';
 import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform';
 
 import type { EffectiveTargetConfig } from './effective.js';
@@ -68,6 +69,10 @@ export interface TargetCapabilityConfig {
   readonly localization: boolean;
 }
 
+export interface TargetLocalizationConfig {
+  readonly fallbackLocale: MpgdLocale;
+}
+
 export interface TargetMonetizationConfig {
   readonly iap: boolean;
   readonly rewardedAds: boolean;
@@ -94,6 +99,7 @@ export interface TargetConfig {
   readonly runtime: TargetRuntimeKind;
   readonly features: TargetFeatureConfig;
   readonly capabilities: TargetCapabilityConfig;
+  readonly localization: TargetLocalizationConfig;
   readonly monetization: TargetMonetizationConfig;
   readonly leaderboard: TargetLeaderboardConfig;
   readonly release: TargetReleaseConfig;

@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-10",
+  "version": "2026-07-12",
   "targets": {
     "web-preview": {
       "runtime": "web-preview",
@@ -13,6 +13,9 @@
       "capabilities": {
         "storage": "local",
         "localization": true
+      },
+      "localization": {
+        "fallbackLocale": "en"
       },
       "monetization": {
         "iap": false,
@@ -54,6 +57,9 @@
         "storage": "local",
         "localization": true
       },
+      "localization": {
+        "fallbackLocale": "en"
+      },
       "monetization": {
         "iap": false,
         "rewardedAds": false,
@@ -93,6 +99,9 @@
       "capabilities": {
         "storage": "native",
         "localization": true
+      },
+      "localization": {
+        "fallbackLocale": "en"
       },
       "monetization": {
         "iap": true,
@@ -134,6 +143,9 @@
         "storage": "native",
         "localization": true
       },
+      "localization": {
+        "fallbackLocale": "en"
+      },
       "monetization": {
         "iap": true,
         "rewardedAds": true,
@@ -174,6 +186,9 @@
         "storage": "none",
         "localization": true
       },
+      "localization": {
+        "fallbackLocale": "ko"
+      },
       "monetization": {
         "iap": true,
         "rewardedAds": true,
@@ -213,6 +228,9 @@
       "capabilities": {
         "storage": "native",
         "localization": true
+      },
+      "localization": {
+        "fallbackLocale": "en"
       },
       "monetization": {
         "iap": false,

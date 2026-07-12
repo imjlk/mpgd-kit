@@ -1,6 +1,6 @@
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 
-import { m, resolveMpgdLocale } from '../src/index';
+import { m, resolveMpgdLocale, resolveTargetMpgdLocale } from '../src/index';
 
 const localizedCapabilities = {
   ...createUnsupportedCapabilities(),
@@ -13,9 +13,46 @@ const blockedCapabilities = {
 
 const ko = resolveMpgdLocale(localizedCapabilities, ['ko-KR', 'en-US']);
 const en = resolveMpgdLocale(blockedCapabilities, ['ko-KR']);
+const saved = resolveTargetMpgdLocale({
+  capabilities: localizedCapabilities,
+  savedLocale: 'ko-KR',
+  preferredLocales: ['en-US'],
+  fallbackLocale: 'en',
+});
+const preferred = resolveTargetMpgdLocale({
+  capabilities: localizedCapabilities,
+  savedLocale: 'unsupported',
+  preferredLocales: ['ko-KR'],
+  fallbackLocale: 'en',
+});
+const configuredFallback = resolveTargetMpgdLocale({
+  capabilities: localizedCapabilities,
+  preferredLocales: ['unsupported'],
+  fallbackLocale: 'ko',
+});
+const configuredFallbackWithoutPreferences = resolveTargetMpgdLocale({
+  capabilities: localizedCapabilities,
+  preferredLocales: [],
+  fallbackLocale: 'ko',
+});
+const disabledFallback = resolveTargetMpgdLocale({
+  capabilities: blockedCapabilities,
+  savedLocale: 'ko',
+  preferredLocales: ['ko-KR'],
+  fallbackLocale: 'en',
+});
 
 assertEqual(ko, 'ko', 'Korean locale should resolve when localized content is available');
 assertEqual(en, 'en', 'Locale should fall back when localized content is target-disabled');
+assertEqual(saved, 'ko', 'Stored locale should take priority over device preferences');
+assertEqual(preferred, 'ko', 'Invalid stored locale should fall through to device preferences');
+assertEqual(configuredFallback, 'ko', 'Target fallback should apply after unsupported preferences');
+assertEqual(
+  configuredFallbackWithoutPreferences,
+  'ko',
+  'Target fallback should apply when device preferences are unavailable',
+);
+assertEqual(disabledFallback, 'en', 'Target-disabled localization should use target fallback');
 assertEqual(
   m.score({ score: 120 }, { locale: ko }),
   '점수 120',
