@@ -279,8 +279,34 @@ function validateAppIconPipeline(): void {
     readonly scripts?: Record<string, unknown>;
   } | null;
 
-  for (const script of ['icons:generate', 'icons:verify', 'icons:inspect']) {
+  for (const script of [
+    'icons:generate',
+    'icons:generate:devvit',
+    'icons:verify',
+    'icons:inspect',
+  ]) {
     assertString(packageJson?.scripts?.[script], `${packagePath}: scripts.${script}`);
+  }
+
+  const devvitPackagePath =
+    'packages/cli/templates/phaser-game/apps/target-devvit/package.json';
+  const devvitPackageJson = readJson(devvitPackagePath) as {
+    readonly scripts?: Record<string, unknown>;
+  } | null;
+
+  assertEqual(
+    devvitPackageJson?.scripts?.['prepare:icon'],
+    'pnpm --dir ../.. icons:generate:devvit',
+    `${devvitPackagePath}: scripts.prepare:icon`,
+  );
+
+  for (const script of ['init', 'init:copy-paste', 'dev', 'upload', 'publish']) {
+    const command = devvitPackageJson?.scripts?.[script];
+    assertString(command, `${devvitPackagePath}: scripts.${script}`);
+
+    if (typeof command === 'string' && !command.startsWith('pnpm run prepare:icon && ')) {
+      failures.push(`${devvitPackagePath}: scripts.${script} must prepare the Devvit icon.`);
+    }
   }
 }
 
