@@ -71,7 +71,12 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     assertPathInsideTargetBase(effectiveConfigPath, `${target} effective target config`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);
 
-    for (const requiredFile of requiredFilesForTarget(target, targetConfig, artifactPath)) {
+    for (const requiredFile of requiredFilesForTarget(
+      target,
+      targetConfig,
+      artifactPath,
+      entry.profile,
+    )) {
       assertFileExists(requiredFile, `${target} required file`);
     }
 
@@ -85,7 +90,11 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
 
     if (target === 'microsoft-store') {
       verifyMicrosoftStorePwaManifest(artifactPath);
-      verifyMicrosoftStorePwaRelease(artifactPath, manifest);
+
+      if (entry.profile === 'production') {
+        verifyMicrosoftStorePwaRelease(artifactPath, manifest);
+      }
+
       verifyMicrosoftStoreBundlePurity(artifactPath);
     }
 
@@ -215,8 +224,12 @@ function verifyMicrosoftStorePwaRelease(
 
   new Script(serviceWorker, { filename: 'service-worker.js' });
 
-  if (!serviceWorker.includes(JSON.stringify(evidence.cacheName))) {
-    throw new Error('PWA service worker cache name is stale.');
+  if (
+    !serviceWorker.includes(JSON.stringify(evidence.cachePrefix))
+    || !serviceWorker.includes(JSON.stringify(evidence.cacheNamePattern))
+    || !serviceWorker.includes('encodeURIComponent(self.registration.scope)')
+  ) {
+    throw new Error('PWA service worker cache identity is stale or not deployment-scoped.');
   }
 
   if (/\bskipWaiting\s*\(/u.test(serviceWorker)) {
@@ -434,10 +447,11 @@ function requiredFilesForTarget(
   target: string,
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
+  profile: string | undefined,
 ): readonly string[] {
   switch (targetConfig.kind) {
     case 'web':
-      return target === 'microsoft-store'
+      return target === 'microsoft-store' && profile === 'production'
         ? [
             `${artifactPath}/index.html`,
             `${artifactPath}/manifest.webmanifest`,

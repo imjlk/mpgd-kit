@@ -17,7 +17,7 @@ export interface MicrosoftStorePwaReleaseEvidence {
   readonly configTarget: 'microsoft-store';
   readonly revision: string;
   readonly cachePrefix: string;
-  readonly cacheName: string;
+  readonly cacheNamePattern: string;
   readonly precacheUrls: readonly string[];
 }
 
@@ -127,7 +127,7 @@ export function createMicrosoftStorePwaReleaseEvidence(input: {
     configTarget: 'microsoft-store',
     revision,
     cachePrefix,
-    cacheName: `${cachePrefix}${revision}`,
+    cacheNamePattern: `${cachePrefix}{scope}-${revision}`,
     precacheUrls: normalizePrecacheUrls(input.precacheUrls),
   };
 }
@@ -135,14 +135,24 @@ export function createMicrosoftStorePwaReleaseEvidence(input: {
 export function createMicrosoftStorePwaServiceWorker(
   evidence: MicrosoftStorePwaReleaseEvidence,
 ): string {
-  const cacheName = requireNonEmptyString(evidence.cacheName, 'PWA cache name');
+  const revision = requireRevision(evidence.revision);
   const cachePrefix = requireNonEmptyString(evidence.cachePrefix, 'PWA cache prefix');
+  const cacheNamePattern = requireNonEmptyString(
+    evidence.cacheNamePattern,
+    'PWA cache name pattern',
+  );
   const precacheUrls = normalizePrecacheUrls(evidence.precacheUrls);
+
+  if (cacheNamePattern !== `${cachePrefix}{scope}-${revision}`) {
+    throw new Error('PWA cache name pattern is inconsistent.');
+  }
 
   return `'use strict';
 
-const CACHE_NAME = ${JSON.stringify(cacheName)};
-const CACHE_PREFIX = ${JSON.stringify(cachePrefix)};
+const CACHE_NAMESPACE = ${JSON.stringify(cachePrefix)};
+const CACHE_SCOPE = encodeURIComponent(self.registration.scope);
+const CACHE_PREFIX = CACHE_NAMESPACE + CACHE_SCOPE + '-';
+const CACHE_NAME = ${JSON.stringify(cacheNamePattern)}.replace('{scope}', CACHE_SCOPE);
 const PRECACHE_URLS = ${JSON.stringify(precacheUrls, null, 2)};
 const INDEX_URL = new URL('./index.html', self.registration.scope).href;
 
@@ -202,7 +212,7 @@ self.addEventListener('fetch', (event) => {
 
   event.respondWith((async () => {
     const cache = await caches.open(CACHE_NAME);
-    return await cache.match(request) ?? fetch(request);
+    return await cache.match(request, { ignoreSearch: true }) ?? fetch(request);
   })());
 });
 `;
@@ -241,7 +251,10 @@ export function readMicrosoftStorePwaReleaseEvidence(
     ),
   });
 
-  if (input.cachePrefix !== evidence.cachePrefix || input.cacheName !== evidence.cacheName) {
+  if (
+    input.cachePrefix !== evidence.cachePrefix
+    || input.cacheNamePattern !== evidence.cacheNamePattern
+  ) {
     throw new Error('PWA release evidence cache identity is inconsistent.');
   }
 

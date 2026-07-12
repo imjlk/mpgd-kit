@@ -117,7 +117,7 @@ const env: NodeJS.ProcessEnv = {
     : { MPGD_AIT_BRAND_ICON_URL: generatedIcons.aitBrandIcon }),
 };
 
-if (targetName === 'microsoft-store' && target.kind === 'web') {
+if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
   assertMicrosoftStorePwaProvenance({
     appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
     buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
@@ -130,7 +130,7 @@ run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env)
 embedEffectiveTargetConfig(targetName, gameApp, env);
 stageWebIconEvidence(generatedIcons, `${gameApp}/dist`);
 
-if (targetName === 'microsoft-store' && target.kind === 'web') {
+if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
   writeMicrosoftStorePwaArtifacts({
     artifactRoot: `${gameApp}/dist`,
     provenance: {

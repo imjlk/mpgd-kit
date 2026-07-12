@@ -71,6 +71,8 @@ assert.match(worker, /cache:\s*'reload'/u);
 assert.doesNotMatch(worker, /\bskipWaiting\s*\(/u);
 assert.doesNotMatch(worker, /\bcaches\.match\s*\(/u);
 assert.match(worker, /name\.startsWith\(CACHE_PREFIX\)/u);
+assert.match(worker, /CACHE_SCOPE = encodeURIComponent\(self\.registration\.scope\)/u);
+assert.match(worker, /cache\.match\(request, \{ ignoreSearch: true \}\)/u);
 assert.throws(
   () => createMicrosoftStorePwaReleaseEvidence({
     ...provenance,
@@ -142,7 +144,10 @@ try {
     readMicrosoftStorePwaReleaseEvidence(`${artifactRoot}/pwa-release.json`).revision,
     first.revision,
   );
-  assert(readFileSync(`${artifactRoot}/service-worker.js`, 'utf8').includes(first.cacheName));
+  assert(
+    readFileSync(`${artifactRoot}/service-worker.js`, 'utf8').includes(first.revision),
+    'PWA service worker must use the release revision',
+  );
 } finally {
   rmSync(artifactRoot, { recursive: true, force: true });
 }
