@@ -1,13 +1,17 @@
 import * as devvitWebClient from '@devvit/web/client';
 
-import { startDevvitSurface, type DevvitSurfaceOptions, type DevvitSurfaceResult } from './surface';
+import {
+  startDevvitSurface,
+  type DevvitSurfaceOptions,
+  type DevvitSurfaceResult,
+} from './surface.js';
 
 export type {
   DevvitSurfaceClient,
   DevvitSurfaceMode,
   DevvitSurfaceOptions,
   DevvitSurfaceResult,
-} from './surface';
+} from './surface.js';
 
 export type DevvitWebSurfaceOptions = Omit<DevvitSurfaceOptions, 'client'>;
 

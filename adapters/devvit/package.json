@@ -50,7 +50,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run && node test/server-dist-import.mjs"
+    "test": "vitest run && node test/server-dist-import.mjs && node --conditions=browser test/web-dist-import.mjs"
   },
   "dependencies": {
     "@devvit/web": "0.13.6",
