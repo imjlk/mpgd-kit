@@ -43,11 +43,13 @@
           },
           "iconManifest": {
             "type": "object",
-            "required": ["path", "digest", "sourceSha256", "generatorVersion", "targetProfile", "targetProfileVersion"],
+            "required": ["path", "digest", "sourceSha256", "sharedConfigSha256", "renderConfigSha256", "generatorVersion", "targetProfile", "targetProfileVersion"],
             "properties": {
               "path": { "type": "string", "minLength": 1 },
               "digest": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
               "sourceSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "sharedConfigSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+              "renderConfigSha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
               "generatorVersion": { "type": "string", "minLength": 1 },
               "targetProfile": { "type": "string", "minLength": 1 },
               "targetProfileVersion": { "type": "string", "minLength": 1 }

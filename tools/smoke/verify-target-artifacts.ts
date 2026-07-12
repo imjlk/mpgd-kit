@@ -9,11 +9,11 @@ import { platformTargetsFilePath } from '../target/platform-targets';
 import {
   assertEmbeddedTargetConfig,
   embeddedTargetConfigFileName,
+  readArtifactTextFromDirectory,
+  readArtifactTextFromZip,
   readEmbeddedTargetConfigFromDirectory,
   readEmbeddedTargetConfigFromFile,
   readEmbeddedTargetConfigFromZip,
-  readNamedTextFromDirectory,
-  readNamedTextFromZip,
   type EmbeddedTargetConfigEvidence,
 } from './embedded-target-config';
 
@@ -98,7 +98,7 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
       },
     );
     assertIconManifestEvidence(
-      readReleaseIconManifest(target, targetConfig, artifactPath),
+      readReleaseIconManifest(target, targetConfig, artifactPath, entry.iconManifest.path),
       entry.iconManifest,
       target,
     );
@@ -171,22 +171,37 @@ function readReleaseIconManifest(
   target: string,
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
+  iconManifestPath: string,
 ): { readonly source: string; readonly content: string } {
-  const fileName = 'mpgd-icon-manifest.json';
-
   switch (targetConfig.kind) {
     case 'web':
-      return readNamedTextFromDirectory(artifactPath, fileName, `${target} web artifact`);
+      return readArtifactTextFromDirectory(
+        artifactPath,
+        iconManifestPath,
+        `${target} web artifact`,
+      );
     case 'capacitor-android':
-      return readNamedTextFromZip(artifactPath, fileName, `${target} release AAB`);
+      return readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} release AAB`);
     case 'capacitor-ios':
-      return readNamedTextFromDirectory(artifactPath, fileName, `${target} native artifact`);
+      return readArtifactTextFromDirectory(
+        artifactPath,
+        iconManifestPath,
+        `${target} native artifact`,
+      );
     case 'apps-in-toss':
       return artifactPath.endsWith('.ait')
-        ? readNamedTextFromZip(artifactPath, fileName, `${target} release artifact`)
-        : readNamedTextFromDirectory(artifactPath, fileName, `${target} wrapper artifact`);
+        ? readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} release artifact`)
+        : readArtifactTextFromDirectory(
+            artifactPath,
+            iconManifestPath,
+            `${target} wrapper artifact`,
+          );
     case 'devvit-web':
-      return readNamedTextFromDirectory(artifactPath, fileName, `${target} Devvit artifact`);
+      return readArtifactTextFromDirectory(
+        artifactPath,
+        iconManifestPath,
+        `${target} Devvit artifact`,
+      );
   }
 }
 
@@ -210,7 +225,9 @@ function assertIconManifestEvidence(
   }
 
   if (
-    parsed.generatorVersion !== expected.generatorVersion
+    parsed.sharedConfigSha256 !== expected.sharedConfigSha256
+    || parsed.renderConfigSha256 !== expected.renderConfigSha256
+    || parsed.generatorVersion !== expected.generatorVersion
     || parsed.targetProfile !== expected.targetProfile
     || parsed.targetProfileVersion !== expected.targetProfileVersion
   ) {

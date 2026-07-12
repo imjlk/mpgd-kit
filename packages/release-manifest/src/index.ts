@@ -12,6 +12,8 @@ export interface ReleaseTargetManifest {
     readonly path: string;
     readonly digest: string;
     readonly sourceSha256: string;
+    readonly sharedConfigSha256: string;
+    readonly renderConfigSha256: string;
     readonly generatorVersion: string;
     readonly targetProfile: string;
     readonly targetProfileVersion: string;

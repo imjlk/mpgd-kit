@@ -23,6 +23,11 @@ const manifestFile = join(tempDir, 'release-manifest.json');
 const matchingManifestFile = join(tempDir, 'matching-release-manifest.json');
 const kitMismatchManifestFile = join(tempDir, 'kit-mismatch-release-manifest.json');
 const iconMismatchManifestFile = join(tempDir, 'icon-mismatch-release-manifest.json');
+const iconConfigMismatchManifestFile = join(tempDir, 'icon-config-mismatch-release-manifest.json');
+const targetRenderOverrideManifestFile = join(
+  tempDir,
+  'target-render-override-release-manifest.json',
+);
 const snapshotManifestFile = join(tempDir, 'snapshot-release-manifest.json');
 const failedGitManifestFile = join(tempDir, 'failed-git-release-manifest.json');
 const emptyGitManifestFile = join(tempDir, 'empty-git-release-manifest.json');
@@ -127,6 +132,43 @@ try {
   });
   assert.deepEqual(Object.keys(readManifest(iconMismatchManifestFile).targets), [
     'microsoft-store',
+  ]);
+
+  runManifest('web-preview', firstCatalogFile, iconConfigMismatchManifestFile, {
+    iconSharedConfigSha: 'c'.repeat(64),
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  runManifest('microsoft-store', firstCatalogFile, iconConfigMismatchManifestFile, {
+    iconSharedConfigSha: 'd'.repeat(64),
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  assert.deepEqual(Object.keys(readManifest(iconConfigMismatchManifestFile).targets), [
+    'microsoft-store',
+  ]);
+
+  runManifest('web-preview', firstCatalogFile, targetRenderOverrideManifestFile, {
+    iconRenderConfigSha: 'e'.repeat(64),
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  runManifest('microsoft-store', firstCatalogFile, targetRenderOverrideManifestFile, {
+    iconRenderConfigSha: 'f'.repeat(64),
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  assert.deepEqual(Object.keys(readManifest(targetRenderOverrideManifestFile).targets).sort(), [
+    'microsoft-store',
+    'web-preview',
+  ]);
+  runManifest('web-preview', firstCatalogFile, targetRenderOverrideManifestFile, {
+    iconRenderConfigSha: '1'.repeat(64),
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  assert.deepEqual(Object.keys(readManifest(targetRenderOverrideManifestFile).targets), [
+    'web-preview',
   ]);
 
   const kitRevisionReadCount = runManifest('web-preview', firstCatalogFile, snapshotManifestFile, {
@@ -249,6 +291,8 @@ interface RunManifestOptions {
   readonly gitExitCode?: number;
   readonly gitStatusOutput?: string;
   readonly gitTopLevel?: string;
+  readonly iconRenderConfigSha?: string;
+  readonly iconSharedConfigSha?: string;
   readonly iconSourceSha?: string;
   readonly kitGitShas: readonly [string, string?];
   readonly kitPath?: string;
@@ -296,7 +340,14 @@ function spawnManifest(
   options: RunManifestOptions,
 ) {
   manifestRunCount += 1;
-  writeFileSync(iconManifestFile, iconManifestJson(options.iconSourceSha));
+  writeFileSync(
+    iconManifestFile,
+    iconManifestJson({
+      renderConfigSha: options.iconRenderConfigSha,
+      sharedConfigSha: options.iconSharedConfigSha,
+      sourceSha: options.iconSourceSha,
+    }),
+  );
   const gitCounterFile = join(tempDir, `git-read-count-${manifestRunCount}.txt`);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
@@ -332,6 +383,7 @@ function spawnManifest(
       'production',
       `artifacts/${target}`,
       outputFile,
+      'nested/mpgd-icon-manifest.json',
     ],
     {
       cwd: process.cwd(),
@@ -464,12 +516,20 @@ function placementsJson(version: string): string {
   return `${JSON.stringify({ version, placements: [] }, null, 2)}\n`;
 }
 
-function iconManifestJson(sourceSha = 'a'.repeat(64)): string {
+function iconManifestJson(options: {
+  readonly renderConfigSha?: string | undefined;
+  readonly sharedConfigSha?: string | undefined;
+  readonly sourceSha?: string | undefined;
+} = {}): string {
+  const sourceSha = options.sourceSha ?? 'a'.repeat(64);
+
   return `${JSON.stringify({
-    schemaVersion: 1,
+    schemaVersion: 2,
     canonicalSource: { path: 'assets/icon.svg', sha256: sourceSha, format: 'svg' },
     renderSource: { path: 'assets/icon.svg', sha256: sourceSha, format: 'svg' },
-    generatorVersion: '1.0.0',
+    sharedConfigSha256: options.sharedConfigSha ?? 'b'.repeat(64),
+    renderConfigSha256: options.renderConfigSha ?? 'c'.repeat(64),
+    generatorVersion: '1.1.0',
     targetProfile: 'fixture',
     targetProfileVersion: '1.0.0',
     outputs: [],

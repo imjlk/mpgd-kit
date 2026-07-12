@@ -29,6 +29,7 @@ export interface GenerateReleaseManifestInput {
   readonly target: string;
   readonly profile: string;
   readonly artifact: string;
+  readonly iconManifestArtifactPath: string;
   readonly outputPath?: string;
 }
 
@@ -64,7 +65,7 @@ function generateReleaseManifestWithKitGitSha(
   }).artifacts.find((artifact) => artifact.target === input.target);
   const buildId = process.env.BUILD_ID ?? createBuildId();
   const gameVersion = process.env.APP_VERSION ?? packageJson.version ?? '0.0.0';
-  const iconManifest = readIconManifestEvidence();
+  const iconManifest = readIconManifestEvidence(input.iconManifestArtifactPath);
 
   if (effectiveConfig === undefined) {
     throw new Error(`Failed to generate effective target config for ${input.target}.`);
@@ -102,7 +103,9 @@ function generateReleaseManifestWithKitGitSha(
   });
 }
 
-function readIconManifestEvidence(): ReleaseManifest['targets'][string]['iconManifest'] {
+function readIconManifestEvidence(
+  artifactPath: string,
+): ReleaseManifest['targets'][string]['iconManifest'] {
   const path = readOptionalString(process.env.MPGD_ICON_MANIFEST_PATH);
 
   if (path === undefined) {
@@ -130,13 +133,32 @@ function readIconManifestEvidence(): ReleaseManifest['targets'][string]['iconMan
   const canonicalSourceRecord = canonicalSource as Record<string, unknown>;
 
   return {
-    path: 'mpgd-icon-manifest.json',
+    path: requirePortableArtifactPath(artifactPath),
     digest: createHash('sha256').update(bytes).digest('hex'),
     sourceSha256: requireManifestString(canonicalSourceRecord, 'sha256', path),
+    sharedConfigSha256: requireManifestString(manifest, 'sharedConfigSha256', path),
+    renderConfigSha256: requireManifestString(manifest, 'renderConfigSha256', path),
     generatorVersion: requireManifestString(manifest, 'generatorVersion', path),
     targetProfile: requireManifestString(manifest, 'targetProfile', path),
     targetProfileVersion: requireManifestString(manifest, 'targetProfileVersion', path),
   };
+}
+
+function requirePortableArtifactPath(path: string): string {
+  const normalized = path.replaceAll('\\', '/');
+  const segments = normalized.split('/');
+
+  if (
+    normalized.length === 0
+    || isAbsolute(path)
+    || isAbsolute(normalized)
+    || /^[A-Za-z]:\//u.test(normalized)
+    || segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')
+  ) {
+    throw new Error(`Invalid icon manifest artifact path: ${path}`);
+  }
+
+  return normalized;
 }
 
 function readFileBytes(path: string): Buffer {
@@ -230,15 +252,24 @@ function hasMatchingIconContract(
   previous: ReleaseManifest,
   next: ReleaseManifest,
 ): boolean {
-  const nextIconManifest = Object.values(next.targets)[0]?.iconManifest;
+  const nextTargetEntry = Object.entries(next.targets)[0];
 
-  if (nextIconManifest === undefined) {
+  if (nextTargetEntry === undefined) {
     return false;
   }
 
-  return Object.values(previous.targets).every(
+  const [nextTargetName, nextTarget] = nextTargetEntry;
+  const nextIconManifest = nextTarget.iconManifest;
+  const previousSameTarget = previous.targets[nextTargetName];
+
+  return (
+    previousSameTarget === undefined
+    || previousSameTarget.iconManifest.renderConfigSha256
+      === nextIconManifest.renderConfigSha256
+  ) && Object.values(previous.targets).every(
     (target) =>
       target.iconManifest.sourceSha256 === nextIconManifest.sourceSha256
+      && target.iconManifest.sharedConfigSha256 === nextIconManifest.sharedConfigSha256
       && target.iconManifest.generatorVersion === nextIconManifest.generatorVersion,
   );
 }
@@ -457,11 +488,17 @@ if (isCliEntrypoint(import.meta.url)) {
     profile = 'production',
     artifact = 'artifacts/web-preview',
     outputPath,
+    iconManifestArtifactPath = process.env.MPGD_ICON_MANIFEST_ARTIFACT_PATH,
   ] = process.argv.slice(2);
-  const input =
-    outputPath === undefined
-      ? { target, profile, artifact }
-      : { target, profile, artifact, outputPath };
+  if (iconManifestArtifactPath === undefined) {
+    throw new Error(
+      'Provide the icon manifest path inside the release artifact as argument 5 '
+      + 'or MPGD_ICON_MANIFEST_ARTIFACT_PATH.',
+    );
+  }
+  const input = outputPath === undefined
+    ? { target, profile, artifact, iconManifestArtifactPath }
+    : { target, profile, artifact, iconManifestArtifactPath, outputPath };
   const manifest = writeReleaseManifest(input);
   console.log(`Release manifest: ${manifest.releaseId}`);
 }

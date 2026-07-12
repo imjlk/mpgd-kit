@@ -1,7 +1,7 @@
 import type { PlatformTargetConfig } from '../target/schemas';
 
-export const iconManifestSchemaVersion = 1 as const;
-export const iconGeneratorVersion = '1.0.0';
+export const iconManifestSchemaVersion = 2 as const;
+export const iconGeneratorVersion = '1.1.0';
 
 export type BrandImageVariant =
   | 'maskable'
@@ -65,6 +65,7 @@ export interface IconManifest {
   readonly canonicalSource: IconManifestSource;
   readonly renderSource: IconManifestSource;
   readonly variantSources: Partial<Record<BrandImageVariant, IconManifestSource>>;
+  readonly sharedConfigSha256: string;
   readonly renderConfigSha256: string;
   readonly generatorVersion: string;
   readonly targetProfile: string;

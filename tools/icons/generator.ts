@@ -72,6 +72,16 @@ export async function generateTargetIcons(input: {
   );
   const backgroundColor = appIcon.backgroundColor ?? defaultBackgroundColor;
   const variantSources = await loadVariantSources(input.gameRoot, appIcon, strict);
+  const sharedVariantSources = await loadVariantSources(input.gameRoot, loaded.appIcon, strict);
+  const sharedConfigSha256 = createRenderConfigSha256({
+    canonicalSourcePath: loaded.appIcon.source,
+    appIcon: loaded.appIcon,
+    backgroundColor: loaded.appIcon.backgroundColor ?? defaultBackgroundColor,
+    canonical,
+    renderSource: canonical,
+    variantSources: sharedVariantSources,
+    externalUrl: undefined,
+  });
   const renderConfigSha256 = createRenderConfigSha256({
     canonicalSourcePath: loaded.appIcon.source,
     appIcon,
@@ -153,6 +163,7 @@ export async function generateTargetIcons(input: {
         toManifestSource(input.gameRoot, image),
       ]),
     ),
+    sharedConfigSha256,
     renderConfigSha256,
     generatorVersion: iconGeneratorVersion,
     targetProfile: profile.id,
@@ -215,6 +226,16 @@ export async function verifyExistingTargetIcons(input: {
   const profile = resolveTargetIconProfile(input.targetName, input.target);
   const backgroundColor = appIcon.backgroundColor ?? defaultBackgroundColor;
   const variantSources = await loadVariantSources(input.gameRoot, appIcon, strict);
+  const sharedVariantSources = await loadVariantSources(input.gameRoot, loaded.appIcon, strict);
+  const sharedConfigSha256 = createRenderConfigSha256({
+    canonicalSourcePath: loaded.appIcon.source,
+    appIcon: loaded.appIcon,
+    backgroundColor: loaded.appIcon.backgroundColor ?? defaultBackgroundColor,
+    canonical,
+    renderSource: canonical,
+    variantSources: sharedVariantSources,
+    externalUrl: undefined,
+  });
   const renderConfigSha256 = createRenderConfigSha256({
     canonicalSourcePath: loaded.appIcon.source,
     appIcon,
@@ -250,6 +271,7 @@ export async function verifyExistingTargetIcons(input: {
     || manifest.targetProfileVersion !== profile.version
     || manifest.canonicalSource?.sha256 !== canonical.sha256
     || manifest.renderSource?.sha256 !== renderSource.sha256
+    || manifest.sharedConfigSha256 !== sharedConfigSha256
     || manifest.renderConfigSha256 !== renderConfigSha256
     || typeof manifest.variantSources !== 'object'
     || manifest.variantSources === null

@@ -12,11 +12,13 @@ import {
 } from './generator';
 import { stageWrapperIcon } from './staging';
 
-const [action = 'generate', targetList = '', profile = 'development'] = process.argv.slice(2);
+const [action = 'generate', targetList = '', requestedProfile] = process.argv.slice(2);
 
 if (action !== 'generate' && action !== 'verify' && action !== 'inspect') {
   throw new Error(`Unknown icon action: ${action}`);
 }
+
+const profile = requestedProfile ?? (action === 'verify' ? 'production' : 'development');
 
 const loaded = loadPlatformTargetsConfig();
 const requestedTargets = targetList.length === 0

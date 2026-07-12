@@ -2,6 +2,7 @@ import { spawnSync } from 'node:child_process';
 import {
   cpSync,
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -10,7 +11,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 
 import { loadEnv } from 'vite';
 
@@ -461,9 +462,86 @@ function writeManifest(
       target,
       profile: releaseProfile,
       artifact,
+      iconManifestArtifactPath: findEmbeddedIconManifestArtifactPath(artifact),
       outputPath: releaseManifestPath(configBaseDir),
     }),
   );
+}
+
+function findEmbeddedIconManifestArtifactPath(artifact: string): string {
+  const artifactPath = targetPath(artifact);
+  const fileName = 'mpgd-icon-manifest.json';
+  const matches = statSync(artifactPath).isDirectory()
+    ? findNamedArtifactFiles(artifactPath, fileName).map(
+        (path) => relative(artifactPath, path).replaceAll('\\', '/'),
+      )
+    : listZipEntries(artifactPath).filter((entry) => basename(entry) === fileName);
+
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one ${fileName} in release artifact ${artifactPath}; found ${matches.length}.`,
+    );
+  }
+
+  const match = matches[0];
+
+  if (
+    match === undefined
+    || match.startsWith('/')
+    || match.split('/').some(
+      (segment) => segment.length === 0 || segment === '.' || segment === '..',
+    )
+  ) {
+    throw new Error(`Unsafe embedded icon manifest path in ${artifactPath}: ${String(match)}`);
+  }
+
+  return match;
+}
+
+function findNamedArtifactFiles(root: string, fileName: string): readonly string[] {
+  const matches: string[] = [];
+
+  for (const entry of readdirSync(root)) {
+    const path = join(root, entry);
+    const stat = lstatSync(path);
+
+    if (stat.isSymbolicLink()) {
+      continue;
+    }
+
+    if (stat.isDirectory()) {
+      matches.push(...findNamedArtifactFiles(path, fileName));
+    } else if (stat.isFile() && entry === fileName) {
+      matches.push(path);
+    }
+  }
+
+  return matches;
+}
+
+function listZipEntries(path: string): readonly string[] {
+  const result = spawnSync('unzip', ['-Z1', path], {
+    cwd: process.cwd(),
+    env: process.env,
+    encoding: 'utf8',
+  });
+
+  if (result.error !== undefined) {
+    throw result.error;
+  }
+
+  const toleratedPrefixWarning = result.status === 1
+    && result.stdout.trim().length > 0
+    && result.stderr.includes('extra bytes at beginning or within zipfile')
+    && result.stderr.includes('(attempting to process anyway)');
+
+  if (result.status !== 0 && !toleratedPrefixWarning) {
+    throw new Error(
+      `Failed to list release artifact ${path}: ${result.stderr.trim() || `exit ${String(result.status)}`}`,
+    );
+  }
+
+  return result.stdout.split('\n').filter((entry) => entry.length > 0);
 }
 
 function embedEffectiveTargetConfig(
