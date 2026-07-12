@@ -18,7 +18,7 @@ import { cli } from 'gunshi';
 export {
   assertProductionTargetReadiness,
   type ProductionTargetReadinessInput,
-} from './production-target-readiness';
+} from './production-target-readiness.js';
 
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolvePackageRoot(sourceDir);

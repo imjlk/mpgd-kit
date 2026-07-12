@@ -15,7 +15,7 @@ const buildRoot = join(process.cwd(), artifactsDir, 'ios-build');
 const appPath = join(buildRoot, 'Debug-iphonesimulator/App.app');
 const screenshotPath = join(process.cwd(), artifactsDir, 'ios.png');
 
-run('pnpm', ['build:ios']);
+run('pnpm', ['build:target', 'ios', 'staging']);
 
 const device = findSimulator(simulatorName, simulatorOs);
 

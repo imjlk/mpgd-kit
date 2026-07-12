@@ -21,7 +21,7 @@ const debugApk =
 assertExecutable(adb, 'adb');
 assertExecutable(emulator, 'emulator');
 
-run('pnpm', ['build:android']);
+run('pnpm', ['build:target', 'android', 'staging']);
 run('./gradlew', ['assembleDebug', '--no-daemon'], 'apps/mobile-capacitor/android');
 mkdirSync('artifacts/emulator', { recursive: true });
 
