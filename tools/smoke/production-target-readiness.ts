@@ -32,15 +32,16 @@ try {
     });
   }
 
-  symlinkSync(outsideRoot, join(gameRoot, 'apps', 'mobile-capacitor', 'android'));
-  expectReadinessError(
-    { target: 'android', profile: 'production', gameServicesUrl: publicBackend },
-    'must keep its native platform directory inside',
-  );
-  rmSync(join(gameRoot, 'apps', 'mobile-capacitor', 'android'), {
-    force: true,
-    recursive: true,
-  });
+  for (const target of ['android', 'ios']) {
+    const nativePlatformDir = join(gameRoot, 'apps', 'mobile-capacitor', target);
+
+    symlinkSync(outsideRoot, nativePlatformDir);
+    expectReadinessError(
+      { target, profile: 'production', gameServicesUrl: publicBackend },
+      'must keep its native platform directory inside',
+    );
+    rmSync(nativePlatformDir, { force: true, recursive: true });
+  }
 
   assertProductionTargetReadiness({
     target: 'ait',
