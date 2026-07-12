@@ -16,7 +16,7 @@ export type DevvitWebSurfaceOptions = Omit<DevvitSurfaceOptions, 'client'>;
 // Keep the narrow browser contract explicit until its default types expose it.
 const browserClient = devvitWebClient as unknown as {
   readonly getWebViewMode: () => 'inline' | 'expanded';
-  readonly requestExpandedMode: (event: MouseEvent, entry: string) => void;
+  readonly requestExpandedMode: (event: MouseEvent, entry: string) => void | Promise<void>;
 };
 
 export function startDevvitWebSurface(
@@ -28,6 +28,9 @@ export function startDevvitWebSurface(
   });
 }
 
-export function requestDevvitExpandedMode(event: MouseEvent, entry: string): void {
-  browserClient.requestExpandedMode(event, entry);
+export async function requestDevvitExpandedMode(
+  event: MouseEvent,
+  entry: string,
+): Promise<void> {
+  await browserClient.requestExpandedMode(event, entry);
 }

@@ -37,9 +37,9 @@ function renderInlinePreview(): void {
   button.className = 'devvit-preview__button';
   button.type = 'button';
   button.textContent = 'Play';
-  button.addEventListener('click', (event) => {
+  button.addEventListener('click', async (event) => {
     try {
-      requestDevvitExpandedMode(event, 'game');
+      await requestDevvitExpandedMode(event, 'game');
     } catch (error) {
       console.error('[devvit] expanded game surface request failed.', error);
     }

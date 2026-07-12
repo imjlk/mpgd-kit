@@ -538,7 +538,7 @@ function validatePhaserTemplateDevvitSurfaces(): void {
         "from '@mpgd/adapter-devvit/web'",
         'mountInlinePreview',
         "await import('../main')",
-        "requestDevvitExpandedMode(event, 'game')",
+        "await requestDevvitExpandedMode(event, 'game')",
       ]) {
         assertIncludesText(source, requiredText, `${devvitEntryPath}: Devvit surface split.`);
       }
