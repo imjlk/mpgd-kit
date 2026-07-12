@@ -84,6 +84,20 @@ export function assertProductionTargetReadiness(
     );
   }
 
+  if (input.target === 'android' || input.target === 'ios') {
+    const canonicalPlatformDir = readCanonicalPathAllowingMissingTail(
+      path.join(resolvedOwnerPath, input.target),
+      `${input.target} native platform directory`,
+    );
+
+    if (!isDedicatedChildPath(canonicalOwnerPath, canonicalPlatformDir)) {
+      throw new Error(
+        `Production target ${input.target} must keep its native platform directory inside `
+          + `${canonicalOwnerPath}; received ${canonicalPlatformDir}.`,
+      );
+    }
+  }
+
   assertAuthoritativeGameServicesUrl(input.gameServicesUrl, input.target);
 }
 

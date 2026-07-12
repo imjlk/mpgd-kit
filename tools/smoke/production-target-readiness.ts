@@ -32,6 +32,16 @@ try {
     });
   }
 
+  symlinkSync(outsideRoot, join(gameRoot, 'apps', 'mobile-capacitor', 'android'));
+  expectReadinessError(
+    { target: 'android', profile: 'production', gameServicesUrl: publicBackend },
+    'must keep its native platform directory inside',
+  );
+  rmSync(join(gameRoot, 'apps', 'mobile-capacitor', 'android'), {
+    force: true,
+    recursive: true,
+  });
+
   assertProductionTargetReadiness({
     target: 'ait',
     profile: 'staging',
