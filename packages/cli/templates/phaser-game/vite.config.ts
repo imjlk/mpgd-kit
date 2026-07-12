@@ -13,6 +13,7 @@ interface RuntimePlatformTargetMetadata {
 export default defineConfig(({ mode }) => {
   const isProduction = mode === 'production';
   const platformTarget = readRuntimePlatformTarget();
+  const isDevvitBuild = process.env.APP_TARGET === 'reddit';
 
   return {
     base: './',
@@ -42,8 +43,16 @@ export default defineConfig(({ mode }) => {
       assetsDir: 'assets',
       emptyOutDir: true,
       rolldownOptions: {
+        ...(isDevvitBuild
+          ? {
+              input: {
+                preview: resolve('index.html'),
+                game: resolve('game.html'),
+              },
+            }
+          : {}),
         output: {
-          entryFileNames: 'assets/game.js',
+          entryFileNames: isDevvitBuild ? 'assets/[name].js' : 'assets/game.js',
           chunkFileNames: 'assets/[name].js',
           assetFileNames: 'assets/[name][extname]',
         },

@@ -8,6 +8,10 @@ to `apps/target-devvit/dist/client`, and builds the Devvit server bundle to
 `apps/target-devvit/dist/server/index.cjs`. In this repository that configured
 game app is `examples/phaser-starter`.
 
+The client build emits `index.html` for the lightweight inline post preview and
+`game.html` for the expanded Phaser surface. `devvit.json` maps the default and
+`game` entrypoints to those documents respectively.
+
 The game client talks to the Devvit server through the shared
 `@mpgd/bridge/orpc` contract at `/api/mpgd/rpc`. The older JSON bridge endpoint
 at `/api/mpgd/bridge` remains available for compatibility, but new

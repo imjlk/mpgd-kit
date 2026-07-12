@@ -32,6 +32,14 @@
     "./server": {
       "types": "./dist/server/index.d.ts",
       "default": "./dist/server/index.js"
+    },
+    "./surface": {
+      "types": "./dist/surface.d.ts",
+      "default": "./dist/surface.js"
+    },
+    "./web": {
+      "types": "./dist/web.d.ts",
+      "default": "./dist/web.js"
     }
   },
   "files": [
@@ -45,6 +53,7 @@
     "test": "vitest run && node test/server-dist-import.mjs"
   },
   "dependencies": {
+    "@devvit/web": "0.13.6",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/platform": "workspace:*"
   },

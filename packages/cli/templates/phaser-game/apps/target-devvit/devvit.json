@@ -7,6 +7,10 @@
       "default": {
         "entry": "index.html",
         "height": "tall"
+      },
+      "game": {
+        "entry": "game.html",
+        "height": "tall"
       }
     }
   },

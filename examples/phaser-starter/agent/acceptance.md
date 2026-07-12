@@ -20,6 +20,8 @@ pnpm --dir examples/phaser-starter build
 - Identity upgrade, launch, share, and notification-subscription calls remain behind `PlatformGateway`.
 - Inbound share payloads are treated as untrusted, and progress linking plus notification delivery remain server-owned.
 - Orientation locks are soft prompts unless a platform adapter explicitly supplies hard-lock support.
+- The Reddit inline document renders a lightweight preview without loading the Phaser game bundle.
+- The Reddit `game` entrypoint opens the separate expanded document and starts Phaser directly.
 
 ## Apps in Toss Target
 

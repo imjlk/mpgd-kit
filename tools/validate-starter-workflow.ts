@@ -156,6 +156,7 @@ if (manifest !== null) {
 validatePhaserTemplateAITPolyfill();
 validatePhaserTemplateAITConsoleCli();
 validatePhaserTemplateDevvitPostOperations();
+validatePhaserTemplateDevvitSurfaces();
 validatePhaserTemplateOrientationPolicy();
 
 if (failures.length > 0) {
@@ -469,6 +470,116 @@ function validatePhaserTemplateDevvitPostOperations(): void {
         `${templateReadmePath}: durable post operation guidance.`,
       );
     }
+  }
+}
+
+function validatePhaserTemplateDevvitSurfaces(): void {
+  const roots = ['packages/cli/templates/phaser-game', 'examples/phaser-starter'] as const;
+
+  for (const root of roots) {
+    const indexPath = `${root}/index.html`;
+    const gameDocumentPath = `${root}/game.html`;
+    const entryPath = `${root}/src/entry.ts`;
+    const gameEntryPath = `${root}/src/gameEntry.ts`;
+    const devvitEntryPath = `${root}/src/platform/devvitEntrypoint.ts`;
+    const devvitStylePath = `${root}/src/platform/devvitInlinePreview.css`;
+    const vitePath = `${root}/vite.config.ts`;
+
+    for (const path of [
+      indexPath,
+      gameDocumentPath,
+      entryPath,
+      gameEntryPath,
+      devvitEntryPath,
+      devvitStylePath,
+      vitePath,
+    ]) {
+      if (!existsSync(path)) {
+        failures.push(`${path}: required for split Devvit inline and expanded surfaces.`);
+      }
+    }
+
+    if (existsSync(indexPath)) {
+      const source = readText(indexPath);
+      assertIncludesText(source, '/src/entry.ts', `${indexPath}: platform entry.`);
+
+      if (source.includes('/src/main.ts')) {
+        failures.push(`${indexPath}: must not load the Phaser bootstrap directly.`);
+      }
+    }
+
+    if (existsSync(gameDocumentPath)) {
+      assertIncludesText(
+        readText(gameDocumentPath),
+        '/src/gameEntry.ts',
+        `${gameDocumentPath}: expanded game entry.`,
+      );
+    }
+
+    if (existsSync(entryPath)) {
+      const source = readText(entryPath);
+      for (const requiredText of ["__APP_TARGET__ === 'reddit'", "import('./main')"]) {
+        assertIncludesText(source, requiredText, `${entryPath}: target-aware bootstrap.`);
+      }
+    }
+
+    if (existsSync(gameEntryPath)) {
+      const source = readText(gameEntryPath);
+      assertIncludesText(source, "import('./main')", `${gameEntryPath}: Phaser bootstrap.`);
+
+      if (source.includes('getWebViewMode')) {
+        failures.push(`${gameEntryPath}: expanded entry must not inspect Devvit web view mode.`);
+      }
+    }
+
+    if (existsSync(devvitEntryPath)) {
+      const source = readText(devvitEntryPath);
+      for (const requiredText of [
+        "from '@mpgd/adapter-devvit/web'",
+        'mountInlinePreview',
+        "await import('../main')",
+        "requestDevvitExpandedMode(event, 'game')",
+      ]) {
+        assertIncludesText(source, requiredText, `${devvitEntryPath}: Devvit surface split.`);
+      }
+    }
+
+    if (existsSync(vitePath)) {
+      const source = readText(vitePath);
+      for (const requiredText of [
+        "process.env.APP_TARGET === 'reddit'",
+        "preview: resolve('index.html')",
+        "game: resolve('game.html')",
+      ]) {
+        assertIncludesText(source, requiredText, `${vitePath}: Devvit multi-page build.`);
+      }
+    }
+  }
+
+  for (const path of [
+    'apps/target-devvit/devvit.json',
+    'packages/cli/templates/phaser-game/apps/target-devvit/devvit.json',
+  ]) {
+    const manifest = readJson(path) as {
+      readonly post?: {
+        readonly entrypoints?: Record<string, { readonly entry?: unknown }>;
+      };
+    } | null;
+
+    if (manifest === null) {
+      continue;
+    }
+
+    assertEqual(
+      manifest.post?.entrypoints?.default?.entry,
+      'index.html',
+      `${path}: inline post entry`,
+    );
+    assertEqual(
+      manifest.post?.entrypoints?.game?.entry,
+      'game.html',
+      `${path}: expanded game entry`,
+    );
   }
 }
 
