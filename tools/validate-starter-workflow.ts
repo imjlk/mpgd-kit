@@ -282,6 +282,7 @@ function validateAppIconPipeline(): void {
   for (const script of [
     'icons:generate',
     'icons:generate:devvit',
+    'icons:generate:devvit:production',
     'icons:verify',
     'icons:inspect',
   ]) {
@@ -299,14 +300,29 @@ function validateAppIconPipeline(): void {
     'pnpm --dir ../.. icons:generate:devvit',
     `${devvitPackagePath}: scripts.prepare:icon`,
   );
+  assertEqual(
+    devvitPackageJson?.scripts?.['prepare:icon:production'],
+    'pnpm --dir ../.. icons:generate:devvit:production',
+    `${devvitPackagePath}: scripts.prepare:icon:production`,
+  );
 
-  for (const script of ['init', 'init:copy-paste', 'dev', 'upload', 'publish']) {
+  for (const script of ['init', 'init:copy-paste', 'upload', 'publish']) {
     const command = devvitPackageJson?.scripts?.[script];
     assertString(command, `${devvitPackagePath}: scripts.${script}`);
 
-    if (typeof command === 'string' && !command.startsWith('pnpm run prepare:icon && ')) {
-      failures.push(`${devvitPackagePath}: scripts.${script} must prepare the Devvit icon.`);
+    if (
+      typeof command === 'string'
+      && !command.startsWith('pnpm run prepare:icon:production && ')
+    ) {
+      failures.push(`${devvitPackagePath}: scripts.${script} must prepare a production icon.`);
     }
+  }
+
+  const devCommand = devvitPackageJson?.scripts?.dev;
+  assertString(devCommand, `${devvitPackagePath}: scripts.dev`);
+
+  if (typeof devCommand === 'string' && !devCommand.startsWith('pnpm run prepare:icon && ')) {
+    failures.push(`${devvitPackagePath}: scripts.dev must prepare a development icon.`);
   }
 }
 

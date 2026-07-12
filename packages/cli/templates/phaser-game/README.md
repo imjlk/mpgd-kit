@@ -165,7 +165,7 @@ First-time Devvit setup:
 
 ```sh
 pnpm install -w
-pnpm icons:generate:devvit
+pnpm icons:generate:devvit:production
 pnpm devvit:login
 pnpm devvit:whoami
 pnpm devvit:init
