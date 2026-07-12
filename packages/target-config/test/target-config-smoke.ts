@@ -425,14 +425,53 @@ const androidEffectiveConfig = createEffectiveTargetConfig({
   catalog: productCatalog,
   adPlacements,
 });
+const androidTargetOverrideEffectiveConfig = createEffectiveTargetConfig({
+  target: 'android',
+  targetConfigVersion: targetConfigMatrix.version,
+  config: androidConfig,
+  catalog: productCatalog,
+  adPlacements,
+  platformTarget: {
+    kind: 'capacitor-android',
+    adapter: 'capacitor',
+    integrations: {
+      presentation: 'disabled',
+      sharing: 'disabled',
+      inboundShare: 'disabled',
+      notifications: 'disabled',
+      presentationMode: 'inline-expanded',
+    },
+  },
+});
+const androidTargetOverrideGateway = withTargetAvailability(gateway, androidConfig, {
+  effectiveConfig: androidTargetOverrideEffectiveConfig,
+  resolveAdPlacementType,
+});
 const androidGateway = withTargetAvailability(gateway, androidConfig, {
   effectiveConfig: androidEffectiveConfig,
   resolveAdPlacementType,
 });
+const androidTargetOverrideRuntime = await androidTargetOverrideGateway.getTargetRuntime();
 const androidRuntime = await androidGateway.getTargetRuntime();
 
 assertEqual(androidRuntime.presentationMode, 'fullscreen');
 assertEqual(androidEffectiveConfig.integrations.identityUpgrade, 'available');
+assertDeepEqual(androidTargetOverrideEffectiveConfig.integrations, {
+  identityUpgrade: 'available',
+  presentation: 'disabled',
+  sharing: 'disabled',
+  inboundShare: 'disabled',
+  notifications: 'disabled',
+  presentationMode: 'inline-expanded',
+});
+assertEqual(androidTargetOverrideRuntime.presentationMode, 'inline-expanded');
+assertEqual(androidTargetOverrideRuntime.integrations.presentation.state, 'disabled');
+assertEqual(androidTargetOverrideRuntime.integrations.sharing.state, 'disabled');
+assertEqual(androidTargetOverrideRuntime.integrations.inboundShare.state, 'disabled');
+assertEqual(androidTargetOverrideRuntime.integrations.notifications.state, 'disabled');
+assertEqual(androidTargetOverrideGateway.presentation, undefined);
+assertEqual(androidTargetOverrideGateway.sharing, undefined);
+assertEqual(androidTargetOverrideGateway.notifications, undefined);
 assertEqual(androidRuntime.integrations.identityUpgrade.state, 'available');
 assertEqual(androidRuntime.integrations.presentation.state, 'available');
 assertEqual(androidRuntime.integrations.sharing.state, 'available');

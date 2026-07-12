@@ -180,6 +180,30 @@ export const targetIntegrations = [
   'notifications',
 ] as const satisfies readonly TargetIntegration[];
 
+type CompleteValueList<Union, Values extends readonly Union[]> =
+  Exclude<Union, Values[number]> extends never ? Values : never;
+
+const integrationAvailabilityStateValues = [
+  'available',
+  'disabled',
+  'approval-required',
+  'configuration-required',
+  'unsupported',
+] as const satisfies readonly IntegrationAvailabilityState[];
+export const integrationAvailabilityStates: CompleteValueList<
+  IntegrationAvailabilityState,
+  typeof integrationAvailabilityStateValues
+> = integrationAvailabilityStateValues;
+
+const presentationModeValues = [
+  'fullscreen',
+  'inline-expanded',
+] as const satisfies readonly PresentationMode[];
+export const presentationModes: CompleteValueList<
+  PresentationMode,
+  typeof presentationModeValues
+> = presentationModeValues;
+
 export const defaultTargetIntegrationConfig = {
   identityUpgrade: 'disabled',
   presentation: 'disabled',
@@ -189,13 +213,10 @@ export const defaultTargetIntegrationConfig = {
   presentationMode: 'fullscreen',
 } as const satisfies TargetIntegrationConfig;
 
-const integrationAvailabilityStates = new Set<IntegrationAvailabilityState>([
-  'available',
-  'disabled',
-  'approval-required',
-  'configuration-required',
-  'unsupported',
-]);
+const integrationAvailabilityStateSet = new Set<IntegrationAvailabilityState>(
+  integrationAvailabilityStates,
+);
+const presentationModeSet = new Set<PresentationMode>(presentationModes);
 
 export function normalizeTargetIntegrationConfig(
   config: Partial<TargetIntegrationConfig> | undefined,
@@ -322,7 +343,9 @@ export function createTargetRuntimeSnapshot(input: {
     leaderboard: getFeatureAvailability('leaderboard', input.config, input.capabilities),
     localization: getFeatureAvailability('localization', input.config, input.capabilities),
   } satisfies Record<PlatformFeature, FeatureAvailability>;
-  const integrationConfig = normalizeTargetIntegrationConfig(input.config.integrations);
+  const integrationConfig = normalizeTargetIntegrationConfig(
+    input.effectiveConfig?.integrations ?? input.config.integrations,
+  );
   const integrationEntries = targetIntegrations.map((integration) => {
     const availability = createIntegrationAvailability(
       integration,
@@ -373,7 +396,9 @@ export function withTargetAvailability(
     notifications: gatewayNotifications,
     ...gatewayWithoutIntegrations
   } = gateway;
-  const integrations = normalizeTargetIntegrationConfig(config.integrations);
+  const integrations = normalizeTargetIntegrationConfig(
+    options.effectiveConfig?.integrations ?? config.integrations,
+  );
   const isIntegrationAvailable = (integration: TargetIntegration): boolean => (
     createIntegrationAvailability(integration, integrations[integration], gateway).state
       === 'available'
@@ -595,7 +620,7 @@ function normalizeIntegrationAvailabilityState(
   input: IntegrationAvailabilityState | undefined,
   fallback: IntegrationAvailabilityState,
 ): IntegrationAvailabilityState {
-  if (input !== undefined && integrationAvailabilityStates.has(input)) {
+  if (input !== undefined && integrationAvailabilityStateSet.has(input)) {
     return input;
   }
 
@@ -603,7 +628,7 @@ function normalizeIntegrationAvailabilityState(
 }
 
 function normalizePresentationMode(input: PresentationMode | undefined): PresentationMode {
-  if (input === 'inline-expanded' || input === 'fullscreen') {
+  if (input !== undefined && presentationModeSet.has(input)) {
     return input;
   }
 

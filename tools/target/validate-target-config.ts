@@ -2,18 +2,21 @@ import { existsSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
 import { isCliEntrypoint, readJsonFile } from '../io';
-import { loadPlatformTargetsConfig, resolveFromPlatformTargetsBase } from './platform-targets';
-import { assertPlatformTargetsConfig } from './schemas';
+import {
+  assertPlatformTargetsConfigShape,
+  loadPlatformTargetsConfig,
+  resolveFromPlatformTargetsBase,
+} from './platform-targets';
 
 export function validateTargetConfigFile(path?: string) {
   const loadedConfig = path === undefined
     ? loadPlatformTargetsConfig()
     : {
         baseDir: dirname(resolve(path)),
-        config: assertPlatformTargetsConfig(readJsonFile(path)),
+        config: assertPlatformTargetsConfigShape(readJsonFile(path)),
         path: resolve(path),
       };
-  const config = assertPlatformTargetsConfig(loadedConfig.config);
+  const config = loadedConfig.config;
 
   for (const [targetName, target] of Object.entries(config.targets)) {
     if (!existsSync(resolvePath(target.gameApp))) {

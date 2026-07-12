@@ -215,6 +215,7 @@ function toEffectivePlatformTargetMetadata(
   const base = {
     kind: config.kind,
     adapter: config.adapter,
+    ...(config.integrations === undefined ? {} : { integrations: config.integrations }),
   };
 
   switch (config.kind) {

@@ -1,8 +1,22 @@
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import type { EffectiveTargetConfig, TargetIntegrationConfig } from '@mpgd/target-config';
 
 // Runtime source import is intentional: smoke runs before package dist is rebuilt.
-import { targetIntegrations } from '../../packages/target-config/src/runtime';
-import { validateEffectiveTargetConfigMatrix } from '../target/effective-config';
+import {
+  integrationAvailabilityStates,
+  presentationModes,
+  targetIntegrations,
+} from '../../packages/target-config/src/runtime';
+import {
+  validateEffectiveTargetConfigMatrix,
+  writeEffectiveTargetConfigs,
+} from '../target/effective-config';
+import { loadPlatformTargetsConfig } from '../target/platform-targets';
+import { assertPlatformTargetsConfig } from '../target/schemas';
+import { validateTargetConfigMatrixFile } from '../validate-target-config';
 
 const matrix = validateEffectiveTargetConfigMatrix();
 const webStoreIntegrationConfig = {
@@ -60,7 +74,178 @@ for (const expectedTarget of Object.keys(expectedIntegrations)) {
   }
 }
 
+verifyGameOwnedIntegrationOverrides();
+
 console.log(`Effective target config smoke passed: ${Object.keys(matrix.targets).join(', ')}`);
+
+function verifyGameOwnedIntegrationOverrides(): void {
+  const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-target-integrations-'));
+  const targetsPath = join(tempDir, 'mpgd.targets.json');
+  const outputDir = join(tempDir, 'artifacts');
+  const previousTargetsPath = process.env.MPGD_PLATFORM_TARGETS_FILE;
+  const target = {
+    kind: 'devvit-web',
+    gameApp: '.',
+    wrapperApp: '.',
+    adapter: 'devvit',
+    webDir: '.',
+    artifact: 'devvit',
+  } as const;
+  const withIntegrations = (integrations: unknown): unknown => ({
+    targets: {
+      reddit: {
+        ...target,
+        integrations,
+      },
+    },
+  });
+  const platformTargets = withIntegrations({
+    notifications: 'disabled',
+    presentationMode: 'fullscreen',
+  });
+  const invalidPlatformTargets = withIntegrations({
+    notifications: 'not-a-readiness-state',
+  });
+  const invalidInputs = [
+    {
+      description: 'an invalid availability state',
+      config: invalidPlatformTargets,
+      expectedMessage: 'notifications has an unsupported value',
+    },
+    {
+      description: 'an unknown integration key',
+      config: withIntegrations({ presntation: 'available' }),
+      expectedMessage: 'not a recognized integration key',
+    },
+    {
+      description: 'an invalid presentation mode',
+      config: withIntegrations({ presentationMode: 'windowed' }),
+      expectedMessage: 'presentationMode has an unsupported value',
+    },
+    {
+      description: 'an object availability value',
+      config: withIntegrations({ notifications: {} }),
+      expectedMessage: 'notifications has an unsupported value',
+    },
+    {
+      description: 'a string integrations value',
+      config: withIntegrations('available'),
+      expectedMessage: 'integrations must be an object',
+    },
+    {
+      description: 'a number integrations value',
+      config: withIntegrations(1),
+      expectedMessage: 'integrations must be an object',
+    },
+    {
+      description: 'a boolean integrations value',
+      config: withIntegrations(true),
+      expectedMessage: 'integrations must be an object',
+    },
+    {
+      description: 'a null integrations value',
+      config: withIntegrations(null),
+      expectedMessage: 'integrations must be an object',
+    },
+    {
+      description: 'an array integrations value',
+      config: withIntegrations([]),
+      expectedMessage: 'integrations must be an object',
+    },
+  ] as const;
+
+  try {
+    assertPlatformTargetsConfig(platformTargets);
+    assertThrows(
+      () => assertPlatformTargetsConfig(invalidPlatformTargets),
+      'typia should reject an invalid game-owned integration state',
+      'notifications',
+    );
+
+    process.env.MPGD_PLATFORM_TARGETS_FILE = targetsPath;
+    for (const invalidInput of invalidInputs) {
+      writeFileSync(targetsPath, `${JSON.stringify(invalidInput.config, null, 2)}\n`);
+      assertThrows(
+        () => writeEffectiveTargetConfigs({ targets: ['reddit'], outputDir }),
+        `the effective config path should reject ${invalidInput.description}`,
+        invalidInput.expectedMessage,
+      );
+      assertThrows(
+        () => validateTargetConfigMatrixFile('packages/target-config/targets.json', targetsPath),
+        `the standard target-config validator should reject ${invalidInput.description}`,
+        invalidInput.expectedMessage,
+      );
+    }
+
+    for (const availability of integrationAvailabilityStates) {
+      const integrations = Object.fromEntries(
+        targetIntegrations.map((integration) => [integration, availability]),
+      );
+      const config = withIntegrations({
+        ...integrations,
+        presentationMode: presentationModes[0],
+      });
+
+      assertValidPlatformTargetsFile(config, targetsPath, `availability state "${availability}"`);
+    }
+
+    for (const presentationMode of presentationModes) {
+      const config = withIntegrations({
+        notifications: integrationAvailabilityStates[0],
+        presentationMode,
+      });
+
+      assertValidPlatformTargetsFile(
+        config,
+        targetsPath,
+        `presentation mode "${presentationMode}"`,
+      );
+    }
+
+    writeFileSync(targetsPath, `${JSON.stringify(platformTargets, null, 2)}\n`);
+    writeEffectiveTargetConfigs({
+      targets: ['reddit'],
+      outputDir,
+    });
+    const artifact = JSON.parse(
+      readFileSync(join(outputDir, 'reddit.json'), 'utf8'),
+    ) as EffectiveTargetConfig;
+
+    assertEqual(
+      artifact.integrations.identityUpgrade,
+      'configuration-required',
+      'reddit identity upgrade should inherit the generic target config',
+    );
+    assertEqual(
+      artifact.integrations.sharing,
+      'configuration-required',
+      'reddit sharing should inherit the generic target config',
+    );
+    assertEqual(
+      artifact.integrations.presentation,
+      'configuration-required',
+      'reddit presentation readiness should be independent from presentation mode',
+    );
+    assertEqual(
+      artifact.integrations.notifications,
+      'disabled',
+      'reddit notifications should use the game-owned target override',
+    );
+    assertEqual(
+      artifact.integrations.presentationMode,
+      'fullscreen',
+      'reddit presentation mode should use the game-owned target override',
+    );
+  } finally {
+    if (previousTargetsPath === undefined) {
+      delete process.env.MPGD_PLATFORM_TARGETS_FILE;
+    } else {
+      process.env.MPGD_PLATFORM_TARGETS_FILE = previousTargetsPath;
+    }
+
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
 
 function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): void {
   const expectedIntegrationConfig = expectedIntegrations[target];
@@ -149,4 +334,43 @@ function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(`${message}. Expected ${String(expected)}, got ${String(actual)}.`);
   }
+}
+
+function assertValidPlatformTargetsFile(
+  config: unknown,
+  targetsPath: string,
+  description: string,
+): void {
+  try {
+    assertPlatformTargetsConfig(config);
+    writeFileSync(targetsPath, `${JSON.stringify(config, null, 2)}\n`);
+    loadPlatformTargetsConfig(targetsPath);
+  } catch (error) {
+    throw new Error(`Valid integration override rejected for ${description}.`, {
+      cause: error,
+    });
+  }
+}
+
+function assertThrows(
+  callback: () => unknown,
+  message: string,
+  expectedMessage: string,
+): void {
+  try {
+    callback();
+  } catch (error) {
+    const actualMessage = error instanceof Error ? error.message : String(error);
+
+    if (!actualMessage.includes(expectedMessage)) {
+      throw new Error(
+        `${message}. Expected an error containing "${expectedMessage}", got "${actualMessage}".`,
+        { cause: error },
+      );
+    }
+
+    return;
+  }
+
+  throw new Error(`${message}. Expected callback to throw.`);
 }

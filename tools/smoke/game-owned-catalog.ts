@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -23,6 +23,8 @@ const previousCatalogFile = process.env.MPGD_PRODUCT_CATALOG_FILE;
 const previousPlacementsFile = process.env.MPGD_AD_PLACEMENTS_FILE;
 const previousInitCwd = process.env.INIT_CWD;
 const previousPwd = process.env.PWD;
+const previousPlatformTargetsFile = process.env.MPGD_PLATFORM_TARGETS_FILE;
+const previousConfigTarget = process.env.MPGD_CONFIG_TARGET;
 
 try {
   writeFileSync(
@@ -219,6 +221,8 @@ try {
   await assertViteCatalogAliasesWithRelativeEnv();
   await assertViteCatalogAliasesFallBackWhenInitCwdMisses();
   await assertViteCatalogAliasesPreferGameRoot();
+  await assertVitePlatformTargetMetadata();
+  assertViteConfigsStayInSync();
   assertTargetBuildCatalogEnvUsesCallerBase();
 
   const matrix = validateEffectiveTargetConfigMatrix(loadEffectiveTargetConfigMatrix());
@@ -276,6 +280,8 @@ try {
   restoreEnv('MPGD_AD_PLACEMENTS_FILE', previousPlacementsFile);
   restoreEnv('INIT_CWD', previousInitCwd);
   restoreEnv('PWD', previousPwd);
+  restoreEnv('MPGD_PLATFORM_TARGETS_FILE', previousPlatformTargetsFile);
+  restoreEnv('MPGD_CONFIG_TARGET', previousConfigTarget);
   rmSync(tempDir, { force: true, recursive: true });
 }
 
@@ -430,6 +436,80 @@ async function assertViteCatalogAliasesPreferGameRoot(): Promise<void> {
   }
 }
 
+async function assertVitePlatformTargetMetadata(): Promise<void> {
+  const targetsFile = join(tempDir, 'runtime-platform-targets.json');
+  const malformedTargetsFile = join(tempDir, 'malformed-runtime-platform-targets.json');
+  const missingTargetsFile = join(tempDir, 'missing-runtime-platform-targets.json');
+  const configPaths = [
+    'examples/phaser-starter/vite.config.ts',
+    'packages/cli/templates/phaser-game/vite.config.ts',
+  ];
+  const expectedMetadata = {
+    kind: 'apps-in-toss',
+    adapter: 'ait',
+    integrations: {
+      presentation: 'disabled',
+      presentationMode: 'inline-expanded',
+    },
+  };
+
+  writeFileSync(
+    targetsFile,
+    `${JSON.stringify({
+      targets: {
+        ait: {
+          ...expectedMetadata,
+          gameApp: '.',
+          wrapperApp: 'apps/target-ait',
+          webDir: 'apps/target-ait/public/game',
+          artifact: '.ait',
+        },
+      },
+    }, null, 2)}\n`,
+  );
+  writeFileSync(malformedTargetsFile, '{ malformed json\n');
+  process.env.MPGD_PLATFORM_TARGETS_FILE = targetsFile;
+  process.env.MPGD_CONFIG_TARGET = 'ait';
+
+  try {
+    for (const configPath of configPaths) {
+      const config = await loadViteConfig(configPath);
+      const serializedMetadata = config.define?.['__MPGD_PLATFORM_TARGET__'];
+
+      assert.ok(serializedMetadata !== undefined, `${configPath} platform target define`);
+      assert.deepEqual(JSON.parse(serializedMetadata), expectedMetadata);
+    }
+
+    for (const [targetsPath, expectedPath] of [
+      [missingTargetsFile, 'missing-runtime-platform-targets.json'],
+      [malformedTargetsFile, 'malformed-runtime-platform-targets.json'],
+    ] as const) {
+      process.env.MPGD_PLATFORM_TARGETS_FILE = targetsPath;
+
+      for (const configPath of configPaths) {
+        await assert.rejects(
+          loadViteConfig(configPath),
+          new RegExp(
+            `Failed to read or parse MPGD_PLATFORM_TARGETS_FILE at .*${expectedPath}:`,
+            'u',
+          ),
+        );
+      }
+    }
+  } finally {
+    restoreEnv('MPGD_PLATFORM_TARGETS_FILE', previousPlatformTargetsFile);
+    restoreEnv('MPGD_CONFIG_TARGET', previousConfigTarget);
+  }
+}
+
+function assertViteConfigsStayInSync(): void {
+  assert.equal(
+    readFileSync('examples/phaser-starter/vite.config.ts', 'utf8'),
+    readFileSync('packages/cli/templates/phaser-game/vite.config.ts', 'utf8'),
+    'Starter and generated-template Vite target wiring must stay in sync.',
+  );
+}
+
 function assertTargetBuildCatalogEnvUsesCallerBase(): void {
   const callerDir = join(tempDir, 'caller-game');
   const shadowDir = join(tempDir, 'shadow-caller');
@@ -476,6 +556,7 @@ function assertTargetBuildCatalogEnvUsesCallerBase(): void {
 }
 
 interface ViteUserConfig {
+  readonly define?: Record<string, string>;
   readonly resolve?: {
     readonly alias?: ViteAlias;
   };
