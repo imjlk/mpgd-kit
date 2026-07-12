@@ -177,9 +177,7 @@ function verifyGameOwnedIntegrationOverrides(): void {
         presentationMode: presentationModes[0],
       });
 
-      assertPlatformTargetsConfig(config);
-      writeFileSync(targetsPath, `${JSON.stringify(config, null, 2)}\n`);
-      loadPlatformTargetsConfig(targetsPath);
+      assertValidPlatformTargetsFile(config, targetsPath, `availability state "${availability}"`);
     }
 
     for (const presentationMode of presentationModes) {
@@ -188,9 +186,11 @@ function verifyGameOwnedIntegrationOverrides(): void {
         presentationMode,
       });
 
-      assertPlatformTargetsConfig(config);
-      writeFileSync(targetsPath, `${JSON.stringify(config, null, 2)}\n`);
-      loadPlatformTargetsConfig(targetsPath);
+      assertValidPlatformTargetsFile(
+        config,
+        targetsPath,
+        `presentation mode "${presentationMode}"`,
+      );
     }
 
     writeFileSync(targetsPath, `${JSON.stringify(platformTargets, null, 2)}\n`);
@@ -319,6 +319,22 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(`${message}. Expected ${String(expected)}, got ${String(actual)}.`);
+  }
+}
+
+function assertValidPlatformTargetsFile(
+  config: unknown,
+  targetsPath: string,
+  description: string,
+): void {
+  try {
+    assertPlatformTargetsConfig(config);
+    writeFileSync(targetsPath, `${JSON.stringify(config, null, 2)}\n`);
+    loadPlatformTargetsConfig(targetsPath);
+  } catch (error) {
+    throw new Error(`Valid integration override rejected for ${description}.`, {
+      cause: error,
+    });
   }
 }
 
