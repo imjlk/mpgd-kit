@@ -1395,13 +1395,14 @@ function runTargetCommand(input: {
 }): void {
   const target = normalizeBuildTarget(input.target);
   const env = withTargetVariantEnv(target, input.variant, input.env);
+  const profile = input.profile ?? 'production';
 
   if (input.action === 'build') {
     const targetsFile = readConfiguredTargetsFile(env);
 
     assertProductionTargetReadiness({
       target,
-      profile: input.profile ?? 'production',
+      profile,
       targetsFile,
       gameRoot: path.dirname(targetsFile),
       ...(env.VITE_MPGD_GAME_SERVICES_URL === undefined
@@ -1412,7 +1413,7 @@ function runTargetCommand(input: {
 
   const args =
     input.action === 'build'
-      ? ['build:target', target, input.profile ?? 'production']
+      ? ['build:target', target, profile]
       : ['smoke:target', target];
 
   console.log(`[mpgd] ${input.action} ${target}`);
