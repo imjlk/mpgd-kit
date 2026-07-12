@@ -61,7 +61,17 @@ export async function presentDevvitShareSheet(
       status: 'shared',
       completion: 'presented',
     };
-  } catch {
+  } catch (error) {
+    if (isAbortError(error)) {
+      return { status: 'cancelled' };
+    }
+
     return { status: 'unavailable' };
   }
+}
+
+function isAbortError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && Reflect.get(error, 'name') === 'AbortError';
 }

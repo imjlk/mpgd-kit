@@ -59,4 +59,12 @@ describe('presentDevvitShareSheet', () => {
       status: 'unavailable',
     });
   });
+
+  it('preserves cancellation when the share surface rejects with AbortError', async () => {
+    showShareSheet.mockRejectedValueOnce(new DOMException('Share cancelled', 'AbortError'));
+
+    await expect(presentDevvitShareSheet({ text: 'Try this challenge' })).resolves.toEqual({
+      status: 'cancelled',
+    });
+  });
 });
