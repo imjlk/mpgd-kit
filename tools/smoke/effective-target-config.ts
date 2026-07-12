@@ -5,11 +5,16 @@ import { join } from 'node:path';
 import type { EffectiveTargetConfig, TargetIntegrationConfig } from '@mpgd/target-config';
 
 // Runtime source import is intentional: smoke runs before package dist is rebuilt.
-import { targetIntegrations } from '../../packages/target-config/src/runtime';
+import {
+  integrationAvailabilityStates,
+  presentationModes,
+  targetIntegrations,
+} from '../../packages/target-config/src/runtime';
 import {
   validateEffectiveTargetConfigMatrix,
   writeEffectiveTargetConfigs,
 } from '../target/effective-config';
+import { loadPlatformTargetsConfig } from '../target/platform-targets';
 import { assertPlatformTargetsConfig } from '../target/schemas';
 
 const matrix = validateEffectiveTargetConfigMatrix();
@@ -77,42 +82,66 @@ function verifyGameOwnedIntegrationOverrides(): void {
   const targetsPath = join(tempDir, 'mpgd.targets.json');
   const outputDir = join(tempDir, 'artifacts');
   const previousTargetsPath = process.env.MPGD_PLATFORM_TARGETS_FILE;
-  const platformTargets = {
+  const target = {
+    kind: 'devvit-web',
+    gameApp: '.',
+    wrapperApp: '.',
+    adapter: 'devvit',
+    webDir: '.',
+    artifact: 'devvit',
+  } as const;
+  const withIntegrations = (integrations: unknown): unknown => ({
     targets: {
       reddit: {
-        kind: 'devvit-web',
-        gameApp: '.',
-        wrapperApp: '.',
-        adapter: 'devvit',
-        webDir: '.',
-        artifact: 'devvit',
-        integrations: {
-          notifications: 'disabled',
-          presentationMode: 'fullscreen',
-        },
+        ...target,
+        integrations,
       },
     },
-  } as const;
-  const invalidPlatformTargets = {
-    targets: {
-      reddit: {
-        ...platformTargets.targets.reddit,
-        integrations: {
-          notifications: 'not-a-readiness-state',
-        },
-      },
+  });
+  const platformTargets = withIntegrations({
+    notifications: 'disabled',
+    presentationMode: 'fullscreen',
+  });
+  const invalidPlatformTargets = withIntegrations({
+    notifications: 'not-a-readiness-state',
+  });
+  const invalidInputs = [
+    {
+      description: 'an unknown integration key',
+      config: withIntegrations({ presntation: 'available' }),
+      expectedMessage: 'not a recognized integration key',
     },
-  } as const;
-  const unknownIntegrationPlatformTargets = {
-    targets: {
-      reddit: {
-        ...platformTargets.targets.reddit,
-        integrations: {
-          presntation: 'available',
-        },
-      },
+    {
+      description: 'an invalid presentation mode',
+      config: withIntegrations({ presentationMode: 'windowed' }),
+      expectedMessage: 'presentationMode has an unsupported value',
     },
-  } as const;
+    {
+      description: 'a string integrations value',
+      config: withIntegrations('available'),
+      expectedMessage: 'integrations must be an object',
+    },
+    {
+      description: 'a number integrations value',
+      config: withIntegrations(1),
+      expectedMessage: 'integrations must be an object',
+    },
+    {
+      description: 'a boolean integrations value',
+      config: withIntegrations(true),
+      expectedMessage: 'integrations must be an object',
+    },
+    {
+      description: 'a null integrations value',
+      config: withIntegrations(null),
+      expectedMessage: 'integrations must be an object',
+    },
+    {
+      description: 'an array integrations value',
+      config: withIntegrations([]),
+      expectedMessage: 'integrations must be an object',
+    },
+  ] as const;
 
   try {
     assertPlatformTargetsConfig(platformTargets);
@@ -130,12 +159,39 @@ function verifyGameOwnedIntegrationOverrides(): void {
       'unsupported value',
     );
 
-    writeFileSync(targetsPath, `${JSON.stringify(unknownIntegrationPlatformTargets, null, 2)}\n`);
-    assertThrows(
-      () => writeEffectiveTargetConfigs({ targets: ['reddit'], outputDir }),
-      'the platform target loader should reject an unknown integration key',
-      'not a recognized integration key',
-    );
+    for (const invalidInput of invalidInputs) {
+      writeFileSync(targetsPath, `${JSON.stringify(invalidInput.config, null, 2)}\n`);
+      assertThrows(
+        () => writeEffectiveTargetConfigs({ targets: ['reddit'], outputDir }),
+        `the effective config path should reject ${invalidInput.description}`,
+        invalidInput.expectedMessage,
+      );
+    }
+
+    for (const availability of integrationAvailabilityStates) {
+      const integrations = Object.fromEntries(
+        targetIntegrations.map((integration) => [integration, availability]),
+      );
+      const config = withIntegrations({
+        ...integrations,
+        presentationMode: presentationModes[0],
+      });
+
+      assertPlatformTargetsConfig(config);
+      writeFileSync(targetsPath, `${JSON.stringify(config, null, 2)}\n`);
+      loadPlatformTargetsConfig(targetsPath);
+    }
+
+    for (const presentationMode of presentationModes) {
+      const config = withIntegrations({
+        notifications: integrationAvailabilityStates[0],
+        presentationMode,
+      });
+
+      assertPlatformTargetsConfig(config);
+      writeFileSync(targetsPath, `${JSON.stringify(config, null, 2)}\n`);
+      loadPlatformTargetsConfig(targetsPath);
+    }
 
     writeFileSync(targetsPath, `${JSON.stringify(platformTargets, null, 2)}\n`);
     writeEffectiveTargetConfigs({
