@@ -9,7 +9,7 @@ import {
 } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 
-import sharp from 'sharp';
+import sharp, { type Metadata } from 'sharp';
 
 import type { PlatformTargetConfig } from '../target/schemas';
 import {
@@ -252,6 +252,7 @@ export async function verifyExistingTargetIcons(input: {
     || manifest.renderConfigSha256 !== renderConfigSha256
     || typeof manifest.variantSources !== 'object'
     || manifest.variantSources === null
+    || !variantSourceEvidenceMatches(input.gameRoot, variantSources, manifest.variantSources)
     || !Array.isArray(manifest.outputs)
   ) {
     throw new Error(`Generated icon manifest is stale or incompatible: ${manifestPath}`);
@@ -290,6 +291,25 @@ export async function verifyGeneratedTargetIcons(result: GeneratedTargetIcons): 
 
     if (sha256(bytes) !== output.sha256) {
       throw new Error(`Stale generated icon output: ${path}`);
+    }
+
+    let metadata: Metadata;
+
+    try {
+      metadata = await sharp(bytes).metadata();
+    } catch {
+      throw new Error(`Generated icon is not a decodable PNG: ${path}`);
+    }
+
+    if (
+      metadata.format !== 'png'
+      || metadata.width !== output.width
+      || metadata.height !== output.height
+      || (metadata.pages ?? 1) !== 1
+    ) {
+      throw new Error(
+        `Generated icon must be a ${output.width}x${output.height} single-page PNG: ${path}`,
+      );
     }
 
     if (await pixelSha256(bytes) !== output.pixelSha256) {
@@ -411,6 +431,35 @@ function createRenderConfigSha256(input: {
       ]),
     ),
   }));
+}
+
+function variantSourceEvidenceMatches(
+  gameRoot: string,
+  expected: Partial<Record<BrandImageVariant, ValidatedBrandImage>>,
+  actual: Partial<Record<BrandImageVariant, IconManifest['canonicalSource']>>,
+): boolean {
+  const actualKeys = Object.keys(actual).sort();
+  const expectedKeys = brandImageVariants
+    .filter((variant) => expected[variant] !== undefined)
+    .sort();
+
+  if (
+    actualKeys.length !== expectedKeys.length
+    || actualKeys.some((key, index) => key !== expectedKeys[index])
+  ) {
+    return false;
+  }
+
+  return expectedKeys.every((variant) => {
+    const image = expected[variant];
+    const source = actual[variant];
+
+    return image !== undefined
+      && source !== undefined
+      && source.path === toGameRelativePath(gameRoot, image.path)
+      && source.sha256 === image.sha256
+      && source.format === image.format;
+  });
 }
 
 async function assertOpaqueBackgroundColor(backgroundColor: string): Promise<void> {

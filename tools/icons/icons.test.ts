@@ -13,6 +13,7 @@ import {
   verifyExistingTargetIcons,
   verifyGeneratedTargetIcons,
 } from './generator';
+import { pixelSha256, sha256 } from './image';
 import { stageNativeIconResources, stageWebIconEvidence } from './staging';
 
 const root = mkdtempSync(join(tmpdir(), 'mpgd-icons-'));
@@ -175,6 +176,78 @@ async function testPngAndOverrides(parent: string): Promise<void> {
     target,
     profile: 'production',
   });
+
+  const regenerated = await verifyExistingTargetIcons({
+    gameRoot,
+    targetName: 'microsoft-store',
+    target,
+    profile: 'production',
+  });
+  const resizedOutput = regenerated.manifest.outputs[0];
+
+  assert.ok(resizedOutput);
+  const resizedBytes = await sharp({
+    create: { width: 64, height: 64, channels: 4, background: '#2563eb' },
+  }).png().toBuffer();
+  const resizedPixelSha256 = await pixelSha256(resizedBytes);
+
+  writeFileSync(
+    join(regenerated.outputDir, resizedOutput.path.slice('icons/'.length)),
+    resizedBytes,
+  );
+  writeFileSync(regenerated.manifestPath, `${JSON.stringify({
+    ...regenerated.manifest,
+    outputs: regenerated.manifest.outputs.map((output) => output.path === resizedOutput.path
+      ? {
+          ...output,
+          sha256: sha256(resizedBytes),
+          pixelSha256: resizedPixelSha256,
+        }
+      : output),
+  }, null, 2)}\n`);
+  await assert.rejects(
+    verifyExistingTargetIcons({
+      gameRoot,
+      targetName: 'microsoft-store',
+      target,
+      profile: 'production',
+    }),
+    /must be a 192x192 single-page PNG/u,
+  );
+  await generateTargetIcons({
+    gameRoot,
+    targetName: 'microsoft-store',
+    target,
+    profile: 'production',
+  });
+
+  const androidTarget = {
+    ...requireTarget(createTargets(gameRoot), 'android'),
+    icon: { profile: 'android', variants: { monochrome: 'assets/maskable.png' } },
+  } satisfies PlatformTargetConfig;
+  const android = await generateTargetIcons({
+    gameRoot,
+    targetName: 'android',
+    target: androidTarget,
+    profile: 'production',
+  });
+  const tamperedAndroidManifest = {
+    ...android.manifest,
+    variantSources: {},
+    outputs: android.manifest.outputs.filter(
+      (output) => output.purpose !== 'adaptive-monochrome',
+    ),
+  };
+  writeFileSync(android.manifestPath, `${JSON.stringify(tamperedAndroidManifest, null, 2)}\n`);
+  await assert.rejects(
+    verifyExistingTargetIcons({
+      gameRoot,
+      targetName: 'android',
+      target: androidTarget,
+      profile: 'production',
+    }),
+    /stale or incompatible/u,
+  );
 
   await sharp({
     create: { width: 1024, height: 1024, channels: 4, background: '#7c3aed' },
