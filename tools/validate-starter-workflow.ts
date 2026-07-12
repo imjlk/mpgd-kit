@@ -179,6 +179,7 @@ function validatePhaserTemplateMicrosoftStorePwa(): void {
 
   if (!existsSync(exampleRuntime) || !existsSync(templateRuntime)) {
     failures.push('Starter and template must include the Microsoft Store PWA runtime helper.');
+    return;
   } else if (readText(exampleRuntime) !== readText(templateRuntime)) {
     failures.push(`${templateRuntime}: must stay in parity with ${exampleRuntime}.`);
   }
