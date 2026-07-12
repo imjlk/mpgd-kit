@@ -15,6 +15,11 @@ export default defineConfig(({ mode }) => {
   const platformTarget = readRuntimePlatformTarget();
   const appTarget = process.env.APP_TARGET ?? 'browser';
   const isDevvitBuild = appTarget === 'reddit';
+  const buildGatewayModule = resolveBuildGatewayModule({
+    target: appTarget,
+    debug: !isProduction,
+    buildId: process.env.BUILD_ID ?? 'local',
+  });
 
   return {
     base: './',
@@ -25,7 +30,10 @@ export default defineConfig(({ mode }) => {
       }),
     ],
     resolve: {
-      alias: createCatalogAliases(),
+      alias: {
+        ...createCatalogAliases(),
+        '#mpgd-platform-gateway': resolve(buildGatewayModule),
+      },
     },
     define: {
       __APP_TARGET__: JSON.stringify(appTarget),
@@ -61,6 +69,29 @@ export default defineConfig(({ mode }) => {
     },
   };
 });
+
+export function resolveBuildGatewayModule(input: {
+  readonly target: string;
+  readonly debug: boolean;
+  readonly buildId: string;
+}): string {
+  switch (input.target) {
+    case 'android':
+      return 'src/platform/buildGateways/capacitorAndroid.ts';
+    case 'ios':
+      return 'src/platform/buildGateways/capacitorIos.ts';
+    case 'ait':
+      return input.debug
+        ? 'src/platform/buildGateways/aitSandbox.ts'
+        : 'src/platform/buildGateways/ait.ts';
+    case 'reddit':
+      return input.debug && input.buildId === 'devvit-sandbox'
+        ? 'src/platform/buildGateways/redditSandbox.ts'
+        : 'src/platform/buildGateways/reddit.ts';
+    default:
+      return 'src/platform/buildGateways/browser.ts';
+  }
+}
 
 function createCatalogAliases(): Record<string, string> {
   const productCatalogFile = readConfiguredPath(process.env.MPGD_PRODUCT_CATALOG_FILE);
