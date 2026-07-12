@@ -40,11 +40,12 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
   }).artifacts.find((artifact) => artifact.target === input.target);
   const buildId = process.env.BUILD_ID ?? createBuildId();
   const gameVersion = process.env.APP_VERSION ?? packageJson.version ?? '0.0.0';
-  const kitGitSha = getKitGitSha();
 
   if (effectiveConfig === undefined) {
     throw new Error(`Failed to generate effective target config for ${input.target}.`);
   }
+
+  const kitGitSha = getKitGitSha();
 
   return assertReleaseManifest({
     releaseId: `mpgd-${gameVersion}+${buildId}`,
@@ -232,14 +233,22 @@ function getSourceGitSha(kitGitSha: string): string {
 }
 
 function getKitGitSha(): string {
+  let kitGitSha: string;
+
   try {
-    return execFileSync('git', ['rev-parse', 'HEAD'], {
+    kitGitSha = execFileSync('git', ['rev-parse', 'HEAD'], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
-  } catch {
-    return 'uncommitted';
+  } catch (error) {
+    throw new Error('Failed to resolve the mpgd-kit Git revision.', { cause: error });
   }
+
+  if (!/^[0-9a-f]{40}$/u.test(kitGitSha)) {
+    throw new Error('The mpgd-kit Git revision must be a full 40-character SHA.');
+  }
+
+  return kitGitSha;
 }
 
 if (isCliEntrypoint(import.meta.url)) {

@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
@@ -14,6 +22,8 @@ const manifestFile = join(tempDir, 'release-manifest.json');
 const matchingManifestFile = join(tempDir, 'matching-release-manifest.json');
 const kitMismatchManifestFile = join(tempDir, 'kit-mismatch-release-manifest.json');
 const snapshotManifestFile = join(tempDir, 'snapshot-release-manifest.json');
+const failedGitManifestFile = join(tempDir, 'failed-git-release-manifest.json');
+const emptyGitManifestFile = join(tempDir, 'empty-git-release-manifest.json');
 const effectiveConfigDir = join(tempDir, 'target-config');
 const fakeGitDir = join(tempDir, 'bin');
 const firstKitGitSha = '1111111111111111111111111111111111111111';
@@ -84,6 +94,33 @@ try {
   assert.equal(kitRevisionReadCount, 1);
   assert.equal(snapshotManifest.gitSha, firstKitGitSha);
   assert.equal(snapshotManifest.kitGitSha, firstKitGitSha);
+
+  const failedGitOutput = runManifestExpectFailure(
+    'web-preview',
+    firstCatalogFile,
+    failedGitManifestFile,
+    {
+      gitExitCode: 65,
+      kitGitShas: [firstKitGitSha],
+      sourceGitSha: 'game-source-sha',
+    },
+  );
+
+  assert.match(failedGitOutput, /Failed to resolve the mpgd-kit Git revision\./u);
+  assert.equal(existsSync(failedGitManifestFile), false);
+
+  const emptyGitOutput = runManifestExpectFailure(
+    'web-preview',
+    firstCatalogFile,
+    emptyGitManifestFile,
+    {
+      kitGitShas: [''],
+      sourceGitSha: 'game-source-sha',
+    },
+  );
+
+  assert.match(emptyGitOutput, /mpgd-kit Git revision must be a full 40-character SHA/u);
+  assert.equal(existsSync(emptyGitManifestFile), false);
 } finally {
   rmSync(tempDir, { force: true, recursive: true });
 }
@@ -91,6 +128,7 @@ try {
 console.log('Release manifest merge preserves matching targets and resets on contract changes.');
 
 interface RunManifestOptions {
+  readonly gitExitCode?: number;
   readonly kitGitShas: readonly [string, string?];
   readonly sourceGitSha?: string;
 }
@@ -101,6 +139,35 @@ function runManifest(
   outputFile: string,
   options: RunManifestOptions,
 ): number {
+  const { gitReadCount, result } = spawnManifest(target, catalogFile, outputFile, options);
+
+  assert.equal(
+    result.status,
+    0,
+    `Manifest subprocess exited with status ${String(result.status)}:\n${result.stderr || result.stdout || '(no output)'}`,
+  );
+
+  return gitReadCount;
+}
+
+function runManifestExpectFailure(
+  target: string,
+  catalogFile: string,
+  outputFile: string,
+  options: RunManifestOptions,
+): string {
+  const { result } = spawnManifest(target, catalogFile, outputFile, options);
+
+  assert.notEqual(result.status, 0, 'Manifest subprocess unexpectedly succeeded.');
+  return result.stderr || result.stdout || '(no output)';
+}
+
+function spawnManifest(
+  target: string,
+  catalogFile: string,
+  outputFile: string,
+  options: RunManifestOptions,
+) {
   manifestRunCount += 1;
   const gitCounterFile = join(tempDir, `git-read-count-${manifestRunCount}.txt`);
   const env: NodeJS.ProcessEnv = {
@@ -111,6 +178,7 @@ function runManifest(
     MPGD_AD_PLACEMENTS_FILE: placementsFile,
     MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveConfigDir,
     MPGD_TEST_GIT_COUNTER_FILE: gitCounterFile,
+    MPGD_TEST_GIT_EXIT_CODE: String(options.gitExitCode ?? 0),
     MPGD_TEST_GIT_SHA_FIRST: options.kitGitShas[0],
     MPGD_TEST_GIT_SHA_LATER: options.kitGitShas[1] ?? options.kitGitShas[0],
     PATH: [fakeGitDir, process.env.PATH].filter(Boolean).join(delimiter),
@@ -144,12 +212,15 @@ function runManifest(
   }
 
   assert.equal(
-    result.status,
-    0,
-    `Manifest subprocess exited with status ${String(result.status)}:\n${result.stderr || result.stdout || '(no output)'}`,
+    existsSync(gitCounterFile),
+    true,
+    'The fake git executable did not record a revision read.',
   );
 
-  return Number.parseInt(readFileSync(gitCounterFile, 'utf8').trim(), 10);
+  return {
+    gitReadCount: Number.parseInt(readFileSync(gitCounterFile, 'utf8').trim(), 10),
+    result,
+  };
 }
 
 function writeFakeGit(): void {
@@ -169,6 +240,9 @@ if [ -f "$MPGD_TEST_GIT_COUNTER_FILE" ]; then
 fi
 count=$((count + 1))
 printf '%s\\n' "$count" > "$MPGD_TEST_GIT_COUNTER_FILE"
+if [ "$MPGD_TEST_GIT_EXIT_CODE" -ne 0 ]; then
+  exit "$MPGD_TEST_GIT_EXIT_CODE"
+fi
 if [ "$count" -eq 1 ]; then
   printf '%s\\n' "$MPGD_TEST_GIT_SHA_FIRST"
 else
