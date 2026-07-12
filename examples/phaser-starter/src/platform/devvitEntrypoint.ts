@@ -3,7 +3,7 @@ import { requestDevvitExpandedMode, startDevvitWebSurface } from '@mpgd/adapter-
 await startDevvitWebSurface({
   async mountInlinePreview() {
     await import('./devvitInlinePreview.css');
-    mountInlinePreview();
+    renderInlinePreview();
   },
   async loadExpandedGame() {
     await import('../main');
@@ -15,7 +15,7 @@ await startDevvitWebSurface({
   },
 });
 
-function mountInlinePreview(): void {
+function renderInlinePreview(): void {
   const preview = document.createElement('main');
   preview.className = 'devvit-preview';
 
@@ -43,5 +43,12 @@ function mountInlinePreview(): void {
   });
 
   preview.append(eyebrow, title, description, button);
-  document.body.replaceChildren(preview);
+  const body = document.body;
+
+  if (body === null) {
+    throw new Error('Devvit inline preview requires a document body.');
+  }
+
+  body.classList.add('devvit-preview-host');
+  body.replaceChildren(preview);
 }

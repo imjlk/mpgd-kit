@@ -544,10 +544,22 @@ function validatePhaserTemplateDevvitSurfaces(): void {
       }
     }
 
+    if (existsSync(devvitStylePath)) {
+      const source = readText(devvitStylePath);
+
+      for (const requiredText of [
+        'body.devvit-preview-host',
+        '.devvit-preview',
+        '.devvit-preview__button',
+      ]) {
+        assertIncludesText(source, requiredText, `${devvitStylePath}: inline preview styles.`);
+      }
+    }
+
     if (existsSync(vitePath)) {
       const source = readText(vitePath);
       for (const requiredText of [
-        "process.env.APP_TARGET === 'reddit'",
+        "const isDevvitBuild = appTarget === 'reddit'",
         "preview: resolve('index.html')",
         "game: resolve('game.html')",
       ]) {
