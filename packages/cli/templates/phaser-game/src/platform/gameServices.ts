@@ -1,5 +1,6 @@
 import {
   createGameServicesRuntime,
+  resolveGameServicesAuthorityMode,
   type GameServicesRuntime,
   type GameServicesRuntimeMode,
 } from '@mpgd/game-services';
@@ -15,7 +16,7 @@ export function createStarterGameServices(input: {
   return createGameServicesRuntime({
     gateway: input.gateway,
     playerId: input.playerId,
-    authorityMode: import.meta.env.PROD ? 'production' : 'non-production',
+    authorityMode: resolveGameServicesAuthorityMode(import.meta.env.MODE),
     target: import.meta.env.VITE_MPGD_GAME_SERVICES_TARGET ?? input.gateway.target,
     ...(import.meta.env.VITE_MPGD_GAME_SERVICES_URL === undefined
       ? {}

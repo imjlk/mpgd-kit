@@ -1,6 +1,10 @@
 import type { PlatformGateway } from '@mpgd/platform';
 
-import { createGameServicesRuntime, type GameServicesBackendApi } from './index';
+import {
+  createGameServicesRuntime,
+  resolveGameServicesAuthorityMode,
+  type GameServicesBackendApi,
+} from './index';
 
 const playerId = 'runtime-player';
 let purchaseCalls = 0;
@@ -76,6 +80,53 @@ assertEqual(
 );
 assertLocalCalls(0, 'blank production URL');
 
+for (const baseUrl of [
+  'not a URL',
+  'http://services.example.com',
+  'https://user:secret@services.example.com',
+  'https://localhost:5173',
+  'https://service.local',
+  'https://10.0.0.1',
+  'https://192.168.0.1',
+  'https://[::1]',
+  'https://[fc00::1]',
+  'https://[::ffff:10.0.0.1]',
+]) {
+  const invalidProductionRuntime = createGameServicesRuntime({
+    gateway: createGateway(),
+    playerId,
+    authorityMode: 'production',
+    baseUrl,
+    allowLocalBackend: true,
+    localBackend,
+  });
+
+  assertEqual(
+    invalidProductionRuntime.reason,
+    'invalid_authoritative_backend',
+    `production should reject ${baseUrl}`,
+  );
+  assertEqual(
+    invalidProductionRuntime.client,
+    undefined,
+    `invalid production URL should not expose a client: ${baseUrl}`,
+  );
+}
+assertLocalCalls(0, 'invalid production URLs');
+
+const localDevelopmentUrl = createGameServicesRuntime({
+  gateway: createGateway(),
+  playerId,
+  authorityMode: 'non-production',
+  baseUrl: 'http://localhost:5173',
+});
+
+assertEqual(
+  localDevelopmentUrl.mode,
+  'http',
+  'non-production should permit an explicitly configured local HTTP service',
+);
+
 const developmentWithoutOptIn = createGameServicesRuntime({
   gateway: createGateway(),
   playerId,
@@ -87,6 +138,22 @@ assertEqual(
   developmentWithoutOptIn.reason,
   'local_backend_not_allowed',
   'non-production local authority should require explicit opt-in',
+);
+
+assertEqual(
+  resolveGameServicesAuthorityMode('production'),
+  'production',
+  'production profile should require authoritative services',
+);
+assertEqual(
+  resolveGameServicesAuthorityMode('staging'),
+  'non-production',
+  'staging profile should use non-production authority policy',
+);
+assertEqual(
+  resolveGameServicesAuthorityMode('development'),
+  'non-production',
+  'development profile should use non-production authority policy',
 );
 
 const developmentWithoutBackend = createGameServicesRuntime({
