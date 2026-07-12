@@ -5,9 +5,12 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import typia from 'typia';
 
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
-import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 import type { TargetConfigMatrix } from '@mpgd/target-config';
 
+import {
+  assertReleaseManifest,
+  type ReleaseManifest,
+} from '../../packages/release-manifest/src/index';
 import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import { isCliEntrypoint, readJsonFile } from '../io';
 import { writeEffectiveTargetConfigs } from './effective-config';
