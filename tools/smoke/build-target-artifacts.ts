@@ -13,15 +13,15 @@ for (const path of generatedPaths) {
   rmSync(path, { force: true, recursive: true });
 }
 
-for (const script of [
-  'build:web',
-  'build:microsoft-store',
-  'build:android',
-  'build:ios',
-  'build:ait',
-  'build:devvit',
+for (const args of [
+  ['build:web'],
+  ['build:microsoft-store'],
+  ['build:target', 'android', 'staging'],
+  ['build:target', 'ios', 'staging'],
+  ['build:target', 'ait', 'staging'],
+  ['build:devvit'],
 ]) {
-  run('pnpm', [script]);
+  run('pnpm', args);
 }
 
 verifyTargetArtifacts();
