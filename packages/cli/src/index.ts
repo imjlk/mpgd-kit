@@ -296,6 +296,10 @@ const gameCommand = defineI18n({
             en: 'JSON and Markdown handoff report directory.',
             ko: 'JSON 및 Markdown 인계 리포트 디렉터리.',
           },
+          'timeout-ms': {
+            en: 'Maximum duration for each acceptance command.',
+            ko: '각 인수 검증 명령의 최대 실행 시간.',
+          },
           'kit-path': {
             en: 'Path to the mpgd-kit checkout.',
             ko: 'mpgd-kit 체크아웃 경로.',
@@ -344,6 +348,12 @@ const gameCommand = defineI18n({
           required: false,
           description: 'JSON and Markdown handoff report directory.',
         },
+        'timeout-ms': {
+          type: 'string',
+          required: false,
+          default: '1800000',
+          description: 'Maximum duration for each acceptance command in milliseconds.',
+        },
         'kit-path': {
           type: 'string',
           required: false,
@@ -381,6 +391,10 @@ const gameCommand = defineI18n({
         const iosVariant = readOptionalString(ctx.values['ios-variant']);
         const reportDir = readOptionalString(ctx.values['report-dir']);
         const kitPath = readOptionalString(ctx.values['kit-path']);
+        const timeoutMs = readPositiveInteger(
+          readOptionalString(ctx.values['timeout-ms']) ?? '1800000',
+          '--timeout-ms',
+        );
 
         acceptGame({
           gameRoot,
@@ -391,6 +405,7 @@ const gameCommand = defineI18n({
           playtestScript: readOptionalString(ctx.values['playtest-script']) ?? 'playtest',
           ...(reportDir === undefined ? {} : { reportDir }),
           ...(kitPath === undefined ? {} : { kitPath }),
+          timeoutMs,
           skipTest: ctx.values['skip-test'] === true,
           skipGraph: ctx.values['skip-graph'] === true,
           skipPlaytest: ctx.values['skip-playtest'] === true,
@@ -481,6 +496,7 @@ interface AcceptGameInput {
   readonly playtestScript: string;
   readonly reportDir?: string;
   readonly kitPath?: string;
+  readonly timeoutMs: number;
   readonly skipTest: boolean;
   readonly skipGraph: boolean;
   readonly skipPlaytest: boolean;
@@ -607,8 +623,10 @@ function acceptGame(input: AcceptGameInput): void {
       skipPlaytest: input.skipPlaytest,
       skipTargetBuild: input.skipTargetBuild,
       skipTargetSmoke: input.skipTargetSmoke,
+      timeoutMs: String(input.timeoutMs),
     },
     steps,
+    commandTimeoutMs: input.timeoutMs,
     env: {
       ...process.env,
       MPGD_KIT_PATH: kitPath,
@@ -714,6 +732,16 @@ function targetMatrixAcceptanceStep(input: {
 
 function skippedAcceptanceStep(id: string, label: string, skipReason: string): GameAcceptanceStep {
   return { id, label, skipReason };
+}
+
+function readPositiveInteger(value: string, label: string): number {
+  const parsed = Number(value);
+
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+
+  return parsed;
 }
 
 const legalCommand = defineI18n({

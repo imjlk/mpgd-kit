@@ -87,6 +87,9 @@ target build/smoke matrix. Results are written as JSON and Markdown under
 `artifacts/acceptance`. Add a non-interactive `playtest` package script when the
 game has an automated browser scenario; interactive platform playtests remain
 separate operator workflows.
+Each command has a 30-minute timeout by default. Pass `--timeout-ms` to the
+underlying `mpgd game accept` command when a target matrix needs a different
+per-step limit.
 
 ## Assets
 

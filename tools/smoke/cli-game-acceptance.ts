@@ -7,6 +7,7 @@ import {
   runGameAcceptance,
   runMpgdCli,
   type GameAcceptanceCommandRunner,
+  type GameAcceptanceReport,
 } from '../../packages/cli/src/index';
 
 const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'mpgd-game-acceptance-'));
@@ -86,6 +87,52 @@ try {
   assert.equal(failed.report.steps[0]?.detail, 'fixture failure');
   assert.match(readFileSync(failed.markdownFile, 'utf8'), /A previous acceptance step failed/u);
 
+  const malformed = runGameAcceptance({
+    gameRoot: fixtureRoot,
+    reportDir: path.join(fixtureRoot, 'malformed-report'),
+    options: {},
+    steps: [{ id: 'malformed', label: 'Malformed step', cwd: fixtureRoot }],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  assert.equal(malformed.report.status, 'failed');
+  assert.match(malformed.report.steps[0]?.detail ?? '', /missing command/u);
+
+  mkdirSync(path.dirname(releaseManifestFile), { recursive: true });
+  writeFileSync(releaseManifestFile, '{invalid');
+  const invalidEvidence = runGameAcceptance({
+    gameRoot: fixtureRoot,
+    reportDir: path.join(fixtureRoot, 'invalid-evidence-report'),
+    releaseManifestFile,
+    options: {},
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  assert.equal(invalidEvidence.report.evidence.releaseManifest?.found, true);
+  assert.match(invalidEvidence.report.evidence.releaseManifest?.parseError ?? '', /JSON/u);
+  assert.match(readFileSync(invalidEvidence.markdownFile, 'utf8'), /Release manifest is invalid/u);
+
+  const timedOut = runGameAcceptance({
+    gameRoot: fixtureRoot,
+    reportDir: path.join(fixtureRoot, 'timeout-report'),
+    options: {},
+    steps: [{
+      id: 'timeout',
+      label: 'Timeout step',
+      command: process.execPath,
+      args: ['-e', 'setTimeout(() => undefined, 10000)'],
+      cwd: fixtureRoot,
+    }],
+    commandTimeoutMs: 10,
+    log: () => undefined,
+  });
+
+  assert.equal(timedOut.report.status, 'failed');
+  assert.match(timedOut.report.steps[0]?.detail ?? '', /timed out after 10ms/u);
+
   const cliGameRoot = path.join(fixtureRoot, 'cli-game');
   const cliReportDir = path.join(cliGameRoot, 'handoff');
 
@@ -123,10 +170,10 @@ try {
 
   const cliReport = JSON.parse(
     readFileSync(path.join(cliReportDir, 'acceptance-report.json'), 'utf8'),
-  ) as { readonly status?: unknown; readonly steps?: readonly unknown[] };
+  ) as GameAcceptanceReport;
 
   assert.equal(cliReport.status, 'passed');
-  assert.equal(cliReport.steps?.length, 7);
+  assert.equal(cliReport.steps.length, 7);
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });
 }

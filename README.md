@@ -58,6 +58,8 @@ build/smoke matrix. It writes both JSON and Markdown reports under
 `artifacts/acceptance` by default. Games keep playtest scenarios in their own
 package and expose them through a `playtest` script; the CLI records absent
 optional scripts as skipped instead of inventing game-specific behavior.
+Each command has a 30-minute timeout by default; use `--timeout-ms` for a
+different per-step limit.
 
 For a minimum repo confidence check:
 

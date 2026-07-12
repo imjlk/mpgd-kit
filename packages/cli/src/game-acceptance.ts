@@ -39,6 +39,7 @@ export interface GameAcceptanceReport {
     readonly releaseManifest: {
       readonly file: string;
       readonly found: boolean;
+      readonly parseError: string | null;
       readonly value: unknown;
     } | null;
   };
@@ -60,6 +61,7 @@ export interface RunGameAcceptanceInput {
   readonly options: Readonly<Record<string, string | boolean | null>>;
   readonly steps: readonly GameAcceptanceStep[];
   readonly env?: NodeJS.ProcessEnv;
+  readonly commandTimeoutMs?: number;
   readonly commandRunner?: GameAcceptanceCommandRunner;
   readonly now?: () => number;
   readonly log?: (message: string) => void;
@@ -74,8 +76,14 @@ export interface RunGameAcceptanceResult {
 export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAcceptanceResult {
   const now = input.now ?? Date.now;
   const log = input.log ?? console.log;
+  const commandTimeoutMs = input.commandTimeoutMs ?? 30 * 60 * 1_000;
+
+  if (!Number.isInteger(commandTimeoutMs) || commandTimeoutMs <= 0) {
+    throw new Error(`Acceptance command timeout must be a positive integer: ${commandTimeoutMs}`);
+  }
+
   const commandRunner = input.commandRunner
-    ?? ((step) => runAcceptanceCommand(step, input.env ?? process.env));
+    ?? ((step) => runAcceptanceCommand(step, input.env ?? process.env, commandTimeoutMs));
   const gameRoot = path.resolve(input.gameRoot);
   const startedAtMs = now();
   const results: GameAcceptanceStepResult[] = [];
@@ -93,9 +101,17 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
       continue;
     }
 
-    const command = requireStepField(step.command, step.id, 'command');
+    const runnableStep = resolveRunnableStep(step);
+
+    if (!runnableStep.ok) {
+      results.push(failedStepResult(step, now(), runnableStep.detail));
+      failed = true;
+      continue;
+    }
+
+    const command = runnableStep.command;
     const args = step.args ?? [];
-    const cwd = path.resolve(requireStepField(step.cwd, step.id, 'cwd'));
+    const cwd = path.resolve(runnableStep.cwd);
     const stepStartedAtMs = now();
     const startedAt = new Date(stepStartedAtMs).toISOString();
 
@@ -183,6 +199,11 @@ export function renderGameAcceptanceMarkdown(report: GameAcceptanceReport): stri
     lines.push('- Release manifest collection disabled.');
   } else if (!report.evidence.releaseManifest.found) {
     lines.push(`- Release manifest not found: ${report.evidence.releaseManifest.file}`);
+  } else if (report.evidence.releaseManifest.parseError !== null) {
+    lines.push(
+      `- Release manifest is invalid: ${report.evidence.releaseManifest.file}`,
+      `  - ${report.evidence.releaseManifest.parseError}`,
+    );
   } else {
     lines.push(`- Release manifest: ${report.evidence.releaseManifest.file}`);
   }
@@ -193,24 +214,48 @@ export function renderGameAcceptanceMarkdown(report: GameAcceptanceReport): stri
 function runAcceptanceCommand(
   step: Required<Pick<GameAcceptanceStep, 'command' | 'args' | 'cwd'>>,
   env: NodeJS.ProcessEnv,
+  timeoutMs: number,
 ): GameAcceptanceCommandResult {
   const result = spawnSync(step.command, [...step.args], {
     cwd: step.cwd,
     env,
     stdio: 'inherit',
     shell: process.platform === 'win32',
+    timeout: timeoutMs,
+    killSignal: 'SIGTERM',
   });
 
   if (result.error !== undefined) {
     return {
       exitCode: 1,
-      detail: result.error.message,
+      detail: isTimeoutError(result.error)
+        ? `Command timed out after ${timeoutMs}ms.`
+        : result.error.message,
     };
   }
 
   return {
     exitCode: result.status ?? 1,
     ...(result.signal === null ? {} : { detail: `Terminated by ${result.signal}.` }),
+  };
+}
+
+function failedStepResult(
+  step: GameAcceptanceStep,
+  nowMs: number,
+  detail: string,
+): GameAcceptanceStepResult {
+  return {
+    id: step.id,
+    label: step.label,
+    command: step.command ?? null,
+    args: step.args ?? [],
+    cwd: step.cwd === undefined ? null : path.resolve(step.cwd),
+    status: 'failed',
+    exitCode: 1,
+    startedAt: new Date(nowMs).toISOString(),
+    durationMs: 0,
+    detail,
   };
 }
 
@@ -245,20 +290,22 @@ function readOptionalJsonEvidence(
   const displayFile = relativeOrAbsolute(gameRoot, resolved);
 
   if (!existsSync(resolved)) {
-    return { file: displayFile, found: false, value: null };
+    return { file: displayFile, found: false, parseError: null, value: null };
   }
 
   try {
     return {
       file: displayFile,
       found: true,
+      parseError: null,
       value: JSON.parse(readFileSync(resolved, 'utf8')) as unknown,
     };
   } catch (error) {
     return {
       file: displayFile,
-      found: false,
-      value: { error: formatError(error) },
+      found: true,
+      parseError: formatError(error),
+      value: null,
     };
   }
 }
@@ -269,16 +316,22 @@ function relativeOrAbsolute(root: string, file: string): string {
   return relative.startsWith('..') || path.isAbsolute(relative) ? file : relative || '.';
 }
 
-function requireStepField(value: string | undefined, stepId: string, field: string): string {
-  if (value === undefined || value.length === 0) {
-    throw new Error(`Acceptance step ${stepId} is missing ${field}.`);
+function resolveRunnableStep(step: GameAcceptanceStep):
+  | { readonly ok: true; readonly command: string; readonly cwd: string }
+  | { readonly ok: false; readonly detail: string } {
+  if (step.command === undefined || step.command.length === 0) {
+    return { ok: false, detail: `Acceptance step ${step.id} is missing command.` };
   }
 
-  return value;
+  if (step.cwd === undefined || step.cwd.length === 0) {
+    return { ok: false, detail: `Acceptance step ${step.id} is missing cwd.` };
+  }
+
+  return { ok: true, command: step.command, cwd: step.cwd };
 }
 
 function escapeMarkdownTable(value: string): string {
-  return value.replaceAll('|', '\\|').replaceAll('\n', ' ');
+  return value.replaceAll('\\', '\\\\').replaceAll('|', '\\|').replaceAll('\n', ' ');
 }
 
 function formatDuration(durationMs: number): string {
@@ -287,4 +340,8 @@ function formatDuration(durationMs: number): string {
 
 function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function isTimeoutError(error: Error): boolean {
+  return 'code' in error && error.code === 'ETIMEDOUT';
 }
