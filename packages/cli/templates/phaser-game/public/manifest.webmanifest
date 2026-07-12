@@ -3,6 +3,7 @@
   "name": "__GAME_TITLE__",
   "short_name": "__GAME_NAME__",
   "description": "__GAME_TITLE__ built with mpgd-kit.",
+  "id": "./",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",

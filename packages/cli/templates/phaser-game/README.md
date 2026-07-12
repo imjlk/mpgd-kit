@@ -254,7 +254,12 @@ submission.
 - Microsoft Store is a game-owned PWA target that reuses the browser adapter and
   writes to `artifacts/microsoft-store` with `manifest.webmanifest` for
   PWABuilder packaging. Replace the starter icon and manifest metadata before
-  Store submission.
+  Store submission. Production builds also emit `pwa-release.json` and an
+  atomic offline `service-worker.js`; its deterministic revision covers every
+  precached artifact plus the game and kit Git provenance. Updates intentionally
+  wait while any old app window remains open. Listen for
+  `mpgd:pwa-update-ready` to tell players to close every window and reopen the
+  app; do not force activation with `skipWaiting()`.
 - Reddit Devvit is game-owned in `apps/target-devvit`.
 - Apps in Toss currently uses the kit reference wrapper at
   `${MPGD_KIT_PATH}/apps/target-ait` for smoke packaging. Before a real Toss

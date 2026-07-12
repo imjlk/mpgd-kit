@@ -37,19 +37,33 @@ export type ReleaseManifestWriter = (
   input: GenerateReleaseManifestInput,
 ) => ReleaseManifest;
 
-export function createReleaseManifestWriter(): ReleaseManifestWriter {
+export interface ReleaseProvenance {
+  readonly sourceGitSha: string;
+  readonly kitGitSha: string;
+}
+
+export function resolveReleaseProvenance(): ReleaseProvenance {
   const kitGitSha = resolveKitGitSha();
 
-  return (input) => writeReleaseManifestWithKitGitSha(input, kitGitSha);
+  return {
+    sourceGitSha: getSourceGitSha(kitGitSha),
+    kitGitSha,
+  };
+}
+
+export function createReleaseManifestWriter(
+  provenance = resolveReleaseProvenance(),
+): ReleaseManifestWriter {
+  return (input) => writeReleaseManifestWithProvenance(input, provenance);
 }
 
 export function generateReleaseManifest(input: GenerateReleaseManifestInput): ReleaseManifest {
-  return generateReleaseManifestWithKitGitSha(input, resolveKitGitSha());
+  return generateReleaseManifestWithProvenance(input, resolveReleaseProvenance());
 }
 
-function generateReleaseManifestWithKitGitSha(
+function generateReleaseManifestWithProvenance(
   input: GenerateReleaseManifestInput,
-  kitGitSha: string,
+  provenance: ReleaseProvenance,
   platformTargets: LoadedPlatformTargetsConfig = loadPlatformTargetsConfig(),
 ): ReleaseManifest {
   const targetMetadata = readTargetReleaseMetadata(platformTargets.config.targets[input.target]);
@@ -73,8 +87,8 @@ function generateReleaseManifestWithKitGitSha(
 
   return assertReleaseManifest({
     releaseId: `mpgd-${gameVersion}+${buildId}`,
-    gitSha: getSourceGitSha(kitGitSha),
-    kitGitSha,
+    gitSha: provenance.sourceGitSha,
+    kitGitSha: provenance.kitGitSha,
     gameVersion,
     buildId,
     targetConfigVersion: targetConfig.version,
@@ -191,13 +205,13 @@ export function writeReleaseManifest(input: GenerateReleaseManifestInput): Relea
   return createReleaseManifestWriter()(input);
 }
 
-function writeReleaseManifestWithKitGitSha(
+function writeReleaseManifestWithProvenance(
   input: GenerateReleaseManifestInput,
-  kitGitSha: string,
+  provenance: ReleaseProvenance,
 ): ReleaseManifest {
   const outputPath = input.outputPath ?? 'release-output/release-manifest.json';
   const platformTargets = loadPlatformTargetsConfig();
-  const nextManifest = generateReleaseManifestWithKitGitSha(input, kitGitSha, platformTargets);
+  const nextManifest = generateReleaseManifestWithProvenance(input, provenance, platformTargets);
   const manifest = makeEffectiveConfigPathsPortable(
     mergeManifest(outputPath, nextManifest),
     platformTargets.baseDir,

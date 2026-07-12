@@ -14,6 +14,7 @@ import { createStarterGame } from './runtime/createGame';
 import { detectRuntime } from './platform/runtimeDetector';
 import { createStarterGameServices } from './platform/gameServices';
 import { installPlatform } from './platform/installPlatform';
+import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
 await bootstrap();
 
@@ -27,6 +28,7 @@ async function bootstrap(): Promise<void> {
     }
 
     const runtimeConfig = detectRuntime();
+    installMicrosoftStorePwa(runtimeConfig);
     const platform = await installPlatform(runtimeConfig);
     const runtime = await platform.getTargetRuntime();
     const orientationPolicy = {
