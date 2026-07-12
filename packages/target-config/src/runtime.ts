@@ -180,18 +180,29 @@ export const targetIntegrations = [
   'notifications',
 ] as const satisfies readonly TargetIntegration[];
 
-export const integrationAvailabilityStates = [
+type CompleteValueList<Union, Values extends readonly Union[]> =
+  Exclude<Union, Values[number]> extends never ? Values : never;
+
+const integrationAvailabilityStateValues = [
   'available',
   'disabled',
   'approval-required',
   'configuration-required',
   'unsupported',
 ] as const satisfies readonly IntegrationAvailabilityState[];
+export const integrationAvailabilityStates: CompleteValueList<
+  IntegrationAvailabilityState,
+  typeof integrationAvailabilityStateValues
+> = integrationAvailabilityStateValues;
 
-export const presentationModes = [
+const presentationModeValues = [
   'fullscreen',
   'inline-expanded',
 ] as const satisfies readonly PresentationMode[];
+export const presentationModes: CompleteValueList<
+  PresentationMode,
+  typeof presentationModeValues
+> = presentationModeValues;
 
 export const defaultTargetIntegrationConfig = {
   identityUpgrade: 'disabled',
