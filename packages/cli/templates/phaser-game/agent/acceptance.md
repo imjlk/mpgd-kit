@@ -3,14 +3,16 @@
 Run these checks before handing off a generated game starter:
 
 ```sh
-pnpm check
-pnpm build
 pnpm icons:generate
 pnpm icons:verify
-pnpm --dir ../mpgd-kit mpgd target build-all --targets-file "$PWD/mpgd.targets.json" --targets web,microsoft-store,ait,reddit --profile staging --ait-variant wrapper
-pnpm --dir ../mpgd-kit mpgd target smoke-all --targets-file "$PWD/mpgd.targets.json" --targets web,microsoft-store,ait,reddit
-pnpm --dir ../mpgd-kit mpgd target doctor --targets-file "$PWD/mpgd.targets.json" --targets web,microsoft-store,ait,reddit
+pnpm accept
 ```
+
+`pnpm accept` runs the configured game check, optional test and playtest scripts,
+game build, kit TypeScript graph preflight, and the reusable target build/smoke
+matrix. It writes `artifacts/acceptance/acceptance-report.json` and
+`acceptance-report.md` for handoff. Missing optional `test` or `playtest` scripts
+are recorded as skipped; check and build remain required.
 
 For Apps in Toss changes, use the apps-in-toss MCP before implementation and
 keep SDK calls inside adapters or target wrappers.

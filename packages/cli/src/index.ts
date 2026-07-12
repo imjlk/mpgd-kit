@@ -15,6 +15,22 @@ import i18n, { defineI18n } from '@gunshi/plugin-i18n';
 import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
 
+import { runGameAcceptance, type GameAcceptanceStep } from './game-acceptance.js';
+
+export {
+  renderGameAcceptanceMarkdown,
+  runGameAcceptance,
+  type GameAcceptanceCommandResult,
+  type GameAcceptanceCommandRunner,
+  type GameAcceptanceReport,
+  type GameAcceptanceStatus,
+  type GameAcceptanceStep,
+  type GameAcceptanceStepResult,
+  type GameAcceptanceStepStatus,
+  type RunGameAcceptanceInput,
+  type RunGameAcceptanceResult,
+} from './game-acceptance.js';
+
 export {
   assertProductionTargetReadiness,
   type ProductionTargetReadinessInput,
@@ -65,6 +81,15 @@ const supportedBuildTargets = [
   'reddit',
 ] as const;
 const supportedVariants = ['wrapper', 'sync', 'simulator', 'archive'] as const;
+const acceptanceStepIds = {
+  check: 'check',
+  test: 'test',
+  build: 'build',
+  graph: 'graph-preflight',
+  playtest: 'playtest',
+  targetBuild: 'target-build',
+  targetSmoke: 'target-smoke',
+} as const;
 
 export async function runMpgdCli(args: readonly string[]): Promise<void> {
   await cli([...args], entryCommand, {
@@ -242,6 +267,138 @@ const gameCommand = defineI18n({
         });
       },
     }),
+    accept: defineI18n({
+      name: 'accept',
+      description: 'Run the reusable game handoff acceptance workflow.',
+      resource: commandResource(
+        {
+          en: 'Run check, test, build, graph, playtest, and target acceptance with handoff reports.',
+          ko: 'check, test, build, graph, playtest, 타깃 인수 검증과 인계 리포트를 실행합니다.',
+        },
+        {
+          game: {
+            en: 'Game root containing package.json and mpgd.targets.json.',
+            ko: 'package.json과 mpgd.targets.json이 있는 게임 루트.',
+          },
+          targets: {
+            en: 'Comma-separated target list, default, or all.',
+            ko: '쉼표로 구분한 타깃 목록, default 또는 all.',
+          },
+          profile: {
+            en: 'Target build profile. Defaults to staging.',
+            ko: '타깃 빌드 프로필. 기본값은 staging.',
+          },
+          'playtest-script': {
+            en: 'Optional game-owned package script used for automated playtesting.',
+            ko: '자동 플레이테스트에 사용할 선택적 게임 소유 패키지 스크립트.',
+          },
+          'report-dir': {
+            en: 'JSON and Markdown handoff report directory.',
+            ko: 'JSON 및 Markdown 인계 리포트 디렉터리.',
+          },
+          'kit-path': {
+            en: 'Path to the mpgd-kit checkout.',
+            ko: 'mpgd-kit 체크아웃 경로.',
+          },
+        },
+      ),
+      args: {
+        game: {
+          type: 'positional',
+          required: true,
+          description: 'Game root containing package.json and mpgd.targets.json.',
+        },
+        targets: {
+          type: 'string',
+          required: false,
+          default: 'default',
+          description: 'Comma-separated target list, default, or all.',
+        },
+        profile: {
+          type: 'string',
+          required: false,
+          default: 'staging',
+          description: 'Target build profile.',
+        },
+        'ait-variant': {
+          type: 'enum',
+          choices: supportedVariants,
+          required: false,
+          default: 'wrapper',
+          description: 'Variant for the ait target.',
+        },
+        'ios-variant': {
+          type: 'enum',
+          choices: supportedVariants,
+          required: false,
+          description: 'Variant for the ios target.',
+        },
+        'playtest-script': {
+          type: 'string',
+          required: false,
+          default: 'playtest',
+          description: 'Game-owned package script used for automated playtesting.',
+        },
+        'report-dir': {
+          type: 'string',
+          required: false,
+          description: 'JSON and Markdown handoff report directory.',
+        },
+        'kit-path': {
+          type: 'string',
+          required: false,
+          description: 'Path to the mpgd-kit checkout.',
+        },
+        'skip-test': {
+          type: 'boolean',
+          required: false,
+          description: 'Skip the game-owned test package script.',
+        },
+        'skip-graph': {
+          type: 'boolean',
+          required: false,
+          description: 'Skip the kit graph preflight.',
+        },
+        'skip-playtest': {
+          type: 'boolean',
+          required: false,
+          description: 'Skip the game-owned playtest package script.',
+        },
+        'skip-target-build': {
+          type: 'boolean',
+          required: false,
+          description: 'Skip the target build matrix.',
+        },
+        'skip-target-smoke': {
+          type: 'boolean',
+          required: false,
+          description: 'Skip the target smoke matrix.',
+        },
+      },
+      run: (ctx) => {
+        const positionals = readLocalPositionals(ctx.positionals, ['game', 'accept']);
+        const gameRoot = path.resolve(readRequiredPositional(positionals, 0, 'game'));
+        const iosVariant = readOptionalString(ctx.values['ios-variant']);
+        const reportDir = readOptionalString(ctx.values['report-dir']);
+        const kitPath = readOptionalString(ctx.values['kit-path']);
+
+        acceptGame({
+          gameRoot,
+          targets: readOptionalString(ctx.values.targets) ?? 'default',
+          profile: readOptionalString(ctx.values.profile) ?? 'staging',
+          aitVariant: readOptionalString(ctx.values['ait-variant']) ?? 'wrapper',
+          ...(iosVariant === undefined ? {} : { iosVariant }),
+          playtestScript: readOptionalString(ctx.values['playtest-script']) ?? 'playtest',
+          ...(reportDir === undefined ? {} : { reportDir }),
+          ...(kitPath === undefined ? {} : { kitPath }),
+          skipTest: ctx.values['skip-test'] === true,
+          skipGraph: ctx.values['skip-graph'] === true,
+          skipPlaytest: ctx.values['skip-playtest'] === true,
+          skipTargetBuild: ctx.values['skip-target-build'] === true,
+          skipTargetSmoke: ctx.values['skip-target-smoke'] === true,
+        });
+      },
+    }),
     icons: defineI18n({
       name: 'icons',
       description: 'Generate and verify target app icons from the game brand source.',
@@ -304,7 +461,9 @@ const gameCommand = defineI18n({
     }),
   },
   run: () => {
-    console.log('Use "mpgd game create <directory>" or "mpgd game icons generate <game>".');
+    console.log(
+      'Use "mpgd game create <directory>", "mpgd game accept <game>", or "mpgd game icons generate <game>".',
+    );
   },
 });
 
@@ -312,6 +471,250 @@ const defaultLegalDir = 'legal';
 const defaultLegalOutDir = 'artifacts/legal-site';
 const legalPageSlugs = ['privacy', 'support', 'terms'] as const;
 const legalPageFileList = legalPageSlugs.map((slug) => `${slug}.html`).join(', ');
+
+interface AcceptGameInput {
+  readonly gameRoot: string;
+  readonly targets: string;
+  readonly profile: string;
+  readonly aitVariant: string;
+  readonly iosVariant?: string;
+  readonly playtestScript: string;
+  readonly reportDir?: string;
+  readonly kitPath?: string;
+  readonly skipTest: boolean;
+  readonly skipGraph: boolean;
+  readonly skipPlaytest: boolean;
+  readonly skipTargetBuild: boolean;
+  readonly skipTargetSmoke: boolean;
+}
+
+function acceptGame(input: AcceptGameInput): void {
+  if (input.skipTargetBuild && !input.skipTargetSmoke) {
+    throw new Error('Use --skip-target-smoke when --skip-target-build is set.');
+  }
+
+  const gameRoot = assertGameAcceptanceRoot(input.gameRoot);
+  const gamePackage = readPackageJsonOrUndefined(gameRoot, { strictParse: true });
+
+  if (gamePackage === undefined) {
+    throw new Error(`Missing game package.json: ${gameRoot}`);
+  }
+
+  const targetsFile = path.join(gameRoot, 'mpgd.targets.json');
+
+  if (!existsSync(targetsFile)) {
+    throw new Error(`Missing game target config: ${targetsFile}`);
+  }
+
+  const kitPath = resolveKitPathForTarget({
+    ...(input.kitPath === undefined ? {} : { 'kit-path': input.kitPath }),
+  });
+  const packageManager = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const steps: GameAcceptanceStep[] = [
+    packageScriptAcceptanceStep({
+      id: acceptanceStepIds.check,
+      label: 'Game check',
+      script: 'check',
+      gameRoot,
+      packageManager,
+      scripts: gamePackage.scripts,
+      required: true,
+    }),
+    packageScriptAcceptanceStep({
+      id: acceptanceStepIds.test,
+      label: 'Game tests',
+      script: 'test',
+      gameRoot,
+      packageManager,
+      scripts: gamePackage.scripts,
+      required: false,
+      skipped: input.skipTest,
+    }),
+    packageScriptAcceptanceStep({
+      id: acceptanceStepIds.build,
+      label: 'Game build',
+      script: 'build',
+      gameRoot,
+      packageManager,
+      scripts: gamePackage.scripts,
+      required: true,
+    }),
+    input.skipGraph
+      ? skippedAcceptanceStep(
+          acceptanceStepIds.graph,
+          'TypeScript graph preflight',
+          'Disabled by --skip-graph.',
+        )
+      : {
+          id: acceptanceStepIds.graph,
+          label: 'TypeScript graph preflight',
+          command: packageManager,
+          args: ['graph:preflight'],
+          cwd: kitPath,
+        },
+    packageScriptAcceptanceStep({
+      id: acceptanceStepIds.playtest,
+      label: 'Automated playtest',
+      script: input.playtestScript,
+      gameRoot,
+      packageManager,
+      scripts: gamePackage.scripts,
+      required: false,
+      skipped: input.skipPlaytest,
+    }),
+    targetMatrixAcceptanceStep({
+      action: 'build-all',
+      id: acceptanceStepIds.targetBuild,
+      label: 'Target build matrix',
+      kitPath,
+      packageManager,
+      targetsFile,
+      targets: input.targets,
+      profile: input.profile,
+      aitVariant: input.aitVariant,
+      ...(input.iosVariant === undefined ? {} : { iosVariant: input.iosVariant }),
+      skipped: input.skipTargetBuild,
+    }),
+    targetMatrixAcceptanceStep({
+      action: 'smoke-all',
+      id: acceptanceStepIds.targetSmoke,
+      label: 'Target smoke matrix',
+      kitPath,
+      packageManager,
+      targetsFile,
+      targets: input.targets,
+      profile: input.profile,
+      aitVariant: input.aitVariant,
+      ...(input.iosVariant === undefined ? {} : { iosVariant: input.iosVariant }),
+      skipped: input.skipTargetSmoke,
+    }),
+  ];
+  const reportDir = path.resolve(gameRoot, input.reportDir ?? 'artifacts/acceptance');
+  const result = runGameAcceptance({
+    gameRoot,
+    reportDir,
+    ...(input.skipTargetBuild
+      ? {}
+      : { releaseManifestFile: path.join(gameRoot, 'artifacts/release-manifest.json') }),
+    options: {
+      targets: input.targets,
+      profile: input.profile,
+      aitVariant: input.aitVariant,
+      iosVariant: input.iosVariant ?? null,
+      playtestScript: input.playtestScript,
+      skipTest: input.skipTest,
+      skipGraph: input.skipGraph,
+      skipPlaytest: input.skipPlaytest,
+      skipTargetBuild: input.skipTargetBuild,
+      skipTargetSmoke: input.skipTargetSmoke,
+    },
+    steps,
+    env: {
+      ...process.env,
+      MPGD_KIT_PATH: kitPath,
+    },
+  });
+
+  console.log(`[mpgd:accept] JSON report: ${result.jsonFile}`);
+  console.log(`[mpgd:accept] Markdown report: ${result.markdownFile}`);
+
+  if (result.report.status === 'failed') {
+    throw new Error(`Game acceptance failed. Report: ${result.markdownFile}`);
+  }
+
+  console.log('[mpgd:accept] passed');
+}
+
+function assertGameAcceptanceRoot(gameRoot: string): string {
+  const resolved = path.resolve(gameRoot);
+
+  if (!existsSync(resolved)) {
+    throw new Error(`Game root does not exist: ${resolved}`);
+  }
+
+  return realpathSync(resolved);
+}
+
+function packageScriptAcceptanceStep(input: {
+  readonly id: string;
+  readonly label: string;
+  readonly script: string;
+  readonly gameRoot: string;
+  readonly packageManager: string;
+  readonly scripts: Readonly<Record<string, string>> | undefined;
+  readonly required: boolean;
+  readonly skipped?: boolean;
+}): GameAcceptanceStep {
+  if (input.skipped === true) {
+    return skippedAcceptanceStep(input.id, input.label, 'Disabled by command option.');
+  }
+
+  if (input.scripts?.[input.script] === undefined && !input.required) {
+    return skippedAcceptanceStep(
+      input.id,
+      input.label,
+      `Optional package script "${input.script}" is not configured.`,
+    );
+  }
+
+  return {
+    id: input.id,
+    label: input.label,
+    command: input.packageManager,
+    args: ['run', input.script],
+    cwd: input.gameRoot,
+  };
+}
+
+function targetMatrixAcceptanceStep(input: {
+  readonly action: 'build-all' | 'smoke-all';
+  readonly id: string;
+  readonly label: string;
+  readonly kitPath: string;
+  readonly packageManager: string;
+  readonly targetsFile: string;
+  readonly targets: string;
+  readonly profile: string;
+  readonly aitVariant: string;
+  readonly iosVariant?: string;
+  readonly skipped: boolean;
+}): GameAcceptanceStep {
+  if (input.skipped) {
+    return skippedAcceptanceStep(input.id, input.label, 'Disabled by command option.');
+  }
+
+  const args = [
+    'mpgd',
+    'target',
+    input.action,
+    '--targets-file',
+    input.targetsFile,
+    '--kit-path',
+    input.kitPath,
+    '--targets',
+    input.targets,
+  ];
+
+  if (input.action === 'build-all') {
+    args.push('--profile', input.profile, '--ait-variant', input.aitVariant);
+
+    if (input.iosVariant !== undefined) {
+      args.push('--ios-variant', input.iosVariant);
+    }
+  }
+
+  return {
+    id: input.id,
+    label: input.label,
+    command: input.packageManager,
+    args,
+    cwd: input.kitPath,
+  };
+}
+
+function skippedAcceptanceStep(id: string, label: string, skipReason: string): GameAcceptanceStep {
+  return { id, label, skipReason };
+}
 
 const legalCommand = defineI18n({
   name: 'legal',

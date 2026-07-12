@@ -42,10 +42,7 @@ pnpm install
 pnpm mpgd game create examples/my-game --title "My Game" --workspace
 cd examples/my-game
 pnpm install --filter . --filter ./apps/target-devvit
-pnpm check
-pnpm build
-pnpm exec mpgd target build-all --targets-file ./mpgd.targets.json --targets web,microsoft-store,ait,reddit --ait-variant wrapper --kit-path ../..
-pnpm exec mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,microsoft-store,ait,reddit --kit-path ../..
+pnpm exec mpgd game accept . --targets default --profile staging --kit-path ../..
 ```
 
 Use `--workspace` for local kit development. Omit it when generating an external
@@ -54,6 +51,13 @@ game repo that should consume published `@mpgd/*` packages.
 The starter wires `PlatformGateway`, target-config/effective-config, i18n, asset
 manifest loading, and optional game-services client creation without copying the
 demo game's score/coin loop.
+
+`mpgd game accept` provides one reusable handoff gate for game check, optional
+test and playtest scripts, game build, ttsc graph preflight, and the target
+build/smoke matrix. It writes both JSON and Markdown reports under
+`artifacts/acceptance` by default. Games keep playtest scenarios in their own
+package and expose them through a `playtest` script; the CLI records absent
+optional scripts as skipped instead of inventing game-specific behavior.
 
 For a minimum repo confidence check:
 

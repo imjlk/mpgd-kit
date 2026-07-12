@@ -162,6 +162,7 @@ validatePhaserTemplateDevvitSurfaces();
 validatePhaserTemplateBuildGateways();
 validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
+validatePhaserTemplateAcceptanceCommand();
 validateAppIconPipeline();
 
 if (failures.length > 0) {
@@ -169,6 +170,24 @@ if (failures.length > 0) {
 }
 
 console.log('Starter workflow validation passed.');
+
+function validatePhaserTemplateAcceptanceCommand(): void {
+  const templateRoot = 'packages/cli/templates/phaser-game';
+  const packageFile = `${templateRoot}/package.json`;
+  const acceptanceFile = `${templateRoot}/agent/acceptance.md`;
+  const manifestFile = `${templateRoot}/agent/game-manifest.json`;
+  const packageSource = readText(packageFile);
+
+  if (!packageSource.includes('"accept"') || !packageSource.includes('mpgd game accept')) {
+    failures.push(`${packageFile}: must expose the reusable mpgd game accept command.`);
+  }
+
+  for (const file of [acceptanceFile, manifestFile]) {
+    if (!readText(file).includes('pnpm accept')) {
+      failures.push(`${file}: must use the reusable pnpm accept handoff command.`);
+    }
+  }
+}
 
 function validatePhaserTemplateMicrosoftStorePwa(): void {
   const exampleRoot = 'examples/phaser-starter';
