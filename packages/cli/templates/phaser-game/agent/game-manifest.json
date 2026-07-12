@@ -55,6 +55,7 @@
     }
   ],
   "acceptance": [
+    "pnpm accept",
     "pnpm icons:generate",
     "pnpm icons:verify",
     "pnpm check",

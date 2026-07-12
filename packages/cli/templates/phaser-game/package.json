@@ -8,6 +8,7 @@
     "dev": "__WORKSPACE_I18N_BUILD_PREFIX__vite --host 0.0.0.0",
     "dev:ait": "APP_TARGET=ait APP_VERSION=0.0.0-dev BUILD_ID=ait-sandbox sh -c '__WORKSPACE_I18N_BUILD_PREFIX__vite --host 0.0.0.0'",
     "build": "__WORKSPACE_I18N_BUILD_PREFIX__vite build",
+    "accept": "node ./tools/run-game-acceptance.mjs",
     "icons:generate": "pnpm exec mpgd game icons generate . --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "icons:generate:devvit": "pnpm exec mpgd game icons generate . --targets reddit --profile development --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "icons:generate:devvit:production": "pnpm exec mpgd game icons generate . --targets reddit --profile production --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",

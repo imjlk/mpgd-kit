@@ -162,6 +162,7 @@ validatePhaserTemplateDevvitSurfaces();
 validatePhaserTemplateBuildGateways();
 validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
+validatePhaserTemplateAcceptanceCommand();
 validateAppIconPipeline();
 
 if (failures.length > 0) {
@@ -169,6 +170,46 @@ if (failures.length > 0) {
 }
 
 console.log('Starter workflow validation passed.');
+
+function validatePhaserTemplateAcceptanceCommand(): void {
+  const templateRoot = 'packages/cli/templates/phaser-game';
+  const packageFile = `${templateRoot}/package.json`;
+  const acceptanceFile = `${templateRoot}/agent/acceptance.md`;
+  const manifestFile = `${templateRoot}/agent/game-manifest.json`;
+  const runnerFile = `${templateRoot}/tools/run-game-acceptance.mjs`;
+  const packageJson = readJson(packageFile);
+  const scripts = isJsonObject(packageJson) && isJsonObject(packageJson.scripts)
+    ? packageJson.scripts
+    : null;
+  const acceptScript = scripts?.accept;
+
+  if (acceptScript !== 'node ./tools/run-game-acceptance.mjs') {
+    failures.push(`${packageFile}: must expose the reusable mpgd game accept command.`);
+  }
+
+  const runnerSource = readText(runnerFile);
+
+  if (
+    !runnerSource.includes("import { runMpgdCli } from '@mpgd/cli'")
+    || !runnerSource.includes('configuredKitPath.length === 0')
+    || !runnerSource.includes("? '__DEFAULT_KIT_PATH__'")
+    || !runnerSource.includes('...process.argv.slice(2)')
+  ) {
+    failures.push(
+      `${runnerFile}: must call the CLI API directly and resolve empty or missing kit paths without shell expansion.`,
+    );
+  }
+
+  for (const file of [acceptanceFile, manifestFile]) {
+    if (!readText(file).includes('pnpm accept')) {
+      failures.push(`${file}: must use the reusable pnpm accept handoff command.`);
+    }
+  }
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
 
 function validatePhaserTemplateMicrosoftStorePwa(): void {
   const exampleRoot = 'examples/phaser-starter';
