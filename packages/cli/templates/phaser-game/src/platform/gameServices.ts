@@ -1,6 +1,7 @@
 import {
   createGameServicesRuntime,
   resolveGameServicesAuthorityMode,
+  resolveGameServicesTransport,
   type GameServicesRuntime,
   type GameServicesRuntimeMode,
 } from '@mpgd/game-services';
@@ -21,6 +22,6 @@ export function createStarterGameServices(input: {
     ...(import.meta.env.VITE_MPGD_GAME_SERVICES_URL === undefined
       ? {}
       : { baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL }),
-    transport: import.meta.env.VITE_MPGD_GAME_SERVICES_TRANSPORT === 'orpc' ? 'orpc' : 'http',
+    transport: resolveGameServicesTransport(import.meta.env.VITE_MPGD_GAME_SERVICES_TRANSPORT),
   });
 }

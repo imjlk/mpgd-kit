@@ -3,6 +3,7 @@ import type { PlatformGateway } from '@mpgd/platform';
 import {
   createGameServicesRuntime,
   resolveGameServicesAuthorityMode,
+  resolveGameServicesTransport,
   type GameServicesBackendApi,
 } from './index';
 
@@ -127,6 +128,28 @@ assertEqual(
   'non-production should permit an explicitly configured local HTTP service',
 );
 
+assertThrows(
+  () => createGameServicesRuntime({
+    gateway: createGateway(),
+    playerId,
+    authorityMode: 'non-production',
+    baseUrl: 'not a URL',
+  }),
+  'valid absolute URL',
+  'non-production malformed URL should fail fast',
+);
+assertThrows(
+  () => createGameServicesRuntime({
+    gateway: createGateway(),
+    playerId,
+    authorityMode: 'non-production',
+    baseUrl: 'http://localhost:5173',
+    transport: 'grpc' as never,
+  }),
+  'transport must be http or orpc',
+  'invalid factory transport should fail fast',
+);
+
 const developmentWithoutOptIn = createGameServicesRuntime({
   gateway: createGateway(),
   playerId,
@@ -154,6 +177,14 @@ assertEqual(
   resolveGameServicesAuthorityMode('development'),
   'non-production',
   'development profile should use non-production authority policy',
+);
+assertEqual(resolveGameServicesTransport(undefined), 'http', 'missing transport should use HTTP');
+assertEqual(resolveGameServicesTransport('http'), 'http', 'HTTP transport should remain HTTP');
+assertEqual(resolveGameServicesTransport('orpc'), 'orpc', 'oRPC transport should remain oRPC');
+assertThrows(
+  () => resolveGameServicesTransport('grpc'),
+  'transport must be http or orpc',
+  'unknown environment transport should fail fast',
 );
 
 const developmentWithoutBackend = createGameServicesRuntime({
@@ -220,6 +251,17 @@ assertEqual(
 assertEqual(remoteRuntime.target, 'android', 'runtime should preserve the ledger target');
 assertNotEqual(remoteRuntime.client, undefined, 'remote production should expose a client');
 assertLocalCalls(1, 'remote production factory creation');
+
+const orpcRuntime = createGameServicesRuntime({
+  gateway: createGateway(),
+  playerId,
+  authorityMode: 'production',
+  baseUrl: 'https://services.example.com/rpc',
+  transport: 'orpc',
+});
+
+assertEqual(orpcRuntime.mode, 'orpc', 'oRPC transport should select the oRPC backend');
+assertNotEqual(orpcRuntime.client, undefined, 'oRPC production should expose a client');
 
 const unsupportedRuntime = createGameServicesRuntime({
   gateway: createGateway('telegram'),
@@ -331,4 +373,22 @@ function assertNotEqual<T>(actual: T, expected: T, message: string): void {
   if (actual === expected) {
     throw new Error(`${message}: did not expect ${String(expected)}.`);
   }
+}
+
+function assertThrows(
+  callback: () => unknown,
+  expectedMessage: string,
+  message: string,
+): void {
+  try {
+    callback();
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(expectedMessage)) {
+      return;
+    }
+
+    throw error;
+  }
+
+  throw new Error(`${message}: expected an error containing ${expectedMessage}.`);
 }

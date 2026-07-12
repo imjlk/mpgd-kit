@@ -47,6 +47,7 @@ export function createGameServicesRuntime(
   input: CreateGameServicesRuntimeInput,
 ): GameServicesRuntime {
   assertAuthorityMode(input.authorityMode);
+  assertTransport(input.transport);
 
   const target = resolveGameServicesLedgerTarget(input.target ?? input.gateway.target);
 
@@ -59,8 +60,14 @@ export function createGameServicesRuntime(
   let mode: Exclude<GameServicesRuntimeMode, 'disabled'>;
 
   if (baseUrl !== undefined) {
-    if (input.authorityMode === 'production' && !isPublicHttpsUrl(baseUrl)) {
+    const url = parseAbsoluteUrl(baseUrl);
+
+    if (input.authorityMode === 'production' && !isPublicHttpsUrl(url)) {
       return disabledRuntime('invalid_authoritative_backend', target);
+    }
+
+    if (url === undefined) {
+      throw new Error('Game Services baseUrl must be a valid absolute URL.');
     }
 
     mode = input.transport === 'orpc' ? 'orpc' : 'http';
@@ -128,6 +135,20 @@ export function resolveGameServicesAuthorityMode(profile: string): GameServicesA
   return profile === 'production' ? 'production' : 'non-production';
 }
 
+export function resolveGameServicesTransport(
+  transport: string | undefined,
+): 'http' | 'orpc' {
+  if (transport === undefined || transport.length === 0 || transport === 'http') {
+    return 'http';
+  }
+
+  if (transport === 'orpc') {
+    return 'orpc';
+  }
+
+  throw new Error('Game Services transport must be http or orpc.');
+}
+
 function disabledRuntime(
   reason: GameServicesDisabledReason,
   target?: GameServicesLedgerTarget,
@@ -145,19 +166,20 @@ function normalizeBaseUrl(baseUrl: string | undefined): string | undefined {
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
 }
 
-function isPublicHttpsUrl(value: string): boolean {
-  let url: URL;
-
-  try {
-    url = new URL(value);
-  } catch {
-    return false;
-  }
-
-  return url.protocol === 'https:'
+function isPublicHttpsUrl(url: URL | undefined): boolean {
+  return url !== undefined
+    && url.protocol === 'https:'
     && url.username.length === 0
     && url.password.length === 0
     && !isNonPublicHostname(url.hostname);
+}
+
+function parseAbsoluteUrl(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
 }
 
 function isNonPublicHostname(hostname: string): boolean {
@@ -274,5 +296,13 @@ function assertAuthorityMode(
 ): asserts authorityMode is GameServicesAuthorityMode {
   if (authorityMode !== 'production' && authorityMode !== 'non-production') {
     throw new Error('authorityMode must be production or non-production.');
+  }
+}
+
+function assertTransport(
+  transport: CreateGameServicesRuntimeInput['transport'],
+): void {
+  if (transport !== undefined && transport !== 'http' && transport !== 'orpc') {
+    throw new Error('Game Services transport must be http or orpc.');
   }
 }
