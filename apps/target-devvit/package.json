@@ -21,6 +21,7 @@
   },
   "dependencies": {
     "@devvit/web": "0.13.6",
+    "@mpgd/adapter-devvit": "workspace:*",
     "@mpgd/bridge": "workspace:*",
     "express": "^5.2.1",
     "helmet": "^8.1.0"

@@ -101,10 +101,16 @@ Implemented shape:
 - `apps/target-devvit`
 - bridge fixtures
 - `/api/mpgd/bridge` server boundary
+- duplicate-safe, ambiguity-safe durable post operations through the
+  `@mpgd/adapter-devvit/server` entry
 - smoke tests
 
 Generated games keep Devvit SDK imports in their own `apps/target-devvit`
 directory, while game-facing code should continue to use `PlatformGateway`.
+Durable custom-post operations must persist a stable attempt marker before a
+Reddit call and reconcile uncertain outcomes without reposting. They must not be
+described as exactly-once. See
+[Devvit durable post operations](DEVVIT_DURABLE_POST_OPERATIONS.md).
 
 ## Validation
 

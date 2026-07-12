@@ -306,6 +306,11 @@ builds the Devvit server bridge to CJS, and writes the release manifest. Live
 `devvit playtest`, `devvit upload`, and `devvit publish` remain local commands
 because they depend on Reddit auth state in `~/.devvit/token`.
 
+Repeatable server-side custom-post flows can use the
+[`@mpgd/adapter-devvit/server` durable operation coordinator](docs/DEVVIT_DURABLE_POST_OPERATIONS.md).
+It is duplicate-safe and ambiguity-safe rather than exactly-once: an uncertain
+Reddit response enters reconciliation and does not authorize a blind repost.
+
 ## Microsoft Store
 
 The Microsoft Store target is a PWA distribution path. Microsoft's current

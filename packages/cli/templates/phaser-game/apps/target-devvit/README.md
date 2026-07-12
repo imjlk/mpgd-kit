@@ -29,3 +29,28 @@ The client bundle is copied into `dist/client` by the mpgd target build. The ser
 compiled to `dist/server/index.cjs` and keeps Devvit SDK imports out of Phaser scenes.
 The game root pins `@mpgd/cli`, so these commands use the same CLI version as the generated
 starter's other `@mpgd/*` dependencies.
+
+## Durable Post Operations
+
+Use `src/server/postOperationStore.ts` with `@mpgd/adapter-devvit/server` for a
+server action or scheduler that may receive the same custom-post operation more
+than once. Use `{ appScope, subredditId }` as the scope, a stable `operationType`
+in the definition, and an `operationId` for each logical publication slot. Validate
+the public payload and launch parameters, then inject the Redis-backed store into
+`createDevvitPostOperationCoordinator`.
+
+The contract is duplicate-safe and ambiguity-safe, not exactly-once. It persists
+the attempt before invoking Reddit. If Reddit accepts the post but its response is
+lost, or the process stops before the receipt is saved, repeating `execute` returns
+`reconciliation-required` and never blindly calls the submit function again. An
+explicit recovery endpoint or scheduler calls `reconcile`, which requires an exact
+match of the full canonical envelope. A missing match from a bounded listing
+remains unresolved rather than restoring submit permission.
+
+Keep operation definitions and `@devvit/web/server` imports inside this target
+app. The canonical `{ mpgd, launch, payload }` envelope is public and untrusted;
+keep private content and authoritative records in server-side storage. Exercise
+first success, duplicate calls, interruption,
+response loss, lease expiry with concurrent reconciliation, malformed durable
+state, invalid launch metadata, and cross-scope key isolation before enabling a
+scheduled or user-triggered publication flow.

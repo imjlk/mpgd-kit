@@ -17,6 +17,7 @@
     "paths": {
       "@mpgd/bridge/cloudflare-pages": ["./packages/bridge/src/cloudflare-pages.ts"],
       "@mpgd/bridge/orpc": ["./packages/bridge/src/orpc.ts"],
+      "@mpgd/adapter-devvit/server": ["./adapters/devvit/src/server/index.ts"],
       "@mpgd/catalog/*": ["./packages/catalog/*"],
       "@mpgd/game-services/*": ["./packages/game-services/src/*"],
       "@mpgd/adapter-*": ["./adapters/*/src"],
