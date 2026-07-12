@@ -11,7 +11,11 @@ import type { TargetConfigMatrix } from '@mpgd/target-config';
 import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import { isCliEntrypoint, readJsonFile } from '../io';
 import { writeEffectiveTargetConfigs } from './effective-config';
-import { effectiveTargetConfigOutputDir, loadPlatformTargetsConfig } from './platform-targets';
+import {
+  effectiveTargetConfigOutputDir,
+  loadPlatformTargetsConfig,
+  type LoadedPlatformTargetsConfig,
+} from './platform-targets';
 
 const assertProductCatalog = typia.createAssert<ProductCatalog>();
 const assertAdPlacements = typia.createAssert<AdPlacements>();
@@ -41,8 +45,8 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
 function generateReleaseManifestWithKitGitSha(
   input: GenerateReleaseManifestInput,
   kitGitSha: string,
+  platformTargets: LoadedPlatformTargetsConfig = loadPlatformTargetsConfig(),
 ): ReleaseManifest {
-  const platformTargets = loadPlatformTargetsConfig();
   const targetMetadata = readTargetReleaseMetadata(platformTargets.config.targets[input.target]);
   const packageJson = readJsonFile('package.json') as { version?: string };
   const targetConfig = assertTargetConfigMatrix(
@@ -101,10 +105,11 @@ function writeReleaseManifestWithKitGitSha(
   kitGitSha: string,
 ): ReleaseManifest {
   const outputPath = input.outputPath ?? 'release-output/release-manifest.json';
-  const nextManifest = generateReleaseManifestWithKitGitSha(input, kitGitSha);
+  const platformTargets = loadPlatformTargetsConfig();
+  const nextManifest = generateReleaseManifestWithKitGitSha(input, kitGitSha, platformTargets);
   const manifest = makeEffectiveConfigPathsPortable(
     mergeManifest(outputPath, nextManifest),
-    loadPlatformTargetsConfig().baseDir,
+    platformTargets.baseDir,
   );
 
   mkdirSync(dirname(outputPath), { recursive: true });
@@ -301,7 +306,10 @@ function resolveKitRoot(): string {
   }
 
   if (resolvedConfiguredKitRoot !== executionRoot) {
-    throw new Error('MPGD_KIT_PATH must match the mpgd-kit execution root.');
+    throw new Error(
+      'MPGD_KIT_PATH must match the mpgd-kit execution root. '
+      + `Resolved MPGD_KIT_PATH: ${resolvedConfiguredKitRoot}; execution root: ${executionRoot}.`,
+    );
   }
 
   return executionRoot;
@@ -329,7 +337,10 @@ function assertKitGitTopLevel(kitRoot: string): void {
   }
 
   if (resolvedGitTopLevel !== kitRoot) {
-    throw new Error('MPGD_KIT_PATH must point to the root of its own Git checkout.');
+    throw new Error(
+      'MPGD_KIT_PATH must point to the root of its own Git checkout. '
+      + `Git root: ${resolvedGitTopLevel}; execution root: ${kitRoot}.`,
+    );
   }
 }
 
