@@ -32,6 +32,7 @@ let manifestRunCount = 0;
 
 try {
   writeFakeGit();
+  assertKitGitShaSchema();
   writeFileSync(firstCatalogFile, catalogJson('game-v1'));
   writeFileSync(secondCatalogFile, catalogJson('game-v2'));
   writeFileSync(placementsFile, placementsJson('ads-v1'));
@@ -255,6 +256,30 @@ fi
 
 function readManifest(path: string): ReleaseManifest {
   return JSON.parse(readFileSync(path, 'utf8')) as ReleaseManifest;
+}
+
+function assertKitGitShaSchema(): void {
+  const schema = JSON.parse(readFileSync('release.manifest.schema.json', 'utf8')) as {
+    readonly required?: readonly string[];
+    readonly properties?: {
+      readonly kitGitSha?: {
+        readonly type?: string;
+        readonly pattern?: string;
+      };
+    };
+  };
+  const kitGitShaSchema = schema.properties?.kitGitSha;
+
+  assert.equal(schema.required?.includes('kitGitSha'), true);
+  assert.deepEqual(kitGitShaSchema, {
+    type: 'string',
+    pattern: '^[0-9a-f]{40}$',
+  });
+
+  const kitGitShaPattern = new RegExp(kitGitShaSchema.pattern, 'u');
+
+  assert.match(firstKitGitSha, kitGitShaPattern);
+  assert.doesNotMatch(firstKitGitSha.slice(1), kitGitShaPattern);
 }
 
 function catalogJson(version: string): string {

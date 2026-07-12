@@ -6,6 +6,7 @@
   "required": [
     "releaseId",
     "gitSha",
+    "kitGitSha",
     "gameVersion",
     "buildId",
     "catalogVersion",
@@ -15,6 +16,7 @@
   "properties": {
     "releaseId": { "type": "string", "minLength": 1 },
     "gitSha": { "type": "string", "minLength": 1 },
+    "kitGitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "gameVersion": { "type": "string", "minLength": 1 },
     "buildId": { "type": "string", "minLength": 1 },
     "catalogVersion": { "type": "string", "minLength": 1 },
