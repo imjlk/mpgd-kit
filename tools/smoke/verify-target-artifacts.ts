@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
@@ -76,6 +76,7 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
 
     if (target === 'microsoft-store') {
       verifyMicrosoftStorePwaManifest(artifactPath);
+      verifyMicrosoftStoreBundlePurity(artifactPath);
     }
 
     if (targetConfig.kind === 'devvit-web') {
@@ -102,6 +103,59 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
   }
 
   console.log(`Target smoke passed: ${targets.join(', ')}`);
+}
+
+const forbiddenMicrosoftStoreJavaScriptMarkers = [
+  ['AIT bridge is not installed.', 'AIT adapter'],
+  ['AIT Sandbox Player', 'AIT sandbox identity'],
+  ['ait-sandbox-reward-', 'AIT sandbox rewarded ad'],
+  ['CapacitorCookies', 'Capacitor adapter'],
+  ['DevvitBridgeError', 'Devvit adapter'],
+  ['EFFECT_REALTIME_SUB', 'Devvit web client'],
+] as const;
+
+function verifyMicrosoftStoreBundlePurity(artifactPath: string): void {
+  const javascriptFiles = listJavaScriptFiles(artifactPath);
+
+  if (javascriptFiles.length === 0) {
+    throw new Error('Microsoft Store artifact must contain JavaScript.');
+  }
+
+  for (const file of javascriptFiles) {
+    const source = readFileSync(file, 'utf8');
+    const relativeFile = relative(artifactPath, file);
+
+    for (const [marker, owner] of forbiddenMicrosoftStoreJavaScriptMarkers) {
+      if (source.includes(marker)) {
+        throw new Error(`Microsoft Store artifact contains ${owner} code in ${relativeFile}.`);
+      }
+    }
+  }
+}
+
+function listJavaScriptFiles(root: string): readonly string[] {
+  const files: string[] = [];
+  const pendingDirectories = [root];
+
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop();
+
+    if (directory === undefined) {
+      throw new Error('JavaScript artifact traversal lost its directory.');
+    }
+
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const file = resolve(directory, entry.name);
+
+      if (entry.isDirectory()) {
+        pendingDirectories.push(file);
+      } else if (entry.isFile() && entry.name.endsWith('.js')) {
+        files.push(file);
+      }
+    }
+  }
+
+  return files.sort();
 }
 
 function readReleaseEmbeddedTargetConfig(

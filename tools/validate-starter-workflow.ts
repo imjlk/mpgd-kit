@@ -157,6 +157,7 @@ validatePhaserTemplateAITPolyfill();
 validatePhaserTemplateAITConsoleCli();
 validatePhaserTemplateDevvitPostOperations();
 validatePhaserTemplateDevvitSurfaces();
+validatePhaserTemplateBuildGateways();
 validatePhaserTemplateOrientationPolicy();
 
 if (failures.length > 0) {
@@ -164,6 +165,63 @@ if (failures.length > 0) {
 }
 
 console.log('Starter workflow validation passed.');
+
+function validatePhaserTemplateBuildGateways(): void {
+  const exampleRoot = 'examples/phaser-starter';
+  const templateRoot = 'packages/cli/templates/phaser-game';
+  const gatewayFiles = [
+    'src/platform/buildGatewayModule.ts',
+    'src/platform/buildGateways/browser.ts',
+    'src/platform/buildGateways/capacitorAndroid.ts',
+    'src/platform/buildGateways/capacitorIos.ts',
+    'src/platform/buildGateways/ait.ts',
+    'src/platform/buildGateways/aitSandbox.ts',
+    'src/platform/buildGateways/reddit.ts',
+    'src/platform/buildGateways/redditSandbox.ts',
+  ] as const;
+
+  for (const relativePath of gatewayFiles) {
+    const examplePath = `${exampleRoot}/${relativePath}`;
+    const templatePath = `${templateRoot}/${relativePath}`;
+
+    if (!existsSync(examplePath)) {
+      failures.push(`${examplePath}: required for target-isolated gateway builds.`);
+      continue;
+    }
+
+    if (!existsSync(templatePath)) {
+      failures.push(`${templatePath}: required for target-isolated gateway builds.`);
+      continue;
+    }
+
+    if (readText(examplePath) !== readText(templatePath)) {
+      failures.push(`${templatePath}: must stay in parity with ${examplePath}.`);
+    }
+  }
+
+  for (const root of [exampleRoot, templateRoot]) {
+    const vitePath = `${root}/vite.config.ts`;
+    const installPath = `${root}/src/platform/${
+      root === exampleRoot ? 'installStarterPlatform.ts' : 'installPlatform.ts'
+    }`;
+
+    for (const requiredText of [
+      "'#mpgd-platform-gateway': resolve(buildGatewayModule)",
+      'export function resolveBuildGatewayModule',
+      "return 'src/platform/buildGateways/browser.ts'",
+      "'src/platform/buildGateways/aitSandbox.ts'",
+      "'src/platform/buildGateways/redditSandbox.ts'",
+    ]) {
+      assertIncludesText(readText(vitePath), requiredText, `${vitePath}: build gateway isolation.`);
+    }
+
+    assertIncludesText(
+      readText(installPath),
+      "import { createBuildGateway } from '#mpgd-platform-gateway'",
+      `${installPath}: build-selected gateway.`,
+    );
+  }
+}
 
 function validateSkillFrontmatter(path: string): void {
   const content = readText(path);

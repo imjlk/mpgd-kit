@@ -1,7 +1,8 @@
+import { createBuildGateway } from '#mpgd-platform-gateway';
+
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import productCatalogJson from '@mpgd/catalog/catalog.json';
 import adPlacementsJson from '@mpgd/catalog/placements.json';
-import type { PlatformGateway } from '@mpgd/platform';
 import {
   createEffectiveTargetConfig,
   getTargetConfig,
@@ -14,7 +15,6 @@ import targetConfigMatrixJson from '@mpgd/target-config/targets.json';
 
 import type { RuntimeConfig } from './runtimeDetector';
 
-const devvitSandboxBuildId = 'devvit-sandbox';
 const targetConfigMatrix = targetConfigMatrixJson as TargetConfigMatrix;
 const productCatalog = productCatalogJson as ProductCatalog;
 const adPlacements = adPlacementsJson as AdPlacements;
@@ -27,50 +27,7 @@ const adPlacementTypes = new Map<string, 'rewarded' | 'interstitial'>(
 );
 
 export async function installPlatform(runtime: RuntimeConfig): Promise<TargetConfiguredGateway> {
-  let gateway: PlatformGateway;
-
-  switch (runtime.target) {
-    case 'android':
-    case 'ios': {
-      const { createCapacitorPlatformGateway } = await import('@mpgd/adapter-capacitor');
-      gateway = createCapacitorPlatformGateway({
-        target: runtime.target,
-        appVersion: runtime.appVersion,
-        buildId: runtime.buildId,
-      });
-      break;
-    }
-
-    case 'ait': {
-      const { createAitPlatformGateway, createAitSandboxBridge } = await import(
-        '@mpgd/adapter-ait'
-      );
-      gateway = createAitPlatformGateway({
-        appVersion: runtime.appVersion,
-        buildId: runtime.buildId,
-        ...(runtime.debug ? { fallbackBridge: createAitSandboxBridge() } : {}),
-      });
-      break;
-    }
-
-    case 'reddit': {
-      const { createDevvitPlatformGateway, createDevvitSandboxBridge } = await import(
-        '@mpgd/adapter-devvit'
-      );
-      gateway = createDevvitPlatformGateway({
-        appVersion: runtime.appVersion,
-        buildId: runtime.buildId,
-        ...(shouldUseDevvitSandbox(runtime) ? { fallbackBridge: createDevvitSandboxBridge() } : {}),
-      });
-      break;
-    }
-
-    default: {
-      const { createBrowserPlatformGateway } = await import('@mpgd/adapter-browser');
-      gateway = createBrowserPlatformGateway();
-    }
-  }
-
+  const gateway = await createBuildGateway(runtime);
   const configTarget = runtime.configTarget || targetConfigKeyForPlatform(runtime.target);
   const targetConfig = getTargetConfig(targetConfigMatrix, configTarget);
   const effectiveConfig = createEffectiveTargetConfig({
@@ -92,8 +49,4 @@ export async function installPlatform(runtime: RuntimeConfig): Promise<TargetCon
       return adPlacementTypes.get(placementId);
     },
   });
-}
-
-function shouldUseDevvitSandbox(runtime: RuntimeConfig): boolean {
-  return runtime.debug && runtime.buildId === devvitSandboxBuildId;
 }
