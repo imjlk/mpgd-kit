@@ -169,8 +169,33 @@ export interface ShareIntent {
   readonly previewImageUrl?: string;
 }
 
+/**
+ * Evidence available after a platform reports a successful share operation.
+ * `presented` means the platform share surface opened, not that the user
+ * finished sharing. `completed` means the adapter observed completion.
+ */
+export type ShareCompletion = 'presented' | 'completed';
+
 export interface ShareResult {
   readonly status: 'shared' | 'cancelled' | 'unavailable';
+  /**
+   * Optional for backward compatibility. A legacy `shared` result without this
+   * field normalizes to `completed`; new adapters should set it explicitly when
+   * they can only prove that a share surface was presented.
+   */
+  readonly completion?: ShareCompletion;
+}
+
+export function resolveShareCompletion(result: ShareResult): ShareCompletion | undefined {
+  if (result.status !== 'shared') {
+    return undefined;
+  }
+
+  return result.completion ?? 'completed';
+}
+
+export function isShareCompleted(result: ShareResult): boolean {
+  return resolveShareCompletion(result) === 'completed';
 }
 
 export interface InboundShare {

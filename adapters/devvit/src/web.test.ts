@@ -1,17 +1,23 @@
 import { describe, expect, it, vi } from 'vitest';
 
-const { requestExpandedMode } = vi.hoisted(() => ({
+const { requestExpandedMode, showShareSheet } = vi.hoisted(() => ({
   requestExpandedMode: vi.fn<
     (event: MouseEvent, entry: string) => void | Promise<void>
   >(),
+  showShareSheet: vi.fn<(options: {
+    readonly data?: string;
+    readonly title?: string;
+    readonly text?: string;
+  }) => Promise<void>>(),
 }));
 
 vi.mock('@devvit/web/client', () => ({
   getWebViewMode: () => 'inline',
   requestExpandedMode,
+  showShareSheet,
 }));
 
-import { requestDevvitExpandedMode } from './web';
+import { presentDevvitShareSheet, requestDevvitExpandedMode } from './web';
 
 describe('requestDevvitExpandedMode', () => {
   it('normalizes the current synchronous Devvit request to a promise', async () => {
@@ -27,5 +33,30 @@ describe('requestDevvitExpandedMode', () => {
     requestExpandedMode.mockRejectedValueOnce(failure);
 
     await expect(requestDevvitExpandedMode({} as MouseEvent, 'game')).rejects.toBe(failure);
+  });
+});
+
+describe('presentDevvitShareSheet', () => {
+  it('reports presentation without claiming share completion', async () => {
+    showShareSheet.mockResolvedValueOnce(undefined);
+
+    await expect(
+      presentDevvitShareSheet({
+        data: 'challenge=abc',
+        title: 'Challenge',
+        text: 'Try this challenge',
+      }),
+    ).resolves.toEqual({
+      status: 'shared',
+      completion: 'presented',
+    });
+  });
+
+  it('returns unavailable when Devvit cannot present the share surface', async () => {
+    showShareSheet.mockRejectedValueOnce(new Error('share surface unavailable'));
+
+    await expect(presentDevvitShareSheet({ text: 'Try this challenge' })).resolves.toEqual({
+      status: 'unavailable',
+    });
   });
 });
