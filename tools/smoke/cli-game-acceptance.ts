@@ -28,6 +28,12 @@ assert.equal(
   }),
   path.resolve(fixtureRoot, '../external-release.json'),
 );
+assert.equal(
+  resolveGameAcceptanceReleaseManifestFile(fixtureRoot, {
+    MPGD_RELEASE_MANIFEST_FILE: '',
+  }),
+  path.join(fixtureRoot, 'artifacts/release-manifest.json'),
+);
 
 try {
   const commands: string[] = [];

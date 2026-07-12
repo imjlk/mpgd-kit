@@ -9,9 +9,13 @@ export function resolveGameAcceptanceReleaseManifestFile(
   gameRoot: string,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  const configuredFile = env.MPGD_RELEASE_MANIFEST_FILE;
+
   return path.resolve(
     gameRoot,
-    env.MPGD_RELEASE_MANIFEST_FILE ?? defaultGameAcceptanceReleaseManifestFile,
+    configuredFile === undefined || configuredFile.length === 0
+      ? defaultGameAcceptanceReleaseManifestFile
+      : configuredFile,
   );
 }
 

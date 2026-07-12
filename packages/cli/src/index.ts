@@ -614,12 +614,13 @@ function acceptGame(input: AcceptGameInput): void {
     }),
   ];
   const reportDir = path.resolve(gameRoot, input.reportDir ?? 'artifacts/acceptance');
+  const releaseManifestFile = resolveGameAcceptanceReleaseManifestFile(gameRoot);
   const result = runGameAcceptance({
     gameRoot,
     reportDir,
     ...(input.skipTargetBuild
       ? {}
-      : { releaseManifestFile: resolveGameAcceptanceReleaseManifestFile(gameRoot) }),
+      : { releaseManifestFile }),
     options: {
       targets: input.targets,
       profile: input.profile,
@@ -638,6 +639,7 @@ function acceptGame(input: AcceptGameInput): void {
     env: {
       ...process.env,
       MPGD_KIT_PATH: kitPath,
+      MPGD_RELEASE_MANIFEST_FILE: releaseManifestFile,
     },
   });
 
