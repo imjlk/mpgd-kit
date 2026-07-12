@@ -20,6 +20,7 @@ await bootstrap();
 
 async function bootstrap(): Promise<void> {
   let locale: Locale = 'en';
+  let disposeMicrosoftStorePwa: (() => void) | undefined;
 
   try {
     if (__APP_TARGET__ === 'ait') {
@@ -28,7 +29,7 @@ async function bootstrap(): Promise<void> {
     }
 
     const runtimeConfig = detectRuntime();
-    installMicrosoftStorePwa(runtimeConfig);
+    disposeMicrosoftStorePwa = installMicrosoftStorePwa(runtimeConfig);
     const platform = await installPlatform(runtimeConfig);
     const runtime = await platform.getTargetRuntime();
     const orientationPolicy = {
@@ -84,6 +85,7 @@ async function bootstrap(): Promise<void> {
       },
     });
   } catch (error) {
+    disposeMicrosoftStorePwa?.();
     renderBootstrapError(error, locale);
     console.error('[bootstrap]', error);
   }
