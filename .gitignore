@@ -4,6 +4,7 @@ artifacts/
 release-output/
 output/
 .mpgd.targets.generated.json
+.mpgd/
 .env
 .env.*
 .devvit/
@@ -24,7 +25,9 @@ apps/target-ait/.ait_urls
 apps/target-ait/.granite/
 apps/target-ait/public/assets/
 apps/target-ait/public/game/
+apps/target-ait/generated/
 apps/target-devvit/dist/
+apps/target-devvit/generated/
 apps/mobile-capacitor/www/
 apps/mobile-capacitor/android/.gradle/
 apps/mobile-capacitor/android/local.properties
