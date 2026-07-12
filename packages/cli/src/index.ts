@@ -1411,10 +1411,9 @@ function runTargetCommand(input: {
     });
   }
 
-  const args =
-    input.action === 'build'
-      ? ['build:target', target, profile]
-      : ['smoke:target', target];
+  const args = input.action === 'build'
+    ? ['build:target', target, profile]
+    : ['smoke:target', target];
 
   console.log(`[mpgd] ${input.action} ${target}`);
   runPnpm(args, env);
