@@ -206,7 +206,11 @@ function validatePhaserTemplateMicrosoftStorePwa(): void {
     );
 
     if (pwaManifest !== null) {
-      assertEqual(pwaManifest.id, './', `${pwaManifestPath}: stable relative PWA id`);
+      assertEqual(
+        pwaManifest.id,
+        root === exampleRoot ? './mpgd-phaser-starter' : './__GAME_NAME__',
+        `${pwaManifestPath}: stable game-specific PWA id`,
+      );
       assertEqual(pwaManifest.scope, './', `${pwaManifestPath}: relative PWA scope`);
       assertEqual(pwaManifest.start_url, './', `${pwaManifestPath}: relative PWA start URL`);
     }

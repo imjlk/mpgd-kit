@@ -2,7 +2,7 @@
   "name": "mpgd Phaser Starter",
   "short_name": "mpgd Starter",
   "description": "Starter Phaser game for mpgd multi-platform targets.",
-  "id": "./",
+  "id": "./mpgd-phaser-starter",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
