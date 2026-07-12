@@ -27,6 +27,14 @@ These groups are optional so existing adapters remain source compatible.
 Callers must read the target runtime integration state before showing a CTA and
 must still handle an operation returning `unavailable`.
 
+`ShareResult.completion` separates proof that a platform share surface was
+`presented` from proof that sharing `completed`. The field is optional so
+existing adapters and games remain compatible; a legacy `status: 'shared'`
+result without it normalizes to `completed`. New integrations that only open a
+share sheet must return `completion: 'presented'`, and callers should use
+`resolveShareCompletion()` or `isShareCompleted()` instead of treating every
+`shared` status as a confirmed completion.
+
 ## Availability is a state
 
 Target config keeps the existing boolean monetization gates and adds separate
@@ -87,6 +95,11 @@ The browser adapter uses Web Share and then a clipboard fallback. Apps in Toss
 uses a Toss share link before opening its native share sheet. Mobile and Reddit
 bridge contracts are present, but target config exposes their current setup
 state instead of pretending an unwired SDK call is available.
+
+`presentDevvitShareSheet()` in `@mpgd/adapter-devvit/web` wraps Devvit's
+`showShareSheet()` effect and returns `shared + presented`; Devvit does not
+provide a callback proving that the user finished sharing. Games may show an
+"opened" state after this result, but must not record a completed share from it.
 
 ## Notifications are split at the trust boundary
 

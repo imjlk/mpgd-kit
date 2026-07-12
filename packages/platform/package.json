@@ -37,11 +37,13 @@
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
-    "fix": "ttsc fix"
+    "fix": "ttsc fix",
+    "test": "vitest run"
   },
   "devDependencies": {
     "ttsc": "0.16.9",
-    "typescript": "7.0.1-rc"
+    "typescript": "7.0.1-rc",
+    "vitest": "^4.0.0"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
