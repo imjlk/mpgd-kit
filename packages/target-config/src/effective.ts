@@ -13,6 +13,7 @@ import {
   type TargetConfigMatrix,
   type TargetFeatureConfig,
   type TargetIntegrationConfig,
+  type TargetLocalizationConfig,
   type TargetPolicyRestrictions,
   type TargetReleaseConfig,
   type TargetRuntimeKind,
@@ -83,6 +84,7 @@ export interface EffectiveStorageConfig {
 
 export interface EffectiveLocalizationConfig {
   readonly enabled: boolean;
+  readonly fallbackLocale: TargetLocalizationConfig['fallbackLocale'];
 }
 
 export interface EffectiveTargetConfig {
@@ -185,6 +187,7 @@ export function createEffectiveTargetConfig(
     },
     localization: {
       enabled: input.config.capabilities.localization,
+      fallbackLocale: input.config.localization.fallbackLocale,
     },
   };
 }

@@ -2,7 +2,7 @@ import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
-import { resolveMpgdLocale } from '../../packages/i18n/src/index';
+import { resolveTargetMpgdLocale } from '../../packages/i18n/src/index';
 import {
   createEffectiveTargetConfig,
   getEffectiveAdPlacementConfig,
@@ -161,10 +161,16 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
   );
 
   const expectedLocale =
-    config.features.localization && runtime.features.localization.capabilitySupported ? 'ko' : 'en';
+    config.features.localization && runtime.features.localization.capabilitySupported
+      ? 'ko'
+      : config.localization.fallbackLocale;
 
   assertEqual(
-    resolveMpgdLocale(runtime.capabilities, ['ko-KR']),
+    resolveTargetMpgdLocale({
+      capabilities: runtime.capabilities,
+      preferredLocales: ['ko-KR'],
+      fallbackLocale: runtime.config.localization.fallbackLocale,
+    }),
     expectedLocale,
     `${configTarget} localization feature should control locale resolution`,
   );

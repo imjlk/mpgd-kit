@@ -160,7 +160,10 @@ has authenticated identity/session infrastructure.
 `packages/target-config/targets.json` is the source of truth for target-specific
 platform feature availability, runtime metadata, release profiles, and nested
 platform policy restrictions. Features include IAP, rewarded ads, interstitial
-ads, leaderboard, and localization.
+ads, leaderboard, and localization. Each target supplies a localization
+`fallbackLocale`; `@mpgd/i18n` can resolve a locale from a saved value, device
+preferences, then that configured fallback without assigning defaults to
+platform names.
 
 Builds embed `mpgd-effective-target.json` into each target payload and record the
 bundle path, version, and sha256 digest in the release manifest.

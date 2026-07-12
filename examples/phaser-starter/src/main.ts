@@ -1,6 +1,6 @@
 import './styles.css';
 
-import { resolveMpgdLocale } from '@mpgd/i18n';
+import { resolveTargetMpgdLocale } from '@mpgd/i18n';
 import type { IdentitySession, LaunchIntent, PlatformGateway } from '@mpgd/platform';
 import {
   resolveTargetViewportPlan,
@@ -39,7 +39,12 @@ async function bootstrapStarter(): Promise<void> {
       resolveIdentitySession(platform, player.playerId),
       resolveLaunchIntent(platform),
     ]);
-    const locale = resolveMpgdLocale(runtime.capabilities);
+    const locale = resolveTargetMpgdLocale({
+      capabilities: runtime.capabilities,
+      fallbackLocale:
+        runtime.effectiveConfig?.localization.fallbackLocale
+        ?? runtime.config.localization.fallbackLocale,
+    });
     const gameServices = createStarterGameServices({
       gateway: platform,
       playerId: identitySession.playerId ?? player.playerId,
