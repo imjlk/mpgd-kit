@@ -190,8 +190,9 @@ function validatePhaserTemplateAcceptanceCommand(): void {
   const runnerSource = readText(runnerFile);
 
   if (
-    !runnerSource.includes("import.meta.resolve('@mpgd/cli')")
-    || !runnerSource.includes("process.env.MPGD_KIT_PATH ?? '__DEFAULT_KIT_PATH__'")
+    !runnerSource.includes("import { runMpgdCli } from '@mpgd/cli'")
+    || !runnerSource.includes('configuredKitPath.length === 0')
+    || !runnerSource.includes("? '__DEFAULT_KIT_PATH__'")
   ) {
     failures.push(`${runnerFile}: must resolve the CLI and kit path without shell expansion.`);
   }
