@@ -250,9 +250,9 @@ function failedStepResult(
   return {
     id: step.id,
     label: step.label,
-    command: step.command === undefined || step.command.length === 0 ? null : step.command,
+    command: normalizeStepCommand(step.command),
     args: step.args ?? [],
-    cwd: step.cwd === undefined || step.cwd.length === 0 ? null : path.resolve(step.cwd),
+    cwd: normalizeStepCwd(step.cwd),
     status: 'failed',
     exitCode: 1,
     startedAt: new Date(nowMs).toISOString(),
@@ -269,15 +269,23 @@ function skippedStepResult(
   return {
     id: step.id,
     label: step.label,
-    command: step.command ?? null,
+    command: normalizeStepCommand(step.command),
     args: step.args ?? [],
-    cwd: step.cwd === undefined ? null : path.resolve(step.cwd),
+    cwd: normalizeStepCwd(step.cwd),
     status: 'skipped',
     exitCode: null,
     startedAt: new Date(nowMs).toISOString(),
     durationMs: 0,
     detail,
   };
+}
+
+function normalizeStepCommand(command: string | undefined): string | null {
+  return command === undefined || command.length === 0 ? null : command;
+}
+
+function normalizeStepCwd(cwd: string | undefined): string | null {
+  return cwd === undefined || cwd.length === 0 ? null : path.resolve(cwd);
 }
 
 function readOptionalJsonEvidence(

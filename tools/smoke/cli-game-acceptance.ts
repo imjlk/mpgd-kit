@@ -70,9 +70,9 @@ try {
       {
         id: 'build',
         label: 'Game build',
-        command: 'pnpm',
+        command: '',
         args: ['run', 'build'],
-        cwd: fixtureRoot,
+        cwd: '',
       },
     ],
     commandRunner: () => ({ exitCode: 2, detail: 'fixture failure' }),
@@ -86,6 +86,8 @@ try {
     ['failed', 'skipped'],
   );
   assert.equal(failed.report.steps[0]?.detail, 'fixture failure');
+  assert.equal(failed.report.steps[1]?.command, null);
+  assert.equal(failed.report.steps[1]?.cwd, null);
   assert.match(readFileSync(failed.markdownFile, 'utf8'), /A previous acceptance step failed/u);
 
   const malformed = runGameAcceptance({
