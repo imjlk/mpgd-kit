@@ -176,10 +176,24 @@ function validatePhaserTemplateAcceptanceCommand(): void {
   const packageFile = `${templateRoot}/package.json`;
   const acceptanceFile = `${templateRoot}/agent/acceptance.md`;
   const manifestFile = `${templateRoot}/agent/game-manifest.json`;
-  const packageSource = readText(packageFile);
+  const runnerFile = `${templateRoot}/tools/run-game-acceptance.mjs`;
+  const packageJson = readJson(packageFile);
+  const scripts = isJsonObject(packageJson) && isJsonObject(packageJson.scripts)
+    ? packageJson.scripts
+    : null;
+  const acceptScript = scripts?.accept;
 
-  if (!packageSource.includes('"accept"') || !packageSource.includes('mpgd game accept')) {
+  if (acceptScript !== 'node ./tools/run-game-acceptance.mjs') {
     failures.push(`${packageFile}: must expose the reusable mpgd game accept command.`);
+  }
+
+  const runnerSource = readText(runnerFile);
+
+  if (
+    !runnerSource.includes("import.meta.resolve('@mpgd/cli')")
+    || !runnerSource.includes("process.env.MPGD_KIT_PATH ?? '__DEFAULT_KIT_PATH__'")
+  ) {
+    failures.push(`${runnerFile}: must resolve the CLI and kit path without shell expansion.`);
   }
 
   for (const file of [acceptanceFile, manifestFile]) {
@@ -187,6 +201,10 @@ function validatePhaserTemplateAcceptanceCommand(): void {
       failures.push(`${file}: must use the reusable pnpm accept handoff command.`);
     }
   }
+}
+
+function isJsonObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function validatePhaserTemplateMicrosoftStorePwa(): void {

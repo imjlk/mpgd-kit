@@ -179,7 +179,7 @@ export function renderGameAcceptanceMarkdown(report: GameAcceptanceReport): stri
     '',
     `Status: ${report.status}`,
     `Generated: ${report.generatedAt}`,
-    `Game root: ${report.gameRoot}`,
+    `Game root: ${escapeMarkdownInline(report.gameRoot)}`,
     `Duration: ${formatDuration(report.durationMs)}`,
     '',
     '## Steps',
@@ -200,14 +200,16 @@ export function renderGameAcceptanceMarkdown(report: GameAcceptanceReport): stri
   if (report.evidence.releaseManifest === null) {
     lines.push('- Release manifest collection disabled.');
   } else if (!report.evidence.releaseManifest.found) {
-    lines.push(`- Release manifest not found: ${report.evidence.releaseManifest.file}`);
+    lines.push(
+      `- Release manifest not found: ${escapeMarkdownInline(report.evidence.releaseManifest.file)}`,
+    );
   } else if (report.evidence.releaseManifest.parseError !== null) {
     lines.push(
-      `- Release manifest is invalid: ${report.evidence.releaseManifest.file}`,
+      `- Release manifest is invalid: ${escapeMarkdownInline(report.evidence.releaseManifest.file)}`,
       `  - ${escapeMarkdownInline(report.evidence.releaseManifest.parseError)}`,
     );
   } else {
-    lines.push(`- Release manifest: ${report.evidence.releaseManifest.file}`);
+    lines.push(`- Release manifest: ${escapeMarkdownInline(report.evidence.releaseManifest.file)}`);
   }
 
   return `${lines.join('\n')}\n`;

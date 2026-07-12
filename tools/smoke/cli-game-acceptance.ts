@@ -121,9 +121,10 @@ try {
   assert.match(readFileSync(invalidEvidence.markdownFile, 'utf8'), /Release manifest is invalid/u);
   const escapedMarkdown = renderGameAcceptanceMarkdown({
     ...invalidEvidence.report,
+    gameRoot: 'root *game* <tag>\nnext',
     evidence: {
       releaseManifest: {
-        file: 'artifacts/release-manifest.json',
+        file: 'artifacts/[release]*.json\nnext',
         found: true,
         parseError: 'bad *value* [detail] <tag>',
         value: null,
@@ -132,6 +133,8 @@ try {
   });
 
   assert.match(escapedMarkdown, /bad \\\*value\\\* \\\[detail\\\] &lt;tag&gt;/u);
+  assert.match(escapedMarkdown, /Game root: root \\\*game\\\* &lt;tag&gt; next/u);
+  assert.match(escapedMarkdown, /artifacts\/\\\[release\\\]\\\*\.json next/u);
 
   const timedOut = runGameAcceptance({
     gameRoot: fixtureRoot,
