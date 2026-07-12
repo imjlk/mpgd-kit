@@ -160,16 +160,17 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
     `${configTarget} notifications should be clamped by availability`,
   );
 
+  const fallbackLocale = runtime.config.localization.fallbackLocale;
   const expectedLocale =
     config.features.localization && runtime.features.localization.capabilitySupported
       ? 'ko'
-      : config.localization.fallbackLocale;
+      : fallbackLocale;
 
   assertEqual(
     resolveTargetMpgdLocale({
       capabilities: runtime.capabilities,
       preferredLocales: ['ko-KR'],
-      fallbackLocale: runtime.config.localization.fallbackLocale,
+      fallbackLocale,
     }),
     expectedLocale,
     `${configTarget} localization feature should control locale resolution`,

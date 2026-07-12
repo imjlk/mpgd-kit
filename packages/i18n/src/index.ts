@@ -37,19 +37,11 @@ export function resolveMpgdLocale(
   capabilities: Pick<PlatformCapabilities, 'localizedContent'>,
   preferredLocales = readPreferredLocales(),
 ): MpgdLocale {
-  if (!capabilities.localizedContent) {
-    return baseLocale;
-  }
-
-  for (const preferredLocale of preferredLocales) {
-    const locale = normalizeMpgdLocale(preferredLocale);
-
-    if (locale !== null) {
-      return locale;
-    }
-  }
-
-  return baseLocale;
+  return resolveTargetMpgdLocale({
+    capabilities,
+    preferredLocales,
+    fallbackLocale: baseLocale,
+  });
 }
 
 /** Resolves locale policy without assigning defaults to specific platform names. */
