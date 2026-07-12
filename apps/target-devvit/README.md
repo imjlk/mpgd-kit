@@ -15,6 +15,16 @@ at `/api/mpgd/bridge` remains available for compatibility, but new
 override the oRPC route with `rpcEndpoint`; the existing `endpoint` option keeps
 targeting the legacy JSON bridge.
 
+Server actions and schedulers that create repeatable custom posts can use the
+Redis-backed wrapper in `src/server/postOperationStore.ts` with
+`@mpgd/adapter-devvit/server`. The coordinator is duplicate-safe and
+ambiguity-safe: it records an attempt before calling Reddit, then returns
+`reconciliation-required` for an uncertain outcome without blindly posting again.
+An explicit recovery endpoint or scheduler calls `reconcile`. The coordinator does
+not claim exactly-once delivery. See
+[Devvit durable post operations](../../docs/DEVVIT_DURABLE_POST_OPERATIONS.md) for
+the operation, retry, and launch-metadata contract.
+
 Local Reddit playtest still needs a Devvit login token:
 
 ```bash
