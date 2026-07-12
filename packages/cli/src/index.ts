@@ -15,11 +15,16 @@ import i18n, { defineI18n } from '@gunshi/plugin-i18n';
 import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
 
-import { runGameAcceptance, type GameAcceptanceStep } from './game-acceptance.js';
+import {
+  defaultGameAcceptanceCommandTimeoutMs,
+  runGameAcceptance,
+  type GameAcceptanceStep,
+} from './game-acceptance.js';
 
 export {
   renderGameAcceptanceMarkdown,
   runGameAcceptance,
+  defaultGameAcceptanceCommandTimeoutMs,
   type GameAcceptanceCommandResult,
   type GameAcceptanceCommandRunner,
   type GameAcceptanceReport,
@@ -351,7 +356,7 @@ const gameCommand = defineI18n({
         'timeout-ms': {
           type: 'string',
           required: false,
-          default: '1800000',
+          default: String(defaultGameAcceptanceCommandTimeoutMs),
           description: 'Maximum duration for each acceptance command in milliseconds.',
         },
         'kit-path': {
@@ -392,7 +397,8 @@ const gameCommand = defineI18n({
         const reportDir = readOptionalString(ctx.values['report-dir']);
         const kitPath = readOptionalString(ctx.values['kit-path']);
         const timeoutMs = readPositiveInteger(
-          readOptionalString(ctx.values['timeout-ms']) ?? '1800000',
+          readOptionalString(ctx.values['timeout-ms'])
+            ?? String(defaultGameAcceptanceCommandTimeoutMs),
           '--timeout-ms',
         );
 

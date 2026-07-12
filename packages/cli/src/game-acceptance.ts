@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
+export const defaultGameAcceptanceCommandTimeoutMs = 30 * 60 * 1_000;
+
 export type GameAcceptanceStatus = 'failed' | 'passed';
 export type GameAcceptanceStepStatus = 'failed' | 'passed' | 'skipped';
 
@@ -76,7 +78,7 @@ export interface RunGameAcceptanceResult {
 export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAcceptanceResult {
   const now = input.now ?? Date.now;
   const log = input.log ?? console.log;
-  const commandTimeoutMs = input.commandTimeoutMs ?? 30 * 60 * 1_000;
+  const commandTimeoutMs = input.commandTimeoutMs ?? defaultGameAcceptanceCommandTimeoutMs;
 
   if (!Number.isInteger(commandTimeoutMs) || commandTimeoutMs <= 0) {
     throw new Error(`Acceptance command timeout must be a positive integer: ${commandTimeoutMs}`);
