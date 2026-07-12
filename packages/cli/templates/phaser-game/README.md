@@ -259,7 +259,9 @@ submission.
   precached artifact plus the game and kit Git provenance. Updates intentionally
   wait while any old app window remains open. Listen for
   `mpgd:pwa-update-ready` to tell players to close every window and reopen the
-  app; do not force activation with `skipWaiting()`.
+  app; do not force activation with `skipWaiting()`. Keep the web manifest `id`
+  game-specific because the cache namespace uses it to isolate apps sharing an
+  origin.
 - Reddit Devvit is game-owned in `apps/target-devvit`.
 - Apps in Toss currently uses the kit reference wrapper at
   `${MPGD_KIT_PATH}/apps/target-ait` for smoke packaging. Before a real Toss

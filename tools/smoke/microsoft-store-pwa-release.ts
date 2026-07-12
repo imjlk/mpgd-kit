@@ -46,10 +46,21 @@ assert.notEqual(
   }),
   'PWA revision must change with precached content',
 );
+assert.notEqual(
+  createMicrosoftStorePwaRevision({
+    ...provenance,
+    precacheEntries: [{ url: './a', source: 'bc' }],
+  }),
+  createMicrosoftStorePwaRevision({
+    ...provenance,
+    precacheEntries: [{ url: './ab', source: 'c' }],
+  }),
+  'PWA revision fields must have unambiguous boundaries',
+);
 
 const evidence = createMicrosoftStorePwaReleaseEvidence({
   ...provenance,
-  pwaId: './',
+  pwaId: './fixture-game',
   revision,
   precacheUrls: ['./pwa-release.json', ...entries.map((entry) => entry.url)],
 });
@@ -62,7 +73,7 @@ assert.match(worker, /name\.startsWith\(CACHE_PREFIX\)/u);
 assert.throws(
   () => createMicrosoftStorePwaReleaseEvidence({
     ...provenance,
-    pwaId: './',
+    pwaId: './fixture-game',
     revision,
     precacheUrls: ['./index.html', './index.html'],
   }),
@@ -71,11 +82,20 @@ assert.throws(
 assert.throws(
   () => createMicrosoftStorePwaReleaseEvidence({
     ...provenance,
-    pwaId: './',
+    pwaId: './fixture-game',
     revision,
     precacheUrls: ['../escape.js'],
   }),
   /Unsafe PWA precache URL/u,
+);
+assert.throws(
+  () => createMicrosoftStorePwaReleaseEvidence({
+    ...provenance,
+    pwaId: './',
+    revision,
+    precacheUrls: ['./index.html'],
+  }),
+  /must be game-specific/u,
 );
 
 const artifactRoot = mkdtempSync(resolve(tmpdir(), 'mpgd-pwa-release-'));
@@ -83,10 +103,16 @@ const artifactRoot = mkdtempSync(resolve(tmpdir(), 'mpgd-pwa-release-'));
 try {
   mkdirSync(`${artifactRoot}/assets`);
   writeFileSync(`${artifactRoot}/index.html`, '<script src="./assets/game.js"></script>');
-  writeFileSync(`${artifactRoot}/manifest.webmanifest`, JSON.stringify({ id: './' }));
+  writeFileSync(`${artifactRoot}/manifest.webmanifest`, JSON.stringify({ start_url: './' }));
   writeFileSync(`${artifactRoot}/effective-target-config.json`, '{}');
   writeFileSync(`${artifactRoot}/assets/game.js`, 'console.log("game")');
   writeFileSync(`${artifactRoot}/assets/game.js.map`, '{}');
+
+  assert.throws(
+    () => writeMicrosoftStorePwaArtifacts({ artifactRoot, provenance }),
+    /manifest id/u,
+  );
+  writeFileSync(`${artifactRoot}/manifest.webmanifest`, JSON.stringify({ id: './fixture-game' }));
 
   const first = writeMicrosoftStorePwaArtifacts({ artifactRoot, provenance });
   const second = writeMicrosoftStorePwaArtifacts({ artifactRoot, provenance });

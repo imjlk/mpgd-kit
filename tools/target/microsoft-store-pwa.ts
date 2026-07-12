@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, type Hash } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 
@@ -80,12 +80,12 @@ export function createMicrosoftStorePwaRevision(input: {
     kitGitSha: requireGitSha(input.kitGitSha, 'PWA kit Git SHA'),
   };
 
-  hash.update(microsoftStorePwaCacheSchema);
-  hash.update(JSON.stringify(release));
+  updateRevisionField(hash, microsoftStorePwaCacheSchema);
+  updateRevisionField(hash, JSON.stringify(release));
 
   for (const entry of normalizePrecacheEntries(input.precacheEntries)) {
-    hash.update(entry.url);
-    hash.update(entry.source);
+    updateRevisionField(hash, entry.url);
+    updateRevisionField(hash, entry.source);
   }
 
   return hash.digest('hex').slice(0, 16);
@@ -100,7 +100,7 @@ export function createMicrosoftStorePwaReleaseEvidence(input: {
   readonly revision: string;
   readonly precacheUrls: readonly string[];
 }): MicrosoftStorePwaReleaseEvidence {
-  const pwaId = requireNonEmptyString(input.pwaId, 'PWA ID');
+  const pwaId = requireGameSpecificPwaId(input.pwaId);
   const revision = requireRevision(input.revision);
   const cachePrefix = `mpgd-pwa-${createHash('sha256').update(pwaId).digest('hex').slice(0, 12)}-`;
 
@@ -329,7 +329,24 @@ function readPwaId(input: unknown): string {
     throw new Error('Microsoft Store PWA manifest must be an object.');
   }
 
-  return requireNonEmptyString(input.id ?? input.start_url, 'Microsoft Store PWA manifest id');
+  return requireGameSpecificPwaId(input.id);
+}
+
+function requireGameSpecificPwaId(value: unknown): string {
+  const pwaId = requireNonEmptyString(value, 'Microsoft Store PWA manifest id');
+
+  if (pwaId === '.' || pwaId === './' || pwaId === '/') {
+    throw new Error('Microsoft Store PWA manifest id must be game-specific.');
+  }
+
+  return pwaId;
+}
+
+function updateRevisionField(hash: Hash, value: string | Uint8Array): void {
+  const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : value;
+
+  hash.update(`${String(bytes.byteLength)}:`);
+  hash.update(bytes);
 }
 
 function requireGitSha(value: unknown, label: string): string {
