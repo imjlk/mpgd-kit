@@ -36,7 +36,7 @@ deprecation warning. New games should use `brand.appIcon`.
 | --- | --- |
 | `web-preview` | 32, 192, and 512 PNG icons with alpha |
 | `microsoft-pwa` | separate 192/512 `any` and opaque `maskable` PNG icons |
-| `devvit` | 1024 PNG, no more than 500000 bytes, staged into the Devvit app root |
+| `devvit` | 1024 PNG, no more than 500 KiB (512000 bytes), staged into the Devvit app root |
 | `ait` | opaque, square 600 PNG for Apps in Toss console upload |
 | `android` | adaptive foreground/background, optional monochrome, and legacy density icons |
 | `ios` | opaque 1024 PNG connected to the single-size AppIcon asset catalog |

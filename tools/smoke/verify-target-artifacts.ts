@@ -33,6 +33,7 @@ interface SmokePlatformTargetsConfig {
 }
 
 const releaseManifestFileEnv = 'MPGD_RELEASE_MANIFEST_FILE';
+const devvitIconMaximumBytes = 500 * 1024;
 
 const loadedPlatformTargets = loadSmokePlatformTargetsConfig();
 const configuredTargets = Object.keys(loadedPlatformTargets.config.targets);
@@ -435,8 +436,8 @@ function verifyDevvitWebManifest(
     throw new Error(`${label} marketing icon must be 1024x1024.`);
   }
 
-  if (statSync(marketingIcon).size > 500_000) {
-    throw new Error(`${label} marketing icon must be at most 500000 bytes.`);
+  if (statSync(marketingIcon).size > devvitIconMaximumBytes) {
+    throw new Error(`${label} marketing icon must be at most ${devvitIconMaximumBytes} bytes.`);
   }
 
   const post = manifest.post;

@@ -111,7 +111,7 @@ export async function renderProfileOutput(input: {
   const top = Math.floor((input.height - contentHeight) / 2);
   const background = input.opaque ? input.backgroundColor : { r: 0, g: 0, b: 0, alpha: 0 };
 
-  return sharp({
+  let output = sharp({
     create: {
       width: input.width,
       height: input.height,
@@ -120,7 +120,13 @@ export async function renderProfileOutput(input: {
     },
   })
     .composite([{ input: contentBuffer, left, top }])
-    .toColourspace('srgb')
+    .toColourspace('srgb');
+
+  if (input.opaque) {
+    output = output.removeAlpha();
+  }
+
+  return output
     .png({
       compressionLevel: 9,
       adaptiveFiltering: false,

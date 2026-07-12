@@ -122,9 +122,15 @@ async function stageAndroid(
     }
   }
 
-  const adaptiveXml = androidAdaptiveXml(monochrome !== undefined);
+  const adaptiveXml = androidAdaptiveXml(false);
   write(join(res, 'mipmap-anydpi-v26/ic_launcher.xml'), adaptiveXml);
   write(join(res, 'mipmap-anydpi-v26/ic_launcher_round.xml'), adaptiveXml);
+
+  if (monochrome !== undefined) {
+    const themedAdaptiveXml = androidAdaptiveXml(true);
+    write(join(res, 'mipmap-anydpi-v33/ic_launcher.xml'), themedAdaptiveXml);
+    write(join(res, 'mipmap-anydpi-v33/ic_launcher_round.xml'), themedAdaptiveXml);
+  }
 }
 
 function stageIos(

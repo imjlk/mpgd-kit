@@ -119,7 +119,9 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   const ios = requireFirstOutput(requireResult(results, 'ios'));
   assert.equal(ios.width, 1024);
   assert.equal(ios.opaque, true);
-  await assertOpaque(join(requireResult(results, 'ios').outputDir, 'AppIcon-1024.png'));
+  const iosPath = join(requireResult(results, 'ios').outputDir, 'AppIcon-1024.png');
+  await assertOpaque(iosPath);
+  await assertNoAlphaChannel(iosPath);
 
   const android = requireResult(results, 'android');
   const shell = join(gameRoot, 'native-shell');
@@ -275,6 +277,18 @@ async function testPngAndOverrides(parent: string): Promise<void> {
   });
   assert.equal(android.manifest.variantSources.androidForeground?.format, 'png');
   assert.equal(android.manifest.variantSources.monochrome?.format, 'png');
+  const nativeShell = join(gameRoot, 'android-monochrome-shell');
+  const restoreNativeIcons = await stageNativeIconResources(android, nativeShell);
+  const adaptiveV26 = await readUtf8(
+    join(nativeShell, 'android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml'),
+  );
+  const adaptiveV33 = await readUtf8(
+    join(nativeShell, 'android/app/src/main/res/mipmap-anydpi-v33/ic_launcher.xml'),
+  );
+
+  assert.doesNotMatch(adaptiveV26, /monochrome/u);
+  assert.match(adaptiveV33, /monochrome/u);
+  restoreNativeIcons();
   const tamperedAndroidManifest = {
     ...android.manifest,
     variantSources: {},
@@ -434,7 +448,7 @@ async function testInvalidInputs(parent: string): Promise<void> {
       target: devvitTarget,
       profile: 'production',
     }),
-    /at most 500000 bytes/u,
+    /at most 512000 bytes/u,
   );
   await assert.rejects(
     verifyExistingTargetIcons({
@@ -600,6 +614,11 @@ async function assertOpaque(path: string): Promise<void> {
   for (let index = info.channels - 1; index < data.length; index += info.channels) {
     assert.equal(data[index], 255, `${path} contains a non-opaque pixel.`);
   }
+}
+
+async function assertNoAlphaChannel(path: string): Promise<void> {
+  const metadata = await sharp(path).metadata();
+  assert.equal(metadata.hasAlpha, false, `${path} must not encode an alpha channel.`);
 }
 
 async function assertCornerColor(

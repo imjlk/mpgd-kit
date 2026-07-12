@@ -39,6 +39,7 @@ import {
 } from './types';
 
 const defaultBackgroundColor = '#ffffff';
+const devvitIconMaximumBytes = 500 * 1024;
 const brandImageVariants = [
   'maskable',
   'androidForeground',
@@ -164,9 +165,9 @@ export async function generateTargetIcons(input: {
     const output = requireOutput(outputs, 'app-icon');
     const size = readFileSync(resolve(outputDir, output.path.slice('icons/'.length))).byteLength;
 
-    if (size > 500_000) {
+    if (size > devvitIconMaximumBytes) {
       throw new Error(
-        `Devvit marketing icon is ${size} bytes; the generated 1024x1024 PNG must be at most 500000 bytes.`,
+        `Devvit marketing icon is ${size} bytes; the generated 1024x1024 PNG must be at most ${devvitIconMaximumBytes} bytes.`,
       );
     }
   }
@@ -320,8 +321,10 @@ export async function verifyGeneratedTargetIcons(result: GeneratedTargetIcons): 
       throw new Error(`Generated icon expected to be opaque: ${path}`);
     }
 
-    if (result.profile.id === 'devvit' && bytes.byteLength > 500_000) {
-      throw new Error(`Devvit marketing icon must be at most 500000 bytes: ${path}`);
+    if (result.profile.id === 'devvit' && bytes.byteLength > devvitIconMaximumBytes) {
+      throw new Error(
+        `Devvit marketing icon must be at most ${devvitIconMaximumBytes} bytes: ${path}`,
+      );
     }
   }
 }
