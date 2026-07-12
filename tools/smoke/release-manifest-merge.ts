@@ -24,6 +24,8 @@ const kitMismatchManifestFile = join(tempDir, 'kit-mismatch-release-manifest.jso
 const snapshotManifestFile = join(tempDir, 'snapshot-release-manifest.json');
 const failedGitManifestFile = join(tempDir, 'failed-git-release-manifest.json');
 const emptyGitManifestFile = join(tempDir, 'empty-git-release-manifest.json');
+const stagedGitManifestFile = join(tempDir, 'staged-git-release-manifest.json');
+const untrackedGitManifestFile = join(tempDir, 'untracked-git-release-manifest.json');
 const effectiveConfigDir = join(tempDir, 'target-config');
 const fakeGitDir = join(tempDir, 'bin');
 const firstKitGitSha = '1111111111111111111111111111111111111111';
@@ -122,6 +124,36 @@ try {
 
   assert.match(emptyGitOutput, /mpgd-kit Git revision must be a full 40-character SHA/u);
   assert.equal(existsSync(emptyGitManifestFile), false);
+
+  const stagedGitOutput = runManifestExpectFailure(
+    'web-preview',
+    firstCatalogFile,
+    stagedGitManifestFile,
+    {
+      expectedGitReadCount: 0,
+      gitStatusOutput: 'M  packages/release-manifest/src/index.ts',
+      kitGitShas: [firstKitGitSha],
+      sourceGitSha: 'game-source-sha',
+    },
+  );
+
+  assert.match(stagedGitOutput, /mpgd-kit Git worktree must be clean/u);
+  assert.equal(existsSync(stagedGitManifestFile), false);
+
+  const untrackedGitOutput = runManifestExpectFailure(
+    'web-preview',
+    firstCatalogFile,
+    untrackedGitManifestFile,
+    {
+      expectedGitReadCount: 0,
+      gitStatusOutput: '?? release-output/untracked-artifact.js',
+      kitGitShas: [firstKitGitSha],
+      sourceGitSha: 'game-source-sha',
+    },
+  );
+
+  assert.match(untrackedGitOutput, /mpgd-kit Git worktree must be clean/u);
+  assert.equal(existsSync(untrackedGitManifestFile), false);
 } finally {
   rmSync(tempDir, { force: true, recursive: true });
 }
@@ -129,7 +161,9 @@ try {
 console.log('Release manifest merge preserves matching targets and resets on contract changes.');
 
 interface RunManifestOptions {
+  readonly expectedGitReadCount?: number;
   readonly gitExitCode?: number;
+  readonly gitStatusOutput?: string;
   readonly kitGitShas: readonly [string, string?];
   readonly sourceGitSha?: string;
 }
@@ -157,9 +191,14 @@ function runManifestExpectFailure(
   outputFile: string,
   options: RunManifestOptions,
 ): string {
-  const { result } = spawnManifest(target, catalogFile, outputFile, options);
+  const { gitReadCount, result } = spawnManifest(target, catalogFile, outputFile, options);
 
   assert.notEqual(result.status, 0, 'Manifest subprocess unexpectedly succeeded.');
+
+  if (options.expectedGitReadCount !== undefined) {
+    assert.equal(gitReadCount, options.expectedGitReadCount);
+  }
+
   return result.stderr || result.stdout || '(no output)';
 }
 
@@ -180,6 +219,7 @@ function spawnManifest(
     MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveConfigDir,
     MPGD_TEST_GIT_COUNTER_FILE: gitCounterFile,
     MPGD_TEST_GIT_EXIT_CODE: String(options.gitExitCode ?? 0),
+    MPGD_TEST_GIT_STATUS_OUTPUT: options.gitStatusOutput ?? '',
     MPGD_TEST_GIT_SHA_FIRST: options.kitGitShas[0],
     MPGD_TEST_GIT_SHA_LATER: options.kitGitShas[1] ?? options.kitGitShas[0],
     PATH: [fakeGitDir, process.env.PATH].filter(Boolean).join(delimiter),
@@ -212,14 +252,10 @@ function spawnManifest(
     throw result.error;
   }
 
-  assert.equal(
-    existsSync(gitCounterFile),
-    true,
-    'The fake git executable did not record a revision read.',
-  );
-
   return {
-    gitReadCount: Number.parseInt(readFileSync(gitCounterFile, 'utf8').trim(), 10),
+    gitReadCount: existsSync(gitCounterFile)
+      ? Number.parseInt(readFileSync(gitCounterFile, 'utf8').trim(), 10)
+      : 0,
     result,
   };
 }
@@ -232,6 +268,12 @@ function writeFakeGit(): void {
     fakeGitPath,
     `#!/bin/sh
 set -eu
+if [ "$#" -eq 2 ] && [ "$1" = "status" ] && [ "$2" = "--porcelain" ]; then
+  if [ -n "$MPGD_TEST_GIT_STATUS_OUTPUT" ]; then
+    printf '%s\\n' "$MPGD_TEST_GIT_STATUS_OUTPUT"
+  fi
+  exit 0
+fi
 if [ "$#" -ne 2 ] || [ "$1" != "rev-parse" ] || [ "$2" != "HEAD" ]; then
   exit 64
 fi

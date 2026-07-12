@@ -233,6 +233,8 @@ function getSourceGitSha(kitGitSha: string): string {
 }
 
 function getKitGitSha(): string {
+  assertCleanKitWorktree();
+
   let kitGitSha: string;
 
   try {
@@ -249,6 +251,25 @@ function getKitGitSha(): string {
   }
 
   return kitGitSha;
+}
+
+function assertCleanKitWorktree(): void {
+  let worktreeStatus: string;
+
+  try {
+    worktreeStatus = execFileSync('git', ['status', '--porcelain'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch (error) {
+    throw new Error('Failed to inspect the mpgd-kit Git worktree.', { cause: error });
+  }
+
+  if (worktreeStatus.length > 0) {
+    throw new Error(
+      'The mpgd-kit Git worktree must be clean before generating a release manifest.',
+    );
+  }
 }
 
 if (isCliEntrypoint(import.meta.url)) {
