@@ -16,6 +16,7 @@ import {
 } from '../target/effective-config';
 import { loadPlatformTargetsConfig } from '../target/platform-targets';
 import { assertPlatformTargetsConfig } from '../target/schemas';
+import { validateTargetConfigMatrixFile } from '../validate-target-config';
 
 const matrix = validateEffectiveTargetConfigMatrix();
 const webStoreIntegrationConfig = {
@@ -107,6 +108,11 @@ function verifyGameOwnedIntegrationOverrides(): void {
   });
   const invalidInputs = [
     {
+      description: 'an invalid availability state',
+      config: invalidPlatformTargets,
+      expectedMessage: 'notifications has an unsupported value',
+    },
+    {
       description: 'an unknown integration key',
       config: withIntegrations({ presntation: 'available' }),
       expectedMessage: 'not a recognized integration key',
@@ -115,6 +121,11 @@ function verifyGameOwnedIntegrationOverrides(): void {
       description: 'an invalid presentation mode',
       config: withIntegrations({ presentationMode: 'windowed' }),
       expectedMessage: 'presentationMode has an unsupported value',
+    },
+    {
+      description: 'an object availability value',
+      config: withIntegrations({ notifications: {} }),
+      expectedMessage: 'notifications has an unsupported value',
     },
     {
       description: 'a string integrations value',
@@ -152,18 +163,16 @@ function verifyGameOwnedIntegrationOverrides(): void {
     );
 
     process.env.MPGD_PLATFORM_TARGETS_FILE = targetsPath;
-    writeFileSync(targetsPath, `${JSON.stringify(invalidPlatformTargets, null, 2)}\n`);
-    assertThrows(
-      () => writeEffectiveTargetConfigs({ targets: ['reddit'], outputDir }),
-      'the platform target loader should reject an invalid integration state',
-      'unsupported value',
-    );
-
     for (const invalidInput of invalidInputs) {
       writeFileSync(targetsPath, `${JSON.stringify(invalidInput.config, null, 2)}\n`);
       assertThrows(
         () => writeEffectiveTargetConfigs({ targets: ['reddit'], outputDir }),
         `the effective config path should reject ${invalidInput.description}`,
+        invalidInput.expectedMessage,
+      );
+      assertThrows(
+        () => validateTargetConfigMatrixFile('packages/target-config/targets.json', targetsPath),
+        `the standard target-config validator should reject ${invalidInput.description}`,
         invalidInput.expectedMessage,
       );
     }
@@ -211,6 +220,11 @@ function verifyGameOwnedIntegrationOverrides(): void {
       artifact.integrations.sharing,
       'configuration-required',
       'reddit sharing should inherit the generic target config',
+    );
+    assertEqual(
+      artifact.integrations.presentation,
+      'configuration-required',
+      'reddit presentation readiness should be independent from presentation mode',
     );
     assertEqual(
       artifact.integrations.notifications,

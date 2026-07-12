@@ -8,7 +8,11 @@ import {
   type PresentationMode,
 } from '../../packages/target-config/src/runtime';
 import { readJsonFile } from '../io';
-import type { PlatformTargetConfig, PlatformTargetsConfig } from './schemas';
+import {
+  assertPlatformTargetsConfig,
+  type PlatformTargetConfig,
+  type PlatformTargetsConfig,
+} from './schemas';
 
 export const platformTargetsFileEnv = 'MPGD_PLATFORM_TARGETS_FILE';
 export const releaseManifestFileEnv = 'MPGD_RELEASE_MANIFEST_FILE';
@@ -64,7 +68,7 @@ export function effectiveTargetConfigOutputDir(
   );
 }
 
-function assertPlatformTargetsConfigShape(input: unknown): PlatformTargetsConfig {
+export function assertPlatformTargetsConfigShape(input: unknown): PlatformTargetsConfig {
   assertRecord(input, 'platform targets config');
   const targets = input.targets;
   assertRecord(targets, 'platform targets');
@@ -73,9 +77,7 @@ function assertPlatformTargetsConfigShape(input: unknown): PlatformTargetsConfig
     assertPlatformTargetConfigShape(config, target);
   }
 
-  return {
-    targets: targets as Record<string, PlatformTargetConfig>,
-  };
+  return assertPlatformTargetsConfig(input);
 }
 
 function assertPlatformTargetConfigShape(
