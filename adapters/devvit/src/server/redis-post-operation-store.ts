@@ -11,6 +11,7 @@ export interface DevvitRedisSetOptions {
 
 export interface DevvitRedisTransactionLike {
   multi(): Promise<void>;
+  discard(): Promise<unknown>;
   set(key: string, value: string, options?: DevvitRedisSetOptions): Promise<unknown>;
   del(...keys: readonly string[]): Promise<unknown>;
   exec(): Promise<readonly unknown[]>;
@@ -102,30 +103,53 @@ async function mutateIfValue(input: {
 }): Promise<boolean> {
   for (let attempt = 0; attempt < input.transactionAttempts; attempt += 1) {
     const transaction = await input.redis.watch(input.key);
-    const currentValue = await input.redis.get(input.key);
+    let multiStarted = false;
 
-    if (currentValue !== input.expectedValue) {
-      await transaction.unwatch();
-      return false;
-    }
+    try {
+      const currentValue = await input.redis.get(input.key);
 
-    await transaction.multi();
-    await input.queueMutation(transaction);
+      if (currentValue !== input.expectedValue) {
+        await transaction.unwatch();
+        return false;
+      }
 
-    const results = await transaction.exec();
+      await transaction.multi();
+      multiStarted = true;
+      await input.queueMutation(transaction);
 
-    if (!Array.isArray(results)) {
-      throw new Error('Devvit Redis transaction returned an unsupported response.');
-    }
+      const results = await transaction.exec();
 
-    if (results.length > 0) {
-      return true;
+      if (!Array.isArray(results)) {
+        throw new Error('Devvit Redis transaction returned an unsupported response.');
+      }
+
+      if (results.length > 0) {
+        return true;
+      }
+    } catch (error) {
+      await bestEffortReset(transaction, multiStarted);
+      throw error;
     }
   }
 
   throw new Error(
     `Devvit Redis transaction contention exceeded ${String(input.transactionAttempts)} attempts for key: ${input.key}`,
   );
+}
+
+async function bestEffortReset(
+  transaction: DevvitRedisTransactionLike,
+  multiStarted: boolean,
+): Promise<void> {
+  try {
+    if (multiStarted) {
+      await transaction.discard();
+    } else {
+      await transaction.unwatch();
+    }
+  } catch {
+    // Preserve the original Redis failure; this cleanup is best-effort.
+  }
 }
 
 function normalizeTransactionAttempts(value: number | undefined): number {
@@ -147,5 +171,8 @@ function normalizeTransactionAttempts(value: number | undefined): number {
 function assertExpirationDate(value: Date): void {
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) {
     throw new TypeError('Devvit Redis lease expiration must be a valid Date.');
+  }
+  if (value.getTime() <= Date.now()) {
+    throw new TypeError('Devvit Redis lease expiration must be in the future.');
   }
 }

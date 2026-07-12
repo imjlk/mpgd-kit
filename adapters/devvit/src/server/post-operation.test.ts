@@ -180,6 +180,27 @@ describe('durable Devvit post operation coordinator', () => {
     expect(publish).toHaveBeenCalledOnce();
   });
 
+  it('does not let lease cleanup failure mask a recovered durable result', async () => {
+    const fixture = createFixture();
+    let accepted: DevvitCanonicalPostData<TestPayload, TestLaunchParams> | undefined;
+
+    await fixture.coordinator.execute({
+      ...baseDescriptor(),
+      publish: async (input) => {
+        accepted = input.postData;
+        throw new Error('response lost after acceptance');
+      },
+    });
+    fixture.store.throwOnReleaseLease = true;
+
+    await expect(fixture.coordinator.reconcile({
+      ...baseDescriptor(),
+      findCandidates: async () => [{ postId: 't3_cleanup', postData: accepted }],
+    })).resolves.toMatchObject({ status: 'recovered', postId: 't3_cleanup' });
+    expect(fixture.store.recordPhases()).toEqual(['published']);
+    expect(fixture.store.activeLeaseTokens()).toHaveLength(1);
+  });
+
   it('does not let a publish callback mutate canonical durable post data', async () => {
     const fixture = createFixture();
 
@@ -629,6 +650,7 @@ class MemoryDurableOperationStore implements DevvitDurableOperationStore {
   throwAfterCreate = false;
   throwAfterAttemptedCas = false;
   throwAfterPublishedCas = false;
+  throwOnReleaseLease = false;
   private terminalCasGate: {
     readonly started: ReturnType<typeof deferred<void>>;
     readonly release: ReturnType<typeof deferred<void>>;
@@ -685,6 +707,10 @@ class MemoryDurableOperationStore implements DevvitDurableOperationStore {
   }
 
   releaseLease(key: string, token: string): Promise<void> {
+    if (this.throwOnReleaseLease) {
+      this.throwOnReleaseLease = false;
+      return Promise.reject(new Error('lease cleanup unavailable'));
+    }
     if (this.leases.get(key)?.token === token) {
       this.leases.delete(key);
     }

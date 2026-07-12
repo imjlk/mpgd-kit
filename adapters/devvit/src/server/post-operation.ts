@@ -465,7 +465,11 @@ export function createDevvitPostOperationCoordinator<
         exactMatches.map((candidate) => candidate.postId),
       );
     } finally {
-      await input.store.releaseLease(leaseKey, leaseToken);
+      try {
+        await input.store.releaseLease(leaseKey, leaseToken);
+      } catch {
+        // The fenced lease expires on its own; cleanup must not mask a durable result.
+      }
     }
   }
 
@@ -832,18 +836,25 @@ function parseStoredRecord<
       'createdAt',
       'updatedAt',
     ];
-    const phaseKeys = phase === 'prepared'
-      ? []
-      : phase === 'attempted'
-        ? ['attemptId', 'attemptedAt']
-        : phase === 'published'
-          ? ['attemptId', 'attemptedAt', 'postId', 'publishedAt', 'recovered']
-          : phase === 'terminal-unresolved'
-            ? ['attemptId', 'attemptedAt', 'reason', 'postIds', 'unresolvedAt']
-            : undefined;
+    let phaseKeys: readonly string[];
 
-    if (phaseKeys === undefined) {
-      throw new DevvitPostOperationValidationError(`Unsupported stored operation phase: ${phase}`);
+    switch (phase) {
+      case 'prepared':
+        phaseKeys = [];
+        break;
+      case 'attempted':
+        phaseKeys = ['attemptId', 'attemptedAt'];
+        break;
+      case 'published':
+        phaseKeys = ['attemptId', 'attemptedAt', 'postId', 'publishedAt', 'recovered'];
+        break;
+      case 'terminal-unresolved':
+        phaseKeys = ['attemptId', 'attemptedAt', 'reason', 'postIds', 'unresolvedAt'];
+        break;
+      default:
+        throw new DevvitPostOperationValidationError(
+          `Unsupported stored operation phase: ${phase}`,
+        );
     }
 
     assertExactKeys(record, [...commonKeys, ...phaseKeys], 'stored operation');

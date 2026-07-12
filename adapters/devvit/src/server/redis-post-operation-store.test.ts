@@ -33,7 +33,7 @@ describe('createDevvitRedisPostOperationStore', () => {
   it('creates leases with the caller-provided absolute expiration', async () => {
     const redis = new FakeDevvitRedis();
     const store = createDevvitRedisPostOperationStore(redis);
-    const expiresAt = new Date('2026-07-12T12:01:00.000Z');
+    const expiresAt = new Date(Date.now() + 60_000);
 
     await expect(store.createLease('operation:lease', 'owner-1', expiresAt)).resolves.toBe(true);
     await expect(store.createLease('operation:lease', 'owner-2', expiresAt)).resolves.toBe(false);
@@ -124,6 +124,7 @@ describe('createDevvitRedisPostOperationStore', () => {
     await expect(store.compareAndSet('operation', 'pending', 'published')).rejects.toBe(
       transportError,
     );
+    expect(redis.discardCalls).toBe(1);
   });
 
   it('rejects invalid adapter options and lease expirations', async () => {
@@ -135,6 +136,9 @@ describe('createDevvitRedisPostOperationStore', () => {
     const store = createDevvitRedisPostOperationStore(redis);
     await expect(store.createLease('operation:lease', 'owner', new Date(Number.NaN))).rejects
       .toThrow('valid Date');
+    await expect(
+      store.createLease('operation:lease', 'owner', new Date(Date.now() - 1)),
+    ).rejects.toThrow('in the future');
   });
 });
 
@@ -154,6 +158,7 @@ class FakeDevvitRedis implements DevvitRedisLike {
   readonly execOutcomes: ExecOutcome[] = [];
   watchCalls = 0;
   unwatchCalls = 0;
+  discardCalls = 0;
 
   constructor(entries: readonly (readonly [string, string])[] = []) {
     this.values = new Map(entries);
@@ -201,6 +206,12 @@ class FakeDevvitRedisTransaction implements DevvitRedisTransactionLike {
 
   async multi(): Promise<void> {
     this.multiStarted = true;
+  }
+
+  async discard(): Promise<void> {
+    this.redis.discardCalls += 1;
+    this.mutation = undefined;
+    this.multiStarted = false;
   }
 
   async set(key: string, value: string): Promise<void> {
