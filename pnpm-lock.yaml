@@ -243,6 +243,9 @@ importers:
       '@devvit/web':
         specifier: 0.13.6
         version: 0.13.6(twirp-ts@2.5.0)
+      '@mpgd/adapter-devvit':
+        specifier: workspace:*
+        version: link:../../adapters/devvit
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../../packages/bridge

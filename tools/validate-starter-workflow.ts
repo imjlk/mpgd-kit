@@ -155,6 +155,7 @@ if (manifest !== null) {
 
 validatePhaserTemplateAITPolyfill();
 validatePhaserTemplateAITConsoleCli();
+validatePhaserTemplateDevvitPostOperations();
 validatePhaserTemplateOrientationPolicy();
 
 if (failures.length > 0) {
@@ -386,6 +387,83 @@ function validatePhaserTemplateAITConsoleCli(): void {
           failures.push(`${readmePath}: must document ${requiredText} for the AIT console flow.`);
         }
       }
+    }
+  }
+}
+
+function validatePhaserTemplateDevvitPostOperations(): void {
+  const kitPackagePath = 'apps/target-devvit/package.json';
+  const kitStorePath = 'apps/target-devvit/src/server/postOperationStore.ts';
+  const templatePackagePath =
+    'packages/cli/templates/phaser-game/apps/target-devvit/package.json';
+  const templateStorePath =
+    'packages/cli/templates/phaser-game/apps/target-devvit/src/server/postOperationStore.ts';
+  const templateReadmePath =
+    'packages/cli/templates/phaser-game/apps/target-devvit/README.md';
+
+  for (const packagePath of [kitPackagePath, templatePackagePath]) {
+    if (!existsSync(packagePath)) {
+      failures.push(`${packagePath}: required for durable Devvit post operations.`);
+      continue;
+    }
+
+    const packageJson = readJson(packagePath) as {
+      readonly dependencies?: Record<string, unknown>;
+    } | null;
+
+    if (packageJson !== null) {
+      assertString(
+        packageJson.dependencies?.['@mpgd/adapter-devvit'],
+        `${packagePath}: dependencies.@mpgd/adapter-devvit`,
+      );
+    }
+  }
+
+  if (!existsSync(kitStorePath)) {
+    failures.push(`${kitStorePath}: required for the Devvit Redis store wrapper.`);
+  }
+  if (!existsSync(templateStorePath)) {
+    failures.push(`${templateStorePath}: required for the generated Devvit Redis store wrapper.`);
+  }
+
+  if (existsSync(kitStorePath) && existsSync(templateStorePath)) {
+    const kitStore = readText(kitStorePath);
+    const templateStore = readText(templateStorePath);
+
+    if (kitStore !== templateStore) {
+      failures.push(`${templateStorePath}: must stay in parity with ${kitStorePath}.`);
+    }
+
+    for (const requiredText of [
+      "from '@devvit/web/server'",
+      "from '@mpgd/adapter-devvit/server'",
+      'createDevvitRedisPostOperationStore',
+    ]) {
+      assertIncludesText(
+        templateStore,
+        requiredText,
+        `${templateStorePath}: durable post operation wrapper.`,
+      );
+    }
+  }
+
+  if (!existsSync(templateReadmePath)) {
+    failures.push(`${templateReadmePath}: required for durable Devvit post operation guidance.`);
+  } else {
+    const readme = readText(templateReadmePath);
+
+    for (const requiredText of [
+      'duplicate-safe',
+      'ambiguity-safe',
+      'not exactly-once',
+      'postOperationStore.ts',
+      'never blindly calls the submit function again',
+    ]) {
+      assertIncludesText(
+        readme,
+        requiredText,
+        `${templateReadmePath}: durable post operation guidance.`,
+      );
     }
   }
 }
