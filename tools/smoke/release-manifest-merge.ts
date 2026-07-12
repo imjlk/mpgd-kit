@@ -12,7 +12,7 @@ import {
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 
-import type { ReleaseManifest } from '@mpgd/release-manifest';
+import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
 const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-release-manifest-'));
 const firstCatalogFile = join(tempDir, 'catalog-v1.json');
@@ -26,7 +26,15 @@ const failedGitManifestFile = join(tempDir, 'failed-git-release-manifest.json');
 const emptyGitManifestFile = join(tempDir, 'empty-git-release-manifest.json');
 const stagedGitManifestFile = join(tempDir, 'staged-git-release-manifest.json');
 const untrackedGitManifestFile = join(tempDir, 'untracked-git-release-manifest.json');
+const nestedKitManifestFile = join(tempDir, 'nested-kit-release-manifest.json');
+const mismatchedKitPathManifestFile = join(tempDir, 'mismatched-kit-path-release-manifest.json');
+const generatedBeforeProvenanceManifestFile = join(
+  tempDir,
+  'generated-before-provenance-release-manifest.json',
+);
 const effectiveConfigDir = join(tempDir, 'target-config');
+const generatedBeforeProvenanceDir = join(tempDir, 'generated-before-provenance');
+const nestedKitParent = join(tempDir, 'game-repository');
 const fakeGitDir = join(tempDir, 'bin');
 const firstKitGitSha = '1111111111111111111111111111111111111111';
 const secondKitGitSha = '2222222222222222222222222222222222222222';
@@ -35,6 +43,7 @@ let manifestRunCount = 0;
 try {
   writeFakeGit();
   assertKitGitShaSchema();
+  mkdirSync(nestedKitParent);
   writeFileSync(firstCatalogFile, catalogJson('game-v1'));
   writeFileSync(secondCatalogFile, catalogJson('game-v2'));
   writeFileSync(placementsFile, placementsJson('ads-v1'));
@@ -50,9 +59,23 @@ try {
 
   const matchingManifest = readManifest(matchingManifestFile);
 
+  assertManifestMatchesTopLevelSchema(matchingManifest);
   assert.equal(matchingManifest.gitSha, 'game-source-sha');
   assert.equal(matchingManifest.kitGitSha, firstKitGitSha);
   assert.match(matchingManifest.kitGitSha, /^[0-9a-f]{40}$/u);
+  for (const invalidKitGitSha of [
+    'dirty',
+    'a'.repeat(39),
+    'a'.repeat(41),
+    'g'.repeat(40),
+    'A'.repeat(40),
+    `${firstKitGitSha} `,
+  ]) {
+    assert.throws(
+      () => assertReleaseManifest({ ...matchingManifest, kitGitSha: invalidKitGitSha }),
+      /kitGitSha must be a lowercase 40-character SHA/u,
+    );
+  }
   assert.deepEqual(Object.keys(matchingManifest.targets).sort(), [
     'microsoft-store',
     'web-preview',
@@ -97,6 +120,16 @@ try {
   assert.equal(kitRevisionReadCount, 1);
   assert.equal(snapshotManifest.gitSha, firstKitGitSha);
   assert.equal(snapshotManifest.kitGitSha, firstKitGitSha);
+
+  const generatedEffectiveConfigFile = join(generatedBeforeProvenanceDir, 'web-preview.json');
+
+  runManifest('web-preview', firstCatalogFile, generatedBeforeProvenanceManifestFile, {
+    dirtyWhenPathExists: generatedEffectiveConfigFile,
+    effectiveConfigDir: generatedBeforeProvenanceDir,
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  assert.equal(existsSync(generatedEffectiveConfigFile), true);
 
   const failedGitOutput = runManifestExpectFailure(
     'web-preview',
@@ -156,6 +189,36 @@ try {
 
   assert.match(untrackedGitOutput, /mpgd-kit Git worktree must be clean/u);
   assert.equal(existsSync(untrackedGitManifestFile), false);
+
+  const nestedKitOutput = runManifestExpectFailure(
+    'web-preview',
+    firstCatalogFile,
+    nestedKitManifestFile,
+    {
+      expectedGitReadCount: 0,
+      gitTopLevel: nestedKitParent,
+      kitGitShas: [firstKitGitSha],
+      sourceGitSha: 'game-source-sha',
+    },
+  );
+
+  assert.match(nestedKitOutput, /MPGD_KIT_PATH must point to the root of its own Git checkout/u);
+  assert.equal(existsSync(nestedKitManifestFile), false);
+
+  const mismatchedKitPathOutput = runManifestExpectFailure(
+    'web-preview',
+    firstCatalogFile,
+    mismatchedKitPathManifestFile,
+    {
+      expectedGitReadCount: 0,
+      kitGitShas: [firstKitGitSha],
+      kitPath: nestedKitParent,
+      sourceGitSha: 'game-source-sha',
+    },
+  );
+
+  assert.match(mismatchedKitPathOutput, /MPGD_KIT_PATH must match the mpgd-kit execution root/u);
+  assert.equal(existsSync(mismatchedKitPathManifestFile), false);
 } finally {
   rmSync(tempDir, { force: true, recursive: true });
 }
@@ -163,10 +226,14 @@ try {
 console.log('Release manifest merge preserves matching targets and resets on contract changes.');
 
 interface RunManifestOptions {
+  readonly dirtyWhenPathExists?: string;
+  readonly effectiveConfigDir?: string;
   readonly expectedGitReadCount?: number;
   readonly gitExitCode?: number;
   readonly gitStatusOutput?: string;
+  readonly gitTopLevel?: string;
   readonly kitGitShas: readonly [string, string?];
+  readonly kitPath?: string;
   readonly sourceGitSha?: string;
 }
 
@@ -218,10 +285,13 @@ function spawnManifest(
     BUILD_ID: 'manifest-merge-smoke',
     MPGD_PRODUCT_CATALOG_FILE: catalogFile,
     MPGD_AD_PLACEMENTS_FILE: placementsFile,
-    MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveConfigDir,
+    MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: options.effectiveConfigDir ?? effectiveConfigDir,
+    MPGD_KIT_PATH: options.kitPath ?? process.cwd(),
+    MPGD_TEST_DIRTY_WHEN_PATH_EXISTS: options.dirtyWhenPathExists ?? '',
     MPGD_TEST_GIT_COUNTER_FILE: gitCounterFile,
     MPGD_TEST_GIT_EXIT_CODE: String(options.gitExitCode ?? 0),
     MPGD_TEST_GIT_STATUS_OUTPUT: options.gitStatusOutput ?? '',
+    MPGD_TEST_GIT_TOP_LEVEL: options.gitTopLevel ?? process.cwd(),
     MPGD_TEST_GIT_SHA_FIRST: options.kitGitShas[0],
     MPGD_TEST_GIT_SHA_LATER: options.kitGitShas[1] ?? options.kitGitShas[0],
     PATH: [fakeGitDir, process.env.PATH].filter(Boolean).join(delimiter),
@@ -270,9 +340,16 @@ function writeFakeGit(): void {
     fakeGitPath,
     `#!/bin/sh
 set -eu
+if [ "$#" -eq 2 ] && [ "$1" = "rev-parse" ] && [ "$2" = "--show-toplevel" ]; then
+  printf '%s\\n' "$MPGD_TEST_GIT_TOP_LEVEL"
+  exit 0
+fi
 if [ "$#" -eq 2 ] && [ "$1" = "status" ] && [ "$2" = "--porcelain" ]; then
   if [ -n "$MPGD_TEST_GIT_STATUS_OUTPUT" ]; then
     printf '%s\\n' "$MPGD_TEST_GIT_STATUS_OUTPUT"
+  fi
+  if [ -n "$MPGD_TEST_DIRTY_WHEN_PATH_EXISTS" ] && [ -e "$MPGD_TEST_DIRTY_WHEN_PATH_EXISTS" ]; then
+    printf '?? %s\\n' "$MPGD_TEST_DIRTY_WHEN_PATH_EXISTS"
   fi
   exit 0
 fi
@@ -299,7 +376,7 @@ fi
 }
 
 function readManifest(path: string): ReleaseManifest {
-  return JSON.parse(readFileSync(path, 'utf8')) as ReleaseManifest;
+  return assertReleaseManifest(JSON.parse(readFileSync(path, 'utf8')));
 }
 
 function assertKitGitShaSchema(): void {
@@ -310,11 +387,16 @@ function assertKitGitShaSchema(): void {
         readonly type?: string;
         readonly pattern?: string;
       };
+      readonly targetConfigVersion?: {
+        readonly type?: string;
+        readonly minLength?: number;
+      };
     };
   };
   const kitGitShaSchema = schema.properties?.kitGitSha;
 
   assert.equal(schema.required?.includes('kitGitSha'), true);
+  assert.equal(schema.required?.includes('targetConfigVersion'), true);
   assert.ok(kitGitShaSchema, 'kitGitSha schema must exist.');
   assert.deepEqual(kitGitShaSchema, {
     type: 'string',
@@ -326,6 +408,32 @@ function assertKitGitShaSchema(): void {
   assert.match(firstKitGitSha, kitGitShaPattern);
   assert.doesNotMatch(firstKitGitSha.slice(1), kitGitShaPattern);
   assert.doesNotMatch('A'.repeat(40), kitGitShaPattern);
+  assert.deepEqual(schema.properties?.targetConfigVersion, {
+    type: 'string',
+    minLength: 1,
+  });
+}
+
+function assertManifestMatchesTopLevelSchema(manifest: ReleaseManifest): void {
+  const schema = JSON.parse(readFileSync('release.manifest.schema.json', 'utf8')) as {
+    readonly required?: readonly string[];
+    readonly properties?: Record<string, unknown>;
+    readonly additionalProperties?: boolean;
+  };
+
+  assert.equal(schema.additionalProperties, false);
+
+  for (const requiredProperty of schema.required ?? []) {
+    assert.equal(requiredProperty in manifest, true, `Missing ${requiredProperty} in manifest.`);
+  }
+
+  for (const manifestProperty of Object.keys(manifest)) {
+    assert.equal(
+      schema.properties?.[manifestProperty] !== undefined,
+      true,
+      `Manifest property ${manifestProperty} is absent from the JSON schema.`,
+    );
+  }
 }
 
 function catalogJson(version: string): string {

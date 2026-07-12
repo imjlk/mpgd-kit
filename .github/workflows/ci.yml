@@ -55,13 +55,13 @@ jobs:
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm test
         if: ${{ env.IS_RELEASE_PR != 'true' }}
-      - run: tar -czf package-dist.tgz packages/*/dist adapters/*/dist backend/*/dist native-plugins/*/dist
+      - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist backend/*/dist native-plugins/*/dist
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - uses: actions/upload-artifact@v6
         if: ${{ env.IS_RELEASE_PR != 'true' }}
         with:
           name: package-dist-ci
-          path: package-dist.tgz
+          path: ${{ runner.temp }}/package-dist.tgz
       - run: pnpm graph:preflight
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm pack:packages:prepared
@@ -117,7 +117,8 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: package-dist-ci
-      - run: tar -xzf package-dist.tgz
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
       - run: pnpm build:android
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
@@ -153,7 +154,8 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: package-dist-ci
-      - run: tar -xzf package-dist.tgz
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
       - run: pnpm build:ios
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
@@ -188,7 +190,8 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: package-dist-ci
-      - run: tar -xzf package-dist.tgz
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
       - run: pnpm build:ait
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
@@ -227,7 +230,8 @@ jobs:
       - uses: actions/download-artifact@v7
         with:
           name: package-dist-ci
-      - run: tar -xzf package-dist.tgz
+          path: ${{ runner.temp }}
+      - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
       - run: pnpm build:devvit
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'

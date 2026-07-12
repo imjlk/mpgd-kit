@@ -13,6 +13,7 @@ import {
 import { dirname, join, relative } from 'node:path';
 
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
+import { createReleaseManifestWriter } from './generate-release-manifest';
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
 import {
   effectiveTargetConfigOutputDir,
@@ -23,6 +24,18 @@ import {
 import type { TargetReleaseMetadata } from './schemas';
 
 const [targetName = 'web-preview', profile = 'production'] = process.argv.slice(2);
+const writeCapturedReleaseManifest = createReleaseManifestWriter();
+const releaseManifestEnvKeys = [
+  'APP_VERSION',
+  'BUILD_ID',
+  'MPGD_AD_PLACEMENTS_FILE',
+  'MPGD_AIT_APP_NAME',
+  'MPGD_AIT_SDK_MAJOR',
+  'MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR',
+  'MPGD_PLATFORM_TARGETS_FILE',
+  'MPGD_PRODUCT_CATALOG_FILE',
+  'MPGD_SOURCE_GIT_SHA',
+] as const;
 
 interface BuildTargetConfig {
   readonly kind: 'web' | 'capacitor-android' | 'capacitor-ios' | 'apps-in-toss' | 'devvit-web';
@@ -406,10 +419,13 @@ function writeManifest(
   artifact: string,
   commandEnv: NodeJS.ProcessEnv,
 ): void {
-  run(
-    'pnpm',
-    ['manifest:release', target, releaseProfile, artifact, releaseManifestPath(configBaseDir)],
-    commandEnv,
+  withProcessEnv(commandEnv, releaseManifestEnvKeys, () =>
+    writeCapturedReleaseManifest({
+      target,
+      profile: releaseProfile,
+      artifact,
+      outputPath: releaseManifestPath(configBaseDir),
+    }),
   );
 }
 

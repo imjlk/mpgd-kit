@@ -1,11 +1,11 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, isAbsolute, relative } from 'node:path';
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import typia from 'typia';
 
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
-import type { ReleaseManifest } from '@mpgd/release-manifest';
+import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 import type { TargetConfigMatrix } from '@mpgd/target-config';
 
 import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
@@ -15,7 +15,6 @@ import { effectiveTargetConfigOutputDir, loadPlatformTargetsConfig } from './pla
 
 const assertProductCatalog = typia.createAssert<ProductCatalog>();
 const assertAdPlacements = typia.createAssert<AdPlacements>();
-const assertReleaseManifest = typia.createAssert<ReleaseManifest>();
 const assertTargetConfigMatrix = typia.createAssert<TargetConfigMatrix>();
 
 export interface GenerateReleaseManifestInput {
@@ -25,7 +24,24 @@ export interface GenerateReleaseManifestInput {
   readonly outputPath?: string;
 }
 
+export type ReleaseManifestWriter = (
+  input: GenerateReleaseManifestInput,
+) => ReleaseManifest;
+
+export function createReleaseManifestWriter(): ReleaseManifestWriter {
+  const kitGitSha = resolveKitGitSha();
+
+  return (input) => writeReleaseManifestWithKitGitSha(input, kitGitSha);
+}
+
 export function generateReleaseManifest(input: GenerateReleaseManifestInput): ReleaseManifest {
+  return generateReleaseManifestWithKitGitSha(input, resolveKitGitSha());
+}
+
+function generateReleaseManifestWithKitGitSha(
+  input: GenerateReleaseManifestInput,
+  kitGitSha: string,
+): ReleaseManifest {
   const platformTargets = loadPlatformTargetsConfig();
   const targetMetadata = readTargetReleaseMetadata(platformTargets.config.targets[input.target]);
   const packageJson = readJsonFile('package.json') as { version?: string };
@@ -44,8 +60,6 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
   if (effectiveConfig === undefined) {
     throw new Error(`Failed to generate effective target config for ${input.target}.`);
   }
-
-  const kitGitSha = getKitGitSha();
 
   return assertReleaseManifest({
     releaseId: `mpgd-${gameVersion}+${buildId}`,
@@ -79,8 +93,15 @@ export function generateReleaseManifest(input: GenerateReleaseManifestInput): Re
 }
 
 export function writeReleaseManifest(input: GenerateReleaseManifestInput): ReleaseManifest {
+  return createReleaseManifestWriter()(input);
+}
+
+function writeReleaseManifestWithKitGitSha(
+  input: GenerateReleaseManifestInput,
+  kitGitSha: string,
+): ReleaseManifest {
   const outputPath = input.outputPath ?? 'release-output/release-manifest.json';
-  const nextManifest = generateReleaseManifest(input);
+  const nextManifest = generateReleaseManifestWithKitGitSha(input, kitGitSha);
   const manifest = makeEffectiveConfigPathsPortable(
     mergeManifest(outputPath, nextManifest),
     loadPlatformTargetsConfig().baseDir,
@@ -232,13 +253,17 @@ function getSourceGitSha(kitGitSha: string): string {
   return kitGitSha;
 }
 
-function getKitGitSha(): string {
-  assertCleanKitWorktree();
+function resolveKitGitSha(): string {
+  const kitRoot = resolveKitRoot();
+
+  assertKitGitTopLevel(kitRoot);
+  assertCleanKitWorktree(kitRoot);
 
   let kitGitSha: string;
 
   try {
     kitGitSha = execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: kitRoot,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
@@ -253,11 +278,67 @@ function getKitGitSha(): string {
   return kitGitSha;
 }
 
-function assertCleanKitWorktree(): void {
+function resolveKitRoot(): string {
+  const configuredKitRoot = readOptionalString(process.env.MPGD_KIT_PATH);
+  let executionRoot: string;
+
+  try {
+    executionRoot = realpathSync(resolve(process.cwd()));
+  } catch (error) {
+    throw new Error('Failed to resolve the mpgd-kit execution root.', { cause: error });
+  }
+
+  if (configuredKitRoot === undefined) {
+    return executionRoot;
+  }
+
+  let resolvedConfiguredKitRoot: string;
+
+  try {
+    resolvedConfiguredKitRoot = realpathSync(resolve(configuredKitRoot));
+  } catch (error) {
+    throw new Error('Failed to resolve MPGD_KIT_PATH.', { cause: error });
+  }
+
+  if (resolvedConfiguredKitRoot !== executionRoot) {
+    throw new Error('MPGD_KIT_PATH must match the mpgd-kit execution root.');
+  }
+
+  return executionRoot;
+}
+
+function assertKitGitTopLevel(kitRoot: string): void {
+  let gitTopLevel: string;
+
+  try {
+    gitTopLevel = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: kitRoot,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch (error) {
+    throw new Error('Failed to resolve the mpgd-kit Git checkout root.', { cause: error });
+  }
+
+  let resolvedGitTopLevel: string;
+
+  try {
+    resolvedGitTopLevel = realpathSync(gitTopLevel);
+  } catch (error) {
+    throw new Error('Failed to resolve the mpgd-kit Git checkout root path.', { cause: error });
+  }
+
+  if (resolvedGitTopLevel !== kitRoot) {
+    throw new Error('MPGD_KIT_PATH must point to the root of its own Git checkout.');
+  }
+}
+
+function assertCleanKitWorktree(kitRoot: string): void {
   let worktreeStatus: string;
 
   try {
     worktreeStatus = execFileSync('git', ['status', '--porcelain'], {
+      cwd: kitRoot,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
     }).trim();
