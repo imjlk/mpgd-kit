@@ -89,6 +89,7 @@ function assertPlatformTargetConfigShape(
   assertString(input.gameApp, `${target}.gameApp`);
   assertString(input.adapter, `${target}.adapter`);
   assertTargetIntegrations(input.integrations, target);
+  assertTargetIcon(input.icon, target);
 
   switch (input.kind) {
     case 'web':
@@ -106,6 +107,51 @@ function assertPlatformTargetConfigShape(
       assertString(input.webDir, `${target}.webDir`);
       assertString(input.artifact, `${target}.artifact`);
       break;
+  }
+}
+
+function assertTargetIcon(input: unknown, target: string): void {
+  if (input === undefined) {
+    return;
+  }
+
+  assertRecord(input, `${target}.icon`);
+  const supportedKeys = new Set([
+    'profile',
+    'source',
+    'backgroundColor',
+    'externalUrl',
+    'variants',
+  ]);
+
+  for (const key of Object.keys(input)) {
+    if (!supportedKeys.has(key)) {
+      throw new Error(`${target}.icon.${key} is not a recognized icon override key.`);
+    }
+  }
+
+  for (const key of ['profile', 'source', 'backgroundColor', 'externalUrl'] as const) {
+    if (input[key] !== undefined) {
+      assertString(input[key], `${target}.icon.${key}`);
+    }
+  }
+
+  if (input.variants !== undefined) {
+    assertRecord(input.variants, `${target}.icon.variants`);
+    const supportedVariants = new Set([
+      'maskable',
+      'androidForeground',
+      'monochrome',
+      'background',
+    ]);
+
+    for (const [key, value] of Object.entries(input.variants)) {
+      if (!supportedVariants.has(key)) {
+        throw new Error(`${target}.icon.variants.${key} is not a recognized icon variant.`);
+      }
+
+      assertString(value, `${target}.icon.variants.${key}`);
+    }
   }
 }
 

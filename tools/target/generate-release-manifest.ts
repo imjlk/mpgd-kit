@@ -1,5 +1,6 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve } from 'node:path';
 
 import typia from 'typia';
@@ -28,6 +29,7 @@ export interface GenerateReleaseManifestInput {
   readonly target: string;
   readonly profile: string;
   readonly artifact: string;
+  readonly iconManifestArtifactPath: string;
   readonly outputPath?: string;
 }
 
@@ -63,6 +65,7 @@ function generateReleaseManifestWithKitGitSha(
   }).artifacts.find((artifact) => artifact.target === input.target);
   const buildId = process.env.BUILD_ID ?? createBuildId();
   const gameVersion = process.env.APP_VERSION ?? packageJson.version ?? '0.0.0';
+  const iconManifest = readIconManifestEvidence(input.iconManifestArtifactPath);
 
   if (effectiveConfig === undefined) {
     throw new Error(`Failed to generate effective target config for ${input.target}.`);
@@ -86,6 +89,7 @@ function generateReleaseManifestWithKitGitSha(
           version: effectiveConfig.version,
           digest: effectiveConfig.digest,
         },
+        iconManifest,
         ...(input.target === 'ait'
           ? {
               appName: readOptionalString(process.env.MPGD_AIT_APP_NAME)
@@ -97,6 +101,90 @@ function generateReleaseManifestWithKitGitSha(
       },
     },
   });
+}
+
+function readIconManifestEvidence(
+  artifactPath: string,
+): ReleaseManifest['targets'][string]['iconManifest'] {
+  const path = readOptionalString(process.env.MPGD_ICON_MANIFEST_PATH);
+
+  if (path === undefined) {
+    throw new Error('MPGD_ICON_MANIFEST_PATH is required when generating a release manifest.');
+  }
+
+  const bytes = readFileBytes(path);
+  const parsed = JSON.parse(bytes.toString('utf8')) as unknown;
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Invalid icon manifest: ${path}`);
+  }
+
+  const manifest = parsed as Record<string, unknown>;
+  const canonicalSource = manifest.canonicalSource;
+
+  if (
+    typeof canonicalSource !== 'object'
+    || canonicalSource === null
+    || Array.isArray(canonicalSource)
+  ) {
+    throw new Error(`Invalid icon manifest canonicalSource: ${path}`);
+  }
+
+  const canonicalSourceRecord = canonicalSource as Record<string, unknown>;
+
+  return {
+    path: requirePortableArtifactPath(artifactPath),
+    digest: createHash('sha256').update(bytes).digest('hex'),
+    sourceSha256: requireManifestString(canonicalSourceRecord, 'sha256', path),
+    sharedConfigSha256: requireManifestString(manifest, 'sharedConfigSha256', path),
+    renderConfigSha256: requireManifestString(manifest, 'renderConfigSha256', path),
+    generatorVersion: requireManifestString(manifest, 'generatorVersion', path),
+    targetProfile: requireManifestString(manifest, 'targetProfile', path),
+    targetProfileVersion: requireManifestString(manifest, 'targetProfileVersion', path),
+  };
+}
+
+function requirePortableArtifactPath(path: string): string {
+  const normalized = path.replaceAll('\\', '/');
+  const segments = normalized.split('/');
+
+  if (
+    normalized.length === 0
+    || isAbsolute(path)
+    || isAbsolute(normalized)
+    || /^[A-Za-z]:\//u.test(normalized)
+    || segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')
+  ) {
+    throw new Error(`Invalid icon manifest artifact path: ${path}`);
+  }
+
+  return normalized;
+}
+
+function readFileBytes(path: string): Buffer {
+  try {
+    return readFileSync(path);
+  } catch (error) {
+    throw new Error(`Failed to read icon manifest ${path}: ${formatError(error)}`);
+  }
+}
+
+function requireManifestString(
+  record: Record<string, unknown>,
+  key: string,
+  path: string,
+): string {
+  const value = record[key];
+
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Invalid icon manifest ${key}: ${path}`);
+  }
+
+  return value;
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 export function writeReleaseManifest(input: GenerateReleaseManifestInput): ReleaseManifest {
@@ -156,7 +244,34 @@ function hasMatchingReleaseContract(
     && previous.kitGitSha === next.kitGitSha
     && previous.targetConfigVersion === next.targetConfigVersion
     && previous.catalogVersion === next.catalogVersion
-    && previous.adPlacementVersion === next.adPlacementVersion;
+    && previous.adPlacementVersion === next.adPlacementVersion
+    && hasMatchingIconContract(previous, next);
+}
+
+function hasMatchingIconContract(
+  previous: ReleaseManifest,
+  next: ReleaseManifest,
+): boolean {
+  const nextTargetEntry = Object.entries(next.targets)[0];
+
+  if (nextTargetEntry === undefined) {
+    return false;
+  }
+
+  const [nextTargetName, nextTarget] = nextTargetEntry;
+  const nextIconManifest = nextTarget.iconManifest;
+  const previousSameTarget = previous.targets[nextTargetName];
+
+  return (
+    previousSameTarget === undefined
+    || previousSameTarget.iconManifest.renderConfigSha256
+      === nextIconManifest.renderConfigSha256
+  ) && Object.values(previous.targets).every(
+    (target) =>
+      target.iconManifest.sourceSha256 === nextIconManifest.sourceSha256
+      && target.iconManifest.sharedConfigSha256 === nextIconManifest.sharedConfigSha256
+      && target.iconManifest.generatorVersion === nextIconManifest.generatorVersion,
+  );
 }
 
 function makeEffectiveConfigPathsPortable(
@@ -373,11 +488,17 @@ if (isCliEntrypoint(import.meta.url)) {
     profile = 'production',
     artifact = 'artifacts/web-preview',
     outputPath,
+    iconManifestArtifactPath = process.env.MPGD_ICON_MANIFEST_ARTIFACT_PATH,
   ] = process.argv.slice(2);
-  const input =
-    outputPath === undefined
-      ? { target, profile, artifact }
-      : { target, profile, artifact, outputPath };
+  if (iconManifestArtifactPath === undefined) {
+    throw new Error(
+      'Provide the icon manifest path inside the release artifact as argument 5 '
+      + 'or MPGD_ICON_MANIFEST_ARTIFACT_PATH.',
+    );
+  }
+  const input = outputPath === undefined
+    ? { target, profile, artifact, iconManifestArtifactPath }
+    : { target, profile, artifact, iconManifestArtifactPath, outputPath };
   const manifest = writeReleaseManifest(input);
   console.log(`Release manifest: ${manifest.releaseId}`);
 }

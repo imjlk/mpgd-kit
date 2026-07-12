@@ -6,6 +6,8 @@ The starter is accepted when it remains a minimal game shell and still proves th
 
 ```sh
 pnpm validate:starter-workflow
+pnpm game:icons:generate
+pnpm game:icons:verify
 pnpm --dir examples/phaser-starter check
 pnpm --dir examples/phaser-starter build
 ```

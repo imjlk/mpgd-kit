@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
 
@@ -8,6 +9,8 @@ import { platformTargetsFilePath } from '../target/platform-targets';
 import {
   assertEmbeddedTargetConfig,
   embeddedTargetConfigFileName,
+  readArtifactTextFromDirectory,
+  readArtifactTextFromZip,
   readEmbeddedTargetConfigFromDirectory,
   readEmbeddedTargetConfigFromFile,
   readEmbeddedTargetConfigFromZip,
@@ -30,6 +33,7 @@ interface SmokePlatformTargetsConfig {
 }
 
 const releaseManifestFileEnv = 'MPGD_RELEASE_MANIFEST_FILE';
+const devvitIconMaximumBytes = 500 * 1024;
 
 const loadedPlatformTargets = loadSmokePlatformTargetsConfig();
 const configuredTargets = Object.keys(loadedPlatformTargets.config.targets);
@@ -92,6 +96,11 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
         target,
         digest: entry.effectiveConfig.digest,
       },
+    );
+    assertIconManifestEvidence(
+      readReleaseIconManifest(target, targetConfig, artifactPath, entry.iconManifest.path),
+      entry.iconManifest,
+      target,
     );
     assertEmbeddedTargetConfig(
       readReleaseEmbeddedTargetConfig(target, targetConfig, artifactPath),
@@ -156,6 +165,74 @@ function listJavaScriptFiles(root: string): readonly string[] {
   }
 
   return files.sort();
+}
+
+function readReleaseIconManifest(
+  target: string,
+  targetConfig: SmokePlatformTargetConfig,
+  artifactPath: string,
+  iconManifestPath: string,
+): { readonly source: string; readonly content: string } {
+  switch (targetConfig.kind) {
+    case 'web':
+      return readArtifactTextFromDirectory(
+        artifactPath,
+        iconManifestPath,
+        `${target} web artifact`,
+      );
+    case 'capacitor-android':
+      return readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} release AAB`);
+    case 'capacitor-ios':
+      return readArtifactTextFromDirectory(
+        artifactPath,
+        iconManifestPath,
+        `${target} native artifact`,
+      );
+    case 'apps-in-toss':
+      return artifactPath.endsWith('.ait')
+        ? readArtifactTextFromZip(artifactPath, iconManifestPath, `${target} release artifact`)
+        : readArtifactTextFromDirectory(
+            artifactPath,
+            iconManifestPath,
+            `${target} wrapper artifact`,
+          );
+    case 'devvit-web':
+      return readArtifactTextFromDirectory(
+        artifactPath,
+        iconManifestPath,
+        `${target} Devvit artifact`,
+      );
+  }
+}
+
+function assertIconManifestEvidence(
+  evidence: { readonly source: string; readonly content: string },
+  expected: ReleaseManifest['targets'][string]['iconManifest'],
+  target: string,
+): void {
+  const digest = createHash('sha256').update(evidence.content).digest('hex');
+
+  if (digest !== expected.digest) {
+    throw new Error(`${target} embedded icon manifest digest mismatch: ${evidence.source}`);
+  }
+
+  const parsed = JSON.parse(evidence.content) as unknown;
+  assertRecord(parsed, `${target} icon manifest`);
+  assertRecord(parsed.canonicalSource, `${target} icon manifest canonical source`);
+
+  if (parsed.canonicalSource.sha256 !== expected.sourceSha256) {
+    throw new Error(`${target} icon manifest canonical source digest mismatch.`);
+  }
+
+  if (
+    parsed.sharedConfigSha256 !== expected.sharedConfigSha256
+    || parsed.renderConfigSha256 !== expected.renderConfigSha256
+    || parsed.generatorVersion !== expected.generatorVersion
+    || parsed.targetProfile !== expected.targetProfile
+    || parsed.targetProfileVersion !== expected.targetProfileVersion
+  ) {
+    throw new Error(`${target} icon manifest generator/profile evidence mismatch.`);
+  }
 }
 
 function readReleaseEmbeddedTargetConfig(
@@ -291,6 +368,11 @@ function verifyMicrosoftStorePwaManifest(artifactPath: string): void {
   }
 
   assertArray(manifest.icons, 'Microsoft Store PWA manifest icons');
+  const precachePath = `${artifactPath}/mpgd-icon-precache.json`;
+  const precache = readJsonFile(precachePath);
+  assertArray(precache, 'Microsoft Store icon precache list');
+  const purposes = new Set<string>();
+  const sizes = new Set<string>();
 
   if (manifest.icons.length === 0) {
     throw new Error('Microsoft Store PWA manifest must include at least one icon.');
@@ -300,6 +382,12 @@ function verifyMicrosoftStorePwaManifest(artifactPath: string): void {
     assertRecord(icon, `Microsoft Store PWA manifest icon ${index}`);
     assertString(icon.src, `Microsoft Store PWA manifest icon ${index} src`);
     assertString(icon.sizes, `Microsoft Store PWA manifest icon ${index} sizes`);
+    assertString(icon.type, `Microsoft Store PWA manifest icon ${index} type`);
+    assertString(icon.purpose, `Microsoft Store PWA manifest icon ${index} purpose`);
+
+    if (icon.type !== 'image/png') {
+      throw new Error(`Microsoft Store PWA manifest icon ${index} must use image/png.`);
+    }
 
     const iconPath = resolveArtifactWebFilePath(artifactPath, dirname(manifestPath), icon.src);
 
@@ -309,6 +397,31 @@ function verifyMicrosoftStorePwaManifest(artifactPath: string): void {
       `Microsoft Store PWA manifest icon ${index} must stay inside artifact`,
     );
     assertFileExists(iconPath, `Microsoft Store PWA manifest icon ${index}`);
+    const [declaredWidth, declaredHeight] = icon.sizes.split('x').map(Number);
+    const actual = readPngDimensions(iconPath);
+
+    if (actual.width !== declaredWidth || actual.height !== declaredHeight) {
+      throw new Error(`Microsoft Store PWA icon ${index} dimensions do not match its manifest.`);
+    }
+
+    if (!precache.includes(`./${normalizeLocalWebPath(icon.src)}`)) {
+      throw new Error(`Microsoft Store PWA icon ${icon.src} is missing from precache evidence.`);
+    }
+
+    purposes.add(icon.purpose);
+    sizes.add(icon.sizes);
+  }
+
+  for (const purpose of ['any', 'maskable']) {
+    if (!purposes.has(purpose)) {
+      throw new Error(`Microsoft Store PWA manifest must include purpose: ${purpose}.`);
+    }
+  }
+
+  for (const size of ['192x192', '512x512']) {
+    if (!sizes.has(size)) {
+      throw new Error(`Microsoft Store PWA manifest must include size: ${size}.`);
+    }
   }
 }
 
@@ -326,6 +439,23 @@ function verifyDevvitWebManifest(
   assertNoTemplatePlaceholders(manifest, label);
   assertString(manifest.name, `${label} name`);
   assertDevvitAppName(manifest.name, `${label} name`);
+  const marketingAssets = manifest.marketingAssets;
+  assertRecord(marketingAssets, `${label} marketingAssets`);
+  assertString(marketingAssets.icon, `${label} marketingAssets.icon`);
+  const marketingIcon = resolveDevvitManifestFile(
+    wrapperApp,
+    marketingAssets.icon,
+    `${label} marketingAssets.icon`,
+  );
+  const dimensions = readPngDimensions(marketingIcon);
+
+  if (dimensions.width !== 1024 || dimensions.height !== 1024) {
+    throw new Error(`${label} marketing icon must be 1024x1024.`);
+  }
+
+  if (statSync(marketingIcon).size > devvitIconMaximumBytes) {
+    throw new Error(`${label} marketing icon must be at most ${devvitIconMaximumBytes} bytes.`);
+  }
 
   const post = manifest.post;
   assertRecord(post, `${label} post`);
@@ -415,6 +545,20 @@ function verifyDevvitWebManifest(
   if (!menu.items.some(isCreatePostMenuItem)) {
     throw new Error(`${label} must expose a subreddit create-post menu item.`);
   }
+}
+
+function readPngDimensions(path: string): { readonly width: number; readonly height: number } {
+  const bytes = readFileSync(path);
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+
+  if (bytes.length < 24 || !bytes.subarray(0, 8).equals(signature)) {
+    throw new Error(`Expected PNG icon: ${path}`);
+  }
+
+  return {
+    width: bytes.readUInt32BE(16),
+    height: bytes.readUInt32BE(20),
+  };
 }
 
 function hasManifestLink(html: string): boolean {

@@ -11,6 +11,7 @@ distribution target gets the right adapter and validation path.
 
 - Phaser 4 browser game shell and validation demo.
 - Browser preview, Capacitor Android/iOS, Apps in Toss WebView, and Reddit Devvit Web target builds.
+- Single-source PNG/SVG app icon generation with versioned profiles and release evidence for every target.
 - `PlatformGateway` contracts for identity, storage, IAP, ads, leaderboard, and lifecycle.
 - Target-specific feature availability through `@mpgd/target-config`.
 - Effective target config bundles for products, ad placements, storage, release profile, and localization.
@@ -287,6 +288,15 @@ pnpm graph:preflight
 
 `pnpm graph:preflight` runs every preset against `tsconfig.graph.json` and fails
 if a preset no longer returns answer-ready anchors.
+
+## App Icons
+
+Games declare one PNG or SVG canonical source in `mpgd.game.json`. Run
+`mpgd game icons generate <game>`, `verify`, or `inspect` to prepare versioned
+Devvit, Microsoft PWA, Apps in Toss, Android, iOS, and web-preview outputs.
+Target builds run the same generator automatically and embed source/profile
+evidence in their release artifacts. See [the app icon pipeline](docs/APP_ICON_PIPELINE.md)
+for target overrides, native staging, and the Apps in Toss console URL gate.
 
 ## Apps in Toss
 

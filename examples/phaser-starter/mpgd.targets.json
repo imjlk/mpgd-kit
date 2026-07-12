@@ -4,12 +4,14 @@
       "kind": "web",
       "gameApp": ".",
       "adapter": "browser",
+      "icon": { "profile": "web-preview" },
       "output": "artifacts/web-preview"
     },
     "microsoft-store": {
       "kind": "web",
       "gameApp": ".",
       "adapter": "browser",
+      "icon": { "profile": "microsoft-pwa" },
       "output": "artifacts/microsoft-store"
     },
     "android": {
@@ -17,6 +19,7 @@
       "gameApp": ".",
       "shellApp": "../../apps/mobile-capacitor",
       "adapter": "capacitor",
+      "icon": { "profile": "android" },
       "webDir": "../../apps/mobile-capacitor/www",
       "artifact": "aab"
     },
@@ -25,6 +28,7 @@
       "gameApp": ".",
       "shellApp": "../../apps/mobile-capacitor",
       "adapter": "capacitor",
+      "icon": { "profile": "ios" },
       "webDir": "../../apps/mobile-capacitor/www",
       "artifact": "ipa"
     },
@@ -33,6 +37,7 @@
       "gameApp": ".",
       "wrapperApp": "../../apps/target-ait",
       "adapter": "ait",
+      "icon": { "profile": "ait" },
       "webDir": "../../apps/target-ait/public/game",
       "artifact": ".ait"
     },
@@ -41,6 +46,7 @@
       "gameApp": ".",
       "wrapperApp": "../../apps/target-devvit",
       "adapter": "devvit",
+      "icon": { "profile": "devvit" },
       "webDir": "../../apps/target-devvit/dist/client",
       "artifact": "devvit"
     }

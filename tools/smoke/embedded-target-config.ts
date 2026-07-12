@@ -1,7 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, join } from 'node:path';
+import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import { basename, isAbsolute, join, relative, resolve } from 'node:path';
 
 export const embeddedTargetConfigFileName = 'mpgd-effective-target.json';
 
@@ -54,6 +54,48 @@ export function readEmbeddedTargetConfigFromZip(
   return createEvidence(label, `${path}:${entry}`, captureZipStdout('unzip', ['-p', path, entry]));
 }
 
+export function readArtifactTextFromDirectory(
+  root: string,
+  artifactPath: string,
+  label: string,
+): { readonly source: string; readonly content: string } {
+  assertPathExists(root, label);
+  const portablePath = requirePortableArtifactPath(artifactPath);
+  const path = resolve(root, portablePath);
+  assertPathExists(path, `${label} icon manifest`);
+  const resolvedRoot = realpathSync(root);
+  const resolvedPath = realpathSync(path);
+  const relativePath = relative(resolvedRoot, resolvedPath);
+
+  if (relativePath.length === 0 || relativePath.startsWith('..') || isAbsolute(relativePath)) {
+    throw new Error(`Artifact path escapes ${label}: ${artifactPath}`);
+  }
+
+  return { source: resolvedPath, content: readFileSync(resolvedPath, 'utf8') };
+}
+
+export function readArtifactTextFromZip(
+  path: string,
+  artifactPath: string,
+  label: string,
+): { readonly source: string; readonly content: string } {
+  assertPathExists(path, label);
+  const portablePath = requirePortableArtifactPath(artifactPath);
+  const entries = captureZipStdout('unzip', ['-Z1', path]).split('\n');
+  const matches = entries.filter((candidate) => candidate === portablePath);
+
+  if (matches.length !== 1) {
+    throw new Error(
+      `Expected exactly one ${portablePath} in ${label}; found ${matches.length}: ${path}`,
+    );
+  }
+
+  return {
+    source: `${path}:${portablePath}`,
+    content: captureZipStdout('unzip', ['-p', path, portablePath]),
+  };
+}
+
 export function assertEmbeddedTargetConfig(
   evidence: EmbeddedTargetConfigEvidence,
   expected: {
@@ -95,11 +137,15 @@ function createEvidence(
 }
 
 function findEmbeddedTargetConfig(root: string): string | undefined {
+  return findNamedFile(root, embeddedTargetConfigFileName);
+}
+
+function findNamedFile(root: string, fileName: string): string | undefined {
   for (const entry of readdirSync(root)) {
     const path = join(root, entry);
     const stat = statSync(path);
 
-    if (stat.isFile() && entry === embeddedTargetConfigFileName) {
+    if (stat.isFile() && entry === fileName) {
       return path;
     }
 
@@ -107,7 +153,7 @@ function findEmbeddedTargetConfig(root: string): string | undefined {
       continue;
     }
 
-    const found = findEmbeddedTargetConfig(path);
+    const found = findNamedFile(path, fileName);
 
     if (found !== undefined) {
       return found;
@@ -115,6 +161,24 @@ function findEmbeddedTargetConfig(root: string): string | undefined {
   }
 
   return undefined;
+}
+
+function requirePortableArtifactPath(path: string): string {
+  const normalized = path.replaceAll('\\', '/');
+
+  if (
+    normalized.length === 0
+    || isAbsolute(path)
+    || isAbsolute(normalized)
+    || /^[A-Za-z]:\//u.test(normalized)
+    || normalized.split('/').some(
+      (segment) => segment.length === 0 || segment === '.' || segment === '..',
+    )
+  ) {
+    throw new Error(`Invalid artifact path: ${path}`);
+  }
+
+  return normalized;
 }
 
 function captureZipStdout(command: string, args: readonly string[]): string {

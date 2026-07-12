@@ -127,6 +127,24 @@ soft rotate prompt on mismatch. The generated PWA manifest also declares
 that manifest value aligned with the runtime policy if you make a portrait-first
 game.
 
+## App Icons
+
+`mpgd.game.json` owns one canonical PNG or SVG app icon source. Target profiles
+derive each platform's required sizes, safe zones, alpha policy, and native or
+wrapper staging files.
+
+```sh
+pnpm icons:generate
+pnpm icons:verify
+pnpm icons:inspect
+```
+
+Use each target's optional `icon` object in `mpgd.targets.json` for a profile,
+background, source, or variant override. The release evidence still records the
+shared canonical source separately from an override render source. Before an
+Apps in Toss production package build, upload the generated 600x600 icon in the
+console and configure the returned HTTPS URL as `ait.icon.externalUrl`.
+
 ## Reddit Devvit
 
 This starter owns its Devvit app root in `apps/target-devvit`. That directory
@@ -147,6 +165,7 @@ First-time Devvit setup:
 
 ```sh
 pnpm install -w
+pnpm icons:generate:devvit:production
 pnpm devvit:login
 pnpm devvit:whoami
 pnpm devvit:init

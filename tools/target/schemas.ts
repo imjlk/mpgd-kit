@@ -15,6 +15,22 @@ export interface BaseTargetConfig {
   readonly adapter: string;
   readonly metadata?: TargetReleaseMetadata;
   readonly integrations?: Partial<TargetIntegrationConfig>;
+  readonly icon?: TargetIconConfig;
+}
+
+export interface TargetIconConfig {
+  /** Versioned profile id. Omit to infer the built-in profile from the target kind. */
+  readonly profile?: string;
+  /** Optional target rendering source. The canonical source remains recorded in evidence. */
+  readonly source?: string;
+  readonly backgroundColor?: string;
+  readonly externalUrl?: string;
+  readonly variants?: {
+    readonly maskable?: string;
+    readonly androidForeground?: string;
+    readonly monochrome?: string;
+    readonly background?: string;
+  };
 }
 
 export interface TargetReleaseMetadata {

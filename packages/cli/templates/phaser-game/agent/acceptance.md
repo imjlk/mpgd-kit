@@ -5,6 +5,8 @@ Run these checks before handing off a generated game starter:
 ```sh
 pnpm check
 pnpm build
+pnpm icons:generate
+pnpm icons:verify
 pnpm --dir ../mpgd-kit mpgd target build-all --targets-file "$PWD/mpgd.targets.json" --targets web,microsoft-store,ait,reddit --profile staging --ait-variant wrapper
 pnpm --dir ../mpgd-kit mpgd target smoke-all --targets-file "$PWD/mpgd.targets.json" --targets web,microsoft-store,ait,reddit
 pnpm --dir ../mpgd-kit mpgd target doctor --targets-file "$PWD/mpgd.targets.json" --targets web,microsoft-store,ait,reddit
