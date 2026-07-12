@@ -85,7 +85,16 @@ function readRuntimePlatformTarget(): RuntimePlatformTargetMetadata | undefined 
     return undefined;
   }
 
-  const parsed = JSON.parse(readFileSync(resolve(targetsFile), 'utf8')) as unknown;
+  const resolvedTargetsFile = resolve(targetsFile);
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(readFileSync(resolvedTargetsFile, 'utf8'));
+  } catch (error) {
+    throw new Error(
+      `Failed to read or parse MPGD_PLATFORM_TARGETS_FILE at ${resolvedTargetsFile}: ${formatError(error)}`,
+    );
+  }
 
   if (!isRecord(parsed) || !isRecord(parsed.targets)) {
     throw new Error('MPGD_PLATFORM_TARGETS_FILE must contain a targets object.');
@@ -114,6 +123,10 @@ function readRuntimePlatformTarget(): RuntimePlatformTargetMetadata | undefined 
 
 function isRecord(input: unknown): input is Record<string, unknown> {
   return typeof input === 'object' && input !== null && !Array.isArray(input);
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function resolveCatalogPath(path: string, pairedPath: string): string {
