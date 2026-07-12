@@ -204,7 +204,7 @@ export function renderGameAcceptanceMarkdown(report: GameAcceptanceReport): stri
   } else if (report.evidence.releaseManifest.parseError !== null) {
     lines.push(
       `- Release manifest is invalid: ${report.evidence.releaseManifest.file}`,
-      `  - ${report.evidence.releaseManifest.parseError}`,
+      `  - ${escapeMarkdownInline(report.evidence.releaseManifest.parseError)}`,
     );
   } else {
     lines.push(`- Release manifest: ${report.evidence.releaseManifest.file}`);
@@ -250,9 +250,9 @@ function failedStepResult(
   return {
     id: step.id,
     label: step.label,
-    command: step.command ?? null,
+    command: step.command === undefined || step.command.length === 0 ? null : step.command,
     args: step.args ?? [],
-    cwd: step.cwd === undefined ? null : path.resolve(step.cwd),
+    cwd: step.cwd === undefined || step.cwd.length === 0 ? null : path.resolve(step.cwd),
     status: 'failed',
     exitCode: 1,
     startedAt: new Date(nowMs).toISOString(),
@@ -333,7 +333,16 @@ function resolveRunnableStep(step: GameAcceptanceStep):
 }
 
 function escapeMarkdownTable(value: string): string {
-  return value.replaceAll('\\', '\\\\').replaceAll('|', '\\|').replaceAll('\n', ' ');
+  return escapeMarkdownInline(value).replaceAll('|', '\\|');
+}
+
+function escapeMarkdownInline(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replace(/([\\`*_[\]])/gu, '\\$1')
+    .replaceAll('\n', ' ');
 }
 
 function formatDuration(durationMs: number): string {

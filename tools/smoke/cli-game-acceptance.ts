@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  renderGameAcceptanceMarkdown,
   runGameAcceptance,
   runMpgdCli,
   type GameAcceptanceCommandRunner,
@@ -91,16 +92,18 @@ try {
     gameRoot: fixtureRoot,
     reportDir: path.join(fixtureRoot, 'malformed-report'),
     options: {},
-    steps: [{ id: 'malformed', label: 'Malformed step', cwd: fixtureRoot }],
+    steps: [{ id: 'malformed', label: 'Malformed step', command: '', cwd: '' }],
     now: createClock(),
     log: () => undefined,
   });
 
   assert.equal(malformed.report.status, 'failed');
   assert.match(malformed.report.steps[0]?.detail ?? '', /missing command/u);
+  assert.equal(malformed.report.steps[0]?.command, null);
+  assert.equal(malformed.report.steps[0]?.cwd, null);
 
   mkdirSync(path.dirname(releaseManifestFile), { recursive: true });
-  writeFileSync(releaseManifestFile, '{invalid');
+  writeFileSync(releaseManifestFile, '{*invalid');
   const invalidEvidence = runGameAcceptance({
     gameRoot: fixtureRoot,
     reportDir: path.join(fixtureRoot, 'invalid-evidence-report'),
@@ -114,6 +117,19 @@ try {
   assert.equal(invalidEvidence.report.evidence.releaseManifest?.found, true);
   assert.match(invalidEvidence.report.evidence.releaseManifest?.parseError ?? '', /JSON/u);
   assert.match(readFileSync(invalidEvidence.markdownFile, 'utf8'), /Release manifest is invalid/u);
+  const escapedMarkdown = renderGameAcceptanceMarkdown({
+    ...invalidEvidence.report,
+    evidence: {
+      releaseManifest: {
+        file: 'artifacts/release-manifest.json',
+        found: true,
+        parseError: 'bad *value* [detail] <tag>',
+        value: null,
+      },
+    },
+  });
+
+  assert.match(escapedMarkdown, /bad \\\*value\\\* \\\[detail\\\] &lt;tag&gt;/u);
 
   const timedOut = runGameAcceptance({
     gameRoot: fixtureRoot,
