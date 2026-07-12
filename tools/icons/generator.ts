@@ -19,6 +19,7 @@ import {
   toGameRelativePath,
 } from './config';
 import {
+  isPngOpaque,
   pixelSha256,
   renderProfileOutput,
   sha256,
@@ -30,6 +31,7 @@ import {
   iconGeneratorVersion,
   iconManifestSchemaVersion,
   type BrandAppIconConfig,
+  type BrandImageVariant,
   type GeneratedTargetIcons,
   type IconManifest,
   type IconManifestOutput,
@@ -37,6 +39,12 @@ import {
 } from './types';
 
 const defaultBackgroundColor = '#ffffff';
+const brandImageVariants = [
+  'maskable',
+  'androidForeground',
+  'monochrome',
+  'background',
+] as const satisfies readonly BrandImageVariant[];
 
 export async function generateTargetIcons(input: {
   readonly gameRoot: string;
@@ -62,7 +70,21 @@ export async function generateTargetIcons(input: {
     input.targetName,
   );
   const backgroundColor = appIcon.backgroundColor ?? defaultBackgroundColor;
+  const variantSources = await loadVariantSources(input.gameRoot, appIcon, strict);
+  const renderConfigSha256 = createRenderConfigSha256({
+    canonicalSourcePath: loaded.appIcon.source,
+    appIcon,
+    backgroundColor,
+    canonical,
+    renderSource,
+    variantSources,
+    externalUrl: input.target.icon?.externalUrl,
+  });
   const warnings = [...loaded.warnings, ...canonical.warnings, ...renderSource.warnings];
+
+  if (profile.outputs.some((output) => output.opaque)) {
+    await assertOpaqueBackgroundColor(backgroundColor);
+  }
 
   assertSafeGeneratedPath(input.gameRoot, outputDir);
   rmSync(outputDir, { recursive: true, force: true });
@@ -83,11 +105,10 @@ export async function generateTargetIcons(input: {
     }
 
     const image = await resolveOutputImage({
-      gameRoot: input.gameRoot,
       appIcon,
       output,
       renderSource,
-      strict,
+      variantSources,
     });
     const bytes = image === undefined
       ? await renderSolidBackground(output, backgroundColor)
@@ -101,6 +122,10 @@ export async function generateTargetIcons(input: {
           monochrome: output.sourceVariant === 'monochrome',
         });
     const outputPath = resolve(outputDir, output.file);
+
+    if (output.opaque && !(await isPngOpaque(bytes))) {
+      throw new Error(`${input.targetName} ${output.purpose} output must be fully opaque.`);
+    }
 
     writeFileSync(outputPath, bytes);
     outputs.push({
@@ -121,6 +146,13 @@ export async function generateTargetIcons(input: {
     schemaVersion: iconManifestSchemaVersion,
     canonicalSource: toManifestSource(input.gameRoot, canonical),
     renderSource: toManifestSource(input.gameRoot, renderSource),
+    variantSources: Object.fromEntries(
+      Object.entries(variantSources).map(([variant, image]) => [
+        variant,
+        toManifestSource(input.gameRoot, image),
+      ]),
+    ),
+    renderConfigSha256,
     generatorVersion: iconGeneratorVersion,
     targetProfile: profile.id,
     targetProfileVersion: profile.version,
@@ -128,11 +160,6 @@ export async function generateTargetIcons(input: {
     warnings,
     ...(readiness === undefined ? {} : { readiness }),
   };
-  const manifestPath = join(outputDir, 'icon-manifest.json');
-  const manifestBytes = `${JSON.stringify(manifest, null, 2)}\n`;
-
-  writeFileSync(manifestPath, manifestBytes);
-
   if (profile.id === 'devvit') {
     const output = requireOutput(outputs, 'app-icon');
     const size = readFileSync(resolve(outputDir, output.path.slice('icons/'.length))).byteLength;
@@ -143,6 +170,11 @@ export async function generateTargetIcons(input: {
       );
     }
   }
+
+  const manifestPath = join(outputDir, 'icon-manifest.json');
+  const manifestBytes = `${JSON.stringify(manifest, null, 2)}\n`;
+
+  writeFileSync(manifestPath, manifestBytes);
 
   return {
     gameRoot: input.gameRoot,
@@ -180,6 +212,17 @@ export async function verifyExistingTargetIcons(input: {
     { strict, minimumSize: 1024 },
   );
   const profile = resolveTargetIconProfile(input.targetName, input.target);
+  const backgroundColor = appIcon.backgroundColor ?? defaultBackgroundColor;
+  const variantSources = await loadVariantSources(input.gameRoot, appIcon, strict);
+  const renderConfigSha256 = createRenderConfigSha256({
+    canonicalSourcePath: loaded.appIcon.source,
+    appIcon,
+    backgroundColor,
+    canonical,
+    renderSource,
+    variantSources,
+    externalUrl: input.target.icon?.externalUrl,
+  });
   const outputDir = resolveTargetOutputDir(
     input.gameRoot,
     canonical.sha256,
@@ -206,6 +249,9 @@ export async function verifyExistingTargetIcons(input: {
     || manifest.targetProfileVersion !== profile.version
     || manifest.canonicalSource?.sha256 !== canonical.sha256
     || manifest.renderSource?.sha256 !== renderSource.sha256
+    || manifest.renderConfigSha256 !== renderConfigSha256
+    || typeof manifest.variantSources !== 'object'
+    || manifest.variantSources === null
     || !Array.isArray(manifest.outputs)
   ) {
     throw new Error(`Generated icon manifest is stale or incompatible: ${manifestPath}`);
@@ -225,16 +271,18 @@ export async function verifyExistingTargetIcons(input: {
       : {}),
   };
 
-  verifyGeneratedTargetIcons(result);
+  await verifyGeneratedTargetIcons(result);
   return result;
 }
 
-export function verifyGeneratedTargetIcons(result: GeneratedTargetIcons): void {
+export async function verifyGeneratedTargetIcons(result: GeneratedTargetIcons): Promise<void> {
   const manifestBytes = readFileSync(result.manifestPath);
 
   if (sha256(manifestBytes) !== result.manifestSha256) {
     throw new Error(`Stale icon manifest: ${result.manifestPath}`);
   }
+
+  assertManifestOutputsMatchProfile(result);
 
   for (const output of result.manifest.outputs) {
     const path = resolve(result.outputDir, output.path.slice('icons/'.length));
@@ -242,6 +290,18 @@ export function verifyGeneratedTargetIcons(result: GeneratedTargetIcons): void {
 
     if (sha256(bytes) !== output.sha256) {
       throw new Error(`Stale generated icon output: ${path}`);
+    }
+
+    if (await pixelSha256(bytes) !== output.pixelSha256) {
+      throw new Error(`Generated icon pixel digest mismatch: ${path}`);
+    }
+
+    if (output.opaque && !(await isPngOpaque(bytes))) {
+      throw new Error(`Generated icon expected to be opaque: ${path}`);
+    }
+
+    if (result.profile.id === 'devvit' && bytes.byteLength > 500_000) {
+      throw new Error(`Devvit marketing icon must be at most 500000 bytes: ${path}`);
     }
   }
 }
@@ -274,31 +334,143 @@ export function inspectGeneratedTargetIcons(result: GeneratedTargetIcons): strin
 }
 
 async function resolveOutputImage(input: {
-  readonly gameRoot: string;
   readonly appIcon: BrandAppIconConfig;
   readonly output: IconOutputProfile;
   readonly renderSource: ValidatedBrandImage;
-  readonly strict: boolean;
+  readonly variantSources: Partial<Record<BrandImageVariant, ValidatedBrandImage>>;
 }): Promise<ValidatedBrandImage | undefined> {
   if (input.output.sourceVariant === 'background' && input.appIcon.variants?.background === undefined) {
     return undefined;
   }
 
-  const configuredPath = input.output.sourceVariant === undefined
-    ? undefined
-    : input.appIcon.variants?.[input.output.sourceVariant];
-  const fallbackPath = input.output.fallbackVariant === undefined
-    ? undefined
-    : input.appIcon.variants?.[input.output.fallbackVariant];
-  const selectedPath = configuredPath ?? fallbackPath;
+  return (
+    (input.output.sourceVariant === undefined
+      ? undefined
+      : input.variantSources[input.output.sourceVariant])
+    ?? (input.output.fallbackVariant === undefined
+      ? undefined
+      : input.variantSources[input.output.fallbackVariant])
+    ?? input.renderSource
+  );
+}
 
-  if (selectedPath === undefined) {
-    return input.renderSource;
+async function loadVariantSources(
+  gameRoot: string,
+  appIcon: BrandAppIconConfig,
+  strict: boolean,
+): Promise<Partial<Record<BrandImageVariant, ValidatedBrandImage>>> {
+  const entries = await Promise.all(
+    brandImageVariants.map(async (variant) => {
+      const path = appIcon.variants?.[variant];
+
+      if (path === undefined) {
+        return undefined;
+      }
+
+      return [
+        variant,
+        await validateBrandImage(resolveSecureGamePath(gameRoot, path), { strict }),
+      ] as const;
+    }),
+  );
+
+  return Object.fromEntries(
+    entries.filter((entry): entry is NonNullable<typeof entry> => entry !== undefined),
+  );
+}
+
+function createRenderConfigSha256(input: {
+  readonly canonicalSourcePath: string;
+  readonly appIcon: BrandAppIconConfig;
+  readonly backgroundColor: string;
+  readonly canonical: ValidatedBrandImage;
+  readonly renderSource: ValidatedBrandImage;
+  readonly variantSources: Partial<Record<BrandImageVariant, ValidatedBrandImage>>;
+  readonly externalUrl: string | undefined;
+}): string {
+  return sha256(JSON.stringify({
+    canonicalSource: {
+      path: input.canonicalSourcePath,
+      sha256: input.canonical.sha256,
+    },
+    renderSource: {
+      path: input.appIcon.source,
+      sha256: input.renderSource.sha256,
+    },
+    backgroundColor: input.backgroundColor,
+    externalUrl: input.externalUrl ?? null,
+    variants: Object.fromEntries(
+      brandImageVariants.map((variant) => [
+        variant,
+        input.variantSources[variant] === undefined
+          ? null
+          : {
+              path: input.appIcon.variants?.[variant],
+              sha256: input.variantSources[variant].sha256,
+            },
+      ]),
+    ),
+  }));
+}
+
+async function assertOpaqueBackgroundColor(backgroundColor: string): Promise<void> {
+  let pixel: Buffer;
+
+  try {
+    pixel = await sharp({
+      create: { width: 1, height: 1, channels: 4, background: backgroundColor },
+    }).ensureAlpha().raw().toBuffer();
+  } catch (error) {
+    throw new Error(`Invalid app icon backgroundColor ${backgroundColor}: ${formatError(error)}`);
   }
 
-  return validateBrandImage(resolveSecureGamePath(input.gameRoot, selectedPath), {
-    strict: input.strict,
-  });
+  if (pixel[3] !== 255) {
+    throw new Error(
+      'App icon backgroundColor must be fully opaque for the selected target profile.',
+    );
+  }
+}
+
+function assertManifestOutputsMatchProfile(result: GeneratedTargetIcons): void {
+  const expectedOutputs = result.profile.outputs.filter(
+    (output) =>
+      output.requiredVariant !== true
+      || (output.sourceVariant !== undefined
+        && result.manifest.variantSources[output.sourceVariant] !== undefined),
+  );
+
+  if (result.manifest.outputs.length !== expectedOutputs.length) {
+    throw new Error(`Generated icon output count does not match ${result.profile.id} profile.`);
+  }
+
+  for (const expected of expectedOutputs) {
+    const path = `icons/${expected.file}`;
+    const matches = result.manifest.outputs.filter((output) => output.path === path);
+
+    if (matches.length !== 1) {
+      throw new Error(`Generated icon manifest must contain exactly one ${path} output.`);
+    }
+
+    const output = matches[0];
+
+    if (
+      output === undefined
+      || output.target !== result.target
+      || output.purpose !== expected.purpose
+      || output.width !== expected.width
+      || output.height !== expected.height
+      || output.format !== 'png'
+      || output.opaque !== expected.opaque
+      || !/^[0-9a-f]{64}$/u.test(output.sha256)
+      || !/^[0-9a-f]{64}$/u.test(output.pixelSha256)
+    ) {
+      throw new Error(`Generated icon manifest output does not match profile: ${path}`);
+    }
+  }
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 async function renderSolidBackground(
@@ -341,7 +513,15 @@ function createReadiness(
   }
 
   if (externalUrl !== undefined) {
-    if (!/^https:\/\//u.test(externalUrl)) {
+    let url: URL;
+
+    try {
+      url = new URL(externalUrl);
+    } catch {
+      throw new Error(`${input.targetName}.icon.externalUrl must be a valid HTTPS URL.`);
+    }
+
+    if (url.protocol !== 'https:' || url.hostname.length === 0) {
       throw new Error(`${input.targetName}.icon.externalUrl must use https.`);
     }
 

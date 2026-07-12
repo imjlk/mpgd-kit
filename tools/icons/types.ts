@@ -64,6 +64,8 @@ export interface IconManifest {
   readonly schemaVersion: typeof iconManifestSchemaVersion;
   readonly canonicalSource: IconManifestSource;
   readonly renderSource: IconManifestSource;
+  readonly variantSources: Partial<Record<BrandImageVariant, IconManifestSource>>;
+  readonly renderConfigSha256: string;
   readonly generatorVersion: string;
   readonly targetProfile: string;
   readonly targetProfileVersion: string;

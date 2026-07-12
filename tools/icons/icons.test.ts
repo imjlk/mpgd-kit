@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -40,7 +41,7 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   assert.equal(sourceDigests.size, 1);
 
   for (const result of results) {
-    verifyGeneratedTargetIcons(result);
+    await verifyGeneratedTargetIcons(result);
   }
 
   const microsoft = requireResult(results, 'microsoft-store');
@@ -157,6 +158,25 @@ async function testPngAndOverrides(parent: string): Promise<void> {
   assert.equal(maskable.opaque, true);
 
   await sharp({
+    create: { width: 1024, height: 1024, channels: 4, background: '#2563eb' },
+  }).png().toFile(join(gameRoot, 'assets/maskable.png'));
+  await assert.rejects(
+    verifyExistingTargetIcons({
+      gameRoot,
+      targetName: 'microsoft-store',
+      target,
+      profile: 'production',
+    }),
+    /stale or incompatible/u,
+  );
+  await generateTargetIcons({
+    gameRoot,
+    targetName: 'microsoft-store',
+    target,
+    profile: 'production',
+  });
+
+  await sharp({
     create: { width: 1024, height: 1024, channels: 4, background: '#7c3aed' },
   }).png().toFile(join(gameRoot, 'assets/icon.bin'));
   await assert.rejects(
@@ -248,6 +268,65 @@ async function testInvalidInputs(parent: string): Promise<void> {
       profile: 'production',
     }),
     /external references/u,
+  );
+
+  writeFileSync(join(gameRoot, 'assets/icon.svg'), simpleSvg('#ffffff'));
+  writeFileSync(
+    join(gameRoot, 'mpgd.game.json'),
+    JSON.stringify({
+      brand: { appIcon: { source: 'assets/icon.svg', backgroundColor: '#ffffff00' } },
+    }),
+  );
+  await assert.rejects(
+    generateTargetIcons({
+      gameRoot,
+      targetName: 'ios',
+      target: requireTarget(createTargets(gameRoot), 'ios'),
+      profile: 'production',
+    }),
+    /backgroundColor must be fully opaque/u,
+  );
+
+  writeGameConfig(gameRoot, 'assets/icon.svg');
+
+  const aitTarget = {
+    ...requireTarget(createTargets(gameRoot), 'ait'),
+    icon: { profile: 'ait', externalUrl: 'https://' },
+  } satisfies PlatformTargetConfig;
+  await assert.rejects(
+    generateTargetIcons({
+      gameRoot,
+      targetName: 'ait',
+      target: aitTarget,
+      profile: 'production',
+    }),
+    /valid HTTPS URL/u,
+  );
+
+  const noisyGameRoot = join(parent, 'oversized-devvit-game');
+  mkdirSync(join(noisyGameRoot, 'assets'), { recursive: true });
+  await sharp(randomBytes(1024 * 1024 * 3), {
+    raw: { width: 1024, height: 1024, channels: 3 },
+  }).png().toFile(join(noisyGameRoot, 'assets/icon.png'));
+  writeGameConfig(noisyGameRoot, 'assets/icon.png');
+  const devvitTarget = requireTarget(createTargets(noisyGameRoot), 'reddit');
+  await assert.rejects(
+    generateTargetIcons({
+      gameRoot: noisyGameRoot,
+      targetName: 'reddit',
+      target: devvitTarget,
+      profile: 'production',
+    }),
+    /at most 500000 bytes/u,
+  );
+  await assert.rejects(
+    verifyExistingTargetIcons({
+      gameRoot: noisyGameRoot,
+      targetName: 'reddit',
+      target: devvitTarget,
+      profile: 'production',
+    }),
+    /Generated icons are missing/u,
   );
 }
 

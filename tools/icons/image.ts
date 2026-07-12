@@ -138,6 +138,20 @@ export async function pixelSha256(bytes: Buffer): Promise<string> {
   return sha256(Buffer.concat([dimensions, data]));
 }
 
+export async function isPngOpaque(bytes: Buffer): Promise<boolean> {
+  const { data, info } = await sharp(bytes).ensureAlpha().raw().toBuffer({
+    resolveWithObject: true,
+  });
+
+  for (let offset = info.channels - 1; offset < data.length; offset += info.channels) {
+    if (data[offset] !== 255) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 export function sha256(input: Buffer | string): string {
   return createHash('sha256').update(input).digest('hex');
 }

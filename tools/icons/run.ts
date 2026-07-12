@@ -45,7 +45,7 @@ for (const targetName of requestedTargets) {
       });
 
   if (action === 'generate') {
-    verifyGeneratedTargetIcons(generated);
+    await verifyGeneratedTargetIcons(generated);
     if (target.kind === 'apps-in-toss' || target.kind === 'devvit-web') {
       stageWrapperIcon(
         generated,
