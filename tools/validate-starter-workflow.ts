@@ -194,7 +194,9 @@ function validatePhaserTemplateAcceptanceCommand(): void {
     || !runnerSource.includes('configuredKitPath.length === 0')
     || !runnerSource.includes("? '__DEFAULT_KIT_PATH__'")
   ) {
-    failures.push(`${runnerFile}: must resolve the CLI and kit path without shell expansion.`);
+    failures.push(
+      `${runnerFile}: must call the CLI API directly and resolve empty or missing kit paths without shell expansion.`,
+    );
   }
 
   for (const file of [acceptanceFile, manifestFile]) {
