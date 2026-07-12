@@ -180,6 +180,14 @@ VITE_MPGD_GAME_SERVICES_TRANSPORT=http
 Use `VITE_MPGD_GAME_SERVICES_TRANSPORT=orpc` with a `/rpc` URL when testing the
 oRPC client path.
 
+The starter delegates this policy to `createGameServicesRuntime`. Production
+mode is fail-closed: without `VITE_MPGD_GAME_SERVICES_URL`, the runtime returns
+`mode: 'disabled'` with `reason: 'missing_authoritative_backend'` and exposes no
+client. An explicitly supplied process-local backend is available only in
+`non-production` mode with `allowLocalBackend: true`; it must never be used to
+grant production purchases or ad rewards, or to accept production leaderboard
+records.
+
 ## Daily Loop
 
 ```sh

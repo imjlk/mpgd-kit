@@ -259,3 +259,10 @@ VITE_MPGD_GAME_SERVICES_TRANSPORT=http
 
 Use `VITE_MPGD_GAME_SERVICES_TRANSPORT=orpc` with a `/rpc` URL to test the oRPC
 client path.
+
+The generated starter uses `createGameServicesRuntime` for backend selection.
+Production builds fail closed when the URL is absent: Game Services reports
+`disabled` with `missing_authoritative_backend` and does not create a client.
+Process-local backends require both a non-production authority mode and an
+explicit `allowLocalBackend` opt-in, so they cannot manufacture successful
+production purchase, rewarded-ad, or leaderboard ledger results.
