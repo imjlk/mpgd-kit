@@ -160,6 +160,7 @@ validatePhaserTemplateAITConsoleCli();
 validatePhaserTemplateDevvitPostOperations();
 validatePhaserTemplateDevvitSurfaces();
 validatePhaserTemplateBuildGateways();
+validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
 validateAppIconPipeline();
 
@@ -168,6 +169,64 @@ if (failures.length > 0) {
 }
 
 console.log('Starter workflow validation passed.');
+
+function validatePhaserTemplateMicrosoftStorePwa(): void {
+  const exampleRoot = 'examples/phaser-starter';
+  const templateRoot = 'packages/cli/templates/phaser-game';
+  const runtimePath = 'src/platform/microsoftStorePwa.ts';
+  const exampleRuntime = `${exampleRoot}/${runtimePath}`;
+  const templateRuntime = `${templateRoot}/${runtimePath}`;
+
+  if (!existsSync(exampleRuntime) || !existsSync(templateRuntime)) {
+    failures.push('Starter and template must include the Microsoft Store PWA runtime helper.');
+    return;
+  } else if (readText(exampleRuntime) !== readText(templateRuntime)) {
+    failures.push(`${templateRuntime}: must stay in parity with ${exampleRuntime}.`);
+  }
+
+  for (const root of [exampleRoot, templateRoot]) {
+    const mainPath = `${root}/src/main.ts`;
+    const pwaManifestPath = `${root}/public/manifest.webmanifest`;
+    const main = readText(mainPath);
+    const pwaManifest = readJson(pwaManifestPath) as {
+      readonly id?: unknown;
+      readonly scope?: unknown;
+      readonly start_url?: unknown;
+    } | null;
+
+    assertIncludesText(
+      main,
+      "import { installMicrosoftStorePwa } from './platform/microsoftStorePwa'",
+      `${mainPath}: Microsoft Store PWA registration.`,
+    );
+    assertIncludesText(
+      main,
+      'installMicrosoftStorePwa(runtimeConfig)',
+      `${mainPath}: Microsoft Store PWA registration.`,
+    );
+
+    if (pwaManifest !== null) {
+      assertEqual(
+        pwaManifest.id,
+        root === exampleRoot ? './mpgd-phaser-starter' : './__GAME_NAME__',
+        `${pwaManifestPath}: stable game-specific PWA id`,
+      );
+      assertEqual(pwaManifest.scope, './', `${pwaManifestPath}: relative PWA scope`);
+      assertEqual(pwaManifest.start_url, './', `${pwaManifestPath}: relative PWA start URL`);
+    }
+  }
+
+  const readme = readText(`${templateRoot}/README.md`);
+
+  for (const requiredText of [
+    '`pwa-release.json`',
+    '`service-worker.js`',
+    '`mpgd:pwa-update-ready`',
+    '`skipWaiting()`',
+  ]) {
+    assertIncludesText(readme, requiredText, 'Phaser template Microsoft Store PWA guidance.');
+  }
+}
 
 function validatePhaserTemplateBuildGateways(): void {
   const exampleRoot = 'examples/phaser-starter';

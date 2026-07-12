@@ -1334,7 +1334,7 @@ function readConfiguredPath(value: string | undefined): string | undefined {
 }
 
 function readSourceGitSha(gameRoot: string): string {
-  const result = spawnSync('git', ['-C', gameRoot, 'rev-parse', '--short', 'HEAD'], {
+  const result = spawnSync('git', ['-C', gameRoot, 'rev-parse', 'HEAD'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });

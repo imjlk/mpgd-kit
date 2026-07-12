@@ -1,10 +1,15 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { Script } from 'node:vm';
 
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
 import { readJsonFile } from '../io';
+import {
+  createMicrosoftStorePwaRevision,
+  readMicrosoftStorePwaReleaseEvidence,
+} from '../target/microsoft-store-pwa';
 import { platformTargetsFilePath } from '../target/platform-targets';
 import {
   assertEmbeddedTargetConfig,
@@ -66,7 +71,12 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     assertPathInsideTargetBase(effectiveConfigPath, `${target} effective target config`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);
 
-    for (const requiredFile of requiredFilesForTarget(target, targetConfig, artifactPath)) {
+    for (const requiredFile of requiredFilesForTarget(
+      target,
+      targetConfig,
+      artifactPath,
+      entry.profile,
+    )) {
       assertFileExists(requiredFile, `${target} required file`);
     }
 
@@ -80,6 +90,11 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
 
     if (target === 'microsoft-store') {
       verifyMicrosoftStorePwaManifest(artifactPath);
+
+      if (entry.profile === 'production') {
+        verifyMicrosoftStorePwaRelease(artifactPath, manifest);
+      }
+
       verifyMicrosoftStoreBundlePurity(artifactPath);
     }
 
@@ -122,6 +137,113 @@ const forbiddenMicrosoftStoreJavaScriptMarkers = [
   ['DevvitBridgeError', 'Devvit adapter'],
   ['EFFECT_REALTIME_SUB', 'Devvit web client'],
 ] as const;
+
+function verifyMicrosoftStorePwaRelease(
+  artifactPath: string,
+  releaseManifest: ReleaseManifest,
+): void {
+  const evidence = readMicrosoftStorePwaReleaseEvidence(`${artifactPath}/pwa-release.json`);
+  const webManifest = readJsonFile(`${artifactPath}/manifest.webmanifest`);
+
+  assertRecord(webManifest, 'Microsoft Store PWA manifest');
+  assertString(webManifest.id, 'Microsoft Store PWA manifest id');
+
+  if (evidence.pwaId !== webManifest.id) {
+    throw new Error('PWA release evidence id must match manifest.webmanifest.');
+  }
+
+  if (
+    evidence.appVersion !== releaseManifest.gameVersion
+    || evidence.buildId !== releaseManifest.buildId
+    || evidence.sourceGitSha !== releaseManifest.gitSha
+    || evidence.kitGitSha !== releaseManifest.kitGitSha
+  ) {
+    throw new Error('PWA release provenance must match the release manifest.');
+  }
+
+  const entries = evidence.precacheUrls
+    .filter((url) => url !== './pwa-release.json')
+    .map((url) => {
+      const file = resolveArtifactWebFilePath(artifactPath, artifactPath, url);
+
+      assertPathInside(file, artifactPath, `PWA precache URL must stay inside artifact: ${url}`);
+      assertFileExists(file, `PWA precache artifact: ${url}`);
+
+      if (file.endsWith('.map')) {
+        throw new Error(`PWA precache must not include source maps: ${url}`);
+      }
+
+      return { url, source: readFileSync(file) };
+    });
+  const revision = createMicrosoftStorePwaRevision({
+    appVersion: evidence.appVersion,
+    buildId: evidence.buildId,
+    sourceGitSha: evidence.sourceGitSha,
+    kitGitSha: evidence.kitGitSha,
+    precacheEntries: entries,
+  });
+
+  if (revision !== evidence.revision) {
+    throw new Error('PWA release revision does not match its precached files.');
+  }
+
+  for (const requiredUrl of [
+    './index.html',
+    './manifest.webmanifest',
+    `./${embeddedTargetConfigFileName}`,
+    './pwa-release.json',
+  ]) {
+    if (!evidence.precacheUrls.includes(requiredUrl)) {
+      throw new Error(`PWA release is missing required precache URL: ${requiredUrl}`);
+    }
+  }
+
+  const indexHtml = readFileSync(`${artifactPath}/index.html`, 'utf8');
+  const localIndexUrls = [
+    ...indexHtml.matchAll(
+      /(?:href|src)\s*=\s*["'](?<url>(?:\.\/|\/)[^"'#?]+)["']/gu,
+    ),
+  ].flatMap((match) => {
+    const url = match.groups?.url;
+
+    if (url === undefined || url.startsWith('//')) {
+      return [];
+    }
+
+    const normalized = normalizeLocalWebPath(url);
+    return normalized.length === 0 ? [] : [`./${normalized}`];
+  });
+
+  for (const url of localIndexUrls) {
+    if (!evidence.precacheUrls.includes(url)) {
+      throw new Error(`PWA release does not precache index dependency: ${url}`);
+    }
+  }
+
+  const serviceWorker = readFileSync(`${artifactPath}/service-worker.js`, 'utf8');
+
+  new Script(serviceWorker, { filename: 'service-worker.js' });
+
+  if (
+    !serviceWorker.includes(JSON.stringify(evidence.cachePrefix))
+    || !serviceWorker.includes(JSON.stringify(evidence.cacheNamePattern))
+    || !serviceWorker.includes('encodeURIComponent(self.registration.scope)')
+  ) {
+    throw new Error('PWA service worker cache identity is stale or not deployment-scoped.');
+  }
+
+  if (/\bskipWaiting\s*\(/u.test(serviceWorker)) {
+    throw new Error('PWA service worker must preserve multi-window atomic updates.');
+  }
+
+  if (/\bcaches\.match\s*\(/u.test(serviceWorker)) {
+    throw new Error('PWA service worker must scope reads to its release cache.');
+  }
+
+  if (!/cache:\s*['"]reload['"]/u.test(serviceWorker)) {
+    throw new Error('PWA service worker install must bypass the HTTP cache.');
+  }
+}
 
 function verifyMicrosoftStoreBundlePurity(artifactPath: string): void {
   const javascriptFiles = listJavaScriptFiles(artifactPath);
@@ -325,11 +447,17 @@ function requiredFilesForTarget(
   target: string,
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
+  profile: string | undefined,
 ): readonly string[] {
   switch (targetConfig.kind) {
     case 'web':
-      return target === 'microsoft-store'
-        ? [`${artifactPath}/index.html`, `${artifactPath}/manifest.webmanifest`]
+      return target === 'microsoft-store' && profile === 'production'
+        ? [
+            `${artifactPath}/index.html`,
+            `${artifactPath}/manifest.webmanifest`,
+            `${artifactPath}/pwa-release.json`,
+            `${artifactPath}/service-worker.js`,
+          ]
         : [`${artifactPath}/index.html`];
     case 'apps-in-toss':
       if (artifactPath.endsWith('.ait')) {

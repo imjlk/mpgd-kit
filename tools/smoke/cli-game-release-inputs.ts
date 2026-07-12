@@ -164,7 +164,7 @@ function assertReleaseInputs(captured: Record<string, string>, source: string): 
 }
 
 function currentGitSha(): string {
-  const result = spawnSync('git', ['rev-parse', '--short', 'HEAD'], {
+  const result = spawnSync('git', ['rev-parse', 'HEAD'], {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
   });

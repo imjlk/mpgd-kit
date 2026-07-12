@@ -14,11 +14,13 @@ import { createStarterGame } from './runtime/createGame';
 import { detectRuntime } from './platform/runtimeDetector';
 import { createStarterGameServices } from './platform/gameServices';
 import { installPlatform } from './platform/installPlatform';
+import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
 await bootstrap();
 
 async function bootstrap(): Promise<void> {
   let locale: Locale = 'en';
+  let disposeMicrosoftStorePwa: (() => void) | undefined;
 
   try {
     if (__APP_TARGET__ === 'ait') {
@@ -27,6 +29,7 @@ async function bootstrap(): Promise<void> {
     }
 
     const runtimeConfig = detectRuntime();
+    disposeMicrosoftStorePwa = installMicrosoftStorePwa(runtimeConfig);
     const platform = await installPlatform(runtimeConfig);
     const runtime = await platform.getTargetRuntime();
     const orientationPolicy = {
@@ -82,6 +85,7 @@ async function bootstrap(): Promise<void> {
       },
     });
   } catch (error) {
+    disposeMicrosoftStorePwa?.();
     renderBootstrapError(error, locale);
     console.error('[bootstrap]', error);
   }

@@ -19,7 +19,11 @@ import { assertProductionTargetReadiness } from '../../packages/cli/src/producti
 import { generateTargetIcons, verifyGeneratedTargetIcons } from '../icons/generator';
 import { stageNativeIconResources, stageWebIconEvidence, stageWrapperIcon } from '../icons/staging';
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
-import { createReleaseManifestWriter } from './generate-release-manifest';
+import { createReleaseManifestWriter, resolveReleaseProvenance } from './generate-release-manifest';
+import {
+  assertMicrosoftStorePwaProvenance,
+  writeMicrosoftStorePwaArtifacts,
+} from './microsoft-store-pwa';
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
 import {
   effectiveTargetConfigOutputDir,
@@ -30,7 +34,8 @@ import {
 import type { PlatformTargetConfig } from './schemas';
 
 const [targetName = 'web-preview', profile = 'production'] = process.argv.slice(2);
-const writeCapturedReleaseManifest = createReleaseManifestWriter();
+const releaseProvenance = resolveReleaseProvenance();
+const writeCapturedReleaseManifest = createReleaseManifestWriter(releaseProvenance);
 const releaseManifestEnvKeys = [
   'APP_VERSION',
   'BUILD_ID',
@@ -103,6 +108,7 @@ const env: NodeJS.ProcessEnv = {
   MPGD_CONFIG_TARGET: targetName,
   APP_VERSION: process.env.APP_VERSION ?? '0.0.0',
   BUILD_ID: process.env.BUILD_ID ?? 'local',
+  MPGD_SOURCE_GIT_SHA: releaseProvenance.sourceGitSha,
   MPGD_PLATFORM_TARGETS_FILE: platformTargets.path,
   MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveTargetConfigOutputDir(configBaseDir),
   MPGD_ICON_MANIFEST_PATH: generatedIcons.manifestPath,
@@ -111,9 +117,30 @@ const env: NodeJS.ProcessEnv = {
     : { MPGD_AIT_BRAND_ICON_URL: generatedIcons.aitBrandIcon }),
 };
 
+if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
+  assertMicrosoftStorePwaProvenance({
+    appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
+    buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
+    sourceGitSha: releaseProvenance.sourceGitSha,
+    kitGitSha: releaseProvenance.kitGitSha,
+  });
+}
+
 run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
 embedEffectiveTargetConfig(targetName, gameApp, env);
 stageWebIconEvidence(generatedIcons, `${gameApp}/dist`);
+
+if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: `${gameApp}/dist`,
+    provenance: {
+      appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
+      buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
+      sourceGitSha: releaseProvenance.sourceGitSha,
+      kitGitSha: releaseProvenance.kitGitSha,
+    },
+  });
+}
 
 switch (target.kind) {
   case 'web': {

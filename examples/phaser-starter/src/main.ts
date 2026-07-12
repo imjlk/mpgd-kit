@@ -11,46 +11,58 @@ import { createStarterGame } from './runtime/createGame';
 import { detectRuntime } from './platform/runtimeDetector';
 import { createStarterGameServices } from './platform/gameServices';
 import { installStarterPlatform } from './platform/installStarterPlatform';
+import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
-const runtimeConfig = detectRuntime();
-const platform = await installStarterPlatform(runtimeConfig);
-const runtime = await platform.getTargetRuntime();
-const orientationPolicy = {
-  mode: 'responsive',
-} as const satisfies TargetViewportOrientationPolicy;
-const viewport = resolveTargetViewportPlan({
-  ...measureGameViewport(),
-  runtime: runtime.config.runtime,
-  orientationPolicy,
-});
-const player =
-  (await platform.identity.getPlayer()) ?? {
-    playerId: 'local-player',
-    displayName: 'Local Player',
-  };
-const [identitySession, launchIntent] = await Promise.all([
-  resolveIdentitySession(platform, player.playerId),
-  resolveLaunchIntent(platform),
-]);
-const locale = resolveMpgdLocale(runtime.capabilities);
-const gameServices = createStarterGameServices({
-  gateway: platform,
-  playerId: identitySession.playerId ?? player.playerId,
-});
+await bootstrapStarter();
 
-createStarterGame({
-  mountId: 'game',
-  context: {
-    platform,
-    runtime,
-    viewport,
-    player,
-    identitySession,
-    launchIntent,
-    locale,
-    gameServices,
-  },
-});
+async function bootstrapStarter(): Promise<void> {
+  const runtimeConfig = detectRuntime();
+  const disposeMicrosoftStorePwa = installMicrosoftStorePwa(runtimeConfig);
+
+  try {
+    const platform = await installStarterPlatform(runtimeConfig);
+    const runtime = await platform.getTargetRuntime();
+    const orientationPolicy = {
+      mode: 'responsive',
+    } as const satisfies TargetViewportOrientationPolicy;
+    const viewport = resolveTargetViewportPlan({
+      ...measureGameViewport(),
+      runtime: runtime.config.runtime,
+      orientationPolicy,
+    });
+    const player =
+      (await platform.identity.getPlayer()) ?? {
+        playerId: 'local-player',
+        displayName: 'Local Player',
+      };
+    const [identitySession, launchIntent] = await Promise.all([
+      resolveIdentitySession(platform, player.playerId),
+      resolveLaunchIntent(platform),
+    ]);
+    const locale = resolveMpgdLocale(runtime.capabilities);
+    const gameServices = createStarterGameServices({
+      gateway: platform,
+      playerId: identitySession.playerId ?? player.playerId,
+    });
+
+    createStarterGame({
+      mountId: 'game',
+      context: {
+        platform,
+        runtime,
+        viewport,
+        player,
+        identitySession,
+        launchIntent,
+        locale,
+        gameServices,
+      },
+    });
+  } catch (error) {
+    disposeMicrosoftStorePwa();
+    throw error;
+  }
+}
 
 async function resolveIdentitySession(
   platform: PlatformGateway,

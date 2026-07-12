@@ -2,14 +2,15 @@
   "name": "mpgd Phaser Starter",
   "short_name": "mpgd Starter",
   "description": "Starter Phaser game for mpgd multi-platform targets.",
-  "start_url": "/",
-  "scope": "/",
+  "id": "./mpgd-phaser-starter",
+  "start_url": "./",
+  "scope": "./",
   "display": "standalone",
   "background_color": "#121826",
   "theme_color": "#2f7df6",
   "icons": [
     {
-      "src": "/assets/starter-logo.svg",
+      "src": "./assets/starter-logo.svg",
       "sizes": "any",
       "type": "image/svg+xml"
     }
