@@ -53,7 +53,7 @@ jobs:
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm validate:targets
         if: ${{ env.IS_RELEASE_PR != 'true' }}
-      - run: pnpm test
+      - run: pnpm build:packages
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist backend/*/dist native-plugins/*/dist
         if: ${{ env.IS_RELEASE_PR != 'true' }}
@@ -77,6 +77,8 @@ jobs:
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target microsoft-store
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
+      - run: pnpm test
         if: ${{ env.IS_RELEASE_PR != 'true' }}
 
       - uses: actions/upload-artifact@v6
