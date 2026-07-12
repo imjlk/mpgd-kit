@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import {
   renderGameAcceptanceMarkdown,
+  resolveGameAcceptanceReleaseManifestFile,
   runGameAcceptance,
   runMpgdCli,
   type GameAcceptanceCommandRunner,
@@ -14,6 +15,19 @@ import {
 const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'mpgd-game-acceptance-'));
 const reportDir = path.join(fixtureRoot, 'core-report');
 const releaseManifestFile = path.join(fixtureRoot, 'artifacts/release-manifest.json');
+
+assert.equal(
+  resolveGameAcceptanceReleaseManifestFile(fixtureRoot, {
+    MPGD_RELEASE_MANIFEST_FILE: 'custom/release.json',
+  }),
+  path.join(fixtureRoot, 'custom/release.json'),
+);
+assert.equal(
+  resolveGameAcceptanceReleaseManifestFile(fixtureRoot, {
+    MPGD_RELEASE_MANIFEST_FILE: path.resolve(fixtureRoot, '../external-release.json'),
+  }),
+  path.resolve(fixtureRoot, '../external-release.json'),
+);
 
 try {
   const commands: string[] = [];

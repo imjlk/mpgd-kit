@@ -3,6 +3,17 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 export const defaultGameAcceptanceCommandTimeoutMs = 30 * 60 * 1_000;
+const defaultGameAcceptanceReleaseManifestFile = 'artifacts/release-manifest.json';
+
+export function resolveGameAcceptanceReleaseManifestFile(
+  gameRoot: string,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  return path.resolve(
+    gameRoot,
+    env.MPGD_RELEASE_MANIFEST_FILE ?? defaultGameAcceptanceReleaseManifestFile,
+  );
+}
 
 export type GameAcceptanceStatus = 'failed' | 'passed';
 export type GameAcceptanceStepStatus = 'failed' | 'passed' | 'skipped';

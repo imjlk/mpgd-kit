@@ -17,12 +17,14 @@ import { cli } from 'gunshi';
 
 import {
   defaultGameAcceptanceCommandTimeoutMs,
+  resolveGameAcceptanceReleaseManifestFile,
   runGameAcceptance,
   type GameAcceptanceStep,
 } from './game-acceptance.js';
 
 export {
   renderGameAcceptanceMarkdown,
+  resolveGameAcceptanceReleaseManifestFile,
   runGameAcceptance,
   defaultGameAcceptanceCommandTimeoutMs,
   type GameAcceptanceCommandResult,
@@ -617,7 +619,7 @@ function acceptGame(input: AcceptGameInput): void {
     reportDir,
     ...(input.skipTargetBuild
       ? {}
-      : { releaseManifestFile: path.join(gameRoot, 'artifacts/release-manifest.json') }),
+      : { releaseManifestFile: resolveGameAcceptanceReleaseManifestFile(gameRoot) }),
     options: {
       targets: input.targets,
       profile: input.profile,
