@@ -271,6 +271,7 @@ function assertKitGitShaSchema(): void {
   const kitGitShaSchema = schema.properties?.kitGitSha;
 
   assert.equal(schema.required?.includes('kitGitSha'), true);
+  assert.ok(kitGitShaSchema, 'kitGitSha schema must exist.');
   assert.deepEqual(kitGitShaSchema, {
     type: 'string',
     pattern: '^[0-9a-f]{40}$',
@@ -280,6 +281,7 @@ function assertKitGitShaSchema(): void {
 
   assert.match(firstKitGitSha, kitGitShaPattern);
   assert.doesNotMatch(firstKitGitSha.slice(1), kitGitShaPattern);
+  assert.doesNotMatch('A'.repeat(40), kitGitShaPattern);
 }
 
 function catalogJson(version: string): string {
