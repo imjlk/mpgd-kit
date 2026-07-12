@@ -6,8 +6,10 @@
   "required": [
     "releaseId",
     "gitSha",
+    "kitGitSha",
     "gameVersion",
     "buildId",
+    "targetConfigVersion",
     "catalogVersion",
     "adPlacementVersion",
     "targets"
@@ -15,8 +17,10 @@
   "properties": {
     "releaseId": { "type": "string", "minLength": 1 },
     "gitSha": { "type": "string", "minLength": 1 },
+    "kitGitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "gameVersion": { "type": "string", "minLength": 1 },
     "buildId": { "type": "string", "minLength": 1 },
+    "targetConfigVersion": { "type": "string", "minLength": 1 },
     "catalogVersion": { "type": "string", "minLength": 1 },
     "adPlacementVersion": { "type": "string", "minLength": 1 },
     "targets": {

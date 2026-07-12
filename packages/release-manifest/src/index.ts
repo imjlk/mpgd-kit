@@ -18,7 +18,10 @@ export interface ReleaseTargetManifest {
 
 export interface ReleaseManifest {
   readonly releaseId: string;
+  /** Revision of the downstream game source used for this build. */
   readonly gitSha: string;
+  /** Revision of mpgd-kit that generated the target artifacts. */
+  readonly kitGitSha: string;
   readonly gameVersion: string;
   readonly buildId: string;
   readonly targetConfigVersion: string;
@@ -27,4 +30,15 @@ export interface ReleaseManifest {
   readonly targets: Record<string, ReleaseTargetManifest>;
 }
 
-export const assertReleaseManifest = typia.createAssert<ReleaseManifest>();
+const assertReleaseManifestStructure = typia.createAssert<ReleaseManifest>();
+const fullGitShaPattern = /^[0-9a-f]{40}$/u;
+
+export function assertReleaseManifest(input: unknown): ReleaseManifest {
+  const manifest = assertReleaseManifestStructure(input);
+
+  if (!fullGitShaPattern.test(manifest.kitGitSha)) {
+    throw new TypeError('Release manifest kitGitSha must be a lowercase 40-character SHA.');
+  }
+
+  return manifest;
+}
