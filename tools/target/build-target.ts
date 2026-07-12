@@ -12,6 +12,9 @@ import {
 } from 'node:fs';
 import { dirname, join, relative } from 'node:path';
 
+import { loadEnv } from 'vite';
+
+import { assertProductionTargetReadiness } from '../../packages/cli/src/production-target-readiness';
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 import { createReleaseManifestWriter } from './generate-release-manifest';
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
@@ -76,6 +79,19 @@ if (target === undefined) {
 
 const gameApp = targetPath(target.gameApp);
 const appTarget = appTargetForBuild(target, targetName);
+const gameServicesUrl = profile === 'production'
+  ? (process.env.VITE_MPGD_GAME_SERVICES_URL
+    ?? loadEnv(profile, gameApp, 'VITE_MPGD_').VITE_MPGD_GAME_SERVICES_URL)
+  : process.env.VITE_MPGD_GAME_SERVICES_URL;
+
+assertProductionTargetReadiness({
+  target: targetName,
+  profile,
+  targetsFile: platformTargets.path,
+  gameRoot: configBaseDir,
+  ...(gameServicesUrl === undefined ? {} : { gameServicesUrl }),
+});
+
 const env: NodeJS.ProcessEnv = {
   ...process.env,
   ...monetizationCatalogEnv,

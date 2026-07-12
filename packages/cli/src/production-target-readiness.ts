@@ -1,4 +1,4 @@
-import { readFileSync, realpathSync } from 'node:fs';
+import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
 
@@ -46,12 +46,18 @@ export function assertProductionTargetReadiness(
   }
 
   const ownerPath = targetConfig[ownerPathKey];
+  const webDir = targetConfig.webDir;
 
   if (typeof ownerPath !== 'string' || ownerPath.length === 0) {
     throw new Error(`Production target ${input.target} is missing ${ownerPathKey}.`);
   }
 
+  if (typeof webDir !== 'string' || webDir.length === 0) {
+    throw new Error(`Production target ${input.target} is missing webDir.`);
+  }
+
   const resolvedOwnerPath = path.resolve(path.dirname(input.targetsFile), ownerPath);
+  const resolvedWebDir = path.resolve(path.dirname(input.targetsFile), webDir);
   const canonicalGameRoot = readCanonicalPath(input.gameRoot, 'game root');
   const canonicalOwnerPath = readCanonicalPath(
     resolvedOwnerPath,
@@ -63,6 +69,18 @@ export function assertProductionTargetReadiness(
       `Production target ${input.target} must use a game-owned ${ownerPathKey} inside `
         + `${canonicalGameRoot}; received ${canonicalOwnerPath}. `
         + 'Use a non-production profile for kit reference wrapper/shell smoke builds.',
+    );
+  }
+
+  const canonicalWebDir = readCanonicalPathAllowingMissingTail(
+    resolvedWebDir,
+    `${input.target} webDir`,
+  );
+
+  if (!isDedicatedChildPath(canonicalOwnerPath, canonicalWebDir)) {
+    throw new Error(
+      `Production target ${input.target} must keep webDir inside its game-owned `
+        + `${ownerPathKey} ${canonicalOwnerPath}; received ${canonicalWebDir}.`,
     );
   }
 
@@ -101,6 +119,24 @@ function readCanonicalPath(candidate: string, label: string): string {
   } catch (error) {
     throw new Error(`Production ${label} must exist: ${candidate} (${formatError(error)})`);
   }
+}
+
+function readCanonicalPathAllowingMissingTail(candidate: string, label: string): string {
+  let existingPath = candidate;
+  const missingSegments: string[] = [];
+
+  while (!existsSync(existingPath)) {
+    const parent = path.dirname(existingPath);
+
+    if (parent === existingPath) {
+      throw new Error(`Production ${label} has no existing ancestor: ${candidate}`);
+    }
+
+    missingSegments.unshift(path.basename(existingPath));
+    existingPath = parent;
+  }
+
+  return path.join(readCanonicalPath(existingPath, label), ...missingSegments);
 }
 
 function assertAuthoritativeGameServicesUrl(
@@ -189,6 +225,13 @@ function isNonPublicIpv6(address: string): boolean {
   }
 
   if (words.slice(0, 5).every((word) => word === 0) && words[5] === 0xffff) {
+    return isNonPublicIpv4(
+      `${(words[6] ?? 0) >> 8}.${(words[6] ?? 0) & 0xff}.`
+        + `${(words[7] ?? 0) >> 8}.${(words[7] ?? 0) & 0xff}`,
+    );
+  }
+
+  if (words.slice(0, 6).every((word) => word === 0)) {
     return isNonPublicIpv4(
       `${(words[6] ?? 0) >> 8}.${(words[6] ?? 0) & 0xff}.`
         + `${(words[7] ?? 0) >> 8}.${(words[7] ?? 0) & 0xff}`,

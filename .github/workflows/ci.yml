@@ -121,7 +121,7 @@ jobs:
           name: package-dist-ci
           path: ${{ runner.temp }}
       - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
-      - run: pnpm build:android
+      - run: pnpm build:target android staging
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target android
@@ -158,7 +158,7 @@ jobs:
           name: package-dist-ci
           path: ${{ runner.temp }}
       - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
-      - run: pnpm build:ios
+      - run: pnpm build:target ios staging
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target ios
@@ -194,7 +194,7 @@ jobs:
           name: package-dist-ci
           path: ${{ runner.temp }}
       - run: tar -xzf "$RUNNER_TEMP/package-dist.tgz"
-      - run: pnpm build:ait
+      - run: pnpm build:target ait staging
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
       - run: pnpm smoke:target ait

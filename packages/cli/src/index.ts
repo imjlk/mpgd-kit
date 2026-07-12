@@ -15,8 +15,6 @@ import i18n, { defineI18n } from '@gunshi/plugin-i18n';
 import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
 
-import { assertProductionTargetReadiness } from './production-target-readiness';
-
 export {
   assertProductionTargetReadiness,
   type ProductionTargetReadinessInput,
@@ -1396,20 +1394,6 @@ function runTargetCommand(input: {
   const target = normalizeBuildTarget(input.target);
   const env = withTargetVariantEnv(target, input.variant, input.env);
   const profile = input.profile ?? 'production';
-
-  if (input.action === 'build') {
-    const targetsFile = readConfiguredTargetsFile(env);
-
-    assertProductionTargetReadiness({
-      target,
-      profile,
-      targetsFile,
-      gameRoot: path.dirname(targetsFile),
-      ...(env.VITE_MPGD_GAME_SERVICES_URL === undefined
-        ? {}
-        : { gameServicesUrl: env.VITE_MPGD_GAME_SERVICES_URL }),
-    });
-  }
 
   const args = input.action === 'build'
     ? ['build:target', target, profile]

@@ -17,9 +17,9 @@ try {
   mkdirSync(outsideRoot, { recursive: true });
 
   writeTargets({
-    ait: { wrapperApp: 'apps/target-ait' },
-    android: { shellApp: 'apps/mobile-capacitor' },
-    ios: { shellApp: 'apps/mobile-capacitor' },
+    ait: { wrapperApp: 'apps/target-ait', webDir: 'apps/target-ait/public/game' },
+    android: { shellApp: 'apps/mobile-capacitor', webDir: 'apps/mobile-capacitor/www' },
+    ios: { shellApp: 'apps/mobile-capacitor', webDir: 'apps/mobile-capacitor/www' },
   });
 
   for (const target of ['ait', 'android', 'ios']) {
@@ -75,6 +75,8 @@ try {
     'https://[ff00::1]',
     'https://[2001:db8::1]',
     'https://[::ffff:10.0.0.1]',
+    'https://[::10.0.0.1]',
+    'https://[::192.168.0.1]',
   ]) {
     expectReadinessError(
       { target: 'ait', profile: 'production', gameServicesUrl: url },
@@ -86,6 +88,7 @@ try {
     'https://services.example.com.',
     'https://8.8.8.8',
     'https://[2606:4700:4700::1111]',
+    'https://[::8.8.8.8]',
   ]) {
     assertProductionTargetReadiness({
       target: 'ait',
@@ -96,30 +99,62 @@ try {
     });
   }
 
-  writeTargets({ ait: { wrapperApp: '.' } });
+  writeTargets({ ait: { wrapperApp: '.', webDir: 'public/game' } });
   expectReadinessError(
     { target: 'ait', profile: 'production', gameServicesUrl: publicBackend },
     'must use a game-owned wrapperApp',
   );
 
-  writeTargets({ ait: { wrapperApp: '../outside' } });
+  writeTargets({ ait: { wrapperApp: '../outside', webDir: '../outside/www' } });
   expectReadinessError(
     { target: 'ait', profile: 'production', gameServicesUrl: publicBackend },
     'must use a game-owned wrapperApp',
   );
 
   symlinkSync(outsideRoot, join(gameRoot, 'apps', 'escaped-wrapper'));
-  writeTargets({ ait: { wrapperApp: 'apps/escaped-wrapper' } });
+  writeTargets({
+    ait: { wrapperApp: 'apps/escaped-wrapper', webDir: 'apps/escaped-wrapper/public/game' },
+  });
   expectReadinessError(
     { target: 'ait', profile: 'production', gameServicesUrl: publicBackend },
     'must use a game-owned wrapperApp',
   );
 
-  writeTargets({ ait: { wrapperApp: 'apps/missing-wrapper' } });
+  writeTargets({
+    ait: { wrapperApp: 'apps/missing-wrapper', webDir: 'apps/missing-wrapper/public/game' },
+  });
   expectReadinessError(
     { target: 'ait', profile: 'production', gameServicesUrl: publicBackend },
     'must exist',
   );
+
+  writeTargets({
+    ait: { wrapperApp: 'apps/target-ait', webDir: '../outside' },
+  });
+  expectReadinessError(
+    { target: 'ait', profile: 'production', gameServicesUrl: publicBackend },
+    'must keep webDir inside',
+  );
+
+  symlinkSync(outsideRoot, join(gameRoot, 'apps', 'target-ait', 'escaped-web'));
+  writeTargets({
+    ait: { wrapperApp: 'apps/target-ait', webDir: 'apps/target-ait/escaped-web/game' },
+  });
+  expectReadinessError(
+    { target: 'ait', profile: 'production', gameServicesUrl: publicBackend },
+    'must keep webDir inside',
+  );
+
+  writeTargets({
+    ait: { wrapperApp: 'apps/target-ait', webDir: 'apps/target-ait/generated/game' },
+  });
+  assertProductionTargetReadiness({
+    target: 'ait',
+    profile: 'production',
+    targetsFile,
+    gameRoot,
+    gameServicesUrl: publicBackend,
+  });
 
   writeTargets({ android: {} });
   expectReadinessError(
