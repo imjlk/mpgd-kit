@@ -38,6 +38,9 @@ export async function installStarterPlatform(
     config: targetConfig,
     catalog: productCatalog,
     adPlacements,
+    ...(__MPGD_PLATFORM_TARGET__ === undefined
+      ? {}
+      : { platformTarget: __MPGD_PLATFORM_TARGET__ }),
   });
 
   return withTargetAvailability(gateway, targetConfig, {

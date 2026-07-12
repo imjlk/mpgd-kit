@@ -1,11 +1,18 @@
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import ttsc from '@ttsc/unplugin/vite';
 import { defineConfig } from 'vite';
 
+interface RuntimePlatformTargetMetadata {
+  readonly kind: string;
+  readonly adapter: string;
+  readonly integrations?: Record<string, unknown>;
+}
+
 export default defineConfig(({ mode }) => {
   const isProduction = mode === 'production';
+  const platformTarget = readRuntimePlatformTarget();
 
   return {
     base: './',
@@ -21,6 +28,8 @@ export default defineConfig(({ mode }) => {
     define: {
       __APP_TARGET__: JSON.stringify(process.env.APP_TARGET ?? 'browser'),
       __MPGD_CONFIG_TARGET__: JSON.stringify(process.env.MPGD_CONFIG_TARGET ?? ''),
+      __MPGD_PLATFORM_TARGET__:
+        platformTarget === undefined ? 'undefined' : JSON.stringify(platformTarget),
       __APP_VERSION__: JSON.stringify(process.env.APP_VERSION ?? '0.0.0-dev'),
       __BUILD_ID__: JSON.stringify(process.env.BUILD_ID ?? 'local'),
       __SOURCE_GIT_SHA__: JSON.stringify(process.env.MPGD_SOURCE_GIT_SHA ?? 'uncommitted'),
@@ -66,6 +75,45 @@ function createCatalogAliases(): Record<string, string> {
 function readConfiguredPath(value: string | undefined): string | undefined {
   const normalized = value?.trim();
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
+}
+
+function readRuntimePlatformTarget(): RuntimePlatformTargetMetadata | undefined {
+  const targetsFile = readConfiguredPath(process.env.MPGD_PLATFORM_TARGETS_FILE);
+  const configTarget = readConfiguredPath(process.env.MPGD_CONFIG_TARGET);
+
+  if (targetsFile === undefined || configTarget === undefined) {
+    return undefined;
+  }
+
+  const parsed = JSON.parse(readFileSync(resolve(targetsFile), 'utf8')) as unknown;
+
+  if (!isRecord(parsed) || !isRecord(parsed.targets)) {
+    throw new Error('MPGD_PLATFORM_TARGETS_FILE must contain a targets object.');
+  }
+
+  const target = parsed.targets[configTarget];
+
+  if (!isRecord(target)) {
+    throw new Error(`Missing platform target metadata for ${configTarget}.`);
+  }
+
+  if (typeof target.kind !== 'string' || typeof target.adapter !== 'string') {
+    throw new Error(`Platform target ${configTarget} must define kind and adapter.`);
+  }
+
+  if (target.integrations !== undefined && !isRecord(target.integrations)) {
+    throw new Error(`Platform target ${configTarget} integrations must be an object.`);
+  }
+
+  return {
+    kind: target.kind,
+    adapter: target.adapter,
+    ...(target.integrations === undefined ? {} : { integrations: target.integrations }),
+  };
+}
+
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === 'object' && input !== null && !Array.isArray(input);
 }
 
 function resolveCatalogPath(path: string, pairedPath: string): string {

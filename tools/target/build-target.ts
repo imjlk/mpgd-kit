@@ -71,6 +71,7 @@ const env: NodeJS.ProcessEnv = {
   MPGD_CONFIG_TARGET: targetName,
   APP_VERSION: process.env.APP_VERSION ?? '0.0.0',
   BUILD_ID: process.env.BUILD_ID ?? 'local',
+  MPGD_PLATFORM_TARGETS_FILE: platformTargets.path,
   MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveTargetConfigOutputDir(configBaseDir),
 };
 

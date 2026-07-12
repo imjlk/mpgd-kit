@@ -343,7 +343,9 @@ export function createTargetRuntimeSnapshot(input: {
     leaderboard: getFeatureAvailability('leaderboard', input.config, input.capabilities),
     localization: getFeatureAvailability('localization', input.config, input.capabilities),
   } satisfies Record<PlatformFeature, FeatureAvailability>;
-  const integrationConfig = normalizeTargetIntegrationConfig(input.config.integrations);
+  const integrationConfig = normalizeTargetIntegrationConfig(
+    input.effectiveConfig?.integrations ?? input.config.integrations,
+  );
   const integrationEntries = targetIntegrations.map((integration) => {
     const availability = createIntegrationAvailability(
       integration,
@@ -394,7 +396,9 @@ export function withTargetAvailability(
     notifications: gatewayNotifications,
     ...gatewayWithoutIntegrations
   } = gateway;
-  const integrations = normalizeTargetIntegrationConfig(config.integrations);
+  const integrations = normalizeTargetIntegrationConfig(
+    options.effectiveConfig?.integrations ?? config.integrations,
+  );
   const isIntegrationAvailable = (integration: TargetIntegration): boolean => (
     createIntegrationAvailability(integration, integrations[integration], gateway).state
       === 'available'
