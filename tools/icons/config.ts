@@ -28,13 +28,13 @@ export function loadGameBrandConfig(gameRoot: string): LoadedGameBrandConfig {
   if (brand.appIcon !== undefined) {
     appIcon = readAppIconConfig(brand.appIcon, 'brand.appIcon');
   } else {
-    const legacyIcon = readOptionalString(brand.icon);
+    const legacyIcon = readOptionalString(brand.icon, 'brand.icon');
 
     if (legacyIcon === undefined) {
       throw new Error('mpgd.game.json brand.appIcon.source is required.');
     }
 
-    const legacyMaskable = readOptionalString(brand.maskableIcon);
+    const legacyMaskable = readOptionalString(brand.maskableIcon, 'brand.maskableIcon');
     warnings.push('brand.icon and brand.maskableIcon are deprecated; migrate to brand.appIcon.');
     appIcon = {
       source: legacyIcon,
@@ -54,8 +54,16 @@ export function applyTargetIconOverride(
   }
 
   assertRecord(override, 'target icon override');
-  const source = readOptionalString(override.source) ?? base.source;
-  const backgroundColor = readOptionalString(override.backgroundColor) ?? base.backgroundColor;
+  assertSupportedKeys(
+    override,
+    ['profile', 'source', 'backgroundColor', 'variants', 'externalUrl'],
+    'target icon override',
+  );
+  const source = readOptionalString(override.source, 'target icon override.source') ?? base.source;
+  const backgroundColor = readOptionalString(
+    override.backgroundColor,
+    'target icon override.backgroundColor',
+  ) ?? base.backgroundColor;
   const variants = {
     ...base.variants,
     ...readVariants(override.variants, 'target icon override variants'),
@@ -97,8 +105,9 @@ export function toGameRelativePath(gameRoot: string, path: string): string {
 
 function readAppIconConfig(input: unknown, label: string): BrandAppIconConfig {
   assertRecord(input, label);
+  assertSupportedKeys(input, ['source', 'backgroundColor', 'variants'], label);
   const source = readRequiredString(input.source, `${label}.source`);
-  const backgroundColor = readOptionalString(input.backgroundColor);
+  const backgroundColor = readOptionalString(input.backgroundColor, `${label}.backgroundColor`);
   const variants = readVariants(input.variants, `${label}.variants`);
 
   return {
@@ -120,7 +129,7 @@ function readVariants(
   const variants: Partial<Record<BrandImageVariant, string>> = {};
 
   for (const name of variantNames) {
-    const path = readOptionalString(input[name]);
+    const path = readOptionalString(input[name], `${label}.${name}`);
 
     if (path !== undefined) {
       variants[name] = path;
@@ -136,6 +145,18 @@ function readVariants(
   return variants;
 }
 
+function assertSupportedKeys(
+  input: Record<string, unknown>,
+  supportedKeys: readonly string[],
+  label: string,
+): void {
+  for (const key of Object.keys(input)) {
+    if (!supportedKeys.includes(key)) {
+      throw new Error(`${label}.${key} is not supported.`);
+    }
+  }
+}
+
 function assertRecord(input: unknown, label: string): asserts input is Record<string, unknown> {
   if (typeof input !== 'object' || input === null || Array.isArray(input)) {
     throw new Error(`${label} must be an object.`);
@@ -143,20 +164,17 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 }
 
 function readRequiredString(input: unknown, label: string): string {
-  const value = readOptionalString(input);
-
-  if (value === undefined) {
+  if (typeof input !== 'string' || input.trim().length === 0) {
     throw new Error(`${label} must be a non-empty string.`);
   }
 
-  return value;
+  return input.trim();
 }
 
-function readOptionalString(input: unknown): string | undefined {
-  if (typeof input !== 'string') {
+function readOptionalString(input: unknown, label: string): string | undefined {
+  if (input === undefined) {
     return undefined;
   }
 
-  const value = input.trim();
-  return value.length === 0 ? undefined : value;
+  return readRequiredString(input, label);
 }

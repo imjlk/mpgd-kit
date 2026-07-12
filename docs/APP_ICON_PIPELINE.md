@@ -27,6 +27,10 @@ Scripts, event handlers, external images, external stylesheets, and external
 URLs are rejected. Production validation also rejects SVG text so output does
 not depend on an ambient font installation.
 
+Configured optional fields must be non-empty strings. Unknown `appIcon`,
+target override, and variant keys fail validation instead of silently falling
+back to a different asset.
+
 Legacy `brand.icon` and `brand.maskableIcon` fields are normalized with a
 deprecation warning. New games should use `brand.appIcon`.
 
