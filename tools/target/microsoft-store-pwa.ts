@@ -33,11 +33,23 @@ interface PrecacheEntry {
   readonly source: string | Uint8Array;
 }
 
+export function assertMicrosoftStorePwaProvenance(
+  input: MicrosoftStorePwaProvenance,
+): MicrosoftStorePwaProvenance {
+  return {
+    appVersion: requireNonEmptyString(input.appVersion, 'PWA app version'),
+    buildId: requireNonEmptyString(input.buildId, 'PWA build ID'),
+    sourceGitSha: requireGitSha(input.sourceGitSha, 'PWA source Git SHA'),
+    kitGitSha: requireGitSha(input.kitGitSha, 'PWA kit Git SHA'),
+  };
+}
+
 export function writeMicrosoftStorePwaArtifacts(input: {
   readonly artifactRoot: string;
   readonly provenance: MicrosoftStorePwaProvenance;
 }): MicrosoftStorePwaReleaseEvidence {
   const artifactRoot = resolve(input.artifactRoot);
+  const provenance = assertMicrosoftStorePwaProvenance(input.provenance);
   const manifest = readJsonFile(`${artifactRoot}/manifest.webmanifest`);
   const pwaId = readPwaId(manifest);
   const artifactEntries = listPrecacheEntries(artifactRoot);
@@ -46,11 +58,11 @@ export function writeMicrosoftStorePwaArtifacts(input: {
     './pwa-release.json',
   ].sort(compareCodeUnits);
   const revision = createMicrosoftStorePwaRevision({
-    ...input.provenance,
+    ...provenance,
     precacheEntries: artifactEntries,
   });
   const evidence = createMicrosoftStorePwaReleaseEvidence({
-    ...input.provenance,
+    ...provenance,
     pwaId,
     revision,
     precacheUrls,
@@ -316,12 +328,30 @@ function requirePrecacheUrl(value: string): string {
     || url.includes('\\')
     || url.includes('?')
     || url.includes('#')
-    || url.split('/').includes('..')
+    || hasDotSegment(url)
   ) {
     throw new Error(`Unsafe PWA precache URL: ${url}`);
   }
 
   return url;
+}
+
+function hasDotSegment(url: string): boolean {
+  for (const segment of url.slice(2).split('/')) {
+    let decoded: string;
+
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return true;
+    }
+
+    if (decoded === '.' || decoded === '..') {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function readPwaId(input: unknown): string {

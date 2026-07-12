@@ -20,7 +20,10 @@ import { generateTargetIcons, verifyGeneratedTargetIcons } from '../icons/genera
 import { stageNativeIconResources, stageWebIconEvidence, stageWrapperIcon } from '../icons/staging';
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 import { createReleaseManifestWriter, resolveReleaseProvenance } from './generate-release-manifest';
-import { writeMicrosoftStorePwaArtifacts } from './microsoft-store-pwa';
+import {
+  assertMicrosoftStorePwaProvenance,
+  writeMicrosoftStorePwaArtifacts,
+} from './microsoft-store-pwa';
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
 import {
   effectiveTargetConfigOutputDir,
@@ -113,6 +116,15 @@ const env: NodeJS.ProcessEnv = {
     ? {}
     : { MPGD_AIT_BRAND_ICON_URL: generatedIcons.aitBrandIcon }),
 };
+
+if (targetName === 'microsoft-store' && target.kind === 'web') {
+  assertMicrosoftStorePwaProvenance({
+    appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
+    buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
+    sourceGitSha: releaseProvenance.sourceGitSha,
+    kitGitSha: releaseProvenance.kitGitSha,
+  });
+}
 
 run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
 embedEffectiveTargetConfig(targetName, gameApp, env);

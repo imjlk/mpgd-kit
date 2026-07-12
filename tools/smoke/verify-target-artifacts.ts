@@ -190,11 +190,23 @@ function verifyMicrosoftStorePwaRelease(
   }
 
   const indexHtml = readFileSync(`${artifactPath}/index.html`, 'utf8');
-  const localIndexUrls = [...indexHtml.matchAll(/(?:href|src)="(\.[^"#?]+)"/gu)]
-    .map((match) => match[1]);
+  const localIndexUrls = [
+    ...indexHtml.matchAll(
+      /(?:href|src)\s*=\s*["'](?<url>(?:\.\/|\/)[^"'#?]+)["']/gu,
+    ),
+  ].flatMap((match) => {
+    const url = match.groups?.url;
+
+    if (url === undefined || url.startsWith('//')) {
+      return [];
+    }
+
+    const normalized = normalizeLocalWebPath(url);
+    return normalized.length === 0 ? [] : [`./${normalized}`];
+  });
 
   for (const url of localIndexUrls) {
-    if (url !== undefined && !evidence.precacheUrls.includes(url)) {
+    if (!evidence.precacheUrls.includes(url)) {
       throw new Error(`PWA release does not precache index dependency: ${url}`);
     }
   }

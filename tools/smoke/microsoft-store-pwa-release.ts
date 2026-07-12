@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
 
 import {
+  assertMicrosoftStorePwaProvenance,
   createMicrosoftStorePwaReleaseEvidence,
   createMicrosoftStorePwaRevision,
   createMicrosoftStorePwaServiceWorker,
@@ -96,6 +97,22 @@ assert.throws(
     precacheUrls: ['./index.html'],
   }),
   /must be game-specific/u,
+);
+assert.throws(
+  () => assertMicrosoftStorePwaProvenance({
+    ...provenance,
+    sourceGitSha: 'uncommitted',
+  }),
+  /full 40-character hexadecimal SHA/u,
+);
+assert.throws(
+  () => createMicrosoftStorePwaReleaseEvidence({
+    ...provenance,
+    pwaId: './fixture-game',
+    revision,
+    precacheUrls: ['./%2e%2e/escape.js'],
+  }),
+  /Unsafe PWA precache URL/u,
 );
 
 const artifactRoot = mkdtempSync(resolve(tmpdir(), 'mpgd-pwa-release-'));
