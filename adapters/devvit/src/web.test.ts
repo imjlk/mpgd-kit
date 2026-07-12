@@ -67,4 +67,12 @@ describe('presentDevvitShareSheet', () => {
       status: 'cancelled',
     });
   });
+
+  it('recognizes cross-realm AbortError-shaped rejections', async () => {
+    showShareSheet.mockRejectedValueOnce({ name: 'AbortError' });
+
+    await expect(presentDevvitShareSheet({ text: 'Try this challenge' })).resolves.toEqual({
+      status: 'cancelled',
+    });
+  });
 });

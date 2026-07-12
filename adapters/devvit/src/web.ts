@@ -71,7 +71,9 @@ export async function presentDevvitShareSheet(
 }
 
 function isAbortError(error: unknown): boolean {
-  return typeof error === 'object'
-    && error !== null
-    && Reflect.get(error, 'name') === 'AbortError';
+  return typeof DOMException !== 'undefined' && error instanceof DOMException
+    ? error.name === 'AbortError'
+    : typeof error === 'object'
+      && error !== null
+      && (error as { readonly name?: unknown }).name === 'AbortError';
 }
