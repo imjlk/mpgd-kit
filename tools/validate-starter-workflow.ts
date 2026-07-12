@@ -401,7 +401,10 @@ function validatePhaserTemplateDevvitPostOperations(): void {
   const templateReadmePath =
     'packages/cli/templates/phaser-game/apps/target-devvit/README.md';
 
-  for (const packagePath of [kitPackagePath, templatePackagePath]) {
+  for (const [packagePath, expectedVersion] of [
+    [kitPackagePath, 'workspace:*'],
+    [templatePackagePath, '__MPGD_DEPENDENCY_VERSION_ADAPTER_DEVVIT__'],
+  ] as const) {
     if (!existsSync(packagePath)) {
       failures.push(`${packagePath}: required for durable Devvit post operations.`);
       continue;
@@ -412,8 +415,9 @@ function validatePhaserTemplateDevvitPostOperations(): void {
     } | null;
 
     if (packageJson !== null) {
-      assertString(
+      assertEqual(
         packageJson.dependencies?.['@mpgd/adapter-devvit'],
+        expectedVersion,
         `${packagePath}: dependencies.@mpgd/adapter-devvit`,
       );
     }
@@ -453,11 +457,11 @@ function validatePhaserTemplateDevvitPostOperations(): void {
     const readme = readText(templateReadmePath);
 
     for (const requiredText of [
-      'duplicate-safe',
-      'ambiguity-safe',
-      'not exactly-once',
+      '## Durable Post Operations',
       'postOperationStore.ts',
-      'never blindly calls the submit function again',
+      '@mpgd/adapter-devvit/server',
+      '`reconciliation-required`',
+      '`reconcile`',
     ]) {
       assertIncludesText(
         readme,
