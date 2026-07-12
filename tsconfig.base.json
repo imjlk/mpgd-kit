@@ -18,6 +18,8 @@
       "@mpgd/bridge/cloudflare-pages": ["./packages/bridge/src/cloudflare-pages.ts"],
       "@mpgd/bridge/orpc": ["./packages/bridge/src/orpc.ts"],
       "@mpgd/adapter-devvit/server": ["./adapters/devvit/src/server/index.ts"],
+      "@mpgd/adapter-devvit/surface": ["./adapters/devvit/src/surface.ts"],
+      "@mpgd/adapter-devvit/web": ["./adapters/devvit/src/web.ts"],
       "@mpgd/catalog/*": ["./packages/catalog/*"],
       "@mpgd/game-services/*": ["./packages/game-services/src/*"],
       "@mpgd/adapter-*": ["./adapters/*/src"],

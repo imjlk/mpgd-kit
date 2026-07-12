@@ -38,6 +38,10 @@
       "owner": "apps/target-devvit"
     },
     {
+      "id": "platform.devvit.surface-split",
+      "owner": "src/platform/devvitEntrypoint.ts"
+    },
+    {
       "id": "services.backend.game-services",
       "owner": "src/platform/gameServices.ts"
     },

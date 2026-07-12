@@ -30,6 +30,11 @@ compiled to `dist/server/index.cjs` and keeps Devvit SDK imports out of Phaser s
 The game root pins `@mpgd/cli`, so these commands use the same CLI version as the generated
 starter's other `@mpgd/*` dependencies.
 
+The default post entry uses `index.html` for a lightweight inline preview. Its
+Play button requests the `game` entrypoint, which loads the separate
+`game.html` Phaser document. Keep inline UI free of game runtime imports so the
+card remains lightweight before expansion.
+
 ## Durable Post Operations
 
 Use `src/server/postOperationStore.ts` with `@mpgd/adapter-devvit/server` for a

@@ -13,6 +13,8 @@ interface RuntimePlatformTargetMetadata {
 export default defineConfig(({ mode }) => {
   const isProduction = mode === 'production';
   const platformTarget = readRuntimePlatformTarget();
+  const appTarget = process.env.APP_TARGET ?? 'browser';
+  const isDevvitBuild = appTarget === 'reddit';
 
   return {
     base: './',
@@ -26,7 +28,7 @@ export default defineConfig(({ mode }) => {
       alias: createCatalogAliases(),
     },
     define: {
-      __APP_TARGET__: JSON.stringify(process.env.APP_TARGET ?? 'browser'),
+      __APP_TARGET__: JSON.stringify(appTarget),
       __MPGD_CONFIG_TARGET__: JSON.stringify(process.env.MPGD_CONFIG_TARGET ?? ''),
       __MPGD_PLATFORM_TARGET__:
         platformTarget === undefined ? 'undefined' : JSON.stringify(platformTarget),
@@ -42,8 +44,16 @@ export default defineConfig(({ mode }) => {
       assetsDir: 'assets',
       emptyOutDir: true,
       rolldownOptions: {
+        ...(isDevvitBuild
+          ? {
+              input: {
+                preview: resolve('index.html'),
+                game: resolve('game.html'),
+              },
+            }
+          : {}),
         output: {
-          entryFileNames: 'assets/game.js',
+          entryFileNames: isDevvitBuild ? 'assets/[name].js' : 'assets/game.js',
           chunkFileNames: 'assets/[name].js',
           assetFileNames: 'assets/[name][extname]',
         },

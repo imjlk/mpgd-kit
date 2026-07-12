@@ -207,7 +207,7 @@ function requiredFilesForTarget(
 
       return [`${artifactPath}/index.html`, `${artifactPath}/game/index.html`];
     case 'devvit-web':
-      return [`${artifactPath}/client/index.html`];
+      return [`${artifactPath}/client/index.html`, `${artifactPath}/client/game.html`];
     case 'capacitor-android':
     case 'capacitor-ios':
       return [];
@@ -301,6 +301,25 @@ function verifyDevvitWebManifest(
     `${label} default post entry must target the built client index`,
   );
   assertFileExists(defaultPostEntryPath, `${label} default post entry`);
+
+  const gameEntrypoint = entrypoints.game;
+  assertRecord(gameEntrypoint, `${label} game post entrypoint`);
+  assertString(gameEntrypoint.entry, `${label} game post entry`);
+  const gamePostEntryPath = resolveDevvitManifestFile(
+    postDir,
+    gameEntrypoint.entry,
+    `${label} game post entry`,
+    {
+      allowQueryString: true,
+    },
+  );
+
+  assertPathEqual(
+    gamePostEntryPath,
+    resolve(expectedPostDir, 'game.html'),
+    `${label} game post entry must target the expanded client document`,
+  );
+  assertFileExists(gamePostEntryPath, `${label} game post entry`);
 
   const server = manifest.server;
   assertRecord(server, `${label} server`);

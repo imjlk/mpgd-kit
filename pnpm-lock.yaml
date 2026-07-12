@@ -73,7 +73,7 @@ importers:
         version: 7.0.1-rc
       typia:
         specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
+        version: 13.0.0-rc.2(@types/node@24.13.2)
       vite:
         specifier: ^8.1.3
         version: 8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(jiti@1.21.7)(terser@5.48.0)(yaml@2.9.0)
@@ -140,6 +140,9 @@ importers:
 
   adapters/devvit:
     dependencies:
+      '@devvit/web':
+        specifier: 0.13.6
+        version: 0.13.6(twirp-ts@2.5.0)
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../../packages/bridge
@@ -457,7 +460,7 @@ importers:
         version: link:../platform
       typia:
         specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
+        version: 13.0.0-rc.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -473,7 +476,7 @@ importers:
         version: link:../platform
       typia:
         specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
+        version: 13.0.0-rc.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -495,7 +498,7 @@ importers:
         version: 2.0.0-beta.14
       typia:
         specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
+        version: 13.0.0-rc.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -511,7 +514,7 @@ importers:
         version: link:../platform
       typia:
         specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
+        version: 13.0.0-rc.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -631,7 +634,7 @@ importers:
     dependencies:
       typia:
         specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
+        version: 13.0.0-rc.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -758,7 +761,7 @@ importers:
     dependencies:
       typia:
         specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
+        version: 13.0.0-rc.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -777,7 +780,7 @@ importers:
         version: link:../platform
       typia:
         specifier: rc
-        version: 13.0.0-rc.1(@types/node@24.13.2)
+        version: 13.0.0-rc.2(@types/node@24.13.2)
     devDependencies:
       ttsc:
         specifier: 0.16.9
@@ -4700,6 +4703,9 @@ packages:
   '@typia/interface@13.0.0-rc.1':
     resolution: {integrity: sha512-zZEmDL+GRRGRhmFeWG/N9hQhV8zMdEm0cK3u4iFT9ry1dZU7bNE8TzFXRpu89LNVHLnttEkj5nkEWbgoeRYldQ==}
 
+  '@typia/interface@13.0.2':
+    resolution: {integrity: sha512-8MnKq/vs90KA1iydscUubBzP2C6qXYL4vlW83giWV8ZzCfROtyyczx29P2ZH0tvN6yRd6qQlnx6sAB4YAmr7QA==}
+
   '@typia/mcp@13.0.0-rc.1':
     resolution: {integrity: sha512-5O+gDDWTkPnIdmeYjtpxiGVUFJGlcmcJzc65HmFsuEIVwJOTD2CEXc6BEwIa/9fGhYx6Eine4fZMUZ6fxhuYOQ==}
     peerDependencies:
@@ -4707,6 +4713,9 @@ packages:
 
   '@typia/utils@13.0.0-rc.1':
     resolution: {integrity: sha512-UQZHcSLSOV0UEy4FfP1Eo5u6K81OEPirEnNUw4g3ALkC5W9tm0l+NGoyMtm3mZ5zMTKlLzui2TWfgg651qJ72A==}
+
+  '@typia/utils@13.0.2':
+    resolution: {integrity: sha512-xBaSdfviUgGJPdunaxKI/KFI5AFubDag2BYy8O+fd64yVaNgh/OaaWnOuHU2M7m+88pyR2WeVz0BisHcUJ7V7A==}
 
   '@vitest/expect@4.1.9':
     resolution: {integrity: sha512-vl/rYsUKcBr3SnQn166+XR5ZQcgMx3DQhFWdfli/cWpLnLUmbxZvyrJZotLFUryib+LtArYMSTJ5RbQ57ZqrlA==}
@@ -9074,6 +9083,10 @@ packages:
 
   typia@13.0.0-rc.1:
     resolution: {integrity: sha512-eS+Xp7OvMbv2mqQiok1SmPPmEEqEe3oJhaoWpiUiOOvRSTQ2bIcufZpRydnNX+MDPqL/qRM7R4kkDUymjCpffg==}
+    hasBin: true
+
+  typia@13.0.0-rc.2:
+    resolution: {integrity: sha512-O4ylbNFZg7KxWZ8x+mak5/JIHD0PgDZeiv1KT6yMX8i+/XuhAC2lMu9uDamroDckhIBqqNKOUZmata/jRdhlvw==}
     hasBin: true
 
   ufo@1.6.4:
@@ -15456,6 +15469,8 @@ snapshots:
 
   '@typia/interface@13.0.0-rc.1': {}
 
+  '@typia/interface@13.0.2': {}
+
   '@typia/mcp@13.0.0-rc.1(@modelcontextprotocol/sdk@1.29.0(zod@4.4.3))':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
@@ -15465,6 +15480,10 @@ snapshots:
   '@typia/utils@13.0.0-rc.1':
     dependencies:
       '@typia/interface': 13.0.0-rc.1
+
+  '@typia/utils@13.0.2':
+    dependencies:
+      '@typia/interface': 13.0.2
 
   '@vitest/expect@4.1.9':
     dependencies:
@@ -21057,6 +21076,18 @@ snapshots:
       '@standard-schema/spec': 1.1.0
       '@typia/interface': 13.0.0-rc.1
       '@typia/utils': 13.0.0-rc.1
+      commander: 10.0.1
+      inquirer: 8.2.7(@types/node@24.13.2)
+      randexp: 0.5.3
+      tinyglobby: 0.2.17
+    transitivePeerDependencies:
+      - '@types/node'
+
+  typia@13.0.0-rc.2(@types/node@24.13.2):
+    dependencies:
+      '@standard-schema/spec': 1.1.0
+      '@typia/interface': 13.0.2
+      '@typia/utils': 13.0.2
       commander: 10.0.1
       inquirer: 8.2.7(@types/node@24.13.2)
       randexp: 0.5.3

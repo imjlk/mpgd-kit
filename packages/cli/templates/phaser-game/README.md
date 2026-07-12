@@ -126,6 +126,12 @@ The generated `devvit.json` app name is a Devvit-safe slug derived from the game
 directory name; edit it before `devvit:init` if you need a different Reddit app
 name.
 
+The default post entry builds a lightweight inline preview without importing
+Phaser. Its Play button requests the separate `game` entrypoint, whose
+`game.html` document starts the Phaser bundle directly. Keep these physical
+entries separate when customizing the preview so Reddit cards do not pay the
+game runtime cost before expansion.
+
 First-time Devvit setup:
 
 ```sh
