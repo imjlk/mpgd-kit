@@ -16,12 +16,7 @@ await runMpgdCli([
   'game',
   'accept',
   gameRoot,
-  '--targets',
-  'default',
-  '--profile',
-  'staging',
-  '--ait-variant',
-  'wrapper',
   '--kit-path',
   kitPath,
+  ...process.argv.slice(2),
 ]);

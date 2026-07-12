@@ -156,6 +156,20 @@ try {
   assert.match(escapedMarkdown, /Game root: root \\\*game\\\* &lt;tag&gt; next/u);
   assert.match(escapedMarkdown, /artifacts\/\\\[release\\\]\\\*\.json next/u);
 
+  writeFileSync(path.join(fixtureRoot, 'relative-release.json'), '{"version":1}\n');
+  const relativeEvidence = runGameAcceptance({
+    gameRoot: fixtureRoot,
+    reportDir: path.join(fixtureRoot, 'relative-evidence-report'),
+    releaseManifestFile: 'relative-release.json',
+    options: {},
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  assert.equal(relativeEvidence.report.evidence.releaseManifest?.found, true);
+  assert.deepEqual(relativeEvidence.report.evidence.releaseManifest?.value, { version: 1 });
+
   const timedOut = runGameAcceptance({
     gameRoot: fixtureRoot,
     reportDir: path.join(fixtureRoot, 'timeout-report'),

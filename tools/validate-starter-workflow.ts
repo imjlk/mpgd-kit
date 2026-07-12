@@ -193,6 +193,7 @@ function validatePhaserTemplateAcceptanceCommand(): void {
     !runnerSource.includes("import { runMpgdCli } from '@mpgd/cli'")
     || !runnerSource.includes('configuredKitPath.length === 0')
     || !runnerSource.includes("? '__DEFAULT_KIT_PATH__'")
+    || !runnerSource.includes('...process.argv.slice(2)')
   ) {
     failures.push(
       `${runnerFile}: must call the CLI API directly and resolve empty or missing kit paths without shell expansion.`,

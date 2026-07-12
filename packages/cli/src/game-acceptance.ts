@@ -313,7 +313,7 @@ function readOptionalJsonEvidence(
     return null;
   }
 
-  const resolved = path.resolve(file);
+  const resolved = path.resolve(gameRoot, file);
   const displayFile = relativeOrAbsolute(gameRoot, resolved);
 
   if (!existsSync(resolved)) {
