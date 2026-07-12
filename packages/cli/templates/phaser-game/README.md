@@ -32,6 +32,7 @@ pnpm exec mpgd target build-all \
   --targets-file ./mpgd.targets.json \
   --kit-path ../mpgd-kit \
   --targets web,microsoft-store,ait,reddit \
+  --profile staging \
   --ait-variant wrapper
 pnpm exec mpgd target smoke-all \
   --targets-file ./mpgd.targets.json \
@@ -51,12 +52,22 @@ pnpm --dir ../mpgd-kit mpgd target build-all \
   --targets-file "$PWD/mpgd.targets.json" \
   --kit-path ../mpgd-kit \
   --targets web,microsoft-store,ait,reddit \
+  --profile staging \
   --ait-variant wrapper
 ```
 
 `mpgd.targets.json` contains `${MPGD_KIT_PATH}` tokens. The CLI resolves them
 into `.mpgd.targets.generated.json` before calling the kit's existing target
 build and smoke scripts.
+
+The starter's Apps in Toss and Capacitor entries intentionally point at kit
+reference wrappers, so their reusable validation builds use the `staging`
+profile. Before an AIT, Android, or iOS production build, copy or create the
+wrapper/shell under this game directory, update `mpgd.targets.json`, and set
+`VITE_MPGD_GAME_SERVICES_URL` to a public HTTPS endpoint without embedded
+credentials. Production preflight resolves real paths, rejects wrappers or
+shells outside the game root (including symbolic-link escapes), and blocks
+localhost plus literal private or reserved IP addresses.
 
 `mpgd target doctor` verifies that release manifest artifact paths stay under
 this game directory, even when a build used the kit reference Apps in Toss or

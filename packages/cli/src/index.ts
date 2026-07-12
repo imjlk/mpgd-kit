@@ -15,6 +15,11 @@ import i18n, { defineI18n } from '@gunshi/plugin-i18n';
 import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
 
+export {
+  assertProductionTargetReadiness,
+  type ProductionTargetReadinessInput,
+} from './production-target-readiness.js';
+
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolvePackageRoot(sourceDir);
 const detectedKitRoot = resolveDefaultKitRoot();
@@ -869,6 +874,7 @@ function createGameApp(input: {
       '  mpgd target build-all',
       `--targets-file ${path.join(appDir, 'mpgd.targets.json')}`,
       `--targets ${recommendedMatrixTargets}`,
+      '--profile staging',
       '--ait-variant wrapper',
       '--kit-path <path-to-mpgd-kit>',
     ].join(' '),
@@ -1387,10 +1393,11 @@ function runTargetCommand(input: {
 }): void {
   const target = normalizeBuildTarget(input.target);
   const env = withTargetVariantEnv(target, input.variant, input.env);
-  const args =
-    input.action === 'build'
-      ? ['build:target', target, input.profile ?? 'production']
-      : ['smoke:target', target];
+  const profile = input.profile ?? 'production';
+
+  const args = input.action === 'build'
+    ? ['build:target', target, profile]
+    : ['smoke:target', target];
 
   console.log(`[mpgd] ${input.action} ${target}`);
   runPnpm(args, env);
