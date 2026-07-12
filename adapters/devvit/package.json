@@ -42,7 +42,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run"
+    "test": "vitest run && node test/server-dist-import.mjs"
   },
   "dependencies": {
     "@mpgd/bridge": "workspace:*",

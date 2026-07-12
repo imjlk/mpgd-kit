@@ -1,4 +1,4 @@
-import type { DevvitDurableOperationStore } from './post-operation';
+import type { DevvitDurableOperationStore } from './post-operation.js';
 
 const defaultTransactionAttempts = 3;
 const maximumTransactionAttempts = 32;
@@ -14,7 +14,7 @@ export interface DevvitRedisTransactionLike {
   discard(): Promise<unknown>;
   set(key: string, value: string, options?: DevvitRedisSetOptions): Promise<unknown>;
   del(...keys: readonly string[]): Promise<unknown>;
-  exec(): Promise<readonly unknown[]>;
+  exec(): Promise<readonly unknown[] | null>;
   unwatch(): Promise<unknown>;
 }
 
@@ -118,6 +118,10 @@ async function mutateIfValue(input: {
       await input.queueMutation(transaction);
 
       const results = await transaction.exec();
+
+      if (results === null) {
+        continue;
+      }
 
       if (!Array.isArray(results)) {
         throw new Error('Devvit Redis transaction returned an unsupported response.');

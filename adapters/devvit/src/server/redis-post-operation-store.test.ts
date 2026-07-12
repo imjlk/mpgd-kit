@@ -71,6 +71,16 @@ describe('createDevvitRedisPostOperationStore', () => {
     expect(redis.watchCalls).toBe(2);
   });
 
+  it('retries a null transaction abort as contention', async () => {
+    const redis = new FakeDevvitRedis([['operation', 'pending']]);
+    redis.execOutcomes.push('null-contention', 'success');
+    const store = createDevvitRedisPostOperationStore(redis, { transactionAttempts: 2 });
+
+    await expect(store.compareAndSet('operation', 'pending', 'published')).resolves.toBe(true);
+    await expect(store.read('operation')).resolves.toBe('published');
+    expect(redis.watchCalls).toBe(2);
+  });
+
   it('throws instead of reporting false when transaction contention is exhausted', async () => {
     const redis = new FakeDevvitRedis([['operation', 'pending']]);
     redis.execOutcomes.push('contention', 'contention');
@@ -145,8 +155,9 @@ describe('createDevvitRedisPostOperationStore', () => {
 type ExecOutcome =
   | 'success'
   | 'contention'
+  | 'null-contention'
   | Error
-  | (() => 'success' | 'contention' | Error);
+  | (() => 'success' | 'contention' | 'null-contention' | Error);
 
 class FakeDevvitRedis implements DevvitRedisLike {
   readonly values: Map<string, string>;
@@ -188,7 +199,7 @@ class FakeDevvitRedis implements DevvitRedisLike {
     return new FakeDevvitRedisTransaction(this, key);
   }
 
-  nextExecOutcome(): 'success' | 'contention' | Error {
+  nextExecOutcome(): 'success' | 'contention' | 'null-contention' | Error {
     const configured = this.execOutcomes.shift() ?? 'success';
 
     return typeof configured === 'function' ? configured() : configured;
@@ -230,7 +241,7 @@ class FakeDevvitRedisTransaction implements DevvitRedisTransactionLike {
     };
   }
 
-  async exec(): Promise<readonly unknown[]> {
+  async exec(): Promise<readonly unknown[] | null> {
     const outcome = this.redis.nextExecOutcome();
 
     if (outcome instanceof Error) {
@@ -239,6 +250,9 @@ class FakeDevvitRedisTransaction implements DevvitRedisTransactionLike {
 
     if (outcome === 'contention') {
       return [];
+    }
+    if (outcome === 'null-contention') {
+      return null;
     }
 
     this.mutation?.();
