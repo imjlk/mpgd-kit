@@ -15,6 +15,13 @@ import i18n, { defineI18n } from '@gunshi/plugin-i18n';
 import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
 
+import { assertProductionTargetReadiness } from './production-target-readiness';
+
+export {
+  assertProductionTargetReadiness,
+  type ProductionTargetReadinessInput,
+} from './production-target-readiness';
+
 const sourceDir = path.dirname(fileURLToPath(import.meta.url));
 const packageRoot = resolvePackageRoot(sourceDir);
 const detectedKitRoot = resolveDefaultKitRoot();
@@ -869,6 +876,7 @@ function createGameApp(input: {
       '  mpgd target build-all',
       `--targets-file ${path.join(appDir, 'mpgd.targets.json')}`,
       `--targets ${recommendedMatrixTargets}`,
+      '--profile staging',
       '--ait-variant wrapper',
       '--kit-path <path-to-mpgd-kit>',
     ].join(' '),
@@ -1387,6 +1395,21 @@ function runTargetCommand(input: {
 }): void {
   const target = normalizeBuildTarget(input.target);
   const env = withTargetVariantEnv(target, input.variant, input.env);
+
+  if (input.action === 'build') {
+    const targetsFile = readConfiguredTargetsFile(env);
+
+    assertProductionTargetReadiness({
+      target,
+      profile: input.profile ?? 'production',
+      targetsFile,
+      gameRoot: path.dirname(targetsFile),
+      ...(env.VITE_MPGD_GAME_SERVICES_URL === undefined
+        ? {}
+        : { gameServicesUrl: env.VITE_MPGD_GAME_SERVICES_URL }),
+    });
+  }
+
   const args =
     input.action === 'build'
       ? ['build:target', target, input.profile ?? 'production']
