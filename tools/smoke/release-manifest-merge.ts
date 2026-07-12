@@ -103,6 +103,7 @@ try {
     firstCatalogFile,
     failedGitManifestFile,
     {
+      expectedGitReadCount: 1,
       gitExitCode: 65,
       kitGitShas: [firstKitGitSha],
       sourceGitSha: 'game-source-sha',
@@ -117,6 +118,7 @@ try {
     firstCatalogFile,
     emptyGitManifestFile,
     {
+      expectedGitReadCount: 1,
       kitGitShas: [''],
       sourceGitSha: 'game-source-sha',
     },
