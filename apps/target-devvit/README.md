@@ -39,3 +39,24 @@ pnpm --dir apps/target-devvit dev
 
 `devvit playtest`, `devvit upload`, and `devvit publish` are intentionally kept
 as local commands because they use Reddit auth state from the developer machine.
+
+## AI-assisted Devvit development
+
+Devvit provides an optional MCP server for targeted documentation search and
+deployed-app log inspection. See the official
+[Devvit AI Tools guide](https://developers.reddit.com/docs/guides/ai), then
+register it once in the developer's global Codex configuration:
+
+```sh
+codex mcp add devvit -- npx -y @devvit/mcp
+```
+
+Restart Codex or begin a new task after registering it. Use `devvit_search`
+before broad Devvit documentation exploration. Use the experimental
+`devvit_logs` tool for a deployed app and subreddit when diagnosing production
+or playtest behavior, and confirm its findings with local tests and
+`devvit playtest`.
+
+The MCP server is an agent-side aid only. It is not required by the game build,
+must not be bundled into target artifacts, and does not replace Devvit CLI
+authentication or the repository's release checks.
