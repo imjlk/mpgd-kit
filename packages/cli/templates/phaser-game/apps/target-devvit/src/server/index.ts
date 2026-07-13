@@ -48,6 +48,7 @@ async function handleHttpRequest(
         throw error;
       }
 
+      discardOversizedRequestBody(request, response);
       sendJson(response, 413, {
         error: 'REQUEST_BODY_TOO_LARGE',
       });
@@ -82,6 +83,10 @@ async function handleLegacyBridgeRequest(
     body = await readJsonRequestBody(request, maxRequestBodySize);
   } catch (error) {
     const responseError = describeLegacyBridgeBodyError(error);
+
+    if (error instanceof RequestBodyTooLargeError) {
+      discardOversizedRequestBody(request, response);
+    }
 
     if (responseError.retryable) {
       console.error(`devvit legacy bridge body read failed: ${errorMessage(error)}`, error);
@@ -772,6 +777,14 @@ function assertContentLengthWithinLimit(
   ) {
     throw new RequestBodyTooLargeError();
   }
+}
+
+function discardOversizedRequestBody(
+  request: IncomingMessage,
+  response: ServerResponse,
+): void {
+  response.setHeader('connection', 'close');
+  request.resume();
 }
 
 function requestIdFromBody(input: unknown): string {

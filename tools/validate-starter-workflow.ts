@@ -912,7 +912,7 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
         `${serverPath}: legacy bridge compatibility route.`,
       );
 
-      for (const forbiddenPackage of ['express', 'helmet']) {
+      for (const forbiddenPackage of ['express', 'helmet', 'hono']) {
         if (
           source.includes(`from '${forbiddenPackage}'`) ||
           source.includes(`from "${forbiddenPackage}"`)
