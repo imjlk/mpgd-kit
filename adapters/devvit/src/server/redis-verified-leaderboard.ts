@@ -335,19 +335,10 @@ async function tryReadRankedAttempts(
     members.map(({ member }) => redis.hGet(keys.entries, member)),
   );
 
-  if (values.length !== members.length) {
-    throw new Error(`Devvit Redis returned incomplete retained entries for ${keys.ranking}.`);
-  }
-
   const rankedAttempts: RankedAttempt[] = [];
 
-  for (let index = 0; index < members.length; index += 1) {
-    const member = members[index];
+  for (const [index, member] of members.entries()) {
     const raw = values[index];
-
-    if (member === undefined) {
-      throw new Error(`Devvit Redis returned incomplete retained entries for ${keys.entries}.`);
-    }
 
     if (raw === undefined) {
       return undefined;
