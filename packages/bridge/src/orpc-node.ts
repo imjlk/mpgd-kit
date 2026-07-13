@@ -2,7 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 
 import { BodyLimitHandlerPlugin, RPCHandler } from '@orpc/server/node';
 
-import { defaultBridgeRpcEndpoint, type BridgeRpcPrefix, type BridgeRpcRouter } from './orpc';
+import { defaultBridgeRpcEndpoint, type BridgeRpcPrefix, type BridgeRpcRouter } from './orpc.js';
 
 export interface CreateBridgeRpcNodeHandlerOptions {
   readonly maxBodySize?: number;

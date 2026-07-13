@@ -50,7 +50,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/bridge/src/bridge-protocol.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc-node.test.ts && node tools/run-ttsx.mjs packages/bridge/src/cloudflare-pages.test.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/bridge/src/bridge-protocol.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc-node.test.ts && node tools/run-ttsx.mjs packages/bridge/src/cloudflare-pages.test.ts && node packages/bridge/test/orpc-node-dist-import.mjs"
   },
   "dependencies": {
     "@orpc/client": "2.0.0-beta.14",

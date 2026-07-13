@@ -22,6 +22,20 @@ export default defineConfig(({ mode }) => {
   return {
     ...shared,
     publicDir: resolve(gameRoot, 'public'),
-    plugins: [...(shared.plugins ?? []), devvit()],
+    plugins: [
+      ...(shared.plugins ?? []),
+      devvit({
+        client: {
+          build: {
+            sourcemap: mode !== 'production',
+          },
+        },
+        server: {
+          build: {
+            sourcemap: mode !== 'production',
+          },
+        },
+      }),
+    ],
   };
 });

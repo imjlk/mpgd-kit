@@ -102,15 +102,14 @@ function assertPlatformTargetConfigShape(
       assertString(input.artifact, `${target}.artifact`);
       break;
     case 'apps-in-toss':
-      assertString(input.wrapperApp, `${target}.wrapperApp`);
-      assertString(input.webDir, `${target}.webDir`);
-      assertString(input.artifact, `${target}.artifact`);
-      break;
     case 'devvit-web':
       assertString(input.wrapperApp, `${target}.wrapperApp`);
       assertString(input.webDir, `${target}.webDir`);
       assertString(input.artifact, `${target}.artifact`);
-      assertDevvitBuildStrategy(input.buildStrategy, target);
+
+      if (input.kind === 'devvit-web') {
+        assertDevvitBuildStrategy(input.buildStrategy, target);
+      }
       break;
   }
 }

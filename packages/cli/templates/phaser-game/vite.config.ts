@@ -2,7 +2,9 @@ import { resolve } from 'node:path';
 
 import { defineConfig } from 'vite';
 
-import { createGameViteSharedConfig, resolveBuildGatewayModule } from './vite.shared';
+import { createGameViteSharedConfig } from './vite.shared';
+
+export { resolveBuildGatewayModule } from './vite.shared';
 
 const gameRoot = process.cwd();
 
@@ -41,5 +43,3 @@ export default defineConfig(({ mode }) => {
     },
   };
 });
-
-export { resolveBuildGatewayModule };

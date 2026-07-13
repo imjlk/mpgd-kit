@@ -38,7 +38,9 @@ not required. Devvit-owned menu, scheduler, trigger, and form callbacks remain
 thin `/internal/...` routes and delegate to shared service functions. oRPC
 Publisher helpers can broadcast results after a task completes, but they do not
 replace the `devvit.json` scheduler endpoint and should not use process-local
-memory when delivery must cross instances.
+memory when delivery must cross instances. A thin `/api/mpgd/bridge` JSON route
+remains available for callers that explicitly configure the adapter's legacy
+`endpoint` option; new traffic uses oRPC by default.
 
 The default post entry uses `index.html` for a lightweight inline preview. Its
 Play button requests the `game` entrypoint, which loads the separate

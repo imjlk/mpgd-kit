@@ -80,6 +80,7 @@ const requiredDevvitQueries = [
   'playtest',
   'payments',
 ] as const;
+const expectedDevvitVersion = '0.13.7';
 const requiredMcpRequirements = [
   {
     target: 'ait',
@@ -891,7 +892,7 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
       for (const requiredText of [
         "from '@devvit/start/vite'",
         'createGameViteSharedConfig',
-        'plugins: [...(shared.plugins ?? []), devvit()]',
+        "sourcemap: mode !== 'production'",
       ]) {
         assertIncludesText(source, requiredText, `${vitePath}: official Devvit Vite plugin.`);
       }
@@ -905,10 +906,18 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
         "from '@mpgd/bridge/orpc/node'",
         `${serverPath}: direct oRPC Node HTTP adapter.`,
       );
+      assertIncludesText(
+        source,
+        "const legacyBridgeEndpoint = '/api/mpgd/bridge'",
+        `${serverPath}: legacy bridge compatibility route.`,
+      );
 
-      for (const forbiddenText of ["from 'express'", "from 'helmet'"]) {
-        if (source.includes(forbiddenText)) {
-          failures.push(`${serverPath}: must not require ${forbiddenText}.`);
+      for (const forbiddenPackage of ['express', 'helmet']) {
+        if (
+          source.includes(`from '${forbiddenPackage}'`) ||
+          source.includes(`from "${forbiddenPackage}"`)
+        ) {
+          failures.push(`${serverPath}: must not import ${forbiddenPackage}.`);
         }
       }
     }
@@ -921,17 +930,17 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
     if (packageJson !== null) {
       assertEqual(
         packageJson.dependencies?.['@devvit/web'],
-        '0.13.7',
+        expectedDevvitVersion,
         `${packagePath}: dependencies.@devvit/web`,
       );
       assertEqual(
         packageJson.devDependencies?.['@devvit/start'],
-        '0.13.7',
+        expectedDevvitVersion,
         `${packagePath}: devDependencies.@devvit/start`,
       );
       assertEqual(
         packageJson.devDependencies?.devvit,
-        '0.13.7',
+        expectedDevvitVersion,
         `${packagePath}: devDependencies.devvit`,
       );
     }

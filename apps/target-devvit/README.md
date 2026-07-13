@@ -18,7 +18,9 @@ The game client talks to the Devvit server through the shared
 Node HTTP adapter from `@mpgd/bridge/orpc/node`; Express, Hono, and Fetch request
 conversion are not required. Devvit-owned menu, scheduler, trigger, and form
 callbacks remain thin `/internal/...` HTTP routes and should delegate their
-business logic to shared service functions.
+business logic to shared service functions. A thin `/api/mpgd/bridge` JSON route
+remains available for callers that explicitly configure the adapter's legacy
+`endpoint` option; new traffic uses oRPC by default.
 
 oRPC Publisher helpers are appropriate when a completed task also needs to
 broadcast live updates, but they do not replace Devvit Scheduler. Scheduler

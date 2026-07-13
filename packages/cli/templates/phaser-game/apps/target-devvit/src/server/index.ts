@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer, context, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { UiResponse } from '@devvit/web/shared';
 import {
+  assertBridgeRequest,
   createBridgeError,
   type BridgeRequest,
   type BridgeResponse,
@@ -17,6 +18,7 @@ const redisKeyComponentPattern = /^[A-Za-z0-9:_-]{1,128}$/;
 const maxStorageKeyLength = 128;
 const maxEncodedStorageKeyLength = 384;
 const maxRequestBodySize = 1_000_000;
+const legacyBridgeEndpoint = '/api/mpgd/bridge';
 const leaderboardUpdateMaxAttempts = 3;
 const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
@@ -39,7 +41,25 @@ async function handleHttpRequest(
   setResponseSecurityHeaders(response);
 
   if (request.method === 'POST' && requestPathname(request) === '/internal/menu/create-post') {
+    try {
+      await drainRequestBody(request, maxRequestBodySize);
+    } catch (error) {
+      if (!(error instanceof RequestBodyTooLargeError)) {
+        throw error;
+      }
+
+      sendJson(response, 413, {
+        error: 'REQUEST_BODY_TOO_LARGE',
+      });
+      return;
+    }
+
     await handleCreatePostMenu(response);
+    return;
+  }
+
+  if (request.method === 'POST' && requestPathname(request) === legacyBridgeEndpoint) {
+    await handleLegacyBridgeRequest(request, response);
     return;
   }
 
@@ -50,6 +70,63 @@ async function handleHttpRequest(
   sendJson(response, 404, {
     error: 'NOT_FOUND',
   });
+}
+
+async function handleLegacyBridgeRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+
+  try {
+    body = await readJsonRequestBody(request, maxRequestBodySize);
+  } catch (error) {
+    const tooLarge = error instanceof RequestBodyTooLargeError;
+
+    sendJson(
+      response,
+      tooLarge ? 413 : 400,
+      createBridgeError(
+        'unknown',
+        tooLarge ? 'BRIDGE_REQUEST_TOO_LARGE' : 'INVALID_BRIDGE_REQUEST',
+        tooLarge ? 'Bridge request body is too large.' : 'Bridge request body is not valid JSON.',
+      ),
+    );
+    return;
+  }
+
+  let bridgeRequest: BridgeRequest;
+
+  try {
+    bridgeRequest = assertBridgeRequest(body);
+  } catch (error) {
+    sendJson(
+      response,
+      400,
+      createBridgeError(
+        requestIdFromBody(body),
+        'INVALID_BRIDGE_REQUEST',
+        error instanceof Error ? error.message : 'Invalid bridge request.',
+      ),
+    );
+    return;
+  }
+
+  try {
+    sendJson(response, 200, await handleBridgeRequest(bridgeRequest));
+  } catch (error) {
+    console.error(`devvit legacy bridge request failed: ${errorMessage(error)}`, error);
+    sendJson(
+      response,
+      500,
+      createBridgeError(
+        bridgeRequest.id,
+        'DEVVIT_BRIDGE_INTERNAL_ERROR',
+        'Devvit bridge request failed.',
+        true,
+      ),
+    );
+  }
 }
 
 async function handleCreatePostMenu(response: ServerResponse): Promise<void> {
@@ -110,6 +187,7 @@ const server = createServer((request, response) => {
     });
   });
 });
+
 const port = getServerPort();
 
 server.on('error', (error) => {
@@ -596,18 +674,87 @@ function optionalObjectPayload(payload: unknown): Record<string, unknown> {
 }
 
 function requestPathname(request: IncomingMessage): string {
-  const host = request.headers.host ?? 'localhost';
-  return new URL(request.url ?? '/', `http://${host}`).pathname;
+  return new URL(request.url ?? '/', 'http://localhost').pathname;
+}
+
+class RequestBodyTooLargeError extends Error {}
+
+async function drainRequestBody(
+  request: IncomingMessage,
+  maxBodySize: number,
+): Promise<void> {
+  assertContentLengthWithinLimit(request, maxBodySize);
+
+  let bodySize = 0;
+
+  for await (const chunk of request) {
+    bodySize += Buffer.byteLength(chunk);
+
+    if (bodySize > maxBodySize) {
+      throw new RequestBodyTooLargeError();
+    }
+  }
+}
+
+async function readJsonRequestBody(
+  request: IncomingMessage,
+  maxBodySize: number,
+): Promise<unknown> {
+  assertContentLengthWithinLimit(request, maxBodySize);
+
+  const chunks: Buffer[] = [];
+  let bodySize = 0;
+
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bodySize += buffer.byteLength;
+
+    if (bodySize > maxBodySize) {
+      throw new RequestBodyTooLargeError();
+    }
+
+    chunks.push(buffer);
+  }
+
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+function assertContentLengthWithinLimit(
+  request: IncomingMessage,
+  maxBodySize: number,
+): void {
+  const contentLength = request.headers['content-length'];
+
+  if (
+    contentLength !== undefined
+    && Number.isFinite(Number(contentLength))
+    && Number(contentLength) > maxBodySize
+  ) {
+    throw new RequestBodyTooLargeError();
+  }
+}
+
+function requestIdFromBody(input: unknown): string {
+  if (typeof input !== 'object' || input === null || !('id' in input)) {
+    return 'unknown';
+  }
+
+  const id = (input as { readonly id?: unknown }).id;
+  return typeof id === 'string' && id.length > 0 ? id : 'unknown';
 }
 
 function setResponseSecurityHeaders(response: ServerResponse): void {
   response.setHeader('cache-control', 'no-store');
+  response.setHeader('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
   response.setHeader('referrer-policy', 'no-referrer');
   response.setHeader('x-content-type-options', 'nosniff');
+  response.setHeader('x-frame-options', 'DENY');
 }
 
 function sendJson(response: ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body);
   response.statusCode = status;
+  response.setHeader('content-length', Buffer.byteLength(payload));
   response.setHeader('content-type', 'application/json; charset=utf-8');
-  response.end(JSON.stringify(body));
+  response.end(payload);
 }

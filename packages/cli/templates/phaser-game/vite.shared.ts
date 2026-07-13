@@ -10,6 +10,8 @@ interface RuntimePlatformTargetMetadata {
   readonly integrations?: Record<string, unknown>;
 }
 
+const devvitSandboxBuildId = 'devvit-sandbox';
+
 export interface CreateGameViteSharedConfigInput {
   readonly appTarget?: string;
   readonly configTarget?: string;
@@ -87,7 +89,7 @@ export function resolveBuildGatewayModule(input: {
         ? 'src/platform/buildGateways/aitSandbox.ts'
         : 'src/platform/buildGateways/ait.ts';
     case 'reddit':
-      return input.debug && input.buildId === 'devvit-sandbox'
+      return input.debug && input.buildId === devvitSandboxBuildId
         ? 'src/platform/buildGateways/redditSandbox.ts'
         : 'src/platform/buildGateways/reddit.ts';
     default:
