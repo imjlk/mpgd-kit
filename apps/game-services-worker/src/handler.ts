@@ -157,27 +157,27 @@ function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi
 }
 
 function createWorkerStore(env: GameServicesWorkerEnv): GameServicesStore {
-  if (env.MPGD_STORE === 'd1') {
-    if (env.DB === undefined) {
-      throw new Error('MPGD_STORE is d1 but DB binding is not configured.');
-    }
-
-    return createD1GameServicesStore(env.DB);
-  }
-
-  return fallbackMemoryStore;
+  const db = resolveD1Database(env);
+  return db === undefined ? fallbackMemoryStore : createD1GameServicesStore(db);
 }
 
 function createWorkerVerifiedLeaderboardService(
   env: GameServicesWorkerEnv,
 ): VerifiedLeaderboardService {
-  if (env.MPGD_STORE === 'd1') {
-    if (env.DB === undefined) {
-      throw new Error('MPGD_STORE is d1 but DB binding is not configured.');
-    }
+  const db = resolveD1Database(env);
+  return db === undefined
+    ? fallbackVerifiedLeaderboardService
+    : createD1VerifiedLeaderboardService(db);
+}
 
-    return createD1VerifiedLeaderboardService(env.DB);
+function resolveD1Database(env: GameServicesWorkerEnv): D1Database | undefined {
+  if (env.MPGD_STORE !== 'd1') {
+    return undefined;
   }
 
-  return fallbackVerifiedLeaderboardService;
+  if (env.DB === undefined) {
+    throw new Error('MPGD_STORE is d1 but DB binding is not configured.');
+  }
+
+  return env.DB;
 }

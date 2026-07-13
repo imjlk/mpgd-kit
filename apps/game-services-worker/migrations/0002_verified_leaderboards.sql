@@ -16,7 +16,9 @@ CREATE TABLE IF NOT EXISTS verified_leaderboard_attempts (
   evidence_id TEXT NOT NULL,
   verified_at TEXT NOT NULL,
   verified_at_ms INTEGER NOT NULL,
-  response_retained INTEGER,
+  response_retained INTEGER CHECK (
+    response_retained IS NULL OR response_retained IN (0, 1)
+  ),
   response_entry_rank INTEGER,
   response_entry_participant_id TEXT,
   response_entry_participant_label TEXT,
@@ -27,6 +29,8 @@ CREATE TABLE IF NOT EXISTS verified_leaderboard_attempts (
   PRIMARY KEY (leaderboard_id, attempt_id),
   FOREIGN KEY (leaderboard_id)
     REFERENCES verified_leaderboard_definitions (leaderboard_id)
+    ON UPDATE RESTRICT
+    ON DELETE RESTRICT
 );
 
 CREATE TABLE IF NOT EXISTS verified_leaderboard_entries (
@@ -42,6 +46,8 @@ CREATE TABLE IF NOT EXISTS verified_leaderboard_entries (
   UNIQUE (leaderboard_id, attempt_id),
   FOREIGN KEY (leaderboard_id)
     REFERENCES verified_leaderboard_definitions (leaderboard_id)
+    ON UPDATE RESTRICT
+    ON DELETE RESTRICT
 );
 
 CREATE INDEX IF NOT EXISTS idx_verified_leaderboard_entries_rank
@@ -69,6 +75,7 @@ END;
 
 CREATE TRIGGER IF NOT EXISTS verified_leaderboard_attempt_conflict
 BEFORE INSERT ON verified_leaderboard_attempts
+/* Labels are presentation metadata; retries preserve the originally stored label. */
 WHEN EXISTS (
   SELECT 1
   FROM verified_leaderboard_attempts
@@ -85,4 +92,28 @@ WHEN EXISTS (
 )
 BEGIN
   SELECT RAISE(ABORT, 'verified leaderboard attempt id conflict');
+END;
+
+CREATE TRIGGER IF NOT EXISTS verified_leaderboard_attempt_identity_immutable
+BEFORE UPDATE OF
+  leaderboard_id,
+  attempt_id,
+  participant_id,
+  score,
+  completed_at_ms,
+  authority_id,
+  evidence_id,
+  verified_at_ms
+ON verified_leaderboard_attempts
+WHEN
+  OLD.leaderboard_id IS NOT NEW.leaderboard_id
+  OR OLD.attempt_id IS NOT NEW.attempt_id
+  OR OLD.participant_id IS NOT NEW.participant_id
+  OR OLD.score IS NOT NEW.score
+  OR OLD.completed_at_ms IS NOT NEW.completed_at_ms
+  OR OLD.authority_id IS NOT NEW.authority_id
+  OR OLD.evidence_id IS NOT NEW.evidence_id
+  OR OLD.verified_at_ms IS NOT NEW.verified_at_ms
+BEGIN
+  SELECT RAISE(ABORT, 'verified leaderboard attempt identity is immutable');
 END;
