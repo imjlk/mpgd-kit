@@ -183,6 +183,8 @@ a bounded budget, and an attempt retry returns its originally persisted
 decision even after a later attempt replaces the retained entry.
 Snapshot and write-side retained-entry loads retry a bounded number of times if
 a replacement transaction commits between the sorted-set and hash reads.
+Retained values use standard `hGet` reads instead of allowlisted Redis commands
+so the provider works with the default Devvit Redis command set.
 
 Redis sorted-set order is not used as the final tie breaker because Redis and
 JavaScript order non-ASCII strings differently. The adapter loads retained

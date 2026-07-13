@@ -48,7 +48,6 @@ export interface DevvitVerifiedLeaderboardRedisTransactionLike {
 export interface DevvitVerifiedLeaderboardRedisLike {
   get(key: string): Promise<string | undefined>;
   hGet(key: string, field: string): Promise<string | undefined>;
-  hMGet(key: string, fields: string[]): Promise<Array<string | null | undefined>>;
   zRange(
     key: string,
     start: number,
@@ -332,9 +331,8 @@ async function tryReadRankedAttempts(
     return [];
   }
 
-  const values = await redis.hMGet(
-    keys.entries,
-    members.map(({ member }) => member),
+  const values = await Promise.all(
+    members.map(({ member }) => redis.hGet(keys.entries, member)),
   );
 
   if (values.length !== members.length) {
@@ -351,7 +349,7 @@ async function tryReadRankedAttempts(
       throw new Error(`Devvit Redis returned incomplete retained entries for ${keys.entries}.`);
     }
 
-    if (raw === null || raw === undefined) {
+    if (raw === undefined) {
       return undefined;
     }
 

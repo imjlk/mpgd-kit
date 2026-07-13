@@ -80,11 +80,10 @@ describe('createDevvitRedisVerifiedLeaderboardService', () => {
 
   it('re-reads a snapshot when a retained replacement commits between Redis reads', async () => {
     const redis = new FakeDevvitRedis();
-    redis.missingHashFieldsAsUndefined = true;
     const service = createDevvitRedisVerifiedLeaderboardService(redis);
     const initialRequest = createRequest('snapshot-race');
     await service.recordVerifiedAttempt(initialRequest);
-    redis.beforeNextHMGet = async () => {
+    redis.beforeNextRetainedHGet = async () => {
       await service.recordVerifiedAttempt({
         ...initialRequest,
         attempt: {
@@ -104,7 +103,7 @@ describe('createDevvitRedisVerifiedLeaderboardService', () => {
     })).resolves.toMatchObject({
       entries: [{ attemptId: 'attempt:snapshot-race:earlier' }],
     });
-    expect(redis.hMGetCalls).toBe(3);
+    expect(redis.retainedHGetCalls).toBe(3);
   });
 
   it('rejects invalid provider options before using Redis', () => {
@@ -152,11 +151,10 @@ class FakeDevvitRedis implements DevvitVerifiedLeaderboardRedisLike {
   readonly sortedSets = new Map<string, Map<string, number>>();
   readonly versions = new Map<string, number>();
   readonly observedKeys: string[] = [];
-  beforeNextHMGet: (() => Promise<void>) | undefined;
-  missingHashFieldsAsUndefined = false;
+  beforeNextRetainedHGet: (() => Promise<void>) | undefined;
   remainingContentions = 0;
   execCalls = 0;
-  hMGetCalls = 0;
+  retainedHGetCalls = 0;
 
   async get(key: string): Promise<string | undefined> {
     this.observe(key);
@@ -164,20 +162,15 @@ class FakeDevvitRedis implements DevvitVerifiedLeaderboardRedisLike {
   }
 
   async hGet(key: string, field: string): Promise<string | undefined> {
+    if (key.endsWith(':entries')) {
+      this.retainedHGetCalls += 1;
+      const beforeRetainedHGet = this.beforeNextRetainedHGet;
+      this.beforeNextRetainedHGet = undefined;
+      await beforeRetainedHGet?.();
+    }
+
     this.observe(key);
     return this.hashes.get(key)?.get(field);
-  }
-
-  async hMGet(key: string, fields: string[]): Promise<Array<string | null | undefined>> {
-    this.hMGetCalls += 1;
-    const beforeHMGet = this.beforeNextHMGet;
-    this.beforeNextHMGet = undefined;
-    await beforeHMGet?.();
-    this.observe(key);
-    const hash = this.hashes.get(key);
-    return fields.map(
-      (field) => hash?.get(field) ?? (this.missingHashFieldsAsUndefined ? undefined : null),
-    );
   }
 
   async zRange(
