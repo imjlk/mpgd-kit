@@ -1,6 +1,8 @@
 export type VerifiedLeaderboardScoreOrder = 'ascending' | 'descending';
 export type VerifiedLeaderboardAttemptSelection = 'first' | 'best';
 
+export const verifiedLeaderboardIdentifierMaximumLength = 2_048;
+
 const timestampPattern = new RegExp(
   '^(\\d{4})-(\\d{2})-(\\d{2})'
     + 'T(\\d{2}):(\\d{2}):(\\d{2})'
@@ -283,7 +285,7 @@ export function assertVerifiedLeaderboardDefinition(
   input: unknown,
 ): asserts input is VerifiedLeaderboardDefinition {
   assertRecord(input, 'VerifiedLeaderboardDefinition');
-  assertNonEmptyString(input.leaderboardId, 'leaderboardId');
+  assertVerifiedLeaderboardIdentifier(input.leaderboardId, 'leaderboardId');
   assertScoreOrder(input.scoreOrder);
   assertAttemptSelection(input.attemptSelection);
 }
@@ -303,7 +305,7 @@ export function assertVerifiedLeaderboardAttempt(
   assertRecord(input, 'VerifiedLeaderboardAttempt');
   assertNonEmptyString(input.participantId, 'participantId');
   assertOptionalNonEmptyString(input.participantLabel, 'participantLabel');
-  assertNonEmptyString(input.attemptId, 'attemptId');
+  assertVerifiedLeaderboardIdentifier(input.attemptId, 'attemptId');
   assertFiniteNumber(input.score, 'score');
   assertTimestamp(input.completedAt, 'completedAt');
   assertLeaderboardVerificationEvidence(input.verification);
@@ -343,7 +345,7 @@ export function assertGetVerifiedLeaderboardSnapshotRequest(
   input: unknown,
 ): asserts input is GetVerifiedLeaderboardSnapshotRequest {
   assertRecord(input, 'GetVerifiedLeaderboardSnapshotRequest');
-  assertNonEmptyString(input.leaderboardId, 'leaderboardId');
+  assertVerifiedLeaderboardIdentifier(input.leaderboardId, 'leaderboardId');
   assertOptionalNonEmptyString(input.participantId, 'participantId');
   assertOptionalCursor(input.cursor);
 
@@ -371,7 +373,7 @@ export function assertLeaderboardRankedEntry(
 
   assertNonEmptyString(input.participantId, 'participantId');
   assertOptionalNonEmptyString(input.participantLabel, 'participantLabel');
-  assertNonEmptyString(input.attemptId, 'attemptId');
+  assertVerifiedLeaderboardIdentifier(input.attemptId, 'attemptId');
   assertFiniteNumber(input.score, 'score');
   assertTimestamp(input.completedAt, 'completedAt');
 }
@@ -424,7 +426,6 @@ export function createVerifiedLeaderboardCursor(
       attemptId: entry.attemptId,
     }),
   );
-  // Public identifiers are not length-bounded, so generated tokens still need the cursor cap.
   assertOptionalCursor(cursor);
   return cursor;
 }
@@ -444,12 +445,12 @@ export function parseVerifiedLeaderboardCursor(
       throw new Error('cursor version must be 1.');
     }
 
-    assertNonEmptyString(payload.leaderboardId, 'cursor leaderboardId');
+    assertVerifiedLeaderboardIdentifier(payload.leaderboardId, 'cursor leaderboardId');
     assertScoreOrder(payload.scoreOrder);
     assertAttemptSelection(payload.attemptSelection);
     assertFiniteNumber(payload.score, 'cursor score');
     assertTimestamp(payload.completedAt, 'cursor completedAt');
-    assertNonEmptyString(payload.attemptId, 'cursor attemptId');
+    assertVerifiedLeaderboardIdentifier(payload.attemptId, 'cursor attemptId');
 
     if (
       payload.leaderboardId !== definition.leaderboardId
@@ -622,6 +623,19 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 function assertNonEmptyString(input: unknown, label: string): asserts input is string {
   if (typeof input !== 'string' || input.length === 0) {
     throw new Error(`${label} must be a non-empty string.`);
+  }
+}
+
+function assertVerifiedLeaderboardIdentifier(
+  input: unknown,
+  label: string,
+): asserts input is string {
+  assertNonEmptyString(input, label);
+
+  if (input.length > verifiedLeaderboardIdentifierMaximumLength) {
+    throw new Error(
+      `${label} must contain at most ${String(verifiedLeaderboardIdentifierMaximumLength)} characters.`,
+    );
   }
 }
 

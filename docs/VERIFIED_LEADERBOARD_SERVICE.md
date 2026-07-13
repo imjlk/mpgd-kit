@@ -29,6 +29,8 @@ verified-attempt flow.
 
 `leaderboardId` is an opaque content scope. Games can use IDs such as
 `daily:<date>` or `level:<published-id>` without the kit learning those schemas.
+Leaderboard and attempt IDs may contain at most 2,048 JavaScript characters;
+this keeps every valid keyset cursor within its public size cap.
 The definition also fixes two policies for the lifetime of that board:
 
 - `scoreOrder`: `ascending` for elapsed time and `descending` for points.
