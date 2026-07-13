@@ -86,7 +86,56 @@ assertEqual(
   'service binding purchase should verify',
 );
 
-console.log('Game services Worker smoke passed: HTTP, oRPC, and service binding surfaces');
+const verifiedAttempt = await workerService.recordVerifiedAttempt({
+  definition: {
+    leaderboardId: 'worker:verified',
+    scoreOrder: 'descending',
+    attemptSelection: 'best',
+  },
+  attempt: {
+    participantId: 'worker-player',
+    attemptId: 'worker-verified-run-1',
+    score: 999,
+    completedAt: '2026-07-04T00:00:04.000Z',
+    verification: {
+      authorityId: 'worker-smoke',
+      evidenceId: 'worker-evidence-1',
+      verifiedAt: '2026-07-04T00:00:05.000Z',
+    },
+  },
+});
+const verifiedSnapshot = await workerService.getSnapshot({
+  leaderboardId: 'worker:verified',
+  participantId: 'worker-player',
+});
+assertEqual(verifiedAttempt.retained, true, 'private verified writes should retain attempts');
+assertEqual(
+  verifiedSnapshot?.participantEntry?.attemptId,
+  'worker-verified-run-1',
+  'private verified reads should return the retained attempt',
+);
+
+const untrustedWrite = await postJson('/game-services/verified-leaderboard/record', {
+  definition: {
+    leaderboardId: 'public:forbidden',
+    scoreOrder: 'descending',
+    attemptSelection: 'best',
+  },
+  attempt: {
+    participantId: 'untrusted-player',
+    attemptId: 'untrusted-attempt',
+    score: 1,
+    completedAt: '2026-07-04T00:00:06.000Z',
+    verification: {
+      authorityId: 'untrusted-client',
+      evidenceId: 'untrusted-evidence',
+      verifiedAt: '2026-07-04T00:00:06.000Z',
+    },
+  },
+});
+assertEqual(untrustedWrite.status, 404, 'verified writes must not be exposed over public HTTP');
+
+console.log('Game services Worker smoke passed: HTTP, oRPC, and private binding surfaces');
 
 async function postJson(pathname: string, body: unknown): Promise<Response> {
   return workerFetch(

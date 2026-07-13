@@ -78,7 +78,7 @@
     "smoke:game-services": "pnpm build:packages && pnpm smoke:game-services:prepared",
     "smoke:game-services:prepared": "node tools/run-ttsx.mjs tools/smoke/game-services-vertical-slice.ts",
     "smoke:game-services:worker": "pnpm build:packages && pnpm smoke:game-services:worker:prepared",
-    "smoke:game-services:worker:prepared": "pnpm --dir apps/game-services-worker check && pnpm --dir apps/game-services-worker build && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/index.test.ts",
+    "smoke:game-services:worker:prepared": "pnpm --dir apps/game-services-worker check && pnpm --dir apps/game-services-worker build && pnpm --dir apps/game-services-worker test",
     "smoke:targets:build": "node tools/run-ttsx.mjs tools/smoke/build-target-artifacts.ts",
     "smoke:android:emulator": "node tools/run-ttsx.mjs tools/smoke/android-emulator.ts",
     "smoke:ios:simulator": "node tools/run-ttsx.mjs tools/smoke/ios-simulator.ts",

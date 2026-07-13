@@ -1,6 +1,8 @@
 import type {
   ClaimAdRewardRequest,
+  GetVerifiedLeaderboardSnapshotRequest,
   RecordLeaderboardScoreRequest,
+  RecordVerifiedLeaderboardAttemptRequest,
   VerifyPurchaseRequest,
 } from '@mpgd/game-services';
 import { WorkerEntrypoint } from 'cloudflare:workers';
@@ -26,6 +28,14 @@ export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> 
 
   async recordLeaderboardScore(input: RecordLeaderboardScoreRequest) {
     return createWorkerService(this.env).recordLeaderboardScore(input);
+  }
+
+  async recordVerifiedAttempt(input: RecordVerifiedLeaderboardAttemptRequest) {
+    return createWorkerService(this.env).recordVerifiedAttempt(input);
+  }
+
+  async getSnapshot(input: GetVerifiedLeaderboardSnapshotRequest) {
+    return createWorkerService(this.env).getSnapshot(input);
   }
 }
 
