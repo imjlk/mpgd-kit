@@ -15,6 +15,7 @@ import { deflateSync } from 'node:zlib';
 
 import sharp from 'sharp';
 
+import { writeMicrosoftStorePwaArtifacts } from '../target/microsoft-store-pwa';
 import type { PlatformTargetConfig } from '../target/schemas';
 import {
   generateTargetIcons,
@@ -102,6 +103,30 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
     new Set(['192x192', '512x512']),
   );
 
+  rmSync(join(gameRoot, 'public/manifest.webmanifest'));
+  const fallbackDist = join(gameRoot, 'fallback-dist');
+  mkdirSync(fallbackDist, { recursive: true });
+  writeFileSync(join(fallbackDist, 'index.html'), '<html><head></head><body></body></html>');
+  stageWebIconEvidence(repeated, fallbackDist);
+  const fallbackManifest = JSON.parse(
+    await readUtf8(join(fallbackDist, 'manifest.webmanifest')),
+  ) as Record<string, unknown>;
+
+  assert.equal(fallbackManifest.description, 'svg-game game.');
+  assert.equal(fallbackManifest.id, './svg-game');
+  assert.equal(fallbackManifest.scope, './');
+  const fallbackPwaRelease = writeMicrosoftStorePwaArtifacts({
+    artifactRoot: fallbackDist,
+    provenance: {
+      appVersion: '1.0.0',
+      buildId: 'fallback-manifest',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+
+  assert.equal(fallbackPwaRelease.pwaId, './svg-game');
+
   const devvit = requireResult(results, 'reddit');
   const devvitOutput = requireFirstOutput(devvit);
   assert.equal(devvitOutput.width, 1024);
@@ -126,10 +151,25 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   const android = requireResult(results, 'android');
   const shell = join(gameRoot, 'native-shell');
   const existingLauncher = join(shell, 'android/app/src/main/res/mipmap-mdpi/ic_launcher.png');
+  const staleMonochrome = join(
+    shell,
+    'android/app/src/main/res/mipmap-mdpi/ic_launcher_monochrome.png',
+  );
+  const staleThemedXml = join(shell, 'android/app/src/main/res/mipmap-anydpi-v33/ic_launcher.xml');
+  const staleThemedRoundXml = join(
+    shell,
+    'android/app/src/main/res/mipmap-anydpi-v33/ic_launcher_round.xml',
+  );
   const starterBytes = Buffer.from('starter-icon');
+  const staleMonochromeBytes = Buffer.from('stale-monochrome');
+  const staleThemedXmlContents = '<adaptive-icon>stale</adaptive-icon>';
 
   mkdirSync(join(existingLauncher, '..'), { recursive: true });
+  mkdirSync(join(staleThemedXml, '..'), { recursive: true });
   writeFileSync(existingLauncher, starterBytes);
+  writeFileSync(staleMonochrome, staleMonochromeBytes);
+  writeFileSync(staleThemedXml, staleThemedXmlContents);
+  writeFileSync(staleThemedRoundXml, staleThemedXmlContents);
   const restore = await stageNativeIconResources(android, shell);
   const adaptiveXml = await readUtf8(
     join(shell, 'android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml'),
@@ -138,8 +178,14 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   assert.match(adaptiveXml, /adaptive-icon/u);
   assert.match(adaptiveXml, /ic_launcher_foreground/u);
   assert.notDeepEqual(readFileSync(existingLauncher), starterBytes);
+  assert.equal(existsSync(staleMonochrome), false);
+  assert.equal(existsSync(staleThemedXml), false);
+  assert.equal(existsSync(staleThemedRoundXml), false);
   restore();
   assert.deepEqual(readFileSync(existingLauncher), starterBytes);
+  assert.deepEqual(readFileSync(staleMonochrome), staleMonochromeBytes);
+  assert.equal(readFileSync(staleThemedXml, 'utf8'), staleThemedXmlContents);
+  assert.equal(readFileSync(staleThemedRoundXml, 'utf8'), staleThemedXmlContents);
 
   writeFileSync(join(gameRoot, 'assets/icon.svg'), simpleSvg('#dc2626'));
   const changedResults = await Promise.all(
@@ -402,6 +448,77 @@ async function testInvalidInputs(parent: string): Promise<void> {
   );
 
   writeFileSync(join(gameRoot, 'assets/icon.svg'), simpleSvg('#ffffff'));
+  const malformedAppIcons = [
+    [
+      { source: 'assets/icon.svg', backgroundColor: 123 },
+      /brand\.appIcon\.backgroundColor must be a non-empty string/u,
+    ],
+    [
+      { source: 'assets/icon.svg', variants: { maskable: 123 } },
+      /brand\.appIcon\.variants\.maskable must be a non-empty string/u,
+    ],
+    [
+      { source: 'assets/icon.svg', backgroundColor: '   ' },
+      /brand\.appIcon\.backgroundColor must be a non-empty string/u,
+    ],
+    [
+      { source: 'assets/icon.svg', unsupported: true },
+      /brand\.appIcon\.unsupported is not supported/u,
+    ],
+  ] as const;
+
+  for (const [appIcon, expected] of malformedAppIcons) {
+    writeFileSync(join(gameRoot, 'mpgd.game.json'), JSON.stringify({ brand: { appIcon } }));
+    await assert.rejects(
+      generateTargetIcons({
+        gameRoot,
+        targetName: 'web-preview',
+        target,
+        profile: 'production',
+      }),
+      expected,
+    );
+  }
+
+  writeFileSync(join(gameRoot, 'mpgd.game.json'), JSON.stringify({ brand: { icon: 123 } }));
+  await assert.rejects(
+    generateTargetIcons({
+      gameRoot,
+      targetName: 'web-preview',
+      target,
+      profile: 'production',
+    }),
+    /brand\.icon must be a non-empty string/u,
+  );
+
+  writeGameConfig(gameRoot, 'assets/icon.svg');
+  const malformedOverrides = [
+    [
+      { profile: 'web-preview', source: 123 },
+      /target icon override\.source must be a non-empty string/u,
+    ],
+    [
+      { profile: 'web-preview', variants: { maskable: 123 } },
+      /target icon override variants\.maskable must be a non-empty string/u,
+    ],
+    [
+      { profile: 'web-preview', unsupported: true },
+      /target icon override\.unsupported is not supported/u,
+    ],
+  ] as const;
+
+  for (const [icon, expected] of malformedOverrides) {
+    await assert.rejects(
+      generateTargetIcons({
+        gameRoot,
+        targetName: 'web-preview',
+        target: { ...target, icon } as unknown as PlatformTargetConfig,
+        profile: 'production',
+      }),
+      expected,
+    );
+  }
+
   writeFileSync(
     join(gameRoot, 'mpgd.game.json'),
     JSON.stringify({

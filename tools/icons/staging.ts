@@ -66,9 +66,16 @@ export async function stageNativeIconResources(
     mkdirSync(dirname(path), { recursive: true });
     writeFileSync(path, contents);
   };
+  const remove = (path: string): void => {
+    if (!snapshots.has(path)) {
+      snapshots.set(path, existsSync(path) ? readFileSync(path) : undefined);
+    }
+
+    rmSync(path, { force: true });
+  };
 
   if (result.profile.id === 'android-adaptive') {
-    await stageAndroid(result, shellApp, write);
+    await stageAndroid(result, shellApp, write, remove);
   } else if (result.profile.id === 'ios-app-icon') {
     stageIos(result, shellApp, write);
   }
@@ -88,6 +95,7 @@ async function stageAndroid(
   result: GeneratedTargetIcons,
   shellApp: string,
   write: (path: string, contents: Buffer | string) => void,
+  remove: (path: string) => void,
 ): Promise<void> {
   const res = join(shellApp, 'android/app/src/main/res');
   const foreground = cacheOutputPath(result, requireOutput(result, 'adaptive-foreground'));
@@ -119,6 +127,8 @@ async function stageAndroid(
         join(dir, 'ic_launcher_monochrome.png'),
         await resizePng(cacheOutputPath(result, monochrome), adaptiveSize),
       );
+    } else {
+      remove(join(dir, 'ic_launcher_monochrome.png'));
     }
   }
 
@@ -130,6 +140,9 @@ async function stageAndroid(
     const themedAdaptiveXml = androidAdaptiveXml(true);
     write(join(res, 'mipmap-anydpi-v33/ic_launcher.xml'), themedAdaptiveXml);
     write(join(res, 'mipmap-anydpi-v33/ic_launcher_round.xml'), themedAdaptiveXml);
+  } else {
+    remove(join(res, 'mipmap-anydpi-v33/ic_launcher.xml'));
+    remove(join(res, 'mipmap-anydpi-v33/ic_launcher_round.xml'));
   }
 }
 
@@ -160,7 +173,10 @@ function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void 
     : {
         name: basename(result.gameRoot),
         short_name: basename(result.gameRoot),
+        description: `${basename(result.gameRoot)} game.`,
+        id: `./${encodeURIComponent(basename(result.gameRoot))}`,
         start_url: './',
+        scope: './',
         display: 'standalone',
       };
 
