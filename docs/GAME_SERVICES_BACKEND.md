@@ -11,6 +11,8 @@ This keeps client callbacks from becoming the source of truth.
 
 For deployment steps, D1 setup, public HTTP/oRPC smoke, and service binding
 examples, see [Cloudflare Worker Deploy Runbook](CLOUDFLARE_WORKER_DEPLOY.md).
+For content-scoped leaderboards written only after authoritative game completion,
+see [Verified Leaderboard Service Boundary](VERIFIED_LEADERBOARD_SERVICE.md).
 For real Google Play, App Store, AdMob SSV, Apps in Toss, and leaderboard
 verifier follow-ups, see
 [Production Integration Roadmap](PRODUCTION_INTEGRATION_ROADMAP.md).
@@ -20,7 +22,9 @@ verifier follow-ups, see
 - `@mpgd/game-services`: reusable client orchestration, oRPC v2 beta contract,
   authoritative backend implementation, async `GameServicesStore` interface,
   memory store, JSON endpoint handler, oRPC router, fetch handler helpers, and
-  typed request/response contracts.
+  typed request/response contracts. Its `verified-leaderboard` subpath also
+  provides separate read and trusted-write ports for authoritative per-content
+  rankings without adding a public client score-submit route.
 - `@mpgd/analytics`: optional typed event sink used by game-services client and
   server paths to record purchase, rewarded ad, and leaderboard outcomes.
 - `@mpgd/catalog`: product catalog and ad placement schemas consumed by the
