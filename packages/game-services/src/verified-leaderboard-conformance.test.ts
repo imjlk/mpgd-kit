@@ -54,4 +54,58 @@ if (
   throw new Error('Expected cleanup failures to preserve the named scenario failure.');
 }
 
+let acceptedInvalidInputFailure: unknown;
+
+try {
+  await runVerifiedLeaderboardConformance({
+    createFixture: ({ scenario, now }) => {
+      const service = createInMemoryVerifiedLeaderboardService({ now: () => now });
+
+      if (scenario !== 'runtime-validation') {
+        return { service };
+      }
+
+      const fallback = createInMemoryVerifiedLeaderboardService({ now: () => now });
+      return {
+        service: {
+          async recordVerifiedAttempt(input) {
+            try {
+              return await service.recordVerifiedAttempt(input);
+            } catch {
+              return fallback.recordVerifiedAttempt({
+                definition: {
+                  leaderboardId: 'accepted-invalid:fallback',
+                  scoreOrder: 'ascending',
+                  attemptSelection: 'first',
+                },
+                attempt: {
+                  participantId: 'participant:fallback',
+                  attemptId: 'attempt:fallback',
+                  score: 1,
+                  completedAt: now,
+                  verification: {
+                    authorityId: 'accepted-invalid-provider',
+                    evidenceId: 'evidence:fallback',
+                    verifiedAt: now,
+                  },
+                },
+              });
+            }
+          },
+          getSnapshot: (input) => service.getSnapshot(input),
+        } satisfies VerifiedLeaderboardService,
+      };
+    },
+  });
+} catch (error) {
+  acceptedInvalidInputFailure = error;
+}
+
+if (
+  !(acceptedInvalidInputFailure instanceof Error)
+  || !acceptedInvalidInputFailure.message.includes('runtime-validation')
+) {
+  throw new Error('Expected providers that resolve invalid writes to fail conformance.');
+}
+
 console.log('Verified leaderboard provider conformance tests passed.');

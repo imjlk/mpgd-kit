@@ -191,6 +191,7 @@ async function runFirstSelectionAndSnapshotScenario(
   });
   assert(snapshot !== undefined, 'recorded boards must return snapshots');
   assertEqual(snapshot.entries.length, 1, 'snapshot limits must be honored');
+  assertEqual(snapshot.entries[0]?.rank, 1, 'page entries must carry their global rank');
   assertEqual(
     snapshot.entries[0]?.participantId,
     'participant:leader',
@@ -204,6 +205,26 @@ async function runFirstSelectionAndSnapshotScenario(
   assertEqual(snapshot.participantEntry?.rank, 2, 'participant entries must carry global rank');
   assertEqual(snapshot.totalParticipants, 2, 'snapshots must count retained participants');
   assertEqual(snapshot.generatedAt, context.now, 'snapshots must use the provider clock');
+
+  const anonymousSnapshot = await context.service.getSnapshot({
+    leaderboardId: 'first:board',
+    limit: 1,
+  });
+  assertEqual(
+    anonymousSnapshot?.participantEntry,
+    undefined,
+    'anonymous snapshot reads must not synthesize participant entries',
+  );
+  const missingParticipantSnapshot = await context.service.getSnapshot({
+    leaderboardId: 'first:board',
+    participantId: 'participant:missing',
+    limit: 1,
+  });
+  assertEqual(
+    missingParticipantSnapshot?.participantEntry,
+    undefined,
+    'unknown participants must not receive another participant entry',
+  );
 
   const laterRetry = await context.service.recordVerifiedAttempt(laterRequest);
   assertEqual(laterRetry.alreadyProcessed, true, 'retries must be detected');
@@ -230,17 +251,16 @@ async function runBestSelectionAndRetryScenario(context: ScenarioContext): Promi
     completedAt: '2030-01-02T02:10:00.000Z',
   });
   await context.service.recordVerifiedAttempt(initialRequest);
-  const worseRecord = await context.service.recordVerifiedAttempt(
-    createAttempt({
-      leaderboardId: 'best:board',
-      scoreOrder: 'descending',
-      attemptSelection: 'best',
-      participantId: 'participant:best',
-      attemptId: 'attempt:worse',
-      score: 90,
-      completedAt: '2030-01-02T02:11:00.000Z',
-    }),
-  );
+  const worseRequest = createAttempt({
+    leaderboardId: 'best:board',
+    scoreOrder: 'descending',
+    attemptSelection: 'best',
+    participantId: 'participant:best',
+    attemptId: 'attempt:worse',
+    score: 90,
+    completedAt: '2030-01-02T02:11:00.000Z',
+  });
+  const worseRecord = await context.service.recordVerifiedAttempt(worseRequest);
   const improvedRecord = await context.service.recordVerifiedAttempt(
     createAttempt({
       leaderboardId: 'best:board',
@@ -264,6 +284,14 @@ async function runBestSelectionAndRetryScenario(context: ScenarioContext): Promi
     improvedRecord.entry.attemptId,
     'attempt:improved',
     'improved attempts must replace the retained entry',
+  );
+
+  const worseRetry = await context.service.recordVerifiedAttempt(worseRequest);
+  assertEqual(worseRetry.alreadyProcessed, true, 'non-retained retries must be detected');
+  assertEqual(
+    worseRetry.retained,
+    false,
+    'non-retained attempt retries must preserve their original decision',
   );
 
   const initialRetry = await context.service.recordVerifiedAttempt(initialRequest);
@@ -461,6 +489,16 @@ async function runIdentityAndDefinitionConflictsScenario(
       ...request,
       attempt: {
         ...request.attempt,
+        completedAt: '2030-01-02T02:31:00.000Z',
+      },
+    }),
+    'attempt IDs reused with a different completion instant must fail closed',
+  );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt({
+      ...request,
+      attempt: {
+        ...request.attempt,
         verification: {
           ...request.attempt.verification,
           evidenceId: 'evidence:different',
@@ -532,6 +570,16 @@ async function runIdentityAndDefinitionConflictsScenario(
     request.attempt.attemptId,
     'conflict failures must leave the original attempt retained',
   );
+  assertEqual(
+    stableSnapshot?.entries[0]?.participantId,
+    request.attempt.participantId,
+    'conflict failures must not retain a conflicting participant',
+  );
+  assertEqual(
+    stableSnapshot?.totalParticipants,
+    1,
+    'conflict failures must not add retained participants',
+  );
 
   const otherBoardRecord = await context.service.recordVerifiedAttempt(
     createAttempt({
@@ -597,10 +645,15 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
     // Frozen provider responses are already isolated from caller mutation.
   }
 
-  const snapshot = await context.service.getSnapshot({ leaderboardId: 'mutation:board' });
+  const snapshot = await context.service.getSnapshot({
+    leaderboardId: 'mutation:board',
+    participantId: 'participant:mutation',
+  });
   assert(snapshot !== undefined, 'mutation board must return a snapshot');
   const snapshotEntry = snapshot.entries[0];
   assert(snapshotEntry !== undefined, 'mutation board must retain its recorded entry');
+  const participantEntry = snapshot.participantEntry;
+  assert(participantEntry !== undefined, 'participant reads must return the retained entry');
   assertEqual(snapshot.definition.scoreOrder, 'ascending', 'stored definitions must be cloned');
   assertEqual(snapshotEntry.score, 50, 'stored attempts must resist caller mutation');
   assertEqual(
@@ -622,12 +675,21 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
   }
 
   try {
+    Object.assign(participantEntry, { participantLabel: 'Participant Mutation', score: -4 });
+  } catch {
+    // Frozen provider participant entries are already isolated from mutation.
+  }
+
+  try {
     (snapshot.entries as Array<typeof snapshotEntry>).pop();
   } catch {
     // Frozen provider snapshot arrays are already isolated from mutation.
   }
 
-  const rereadSnapshot = await context.service.getSnapshot({ leaderboardId: 'mutation:board' });
+  const rereadSnapshot = await context.service.getSnapshot({
+    leaderboardId: 'mutation:board',
+    participantId: 'participant:mutation',
+  });
   assertEqual(
     rereadSnapshot?.definition.scoreOrder,
     'ascending',
@@ -648,7 +710,19 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
     1,
     'snapshot array mutation must not rewrite retained entries',
   );
+  assertEqual(
+    rereadSnapshot?.participantEntry?.score,
+    50,
+    'participant entry mutation must not rewrite retained attempts',
+  );
+  assertEqual(
+    rereadSnapshot?.participantEntry?.participantLabel,
+    'Stable Label',
+    'participant entry mutation must not rewrite presentation metadata',
+  );
 }
+
+class ProviderOutputValidationError extends Error {}
 
 function createOutputValidatingService(
   service: VerifiedLeaderboardService,
@@ -656,14 +730,30 @@ function createOutputValidatingService(
   return {
     async recordVerifiedAttempt(input) {
       const response: unknown = await service.recordVerifiedAttempt(input);
-      assertRecordVerifiedLeaderboardAttemptResponse(response);
+
+      try {
+        assertRecordVerifiedLeaderboardAttemptResponse(response);
+      } catch (cause) {
+        throw new ProviderOutputValidationError(
+          'Provider returned an invalid verified leaderboard record response.',
+          { cause },
+        );
+      }
+
       return response;
     },
     async getSnapshot(input) {
       const snapshot: unknown = await service.getSnapshot(input);
 
       if (snapshot !== undefined) {
-        assertVerifiedLeaderboardSnapshot(snapshot);
+        try {
+          assertVerifiedLeaderboardSnapshot(snapshot);
+        } catch (cause) {
+          throw new ProviderOutputValidationError(
+            'Provider returned an invalid verified leaderboard snapshot.',
+            { cause },
+          );
+        }
       }
 
       return snapshot;
@@ -773,7 +863,11 @@ async function runRuntimeValidationScenario(context: ScenarioContext): Promise<v
 
   await assertRejects(
     () => context.service.getSnapshot({ leaderboardId: 'validation:limit', limit: 0 }),
-    'invalid snapshot limits must fail closed',
+    'non-positive snapshot limits must fail closed',
+  );
+  await assertRejects(
+    () => context.service.getSnapshot({ leaderboardId: 'validation:limit', limit: 101 }),
+    'over-maximum snapshot limits must fail closed',
   );
 }
 
@@ -846,7 +940,11 @@ function createMutableAttempt(input: {
 async function assertRejects(operation: () => Promise<unknown>, message: string): Promise<void> {
   try {
     await operation();
-  } catch {
+  } catch (error) {
+    if (error instanceof ProviderOutputValidationError) {
+      throw error;
+    }
+
     return;
   }
 
