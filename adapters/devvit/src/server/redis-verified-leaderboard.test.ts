@@ -80,6 +80,7 @@ describe('createDevvitRedisVerifiedLeaderboardService', () => {
 
   it('re-reads a snapshot when a retained replacement commits between Redis reads', async () => {
     const redis = new FakeDevvitRedis();
+    redis.missingHashFieldsAsUndefined = true;
     const service = createDevvitRedisVerifiedLeaderboardService(redis);
     const initialRequest = createRequest('snapshot-race');
     await service.recordVerifiedAttempt(initialRequest);
@@ -152,6 +153,7 @@ class FakeDevvitRedis implements DevvitVerifiedLeaderboardRedisLike {
   readonly versions = new Map<string, number>();
   readonly observedKeys: string[] = [];
   beforeNextHMGet: (() => Promise<void>) | undefined;
+  missingHashFieldsAsUndefined = false;
   remainingContentions = 0;
   execCalls = 0;
   hMGetCalls = 0;
@@ -166,14 +168,16 @@ class FakeDevvitRedis implements DevvitVerifiedLeaderboardRedisLike {
     return this.hashes.get(key)?.get(field);
   }
 
-  async hMGet(key: string, fields: string[]): Promise<Array<string | null>> {
+  async hMGet(key: string, fields: string[]): Promise<Array<string | null | undefined>> {
     this.hMGetCalls += 1;
     const beforeHMGet = this.beforeNextHMGet;
     this.beforeNextHMGet = undefined;
     await beforeHMGet?.();
     this.observe(key);
     const hash = this.hashes.get(key);
-    return fields.map((field) => hash?.get(field) ?? null);
+    return fields.map(
+      (field) => hash?.get(field) ?? (this.missingHashFieldsAsUndefined ? undefined : null),
+    );
   }
 
   async zRange(
