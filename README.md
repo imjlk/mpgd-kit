@@ -102,7 +102,8 @@ Codex agents, skills, starter manifests, and Apps in Toss MCP guidance.
 - `@mpgd/i18n`: Paraglide-backed localized messages.
 - `@mpgd/analytics`: typed analytics events and sink helpers for platform integrations.
 - `@mpgd/game-services`: client orchestration, oRPC v2 beta contract, HTTP/oRPC handlers,
-  memory/D1 store integration points, and backend service assembly.
+  memory/D1 store integration points, authenticated cursor-paginated verified
+  leaderboard reads, and backend service assembly.
 - `@mpgd/capacitor-game-services`: Capacitor native plugin bridge surface.
 - `@mpgd/cli`: Gunshi-based local CLI surfaced as `pnpm mpgd` for starter
   generation and target build/smoke matrix orchestration.

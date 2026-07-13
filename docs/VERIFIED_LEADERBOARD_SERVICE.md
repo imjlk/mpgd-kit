@@ -29,6 +29,9 @@ verified-attempt flow.
 
 `leaderboardId` is an opaque content scope. Games can use IDs such as
 `daily:<date>` or `level:<published-id>` without the kit learning those schemas.
+Leaderboard and attempt IDs must be well-formed Unicode and may contain at most
+512 JavaScript characters; this keeps every valid keyset cursor request within
+the bundled Worker's URL size cap, including worst-case JSON and URL escaping.
 The definition also fixes two policies for the lifetime of that board:
 
 - `scoreOrder`: `ascending` for elapsed time and `descending` for points.
@@ -49,6 +52,15 @@ retry without changing attempt identity. Retries return the original retention
 decision even if another attempt later replaces the retained entry. A snapshot
 returns top entries, total participant count, and an optional participant entry
 even when that participant falls outside the requested top-entry limit.
+
+Snapshot reads support opaque cursor pagination. A returned `nextCursor` is a
+versioned base64url keyset bound to the leaderboard ID, definition policies,
+score, completion instant, and ordinal attempt ID. Pass it back as `cursor` to
+continue after the final entry in the previous page. It is a continuation hint,
+not an authentication credential, and clients must not parse or modify it.
+Ranks are recalculated from the current board on every read. Because the board
+can change between requests, traversal has weak snapshot consistency: retained
+attempt updates may move entries across an already-read page boundary.
 
 The bundled memory implementation is for tests and local orchestration. It
 retains every definition and processed attempt for the lifetime of the process,
@@ -75,7 +87,41 @@ supplementary characters.
 
 The Miniflare smoke runs the public provider conformance suite against the real
 D1 API, including concurrent idempotency, rollback, mutation isolation, and
-cross-encoding tie cases.
+cross-encoding tie cases. Cursor reads use keyset predicates while preserving
+global ranks and an independently scoped participant entry. The current D1
+query computes a full-board `ROW_NUMBER()` window before applying the keyset so
+rank values remain current; very large or hot boards may need cached/materialized
+ranks or an application-level participant cap.
+
+## Authenticated Read Transport
+
+`@mpgd/game-services/verified-leaderboard-transport` provides a composable GET
+handler and fetch client for read-only snapshots. The handler authenticates the
+request before reading and injects the authenticated `participantId`; it rejects
+client-supplied participant scope and never accepts verified-attempt writes.
+
+```ts
+const snapshotFetch = createVerifiedLeaderboardSnapshotFetchHandler({
+  reader: verifiedLeaderboard,
+  authenticate: (request) => sessions.authenticate(request),
+});
+
+const response = await snapshotFetch(request);
+```
+
+The default route is
+`GET /game-services/verified-leaderboard/snapshot?leaderboardId=<id>&limit=<n>&cursor=<opaque>`.
+The fetch client preserves a path prefix in `baseUrl`, so a base such as
+`https://services.example/api/` targets `/api/game-services/...`.
+Unknown routes return `undefined` so the handler can compose with an existing
+router. Missing or invalid credentials return `401`; invalid cursors return
+`400`; unknown leaderboards return `404`. Responses are always marked
+`Cache-Control: private, no-store` because `participantEntry` is identity scoped.
+
+The bundled Worker mounts this route only when `VERIFIED_LEADERBOARD_AUTH` is
+configured. That private auth service binding receives the Authorization header
+and returns `{ participantId }` after verification. Keep token verification in
+the identity service; do not derive participant IDs from client query values.
 
 ## Provider Conformance
 
@@ -95,8 +141,8 @@ The fixture factory is called once per scenario and must return isolated state,
 or namespace each scenario in a shared test database. The suite covers first
 and best retention, original retry-decision preservation, deterministic ties,
 identity and definition conflicts, concurrent duplicate writes, caller-mutation
-isolation, snapshot behavior, and runtime validation. Optional `dispose()`
-cleanup runs even when a scenario fails.
+isolation, cursor traversal across UTF-16 ties, snapshot behavior, and runtime
+validation. Optional `dispose()` cleanup runs even when a scenario fails.
 
 ## Devvit Adapter Shape
 

@@ -3,6 +3,8 @@ import {
   assertRecordVerifiedLeaderboardAttemptRequest,
   assertRecordVerifiedLeaderboardAttemptResponse,
   assertVerifiedLeaderboardSnapshot,
+  createVerifiedLeaderboardCursor,
+  parseVerifiedLeaderboardCursor,
   type GetVerifiedLeaderboardSnapshotRequest,
   type LeaderboardRankedEntry,
   type RecordVerifiedLeaderboardAttemptRequest,
@@ -36,6 +38,8 @@ type RankedEntryRow = {
   attempt_id: string;
   score: number;
   completed_at: string;
+  completed_at_ms: number;
+  attempt_ordinal: string;
 };
 
 export interface CreateD1VerifiedLeaderboardServiceInput {
@@ -348,19 +352,60 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
 
     const definition = definitionFromRow(definitionRow);
     const orderBy = createRankOrderBy(definition.scoreOrder);
-    const pageStatement = session.prepare(
-      `SELECT
-        ROW_NUMBER() OVER (ORDER BY ${orderBy}) AS rank,
-        participant_id,
-        participant_label,
-        attempt_id,
-        score,
-        completed_at
-      FROM verified_leaderboard_entries
-      WHERE leaderboard_id = ?
-      ORDER BY ${orderBy}
-      LIMIT ?`,
-    ).bind(input.leaderboardId, input.limit ?? 10);
+    const limit = input.limit ?? 10;
+    const cursorPosition = input.cursor === undefined
+      ? undefined
+      : parseVerifiedLeaderboardCursor(input.cursor, definition);
+    // Rank is intentionally computed across the full board before keyset filtering.
+    // This preserves current global ranks; very large boards should materialize ranks.
+    const rankedEntriesQuery = `SELECT
+      ROW_NUMBER() OVER (ORDER BY ${orderBy}) AS rank,
+      participant_id,
+      participant_label,
+      attempt_id,
+      score,
+      completed_at,
+      completed_at_ms,
+      attempt_ordinal
+    FROM verified_leaderboard_entries
+    WHERE leaderboard_id = ?`;
+    const pageStatement = cursorPosition === undefined
+      ? session.prepare(
+          `SELECT * FROM (${rankedEntriesQuery})
+           ORDER BY rank
+           LIMIT ?`,
+        ).bind(input.leaderboardId, limit + 1)
+      : session.prepare(
+          `SELECT ranked.*
+           FROM (${rankedEntriesQuery}) AS ranked
+           CROSS JOIN (
+             SELECT
+               ? AS cursor_score,
+               ? AS cursor_completed_at_ms,
+               ? AS cursor_attempt_ordinal
+           ) AS cursor
+           WHERE (
+             ranked.score ${definition.scoreOrder === 'ascending' ? '>' : '<'} cursor.cursor_score
+             OR (
+               ranked.score = cursor.cursor_score
+               AND (
+                 ranked.completed_at_ms > cursor.cursor_completed_at_ms
+                 OR (
+                   ranked.completed_at_ms = cursor.cursor_completed_at_ms
+                   AND ranked.attempt_ordinal > cursor.cursor_attempt_ordinal
+                 )
+               )
+             )
+           )
+           ORDER BY ranked.rank
+           LIMIT ?`,
+        ).bind(
+          input.leaderboardId,
+          cursorPosition.score,
+          cursorPosition.completedAtMs,
+          toUtf16OrdinalKey(cursorPosition.attemptId),
+          limit + 1,
+        );
     const countStatement = session.prepare(
       `SELECT COUNT(*) AS total
        FROM verified_leaderboard_entries
@@ -380,7 +425,9 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
                  participant_label,
                  attempt_id,
                  score,
-                 completed_at
+                 completed_at,
+                 completed_at_ms,
+                 attempt_ordinal
                FROM verified_leaderboard_entries
                WHERE leaderboard_id = ?
              )
@@ -388,9 +435,12 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
           ).bind(input.leaderboardId, input.participantId),
         ];
     const results = await session.batch(statements);
-    const entries = (results[0]?.results ?? []).map((row) =>
-      rankedEntryFromRow(row as RankedEntryRow)
-    );
+    const pageRows = (results[0]?.results ?? []) as unknown as RankedEntryRow[];
+    const entries = pageRows.slice(0, limit).map(rankedEntryFromRow);
+    const lastEntry = entries.at(-1);
+    const nextCursor = pageRows.length > limit && lastEntry !== undefined
+      ? createVerifiedLeaderboardCursor(definition, lastEntry)
+      : undefined;
     const totalRow = results[1]?.results[0] as { total?: number } | undefined;
     const participantRow = results[2]?.results[0] as RankedEntryRow | undefined;
     const snapshot: VerifiedLeaderboardSnapshot = {
@@ -401,6 +451,7 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
         : { participantEntry: rankedEntryFromRow(participantRow) }),
       totalParticipants: totalRow?.total ?? 0,
       generatedAt: this.now(),
+      ...(nextCursor === undefined ? {} : { nextCursor }),
     };
     assertVerifiedLeaderboardSnapshot(snapshot);
     return snapshot;

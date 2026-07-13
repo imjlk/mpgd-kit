@@ -7,6 +7,7 @@ import {
   createGameServicesRouter,
   createInMemoryGameServicesStore,
   createInMemoryVerifiedLeaderboardService,
+  createVerifiedLeaderboardSnapshotFetchHandler,
   type ClaimAdRewardRequest,
   type GameServicesBackendApi,
   type GameServicesStore,
@@ -15,6 +16,7 @@ import {
   type RecordVerifiedLeaderboardAttemptRequest,
   type RecordVerifiedLeaderboardAttemptResponse,
   type VerifiedLeaderboardService,
+  type VerifiedLeaderboardSnapshotPrincipal,
   type VerifiedLeaderboardSnapshot,
   type VerifyPurchaseRequest,
 } from '@mpgd/game-services';
@@ -26,6 +28,17 @@ import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
 export interface GameServicesWorkerEnv {
   readonly DB?: D1Database;
   readonly MPGD_STORE?: 'memory' | 'd1';
+  readonly VERIFIED_LEADERBOARD_AUTH?: VerifiedLeaderboardAuthBinding;
+}
+
+export interface VerifiedLeaderboardAuthBindingRequest {
+  readonly authorization: string;
+}
+
+export interface VerifiedLeaderboardAuthBinding {
+  authenticateVerifiedLeaderboardSnapshot(
+    input: VerifiedLeaderboardAuthBindingRequest,
+  ): Promise<VerifiedLeaderboardSnapshotPrincipal | undefined>;
 }
 
 export interface GameServicesWorkerService {
@@ -88,6 +101,7 @@ export function createWorkerFetchHandler(
   env: GameServicesWorkerEnv,
 ): (request: Request) => Promise<Response> {
   const backend = createWorkerBackend(env);
+  const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -112,8 +126,19 @@ export function createWorkerFetchHandler(
       version: productCatalog.version,
     },
   );
+  const snapshotFetch = createWorkerVerifiedLeaderboardSnapshotFetchHandler(
+    env,
+    verifiedLeaderboard,
+    corsHeaders,
+  );
 
-  return (request) => {
+  return async (request) => {
+    const snapshotResponse = await snapshotFetch?.(request);
+
+    if (snapshotResponse !== undefined) {
+      return snapshotResponse;
+    }
+
     const pathname = new URL(request.url).pathname;
 
     if (pathname.startsWith('/rpc')) {
@@ -122,6 +147,32 @@ export function createWorkerFetchHandler(
 
     return httpFetch(request);
   };
+}
+
+function createWorkerVerifiedLeaderboardSnapshotFetchHandler(
+  env: GameServicesWorkerEnv,
+  reader: VerifiedLeaderboardService,
+  corsHeaders: Readonly<Record<string, string>>,
+): ((request: Request) => Promise<Response | undefined>) | undefined {
+  const auth = env.VERIFIED_LEADERBOARD_AUTH;
+
+  if (auth === undefined) {
+    return undefined;
+  }
+
+  return createVerifiedLeaderboardSnapshotFetchHandler({
+    reader,
+    corsHeaders,
+    authenticate(request) {
+      const authorization = request.headers.get('Authorization');
+
+      if (authorization === null || authorization.length === 0) {
+        return undefined;
+      }
+
+      return auth.authenticateVerifiedLeaderboardSnapshot({ authorization });
+    },
+  });
 }
 
 export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWorkerService {

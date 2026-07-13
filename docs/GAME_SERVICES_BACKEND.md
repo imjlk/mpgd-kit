@@ -24,7 +24,8 @@ verifier follow-ups, see
   memory store, JSON endpoint handler, oRPC router, fetch handler helpers, and
   typed request/response contracts. Its `verified-leaderboard` subpath also
   provides separate read and trusted-write ports for authoritative per-content
-  rankings without adding a public client score-submit route.
+  rankings, while `verified-leaderboard-transport` adds an authenticated,
+  cursor-paginated read-only fetch surface without a public score-submit route.
 - `@mpgd/analytics`: optional typed event sink used by game-services client and
   server paths to record purchase, rewarded ad, and leaderboard outcomes.
 - `@mpgd/catalog`: product catalog and ad placement schemas consumed by the
@@ -141,6 +142,12 @@ in filename order, uncomment the D1 binding, and set `MPGD_STORE = "d1"`.
 The `0002_verified_leaderboards.sql` migration adds durable definition,
 processed-attempt decision, and retained-entry tables.
 
+Configure the private `VERIFIED_LEADERBOARD_AUTH` service binding to mount the
+public read-only verified leaderboard snapshot route. Its RPC method validates
+the Authorization header and returns the authenticated participant ID. Without
+that binding, the Worker does not mount the snapshot handler. Trusted writes
+remain available only through the game-services service binding.
+
 The Worker class extends `WorkerEntrypoint`, so another Worker can bind it as an
 internal service and call methods without a public URL:
 
@@ -161,6 +168,8 @@ const snapshot = await env.GAME_SERVICES.getSnapshot(snapshotRequest);
 Use public HTTP/oRPC for external game clients and service binding RPC for
 internal Cloudflare Worker-to-Worker calls. `recordVerifiedAttempt()` is a
 trusted internal command and is not exposed by the Worker's public fetch routes.
+Authenticated clients can use `createVerifiedLeaderboardSnapshotFetchClient()`
+for read-only pages; the server, not the client, chooses `participantEntry` scope.
 
 ## Target Notes
 

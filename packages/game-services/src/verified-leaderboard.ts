@@ -1,6 +1,8 @@
 export type VerifiedLeaderboardScoreOrder = 'ascending' | 'descending';
 export type VerifiedLeaderboardAttemptSelection = 'first' | 'best';
 
+export const verifiedLeaderboardIdentifierMaximumLength = 512;
+
 const timestampPattern = new RegExp(
   '^(\\d{4})-(\\d{2})-(\\d{2})'
     + 'T(\\d{2}):(\\d{2}):(\\d{2})'
@@ -54,6 +56,7 @@ export interface GetVerifiedLeaderboardSnapshotRequest {
   readonly leaderboardId: string;
   readonly participantId?: string;
   readonly limit?: number;
+  readonly cursor?: string;
 }
 
 export interface VerifiedLeaderboardSnapshot {
@@ -62,6 +65,17 @@ export interface VerifiedLeaderboardSnapshot {
   readonly participantEntry?: LeaderboardRankedEntry;
   readonly totalParticipants: number;
   readonly generatedAt: string;
+  readonly nextCursor?: string;
+}
+
+export interface VerifiedLeaderboardCursorPosition {
+  readonly score: number;
+  readonly completedAtMs: number;
+  readonly attemptId: string;
+}
+
+export class VerifiedLeaderboardCursorError extends Error {
+  override readonly name = 'VerifiedLeaderboardCursorError';
 }
 
 /**
@@ -162,16 +176,32 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
     }
 
     const rankedEntries = this.createRankedEntries(definition);
+    const cursorPosition = input.cursor === undefined
+      ? undefined
+      : parseVerifiedLeaderboardCursor(input.cursor, definition);
+    const firstPageIndex = cursorPosition === undefined
+      ? 0
+      : rankedEntries.findIndex(
+          (entry) => compareRankedEntryToCursor(definition, entry, cursorPosition) > 0,
+        );
+    const pageStart = firstPageIndex < 0 ? rankedEntries.length : firstPageIndex;
+    const pageEnd = pageStart + (input.limit ?? 10);
+    const entries = rankedEntries.slice(pageStart, pageEnd);
     const participantEntry = input.participantId === undefined
       ? undefined
       : rankedEntries.find((entry) => entry.participantId === input.participantId);
+    const lastEntry = entries.at(-1);
+    const nextCursor = lastEntry !== undefined && pageEnd < rankedEntries.length
+      ? createVerifiedLeaderboardCursor(definition, lastEntry)
+      : undefined;
 
     const snapshot: VerifiedLeaderboardSnapshot = {
       definition: cloneVerifiedLeaderboardDefinition(definition),
-      entries: rankedEntries.slice(0, input.limit ?? 10),
+      entries,
       ...(participantEntry === undefined ? {} : { participantEntry }),
       totalParticipants: rankedEntries.length,
       generatedAt: this.now(),
+      ...(nextCursor === undefined ? {} : { nextCursor }),
     };
     assertVerifiedLeaderboardSnapshot(snapshot);
     return snapshot;
@@ -255,7 +285,7 @@ export function assertVerifiedLeaderboardDefinition(
   input: unknown,
 ): asserts input is VerifiedLeaderboardDefinition {
   assertRecord(input, 'VerifiedLeaderboardDefinition');
-  assertNonEmptyString(input.leaderboardId, 'leaderboardId');
+  assertVerifiedLeaderboardIdentifier(input.leaderboardId, 'leaderboardId');
   assertScoreOrder(input.scoreOrder);
   assertAttemptSelection(input.attemptSelection);
 }
@@ -275,7 +305,7 @@ export function assertVerifiedLeaderboardAttempt(
   assertRecord(input, 'VerifiedLeaderboardAttempt');
   assertNonEmptyString(input.participantId, 'participantId');
   assertOptionalNonEmptyString(input.participantLabel, 'participantLabel');
-  assertNonEmptyString(input.attemptId, 'attemptId');
+  assertVerifiedLeaderboardIdentifier(input.attemptId, 'attemptId');
   assertFiniteNumber(input.score, 'score');
   assertTimestamp(input.completedAt, 'completedAt');
   assertLeaderboardVerificationEvidence(input.verification);
@@ -315,8 +345,9 @@ export function assertGetVerifiedLeaderboardSnapshotRequest(
   input: unknown,
 ): asserts input is GetVerifiedLeaderboardSnapshotRequest {
   assertRecord(input, 'GetVerifiedLeaderboardSnapshotRequest');
-  assertNonEmptyString(input.leaderboardId, 'leaderboardId');
+  assertVerifiedLeaderboardIdentifier(input.leaderboardId, 'leaderboardId');
   assertOptionalNonEmptyString(input.participantId, 'participantId');
+  assertOptionalCursor(input.cursor);
 
   if (
     input.limit !== undefined
@@ -342,7 +373,7 @@ export function assertLeaderboardRankedEntry(
 
   assertNonEmptyString(input.participantId, 'participantId');
   assertOptionalNonEmptyString(input.participantLabel, 'participantLabel');
-  assertNonEmptyString(input.attemptId, 'attemptId');
+  assertVerifiedLeaderboardIdentifier(input.attemptId, 'attemptId');
   assertFiniteNumber(input.score, 'score');
   assertTimestamp(input.completedAt, 'completedAt');
 }
@@ -374,6 +405,75 @@ export function assertVerifiedLeaderboardSnapshot(
   }
 
   assertTimestamp(input.generatedAt, 'generatedAt');
+  assertOptionalCursor(input.nextCursor);
+}
+
+export function createVerifiedLeaderboardCursor(
+  definition: VerifiedLeaderboardDefinition,
+  entry: LeaderboardRankedEntry,
+): string {
+  assertVerifiedLeaderboardDefinition(definition);
+  assertLeaderboardRankedEntry(entry);
+
+  const cursor = encodeBase64Url(
+    JSON.stringify({
+      version: 1,
+      leaderboardId: definition.leaderboardId,
+      scoreOrder: definition.scoreOrder,
+      attemptSelection: definition.attemptSelection,
+      score: entry.score,
+      completedAt: entry.completedAt,
+      attemptId: entry.attemptId,
+    }),
+  );
+  assertOptionalCursor(cursor);
+  return cursor;
+}
+
+export function parseVerifiedLeaderboardCursor(
+  cursor: string,
+  definition: VerifiedLeaderboardDefinition,
+): VerifiedLeaderboardCursorPosition {
+  assertVerifiedLeaderboardDefinition(definition);
+
+  try {
+    assertOptionalCursor(cursor);
+    const payload: unknown = JSON.parse(decodeBase64Url(cursor));
+    assertRecord(payload, 'VerifiedLeaderboardCursor');
+
+    if (payload.version !== 1) {
+      throw new Error('cursor version must be 1.');
+    }
+
+    assertVerifiedLeaderboardIdentifier(payload.leaderboardId, 'cursor leaderboardId');
+    assertScoreOrder(payload.scoreOrder);
+    assertAttemptSelection(payload.attemptSelection);
+    assertFiniteNumber(payload.score, 'cursor score');
+    assertTimestamp(payload.completedAt, 'cursor completedAt');
+    assertVerifiedLeaderboardIdentifier(payload.attemptId, 'cursor attemptId');
+
+    if (
+      payload.leaderboardId !== definition.leaderboardId
+      || payload.scoreOrder !== definition.scoreOrder
+      || payload.attemptSelection !== definition.attemptSelection
+    ) {
+      throw new Error('cursor does not match the leaderboard definition.');
+    }
+
+    return {
+      score: payload.score,
+      completedAtMs: parseTimestamp(payload.completedAt),
+      attemptId: payload.attemptId,
+    };
+  } catch (error) {
+    if (error instanceof VerifiedLeaderboardCursorError) {
+      throw error;
+    }
+
+    throw new VerifiedLeaderboardCursorError('Invalid verified leaderboard cursor.', {
+      cause: error,
+    });
+  }
 }
 
 function shouldReplaceRetainedAttempt(
@@ -526,6 +626,47 @@ function assertNonEmptyString(input: unknown, label: string): asserts input is s
   }
 }
 
+function assertVerifiedLeaderboardIdentifier(
+  input: unknown,
+  label: string,
+): asserts input is string {
+  assertNonEmptyString(input, label);
+
+  if (input.length > verifiedLeaderboardIdentifierMaximumLength) {
+    throw new Error(
+      `${label} must contain at most ${String(verifiedLeaderboardIdentifierMaximumLength)} characters.`,
+    );
+  }
+
+  if (!isWellFormedUnicode(input)) {
+    throw new Error(`${label} must contain only well-formed Unicode.`);
+  }
+}
+
+function isWellFormedUnicode(input: string): boolean {
+  for (let index = 0; index < input.length; index += 1) {
+    const codeUnit = input.charCodeAt(index);
+
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = input.charCodeAt(index + 1);
+
+      if (
+        index + 1 >= input.length
+        || nextCodeUnit < 0xdc00
+        || nextCodeUnit > 0xdfff
+      ) {
+        return false;
+      }
+
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 function assertOptionalNonEmptyString(
   input: unknown,
   label: string,
@@ -606,6 +747,109 @@ function compareOrdinal(left: string, right: string): number {
   }
 
   return left > right ? 1 : 0;
+}
+
+function compareRankedEntryToCursor(
+  definition: VerifiedLeaderboardDefinition,
+  entry: LeaderboardRankedEntry,
+  cursor: VerifiedLeaderboardCursorPosition,
+): number {
+  if (entry.score !== cursor.score) {
+    const comparison = entry.score < cursor.score ? -1 : 1;
+    return definition.scoreOrder === 'ascending' ? comparison : -comparison;
+  }
+
+  const completedAtMs = parseTimestamp(entry.completedAt);
+
+  if (completedAtMs !== cursor.completedAtMs) {
+    return completedAtMs < cursor.completedAtMs ? -1 : 1;
+  }
+
+  return compareOrdinal(entry.attemptId, cursor.attemptId);
+}
+
+function assertOptionalCursor(input: unknown): asserts input is string | undefined {
+  if (input === undefined) {
+    return;
+  }
+
+  if (
+    typeof input !== 'string'
+    || input.length === 0
+    || input.length > 65_536
+    || !/^[A-Za-z0-9_-]+$/u.test(input)
+  ) {
+    throw new VerifiedLeaderboardCursorError(
+      'cursor must be a base64url string no longer than 65536 characters.',
+    );
+  }
+}
+
+const base64UrlAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
+
+function encodeBase64Url(input: string): string {
+  const bytes = new TextEncoder().encode(input);
+  let encoded = '';
+
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index] ?? 0;
+    const second = bytes[index + 1];
+    const third = bytes[index + 2];
+    const bits = (first << 16) | ((second ?? 0) << 8) | (third ?? 0);
+    encoded += base64UrlAlphabet.charAt((bits >>> 18) & 63);
+    encoded += base64UrlAlphabet.charAt((bits >>> 12) & 63);
+
+    if (second !== undefined) {
+      encoded += base64UrlAlphabet.charAt((bits >>> 6) & 63);
+    }
+
+    if (third !== undefined) {
+      encoded += base64UrlAlphabet.charAt(bits & 63);
+    }
+  }
+
+  return encoded;
+}
+
+function decodeBase64Url(input: string): string {
+  if (input.length % 4 === 1) {
+    throw new Error('cursor has invalid base64url length.');
+  }
+
+  const bytes: number[] = [];
+
+  for (let index = 0; index < input.length; index += 4) {
+    const first = decodeBase64UrlCharacter(input[index]);
+    const second = decodeBase64UrlCharacter(input[index + 1]);
+    const third = decodeBase64UrlCharacter(input[index + 2]);
+    const fourth = decodeBase64UrlCharacter(input[index + 3]);
+    const bits = (first << 18) | (second << 12) | (third << 6) | fourth;
+    bytes.push((bits >>> 16) & 255);
+
+    if (input[index + 2] !== undefined) {
+      bytes.push((bits >>> 8) & 255);
+    }
+
+    if (input[index + 3] !== undefined) {
+      bytes.push(bits & 255);
+    }
+  }
+
+  return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(bytes));
+}
+
+function decodeBase64UrlCharacter(input: string | undefined): number {
+  if (input === undefined) {
+    return 0;
+  }
+
+  const value = base64UrlAlphabet.indexOf(input);
+
+  if (value < 0) {
+    throw new Error('cursor contains invalid base64url characters.');
+  }
+
+  return value;
 }
 
 function assertScoreOrder(input: unknown): asserts input is VerifiedLeaderboardScoreOrder {

@@ -1,6 +1,7 @@
 import {
   assertRecordVerifiedLeaderboardAttemptRequest,
   createInMemoryVerifiedLeaderboardService,
+  verifiedLeaderboardIdentifierMaximumLength,
   type RecordVerifiedLeaderboardAttemptRequest,
 } from './verified-leaderboard';
 
@@ -117,6 +118,93 @@ assertEqual(
 );
 assertEqual(snapshot.totalParticipants, 2, 'snapshot should count retained participants');
 assertEqual(snapshot.generatedAt, now, 'snapshot should use the injected server clock');
+
+const maximumIdentifier = '\u0000'.repeat(verifiedLeaderboardIdentifierMaximumLength);
+const maximumIdentifierService = createInMemoryVerifiedLeaderboardService({ now: () => now });
+
+for (const [index, suffix] of ['a', 'b'].entries()) {
+  await maximumIdentifierService.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: maximumIdentifier,
+      participantId: `maximum-identifier-player-${String(index + 1)}`,
+      attemptId: `${maximumIdentifier.slice(1)}${suffix}`,
+      score: index + 1,
+      completedAt: `2026-07-13T08:00:0${String(index)}.000Z`,
+    }),
+  );
+}
+
+const maximumIdentifierFirstPage = await maximumIdentifierService.getSnapshot({
+  leaderboardId: maximumIdentifier,
+  limit: 1,
+});
+assert(
+  maximumIdentifierFirstPage?.nextCursor !== undefined,
+  'maximum-length identifiers should still produce a continuation cursor',
+);
+assert(
+  maximumIdentifierFirstPage.nextCursor.length <= 65_536,
+  'maximum-length identifiers should keep the continuation cursor within its public cap',
+);
+const maximumIdentifierPageUrl = new URL(
+  'https://verified-leaderboard.test/game-services/verified-leaderboard/snapshot',
+);
+maximumIdentifierPageUrl.searchParams.set('leaderboardId', maximumIdentifier);
+maximumIdentifierPageUrl.searchParams.set('limit', '1');
+maximumIdentifierPageUrl.searchParams.set('cursor', maximumIdentifierFirstPage.nextCursor);
+assert(
+  maximumIdentifierPageUrl.href.length <= 16_384,
+  'maximum-length identifiers should keep cursor reads within the Workers URL cap',
+);
+const maximumIdentifierSecondPage = await maximumIdentifierService.getSnapshot({
+  leaderboardId: maximumIdentifier,
+  limit: 1,
+  cursor: maximumIdentifierFirstPage.nextCursor,
+});
+assertEqual(
+  maximumIdentifierSecondPage?.entries[0]?.rank,
+  2,
+  'maximum-length identifiers should traverse to the next page',
+);
+
+await assertRejects(
+  () => maximumIdentifierService.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: `${maximumIdentifier}x`,
+      participantId: 'oversized-leaderboard-player',
+      attemptId: 'oversized-leaderboard-attempt',
+      score: 1,
+      completedAt: '2026-07-13T08:00:02.000Z',
+    }),
+  ),
+  'leaderboardId must contain at most',
+  'leaderboard IDs beyond the public maximum should fail closed',
+);
+await assertRejects(
+  () => maximumIdentifierService.recordVerifiedAttempt(
+    createAttempt({
+      participantId: 'oversized-attempt-player',
+      attemptId: `${maximumIdentifier}x`,
+      score: 1,
+      completedAt: '2026-07-13T08:00:03.000Z',
+    }),
+  ),
+  'attemptId must contain at most',
+  'attempt IDs beyond the public maximum should fail closed',
+);
+await assertRejects(
+  () => maximumIdentifierService.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: 'invalid-unicode-\uD800',
+      participantId: 'invalid-unicode-player',
+      attemptId: 'invalid-unicode-attempt',
+      score: 1,
+      completedAt: '2026-07-13T08:00:04.000Z',
+    }),
+  ),
+  'leaderboardId must contain only well-formed Unicode',
+  'URL-lossy leaderboard IDs should fail closed',
+);
 
 const missing = await service.getSnapshot({ leaderboardId: 'missing' });
 assertEqual(missing, undefined, 'unknown leaderboard should not invent a definition');

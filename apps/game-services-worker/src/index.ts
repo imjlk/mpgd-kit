@@ -43,5 +43,7 @@ export {
   createWorkerFetchHandler,
   createWorkerService,
   type GameServicesWorkerEnv,
+  type VerifiedLeaderboardAuthBinding,
+  type VerifiedLeaderboardAuthBindingRequest,
 } from './handler.js';
 export default GameServicesWorker;

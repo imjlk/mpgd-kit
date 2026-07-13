@@ -263,6 +263,7 @@ to run xcodebuild archive.
 - [x] `apps/game-services-worker` uses the Cloudflare Vite plugin for local dev, production build, preview, and deploy
 - [x] `pnpm smoke:game-services:worker` validates local Worker HTTP, oRPC, service binding, and Vite build surfaces
 - [x] D1 verified leaderboards preserve provider conformance behind private Worker service binding RPC
+- [x] authenticated verified leaderboard snapshots use server-scoped participants and keyset cursors
 
 ## Phase 22 - Reddit Devvit Web Target
 
