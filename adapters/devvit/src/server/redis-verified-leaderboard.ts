@@ -59,7 +59,7 @@ export interface DevvitVerifiedLeaderboardRedisLike {
 export interface DevvitRedisVerifiedLeaderboardServiceOptions {
   /** Redis-safe namespace shared by every board created by this provider. */
   readonly keyPrefix?: string;
-  /** Maximum optimistic transaction attempts after WATCH contention. */
+  /** Maximum optimistic transaction and retained-entry read attempts. */
   readonly transactionAttempts?: number;
   /** Clock used for snapshot generation timestamps. */
   readonly now?: () => string;
@@ -128,7 +128,12 @@ export function createDevvitRedisVerifiedLeaderboardService(
             return cloneRecordResponse(existing.response, true);
           }
 
-          const rankedAttempts = await readRankedAttempts(redis, keys, definition);
+          const rankedAttempts = await readRankedAttempts(
+            redis,
+            keys,
+            definition,
+            transactionAttempts,
+          );
           assertAvailableAttemptMember(rankedAttempts, attemptMember, request.attempt);
           const retainedAttempt = rankedAttempts.find(
             (candidate) => candidate.attempt.participantId === request.attempt.participantId,
@@ -215,7 +220,12 @@ export function createDevvitRedisVerifiedLeaderboardService(
         return undefined;
       }
 
-      const rankedAttempts = await readRankedAttempts(redis, keys, definition);
+      const rankedAttempts = await readRankedAttempts(
+        redis,
+        keys,
+        definition,
+        transactionAttempts,
+      );
       const rankedEntries = toRankedEntries(rankedAttempts);
       const cursorPosition = request.cursor === undefined
         ? undefined
@@ -305,7 +315,27 @@ async function readRankedAttempts(
   redis: DevvitVerifiedLeaderboardRedisLike,
   keys: BoardKeys,
   definition: VerifiedLeaderboardDefinition,
+  readAttempts: number,
 ): Promise<RankedAttempt[]> {
+  for (let attempt = 0; attempt < readAttempts; attempt += 1) {
+    const rankedAttempts = await tryReadRankedAttempts(redis, keys, definition);
+
+    if (rankedAttempts !== undefined) {
+      return rankedAttempts;
+    }
+  }
+
+  throw new Error(
+    'Devvit Redis retained entries changed during '
+      + `${String(readAttempts)} consecutive reads for ${keys.ranking}.`,
+  );
+}
+
+async function tryReadRankedAttempts(
+  redis: DevvitVerifiedLeaderboardRedisLike,
+  keys: BoardKeys,
+  definition: VerifiedLeaderboardDefinition,
+): Promise<RankedAttempt[] | undefined> {
   const members = await redis.zRange(keys.ranking, 0, -1);
 
   if (members.length === 0) {
@@ -321,11 +351,15 @@ async function readRankedAttempts(
     throw new Error(`Devvit Redis returned incomplete retained entries for ${keys.ranking}.`);
   }
 
+  if (values.some((raw) => raw === null)) {
+    return undefined;
+  }
+
   const rankedAttempts = members.map((member, index): RankedAttempt => {
     const raw = values[index];
 
     if (raw === null || raw === undefined) {
-      throw new Error(`Devvit Redis retained entry is missing for ${keys.entries}.`);
+      throw new Error(`Devvit Redis returned incomplete retained entries for ${keys.entries}.`);
     }
 
     const stored = parseStoredRetainedAttempt(raw, keys.entries);

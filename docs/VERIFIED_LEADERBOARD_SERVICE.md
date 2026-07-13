@@ -181,6 +181,8 @@ watches the board definition, idempotency decisions, retained-entry hash, and
 ranking set before committing them with `MULTI/EXEC`. Contention is retried with
 a bounded budget, and an attempt retry returns its originally persisted
 decision even after a later attempt replaces the retained entry.
+Snapshot and write-side retained-entry loads retry a bounded number of times if
+a replacement transaction commits between the sorted-set and hash reads.
 
 Redis sorted-set order is not used as the final tie breaker because Redis and
 JavaScript order non-ASCII strings differently. The adapter loads retained

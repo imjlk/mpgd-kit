@@ -78,6 +78,34 @@ describe('createDevvitRedisVerifiedLeaderboardService', () => {
       .toThrow('contention exceeded 2 attempts');
   });
 
+  it('re-reads a snapshot when a retained replacement commits between Redis reads', async () => {
+    const redis = new FakeDevvitRedis();
+    const service = createDevvitRedisVerifiedLeaderboardService(redis);
+    const initialRequest = createRequest('snapshot-race');
+    await service.recordVerifiedAttempt(initialRequest);
+    redis.beforeNextHMGet = async () => {
+      await service.recordVerifiedAttempt({
+        ...initialRequest,
+        attempt: {
+          ...initialRequest.attempt,
+          attemptId: 'attempt:snapshot-race:earlier',
+          completedAt: '2030-01-02T03:03:05.000Z',
+          verification: {
+            ...initialRequest.attempt.verification,
+            evidenceId: 'evidence:snapshot-race:earlier',
+          },
+        },
+      });
+    };
+
+    await expect(service.getSnapshot({
+      leaderboardId: initialRequest.definition.leaderboardId,
+    })).resolves.toMatchObject({
+      entries: [{ attemptId: 'attempt:snapshot-race:earlier' }],
+    });
+    expect(redis.hMGetCalls).toBe(3);
+  });
+
   it('rejects invalid provider options before using Redis', () => {
     const redis = new FakeDevvitRedis();
 
@@ -123,8 +151,10 @@ class FakeDevvitRedis implements DevvitVerifiedLeaderboardRedisLike {
   readonly sortedSets = new Map<string, Map<string, number>>();
   readonly versions = new Map<string, number>();
   readonly observedKeys: string[] = [];
+  beforeNextHMGet: (() => Promise<void>) | undefined;
   remainingContentions = 0;
   execCalls = 0;
+  hMGetCalls = 0;
 
   async get(key: string): Promise<string | undefined> {
     this.observe(key);
@@ -137,6 +167,10 @@ class FakeDevvitRedis implements DevvitVerifiedLeaderboardRedisLike {
   }
 
   async hMGet(key: string, fields: string[]): Promise<Array<string | null>> {
+    this.hMGetCalls += 1;
+    const beforeHMGet = this.beforeNextHMGet;
+    this.beforeNextHMGet = undefined;
+    await beforeHMGet?.();
     this.observe(key);
     const hash = this.hashes.get(key);
     return fields.map((field) => hash?.get(field) ?? null);
