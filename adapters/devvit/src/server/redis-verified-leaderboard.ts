@@ -19,6 +19,7 @@ import {
 } from '@mpgd/game-services/verified-leaderboard';
 
 const defaultKeyPrefix = 'mpgd:verified-leaderboard:v1';
+const defaultSnapshotLimit = 10;
 const defaultTransactionAttempts = 3;
 const maximumTransactionAttempts = 32;
 const keyPrefixPattern = /^[A-Za-z0-9:_-]{1,128}$/;
@@ -225,7 +226,7 @@ export function createDevvitRedisVerifiedLeaderboardService(
           (entry) => compareEntryToCursor(definition.scoreOrder, entry, cursorPosition) > 0,
         );
       const pageStart = firstPageIndex < 0 ? rankedEntries.length : firstPageIndex;
-      const pageEnd = pageStart + (request.limit ?? 10);
+      const pageEnd = pageStart + (request.limit ?? defaultSnapshotLimit);
       const entries = rankedEntries.slice(pageStart, pageEnd);
       const participantEntry = request.participantId === undefined
         ? undefined
@@ -499,7 +500,15 @@ function compareEntryToCursor(
 }
 
 function compareOrdinal(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+  if (left < right) {
+    return -1;
+  }
+
+  if (left > right) {
+    return 1;
+  }
+
+  return 0;
 }
 
 function redisRankingScore(scoreOrder: VerifiedLeaderboardScoreOrder, score: number): number {
