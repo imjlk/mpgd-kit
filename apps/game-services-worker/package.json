@@ -11,7 +11,7 @@
     "preview": "pnpm build && vite preview",
     "deploy": "pnpm build && wrangler deploy",
     "types": "wrangler types",
-    "test": "cd ../.. && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/index.test.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/index.test.ts && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/verifiedLeaderboardD1.test.ts"
   },
   "dependencies": {
     "@mpgd/catalog": "workspace:*",
@@ -20,6 +20,7 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.43.0",
     "@cloudflare/workers-types": "^4.20260701.1",
+    "miniflare": "4.20260701.0",
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
     "vite": "^8.1.3",

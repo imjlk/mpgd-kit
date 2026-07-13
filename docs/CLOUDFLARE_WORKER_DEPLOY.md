@@ -127,12 +127,20 @@ The current service binding methods are:
 - `verifyPurchase(input)`
 - `claimAdReward(input)`
 - `recordLeaderboardScore(input)`
+- `recordVerifiedAttempt(input)` for trusted attempt coordinators
+- `getSnapshot(input)` for verified leaderboard reads
+
+The verified-attempt writer is intentionally available only through the
+private service binding. It is not routed through the public JSON or oRPC
+surfaces. Authenticate and scope any public snapshot transport separately.
 
 ## Production Notes
 
 - Keep secrets out of `wrangler.toml`; use Cloudflare secret management for real
   API credentials.
 - `MPGD_STORE = "memory"` is sample-only. Use D1 for persistence.
+- Apply both `0001_game_services.sql` and `0002_verified_leaderboards.sql`
+  before switching an existing deployment to D1.
 - The Worker verifies sample product/ad evidence today. Real Google Play,
   App Store, AdMob SSV, and Apps in Toss verification adapters are described in
   [Production Integration Roadmap](PRODUCTION_INTEGRATION_ROADMAP.md).

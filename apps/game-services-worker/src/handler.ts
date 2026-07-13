@@ -6,15 +6,22 @@ import {
   createGameServicesRpcFetchHandler,
   createGameServicesRouter,
   createInMemoryGameServicesStore,
+  createInMemoryVerifiedLeaderboardService,
   type ClaimAdRewardRequest,
   type GameServicesBackendApi,
   type GameServicesStore,
+  type GetVerifiedLeaderboardSnapshotRequest,
   type RecordLeaderboardScoreRequest,
+  type RecordVerifiedLeaderboardAttemptRequest,
+  type RecordVerifiedLeaderboardAttemptResponse,
+  type VerifiedLeaderboardService,
+  type VerifiedLeaderboardSnapshot,
   type VerifyPurchaseRequest,
 } from '@mpgd/game-services';
 import type { ProductCatalog } from '@mpgd/catalog';
 
 import { createD1GameServicesStore } from './d1Store.js';
+import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
 
 export interface GameServicesWorkerEnv {
   readonly DB?: D1Database;
@@ -25,6 +32,12 @@ export interface GameServicesWorkerService {
   verifyPurchase(input: VerifyPurchaseRequest): Promise<unknown>;
   claimAdReward(input: ClaimAdRewardRequest): Promise<unknown>;
   recordLeaderboardScore(input: RecordLeaderboardScoreRequest): Promise<unknown>;
+  recordVerifiedAttempt(
+    input: RecordVerifiedLeaderboardAttemptRequest,
+  ): Promise<RecordVerifiedLeaderboardAttemptResponse>;
+  getSnapshot(
+    input: GetVerifiedLeaderboardSnapshotRequest,
+  ): Promise<VerifiedLeaderboardSnapshot | undefined>;
 }
 
 const productCatalog = {
@@ -69,6 +82,7 @@ const adPlacements = {
   ],
 } as const satisfies AdPlacements;
 const fallbackMemoryStore = createInMemoryGameServicesStore();
+const fallbackVerifiedLeaderboardService = createInMemoryVerifiedLeaderboardService();
 
 export function createWorkerFetchHandler(
   env: GameServicesWorkerEnv,
@@ -112,6 +126,7 @@ export function createWorkerFetchHandler(
 
 export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWorkerService {
   const backend = createWorkerBackend(env);
+  const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
 
   return {
     verifyPurchase(input) {
@@ -122,6 +137,12 @@ export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWor
     },
     recordLeaderboardScore(input) {
       return backend.leaderboard.recordScore(input);
+    },
+    recordVerifiedAttempt(input) {
+      return verifiedLeaderboard.recordVerifiedAttempt(input);
+    },
+    getSnapshot(input) {
+      return verifiedLeaderboard.getSnapshot(input);
     },
   };
 }
@@ -136,13 +157,27 @@ function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi
 }
 
 function createWorkerStore(env: GameServicesWorkerEnv): GameServicesStore {
-  if (env.MPGD_STORE === 'd1') {
-    if (env.DB === undefined) {
-      throw new Error('MPGD_STORE is d1 but DB binding is not configured.');
-    }
+  const db = resolveD1Database(env);
+  return db === undefined ? fallbackMemoryStore : createD1GameServicesStore(db);
+}
 
-    return createD1GameServicesStore(env.DB);
+function createWorkerVerifiedLeaderboardService(
+  env: GameServicesWorkerEnv,
+): VerifiedLeaderboardService {
+  const db = resolveD1Database(env);
+  return db === undefined
+    ? fallbackVerifiedLeaderboardService
+    : createD1VerifiedLeaderboardService(db);
+}
+
+function resolveD1Database(env: GameServicesWorkerEnv): D1Database | undefined {
+  if (env.MPGD_STORE !== 'd1') {
+    return undefined;
   }
 
-  return fallbackMemoryStore;
+  if (env.DB === undefined) {
+    throw new Error('MPGD_STORE is d1 but DB binding is not configured.');
+  }
+
+  return env.DB;
 }

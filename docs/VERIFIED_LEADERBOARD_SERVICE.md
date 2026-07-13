@@ -58,6 +58,25 @@ deployments without adding bounded retention and an indexed ranking strategy.
 Durable platforms should implement the same `VerifiedLeaderboardService`
 interface.
 
+## Bundled Cloudflare D1 Provider
+
+`apps/game-services-worker` includes a D1 implementation behind its private
+`WorkerEntrypoint` service-binding methods. With `MPGD_STORE = "d1"`,
+`recordVerifiedAttempt()` and `getSnapshot()` use the configured `DB` binding;
+the memory provider remains the local default.
+
+Apply `apps/game-services-worker/migrations/0002_verified_leaderboards.sql`
+after the base game-services migration. Each write uses one D1 `batch()` so the
+definition check, attempt-id decision, retained-entry update, and original
+response snapshot commit atomically. Snapshot and read-after-write operations
+use a `first-primary` D1 session. Attempt IDs carry a derived UTF-16 code-unit
+ordinal key so SQLite ranking matches JavaScript ordering for both BMP and
+supplementary characters.
+
+The Miniflare smoke runs the public provider conformance suite against the real
+D1 API, including concurrent idempotency, rollback, mutation isolation, and
+cross-encoding tie cases.
+
 ## Provider Conformance
 
 Durable provider packages can validate their implementation with the
@@ -129,11 +148,10 @@ service = "game-leaderboard"
 Access the binding from each request's `env`; do not cache it in module-global
 state.
 
-For D1 persistence, use separate definition, verified-attempt decision, and
-retained-entry tables. Enforce unique `(leaderboard_id, attempt_id)` and
-`(leaderboard_id, participant_id)` keys, make definition policies immutable,
-and perform the idempotency decision plus retained-entry update atomically.
-Prepared statements are required. Use the primary/session for read-after-write
-responses; public snapshot reads may use replicas when stale reads are
-acceptable. KV is not suitable as the authoritative write store for a hot
-leaderboard because writes are eventually consistent and rate-limited per key.
+The bundled D1 provider uses separate definition, verified-attempt decision,
+and retained-entry tables. It enforces unique `(leaderboard_id, attempt_id)` and
+`(leaderboard_id, participant_id)` keys, immutable definition policies, and an
+atomic idempotency plus retained-entry decision. Public snapshot reads added by
+an application may use replicas when stale reads are acceptable. KV is not
+suitable as the authoritative write store for a hot leaderboard because writes
+are eventually consistent and rate-limited per key.

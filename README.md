@@ -127,7 +127,8 @@ Reusable purchase, rewarded ad, and leaderboard flows are ledger-first:
 public JSON endpoints, `/rpc/*` oRPC procedures, `/health`, and
 `WorkerEntrypoint` service binding methods. The default Worker store is
 `memory` for local smoke tests; production persistence should enable D1 and
-`MPGD_STORE = "d1"`.
+`MPGD_STORE = "d1"`. The same D1 binding durably stores verified leaderboard
+definitions, idempotent attempt decisions, and retained ranked entries.
 
 Read:
 

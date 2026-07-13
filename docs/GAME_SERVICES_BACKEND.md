@@ -136,8 +136,10 @@ The Worker entry file is intentionally thin: `src/index.ts` extends
 
 The default `wrangler.toml` uses `MPGD_STORE = "memory"` so local smoke tests
 work without provisioning cloud resources. For production persistence, create a
-D1 database, run `apps/game-services-worker/migrations/0001_game_services.sql`,
-uncomment the D1 binding, and set `MPGD_STORE = "d1"`.
+D1 database, apply every migration in `apps/game-services-worker/migrations/`
+in filename order, uncomment the D1 binding, and set `MPGD_STORE = "d1"`.
+The `0002_verified_leaderboards.sql` migration adds durable definition,
+processed-attempt decision, and retained-entry tables.
 
 The Worker class extends `WorkerEntrypoint`, so another Worker can bind it as an
 internal service and call methods without a public URL:
@@ -152,10 +154,13 @@ service = "mpgd-game-services"
 const purchase = await env.GAME_SERVICES.verifyPurchase(input);
 const reward = await env.GAME_SERVICES.claimAdReward(input);
 const score = await env.GAME_SERVICES.recordLeaderboardScore(input);
+const verified = await env.GAME_SERVICES.recordVerifiedAttempt(verifiedCommand);
+const snapshot = await env.GAME_SERVICES.getSnapshot(snapshotRequest);
 ```
 
 Use public HTTP/oRPC for external game clients and service binding RPC for
-internal Cloudflare Worker-to-Worker calls.
+internal Cloudflare Worker-to-Worker calls. `recordVerifiedAttempt()` is a
+trusted internal command and is not exposed by the Worker's public fetch routes.
 
 ## Target Notes
 
@@ -201,4 +206,5 @@ the store, leaderboard submissions appear in the store, duplicate idempotency
 keys dedupe, and cancelled purchase or skipped ad callbacks do not create grants.
 The Worker smoke builds the Cloudflare Vite plugin output, calls
 `/game-services/*` and `/rpc/*` against the Worker fetch handler in-process, and
-checks the service binding method surface through `createWorkerService()`.
+checks the service binding method surface through `createWorkerService()`. It
+also runs the provider conformance suite against a real Miniflare D1 database.
