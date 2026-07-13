@@ -31,13 +31,13 @@
     "helmet": "^8.1.0"
   },
   "devDependencies": {
-    "@ttsc/unplugin": "0.16.9",
+    "@ttsc/unplugin": "0.18.4",
     "@types/express": "^5.0.6",
     "@types/node": "^24.0.0",
     "concurrently": "10.0.3",
     "devvit": "0.13.6",
-    "ttsc": "0.16.9",
-    "typescript": "7.0.1-rc",
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
     "vite": "^8.1.3"
   }
 }

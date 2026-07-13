@@ -41,8 +41,8 @@
     "test": "vitest run"
   },
   "devDependencies": {
-    "ttsc": "0.16.9",
-    "typescript": "7.0.1-rc",
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
     "vitest": "^4.0.0"
   },
   "main": "./dist/index.js",

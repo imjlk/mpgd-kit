@@ -16,23 +16,23 @@ allowBuilds:
   sharp: true
   workerd: true
 minimumReleaseAgeExclude:
-  - '@ttsc/darwin-arm64@0.16.9'
-  - '@ttsc/darwin-x64@0.16.9'
-  - '@ttsc/graph@0.16.9'
-  - '@ttsc/lint@0.16.9'
-  - '@ttsc/linux-arm64@0.16.9'
-  - '@ttsc/linux-arm@0.16.9'
-  - '@ttsc/linux-x64@0.16.9'
-  - '@ttsc/paths@0.16.9'
-  - '@ttsc/strip@0.16.9'
-  - '@ttsc/unplugin@0.16.9'
-  - '@ttsc/win32-arm64@0.16.9'
-  - '@ttsc/win32-x64@0.16.9'
-  - '@typia/interface@13.0.0-rc.1'
-  - '@typia/mcp@13.0.0-rc.1'
-  - '@typia/utils@13.0.0-rc.1'
-  - ttsc@0.16.9
-  - typia@13.0.0-rc.1
+  - '@ttsc/darwin-arm64@0.18.4'
+  - '@ttsc/darwin-x64@0.18.4'
+  - '@ttsc/graph@0.18.4'
+  - '@ttsc/lint@0.18.4'
+  - '@ttsc/linux-arm64@0.18.4'
+  - '@ttsc/linux-arm@0.18.4'
+  - '@ttsc/linux-x64@0.18.4'
+  - '@ttsc/paths@0.18.4'
+  - '@ttsc/strip@0.18.4'
+  - '@ttsc/unplugin@0.18.4'
+  - '@ttsc/win32-arm64@0.18.4'
+  - '@ttsc/win32-x64@0.18.4'
+  - '@typia/interface@13.0.2'
+  - '@typia/mcp@13.0.2'
+  - '@typia/utils@13.0.2'
+  - ttsc@0.18.4
+  - typia@13.0.2
   - '@orpc/client@2.0.0-beta.14'
   - '@orpc/contract@2.0.0-beta.14'
   - '@orpc/interop@2.0.0-beta.14'

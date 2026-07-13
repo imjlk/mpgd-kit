@@ -87,10 +87,11 @@ export function dumpGraph({ cwd, tsconfig }) {
   return dump.stdout;
 }
 
-export function inspectWithDump(dump, props) {
+export async function inspectWithDump(dump, props) {
   const memory = TtscGraphMemory.from(JSON.parse(dump));
   const app = new TtscGraphApplication(memory);
-  return app.inspect_typescript_graph(props).result;
+  const response = await app.inspect_typescript_graph(props);
+  return response.result;
 }
 
 export function summarizeGraphResult(result) {

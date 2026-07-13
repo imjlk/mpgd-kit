@@ -58,7 +58,7 @@
     "@inlang/paraglide-js": "2.20.2",
     "@inlang/plugin-message-format": "4.4.0",
     "@types/node": "^24.0.0",
-    "ttsc": "0.16.9",
+    "ttsc": "0.18.4",
     "typescript": "5.9.3"
   },
   "main": "./dist/index.js",

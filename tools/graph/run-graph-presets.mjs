@@ -27,7 +27,7 @@ for (const presetName of requestedPresets) {
     dumps.set(key, dump);
   }
 
-  const result = inspectWithDump(dump, preset.props);
+  const result = await inspectWithDump(dump, preset.props);
   const nextAction = result.next?.action;
   const anchorCount =
     result.answerAnchors?.length ??

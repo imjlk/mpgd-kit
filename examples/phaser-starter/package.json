@@ -25,10 +25,10 @@
     "phaser": "4.2.0"
   },
   "devDependencies": {
-    "@ttsc/unplugin": "0.16.9",
+    "@ttsc/unplugin": "0.18.4",
     "@types/node": "^24.0.0",
-    "ttsc": "0.16.9",
-    "typescript": "rc",
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
     "vite": "^8.1.3"
   }
 }
