@@ -1,6 +1,12 @@
 export type VerifiedLeaderboardScoreOrder = 'ascending' | 'descending';
 export type VerifiedLeaderboardAttemptSelection = 'first' | 'best';
 
+const timestampPattern = new RegExp(
+  '^(\\d{4})-(\\d{2})-(\\d{2})'
+    + 'T(\\d{2}):(\\d{2}):(\\d{2})'
+    + '(?:\\.(\\d{1,3}))?(Z|([+-])(\\d{2}):(\\d{2}))$',
+);
+
 export interface VerifiedLeaderboardDefinition {
   readonly leaderboardId: string;
   readonly scoreOrder: VerifiedLeaderboardScoreOrder;
@@ -550,11 +556,6 @@ function assertTimestamp(input: unknown, label: string): asserts input is string
 }
 
 function parseTimestamp(input: string): number {
-  const timestampPattern = new RegExp(
-    '^(\\d{4})-(\\d{2})-(\\d{2})'
-      + 'T(\\d{2}):(\\d{2}):(\\d{2})'
-      + '(?:\\.(\\d{1,3}))?(Z|([+-])(\\d{2}):(\\d{2}))$',
-  );
   const match = timestampPattern.exec(input);
 
   if (match === null) {
