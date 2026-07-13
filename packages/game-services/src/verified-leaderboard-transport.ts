@@ -89,6 +89,10 @@ export function createVerifiedLeaderboardSnapshotFetchHandler(
       snapshotRequest = readSnapshotRequest(requestUrl);
       assertGetVerifiedLeaderboardSnapshotRequest(snapshotRequest);
     } catch (error) {
+      if (error instanceof VerifiedLeaderboardCursorError) {
+        return jsonResponse({ error: 'INVALID_CURSOR' }, 400, input.corsHeaders);
+      }
+
       return jsonResponse(
         { error: error instanceof Error ? error.message : 'BAD_REQUEST' },
         400,
@@ -161,7 +165,15 @@ export function createVerifiedLeaderboardSnapshotFetchClient(
         return undefined;
       }
 
-      const body: unknown = await response.json();
+      let body: unknown;
+
+      try {
+        body = await response.json();
+      } catch {
+        throw new Error(
+          `Verified leaderboard snapshot response was not JSON (status ${response.status}).`,
+        );
+      }
 
       if (!response.ok) {
         const error = readErrorCode(body);

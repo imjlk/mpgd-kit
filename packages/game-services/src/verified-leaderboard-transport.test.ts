@@ -104,6 +104,16 @@ await assertRejects(
   'the client must reject unauthorized transport responses',
 );
 
+const nonJsonClient = createVerifiedLeaderboardSnapshotFetchClient({
+  baseUrl,
+  authorization: () => 'Bearer player-token',
+  fetch: async () => new Response('<html>upstream unavailable</html>', { status: 502 }),
+});
+await assertRejects(
+  () => nonJsonClient.getSnapshot({ leaderboardId: 'transport:board' }),
+  'the client must wrap non-JSON upstream responses',
+);
+
 console.log('Verified leaderboard authenticated snapshot transport smoke passed');
 
 function snapshotRequest(suffix = '', authenticated = false): Request {

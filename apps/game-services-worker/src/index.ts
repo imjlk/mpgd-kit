@@ -11,8 +11,6 @@ import {
   createWorkerFetchHandler,
   createWorkerService,
   type GameServicesWorkerEnv,
-  type VerifiedLeaderboardAuthBinding,
-  type VerifiedLeaderboardAuthBindingRequest,
 } from './handler.js';
 
 export class GameServicesWorker extends WorkerEntrypoint<GameServicesWorkerEnv> {
@@ -45,5 +43,7 @@ export {
   createWorkerFetchHandler,
   createWorkerService,
   type GameServicesWorkerEnv,
+  type VerifiedLeaderboardAuthBinding,
+  type VerifiedLeaderboardAuthBindingRequest,
 } from './handler.js';
 export default GameServicesWorker;

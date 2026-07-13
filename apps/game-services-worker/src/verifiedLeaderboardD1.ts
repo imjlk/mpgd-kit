@@ -356,6 +356,8 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
     const cursorPosition = input.cursor === undefined
       ? undefined
       : parseVerifiedLeaderboardCursor(input.cursor, definition);
+    // Rank is intentionally computed across the full board before keyset filtering.
+    // This preserves current global ranks; very large boards should materialize ranks.
     const rankedEntriesQuery = `SELECT
       ROW_NUMBER() OVER (ORDER BY ${orderBy}) AS rank,
       participant_id,
@@ -374,24 +376,32 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
            LIMIT ?`,
         ).bind(input.leaderboardId, limit + 1)
       : session.prepare(
-          `SELECT * FROM (${rankedEntriesQuery})
+          `SELECT ranked.*
+           FROM (${rankedEntriesQuery}) AS ranked
+           CROSS JOIN (
+             SELECT
+               ? AS cursor_score,
+               ? AS cursor_completed_at_ms,
+               ? AS cursor_attempt_ordinal
+           ) AS cursor
            WHERE (
-             score ${definition.scoreOrder === 'ascending' ? '>' : '<'} ?
+             ranked.score ${definition.scoreOrder === 'ascending' ? '>' : '<'} cursor.cursor_score
              OR (
-               score = ?
+               ranked.score = cursor.cursor_score
                AND (
-                 completed_at_ms > ?
-                 OR (completed_at_ms = ? AND attempt_ordinal > ?)
+                 ranked.completed_at_ms > cursor.cursor_completed_at_ms
+                 OR (
+                   ranked.completed_at_ms = cursor.cursor_completed_at_ms
+                   AND ranked.attempt_ordinal > cursor.cursor_attempt_ordinal
+                 )
                )
              )
            )
-           ORDER BY rank
+           ORDER BY ranked.rank
            LIMIT ?`,
         ).bind(
           input.leaderboardId,
           cursorPosition.score,
-          cursorPosition.score,
-          cursorPosition.completedAtMs,
           cursorPosition.completedAtMs,
           toUtf16OrdinalKey(cursorPosition.attemptId),
           limit + 1,

@@ -424,6 +424,7 @@ export function createVerifiedLeaderboardCursor(
       attemptId: entry.attemptId,
     }),
   );
+  // Public identifiers are not length-bounded, so generated tokens still need the cursor cap.
   assertOptionalCursor(cursor);
   return cursor;
 }
@@ -730,12 +731,19 @@ function assertOptionalCursor(input: unknown): asserts input is string | undefin
     return;
   }
 
-  assertNonEmptyString(input, 'cursor');
-
-  if (input.length > 65_536 || !/^[A-Za-z0-9_-]+$/u.test(input)) {
-    throw new Error('cursor must be a base64url string no longer than 65536 characters.');
+  if (
+    typeof input !== 'string'
+    || input.length === 0
+    || input.length > 65_536
+    || !/^[A-Za-z0-9_-]+$/u.test(input)
+  ) {
+    throw new VerifiedLeaderboardCursorError(
+      'cursor must be a base64url string no longer than 65536 characters.',
+    );
   }
 }
+
+const base64UrlAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
 function encodeBase64Url(input: string): string {
   const bytes = new TextEncoder().encode(input);
@@ -801,8 +809,6 @@ function decodeBase64UrlCharacter(input: string | undefined): number {
 
   return value;
 }
-
-const base64UrlAlphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 
 function assertScoreOrder(input: unknown): asserts input is VerifiedLeaderboardScoreOrder {
   if (input !== 'ascending' && input !== 'descending') {

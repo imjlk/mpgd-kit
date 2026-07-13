@@ -84,8 +84,11 @@ supplementary characters.
 
 The Miniflare smoke runs the public provider conformance suite against the real
 D1 API, including concurrent idempotency, rollback, mutation isolation, and
-cross-encoding tie cases. Cursor reads use indexed keyset predicates while
-preserving global ranks and an independently scoped participant entry.
+cross-encoding tie cases. Cursor reads use keyset predicates while preserving
+global ranks and an independently scoped participant entry. The current D1
+query computes a full-board `ROW_NUMBER()` window before applying the keyset so
+rank values remain current; very large or hot boards may need cached/materialized
+ranks or an application-level participant cap.
 
 ## Authenticated Read Transport
 
