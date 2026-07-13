@@ -39,6 +39,22 @@ const skippedGeneratedSourceDirs = new Set([
   'dist',
   'node_modules',
 ]);
+const generatedSourceSuffixes = [
+  ['.d.mts.map', '.mts'],
+  ['.d.cts.map', '.cts'],
+  ['.d.ts.map', '.ts'],
+  ['.mjs.map', '.mts'],
+  ['.cjs.map', '.cts'],
+  ['.jsx.map', '.tsx'],
+  ['.js.map', '.ts'],
+  ['.d.mts', '.mts'],
+  ['.d.cts', '.cts'],
+  ['.d.ts', '.ts'],
+  ['.mjs', '.mts'],
+  ['.cjs', '.cts'],
+  ['.jsx', '.tsx'],
+  ['.js', '.ts'],
+];
 
 if (!existsSync(tsgoBinary)) {
   throw new Error(`TypeScript-Go binary not found: ${tsgoBinary}`);
@@ -50,6 +66,7 @@ if (!existsSync(tsgoBinary)) {
 removeGeneratedSourceSiblings();
 
 let result;
+let cleanupError;
 
 try {
   result = spawnSync(process.execPath, [
@@ -68,14 +85,30 @@ try {
     },
   });
 } finally {
-  removeGeneratedSourceSiblings();
+  try {
+    removeGeneratedSourceSiblings();
+  } catch (error) {
+    cleanupError = error;
+  }
 }
 
 if (result.error !== undefined) {
   throw result.error;
 }
 
-process.exit(result.status ?? 1);
+const exitStatus = result.status ?? 1;
+
+if (cleanupError !== undefined) {
+  if (exitStatus !== 0) {
+    process.stderr.write(`ttsx source cleanup also failed: ${formatError(cleanupError)}\n`);
+  } else {
+    throw new Error('ttsx source cleanup failed after a successful run.', {
+      cause: cleanupError,
+    });
+  }
+}
+
+process.exit(exitStatus);
 
 function removeGeneratedSourceSiblings() {
   for (const root of generatedSourceRoots) {
@@ -105,11 +138,7 @@ function removeGeneratedSourceSiblingsIn(dir) {
       continue;
     }
 
-    const sourceSibling = path.endsWith('.d.ts')
-      ? `${path.slice(0, -5)}.ts`
-      : path.endsWith('.js')
-        ? `${path.slice(0, -3)}.ts`
-        : undefined;
+    const sourceSibling = findSourceSibling(path);
 
     if (sourceSibling !== undefined && existsSync(sourceSibling)) {
       rmSync(path, { force: true });
@@ -117,8 +146,28 @@ function removeGeneratedSourceSiblingsIn(dir) {
   }
 }
 
+function findSourceSibling(path) {
+  for (const [artifactSuffix, sourceSuffix] of generatedSourceSuffixes) {
+    if (!path.endsWith(artifactSuffix)) {
+      continue;
+    }
+
+    const sourcePath = `${path.slice(0, -artifactSuffix.length)}${sourceSuffix}`;
+
+    if (existsSync(sourcePath)) {
+      return sourcePath;
+    }
+  }
+
+  return undefined;
+}
+
 function isAllowedGeneratedSource(path) {
   return path.startsWith(`${paraglideDir}${sep}`) || allowedGeneratedSourceFiles.has(path);
+}
+
+function formatError(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function parseRunnerArgs(args) {
