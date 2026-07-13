@@ -1,5 +1,11 @@
 # @mpgd/platform
 
+## 0.5.0 — 2026-07-13
+
+### Added
+
+- [81b1bab](https://github.com/imjlk/mpgd-kit/commit/81b1bab1be4e9234187cc1db673d9b724f80d728) Distinguish a presented share surface from confirmed share completion and expose a conservative Devvit share-sheet wrapper. — Thanks @imjlk!
+
 ## 0.4.0 — 2026-07-11
 
 ### Added

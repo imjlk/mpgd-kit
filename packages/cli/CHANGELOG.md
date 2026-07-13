@@ -1,5 +1,30 @@
 # @mpgd/cli
 
+## 0.7.0 — 2026-07-13
+
+### Added
+
+- [fd32478](https://github.com/imjlk/mpgd-kit/commit/fd3247854df451008b7c42d619977d8a09999ad2) Fail closed before production AIT, Android, and iOS builds unless the target uses a game-owned wrapper or shell and a public HTTPS game-services endpoint. — Thanks @imjlk!
+- [fdacd52](https://github.com/imjlk/mpgd-kit/commit/fdacd52c510f09ea8723c1665e729515b64817a7) Add a single-source PNG/SVG app icon pipeline with versioned target profiles, per-target overrides, generated-game CLI commands, automatic target staging, and digest-linked release evidence. — Thanks @imjlk!
+- [2a60e46](https://github.com/imjlk/mpgd-kit/commit/2a60e4688f5d15e2740c9219476a006eaf6f3ae7) Generate target-isolated platform gateway entrypoints so production bundles include only the selected platform adapter. — Thanks @imjlk!
+- [420ad8f](https://github.com/imjlk/mpgd-kit/commit/420ad8fb5b54e4aa6b049aa5a220a2294ef4f2f6) Generate deterministic Microsoft Store PWA release evidence, atomic offline updates, and target-aware service worker registration in Phaser game starters. — Thanks @imjlk!
+- [74bd3cc](https://github.com/imjlk/mpgd-kit/commit/74bd3cc38b769d3ee8622938815c0e8624d29b38) Add `mpgd game accept` for reusable check, test, build, graph, playtest, target-matrix, and JSON/Markdown handoff reporting. — Thanks @imjlk!
+
+### Changed
+
+- [5a4f259](https://github.com/imjlk/mpgd-kit/commit/5a4f259ff196db50f5bd53cbd4e9f91bae9b2bd5) Add a duplicate-safe, ambiguity-safe Devvit custom-post operation coordinator and include its Redis-backed server wrapper in generated starters. — Thanks @imjlk!
+- [2f51b58](https://github.com/imjlk/mpgd-kit/commit/2f51b580aa5057d0d18e1820b1ed5b9d50d86d7e) Add reusable Devvit web-surface routing and generate physically separate lightweight inline and expanded Phaser entries. — Thanks @imjlk!
+- [5fb3dca](https://github.com/imjlk/mpgd-kit/commit/5fb3dcaf9a6bc491a650221058595e505a725466) Merge target-specific integration overrides into effective target configuration and wire generated game runtimes to enforce the merged availability and presentation-mode contract. — Thanks @imjlk!
+- [fd25ffe](https://github.com/imjlk/mpgd-kit/commit/fd25ffec5041036288c5aa4b10bd8ab5114b0499) Add a shared Game Services runtime factory that disables production clients without an authoritative backend URL and permits process-local backends only through explicit non-production opt-in. — Thanks @imjlk!
+
+### Fixed
+
+- [bfbcfaa](https://github.com/imjlk/mpgd-kit/commit/bfbcfaafd1f929962ca951e1e87cd5107212613a) Reject malformed app-icon options, clear stale Android monochrome resources during staging, and complete synthesized Microsoft Store PWA manifests. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.4.1, adapter-browser@0.4.1, adapter-capacitor@0.4.1, adapter-devvit@0.5.0, analytics@0.3.4, catalog@0.3.4, game-services@0.5.0, i18n@0.5.0, platform@0.5.0, target-config@0.6.0
+
 ## 0.6.0 — 2026-07-11
 
 ### Fixed
