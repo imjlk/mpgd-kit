@@ -100,9 +100,11 @@ BEFORE UPDATE OF
   attempt_id,
   participant_id,
   score,
+  completed_at,
   completed_at_ms,
   authority_id,
   evidence_id,
+  verified_at,
   verified_at_ms
 ON verified_leaderboard_attempts
 WHEN
@@ -110,9 +112,11 @@ WHEN
   OR OLD.attempt_id IS NOT NEW.attempt_id
   OR OLD.participant_id IS NOT NEW.participant_id
   OR OLD.score IS NOT NEW.score
+  OR OLD.completed_at IS NOT NEW.completed_at
   OR OLD.completed_at_ms IS NOT NEW.completed_at_ms
   OR OLD.authority_id IS NOT NEW.authority_id
   OR OLD.evidence_id IS NOT NEW.evidence_id
+  OR OLD.verified_at IS NOT NEW.verified_at
   OR OLD.verified_at_ms IS NOT NEW.verified_at_ms
 BEGIN
   SELECT RAISE(ABORT, 'verified leaderboard attempt identity is immutable');
