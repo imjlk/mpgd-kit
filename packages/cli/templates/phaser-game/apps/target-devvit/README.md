@@ -59,3 +59,24 @@ first success, duplicate calls, interruption,
 response loss, lease expiry with concurrent reconciliation, malformed durable
 state, invalid launch metadata, and cross-scope key isolation before enabling a
 scheduled or user-triggered publication flow.
+
+## AI-assisted Devvit development
+
+Devvit provides an optional MCP server for targeted documentation search and
+deployed-app log inspection. See the official
+[Devvit AI Tools guide](https://developers.reddit.com/docs/guides/ai), then
+register it once in the developer's global Codex configuration:
+
+```sh
+codex mcp add devvit -- npx -y @devvit/mcp
+```
+
+Restart Codex or begin a new task after registering it. Use `devvit_search`
+before broad Devvit documentation exploration. Use the experimental
+`devvit_logs` tool for a deployed app and subreddit when diagnosing production
+or playtest behavior, and confirm its findings with local tests and
+`pnpm devvit:playtest`.
+
+The MCP server is an agent-side aid only. It is not required by the generated
+game build, must not be bundled into target artifacts, and does not replace
+Devvit CLI authentication or release verification.

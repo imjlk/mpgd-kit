@@ -74,3 +74,21 @@ Platform SDK imports belong only in:
 ## MCP
 
 Use the `ttsc-graph` MCP server before broad TypeScript source exploration once the workspace has dependencies installed.
+
+For Reddit Devvit work, register the official Devvit MCP server once in the
+developer's global Codex configuration:
+
+```sh
+codex mcp add devvit -- npx -y @devvit/mcp
+```
+
+- Use `devvit_search` before broad web searches or loading large Devvit
+  documentation pages into context.
+- Use the experimental `devvit_logs` tool when investigating an app deployed to
+  a specific subreddit, then verify any proposed fix with repository tests and
+  the normal Devvit CLI playtest flow.
+- Do not vendor personal MCP configuration or authentication state into this
+  repository or generated games. MCP is an agent-side development aid, not a
+  runtime or build dependency.
+- If the server was just registered and its tools are not visible, restart
+  Codex or begin a new task before falling back to official Devvit web docs.
