@@ -38,7 +38,7 @@ if (dumpOnly) {
   process.exit(0);
 }
 
-const response = inspectWithDump(dump, requestBundle.props);
+const response = await inspectWithDump(dump, requestBundle.props);
 
 process.stdout.write(`${JSON.stringify(response, null, 2)}\n`);
 

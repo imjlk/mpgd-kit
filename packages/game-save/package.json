@@ -40,11 +40,11 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "typia": "rc"
+    "typia": "13.0.2"
   },
   "devDependencies": {
-    "ttsc": "0.16.9",
-    "typescript": "7.0.1-rc"
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
