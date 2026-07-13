@@ -449,10 +449,35 @@ async function runIdentityAndDefinitionConflictsScenario(
   await assertRejects(
     () => context.service.recordVerifiedAttempt({
       ...request,
-      definition: { ...request.definition, scoreOrder: 'descending' },
-      attempt: { ...request.attempt, attemptId: 'attempt:policy-conflict' },
+      attempt: { ...request.attempt, participantId: 'participant:different' },
     }),
-    'leaderboard definitions must be immutable',
+    'attempt IDs reused by another participant must fail closed',
+  );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: request.definition.leaderboardId,
+        scoreOrder: 'descending',
+        participantId: request.attempt.participantId,
+        attemptId: 'attempt:score-order-conflict',
+        score: request.attempt.score,
+        completedAt: request.attempt.completedAt,
+      }),
+    ),
+    'leaderboard score order must be immutable',
+  );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: request.definition.leaderboardId,
+        attemptSelection: 'best',
+        participantId: request.attempt.participantId,
+        attemptId: 'attempt:selection-conflict',
+        score: request.attempt.score,
+        completedAt: request.attempt.completedAt,
+      }),
+    ),
+    'leaderboard attempt selection must be immutable',
   );
 
   const otherBoardRecord = await context.service.recordVerifiedAttempt(
@@ -616,6 +641,51 @@ async function runRuntimeValidationScenario(context: ScenarioContext): Promise<v
     ),
     'invalid verification timestamps must fail closed independently',
   );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: 'validation:score-nan',
+        participantId: 'participant:score-nan',
+        attemptId: 'attempt:score-nan',
+        score: Number.NaN,
+        completedAt: validVerificationTimestamp,
+      }),
+    ),
+    'NaN scores must fail closed',
+  );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: 'validation:score-infinity',
+        participantId: 'participant:score-infinity',
+        attemptId: 'attempt:score-infinity',
+        score: Number.POSITIVE_INFINITY,
+        completedAt: validVerificationTimestamp,
+      }),
+    ),
+    'infinite scores must fail closed',
+  );
+
+  const failedWriteChecks = await Promise.all([
+    'validation:calendar',
+    'validation:timezone',
+    'validation:precision',
+    'validation:evidence-timezone',
+    'validation:score-nan',
+    'validation:score-infinity',
+  ].map(async (leaderboardId) => ({
+    leaderboardId,
+    snapshot: await context.service.getSnapshot({ leaderboardId }),
+  })));
+
+  for (const { leaderboardId, snapshot } of failedWriteChecks) {
+    assertEqual(
+      snapshot,
+      undefined,
+      `rejected writes must not leave state for ${JSON.stringify(leaderboardId)}`,
+    );
+  }
+
   await assertRejects(
     () => context.service.getSnapshot({ leaderboardId: 'validation:limit', limit: 0 }),
     'invalid snapshot limits must fail closed',
