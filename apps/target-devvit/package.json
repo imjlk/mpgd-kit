@@ -19,7 +19,8 @@
   "dependencies": {
     "@devvit/web": "0.13.7",
     "@mpgd/adapter-devvit": "workspace:*",
-    "@mpgd/bridge": "workspace:*"
+    "@mpgd/bridge": "workspace:*",
+    "@mpgd/game-services": "workspace:*"
   },
   "devDependencies": {
     "@devvit/start": "0.13.7",

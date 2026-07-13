@@ -149,6 +149,9 @@ importers:
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../../packages/bridge
+      '@mpgd/game-services':
+        specifier: workspace:*
+        version: link:../../packages/game-services
       '@mpgd/platform':
         specifier: workspace:*
         version: link:../../packages/platform
@@ -258,6 +261,9 @@ importers:
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:../../packages/bridge
+      '@mpgd/game-services':
+        specifier: workspace:*
+        version: link:../../packages/game-services
     devDependencies:
       '@devvit/start':
         specifier: 0.13.7

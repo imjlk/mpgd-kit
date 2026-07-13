@@ -38,6 +38,16 @@ not claim exactly-once delivery. See
 [Devvit durable post operations](../../docs/DEVVIT_DURABLE_POST_OPERATIONS.md) for
 the operation, retry, and launch-metadata contract.
 
+Authoritative completion handlers can create a durable verified-leaderboard
+provider with `src/server/verifiedLeaderboard.ts`. It injects the server-only
+Devvit Redis client into `@mpgd/adapter-devvit/server`; the adapter package keeps
+the platform SDK outside its reusable implementation. Call
+`recordVerifiedAttempt()` only after the application validates completion, and
+expose snapshots through an authenticated game-scoped read route. Do not add a
+generic client score-submit endpoint. Cursor pagination and provider semantics
+are documented in
+[Verified Leaderboard Service Boundary](../../docs/VERIFIED_LEADERBOARD_SERVICE.md).
+
 Local Reddit playtest still needs a Devvit login token:
 
 ```bash

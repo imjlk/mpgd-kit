@@ -55,6 +55,7 @@
   "dependencies": {
     "@devvit/web": "0.13.7",
     "@mpgd/bridge": "workspace:*",
+    "@mpgd/game-services": "workspace:*",
     "@mpgd/platform": "workspace:*"
   },
   "devDependencies": {

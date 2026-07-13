@@ -146,8 +146,19 @@ validation. Optional `dispose()` cleanup runs even when a scenario fails.
 
 ## Devvit Adapter Shape
 
-A Devvit server can implement the interface over Redis while keeping its
-game-specific attempt session and completion validator in the application:
+`@mpgd/adapter-devvit/server` includes
+`createDevvitRedisVerifiedLeaderboardService()`. Pass the server-scoped Redis
+client to it; the adapter does not import the Devvit SDK itself:
+
+```ts
+import { redis } from '@devvit/web/server';
+import { createDevvitRedisVerifiedLeaderboardService } from '@mpgd/adapter-devvit/server';
+
+const leaderboard = createDevvitRedisVerifiedLeaderboardService(redis);
+```
+
+Keep the game-specific attempt session and completion validator in the
+application:
 
 ```ts
 const completion = await attemptCoordinator.complete(command);
@@ -163,6 +174,26 @@ if (completion.ranked) {
 The client bridge should expose only a game-scoped snapshot read plus the
 game-specific completion command. Completion performs the write internally; a
 generic client score-submit bridge must not be added.
+
+The adapter hashes board and attempt IDs into bounded Redis keys and fields,
+then checks stored identities so a digest collision fails closed. Each write
+watches the board definition, idempotency decisions, retained-entry hash, and
+ranking set before committing them with `MULTI/EXEC`. Contention is retried with
+a bounded budget, and an attempt retry returns its originally persisted
+decision even after a later attempt replaces the retained entry.
+Snapshot and write-side retained-entry loads retry a bounded number of times if
+a replacement transaction commits between the sorted-set and hash reads.
+Retained values use standard `hGet` reads instead of allowlisted Redis commands
+so the provider works with the default Devvit Redis command set.
+
+Redis sorted-set order is not used as the final tie breaker because Redis and
+JavaScript order non-ASCII strings differently. The adapter loads retained
+entries and applies the public JavaScript ordering before calculating ranks or
+cursor pages. This makes it a correctness-first provider for modest boards; it
+retains all processed attempt decisions and performs an O(n log n) retained-entry
+sort on writes and snapshots. Large or hot boards should add an application
+participant cap or a materialized ranking design while continuing to run the
+public provider conformance suite.
 
 ## Cloudflare Service Binding Shape
 

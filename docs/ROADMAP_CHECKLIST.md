@@ -272,6 +272,7 @@ to run xcodebuild archive.
 - [x] `apps/target-devvit` wrapper added with `/api/mpgd/bridge`
 - [x] `pnpm build:devvit` builds Phaser client artifacts and Devvit server CJS bundle
 - [x] target config, effective config, adapter parity, and target artifact smoke cover `reddit`
+- [x] Devvit Redis verified leaderboards preserve provider conformance and cursor pagination
 
 ## Phase 23 - Cloudflare Pages Host And Legal Site
 
