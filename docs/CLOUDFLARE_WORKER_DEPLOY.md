@@ -132,7 +132,32 @@ The current service binding methods are:
 
 The verified-attempt writer is intentionally available only through the
 private service binding. It is not routed through the public JSON or oRPC
-surfaces. Authenticate and scope any public snapshot transport separately.
+surfaces.
+
+## Authenticated Snapshot Reads
+
+Bind a private identity Worker that implements
+`authenticateVerifiedLeaderboardSnapshot({ authorization })` and returns the
+verified `{ participantId }` or `undefined`:
+
+```toml
+[[services]]
+binding = "VERIFIED_LEADERBOARD_AUTH"
+service = "game-identity"
+```
+
+The binding enables the read-only route while keeping participant scope out of
+client-controlled query parameters:
+
+```sh
+curl 'https://example.com/game-services/verified-leaderboard/snapshot?leaderboardId=daily%3A2030-01-02&limit=25' \
+  -H 'authorization: Bearer <session-token>'
+```
+
+Continue with the opaque `nextCursor` returned by the prior response. Cursors
+are keyset positions bound to the board definition, not credentials or stable
+snapshot locks. The Worker returns private, non-cacheable responses and never
+mounts a public verified-attempt write route.
 
 ## Production Notes
 

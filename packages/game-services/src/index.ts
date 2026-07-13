@@ -6,3 +6,4 @@ export * from './runtime.js';
 export * from './server';
 export * from './types';
 export * from './verified-leaderboard';
+export * from './verified-leaderboard-transport';

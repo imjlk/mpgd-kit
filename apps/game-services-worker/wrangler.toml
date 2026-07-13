@@ -19,3 +19,10 @@ head_sampling_rate = 1
 # binding = "DB"
 # database_name = "mpgd-game-services"
 # database_id = "<replace-with-wrangler-d1-create-output>"
+
+# Bind a private identity Worker to enable authenticated public snapshot reads.
+# The service must implement authenticateVerifiedLeaderboardSnapshot({ authorization }).
+#
+# [[services]]
+# binding = "VERIFIED_LEADERBOARD_AUTH"
+# service = "game-identity"

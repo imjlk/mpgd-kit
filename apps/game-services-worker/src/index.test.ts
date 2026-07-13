@@ -7,6 +7,15 @@ import { createWorkerFetchHandler, createWorkerService } from './handler.js';
 
 const workerEnv = {
   MPGD_STORE: 'memory',
+  VERIFIED_LEADERBOARD_AUTH: {
+    async authenticateVerifiedLeaderboardSnapshot(
+      input: { readonly authorization: string },
+    ) {
+      return input.authorization === 'Bearer worker-read-token'
+        ? { participantId: 'worker-player' }
+        : undefined;
+    },
+  },
 } as const;
 const workerFetch = createWorkerFetchHandler(workerEnv);
 const workerService = createWorkerService(workerEnv);
@@ -113,6 +122,48 @@ assertEqual(
   verifiedSnapshot?.participantEntry?.attemptId,
   'worker-verified-run-1',
   'private verified reads should return the retained attempt',
+);
+
+const unauthorizedSnapshot = await workerFetch(
+  new Request(`${baseUrl}/game-services/verified-leaderboard/snapshot?leaderboardId=worker%3Averified`),
+);
+assertEqual(unauthorizedSnapshot.status, 401, 'public snapshot reads should require authentication');
+
+const publicSnapshot = await workerFetch(
+  new Request(
+    `${baseUrl}/game-services/verified-leaderboard/snapshot?leaderboardId=worker%3Averified`,
+    {
+      headers: {
+        Authorization: 'Bearer worker-read-token',
+      },
+    },
+  ),
+);
+const publicSnapshotBody = await publicSnapshot.json() as {
+  readonly participantEntry?: { readonly participantId: string };
+};
+assertEqual(publicSnapshot.status, 200, 'authenticated public snapshot reads should succeed');
+assertEqual(
+  publicSnapshotBody.participantEntry?.participantId,
+  'worker-player',
+  'public snapshots should derive participant scope from the auth binding',
+);
+
+const forgedParticipantScope = await workerFetch(
+  new Request(
+    `${baseUrl}/game-services/verified-leaderboard/snapshot`
+      + '?leaderboardId=worker%3Averified&participantId=untrusted-player',
+    {
+      headers: {
+        Authorization: 'Bearer worker-read-token',
+      },
+    },
+  ),
+);
+assertEqual(
+  forgedParticipantScope.status,
+  400,
+  'public snapshot reads must reject client-controlled participant scope',
 );
 
 const untrustedWrite = await postJson('/game-services/verified-leaderboard/record', {

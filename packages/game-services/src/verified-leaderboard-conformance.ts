@@ -205,6 +205,45 @@ async function runFirstSelectionAndSnapshotScenario(
   assertEqual(snapshot.participantEntry?.rank, 2, 'participant entries must carry global rank');
   assertEqual(snapshot.totalParticipants, 2, 'snapshots must count retained participants');
   assertEqual(snapshot.generatedAt, context.now, 'snapshots must use the provider clock');
+  const firstBoardCursor = snapshot.nextCursor;
+  assert(firstBoardCursor !== undefined, 'limited snapshots must return a continuation cursor');
+
+  const nextSnapshot = await context.service.getSnapshot({
+    leaderboardId: 'first:board',
+    participantId: 'participant:first',
+    limit: 1,
+    cursor: firstBoardCursor,
+  });
+  assertEqual(nextSnapshot?.entries.length, 1, 'cursor reads must return the next page');
+  assertEqual(nextSnapshot?.entries[0]?.rank, 2, 'cursor pages must retain global ranks');
+  assertEqual(
+    nextSnapshot?.entries[0]?.attemptId,
+    'attempt:earlier',
+    'ascending cursors must continue after the previous ordering tuple',
+  );
+  assertEqual(
+    nextSnapshot?.participantEntry?.attemptId,
+    'attempt:earlier',
+    'participant entries must remain independent of the current page',
+  );
+  assertEqual(nextSnapshot?.nextCursor, undefined, 'final pages must omit nextCursor');
+
+  await context.service.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: 'first:other-board',
+      participantId: 'participant:other-board',
+      attemptId: 'attempt:other-board',
+      score: 1,
+      completedAt: '2030-01-02T02:05:00.000Z',
+    }),
+  );
+  await assertRejects(
+    () => context.service.getSnapshot({
+      leaderboardId: 'first:other-board',
+      cursor: firstBoardCursor,
+    }),
+    'cursors must remain bound to their originating leaderboard definition',
+  );
 
   const anonymousSnapshot = await context.service.getSnapshot({
     leaderboardId: 'first:board',
@@ -413,6 +452,33 @@ async function runDeterministicTiesScenario(context: ScenarioContext): Promise<v
     bmpPrivateUseAttemptId,
     'BMP IDs must not be reordered by UTF-8 byte collation',
   );
+
+  const firstTiePage = await context.service.getSnapshot({
+    leaderboardId: 'ties:ranking',
+    limit: 2,
+  });
+  assert(firstTiePage?.nextCursor !== undefined, 'the first tie page must be continuable');
+  const secondTiePage = await context.service.getSnapshot({
+    leaderboardId: 'ties:ranking',
+    limit: 2,
+    cursor: firstTiePage.nextCursor,
+  });
+  assert(secondTiePage?.nextCursor !== undefined, 'the second tie page must be continuable');
+  const thirdTiePage = await context.service.getSnapshot({
+    leaderboardId: 'ties:ranking',
+    limit: 2,
+    cursor: secondTiePage.nextCursor,
+  });
+  assertEqual(
+    [
+      ...firstTiePage.entries,
+      ...secondTiePage.entries,
+      ...(thirdTiePage?.entries ?? []),
+    ].map((entry) => entry.attemptId).join('|'),
+    snapshot.entries.map((entry) => entry.attemptId).join('|'),
+    'cursor traversal must preserve UTF-16 ordinal ties without gaps or duplicates',
+  );
+  assertEqual(thirdTiePage?.nextCursor, undefined, 'the last tie page must terminate');
 
   await context.service.recordVerifiedAttempt(
     createAttempt({
@@ -868,6 +934,23 @@ async function runRuntimeValidationScenario(context: ScenarioContext): Promise<v
   await assertRejects(
     () => context.service.getSnapshot({ leaderboardId: 'validation:limit', limit: 101 }),
     'over-maximum snapshot limits must fail closed',
+  );
+
+  await context.service.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: 'validation:cursor',
+      participantId: 'participant:cursor',
+      attemptId: 'attempt:cursor',
+      score: 1,
+      completedAt: validVerificationTimestamp,
+    }),
+  );
+  await assertRejects(
+    () => context.service.getSnapshot({
+      leaderboardId: 'validation:cursor',
+      cursor: 'not-a-valid-cursor',
+    }),
+    'malformed snapshot cursors must fail closed',
   );
 }
 
