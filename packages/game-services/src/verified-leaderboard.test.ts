@@ -38,13 +38,34 @@ const unlabeledFirstRetry = await service.recordVerifiedAttempt({
     verification: firstAttempt.attempt.verification,
   },
 });
+const offsetFirstRetry = await service.recordVerifiedAttempt({
+  ...firstAttempt,
+  attempt: {
+    ...firstAttempt.attempt,
+    completedAt: '2026-07-13T17:00:00.000+09:00',
+    verification: {
+      ...firstAttempt.attempt.verification,
+      verifiedAt: '2026-07-13T17:00:00.000+09:00',
+    },
+  },
+});
 
 assertEqual(renamedFirstRetry.alreadyProcessed, true, 'renamed retry should be idempotent');
 assertEqual(unlabeledFirstRetry.alreadyProcessed, true, 'unlabeled retry should be idempotent');
 assertEqual(
+  offsetFirstRetry.alreadyProcessed,
+  true,
+  'equivalent timestamp retry should be idempotent',
+);
+assertEqual(
   unlabeledFirstRetry.entry.participantLabel,
   'Player One',
   'retry should preserve the original stored label',
+);
+assertEqual(
+  offsetFirstRetry.entry.completedAt,
+  firstAttempt.attempt.completedAt,
+  'equivalent timestamp retry should preserve the original response timestamp',
 );
 
 await service.recordVerifiedAttempt(

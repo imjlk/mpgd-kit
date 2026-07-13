@@ -441,10 +441,11 @@ function assertSameAttempt(
     existing.participantId !== candidate.participantId
     || existing.attemptId !== candidate.attemptId
     || existing.score !== candidate.score
-    || existing.completedAt !== candidate.completedAt
+    || parseTimestamp(existing.completedAt) !== parseTimestamp(candidate.completedAt)
     || existing.verification.authorityId !== candidate.verification.authorityId
     || existing.verification.evidenceId !== candidate.verification.evidenceId
-    || existing.verification.verifiedAt !== candidate.verification.verifiedAt
+    || parseTimestamp(existing.verification.verifiedAt)
+      !== parseTimestamp(candidate.verification.verifiedAt)
   ) {
     throw new Error(`Attempt id conflict for ${JSON.stringify(candidate.attemptId)}.`);
   }
