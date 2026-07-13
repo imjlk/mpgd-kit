@@ -11,7 +11,7 @@
   "review": "A broad backend service flow should use a focused graph tour over the Worker app tsconfig so Cloudflare-specific source is included without changing the root graph project.",
   "request": {
     "type": "tour",
-    "query": "gameServicesContract createGameServicesOrpcClient createGameServicesOrpcBackendApi createGameServicesBackend createGameServicesRouter createGameServicesRpcFetchHandler createGameServicesHttpFetchHandler GameServicesStore InMemoryGameServicesStore VerifiedLeaderboardService TrustedLeaderboardRecorder createInMemoryVerifiedLeaderboardService recordVerifiedAttempt getSnapshot createD1GameServicesStore createWorkerFetchHandler createWorkerService GameServicesWorker verifyPurchase claimAdReward recordLeaderboardScore index.test verified-leaderboard.test",
+    "query": "gameServicesContract createGameServicesOrpcClient createGameServicesOrpcBackendApi createGameServicesBackend createGameServicesRouter createGameServicesRpcFetchHandler createGameServicesHttpFetchHandler GameServicesStore InMemoryGameServicesStore VerifiedLeaderboardService TrustedLeaderboardRecorder createInMemoryVerifiedLeaderboardService runVerifiedLeaderboardConformance recordVerifiedAttempt getSnapshot createD1GameServicesStore createWorkerFetchHandler createWorkerService GameServicesWorker verifyPurchase claimAdReward recordLeaderboardScore index.test verified-leaderboard.test verified-leaderboard-conformance.test",
     "includeTests": true,
     "limit": 90
   }

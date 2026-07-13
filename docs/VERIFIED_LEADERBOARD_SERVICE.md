@@ -58,6 +58,27 @@ deployments without adding bounded retention and an indexed ranking strategy.
 Durable platforms should implement the same `VerifiedLeaderboardService`
 interface.
 
+## Provider Conformance
+
+Durable provider packages can validate their implementation with the
+test-framework-independent helper exported from
+`@mpgd/game-services/verified-leaderboard-conformance`:
+
+```ts
+const report = await runVerifiedLeaderboardConformance({
+  createFixture: async ({ scenario, now }) => ({
+    service: await createIsolatedProvider({ scenario, now }),
+  }),
+});
+```
+
+The fixture factory is called once per scenario and must return isolated state,
+or namespace each scenario in a shared test database. The suite covers first
+and best retention, original retry-decision preservation, deterministic ties,
+identity and definition conflicts, concurrent duplicate writes, caller-mutation
+isolation, snapshot behavior, and runtime validation. Optional `dispose()`
+cleanup runs even when a scenario fails.
+
 ## Devvit Adapter Shape
 
 A Devvit server can implement the interface over Redis while keeping its
