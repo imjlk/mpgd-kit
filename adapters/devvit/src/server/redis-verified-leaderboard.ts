@@ -19,6 +19,7 @@ import {
 } from '@mpgd/game-services/verified-leaderboard';
 
 const defaultKeyPrefix = 'mpgd:verified-leaderboard:v1';
+const retainedEntryReadAttempts = 3;
 const defaultSnapshotLimit = 10;
 const defaultTransactionAttempts = 3;
 const maximumTransactionAttempts = 32;
@@ -59,7 +60,7 @@ export interface DevvitVerifiedLeaderboardRedisLike {
 export interface DevvitRedisVerifiedLeaderboardServiceOptions {
   /** Redis-safe namespace shared by every board created by this provider. */
   readonly keyPrefix?: string;
-  /** Maximum optimistic transaction and retained-entry read attempts. */
+  /** Maximum optimistic transaction attempts after WATCH contention. */
   readonly transactionAttempts?: number;
   /** Clock used for snapshot generation timestamps. */
   readonly now?: () => string;
@@ -128,12 +129,7 @@ export function createDevvitRedisVerifiedLeaderboardService(
             return cloneRecordResponse(existing.response, true);
           }
 
-          const rankedAttempts = await readRankedAttempts(
-            redis,
-            keys,
-            definition,
-            transactionAttempts,
-          );
+          const rankedAttempts = await readRankedAttempts(redis, keys, definition);
           assertAvailableAttemptMember(rankedAttempts, attemptMember, request.attempt);
           const retainedAttempt = rankedAttempts.find(
             (candidate) => candidate.attempt.participantId === request.attempt.participantId,
@@ -220,12 +216,7 @@ export function createDevvitRedisVerifiedLeaderboardService(
         return undefined;
       }
 
-      const rankedAttempts = await readRankedAttempts(
-        redis,
-        keys,
-        definition,
-        transactionAttempts,
-      );
+      const rankedAttempts = await readRankedAttempts(redis, keys, definition);
       const rankedEntries = toRankedEntries(rankedAttempts);
       const cursorPosition = request.cursor === undefined
         ? undefined
@@ -315,9 +306,8 @@ async function readRankedAttempts(
   redis: DevvitVerifiedLeaderboardRedisLike,
   keys: BoardKeys,
   definition: VerifiedLeaderboardDefinition,
-  readAttempts: number,
 ): Promise<RankedAttempt[]> {
-  for (let attempt = 0; attempt < readAttempts; attempt += 1) {
+  for (let attempt = 0; attempt < retainedEntryReadAttempts; attempt += 1) {
     const rankedAttempts = await tryReadRankedAttempts(redis, keys, definition);
 
     if (rankedAttempts !== undefined) {
@@ -327,7 +317,7 @@ async function readRankedAttempts(
 
   throw new Error(
     'Devvit Redis retained entries changed during '
-      + `${String(readAttempts)} consecutive reads for ${keys.ranking}.`,
+      + `${String(retainedEntryReadAttempts)} consecutive reads for ${keys.ranking}.`,
   );
 }
 
@@ -351,15 +341,18 @@ async function tryReadRankedAttempts(
     throw new Error(`Devvit Redis returned incomplete retained entries for ${keys.ranking}.`);
   }
 
-  if (values.some((raw) => raw === null)) {
-    return undefined;
-  }
+  const rankedAttempts: RankedAttempt[] = [];
 
-  const rankedAttempts = members.map((member, index): RankedAttempt => {
+  for (let index = 0; index < members.length; index += 1) {
+    const member = members[index];
     const raw = values[index];
 
-    if (raw === null || raw === undefined) {
+    if (member === undefined || raw === undefined) {
       throw new Error(`Devvit Redis returned incomplete retained entries for ${keys.entries}.`);
+    }
+
+    if (raw === null) {
+      return undefined;
     }
 
     const stored = parseStoredRetainedAttempt(raw, keys.entries);
@@ -369,8 +362,9 @@ async function tryReadRankedAttempts(
       throw new Error(`Devvit Redis retained entry score is inconsistent for ${keys.ranking}.`);
     }
 
-    return { member: member.member, attempt: stored.attempt };
-  });
+    rankedAttempts.push({ member: member.member, attempt: stored.attempt });
+  }
+
   assertUniqueRetainedParticipants(rankedAttempts, keys.entries);
   return rankedAttempts.sort(
     (left, right) => compareAttempts(definition.scoreOrder, left.attempt, right.attempt),
