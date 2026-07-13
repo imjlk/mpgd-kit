@@ -26,21 +26,28 @@ if (disposeCount !== verifiedLeaderboardConformanceScenarios.length) {
 }
 
 const failureService = createInMemoryVerifiedLeaderboardService();
+const cleanupFailureScenario = 'first-selection-and-snapshot';
 let combinedFailure: unknown;
 
 try {
   await runVerifiedLeaderboardConformance({
-    createFixture: () => ({
-      service: {
-        recordVerifiedAttempt: (input) => failureService.recordVerifiedAttempt(input),
-        getSnapshot: async () => {
-          throw new Error('scenario failure');
+    createFixture: ({ scenario, now }) => {
+      if (scenario !== cleanupFailureScenario) {
+        return { service: createInMemoryVerifiedLeaderboardService({ now: () => now }) };
+      }
+
+      return {
+        service: {
+          recordVerifiedAttempt: (input) => failureService.recordVerifiedAttempt(input),
+          getSnapshot: async () => {
+            throw new Error('scenario failure');
+          },
+        } satisfies VerifiedLeaderboardService,
+        dispose: () => {
+          throw new Error('cleanup failure');
         },
-      } satisfies VerifiedLeaderboardService,
-      dispose: () => {
-        throw new Error('cleanup failure');
-      },
-    }),
+      };
+    },
   });
 } catch (error) {
   combinedFailure = error;
@@ -48,7 +55,7 @@ try {
 
 if (
   !(combinedFailure instanceof Error)
-  || !combinedFailure.message.includes('first-selection-and-snapshot')
+  || !combinedFailure.message.includes(cleanupFailureScenario)
   || !(combinedFailure.cause instanceof AggregateError)
 ) {
   throw new Error('Expected cleanup failures to preserve the named scenario failure.');
