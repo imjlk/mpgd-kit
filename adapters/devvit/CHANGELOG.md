@@ -1,5 +1,23 @@
 # @mpgd/adapter-devvit
 
+## 0.6.0 — 2026-07-14
+
+### Changed
+
+- [2f06373](https://github.com/imjlk/mpgd-kit/commit/2f063737d518a19d93de0781bf44582c0a0bc78b) Add an opt-in official Devvit Vite build strategy for generated Phaser games,
+  upgrade Devvit packages to 0.13.7, expose a direct oRPC Node HTTP bridge
+  adapter, and remove the generated target's Express-based request conversion. — Thanks @imjlk!
+- [5230c6b](https://github.com/imjlk/mpgd-kit/commit/5230c6b4f49cdd38b4cde2449a7dc7751f9dacff) Update published package metadata and generated Phaser starters to the current ttsc, TypeScript, and typia toolchain releases. — Thanks @imjlk!
+
+### Added
+
+- [960a114](https://github.com/imjlk/mpgd-kit/commit/960a114db3a7999e0b0541f46026e5d1a297fb93) Add a durable Redis verified-leaderboard provider for Devvit servers with
+  atomic idempotency, deterministic ranking, and opaque cursor pagination. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: bridge@0.6.0, game-services@0.6.0, platform@0.5.1
+
 ## 0.5.0 — 2026-07-13
 
 ### Added

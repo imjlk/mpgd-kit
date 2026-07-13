@@ -1,5 +1,15 @@
 # @mpgd/adapter-browser
 
+## 0.4.2 — 2026-07-14
+
+### Changed
+
+- [5230c6b](https://github.com/imjlk/mpgd-kit/commit/5230c6b4f49cdd38b4cde2449a7dc7751f9dacff) Update published package metadata and generated Phaser starters to the current ttsc, TypeScript, and typia toolchain releases. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.5.1
+
 ## 0.4.1 — 2026-07-13
 
 ### Patch changes

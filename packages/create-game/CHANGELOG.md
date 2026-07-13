@@ -1,5 +1,21 @@
 # @mpgd/create-game
 
+## 0.8.0 — 2026-07-14
+
+### Added
+
+- [2f06373](https://github.com/imjlk/mpgd-kit/commit/2f063737d518a19d93de0781bf44582c0a0bc78b) Add an opt-in official Devvit Vite build strategy for generated Phaser games,
+  upgrade Devvit packages to 0.13.7, expose a direct oRPC Node HTTP bridge
+  adapter, and remove the generated target's Express-based request conversion. — Thanks @imjlk!
+
+### Changed
+
+- [5230c6b](https://github.com/imjlk/mpgd-kit/commit/5230c6b4f49cdd38b4cde2449a7dc7751f9dacff) Update published package metadata and generated Phaser starters to the current ttsc, TypeScript, and typia toolchain releases. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: cli@0.8.0
+
 ## 0.7.0 — 2026-07-13
 
 ### Patch changes
