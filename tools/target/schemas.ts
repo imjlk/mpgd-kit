@@ -63,6 +63,11 @@ export interface AppsInTossTargetConfig extends BaseTargetConfig {
 
 export interface DevvitTargetConfig extends BaseTargetConfig {
   readonly kind: 'devvit-web';
+  /**
+   * `devvit-vite` delegates both client and server bundling to the official
+   * `@devvit/start/vite` plugin. Omit this field for the legacy split build.
+   */
+  readonly buildStrategy?: 'devvit-vite';
   readonly wrapperApp: string;
   readonly webDir: string;
   readonly artifact: 'devvit';

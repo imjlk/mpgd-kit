@@ -33,6 +33,10 @@
       "types": "./dist/orpc.d.ts",
       "default": "./dist/orpc.js"
     },
+    "./orpc/node": {
+      "types": "./dist/orpc-node.d.ts",
+      "default": "./dist/orpc-node.js"
+    },
     "./cloudflare-pages": {
       "types": "./dist/cloudflare-pages.d.ts",
       "default": "./dist/cloudflare-pages.js"
@@ -46,7 +50,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/bridge/src/bridge-protocol.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc.test.ts && node tools/run-ttsx.mjs packages/bridge/src/cloudflare-pages.test.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/bridge/src/bridge-protocol.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc.test.ts && node tools/run-ttsx.mjs packages/bridge/src/orpc-node.test.ts && node tools/run-ttsx.mjs packages/bridge/src/cloudflare-pages.test.ts"
   },
   "dependencies": {
     "@orpc/client": "2.0.0-beta.14",
@@ -55,6 +59,7 @@
     "typia": "13.0.2"
   },
   "devDependencies": {
+    "@types/node": "^24.0.0",
     "ttsc": "0.18.4",
     "typescript": "7.0.2"
   },

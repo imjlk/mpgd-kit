@@ -43,6 +43,7 @@
     },
     "reddit": {
       "kind": "devvit-web",
+      "buildStrategy": "devvit-vite",
       "gameApp": ".",
       "wrapperApp": "../../apps/target-devvit",
       "adapter": "devvit",

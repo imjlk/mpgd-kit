@@ -1,23 +1,22 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
 import { createServer, context, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { UiResponse } from '@devvit/web/shared';
 import {
-  assertBridgeRequest,
   createBridgeError,
   type BridgeRequest,
   type BridgeResponse,
 } from '@mpgd/bridge';
 import {
-  createBridgeRpcFetchHandler,
   createBridgeRpcRouter,
   defaultBridgeRpcEndpoint,
 } from '@mpgd/bridge/orpc';
-import express, { type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
-import helmet from 'helmet';
+import { createBridgeRpcNodeHandler } from '@mpgd/bridge/orpc/node';
 
-const app = express();
 const redisKeyComponentPattern = /^[A-Za-z0-9:_-]{1,128}$/;
 const maxStorageKeyLength = 128;
 const maxEncodedStorageKeyLength = 384;
+const maxRequestBodySize = 1_000_000;
 const leaderboardUpdateMaxAttempts = 3;
 const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
@@ -25,51 +24,39 @@ const leaderboardLockTtlSeconds = Math.ceil(leaderboardLockTtlMs / 1_000);
 const leaderboardLockRetryBudgetMs = leaderboardLockTtlSeconds * 1_000;
 const gameName = '__GAME_NAME__';
 const gameTitle = __GAME_TITLE_TS_LITERAL__;
-const expressManagedResponseHeaders = new Set([
-  'connection',
-  'content-encoding',
-  'content-length',
-  'transfer-encoding',
-]);
-
-app.disable('x-powered-by');
-app.use(helmet());
-
-const bridgeRpcFetchHandler = createBridgeRpcFetchHandler(
+const bridgeRpcHandler = createBridgeRpcNodeHandler(
   createBridgeRpcRouter(handleBridgeRequest),
+  {
+    maxBodySize: maxRequestBodySize,
+    prefix: defaultBridgeRpcEndpoint,
+  },
 );
 
-app.use(defaultBridgeRpcEndpoint, express.raw({ type: '*/*', limit: '1mb' }), async (
-  request: ExpressRequest,
-  response: ExpressResponse,
-): Promise<void> => {
-  try {
-    const fetchResponse = await bridgeRpcFetchHandler(expressRequestToFetchRequest(request));
-    await sendFetchResponse(response, fetchResponse);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Devvit oRPC request failed.';
-    console.error(`devvit oRPC internal error: ${message}`, error);
-    response.status(500).json(
-      createBridgeError(
-        requestIdFromBody(request.body),
-        'DEVVIT_BRIDGE_INTERNAL_ERROR',
-        'Devvit bridge request failed.',
-        true,
-      ),
-    );
+async function handleHttpRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  setResponseSecurityHeaders(response);
+
+  if (request.method === 'POST' && requestPathname(request) === '/internal/menu/create-post') {
+    await handleCreatePostMenu(response);
+    return;
   }
-});
 
-app.use(express.json({ limit: '1mb' }));
+  if (await bridgeRpcHandler(request, response)) {
+    return;
+  }
 
-app.post('/internal/menu/create-post', async (
-  _request: ExpressRequest,
-  response: ExpressResponse,
-): Promise<void> => {
+  sendJson(response, 404, {
+    error: 'NOT_FOUND',
+  });
+}
+
+async function handleCreatePostMenu(response: ServerResponse): Promise<void> {
   const subredditName = currentSubredditName();
 
   if (subredditName === undefined) {
-    response.status(200).json({
+    sendJson(response, 200, {
       showToast: {
         text: 'Could not resolve the target subreddit for this menu action.',
         appearance: 'neutral',
@@ -92,7 +79,7 @@ app.post('/internal/menu/create-post', async (
       },
     });
 
-    response.status(200).json({
+    sendJson(response, 200, {
       showToast: {
         text: `Created ${gameTitle} post ${post.id}.`,
         appearance: 'success',
@@ -100,53 +87,29 @@ app.post('/internal/menu/create-post', async (
     } satisfies UiResponse);
   } catch (error) {
     console.error(`devvit custom post creation failed: ${errorMessage(error)}`, error);
-    response.status(200).json({
+    sendJson(response, 200, {
       showToast: {
         text: `Could not create the ${gameTitle} post.`,
         appearance: 'neutral',
       },
     } satisfies UiResponse);
   }
+}
+
+const server = createServer((request, response) => {
+  void handleHttpRequest(request, response).catch((error: unknown) => {
+    console.error(`devvit server request failed: ${errorMessage(error)}`, error);
+
+    if (response.headersSent) {
+      response.end();
+      return;
+    }
+
+    sendJson(response, 500, {
+      error: 'DEVVIT_SERVER_INTERNAL_ERROR',
+    });
+  });
 });
-
-app.post('/api/mpgd/bridge', async (
-  request: ExpressRequest,
-  response: ExpressResponse,
-): Promise<void> => {
-  let bridgeRequest: BridgeRequest;
-
-  try {
-    bridgeRequest = assertBridgeRequest(request.body);
-  } catch (error) {
-    response.status(400).json(
-      createBridgeError(
-        requestIdFromBody(request.body),
-        'INVALID_BRIDGE_REQUEST',
-        error instanceof Error ? error.message : 'Invalid bridge request.',
-      ),
-    );
-    return;
-  }
-
-  try {
-    const bridgeResponse = await handleBridgeRequest(bridgeRequest);
-    response.status(200).json(bridgeResponse);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Devvit bridge request failed.';
-    console.error(`devvit bridge internal error: ${message}`, error);
-
-    response.status(500).json(
-      createBridgeError(
-        bridgeRequest.id,
-        'DEVVIT_BRIDGE_INTERNAL_ERROR',
-        'Devvit bridge request failed.',
-        true,
-      ),
-    );
-  }
-});
-
-const server = createServer(app);
 const port = getServerPort();
 
 server.on('error', (error) => {
@@ -385,15 +348,6 @@ async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
     saved: true,
     playerId,
   });
-}
-
-function requestIdFromBody(input: unknown): string {
-  if (typeof input !== 'object' || input === null) {
-    return 'unknown';
-  }
-
-  const candidate = input as { readonly id?: unknown };
-  return typeof candidate.id === 'string' ? candidate.id : 'unknown';
 }
 
 function ok(input: BridgeRequest, data: unknown): BridgeResponse {
@@ -641,61 +595,19 @@ function optionalObjectPayload(payload: unknown): Record<string, unknown> {
   return payload as Record<string, unknown>;
 }
 
-function expressRequestToFetchRequest(request: ExpressRequest): Request {
-  const headers = new Headers();
-
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (typeof value === 'string') {
-      headers.set(key, value);
-    } else if (Array.isArray(value)) {
-      headers.set(key, value.join(', '));
-    }
-  }
-
-  const init: RequestInit = {
-    method: request.method,
-    headers,
-  };
-
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
-    init.body = requestBodyToBodyInit(request.body);
-
-    if (!headers.has('content-type') && !(request.body instanceof Uint8Array)) {
-      headers.set('content-type', 'application/json');
-    }
-  }
-
-  return new Request(expressRequestUrl(request), init);
+function requestPathname(request: IncomingMessage): string {
+  const host = request.headers.host ?? 'localhost';
+  return new URL(request.url ?? '/', `http://${host}`).pathname;
 }
 
-function requestBodyToBodyInit(input: unknown): BodyInit {
-  if (input instanceof Uint8Array) {
-    const body = new Uint8Array(input.byteLength);
-    body.set(input);
-
-    return body.buffer as ArrayBuffer;
-  }
-
-  return JSON.stringify(input ?? null);
+function setResponseSecurityHeaders(response: ServerResponse): void {
+  response.setHeader('cache-control', 'no-store');
+  response.setHeader('referrer-policy', 'no-referrer');
+  response.setHeader('x-content-type-options', 'nosniff');
 }
 
-function expressRequestUrl(request: ExpressRequest): string {
-  const host = request.get('host') ?? 'localhost';
-  const protocol = request.protocol || 'https';
-
-  return `${protocol}://${host}${request.originalUrl}`;
-}
-
-async function sendFetchResponse(
-  response: ExpressResponse,
-  fetchResponse: Response,
-): Promise<void> {
-  fetchResponse.headers.forEach((value: string, key: string) => {
-    if (!expressManagedResponseHeaders.has(key.toLowerCase())) {
-      response.setHeader(key, value);
-    }
-  });
-
-  response.status(fetchResponse.status);
-  response.send(await fetchResponse.text());
+function sendJson(response: ServerResponse, status: number, body: unknown): void {
+  response.statusCode = status;
+  response.setHeader('content-type', 'application/json; charset=utf-8');
+  response.end(JSON.stringify(body));
 }

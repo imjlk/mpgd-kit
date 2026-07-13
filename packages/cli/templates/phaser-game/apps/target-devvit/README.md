@@ -25,15 +25,28 @@ available and the CLI asks for a manual code. After that, use
 `pnpm devvit:playtest`, `pnpm devvit:upload`, and `pnpm devvit:publish` from the
 game root.
 
-The client bundle is copied into `dist/client` by the mpgd target build. The server bridge is
-compiled to `dist/server/index.cjs` and keeps Devvit SDK imports out of Phaser scenes.
-The game root pins `@mpgd/cli`, so these commands use the same CLI version as the generated
-starter's other `@mpgd/*` dependencies.
+The official `@devvit/start/vite` plugin builds the game client into
+`dist/client` and the CommonJS server bridge into `dist/server/index.cjs` in one
+pass. The mpgd target build wraps that unified build with release provenance and
+effective-target evidence while keeping Devvit SDK imports out of Phaser scenes.
+The game root pins `@mpgd/cli`, so these commands use the same CLI version as the
+generated starter's other `@mpgd/*` dependencies.
+
+The bridge endpoint at `/api/mpgd/rpc` uses the direct oRPC Node HTTP adapter
+from `@mpgd/bridge/orpc/node`; Express, Hono, and Fetch request conversion are
+not required. Devvit-owned menu, scheduler, trigger, and form callbacks remain
+thin `/internal/...` routes and delegate to shared service functions. oRPC
+Publisher helpers can broadcast results after a task completes, but they do not
+replace the `devvit.json` scheduler endpoint and should not use process-local
+memory when delivery must cross instances.
 
 The default post entry uses `index.html` for a lightweight inline preview. Its
 Play button requests the `game` entrypoint, which loads the separate
 `game.html` Phaser document. Keep inline UI free of game runtime imports so the
 card remains lightweight before expansion.
+
+`devvit playtest` runs the official unified Vite build in watch mode, so a
+separate client/server watcher or staging prebuild is not required.
 
 ## Durable Post Operations
 

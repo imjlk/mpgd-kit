@@ -9,12 +9,7 @@
     "init": "pnpm run prepare:icon:production && devvit upload --config devvit.json",
     "init:copy-paste": "pnpm run prepare:icon:production && devvit upload --copy-paste --config devvit.json",
     "dev": "pnpm run prepare:icon && devvit playtest --config devvit.json",
-    "dev:prepare": "pnpm --dir ../.. build:devvit:staging",
-    "dev:client": "APP_TARGET=reddit APP_VERSION=0.0.0-dev BUILD_ID=devvit-watch pnpm --dir ../.. exec vite build --mode staging --watch --outDir apps/target-devvit/dist/client",
-    "dev:server": "vite build --config vite.server.config.ts --watch",
-    "dev:watch": "concurrently --kill-others --success first \"pnpm run dev:client\" \"pnpm run dev:server\"",
     "build": "pnpm --dir ../.. build:devvit",
-    "build:server": "vite build --config vite.server.config.ts",
     "whoami": "devvit whoami",
     "upload": "pnpm run prepare:icon:production && devvit upload --config devvit.json",
     "publish": "pnpm run prepare:icon:production && devvit publish --config devvit.json",
@@ -24,18 +19,15 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@devvit/web": "0.13.6",
+    "@devvit/web": "0.13.7",
     "@mpgd/adapter-devvit": "__MPGD_DEPENDENCY_VERSION_ADAPTER_DEVVIT__",
-    "@mpgd/bridge": "__MPGD_DEPENDENCY_VERSION_BRIDGE__",
-    "express": "^5.2.1",
-    "helmet": "^8.1.0"
+    "@mpgd/bridge": "__MPGD_DEPENDENCY_VERSION_BRIDGE__"
   },
   "devDependencies": {
+    "@devvit/start": "0.13.7",
     "@ttsc/unplugin": "0.18.4",
-    "@types/express": "^5.0.6",
     "@types/node": "^24.0.0",
-    "concurrently": "10.0.3",
-    "devvit": "0.13.6",
+    "devvit": "0.13.7",
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
     "vite": "^8.1.3"

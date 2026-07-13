@@ -159,6 +159,7 @@ validatePhaserTemplateAITPolyfill();
 validatePhaserTemplateAITConsoleCli();
 validatePhaserTemplateDevvitPostOperations();
 validatePhaserTemplateDevvitSurfaces();
+validatePhaserTemplateDevvitVitePlugin();
 validatePhaserTemplateBuildGateways();
 validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
@@ -304,13 +305,13 @@ function validatePhaserTemplateBuildGateways(): void {
   }
 
   for (const root of [exampleRoot, templateRoot]) {
-    const vitePath = `${root}/vite.config.ts`;
+    const vitePath = `${root}/vite.shared.ts`;
     const installPath = `${root}/src/platform/${
       root === exampleRoot ? 'installStarterPlatform.ts' : 'installPlatform.ts'
     }`;
 
     for (const requiredText of [
-      "'#mpgd-platform-gateway': resolve(buildGatewayModule)",
+      "'#mpgd-platform-gateway': resolve(input.gameRoot, buildGatewayModule)",
       'export function resolveBuildGatewayModule',
       "return 'src/platform/buildGateways/browser.ts'",
       "'src/platform/buildGateways/aitSandbox.ts'",
@@ -822,8 +823,8 @@ function validatePhaserTemplateDevvitSurfaces(): void {
       const source = readText(vitePath);
       for (const requiredText of [
         "const isDevvitBuild = appTarget === 'reddit'",
-        "preview: resolve('index.html')",
-        "game: resolve('game.html')",
+        "preview: resolve(gameRoot, 'index.html')",
+        "game: resolve(gameRoot, 'game.html')",
       ]) {
         assertIncludesText(source, requiredText, `${vitePath}: Devvit multi-page build.`);
       }
@@ -854,6 +855,115 @@ function validatePhaserTemplateDevvitSurfaces(): void {
       'game.html',
       `${path}: expanded game entry`,
     );
+  }
+}
+
+function validatePhaserTemplateDevvitVitePlugin(): void {
+  const wrapperRoots = [
+    'apps/target-devvit',
+    'packages/cli/templates/phaser-game/apps/target-devvit',
+  ] as const;
+
+  for (const root of wrapperRoots) {
+    const vitePath = `${root}/vite.config.ts`;
+    const serverPath = `${root}/src/server/index.ts`;
+    const packagePath = `${root}/package.json`;
+    const manifestPath = `${root}/devvit.json`;
+
+    for (const path of [
+      vitePath,
+      serverPath,
+      packagePath,
+      manifestPath,
+      `${root}/src/client/index.html`,
+      `${root}/src/client/game.html`,
+      `${root}/src/client/preview.ts`,
+      `${root}/src/client/game.ts`,
+    ]) {
+      if (!existsSync(path)) {
+        failures.push(`${path}: required for the official Devvit Vite build.`);
+      }
+    }
+
+    if (existsSync(vitePath)) {
+      const source = readText(vitePath);
+
+      for (const requiredText of [
+        "from '@devvit/start/vite'",
+        'createGameViteSharedConfig',
+        'plugins: [...(shared.plugins ?? []), devvit()]',
+      ]) {
+        assertIncludesText(source, requiredText, `${vitePath}: official Devvit Vite plugin.`);
+      }
+    }
+
+    if (existsSync(serverPath)) {
+      const source = readText(serverPath);
+
+      assertIncludesText(
+        source,
+        "from '@mpgd/bridge/orpc/node'",
+        `${serverPath}: direct oRPC Node HTTP adapter.`,
+      );
+
+      for (const forbiddenText of ["from 'express'", "from 'helmet'"]) {
+        if (source.includes(forbiddenText)) {
+          failures.push(`${serverPath}: must not require ${forbiddenText}.`);
+        }
+      }
+    }
+
+    const packageJson = readJson(packagePath) as {
+      readonly dependencies?: Record<string, unknown>;
+      readonly devDependencies?: Record<string, unknown>;
+    } | null;
+
+    if (packageJson !== null) {
+      assertEqual(
+        packageJson.dependencies?.['@devvit/web'],
+        '0.13.7',
+        `${packagePath}: dependencies.@devvit/web`,
+      );
+      assertEqual(
+        packageJson.devDependencies?.['@devvit/start'],
+        '0.13.7',
+        `${packagePath}: devDependencies.@devvit/start`,
+      );
+      assertEqual(
+        packageJson.devDependencies?.devvit,
+        '0.13.7',
+        `${packagePath}: devDependencies.devvit`,
+      );
+    }
+
+    const manifest = readJson(manifestPath) as {
+      readonly scripts?: Record<string, unknown>;
+    } | null;
+
+    if (manifest !== null) {
+      assertEqual(
+        manifest.scripts?.dev,
+        'vite build --mode staging --watch',
+        `${manifestPath}: scripts.dev`,
+      );
+    }
+  }
+
+  for (const path of [
+    'examples/phaser-starter/mpgd.targets.json',
+    'packages/cli/templates/phaser-game/mpgd.targets.json',
+  ]) {
+    const config = readJson(path) as {
+      readonly targets?: Record<string, { readonly buildStrategy?: unknown }>;
+    } | null;
+
+    if (config !== null) {
+      assertEqual(
+        config.targets?.reddit?.buildStrategy,
+        'devvit-vite',
+        `${path}: targets.reddit.buildStrategy`,
+      );
+    }
   }
 }
 
