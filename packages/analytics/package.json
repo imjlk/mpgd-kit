@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/analytics",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "Typed analytics event schema and sink helpers for mpgd platform integrations.",
   "license": "MIT",
   "repository": {

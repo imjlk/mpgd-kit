@@ -1,5 +1,27 @@
 # @mpgd/game-services
 
+## 0.6.0 — 2026-07-14
+
+### Added
+
+- [f81d3fa](https://github.com/imjlk/mpgd-kit/commit/f81d3fa30da83537d838442ef934642b433e347b) Add authenticated read-only verified leaderboard fetch helpers and opaque
+  keyset cursor pagination shared by memory and D1 providers, with bounded,
+  well-formed board and attempt identifiers that keep every generated continuation
+  cursor transport-safe. — Thanks @imjlk!
+- [8599f11](https://github.com/imjlk/mpgd-kit/commit/8599f11b891535635e4aab1cb37d180f1ab861c2) Add a reusable, test-framework-independent conformance suite for verified
+  leaderboard providers, including concurrent idempotency and mutation isolation. — Thanks @imjlk!
+- [4eb7cee](https://github.com/imjlk/mpgd-kit/commit/4eb7cee9b2088e3734af673af6db33e8c8a7c51b) Add a provider-neutral verified leaderboard boundary with separate public-read
+  and trusted server-write ports, first/best attempt selection, deterministic
+  snapshots, and an in-memory reference implementation. — Thanks @imjlk!
+
+### Changed
+
+- [5230c6b](https://github.com/imjlk/mpgd-kit/commit/5230c6b4f49cdd38b4cde2449a7dc7751f9dacff) Update published package metadata and generated Phaser starters to the current ttsc, TypeScript, and typia toolchain releases. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: analytics@0.3.5, catalog@0.3.5, platform@0.5.1
+
 ## 0.5.0 — 2026-07-13
 
 ### Added
