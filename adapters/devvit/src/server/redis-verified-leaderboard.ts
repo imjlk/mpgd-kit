@@ -331,9 +331,7 @@ async function tryReadRankedAttempts(
     return [];
   }
 
-  const values = await Promise.all(
-    members.map(({ member }) => redis.hGet(keys.entries, member)),
-  );
+  const values = await Promise.all(members.map(({ member }) => redis.hGet(keys.entries, member)));
 
   const rankedAttempts: RankedAttempt[] = [];
 
