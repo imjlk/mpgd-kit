@@ -114,6 +114,16 @@ assert(
 const missing = await client.getSnapshot({ leaderboardId: 'transport:missing' });
 assertEqual(missing, undefined, 'the client should map missing boards to undefined');
 
+const unmountedRouteClient = createVerifiedLeaderboardSnapshotFetchClient({
+  baseUrl,
+  authorization: () => 'Bearer player-token',
+  fetch: async () => Response.json({ error: 'ROUTE_NOT_FOUND' }, { status: 404 }),
+});
+await assertRejects(
+  () => unmountedRouteClient.getSnapshot({ leaderboardId: 'transport:board' }),
+  'the client must not treat an unmounted route as a missing leaderboard',
+);
+
 const unauthorizedClient = createVerifiedLeaderboardSnapshotFetchClient({
   baseUrl,
   authorization: () => 'Bearer invalid-token',

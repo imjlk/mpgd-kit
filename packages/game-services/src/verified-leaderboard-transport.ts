@@ -158,10 +158,6 @@ export function createVerifiedLeaderboardSnapshotFetchClient(
         },
       });
 
-      if (response.status === 404) {
-        return undefined;
-      }
-
       let body: unknown;
 
       try {
@@ -170,6 +166,10 @@ export function createVerifiedLeaderboardSnapshotFetchClient(
         throw new Error(
           `Verified leaderboard snapshot response was not JSON (status ${response.status}).`,
         );
+      }
+
+      if (response.status === 404 && readErrorCode(body) === 'LEADERBOARD_NOT_FOUND') {
+        return undefined;
       }
 
       if (!response.ok) {

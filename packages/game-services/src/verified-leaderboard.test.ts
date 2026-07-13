@@ -119,7 +119,7 @@ assertEqual(
 assertEqual(snapshot.totalParticipants, 2, 'snapshot should count retained participants');
 assertEqual(snapshot.generatedAt, now, 'snapshot should use the injected server clock');
 
-const maximumIdentifier = '\uD800'.repeat(verifiedLeaderboardIdentifierMaximumLength);
+const maximumIdentifier = '\u0000'.repeat(verifiedLeaderboardIdentifierMaximumLength);
 const maximumIdentifierService = createInMemoryVerifiedLeaderboardService({ now: () => now });
 
 for (const [index, suffix] of ['a', 'b'].entries()) {
@@ -191,6 +191,19 @@ await assertRejects(
   ),
   'attemptId must contain at most',
   'attempt IDs beyond the public maximum should fail closed',
+);
+await assertRejects(
+  () => maximumIdentifierService.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: 'invalid-unicode-\uD800',
+      participantId: 'invalid-unicode-player',
+      attemptId: 'invalid-unicode-attempt',
+      score: 1,
+      completedAt: '2026-07-13T08:00:04.000Z',
+    }),
+  ),
+  'leaderboardId must contain only well-formed Unicode',
+  'URL-lossy leaderboard IDs should fail closed',
 );
 
 const missing = await service.getSnapshot({ leaderboardId: 'missing' });

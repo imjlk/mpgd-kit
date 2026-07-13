@@ -637,6 +637,34 @@ function assertVerifiedLeaderboardIdentifier(
       `${label} must contain at most ${String(verifiedLeaderboardIdentifierMaximumLength)} characters.`,
     );
   }
+
+  if (!isWellFormedUnicode(input)) {
+    throw new Error(`${label} must contain only well-formed Unicode.`);
+  }
+}
+
+function isWellFormedUnicode(input: string): boolean {
+  for (let index = 0; index < input.length; index += 1) {
+    const codeUnit = input.charCodeAt(index);
+
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = input.charCodeAt(index + 1);
+
+      if (
+        index + 1 >= input.length
+        || nextCodeUnit < 0xdc00
+        || nextCodeUnit > 0xdfff
+      ) {
+        return false;
+      }
+
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function assertOptionalNonEmptyString(
