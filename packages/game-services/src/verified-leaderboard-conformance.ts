@@ -75,16 +75,42 @@ export async function runVerifiedLeaderboardConformance(
 
   for (const [scenario, runScenario] of scenarios) {
     let fixture: VerifiedLeaderboardConformanceFixture | undefined;
+    let scenarioError: unknown;
+    let scenarioFailed = false;
 
     try {
       fixture = await input.createFixture({ scenario, now });
       await runScenario({ service: fixture.service, now });
     } catch (error) {
-      throw new Error(`Verified leaderboard conformance failed: ${scenario}.`, {
-        cause: error,
-      });
-    } finally {
+      scenarioError = error;
+      scenarioFailed = true;
+    }
+
+    let cleanupError: unknown;
+    let cleanupFailed = false;
+
+    try {
       await fixture?.dispose?.();
+    } catch (error) {
+      cleanupError = error;
+      cleanupFailed = true;
+    }
+
+    if (scenarioFailed) {
+      throw new Error(`Verified leaderboard conformance failed: ${scenario}.`, {
+        cause: cleanupFailed
+          ? new AggregateError(
+              [scenarioError, cleanupError],
+              `Scenario and fixture cleanup both failed: ${scenario}.`,
+            )
+          : scenarioError,
+      });
+    }
+
+    if (cleanupFailed) {
+      throw new Error(`Verified leaderboard conformance cleanup failed: ${scenario}.`, {
+        cause: cleanupError,
+      });
     }
 
     passedScenarios.push(scenario);
@@ -229,6 +255,76 @@ async function runBestSelectionAndRetryScenario(context: ScenarioContext): Promi
     'attempt:initial',
     'superseded best retries must preserve their original response entry',
   );
+
+  await context.service.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: 'best:board',
+      scoreOrder: 'descending',
+      attemptSelection: 'best',
+      participantId: 'participant:runner-up',
+      attemptId: 'attempt:runner-up',
+      score: 105,
+      completedAt: '2030-01-02T02:13:00.000Z',
+    }),
+  );
+  const descendingSnapshot = await context.service.getSnapshot({
+    leaderboardId: 'best:board',
+    limit: 2,
+  });
+  assertEqual(
+    descendingSnapshot?.entries[0]?.attemptId,
+    'attempt:improved',
+    'descending snapshots must rank higher scores first',
+  );
+  assertEqual(
+    descendingSnapshot?.entries[1]?.attemptId,
+    'attempt:runner-up',
+    'descending snapshots must preserve lower-scoring followers',
+  );
+
+  await context.service.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: 'best:ascending',
+      scoreOrder: 'ascending',
+      attemptSelection: 'best',
+      participantId: 'participant:ascending',
+      attemptId: 'attempt:ascending-initial',
+      score: 100,
+      completedAt: '2030-01-02T02:14:00.000Z',
+    }),
+  );
+  const slowerAscendingRecord = await context.service.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: 'best:ascending',
+      scoreOrder: 'ascending',
+      attemptSelection: 'best',
+      participantId: 'participant:ascending',
+      attemptId: 'attempt:ascending-slower',
+      score: 110,
+      completedAt: '2030-01-02T02:15:00.000Z',
+    }),
+  );
+  const fasterAscendingRecord = await context.service.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: 'best:ascending',
+      scoreOrder: 'ascending',
+      attemptSelection: 'best',
+      participantId: 'participant:ascending',
+      attemptId: 'attempt:ascending-faster',
+      score: 90,
+      completedAt: '2030-01-02T02:16:00.000Z',
+    }),
+  );
+  assertEqual(
+    slowerAscendingRecord.retained,
+    false,
+    'ascending best selection must reject higher scores',
+  );
+  assertEqual(
+    fasterAscendingRecord.retained,
+    true,
+    'ascending best selection must retain lower scores',
+  );
 }
 
 async function runDeterministicTiesScenario(context: ScenarioContext): Promise<void> {
@@ -359,10 +455,18 @@ async function runIdentityAndDefinitionConflictsScenario(
     'leaderboard definitions must be immutable',
   );
 
-  const otherBoardRecord = await context.service.recordVerifiedAttempt({
-    ...request,
-    definition: { ...request.definition, leaderboardId: 'identity:other-board' },
-  });
+  const otherBoardRecord = await context.service.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: 'identity:other-board',
+      participantId: request.attempt.participantId,
+      ...(request.attempt.participantLabel === undefined
+        ? {}
+        : { participantLabel: request.attempt.participantLabel }),
+      attemptId: request.attempt.attemptId,
+      score: request.attempt.score,
+      completedAt: request.attempt.completedAt,
+    }),
+  );
   assertEqual(
     otherBoardRecord.alreadyProcessed,
     false,
@@ -416,16 +520,50 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
   }
 
   const snapshot = await context.service.getSnapshot({ leaderboardId: 'mutation:board' });
-  assertEqual(snapshot?.definition.scoreOrder, 'ascending', 'stored definitions must be cloned');
-  assertEqual(snapshot?.entries[0]?.score, 50, 'stored attempts must resist caller mutation');
+  assert(snapshot !== undefined, 'mutation board must return a snapshot');
+  const snapshotEntry = snapshot.entries[0];
+  assert(snapshotEntry !== undefined, 'mutation board must retain its recorded entry');
+  assertEqual(snapshot.definition.scoreOrder, 'ascending', 'stored definitions must be cloned');
+  assertEqual(snapshotEntry.score, 50, 'stored attempts must resist caller mutation');
   assertEqual(
-    snapshot?.entries[0]?.participantLabel,
+    snapshotEntry.participantLabel,
     'Stable Label',
     'response mutation must not rewrite retained entries',
+  );
+
+  try {
+    Object.assign(snapshot.definition, { scoreOrder: 'descending' });
+  } catch {
+    // Frozen provider snapshot definitions are already isolated from mutation.
+  }
+
+  try {
+    Object.assign(snapshotEntry, { participantLabel: 'Snapshot Mutation', score: -3 });
+  } catch {
+    // Frozen provider snapshot entries are already isolated from mutation.
+  }
+
+  const rereadSnapshot = await context.service.getSnapshot({ leaderboardId: 'mutation:board' });
+  assertEqual(
+    rereadSnapshot?.definition.scoreOrder,
+    'ascending',
+    'snapshot definition mutation must not rewrite stored policy',
+  );
+  assertEqual(
+    rereadSnapshot?.entries[0]?.score,
+    50,
+    'snapshot entry mutation must not rewrite retained attempts',
+  );
+  assertEqual(
+    rereadSnapshot?.entries[0]?.participantLabel,
+    'Stable Label',
+    'snapshot label mutation must not rewrite presentation metadata',
   );
 }
 
 async function runRuntimeValidationScenario(context: ScenarioContext): Promise<void> {
+  const validVerificationTimestamp = '2030-01-02T02:00:00.000Z';
+
   await assertRejects(
     () => context.service.recordVerifiedAttempt(
       createAttempt({
@@ -434,6 +572,7 @@ async function runRuntimeValidationScenario(context: ScenarioContext): Promise<v
         attemptId: 'attempt:calendar',
         score: 1,
         completedAt: '2030-02-31T02:00:00.000Z',
+        verifiedAt: validVerificationTimestamp,
       }),
     ),
     'invalid calendar timestamps must fail closed',
@@ -446,6 +585,7 @@ async function runRuntimeValidationScenario(context: ScenarioContext): Promise<v
         attemptId: 'attempt:timezone',
         score: 1,
         completedAt: '2030-01-02T02:00:00.000',
+        verifiedAt: validVerificationTimestamp,
       }),
     ),
     'offset-less timestamps must fail closed',
@@ -458,9 +598,23 @@ async function runRuntimeValidationScenario(context: ScenarioContext): Promise<v
         attemptId: 'attempt:precision',
         score: 1,
         completedAt: '2030-01-02T02:00:00.0001Z',
+        verifiedAt: validVerificationTimestamp,
       }),
     ),
     'sub-millisecond timestamps must fail closed',
+  );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: 'validation:evidence-timezone',
+        participantId: 'participant:evidence-timezone',
+        attemptId: 'attempt:evidence-timezone',
+        score: 1,
+        completedAt: validVerificationTimestamp,
+        verifiedAt: '2030-01-02T02:00:00.000',
+      }),
+    ),
+    'invalid verification timestamps must fail closed independently',
   );
   await assertRejects(
     () => context.service.getSnapshot({ leaderboardId: 'validation:limit', limit: 0 }),
@@ -477,6 +631,7 @@ function createAttempt(input: {
   readonly attemptId: string;
   readonly score: number;
   readonly completedAt: string;
+  readonly verifiedAt?: string;
 }): RecordVerifiedLeaderboardAttemptRequest {
   return createMutableAttempt(input);
 }
@@ -490,6 +645,7 @@ function createMutableAttempt(input: {
   readonly attemptId: string;
   readonly score: number;
   readonly completedAt: string;
+  readonly verifiedAt?: string;
 }): {
   definition: {
     leaderboardId: string;
@@ -526,7 +682,7 @@ function createMutableAttempt(input: {
       verification: {
         authorityId: 'verified-leaderboard-conformance',
         evidenceId: `evidence:${input.leaderboardId}:${input.attemptId}`,
-        verifiedAt: input.completedAt,
+        verifiedAt: input.verifiedAt ?? input.completedAt,
       },
     },
   };
