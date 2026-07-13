@@ -1,4 +1,6 @@
 import {
+  assertRecordVerifiedLeaderboardAttemptResponse,
+  assertVerifiedLeaderboardSnapshot,
   type RecordVerifiedLeaderboardAttemptRequest,
   type VerifiedLeaderboardService,
 } from './verified-leaderboard';
@@ -80,7 +82,7 @@ export async function runVerifiedLeaderboardConformance(
 
     try {
       fixture = await input.createFixture({ scenario, now });
-      await runScenario({ service: fixture.service, now });
+      await runScenario({ service: createOutputValidatingService(fixture.service), now });
     } catch (error) {
       scenarioError = error;
       scenarioFailed = true;
@@ -159,6 +161,27 @@ async function runFirstSelectionAndSnapshotScenario(
     earlierRecord.retained,
     true,
     'an earlier verified completion must replace a later completion',
+  );
+
+  const latestRecord = await context.service.recordVerifiedAttempt(
+    createAttempt({
+      leaderboardId: 'first:board',
+      participantId: 'participant:first',
+      participantLabel: 'First Player',
+      attemptId: 'attempt:latest',
+      score: 5,
+      completedAt: '2030-01-02T02:04:00.000Z',
+    }),
+  );
+  assertEqual(
+    latestRecord.retained,
+    false,
+    'later completions must not replace the earliest retained attempt',
+  );
+  assertEqual(
+    latestRecord.entry.attemptId,
+    'attempt:earlier',
+    'rejected later attempts must report the retained earliest attempt',
   );
 
   const snapshot = await context.service.getSnapshot({
@@ -480,6 +503,36 @@ async function runIdentityAndDefinitionConflictsScenario(
     'leaderboard attempt selection must be immutable',
   );
 
+  const stableRetry = await context.service.recordVerifiedAttempt(request);
+  assertEqual(
+    stableRetry.alreadyProcessed,
+    true,
+    'conflict failures must preserve the original attempt identity',
+  );
+  assertEqual(
+    stableRetry.entry.score,
+    request.attempt.score,
+    'conflict failures must not rewrite the original retained score',
+  );
+  const stableSnapshot = await context.service.getSnapshot({
+    leaderboardId: request.definition.leaderboardId,
+  });
+  assertEqual(
+    stableSnapshot?.definition.attemptSelection,
+    request.definition.attemptSelection,
+    'conflict failures must not rewrite the original selection policy',
+  );
+  assertEqual(
+    stableSnapshot?.definition.scoreOrder,
+    request.definition.scoreOrder,
+    'conflict failures must not rewrite the original score order',
+  );
+  assertEqual(
+    stableSnapshot?.entries[0]?.attemptId,
+    request.attempt.attemptId,
+    'conflict failures must leave the original attempt retained',
+  );
+
   const otherBoardRecord = await context.service.recordVerifiedAttempt(
     createAttempt({
       leaderboardId: 'identity:other-board',
@@ -568,6 +621,12 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
     // Frozen provider snapshot entries are already isolated from mutation.
   }
 
+  try {
+    (snapshot.entries as Array<typeof snapshotEntry>).pop();
+  } catch {
+    // Frozen provider snapshot arrays are already isolated from mutation.
+  }
+
   const rereadSnapshot = await context.service.getSnapshot({ leaderboardId: 'mutation:board' });
   assertEqual(
     rereadSnapshot?.definition.scoreOrder,
@@ -584,6 +643,32 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
     'Stable Label',
     'snapshot label mutation must not rewrite presentation metadata',
   );
+  assertEqual(
+    rereadSnapshot?.entries.length,
+    1,
+    'snapshot array mutation must not rewrite retained entries',
+  );
+}
+
+function createOutputValidatingService(
+  service: VerifiedLeaderboardService,
+): VerifiedLeaderboardService {
+  return {
+    async recordVerifiedAttempt(input) {
+      const response: unknown = await service.recordVerifiedAttempt(input);
+      assertRecordVerifiedLeaderboardAttemptResponse(response);
+      return response;
+    },
+    async getSnapshot(input) {
+      const snapshot: unknown = await service.getSnapshot(input);
+
+      if (snapshot !== undefined) {
+        assertVerifiedLeaderboardSnapshot(snapshot);
+      }
+
+      return snapshot;
+    },
+  };
 }
 
 async function runRuntimeValidationScenario(context: ScenarioContext): Promise<void> {
