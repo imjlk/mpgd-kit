@@ -81,29 +81,20 @@ async function handleLegacyBridgeRequest(
   try {
     body = await readJsonRequestBody(request, maxRequestBodySize);
   } catch (error) {
-    const tooLarge = error instanceof RequestBodyTooLargeError;
-    const invalidJson = error instanceof SyntaxError;
+    const responseError = describeLegacyBridgeBodyError(error);
 
-    if (!tooLarge && !invalidJson) {
+    if (responseError.retryable) {
       console.error(`devvit legacy bridge body read failed: ${errorMessage(error)}`, error);
     }
 
     sendJson(
       response,
-      tooLarge ? 413 : invalidJson ? 400 : 500,
+      responseError.status,
       createBridgeError(
         'unknown',
-        tooLarge
-          ? 'BRIDGE_REQUEST_TOO_LARGE'
-          : invalidJson
-            ? 'INVALID_BRIDGE_REQUEST'
-            : 'DEVVIT_BRIDGE_INTERNAL_ERROR',
-        tooLarge
-          ? 'Bridge request body is too large.'
-          : invalidJson
-            ? 'Bridge request body is not valid JSON.'
-            : 'Bridge request body could not be read.',
-        !tooLarge && !invalidJson,
+        responseError.code,
+        responseError.message,
+        responseError.retryable,
       ),
     );
     return;
@@ -693,6 +684,38 @@ function requestPathname(request: IncomingMessage): string {
 }
 
 class RequestBodyTooLargeError extends Error {}
+
+function describeLegacyBridgeBodyError(error: unknown): {
+  readonly status: number;
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+} {
+  if (error instanceof RequestBodyTooLargeError) {
+    return {
+      status: 413,
+      code: 'BRIDGE_REQUEST_TOO_LARGE',
+      message: 'Bridge request body is too large.',
+      retryable: false,
+    };
+  }
+
+  if (error instanceof SyntaxError) {
+    return {
+      status: 400,
+      code: 'INVALID_BRIDGE_REQUEST',
+      message: 'Bridge request body is not valid JSON.',
+      retryable: false,
+    };
+  }
+
+  return {
+    status: 500,
+    code: 'DEVVIT_BRIDGE_INTERNAL_ERROR',
+    message: 'Bridge request body could not be read.',
+    retryable: true,
+  };
+}
 
 async function* readRequestBodyChunks(
   request: IncomingMessage,
