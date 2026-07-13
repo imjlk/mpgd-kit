@@ -29,8 +29,9 @@ verified-attempt flow.
 
 `leaderboardId` is an opaque content scope. Games can use IDs such as
 `daily:<date>` or `level:<published-id>` without the kit learning those schemas.
-Leaderboard and attempt IDs may contain at most 2,048 JavaScript characters;
-this keeps every valid keyset cursor within its public size cap.
+Leaderboard and attempt IDs may contain at most 512 JavaScript characters;
+this keeps every valid keyset cursor request within the bundled Worker's URL
+size cap, including worst-case JSON and URL escaping.
 The definition also fixes two policies for the lifetime of that board:
 
 - `scoreOrder`: `ascending` for elapsed time and `descending` for points.
@@ -110,6 +111,8 @@ const response = await snapshotFetch(request);
 
 The default route is
 `GET /game-services/verified-leaderboard/snapshot?leaderboardId=<id>&limit=<n>&cursor=<opaque>`.
+The fetch client preserves a path prefix in `baseUrl`, so a base such as
+`https://services.example/api/` targets `/api/game-services/...`.
 Unknown routes return `undefined` so the handler can compose with an existing
 router. Missing or invalid credentials return `401`; invalid cursors return
 `400`; unknown leaderboards return `404`. Responses are always marked

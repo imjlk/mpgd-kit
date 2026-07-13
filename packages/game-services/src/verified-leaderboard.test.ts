@@ -119,7 +119,7 @@ assertEqual(
 assertEqual(snapshot.totalParticipants, 2, 'snapshot should count retained participants');
 assertEqual(snapshot.generatedAt, now, 'snapshot should use the injected server clock');
 
-const maximumIdentifier = '\u0000'.repeat(verifiedLeaderboardIdentifierMaximumLength);
+const maximumIdentifier = '\uD800'.repeat(verifiedLeaderboardIdentifierMaximumLength);
 const maximumIdentifierService = createInMemoryVerifiedLeaderboardService({ now: () => now });
 
 for (const [index, suffix] of ['a', 'b'].entries()) {
@@ -145,6 +145,16 @@ assert(
 assert(
   maximumIdentifierFirstPage.nextCursor.length <= 65_536,
   'maximum-length identifiers should keep the continuation cursor within its public cap',
+);
+const maximumIdentifierPageUrl = new URL(
+  'https://verified-leaderboard.test/game-services/verified-leaderboard/snapshot',
+);
+maximumIdentifierPageUrl.searchParams.set('leaderboardId', maximumIdentifier);
+maximumIdentifierPageUrl.searchParams.set('limit', '1');
+maximumIdentifierPageUrl.searchParams.set('cursor', maximumIdentifierFirstPage.nextCursor);
+assert(
+  maximumIdentifierPageUrl.href.length <= 16_384,
+  'maximum-length identifiers should keep cursor reads within the Workers URL cap',
 );
 const maximumIdentifierSecondPage = await maximumIdentifierService.getSnapshot({
   leaderboardId: maximumIdentifier,

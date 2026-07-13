@@ -1,7 +1,7 @@
 export type VerifiedLeaderboardScoreOrder = 'ascending' | 'descending';
 export type VerifiedLeaderboardAttemptSelection = 'first' | 'best';
 
-export const verifiedLeaderboardIdentifierMaximumLength = 2_048;
+export const verifiedLeaderboardIdentifierMaximumLength = 512;
 
 const timestampPattern = new RegExp(
   '^(\\d{4})-(\\d{2})-(\\d{2})'

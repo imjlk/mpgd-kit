@@ -88,6 +88,29 @@ const secondPage = await client.getSnapshot({
 assertEqual(secondPage?.entries[0]?.attemptId, 'attempt:2', 'the cursor should advance one entry');
 assertEqual(secondPage?.entries[0]?.rank, 2, 'cursor pages should retain global ranks');
 
+const prefixedPath = `/api${verifiedLeaderboardSnapshotPath}`;
+const prefixedHandler = createVerifiedLeaderboardSnapshotFetchHandler({
+  reader: service,
+  path: prefixedPath,
+  authenticate: () => ({ participantId: 'participant:2' }),
+});
+const prefixedClient = createVerifiedLeaderboardSnapshotFetchClient({
+  baseUrl: `${baseUrl}/api/`,
+  authorization: () => 'Bearer player-token',
+  fetch: async (request, init) => {
+    const response = await prefixedHandler(new Request(request, init));
+    return response ?? new Response('Not Found', { status: 404 });
+  },
+});
+const prefixedSnapshot = await prefixedClient.getSnapshot({
+  leaderboardId: 'transport:board',
+  limit: 1,
+});
+assert(
+  prefixedSnapshot !== undefined,
+  'the client should preserve path prefixes from its base URL',
+);
+
 const missing = await client.getSnapshot({ leaderboardId: 'transport:missing' });
 assertEqual(missing, undefined, 'the client should map missing boards to undefined');
 

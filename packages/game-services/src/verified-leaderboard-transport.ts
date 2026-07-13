@@ -129,10 +129,7 @@ export function createVerifiedLeaderboardSnapshotFetchClient(
     throw new Error('A fetch implementation is required for leaderboard snapshot reads.');
   }
 
-  const endpoint = new URL(
-    input.path ?? verifiedLeaderboardSnapshotPath,
-    ensureTrailingSlash(input.baseUrl),
-  );
+  const endpoint = createEndpointUrl(input.baseUrl, input.path ?? verifiedLeaderboardSnapshotPath);
 
   return {
     async getSnapshot(requestInput) {
@@ -236,8 +233,16 @@ function readErrorCode(input: unknown): string {
   return typeof error === 'string' && error.length > 0 ? error : 'UNKNOWN_ERROR';
 }
 
-function ensureTrailingSlash(input: string): string {
-  return input.endsWith('/') ? input : `${input}/`;
+function createEndpointUrl(baseUrl: string, path: string): URL {
+  const normalizedBaseUrl = new URL(baseUrl);
+  normalizedBaseUrl.search = '';
+  normalizedBaseUrl.hash = '';
+
+  if (!normalizedBaseUrl.pathname.endsWith('/')) {
+    normalizedBaseUrl.pathname = `${normalizedBaseUrl.pathname}/`;
+  }
+
+  return new URL(path.replace(/^\/+/u, ''), normalizedBaseUrl);
 }
 
 function jsonResponse(
