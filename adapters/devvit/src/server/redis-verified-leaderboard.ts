@@ -19,7 +19,6 @@ import {
 } from '@mpgd/game-services/verified-leaderboard';
 
 const defaultKeyPrefix = 'mpgd:verified-leaderboard:v1';
-const retainedEntryReadAttempts = 3;
 const defaultSnapshotLimit = 10;
 const defaultTransactionAttempts = 3;
 const maximumTransactionAttempts = 32;
@@ -128,7 +127,12 @@ export function createDevvitRedisVerifiedLeaderboardService(
             return cloneRecordResponse(existing.response, true);
           }
 
-          const rankedAttempts = await readRankedAttempts(redis, keys, definition);
+          const rankedAttempts = await readRankedAttempts(
+            redis,
+            keys,
+            definition,
+            transactionAttempts,
+          );
           assertAvailableAttemptMember(rankedAttempts, attemptMember, request.attempt);
           const retainedAttempt = rankedAttempts.find(
             (candidate) => candidate.attempt.participantId === request.attempt.participantId,
@@ -215,7 +219,12 @@ export function createDevvitRedisVerifiedLeaderboardService(
         return undefined;
       }
 
-      const rankedAttempts = await readRankedAttempts(redis, keys, definition);
+      const rankedAttempts = await readRankedAttempts(
+        redis,
+        keys,
+        definition,
+        transactionAttempts,
+      );
       const rankedEntries = toRankedEntries(rankedAttempts);
       const cursorPosition = request.cursor === undefined
         ? undefined
@@ -305,8 +314,9 @@ async function readRankedAttempts(
   redis: DevvitVerifiedLeaderboardRedisLike,
   keys: BoardKeys,
   definition: VerifiedLeaderboardDefinition,
+  readAttempts: number,
 ): Promise<RankedAttempt[]> {
-  for (let attempt = 0; attempt < retainedEntryReadAttempts; attempt += 1) {
+  for (let attempt = 0; attempt < readAttempts; attempt += 1) {
     const rankedAttempts = await tryReadRankedAttempts(redis, keys, definition);
 
     if (rankedAttempts !== undefined) {
@@ -316,7 +326,7 @@ async function readRankedAttempts(
 
   throw new Error(
     'Devvit Redis retained entries changed during '
-      + `${String(retainedEntryReadAttempts)} consecutive reads for ${keys.ranking}.`,
+      + `${String(readAttempts)} consecutive reads for ${keys.ranking}.`,
   );
 }
 

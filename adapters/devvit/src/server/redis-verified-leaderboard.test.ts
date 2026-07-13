@@ -106,6 +106,33 @@ describe('createDevvitRedisVerifiedLeaderboardService', () => {
     expect(redis.retainedHGetCalls).toBe(3);
   });
 
+  it('uses the transaction attempt budget for retained entry reads', async () => {
+    const redis = new FakeDevvitRedis();
+    const service = createDevvitRedisVerifiedLeaderboardService(redis, {
+      transactionAttempts: 1,
+    });
+    const initialRequest = createRequest('snapshot-budget');
+    await service.recordVerifiedAttempt(initialRequest);
+    redis.beforeNextRetainedHGet = async () => {
+      await service.recordVerifiedAttempt({
+        ...initialRequest,
+        attempt: {
+          ...initialRequest.attempt,
+          attemptId: 'attempt:snapshot-budget:earlier',
+          completedAt: '2030-01-02T03:03:05.000Z',
+          verification: {
+            ...initialRequest.attempt.verification,
+            evidenceId: 'evidence:snapshot-budget:earlier',
+          },
+        },
+      });
+    };
+
+    await expect(service.getSnapshot({
+      leaderboardId: initialRequest.definition.leaderboardId,
+    })).rejects.toThrow('changed during 1 consecutive reads');
+  });
+
   it('rejects invalid provider options before using Redis', () => {
     const redis = new FakeDevvitRedis();
 
