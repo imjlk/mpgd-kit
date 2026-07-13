@@ -86,15 +86,26 @@ export interface CreateInMemoryVerifiedLeaderboardServiceInput {
   readonly now?: () => string;
 }
 
+interface StoredVerifiedLeaderboardAttempt {
+  readonly attempt: VerifiedLeaderboardAttempt;
+  readonly response: RecordVerifiedLeaderboardAttemptResponse;
+}
+
 export function createInMemoryVerifiedLeaderboardService(
   input: CreateInMemoryVerifiedLeaderboardServiceInput = {},
 ): VerifiedLeaderboardService {
   return new InMemoryVerifiedLeaderboardService(input.now ?? (() => new Date().toISOString()));
 }
 
+/**
+ * Process-local reference adapter for tests and development. It keeps every
+ * definition and processed attempt for its full lifetime and fully sorts the
+ * retained attempts for each write and read. Use a durable adapter with
+ * eviction and an indexed ranking strategy for long-lived or large boards.
+ */
 export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardService {
   private readonly definitions = new Map<string, VerifiedLeaderboardDefinition>();
-  private readonly attemptsById = new Map<string, VerifiedLeaderboardAttempt>();
+  private readonly attemptsById = new Map<string, StoredVerifiedLeaderboardAttempt>();
   private readonly retainedByLeaderboard = new Map<
     string,
     Map<string, VerifiedLeaderboardAttempt>
@@ -105,52 +116,59 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
   async recordVerifiedAttempt(
     input: RecordVerifiedLeaderboardAttemptRequest,
   ): Promise<RecordVerifiedLeaderboardAttemptResponse> {
-    const request = assertRecordVerifiedLeaderboardAttemptRequest(input);
-    const definition = this.ensureDefinition(request.definition);
-    const attemptKey = createCompositeKey([definition.leaderboardId, request.attempt.attemptId]);
+    assertRecordVerifiedLeaderboardAttemptRequest(input);
+    const definition = this.ensureDefinition(input.definition);
+    const attempt = cloneVerifiedLeaderboardAttempt(input.attempt);
+    const attemptKey = createCompositeKey([definition.leaderboardId, attempt.attemptId]);
     const existingAttempt = this.attemptsById.get(attemptKey);
 
     if (existingAttempt !== undefined) {
-      assertSameAttempt(existingAttempt, request.attempt);
-      return this.createRecordResponse(definition, request.attempt, true);
+      assertSameAttempt(existingAttempt.attempt, attempt);
+      return cloneRecordResponse(existingAttempt.response, true);
     }
 
-    this.attemptsById.set(attemptKey, request.attempt);
     const retainedByParticipant = this.getRetainedAttempts(definition.leaderboardId);
-    const retainedAttempt = retainedByParticipant.get(request.attempt.participantId);
+    const retainedAttempt = retainedByParticipant.get(attempt.participantId);
 
     if (
       retainedAttempt === undefined
-      || shouldReplaceRetainedAttempt(definition, retainedAttempt, request.attempt)
+      || shouldReplaceRetainedAttempt(definition, retainedAttempt, attempt)
     ) {
-      retainedByParticipant.set(request.attempt.participantId, request.attempt);
+      retainedByParticipant.set(attempt.participantId, attempt);
     }
 
-    return this.createRecordResponse(definition, request.attempt, false);
+    const response = this.createRecordResponse(definition, attempt, false);
+    this.attemptsById.set(attemptKey, {
+      attempt,
+      response: cloneRecordResponse(response, false),
+    });
+    return response;
   }
 
   async getSnapshot(
     input: GetVerifiedLeaderboardSnapshotRequest,
   ): Promise<VerifiedLeaderboardSnapshot | undefined> {
-    const request = assertGetVerifiedLeaderboardSnapshotRequest(input);
-    const definition = this.definitions.get(request.leaderboardId);
+    assertGetVerifiedLeaderboardSnapshotRequest(input);
+    const definition = this.definitions.get(input.leaderboardId);
 
     if (definition === undefined) {
       return undefined;
     }
 
     const rankedEntries = this.createRankedEntries(definition);
-    const participantEntry = request.participantId === undefined
+    const participantEntry = input.participantId === undefined
       ? undefined
-      : rankedEntries.find((entry) => entry.participantId === request.participantId);
+      : rankedEntries.find((entry) => entry.participantId === input.participantId);
 
-    return assertVerifiedLeaderboardSnapshot({
-      definition,
-      entries: rankedEntries.slice(0, request.limit ?? 10),
+    const snapshot: VerifiedLeaderboardSnapshot = {
+      definition: cloneVerifiedLeaderboardDefinition(definition),
+      entries: rankedEntries.slice(0, input.limit ?? 10),
       ...(participantEntry === undefined ? {} : { participantEntry }),
       totalParticipants: rankedEntries.length,
       generatedAt: this.now(),
-    });
+    };
+    assertVerifiedLeaderboardSnapshot(snapshot);
+    return snapshot;
   }
 
   private createRecordResponse(
@@ -169,19 +187,22 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
 
     const retained = entry.attemptId === attempted.attemptId;
 
-    return assertRecordVerifiedLeaderboardAttemptResponse({
+    const response: RecordVerifiedLeaderboardAttemptResponse = {
       recorded: true,
       alreadyProcessed,
       retained,
       entry,
       ...(retained ? {} : { reason: 'ATTEMPT_NOT_RETAINED' }),
-    });
+    };
+    assertRecordVerifiedLeaderboardAttemptResponse(response);
+    return response;
   }
 
   private ensureDefinition(
     input: VerifiedLeaderboardDefinition,
   ): VerifiedLeaderboardDefinition {
-    const definition = assertVerifiedLeaderboardDefinition(input);
+    assertVerifiedLeaderboardDefinition(input);
+    const definition = cloneVerifiedLeaderboardDefinition(input);
     const existing = this.definitions.get(definition.leaderboardId);
 
     if (existing === undefined) {
@@ -225,28 +246,26 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
 }
 
 export function assertVerifiedLeaderboardDefinition(
-  input: VerifiedLeaderboardDefinition,
-): VerifiedLeaderboardDefinition {
+  input: unknown,
+): asserts input is VerifiedLeaderboardDefinition {
   assertRecord(input, 'VerifiedLeaderboardDefinition');
   assertNonEmptyString(input.leaderboardId, 'leaderboardId');
   assertScoreOrder(input.scoreOrder);
   assertAttemptSelection(input.attemptSelection);
-  return input;
 }
 
 export function assertLeaderboardVerificationEvidence(
-  input: LeaderboardVerificationEvidence,
-): LeaderboardVerificationEvidence {
+  input: unknown,
+): asserts input is LeaderboardVerificationEvidence {
   assertRecord(input, 'LeaderboardVerificationEvidence');
   assertNonEmptyString(input.authorityId, 'authorityId');
   assertNonEmptyString(input.evidenceId, 'evidenceId');
   assertTimestamp(input.verifiedAt, 'verifiedAt');
-  return input;
 }
 
 export function assertVerifiedLeaderboardAttempt(
-  input: VerifiedLeaderboardAttempt,
-): VerifiedLeaderboardAttempt {
+  input: unknown,
+): asserts input is VerifiedLeaderboardAttempt {
   assertRecord(input, 'VerifiedLeaderboardAttempt');
   assertNonEmptyString(input.participantId, 'participantId');
   assertOptionalNonEmptyString(input.participantLabel, 'participantLabel');
@@ -254,21 +273,19 @@ export function assertVerifiedLeaderboardAttempt(
   assertFiniteNumber(input.score, 'score');
   assertTimestamp(input.completedAt, 'completedAt');
   assertLeaderboardVerificationEvidence(input.verification);
-  return input;
 }
 
 export function assertRecordVerifiedLeaderboardAttemptRequest(
-  input: RecordVerifiedLeaderboardAttemptRequest,
-): RecordVerifiedLeaderboardAttemptRequest {
+  input: unknown,
+): asserts input is RecordVerifiedLeaderboardAttemptRequest {
   assertRecord(input, 'RecordVerifiedLeaderboardAttemptRequest');
   assertVerifiedLeaderboardDefinition(input.definition);
   assertVerifiedLeaderboardAttempt(input.attempt);
-  return input;
 }
 
 export function assertRecordVerifiedLeaderboardAttemptResponse(
-  input: RecordVerifiedLeaderboardAttemptResponse,
-): RecordVerifiedLeaderboardAttemptResponse {
+  input: unknown,
+): asserts input is RecordVerifiedLeaderboardAttemptResponse {
   assertRecord(input, 'RecordVerifiedLeaderboardAttemptResponse');
 
   if (input.recorded !== true) {
@@ -286,33 +303,34 @@ export function assertRecordVerifiedLeaderboardAttemptResponse(
   if (input.retained === (input.reason !== undefined)) {
     throw new Error('reason must be present exactly when the attempt is not retained.');
   }
-
-  return input;
 }
 
 export function assertGetVerifiedLeaderboardSnapshotRequest(
-  input: GetVerifiedLeaderboardSnapshotRequest,
-): GetVerifiedLeaderboardSnapshotRequest {
+  input: unknown,
+): asserts input is GetVerifiedLeaderboardSnapshotRequest {
   assertRecord(input, 'GetVerifiedLeaderboardSnapshotRequest');
   assertNonEmptyString(input.leaderboardId, 'leaderboardId');
   assertOptionalNonEmptyString(input.participantId, 'participantId');
 
   if (
     input.limit !== undefined
-    && (!Number.isInteger(input.limit) || input.limit < 1 || input.limit > 100)
+    && (
+      typeof input.limit !== 'number'
+      || !Number.isInteger(input.limit)
+      || input.limit < 1
+      || input.limit > 100
+    )
   ) {
     throw new Error('limit must be an integer from 1 through 100.');
   }
-
-  return input;
 }
 
 export function assertLeaderboardRankedEntry(
-  input: LeaderboardRankedEntry,
-): LeaderboardRankedEntry {
+  input: unknown,
+): asserts input is LeaderboardRankedEntry {
   assertRecord(input, 'LeaderboardRankedEntry');
 
-  if (!Number.isInteger(input.rank) || input.rank < 1) {
+  if (typeof input.rank !== 'number' || !Number.isInteger(input.rank) || input.rank < 1) {
     throw new Error('rank must be a positive integer.');
   }
 
@@ -321,12 +339,11 @@ export function assertLeaderboardRankedEntry(
   assertNonEmptyString(input.attemptId, 'attemptId');
   assertFiniteNumber(input.score, 'score');
   assertTimestamp(input.completedAt, 'completedAt');
-  return input;
 }
 
 export function assertVerifiedLeaderboardSnapshot(
-  input: VerifiedLeaderboardSnapshot,
-): VerifiedLeaderboardSnapshot {
+  input: unknown,
+): asserts input is VerifiedLeaderboardSnapshot {
   assertRecord(input, 'VerifiedLeaderboardSnapshot');
   assertVerifiedLeaderboardDefinition(input.definition);
 
@@ -342,12 +359,15 @@ export function assertVerifiedLeaderboardSnapshot(
     assertLeaderboardRankedEntry(input.participantEntry);
   }
 
-  if (!Number.isInteger(input.totalParticipants) || input.totalParticipants < 0) {
+  if (
+    typeof input.totalParticipants !== 'number'
+    || !Number.isInteger(input.totalParticipants)
+    || input.totalParticipants < 0
+  ) {
     throw new Error('totalParticipants must be a non-negative integer.');
   }
 
   assertTimestamp(input.generatedAt, 'generatedAt');
-  return input;
 }
 
 function shouldReplaceRetainedAttempt(
@@ -356,10 +376,23 @@ function shouldReplaceRetainedAttempt(
   candidate: VerifiedLeaderboardAttempt,
 ): boolean {
   if (definition.attemptSelection === 'first') {
-    return false;
+    return compareAttemptChronology(candidate, retained) < 0;
   }
 
   return compareAttempts(definition.scoreOrder, candidate, retained) < 0;
+}
+
+function compareAttemptChronology(
+  left: VerifiedLeaderboardAttempt,
+  right: VerifiedLeaderboardAttempt,
+): number {
+  const completedAtComparison = Date.parse(left.completedAt) - Date.parse(right.completedAt);
+
+  if (completedAtComparison !== 0) {
+    return completedAtComparison;
+  }
+
+  return left.attemptId.localeCompare(right.attemptId);
 }
 
 function compareAttempts(
@@ -384,7 +417,7 @@ function toRankedEntry(
   attempt: VerifiedLeaderboardAttempt,
   rank: number,
 ): LeaderboardRankedEntry {
-  return assertLeaderboardRankedEntry({
+  const entry: LeaderboardRankedEntry = {
     rank,
     participantId: attempt.participantId,
     ...(attempt.participantLabel === undefined
@@ -393,7 +426,9 @@ function toRankedEntry(
     attemptId: attempt.attemptId,
     score: attempt.score,
     completedAt: attempt.completedAt,
-  });
+  };
+  assertLeaderboardRankedEntry(entry);
+  return entry;
 }
 
 function assertSameAttempt(
@@ -402,7 +437,6 @@ function assertSameAttempt(
 ): void {
   if (
     existing.participantId !== candidate.participantId
-    || existing.participantLabel !== candidate.participantLabel
     || existing.attemptId !== candidate.attemptId
     || existing.score !== candidate.score
     || existing.completedAt !== candidate.completedAt
@@ -412,6 +446,59 @@ function assertSameAttempt(
   ) {
     throw new Error(`Attempt id conflict for ${JSON.stringify(candidate.attemptId)}.`);
   }
+}
+
+function cloneVerifiedLeaderboardDefinition(
+  input: VerifiedLeaderboardDefinition,
+): VerifiedLeaderboardDefinition {
+  return {
+    leaderboardId: input.leaderboardId,
+    scoreOrder: input.scoreOrder,
+    attemptSelection: input.attemptSelection,
+  };
+}
+
+function cloneVerifiedLeaderboardAttempt(
+  input: VerifiedLeaderboardAttempt,
+): VerifiedLeaderboardAttempt {
+  return {
+    participantId: input.participantId,
+    ...(input.participantLabel === undefined
+      ? {}
+      : { participantLabel: input.participantLabel }),
+    attemptId: input.attemptId,
+    score: input.score,
+    completedAt: input.completedAt,
+    verification: {
+      authorityId: input.verification.authorityId,
+      evidenceId: input.verification.evidenceId,
+      verifiedAt: input.verification.verifiedAt,
+    },
+  };
+}
+
+function cloneRecordResponse(
+  input: RecordVerifiedLeaderboardAttemptResponse,
+  alreadyProcessed: boolean,
+): RecordVerifiedLeaderboardAttemptResponse {
+  const response: RecordVerifiedLeaderboardAttemptResponse = {
+    recorded: true,
+    alreadyProcessed,
+    retained: input.retained,
+    entry: {
+      rank: input.entry.rank,
+      participantId: input.entry.participantId,
+      ...(input.entry.participantLabel === undefined
+        ? {}
+        : { participantLabel: input.entry.participantLabel }),
+      attemptId: input.entry.attemptId,
+      score: input.entry.score,
+      completedAt: input.entry.completedAt,
+    },
+    ...(input.reason === undefined ? {} : { reason: input.reason }),
+  };
+  assertRecordVerifiedLeaderboardAttemptResponse(response);
+  return response;
 }
 
 function createCompositeKey(parts: readonly string[]): string {
@@ -454,8 +541,11 @@ function assertBoolean(input: unknown, label: string): asserts input is boolean 
 function assertTimestamp(input: unknown, label: string): asserts input is string {
   assertNonEmptyString(input, label);
 
-  if (!Number.isFinite(Date.parse(input))) {
-    throw new Error(`${label} must be a valid timestamp.`);
+  if (
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(input)
+    || !Number.isFinite(Date.parse(input))
+  ) {
+    throw new Error(`${label} must be a valid timezone-qualified timestamp.`);
   }
 }
 

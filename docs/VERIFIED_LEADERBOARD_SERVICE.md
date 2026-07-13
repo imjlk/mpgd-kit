@@ -32,16 +32,25 @@ verified-attempt flow.
 The definition also fixes two policies for the lifetime of that board:
 
 - `scoreOrder`: `ascending` for elapsed time and `descending` for points.
-- `attemptSelection`: `first` for one-shot ranked play and `best` for conventional
-  high-score play.
+- `attemptSelection`: `first` retains the earliest verified `completedAt`
+  (breaking exact timestamp ties by `attemptId`) for one-shot ranked play, while
+  `best` uses the configured score order for conventional high-score play.
 
 An attempt ID is idempotent within a leaderboard. Reusing it with different
-participant, score, time, or verification evidence fails closed. A snapshot
+participant, score, time, or verification evidence fails closed. The optional
+participant label is presentation metadata and may be changed or omitted by a
+retry without changing attempt identity. Retries return the original retention
+decision even if another attempt later replaces the retained entry. A snapshot
 returns top entries, total participant count, and an optional participant entry
 even when that participant falls outside the requested top-entry limit.
 
-The bundled memory implementation is for tests and local orchestration. Durable
-platforms should implement the same `VerifiedLeaderboardService` interface.
+The bundled memory implementation is for tests and local orchestration. It
+retains every definition and processed attempt for the lifetime of the process,
+does not evict inactive boards, and performs a full sort of retained attempts
+for each write and snapshot read. Do not use it for long-lived or large-board
+deployments without adding bounded retention and an indexed ranking strategy.
+Durable platforms should implement the same `VerifiedLeaderboardService`
+interface.
 
 ## Devvit Adapter Shape
 
