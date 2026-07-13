@@ -232,7 +232,11 @@ async function runBestSelectionAndRetryScenario(context: ScenarioContext): Promi
 }
 
 async function runDeterministicTiesScenario(context: ScenarioContext): Promise<void> {
-  for (const attemptId of ['ä', 'z', 'a']) {
+  const bmpPrivateUseAttemptId = String.fromCodePoint(0xE000);
+  const supplementaryAttemptId = String.fromCodePoint(0x10000);
+  const attemptIds = ['ä', 'z', 'a', bmpPrivateUseAttemptId, supplementaryAttemptId];
+
+  for (const attemptId of attemptIds) {
     await context.service.recordVerifiedAttempt(
       createAttempt({
         leaderboardId: 'ties:ranking',
@@ -246,12 +250,22 @@ async function runDeterministicTiesScenario(context: ScenarioContext): Promise<v
 
   const snapshot = await context.service.getSnapshot({
     leaderboardId: 'ties:ranking',
-    limit: 3,
+    limit: attemptIds.length,
   });
   assert(snapshot !== undefined, 'tie board must return a snapshot');
   assertEqual(snapshot.entries[0]?.attemptId, 'a', 'ties must use ordinal attempt IDs');
   assertEqual(snapshot.entries[1]?.attemptId, 'z', 'ties must not use locale collation');
   assertEqual(snapshot.entries[2]?.attemptId, 'ä', 'non-ASCII IDs must sort ordinally');
+  assertEqual(
+    snapshot.entries[3]?.attemptId,
+    supplementaryAttemptId,
+    'supplementary IDs must follow JavaScript UTF-16 ordinal ordering',
+  );
+  assertEqual(
+    snapshot.entries[4]?.attemptId,
+    bmpPrivateUseAttemptId,
+    'BMP IDs must not be reordered by UTF-8 byte collation',
+  );
 
   await context.service.recordVerifiedAttempt(
     createAttempt({
