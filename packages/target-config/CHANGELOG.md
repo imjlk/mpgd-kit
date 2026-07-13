@@ -1,5 +1,16 @@
 # @mpgd/target-config
 
+## 0.6.0 — 2026-07-13
+
+### Changed
+
+- [5fb3dca](https://github.com/imjlk/mpgd-kit/commit/5fb3dcaf9a6bc491a650221058595e505a725466) Merge target-specific integration overrides into effective target configuration and wire generated game runtimes to enforce the merged availability and presentation-mode contract. — Thanks @imjlk!
+- [fc6c6ab](https://github.com/imjlk/mpgd-kit/commit/fc6c6ab4a6d4be5c845606f73f2a3ed492b768fe) Add target-aware locale resolution with saved-value and device-language priority, plus target-configured fallback locales in runtime and effective config. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.3.4, i18n@0.5.0, platform@0.5.0
+
 ## 0.5.0 — 2026-07-11
 
 ### Fixed

@@ -1,5 +1,15 @@
 # @mpgd/game-services
 
+## 0.5.0 — 2026-07-13
+
+### Added
+
+- [fd25ffe](https://github.com/imjlk/mpgd-kit/commit/fd25ffec5041036288c5aa4b10bd8ab5114b0499) Add a shared Game Services runtime factory that disables production clients without an authoritative backend URL and permits process-local backends only through explicit non-production opt-in. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: analytics@0.3.4, catalog@0.3.4, platform@0.5.0
+
 ## 0.4.0 — 2026-07-11
 
 ### Added

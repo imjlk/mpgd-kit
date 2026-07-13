@@ -1,5 +1,11 @@
 # @mpgd/create-game
 
+## 0.7.0 — 2026-07-13
+
+### Patch changes
+
+- Updated dependencies: cli@0.7.0
+
 ## 0.6.0 — 2026-07-11
 
 ### Patch changes

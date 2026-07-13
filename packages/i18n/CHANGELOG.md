@@ -1,5 +1,15 @@
 # @mpgd/i18n
 
+## 0.5.0 — 2026-07-13
+
+### Added
+
+- [fc6c6ab](https://github.com/imjlk/mpgd-kit/commit/fc6c6ab4a6d4be5c845606f73f2a3ed492b768fe) Add target-aware locale resolution with saved-value and device-language priority, plus target-configured fallback locales in runtime and effective config. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.5.0
+
 ## 0.4.1 — 2026-07-11
 
 ### Patch changes

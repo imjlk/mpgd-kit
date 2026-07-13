@@ -1,5 +1,11 @@
 # @mpgd/adapter-ait
 
+## 0.4.1 — 2026-07-13
+
+### Patch changes
+
+- Updated dependencies: platform@0.5.0
+
 ## 0.4.0 — 2026-07-11
 
 ### Added
