@@ -386,13 +386,14 @@ function compareAttemptChronology(
   left: VerifiedLeaderboardAttempt,
   right: VerifiedLeaderboardAttempt,
 ): number {
-  const completedAtComparison = Date.parse(left.completedAt) - Date.parse(right.completedAt);
+  const completedAtComparison =
+    parseTimestamp(left.completedAt) - parseTimestamp(right.completedAt);
 
   if (completedAtComparison !== 0) {
     return completedAtComparison;
   }
 
-  return left.attemptId.localeCompare(right.attemptId);
+  return compareOrdinal(left.attemptId, right.attemptId);
 }
 
 function compareAttempts(
@@ -404,13 +405,14 @@ function compareAttempts(
     return scoreOrder === 'ascending' ? left.score - right.score : right.score - left.score;
   }
 
-  const completedAtComparison = Date.parse(left.completedAt) - Date.parse(right.completedAt);
+  const completedAtComparison =
+    parseTimestamp(left.completedAt) - parseTimestamp(right.completedAt);
 
   if (completedAtComparison !== 0) {
     return completedAtComparison;
   }
 
-  return left.attemptId.localeCompare(right.attemptId);
+  return compareOrdinal(left.attemptId, right.attemptId);
 }
 
 function toRankedEntry(
@@ -541,12 +543,67 @@ function assertBoolean(input: unknown, label: string): asserts input is boolean 
 function assertTimestamp(input: unknown, label: string): asserts input is string {
   assertNonEmptyString(input, label);
 
-  if (
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/.test(input)
-    || !Number.isFinite(Date.parse(input))
-  ) {
+  if (!Number.isFinite(parseTimestamp(input))) {
     throw new Error(`${label} must be a valid timezone-qualified timestamp.`);
   }
+}
+
+function parseTimestamp(input: string): number {
+  const timestampPattern = new RegExp(
+    '^(\\d{4})-(\\d{2})-(\\d{2})'
+      + 'T(\\d{2}):(\\d{2}):(\\d{2})'
+      + '(?:\\.(\\d{1,3}))?(Z|([+-])(\\d{2}):(\\d{2}))$',
+  );
+  const match = timestampPattern.exec(input);
+
+  if (match === null) {
+    return Number.NaN;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const millisecond = Number((match[7] ?? '').padEnd(3, '0'));
+  const offsetHour = Number(match[10] ?? '0');
+  const offsetMinute = Number(match[11] ?? '0');
+
+  if (offsetHour > 23 || offsetMinute > 59) {
+    return Number.NaN;
+  }
+
+  const localTime = new Date(0);
+  localTime.setUTCFullYear(year, month - 1, day);
+  localTime.setUTCHours(hour, minute, second, millisecond);
+
+  if (
+    localTime.getUTCFullYear() !== year
+    || localTime.getUTCMonth() !== month - 1
+    || localTime.getUTCDate() !== day
+    || localTime.getUTCHours() !== hour
+    || localTime.getUTCMinutes() !== minute
+    || localTime.getUTCSeconds() !== second
+    || localTime.getUTCMilliseconds() !== millisecond
+  ) {
+    return Number.NaN;
+  }
+
+  const offsetDirection = match[9] === '-' ? -1 : 1;
+  const offsetMilliseconds = offsetDirection
+    * (offsetHour * 60 + offsetMinute)
+    * 60_000;
+
+  return localTime.getTime() - offsetMilliseconds;
+}
+
+function compareOrdinal(left: string, right: string): number {
+  if (left < right) {
+    return -1;
+  }
+
+  return left > right ? 1 : 0;
 }
 
 function assertScoreOrder(input: unknown): asserts input is VerifiedLeaderboardScoreOrder {

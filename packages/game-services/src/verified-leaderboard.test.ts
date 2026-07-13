@@ -142,6 +142,35 @@ assertEqual(
   'superseded retry should preserve its original response entry',
 );
 
+const ordinalTieService = createInMemoryVerifiedLeaderboardService({ now: () => now });
+await ordinalTieService.recordVerifiedAttempt(
+  createAttempt({
+    leaderboardId: 'daily:ordinal-tie',
+    participantId: 'player-ordinal',
+    attemptId: 'ä',
+    score: 10,
+    completedAt: '2026-07-13T08:10:00.000Z',
+  }),
+);
+await ordinalTieService.recordVerifiedAttempt(
+  createAttempt({
+    leaderboardId: 'daily:ordinal-tie',
+    participantId: 'player-ordinal',
+    attemptId: 'z',
+    score: 10,
+    completedAt: '2026-07-13T08:10:00.000Z',
+  }),
+);
+const ordinalTieSnapshot = await ordinalTieService.getSnapshot({
+  leaderboardId: 'daily:ordinal-tie',
+});
+
+assertEqual(
+  ordinalTieSnapshot?.entries[0]?.attemptId,
+  'z',
+  'attempt id ties should use locale-independent ordinal ordering',
+);
+
 const bestService = createInMemoryVerifiedLeaderboardService({ now: () => now });
 const initialBestRequest = createAttempt({
   leaderboardId: 'season:1',
@@ -271,6 +300,32 @@ await assertRejects(
   ),
   'timezone-qualified timestamp',
   'offset-less completion timestamps should fail closed',
+);
+
+await assertRejects(
+  () => service.recordVerifiedAttempt(
+    createAttempt({
+      participantId: 'player-invalid-calendar',
+      attemptId: 'attempt-invalid-calendar',
+      score: 1,
+      completedAt: '2026-02-31T08:07:00.000Z',
+    }),
+  ),
+  'timezone-qualified timestamp',
+  'normalized invalid calendar timestamps should fail closed',
+);
+
+await assertRejects(
+  () => service.recordVerifiedAttempt(
+    createAttempt({
+      participantId: 'player-sub-millisecond',
+      attemptId: 'attempt-sub-millisecond',
+      score: 1,
+      completedAt: '2026-07-13T08:07:00.0001Z',
+    }),
+  ),
+  'timezone-qualified timestamp',
+  'unsupported sub-millisecond timestamps should fail closed',
 );
 
 const invalidEvidenceTimestampRequest = createAttempt({

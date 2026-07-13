@@ -33,8 +33,14 @@ The definition also fixes two policies for the lifetime of that board:
 
 - `scoreOrder`: `ascending` for elapsed time and `descending` for points.
 - `attemptSelection`: `first` retains the earliest verified `completedAt`
-  (breaking exact timestamp ties by `attemptId`) for one-shot ranked play, while
-  `best` uses the configured score order for conventional high-score play.
+  (breaking exact timestamp ties by locale-independent ordinal `attemptId`
+  order) for one-shot ranked play, while `best` uses the configured score order
+  for conventional high-score play.
+
+Completion and verification timestamps must include `Z` or a numeric timezone
+offset and may carry at most millisecond precision. Invalid calendar dates and
+sub-millisecond values fail closed so every supported runtime compares the same
+instant.
 
 An attempt ID is idempotent within a leaderboard. Reusing it with different
 participant, score, time, or verification evidence fails closed. The optional
