@@ -82,14 +82,28 @@ async function handleLegacyBridgeRequest(
     body = await readJsonRequestBody(request, maxRequestBodySize);
   } catch (error) {
     const tooLarge = error instanceof RequestBodyTooLargeError;
+    const invalidJson = error instanceof SyntaxError;
+
+    if (!tooLarge && !invalidJson) {
+      console.error(`devvit legacy bridge body read failed: ${errorMessage(error)}`, error);
+    }
 
     sendJson(
       response,
-      tooLarge ? 413 : 400,
+      tooLarge ? 413 : invalidJson ? 400 : 500,
       createBridgeError(
         'unknown',
-        tooLarge ? 'BRIDGE_REQUEST_TOO_LARGE' : 'INVALID_BRIDGE_REQUEST',
-        tooLarge ? 'Bridge request body is too large.' : 'Bridge request body is not valid JSON.',
+        tooLarge
+          ? 'BRIDGE_REQUEST_TOO_LARGE'
+          : invalidJson
+            ? 'INVALID_BRIDGE_REQUEST'
+            : 'DEVVIT_BRIDGE_INTERNAL_ERROR',
+        tooLarge
+          ? 'Bridge request body is too large.'
+          : invalidJson
+            ? 'Bridge request body is not valid JSON.'
+            : 'Bridge request body could not be read.',
+        !tooLarge && !invalidJson,
       ),
     );
     return;
@@ -100,13 +114,14 @@ async function handleLegacyBridgeRequest(
   try {
     bridgeRequest = assertBridgeRequest(body);
   } catch (error) {
+    console.warn(`devvit legacy bridge validation failed: ${errorMessage(error)}`);
     sendJson(
       response,
       400,
       createBridgeError(
         requestIdFromBody(body),
         'INVALID_BRIDGE_REQUEST',
-        error instanceof Error ? error.message : 'Invalid bridge request.',
+        'Invalid bridge request.',
       ),
     );
     return;
@@ -679,30 +694,12 @@ function requestPathname(request: IncomingMessage): string {
 
 class RequestBodyTooLargeError extends Error {}
 
-async function drainRequestBody(
+async function* readRequestBodyChunks(
   request: IncomingMessage,
   maxBodySize: number,
-): Promise<void> {
+): AsyncGenerator<Buffer, void, undefined> {
   assertContentLengthWithinLimit(request, maxBodySize);
 
-  let bodySize = 0;
-
-  for await (const chunk of request) {
-    bodySize += Buffer.byteLength(chunk);
-
-    if (bodySize > maxBodySize) {
-      throw new RequestBodyTooLargeError();
-    }
-  }
-}
-
-async function readJsonRequestBody(
-  request: IncomingMessage,
-  maxBodySize: number,
-): Promise<unknown> {
-  assertContentLengthWithinLimit(request, maxBodySize);
-
-  const chunks: Buffer[] = [];
   let bodySize = 0;
 
   for await (const chunk of request) {
@@ -713,7 +710,27 @@ async function readJsonRequestBody(
       throw new RequestBodyTooLargeError();
     }
 
-    chunks.push(buffer);
+    yield buffer;
+  }
+}
+
+async function drainRequestBody(
+  request: IncomingMessage,
+  maxBodySize: number,
+): Promise<void> {
+  for await (const _chunk of readRequestBodyChunks(request, maxBodySize)) {
+    // Drain the bounded request stream without retaining its contents.
+  }
+}
+
+async function readJsonRequestBody(
+  request: IncomingMessage,
+  maxBodySize: number,
+): Promise<unknown> {
+  const chunks: Buffer[] = [];
+
+  for await (const chunk of readRequestBodyChunks(request, maxBodySize)) {
+    chunks.push(chunk);
   }
 
   return JSON.parse(Buffer.concat(chunks).toString('utf8'));
