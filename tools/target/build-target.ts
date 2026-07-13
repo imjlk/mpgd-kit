@@ -126,9 +126,14 @@ if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'pr
   });
 }
 
-run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
-embedEffectiveTargetConfig(targetName, gameApp, env);
-stageWebIconEvidence(generatedIcons, `${gameApp}/dist`);
+const usesDevvitVitePlugin = target.kind === 'devvit-web'
+  && target.buildStrategy === 'devvit-vite';
+
+if (!usesDevvitVitePlugin) {
+  run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
+  embedEffectiveTargetConfig(targetName, `${gameApp}/dist`, env);
+  stageWebIconEvidence(generatedIcons, `${gameApp}/dist`);
+}
 
 if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
   writeMicrosoftStorePwaArtifacts({
@@ -183,23 +188,30 @@ switch (target.kind) {
     const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
     const wrapperAppConfigPath = requireString(target.wrapperApp, `${targetName}.wrapperApp`);
     const wrapperApp = targetPath(wrapperAppConfigPath);
-    replaceDirectory(`${gameApp}/dist`, webDir);
     stageWrapperIcon(generatedIcons, wrapperApp);
-    run(
-      'pnpm',
-      [
-        '--dir',
-        wrapperApp,
-        'exec',
-        'vite',
-        'build',
-        '--config',
-        'vite.server.config.ts',
-        '--mode',
-        profile,
-      ],
-      env,
-    );
+
+    if (usesDevvitVitePlugin) {
+      run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
+      embedEffectiveTargetConfig(targetName, webDir, env);
+      stageWebIconEvidence(generatedIcons, webDir);
+    } else {
+      replaceDirectory(`${gameApp}/dist`, webDir);
+      run(
+        'pnpm',
+        [
+          '--dir',
+          wrapperApp,
+          'exec',
+          'vite',
+          'build',
+          '--config',
+          'vite.server.config.ts',
+          '--mode',
+          profile,
+        ],
+        env,
+      );
+    }
     writeManifest(targetName, profile, `${wrapperAppConfigPath}/dist`, env);
     break;
   }
@@ -573,7 +585,7 @@ function listZipEntries(path: string): readonly string[] {
 
 function embedEffectiveTargetConfig(
   target: string,
-  gameApp: string,
+  destination: string,
   commandEnv: NodeJS.ProcessEnv,
 ): void {
   const artifact = withProcessEnv(commandEnv, [
@@ -588,7 +600,7 @@ function embedEffectiveTargetConfig(
     throw new Error(`Failed to generate effective target config for ${target}.`);
   }
 
-  copyFile(artifact.path, `${gameApp}/dist/${embeddedTargetConfigFileName}`);
+  copyFile(artifact.path, `${destination}/${embeddedTargetConfigFileName}`);
 }
 
 function withProcessEnv<T>(

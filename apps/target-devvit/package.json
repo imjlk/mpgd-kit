@@ -7,12 +7,7 @@
     "prepare:icon": "pnpm --dir ../.. game:icons:generate -- reddit development",
     "prepare:icon:production": "pnpm --dir ../.. game:icons:generate -- reddit production",
     "dev": "pnpm run prepare:icon && devvit playtest",
-    "dev:prepare": "pnpm --dir ../.. build:target reddit staging",
-    "dev:client": "APP_TARGET=reddit APP_VERSION=0.0.0-dev BUILD_ID=devvit-watch pnpm --dir ../../examples/phaser-starter exec vite build --mode staging --watch --outDir ../../apps/target-devvit/dist/client",
-    "dev:server": "vite build --config vite.server.config.ts --watch",
-    "dev:watch": "concurrently --kill-others --success first \"pnpm run dev:client\" \"pnpm run dev:server\"",
     "build": "pnpm --dir ../.. build:target reddit production",
-    "build:server": "vite build --config vite.server.config.ts",
     "whoami": "devvit whoami",
     "upload": "pnpm run prepare:icon:production && devvit upload",
     "publish": "pnpm run prepare:icon:production && devvit publish",
@@ -22,18 +17,15 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@devvit/web": "0.13.6",
+    "@devvit/web": "0.13.7",
     "@mpgd/adapter-devvit": "workspace:*",
-    "@mpgd/bridge": "workspace:*",
-    "express": "^5.2.1",
-    "helmet": "^8.1.0"
+    "@mpgd/bridge": "workspace:*"
   },
   "devDependencies": {
+    "@devvit/start": "0.13.7",
     "@ttsc/unplugin": "0.18.4",
-    "@types/express": "^5.0.6",
     "@types/node": "^24.0.0",
-    "concurrently": "10.0.3",
-    "devvit": "0.13.6",
+    "devvit": "0.13.7",
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
     "vite": "^8.1.3"

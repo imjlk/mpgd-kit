@@ -2,8 +2,13 @@
   "extends": "../../tsconfig.json",
   "compilerOptions": {
     "allowSyntheticDefaultImports": true,
-    "types": ["node"],
+    "types": ["node", "vite/client"],
     "noEmit": true
   },
-  "include": ["src/**/*.ts", "vite.server.config.ts"]
+  "include": [
+    "src/**/*.ts",
+    "vite.config.ts",
+    "../../src/**/*.ts",
+    "../../vite.shared.ts"
+  ]
 }

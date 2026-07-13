@@ -2,22 +2,31 @@
 
 Reddit Devvit Web wrapper for the Phaser game target.
 
-The root `pnpm build:devvit` command builds the configured game app with
-`APP_TARGET=reddit`, embeds the effective target config, copies the game bundle
-to `apps/target-devvit/dist/client`, and builds the Devvit server bundle to
-`apps/target-devvit/dist/server/index.cjs`. In this repository that configured
-game app is `examples/phaser-starter`.
+The root `pnpm build:devvit` command delegates the configured game client and
+Devvit server to the official `@devvit/start/vite` plugin. The plugin emits the
+client into `dist/client` and the CommonJS server bundle into
+`dist/server/index.cjs`; the mpgd target build then embeds release evidence and
+the effective target config. In this repository the configured game app is
+`examples/phaser-starter`.
 
 The client build emits `index.html` for the lightweight inline post preview and
 `game.html` for the expanded Phaser surface. `devvit.json` maps the default and
 `game` entrypoints to those documents respectively.
 
 The game client talks to the Devvit server through the shared
-`@mpgd/bridge/orpc` contract at `/api/mpgd/rpc`. The older JSON bridge endpoint
-at `/api/mpgd/bridge` remains available for compatibility, but new
-`PlatformGateway` traffic uses the oRPC transport by default. Adapter callers can
-override the oRPC route with `rpcEndpoint`; the existing `endpoint` option keeps
-targeting the legacy JSON bridge.
+`@mpgd/bridge/orpc` contract at `/api/mpgd/rpc`. The server uses the direct oRPC
+Node HTTP adapter from `@mpgd/bridge/orpc/node`; Express, Hono, and Fetch request
+conversion are not required. Devvit-owned menu, scheduler, trigger, and form
+callbacks remain thin `/internal/...` HTTP routes and should delegate their
+business logic to shared service functions. A thin `/api/mpgd/bridge` JSON route
+remains available for callers that explicitly configure the adapter's legacy
+`endpoint` option; new traffic uses oRPC by default.
+
+oRPC Publisher helpers are appropriate when a completed task also needs to
+broadcast live updates, but they do not replace Devvit Scheduler. Scheduler
+delivery is still configured in `devvit.json` and received as a `TaskRequest` at
+the configured internal endpoint. Do not use an in-memory publisher when events
+must cross Devvit server instances.
 
 Server actions and schedulers that create repeatable custom posts can use the
 Redis-backed wrapper in `src/server/postOperationStore.ts` with
@@ -33,9 +42,11 @@ Local Reddit playtest still needs a Devvit login token:
 
 ```bash
 pnpm --dir apps/target-devvit whoami
-pnpm build:devvit
 pnpm --dir apps/target-devvit dev
 ```
+
+`devvit playtest` runs the official unified Vite build in watch mode, so a
+separate client/server watcher or a staging prebuild is no longer necessary.
 
 `devvit playtest`, `devvit upload`, and `devvit publish` are intentionally kept
 as local commands because they use Reddit auth state from the developer machine.

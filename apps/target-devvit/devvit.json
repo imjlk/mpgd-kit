@@ -41,7 +41,7 @@
     ]
   },
   "scripts": {
-    "dev": "pnpm dev:prepare && pnpm dev:watch",
+    "dev": "vite build --mode staging --watch",
     "build": "pnpm build"
   }
 }

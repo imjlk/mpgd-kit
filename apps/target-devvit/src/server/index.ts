@@ -1,3 +1,5 @@
+import type { IncomingMessage, ServerResponse } from 'node:http';
+
 import { createServer, context, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { UiResponse } from '@devvit/web/shared';
 import {
@@ -7,67 +9,140 @@ import {
   type BridgeResponse,
 } from '@mpgd/bridge';
 import {
-  createBridgeRpcFetchHandler,
   createBridgeRpcRouter,
   defaultBridgeRpcEndpoint,
 } from '@mpgd/bridge/orpc';
-import express, { type Request as ExpressRequest, type Response as ExpressResponse } from 'express';
-import helmet from 'helmet';
+import { createBridgeRpcNodeHandler } from '@mpgd/bridge/orpc/node';
 
-const app = express();
 const redisKeyComponentPattern = /^[A-Za-z0-9:_-]{1,128}$/;
 const maxStorageKeyLength = 128;
 const maxEncodedStorageKeyLength = 384;
+const maxRequestBodySize = 1_000_000;
+const legacyBridgeEndpoint = '/api/mpgd/bridge';
 const leaderboardUpdateMaxAttempts = 3;
 const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
 const leaderboardLockTtlSeconds = Math.ceil(leaderboardLockTtlMs / 1_000);
 const leaderboardLockRetryBudgetMs = leaderboardLockTtlSeconds * 1_000;
-const expressManagedResponseHeaders = new Set([
-  'connection',
-  'content-encoding',
-  'content-length',
-  'transfer-encoding',
-]);
-
-app.disable('x-powered-by');
-app.use(helmet());
-
-const bridgeRpcFetchHandler = createBridgeRpcFetchHandler(
+const bridgeRpcHandler = createBridgeRpcNodeHandler(
   createBridgeRpcRouter(handleBridgeRequest),
+  {
+    maxBodySize: maxRequestBodySize,
+    prefix: defaultBridgeRpcEndpoint,
+  },
 );
 
-app.use(defaultBridgeRpcEndpoint, express.raw({ type: '*/*', limit: '1mb' }), async (
-  request: ExpressRequest,
-  response: ExpressResponse,
-): Promise<void> => {
+async function handleHttpRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  setResponseSecurityHeaders(response);
+
+  if (request.method === 'POST' && requestPathname(request) === '/internal/menu/create-post') {
+    try {
+      await drainRequestBody(request, maxRequestBodySize);
+    } catch (error) {
+      if (!(error instanceof RequestBodyTooLargeError)) {
+        throw error;
+      }
+
+      discardOversizedRequestBody(request, response);
+      sendJson(response, 413, {
+        error: 'REQUEST_BODY_TOO_LARGE',
+      });
+      return;
+    }
+
+    await handleCreatePostMenu(response);
+    return;
+  }
+
+  if (request.method === 'POST' && requestPathname(request) === legacyBridgeEndpoint) {
+    await handleLegacyBridgeRequest(request, response);
+    return;
+  }
+
+  if (await bridgeRpcHandler(request, response)) {
+    return;
+  }
+
+  sendJson(response, 404, {
+    error: 'NOT_FOUND',
+  });
+}
+
+async function handleLegacyBridgeRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+): Promise<void> {
+  let body: unknown;
+
   try {
-    const fetchResponse = await bridgeRpcFetchHandler(expressRequestToFetchRequest(request));
-    await sendFetchResponse(response, fetchResponse);
+    body = await readJsonRequestBody(request, maxRequestBodySize);
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'Devvit oRPC request failed.';
-    console.error(`devvit oRPC internal error: ${message}`, error);
-    response.status(500).json(
+    const responseError = describeLegacyBridgeBodyError(error);
+
+    if (error instanceof RequestBodyTooLargeError) {
+      discardOversizedRequestBody(request, response);
+    }
+
+    if (responseError.retryable) {
+      console.error(`devvit legacy bridge body read failed: ${errorMessage(error)}`, error);
+    }
+
+    sendJson(
+      response,
+      responseError.status,
       createBridgeError(
-        requestIdFromBody(request.body),
+        'unknown',
+        responseError.code,
+        responseError.message,
+        responseError.retryable,
+      ),
+    );
+    return;
+  }
+
+  let bridgeRequest: BridgeRequest;
+
+  try {
+    bridgeRequest = assertBridgeRequest(body);
+  } catch (error) {
+    console.warn(`devvit legacy bridge validation failed: ${errorMessage(error)}`);
+    sendJson(
+      response,
+      400,
+      createBridgeError(
+        requestIdFromBody(body),
+        'INVALID_BRIDGE_REQUEST',
+        'Invalid bridge request.',
+      ),
+    );
+    return;
+  }
+
+  try {
+    sendJson(response, 200, await handleBridgeRequest(bridgeRequest));
+  } catch (error) {
+    console.error(`devvit legacy bridge request failed: ${errorMessage(error)}`, error);
+    sendJson(
+      response,
+      500,
+      createBridgeError(
+        bridgeRequest.id,
         'DEVVIT_BRIDGE_INTERNAL_ERROR',
         'Devvit bridge request failed.',
         true,
       ),
     );
   }
-});
+}
 
-app.use(express.json({ limit: '1mb' }));
-
-app.post('/internal/menu/create-post', async (
-  _request: ExpressRequest,
-  response: ExpressResponse,
-): Promise<void> => {
+async function handleCreatePostMenu(response: ServerResponse): Promise<void> {
   const subredditName = currentSubredditName();
 
   if (subredditName === undefined) {
-    response.status(200).json({
+    sendJson(response, 200, {
       showToast: {
         text: 'Could not resolve the target subreddit for this menu action.',
         appearance: 'neutral',
@@ -90,7 +165,7 @@ app.post('/internal/menu/create-post', async (
       },
     });
 
-    response.status(200).json({
+    sendJson(response, 200, {
       showToast: {
         text: `Created mpgd game post ${post.id}.`,
         appearance: 'success',
@@ -98,53 +173,30 @@ app.post('/internal/menu/create-post', async (
     } satisfies UiResponse);
   } catch (error) {
     console.error(`devvit custom post creation failed: ${errorMessage(error)}`, error);
-    response.status(200).json({
+    sendJson(response, 200, {
       showToast: {
         text: 'Could not create the mpgd game post.',
         appearance: 'neutral',
       },
     } satisfies UiResponse);
   }
+}
+
+const server = createServer((request, response) => {
+  void handleHttpRequest(request, response).catch((error: unknown) => {
+    console.error(`devvit server request failed: ${errorMessage(error)}`, error);
+
+    if (response.headersSent) {
+      response.end();
+      return;
+    }
+
+    sendJson(response, 500, {
+      error: 'DEVVIT_SERVER_INTERNAL_ERROR',
+    });
+  });
 });
 
-app.post('/api/mpgd/bridge', async (
-  request: ExpressRequest,
-  response: ExpressResponse,
-): Promise<void> => {
-  let bridgeRequest: BridgeRequest;
-
-  try {
-    bridgeRequest = assertBridgeRequest(request.body);
-  } catch (error) {
-    response.status(400).json(
-      createBridgeError(
-        requestIdFromBody(request.body),
-        'INVALID_BRIDGE_REQUEST',
-        error instanceof Error ? error.message : 'Invalid bridge request.',
-      ),
-    );
-    return;
-  }
-
-  try {
-    const bridgeResponse = await handleBridgeRequest(bridgeRequest);
-    response.status(200).json(bridgeResponse);
-  } catch (error) {
-    const message = error instanceof Error ? error.message : 'Devvit bridge request failed.';
-    console.error(`devvit bridge internal error: ${message}`, error);
-
-    response.status(500).json(
-      createBridgeError(
-        bridgeRequest.id,
-        'DEVVIT_BRIDGE_INTERNAL_ERROR',
-        'Devvit bridge request failed.',
-        true,
-      ),
-    );
-  }
-});
-
-const server = createServer(app);
 const port = getServerPort();
 
 server.on('error', (error) => {
@@ -383,15 +435,6 @@ async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
     saved: true,
     playerId,
   });
-}
-
-function requestIdFromBody(input: unknown): string {
-  if (typeof input !== 'object' || input === null) {
-    return 'unknown';
-  }
-
-  const candidate = input as { readonly id?: unknown };
-  return typeof candidate.id === 'string' ? candidate.id : 'unknown';
 }
 
 function ok(input: BridgeRequest, data: unknown): BridgeResponse {
@@ -639,61 +682,130 @@ function optionalObjectPayload(payload: unknown): Record<string, unknown> {
   return payload as Record<string, unknown>;
 }
 
-function expressRequestToFetchRequest(request: ExpressRequest): Request {
-  const headers = new Headers();
+function requestPathname(request: IncomingMessage): string {
+  return new URL(request.url ?? '/', 'http://localhost').pathname;
+}
 
-  for (const [key, value] of Object.entries(request.headers)) {
-    if (typeof value === 'string') {
-      headers.set(key, value);
-    } else if (Array.isArray(value)) {
-      headers.set(key, value.join(', '));
-    }
+class RequestBodyTooLargeError extends Error {}
+
+function describeLegacyBridgeBodyError(error: unknown): {
+  readonly status: number;
+  readonly code: string;
+  readonly message: string;
+  readonly retryable: boolean;
+} {
+  if (error instanceof RequestBodyTooLargeError) {
+    return {
+      status: 413,
+      code: 'BRIDGE_REQUEST_TOO_LARGE',
+      message: 'Bridge request body is too large.',
+      retryable: false,
+    };
   }
 
-  const init: RequestInit = {
-    method: request.method,
-    headers,
+  if (error instanceof SyntaxError) {
+    return {
+      status: 400,
+      code: 'INVALID_BRIDGE_REQUEST',
+      message: 'Bridge request body is not valid JSON.',
+      retryable: false,
+    };
+  }
+
+  return {
+    status: 500,
+    code: 'DEVVIT_BRIDGE_INTERNAL_ERROR',
+    message: 'Bridge request body could not be read.',
+    retryable: true,
   };
+}
 
-  if (request.method !== 'GET' && request.method !== 'HEAD') {
-    init.body = requestBodyToBodyInit(request.body);
+async function* readRequestBodyChunks(
+  request: IncomingMessage,
+  maxBodySize: number,
+): AsyncGenerator<Buffer, void, undefined> {
+  assertContentLengthWithinLimit(request, maxBodySize);
 
-    if (!headers.has('content-type') && !(request.body instanceof Uint8Array)) {
-      headers.set('content-type', 'application/json');
+  let bodySize = 0;
+
+  for await (const chunk of request) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    bodySize += buffer.byteLength;
+
+    if (bodySize > maxBodySize) {
+      throw new RequestBodyTooLargeError();
     }
+
+    yield buffer;
   }
-
-  return new Request(expressRequestUrl(request), init);
 }
 
-function requestBodyToBodyInit(input: unknown): BodyInit {
-  if (input instanceof Uint8Array) {
-    const body = new Uint8Array(input.byteLength);
-    body.set(input);
-
-    return body.buffer as ArrayBuffer;
-  }
-
-  return JSON.stringify(input ?? null);
-}
-
-function expressRequestUrl(request: ExpressRequest): string {
-  const host = request.get('host') ?? 'localhost';
-  const protocol = request.protocol || 'https';
-
-  return `${protocol}://${host}${request.originalUrl}`;
-}
-
-async function sendFetchResponse(
-  response: ExpressResponse,
-  fetchResponse: Response,
+async function drainRequestBody(
+  request: IncomingMessage,
+  maxBodySize: number,
 ): Promise<void> {
-  fetchResponse.headers.forEach((value: string, key: string) => {
-    if (!expressManagedResponseHeaders.has(key.toLowerCase())) {
-      response.setHeader(key, value);
-    }
-  });
+  for await (const _chunk of readRequestBodyChunks(request, maxBodySize)) {
+    // Drain the bounded request stream without retaining its contents.
+  }
+}
 
-  response.status(fetchResponse.status);
-  response.send(await fetchResponse.text());
+async function readJsonRequestBody(
+  request: IncomingMessage,
+  maxBodySize: number,
+): Promise<unknown> {
+  const chunks: Buffer[] = [];
+
+  for await (const chunk of readRequestBodyChunks(request, maxBodySize)) {
+    chunks.push(chunk);
+  }
+
+  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+}
+
+function assertContentLengthWithinLimit(
+  request: IncomingMessage,
+  maxBodySize: number,
+): void {
+  const contentLength = request.headers['content-length'];
+
+  if (
+    contentLength !== undefined
+    && Number.isFinite(Number(contentLength))
+    && Number(contentLength) > maxBodySize
+  ) {
+    throw new RequestBodyTooLargeError();
+  }
+}
+
+function discardOversizedRequestBody(
+  request: IncomingMessage,
+  response: ServerResponse,
+): void {
+  response.setHeader('connection', 'close');
+  request.resume();
+}
+
+function requestIdFromBody(input: unknown): string {
+  if (typeof input !== 'object' || input === null || !('id' in input)) {
+    return 'unknown';
+  }
+
+  const id = (input as { readonly id?: unknown }).id;
+  return typeof id === 'string' && id.length > 0 ? id : 'unknown';
+}
+
+function setResponseSecurityHeaders(response: ServerResponse): void {
+  response.setHeader('cache-control', 'no-store');
+  response.setHeader('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
+  response.setHeader('referrer-policy', 'no-referrer');
+  response.setHeader('x-content-type-options', 'nosniff');
+  response.setHeader('x-frame-options', 'DENY');
+}
+
+function sendJson(response: ServerResponse, status: number, body: unknown): void {
+  const payload = JSON.stringify(body);
+  response.statusCode = status;
+  response.setHeader('content-length', Buffer.byteLength(payload));
+  response.setHeader('content-type', 'application/json; charset=utf-8');
+  response.end(payload);
 }

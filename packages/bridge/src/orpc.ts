@@ -10,7 +10,7 @@ import {
   createBridgeError,
   type BridgeRequest,
   type BridgeResponse,
-} from './index';
+} from './index.js';
 
 export type BridgeRpcEndpoint = StandardUrl;
 export type BridgeRpcPrefix = `/${string}`;

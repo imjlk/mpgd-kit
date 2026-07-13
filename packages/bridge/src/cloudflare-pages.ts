@@ -3,13 +3,13 @@ import {
   createBridgeError,
   type BridgeRequest,
   type BridgeResponse,
-} from './index';
+} from './index.js';
 import {
   createBridgeRpcFetchHandler,
   createBridgeRpcRouter,
   defaultBridgeRpcEndpoint,
   type BridgeRpcPrefix,
-} from './orpc';
+} from './orpc.js';
 
 export const defaultCloudflarePagesBridgeEndpoint = '/api/mpgd/bridge' as const;
 export const defaultCloudflarePagesGameServicesPrefix = '/api/game-services' as const;

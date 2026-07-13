@@ -53,7 +53,7 @@
     "test": "vitest run && node test/server-dist-import.mjs && node --conditions=browser test/web-dist-import.mjs"
   },
   "dependencies": {
-    "@devvit/web": "0.13.6",
+    "@devvit/web": "0.13.7",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/platform": "workspace:*"
   },
