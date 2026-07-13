@@ -32,13 +32,44 @@ export function createBridgeRpcNodeHandler(
   const prefix = options.prefix ?? defaultBridgeRpcEndpoint;
 
   return async (request, response) => {
-    const result = await handler.handle(request, response, {
-      prefix,
-      context: {
-        request,
-      },
-    });
+    try {
+      const result = await handler.handle(request, response, {
+        prefix,
+        context: {
+          request,
+        },
+      });
 
-    return result.matched;
+      return result.matched;
+    } catch (error) {
+      console.error('Bridge RPC internal error:', error);
+      finishInternalErrorResponse(response);
+      return true;
+    }
   };
+}
+
+function finishInternalErrorResponse(response: ServerResponse): void {
+  if (response.headersSent) {
+    if (!response.writableEnded) {
+      response.destroy();
+    }
+
+    return;
+  }
+
+  if (response.destroyed) {
+    return;
+  }
+
+  const payload = JSON.stringify({
+    error: 'BRIDGE_RPC_INTERNAL_ERROR',
+  });
+
+  response.statusCode = 500;
+  response.setHeader('cache-control', 'no-store');
+  response.setHeader('content-length', Buffer.byteLength(payload));
+  response.setHeader('content-type', 'application/json; charset=utf-8');
+  response.setHeader('x-content-type-options', 'nosniff');
+  response.end(payload);
 }

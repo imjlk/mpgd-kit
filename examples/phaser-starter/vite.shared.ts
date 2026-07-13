@@ -111,7 +111,8 @@ function createCatalogAliases(input: {
 
   if ((productCatalogFile === undefined) !== (adPlacementsFile === undefined)) {
     throw new Error(
-      'MPGD_PRODUCT_CATALOG_FILE and MPGD_AD_PLACEMENTS_FILE must be configured together.',
+      'productCatalogFile and adPlacementsFile '
+      + '(MPGD_PRODUCT_CATALOG_FILE / MPGD_AD_PLACEMENTS_FILE) must be configured together.',
     );
   }
 
@@ -119,17 +120,15 @@ function createCatalogAliases(input: {
     return {};
   }
 
+  const catalogBaseDir = resolveCatalogBaseDir(
+    productCatalogFile,
+    adPlacementsFile,
+    input.gameRoot,
+  );
+
   return {
-    '@mpgd/catalog/catalog.json': resolveCatalogPath(
-      productCatalogFile,
-      adPlacementsFile,
-      input.gameRoot,
-    ),
-    '@mpgd/catalog/placements.json': resolveCatalogPath(
-      adPlacementsFile,
-      productCatalogFile,
-      input.gameRoot,
-    ),
+    '@mpgd/catalog/catalog.json': resolve(catalogBaseDir, productCatalogFile),
+    '@mpgd/catalog/placements.json': resolve(catalogBaseDir, adPlacementsFile),
   };
 }
 
@@ -192,10 +191,6 @@ function formatError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-function resolveCatalogPath(path: string, pairedPath: string, gameRoot: string): string {
-  return resolve(resolveCatalogBaseDir(path, pairedPath, gameRoot), path);
-}
-
 function resolveCatalogBaseDir(path: string, pairedPath: string, gameRoot: string): string {
   const candidates = [
     gameRoot,
@@ -214,5 +209,9 @@ function resolveCatalogBaseDir(path: string, pairedPath: string, gameRoot: strin
     }
   }
 
+  console.warn(
+    `Could not locate catalog files (${path}, ${pairedPath}) in any expected directory; `
+    + `falling back to game root ${gameRoot}.`,
+  );
   return gameRoot;
 }

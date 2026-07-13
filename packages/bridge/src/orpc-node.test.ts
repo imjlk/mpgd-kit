@@ -19,6 +19,15 @@ const nodeHandler = createBridgeRpcNodeHandler(
   } satisfies BridgeResponse)),
 );
 const server = createServer((request, response) => {
+  if (request.headers['x-mpgd-force-handler-error'] === 'true') {
+    Object.defineProperty(request, 'url', {
+      configurable: true,
+      get() {
+        throw new Error('Forced Node HTTP adapter failure.');
+      },
+    });
+  }
+
   void nodeHandler(request, response).then((matched) => {
     if (!matched) {
       response.statusCode = 404;
@@ -73,6 +82,42 @@ try {
   });
 
   assertEqual(notFoundResponse.status, 404, 'unmatched Node HTTP routes should remain available');
+
+  const originalConsoleError = console.error;
+  const capturedErrors: unknown[][] = [];
+  let internalErrorResponse: Response;
+
+  console.error = (...args: unknown[]) => {
+    capturedErrors.push(args);
+  };
+
+  try {
+    internalErrorResponse = await fetch(`${baseUrl}${defaultBridgeRpcEndpoint}`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-mpgd-force-handler-error': 'true',
+      },
+      body: JSON.stringify(request),
+    });
+  } finally {
+    console.error = originalConsoleError;
+  }
+
+  assertEqual(
+    internalErrorResponse.status,
+    500,
+    'unexpected Node HTTP handler failures should complete with status 500',
+  );
+  assertEqual(capturedErrors.length, 1, 'unexpected Node HTTP handler failures should be logged');
+  assertEqual(
+    internalErrorResponse.headers.get('cache-control'),
+    'no-store',
+    'internal error responses should not be cached',
+  );
+  assertDeepEqual(await internalErrorResponse.json(), {
+    error: 'BRIDGE_RPC_INTERNAL_ERROR',
+  });
 } finally {
   await new Promise<void>((resolve, reject) => {
     server.close((error) => {
