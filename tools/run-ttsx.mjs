@@ -93,6 +93,10 @@ try {
 }
 
 if (result.error !== undefined) {
+  if (cleanupError !== undefined) {
+    process.stderr.write(`ttsx source cleanup also failed: ${formatError(cleanupError)}\n`);
+  }
+
   throw result.error;
 }
 
@@ -140,7 +144,7 @@ function removeGeneratedSourceSiblingsIn(dir) {
 
     const sourceSibling = findSourceSibling(path);
 
-    if (sourceSibling !== undefined && existsSync(sourceSibling)) {
+    if (sourceSibling !== undefined) {
       rmSync(path, { force: true });
     }
   }
