@@ -300,7 +300,7 @@ function productPlatformId(
   product: ProductCatalogEntry,
   target: string,
 ): string | undefined {
-  if (!isStoreBackedTarget(target)) {
+  if (!isProductStoreTarget(target)) {
     return undefined;
   }
 
@@ -311,7 +311,7 @@ function adPlacementPlatformId(
   placement: AdPlacementEntry,
   target: string,
 ): string | undefined {
-  if (!isStoreBackedTarget(target)) {
+  if (!isAdStoreTarget(target)) {
     return undefined;
   }
 
@@ -328,7 +328,13 @@ function normalizePlatformId(platformId: string | undefined): string | undefined
   return trimmed.length === 0 ? undefined : trimmed;
 }
 
-function isStoreBackedTarget(target: string): target is 'android' | 'ios' | 'ait' {
+function isProductStoreTarget(
+  target: string,
+): target is 'android' | 'ios' | 'ait' | 'reddit' {
+  return target === 'android' || target === 'ios' || target === 'ait' || target === 'reddit';
+}
+
+function isAdStoreTarget(target: string): target is 'android' | 'ios' | 'ait' {
   return target === 'android' || target === 'ios' || target === 'ait';
 }
 

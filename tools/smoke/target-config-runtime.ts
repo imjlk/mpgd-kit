@@ -194,8 +194,8 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
   if (configTarget === 'reddit') {
     assertEqual(
       getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
-      'target-disabled',
-      'reddit products should be target-disabled',
+      'missing-platform-id',
+      'reddit products should require an app-owned Devvit SKU',
     );
     assertEqual(
       getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.reason,
@@ -207,6 +207,11 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       'target-disabled',
       'reddit platform leaderboard should be disabled',
     );
+    assertEqual(
+      runtime.features.iap.reason,
+      'capability-unsupported',
+      'reddit IAP should require an installed payments adapter',
+    );
     assertDeepEqual(
       await gateway.commerce.purchase({
         productId: 'COINS_100',
@@ -217,7 +222,7 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
         status: 'cancelled',
         entitlementIds: [],
       },
-      'reddit purchase should be disabled',
+      'reddit purchase should remain disabled without a payments adapter',
     );
     assertDeepEqual(
       await gateway.ads.showRewarded({

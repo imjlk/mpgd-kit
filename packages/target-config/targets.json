@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-14",
+  "version": "2026-07-15",
   "targets": {
     "web-preview": {
       "runtime": "web-preview",
@@ -219,7 +219,7 @@
     "reddit": {
       "runtime": "devvit-web",
       "features": {
-        "iap": false,
+        "iap": true,
         "rewardedAds": false,
         "interstitialAds": false,
         "leaderboard": false,
@@ -233,7 +233,7 @@
         "fallbackLocale": "en"
       },
       "monetization": {
-        "iap": false,
+        "iap": true,
         "rewardedAds": false,
         "interstitialAds": false
       },

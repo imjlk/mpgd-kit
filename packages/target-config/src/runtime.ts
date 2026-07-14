@@ -394,6 +394,12 @@ export function withTargetAvailability(
   config: TargetConfig,
   options: TargetAvailabilityOptions = {},
 ): TargetConfiguredGateway {
+  let cachedGatewayCapabilities: PlatformCapabilities | undefined;
+  const getGatewayCapabilities = async (): Promise<PlatformCapabilities> => {
+    cachedGatewayCapabilities ??= await gateway.getCapabilities();
+
+    return cachedGatewayCapabilities;
+  };
   const configTarget = options.configTarget ?? targetConfigKeyForPlatform(gateway.target);
   const {
     identity: gatewayIdentity,
@@ -436,6 +442,9 @@ export function withTargetAvailability(
           ...(exposeInboundShare ? { readInboundShare } : {}),
         };
   const notifications = notificationsAvailable ? gatewayNotifications : undefined;
+  const isIapAvailable = async (): Promise<boolean> => (
+    config.features.iap && (await getGatewayCapabilities()).nativeIap
+  );
   const isAdPlacementAllowed = (
     placementId: string,
     expectedType: AdPlacementType,
@@ -484,35 +493,41 @@ export function withTargetAvailability(
         ...(options.effectiveConfig === undefined
           ? {}
           : { effectiveConfig: options.effectiveConfig }),
-        capabilities: applyTargetConfigToCapabilities(await gateway.getCapabilities(), config),
+        capabilities: applyTargetConfigToCapabilities(await getGatewayCapabilities(), config),
         adPlacements: options.adPlacements ?? [],
         gateway,
       });
     },
     async getCapabilities() {
-      return applyTargetConfigToCapabilities(await gateway.getCapabilities(), config);
+      return applyTargetConfigToCapabilities(await getGatewayCapabilities(), config);
     },
-    commerce: config.features.iap
-      ? gateway.commerce
-      : {
-          async getProducts() {
-            return [];
-          },
-          async purchase() {
-            return {
-              status: 'cancelled',
-              entitlementIds: [],
-            };
-          },
-          async restore() {
-            return {
-              restoredEntitlements: [],
-            };
-          },
-          async getEntitlements() {
-            return [];
-          },
-        },
+    commerce: {
+      async getProducts() {
+        return await isIapAvailable() ? gateway.commerce.getProducts() : [];
+      },
+      async purchase(input) {
+        if (!await isIapAvailable()) {
+          return {
+            status: 'cancelled',
+            entitlementIds: [],
+          };
+        }
+
+        return gateway.commerce.purchase(input);
+      },
+      async restore() {
+        if (!await isIapAvailable() || gateway.commerce.restore === undefined) {
+          return {
+            restoredEntitlements: [],
+          };
+        }
+
+        return gateway.commerce.restore();
+      },
+      async getEntitlements() {
+        return await isIapAvailable() ? gateway.commerce.getEntitlements() : [];
+      },
+    },
     ads: {
       async preload(input) {
         if (canPreloadAdPlacement(input.placementId)) {
