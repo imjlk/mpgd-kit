@@ -49,6 +49,25 @@ assertThrows(
   'paidAt must be an ISO 8601 UTC timestamp',
 );
 assertThrows(
+  () => assertFulfillPlatformOrderInput({
+    ...fulfillInput,
+    paidAt: '2026-02-31T00:00:00.000Z',
+  }),
+  'paidAt must be an ISO 8601 UTC timestamp',
+);
+assertThrows(
+  () => assertRefundPlatformOrderInput({
+    ...refundInput,
+    refundedAt: '2025-02-29T01:00:00Z',
+  }),
+  'refundedAt must be an ISO 8601 UTC timestamp',
+);
+const wholeSecondInput = {
+  ...fulfillInput,
+  paidAt: '2024-02-29T00:00:00Z',
+};
+assertEqual(assertFulfillPlatformOrderInput(wholeSecondInput), wholeSecondInput);
+assertThrows(
   () => assertRefundPlatformOrderInput({
     ...refundInput,
     evidence: {

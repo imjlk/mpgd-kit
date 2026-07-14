@@ -80,11 +80,15 @@ function assertIdentifier(input: unknown, label: string): asserts input is strin
 }
 
 function assertIsoTimestamp(input: unknown, label: string): asserts input is string {
-  if (
-    typeof input !== 'string'
-    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(input)
-    || Number.isNaN(Date.parse(input))
-  ) {
+  if (typeof input !== 'string'
+    || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z$/u.test(input)) {
+    throw new TypeError(`${label} must be an ISO 8601 UTC timestamp.`);
+  }
+
+  const parsed = new Date(input);
+  const canonicalInput = input.includes('.') ? input : `${input.slice(0, -1)}.000Z`;
+
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== canonicalInput) {
     throw new TypeError(`${label} must be an ISO 8601 UTC timestamp.`);
   }
 }
