@@ -2,6 +2,7 @@ export * from './client';
 export * from './contract';
 export * from './evidence-verification';
 export * from './notification-delivery';
+export * from './platform-order';
 export * from './progress-link';
 export * from './runtime.js';
 export * from './server';
