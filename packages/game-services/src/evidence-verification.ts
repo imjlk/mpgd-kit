@@ -26,12 +26,14 @@ export interface VerifyPurchaseEvidenceInput {
   readonly request: VerifyPurchaseRequest;
   readonly product: ProductCatalog['products'][number];
   readonly platformProductId: string;
+  readonly signal: AbortSignal;
 }
 
 export interface VerifyAdRewardEvidenceInput {
   readonly request: ClaimAdRewardRequest;
   readonly placement: AdPlacements['placements'][number];
   readonly platformPlacementId?: string;
+  readonly signal: AbortSignal;
 }
 
 export interface GameServicesEvidenceVerifier {

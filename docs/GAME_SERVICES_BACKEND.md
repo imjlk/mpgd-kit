@@ -129,9 +129,14 @@ Local examples and smoke tests can opt into
 evidence without contacting a provider and must not be used for production
 grants. The Worker starter enables it only when
 `MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE = "true"` is explicitly set in a
-local environment. Checked-in deploy configuration remains fail closed in both
+local environment. Checked-in deploy configuration remains fail-closed in both
 memory and D1 modes. Production deployments must provide a
 `GAME_SERVICES_EVIDENCE_VERIFIER` service binding.
+
+Verifier calls receive an `AbortSignal` and default to a 10-second server-side
+timeout. Configure `evidenceVerificationTimeoutMs` when constructing the
+backend if a provider needs a different bounded deadline. Timeouts fail closed
+with `EVIDENCE_VERIFIER_TIMEOUT` and never reach the entitlement ledger.
 
 ## Cloudflare Worker Starter
 

@@ -197,9 +197,11 @@ const nonGrantingVerifier = {
     throw new Error('provider unavailable');
   },
 } satisfies GameServicesEvidenceVerifier;
+const nonGrantingStore = createInMemoryGameServicesStore();
 const nonGrantingBackend = createGameServicesBackend({
   catalog,
   placements,
+  store: nonGrantingStore,
   evidenceVerifier: nonGrantingVerifier,
 });
 const pendingPurchase = await nonGrantingBackend.purchases.verifyPurchase({
@@ -225,6 +227,92 @@ assertEqual(
   verifierErrorReward.reason,
   'EVIDENCE_VERIFIER_ERROR',
   'verifier exceptions should become stable fail-closed responses',
+);
+assertEqual(
+  (await nonGrantingStore.listEntitlementTransactions()).length,
+  0,
+  'pending and failed evidence verification must not reach the ledger',
+);
+
+const invalidTimestampStore = createInMemoryGameServicesStore();
+const invalidTimestampBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: invalidTimestampStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return {
+        status: 'verified',
+        verificationId: 'provider:purchase:invalid-timestamp',
+        verifiedAt: 'not-a-date',
+      } as const;
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+  },
+});
+const invalidTimestampPurchase = await invalidTimestampBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-invalid-timestamp',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-invalid-timestamp',
+  idempotencyKey: 'purchase-invalid-timestamp',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(invalidTimestampPurchase.verified, false, 'invalid verifier timestamps must reject');
+assertEqual(
+  invalidTimestampPurchase.reason,
+  'EVIDENCE_VERIFIER_ERROR',
+  'invalid verifier timestamps should use the stable verifier error reason',
+);
+assertEqual(
+  (await invalidTimestampStore.listEntitlementTransactions()).length,
+  0,
+  'invalid verifier timestamps must not reach the ledger',
+);
+
+let timeoutSignalAborted = false;
+const timeoutStore = createInMemoryGameServicesStore();
+const timeoutBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: timeoutStore,
+  evidenceVerificationTimeoutMs: 5,
+  evidenceVerifier: {
+    verifyPurchase({ signal }) {
+      return new Promise<never>(() => {
+        signal.addEventListener('abort', () => {
+          timeoutSignalAborted = signal.aborted;
+        }, { once: true });
+      });
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+  },
+});
+const timeoutPurchase = await timeoutBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-timeout',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-timeout',
+  idempotencyKey: 'purchase-timeout',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(timeoutPurchase.verified, false, 'hung verifiers must fail closed');
+assertEqual(
+  timeoutPurchase.reason,
+  'EVIDENCE_VERIFIER_TIMEOUT',
+  'hung verifiers should expose the stable timeout reason',
+);
+assertEqual(timeoutSignalAborted, true, 'verifier timeout should abort the provider signal');
+assertEqual(
+  (await timeoutStore.listEntitlementTransactions()).length,
+  0,
+  'timed out verifiers must not reach the ledger',
 );
 
 let verifierAvailable = true;

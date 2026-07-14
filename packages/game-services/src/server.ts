@@ -53,6 +53,7 @@ export interface CreateGameServicesBackendInput {
   readonly now?: () => string;
   readonly version?: string;
   readonly evidenceVerifier?: GameServicesEvidenceVerifier;
+  readonly evidenceVerificationTimeoutMs?: number;
 }
 
 export interface GameServicesBackendApiHandler {
@@ -252,6 +253,9 @@ export function createGameServicesBackend(
   const now = input.now ?? (() => new Date().toISOString());
   const version = input.version ?? '0.0.0';
   const evidenceVerifier = input.evidenceVerifier ?? createRejectingGameServicesEvidenceVerifier();
+  const evidenceVerificationTimeoutMs = resolveEvidenceVerificationTimeout(
+    input.evidenceVerificationTimeoutMs,
+  );
   const analytics = createAnalyticsReporter({
     target: 'server',
     sessionId: input.analyticsSessionId ?? 'game-services',
@@ -268,6 +272,7 @@ export function createGameServicesBackend(
           store,
           now,
           evidenceVerifier,
+          evidenceVerificationTimeoutMs,
         });
 
         await analytics.track({
@@ -292,6 +297,7 @@ export function createGameServicesBackend(
           store,
           now,
           evidenceVerifier,
+          evidenceVerificationTimeoutMs,
         });
 
         await analytics.track({
@@ -483,6 +489,7 @@ async function verifyPurchaseWithStore(
     readonly store: GameServicesStore;
     readonly now: () => string;
     readonly evidenceVerifier: GameServicesEvidenceVerifier;
+    readonly evidenceVerificationTimeoutMs: number;
   },
 ): Promise<VerifyPurchaseResponse> {
   const request = assertVerifyPurchaseRequest(input);
@@ -520,13 +527,14 @@ async function verifyPurchaseWithStore(
     });
   }
 
-  const verification = await verifyEvidence(() => {
+  const verification = await verifyEvidence((signal) => {
     return context.evidenceVerifier.verifyPurchase({
       request,
       product,
       platformProductId,
+      signal,
     });
-  });
+  }, context.evidenceVerificationTimeoutMs);
 
   if (verification.status !== 'verified') {
     return assertVerifyPurchaseResponse({
@@ -538,44 +546,38 @@ async function verifyPurchaseWithStore(
     });
   }
 
-  let grant: EntitlementLedgerResult;
-
-  try {
-    grant = await context.store.recordEntitlementGrant({
-      playerId: request.playerId,
-      grantId: product.id,
-      source: 'purchase',
-      idempotencyKey: request.idempotencyKey,
-      grantedAt: context.now(),
-      grant: product.grant,
+  const grant = await recordEntitlementGrantWithEvidence(context.store, {
+    playerId: request.playerId,
+    grantId: product.id,
+    source: 'purchase',
+    idempotencyKey: request.idempotencyKey,
+    grantedAt: context.now(),
+    grant: product.grant,
+    evidenceVerificationId: verification.verificationId,
+    payload: {
+      ...verification.payload,
+      target: request.target,
+      productId: request.productId,
+      platformProductId,
+      platformTransactionId: request.platformTransactionId,
+      purchasedAt: request.purchasedAt,
       evidenceVerificationId: verification.verificationId,
-      payload: {
-        ...verification.payload,
-        target: request.target,
-        productId: request.productId,
-        platformProductId,
-        platformTransactionId: request.platformTransactionId,
-        purchasedAt: request.purchasedAt,
-        evidenceVerificationId: verification.verificationId,
-        evidenceVerifiedAt: verification.verifiedAt,
-      },
-    });
-  } catch (error) {
-    if (error instanceof EvidenceAlreadyProcessedError) {
-      return assertVerifyPurchaseResponse({
-        verified: false,
-        alreadyProcessed: false,
-        reason: 'EVIDENCE_ALREADY_PROCESSED',
-      });
-    }
+      evidenceVerifiedAt: verification.verifiedAt,
+    },
+  });
 
-    throw error;
+  if (grant.status === 'evidence_already_processed') {
+    return assertVerifyPurchaseResponse({
+      verified: false,
+      alreadyProcessed: false,
+      reason: 'EVIDENCE_ALREADY_PROCESSED',
+    });
   }
 
   return assertVerifyPurchaseResponse({
     verified: true,
-    ledgerEntryId: grant.ledgerEntryId,
-    alreadyProcessed: grant.alreadyProcessed,
+    ledgerEntryId: grant.result.ledgerEntryId,
+    alreadyProcessed: grant.result.alreadyProcessed,
   });
 }
 
@@ -586,6 +588,7 @@ async function claimAdRewardWithStore(
     readonly store: GameServicesStore;
     readonly now: () => string;
     readonly evidenceVerifier: GameServicesEvidenceVerifier;
+    readonly evidenceVerificationTimeoutMs: number;
   },
 ): Promise<ClaimAdRewardResponse> {
   const request = assertClaimAdRewardRequest(input);
@@ -614,13 +617,14 @@ async function claimAdRewardWithStore(
   }
 
   const platformPlacementId = placement.platformPlacementIds[request.target];
-  const verification = await verifyEvidence(() => {
+  const verification = await verifyEvidence((signal) => {
     return context.evidenceVerifier.verifyAdReward({
       request,
       placement,
       ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
+      signal,
     });
-  });
+  }, context.evidenceVerificationTimeoutMs);
 
   if (verification.status !== 'verified') {
     return assertClaimAdRewardResponse({
@@ -651,47 +655,60 @@ async function claimAdRewardWithStore(
     payload.platformImpressionId = request.platformImpressionId;
   }
 
-  let result: EntitlementLedgerResult;
+  const result = await recordEntitlementGrantWithEvidence(context.store, {
+    playerId: request.playerId,
+    grantId: request.placementId,
+    source: 'ad_reward',
+    idempotencyKey: request.idempotencyKey,
+    grantedAt: context.now(),
+    evidenceVerificationId: verification.verificationId,
+    payload,
+  });
 
-  try {
-    result = await context.store.recordEntitlementGrant({
-      playerId: request.playerId,
-      grantId: request.placementId,
-      source: 'ad_reward',
-      idempotencyKey: request.idempotencyKey,
-      grantedAt: context.now(),
-      evidenceVerificationId: verification.verificationId,
-      payload,
+  if (result.status === 'evidence_already_processed') {
+    return assertClaimAdRewardResponse({
+      granted: false,
+      alreadyProcessed: false,
+      reason: 'EVIDENCE_ALREADY_PROCESSED',
     });
-  } catch (error) {
-    if (error instanceof EvidenceAlreadyProcessedError) {
-      return assertClaimAdRewardResponse({
-        granted: false,
-        alreadyProcessed: false,
-        reason: 'EVIDENCE_ALREADY_PROCESSED',
-      });
-    }
-
-    throw error;
   }
 
   return assertClaimAdRewardResponse({
     granted: true,
-    ledgerEntryId: result.ledgerEntryId,
-    alreadyProcessed: result.alreadyProcessed,
+    ledgerEntryId: result.result.ledgerEntryId,
+    alreadyProcessed: result.result.alreadyProcessed,
   });
 }
 
 async function verifyEvidence(
-  verify: () => Promise<EvidenceVerificationDecision>,
+  verify: (signal: AbortSignal) => Promise<EvidenceVerificationDecision>,
+  timeoutMs: number,
 ): Promise<EvidenceVerificationDecision> {
+  const controller = new AbortController();
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
   try {
-    return assertEvidenceVerificationDecision(await verify());
+    return await Promise.race([
+      verify(controller.signal).then(assertEvidenceVerificationDecision),
+      new Promise<EvidenceVerificationDecision>((resolve) => {
+        timeout = setTimeout(() => {
+          controller.abort();
+          resolve({
+            status: 'rejected',
+            reason: 'EVIDENCE_VERIFIER_TIMEOUT',
+          });
+        }, timeoutMs);
+      }),
+    ]);
   } catch {
     return {
       status: 'rejected',
       reason: 'EVIDENCE_VERIFIER_ERROR',
     };
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
   }
 }
 
@@ -701,6 +718,9 @@ function assertEvidenceVerificationDecision(
   if (decision.status === 'verified') {
     assertNonEmptyDecisionString(decision.verificationId, 'verificationId');
     assertNonEmptyDecisionString(decision.verifiedAt, 'verifiedAt');
+    if (!Number.isFinite(Date.parse(decision.verifiedAt))) {
+      throw new Error('Evidence verification verifiedAt must be a valid timestamp.');
+    }
     if (decision.payload !== undefined) {
       for (const [key, value] of Object.entries(decision.payload)) {
         if (
@@ -728,6 +748,37 @@ function assertEvidenceVerificationDecision(
   }
 
   throw new Error('Unknown evidence verification status.');
+}
+
+async function recordEntitlementGrantWithEvidence(
+  store: GameServicesStore,
+  grant: EntitlementLedgerGrant,
+): Promise<
+  | { readonly status: 'recorded'; readonly result: EntitlementLedgerResult }
+  | { readonly status: 'evidence_already_processed' }
+> {
+  try {
+    return {
+      status: 'recorded',
+      result: await store.recordEntitlementGrant(grant),
+    };
+  } catch (error) {
+    if (error instanceof EvidenceAlreadyProcessedError) {
+      return { status: 'evidence_already_processed' };
+    }
+
+    throw error;
+  }
+}
+
+function resolveEvidenceVerificationTimeout(timeoutMs: number | undefined): number {
+  const resolved = timeoutMs ?? 10_000;
+
+  if (!Number.isFinite(resolved) || resolved <= 0) {
+    throw new Error('evidenceVerificationTimeoutMs must be a positive finite number.');
+  }
+
+  return resolved;
 }
 
 function assertNonEmptyDecisionString(value: unknown, label: string): asserts value is string {

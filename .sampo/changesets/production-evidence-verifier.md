@@ -5,5 +5,5 @@ npm/@mpgd/platform: minor (Added)
 
 Added a provider-neutral purchase and rewarded-ad evidence verifier boundary,
 versioned adapter evidence envelopes, explicit development verifier helpers,
-authority-level replay protection, and fail-closed entitlement grants when
-production verification is unavailable.
+bounded verifier execution, authority-level replay protection, and fail-closed
+entitlement grants when production verification is unavailable.
