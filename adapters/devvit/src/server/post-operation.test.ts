@@ -220,6 +220,32 @@ describe('durable Devvit post operation coordinator', () => {
     })).resolves.toEqual({ operations: [] });
   });
 
+  it('lazily backfills a pre-index operation on an exact retry', async () => {
+    const fixture = createFixture();
+    const publish = vi.fn(async () => {
+      throw new Error('outcome unknown');
+    });
+
+    await fixture.coordinator.execute({ ...baseDescriptor(), publish });
+    fixture.store.clearIndexes();
+    await expect(fixture.coordinator.listPending({ scope: baseDescriptor().scope }))
+      .resolves.toEqual({ operations: [] });
+
+    await expect(fixture.coordinator.execute({ ...baseDescriptor(), publish })).resolves
+      .toMatchObject({
+        status: 'reconciliation-required',
+        operationId: 'operation-20260712',
+      });
+    await expect(fixture.coordinator.listPending({ scope: baseDescriptor().scope })).resolves
+      .toMatchObject({
+        operations: [{
+          status: 'reconciliation-required',
+          operationId: 'operation-20260712',
+        }],
+      });
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
   it('requires a complete indexed-store capability before listing pending work', async () => {
     const store = new UnindexedMemoryDurableOperationStore();
     const coordinator = createDevvitPostOperationCoordinator({ definition, store });
@@ -839,6 +865,11 @@ class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore 
     return Promise.resolve(this.values.get(key));
   }
 
+  ensureIndexed(index: DevvitDurableOperationIndexEntry): Promise<void> {
+    this.applyIndexMutation(index);
+    return Promise.resolve();
+  }
+
   create(key: string, value: string): Promise<boolean> {
     return this.createWithIndex(key, value);
   }
@@ -962,6 +993,10 @@ class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore 
 
   firstIndexMember(): string | undefined {
     return [...this.indexes.values()].flatMap((members) => [...members]).sort()[0];
+  }
+
+  clearIndexes(): void {
+    this.indexes.clear();
   }
 
   indexMemberWithoutState(

@@ -65,6 +65,9 @@ export function createDevvitRedisPostOperationStore(
     read(key) {
       return redis.get(key);
     },
+    async ensureIndexed(index) {
+      await redis.zAdd(index.indexKey, { member: index.member, score: 0 });
+    },
     async create(key, value) {
       return setIfAbsent(redis, key, value);
     },
@@ -94,6 +97,8 @@ export function createDevvitRedisPostOperationStore(
 
       // Stable registry membership was established before state creation and
       // does not change across prepared, attempted, published, or terminal state.
+      // Re-adding it backfills records created before indexed stores existed.
+      await redis.zAdd(index.indexKey, { member: index.member, score: 0 });
       return mutateIfValue({
         redis,
         key,

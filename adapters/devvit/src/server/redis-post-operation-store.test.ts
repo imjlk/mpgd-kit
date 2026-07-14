@@ -102,6 +102,18 @@ describe('createDevvitRedisPostOperationStore', () => {
     await expect(store.listIndex('operations', undefined, 10)).resolves.toEqual([member]);
   });
 
+  it('backfills a pre-index record before its state CAS', async () => {
+    const redis = new FakeDevvitRedis();
+    const store = createDevvitRedisPostOperationStore(redis);
+
+    await store.create('operation', 'prepared');
+    await expect(store.compareAndSetIndexed('operation', 'prepared', 'attempted', {
+      indexKey: 'operations',
+      member: 'operation',
+    })).resolves.toBe(true);
+    await expect(store.listIndex('operations', undefined, 10)).resolves.toEqual(['operation']);
+  });
+
   it('keeps stable index membership while a pending state CAS retries contention', async () => {
     const redis = new FakeDevvitRedis();
     const store = createDevvitRedisPostOperationStore(redis, { transactionAttempts: 2 });

@@ -51,6 +51,8 @@ export interface DevvitDurableOperationIndexEntry {
  * operation must never be absent from its registry.
  */
 export interface DevvitIndexedDurableOperationStore extends DevvitDurableOperationStore {
+  /** Idempotently establishes stable registry membership for an existing record. */
+  ensureIndexed(index: DevvitDurableOperationIndexEntry): Promise<void>;
   createIndexed(
     key: string,
     value: string,
@@ -367,7 +369,7 @@ export function createDevvitPostOperationCoordinator<
     });
 
     for (let attempt = 0; attempt < storeAttempts; attempt += 1) {
-      let current = await readOperation(operationKey, descriptor, definition, input.store);
+      let current = await readStoredOperation(operationKey, descriptor);
 
       if (current.kind === 'missing') {
         const timestamp = readTimestamp(now);
@@ -439,7 +441,7 @@ export function createDevvitPostOperationCoordinator<
       operationType: definition.operationType,
       operationId: request.operationId,
     });
-    const current = await readOperation(operationKey, descriptor, definition, input.store);
+    const current = await readStoredOperation(operationKey, descriptor);
 
     if (current.kind === 'missing') {
       return missingResult(descriptor);
@@ -473,7 +475,7 @@ export function createDevvitPostOperationCoordinator<
       operationType: definition.operationType,
       operationId: request.operationId,
     });
-    const current = await readOperation(operationKey, descriptor, definition, input.store);
+    const current = await readStoredOperation(operationKey, descriptor);
 
     if (current.kind === 'missing') {
       return missingResult(descriptor);
@@ -687,12 +689,7 @@ export function createDevvitPostOperationCoordinator<
         return publishedResult(published, successStatus);
       }
 
-      const reread = await readOperation(
-        source.operationKey,
-        source.descriptor,
-        definition,
-        input.store,
-      );
+      const reread = await readStoredOperation(source.operationKey, source.descriptor);
 
       if (reread.kind === 'missing' || reread.kind === 'conflict') {
         throw new DevvitPostOperationStateError(
@@ -778,12 +775,7 @@ export function createDevvitPostOperationCoordinator<
         return terminalResult(terminal);
       }
 
-      const current = await readOperation(
-        source.operationKey,
-        source.descriptor,
-        definition,
-        input.store,
-      );
+      const current = await readStoredOperation(source.operationKey, source.descriptor);
 
       if (current.kind !== 'record') {
         throw new DevvitPostOperationStateError(
@@ -827,6 +819,19 @@ export function createDevvitPostOperationCoordinator<
       raw,
       createOperationIndexEntry(undefined, record),
     );
+  }
+
+  async function readStoredOperation(
+    operationKey: string,
+    descriptor: DevvitCanonicalPostData<TPayload, TLaunchParams>,
+  ): Promise<ReadOperation<TPayload, TLaunchParams>> {
+    const current = await readOperation(operationKey, descriptor, definition, input.store);
+
+    if (indexedStore !== undefined && current.kind === 'record') {
+      await indexedStore.ensureIndexed(createOperationIndexEntry(undefined, current.record));
+    }
+
+    return current;
   }
 
   function compareAndSetStoredRecord(
@@ -950,6 +955,7 @@ function readIndexedStore(
     candidate.createIndexed,
     candidate.compareAndSetIndexed,
     candidate.listIndex,
+    candidate.ensureIndexed,
   ];
   const supportedCapabilities = capabilities.filter((capability) =>
     typeof capability === 'function').length;
@@ -960,7 +966,7 @@ function readIndexedStore(
   if (supportedCapabilities !== capabilities.length) {
     throw new DevvitPostOperationValidationError(
       'Indexed durable operation stores must implement createIndexed, '
-        + 'compareAndSetIndexed, and listIndex together.',
+        + 'compareAndSetIndexed, ensureIndexed, and listIndex together.',
     );
   }
 

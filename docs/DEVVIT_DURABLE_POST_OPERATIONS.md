@@ -140,6 +140,13 @@ A cursor from another scope is rejected. The base
 operation IDs; `listPending` requires `DevvitIndexedDurableOperationStore`, which
 the Redis factory and generated target wrapper provide.
 
+After upgrading an existing store, operations written before registry support are
+added lazily when the application next calls `execute`, `read`, or `reconcile`
+with their exact operation IDs. Recovery workers should seed any known scheduled
+operation IDs through one of those exact-operation paths before expecting them in
+`listPending`. The adapter deliberately does not scan the Redis keyspace to infer
+legacy operation IDs.
+
 ## Retry And Reconciliation Rules
 
 - Persist the prepared operation before the first Reddit API call.
