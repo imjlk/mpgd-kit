@@ -14,10 +14,7 @@ export interface DevvitCheckoutResult {
 }
 
 export interface DevvitPaymentsClient {
-  purchase(
-    sku: string,
-    metadata: Readonly<Record<string, string>>,
-  ): Promise<DevvitCheckoutResult>;
+  purchase(sku: string): Promise<DevvitCheckoutResult>;
   getEntitlements(): Promise<readonly Entitlement[]>;
 }
 
@@ -49,11 +46,9 @@ export function createDevvitCommerceAdapter(
       }
 
       try {
-        const result = await input.client.purchase(product.sku, {
-          logicalProductId: request.productId,
-          source: request.source,
-          operationId: request.idempotencyKey,
-        });
+        // Reddit's platform order ID is authoritative. Do not attach client operation
+        // metadata whose identifiers can exceed Devvit's metadata constraints.
+        const result = await input.client.purchase(product.sku);
 
         return {
           status: result.status,
