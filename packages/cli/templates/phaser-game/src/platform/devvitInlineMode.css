@@ -5,6 +5,33 @@ body.devvit-inline-mode-host {
   background: #0f172a;
 }
 
+body.devvit-inline-mode-gameplay {
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
+}
+
+body.devvit-inline-mode-gameplay #game {
+  position: relative;
+}
+
+body.devvit-inline-mode-gameplay #game,
+body.devvit-inline-mode-gameplay canvas {
+  touch-action: pan-y !important;
+}
+
+.devvit-inline-gameplay-loading {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  background: #0f172a;
+  color: #cbd5e1;
+  font: 700 0.875rem/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
+  pointer-events: none;
+}
+
 .devvit-launch-screen,
 .devvit-launch-screen * {
   box-sizing: border-box;

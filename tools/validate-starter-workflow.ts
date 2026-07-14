@@ -747,6 +747,8 @@ function validatePhaserTemplateDevvitViewModes(): void {
     const gameDocumentPath = `${root}/game.html`;
     const entryPath = `${root}/src/entry.ts`;
     const gameEntryPath = `${root}/src/gameEntry.ts`;
+    const mainPath = `${root}/src/main.ts`;
+    const createGamePath = `${root}/src/runtime/createGame.ts`;
     const devvitEntryPath = `${root}/src/platform/devvitEntrypoint.ts`;
     const devvitStylePath = `${root}/src/platform/devvitInlineMode.css`;
     const vitePath = `${root}/vite.config.ts`;
@@ -756,6 +758,8 @@ function validatePhaserTemplateDevvitViewModes(): void {
       gameDocumentPath,
       entryPath,
       gameEntryPath,
+      mainPath,
+      createGamePath,
       devvitEntryPath,
       devvitStylePath,
       vitePath,
@@ -806,10 +810,31 @@ function validatePhaserTemplateDevvitViewModes(): void {
         'mountInlineMode',
         'context.startGameplay()',
         'mountGameplayDocument()',
+        'devvit-inline-gameplay-loading',
+        'mpgdPreserveBrowserTouchGestures',
         "await import('../main')",
         "requestDevvitExpandedMode(event, 'game')",
       ]) {
         assertIncludesText(source, requiredText, `${devvitEntryPath}: Devvit view modes.`);
+      }
+    }
+
+    if (existsSync(mainPath)) {
+      assertIncludesText(
+        readText(mainPath),
+        'document.body.dataset.mpgdPreserveBrowserTouchGestures',
+        `${mainPath}: inline mode touch policy.`,
+      );
+    }
+
+    if (existsSync(createGamePath)) {
+      const source = readText(createGamePath);
+
+      for (const requiredText of [
+        'preserveBrowserTouchGestures',
+        'capture: input.preserveBrowserTouchGestures !== true',
+      ]) {
+        assertIncludesText(source, requiredText, `${createGamePath}: inline mode touch policy.`);
       }
     }
 
@@ -818,8 +843,11 @@ function validatePhaserTemplateDevvitViewModes(): void {
 
       for (const requiredText of [
         'body.devvit-inline-mode-host',
+        'body.devvit-inline-mode-gameplay',
         '.devvit-launch-screen',
         '.devvit-launch-screen__button',
+        '.devvit-inline-gameplay-loading',
+        'touch-action: pan-y !important',
       ]) {
         assertIncludesText(source, requiredText, `${devvitStylePath}: inline mode styles.`);
       }
@@ -836,6 +864,12 @@ function validatePhaserTemplateDevvitViewModes(): void {
       }
     }
   }
+
+  assertIncludesText(
+    readText('tsconfig.base.json'),
+    '"@mpgd/adapter-devvit/view-mode": ["./adapters/devvit/src/view-mode.ts"]',
+    'tsconfig.base.json: Devvit view-mode workspace path.',
+  );
 
   for (const path of [
     'apps/target-devvit/devvit.json',

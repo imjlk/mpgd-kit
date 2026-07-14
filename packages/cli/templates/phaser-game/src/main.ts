@@ -76,6 +76,8 @@ async function bootstrap(): Promise<void> {
 
     createStarterGame({
       mountId: 'game',
+      preserveBrowserTouchGestures:
+        document.body.dataset.mpgdPreserveBrowserTouchGestures === 'true',
       context: {
         platform,
         runtime,

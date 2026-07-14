@@ -58,12 +58,16 @@ function renderInlineLaunchScreen(
 
   playInlineButton.addEventListener('click', () => {
     setBusy(true, 'Loading gameplay…');
-    mountGameplayDocument();
+    const loading = mountGameplayDocument();
 
-    void context.startGameplay().catch((error: unknown) => {
-      console.error('[devvit] inline mode gameplay failed to load.', error);
-      renderInlineLaunchScreen(context, 'Gameplay could not start. Try again.');
-    });
+    void context.startGameplay()
+      .then(() => {
+        loading.remove();
+      })
+      .catch((error: unknown) => {
+        console.error('[devvit] inline mode gameplay failed to load.', error);
+        renderInlineLaunchScreen(context, 'Gameplay could not start. Try again.');
+      });
   });
   expandButton.addEventListener('click', (event) => {
     setBusy(true, 'Opening expanded mode…');
@@ -78,7 +82,9 @@ function renderInlineLaunchScreen(
   launchScreen.append(eyebrow, title, description, actions, status);
   const body = requireDocumentBody();
 
+  body.classList.remove('devvit-inline-mode-gameplay');
   body.classList.add('devvit-inline-mode-host');
+  delete body.dataset.mpgdPreserveBrowserTouchGestures;
   body.replaceChildren(launchScreen);
 
   function setBusy(busy: boolean, message: string): void {
@@ -88,17 +94,27 @@ function renderInlineLaunchScreen(
   }
 }
 
-function mountGameplayDocument(): void {
+function mountGameplayDocument(): HTMLElement {
   const body = requireDocumentBody();
   const app = document.createElement('main');
   const game = document.createElement('div');
+  const loading = document.createElement('p');
 
   app.id = 'app';
   game.id = 'game';
+  loading.className = 'devvit-inline-gameplay-loading';
+  loading.setAttribute('aria-live', 'polite');
+  loading.setAttribute('role', 'status');
+  loading.textContent = 'Loading gameplay…';
+  game.append(loading);
   app.append(game);
 
   body.classList.remove('devvit-inline-mode-host');
+  body.classList.add('devvit-inline-mode-gameplay');
+  body.dataset.mpgdPreserveBrowserTouchGestures = 'true';
   body.replaceChildren(app);
+
+  return loading;
 }
 
 function requireDocumentBody(): HTMLElement {
