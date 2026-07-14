@@ -1,5 +1,18 @@
 # @mpgd/catalog
 
+## 0.4.0 — 2026-07-15
+
+### Added
+
+- [6888e52](https://github.com/imjlk/mpgd-kit/commit/6888e52724788139fadb425459d92b5ed409cc4c) Allow game-owned Reddit product SKUs in product catalogs, mark Devvit IAP as
+  target-supported, and gate commerce calls on the runtime IAP capability until
+  a payments adapter is installed. Devvit artifact smoke checks validate payment
+  endpoints and require products.json SKUs to match the effective game catalog. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.6.0
+
 ## 0.3.5 — 2026-07-14
 
 ### Changed
