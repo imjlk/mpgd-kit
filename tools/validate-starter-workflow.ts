@@ -81,6 +81,20 @@ const requiredDevvitQueries = [
   'payments',
 ] as const;
 const expectedDevvitVersion = '0.13.8';
+/** Starter configs that must keep the baseline gameplay evidence plan. */
+const gameplayE2EConfigPaths = [
+  'examples/phaser-starter/mpgd.game.json',
+  'packages/cli/templates/phaser-game/mpgd.game.json',
+] as const;
+/** Starter handoff docs that must explain the optional gameplay E2E step. */
+const gameplayE2EDocumentationPaths = [
+  'examples/phaser-starter/agent/acceptance.md',
+  'packages/cli/templates/phaser-game/README.md',
+  'packages/cli/templates/phaser-game/agent/acceptance.md',
+] as const;
+/** Generic starter states required in both checked manifests. */
+const requiredGameplayE2EStateIds = ['launch-ready', 'primary-input', 'resume-session'] as const;
+type GameplayE2EConfigPath = (typeof gameplayE2EConfigPaths)[number];
 const requiredMcpRequirements = [
   {
     target: 'ait',
@@ -166,6 +180,7 @@ validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
 validatePhaserTemplateLocalePolicy();
 validatePhaserTemplateAcceptanceCommand();
+validateGameplayE2EPlan();
 validateAppIconPipeline();
 
 if (failures.length > 0) {
@@ -207,6 +222,60 @@ function validatePhaserTemplateAcceptanceCommand(): void {
     if (!readText(file).includes('pnpm accept')) {
       failures.push(`${file}: must use the reusable pnpm accept handoff command.`);
     }
+  }
+}
+
+/** Keeps the example and generated starter on the same gameplay evidence contract. */
+function validateGameplayE2EPlan(): void {
+  for (const configPath of gameplayE2EConfigPaths) {
+    validateGameplayE2EConfig(configPath);
+  }
+
+  for (const documentationPath of gameplayE2EDocumentationPaths) {
+    assertIncludesText(
+      readText(documentationPath),
+      'gameplay:e2e',
+      `${documentationPath}: must describe the optional target gameplay E2E contract.`,
+    );
+  }
+}
+
+/** Validates one starter config without assuming a game-specific implementation. */
+function validateGameplayE2EConfig(configPath: GameplayE2EConfigPath): void {
+  const config = readJson(configPath) as {
+    readonly acceptance?: {
+      readonly gameplay?: {
+        readonly schemaVersion?: unknown;
+        readonly states?: unknown;
+      };
+    };
+  } | null;
+  const gameplay = config?.acceptance?.gameplay;
+
+  if (gameplay?.schemaVersion !== 1) {
+    failures.push(`${configPath}: acceptance.gameplay.schemaVersion must be 1.`);
+  }
+
+  if (!Array.isArray(gameplay?.states)) {
+    failures.push(`${configPath}: acceptance.gameplay.states must be an array.`);
+    return;
+  }
+
+  const states = gameplay.states.filter(isJsonObject);
+  const stateIds = states.map((state) => state.id);
+
+  for (const stateId of requiredGameplayE2EStateIds) {
+    assertIncludes(stateIds, stateId, `${configPath}: acceptance.gameplay.states`);
+  }
+
+  const resumeState = states.find((state) => state.id === 'resume-session');
+  const resumeActions = Array.isArray(resumeState?.actions)
+    ? resumeState.actions.filter(isJsonObject)
+    : [];
+  const pauseResume = resumeActions.find((action) => action.type === 'pause-resume');
+
+  if (pauseResume?.expectSameSession !== true) {
+    failures.push(`${configPath}: resume-session must verify session continuity.`);
   }
 }
 

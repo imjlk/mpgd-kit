@@ -4,5 +4,47 @@
       "source": "public/icon.svg",
       "backgroundColor": "#0f172a"
     }
+  },
+  "acceptance": {
+    "gameplay": {
+      "schemaVersion": 1,
+      "states": [
+        {
+          "id": "launch-ready",
+          "label": "Launch ready",
+          "expectation": "The lobby is rendered and ready for primary input.",
+          "actions": [
+            {
+              "type": "wait",
+              "durationMs": 500
+            }
+          ]
+        },
+        {
+          "id": "primary-input",
+          "label": "Primary input",
+          "expectation": "The game enters its playable state after primary input.",
+          "actions": [
+            {
+              "type": "tap",
+              "x": 0.5,
+              "y": 0.72
+            }
+          ]
+        },
+        {
+          "id": "resume-session",
+          "label": "Resume session",
+          "expectation": "The active game session remains healthy after pause and resume.",
+          "actions": [
+            {
+              "type": "pause-resume",
+              "backgroundMs": 1000,
+              "expectSameSession": true
+            }
+          ]
+        }
+      ]
+    }
   }
 }

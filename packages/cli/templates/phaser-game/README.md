@@ -82,11 +82,15 @@ pnpm accept
 ```
 
 The command runs `check`, an optional `test` script, `build`, the kit's ttsc
-graph preflight, an optional game-owned `playtest` script, and the configured
-target build/smoke matrix. Results are written as JSON and Markdown under
-`artifacts/acceptance`. Add a non-interactive `playtest` package script when the
-game has an automated browser scenario; interactive platform playtests remain
-separate operator workflows.
+graph preflight, an optional game-owned browser `playtest` script, the configured
+target build/smoke matrix, and an optional target `gameplay:e2e` script. Results
+are written as JSON and Markdown under `artifacts/acceptance`. Add a
+non-interactive `playtest` script for a browser scenario. Add `gameplay:e2e` only
+after this game has a real target automation and state-inspection driver; the
+manifest plan in `mpgd.game.json` is reusable, but the driver remains
+game-owned. The kit validates and attaches its hashed artifact, release
+manifest, screenshots, and pause/resume session evidence. See
+`docs/GAMEPLAY_E2E.md` in the mpgd-kit repository for the driver contract.
 Each command has a 30-minute timeout by default. Pass `--timeout-ms` to the
 underlying `mpgd game accept` command when a target matrix needs a different
 per-step limit.
