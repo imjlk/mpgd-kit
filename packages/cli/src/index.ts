@@ -42,6 +42,7 @@ export {
 export {
   collectGameplayE2EPathEvidence,
   defaultGameplayE2EReportFile,
+  maximumGameplayE2EStates,
   parseGameplayE2EPlan,
   readGameplayE2EPlan,
   renderGameplayE2EMarkdown,
@@ -50,6 +51,7 @@ export {
   type GameplayE2EAction,
   type GameplayE2EActionResult,
   type GameplayE2EDriver,
+  type GameplayE2EHashLimits,
   type GameplayE2EInputAction,
   type GameplayE2EObservation,
   type GameplayE2EPauseResumeAction,

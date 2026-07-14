@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import {
   collectGameplayE2EPathEvidence,
+  maximumGameplayE2EStates,
   renderGameAcceptanceMarkdown,
   resolveGameAcceptanceReleaseManifestFile,
   runGameAcceptance,
@@ -303,15 +304,45 @@ try {
   const cliReport = JSON.parse(
     readFileSync(path.join(cliReportDir, 'acceptance-report.json'), 'utf8'),
   ) as GameAcceptanceReport;
+  const gameplayE2EStep = cliReport.steps.find((step) => step.id === 'gameplay-e2e');
 
   assert.equal(cliReport.status, 'passed');
   assert.equal(cliReport.steps.length, 8);
-  assert.equal(cliReport.steps[7]?.status, 'passed');
+  assert.equal(gameplayE2EStep?.status, 'passed');
   assert.equal(cliReport.evidence.gameplayE2E?.found, true);
   assert.equal(cliReport.evidence.gameplayE2E?.validationError, null);
   const validGameplayEvidence = JSON.parse(
     readFileSync(path.join(cliGameRoot, 'gameplay-evidence-source.json'), 'utf8'),
   ) as Record<string, unknown>;
+  const oversizedGameplayEvidenceFile = path.join(cliGameRoot, 'oversized-gameplay-evidence.json');
+
+  writeFileSync(
+    oversizedGameplayEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      states: Array.from(
+        { length: maximumGameplayE2EStates + 1 },
+        () => ({ status: 'passed' }),
+      ),
+    })}\n`,
+  );
+  const oversizedEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'oversized-report'),
+    gameplayE2EReportFile: oversizedGameplayEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  assert.equal(oversizedEvidence.report.status, 'failed');
+  assert.match(
+    oversizedEvidence.report.evidence.gameplayE2E?.validationError ?? '',
+    /cannot contain more than/u,
+  );
+
   const escapingGameplayEvidenceFile = path.join(cliGameRoot, 'escaping-gameplay-evidence.json');
 
   writeFileSync(

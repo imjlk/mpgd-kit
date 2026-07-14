@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
-import { collectGameplayE2EPathEvidence } from './gameplay-e2e.js';
+import { collectGameplayE2EPathEvidence, maximumGameplayE2EStates } from './gameplay-e2e.js';
 
 export const defaultGameAcceptanceCommandTimeoutMs = 30 * 60 * 1_000;
 const defaultGameAcceptanceReleaseManifestFile = 'artifacts/release-manifest.json';
@@ -516,6 +516,10 @@ function validateGameplayE2EEvidence(
 
   if (!Array.isArray(value.states) || value.states.length === 0) {
     return 'Gameplay E2E report must contain at least one state.';
+  }
+
+  if (value.states.length > maximumGameplayE2EStates) {
+    return `Gameplay E2E report cannot contain more than ${maximumGameplayE2EStates} states.`;
   }
 
   for (const state of value.states) {

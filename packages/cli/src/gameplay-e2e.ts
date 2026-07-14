@@ -1,11 +1,14 @@
 import { createHash } from 'node:crypto';
 import {
+  closeSync,
   existsSync,
   lstatSync,
   mkdirSync,
+  openSync,
   readdirSync,
   readFileSync,
   readlinkSync,
+  readSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -14,10 +17,33 @@ export const defaultGameplayE2EReportFile =
   'artifacts/gameplay-e2e/gameplay-e2e-report.json';
 
 const gameplayStateIdPattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
-const maximumGameplayStates = 50;
+const gameplayKeyControlCharacterPattern = /[\u0000-\u001f\u007f]/u;
+export const maximumGameplayE2EStates = 50;
 const maximumActionsPerState = 100;
 const maximumWaitMs = 60_000;
 const maximumBackgroundMs = 5 * 60_000;
+const maximumHashReadChunkBytes = 64 * 1_024;
+const defaultGameplayE2EHashLimits = {
+  maximumDepth: 128,
+  maximumEntries: 100_000,
+  maximumTotalFileBytes: 4 * 1_024 * 1_024 * 1_024,
+} as const satisfies GameplayE2EHashLimits;
+
+export interface GameplayE2EHashLimits {
+  readonly maximumDepth: number;
+  readonly maximumEntries: number;
+  readonly maximumTotalFileBytes: number;
+}
+
+class GameplayE2EAggregatedError extends Error {
+  readonly errors: readonly unknown[];
+
+  constructor(message: string, errors: readonly unknown[]) {
+    super(message);
+    this.name = 'GameplayE2EAggregatedError';
+    this.errors = errors;
+  }
+}
 
 export interface GameplayE2EPlan {
   readonly schemaVersion: 1;
@@ -209,8 +235,10 @@ export function parseGameplayE2EPlan(
     throw new Error(`${source}.states must be an array.`);
   }
 
-  if (value.states.length === 0 || value.states.length > maximumGameplayStates) {
-    throw new Error(`${source}.states must contain between 1 and ${maximumGameplayStates} states.`);
+  if (value.states.length === 0 || value.states.length > maximumGameplayE2EStates) {
+    throw new Error(
+      `${source}.states must contain between 1 and ${maximumGameplayE2EStates} states.`,
+    );
   }
 
   const stateIds = new Set<string>();
@@ -470,8 +498,9 @@ async function runPauseResumeAction(
     if (primaryError === undefined) {
       primaryError = error;
     } else {
-      primaryError = new Error(
-        `${formatError(primaryError)} Resume also failed: ${formatError(error)}`,
+      primaryError = new GameplayE2EAggregatedError(
+        'Gameplay background wait and resume both failed.',
+        [primaryError, error],
       );
     }
   }
@@ -590,6 +619,10 @@ function parseGameplayE2EAction(value: unknown, source: string): GameplayE2EActi
         throw new Error(`${source}.key cannot exceed 64 characters.`);
       }
 
+      if (gameplayKeyControlCharacterPattern.test(key)) {
+        throw new Error(`${source}.key cannot contain control characters.`);
+      }
+
       return { type, key };
     }
     case 'wait': {
@@ -690,6 +723,7 @@ export function collectGameplayE2EPathEvidence(
   gameRoot: string,
   file: string,
   label: string,
+  limits: GameplayE2EHashLimits = defaultGameplayE2EHashLimits,
 ): GameplayE2EPathEvidence {
   const resolved = path.resolve(gameRoot, file);
 
@@ -713,7 +747,7 @@ export function collectGameplayE2EPathEvidence(
   return {
     file: relativeOrAbsolute(gameRoot, resolved),
     kind,
-    sha256: hashPath(resolved),
+    sha256: hashPath(resolved, validateHashLimits(limits)),
   };
 }
 
@@ -727,11 +761,22 @@ function assertPathEvidenceKind(
   }
 }
 
-function hashPath(file: string): string {
+interface GameplayE2EHashState {
+  entryCount: number;
+  totalFileBytes: number;
+  readonly limits: GameplayE2EHashLimits;
+}
+
+function hashPath(file: string, limits: GameplayE2EHashLimits): string {
   const hash = createHash('sha256');
   const root = path.dirname(file);
+  const state: GameplayE2EHashState = {
+    entryCount: 0,
+    totalFileBytes: 0,
+    limits,
+  };
 
-  appendPathToHash(hash, root, file);
+  appendPathToHash(hash, root, file, state, 0);
   return hash.digest('hex');
 }
 
@@ -739,7 +784,23 @@ function appendPathToHash(
   hash: ReturnType<typeof createHash>,
   root: string,
   file: string,
+  state: GameplayE2EHashState,
+  depth: number,
 ): void {
+  if (depth > state.limits.maximumDepth) {
+    throw new Error(
+      `Gameplay evidence path exceeds maximum hash depth ${state.limits.maximumDepth}: ${file}`,
+    );
+  }
+
+  state.entryCount += 1;
+
+  if (state.entryCount > state.limits.maximumEntries) {
+    throw new Error(
+      `Gameplay evidence exceeds maximum hash entries ${state.limits.maximumEntries}.`,
+    );
+  }
+
   const stats = lstatSync(file);
   const relative = path.relative(root, file).replaceAll(path.sep, '/');
 
@@ -752,7 +813,7 @@ function appendPathToHash(
     hash.update(`D\0${relative}\0`);
 
     for (const entry of readdirSync(file).sort()) {
-      appendPathToHash(hash, root, path.join(file, entry));
+      appendPathToHash(hash, root, path.join(file, entry), state, depth + 1);
     }
 
     return;
@@ -760,11 +821,66 @@ function appendPathToHash(
 
   if (stats.isFile()) {
     hash.update(`F\0${relative}\0${stats.size}\0`);
-    hash.update(readFileSync(file));
+    appendFileContentsToHash(hash, file, stats.size, state);
     return;
   }
 
   throw new Error(`Unsupported artifact path type: ${file}`);
+}
+
+function appendFileContentsToHash(
+  hash: ReturnType<typeof createHash>,
+  file: string,
+  expectedSize: number,
+  state: GameplayE2EHashState,
+): void {
+  const descriptor = openSync(file, 'r');
+  const buffer = Buffer.allocUnsafe(maximumHashReadChunkBytes);
+  let fileBytes = 0;
+
+  try {
+    while (true) {
+      const bytesRead = readSync(descriptor, buffer, 0, buffer.byteLength, null);
+
+      if (bytesRead === 0) {
+        break;
+      }
+
+      fileBytes += bytesRead;
+
+      if (state.totalFileBytes + fileBytes > state.limits.maximumTotalFileBytes) {
+        throw new Error(
+          `Gameplay evidence exceeds maximum hashed bytes ${state.limits.maximumTotalFileBytes}.`,
+        );
+      }
+
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+
+  if (fileBytes !== expectedSize) {
+    throw new Error(`Gameplay evidence file changed while hashing: ${file}`);
+  }
+
+  state.totalFileBytes += fileBytes;
+}
+
+function validateHashLimits(limits: GameplayE2EHashLimits): GameplayE2EHashLimits {
+  const entries = [
+    ['maximumDepth', limits.maximumDepth],
+    ['maximumEntries', limits.maximumEntries],
+    ['maximumTotalFileBytes', limits.maximumTotalFileBytes],
+  ] as const;
+
+  for (const [name, value] of entries) {
+    if (!Number.isSafeInteger(value) || value <= 0) {
+      throw new Error(`Gameplay evidence hash limit ${name} must be a positive safe integer.`);
+    }
+  }
+
+  return limits;
 }
 
 function assertRecord(value: unknown, source: string): asserts value is Record<string, unknown> {
@@ -854,5 +970,9 @@ function formatDuration(durationMs: number): string {
 }
 
 function formatError(error: unknown): string {
+  if (error instanceof GameplayE2EAggregatedError) {
+    return `${error.message} ${error.errors.map(formatError).join(' ')}`;
+  }
+
   return error instanceof Error ? error.message : String(error);
 }

@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  collectGameplayE2EPathEvidence,
   parseGameplayE2EPlan,
   readGameplayE2EPlan,
   renderGameplayE2EMarkdown,
@@ -71,8 +72,16 @@ assert.throws(
   }),
   /between 0 and 1/u,
 );
+assert.throws(
+  () => parseGameplayE2EPlan({
+    schemaVersion: 1,
+    states: [{ ...plan.states[0], actions: [{ type: 'key', key: 'Enter\n' }] }],
+  }),
+  /control characters/u,
+);
 
 try {
+  // Happy path: load the manifest plan, execute every action, and emit hashed evidence.
   mkdirSync(path.dirname(artifactFile), { recursive: true });
   writeFileSync(artifactFile, 'target artifact\n');
   writeFileSync(releaseManifestFile, '{"schemaVersion":1}\n');
@@ -120,7 +129,16 @@ try {
   assert.match(readFileSync(passed.jsonFile, 'utf8'), /"target": "android"/u);
   assert.match(readFileSync(passed.markdownFile, 'utf8'), /Session preserved/u);
   assert.match(renderGameplayE2EMarkdown(passed.report), /Gameplay E2E Report/u);
+  const collectBoundedArtifact = () => collectGameplayE2EPathEvidence(
+    fixtureRoot,
+    artifactFile,
+    'bounded artifact',
+    { maximumDepth: 10, maximumEntries: 10, maximumTotalFileBytes: 4 },
+  );
 
+  assert.throws(collectBoundedArtifact, /maximum hashed bytes/u);
+
+  // Session mismatch: continuity failure stops later states while still capturing evidence.
   const mismatchLifecycle: string[] = [];
   let inspectCount = 0;
   const mismatch = await runGameplayE2E({
@@ -156,6 +174,7 @@ try {
   assert.ok(inspectCount >= 3);
   assert.match(mismatch.report.states[0]?.detail ?? '', /did not preserve its session/u);
 
+  // Resume safety: resume is attempted even when the background wait fails.
   const resumeAfterFailure: string[] = [];
   const failingWaitDriver = createDriver({
     performed: [],
@@ -178,6 +197,30 @@ try {
   assert.equal(waitFailure.report.status, 'failed');
   assert.deepEqual(resumeAfterFailure, ['pause', 'resume']);
   assert.match(waitFailure.report.states[0]?.detail ?? '', /fixture wait failure/u);
+
+  const dualFailureLifecycle: string[] = [];
+  const dualFailure = await runGameplayE2E({
+    gameRoot: fixtureRoot,
+    reportDir: path.join(fixtureRoot, 'artifacts/dual-failure'),
+    plan: { schemaVersion: 1, states: [plan.states[2]] },
+    target: 'android',
+    profile: 'staging',
+    artifactFile,
+    driver: createDriver({
+      performed: [],
+      lifecycle: dualFailureLifecycle,
+      sessionId: 'session-3',
+      failWait: true,
+      failResume: true,
+    }),
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  assert.equal(dualFailure.report.status, 'failed');
+  assert.deepEqual(dualFailureLifecycle, ['pause', 'resume']);
+  assert.match(dualFailure.report.states[0]?.detail ?? '', /fixture wait failure/u);
+  assert.match(dualFailure.report.states[0]?.detail ?? '', /fixture resume failure/u);
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });
 }
@@ -189,6 +232,7 @@ function createDriver(input: {
   readonly lifecycle: string[];
   readonly sessionId: string;
   readonly failWait?: boolean;
+  readonly failResume?: boolean;
 }): GameplayE2EDriver {
   return {
     perform: async (action) => {
@@ -203,6 +247,10 @@ function createDriver(input: {
     },
     resume: async () => {
       input.lifecycle.push('resume');
+
+      if (input.failResume === true) {
+        throw new Error('fixture resume failure');
+      }
     },
     inspect: async () => observation(input.sessionId),
     captureScreenshot: async ({ file, state }) => {
@@ -221,6 +269,7 @@ function observation(sessionId: string): GameplayE2EObservation {
 }
 
 function createClock(): () => number {
+  // A fixed epoch keeps generated reports deterministic across test runs.
   let value = Date.UTC(2026, 6, 14);
 
   return () => {
