@@ -42,7 +42,7 @@ try {
     ...grant,
     payload: { changedEvidencePayload: true },
   });
-  const stored = await store.findEntitlementTransactionByIdempotency({
+  const stored = await store.findEntitlementTransactionByIdempotency?.({
     source: grant.source,
     playerId: grant.playerId,
     idempotencyKey: grant.idempotencyKey,

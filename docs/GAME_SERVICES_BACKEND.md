@@ -82,6 +82,7 @@ handler:
 ```ts
 import {
   createGameServicesBackendApiHandler,
+  createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesHttpBackendApi,
   createInProcessGameServicesBackendTransport,
 } from '@mpgd/game-services';
@@ -92,10 +93,14 @@ const backend = createGameServicesHttpBackendApi({
       catalog,
       placements,
       store,
+      evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(),
     }),
   ),
 });
 ```
+
+The development verifier is intentionally insecure and belongs only in local
+demos and tests. Production backends must install a provider verifier.
 
 ## Ledger Idempotency Contract
 
@@ -113,6 +118,9 @@ dimensions:
   `IDEMPOTENCY_KEY_CONFLICT`. Platform transaction ids, impression ids, and
   other payload fields are evidence payload, not entitlement idempotency
   dimensions.
+- `findEntitlementTransactionByIdempotency` is an optional indexed store
+  optimization. Stores implementing the earlier contract remain compatible;
+  the backend falls back to `listEntitlementTransactions()` when it is absent.
 - Leaderboard records dedupe by `target`, `leaderboardId`, `playerId`, and
   `runId`. Retries with a different score, submission timestamp, or
   `platformSubmissionId` reuse the original `ledgerEntryId`.

@@ -69,7 +69,7 @@ export interface GameServicesBackendErrorResponse {
 
 export interface GameServicesStore {
   recordEntitlementGrant(input: EntitlementLedgerGrant): Promise<EntitlementLedgerResult>;
-  findEntitlementTransactionByIdempotency(input: {
+  findEntitlementTransactionByIdempotency?(input: {
     readonly source: EntitlementLedgerGrant['source'];
     readonly playerId: string;
     readonly idempotencyKey: string;
@@ -493,17 +493,17 @@ async function verifyPurchaseWithStore(
   },
 ): Promise<VerifyPurchaseResponse> {
   const request = assertVerifyPurchaseRequest(input);
-  const existing = await context.store.findEntitlementTransactionByIdempotency({
+  const retryIdentity = {
     source: 'purchase',
     playerId: request.playerId,
     idempotencyKey: request.idempotencyKey,
-  });
+    grantId: request.productId,
+    target: request.target,
+  } as const;
+  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
 
   if (existing !== undefined) {
-    if (
-      existing.grantId !== request.productId
-      || existing.payload.target !== request.target
-    ) {
+    if (!matchesEntitlementRetry(existing, retryIdentity)) {
       return assertVerifyPurchaseResponse({
         verified: false,
         alreadyProcessed: false,
@@ -586,6 +586,17 @@ async function verifyPurchaseWithStore(
     });
   }
 
+  if (
+    grant.result.alreadyProcessed
+    && !await recordedEntitlementMatchesRetry(context.store, grant.result, retryIdentity)
+  ) {
+    return assertVerifyPurchaseResponse({
+      verified: false,
+      alreadyProcessed: false,
+      reason: 'IDEMPOTENCY_KEY_CONFLICT',
+    });
+  }
+
   return assertVerifyPurchaseResponse({
     verified: true,
     ledgerEntryId: grant.result.ledgerEntryId,
@@ -604,17 +615,17 @@ async function claimAdRewardWithStore(
   },
 ): Promise<ClaimAdRewardResponse> {
   const request = assertClaimAdRewardRequest(input);
-  const existing = await context.store.findEntitlementTransactionByIdempotency({
+  const retryIdentity = {
     source: 'ad_reward',
     playerId: request.playerId,
     idempotencyKey: request.idempotencyKey,
-  });
+    grantId: request.placementId,
+    target: request.target,
+  } as const;
+  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
 
   if (existing !== undefined) {
-    if (
-      existing.grantId !== request.placementId
-      || existing.payload.target !== request.target
-    ) {
+    if (!matchesEntitlementRetry(existing, retryIdentity)) {
       return assertClaimAdRewardResponse({
         granted: false,
         alreadyProcessed: false,
@@ -697,6 +708,17 @@ async function claimAdRewardWithStore(
     });
   }
 
+  if (
+    result.result.alreadyProcessed
+    && !await recordedEntitlementMatchesRetry(context.store, result.result, retryIdentity)
+  ) {
+    return assertClaimAdRewardResponse({
+      granted: false,
+      alreadyProcessed: false,
+      reason: 'IDEMPOTENCY_KEY_CONFLICT',
+    });
+  }
+
   return assertClaimAdRewardResponse({
     granted: true,
     ledgerEntryId: result.result.ledgerEntryId,
@@ -757,6 +779,14 @@ function assertEvidenceVerificationDecision(
       throw new Error('Evidence verification verifiedAt must be a valid timestamp.');
     }
     if (decision.payload !== undefined) {
+      if (
+        typeof decision.payload !== 'object'
+        || decision.payload === null
+        || Array.isArray(decision.payload)
+      ) {
+        throw new Error('Evidence verification payload must be a record.');
+      }
+
       for (const [key, value] of Object.entries(decision.payload)) {
         if (
           typeof value !== 'string'
@@ -804,6 +834,50 @@ async function recordEntitlementGrantWithEvidence(
 
     throw error;
   }
+}
+
+interface EntitlementRetryIdentity {
+  readonly source: EntitlementLedgerGrant['source'];
+  readonly playerId: string;
+  readonly idempotencyKey: string;
+  readonly grantId: string;
+  readonly target: string;
+}
+
+async function findEntitlementTransactionByIdempotency(
+  store: GameServicesStore,
+  identity: EntitlementRetryIdentity,
+): Promise<ProductGrantTransaction | undefined> {
+  if (store.findEntitlementTransactionByIdempotency !== undefined) {
+    return store.findEntitlementTransactionByIdempotency(identity);
+  }
+
+  const transactions = await store.listEntitlementTransactions();
+  return transactions.find((transaction) => {
+    return transaction.source === identity.source
+      && transaction.playerId === identity.playerId
+      && transaction.idempotencyKey === identity.idempotencyKey;
+  });
+}
+
+async function recordedEntitlementMatchesRetry(
+  store: GameServicesStore,
+  result: EntitlementLedgerResult,
+  identity: EntitlementRetryIdentity,
+): Promise<boolean> {
+  const transaction = await store.getEntitlementTransaction(result.ledgerEntryId);
+  return transaction !== undefined && matchesEntitlementRetry(transaction, identity);
+}
+
+function matchesEntitlementRetry(
+  transaction: ProductGrantTransaction,
+  identity: EntitlementRetryIdentity,
+): boolean {
+  return transaction.source === identity.source
+    && transaction.playerId === identity.playerId
+    && transaction.idempotencyKey === identity.idempotencyKey
+    && transaction.grantId === identity.grantId
+    && transaction.payload.target === identity.target;
 }
 
 function resolveEvidenceVerificationTimeout(timeoutMs: number | undefined): number {
