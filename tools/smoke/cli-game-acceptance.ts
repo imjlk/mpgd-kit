@@ -309,6 +309,74 @@ try {
   assert.equal(cliReport.steps[7]?.status, 'passed');
   assert.equal(cliReport.evidence.gameplayE2E?.found, true);
   assert.equal(cliReport.evidence.gameplayE2E?.validationError, null);
+  const validGameplayEvidence = JSON.parse(
+    readFileSync(path.join(cliGameRoot, 'gameplay-evidence-source.json'), 'utf8'),
+  ) as Record<string, unknown>;
+  const escapingGameplayEvidenceFile = path.join(cliGameRoot, 'escaping-gameplay-evidence.json');
+
+  writeFileSync(
+    escapingGameplayEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      artifact: collectGameplayE2EPathEvidence(
+        cliGameRoot,
+        path.join(fixtureRoot, 'relative-release.json'),
+        'outside artifact',
+      ),
+    })}\n`,
+  );
+  const escapingEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'escaping-report'),
+    gameplayE2EReportFile: escapingGameplayEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  assert.equal(escapingEvidence.report.status, 'failed');
+  assert.match(
+    escapingEvidence.report.evidence.gameplayE2E?.validationError ?? '',
+    /path escapes the game root/u,
+  );
+
+  const releaseManifestDir = path.join(cliGameRoot, 'release-manifest-dir');
+  const unreadableGameplayEvidenceFile = path.join(
+    cliGameRoot,
+    'unreadable-gameplay-evidence.json',
+  );
+
+  mkdirSync(releaseManifestDir);
+  writeFileSync(
+    unreadableGameplayEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      releaseManifest: {
+        file: 'release-manifest-dir',
+        kind: 'file',
+        sha256: 'a'.repeat(64),
+      },
+    })}\n`,
+  );
+  const unreadableEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'unreadable-report'),
+    releaseManifestFile: releaseManifestDir,
+    gameplayE2EReportFile: unreadableGameplayEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  assert.equal(unreadableEvidence.report.status, 'failed');
+  assert.match(
+    unreadableEvidence.report.evidence.gameplayE2E?.validationError ?? '',
+    /release manifest is unreadable/u,
+  );
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });
 }

@@ -501,7 +501,15 @@ function validateGameplayE2EEvidence(
       return 'Gameplay E2E report must link the acceptance release manifest path.';
     }
 
-    if (value.releaseManifest.sha256 !== sha256File(resolvedReleaseManifest)) {
+    let releaseManifestSha256: string;
+
+    try {
+      releaseManifestSha256 = sha256File(resolvedReleaseManifest);
+    } catch (error) {
+      return `Gameplay E2E report release manifest is unreadable: ${formatError(error)}`;
+    }
+
+    if (value.releaseManifest.sha256 !== releaseManifestSha256) {
       return 'Gameplay E2E report release manifest hash does not match the acceptance build.';
     }
   }
@@ -558,6 +566,17 @@ function validateCurrentPathEvidence(
   gameRoot: string,
   label: string,
 ): string | null {
+  const resolved = path.resolve(gameRoot, evidence.file);
+  const relative = path.relative(gameRoot, resolved);
+
+  if (
+    relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
+    return `Gameplay E2E ${label} path escapes the game root.`;
+  }
+
   let current: GameplayPathEvidenceValue;
 
   try {
