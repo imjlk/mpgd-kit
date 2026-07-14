@@ -46,11 +46,7 @@ describe('Devvit commerce adapter', () => {
       transactionId: 'order-1',
       entitlementIds: [],
     });
-    expect(purchase).toHaveBeenCalledWith('ttokdoku_final_nine_ember', {
-      logicalProductId: product.id,
-      source: 'shop',
-      operationId: 'checkout-1',
-    });
+    expect(purchase).toHaveBeenCalledWith('ttokdoku_final_nine_ember');
     await expect(adapter.getEntitlements()).resolves.toEqual([entitlement]);
     await expect(adapter.restore?.()).resolves.toEqual({ restoredEntitlements: [entitlement] });
   });
