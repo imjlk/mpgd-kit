@@ -1,6 +1,8 @@
 import {
   assertRecordVerifiedLeaderboardAttemptRequest,
+  assertVerifiedLeaderboardSnapshot,
   createInMemoryVerifiedLeaderboardService,
+  createVerifiedLeaderboardCursor,
   verifiedLeaderboardIdentifierMaximumLength,
   type RecordVerifiedLeaderboardAttemptRequest,
 } from './verified-leaderboard';
@@ -131,6 +133,71 @@ assertEqual(
   snapshot.participantEntry?.metrics?.mistakes,
   1,
   'participant snapshots should expose retained metrics',
+);
+assert(snapshot.nextCursor !== undefined, 'limited snapshots should be continuable');
+assertVerifiedLeaderboardSnapshot(snapshot);
+
+const fullSnapshot = await service.getSnapshot({
+  leaderboardId: 'daily:2026-07-13',
+  limit: 2,
+});
+assert(fullSnapshot !== undefined, 'full snapshots should include the retained board');
+assertEqual(fullSnapshot.nextCursor, undefined, 'full snapshots should terminate');
+const snapshotPageEntry = snapshot.entries[0];
+const firstFullEntry = fullSnapshot.entries[0];
+const secondFullEntry = fullSnapshot.entries[1];
+const finalFullEntry = fullSnapshot.entries.at(-1);
+assert(snapshotPageEntry !== undefined, 'limited snapshots should contain their first entry');
+assert(firstFullEntry !== undefined, 'full snapshots should contain their first entry');
+assert(secondFullEntry !== undefined, 'full snapshots should contain their second entry');
+assert(finalFullEntry !== undefined, 'full snapshots should contain their final entry');
+
+assertThrows(
+  () => assertVerifiedLeaderboardSnapshot({ ...snapshot, nextCursor: undefined }),
+  'nextCursor must be present when snapshot entries remain',
+  'snapshots must not silently truncate remaining entries',
+);
+assertThrows(
+  () => assertVerifiedLeaderboardSnapshot({
+    ...snapshot,
+    nextCursor: createVerifiedLeaderboardCursor(
+      { ...snapshot.definition, leaderboardId: 'daily:other-board' },
+      snapshotPageEntry,
+    ),
+  }),
+  'nextCursor must continue after the final snapshot entry',
+  'snapshots must bind continuation cursors to their definition and final entry',
+);
+assertThrows(
+  () => assertVerifiedLeaderboardSnapshot({
+    ...fullSnapshot,
+    entries: [
+      { ...secondFullEntry, rank: 1 },
+      { ...firstFullEntry, rank: 2 },
+    ],
+  }),
+  'entries must follow the leaderboard ranking order',
+  'snapshots must preserve stable leaderboard ordering',
+);
+assertThrows(
+  () => assertVerifiedLeaderboardSnapshot({
+    ...fullSnapshot,
+    entries: [firstFullEntry, { ...secondFullEntry, rank: 3 }],
+    totalParticipants: 3,
+  }),
+  'entry ranks must be contiguous within a snapshot page',
+  'snapshots must not skip ranks inside a page',
+);
+assertThrows(
+  () => assertVerifiedLeaderboardSnapshot({
+    ...fullSnapshot,
+    nextCursor: createVerifiedLeaderboardCursor(
+      fullSnapshot.definition,
+      finalFullEntry,
+    ),
+  }),
+  'nextCursor must be omitted after the final snapshot entry',
+  'terminal snapshots must not expose looping cursors',
 );
 
 const maximumIdentifier = '\u0000'.repeat(verifiedLeaderboardIdentifierMaximumLength);
@@ -615,6 +682,24 @@ async function assertRejects(
   }
 
   throw new Error(`${message}: expected the operation to reject.`);
+}
+
+function assertThrows(
+  operation: () => void,
+  messageFragment: string,
+  message: string,
+): void {
+  try {
+    operation();
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(messageFragment)) {
+      return;
+    }
+
+    throw new Error(`${message}: received an unexpected error.`);
+  }
+
+  throw new Error(`${message}: expected the operation to throw.`);
 }
 
 function assert(condition: boolean, message: string): asserts condition {

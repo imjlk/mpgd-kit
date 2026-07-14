@@ -283,7 +283,7 @@ export class InMemoryVerifiedLeaderboardService implements VerifiedLeaderboardSe
     definition: VerifiedLeaderboardDefinition,
   ): readonly LeaderboardRankedEntry[] {
     return [...this.getRetainedAttempts(definition.leaderboardId).values()]
-      .sort((left, right) => compareAttempts(definition.scoreOrder, left, right))
+      .sort((left, right) => compareLeaderboardOrder(definition.scoreOrder, left, right))
       .map((attempt, index) => toRankedEntry(attempt, index + 1));
   }
 }
@@ -465,8 +465,11 @@ export function assertVerifiedLeaderboardSnapshot(
     throw new Error('entries must be an array.');
   }
 
+  const entries: LeaderboardRankedEntry[] = [];
+
   for (const entry of input.entries) {
     assertLeaderboardRankedEntry(entry);
+    entries.push(entry);
   }
 
   if (input.participantEntry !== undefined) {
@@ -481,8 +484,93 @@ export function assertVerifiedLeaderboardSnapshot(
     throw new Error('totalParticipants must be a non-negative integer.');
   }
 
+  assertVerifiedLeaderboardSnapshotEntries(
+    input.definition,
+    entries,
+    input.participantEntry,
+    input.totalParticipants,
+  );
   assertTimestamp(input.generatedAt, 'generatedAt');
-  assertOptionalCursor(input.nextCursor);
+  assertVerifiedLeaderboardSnapshotCursor(
+    input.definition,
+    entries,
+    input.totalParticipants,
+    input.nextCursor,
+  );
+}
+
+function assertVerifiedLeaderboardSnapshotEntries(
+  definition: VerifiedLeaderboardDefinition,
+  entries: readonly LeaderboardRankedEntry[],
+  participantEntry: LeaderboardRankedEntry | undefined,
+  totalParticipants: number,
+): void {
+  const participantIds = new Set<string>();
+  const attemptIds = new Set<string>();
+
+  for (const [index, entry] of entries.entries()) {
+    if (entry.rank > totalParticipants) {
+      throw new Error('entry ranks must not exceed totalParticipants.');
+    }
+
+    if (participantIds.has(entry.participantId)) {
+      throw new Error('entries must not repeat a participantId.');
+    }
+
+    if (attemptIds.has(entry.attemptId)) {
+      throw new Error('entries must not repeat an attemptId.');
+    }
+
+    participantIds.add(entry.participantId);
+    attemptIds.add(entry.attemptId);
+    const previous = entries[index - 1];
+
+    if (previous === undefined) {
+      continue;
+    }
+
+    if (entry.rank !== previous.rank + 1) {
+      throw new Error('entry ranks must be contiguous within a snapshot page.');
+    }
+
+    if (compareLeaderboardOrder(definition.scoreOrder, previous, entry) >= 0) {
+      throw new Error('entries must follow the leaderboard ranking order.');
+    }
+  }
+
+  if (participantEntry !== undefined && participantEntry.rank > totalParticipants) {
+    throw new Error('participantEntry rank must not exceed totalParticipants.');
+  }
+}
+
+function assertVerifiedLeaderboardSnapshotCursor(
+  definition: VerifiedLeaderboardDefinition,
+  entries: readonly LeaderboardRankedEntry[],
+  totalParticipants: number,
+  nextCursor: unknown,
+): void {
+  assertOptionalCursor(nextCursor);
+  const lastEntry = entries.at(-1);
+
+  if (nextCursor === undefined) {
+    if (lastEntry !== undefined && lastEntry.rank < totalParticipants) {
+      throw new Error('nextCursor must be present when snapshot entries remain.');
+    }
+
+    return;
+  }
+
+  if (lastEntry === undefined) {
+    throw new Error('nextCursor requires at least one snapshot entry.');
+  }
+
+  if (lastEntry.rank >= totalParticipants) {
+    throw new Error('nextCursor must be omitted after the final snapshot entry.');
+  }
+
+  if (nextCursor !== createVerifiedLeaderboardCursor(definition, lastEntry)) {
+    throw new Error('nextCursor must continue after the final snapshot entry.');
+  }
 }
 
 export function createVerifiedLeaderboardCursor(
@@ -562,7 +650,7 @@ function shouldReplaceRetainedAttempt(
     return compareAttemptChronology(candidate, retained) < 0;
   }
 
-  return compareAttempts(definition.scoreOrder, candidate, retained) < 0;
+  return compareLeaderboardOrder(definition.scoreOrder, candidate, retained) < 0;
 }
 
 function compareAttemptChronology(
@@ -579,10 +667,10 @@ function compareAttemptChronology(
   return compareOrdinal(left.attemptId, right.attemptId);
 }
 
-function compareAttempts(
+function compareLeaderboardOrder(
   scoreOrder: VerifiedLeaderboardScoreOrder,
-  left: VerifiedLeaderboardAttempt,
-  right: VerifiedLeaderboardAttempt,
+  left: Pick<VerifiedLeaderboardAttempt, 'attemptId' | 'completedAt' | 'score'>,
+  right: Pick<VerifiedLeaderboardAttempt, 'attemptId' | 'completedAt' | 'score'>,
 ): number {
   if (left.score !== right.score) {
     return scoreOrder === 'ascending' ? left.score - right.score : right.score - left.score;
