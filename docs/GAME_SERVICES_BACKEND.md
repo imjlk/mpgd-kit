@@ -82,6 +82,7 @@ handler:
 ```ts
 import {
   createGameServicesBackendApiHandler,
+  createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesHttpBackendApi,
   createInProcessGameServicesBackendTransport,
 } from '@mpgd/game-services';
@@ -92,10 +93,14 @@ const backend = createGameServicesHttpBackendApi({
       catalog,
       placements,
       store,
+      evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(),
     }),
   ),
 });
 ```
+
+The development verifier is intentionally insecure and belongs only in local
+demos and tests. Production backends must install a provider verifier.
 
 ## Ledger Idempotency Contract
 
@@ -108,13 +113,57 @@ dimensions:
   `idempotencyKey` for the same player without colliding because their `source`
   values differ.
 - Duplicate entitlement grants return the original `ledgerEntryId` with
-  `alreadyProcessed: true`. Platform transaction ids, impression ids, and other
-  payload fields are evidence payload, not entitlement idempotency dimensions.
+  `alreadyProcessed: true` only when the original logical product or placement
+  and target also match. Reusing a key for another grant target fails with
+  `IDEMPOTENCY_KEY_CONFLICT`. Platform transaction ids, impression ids, and
+  other payload fields are evidence payload, not entitlement idempotency
+  dimensions.
+- `findEntitlementTransactionByIdempotency` is an optional indexed store
+  optimization. Stores implementing the earlier contract remain compatible;
+  the backend falls back to `listEntitlementTransactions()` when it is absent.
+- `findEntitlementTransactionByEvidenceVerificationId` is also optional. The
+  backend falls back to the ledger list and serializes same-evidence writes for
+  each store instance. Persistent production stores must additionally enforce
+  unique `(source, evidenceVerificationId)` values atomically and throw
+  `EvidenceAlreadyProcessedError` to close cross-instance races; the included
+  memory and D1 stores implement this invariant.
+- `findEntitlementTransactionByPlatformEvidence` is an optional indexed lookup
+  for verified purchase transaction ids and rewarded-ad impression ids. It
+  preserves replay protection for historical ledger rows that predate authority
+  verification ids; stores without it use the ledger-list fallback. The backend
+  serializes both authority and platform evidence keys per store instance. The
+  D1 migration backfills authority ids already present in payloads and adds
+  unique source/target platform-evidence indexes for historical and new rows.
 - Leaderboard records dedupe by `target`, `leaderboardId`, `playerId`, and
   `runId`. Retries with a different score, submission timestamp, or
   `platformSubmissionId` reuse the original `ledgerEntryId`.
 - `ledgerEntryId` values are stable opaque strings. Do not parse them for game
   state decisions; persist and compare the idempotency dimensions instead.
+
+## Production Evidence Verification
+
+The backend requires a `GameServicesEvidenceVerifier` before purchase or
+rewarded-ad evidence can write an entitlement. Without one, both paths fail
+closed with `EVIDENCE_VERIFIER_UNAVAILABLE`. Provider adapters can carry
+versioned fields in `request.evidence` while the shared contract stays
+platform-neutral.
+
+Local examples and smoke tests can opt into
+`createDevelopmentGameServicesEvidenceVerifier()`. It accepts submitted
+evidence without contacting a provider and must not be used for production
+grants. The Worker starter enables it only when
+`MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE = "true"` is explicitly set in a
+local environment. Checked-in deploy configuration remains fail-closed in both
+memory and D1 modes. Production deployments must provide a
+`GAME_SERVICES_EVIDENCE_VERIFIER` service binding.
+
+Verifier calls receive an `AbortSignal` and default to a 10-second server-side
+timeout. Configure `evidenceVerificationTimeoutMs` when constructing the
+backend if a provider needs a different bounded deadline. Timeouts fail closed
+with `EVIDENCE_VERIFIER_TIMEOUT` and never reach the entitlement ledger.
+The Worker service-binding wrapper keeps `AbortSignal` local because it is not
+an RPC-cloneable value; it forwards the numeric `timeoutMs` so the bound
+verifier can apply the same provider-side deadline.
 
 ## Cloudflare Worker Starter
 
@@ -142,7 +191,9 @@ in filename order, uncomment the D1 binding, and set `MPGD_STORE = "d1"`.
 The `0002_verified_leaderboards.sql` migration adds durable definition,
 processed-attempt decision, and retained-entry tables. Apply
 `0003_verified_leaderboard_metrics.sql` afterward to persist optional immutable
-numeric attempt metrics on processed decisions and ranked entries.
+numeric attempt metrics on processed decisions and ranked entries. Apply
+`0004_entitlement_evidence.sql` next to persist provider verification identities
+and enforce source-scoped evidence replay protection.
 
 Configure the private `VERIFIED_LEADERBOARD_AUTH` service binding to mount the
 public read-only verified leaderboard snapshot route. Its RPC method validates

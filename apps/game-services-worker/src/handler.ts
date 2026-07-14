@@ -2,6 +2,7 @@ import type { AdPlacements } from '@mpgd/catalog';
 import {
   createGameServicesBackend,
   createGameServicesBackendApiHandler,
+  createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesHttpFetchHandler,
   createGameServicesRpcFetchHandler,
   createGameServicesRouter,
@@ -10,6 +11,8 @@ import {
   createVerifiedLeaderboardSnapshotFetchHandler,
   type ClaimAdRewardRequest,
   type GameServicesBackendApi,
+  type GameServicesEvidenceVerifier,
+  type EvidenceVerificationDecision,
   type GameServicesStore,
   type GetVerifiedLeaderboardSnapshotRequest,
   type RecordLeaderboardScoreRequest,
@@ -19,6 +22,8 @@ import {
   type VerifiedLeaderboardSnapshotPrincipal,
   type VerifiedLeaderboardSnapshot,
   type VerifyPurchaseRequest,
+  type VerifyPurchaseEvidenceInput,
+  type VerifyAdRewardEvidenceInput,
 } from '@mpgd/game-services';
 import type { ProductCatalog } from '@mpgd/catalog';
 
@@ -28,7 +33,18 @@ import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
 export interface GameServicesWorkerEnv {
   readonly DB?: D1Database;
   readonly MPGD_STORE?: 'memory' | 'd1';
+  readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   readonly VERIFIED_LEADERBOARD_AUTH?: VerifiedLeaderboardAuthBinding;
+  readonly GAME_SERVICES_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+}
+
+export interface GameServicesEvidenceVerifierBinding {
+  verifyPurchase(
+    input: Omit<VerifyPurchaseEvidenceInput, 'signal'>,
+  ): Promise<EvidenceVerificationDecision>;
+  verifyAdReward(
+    input: Omit<VerifyAdRewardEvidenceInput, 'signal'>,
+  ): Promise<EvidenceVerificationDecision>;
 }
 
 export interface VerifiedLeaderboardAuthBindingRequest {
@@ -102,6 +118,7 @@ export function createWorkerFetchHandler(
 ): (request: Request) => Promise<Response> {
   const backend = createWorkerBackend(env);
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
+  const evidenceVerifier = resolveWorkerEvidenceVerifier(env);
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -120,6 +137,9 @@ export function createWorkerFetchHandler(
       catalog: productCatalog,
       placements: adPlacements,
       store: createWorkerStore(env),
+      ...(evidenceVerifier === undefined
+        ? {}
+        : { evidenceVerifier }),
     }),
     {
       corsHeaders,
@@ -199,12 +219,48 @@ export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWor
 }
 
 function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi {
+  const evidenceVerifier = resolveWorkerEvidenceVerifier(env);
+
   return createGameServicesBackend({
     catalog: productCatalog,
     placements: adPlacements,
     store: createWorkerStore(env),
+    ...(evidenceVerifier === undefined
+      ? {}
+      : { evidenceVerifier }),
     version: productCatalog.version,
   });
+}
+
+function resolveWorkerEvidenceVerifier(
+  env: GameServicesWorkerEnv,
+): GameServicesEvidenceVerifier | undefined {
+  if (env.GAME_SERVICES_EVIDENCE_VERIFIER !== undefined) {
+    const binding = env.GAME_SERVICES_EVIDENCE_VERIFIER;
+
+    return {
+      verifyPurchase({ request, product, platformProductId, timeoutMs }) {
+        return binding.verifyPurchase({
+          request,
+          product,
+          platformProductId,
+          timeoutMs,
+        });
+      },
+      verifyAdReward({ request, placement, platformPlacementId, timeoutMs }) {
+        return binding.verifyAdReward({
+          request,
+          placement,
+          ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
+          timeoutMs,
+        });
+      },
+    };
+  }
+
+  return env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true'
+    ? createDevelopmentGameServicesEvidenceVerifier()
+    : undefined;
 }
 
 function createWorkerStore(env: GameServicesWorkerEnv): GameServicesStore {

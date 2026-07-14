@@ -7,6 +7,7 @@ import { createWorkerFetchHandler, createWorkerService } from './handler.js';
 
 const workerEnv = {
   MPGD_STORE: 'memory',
+  MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true',
   VERIFIED_LEADERBOARD_AUTH: {
     async authenticateVerifiedLeaderboardSnapshot(
       input: { readonly authorization: string },
@@ -20,6 +21,105 @@ const workerEnv = {
 const workerFetch = createWorkerFetchHandler(workerEnv);
 const workerService = createWorkerService(workerEnv);
 const baseUrl = 'https://game-services-worker.test';
+
+const defaultMemoryFetch = createWorkerFetchHandler({ MPGD_STORE: 'memory' });
+const defaultMemoryPurchase = await defaultMemoryFetch(
+  new Request(`${baseUrl}/game-services/purchases/verify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      target: 'android',
+      playerId: 'worker-default-fail-closed',
+      productId: 'COINS_100',
+      platformTransactionId: 'worker-default-unverified',
+      idempotencyKey: 'worker-default-unverified',
+      purchasedAt: '2026-07-04T00:00:00.000Z',
+    }),
+  }),
+);
+const defaultMemoryPurchaseBody = await defaultMemoryPurchase.json() as {
+  readonly verified: boolean;
+  readonly reason?: string;
+};
+
+assertEqual(
+  defaultMemoryPurchaseBody.verified,
+  false,
+  'deployable memory configuration should fail closed without an explicit development flag',
+);
+assertEqual(
+  defaultMemoryPurchaseBody.reason,
+  'EVIDENCE_VERIFIER_UNAVAILABLE',
+  'deployable memory configuration should expose missing verifier state',
+);
+
+let verifierBindingReceivedSignal = true;
+let verifierBindingTimeoutMs = 0;
+let rewardVerifierBindingReceivedSignal = true;
+const boundVerifierService = createWorkerService({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_EVIDENCE_VERIFIER: {
+    async verifyPurchase(input) {
+      verifierBindingReceivedSignal = Object.hasOwn(input, 'signal');
+      verifierBindingTimeoutMs = input.timeoutMs;
+      return {
+        status: 'verified',
+        verificationId: 'worker-binding:purchase',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      };
+    },
+    async verifyAdReward(input) {
+      rewardVerifierBindingReceivedSignal = Object.hasOwn(input, 'signal');
+      return {
+        status: 'verified',
+        verificationId: 'worker-binding:reward',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      };
+    },
+  },
+});
+const boundVerifierPurchase = await boundVerifierService.verifyPurchase({
+  target: 'android',
+  playerId: 'worker-binding-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'worker-binding-txn',
+  idempotencyKey: 'worker-binding-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const boundVerifierReward = await boundVerifierService.claimAdReward({
+  target: 'android',
+  playerId: 'worker-binding-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'worker-binding-impression',
+  idempotencyKey: 'worker-binding-reward',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(
+  (boundVerifierPurchase as { readonly verified: boolean }).verified,
+  true,
+  'clone-safe verifier bindings should grant verified evidence',
+);
+assertEqual(
+  verifierBindingReceivedSignal,
+  false,
+  'Worker RPC verifier bindings must not receive non-cloneable AbortSignal values',
+);
+assertEqual(
+  verifierBindingTimeoutMs,
+  10_000,
+  'Worker RPC verifier bindings should receive the local timeout budget',
+);
+assertEqual(
+  (boundVerifierReward as { readonly granted: boolean }).granted,
+  true,
+  'clone-safe reward verifier bindings should grant verified evidence',
+);
+assertEqual(
+  rewardVerifierBindingReceivedSignal,
+  false,
+  'reward verifier bindings must not receive non-cloneable AbortSignal values',
+);
 
 const health = await workerFetch(new Request(`${baseUrl}/health`));
 const healthBody = await health.json() as { readonly version: string };

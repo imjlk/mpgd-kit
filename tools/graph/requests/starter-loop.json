@@ -1,14 +1,15 @@
 {
   "name": "starter-loop",
   "description": "Phaser starter loop, platform install, target runtime, and optional game-services wiring.",
-  "expectedFiles": ["examples/phaser-starter/"],
-  "tsconfig": "tsconfig.graph.json",
+  "expectedFiles": ["src/"],
+  "cwd": "examples/phaser-starter",
+  "tsconfig": "tsconfig.json",
   "question": "What are the central Phaser starter flows around game creation, platform install, target runtime, player identity, and optional game-services wiring?",
   "draft": "Use a tour because the starter loop crosses main.ts, runtime setup, scenes, platform installation, and game-services wiring.",
-  "review": "A broad starter flow question should use a graph tour over the full local graph.",
+  "review": "A broad starter flow question should use a graph tour focused on the starter project so similarly named backend symbols cannot displace its anchors.",
   "request": {
     "type": "tour",
-    "query": "createStarterGame installStarterPlatform createStarterGameServices StarterContext BootScene StarterScene PlayScene getTargetRuntime player identity gameServices",
+    "query": "bootstrapStarter createStarterGame installStarterPlatform detectRuntime installMicrosoftStorePwa resolveIdentitySession resolveLaunchIntent createGuestSession createStarterGameServices StarterContext sceneRegistry BootScene StarterScene PlayScene",
     "includeTests": true,
     "limit": 70
   }

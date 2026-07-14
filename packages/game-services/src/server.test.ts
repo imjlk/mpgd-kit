@@ -6,6 +6,7 @@ import {
 } from '@mpgd/game-services';
 
 import {
+  createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesBackend,
   createGameServicesBackendApiHandler,
   createGameServicesHttpFetchHandler,
@@ -13,6 +14,10 @@ import {
   createGameServicesRpcFetchHandler,
   createInMemoryGameServicesStore,
   createInProcessGameServicesBackendTransport,
+  InMemoryGameServicesStore,
+  type EvidenceVerificationDecision,
+  type GameServicesEvidenceVerifier,
+  type GameServicesStore,
 } from './index';
 
 const catalog = {
@@ -28,6 +33,18 @@ const catalog = {
       },
       platformProductIds: {
         android: 'coins_100_android',
+      },
+    },
+    {
+      id: 'COINS_200',
+      type: 'consumable',
+      grant: {
+        type: 'currency',
+        currency: 'coin',
+        amount: 200,
+      },
+      platformProductIds: {
+        android: 'coins_200_android',
       },
     },
   ],
@@ -51,14 +68,153 @@ const placements = {
         android: 'reward_android',
       },
     },
+    {
+      id: 'SECOND_REWARD',
+      type: 'rewarded',
+      reward: {
+        type: 'currency',
+        currency: 'coin',
+        amount: 5,
+      },
+      frequencyCap: {
+        cooldownSeconds: 0,
+      },
+      platformPlacementIds: {
+        android: 'second_reward_android',
+      },
+    },
   ],
 } as const satisfies AdPlacements;
+const evidenceVerifier = createDevelopmentGameServicesEvidenceVerifier(
+  () => '2026-07-04T00:00:00.000Z',
+);
+
+class HiddenIdempotencyLookupStore extends InMemoryGameServicesStore {
+  hideIdempotencyLookups = false;
+
+  override async findEntitlementTransactionByIdempotency(
+    input: Parameters<InMemoryGameServicesStore['findEntitlementTransactionByIdempotency']>[0],
+  ): ReturnType<InMemoryGameServicesStore['findEntitlementTransactionByIdempotency']> {
+    if (this.hideIdempotencyLookups) {
+      return undefined;
+    }
+
+    return super.findEntitlementTransactionByIdempotency(input);
+  }
+}
+
+function createLegacyCompatibleStore(base: InMemoryGameServicesStore): GameServicesStore {
+  return {
+    recordEntitlementGrant: (input) => base.recordEntitlementGrant(input),
+    async getEntitlementTransaction(ledgerEntryId) {
+      const transaction = await base.getEntitlementTransaction(ledgerEntryId);
+      return transaction === undefined ? undefined : withoutTopLevelEvidenceId(transaction);
+    },
+    async listEntitlementTransactions() {
+      const transactions = await base.listEntitlementTransactions();
+      return transactions.map(withoutTopLevelEvidenceId);
+    },
+    recordLeaderboardScore: (input, options) => {
+      return base.recordLeaderboardScore(input, options);
+    },
+    getLeaderboardTransaction: (ledgerEntryId) => {
+      return base.getLeaderboardTransaction(ledgerEntryId);
+    },
+    listLeaderboardTransactions: () => base.listLeaderboardTransactions(),
+  };
+}
+
+function createLegacyPlatformEvidenceStore(base: InMemoryGameServicesStore): GameServicesStore {
+  const platformEvidenceByLedgerEntryId = new Map<
+    string,
+    { readonly field: 'platformTransactionId' | 'platformImpressionId'; readonly value: string }
+  >();
+
+  return {
+    async recordEntitlementGrant(input) {
+      const field = input.source === 'purchase'
+        ? 'platformTransactionId'
+        : 'platformImpressionId';
+      const platformEvidenceId = input.payload[field];
+      const result = await base.recordEntitlementGrant(
+        typeof platformEvidenceId === 'string'
+          ? {
+              ...input,
+              payload: {
+                ...input.payload,
+                [field]: `legacy-unindexed:${input.playerId}:${input.idempotencyKey}`,
+              },
+            }
+          : input,
+      );
+
+      if (typeof platformEvidenceId === 'string') {
+        platformEvidenceByLedgerEntryId.set(result.ledgerEntryId, {
+          field,
+          value: platformEvidenceId,
+        });
+      }
+
+      return result;
+    },
+    async getEntitlementTransaction(ledgerEntryId) {
+      const transaction = await base.getEntitlementTransaction(ledgerEntryId);
+      return transaction === undefined
+        ? undefined
+        : restoreLegacyPlatformEvidence(transaction, platformEvidenceByLedgerEntryId);
+    },
+    async listEntitlementTransactions() {
+      const transactions = await base.listEntitlementTransactions();
+      return transactions.map((transaction) => {
+        return restoreLegacyPlatformEvidence(transaction, platformEvidenceByLedgerEntryId);
+      });
+    },
+    recordLeaderboardScore: (input, options) => {
+      return base.recordLeaderboardScore(input, options);
+    },
+    getLeaderboardTransaction: (ledgerEntryId) => {
+      return base.getLeaderboardTransaction(ledgerEntryId);
+    },
+    listLeaderboardTransactions: () => base.listLeaderboardTransactions(),
+  };
+}
+
+function restoreLegacyPlatformEvidence<T extends {
+  readonly ledgerEntryId: string;
+  readonly payload: Record<string, string | number | boolean>;
+}>(
+  transaction: T,
+  identities: ReadonlyMap<
+    string,
+    { readonly field: 'platformTransactionId' | 'platformImpressionId'; readonly value: string }
+  >,
+): T {
+  const identity = identities.get(transaction.ledgerEntryId);
+  return identity === undefined
+    ? transaction
+    : {
+        ...transaction,
+        payload: {
+          ...transaction.payload,
+          [identity.field]: identity.value,
+        },
+      };
+}
+
+function withoutTopLevelEvidenceId<T extends { readonly evidenceVerificationId?: string }>(
+  transaction: T,
+): Omit<T, 'evidenceVerificationId'> {
+  const { evidenceVerificationId, ...legacyTransaction } = transaction;
+  void evidenceVerificationId;
+  return legacyTransaction;
+}
 
 const store = createInMemoryGameServicesStore();
 const handler = createGameServicesBackendApiHandler({
   catalog,
   placements,
   store,
+  evidenceVerifier,
   now: () => '2026-07-04T00:00:00.000Z',
   version: 'test-http',
 });
@@ -129,6 +285,11 @@ assertEqual(
   'higher cross-target score should rank ahead within the shared leaderboard id',
 );
 assertEqual((await store.listEntitlementTransactions()).length, 2, 'two grants should be recorded');
+assertEqual(
+  (await store.listEntitlementTransactions())[0]?.payload.evidenceVerificationId,
+  'development:purchase:android:txn-1',
+  'ledger grants should retain the server verification identity',
+);
 assertEqual((await store.listLeaderboardTransactions()).length, 2, 'two scores should be recorded');
 assertEqual(
   (await store.listLeaderboardTransactions())[0]?.ledgerEntryId,
@@ -142,10 +303,858 @@ assertEqual(
   'invalid in-process request bodies should return 400 instead of rejecting',
 );
 
+const failClosedStore = createInMemoryGameServicesStore();
+const failClosedBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: failClosedStore,
+});
+const unavailablePurchase = await failClosedBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-fail-closed',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-unverified',
+  idempotencyKey: 'purchase-unverified',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const unavailableReward = await failClosedBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-fail-closed',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-unverified',
+  idempotencyKey: 'reward-unverified',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+
+assertEqual(unavailablePurchase.verified, false, 'missing purchase verifier should fail closed');
+assertEqual(
+  unavailablePurchase.reason,
+  'EVIDENCE_VERIFIER_UNAVAILABLE',
+  'missing purchase verifier should expose an operational reason',
+);
+assertEqual(unavailableReward.granted, false, 'missing reward verifier should fail closed');
+assertEqual(
+  (await failClosedStore.listEntitlementTransactions()).length,
+  0,
+  'unverified evidence must never reach the entitlement ledger',
+);
+
+const nonGrantingVerifier = {
+  async verifyPurchase() {
+    return { status: 'pending', reason: 'PROVIDER_PENDING' } as const;
+  },
+  async verifyAdReward() {
+    throw new Error('provider unavailable');
+  },
+} satisfies GameServicesEvidenceVerifier;
+const nonGrantingStore = createInMemoryGameServicesStore();
+const nonGrantingBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: nonGrantingStore,
+  evidenceVerifier: nonGrantingVerifier,
+});
+const pendingPurchase = await nonGrantingBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-pending',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-pending',
+  idempotencyKey: 'purchase-pending',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const verifierErrorReward = await nonGrantingBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-error',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: 'reward-error',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+
+assertEqual(pendingPurchase.verified, false, 'pending provider evidence must not grant');
+assertEqual(pendingPurchase.reason, 'PROVIDER_PENDING', 'pending reasons should be preserved');
+assertEqual(verifierErrorReward.granted, false, 'verifier errors must not grant');
+assertEqual(
+  verifierErrorReward.reason,
+  'EVIDENCE_VERIFIER_ERROR',
+  'verifier exceptions should become stable fail-closed responses',
+);
+assertEqual(
+  (await nonGrantingStore.listEntitlementTransactions()).length,
+  0,
+  'pending and failed evidence verification must not reach the ledger',
+);
+
+const invalidTimestampStore = createInMemoryGameServicesStore();
+const invalidTimestampBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: invalidTimestampStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return {
+        status: 'verified',
+        verificationId: 'provider:purchase:invalid-timestamp',
+        verifiedAt: 'not-a-date',
+      } as const;
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+  },
+});
+const invalidTimestampPurchase = await invalidTimestampBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-invalid-timestamp',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-invalid-timestamp',
+  idempotencyKey: 'purchase-invalid-timestamp',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(invalidTimestampPurchase.verified, false, 'invalid verifier timestamps must reject');
+assertEqual(
+  invalidTimestampPurchase.reason,
+  'EVIDENCE_VERIFIER_ERROR',
+  'invalid verifier timestamps should use the stable verifier error reason',
+);
+assertEqual(
+  (await invalidTimestampStore.listEntitlementTransactions()).length,
+  0,
+  'invalid verifier timestamps must not reach the ledger',
+);
+
+let timeoutSignalAborted = false;
+const timeoutStore = createInMemoryGameServicesStore();
+const timeoutBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: timeoutStore,
+  evidenceVerificationTimeoutMs: 5,
+  evidenceVerifier: {
+    verifyPurchase({ signal }) {
+      return new Promise<never>((_resolve, reject) => {
+        signal.addEventListener('abort', () => {
+          timeoutSignalAborted = signal.aborted;
+          reject(new Error('provider request aborted'));
+        }, { once: true });
+      });
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+  },
+});
+const timeoutPurchase = await timeoutBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-timeout',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-timeout',
+  idempotencyKey: 'purchase-timeout',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(timeoutPurchase.verified, false, 'hung verifiers must fail closed');
+assertEqual(
+  timeoutPurchase.reason,
+  'EVIDENCE_VERIFIER_TIMEOUT',
+  'hung verifiers should expose the stable timeout reason',
+);
+assertEqual(timeoutSignalAborted, true, 'verifier timeout should abort the provider signal');
+assertEqual(
+  (await timeoutStore.listEntitlementTransactions()).length,
+  0,
+  'timed out verifiers must not reach the ledger',
+);
+
+let verifierAvailable = true;
+const retryStore = createInMemoryGameServicesStore();
+const retryBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: retryStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return verifierAvailable
+        ? {
+            status: 'verified',
+            verificationId: 'provider:purchase:retry',
+            verifiedAt: '2026-07-04T00:00:00.000Z',
+          }
+        : { status: 'pending', reason: 'PROVIDER_PENDING' };
+    },
+    async verifyAdReward() {
+      return verifierAvailable
+        ? {
+            status: 'verified',
+            verificationId: 'provider:reward:retry',
+            verifiedAt: '2026-07-04T00:00:00.000Z',
+          }
+        : { status: 'rejected', reason: 'PROVIDER_UNAVAILABLE' };
+    },
+  },
+});
+await retryBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-retry',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-retry',
+  idempotencyKey: 'purchase-retry',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+await retryBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-retry',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-retry',
+  idempotencyKey: 'reward-retry',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
+verifierAvailable = false;
+const purchaseRetry = await retryBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-retry',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-retry-changed',
+  idempotencyKey: 'purchase-retry',
+  purchasedAt: '2026-07-04T00:00:01.000Z',
+});
+const rewardRetry = await retryBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-retry',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-retry-changed',
+  idempotencyKey: 'reward-retry',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+const purchaseProductConflict = await retryBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-retry',
+  productId: 'COINS_DIFFERENT',
+  platformTransactionId: 'txn-retry-conflicting-product',
+  idempotencyKey: 'purchase-retry',
+  purchasedAt: '2026-07-04T00:00:02.000Z',
+});
+const purchaseTargetConflict = await retryBackend.purchases.verifyPurchase({
+  target: 'ios',
+  playerId: 'player-retry',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-retry-conflicting-target',
+  idempotencyKey: 'purchase-retry',
+  purchasedAt: '2026-07-04T00:00:03.000Z',
+});
+const rewardPlacementConflict = await retryBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-retry',
+  placementId: 'DIFFERENT_REWARD',
+  platformImpressionId: 'impression-retry-conflicting-placement',
+  idempotencyKey: 'reward-retry',
+  completedAt: '2026-07-04T00:00:04.000Z',
+});
+const rewardTargetConflict = await retryBackend.adRewards.claimAdReward({
+  target: 'ios',
+  playerId: 'player-retry',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-retry-conflicting-target',
+  idempotencyKey: 'reward-retry',
+  completedAt: '2026-07-04T00:00:05.000Z',
+});
+
+assertEqual(purchaseRetry.verified, true, 'granted purchase retries should bypass provider drift');
+assertEqual(purchaseRetry.alreadyProcessed, true, 'purchase retries should return ledger state');
+assertEqual(rewardRetry.granted, true, 'granted reward retries should bypass provider drift');
+assertEqual(rewardRetry.alreadyProcessed, true, 'reward retries should return ledger state');
+assertEqual(
+  purchaseProductConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'purchase retries must preserve the original product dimension',
+);
+assertEqual(
+  purchaseTargetConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'purchase retries must preserve the original target dimension',
+);
+assertEqual(
+  rewardPlacementConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'reward retries must preserve the original placement dimension',
+);
+assertEqual(
+  rewardTargetConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'reward retries must preserve the original target dimension',
+);
+assertEqual(
+  (await retryStore.listEntitlementTransactions()).length,
+  2,
+  'conflicting idempotency retries must not create ledger entries',
+);
+
+const racedStore = new HiddenIdempotencyLookupStore();
+const racedBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: racedStore,
+  evidenceVerifier,
+});
+await racedBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-raced-retry',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-raced-original',
+  idempotencyKey: 'purchase-raced-retry',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+await racedBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-raced-retry',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-raced-original',
+  idempotencyKey: 'reward-raced-retry',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
+racedStore.hideIdempotencyLookups = true;
+const racedPurchaseConflict = await racedBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-raced-retry',
+  productId: 'COINS_200',
+  platformTransactionId: 'txn-raced-conflict',
+  idempotencyKey: 'purchase-raced-retry',
+  purchasedAt: '2026-07-04T00:00:01.000Z',
+});
+const racedRewardConflict = await racedBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-raced-retry',
+  placementId: 'SECOND_REWARD',
+  platformImpressionId: 'impression-raced-conflict',
+  idempotencyKey: 'reward-raced-retry',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+
+assertEqual(
+  racedPurchaseConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'purchase conflicts that race the initial lookup must fail closed',
+);
+assertEqual(
+  racedRewardConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'reward conflicts that race the initial lookup must fail closed',
+);
+assertEqual(
+  (await racedStore.listEntitlementTransactions()).length,
+  2,
+  'raced idempotency conflicts must retain only the original grants',
+);
+
+const legacyStoreBase = createInMemoryGameServicesStore();
+const legacyCompatibleStore = createLegacyCompatibleStore(legacyStoreBase);
+const legacyCompatibleBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: legacyCompatibleStore,
+  evidenceVerifier,
+});
+const legacyPurchase = await legacyCompatibleBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-legacy-store',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-legacy-store',
+  idempotencyKey: 'purchase-legacy-store',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const legacyPurchaseRetry = await legacyCompatibleBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-legacy-store',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-legacy-store-retry',
+  idempotencyKey: 'purchase-legacy-store',
+  purchasedAt: '2026-07-04T00:00:01.000Z',
+});
+const legacyPurchaseEvidenceReplay = await legacyCompatibleBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-legacy-store',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-legacy-store',
+  idempotencyKey: 'purchase-legacy-store-replayed-evidence',
+  purchasedAt: '2026-07-04T00:00:02.000Z',
+});
+const legacyReward = await legacyCompatibleBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-legacy-store',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-legacy-store',
+  idempotencyKey: 'reward-legacy-store',
+  completedAt: '2026-07-04T00:00:03.000Z',
+});
+const legacyRewardEvidenceReplay = await legacyCompatibleBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-legacy-store',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-legacy-store',
+  idempotencyKey: 'reward-legacy-store-replayed-evidence',
+  completedAt: '2026-07-04T00:00:04.000Z',
+});
+
+assertEqual(legacyPurchase.verified, true, 'legacy-compatible stores should still grant');
+assertEqual(
+  legacyPurchaseRetry.alreadyProcessed,
+  true,
+  'stores without the optional lookup should fall back to the list contract',
+);
+assertEqual(
+  (await legacyCompatibleStore.listEntitlementTransactions())[0]?.evidenceVerificationId,
+  undefined,
+  'the compatibility fixture should omit the new top-level evidence field',
+);
+assertEqual(
+  (await legacyCompatibleStore.listEntitlementTransactions())[0]?.payload.evidenceVerificationId,
+  'development:purchase:android:txn-legacy-store',
+  'the compatibility fixture should retain the legacy payload evidence identity',
+);
+assertEqual(
+  legacyPurchaseEvidenceReplay.reason,
+  'EVIDENCE_ALREADY_PROCESSED',
+  'compatible stores should reject replayed purchase evidence across new keys',
+);
+assertEqual(legacyReward.granted, true, 'legacy-compatible stores should grant rewards');
+assertEqual(
+  legacyRewardEvidenceReplay.reason,
+  'EVIDENCE_ALREADY_PROCESSED',
+  'compatible stores should reject replayed reward evidence across new keys',
+);
+assertEqual(
+  (await legacyCompatibleStore.listEntitlementTransactions()).length,
+  2,
+  'compatible store replay checks should retain one grant per evidence identity',
+);
+
+const concurrentLegacyStoreBase = createInMemoryGameServicesStore();
+const concurrentLegacyStore = createLegacyCompatibleStore(concurrentLegacyStoreBase);
+const concurrentLegacyBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: concurrentLegacyStore,
+  evidenceVerifier,
+});
+const concurrentLegacyPurchases = await Promise.all([
+  concurrentLegacyBackend.purchases.verifyPurchase({
+    target: 'android',
+    playerId: 'player-concurrent-legacy-store',
+    productId: 'COINS_100',
+    platformTransactionId: 'txn-concurrent-legacy-store',
+    idempotencyKey: 'purchase-concurrent-legacy-store-1',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }),
+  concurrentLegacyBackend.purchases.verifyPurchase({
+    target: 'android',
+    playerId: 'player-concurrent-legacy-store',
+    productId: 'COINS_100',
+    platformTransactionId: 'txn-concurrent-legacy-store',
+    idempotencyKey: 'purchase-concurrent-legacy-store-2',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }),
+]);
+
+assertEqual(
+  concurrentLegacyPurchases.filter((result) => result.verified).length,
+  1,
+  'compatible stores should grant concurrent evidence only once per process',
+);
+assertEqual(
+  concurrentLegacyPurchases.filter((result) => result.reason === 'EVIDENCE_ALREADY_PROCESSED')
+    .length,
+  1,
+  'compatible stores should reject the concurrent replay',
+);
+assertEqual(
+  (await concurrentLegacyStore.listEntitlementTransactions()).length,
+  1,
+  'concurrent compatible-store replays must write one grant',
+);
+
+const concurrentRetryStore = createInMemoryGameServicesStore();
+const concurrentRetryBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: concurrentRetryStore,
+  evidenceVerifier,
+});
+const concurrentPurchaseRetryRequest = {
+  target: 'android',
+  playerId: 'player-concurrent-retry',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-concurrent-retry',
+  idempotencyKey: 'purchase-concurrent-retry',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+} as const;
+const concurrentRewardRetryRequest = {
+  target: 'android',
+  playerId: 'player-concurrent-retry',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-concurrent-retry',
+  idempotencyKey: 'reward-concurrent-retry',
+  completedAt: '2026-07-04T00:00:00.000Z',
+} as const;
+const concurrentPurchaseRetries = await Promise.all([
+  concurrentRetryBackend.purchases.verifyPurchase(concurrentPurchaseRetryRequest),
+  concurrentRetryBackend.purchases.verifyPurchase(concurrentPurchaseRetryRequest),
+]);
+const concurrentRewardRetries = await Promise.all([
+  concurrentRetryBackend.adRewards.claimAdReward(concurrentRewardRetryRequest),
+  concurrentRetryBackend.adRewards.claimAdReward(concurrentRewardRetryRequest),
+]);
+
+assertEqual(
+  concurrentPurchaseRetries.every((result) => result.verified),
+  true,
+  'concurrent purchase retries should both report the successful grant',
+);
+assertEqual(
+  concurrentPurchaseRetries.filter((result) => result.alreadyProcessed).length,
+  1,
+  'one concurrent purchase retry should return the original ledger result',
+);
+assertEqual(
+  concurrentRewardRetries.every((result) => result.granted),
+  true,
+  'concurrent reward retries should both report the successful grant',
+);
+assertEqual(
+  concurrentRewardRetries.filter((result) => result.alreadyProcessed).length,
+  1,
+  'one concurrent reward retry should return the original ledger result',
+);
+assertEqual(
+  (await concurrentRetryStore.listEntitlementTransactions()).length,
+  2,
+  'concurrent retries should write one ledger row per grant source',
+);
+
+const platformFallbackStore = createLegacyPlatformEvidenceStore(createInMemoryGameServicesStore());
+let platformFallbackPurchaseVerification = 0;
+let platformFallbackRewardVerification = 0;
+const platformFallbackBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: platformFallbackStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      platformFallbackPurchaseVerification += 1;
+      return {
+        status: 'verified',
+        verificationId: `provider:purchase:unstable:${platformFallbackPurchaseVerification}`,
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+    async verifyAdReward() {
+      platformFallbackRewardVerification += 1;
+      return {
+        status: 'verified',
+        verificationId: `provider:reward:unstable:${platformFallbackRewardVerification}`,
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+  },
+});
+const platformFallbackPurchases = await Promise.all([
+  platformFallbackBackend.purchases.verifyPurchase({
+    target: 'android',
+    playerId: 'player-platform-fallback',
+    productId: 'COINS_100',
+    platformTransactionId: 'txn-platform-fallback',
+    idempotencyKey: 'purchase-platform-fallback-1',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }),
+  platformFallbackBackend.purchases.verifyPurchase({
+    target: 'android',
+    playerId: 'player-platform-fallback',
+    productId: 'COINS_100',
+    platformTransactionId: 'txn-platform-fallback',
+    idempotencyKey: 'purchase-platform-fallback-2',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }),
+]);
+const platformFallbackRewards = await Promise.all([
+  platformFallbackBackend.adRewards.claimAdReward({
+    target: 'android',
+    playerId: 'player-platform-fallback',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    platformImpressionId: 'impression-platform-fallback',
+    idempotencyKey: 'reward-platform-fallback-1',
+    completedAt: '2026-07-04T00:00:00.000Z',
+  }),
+  platformFallbackBackend.adRewards.claimAdReward({
+    target: 'android',
+    playerId: 'player-platform-fallback',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    platformImpressionId: 'impression-platform-fallback',
+    idempotencyKey: 'reward-platform-fallback-2',
+    completedAt: '2026-07-04T00:00:00.000Z',
+  }),
+]);
+
+assertEqual(
+  platformFallbackPurchases.filter((result) => result.verified).length,
+  1,
+  'platform-evidence locks should grant one concurrent purchase with unstable authority ids',
+);
+assertEqual(
+  platformFallbackPurchases.filter((result) => result.reason === 'EVIDENCE_ALREADY_PROCESSED')
+    .length,
+  1,
+  'platform-evidence locks should reject the other concurrent purchase',
+);
+assertEqual(
+  platformFallbackRewards.filter((result) => result.granted).length,
+  1,
+  'platform-evidence locks should grant one concurrent reward with unstable authority ids',
+);
+assertEqual(
+  platformFallbackRewards.filter((result) => result.reason === 'EVIDENCE_ALREADY_PROCESSED')
+    .length,
+  1,
+  'platform-evidence locks should reject the other concurrent reward',
+);
+assertEqual(
+  (await platformFallbackStore.listEntitlementTransactions()).length,
+  2,
+  'platform-evidence fallback races should retain one grant per source identity',
+);
+
+const historicalEvidenceStore = createInMemoryGameServicesStore();
+await historicalEvidenceStore.recordEntitlementGrant({
+  playerId: 'player-historical-evidence',
+  grantId: 'COINS_100',
+  source: 'purchase',
+  idempotencyKey: 'purchase-historical-original',
+  grantedAt: '2026-07-03T00:00:00.000Z',
+  payload: {
+    target: 'android',
+    platformTransactionId: 'txn-historical-evidence',
+  },
+});
+await historicalEvidenceStore.recordEntitlementGrant({
+  playerId: 'player-historical-evidence',
+  grantId: 'CONTINUE_AFTER_FAIL',
+  source: 'ad_reward',
+  idempotencyKey: 'reward-historical-original',
+  grantedAt: '2026-07-03T00:00:00.000Z',
+  payload: {
+    target: 'android',
+    platformImpressionId: 'impression-historical-evidence',
+  },
+});
+const historicalEvidenceBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: historicalEvidenceStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return {
+        status: 'verified',
+        verificationId: 'provider:purchase:new-authority-id',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+    async verifyAdReward() {
+      return {
+        status: 'verified',
+        verificationId: 'provider:reward:new-authority-id',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+  },
+});
+const historicalPurchaseReplay = await historicalEvidenceBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-historical-evidence',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-historical-evidence',
+  idempotencyKey: 'purchase-historical-replay',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const historicalRewardReplay = await historicalEvidenceBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-historical-evidence',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-historical-evidence',
+  idempotencyKey: 'reward-historical-replay',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(
+  historicalPurchaseReplay.reason,
+  'EVIDENCE_ALREADY_PROCESSED',
+  'historical purchase platform evidence should reject a new authority identity',
+);
+assertEqual(
+  historicalRewardReplay.reason,
+  'EVIDENCE_ALREADY_PROCESSED',
+  'historical reward platform evidence should reject a new authority identity',
+);
+assertEqual(
+  (await historicalEvidenceStore.listEntitlementTransactions()).length,
+  2,
+  'historical platform evidence replays must not write new grants',
+);
+
+const replayStore = createInMemoryGameServicesStore();
+const replayBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: replayStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return {
+        status: 'verified',
+        verificationId: 'provider:purchase:replayed',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+    async verifyAdReward() {
+      return {
+        status: 'verified',
+        verificationId: 'provider:reward:replayed',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+  },
+});
+await replayBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-replay',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-replayed',
+  idempotencyKey: 'purchase-replay-1',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const replayedPurchase = await replayBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-replay',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-replayed',
+  idempotencyKey: 'purchase-replay-2',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+await replayBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-replay',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-replayed',
+  idempotencyKey: 'reward-replay-1',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
+const replayedReward = await replayBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'another-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-replayed',
+  idempotencyKey: 'reward-replay-2',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(replayedPurchase.verified, false, 'replayed purchase evidence must not grant twice');
+assertEqual(
+  replayedPurchase.reason,
+  'EVIDENCE_ALREADY_PROCESSED',
+  'purchase evidence replay should expose a stable reason',
+);
+assertEqual(replayedReward.granted, false, 'replayed reward evidence must not grant twice');
+assertEqual(
+  (await replayStore.listEntitlementTransactions()).length,
+  2,
+  'evidence replay protection should retain only one grant per source identity',
+);
+
+const invalidPayloadStore = createInMemoryGameServicesStore();
+const invalidPayloadBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: invalidPayloadStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return {
+        status: 'verified',
+        verificationId: 'provider:purchase:invalid-payload',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+        payload: { invalidNumber: Number.POSITIVE_INFINITY },
+      } as const;
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+  },
+});
+const invalidPayloadPurchase = await invalidPayloadBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-invalid-payload',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-invalid-payload',
+  idempotencyKey: 'purchase-invalid-payload',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(
+  invalidPayloadPurchase.verified,
+  false,
+  'non-finite verifier payloads must fail closed',
+);
+assertEqual(
+  invalidPayloadPurchase.reason,
+  'EVIDENCE_VERIFIER_ERROR',
+  'malformed verifier decisions should use the verifier error reason',
+);
+assertEqual(
+  (await invalidPayloadStore.listEntitlementTransactions()).length,
+  0,
+  'malformed verifier payloads must not reach the ledger',
+);
+
+const nonRecordPayloadStore = createInMemoryGameServicesStore();
+const nonRecordPayloadBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: nonRecordPayloadStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return {
+        status: 'verified',
+        verificationId: 'provider:purchase:non-record-payload',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+        payload: 'not-a-record',
+      } as unknown as EvidenceVerificationDecision;
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+  },
+});
+const nonRecordPayloadPurchase = await nonRecordPayloadBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-non-record-payload',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-non-record-payload',
+  idempotencyKey: 'purchase-non-record-payload',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(nonRecordPayloadPurchase.verified, false, 'non-record payloads must fail closed');
+assertEqual(
+  nonRecordPayloadPurchase.reason,
+  'EVIDENCE_VERIFIER_ERROR',
+  'non-record payloads should use the stable verifier error reason',
+);
+assertEqual(
+  (await nonRecordPayloadStore.listEntitlementTransactions()).length,
+  0,
+  'non-record verifier payloads must not reach the ledger',
+);
+
 const rpcStore = createInMemoryGameServicesStore();
 const rpcBackend = createGameServicesBackend({
   catalog,
   placements,
+  evidenceVerifier,
   store: rpcStore,
   now: () => '2026-07-04T00:00:00.000Z',
   version: 'test-rpc',
@@ -234,6 +1243,7 @@ const collisionStore = createInMemoryGameServicesStore();
 const collisionBackend = createGameServicesBackend({
   catalog,
   placements,
+  evidenceVerifier,
   store: collisionStore,
   now: () => '2026-07-04T00:00:00.000Z',
 });
@@ -293,6 +1303,7 @@ const idempotencyStore = createInMemoryGameServicesStore();
 const idempotencyBackend = createGameServicesBackend({
   catalog,
   placements,
+  evidenceVerifier,
   store: idempotencyStore,
   now: () => '2026-07-04T00:00:00.000Z',
 });
@@ -483,6 +1494,7 @@ const analyticsEvents: AnalyticsEvent[] = [];
 const analyticsBackend = createGameServicesBackend({
   catalog,
   placements,
+  evidenceVerifier,
   analyticsSessionId: 'server-session',
   analytics: {
     track(event) {
@@ -612,6 +1624,7 @@ assertEqual(
 const failingAnalyticsBackend = createGameServicesBackend({
   catalog,
   placements,
+  evidenceVerifier,
   analytics: {
     track() {
       throw new Error('analytics sink unavailable');

@@ -14,6 +14,11 @@ import {
 } from './client';
 import { gameServicesContract, type GameServicesHealthResponse } from './contract';
 import {
+  createRejectingGameServicesEvidenceVerifier,
+  type EvidenceVerificationDecision,
+  type GameServicesEvidenceVerifier,
+} from './evidence-verification';
+import {
   assertClaimAdRewardRequest,
   assertClaimAdRewardResponse,
   assertEntitlementLedgerGrant,
@@ -47,6 +52,8 @@ export interface CreateGameServicesBackendInput {
   readonly analyticsSessionId?: string;
   readonly now?: () => string;
   readonly version?: string;
+  readonly evidenceVerifier?: GameServicesEvidenceVerifier;
+  readonly evidenceVerificationTimeoutMs?: number;
 }
 
 export interface GameServicesBackendApiHandler {
@@ -62,6 +69,17 @@ export interface GameServicesBackendErrorResponse {
 
 export interface GameServicesStore {
   recordEntitlementGrant(input: EntitlementLedgerGrant): Promise<EntitlementLedgerResult>;
+  findEntitlementTransactionByIdempotency?(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly playerId: string;
+    readonly idempotencyKey: string;
+  }): Promise<ProductGrantTransaction | undefined>;
+  findEntitlementTransactionByEvidenceVerificationId?(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly evidenceVerificationId: string;
+  }): Promise<ProductGrantTransaction | undefined>;
+  findEntitlementTransactionByPlatformEvidence?(input: EntitlementPlatformEvidenceIdentity):
+    Promise<ProductGrantTransaction | undefined>;
   getEntitlementTransaction(
     ledgerEntryId: string,
   ): Promise<ProductGrantTransaction | undefined>;
@@ -74,6 +92,12 @@ export interface GameServicesStore {
     ledgerEntryId: string,
   ): Promise<LeaderboardScoreTransaction | undefined>;
   listLeaderboardTransactions(): Promise<readonly LeaderboardScoreTransaction[]>;
+}
+
+export interface EntitlementPlatformEvidenceIdentity {
+  readonly source: Extract<EntitlementLedgerGrant['source'], 'purchase' | 'ad_reward'>;
+  readonly target: string;
+  readonly platformEvidenceId: string;
 }
 
 export interface CreateGameServicesFetchHandlerOptions {
@@ -93,6 +117,11 @@ export interface GameServicesOrpcContext {
 
 export class InMemoryGameServicesStore implements GameServicesStore {
   private readonly entitlementTransactionsByKey = new Map<string, ProductGrantTransaction>();
+  private readonly entitlementTransactionsByEvidence = new Map<string, ProductGrantTransaction>();
+  private readonly entitlementTransactionsByPlatformEvidence = new Map<
+    string,
+    ProductGrantTransaction
+  >();
   private readonly entitlementTransactionsById = new Map<string, ProductGrantTransaction>();
   private readonly leaderboardTransactionsByRun = new Map<string, LeaderboardScoreTransaction>();
   private readonly leaderboardTransactionsById = new Map<string, LeaderboardScoreTransaction>();
@@ -111,14 +140,73 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       });
     }
 
+    if (grant.evidenceVerificationId !== undefined) {
+      const evidenceKey = createEntitlementEvidenceKey({
+        source: grant.source,
+        evidenceVerificationId: grant.evidenceVerificationId,
+      });
+
+      if (this.entitlementTransactionsByEvidence.has(evidenceKey)) {
+        throw new EvidenceAlreadyProcessedError();
+      }
+    }
+
+    const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
+    if (
+      platformEvidenceIdentity !== undefined
+      && this.entitlementTransactionsByPlatformEvidence.has(
+        createEntitlementPlatformEvidenceKey(platformEvidenceIdentity),
+      )
+    ) {
+      throw new EvidenceAlreadyProcessedError();
+    }
+
     const transaction = createEntitlementTransaction(grant);
     this.entitlementTransactionsByKey.set(key, transaction);
     this.entitlementTransactionsById.set(transaction.ledgerEntryId, transaction);
+    if (grant.evidenceVerificationId !== undefined) {
+      this.entitlementTransactionsByEvidence.set(
+        createEntitlementEvidenceKey({
+          source: grant.source,
+          evidenceVerificationId: grant.evidenceVerificationId,
+        }),
+        transaction,
+      );
+    }
+    if (platformEvidenceIdentity !== undefined) {
+      this.entitlementTransactionsByPlatformEvidence.set(
+        createEntitlementPlatformEvidenceKey(platformEvidenceIdentity),
+        transaction,
+      );
+    }
 
     return assertEntitlementLedgerResult({
       ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: false,
     });
+  }
+
+  async findEntitlementTransactionByIdempotency(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly playerId: string;
+    readonly idempotencyKey: string;
+  }): Promise<ProductGrantTransaction | undefined> {
+    return this.entitlementTransactionsByKey.get(createEntitlementIdempotencyKey(input));
+  }
+
+  async findEntitlementTransactionByEvidenceVerificationId(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly evidenceVerificationId: string;
+  }): Promise<ProductGrantTransaction | undefined> {
+    return this.entitlementTransactionsByEvidence.get(createEntitlementEvidenceKey(input));
+  }
+
+  async findEntitlementTransactionByPlatformEvidence(
+    input: EntitlementPlatformEvidenceIdentity,
+  ): Promise<ProductGrantTransaction | undefined> {
+    return this.entitlementTransactionsByPlatformEvidence.get(
+      createEntitlementPlatformEvidenceKey(input),
+    );
   }
 
   async getEntitlementTransaction(
@@ -194,6 +282,13 @@ export class InMemoryGameServicesStore implements GameServicesStore {
   }
 }
 
+export class EvidenceAlreadyProcessedError extends Error {
+  constructor() {
+    super('Evidence verification identity has already been processed.');
+    this.name = 'EvidenceAlreadyProcessedError';
+  }
+}
+
 export function createInMemoryGameServicesStore(): InMemoryGameServicesStore {
   return new InMemoryGameServicesStore();
 }
@@ -204,6 +299,10 @@ export function createGameServicesBackend(
   const store = input.store ?? createInMemoryGameServicesStore();
   const now = input.now ?? (() => new Date().toISOString());
   const version = input.version ?? '0.0.0';
+  const evidenceVerifier = input.evidenceVerifier ?? createRejectingGameServicesEvidenceVerifier();
+  const evidenceVerificationTimeoutMs = resolveEvidenceVerificationTimeout(
+    input.evidenceVerificationTimeoutMs,
+  );
   const analytics = createAnalyticsReporter({
     target: 'server',
     sessionId: input.analyticsSessionId ?? 'game-services',
@@ -219,6 +318,8 @@ export function createGameServicesBackend(
           catalog: input.catalog,
           store,
           now,
+          evidenceVerifier,
+          evidenceVerificationTimeoutMs,
         });
 
         await analytics.track({
@@ -242,6 +343,8 @@ export function createGameServicesBackend(
           placements: input.placements,
           store,
           now,
+          evidenceVerifier,
+          evidenceVerificationTimeoutMs,
         });
 
         await analytics.track({
@@ -432,9 +535,36 @@ async function verifyPurchaseWithStore(
     readonly catalog: ProductCatalog;
     readonly store: GameServicesStore;
     readonly now: () => string;
+    readonly evidenceVerifier: GameServicesEvidenceVerifier;
+    readonly evidenceVerificationTimeoutMs: number;
   },
 ): Promise<VerifyPurchaseResponse> {
   const request = assertVerifyPurchaseRequest(input);
+  const retryIdentity = {
+    source: 'purchase',
+    playerId: request.playerId,
+    idempotencyKey: request.idempotencyKey,
+    grantId: request.productId,
+    target: request.target,
+  } as const;
+  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
+
+  if (existing !== undefined) {
+    if (!matchesEntitlementRetry(existing, retryIdentity)) {
+      return assertVerifyPurchaseResponse({
+        verified: false,
+        alreadyProcessed: false,
+        reason: 'IDEMPOTENCY_KEY_CONFLICT',
+      });
+    }
+
+    return assertVerifyPurchaseResponse({
+      verified: true,
+      ledgerEntryId: existing.ledgerEntryId,
+      alreadyProcessed: true,
+    });
+  }
+
   const product = context.catalog.products.find((entry) => entry.id === request.productId);
 
   if (product === undefined) {
@@ -455,26 +585,69 @@ async function verifyPurchaseWithStore(
     });
   }
 
-  const grant = await context.store.recordEntitlementGrant({
+  const verification = await verifyEvidence((signal) => {
+    return context.evidenceVerifier.verifyPurchase({
+      request,
+      product,
+      platformProductId,
+      signal,
+      timeoutMs: context.evidenceVerificationTimeoutMs,
+    });
+  }, context.evidenceVerificationTimeoutMs);
+
+  if (verification.status !== 'verified') {
+    return assertVerifyPurchaseResponse({
+      verified: false,
+      alreadyProcessed: false,
+      reason: verification.status === 'pending'
+        ? (verification.reason ?? 'EVIDENCE_PENDING')
+        : verification.reason,
+    });
+  }
+
+  const grant = await recordEntitlementGrantWithEvidence(context.store, {
     playerId: request.playerId,
     grantId: product.id,
     source: 'purchase',
     idempotencyKey: request.idempotencyKey,
     grantedAt: context.now(),
     grant: product.grant,
+    evidenceVerificationId: verification.verificationId,
     payload: {
+      ...verification.payload,
       target: request.target,
       productId: request.productId,
       platformProductId,
       platformTransactionId: request.platformTransactionId,
       purchasedAt: request.purchasedAt,
+      evidenceVerificationId: verification.verificationId,
+      evidenceVerifiedAt: verification.verifiedAt,
     },
   });
 
+  if (grant.status === 'evidence_already_processed') {
+    return assertVerifyPurchaseResponse({
+      verified: false,
+      alreadyProcessed: false,
+      reason: 'EVIDENCE_ALREADY_PROCESSED',
+    });
+  }
+
+  if (
+    grant.result.alreadyProcessed
+    && !await recordedEntitlementMatchesRetry(context.store, grant.result, retryIdentity)
+  ) {
+    return assertVerifyPurchaseResponse({
+      verified: false,
+      alreadyProcessed: false,
+      reason: 'IDEMPOTENCY_KEY_CONFLICT',
+    });
+  }
+
   return assertVerifyPurchaseResponse({
     verified: true,
-    ledgerEntryId: grant.ledgerEntryId,
-    alreadyProcessed: grant.alreadyProcessed,
+    ledgerEntryId: grant.result.ledgerEntryId,
+    alreadyProcessed: grant.result.alreadyProcessed,
   });
 }
 
@@ -484,9 +657,36 @@ async function claimAdRewardWithStore(
     readonly placements: AdPlacements;
     readonly store: GameServicesStore;
     readonly now: () => string;
+    readonly evidenceVerifier: GameServicesEvidenceVerifier;
+    readonly evidenceVerificationTimeoutMs: number;
   },
 ): Promise<ClaimAdRewardResponse> {
   const request = assertClaimAdRewardRequest(input);
+  const retryIdentity = {
+    source: 'ad_reward',
+    playerId: request.playerId,
+    idempotencyKey: request.idempotencyKey,
+    grantId: request.placementId,
+    target: request.target,
+  } as const;
+  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
+
+  if (existing !== undefined) {
+    if (!matchesEntitlementRetry(existing, retryIdentity)) {
+      return assertClaimAdRewardResponse({
+        granted: false,
+        alreadyProcessed: false,
+        reason: 'IDEMPOTENCY_KEY_CONFLICT',
+      });
+    }
+
+    return assertClaimAdRewardResponse({
+      granted: true,
+      ledgerEntryId: existing.ledgerEntryId,
+      alreadyProcessed: true,
+    });
+  }
+
   const placement = context.placements.placements.find((entry) => entry.id === request.placementId);
 
   if (placement === undefined || placement.type !== 'rewarded' || placement.reward === undefined) {
@@ -497,12 +697,36 @@ async function claimAdRewardWithStore(
     });
   }
 
+  const platformPlacementId = placement.platformPlacementIds[request.target];
+  const verification = await verifyEvidence((signal) => {
+    return context.evidenceVerifier.verifyAdReward({
+      request,
+      placement,
+      ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
+      signal,
+      timeoutMs: context.evidenceVerificationTimeoutMs,
+    });
+  }, context.evidenceVerificationTimeoutMs);
+
+  if (verification.status !== 'verified') {
+    return assertClaimAdRewardResponse({
+      granted: false,
+      alreadyProcessed: false,
+      reason: verification.status === 'pending'
+        ? (verification.reason ?? 'EVIDENCE_PENDING')
+        : verification.reason,
+    });
+  }
+
   const payload: EntitlementLedgerPayload = {
+    ...verification.payload,
     target: request.target,
     placementId: request.placementId,
     rewardType: placement.reward.type,
     amount: placement.reward.amount,
     completedAt: request.completedAt,
+    evidenceVerificationId: verification.verificationId,
+    evidenceVerifiedAt: verification.verifiedAt,
   };
 
   if (placement.reward.type === 'currency') {
@@ -513,20 +737,391 @@ async function claimAdRewardWithStore(
     payload.platformImpressionId = request.platformImpressionId;
   }
 
-  const result = await context.store.recordEntitlementGrant({
+  const result = await recordEntitlementGrantWithEvidence(context.store, {
     playerId: request.playerId,
     grantId: request.placementId,
     source: 'ad_reward',
     idempotencyKey: request.idempotencyKey,
     grantedAt: context.now(),
+    evidenceVerificationId: verification.verificationId,
     payload,
   });
 
+  if (result.status === 'evidence_already_processed') {
+    return assertClaimAdRewardResponse({
+      granted: false,
+      alreadyProcessed: false,
+      reason: 'EVIDENCE_ALREADY_PROCESSED',
+    });
+  }
+
+  if (
+    result.result.alreadyProcessed
+    && !await recordedEntitlementMatchesRetry(context.store, result.result, retryIdentity)
+  ) {
+    return assertClaimAdRewardResponse({
+      granted: false,
+      alreadyProcessed: false,
+      reason: 'IDEMPOTENCY_KEY_CONFLICT',
+    });
+  }
+
   return assertClaimAdRewardResponse({
     granted: true,
-    ledgerEntryId: result.ledgerEntryId,
-    alreadyProcessed: result.alreadyProcessed,
+    ledgerEntryId: result.result.ledgerEntryId,
+    alreadyProcessed: result.result.alreadyProcessed,
   });
+}
+
+async function verifyEvidence(
+  verify: (signal: AbortSignal) => Promise<EvidenceVerificationDecision>,
+  timeoutMs: number,
+): Promise<EvidenceVerificationDecision> {
+  const controller = new AbortController();
+  const timeoutDecision = {
+    status: 'rejected',
+    reason: 'EVIDENCE_VERIFIER_TIMEOUT',
+  } as const satisfies EvidenceVerificationDecision;
+  let timedOut = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      verify(controller.signal)
+        .then(assertEvidenceVerificationDecision)
+        .catch((error: unknown) => {
+          if (timedOut) {
+            return timeoutDecision;
+          }
+
+          throw error;
+        }),
+      new Promise<EvidenceVerificationDecision>((resolve) => {
+        timeout = setTimeout(() => {
+          timedOut = true;
+          resolve(timeoutDecision);
+          controller.abort();
+        }, timeoutMs);
+      }),
+    ]);
+  } catch {
+    return {
+      status: 'rejected',
+      reason: 'EVIDENCE_VERIFIER_ERROR',
+    };
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function assertEvidenceVerificationDecision(
+  decision: EvidenceVerificationDecision,
+): EvidenceVerificationDecision {
+  if (decision.status === 'verified') {
+    assertNonEmptyDecisionString(decision.verificationId, 'verificationId');
+    assertNonEmptyDecisionString(decision.verifiedAt, 'verifiedAt');
+    if (!Number.isFinite(Date.parse(decision.verifiedAt))) {
+      throw new Error('Evidence verification verifiedAt must be a valid timestamp.');
+    }
+    if (decision.payload !== undefined) {
+      if (
+        typeof decision.payload !== 'object'
+        || decision.payload === null
+        || Array.isArray(decision.payload)
+      ) {
+        throw new Error('Evidence verification payload must be a record.');
+      }
+
+      for (const [key, value] of Object.entries(decision.payload)) {
+        if (
+          typeof value !== 'string'
+          && (typeof value !== 'number' || !Number.isFinite(value))
+          && typeof value !== 'boolean'
+        ) {
+          throw new Error(`Evidence verification payload.${key} must be primitive.`);
+        }
+      }
+    }
+    return decision;
+  }
+
+  if (decision.status === 'pending') {
+    if (decision.reason !== undefined) {
+      assertNonEmptyDecisionString(decision.reason, 'reason');
+    }
+    return decision;
+  }
+
+  if (decision.status === 'rejected') {
+    assertNonEmptyDecisionString(decision.reason, 'reason');
+    return decision;
+  }
+
+  throw new Error('Unknown evidence verification status.');
+}
+
+async function recordEntitlementGrantWithEvidence(
+  store: GameServicesStore,
+  grant: EntitlementLedgerGrant,
+): Promise<
+  | { readonly status: 'recorded'; readonly result: EntitlementLedgerResult }
+  | { readonly status: 'evidence_already_processed' }
+> {
+  const evidenceVerificationId = grant.evidenceVerificationId;
+  if (evidenceVerificationId !== undefined) {
+    const evidenceIdentity = {
+      source: grant.source,
+      evidenceVerificationId,
+    } as const;
+    const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
+    const lockKeys = [createEntitlementEvidenceKey(evidenceIdentity)];
+    if (platformEvidenceIdentity !== undefined) {
+      lockKeys.push(createEntitlementPlatformEvidenceKey(platformEvidenceIdentity));
+    }
+
+    return withEntitlementEvidenceLocks(store, lockKeys, async () => {
+      const authorityMatch = await findEntitlementTransactionByEvidenceVerificationId(store, {
+        source: grant.source,
+        evidenceVerificationId,
+      });
+      const existing = authorityMatch ?? (platformEvidenceIdentity === undefined
+        ? undefined
+        : await findEntitlementTransactionByPlatformEvidence(
+            store,
+            platformEvidenceIdentity,
+          ));
+
+      if (existing !== undefined) {
+        if (
+          existing.source === grant.source
+          && existing.playerId === grant.playerId
+          && existing.idempotencyKey === grant.idempotencyKey
+        ) {
+          return {
+            status: 'recorded',
+            result: assertEntitlementLedgerResult({
+              ledgerEntryId: existing.ledgerEntryId,
+              alreadyProcessed: true,
+            }),
+          };
+        }
+
+        return { status: 'evidence_already_processed' };
+      }
+
+      return recordEntitlementGrantUnchecked(store, grant);
+    });
+  }
+
+  return recordEntitlementGrantUnchecked(store, grant);
+}
+
+async function recordEntitlementGrantUnchecked(
+  store: GameServicesStore,
+  grant: EntitlementLedgerGrant,
+): Promise<
+  | { readonly status: 'recorded'; readonly result: EntitlementLedgerResult }
+  | { readonly status: 'evidence_already_processed' }
+> {
+  try {
+    return {
+      status: 'recorded',
+      result: await store.recordEntitlementGrant(grant),
+    };
+  } catch (error) {
+    if (error instanceof EvidenceAlreadyProcessedError) {
+      return { status: 'evidence_already_processed' };
+    }
+
+    throw error;
+  }
+}
+
+const entitlementEvidenceLocks = new WeakMap<
+  GameServicesStore,
+  Map<string, Promise<void>>
+>();
+
+async function withEntitlementEvidenceLocks<T>(
+  store: GameServicesStore,
+  lockKeys: readonly string[],
+  task: () => Promise<T>,
+): Promise<T> {
+  const orderedLockKeys = [...new Set(lockKeys)].sort((left, right) => left.localeCompare(right));
+
+  async function runWithLock(index: number): Promise<T> {
+    const lockKey = orderedLockKeys[index];
+    return lockKey === undefined
+      ? task()
+      : withEntitlementEvidenceLockKey(store, lockKey, () => runWithLock(index + 1));
+  }
+
+  return runWithLock(0);
+}
+
+async function withEntitlementEvidenceLockKey<T>(
+  store: GameServicesStore,
+  lockKey: string,
+  task: () => Promise<T>,
+): Promise<T> {
+  const storeLocks = entitlementEvidenceLocks.get(store) ?? new Map<string, Promise<void>>();
+  entitlementEvidenceLocks.set(store, storeLocks);
+
+  const previous = storeLocks.get(lockKey) ?? Promise.resolve();
+  const gate = createPromiseGate();
+  const current = previous.then(() => gate.promise);
+  storeLocks.set(lockKey, current);
+
+  await previous;
+  try {
+    return await task();
+  } finally {
+    gate.release();
+    if (storeLocks.get(lockKey) === current) {
+      storeLocks.delete(lockKey);
+      if (storeLocks.size === 0) {
+        entitlementEvidenceLocks.delete(store);
+      }
+    }
+  }
+}
+
+function createPromiseGate(): { readonly promise: Promise<void>; readonly release: () => void } {
+  let release = (): void => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  return { promise, release };
+}
+
+interface EntitlementRetryIdentity {
+  readonly source: EntitlementLedgerGrant['source'];
+  readonly playerId: string;
+  readonly idempotencyKey: string;
+  readonly grantId: string;
+  readonly target: string;
+}
+
+async function findEntitlementTransactionByIdempotency(
+  store: GameServicesStore,
+  identity: EntitlementRetryIdentity,
+): Promise<ProductGrantTransaction | undefined> {
+  if (store.findEntitlementTransactionByIdempotency !== undefined) {
+    return store.findEntitlementTransactionByIdempotency(identity);
+  }
+
+  const transactions = await store.listEntitlementTransactions();
+  return transactions.find((transaction) => {
+    return transaction.source === identity.source
+      && transaction.playerId === identity.playerId
+      && transaction.idempotencyKey === identity.idempotencyKey;
+  });
+}
+
+async function findEntitlementTransactionByEvidenceVerificationId(
+  store: GameServicesStore,
+  input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly evidenceVerificationId: string;
+  },
+): Promise<ProductGrantTransaction | undefined> {
+  if (store.findEntitlementTransactionByEvidenceVerificationId !== undefined) {
+    return store.findEntitlementTransactionByEvidenceVerificationId(input);
+  }
+
+  const transactions = await store.listEntitlementTransactions();
+  return transactions.find((transaction) => {
+    const storedEvidenceVerificationId = transaction.evidenceVerificationId
+      ?? transaction.payload.evidenceVerificationId;
+
+    return transaction.source === input.source
+      && storedEvidenceVerificationId === input.evidenceVerificationId;
+  });
+}
+
+async function findEntitlementTransactionByPlatformEvidence(
+  store: GameServicesStore,
+  input: EntitlementPlatformEvidenceIdentity,
+): Promise<ProductGrantTransaction | undefined> {
+  if (store.findEntitlementTransactionByPlatformEvidence !== undefined) {
+    return store.findEntitlementTransactionByPlatformEvidence(input);
+  }
+
+  const transactions = await store.listEntitlementTransactions();
+  return transactions.find((transaction) => {
+    const identity = getEntitlementPlatformEvidenceIdentity(transaction);
+    return identity !== undefined
+      && identity.source === input.source
+      && identity.target === input.target
+      && identity.platformEvidenceId === input.platformEvidenceId;
+  });
+}
+
+function getEntitlementPlatformEvidenceIdentity(
+  transaction: Pick<ProductGrantTransaction, 'source' | 'payload'>,
+): EntitlementPlatformEvidenceIdentity | undefined {
+  if (transaction.source !== 'purchase' && transaction.source !== 'ad_reward') {
+    return undefined;
+  }
+
+  const target = transaction.payload.target;
+  const platformEvidenceId = transaction.source === 'purchase'
+    ? transaction.payload.platformTransactionId
+    : transaction.payload.platformImpressionId;
+
+  if (
+    typeof target !== 'string'
+    || target.length === 0
+    || typeof platformEvidenceId !== 'string'
+    || platformEvidenceId.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    source: transaction.source,
+    target,
+    platformEvidenceId,
+  };
+}
+
+async function recordedEntitlementMatchesRetry(
+  store: GameServicesStore,
+  result: EntitlementLedgerResult,
+  identity: EntitlementRetryIdentity,
+): Promise<boolean> {
+  const transaction = await store.getEntitlementTransaction(result.ledgerEntryId);
+  return transaction !== undefined && matchesEntitlementRetry(transaction, identity);
+}
+
+function matchesEntitlementRetry(
+  transaction: ProductGrantTransaction,
+  identity: EntitlementRetryIdentity,
+): boolean {
+  return transaction.source === identity.source
+    && transaction.playerId === identity.playerId
+    && transaction.idempotencyKey === identity.idempotencyKey
+    && transaction.grantId === identity.grantId
+    && transaction.payload.target === identity.target;
+}
+
+function resolveEvidenceVerificationTimeout(timeoutMs: number | undefined): number {
+  const resolved = timeoutMs ?? 10_000;
+
+  if (!Number.isFinite(resolved) || resolved <= 0) {
+    throw new Error('evidenceVerificationTimeoutMs must be a positive finite number.');
+  }
+
+  return resolved;
+}
+
+function assertNonEmptyDecisionString(value: unknown, label: string): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Evidence verification ${label} must be a non-empty string.`);
+  }
 }
 
 async function recordLeaderboardScoreWithStore(
@@ -598,6 +1193,9 @@ function createEntitlementTransaction(
     idempotencyKey: grant.idempotencyKey,
     grantedAt: grant.grantedAt,
     payload: grant.payload,
+    ...(grant.evidenceVerificationId === undefined
+      ? {}
+      : { evidenceVerificationId: grant.evidenceVerificationId }),
   };
 
   return assertProductGrantTransaction(
@@ -605,8 +1203,25 @@ function createEntitlementTransaction(
   );
 }
 
-function createEntitlementIdempotencyKey(grant: EntitlementLedgerGrant): string {
+function createEntitlementIdempotencyKey(grant: {
+  readonly source: EntitlementLedgerGrant['source'];
+  readonly playerId: string;
+  readonly idempotencyKey: string;
+}): string {
   return createCompositeKey([grant.source, grant.playerId, grant.idempotencyKey]);
+}
+
+function createEntitlementEvidenceKey(grant: {
+  readonly source: EntitlementLedgerGrant['source'];
+  readonly evidenceVerificationId: string;
+}): string {
+  return createCompositeKey([grant.source, grant.evidenceVerificationId]);
+}
+
+function createEntitlementPlatformEvidenceKey(
+  identity: EntitlementPlatformEvidenceIdentity,
+): string {
+  return createCompositeKey([identity.source, identity.target, identity.platformEvidenceId]);
 }
 
 function createEntitlementLedgerEntryId(grant: EntitlementLedgerGrant): string {

@@ -5,8 +5,10 @@ import {
   assertProductGrantTransaction,
   assertRecordLeaderboardScoreRequest,
   assertRecordLeaderboardScoreResponse,
+  EvidenceAlreadyProcessedError,
   type EntitlementLedgerGrant,
   type EntitlementLedgerResult,
+  type EntitlementPlatformEvidenceIdentity,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
   type RecordLeaderboardScoreRequest,
@@ -23,6 +25,7 @@ type EntitlementRow = {
   granted_at: string;
   grant_json: string | null;
   payload_json: string;
+  evidence_verification_id: string | null;
 };
 
 type LeaderboardRow = {
@@ -60,8 +63,9 @@ class D1GameServicesStore implements GameServicesStore {
           idempotency_key,
           granted_at,
           grant_json,
-          payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          payload_json,
+          evidence_verification_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         ledgerEntryId,
@@ -72,12 +76,32 @@ class D1GameServicesStore implements GameServicesStore {
         grant.grantedAt,
         grant.grant === undefined ? null : JSON.stringify(grant.grant),
         JSON.stringify(grant.payload),
+        grant.evidenceVerificationId ?? null,
       )
       .run();
 
-    const transaction = await this.findEntitlementByIdempotency(grant);
+    const transaction = await this.findEntitlementTransactionByIdempotency(grant);
 
     if (transaction === undefined) {
+      if (
+        grant.evidenceVerificationId !== undefined
+        && await this.findEntitlementTransactionByEvidenceVerificationId({
+          source: grant.source,
+          evidenceVerificationId: grant.evidenceVerificationId,
+        }) !== undefined
+      ) {
+        throw new EvidenceAlreadyProcessedError();
+      }
+
+      const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
+      if (
+        platformEvidenceIdentity !== undefined
+        && await this.findEntitlementTransactionByPlatformEvidence(platformEvidenceIdentity)
+          !== undefined
+      ) {
+        throw new EvidenceAlreadyProcessedError();
+      }
+
       throw new Error('Failed to read entitlement transaction after insert.');
     }
 
@@ -85,6 +109,22 @@ class D1GameServicesStore implements GameServicesStore {
       ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: result.meta.changes === 0,
     });
+  }
+
+  async findEntitlementTransactionByIdempotency(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly playerId: string;
+    readonly idempotencyKey: string;
+  }): Promise<ProductGrantTransaction | undefined> {
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM entitlement_transactions
+         WHERE source = ? AND player_id = ? AND idempotency_key = ?`,
+      )
+      .bind(input.source, input.playerId, input.idempotencyKey)
+      .first<EntitlementRow>();
+
+    return row === null ? undefined : entitlementFromRow(row);
   }
 
   async getEntitlementTransaction(
@@ -176,15 +216,35 @@ class D1GameServicesStore implements GameServicesStore {
     return results.map(leaderboardFromRow);
   }
 
-  private async findEntitlementByIdempotency(
-    grant: EntitlementLedgerGrant,
-  ): Promise<ProductGrantTransaction | undefined> {
+  async findEntitlementTransactionByEvidenceVerificationId(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly evidenceVerificationId: string;
+  }): Promise<ProductGrantTransaction | undefined> {
     const row = await this.db
       .prepare(
         `SELECT * FROM entitlement_transactions
-         WHERE source = ? AND player_id = ? AND idempotency_key = ?`,
+         WHERE source = ? AND evidence_verification_id = ?`,
       )
-      .bind(grant.source, grant.playerId, grant.idempotencyKey)
+      .bind(input.source, input.evidenceVerificationId)
+      .first<EntitlementRow>();
+
+    return row === null ? undefined : entitlementFromRow(row);
+  }
+
+  async findEntitlementTransactionByPlatformEvidence(
+    input: EntitlementPlatformEvidenceIdentity,
+  ): Promise<ProductGrantTransaction | undefined> {
+    const evidenceJsonPath = input.source === 'purchase'
+      ? '$.platformTransactionId'
+      : '$.platformImpressionId';
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM entitlement_transactions
+         WHERE source = ?
+           AND json_extract(payload_json, '$.target') = ?
+           AND json_extract(payload_json, '${evidenceJsonPath}') = ?`,
+      )
+      .bind(input.source, input.target, input.platformEvidenceId)
       .first<EntitlementRow>();
 
     return row === null ? undefined : entitlementFromRow(row);
@@ -240,6 +300,9 @@ function entitlementFromRow(row: EntitlementRow): ProductGrantTransaction {
     idempotencyKey: row.idempotency_key,
     grantedAt: row.granted_at,
     payload: JSON.parse(row.payload_json) as ProductGrantTransaction['payload'],
+    ...(row.evidence_verification_id === null
+      ? {}
+      : { evidenceVerificationId: row.evidence_verification_id }),
   };
 
   return assertProductGrantTransaction(
@@ -250,6 +313,26 @@ function entitlementFromRow(row: EntitlementRow): ProductGrantTransaction {
           grant: JSON.parse(row.grant_json) as NonNullable<ProductGrantTransaction['grant']>,
         },
   );
+}
+
+function getEntitlementPlatformEvidenceIdentity(
+  grant: EntitlementLedgerGrant,
+): EntitlementPlatformEvidenceIdentity | undefined {
+  if (grant.source !== 'purchase' && grant.source !== 'ad_reward') {
+    return undefined;
+  }
+
+  const target = grant.payload.target;
+  const platformEvidenceId = grant.source === 'purchase'
+    ? grant.payload.platformTransactionId
+    : grant.payload.platformImpressionId;
+
+  return typeof target === 'string'
+    && target.length > 0
+    && typeof platformEvidenceId === 'string'
+    && platformEvidenceId.length > 0
+    ? { source: grant.source, target, platformEvidenceId }
+    : undefined;
 }
 
 function leaderboardFromRow(row: LeaderboardRow): LeaderboardScoreTransaction {

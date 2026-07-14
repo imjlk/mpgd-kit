@@ -1,5 +1,6 @@
 export * from './client';
 export * from './contract';
+export * from './evidence-verification';
 export * from './notification-delivery';
 export * from './progress-link';
 export * from './runtime.js';
