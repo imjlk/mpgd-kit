@@ -37,6 +37,10 @@
       "types": "./dist/contract.d.ts",
       "default": "./dist/contract.js"
     },
+    "./evidence-verification": {
+      "types": "./dist/evidence-verification.d.ts",
+      "default": "./dist/evidence-verification.js"
+    },
     "./notification-delivery": {
       "types": "./dist/notification-delivery.d.ts",
       "default": "./dist/notification-delivery.js"

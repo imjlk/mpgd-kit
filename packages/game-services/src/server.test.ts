@@ -6,6 +6,7 @@ import {
 } from '@mpgd/game-services';
 
 import {
+  createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesBackend,
   createGameServicesBackendApiHandler,
   createGameServicesHttpFetchHandler,
@@ -13,6 +14,7 @@ import {
   createGameServicesRpcFetchHandler,
   createInMemoryGameServicesStore,
   createInProcessGameServicesBackendTransport,
+  type GameServicesEvidenceVerifier,
 } from './index';
 
 const catalog = {
@@ -53,12 +55,16 @@ const placements = {
     },
   ],
 } as const satisfies AdPlacements;
+const evidenceVerifier = createDevelopmentGameServicesEvidenceVerifier(
+  () => '2026-07-04T00:00:00.000Z',
+);
 
 const store = createInMemoryGameServicesStore();
 const handler = createGameServicesBackendApiHandler({
   catalog,
   placements,
   store,
+  evidenceVerifier,
   now: () => '2026-07-04T00:00:00.000Z',
   version: 'test-http',
 });
@@ -129,6 +135,11 @@ assertEqual(
   'higher cross-target score should rank ahead within the shared leaderboard id',
 );
 assertEqual((await store.listEntitlementTransactions()).length, 2, 'two grants should be recorded');
+assertEqual(
+  (await store.listEntitlementTransactions())[0]?.payload.evidenceVerificationId,
+  'development:purchase:android:txn-1',
+  'ledger grants should retain the server verification identity',
+);
 assertEqual((await store.listLeaderboardTransactions()).length, 2, 'two scores should be recorded');
 assertEqual(
   (await store.listLeaderboardTransactions())[0]?.ledgerEntryId,
@@ -142,10 +153,85 @@ assertEqual(
   'invalid in-process request bodies should return 400 instead of rejecting',
 );
 
+const failClosedStore = createInMemoryGameServicesStore();
+const failClosedBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: failClosedStore,
+});
+const unavailablePurchase = await failClosedBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-fail-closed',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-unverified',
+  idempotencyKey: 'purchase-unverified',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const unavailableReward = await failClosedBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-fail-closed',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-unverified',
+  idempotencyKey: 'reward-unverified',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+
+assertEqual(unavailablePurchase.verified, false, 'missing purchase verifier should fail closed');
+assertEqual(
+  unavailablePurchase.reason,
+  'EVIDENCE_VERIFIER_UNAVAILABLE',
+  'missing purchase verifier should expose an operational reason',
+);
+assertEqual(unavailableReward.granted, false, 'missing reward verifier should fail closed');
+assertEqual(
+  (await failClosedStore.listEntitlementTransactions()).length,
+  0,
+  'unverified evidence must never reach the entitlement ledger',
+);
+
+const nonGrantingVerifier = {
+  async verifyPurchase() {
+    return { status: 'pending', reason: 'PROVIDER_PENDING' } as const;
+  },
+  async verifyAdReward() {
+    throw new Error('provider unavailable');
+  },
+} satisfies GameServicesEvidenceVerifier;
+const nonGrantingBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  evidenceVerifier: nonGrantingVerifier,
+});
+const pendingPurchase = await nonGrantingBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-pending',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-pending',
+  idempotencyKey: 'purchase-pending',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const verifierErrorReward = await nonGrantingBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-error',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: 'reward-error',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+
+assertEqual(pendingPurchase.verified, false, 'pending provider evidence must not grant');
+assertEqual(pendingPurchase.reason, 'PROVIDER_PENDING', 'pending reasons should be preserved');
+assertEqual(verifierErrorReward.granted, false, 'verifier errors must not grant');
+assertEqual(
+  verifierErrorReward.reason,
+  'EVIDENCE_VERIFIER_ERROR',
+  'verifier exceptions should become stable fail-closed responses',
+);
+
 const rpcStore = createInMemoryGameServicesStore();
 const rpcBackend = createGameServicesBackend({
   catalog,
   placements,
+  evidenceVerifier,
   store: rpcStore,
   now: () => '2026-07-04T00:00:00.000Z',
   version: 'test-rpc',
@@ -234,6 +320,7 @@ const collisionStore = createInMemoryGameServicesStore();
 const collisionBackend = createGameServicesBackend({
   catalog,
   placements,
+  evidenceVerifier,
   store: collisionStore,
   now: () => '2026-07-04T00:00:00.000Z',
 });
@@ -293,6 +380,7 @@ const idempotencyStore = createInMemoryGameServicesStore();
 const idempotencyBackend = createGameServicesBackend({
   catalog,
   placements,
+  evidenceVerifier,
   store: idempotencyStore,
   now: () => '2026-07-04T00:00:00.000Z',
 });
@@ -483,6 +571,7 @@ const analyticsEvents: AnalyticsEvent[] = [];
 const analyticsBackend = createGameServicesBackend({
   catalog,
   placements,
+  evidenceVerifier,
   analyticsSessionId: 'server-session',
   analytics: {
     track(event) {
@@ -612,6 +701,7 @@ assertEqual(
 const failingAnalyticsBackend = createGameServicesBackend({
   catalog,
   placements,
+  evidenceVerifier,
   analytics: {
     track() {
       throw new Error('analytics sink unavailable');

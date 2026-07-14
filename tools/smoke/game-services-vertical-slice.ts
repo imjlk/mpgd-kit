@@ -1,5 +1,6 @@
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import {
+  createDevelopmentGameServicesEvidenceVerifier,
   createGameServicesBackendApiHandler,
   createGameServicesClient,
   createGameServicesHttpBackendApi,
@@ -22,6 +23,7 @@ for (const target of ['android', 'ios', 'ait'] as const) {
       createGameServicesBackendApiHandler({
         catalog,
         placements,
+        evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(),
         store,
         now: () => '2026-07-03T00:00:01.000Z',
       }),

@@ -14,6 +14,11 @@ import {
 } from './client';
 import { gameServicesContract, type GameServicesHealthResponse } from './contract';
 import {
+  createRejectingGameServicesEvidenceVerifier,
+  type EvidenceVerificationDecision,
+  type GameServicesEvidenceVerifier,
+} from './evidence-verification';
+import {
   assertClaimAdRewardRequest,
   assertClaimAdRewardResponse,
   assertEntitlementLedgerGrant,
@@ -47,6 +52,7 @@ export interface CreateGameServicesBackendInput {
   readonly analyticsSessionId?: string;
   readonly now?: () => string;
   readonly version?: string;
+  readonly evidenceVerifier?: GameServicesEvidenceVerifier;
 }
 
 export interface GameServicesBackendApiHandler {
@@ -204,6 +210,7 @@ export function createGameServicesBackend(
   const store = input.store ?? createInMemoryGameServicesStore();
   const now = input.now ?? (() => new Date().toISOString());
   const version = input.version ?? '0.0.0';
+  const evidenceVerifier = input.evidenceVerifier ?? createRejectingGameServicesEvidenceVerifier();
   const analytics = createAnalyticsReporter({
     target: 'server',
     sessionId: input.analyticsSessionId ?? 'game-services',
@@ -219,6 +226,7 @@ export function createGameServicesBackend(
           catalog: input.catalog,
           store,
           now,
+          evidenceVerifier,
         });
 
         await analytics.track({
@@ -242,6 +250,7 @@ export function createGameServicesBackend(
           placements: input.placements,
           store,
           now,
+          evidenceVerifier,
         });
 
         await analytics.track({
@@ -432,6 +441,7 @@ async function verifyPurchaseWithStore(
     readonly catalog: ProductCatalog;
     readonly store: GameServicesStore;
     readonly now: () => string;
+    readonly evidenceVerifier: GameServicesEvidenceVerifier;
   },
 ): Promise<VerifyPurchaseResponse> {
   const request = assertVerifyPurchaseRequest(input);
@@ -455,6 +465,24 @@ async function verifyPurchaseWithStore(
     });
   }
 
+  const verification = await verifyEvidence(() => {
+    return context.evidenceVerifier.verifyPurchase({
+      request,
+      product,
+      platformProductId,
+    });
+  });
+
+  if (verification.status !== 'verified') {
+    return assertVerifyPurchaseResponse({
+      verified: false,
+      alreadyProcessed: false,
+      reason: verification.status === 'pending'
+        ? (verification.reason ?? 'EVIDENCE_PENDING')
+        : verification.reason,
+    });
+  }
+
   const grant = await context.store.recordEntitlementGrant({
     playerId: request.playerId,
     grantId: product.id,
@@ -463,11 +491,14 @@ async function verifyPurchaseWithStore(
     grantedAt: context.now(),
     grant: product.grant,
     payload: {
+      ...verification.payload,
       target: request.target,
       productId: request.productId,
       platformProductId,
       platformTransactionId: request.platformTransactionId,
       purchasedAt: request.purchasedAt,
+      evidenceVerificationId: verification.verificationId,
+      evidenceVerifiedAt: verification.verifiedAt,
     },
   });
 
@@ -484,6 +515,7 @@ async function claimAdRewardWithStore(
     readonly placements: AdPlacements;
     readonly store: GameServicesStore;
     readonly now: () => string;
+    readonly evidenceVerifier: GameServicesEvidenceVerifier;
   },
 ): Promise<ClaimAdRewardResponse> {
   const request = assertClaimAdRewardRequest(input);
@@ -497,12 +529,34 @@ async function claimAdRewardWithStore(
     });
   }
 
+  const platformPlacementId = placement.platformPlacementIds[request.target];
+  const verification = await verifyEvidence(() => {
+    return context.evidenceVerifier.verifyAdReward({
+      request,
+      placement,
+      ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
+    });
+  });
+
+  if (verification.status !== 'verified') {
+    return assertClaimAdRewardResponse({
+      granted: false,
+      alreadyProcessed: false,
+      reason: verification.status === 'pending'
+        ? (verification.reason ?? 'EVIDENCE_PENDING')
+        : verification.reason,
+    });
+  }
+
   const payload: EntitlementLedgerPayload = {
+    ...verification.payload,
     target: request.target,
     placementId: request.placementId,
     rewardType: placement.reward.type,
     amount: placement.reward.amount,
     completedAt: request.completedAt,
+    evidenceVerificationId: verification.verificationId,
+    evidenceVerifiedAt: verification.verifiedAt,
   };
 
   if (placement.reward.type === 'currency') {
@@ -527,6 +581,60 @@ async function claimAdRewardWithStore(
     ledgerEntryId: result.ledgerEntryId,
     alreadyProcessed: result.alreadyProcessed,
   });
+}
+
+async function verifyEvidence(
+  verify: () => Promise<EvidenceVerificationDecision>,
+): Promise<EvidenceVerificationDecision> {
+  try {
+    return assertEvidenceVerificationDecision(await verify());
+  } catch {
+    return {
+      status: 'rejected',
+      reason: 'EVIDENCE_VERIFIER_ERROR',
+    };
+  }
+}
+
+function assertEvidenceVerificationDecision(
+  decision: EvidenceVerificationDecision,
+): EvidenceVerificationDecision {
+  if (decision.status === 'verified') {
+    assertNonEmptyDecisionString(decision.verificationId, 'verificationId');
+    assertNonEmptyDecisionString(decision.verifiedAt, 'verifiedAt');
+    if (decision.payload !== undefined) {
+      for (const [key, value] of Object.entries(decision.payload)) {
+        if (
+          typeof value !== 'string'
+          && typeof value !== 'number'
+          && typeof value !== 'boolean'
+        ) {
+          throw new Error(`Evidence verification payload.${key} must be primitive.`);
+        }
+      }
+    }
+    return decision;
+  }
+
+  if (decision.status === 'pending') {
+    if (decision.reason !== undefined) {
+      assertNonEmptyDecisionString(decision.reason, 'reason');
+    }
+    return decision;
+  }
+
+  if (decision.status === 'rejected') {
+    assertNonEmptyDecisionString(decision.reason, 'reason');
+    return decision;
+  }
+
+  throw new Error('Unknown evidence verification status.');
+}
+
+function assertNonEmptyDecisionString(value: unknown, label: string): asserts value is string {
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new Error(`Evidence verification ${label} must be a non-empty string.`);
+  }
 }
 
 async function recordLeaderboardScoreWithStore(

@@ -19,6 +19,11 @@ export type EntitlementIdempotencyKey = PurchaseIdempotencyKey | AdRewardIdempot
 export type EntitlementLedgerSource = 'purchase' | 'ad_reward' | 'admin';
 export type EntitlementLedgerPayload = Record<string, string | number | boolean>;
 
+export interface PlatformEvidenceEnvelope {
+  readonly schema: string;
+  readonly payload: Readonly<Record<string, string | number | boolean>>;
+}
+
 export interface VerifyPurchaseRequest {
   readonly target: GameServicesStoreTarget;
   readonly playerId: string;
@@ -26,6 +31,7 @@ export interface VerifyPurchaseRequest {
   readonly platformTransactionId: string;
   readonly idempotencyKey: PurchaseIdempotencyKey;
   readonly purchasedAt: string;
+  readonly evidence?: PlatformEvidenceEnvelope;
 }
 
 export interface VerifyPurchaseResponse {
@@ -42,13 +48,14 @@ export interface ClaimAdRewardRequest {
   readonly platformImpressionId?: string;
   readonly idempotencyKey: AdRewardIdempotencyKey;
   readonly completedAt: string;
+  readonly evidence?: PlatformEvidenceEnvelope;
 }
 
 export interface ClaimAdRewardResponse {
   readonly granted: boolean;
   readonly ledgerEntryId?: string;
   readonly alreadyProcessed: boolean;
-  readonly reason?: 'UNKNOWN_PLACEMENT' | 'NOT_REWARDED_PLACEMENT';
+  readonly reason?: string;
 }
 
 export interface RecordLeaderboardScoreRequest extends LeaderboardScoreInput {
@@ -103,6 +110,7 @@ export function assertVerifyPurchaseRequest(input: VerifyPurchaseRequest): Verif
   assertNonEmptyString(input.platformTransactionId, 'platformTransactionId');
   assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
   assertNonEmptyString(input.purchasedAt, 'purchasedAt');
+  assertOptionalEvidenceEnvelope(input.evidence);
 
   return input;
 }
@@ -129,6 +137,7 @@ export function assertClaimAdRewardRequest(
   assertOptionalNonEmptyString(input.platformImpressionId, 'platformImpressionId');
   assertNonEmptyString(input.idempotencyKey, 'idempotencyKey');
   assertNonEmptyString(input.completedAt, 'completedAt');
+  assertOptionalEvidenceEnvelope(input.evidence);
 
   return input;
 }
@@ -140,7 +149,7 @@ export function assertClaimAdRewardResponse(
   assertBoolean(input.granted, 'granted');
   assertOptionalNonEmptyString(input.ledgerEntryId, 'ledgerEntryId');
   assertBoolean(input.alreadyProcessed, 'alreadyProcessed');
-  assertOptionalAdRewardReason(input.reason, 'reason');
+  assertOptionalNonEmptyString(input.reason, 'reason');
 
   return input;
 }
@@ -304,19 +313,6 @@ function assertProductGrant(input: unknown): asserts input is ProductGrant {
   throw new Error('grant.type must be currency or entitlement.');
 }
 
-function assertOptionalAdRewardReason(
-  input: unknown,
-  label: string,
-): asserts input is ClaimAdRewardResponse['reason'] {
-  if (
-    input !== undefined
-    && input !== 'UNKNOWN_PLACEMENT'
-    && input !== 'NOT_REWARDED_PLACEMENT'
-  ) {
-    throw new Error(`${label} must be UNKNOWN_PLACEMENT or NOT_REWARDED_PLACEMENT.`);
-  }
-}
-
 function assertPayload(input: unknown): asserts input is EntitlementLedgerPayload {
   assertRecord(input, 'payload');
 
@@ -327,4 +323,16 @@ function assertPayload(input: unknown): asserts input is EntitlementLedgerPayloa
       throw new Error(`payload.${key} must be a string, number, or boolean.`);
     }
   }
+}
+
+function assertOptionalEvidenceEnvelope(
+  input: unknown,
+): asserts input is PlatformEvidenceEnvelope | undefined {
+  if (input === undefined) {
+    return;
+  }
+
+  assertRecord(input, 'evidence');
+  assertNonEmptyString(input.schema, 'evidence.schema');
+  assertPayload(input.payload);
 }

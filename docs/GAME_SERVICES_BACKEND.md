@@ -116,6 +116,21 @@ dimensions:
 - `ledgerEntryId` values are stable opaque strings. Do not parse them for game
   state decisions; persist and compare the idempotency dimensions instead.
 
+## Production Evidence Verification
+
+The backend requires a `GameServicesEvidenceVerifier` before purchase or
+rewarded-ad evidence can write an entitlement. Without one, both paths fail
+closed with `EVIDENCE_VERIFIER_UNAVAILABLE`. Provider adapters can carry
+versioned fields in `request.evidence` while the shared contract stays
+platform-neutral.
+
+Local examples and smoke tests can opt into
+`createDevelopmentGameServicesEvidenceVerifier()`. It accepts submitted
+evidence without contacting a provider and must not be used for production
+grants. The Worker starter uses it only with the memory store. A D1 deployment
+must provide a `GAME_SERVICES_EVIDENCE_VERIFIER` service binding or entitlement
+requests remain fail closed.
+
 ## Cloudflare Worker Starter
 
 `apps/game-services-worker` is a Cloudflare Vite plugin Worker starter. Vite
