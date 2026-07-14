@@ -1,5 +1,24 @@
 # @mpgd/adapter-devvit
 
+## 0.7.0 — 2026-07-14
+
+### Changed
+
+- [82b9458](https://github.com/imjlk/mpgd-kit/commit/82b94580f3c6021e05a10a06b655ffd968ce43b7) Add bounded immutable numeric metrics to verified attempts and ranked entries,
+  preserving them across memory, Devvit Redis, Cloudflare D1, and authenticated
+  snapshot transports without changing score-based ranking behavior. — Thanks @imjlk!
+
+### Removed
+
+- [82b9458](https://github.com/imjlk/mpgd-kit/commit/82b94580f3c6021e05a10a06b655ffd968ce43b7) Upgrade generated Devvit targets to the stable 0.13.8 toolchain and remove the
+  deprecated JSON fetch bridge API, JSON route, pre-namespace storage fallback,
+  and split build strategy so Devvit targets use oRPC and the official Vite plugin
+  exclusively. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: game-services@0.7.0
+
 ## 0.6.0 — 2026-07-14
 
 ### Changed
