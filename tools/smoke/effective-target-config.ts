@@ -288,7 +288,7 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     assertEqual(
       config.monetization.products.every((product) => !product.enabled),
       true,
-      'reddit products should be disabled until Devvit payments are wired',
+      'reddit products without app-owned Devvit SKUs should be disabled',
     );
     assertEqual(
       config.ads.placements.every((placement) => !placement.enabled),

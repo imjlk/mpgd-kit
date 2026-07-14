@@ -175,7 +175,11 @@ function validateEffectiveTargetConfig(config: EffectiveTargetConfig): void {
       );
     }
 
-    if (config.features.iap && product.reason === 'missing-platform-id') {
+    if (
+      config.features.iap
+      && product.reason === 'missing-platform-id'
+      && config.target !== 'reddit'
+    ) {
       throw new Error(
         `Effective target ${config.target} is missing a platform product id for ${product.id}.`,
       );
