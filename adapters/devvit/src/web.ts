@@ -7,6 +7,11 @@ import {
   type DevvitSurfaceOptions,
   type DevvitSurfaceResult,
 } from './surface.js';
+import {
+  startDevvitViewMode,
+  type DevvitViewModeOptions,
+  type DevvitViewModeResult,
+} from './view-mode.js';
 
 export type {
   DevvitSurfaceClient,
@@ -14,8 +19,16 @@ export type {
   DevvitSurfaceOptions,
   DevvitSurfaceResult,
 } from './surface.js';
+export type {
+  DevvitInlineModeContext,
+  DevvitViewMode,
+  DevvitViewModeClient,
+  DevvitViewModeOptions,
+  DevvitViewModeResult,
+} from './view-mode.js';
 
 export type DevvitWebSurfaceOptions = Omit<DevvitSurfaceOptions, 'client'>;
+export type DevvitWebViewOptions = Omit<DevvitViewModeOptions, 'client'>;
 
 export interface DevvitShareSheetOptions {
   readonly data?: string;
@@ -36,6 +49,19 @@ export function startDevvitWebSurface(
   options: DevvitWebSurfaceOptions,
 ): Promise<DevvitSurfaceResult> {
   return startDevvitSurface({
+    ...options,
+    client: { getWebViewMode: browserClient.getWebViewMode },
+  });
+}
+
+/**
+ * Starts a Devvit web view in inline or expanded mode. Inline mode can defer
+ * gameplay until an explicit user action while remaining inside the post.
+ */
+export function startDevvitWebView(
+  options: DevvitWebViewOptions,
+): Promise<DevvitViewModeResult> {
+  return startDevvitViewMode({
     ...options,
     client: { getWebViewMode: browserClient.getWebViewMode },
   });

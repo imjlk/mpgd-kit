@@ -5,6 +5,7 @@ import type { StarterContext } from './starterContext';
 
 export interface CreateStarterGameInput {
   readonly mountId: string;
+  readonly preserveBrowserTouchGestures?: boolean;
   readonly context: StarterContext;
 }
 
@@ -14,6 +15,11 @@ export function createStarterGame(input: CreateStarterGameInput): Phaser.Game {
     parent: input.mountId,
     backgroundColor: '#0d1117',
     scene: sceneRegistry,
+    input: {
+      touch: {
+        capture: input.preserveBrowserTouchGestures !== true,
+      },
+    },
     scale: {
       mode: Phaser.Scale.FIT,
       autoCenter: Phaser.Scale.CENTER_BOTH,

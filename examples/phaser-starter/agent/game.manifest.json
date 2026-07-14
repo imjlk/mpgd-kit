@@ -101,13 +101,19 @@
       ]
     },
     {
-      "id": "platform.devvit.surface-split",
+      "id": "platform.devvit.view-modes",
       "kind": "platform",
       "entry": "src/platform/devvitEntrypoint.ts",
-      "capabilities": ["inline-preview", "expanded-game-entry", "deferred-phaser-load"],
+      "capabilities": [
+        "inline-mode-launch-screen",
+        "inline-mode-gameplay",
+        "expanded-mode-game-entry",
+        "deferred-phaser-load"
+      ],
       "gotchas": [
-        "Keep the inline preview independent of Phaser and game runtime imports.",
-        "Keep the expanded game document mapped to the game entrypoint in devvit.json.",
+        "Keep the inline mode launch screen independent of Phaser and game runtime imports until the user starts gameplay.",
+        "Keep the expanded mode game document mapped to the game entrypoint in devvit.json.",
+        "Inline mode gameplay must use tap or click input without trapping feed scrolling.",
         "Use the Devvit adapter web API instead of importing the Devvit SDK in game code."
       ]
     },

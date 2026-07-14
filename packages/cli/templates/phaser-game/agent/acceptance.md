@@ -23,8 +23,10 @@ For Reddit Devvit changes, keep Devvit SDK calls inside the adapter or target wr
 continue to expose game-facing behavior through `PlatformGateway`. The Devvit
 app root is game-owned in `apps/target-devvit`; run `pnpm devvit:init` once
 after login before upload or playtest.
-Verify the default post entry renders only the lightweight inline preview and
-the `game` entry opens the separate expanded Phaser document.
+Verify the default post entry renders a lightweight inline mode launch screen,
+Play here starts gameplay inside the post, and the `game` entry opens the
+separate expanded mode Phaser document. Inline gameplay must remain tap/click
+only and must not trap feed scrolling.
 
 For Microsoft Store changes, keep the first pass as a PWA/web target that uses
 the browser adapter. Add a dedicated Store commerce adapter only when wiring

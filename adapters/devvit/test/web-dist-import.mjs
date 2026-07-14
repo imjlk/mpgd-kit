@@ -5,6 +5,7 @@ globalThis.addEventListener = () => {};
 const webAdapter = await import('../dist/web.js');
 
 assert.equal(typeof webAdapter.startDevvitWebSurface, 'function');
+assert.equal(typeof webAdapter.startDevvitWebView, 'function');
 assert.equal(typeof webAdapter.requestDevvitExpandedMode, 'function');
 assert.equal(typeof webAdapter.presentDevvitShareSheet, 'function');
 

@@ -1,0 +1,133 @@
+body.devvit-inline-mode-host {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  background: #0f172a;
+}
+
+body.devvit-inline-mode-gameplay {
+  overflow-y: auto;
+  overscroll-behavior-y: auto;
+}
+
+body.devvit-inline-mode-gameplay #game {
+  position: relative;
+}
+
+body.devvit-inline-mode-gameplay #game,
+body.devvit-inline-mode-gameplay canvas {
+  touch-action: pan-y !important;
+}
+
+.devvit-inline-gameplay-loading {
+  position: fixed;
+  z-index: 1;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  margin: 0;
+  background: #0f172a;
+  color: #cbd5e1;
+  font: 700 0.875rem/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
+  pointer-events: none;
+}
+
+.devvit-launch-screen,
+.devvit-launch-screen * {
+  box-sizing: border-box;
+}
+
+.devvit-launch-screen {
+  min-height: 100vh;
+  display: grid;
+  place-content: center;
+  justify-items: start;
+  gap: 0.75rem;
+  padding: clamp(1.25rem, 5vw, 3rem);
+  background:
+    radial-gradient(circle at 85% 15%, rgb(56 189 248 / 0.2), transparent 38%),
+    linear-gradient(145deg, #0f172a, #172554);
+  color: #f8fafc;
+  font-family: Inter, ui-sans-serif, system-ui, sans-serif;
+}
+
+.devvit-launch-screen__eyebrow,
+.devvit-launch-screen__description,
+.devvit-launch-screen__status,
+.devvit-launch-screen h1 {
+  margin: 0;
+}
+
+.devvit-launch-screen__eyebrow {
+  color: #7dd3fc;
+  font-size: 0.75rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.devvit-launch-screen h1 {
+  max-width: 18ch;
+  font-size: clamp(2rem, 9vw, 4.5rem);
+  line-height: 0.95;
+}
+
+.devvit-launch-screen__description {
+  max-width: 36rem;
+  color: #cbd5e1;
+  line-height: 1.5;
+}
+
+.devvit-launch-screen__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 0.5rem;
+}
+
+.devvit-launch-screen__button {
+  min-height: 2.75rem;
+  padding: 0.65rem 1.25rem;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: #082f49;
+  background: #7dd3fc;
+  font: inherit;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.devvit-launch-screen__button--secondary {
+  border-color: #7dd3fc;
+  color: #e0f2fe;
+  background: rgb(15 23 42 / 0.64);
+}
+
+.devvit-launch-screen__button:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.devvit-launch-screen__button:focus-visible {
+  outline: 3px solid #f8fafc;
+  outline-offset: 3px;
+}
+
+.devvit-launch-screen__status {
+  min-height: 1.5em;
+  color: #fda4af;
+  font-size: 0.875rem;
+}
+
+@media (hover: hover) {
+  .devvit-launch-screen__button:not(:disabled):hover {
+    filter: brightness(1.1);
+  }
+}
+
+@media (max-width: 420px) {
+  .devvit-launch-screen__actions,
+  .devvit-launch-screen__button {
+    width: 100%;
+  }
+}

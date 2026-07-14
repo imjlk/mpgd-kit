@@ -20,6 +20,7 @@
       "@mpgd/bridge/orpc/node": ["./packages/bridge/src/orpc-node.ts"],
       "@mpgd/adapter-devvit/server": ["./adapters/devvit/src/server/index.ts"],
       "@mpgd/adapter-devvit/surface": ["./adapters/devvit/src/surface.ts"],
+      "@mpgd/adapter-devvit/view-mode": ["./adapters/devvit/src/view-mode.ts"],
       "@mpgd/adapter-devvit/web": ["./adapters/devvit/src/web.ts"],
       "@mpgd/catalog/*": ["./packages/catalog/*"],
       "@mpgd/game-services/*": ["./packages/game-services/src/*"],
