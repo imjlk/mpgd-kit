@@ -31,7 +31,7 @@ BEGIN
   SELECT RAISE(ABORT, 'verified leaderboard attempt id conflict');
 END;
 
-CREATE TRIGGER verified_leaderboard_attempt_metrics_immutable
+CREATE TRIGGER IF NOT EXISTS verified_leaderboard_attempt_metrics_immutable
 BEFORE UPDATE OF metrics_json ON verified_leaderboard_attempts
 WHEN OLD.metrics_json IS NOT NEW.metrics_json
 BEGIN

@@ -1,4 +1,5 @@
 import {
+  areVerifiedLeaderboardMetricsEqual,
   assertGetVerifiedLeaderboardSnapshotRequest,
   assertRecordVerifiedLeaderboardAttemptRequest,
   assertRecordVerifiedLeaderboardAttemptResponse,
@@ -552,7 +553,7 @@ function assertSameAttempt(
     existing.participantId !== candidate.participantId
     || existing.attemptId !== candidate.attemptId
     || existing.score !== candidate.score
-    || !areMetricsEqual(existing.metrics, candidate.metrics)
+    || !areVerifiedLeaderboardMetricsEqual(existing.metrics, candidate.metrics)
     || Date.parse(existing.completedAt) !== Date.parse(candidate.completedAt)
     || existing.verification.authorityId !== candidate.verification.authorityId
     || existing.verification.evidenceId !== candidate.verification.evidenceId
@@ -684,21 +685,6 @@ function cloneRecordResponse(
   };
   assertRecordVerifiedLeaderboardAttemptResponse(response);
   return response;
-}
-
-function areMetricsEqual(
-  left: VerifiedLeaderboardAttempt['metrics'],
-  right: VerifiedLeaderboardAttempt['metrics'],
-): boolean {
-  if (left === undefined || right === undefined) {
-    return left === right;
-  }
-
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-
-  return leftKeys.length === rightKeys.length
-    && leftKeys.every((key) => left[key] === right[key]);
 }
 
 async function bestEffortReset(

@@ -440,6 +440,21 @@ export function normalizeVerifiedLeaderboardMetrics(
   );
 }
 
+export function areVerifiedLeaderboardMetricsEqual(
+  left: VerifiedLeaderboardMetrics | undefined,
+  right: VerifiedLeaderboardMetrics | undefined,
+): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key) => left[key] === right[key]);
+}
+
 export function assertVerifiedLeaderboardSnapshot(
   input: unknown,
 ): asserts input is VerifiedLeaderboardSnapshot {
@@ -595,9 +610,7 @@ function toRankedEntry(
       : { participantLabel: attempt.participantLabel }),
     attemptId: attempt.attemptId,
     score: attempt.score,
-    ...(attempt.metrics === undefined
-      ? {}
-      : { metrics: normalizeVerifiedLeaderboardMetrics(attempt.metrics) }),
+    ...verifiedLeaderboardMetricsProperty(attempt.metrics),
     completedAt: attempt.completedAt,
   };
   assertLeaderboardRankedEntry(entry);
@@ -643,9 +656,7 @@ function cloneVerifiedLeaderboardAttempt(
       : { participantLabel: input.participantLabel }),
     attemptId: input.attemptId,
     score: input.score,
-    ...(input.metrics === undefined
-      ? {}
-      : { metrics: normalizeVerifiedLeaderboardMetrics(input.metrics) }),
+    ...verifiedLeaderboardMetricsProperty(input.metrics),
     completedAt: input.completedAt,
     verification: {
       authorityId: input.verification.authorityId,
@@ -671,9 +682,7 @@ function cloneRecordResponse(
         : { participantLabel: input.entry.participantLabel }),
       attemptId: input.entry.attemptId,
       score: input.entry.score,
-      ...(input.entry.metrics === undefined
-        ? {}
-        : { metrics: normalizeVerifiedLeaderboardMetrics(input.entry.metrics) }),
+      ...verifiedLeaderboardMetricsProperty(input.entry.metrics),
       completedAt: input.entry.completedAt,
     },
     ...(input.reason === undefined ? {} : { reason: input.reason }),
@@ -821,19 +830,10 @@ function compareOrdinal(left: string, right: string): number {
   return left > right ? 1 : 0;
 }
 
-function areVerifiedLeaderboardMetricsEqual(
-  left: VerifiedLeaderboardMetrics | undefined,
-  right: VerifiedLeaderboardMetrics | undefined,
-): boolean {
-  if (left === undefined || right === undefined) {
-    return left === right;
-  }
-
-  const leftKeys = Object.keys(left);
-  const rightKeys = Object.keys(right);
-
-  return leftKeys.length === rightKeys.length
-    && leftKeys.every((key) => left[key] === right[key]);
+function verifiedLeaderboardMetricsProperty(
+  metrics: VerifiedLeaderboardMetrics | undefined,
+): { readonly metrics?: VerifiedLeaderboardMetrics } {
+  return metrics === undefined ? {} : { metrics: normalizeVerifiedLeaderboardMetrics(metrics) };
 }
 
 function compareRankedEntryToCursor(

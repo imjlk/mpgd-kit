@@ -72,6 +72,25 @@ try {
     12_345,
     'private binding reads should preserve verified attempt metrics',
   );
+
+  await db.prepare(`
+    UPDATE verified_leaderboard_entries
+    SET metrics_json = ?
+    WHERE leaderboard_id = ? AND participant_id = ?
+  `).bind(
+    '{not-json',
+    'private-binding:board',
+    'participant:private-binding',
+  ).run();
+  const snapshotWithCorruptMetrics = await privateService.getSnapshot({
+    leaderboardId: 'private-binding:board',
+    participantId: 'participant:private-binding',
+  });
+  assertEqual(
+    snapshotWithCorruptMetrics?.participantEntry?.metrics,
+    undefined,
+    'corrupt supplementary metrics should not make the leaderboard unavailable',
+  );
 } finally {
   await miniflare.dispose();
 }

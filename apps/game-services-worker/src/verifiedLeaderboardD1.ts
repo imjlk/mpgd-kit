@@ -531,21 +531,23 @@ function metricsPropertyFromJson(
     return {};
   }
 
-  let parsed: unknown;
-
   try {
-    parsed = JSON.parse(metricsJson);
+    const parsed: unknown = JSON.parse(metricsJson);
+
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('Stored verified leaderboard metrics must be an object.');
+    }
+
+    return {
+      metrics: normalizeVerifiedLeaderboardMetrics(parsed as Readonly<Record<string, number>>),
+    };
   } catch (error) {
-    throw new Error('Stored verified leaderboard metrics are not valid JSON.', { cause: error });
+    console.warn(
+      'Ignoring invalid stored verified leaderboard metrics.',
+      error,
+    );
+    return {};
   }
-
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
-    throw new Error('Stored verified leaderboard metrics must be an object.');
-  }
-
-  return {
-    metrics: normalizeVerifiedLeaderboardMetrics(parsed as Readonly<Record<string, number>>),
-  };
 }
 
 function toUtf16OrdinalKey(input: string): string {
