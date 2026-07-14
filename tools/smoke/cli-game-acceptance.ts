@@ -367,6 +367,44 @@ try {
     'linked release evidence validation',
   );
 
+  const spoofedPlanFile = path.join(cliGameRoot, 'spoofed-plan.json');
+  const spoofedPlanEvidenceFile = path.join(cliGameRoot, 'spoofed-plan-evidence.json');
+
+  writeFileSync(
+    spoofedPlanFile,
+    `${JSON.stringify({
+      acceptance: {
+        gameplay: {
+          schemaVersion: 1,
+          states: [{ id: 'launch', label: 'Launch', actions: [] }],
+        },
+      },
+    })}\n`,
+  );
+  writeFileSync(
+    spoofedPlanEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      plan: collectGameplayE2EPathEvidence(cliGameRoot, spoofedPlanFile, 'spoofed plan'),
+    })}\n`,
+  );
+  const spoofedPlanEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'spoofed-plan-report'),
+    gameplayE2EReportFile: spoofedPlanEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectMatch(
+    spoofedPlanEvidence.report.evidence.gameplayE2E?.validationError,
+    /must link the game manifest plan path/u,
+    'canonical gameplay plan path',
+  );
+
   writeFileSync(
     linkedReleaseManifestFile,
     `${JSON.stringify({
@@ -567,6 +605,39 @@ try {
     || outsideValidationError.includes(fixtureRoot)
   ) {
     throw new Error('Outside gameplay evidence validation must not expose host paths.');
+  }
+
+  const outsideReleaseManifestFile = path.join(fixtureRoot, 'outside-release-manifest.json');
+
+  writeFileSync(outsideReleaseManifestFile, '{"targets":{}}\n');
+  const outsideReleaseManifest = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'outside-release-report'),
+    releaseManifestFile: outsideReleaseManifestFile,
+    options: {},
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectEqual(
+    outsideReleaseManifest.report.evidence.releaseManifest?.file,
+    '<outside-game-root>',
+    'outside release manifest display path',
+  );
+  expectEqual(
+    outsideReleaseManifest.report.evidence.releaseManifest?.found,
+    false,
+    'outside release manifest existence probe',
+  );
+  const outsideReleaseParseError = outsideReleaseManifest.report.evidence.releaseManifest
+    ?.parseError;
+
+  if (
+    typeof outsideReleaseParseError !== 'string'
+    || outsideReleaseParseError.includes(fixtureRoot)
+  ) {
+    throw new Error('Outside release manifest validation must not expose host paths.');
   }
 
   const oversizedGameplayEvidenceFile = path.join(cliGameRoot, 'oversized-gameplay-evidence.json');

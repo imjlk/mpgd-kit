@@ -396,7 +396,19 @@ function readOptionalJsonEvidence(
     return null;
   }
 
-  const resolved = path.resolve(gameRoot, file);
+  let resolved: string;
+
+  try {
+    resolved = resolvePathInsideGameRoot(gameRoot, file, 'Release manifest');
+  } catch (error) {
+    return {
+      file: '<outside-game-root>',
+      found: false,
+      parseError: formatError(error),
+      value: null,
+    };
+  }
+
   const displayFile = relativeOrAbsolute(gameRoot, resolved);
 
   if (!existsSync(resolved)) {
@@ -574,13 +586,17 @@ function validateGameplayE2EEvidence(
   let configuredPlan: ReturnType<typeof readGameplayE2EPlan>;
 
   try {
-    configuredPlan = readGameplayE2EPlan(gameRoot, value.plan.file);
+    configuredPlan = readGameplayE2EPlan(gameRoot);
   } catch (error) {
     return `Gameplay E2E manifest plan is invalid: ${formatError(error)}`;
   }
 
   if (configuredPlan === null) {
     return 'Gameplay E2E manifest plan must define acceptance.gameplay.';
+  }
+
+  if (path.resolve(gameRoot, value.plan.file) !== configuredPlan.file) {
+    return 'Gameplay E2E report must link the game manifest plan path.';
   }
 
   if (releaseManifestFile !== undefined) {
