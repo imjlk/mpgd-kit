@@ -695,6 +695,141 @@ assertEqual(
   'concurrent compatible-store replays must write one grant',
 );
 
+const concurrentRetryStore = createInMemoryGameServicesStore();
+const concurrentRetryBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: concurrentRetryStore,
+  evidenceVerifier,
+});
+const concurrentPurchaseRetryRequest = {
+  target: 'android',
+  playerId: 'player-concurrent-retry',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-concurrent-retry',
+  idempotencyKey: 'purchase-concurrent-retry',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+} as const;
+const concurrentRewardRetryRequest = {
+  target: 'android',
+  playerId: 'player-concurrent-retry',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-concurrent-retry',
+  idempotencyKey: 'reward-concurrent-retry',
+  completedAt: '2026-07-04T00:00:00.000Z',
+} as const;
+const concurrentPurchaseRetries = await Promise.all([
+  concurrentRetryBackend.purchases.verifyPurchase(concurrentPurchaseRetryRequest),
+  concurrentRetryBackend.purchases.verifyPurchase(concurrentPurchaseRetryRequest),
+]);
+const concurrentRewardRetries = await Promise.all([
+  concurrentRetryBackend.adRewards.claimAdReward(concurrentRewardRetryRequest),
+  concurrentRetryBackend.adRewards.claimAdReward(concurrentRewardRetryRequest),
+]);
+
+assertEqual(
+  concurrentPurchaseRetries.every((result) => result.verified),
+  true,
+  'concurrent purchase retries should both report the successful grant',
+);
+assertEqual(
+  concurrentPurchaseRetries.filter((result) => result.alreadyProcessed).length,
+  1,
+  'one concurrent purchase retry should return the original ledger result',
+);
+assertEqual(
+  concurrentRewardRetries.every((result) => result.granted),
+  true,
+  'concurrent reward retries should both report the successful grant',
+);
+assertEqual(
+  concurrentRewardRetries.filter((result) => result.alreadyProcessed).length,
+  1,
+  'one concurrent reward retry should return the original ledger result',
+);
+assertEqual(
+  (await concurrentRetryStore.listEntitlementTransactions()).length,
+  2,
+  'concurrent retries should write one ledger row per grant source',
+);
+
+const historicalEvidenceStore = createInMemoryGameServicesStore();
+await historicalEvidenceStore.recordEntitlementGrant({
+  playerId: 'player-historical-evidence',
+  grantId: 'COINS_100',
+  source: 'purchase',
+  idempotencyKey: 'purchase-historical-original',
+  grantedAt: '2026-07-03T00:00:00.000Z',
+  payload: {
+    target: 'android',
+    platformTransactionId: 'txn-historical-evidence',
+  },
+});
+await historicalEvidenceStore.recordEntitlementGrant({
+  playerId: 'player-historical-evidence',
+  grantId: 'CONTINUE_AFTER_FAIL',
+  source: 'ad_reward',
+  idempotencyKey: 'reward-historical-original',
+  grantedAt: '2026-07-03T00:00:00.000Z',
+  payload: {
+    target: 'android',
+    platformImpressionId: 'impression-historical-evidence',
+  },
+});
+const historicalEvidenceBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: historicalEvidenceStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return {
+        status: 'verified',
+        verificationId: 'provider:purchase:new-authority-id',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+    async verifyAdReward() {
+      return {
+        status: 'verified',
+        verificationId: 'provider:reward:new-authority-id',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+  },
+});
+const historicalPurchaseReplay = await historicalEvidenceBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-historical-evidence',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-historical-evidence',
+  idempotencyKey: 'purchase-historical-replay',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const historicalRewardReplay = await historicalEvidenceBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-historical-evidence',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-historical-evidence',
+  idempotencyKey: 'reward-historical-replay',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(
+  historicalPurchaseReplay.reason,
+  'EVIDENCE_ALREADY_PROCESSED',
+  'historical purchase platform evidence should reject a new authority identity',
+);
+assertEqual(
+  historicalRewardReplay.reason,
+  'EVIDENCE_ALREADY_PROCESSED',
+  'historical reward platform evidence should reject a new authority identity',
+);
+assertEqual(
+  (await historicalEvidenceStore.listEntitlementTransactions()).length,
+  2,
+  'historical platform evidence replays must not write new grants',
+);
+
 const replayStore = createInMemoryGameServicesStore();
 const replayBackend = createGameServicesBackend({
   catalog,

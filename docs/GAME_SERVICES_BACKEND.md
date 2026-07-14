@@ -127,6 +127,12 @@ dimensions:
   unique `(source, evidenceVerificationId)` values atomically and throw
   `EvidenceAlreadyProcessedError` to close cross-instance races; the included
   memory and D1 stores implement this invariant.
+- `findEntitlementTransactionByPlatformEvidence` is an optional indexed lookup
+  for verified purchase transaction ids and rewarded-ad impression ids. It
+  preserves replay protection for historical ledger rows that predate authority
+  verification ids; stores without it use the ledger-list fallback. The D1
+  migration backfills authority ids already present in payloads and adds unique
+  source/target platform-evidence indexes for historical and new rows.
 - Leaderboard records dedupe by `target`, `leaderboardId`, `playerId`, and
   `runId`. Retries with a different score, submission timestamp, or
   `platformSubmissionId` reuse the original `ledgerEntryId`.

@@ -78,6 +78,8 @@ export interface GameServicesStore {
     readonly source: EntitlementLedgerGrant['source'];
     readonly evidenceVerificationId: string;
   }): Promise<ProductGrantTransaction | undefined>;
+  findEntitlementTransactionByPlatformEvidence?(input: EntitlementPlatformEvidenceIdentity):
+    Promise<ProductGrantTransaction | undefined>;
   getEntitlementTransaction(
     ledgerEntryId: string,
   ): Promise<ProductGrantTransaction | undefined>;
@@ -90,6 +92,12 @@ export interface GameServicesStore {
     ledgerEntryId: string,
   ): Promise<LeaderboardScoreTransaction | undefined>;
   listLeaderboardTransactions(): Promise<readonly LeaderboardScoreTransaction[]>;
+}
+
+export interface EntitlementPlatformEvidenceIdentity {
+  readonly source: Extract<EntitlementLedgerGrant['source'], 'purchase' | 'ad_reward'>;
+  readonly target: string;
+  readonly platformEvidenceId: string;
 }
 
 export interface CreateGameServicesFetchHandlerOptions {
@@ -110,6 +118,10 @@ export interface GameServicesOrpcContext {
 export class InMemoryGameServicesStore implements GameServicesStore {
   private readonly entitlementTransactionsByKey = new Map<string, ProductGrantTransaction>();
   private readonly entitlementTransactionsByEvidence = new Map<string, ProductGrantTransaction>();
+  private readonly entitlementTransactionsByPlatformEvidence = new Map<
+    string,
+    ProductGrantTransaction
+  >();
   private readonly entitlementTransactionsById = new Map<string, ProductGrantTransaction>();
   private readonly leaderboardTransactionsByRun = new Map<string, LeaderboardScoreTransaction>();
   private readonly leaderboardTransactionsById = new Map<string, LeaderboardScoreTransaction>();
@@ -139,6 +151,16 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       }
     }
 
+    const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
+    if (
+      platformEvidenceIdentity !== undefined
+      && this.entitlementTransactionsByPlatformEvidence.has(
+        createEntitlementPlatformEvidenceKey(platformEvidenceIdentity),
+      )
+    ) {
+      throw new EvidenceAlreadyProcessedError();
+    }
+
     const transaction = createEntitlementTransaction(grant);
     this.entitlementTransactionsByKey.set(key, transaction);
     this.entitlementTransactionsById.set(transaction.ledgerEntryId, transaction);
@@ -148,6 +170,12 @@ export class InMemoryGameServicesStore implements GameServicesStore {
           source: grant.source,
           evidenceVerificationId: grant.evidenceVerificationId,
         }),
+        transaction,
+      );
+    }
+    if (platformEvidenceIdentity !== undefined) {
+      this.entitlementTransactionsByPlatformEvidence.set(
+        createEntitlementPlatformEvidenceKey(platformEvidenceIdentity),
         transaction,
       );
     }
@@ -171,6 +199,14 @@ export class InMemoryGameServicesStore implements GameServicesStore {
     readonly evidenceVerificationId: string;
   }): Promise<ProductGrantTransaction | undefined> {
     return this.entitlementTransactionsByEvidence.get(createEntitlementEvidenceKey(input));
+  }
+
+  async findEntitlementTransactionByPlatformEvidence(
+    input: EntitlementPlatformEvidenceIdentity,
+  ): Promise<ProductGrantTransaction | undefined> {
+    return this.entitlementTransactionsByPlatformEvidence.get(
+      createEntitlementPlatformEvidenceKey(input),
+    );
   }
 
   async getEntitlementTransaction(
@@ -841,12 +877,33 @@ async function recordEntitlementGrantWithEvidence(
     } as const;
 
     return withEntitlementEvidenceLock(store, evidenceIdentity, async () => {
-      const existing = await findEntitlementTransactionByEvidenceVerificationId(store, {
+      const authorityMatch = await findEntitlementTransactionByEvidenceVerificationId(store, {
         source: grant.source,
         evidenceVerificationId,
       });
+      const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
+      const existing = authorityMatch ?? (platformEvidenceIdentity === undefined
+        ? undefined
+        : await findEntitlementTransactionByPlatformEvidence(
+            store,
+            platformEvidenceIdentity,
+          ));
 
       if (existing !== undefined) {
+        if (
+          existing.source === grant.source
+          && existing.playerId === grant.playerId
+          && existing.idempotencyKey === grant.idempotencyKey
+        ) {
+          return {
+            status: 'recorded',
+            result: assertEntitlementLedgerResult({
+              ledgerEntryId: existing.ledgerEntryId,
+              alreadyProcessed: true,
+            }),
+          };
+        }
+
         return { status: 'evidence_already_processed' };
       }
 
@@ -963,6 +1020,52 @@ async function findEntitlementTransactionByEvidenceVerificationId(
     return transaction.source === input.source
       && storedEvidenceVerificationId === input.evidenceVerificationId;
   });
+}
+
+async function findEntitlementTransactionByPlatformEvidence(
+  store: GameServicesStore,
+  input: EntitlementPlatformEvidenceIdentity,
+): Promise<ProductGrantTransaction | undefined> {
+  if (store.findEntitlementTransactionByPlatformEvidence !== undefined) {
+    return store.findEntitlementTransactionByPlatformEvidence(input);
+  }
+
+  const transactions = await store.listEntitlementTransactions();
+  return transactions.find((transaction) => {
+    const identity = getEntitlementPlatformEvidenceIdentity(transaction);
+    return identity !== undefined
+      && identity.source === input.source
+      && identity.target === input.target
+      && identity.platformEvidenceId === input.platformEvidenceId;
+  });
+}
+
+function getEntitlementPlatformEvidenceIdentity(
+  transaction: Pick<ProductGrantTransaction, 'source' | 'payload'>,
+): EntitlementPlatformEvidenceIdentity | undefined {
+  if (transaction.source !== 'purchase' && transaction.source !== 'ad_reward') {
+    return undefined;
+  }
+
+  const target = transaction.payload.target;
+  const platformEvidenceId = transaction.source === 'purchase'
+    ? transaction.payload.platformTransactionId
+    : transaction.payload.platformImpressionId;
+
+  if (
+    typeof target !== 'string'
+    || target.length === 0
+    || typeof platformEvidenceId !== 'string'
+    || platformEvidenceId.length === 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    source: transaction.source,
+    target,
+    platformEvidenceId,
+  };
 }
 
 async function recordedEntitlementMatchesRetry(
@@ -1093,6 +1196,12 @@ function createEntitlementEvidenceKey(grant: {
   readonly evidenceVerificationId: string;
 }): string {
   return createCompositeKey([grant.source, grant.evidenceVerificationId]);
+}
+
+function createEntitlementPlatformEvidenceKey(
+  identity: EntitlementPlatformEvidenceIdentity,
+): string {
+  return createCompositeKey([identity.source, identity.target, identity.platformEvidenceId]);
 }
 
 function createEntitlementLedgerEntryId(grant: EntitlementLedgerGrant): string {

@@ -8,6 +8,7 @@ import {
   EvidenceAlreadyProcessedError,
   type EntitlementLedgerGrant,
   type EntitlementLedgerResult,
+  type EntitlementPlatformEvidenceIdentity,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
   type RecordLeaderboardScoreRequest,
@@ -88,6 +89,15 @@ class D1GameServicesStore implements GameServicesStore {
           source: grant.source,
           evidenceVerificationId: grant.evidenceVerificationId,
         }) !== undefined
+      ) {
+        throw new EvidenceAlreadyProcessedError();
+      }
+
+      const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
+      if (
+        platformEvidenceIdentity !== undefined
+        && await this.findEntitlementTransactionByPlatformEvidence(platformEvidenceIdentity)
+          !== undefined
       ) {
         throw new EvidenceAlreadyProcessedError();
       }
@@ -221,6 +231,25 @@ class D1GameServicesStore implements GameServicesStore {
     return row === null ? undefined : entitlementFromRow(row);
   }
 
+  async findEntitlementTransactionByPlatformEvidence(
+    input: EntitlementPlatformEvidenceIdentity,
+  ): Promise<ProductGrantTransaction | undefined> {
+    const evidenceJsonPath = input.source === 'purchase'
+      ? '$.platformTransactionId'
+      : '$.platformImpressionId';
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM entitlement_transactions
+         WHERE source = ?
+           AND json_extract(payload_json, '$.target') = ?
+           AND json_extract(payload_json, '${evidenceJsonPath}') = ?`,
+      )
+      .bind(input.source, input.target, input.platformEvidenceId)
+      .first<EntitlementRow>();
+
+    return row === null ? undefined : entitlementFromRow(row);
+  }
+
   private async findLeaderboardByRun(
     request: RecordLeaderboardScoreRequest,
   ): Promise<LeaderboardScoreTransaction | undefined> {
@@ -284,6 +313,26 @@ function entitlementFromRow(row: EntitlementRow): ProductGrantTransaction {
           grant: JSON.parse(row.grant_json) as NonNullable<ProductGrantTransaction['grant']>,
         },
   );
+}
+
+function getEntitlementPlatformEvidenceIdentity(
+  grant: EntitlementLedgerGrant,
+): EntitlementPlatformEvidenceIdentity | undefined {
+  if (grant.source !== 'purchase' && grant.source !== 'ad_reward') {
+    return undefined;
+  }
+
+  const target = grant.payload.target;
+  const platformEvidenceId = grant.source === 'purchase'
+    ? grant.payload.platformTransactionId
+    : grant.payload.platformImpressionId;
+
+  return typeof target === 'string'
+    && target.length > 0
+    && typeof platformEvidenceId === 'string'
+    && platformEvidenceId.length > 0
+    ? { source: grant.source, target, platformEvidenceId }
+    : undefined;
 }
 
 function leaderboardFromRow(row: LeaderboardRow): LeaderboardScoreTransaction {
