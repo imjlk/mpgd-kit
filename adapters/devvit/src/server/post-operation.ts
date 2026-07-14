@@ -827,8 +827,14 @@ export function createDevvitPostOperationCoordinator<
   ): Promise<ReadOperation<TPayload, TLaunchParams>> {
     const current = await readOperation(operationKey, descriptor, definition, input.store);
 
-    if (indexedStore !== undefined && current.kind === 'record') {
-      await indexedStore.ensureIndexed(createOperationIndexEntry(undefined, current.record));
+    if (indexedStore !== undefined && current.kind !== 'missing') {
+      try {
+        await indexedStore.ensureIndexed(createOperationIndexEntry(undefined, current.record));
+      } catch {
+        // A best-effort migration write must not hide an already-readable exact
+        // result. Indexed creation and every state CAS still require registry
+        // membership before mutating durable state.
+      }
     }
 
     return current;
@@ -1116,7 +1122,11 @@ function pendingOperationResult<
 
 type ReadOperation<TPayload extends DevvitJsonObject, TLaunchParams extends DevvitJsonObject> =
   | { readonly kind: 'missing' }
-  | { readonly kind: 'conflict' }
+  | {
+      readonly kind: 'conflict';
+      readonly raw: string;
+      readonly record: StoredRecord<TPayload, TLaunchParams>;
+    }
   | {
       readonly kind: 'record';
       readonly raw: string;
@@ -1181,7 +1191,7 @@ async function readOperation<
   const record = parseStoredRecord(raw, operationKey, definition);
 
   if (canonicalJson(record.descriptor) !== canonicalJson(descriptor)) {
-    return { kind: 'conflict' };
+    return { kind: 'conflict', raw, record };
   }
 
   return { kind: 'record', raw, record };

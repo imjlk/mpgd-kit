@@ -246,6 +246,49 @@ describe('durable Devvit post operation coordinator', () => {
     expect(publish).toHaveBeenCalledOnce();
   });
 
+  it('backfills the stored record when an exact-key read has a descriptor conflict', async () => {
+    const fixture = createFixture();
+    await fixture.coordinator.execute({
+      ...baseDescriptor(),
+      publish: async () => {
+        throw new Error('outcome unknown');
+      },
+    });
+    fixture.store.clearIndexes();
+
+    await expect(fixture.coordinator.read({
+      ...baseDescriptor(),
+      payload: { alpha: 'changed-payload', zeta: 7 },
+    })).resolves.toMatchObject({ status: 'conflict' });
+    await expect(fixture.coordinator.listPending({ scope: baseDescriptor().scope })).resolves
+      .toMatchObject({
+        operations: [{
+          status: 'reconciliation-required',
+          operationId: 'operation-20260712',
+          postData: expectedPostData(),
+        }],
+      });
+  });
+
+  it('does not mask an exact retry when best-effort registry backfill fails', async () => {
+    const fixture = createFixture();
+    const publish = vi.fn(async () => {
+      throw new Error('outcome unknown');
+    });
+    await fixture.coordinator.execute({ ...baseDescriptor(), publish });
+    fixture.store.clearIndexes();
+    fixture.store.throwOnEnsureIndexed = true;
+
+    await expect(fixture.coordinator.execute({ ...baseDescriptor(), publish })).resolves
+      .toMatchObject({
+        status: 'reconciliation-required',
+        operationId: 'operation-20260712',
+      });
+    await expect(fixture.coordinator.listPending({ scope: baseDescriptor().scope }))
+      .resolves.toEqual({ operations: [] });
+    expect(publish).toHaveBeenCalledOnce();
+  });
+
   it('requires a complete indexed-store capability before listing pending work', async () => {
     const store = new UnindexedMemoryDurableOperationStore();
     const coordinator = createDevvitPostOperationCoordinator({ definition, store });
@@ -852,6 +895,7 @@ class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore 
   throwAfterCreate = false;
   throwAfterAttemptedCas = false;
   throwAfterPublishedCas = false;
+  throwOnEnsureIndexed = false;
   throwOnReleaseLease = false;
   afterNextListIndex: (() => Promise<void>) | undefined;
   private terminalCasGate: {
@@ -866,6 +910,10 @@ class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore 
   }
 
   ensureIndexed(index: DevvitDurableOperationIndexEntry): Promise<void> {
+    if (this.throwOnEnsureIndexed) {
+      this.throwOnEnsureIndexed = false;
+      return Promise.reject(new Error('registry backfill unavailable'));
+    }
     this.applyIndexMutation(index);
     return Promise.resolve();
   }

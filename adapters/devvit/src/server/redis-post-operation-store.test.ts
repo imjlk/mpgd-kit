@@ -114,6 +114,19 @@ describe('createDevvitRedisPostOperationStore', () => {
     await expect(store.listIndex('operations', undefined, 10)).resolves.toEqual(['operation']);
   });
 
+  it('does not transition a pre-index record when registry backfill fails', async () => {
+    const redis = new FakeDevvitRedis();
+    const store = createDevvitRedisPostOperationStore(redis);
+
+    await store.create('operation', 'prepared');
+    redis.zAddError = new Error('registry unavailable');
+    await expect(store.compareAndSetIndexed('operation', 'prepared', 'attempted', {
+      indexKey: 'operations',
+      member: 'operation',
+    })).rejects.toThrow('registry unavailable');
+    await expect(store.read('operation')).resolves.toBe('prepared');
+  });
+
   it('keeps stable index membership while a pending state CAS retries contention', async () => {
     const redis = new FakeDevvitRedis();
     const store = createDevvitRedisPostOperationStore(redis, { transactionAttempts: 2 });
