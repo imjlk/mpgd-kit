@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   createDevvitRedisPostOperationStore,
   type DevvitRedisLike,
+  type DevvitRedisRangeOptions,
   type DevvitRedisSetOptions,
+  type DevvitRedisSortedSetMember,
   type DevvitRedisTransactionLike,
 } from './redis-post-operation-store';
 
@@ -59,6 +61,62 @@ describe('createDevvitRedisPostOperationStore', () => {
     await expect(store.compareAndSet('operation', 'pending', 'published')).resolves.toBe(true);
     await expect(store.read('operation')).resolves.toBe('published');
     expect(redis.unwatchCalls).toBe(1);
+  });
+
+  it('atomically creates state with a pending index and lists it by lex cursor', async () => {
+    const redis = new FakeDevvitRedis();
+    const store = createDevvitRedisPostOperationStore(redis);
+    const first = '0000000000000001:0:operation-a';
+    const second = '0000000000000002:1:operation-b';
+
+    await expect(store.createIndexed('operation-a', 'prepared-a', {
+      indexKey: 'pending',
+      addMember: first,
+    })).resolves.toBe(true);
+    await expect(store.createIndexed('operation-b', 'attempted-b', {
+      indexKey: 'pending',
+      addMember: second,
+    })).resolves.toBe(true);
+    await expect(store.listIndex('pending', undefined, 1)).resolves.toEqual([first]);
+    await expect(store.listIndex('pending', first, 2)).resolves.toEqual([second]);
+  });
+
+  it('moves and removes pending index members in the state CAS transaction', async () => {
+    const redis = new FakeDevvitRedis();
+    const store = createDevvitRedisPostOperationStore(redis);
+    const prepared = '0000000000000001:0:operation';
+    const attempted = '0000000000000002:1:operation';
+
+    await store.createIndexed('operation', 'prepared', {
+      indexKey: 'pending',
+      addMember: prepared,
+    });
+    await expect(store.compareAndSetIndexed('operation', 'prepared', 'attempted', {
+      indexKey: 'pending',
+      removeMember: prepared,
+      addMember: attempted,
+    })).resolves.toBe(true);
+    await expect(store.listIndex('pending', undefined, 10)).resolves.toEqual([attempted]);
+    await expect(store.compareAndSetIndexed('operation', 'attempted', 'published', {
+      indexKey: 'pending',
+      removeMember: attempted,
+    })).resolves.toBe(true);
+    await expect(store.listIndex('pending', undefined, 10)).resolves.toEqual([]);
+  });
+
+  it('does not expose partial indexed writes after transaction contention', async () => {
+    const redis = new FakeDevvitRedis();
+    redis.execOutcomes.push('contention', 'success');
+    const store = createDevvitRedisPostOperationStore(redis, { transactionAttempts: 2 });
+
+    await expect(store.createIndexed('operation', 'prepared', {
+      indexKey: 'pending',
+      addMember: '0000000000000001:0:operation',
+    })).resolves.toBe(true);
+    await expect(store.read('operation')).resolves.toBe('prepared');
+    await expect(store.listIndex('pending', undefined, 10)).resolves.toEqual([
+      '0000000000000001:0:operation',
+    ]);
   });
 
   it('retries confirmed transaction contention within a bounded budget', async () => {
@@ -161,6 +219,7 @@ type ExecOutcome =
 
 class FakeDevvitRedis implements DevvitRedisLike {
   readonly values: Map<string, string>;
+  readonly sortedSets = new Map<string, Map<string, number>>();
   readonly setCalls: Array<{
     readonly key: string;
     readonly value: string;
@@ -194,6 +253,24 @@ class FakeDevvitRedis implements DevvitRedisLike {
     return 'OK';
   }
 
+  async zRange(
+    key: string,
+    start: string,
+    stop: string,
+    options: DevvitRedisRangeOptions,
+  ): Promise<DevvitRedisSortedSetMember[]> {
+    if (stop !== '+' || options.by !== 'lex') {
+      throw new Error('FakeDevvitRedis only supports forward lex ranges.');
+    }
+
+    const exclusiveStart = start === '-' ? undefined : start.slice(1);
+    return [...(this.sortedSets.get(key)?.entries() ?? [])]
+      .filter(([member]) => exclusiveStart === undefined || member > exclusiveStart)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(options.limit.offset, options.limit.offset + options.limit.count)
+      .map(([member, score]) => ({ member, score }));
+  }
+
   async watch(key: string): Promise<DevvitRedisTransactionLike> {
     this.watchCalls += 1;
     return new FakeDevvitRedisTransaction(this, key);
@@ -204,10 +281,25 @@ class FakeDevvitRedis implements DevvitRedisLike {
 
     return typeof configured === 'function' ? configured() : configured;
   }
+
+  applyZAdd(key: string, members: readonly DevvitRedisSortedSetMember[]): void {
+    const set = this.sortedSets.get(key) ?? new Map<string, number>();
+    for (const member of members) {
+      set.set(member.member, member.score);
+    }
+    this.sortedSets.set(key, set);
+  }
+
+  applyZRem(key: string, members: readonly string[]): void {
+    const set = this.sortedSets.get(key);
+    for (const member of members) {
+      set?.delete(member);
+    }
+  }
 }
 
 class FakeDevvitRedisTransaction implements DevvitRedisTransactionLike {
-  private mutation: (() => void) | undefined;
+  private readonly mutations: Array<() => void> = [];
   private multiStarted = false;
 
   constructor(
@@ -221,24 +313,37 @@ class FakeDevvitRedisTransaction implements DevvitRedisTransactionLike {
 
   async discard(): Promise<void> {
     this.redis.discardCalls += 1;
-    this.mutation = undefined;
+    this.mutations.length = 0;
     this.multiStarted = false;
   }
 
   async set(key: string, value: string): Promise<void> {
     this.assertMultiStarted();
-    this.mutation = () => {
+    this.mutations.push(() => {
       this.redis.values.set(key, value);
-    };
+    });
   }
 
   async del(...keys: readonly string[]): Promise<void> {
     this.assertMultiStarted();
-    this.mutation = () => {
+    this.mutations.push(() => {
       for (const key of keys) {
         this.redis.values.delete(key);
       }
-    };
+    });
+  }
+
+  async zAdd(
+    key: string,
+    ...members: readonly DevvitRedisSortedSetMember[]
+  ): Promise<void> {
+    this.assertMultiStarted();
+    this.mutations.push(() => this.redis.applyZAdd(key, members));
+  }
+
+  async zRem(key: string, members: readonly string[]): Promise<void> {
+    this.assertMultiStarted();
+    this.mutations.push(() => this.redis.applyZRem(key, members));
   }
 
   async exec(): Promise<readonly unknown[] | null> {
@@ -255,7 +360,9 @@ class FakeDevvitRedisTransaction implements DevvitRedisTransactionLike {
       return null;
     }
 
-    this.mutation?.();
+    for (const mutation of this.mutations) {
+      mutation();
+    }
     return ['OK'];
   }
 

@@ -7,7 +7,9 @@ import {
   DevvitPostOperationStateError,
   DevvitPostOperationValidationError,
   type DevvitCanonicalPostData,
+  type DevvitDurableOperationIndexMutation,
   type DevvitDurableOperationStore,
+  type DevvitIndexedDurableOperationStore,
   type DevvitJsonObject,
   type DevvitPostOperationDescriptorInput,
   type DevvitPostPublishInput,
@@ -52,6 +54,135 @@ describe('durable Devvit post operation coordinator', () => {
       postData: expectedPostData(),
     });
     expect(fixture.store.recordPhases()).toEqual(['published']);
+  });
+
+  it('lists pending work by scope with a bounded cursor and no external side effects', async () => {
+    const fixture = createFixture();
+    const preparedDescriptor = { ...baseDescriptor(), operationId: 'operation-prepared' };
+    fixture.store.throwAfterCreate = true;
+    await expect(fixture.coordinator.execute({
+      ...preparedDescriptor,
+      publish: vi.fn(),
+    })).rejects.toThrow('process exited after prepared write');
+
+    fixture.clock.advance(1);
+    const attemptedDescriptor = { ...baseDescriptor(), operationId: 'operation-attempted' };
+    const publishAttempted = vi.fn(async () => {
+      throw new Error('outcome unknown');
+    });
+    await fixture.coordinator.execute({ ...attemptedDescriptor, publish: publishAttempted });
+
+    fixture.clock.advance(1);
+    const publishCompleted = vi.fn(async () => ({ postId: 't3_completed' }));
+    await fixture.coordinator.execute({
+      ...baseDescriptor(),
+      operationId: 'operation-completed',
+      publish: publishCompleted,
+    });
+    await fixture.coordinator.execute({
+      ...baseDescriptor({ appScope: 'app-alpha', subredditId: 't5_beta' }),
+      operationId: 'operation-other-scope',
+      publish: async () => {
+        throw new Error('outcome unknown');
+      },
+    });
+
+    const firstPage = await fixture.coordinator.listPending({
+      scope: baseDescriptor().scope,
+      limit: 1,
+    });
+    expect(firstPage.operations).toMatchObject([
+      { status: 'prepared', operationId: 'operation-prepared' },
+    ]);
+    expect(firstPage.nextCursor).toBeDefined();
+    if (firstPage.nextCursor === undefined) {
+      throw new Error('Expected a continuation cursor for the second pending page.');
+    }
+
+    const secondPage = await fixture.coordinator.listPending({
+      scope: baseDescriptor().scope,
+      cursor: firstPage.nextCursor,
+      limit: 1,
+    });
+    expect(secondPage).toMatchObject({
+      operations: [{
+        status: 'reconciliation-required',
+        reason: 'submission-attempted',
+        operationId: 'operation-attempted',
+      }],
+    });
+    expect(secondPage.nextCursor).toBeUndefined();
+    expect(publishAttempted).toHaveBeenCalledOnce();
+    expect(publishCompleted).toHaveBeenCalledOnce();
+  });
+
+  it('keeps terminal ambiguity visible and rejects cursors from another scope', async () => {
+    const fixture = createFixture();
+    let postData: DevvitCanonicalPostData<TestPayload, TestLaunchParams> | undefined;
+    await fixture.coordinator.execute({
+      ...baseDescriptor(),
+      publish: async (input) => {
+        postData = input.postData;
+        throw new Error('outcome unknown');
+      },
+    });
+    await fixture.coordinator.reconcile({
+      ...baseDescriptor(),
+      findCandidates: async () => [
+        { postId: 't3_duplicatea', postData },
+        { postId: 't3_duplicateb', postData },
+      ],
+    });
+
+    const page = await fixture.coordinator.listPending({ scope: baseDescriptor().scope });
+    expect(page.operations).toMatchObject([{
+      status: 'terminal-unresolved',
+      reason: 'multiple-exact-matches',
+      postIds: ['t3_duplicatea', 't3_duplicateb'],
+    }]);
+    const cursor = fixture.store.firstIndexMember();
+    if (cursor === undefined) {
+      throw new Error('Expected the terminal operation to remain indexed.');
+    }
+    await expect(fixture.coordinator.listPending({
+      scope: { appScope: 'app-alpha', subredditId: 't5_beta' },
+      cursor,
+    })).rejects.toBeInstanceOf(DevvitPostOperationStateError);
+  });
+
+  it('skips a pending index member that completes after the page range is read', async () => {
+    const fixture = createFixture();
+    let postData: DevvitCanonicalPostData<TestPayload, TestLaunchParams> | undefined;
+    await fixture.coordinator.execute({
+      ...baseDescriptor(),
+      publish: async (input) => {
+        postData = input.postData;
+        throw new Error('outcome unknown');
+      },
+    });
+    fixture.store.afterNextListIndex = async () => {
+      await fixture.coordinator.reconcile({
+        ...baseDescriptor(),
+        findCandidates: async () => [{ postId: 't3_recovered', postData }],
+      });
+    };
+
+    await expect(fixture.coordinator.listPending({
+      scope: baseDescriptor().scope,
+    })).resolves.toEqual({ operations: [] });
+    await expect(fixture.coordinator.read(baseDescriptor())).resolves.toMatchObject({
+      status: 'existing',
+      postId: 't3_recovered',
+    });
+  });
+
+  it('requires a complete indexed-store capability before listing pending work', async () => {
+    const store = new UnindexedMemoryDurableOperationStore();
+    const coordinator = createDevvitPostOperationCoordinator({ definition, store });
+
+    await expect(coordinator.listPending({ scope: baseDescriptor().scope })).rejects.toThrow(
+      'does not support pending-operation indexes',
+    );
   });
 
   it('can create and publish a new operation with a one-attempt store budget', async () => {
@@ -644,13 +775,15 @@ class TestClock {
   }
 }
 
-class MemoryDurableOperationStore implements DevvitDurableOperationStore {
+class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore {
   readonly values = new Map<string, string>();
+  readonly indexes = new Map<string, Set<string>>();
   readonly leases = new Map<string, { readonly token: string; readonly expiresAt: number }>();
   throwAfterCreate = false;
   throwAfterAttemptedCas = false;
   throwAfterPublishedCas = false;
   throwOnReleaseLease = false;
+  afterNextListIndex: (() => Promise<void>) | undefined;
   private terminalCasGate: {
     readonly started: ReturnType<typeof deferred<void>>;
     readonly release: ReturnType<typeof deferred<void>>;
@@ -663,10 +796,29 @@ class MemoryDurableOperationStore implements DevvitDurableOperationStore {
   }
 
   create(key: string, value: string): Promise<boolean> {
+    return this.createWithIndex(key, value);
+  }
+
+  createIndexed(
+    key: string,
+    value: string,
+    index: DevvitDurableOperationIndexMutation,
+  ): Promise<boolean> {
+    return this.createWithIndex(key, value, index);
+  }
+
+  private createWithIndex(
+    key: string,
+    value: string,
+    index?: DevvitDurableOperationIndexMutation,
+  ): Promise<boolean> {
     if (this.values.has(key)) {
       return Promise.resolve(false);
     }
     this.values.set(key, value);
+    if (index !== undefined) {
+      this.applyIndexMutation(index);
+    }
     if (this.throwAfterCreate) {
       this.throwAfterCreate = false;
       return Promise.reject(new Error('process exited after prepared write'));
@@ -675,6 +827,24 @@ class MemoryDurableOperationStore implements DevvitDurableOperationStore {
   }
 
   async compareAndSet(key: string, expectedValue: string, nextValue: string): Promise<boolean> {
+    return this.compareAndSetWithIndex(key, expectedValue, nextValue);
+  }
+
+  async compareAndSetIndexed(
+    key: string,
+    expectedValue: string,
+    nextValue: string,
+    index: DevvitDurableOperationIndexMutation,
+  ): Promise<boolean> {
+    return this.compareAndSetWithIndex(key, expectedValue, nextValue, index);
+  }
+
+  private async compareAndSetWithIndex(
+    key: string,
+    expectedValue: string,
+    nextValue: string,
+    index?: DevvitDurableOperationIndexMutation,
+  ): Promise<boolean> {
     const phase = storedPhase(nextValue);
     const gate = phase === 'terminal-unresolved' ? this.terminalCasGate : undefined;
     if (gate !== undefined) {
@@ -686,6 +856,9 @@ class MemoryDurableOperationStore implements DevvitDurableOperationStore {
       return false;
     }
     this.values.set(key, nextValue);
+    if (index !== undefined) {
+      this.applyIndexMutation(index);
+    }
     if (phase === 'attempted' && this.throwAfterAttemptedCas) {
       this.throwAfterAttemptedCas = false;
       throw new Error('process exited after attempted write');
@@ -695,6 +868,21 @@ class MemoryDurableOperationStore implements DevvitDurableOperationStore {
       throw new Error('published write acknowledgement was lost');
     }
     return true;
+  }
+
+  async listIndex(
+    key: string,
+    startExclusive: string | undefined,
+    limit: number,
+  ): Promise<readonly string[]> {
+    const page = [...this.indexes.get(key) ?? []]
+      .filter((member) => startExclusive === undefined || member > startExclusive)
+      .sort()
+      .slice(0, limit);
+    const afterList = this.afterNextListIndex;
+    this.afterNextListIndex = undefined;
+    await afterList?.();
+    return page;
   }
 
   createLease(key: string, token: string, expiresAt: Date): Promise<boolean> {
@@ -728,6 +916,10 @@ class MemoryDurableOperationStore implements DevvitDurableOperationStore {
       .sort();
   }
 
+  firstIndexMember(): string | undefined {
+    return [...this.indexes.values()].flatMap((members) => [...members]).sort()[0];
+  }
+
   blockNextTerminalCas(): {
     readonly started: ReturnType<typeof deferred<void>>;
     readonly release: ReturnType<typeof deferred<void>>;
@@ -736,6 +928,49 @@ class MemoryDurableOperationStore implements DevvitDurableOperationStore {
     const release = deferred<void>();
     this.terminalCasGate = { started, release };
     return { started, release };
+  }
+
+  private applyIndexMutation(mutation: DevvitDurableOperationIndexMutation): void {
+    const members = this.indexes.get(mutation.indexKey) ?? new Set<string>();
+    if (mutation.removeMember !== undefined) {
+      members.delete(mutation.removeMember);
+    }
+    if (mutation.addMember !== undefined) {
+      members.add(mutation.addMember);
+    }
+    this.indexes.set(mutation.indexKey, members);
+  }
+}
+
+class UnindexedMemoryDurableOperationStore implements DevvitDurableOperationStore {
+  private readonly values = new Map<string, string>();
+
+  read(key: string): Promise<string | undefined> {
+    return Promise.resolve(this.values.get(key));
+  }
+
+  create(key: string, value: string): Promise<boolean> {
+    if (this.values.has(key)) {
+      return Promise.resolve(false);
+    }
+    this.values.set(key, value);
+    return Promise.resolve(true);
+  }
+
+  compareAndSet(key: string, expectedValue: string, nextValue: string): Promise<boolean> {
+    if (this.values.get(key) !== expectedValue) {
+      return Promise.resolve(false);
+    }
+    this.values.set(key, nextValue);
+    return Promise.resolve(true);
+  }
+
+  createLease(): Promise<boolean> {
+    return Promise.resolve(true);
+  }
+
+  releaseLease(): Promise<void> {
+    return Promise.resolve();
   }
 }
 

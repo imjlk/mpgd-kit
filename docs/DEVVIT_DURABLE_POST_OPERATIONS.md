@@ -90,6 +90,52 @@ TypeScript types for exact callback inputs. Keeping the definition next to the
 server route or scheduler makes the Reddit boundary explicit without coupling the
 reusable coordinator to one post schema.
 
+## Pending Operation Discovery
+
+The Redis-backed store also maintains a scope- and operation-type-specific
+pending index in the same transaction as every durable state change. Use
+`listPending` from a bounded operator endpoint or scheduler to discover
+`prepared`, `reconciliation-required`, and `terminal-unresolved` records without
+scanning the Redis keyspace:
+
+```ts
+let cursor: string | undefined;
+
+do {
+  const page = await coordinator.listPending({
+    scope: descriptor.scope,
+    limit: 25,
+    ...(cursor === undefined ? {} : { cursor }),
+  });
+
+  for (const operation of page.operations) {
+    if (operation.status === 'reconciliation-required') {
+      // Supply the descriptor from operation.postData to the application-owned
+      // bounded candidate lookup, then call reconcile explicitly.
+    } else if (operation.status === 'terminal-unresolved') {
+      // Escalate the conflicting post IDs for operator resolution.
+    }
+  }
+
+  cursor = page.nextCursor;
+} while (cursor !== undefined);
+```
+
+Listing is read-only: it never calls Reddit, invokes a candidate lookup, or
+restores submit permission. A `prepared` record proves only that the remote call
+was not durably marked as attempted; the application still decides whether its
+recovery worker should call `execute`. An attempted record must go through
+`reconcile`, and a terminal record remains fail-closed.
+
+Cursors are bounded continuations for one coordinator definition and scope, not
+snapshot tokens. Concurrent state changes may cause an operation to be observed
+again on a later page or produce a page with fewer live records than its requested
+limit, so workers must preserve the coordinator's idempotent handling and continue
+while `nextCursor` is present. A cursor from another scope is rejected. The base
+`DevvitDurableOperationStore` remains valid for applications that only know exact
+operation IDs; `listPending` requires `DevvitIndexedDurableOperationStore`, which
+the Redis factory and generated target wrapper provide.
+
 ## Retry And Reconciliation Rules
 
 - Persist the prepared operation before the first Reddit API call.
@@ -99,6 +145,8 @@ reusable coordinator to one post schema.
   `reconciliation-required`; it never submits again.
 - An explicit recovery endpoint or scheduler calls `reconcile` with a bounded
   candidate lookup.
+- A bounded recovery scheduler uses `listPending` to discover work; it does not
+  scan Redis keys or treat listing as permission to submit again.
 - Reconciliation accepts only a post whose full canonical envelope matches.
 - A missing match or a failed scan remains reconciliation-required. A bounded
   listing that did not find the post is not proof that Reddit rejected it.

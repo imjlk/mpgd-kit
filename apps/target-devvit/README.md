@@ -33,7 +33,10 @@ Redis-backed wrapper in `src/server/postOperationStore.ts` with
 ambiguity-safe: it records an attempt before calling Reddit, then returns
 `reconciliation-required` for an uncertain outcome without blindly posting again.
 An explicit recovery endpoint or scheduler calls `reconcile`. The coordinator does
-not claim exactly-once delivery. See
+not claim exactly-once delivery. The Redis wrapper also provides the indexed store
+capability used by `listPending()` so a bounded recovery scheduler can discover
+prepared, attempted, and terminal records without scanning Redis keys. Listing is
+read-only and never restores submit permission. See
 [Devvit durable post operations](../../docs/DEVVIT_DURABLE_POST_OPERATIONS.md) for
 the operation, retry, and launch-metadata contract.
 

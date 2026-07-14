@@ -73,6 +73,12 @@ explicit recovery endpoint or scheduler calls `reconcile`, which requires an exa
 match of the full canonical envelope. A missing match from a bounded listing
 remains unresolved rather than restoring submit permission.
 
+The generated Redis wrapper implements `DevvitIndexedDurableOperationStore`.
+Use `listPending()` with a small limit and its scope-bound continuation cursor to
+discover prepared, attempted, and terminal work without scanning Redis keys.
+Listing is read-only; prepared work still requires an explicit `execute` decision,
+attempted work must use `reconcile`, and terminal ambiguity remains fail-closed.
+
 Keep operation definitions and `@devvit/web/server` imports inside this target
 app. The canonical `{ mpgd, launch, payload }` envelope is public and untrusted;
 keep private content and authoritative records in server-side storage. Exercise
