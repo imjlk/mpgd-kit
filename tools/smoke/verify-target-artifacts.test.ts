@@ -19,6 +19,13 @@ const disabledConfig = {
     products: [{ enabled: false, platformProductId: 'cosmetic_1' }],
   },
 };
+const capabilityReadyConfig = {
+  features: { iap: true },
+  monetization: {
+    iap: true,
+    products: [{ enabled: false, platformProductId: undefined }],
+  },
+};
 
 assert.deepEqual(assertDevvitPaymentsReadiness(true, enabledConfig, 'reddit Devvit manifest'), [
   'cosmetic_1',
@@ -27,23 +34,21 @@ assert.deepEqual(
   assertDevvitPaymentsReadiness(false, disabledConfig, 'reddit Devvit manifest'),
   [],
 );
-assert.throws(
-  () => assertDevvitPaymentsReadiness(false, enabledConfig, 'reddit Devvit manifest'),
-  /features\.iap must be false/u,
+assert.deepEqual(
+  assertDevvitPaymentsReadiness(false, capabilityReadyConfig, 'reddit Devvit manifest'),
+  [],
 );
 assert.throws(
-  () => assertDevvitPaymentsReadiness(false, {
-    features: { iap: false },
-    monetization: {
-      iap: false,
-      products: [{ enabled: true, platformProductId: 'cosmetic_1' }],
-    },
-  }, 'reddit Devvit manifest'),
+  () => assertDevvitPaymentsReadiness(false, enabledConfig, 'reddit Devvit manifest'),
   /must not expose enabled products/u,
 );
 assert.throws(
   () => assertDevvitPaymentsReadiness(undefined, enabledConfig, 'reddit Devvit manifest'),
-  /features\.iap must be false/u,
+  /must not expose enabled products/u,
+);
+assert.throws(
+  () => assertDevvitPaymentsReadiness(true, disabledConfig, 'reddit Devvit manifest'),
+  /features\.iap must be true/u,
 );
 
 assert.doesNotThrow(() =>

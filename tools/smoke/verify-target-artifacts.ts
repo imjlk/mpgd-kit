@@ -739,15 +739,15 @@ export function assertDevvitPaymentsReadiness(
   assertRecord(effectiveConfig, `${label} effective target config`);
   const features = effectiveConfig.features;
   assertRecord(features, `${label} effective target config features`);
-  assertBooleanValue(
-    features.iap,
-    permissionEnabled,
-    `${label} effective target config features.iap`,
-  );
   const monetization = effectiveConfig.monetization;
   const monetizationLabel = `${label} effective target config monetization`;
   assertRecord(monetization, monetizationLabel);
-  assertBooleanValue(monetization.iap, permissionEnabled, `${monetizationLabel}.iap`);
+
+  if (permissionEnabled) {
+    assertBooleanValue(features.iap, true, `${label} effective target config features.iap`);
+    assertBooleanValue(monetization.iap, true, `${monetizationLabel}.iap`);
+  }
+
   assertArray(monetization.products, `${monetizationLabel}.products`);
   const effectiveSkus = monetization.products.flatMap((product, index) => {
     assertRecord(product, `${label} effective product ${String(index)}`);
