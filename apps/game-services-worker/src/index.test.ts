@@ -7,6 +7,7 @@ import { createWorkerFetchHandler, createWorkerService } from './handler.js';
 
 const workerEnv = {
   MPGD_STORE: 'memory',
+  MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE: 'true',
   VERIFIED_LEADERBOARD_AUTH: {
     async authenticateVerifiedLeaderboardSnapshot(
       input: { readonly authorization: string },
@@ -20,6 +21,37 @@ const workerEnv = {
 const workerFetch = createWorkerFetchHandler(workerEnv);
 const workerService = createWorkerService(workerEnv);
 const baseUrl = 'https://game-services-worker.test';
+
+const defaultMemoryFetch = createWorkerFetchHandler({ MPGD_STORE: 'memory' });
+const defaultMemoryPurchase = await defaultMemoryFetch(
+  new Request(`${baseUrl}/game-services/purchases/verify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      target: 'android',
+      playerId: 'worker-default-fail-closed',
+      productId: 'COINS_100',
+      platformTransactionId: 'worker-default-unverified',
+      idempotencyKey: 'worker-default-unverified',
+      purchasedAt: '2026-07-04T00:00:00.000Z',
+    }),
+  }),
+);
+const defaultMemoryPurchaseBody = await defaultMemoryPurchase.json() as {
+  readonly verified: boolean;
+  readonly reason?: string;
+};
+
+assertEqual(
+  defaultMemoryPurchaseBody.verified,
+  false,
+  'deployable memory configuration should fail closed without an explicit development flag',
+);
+assertEqual(
+  defaultMemoryPurchaseBody.reason,
+  'EVIDENCE_VERIFIER_UNAVAILABLE',
+  'deployable memory configuration should expose missing verifier state',
+);
 
 const health = await workerFetch(new Request(`${baseUrl}/health`));
 const healthBody = await health.json() as { readonly version: string };

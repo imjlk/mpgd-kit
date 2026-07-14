@@ -30,6 +30,7 @@ import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
 export interface GameServicesWorkerEnv {
   readonly DB?: D1Database;
   readonly MPGD_STORE?: 'memory' | 'd1';
+  readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   readonly VERIFIED_LEADERBOARD_AUTH?: VerifiedLeaderboardAuthBinding;
   readonly GAME_SERVICES_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifier;
 }
@@ -226,9 +227,9 @@ function resolveWorkerEvidenceVerifier(
     return env.GAME_SERVICES_EVIDENCE_VERIFIER;
   }
 
-  return env.MPGD_STORE === 'd1'
-    ? undefined
-    : createDevelopmentGameServicesEvidenceVerifier();
+  return env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true'
+    ? createDevelopmentGameServicesEvidenceVerifier()
+    : undefined;
 }
 
 function createWorkerStore(env: GameServicesWorkerEnv): GameServicesStore {

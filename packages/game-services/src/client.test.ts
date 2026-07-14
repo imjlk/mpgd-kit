@@ -12,12 +12,15 @@ import {
 let purchaseClaims = 0;
 let rewardClaims = 0;
 let scoreRecords = 0;
+let purchaseEvidenceSchema: string | undefined;
+let rewardEvidenceSchema: string | undefined;
 const playerId = 'player-game-services';
 const gateway = createMockGateway();
 const backend = {
   purchases: {
     async verifyPurchase(input) {
       purchaseClaims += 1;
+      purchaseEvidenceSchema = input.evidence?.schema;
 
       return {
         verified: true,
@@ -29,6 +32,7 @@ const backend = {
   adRewards: {
     async claimAdReward(input) {
       rewardClaims += 1;
+      rewardEvidenceSchema = input.evidence?.schema;
 
       return {
         granted: true,
@@ -95,6 +99,16 @@ const reward = await client.claimRewardedAd({
 });
 
 assertEqual(reward.status, 'granted', 'reward should be granted after ad reward ledger claim');
+assertEqual(
+  purchaseEvidenceSchema,
+  'test.purchase.v1',
+  'purchase evidence should reach the backend verifier request',
+);
+assertEqual(
+  rewardEvidenceSchema,
+  'test.reward.v1',
+  'reward evidence should reach the backend verifier request',
+);
 
 const leaderboard = await client.submitLeaderboardScore({
   leaderboardId: 'default',
@@ -424,6 +438,12 @@ function createMockGateway(): PlatformGateway {
           status: 'completed',
           transactionId: `txn-${input.productId}-${input.idempotencyKey}`,
           entitlementIds: [],
+          evidence: {
+            schema: 'test.purchase.v1',
+            payload: {
+              signedTransaction: 'test-signed-transaction',
+            },
+          },
         };
       },
       async getEntitlements() {
@@ -437,6 +457,12 @@ function createMockGateway(): PlatformGateway {
           status: 'completed',
           rewardGranted: true,
           ledgerEntryId: `impression-${input.idempotencyKey}`,
+          evidence: {
+            schema: 'test.reward.v1',
+            payload: {
+              signedCallback: 'test-signed-callback',
+            },
+          },
         };
       },
     },

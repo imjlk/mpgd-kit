@@ -68,6 +68,11 @@ export interface GameServicesBackendErrorResponse {
 
 export interface GameServicesStore {
   recordEntitlementGrant(input: EntitlementLedgerGrant): Promise<EntitlementLedgerResult>;
+  findEntitlementTransactionByIdempotency(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly playerId: string;
+    readonly idempotencyKey: string;
+  }): Promise<ProductGrantTransaction | undefined>;
   getEntitlementTransaction(
     ledgerEntryId: string,
   ): Promise<ProductGrantTransaction | undefined>;
@@ -99,6 +104,7 @@ export interface GameServicesOrpcContext {
 
 export class InMemoryGameServicesStore implements GameServicesStore {
   private readonly entitlementTransactionsByKey = new Map<string, ProductGrantTransaction>();
+  private readonly entitlementTransactionsByEvidence = new Map<string, ProductGrantTransaction>();
   private readonly entitlementTransactionsById = new Map<string, ProductGrantTransaction>();
   private readonly leaderboardTransactionsByRun = new Map<string, LeaderboardScoreTransaction>();
   private readonly leaderboardTransactionsById = new Map<string, LeaderboardScoreTransaction>();
@@ -117,14 +123,42 @@ export class InMemoryGameServicesStore implements GameServicesStore {
       });
     }
 
+    if (grant.evidenceVerificationId !== undefined) {
+      const evidenceKey = createEntitlementEvidenceKey({
+        source: grant.source,
+        evidenceVerificationId: grant.evidenceVerificationId,
+      });
+
+      if (this.entitlementTransactionsByEvidence.has(evidenceKey)) {
+        throw new EvidenceAlreadyProcessedError();
+      }
+    }
+
     const transaction = createEntitlementTransaction(grant);
     this.entitlementTransactionsByKey.set(key, transaction);
     this.entitlementTransactionsById.set(transaction.ledgerEntryId, transaction);
+    if (grant.evidenceVerificationId !== undefined) {
+      this.entitlementTransactionsByEvidence.set(
+        createEntitlementEvidenceKey({
+          source: grant.source,
+          evidenceVerificationId: grant.evidenceVerificationId,
+        }),
+        transaction,
+      );
+    }
 
     return assertEntitlementLedgerResult({
       ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: false,
     });
+  }
+
+  async findEntitlementTransactionByIdempotency(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly playerId: string;
+    readonly idempotencyKey: string;
+  }): Promise<ProductGrantTransaction | undefined> {
+    return this.entitlementTransactionsByKey.get(createEntitlementIdempotencyKey(input));
   }
 
   async getEntitlementTransaction(
@@ -197,6 +231,13 @@ export class InMemoryGameServicesStore implements GameServicesStore {
 
       return left.submittedAt.localeCompare(right.submittedAt);
     });
+  }
+}
+
+export class EvidenceAlreadyProcessedError extends Error {
+  constructor() {
+    super('Evidence verification identity has already been processed.');
+    this.name = 'EvidenceAlreadyProcessedError';
   }
 }
 
@@ -445,6 +486,20 @@ async function verifyPurchaseWithStore(
   },
 ): Promise<VerifyPurchaseResponse> {
   const request = assertVerifyPurchaseRequest(input);
+  const existing = await context.store.findEntitlementTransactionByIdempotency({
+    source: 'purchase',
+    playerId: request.playerId,
+    idempotencyKey: request.idempotencyKey,
+  });
+
+  if (existing !== undefined) {
+    return assertVerifyPurchaseResponse({
+      verified: true,
+      ledgerEntryId: existing.ledgerEntryId,
+      alreadyProcessed: true,
+    });
+  }
+
   const product = context.catalog.products.find((entry) => entry.id === request.productId);
 
   if (product === undefined) {
@@ -483,24 +538,39 @@ async function verifyPurchaseWithStore(
     });
   }
 
-  const grant = await context.store.recordEntitlementGrant({
-    playerId: request.playerId,
-    grantId: product.id,
-    source: 'purchase',
-    idempotencyKey: request.idempotencyKey,
-    grantedAt: context.now(),
-    grant: product.grant,
-    payload: {
-      ...verification.payload,
-      target: request.target,
-      productId: request.productId,
-      platformProductId,
-      platformTransactionId: request.platformTransactionId,
-      purchasedAt: request.purchasedAt,
+  let grant: EntitlementLedgerResult;
+
+  try {
+    grant = await context.store.recordEntitlementGrant({
+      playerId: request.playerId,
+      grantId: product.id,
+      source: 'purchase',
+      idempotencyKey: request.idempotencyKey,
+      grantedAt: context.now(),
+      grant: product.grant,
       evidenceVerificationId: verification.verificationId,
-      evidenceVerifiedAt: verification.verifiedAt,
-    },
-  });
+      payload: {
+        ...verification.payload,
+        target: request.target,
+        productId: request.productId,
+        platformProductId,
+        platformTransactionId: request.platformTransactionId,
+        purchasedAt: request.purchasedAt,
+        evidenceVerificationId: verification.verificationId,
+        evidenceVerifiedAt: verification.verifiedAt,
+      },
+    });
+  } catch (error) {
+    if (error instanceof EvidenceAlreadyProcessedError) {
+      return assertVerifyPurchaseResponse({
+        verified: false,
+        alreadyProcessed: false,
+        reason: 'EVIDENCE_ALREADY_PROCESSED',
+      });
+    }
+
+    throw error;
+  }
 
   return assertVerifyPurchaseResponse({
     verified: true,
@@ -519,6 +589,20 @@ async function claimAdRewardWithStore(
   },
 ): Promise<ClaimAdRewardResponse> {
   const request = assertClaimAdRewardRequest(input);
+  const existing = await context.store.findEntitlementTransactionByIdempotency({
+    source: 'ad_reward',
+    playerId: request.playerId,
+    idempotencyKey: request.idempotencyKey,
+  });
+
+  if (existing !== undefined) {
+    return assertClaimAdRewardResponse({
+      granted: true,
+      ledgerEntryId: existing.ledgerEntryId,
+      alreadyProcessed: true,
+    });
+  }
+
   const placement = context.placements.placements.find((entry) => entry.id === request.placementId);
 
   if (placement === undefined || placement.type !== 'rewarded' || placement.reward === undefined) {
@@ -567,14 +651,29 @@ async function claimAdRewardWithStore(
     payload.platformImpressionId = request.platformImpressionId;
   }
 
-  const result = await context.store.recordEntitlementGrant({
-    playerId: request.playerId,
-    grantId: request.placementId,
-    source: 'ad_reward',
-    idempotencyKey: request.idempotencyKey,
-    grantedAt: context.now(),
-    payload,
-  });
+  let result: EntitlementLedgerResult;
+
+  try {
+    result = await context.store.recordEntitlementGrant({
+      playerId: request.playerId,
+      grantId: request.placementId,
+      source: 'ad_reward',
+      idempotencyKey: request.idempotencyKey,
+      grantedAt: context.now(),
+      evidenceVerificationId: verification.verificationId,
+      payload,
+    });
+  } catch (error) {
+    if (error instanceof EvidenceAlreadyProcessedError) {
+      return assertClaimAdRewardResponse({
+        granted: false,
+        alreadyProcessed: false,
+        reason: 'EVIDENCE_ALREADY_PROCESSED',
+      });
+    }
+
+    throw error;
+  }
 
   return assertClaimAdRewardResponse({
     granted: true,
@@ -606,7 +705,7 @@ function assertEvidenceVerificationDecision(
       for (const [key, value] of Object.entries(decision.payload)) {
         if (
           typeof value !== 'string'
-          && typeof value !== 'number'
+          && (typeof value !== 'number' || !Number.isFinite(value))
           && typeof value !== 'boolean'
         ) {
           throw new Error(`Evidence verification payload.${key} must be primitive.`);
@@ -706,6 +805,9 @@ function createEntitlementTransaction(
     idempotencyKey: grant.idempotencyKey,
     grantedAt: grant.grantedAt,
     payload: grant.payload,
+    ...(grant.evidenceVerificationId === undefined
+      ? {}
+      : { evidenceVerificationId: grant.evidenceVerificationId }),
   };
 
   return assertProductGrantTransaction(
@@ -713,8 +815,19 @@ function createEntitlementTransaction(
   );
 }
 
-function createEntitlementIdempotencyKey(grant: EntitlementLedgerGrant): string {
+function createEntitlementIdempotencyKey(grant: {
+  readonly source: EntitlementLedgerGrant['source'];
+  readonly playerId: string;
+  readonly idempotencyKey: string;
+}): string {
   return createCompositeKey([grant.source, grant.playerId, grant.idempotencyKey]);
+}
+
+function createEntitlementEvidenceKey(grant: {
+  readonly source: EntitlementLedgerGrant['source'];
+  readonly evidenceVerificationId: string;
+}): string {
+  return createCompositeKey([grant.source, grant.evidenceVerificationId]);
 }
 
 function createEntitlementLedgerEntryId(grant: EntitlementLedgerGrant): string {

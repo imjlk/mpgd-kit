@@ -127,9 +127,11 @@ platform-neutral.
 Local examples and smoke tests can opt into
 `createDevelopmentGameServicesEvidenceVerifier()`. It accepts submitted
 evidence without contacting a provider and must not be used for production
-grants. The Worker starter uses it only with the memory store. A D1 deployment
-must provide a `GAME_SERVICES_EVIDENCE_VERIFIER` service binding or entitlement
-requests remain fail closed.
+grants. The Worker starter enables it only when
+`MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE = "true"` is explicitly set in a
+local environment. Checked-in deploy configuration remains fail closed in both
+memory and D1 modes. Production deployments must provide a
+`GAME_SERVICES_EVIDENCE_VERIFIER` service binding.
 
 ## Cloudflare Worker Starter
 

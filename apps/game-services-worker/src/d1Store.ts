@@ -5,6 +5,7 @@ import {
   assertProductGrantTransaction,
   assertRecordLeaderboardScoreRequest,
   assertRecordLeaderboardScoreResponse,
+  EvidenceAlreadyProcessedError,
   type EntitlementLedgerGrant,
   type EntitlementLedgerResult,
   type LeaderboardScoreTransaction,
@@ -23,6 +24,7 @@ type EntitlementRow = {
   granted_at: string;
   grant_json: string | null;
   payload_json: string;
+  evidence_verification_id: string | null;
 };
 
 type LeaderboardRow = {
@@ -60,8 +62,9 @@ class D1GameServicesStore implements GameServicesStore {
           idempotency_key,
           granted_at,
           grant_json,
-          payload_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          payload_json,
+          evidence_verification_id
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .bind(
         ledgerEntryId,
@@ -72,12 +75,23 @@ class D1GameServicesStore implements GameServicesStore {
         grant.grantedAt,
         grant.grant === undefined ? null : JSON.stringify(grant.grant),
         JSON.stringify(grant.payload),
+        grant.evidenceVerificationId ?? null,
       )
       .run();
 
-    const transaction = await this.findEntitlementByIdempotency(grant);
+    const transaction = await this.findEntitlementTransactionByIdempotency(grant);
 
     if (transaction === undefined) {
+      if (
+        grant.evidenceVerificationId !== undefined
+        && await this.findEntitlementByEvidenceVerificationId(
+          grant.source,
+          grant.evidenceVerificationId,
+        ) !== undefined
+      ) {
+        throw new EvidenceAlreadyProcessedError();
+      }
+
       throw new Error('Failed to read entitlement transaction after insert.');
     }
 
@@ -85,6 +99,22 @@ class D1GameServicesStore implements GameServicesStore {
       ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: result.meta.changes === 0,
     });
+  }
+
+  async findEntitlementTransactionByIdempotency(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly playerId: string;
+    readonly idempotencyKey: string;
+  }): Promise<ProductGrantTransaction | undefined> {
+    const row = await this.db
+      .prepare(
+        `SELECT * FROM entitlement_transactions
+         WHERE source = ? AND player_id = ? AND idempotency_key = ?`,
+      )
+      .bind(input.source, input.playerId, input.idempotencyKey)
+      .first<EntitlementRow>();
+
+    return row === null ? undefined : entitlementFromRow(row);
   }
 
   async getEntitlementTransaction(
@@ -176,15 +206,16 @@ class D1GameServicesStore implements GameServicesStore {
     return results.map(leaderboardFromRow);
   }
 
-  private async findEntitlementByIdempotency(
-    grant: EntitlementLedgerGrant,
+  private async findEntitlementByEvidenceVerificationId(
+    source: EntitlementLedgerGrant['source'],
+    evidenceVerificationId: string,
   ): Promise<ProductGrantTransaction | undefined> {
     const row = await this.db
       .prepare(
         `SELECT * FROM entitlement_transactions
-         WHERE source = ? AND player_id = ? AND idempotency_key = ?`,
+         WHERE source = ? AND evidence_verification_id = ?`,
       )
-      .bind(grant.source, grant.playerId, grant.idempotencyKey)
+      .bind(source, evidenceVerificationId)
       .first<EntitlementRow>();
 
     return row === null ? undefined : entitlementFromRow(row);
@@ -240,6 +271,9 @@ function entitlementFromRow(row: EntitlementRow): ProductGrantTransaction {
     idempotencyKey: row.idempotency_key,
     grantedAt: row.granted_at,
     payload: JSON.parse(row.payload_json) as ProductGrantTransaction['payload'],
+    ...(row.evidence_verification_id === null
+      ? {}
+      : { evidenceVerificationId: row.evidence_verification_id }),
   };
 
   return assertProductGrantTransaction(

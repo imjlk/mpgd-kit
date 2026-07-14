@@ -226,6 +226,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         platformTransactionId: purchase.transactionId,
         idempotencyKey: purchaseInput.idempotencyKey,
         purchasedAt: now(),
+        ...(purchase.evidence === undefined ? {} : { evidence: purchase.evidence }),
       });
 
       const result = {
@@ -303,6 +304,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           : { platformImpressionId: reward.ledgerEntryId }),
         idempotencyKey: rewardInput.idempotencyKey,
         completedAt: now(),
+        ...(reward.evidence === undefined ? {} : { evidence: reward.evidence }),
       });
 
       const result = {

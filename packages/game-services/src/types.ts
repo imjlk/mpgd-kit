@@ -3,8 +3,11 @@ import type {
   LeaderboardScoreInput,
   LogicalAdPlacementId,
   LogicalProductId,
+  PlatformEvidenceEnvelope,
   PlatformTarget,
 } from '@mpgd/platform';
+
+export type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 
 export type GameServicesStoreTarget = Extract<PlatformTarget, 'android' | 'ios' | 'ait'>;
 export type GameServicesLedgerTarget = Extract<
@@ -18,11 +21,6 @@ export type EntitlementIdempotencyKey = PurchaseIdempotencyKey | AdRewardIdempot
 
 export type EntitlementLedgerSource = 'purchase' | 'ad_reward' | 'admin';
 export type EntitlementLedgerPayload = Record<string, string | number | boolean>;
-
-export interface PlatformEvidenceEnvelope {
-  readonly schema: string;
-  readonly payload: Readonly<Record<string, string | number | boolean>>;
-}
 
 export interface VerifyPurchaseRequest {
   readonly target: GameServicesStoreTarget;
@@ -79,6 +77,7 @@ export interface EntitlementLedgerGrant {
   readonly grantedAt: string;
   readonly grant?: ProductGrant;
   readonly payload: EntitlementLedgerPayload;
+  readonly evidenceVerificationId?: string;
 }
 
 export interface EntitlementLedgerResult {
@@ -95,6 +94,7 @@ export interface ProductGrantTransaction {
   readonly grantedAt: string;
   readonly grant?: ProductGrant;
   readonly payload: EntitlementLedgerPayload;
+  readonly evidenceVerificationId?: string;
 }
 
 export interface LeaderboardScoreTransaction extends RecordLeaderboardScoreRequest {
@@ -194,6 +194,7 @@ export function assertEntitlementLedgerGrant(
     assertProductGrant(input.grant);
   }
   assertPayload(input.payload);
+  assertOptionalNonEmptyString(input.evidenceVerificationId, 'evidenceVerificationId');
 
   return input;
 }
@@ -222,6 +223,7 @@ export function assertProductGrantTransaction(
     assertProductGrant(input.grant);
   }
   assertPayload(input.payload);
+  assertOptionalNonEmptyString(input.evidenceVerificationId, 'evidenceVerificationId');
 
   return input;
 }

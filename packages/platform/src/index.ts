@@ -30,10 +30,16 @@ export interface Entitlement {
   readonly expiresAt?: string;
 }
 
+export interface PlatformEvidenceEnvelope {
+  readonly schema: string;
+  readonly payload: Readonly<Record<string, string | number | boolean>>;
+}
+
 export interface PurchaseResult {
   readonly status: 'completed' | 'cancelled' | 'pending' | 'failed';
   readonly transactionId?: string;
   readonly entitlementIds: readonly string[];
+  readonly evidence?: PlatformEvidenceEnvelope;
 }
 
 export interface PurchaseRestoreResult {
@@ -44,6 +50,7 @@ export interface RewardedAdResult {
   readonly status: 'completed' | 'skipped' | 'unavailable' | 'failed';
   readonly rewardGranted: boolean;
   readonly ledgerEntryId?: string;
+  readonly evidence?: PlatformEvidenceEnvelope;
 }
 
 export interface InterstitialAdResult {
