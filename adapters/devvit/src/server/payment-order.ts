@@ -8,8 +8,14 @@ import type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 
 const devvitPaymentOrderEvidenceSchema = 'devvit.payment-order.v1';
 
+export interface NormalizeDevvitPaymentOrderInput {
+  readonly order: unknown;
+  /** Authenticated player ID supplied by the Devvit server request context. */
+  readonly playerId: string;
+}
+
 export function normalizeDevvitFulfillmentOrder(
-  input: unknown,
+  input: NormalizeDevvitPaymentOrderInput,
 ): FulfillPlatformOrderInput {
   const order = normalizeDevvitOrder(input, 'PAID');
   const normalized = Object.freeze({
@@ -24,7 +30,9 @@ export function normalizeDevvitFulfillmentOrder(
   return assertFulfillPlatformOrderInput(normalized);
 }
 
-export function normalizeDevvitRefundOrder(input: unknown): RefundPlatformOrderInput {
+export function normalizeDevvitRefundOrder(
+  input: NormalizeDevvitPaymentOrderInput,
+): RefundPlatformOrderInput {
   const order = normalizeDevvitOrder(input, 'REVERTED');
   const normalized = Object.freeze({
     target: 'reddit',
@@ -39,7 +47,7 @@ export function normalizeDevvitRefundOrder(input: unknown): RefundPlatformOrderI
 }
 
 function normalizeDevvitOrder(
-  input: unknown,
+  input: NormalizeDevvitPaymentOrderInput,
   expectedStatus: 'PAID' | 'REVERTED',
 ): Readonly<{
   orderId: string;
@@ -48,7 +56,8 @@ function normalizeDevvitOrder(
   occurredAt: string;
   evidence: PlatformEvidenceEnvelope;
 }> {
-  const record = requireRecord(input, 'Devvit payment order');
+  const playerId = requireString(input.playerId, 'Devvit payment context playerId');
+  const record = requireRecord(input.order, 'Devvit payment order');
   if (record.status !== expectedStatus) {
     throw new TypeError(`Devvit payment order status must be ${expectedStatus}.`);
   }
@@ -58,13 +67,19 @@ function normalizeDevvitOrder(
 
   const product = requireRecord(record.products[0], 'Devvit payment product');
   const orderId = requireString(record.id, 'order.id');
-  const playerId = requireString(record.userId, 'order.userId');
+  if (record.userId !== undefined
+    && requireString(record.userId, 'order.userId') !== playerId) {
+    throw new TypeError(
+      'Devvit payment order userId must match the authenticated context playerId.',
+    );
+  }
   const platformSku = requireString(product.sku, 'order.products[0].sku');
   const occurredAt = requireString(record.updatedAt ?? record.createdAt, 'order.updatedAt');
   const evidencePayload: Record<string, string | number | boolean> = {
     orderId,
     status: expectedStatus,
     occurredAt,
+    playerIdSource: 'devvit-context',
   };
 
   copyOptionalEvidenceField(record, evidencePayload, 'postId');
