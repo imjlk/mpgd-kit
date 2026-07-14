@@ -106,10 +106,14 @@ class HiddenIdempotencyLookupStore extends InMemoryGameServicesStore {
 function createLegacyCompatibleStore(base: InMemoryGameServicesStore): GameServicesStore {
   return {
     recordEntitlementGrant: (input) => base.recordEntitlementGrant(input),
-    getEntitlementTransaction: (ledgerEntryId) => {
-      return base.getEntitlementTransaction(ledgerEntryId);
+    async getEntitlementTransaction(ledgerEntryId) {
+      const transaction = await base.getEntitlementTransaction(ledgerEntryId);
+      return transaction === undefined ? undefined : withoutTopLevelEvidenceId(transaction);
     },
-    listEntitlementTransactions: () => base.listEntitlementTransactions(),
+    async listEntitlementTransactions() {
+      const transactions = await base.listEntitlementTransactions();
+      return transactions.map(withoutTopLevelEvidenceId);
+    },
     recordLeaderboardScore: (input, options) => {
       return base.recordLeaderboardScore(input, options);
     },
@@ -118,6 +122,14 @@ function createLegacyCompatibleStore(base: InMemoryGameServicesStore): GameServi
     },
     listLeaderboardTransactions: () => base.listLeaderboardTransactions(),
   };
+}
+
+function withoutTopLevelEvidenceId<T extends { readonly evidenceVerificationId?: string }>(
+  transaction: T,
+): Omit<T, 'evidenceVerificationId'> {
+  const { evidenceVerificationId, ...legacyTransaction } = transaction;
+  void evidenceVerificationId;
+  return legacyTransaction;
 }
 
 const store = createInMemoryGameServicesStore();
@@ -611,6 +623,16 @@ assertEqual(
   legacyPurchaseRetry.alreadyProcessed,
   true,
   'stores without the optional lookup should fall back to the list contract',
+);
+assertEqual(
+  (await legacyCompatibleStore.listEntitlementTransactions())[0]?.evidenceVerificationId,
+  undefined,
+  'the compatibility fixture should omit the new top-level evidence field',
+);
+assertEqual(
+  (await legacyCompatibleStore.listEntitlementTransactions())[0]?.payload.evidenceVerificationId,
+  'development:purchase:android:txn-legacy-store',
+  'the compatibility fixture should retain the legacy payload evidence identity',
 );
 assertEqual(
   legacyPurchaseEvidenceReplay.reason,

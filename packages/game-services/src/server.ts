@@ -957,8 +957,11 @@ async function findEntitlementTransactionByEvidenceVerificationId(
 
   const transactions = await store.listEntitlementTransactions();
   return transactions.find((transaction) => {
+    const storedEvidenceVerificationId = transaction.evidenceVerificationId
+      ?? transaction.payload.evidenceVerificationId;
+
     return transaction.source === input.source
-      && transaction.evidenceVerificationId === input.evidenceVerificationId;
+      && storedEvidenceVerificationId === input.evidenceVerificationId;
   });
 }
 
