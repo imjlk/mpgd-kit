@@ -7,7 +7,7 @@ import {
   DevvitPostOperationStateError,
   DevvitPostOperationValidationError,
   type DevvitCanonicalPostData,
-  type DevvitDurableOperationIndexMutation,
+  type DevvitDurableOperationIndexEntry,
   type DevvitDurableOperationStore,
   type DevvitIndexedDurableOperationStore,
   type DevvitJsonObject,
@@ -58,7 +58,7 @@ describe('durable Devvit post operation coordinator', () => {
 
   it('lists pending work by scope with a bounded cursor and no external side effects', async () => {
     const fixture = createFixture();
-    const preparedDescriptor = { ...baseDescriptor(), operationId: 'operation-prepared' };
+    const preparedDescriptor = { ...baseDescriptor(), operationId: 'operation-a-prepared' };
     fixture.store.throwAfterCreate = true;
     await expect(fixture.coordinator.execute({
       ...preparedDescriptor,
@@ -66,7 +66,7 @@ describe('durable Devvit post operation coordinator', () => {
     })).rejects.toThrow('process exited after prepared write');
 
     fixture.clock.advance(1);
-    const attemptedDescriptor = { ...baseDescriptor(), operationId: 'operation-attempted' };
+    const attemptedDescriptor = { ...baseDescriptor(), operationId: 'operation-b-attempted' };
     const publishAttempted = vi.fn(async () => {
       throw new Error('outcome unknown');
     });
@@ -76,7 +76,7 @@ describe('durable Devvit post operation coordinator', () => {
     const publishCompleted = vi.fn(async () => ({ postId: 't3_completed' }));
     await fixture.coordinator.execute({
       ...baseDescriptor(),
-      operationId: 'operation-completed',
+      operationId: 'operation-c-completed',
       publish: publishCompleted,
     });
     await fixture.coordinator.execute({
@@ -92,7 +92,7 @@ describe('durable Devvit post operation coordinator', () => {
       limit: 1,
     });
     expect(firstPage.operations).toMatchObject([
-      { status: 'prepared', operationId: 'operation-prepared' },
+      { status: 'prepared', operationId: 'operation-a-prepared' },
     ]);
     expect(firstPage.nextCursor).toBeDefined();
     if (firstPage.nextCursor === undefined) {
@@ -108,10 +108,18 @@ describe('durable Devvit post operation coordinator', () => {
       operations: [{
         status: 'reconciliation-required',
         reason: 'submission-attempted',
-        operationId: 'operation-attempted',
+        operationId: 'operation-b-attempted',
       }],
     });
-    expect(secondPage.nextCursor).toBeUndefined();
+    expect(secondPage.nextCursor).toBeDefined();
+    if (secondPage.nextCursor === undefined) {
+      throw new Error('Expected the published registry member to require one final page.');
+    }
+    await expect(fixture.coordinator.listPending({
+      scope: baseDescriptor().scope,
+      cursor: secondPage.nextCursor,
+      limit: 1,
+    })).resolves.toEqual({ operations: [] });
     expect(publishAttempted).toHaveBeenCalledOnce();
     expect(publishCompleted).toHaveBeenCalledOnce();
   });
@@ -150,7 +158,7 @@ describe('durable Devvit post operation coordinator', () => {
     })).rejects.toBeInstanceOf(DevvitPostOperationStateError);
   });
 
-  it('skips a pending index member that completes after the page range is read', async () => {
+  it('skips a registry member that completes after the page range is read', async () => {
     const fixture = createFixture();
     let postData: DevvitCanonicalPostData<TestPayload, TestLaunchParams> | undefined;
     await fixture.coordinator.execute({
@@ -176,12 +184,48 @@ describe('durable Devvit post operation coordinator', () => {
     });
   });
 
+  it('returns a pending state that advances after the stable page member is read', async () => {
+    const fixture = createFixture();
+    fixture.store.throwAfterCreate = true;
+    await expect(fixture.coordinator.execute({
+      ...baseDescriptor(),
+      publish: vi.fn(),
+    })).rejects.toThrow('process exited after prepared write');
+    fixture.store.afterNextListIndex = async () => {
+      await fixture.coordinator.execute({
+        ...baseDescriptor(),
+        publish: async () => {
+          throw new Error('outcome unknown');
+        },
+      });
+    };
+
+    await expect(fixture.coordinator.listPending({
+      scope: baseDescriptor().scope,
+    })).resolves.toMatchObject({
+      operations: [{
+        status: 'reconciliation-required',
+        operationId: 'operation-20260712',
+      }],
+    });
+  });
+
+  it('skips a conservative index member whose following state creation failed', async () => {
+    const fixture = createFixture();
+    const key = operationKey();
+    fixture.store.indexMemberWithoutState(baseDescriptor().scope, definition.operationType, key);
+
+    await expect(fixture.coordinator.listPending({
+      scope: baseDescriptor().scope,
+    })).resolves.toEqual({ operations: [] });
+  });
+
   it('requires a complete indexed-store capability before listing pending work', async () => {
     const store = new UnindexedMemoryDurableOperationStore();
     const coordinator = createDevvitPostOperationCoordinator({ definition, store });
 
     await expect(coordinator.listPending({ scope: baseDescriptor().scope })).rejects.toThrow(
-      'does not support pending-operation indexes',
+      'does not support operation registries',
     );
   });
 
@@ -802,7 +846,7 @@ class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore 
   createIndexed(
     key: string,
     value: string,
-    index: DevvitDurableOperationIndexMutation,
+    index: DevvitDurableOperationIndexEntry,
   ): Promise<boolean> {
     return this.createWithIndex(key, value, index);
   }
@@ -810,7 +854,7 @@ class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore 
   private createWithIndex(
     key: string,
     value: string,
-    index?: DevvitDurableOperationIndexMutation,
+    index?: DevvitDurableOperationIndexEntry,
   ): Promise<boolean> {
     if (this.values.has(key)) {
       return Promise.resolve(false);
@@ -834,7 +878,7 @@ class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore 
     key: string,
     expectedValue: string,
     nextValue: string,
-    index: DevvitDurableOperationIndexMutation,
+    index: DevvitDurableOperationIndexEntry,
   ): Promise<boolean> {
     return this.compareAndSetWithIndex(key, expectedValue, nextValue, index);
   }
@@ -843,7 +887,7 @@ class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore 
     key: string,
     expectedValue: string,
     nextValue: string,
-    index?: DevvitDurableOperationIndexMutation,
+    index?: DevvitDurableOperationIndexEntry,
   ): Promise<boolean> {
     const phase = storedPhase(nextValue);
     const gate = phase === 'terminal-unresolved' ? this.terminalCasGate : undefined;
@@ -920,6 +964,25 @@ class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore 
     return [...this.indexes.values()].flatMap((members) => [...members]).sort()[0];
   }
 
+  indexMemberWithoutState(
+    scope: { readonly appScope: string; readonly subredditId: string },
+    operationType: string,
+    operationKeyValue: string,
+  ): void {
+    const encoded = (value: string): string => {
+      const bytes = new TextEncoder().encode(value).byteLength;
+      return `${String(bytes)}-${encodeURIComponent(value)}`;
+    };
+    const indexKey = [
+      'mpgd:devvit:post-operation-index:v1',
+      encoded(scope.appScope),
+      encoded(scope.subredditId),
+      encoded(operationType),
+      'operations',
+    ].join(':');
+    this.indexes.set(indexKey, new Set([operationKeyValue]));
+  }
+
   blockNextTerminalCas(): {
     readonly started: ReturnType<typeof deferred<void>>;
     readonly release: ReturnType<typeof deferred<void>>;
@@ -930,15 +993,10 @@ class MemoryDurableOperationStore implements DevvitIndexedDurableOperationStore 
     return { started, release };
   }
 
-  private applyIndexMutation(mutation: DevvitDurableOperationIndexMutation): void {
-    const members = this.indexes.get(mutation.indexKey) ?? new Set<string>();
-    if (mutation.removeMember !== undefined) {
-      members.delete(mutation.removeMember);
-    }
-    if (mutation.addMember !== undefined) {
-      members.add(mutation.addMember);
-    }
-    this.indexes.set(mutation.indexKey, members);
+  private applyIndexMutation(entry: DevvitDurableOperationIndexEntry): void {
+    const members = this.indexes.get(entry.indexKey) ?? new Set<string>();
+    members.add(entry.member);
+    this.indexes.set(entry.indexKey, members);
   }
 }
 

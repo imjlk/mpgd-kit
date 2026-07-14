@@ -4,7 +4,9 @@ npm/@mpgd/cli: patch (Added)
 npm/@mpgd/create-game: patch (Added)
 ---
 
-Add atomically indexed durable Devvit post operations and scope-bound cursor
-pagination for bounded recovery workers. Pending discovery remains read-only and
-keeps attempted and terminal outcomes fail-closed instead of restoring submit
+Add conservatively indexed durable Devvit post operations and scope-bound cursor
+pagination for bounded recovery workers. Stable registry membership is created
+before durable state and retained across every transition, preventing live work
+from disappearing through partial cross-key updates. Discovery remains read-only
+and keeps attempted and terminal outcomes fail-closed instead of restoring submit
 permission.

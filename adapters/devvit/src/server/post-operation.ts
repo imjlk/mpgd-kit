@@ -4,7 +4,7 @@ const defaultMaxPostDataBytes = 2_048;
 const defaultStoreAttempts = 8;
 const maximumStoreAttempts = 32;
 const defaultPendingPageLimit = 20;
-const maximumPendingPageLimit = 100;
+export const devvitPostOperationMaximumPendingPageLimit = 100;
 const maximumIdentifierLength = 128;
 const maximumOperationTypeLength = 64;
 const maximumLeaseTtlMs = 60 * 60 * 1_000;
@@ -38,28 +38,29 @@ export interface DevvitDurableOperationStore {
   releaseLease(key: string, token: string): Promise<void>;
 }
 
-export interface DevvitDurableOperationIndexMutation {
+export interface DevvitDurableOperationIndexEntry {
   readonly indexKey: string;
-  readonly removeMember?: string;
-  readonly addMember?: string;
+  readonly member: string;
 }
 
 /**
  * Optional durable-store capability used to discover pending operations without
- * scanning the Redis keyspace. Every state and index mutation must commit in the
- * same transaction.
+ * scanning the Redis keyspace. Implementations must establish stable registry
+ * membership before creating durable state and retain it for the record's
+ * lifetime. A failed state creation can leave a safe stale member, but a live
+ * operation must never be absent from its registry.
  */
 export interface DevvitIndexedDurableOperationStore extends DevvitDurableOperationStore {
   createIndexed(
     key: string,
     value: string,
-    index: DevvitDurableOperationIndexMutation,
+    index: DevvitDurableOperationIndexEntry,
   ): Promise<boolean>;
   compareAndSetIndexed(
     key: string,
     expectedValue: string,
     nextValue: string,
-    index: DevvitDurableOperationIndexMutation,
+    index: DevvitDurableOperationIndexEntry,
   ): Promise<boolean>;
   listIndex(
     key: string,
@@ -563,7 +564,7 @@ export function createDevvitPostOperationCoordinator<
   ): Promise<DevvitPendingPostOperationPage<TPayload, TLaunchParams>> {
     if (indexedStore === undefined) {
       throw new DevvitPostOperationStateError(
-        'The durable post operation store does not support pending-operation indexes.',
+        'The durable post operation store does not support operation registries.',
       );
     }
 
@@ -581,9 +582,9 @@ export function createDevvitPostOperationCoordinator<
       const raw = await indexedStore.read(indexed.operationKey);
 
       if (raw === undefined) {
-        throw new DevvitPostOperationStateError(
-          `Pending operation index references missing state: ${indexed.operationKey}`,
-        );
+        // Index-first creation can leave a conservative stale member if the
+        // following state write fails. It is safe to skip and advance the cursor.
+        return undefined;
       }
 
       const record = parseStoredRecord(raw, indexed.operationKey, definition);
@@ -603,12 +604,15 @@ export function createDevvitPostOperationCoordinator<
         );
       }
 
-      const expectedMember = pendingIndexMember(record);
+      const expectedMember = operationIndexMember(record);
 
-      if (expectedMember === undefined || expectedMember !== member) {
-        // A state transition may commit after ZRANGE but before this GET. Its
-        // transaction removes the observed member, so this page can safely skip it.
+      if (record.phase === 'published') {
         return undefined;
+      }
+      if (expectedMember !== member) {
+        throw new DevvitPostOperationStateError(
+          `Pending operation index is inconsistent for state: ${indexed.operationKey}`,
+        );
       }
 
       return pendingOperationResult(record);
@@ -821,7 +825,7 @@ export function createDevvitPostOperationCoordinator<
     return indexedStore.createIndexed(
       operationKey,
       raw,
-      createPendingIndexMutation(undefined, record),
+      createOperationIndexEntry(undefined, record),
     );
   }
 
@@ -840,7 +844,7 @@ export function createDevvitPostOperationCoordinator<
       operationKey,
       expectedRaw,
       nextRaw,
-      createPendingIndexMutation(previous, next),
+      createOperationIndexEntry(previous, next),
     );
   }
 }
@@ -879,7 +883,7 @@ function createDevvitPostOperationIndexKey(input: {
     encodeKeyComponent(scope.appScope),
     encodeKeyComponent(scope.subredditId),
     encodeKeyComponent(input.operationType),
-    'pending',
+    'operations',
   ].join(':');
 }
 
@@ -963,13 +967,13 @@ function readIndexedStore(
   return candidate as DevvitIndexedDurableOperationStore;
 }
 
-function createPendingIndexMutation<
+function createOperationIndexEntry<
   TPayload extends DevvitJsonObject,
   TLaunchParams extends DevvitJsonObject,
 >(
   previous: StoredRecord<TPayload, TLaunchParams> | undefined,
   next: StoredRecord<TPayload, TLaunchParams>,
-): DevvitDurableOperationIndexMutation {
+): DevvitDurableOperationIndexEntry {
   const indexKey = createDevvitPostOperationIndexKey({
     scope: next.descriptor.mpgd,
     operationType: next.descriptor.mpgd.operationType,
@@ -983,38 +987,22 @@ function createPendingIndexMutation<
 
     if (previousIndexKey !== indexKey) {
       throw new DevvitPostOperationStateError(
-        'A durable post operation cannot move between pending-operation indexes.',
+        'A durable post operation cannot move between operation registries.',
       );
     }
   }
 
-  const removeMember = previous === undefined ? undefined : pendingIndexMember(previous);
-  const addMember = pendingIndexMember(next);
-
   return {
     indexKey,
-    ...(removeMember === undefined ? {} : { removeMember }),
-    ...(addMember === undefined ? {} : { addMember }),
+    member: operationIndexMember(next),
   };
 }
 
-function pendingIndexMember<
+function operationIndexMember<
   TPayload extends DevvitJsonObject,
   TLaunchParams extends DevvitJsonObject,
->(record: StoredRecord<TPayload, TLaunchParams>): string | undefined {
-  if (record.phase === 'published') {
-    return undefined;
-  }
-
-  let phaseMarker = '2';
-
-  if (record.phase === 'prepared') {
-    phaseMarker = '0';
-  } else if (record.phase === 'attempted') {
-    phaseMarker = '1';
-  }
-
-  return `${String(record.updatedAt).padStart(16, '0')}:${phaseMarker}:${record.operationKey}`;
+>(record: StoredRecord<TPayload, TLaunchParams>): string {
+  return record.operationKey;
 }
 
 function parsePendingIndexMember(
@@ -1026,10 +1014,7 @@ function parsePendingIndexMember(
     throw new DevvitPostOperationStateError('Pending operation index member is invalid.');
   }
 
-  const separator = member.indexOf(':', 17);
-  const timestamp = member.slice(0, 16);
-  const phaseMarker = member.slice(17, separator);
-  const operationKey = separator < 0 ? '' : member.slice(separator + 1);
+  const operationKey = member;
   const operationKeyPrefix = [
     'mpgd:devvit:post-operation:v1',
     encodeKeyComponent(scope.appScope),
@@ -1039,9 +1024,7 @@ function parsePendingIndexMember(
   ].join(':');
 
   if (
-    !/^\d{16}$/u.test(timestamp)
-    || !['0', '1', '2'].includes(phaseMarker)
-    || !operationKey.startsWith(operationKeyPrefix)
+    !operationKey.startsWith(operationKeyPrefix)
     || !operationKey.endsWith(':state')
   ) {
     throw new DevvitPostOperationStateError('Pending operation index member is invalid.');
@@ -1069,10 +1052,11 @@ function normalizePendingPageLimit(limit: number | undefined): number {
   if (
     !Number.isSafeInteger(normalized)
     || normalized < 1
-    || normalized > maximumPendingPageLimit
+    || normalized > devvitPostOperationMaximumPendingPageLimit
   ) {
     throw new DevvitPostOperationValidationError(
-      `limit must be a safe integer from 1 to ${String(maximumPendingPageLimit)}.`,
+      'limit must be a safe integer from 1 to '
+        + `${String(devvitPostOperationMaximumPendingPageLimit)}.`,
     );
   }
 
@@ -1119,7 +1103,7 @@ function pendingOperationResult<
       });
     case 'published':
       throw new DevvitPostOperationStateError(
-        'Published post operation must not remain in the pending-operation index.',
+        'Published post operation cannot be returned as pending work.',
       );
   }
 }
