@@ -103,6 +103,23 @@ class HiddenIdempotencyLookupStore extends InMemoryGameServicesStore {
   }
 }
 
+function createLegacyCompatibleStore(base: InMemoryGameServicesStore): GameServicesStore {
+  return {
+    recordEntitlementGrant: (input) => base.recordEntitlementGrant(input),
+    getEntitlementTransaction: (ledgerEntryId) => {
+      return base.getEntitlementTransaction(ledgerEntryId);
+    },
+    listEntitlementTransactions: () => base.listEntitlementTransactions(),
+    recordLeaderboardScore: (input, options) => {
+      return base.recordLeaderboardScore(input, options);
+    },
+    getLeaderboardTransaction: (ledgerEntryId) => {
+      return base.getLeaderboardTransaction(ledgerEntryId);
+    },
+    listLeaderboardTransactions: () => base.listLeaderboardTransactions(),
+  };
+}
+
 const store = createInMemoryGameServicesStore();
 const handler = createGameServicesBackendApiHandler({
   catalog,
@@ -541,20 +558,7 @@ assertEqual(
 );
 
 const legacyStoreBase = createInMemoryGameServicesStore();
-const legacyCompatibleStore: GameServicesStore = {
-  recordEntitlementGrant: (input) => legacyStoreBase.recordEntitlementGrant(input),
-  getEntitlementTransaction: (ledgerEntryId) => {
-    return legacyStoreBase.getEntitlementTransaction(ledgerEntryId);
-  },
-  listEntitlementTransactions: () => legacyStoreBase.listEntitlementTransactions(),
-  recordLeaderboardScore: (input, options) => {
-    return legacyStoreBase.recordLeaderboardScore(input, options);
-  },
-  getLeaderboardTransaction: (ledgerEntryId) => {
-    return legacyStoreBase.getLeaderboardTransaction(ledgerEntryId);
-  },
-  listLeaderboardTransactions: () => legacyStoreBase.listLeaderboardTransactions(),
-};
+const legacyCompatibleStore = createLegacyCompatibleStore(legacyStoreBase);
 const legacyCompatibleBackend = createGameServicesBackend({
   catalog,
   placements,
@@ -577,12 +581,96 @@ const legacyPurchaseRetry = await legacyCompatibleBackend.purchases.verifyPurcha
   idempotencyKey: 'purchase-legacy-store',
   purchasedAt: '2026-07-04T00:00:01.000Z',
 });
+const legacyPurchaseEvidenceReplay = await legacyCompatibleBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-legacy-store',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-legacy-store',
+  idempotencyKey: 'purchase-legacy-store-replayed-evidence',
+  purchasedAt: '2026-07-04T00:00:02.000Z',
+});
+const legacyReward = await legacyCompatibleBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-legacy-store',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-legacy-store',
+  idempotencyKey: 'reward-legacy-store',
+  completedAt: '2026-07-04T00:00:03.000Z',
+});
+const legacyRewardEvidenceReplay = await legacyCompatibleBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-legacy-store',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-legacy-store',
+  idempotencyKey: 'reward-legacy-store-replayed-evidence',
+  completedAt: '2026-07-04T00:00:04.000Z',
+});
 
 assertEqual(legacyPurchase.verified, true, 'legacy-compatible stores should still grant');
 assertEqual(
   legacyPurchaseRetry.alreadyProcessed,
   true,
   'stores without the optional lookup should fall back to the list contract',
+);
+assertEqual(
+  legacyPurchaseEvidenceReplay.reason,
+  'EVIDENCE_ALREADY_PROCESSED',
+  'compatible stores should reject replayed purchase evidence across new keys',
+);
+assertEqual(legacyReward.granted, true, 'legacy-compatible stores should grant rewards');
+assertEqual(
+  legacyRewardEvidenceReplay.reason,
+  'EVIDENCE_ALREADY_PROCESSED',
+  'compatible stores should reject replayed reward evidence across new keys',
+);
+assertEqual(
+  (await legacyCompatibleStore.listEntitlementTransactions()).length,
+  2,
+  'compatible store replay checks should retain one grant per evidence identity',
+);
+
+const concurrentLegacyStoreBase = createInMemoryGameServicesStore();
+const concurrentLegacyStore = createLegacyCompatibleStore(concurrentLegacyStoreBase);
+const concurrentLegacyBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: concurrentLegacyStore,
+  evidenceVerifier,
+});
+const concurrentLegacyPurchases = await Promise.all([
+  concurrentLegacyBackend.purchases.verifyPurchase({
+    target: 'android',
+    playerId: 'player-concurrent-legacy-store',
+    productId: 'COINS_100',
+    platformTransactionId: 'txn-concurrent-legacy-store',
+    idempotencyKey: 'purchase-concurrent-legacy-store-1',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }),
+  concurrentLegacyBackend.purchases.verifyPurchase({
+    target: 'android',
+    playerId: 'player-concurrent-legacy-store',
+    productId: 'COINS_100',
+    platformTransactionId: 'txn-concurrent-legacy-store',
+    idempotencyKey: 'purchase-concurrent-legacy-store-2',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }),
+]);
+
+assertEqual(
+  concurrentLegacyPurchases.filter((result) => result.verified).length,
+  1,
+  'compatible stores should grant concurrent evidence only once per process',
+);
+assertEqual(
+  concurrentLegacyPurchases.filter((result) => result.reason === 'EVIDENCE_ALREADY_PROCESSED')
+    .length,
+  1,
+  'compatible stores should reject the concurrent replay',
+);
+assertEqual(
+  (await concurrentLegacyStore.listEntitlementTransactions()).length,
+  1,
+  'concurrent compatible-store replays must write one grant',
 );
 
 const replayStore = createInMemoryGameServicesStore();

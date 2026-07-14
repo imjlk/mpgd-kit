@@ -121,6 +121,12 @@ dimensions:
 - `findEntitlementTransactionByIdempotency` is an optional indexed store
   optimization. Stores implementing the earlier contract remain compatible;
   the backend falls back to `listEntitlementTransactions()` when it is absent.
+- `findEntitlementTransactionByEvidenceVerificationId` is also optional. The
+  backend falls back to the ledger list and serializes same-evidence writes for
+  each store instance. Persistent production stores must additionally enforce
+  unique `(source, evidenceVerificationId)` values atomically and throw
+  `EvidenceAlreadyProcessedError` to close cross-instance races; the included
+  memory and D1 stores implement this invariant.
 - Leaderboard records dedupe by `target`, `leaderboardId`, `playerId`, and
   `runId`. Retries with a different score, submission timestamp, or
   `platformSubmissionId` reuse the original `ledgerEntryId`.

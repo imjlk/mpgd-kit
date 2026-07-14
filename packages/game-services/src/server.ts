@@ -74,6 +74,10 @@ export interface GameServicesStore {
     readonly playerId: string;
     readonly idempotencyKey: string;
   }): Promise<ProductGrantTransaction | undefined>;
+  findEntitlementTransactionByEvidenceVerificationId?(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly evidenceVerificationId: string;
+  }): Promise<ProductGrantTransaction | undefined>;
   getEntitlementTransaction(
     ledgerEntryId: string,
   ): Promise<ProductGrantTransaction | undefined>;
@@ -160,6 +164,13 @@ export class InMemoryGameServicesStore implements GameServicesStore {
     readonly idempotencyKey: string;
   }): Promise<ProductGrantTransaction | undefined> {
     return this.entitlementTransactionsByKey.get(createEntitlementIdempotencyKey(input));
+  }
+
+  async findEntitlementTransactionByEvidenceVerificationId(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly evidenceVerificationId: string;
+  }): Promise<ProductGrantTransaction | undefined> {
+    return this.entitlementTransactionsByEvidence.get(createEntitlementEvidenceKey(input));
   }
 
   async getEntitlementTransaction(
@@ -822,6 +833,37 @@ async function recordEntitlementGrantWithEvidence(
   | { readonly status: 'recorded'; readonly result: EntitlementLedgerResult }
   | { readonly status: 'evidence_already_processed' }
 > {
+  const evidenceVerificationId = grant.evidenceVerificationId;
+  if (evidenceVerificationId !== undefined) {
+    const evidenceIdentity = {
+      source: grant.source,
+      evidenceVerificationId,
+    } as const;
+
+    return withEntitlementEvidenceLock(store, evidenceIdentity, async () => {
+      const existing = await findEntitlementTransactionByEvidenceVerificationId(store, {
+        source: grant.source,
+        evidenceVerificationId,
+      });
+
+      if (existing !== undefined) {
+        return { status: 'evidence_already_processed' };
+      }
+
+      return recordEntitlementGrantUnchecked(store, grant);
+    });
+  }
+
+  return recordEntitlementGrantUnchecked(store, grant);
+}
+
+async function recordEntitlementGrantUnchecked(
+  store: GameServicesStore,
+  grant: EntitlementLedgerGrant,
+): Promise<
+  | { readonly status: 'recorded'; readonly result: EntitlementLedgerResult }
+  | { readonly status: 'evidence_already_processed' }
+> {
   try {
     return {
       status: 'recorded',
@@ -834,6 +876,48 @@ async function recordEntitlementGrantWithEvidence(
 
     throw error;
   }
+}
+
+const entitlementEvidenceLocks = new WeakMap<
+  GameServicesStore,
+  Map<string, Promise<void>>
+>();
+
+async function withEntitlementEvidenceLock<T>(
+  store: GameServicesStore,
+  grant: Required<Pick<EntitlementLedgerGrant, 'source' | 'evidenceVerificationId'>>,
+  task: () => Promise<T>,
+): Promise<T> {
+  const lockKey = createEntitlementEvidenceKey(grant);
+  const storeLocks = entitlementEvidenceLocks.get(store) ?? new Map<string, Promise<void>>();
+  entitlementEvidenceLocks.set(store, storeLocks);
+
+  const previous = storeLocks.get(lockKey) ?? Promise.resolve();
+  const gate = createPromiseGate();
+  const current = previous.then(() => gate.promise);
+  storeLocks.set(lockKey, current);
+
+  await previous;
+  try {
+    return await task();
+  } finally {
+    gate.release();
+    if (storeLocks.get(lockKey) === current) {
+      storeLocks.delete(lockKey);
+      if (storeLocks.size === 0) {
+        entitlementEvidenceLocks.delete(store);
+      }
+    }
+  }
+}
+
+function createPromiseGate(): { readonly promise: Promise<void>; readonly release: () => void } {
+  let release = (): void => {};
+  const promise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+
+  return { promise, release };
 }
 
 interface EntitlementRetryIdentity {
@@ -857,6 +941,24 @@ async function findEntitlementTransactionByIdempotency(
     return transaction.source === identity.source
       && transaction.playerId === identity.playerId
       && transaction.idempotencyKey === identity.idempotencyKey;
+  });
+}
+
+async function findEntitlementTransactionByEvidenceVerificationId(
+  store: GameServicesStore,
+  input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly evidenceVerificationId: string;
+  },
+): Promise<ProductGrantTransaction | undefined> {
+  if (store.findEntitlementTransactionByEvidenceVerificationId !== undefined) {
+    return store.findEntitlementTransactionByEvidenceVerificationId(input);
+  }
+
+  const transactions = await store.listEntitlementTransactions();
+  return transactions.find((transaction) => {
+    return transaction.source === input.source
+      && transaction.evidenceVerificationId === input.evidenceVerificationId;
   });
 }
 

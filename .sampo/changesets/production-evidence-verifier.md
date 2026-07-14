@@ -9,4 +9,4 @@ bounded verifier execution, authority-level replay protection, and fail-closed
 entitlement grants when production verification is unavailable. Idempotency
 retries now reject changes to the original logical grant or platform target,
 including raced writes, while existing stores can use the list fallback when
-the optional indexed lookup is not implemented.
+optional indexed idempotency or evidence lookups are not implemented.

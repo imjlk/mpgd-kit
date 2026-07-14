@@ -84,10 +84,10 @@ class D1GameServicesStore implements GameServicesStore {
     if (transaction === undefined) {
       if (
         grant.evidenceVerificationId !== undefined
-        && await this.findEntitlementByEvidenceVerificationId(
-          grant.source,
-          grant.evidenceVerificationId,
-        ) !== undefined
+        && await this.findEntitlementTransactionByEvidenceVerificationId({
+          source: grant.source,
+          evidenceVerificationId: grant.evidenceVerificationId,
+        }) !== undefined
       ) {
         throw new EvidenceAlreadyProcessedError();
       }
@@ -206,16 +206,16 @@ class D1GameServicesStore implements GameServicesStore {
     return results.map(leaderboardFromRow);
   }
 
-  private async findEntitlementByEvidenceVerificationId(
-    source: EntitlementLedgerGrant['source'],
-    evidenceVerificationId: string,
-  ): Promise<ProductGrantTransaction | undefined> {
+  async findEntitlementTransactionByEvidenceVerificationId(input: {
+    readonly source: EntitlementLedgerGrant['source'];
+    readonly evidenceVerificationId: string;
+  }): Promise<ProductGrantTransaction | undefined> {
     const row = await this.db
       .prepare(
         `SELECT * FROM entitlement_transactions
          WHERE source = ? AND evidence_verification_id = ?`,
       )
-      .bind(source, evidenceVerificationId)
+      .bind(input.source, input.evidenceVerificationId)
       .first<EntitlementRow>();
 
     return row === null ? undefined : entitlementFromRow(row);
