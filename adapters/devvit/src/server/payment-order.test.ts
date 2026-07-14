@@ -4,7 +4,6 @@ import { normalizeDevvitFulfillmentOrder, normalizeDevvitRefundOrder } from './p
 
 const paidOrder = Object.freeze({
   id: 'order-1',
-  userId: 'player-1',
   postId: 'post-1',
   environment: 'sandbox',
   status: 'PAID',
@@ -17,7 +16,10 @@ const paidOrder = Object.freeze({
 
 describe('Devvit payment order normalization', () => {
   it('normalizes paid orders for authoritative fulfillment', () => {
-    expect(normalizeDevvitFulfillmentOrder(paidOrder)).toEqual({
+    expect(normalizeDevvitFulfillmentOrder({
+      order: paidOrder,
+      playerId: 'player-1',
+    })).toEqual({
       target: 'reddit',
       orderId: 'order-1',
       playerId: 'player-1',
@@ -29,6 +31,7 @@ describe('Devvit payment order normalization', () => {
           orderId: 'order-1',
           status: 'PAID',
           occurredAt: '2026-07-15T00:01:00.000Z',
+          playerIdSource: 'devvit-context',
           postId: 'post-1',
           environment: 'sandbox',
         },
@@ -38,9 +41,12 @@ describe('Devvit payment order normalization', () => {
 
   it('normalizes reverted orders separately from fulfillment', () => {
     expect(normalizeDevvitRefundOrder({
-      ...paidOrder,
-      status: 'REVERTED',
-      updatedAt: '2026-07-16T00:00:00.000Z',
+      order: {
+        ...paidOrder,
+        status: 'REVERTED',
+        updatedAt: '2026-07-16T00:00:00.000Z',
+      },
+      playerId: 'player-1',
     })).toMatchObject({
       target: 'reddit',
       orderId: 'order-1',
@@ -50,18 +56,18 @@ describe('Devvit payment order normalization', () => {
     });
   });
 
-  it('fails closed for the wrong lifecycle, missing user, or multiple products', () => {
+  it('fails closed for the wrong lifecycle, mismatched context, or multiple products', () => {
     expect(() => normalizeDevvitFulfillmentOrder({
-      ...paidOrder,
-      status: 'REVERTED',
+      order: { ...paidOrder, status: 'REVERTED' },
+      playerId: 'player-1',
     })).toThrow('status must be PAID');
     expect(() => normalizeDevvitFulfillmentOrder({
-      ...paidOrder,
-      userId: undefined,
-    })).toThrow('order.userId must be a string');
+      order: { ...paidOrder, userId: 'player-2' },
+      playerId: 'player-1',
+    })).toThrow('must match the authenticated context playerId');
     expect(() => normalizeDevvitFulfillmentOrder({
-      ...paidOrder,
-      products: [{ sku: 'first' }, { sku: 'second' }],
+      order: { ...paidOrder, products: [{ sku: 'first' }, { sku: 'second' }] },
+      playerId: 'player-1',
     })).toThrow('exactly one product');
   });
 });
