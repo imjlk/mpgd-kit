@@ -663,8 +663,13 @@ function verifyDevvitWebManifest(
   const permissions = manifest.permissions;
   assertRecord(permissions, `${label} permissions`);
   assertBooleanValue(permissions.redis, true, `${label} permissions.redis`);
+  const effectiveProductSkus = assertDevvitPaymentsReadiness(
+    permissions.payments,
+    readJsonFile(effectiveConfigPath),
+    label,
+  );
   if (permissions.payments === true) {
-    verifyEnabledDevvitPayments(manifest, wrapperApp, effectiveConfigPath, label);
+    verifyEnabledDevvitPayments(manifest, wrapperApp, effectiveProductSkus, label);
   } else {
     assertDisabledDevvitPermission(permissions.payments, `${label} permissions.payments`);
   }
@@ -683,7 +688,7 @@ function verifyDevvitWebManifest(
 function verifyEnabledDevvitPayments(
   manifest: Record<string, unknown>,
   wrapperApp: string,
-  effectiveConfigPath: string,
+  effectiveSkus: readonly string[],
   label: string,
 ): void {
   const payments = manifest.payments;
@@ -698,8 +703,8 @@ function verifyEnabledDevvitPayments(
 
   const endpoints = payments.endpoints;
   assertRecord(endpoints, `${label} payments.endpoints`);
-  assertDevvitEndpoint(endpoints.fulfillOrder, `${label} payments.endpoints.fulfillOrder`);
-  assertDevvitEndpoint(endpoints.refundOrder, `${label} payments.endpoints.refundOrder`);
+  assertDevvitInternalEndpoint(endpoints.fulfillOrder, `${label} payments.endpoints.fulfillOrder`);
+  assertDevvitInternalEndpoint(endpoints.refundOrder, `${label} payments.endpoints.refundOrder`);
 
   const productConfig = readJsonFile(productsFile);
   assertRecord(productConfig, `${label} products file`);
@@ -713,15 +718,36 @@ function verifyEnabledDevvitPayments(
     throw new Error(`${label} payments products file must declare at least one product.`);
   }
 
-  const effectiveConfig = readJsonFile(effectiveConfigPath);
+  if (JSON.stringify([...effectiveSkus].sort()) !== JSON.stringify([...productSkus].sort())) {
+    throw new Error(
+      `${label} products file SKUs must match enabled effective catalog platform IDs.`,
+    );
+  }
+}
+
+export function assertDevvitPaymentsReadiness(
+  permission: unknown,
+  effectiveConfig: unknown,
+  label: string,
+): readonly string[] {
+  const permissionEnabled = permission === true;
+
+  if (!permissionEnabled) {
+    assertDisabledDevvitPermission(permission, `${label} permissions.payments`);
+  }
+
   assertRecord(effectiveConfig, `${label} effective target config`);
   const features = effectiveConfig.features;
   assertRecord(features, `${label} effective target config features`);
-  assertBooleanValue(features.iap, true, `${label} effective target config features.iap`);
+  assertBooleanValue(
+    features.iap,
+    permissionEnabled,
+    `${label} effective target config features.iap`,
+  );
   const monetization = effectiveConfig.monetization;
   const monetizationLabel = `${label} effective target config monetization`;
   assertRecord(monetization, monetizationLabel);
-  assertBooleanValue(monetization.iap, true, `${monetizationLabel}.iap`);
+  assertBooleanValue(monetization.iap, permissionEnabled, `${monetizationLabel}.iap`);
   assertArray(monetization.products, `${monetizationLabel}.products`);
   const effectiveSkus = monetization.products.flatMap((product, index) => {
     assertRecord(product, `${label} effective product ${String(index)}`);
@@ -736,11 +762,13 @@ function verifyEnabledDevvitPayments(
     return [product.platformProductId];
   }).sort();
 
-  if (JSON.stringify(effectiveSkus) !== JSON.stringify([...productSkus].sort())) {
+  if (!permissionEnabled && effectiveSkus.length > 0) {
     throw new Error(
-      `${label} products file SKUs must match enabled effective catalog platform IDs.`,
+      `${label} must not expose enabled products while payments permission is disabled.`,
     );
   }
+
+  return effectiveSkus;
 }
 
 function readUniqueDevvitProductSkus(
@@ -761,10 +789,13 @@ function readUniqueDevvitProductSkus(
   return [...skus];
 }
 
-function assertDevvitEndpoint(input: unknown, label: string): asserts input is string {
+export function assertDevvitInternalEndpoint(
+  input: unknown,
+  label: string,
+): asserts input is string {
   assertString(input, label);
-  if (!input.startsWith('/')) {
-    throw new Error(`${label} must be an absolute app endpoint path.`);
+  if (!/^\/internal\/.+/u.test(input)) {
+    throw new Error(`${label} must be a Devvit internal endpoint path.`);
   }
 }
 
