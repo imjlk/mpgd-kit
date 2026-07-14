@@ -2,6 +2,7 @@ import type {
   CommerceAdapter,
   Entitlement,
   PlatformEvidenceEnvelope,
+  PlatformGateway,
   ProductInfo,
   PurchaseResult,
 } from '@mpgd/platform';
@@ -72,6 +73,26 @@ export function createDevvitCommerceAdapter(
     async getEntitlements() {
       return input.client.getEntitlements();
     },
+  };
+}
+
+export function withDevvitCommerceAdapter(
+  gateway: PlatformGateway,
+  commerce: CommerceAdapter,
+): PlatformGateway {
+  if (gateway.target !== 'reddit') {
+    throw new TypeError('Devvit commerce can only be installed on a reddit gateway.');
+  }
+
+  return {
+    ...gateway,
+    async getCapabilities() {
+      return {
+        ...await gateway.getCapabilities(),
+        nativeIap: true,
+      };
+    },
+    commerce,
   };
 }
 
