@@ -43,7 +43,7 @@ const plan = {
       id: 'resume-session',
       label: 'Resume session',
       expectation: 'The active session survives pause and resume.',
-      actions: [{ type: 'pause-resume', backgroundMs: 50 }],
+      actions: [{ type: 'pause-resume', backgroundMs: 50, expectSameSession: true }],
     },
   ],
 } as const satisfies GameplayE2EPlan;
@@ -129,6 +129,32 @@ try {
   assert.match(readFileSync(passed.jsonFile, 'utf8'), /"target": "android"/u);
   assert.match(readFileSync(passed.markdownFile, 'utf8'), /Session preserved/u);
   assert.match(renderGameplayE2EMarkdown(passed.report), /Gameplay E2E Report/u);
+  let mismatchedPlanError: unknown;
+  let mismatchedPlanRejected = false;
+
+  try {
+    await runGameplayE2E({
+      gameRoot: fixtureRoot,
+      reportDir: path.join(fixtureRoot, 'artifacts/mismatched-plan'),
+      plan: { schemaVersion: 1, states: [plan.states[0]] },
+      planFile: gameConfigFile,
+      target: 'android',
+      profile: 'staging',
+      artifactFile,
+      driver,
+      now: createClock(),
+      log: () => undefined,
+    });
+  } catch (error) {
+    mismatchedPlanRejected = true;
+    mismatchedPlanError = error;
+  }
+
+  if (!mismatchedPlanRejected) {
+    throw new Error('Expected a mismatched gameplay plan to be rejected.');
+  }
+
+  expectErrorMatch(mismatchedPlanError, /must match the linked manifest plan file/u);
   const collectBoundedArtifact = () => collectGameplayE2EPathEvidence(
     fixtureRoot,
     artifactFile,
@@ -141,16 +167,23 @@ try {
   // Session mismatch: continuity failure stops later states while still capturing evidence.
   const mismatchLifecycle: string[] = [];
   let inspectCount = 0;
+  const mismatchPlan = {
+    schemaVersion: 1,
+    states: [
+      plan.states[2],
+      { id: 'never-run', label: 'Never run', actions: [] },
+    ],
+  } as const satisfies GameplayE2EPlan;
+  const mismatchConfigFile = path.join(fixtureRoot, 'mpgd.mismatch.json');
+
+  writeFileSync(mismatchConfigFile, `${JSON.stringify({
+    acceptance: { gameplay: mismatchPlan },
+  })}\n`);
   const mismatch = await runGameplayE2E({
     gameRoot: fixtureRoot,
     reportDir: path.join(fixtureRoot, 'artifacts/mismatch'),
-    plan: {
-      schemaVersion: 1,
-      states: [
-        plan.states[2],
-        { id: 'never-run', label: 'Never run', actions: [] },
-      ],
-    },
+    plan: mismatchPlan,
+    planFile: mismatchConfigFile,
     target: 'ios',
     profile: 'staging',
     artifactFile,
@@ -182,10 +215,20 @@ try {
     sessionId: 'session-2',
     failWait: true,
   });
+  const resumePlan = {
+    schemaVersion: 1,
+    states: [plan.states[2]],
+  } as const satisfies GameplayE2EPlan;
+  const resumeConfigFile = path.join(fixtureRoot, 'mpgd.resume.json');
+
+  writeFileSync(resumeConfigFile, `${JSON.stringify({
+    acceptance: { gameplay: resumePlan },
+  })}\n`);
   const waitFailure = await runGameplayE2E({
     gameRoot: fixtureRoot,
     reportDir: path.join(fixtureRoot, 'artifacts/wait-failure'),
-    plan: { schemaVersion: 1, states: [plan.states[2]] },
+    plan: resumePlan,
+    planFile: resumeConfigFile,
     target: 'android',
     profile: 'staging',
     artifactFile,
@@ -202,7 +245,8 @@ try {
   const dualFailure = await runGameplayE2E({
     gameRoot: fixtureRoot,
     reportDir: path.join(fixtureRoot, 'artifacts/dual-failure'),
-    plan: { schemaVersion: 1, states: [plan.states[2]] },
+    plan: resumePlan,
+    planFile: resumeConfigFile,
     target: 'android',
     profile: 'staging',
     artifactFile,
@@ -276,4 +320,12 @@ function createClock(): () => number {
     value += 10;
     return value;
   };
+}
+
+function expectErrorMatch(value: unknown, pattern: RegExp): void {
+  const message = value instanceof Error ? value.message : String(value);
+
+  if (!pattern.test(message)) {
+    throw new Error(`Expected error to match ${String(pattern)}, received ${message}.`);
+  }
 }

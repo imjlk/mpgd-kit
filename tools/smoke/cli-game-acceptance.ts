@@ -5,6 +5,7 @@ import path from 'node:path';
 
 import {
   collectGameplayE2EPathEvidence,
+  maximumGameplayE2EReportBytes,
   maximumGameplayE2EStates,
   renderGameAcceptanceMarkdown,
   resolveGameAcceptanceReleaseManifestFile,
@@ -281,7 +282,8 @@ try {
       'const file = process.env.MPGD_GAMEPLAY_E2E_REPORT_FILE;',
       "if (file === undefined) throw new Error('Missing gameplay E2E report file.');",
       'mkdirSync(path.dirname(file), { recursive: true });',
-      "writeFileSync(file, readFileSync('gameplay-evidence-source.json'));",
+      "const report = JSON.parse(readFileSync('gameplay-evidence-source.json', 'utf8'));",
+      'writeFileSync(file, `${JSON.stringify({ ...report, generatedAt: new Date().toISOString() })}\\n`);',
       '',
     ].join('\n'),
   );
@@ -311,9 +313,262 @@ try {
   assert.equal(gameplayE2EStep?.status, 'passed');
   assert.equal(cliReport.evidence.gameplayE2E?.found, true);
   assert.equal(cliReport.evidence.gameplayE2E?.validationError, null);
-  const validGameplayEvidence = JSON.parse(
-    readFileSync(path.join(cliGameRoot, 'gameplay-evidence-source.json'), 'utf8'),
-  ) as Record<string, unknown>;
+  const validGameplayEvidence = expectRecordValue(
+    cliReport.evidence.gameplayE2E?.value,
+    'gameplay E2E evidence value',
+  );
+  const validGameplayStates = validGameplayEvidence.states;
+
+  if (!Array.isArray(validGameplayStates)) {
+    throw new Error('Expected gameplay E2E evidence states to be an array.');
+  }
+
+  const linkedReleaseManifestFile = path.join(cliGameRoot, 'linked-release-manifest.json');
+  const linkedGameplayEvidenceFile = path.join(cliGameRoot, 'linked-gameplay-evidence.json');
+
+  writeFileSync(
+    linkedReleaseManifestFile,
+    `${JSON.stringify({
+      targets: {
+        android: {
+          artifact: 'app.apk',
+          profile: 'staging',
+        },
+      },
+    })}\n`,
+  );
+  writeFileSync(
+    linkedGameplayEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      releaseManifest: collectGameplayE2EPathEvidence(
+        cliGameRoot,
+        linkedReleaseManifestFile,
+        'release manifest',
+      ),
+    })}\n`,
+  );
+  const linkedEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'linked-report'),
+    releaseManifestFile: linkedReleaseManifestFile,
+    gameplayE2EReportFile: linkedGameplayEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectEqual(linkedEvidence.report.status, 'passed', 'linked release evidence status');
+  expectEqual(
+    linkedEvidence.report.evidence.gameplayE2E?.validationError,
+    null,
+    'linked release evidence validation',
+  );
+
+  writeFileSync(
+    linkedReleaseManifestFile,
+    `${JSON.stringify({
+      targets: {
+        android: {
+          artifact: 'different.apk',
+          profile: 'staging',
+        },
+      },
+    })}\n`,
+  );
+  writeFileSync(
+    linkedGameplayEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      releaseManifest: collectGameplayE2EPathEvidence(
+        cliGameRoot,
+        linkedReleaseManifestFile,
+        'release manifest',
+      ),
+    })}\n`,
+  );
+  const mismatchedReleaseTarget = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'mismatched-release-target-report'),
+    releaseManifestFile: linkedReleaseManifestFile,
+    gameplayE2EReportFile: linkedGameplayEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectMatch(
+    mismatchedReleaseTarget.report.evidence.gameplayE2E?.validationError,
+    /does not match the tested artifact/u,
+    'release target artifact binding',
+  );
+
+  writeFileSync(
+    linkedReleaseManifestFile,
+    `${JSON.stringify({
+      targets: {
+        android: {
+          artifact: 'app.apk',
+          profile: 'staging',
+        },
+      },
+      padding: 'x'.repeat(maximumGameplayE2EReportBytes),
+    })}\n`,
+  );
+  writeFileSync(
+    linkedGameplayEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      releaseManifest: collectGameplayE2EPathEvidence(
+        cliGameRoot,
+        linkedReleaseManifestFile,
+        'release manifest',
+      ),
+    })}\n`,
+  );
+  const oversizedReleaseManifest = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'oversized-release-manifest-report'),
+    releaseManifestFile: linkedReleaseManifestFile,
+    gameplayE2EReportFile: linkedGameplayEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectMatch(
+    oversizedReleaseManifest.report.evidence.releaseManifest?.parseError,
+    new RegExp(`cannot exceed ${maximumGameplayE2EReportBytes} bytes`, 'u'),
+    'release manifest byte limit',
+  );
+  expectMatch(
+    oversizedReleaseManifest.report.evidence.gameplayE2E?.validationError,
+    new RegExp(`cannot exceed ${maximumGameplayE2EReportBytes} bytes`, 'u'),
+    'gameplay release manifest byte limit',
+  );
+
+  const incompletePlanEvidenceFile = path.join(cliGameRoot, 'incomplete-plan-evidence.json');
+
+  writeFileSync(
+    incompletePlanEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      states: [
+        ...validGameplayStates,
+        ...validGameplayStates,
+      ],
+    })}\n`,
+  );
+  const incompletePlanEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'incomplete-plan-report'),
+    gameplayE2EReportFile: incompletePlanEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectMatch(
+    incompletePlanEvidence.report.evidence.gameplayE2E?.validationError,
+    /cover every manifest plan state in order/u,
+    'manifest state coverage',
+  );
+
+  const excessiveBytesEvidenceFile = path.join(cliGameRoot, 'excessive-bytes-evidence.json');
+
+  writeFileSync(
+    excessiveBytesEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      padding: 'x'.repeat(maximumGameplayE2EReportBytes),
+    })}\n`,
+  );
+  const excessiveBytesEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'excessive-bytes-report'),
+    gameplayE2EReportFile: excessiveBytesEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectMatch(
+    excessiveBytesEvidence.report.evidence.gameplayE2E?.validationError,
+    new RegExp(`cannot exceed ${maximumGameplayE2EReportBytes} bytes`, 'u'),
+    'gameplay evidence byte limit',
+  );
+
+  const staleGameplayEvidenceFile = path.join(cliGameRoot, 'stale-gameplay-evidence.json');
+
+  writeFileSync(staleGameplayEvidenceFile, `${JSON.stringify(validGameplayEvidence)}\n`);
+  const staleGameplayEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'stale-report'),
+    gameplayE2EReportFile: staleGameplayEvidenceFile,
+    requireGameplayE2EReport: true,
+    gameplayE2EStepId: 'gameplay-e2e',
+    options: { profile: 'staging' },
+    steps: [{
+      id: 'gameplay-e2e',
+      label: 'Gameplay E2E',
+      command: 'noop',
+      cwd: cliGameRoot,
+    }],
+    commandRunner: () => ({ exitCode: 0 }),
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectEqual(
+    staleGameplayEvidence.report.evidence.gameplayE2E?.found,
+    false,
+    'stale gameplay evidence removal',
+  );
+
+  const outsideGameplayEvidenceFile = path.join(fixtureRoot, 'outside-gameplay-evidence.json');
+
+  writeFileSync(outsideGameplayEvidenceFile, `${JSON.stringify(validGameplayEvidence)}\n`);
+  const outsideGameplayEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'outside-evidence-report'),
+    gameplayE2EReportFile: outsideGameplayEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectEqual(
+    outsideGameplayEvidence.report.evidence.gameplayE2E?.file,
+    '<outside-game-root>',
+    'outside gameplay evidence display path',
+  );
+  expectEqual(
+    outsideGameplayEvidence.report.evidence.gameplayE2E?.found,
+    false,
+    'outside gameplay evidence existence probe',
+  );
+  const outsideValidationError = outsideGameplayEvidence.report.evidence.gameplayE2E
+    ?.validationError;
+
+  if (
+    typeof outsideValidationError !== 'string'
+    || outsideValidationError.includes(fixtureRoot)
+  ) {
+    throw new Error('Outside gameplay evidence validation must not expose host paths.');
+  }
+
   const oversizedGameplayEvidenceFile = path.join(cliGameRoot, 'oversized-gameplay-evidence.json');
 
   writeFileSync(
@@ -421,4 +676,26 @@ function createClock(): () => number {
     value += 10;
     return value;
   };
+}
+
+function expectEqual(actual: unknown, expected: unknown, label: string): void {
+  if (!Object.is(actual, expected)) {
+    throw new Error(`${label}: expected ${String(expected)}, received ${String(actual)}.`);
+  }
+}
+
+function expectMatch(value: unknown, pattern: RegExp, label: string): void {
+  if (typeof value !== 'string' || !pattern.test(value)) {
+    const detail = `${label}: expected to match ${String(pattern)}, received ${String(value)}.`;
+
+    throw new Error(detail);
+  }
+}
+
+function expectRecordValue(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new Error(`Expected ${label} to be an object.`);
+  }
+
+  return value as Record<string, unknown>;
 }

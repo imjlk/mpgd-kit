@@ -141,7 +141,7 @@ export interface GameplayE2EReport {
   readonly target: string;
   readonly profile: string;
   readonly durationMs: number;
-  readonly plan: GameplayE2EPathEvidence | null;
+  readonly plan: GameplayE2EPathEvidence;
   readonly artifact: GameplayE2EPathEvidence;
   readonly releaseManifest: GameplayE2EPathEvidence | null;
   readonly states: readonly GameplayE2EStateResult[];
@@ -152,7 +152,7 @@ export interface RunGameplayE2EInput {
   readonly reportDir: string;
   readonly reportFile?: string;
   readonly plan: GameplayE2EPlan;
-  readonly planFile?: string;
+  readonly planFile: string;
   readonly target: string;
   readonly profile: string;
   readonly artifactFile: string;
@@ -260,13 +260,25 @@ export async function runGameplayE2E(
   const screenshotsDir = path.join(reportDir, 'screenshots');
   const startedAtMs = now();
   const plan = parseGameplayE2EPlan(input.plan);
+  const configuredPlan = readGameplayE2EPlan(gameRoot, input.planFile);
+
+  if (configuredPlan === null) {
+    throw new Error('Gameplay E2E plan file must define acceptance.gameplay.');
+  }
+
+  if (JSON.stringify(configuredPlan.plan) !== JSON.stringify(plan)) {
+    throw new Error('Gameplay E2E plan must match the linked manifest plan file.');
+  }
+
   const artifact = collectGameplayE2EPathEvidence(gameRoot, input.artifactFile, 'target artifact');
   const releaseManifest = input.releaseManifestFile === undefined
     ? null
     : collectGameplayE2EPathEvidence(gameRoot, input.releaseManifestFile, 'release manifest');
-  const planEvidence = input.planFile === undefined
-    ? null
-    : collectGameplayE2EPathEvidence(gameRoot, input.planFile, 'gameplay E2E plan');
+  const planEvidence = collectGameplayE2EPathEvidence(
+    gameRoot,
+    configuredPlan.file,
+    'gameplay E2E plan',
+  );
   const states: GameplayE2EStateResult[] = [];
   let failed = false;
 
@@ -276,9 +288,7 @@ export async function runGameplayE2E(
     assertPathEvidenceKind(releaseManifest, ['file'], 'release manifest');
   }
 
-  if (planEvidence !== null) {
-    assertPathEvidenceKind(planEvidence, ['file'], 'gameplay E2E plan');
-  }
+  assertPathEvidenceKind(planEvidence, ['file'], 'gameplay E2E plan');
 
   mkdirSync(screenshotsDir, { recursive: true });
 

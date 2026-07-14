@@ -28,6 +28,7 @@ export {
   resolveGameAcceptanceReleaseManifestFile,
   runGameAcceptance,
   defaultGameAcceptanceCommandTimeoutMs,
+  maximumGameplayE2EReportBytes,
   type GameAcceptanceCommandResult,
   type GameAcceptanceCommandRunner,
   type GameAcceptanceReport,
@@ -683,7 +684,11 @@ function acceptGame(input: AcceptGameInput): void {
       ? {}
       : { releaseManifestFile }),
     ...(gameplayE2EEnabled
-      ? { gameplayE2EReportFile, requireGameplayE2EReport: true }
+      ? {
+          gameplayE2EReportFile,
+          requireGameplayE2EReport: true,
+          gameplayE2EStepId: acceptanceStepIds.gameplayE2E,
+        }
       : {}),
     options: {
       targets: input.targets,

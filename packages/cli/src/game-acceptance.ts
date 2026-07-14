@@ -1,12 +1,25 @@
 import { spawnSync } from 'node:child_process';
-import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  readSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
-import { collectGameplayE2EPathEvidence, maximumGameplayE2EStates } from './gameplay-e2e.js';
+import {
+  collectGameplayE2EPathEvidence,
+  maximumGameplayE2EStates,
+  readGameplayE2EPlan,
+} from './gameplay-e2e.js';
 
 export const defaultGameAcceptanceCommandTimeoutMs = 30 * 60 * 1_000;
 const defaultGameAcceptanceReleaseManifestFile = 'artifacts/release-manifest.json';
+export const maximumGameplayE2EReportBytes = 1_024 * 1_024;
 
 export function resolveGameAcceptanceReleaseManifestFile(
   gameRoot: string,
@@ -87,6 +100,8 @@ export interface RunGameAcceptanceInput {
   readonly releaseManifestFile?: string;
   readonly gameplayE2EReportFile?: string;
   readonly requireGameplayE2EReport?: boolean;
+  /** Step that must replace any previous gameplay report before evidence is accepted. */
+  readonly gameplayE2EStepId?: string;
   readonly options: Readonly<Record<string, string | boolean | null>>;
   readonly steps: readonly GameAcceptanceStep[];
   readonly env?: NodeJS.ProcessEnv;
@@ -117,6 +132,26 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
   const startedAtMs = now();
   const results: GameAcceptanceStepResult[] = [];
   let failed = false;
+
+  if (input.gameplayE2EStepId !== undefined) {
+    if (input.gameplayE2EReportFile === undefined) {
+      throw new Error('A gameplay E2E evidence step needs a report file.');
+    }
+
+    if (input.steps.filter((step) => step.id === input.gameplayE2EStepId).length !== 1) {
+      throw new Error(
+        `Gameplay E2E evidence step must occur exactly once: ${input.gameplayE2EStepId}`,
+      );
+    }
+
+    const reportFile = resolvePathInsideGameRoot(
+      gameRoot,
+      input.gameplayE2EReportFile,
+      'Gameplay E2E report',
+    );
+
+    rmSync(reportFile, { force: true });
+  }
 
   for (const step of input.steps) {
     if (failed) {
@@ -369,11 +404,23 @@ function readOptionalJsonEvidence(
   }
 
   try {
+    const releaseManifestContent = readBoundedUtf8File(resolved, maximumGameplayE2EReportBytes);
+
+    if (releaseManifestContent === null) {
+      return {
+        file: displayFile,
+        found: true,
+        parseError:
+          `Release manifest cannot exceed ${maximumGameplayE2EReportBytes} bytes.`,
+        value: null,
+      };
+    }
+
     return {
       file: displayFile,
       found: true,
       parseError: null,
-      value: JSON.parse(readFileSync(resolved, 'utf8')) as unknown,
+      value: JSON.parse(releaseManifestContent) as unknown,
     };
   } catch (error) {
     return {
@@ -395,7 +442,20 @@ function readGameplayE2EEvidence(
     return null;
   }
 
-  const resolved = path.resolve(gameRoot, file);
+  let resolved: string;
+
+  try {
+    resolved = resolvePathInsideGameRoot(gameRoot, file, 'Gameplay E2E report');
+  } catch (error) {
+    return {
+      file: '<outside-game-root>',
+      found: false,
+      parseError: null,
+      validationError: formatError(error),
+      value: null,
+    };
+  }
+
   const displayFile = relativeOrAbsolute(gameRoot, resolved);
 
   if (!existsSync(resolved)) {
@@ -411,7 +471,20 @@ function readGameplayE2EEvidence(
   let value: unknown;
 
   try {
-    value = JSON.parse(readFileSync(resolved, 'utf8')) as unknown;
+    const reportContent = readBoundedUtf8File(resolved, maximumGameplayE2EReportBytes);
+
+    if (reportContent === null) {
+      return {
+        file: displayFile,
+        found: true,
+        parseError: null,
+        validationError:
+          `Gameplay E2E report cannot exceed ${maximumGameplayE2EReportBytes} bytes.`,
+        value: null,
+      };
+    }
+
+    value = JSON.parse(reportContent) as unknown;
   } catch (error) {
     return {
       file: displayFile,
@@ -454,6 +527,18 @@ function validateGameplayE2EEvidence(
     return 'Gameplay E2E report status must be passed.';
   }
 
+  const generatedAtMs = typeof value.generatedAt === 'string'
+    ? Date.parse(value.generatedAt)
+    : Number.NaN;
+
+  if (
+    typeof value.generatedAt !== 'string'
+    || !Number.isFinite(generatedAtMs)
+    || new Date(generatedAtMs).toISOString() !== value.generatedAt
+  ) {
+    return 'Gameplay E2E report generatedAt must be an ISO timestamp.';
+  }
+
   if (typeof value.target !== 'string' || value.target.length === 0) {
     return 'Gameplay E2E report target must be a non-empty string.';
   }
@@ -486,6 +571,18 @@ function validateGameplayE2EEvidence(
     return planError;
   }
 
+  let configuredPlan: ReturnType<typeof readGameplayE2EPlan>;
+
+  try {
+    configuredPlan = readGameplayE2EPlan(gameRoot, value.plan.file);
+  } catch (error) {
+    return `Gameplay E2E manifest plan is invalid: ${formatError(error)}`;
+  }
+
+  if (configuredPlan === null) {
+    return 'Gameplay E2E manifest plan must define acceptance.gameplay.';
+  }
+
   if (releaseManifestFile !== undefined) {
     if (!isPathEvidence(value.releaseManifest) || value.releaseManifest.kind !== 'file') {
       return 'Gameplay E2E report must link the current release manifest.';
@@ -501,16 +598,43 @@ function validateGameplayE2EEvidence(
       return 'Gameplay E2E report must link the acceptance release manifest path.';
     }
 
-    let releaseManifestSha256: string;
+    const releaseManifestError = validateCurrentPathEvidence(
+      value.releaseManifest,
+      gameRoot,
+      'release manifest',
+    );
+
+    if (releaseManifestError !== null) {
+      return releaseManifestError;
+    }
+
+    let releaseManifest: unknown;
 
     try {
-      releaseManifestSha256 = sha256File(resolvedReleaseManifest);
+      const releaseManifestContent = readBoundedUtf8File(
+        resolvedReleaseManifest,
+        maximumGameplayE2EReportBytes,
+      );
+
+      if (releaseManifestContent === null) {
+        return `Gameplay E2E release manifest cannot exceed ${maximumGameplayE2EReportBytes} bytes.`;
+      }
+
+      releaseManifest = JSON.parse(releaseManifestContent) as unknown;
     } catch (error) {
       return `Gameplay E2E report release manifest is unreadable: ${formatError(error)}`;
     }
 
-    if (value.releaseManifest.sha256 !== releaseManifestSha256) {
-      return 'Gameplay E2E report release manifest hash does not match the acceptance build.';
+    const releaseTargetError = validateReleaseTargetEvidence(
+      releaseManifest,
+      value.target,
+      value.profile,
+      value.artifact.file,
+      gameRoot,
+    );
+
+    if (releaseTargetError !== null) {
+      return releaseTargetError;
     }
   }
 
@@ -522,9 +646,13 @@ function validateGameplayE2EEvidence(
     return `Gameplay E2E report cannot contain more than ${maximumGameplayE2EStates} states.`;
   }
 
+  const stateIds: string[] = [];
+
   for (const state of value.states) {
     if (
       !isRecord(state)
+      || typeof state.id !== 'string'
+      || state.id.length === 0
       || state.status !== 'passed'
       || !isPathEvidence(state.screenshot)
       || state.screenshot.kind !== 'file'
@@ -541,6 +669,51 @@ function validateGameplayE2EEvidence(
     if (screenshotError !== null) {
       return screenshotError;
     }
+
+    stateIds.push(state.id);
+  }
+
+  const configuredStateIds = configuredPlan.plan.states.map((state) => state.id);
+
+  if (
+    stateIds.length !== configuredStateIds.length
+    || stateIds.some((stateId, index) => stateId !== configuredStateIds[index])
+  ) {
+    return 'Gameplay E2E report must cover every manifest plan state in order.';
+  }
+
+  return null;
+}
+
+function validateReleaseTargetEvidence(
+  value: unknown,
+  target: string,
+  profile: string,
+  artifactFile: string,
+  gameRoot: string,
+): string | null {
+  if (!isRecord(value) || !isRecord(value.targets)) {
+    return 'Gameplay E2E release manifest must define target evidence.';
+  }
+
+  const targetEvidence = value.targets[target];
+
+  if (!isRecord(targetEvidence) || typeof targetEvidence.artifact !== 'string') {
+    return `Gameplay E2E release manifest does not contain target ${target}.`;
+  }
+
+  if (
+    targetEvidence.profile !== undefined
+    && targetEvidence.profile !== profile
+  ) {
+    return `Gameplay E2E release manifest target ${target} does not match profile ${profile}.`;
+  }
+
+  if (
+    path.resolve(gameRoot, targetEvidence.artifact)
+    !== path.resolve(gameRoot, artifactFile)
+  ) {
+    return `Gameplay E2E release manifest target ${target} does not match the tested artifact.`;
   }
 
   return null;
@@ -594,14 +767,47 @@ function validateCurrentPathEvidence(
     : `Gameplay E2E ${label} hash does not match its current contents.`;
 }
 
-function sha256File(file: string): string {
-  return createHash('sha256').update(readFileSync(file)).digest('hex');
-}
-
 function relativeOrAbsolute(root: string, file: string): string {
   const relative = path.relative(root, file);
 
   return relative.startsWith('..') || path.isAbsolute(relative) ? file : relative || '.';
+}
+
+function resolvePathInsideGameRoot(gameRoot: string, file: string, label: string): string {
+  const resolved = path.resolve(gameRoot, file);
+  const relative = path.relative(gameRoot, resolved);
+
+  if (
+    relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
+    throw new Error(`${label} must stay inside the game root.`);
+  }
+
+  return resolved;
+}
+
+function readBoundedUtf8File(file: string, maximumBytes: number): string | null {
+  const buffer = Buffer.allocUnsafe(maximumBytes + 1);
+  const fileDescriptor = openSync(file, 'r');
+  let offset = 0;
+
+  try {
+    while (offset < buffer.length) {
+      const bytesRead = readSync(fileDescriptor, buffer, offset, buffer.length - offset, null);
+
+      if (bytesRead === 0) {
+        break;
+      }
+
+      offset += bytesRead;
+    }
+  } finally {
+    closeSync(fileDescriptor);
+  }
+
+  return offset > maximumBytes ? null : buffer.subarray(0, offset).toString('utf8');
 }
 
 function resolveRunnableStep(step: GameAcceptanceStep):
