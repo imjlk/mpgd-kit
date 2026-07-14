@@ -21,6 +21,7 @@ import {
   runGameAcceptance,
   type GameAcceptanceStep,
 } from './game-acceptance.js';
+import { resolveGameplayE2EReportFile } from './gameplay-e2e.js';
 
 export {
   renderGameAcceptanceMarkdown,
@@ -37,6 +38,31 @@ export {
   type RunGameAcceptanceInput,
   type RunGameAcceptanceResult,
 } from './game-acceptance.js';
+
+export {
+  collectGameplayE2EPathEvidence,
+  defaultGameplayE2EReportFile,
+  parseGameplayE2EPlan,
+  readGameplayE2EPlan,
+  renderGameplayE2EMarkdown,
+  resolveGameplayE2EReportFile,
+  runGameplayE2E,
+  type GameplayE2EAction,
+  type GameplayE2EActionResult,
+  type GameplayE2EDriver,
+  type GameplayE2EInputAction,
+  type GameplayE2EObservation,
+  type GameplayE2EPauseResumeAction,
+  type GameplayE2EPathEvidence,
+  type GameplayE2EPlan,
+  type GameplayE2EReport,
+  type GameplayE2EResultStatus,
+  type GameplayE2EState,
+  type GameplayE2EStateResult,
+  type GameplayE2EStatus,
+  type RunGameplayE2EInput,
+  type RunGameplayE2EResult,
+} from './gameplay-e2e.js';
 
 export {
   assertProductionTargetReadiness,
@@ -96,6 +122,7 @@ const acceptanceStepIds = {
   playtest: 'playtest',
   targetBuild: 'target-build',
   targetSmoke: 'target-smoke',
+  gameplayE2E: 'gameplay-e2e',
 } as const;
 
 export async function runMpgdCli(args: readonly string[]): Promise<void> {
@@ -279,8 +306,8 @@ const gameCommand = defineI18n({
       description: 'Run the reusable game handoff acceptance workflow.',
       resource: commandResource(
         {
-          en: 'Run check, test, build, graph, playtest, and target acceptance with handoff reports.',
-          ko: 'check, test, build, graph, playtest, 타깃 인수 검증과 인계 리포트를 실행합니다.',
+          en: 'Run check, test, build, graph, playtest, target, and gameplay acceptance with handoff reports.',
+          ko: 'check, test, build, graph, playtest, 타깃 및 gameplay 인수 검증과 인계 리포트를 실행합니다.',
         },
         {
           game: {
@@ -298,6 +325,10 @@ const gameCommand = defineI18n({
           'playtest-script': {
             en: 'Optional game-owned package script used for automated playtesting.',
             ko: '자동 플레이테스트에 사용할 선택적 게임 소유 패키지 스크립트.',
+          },
+          'gameplay-script': {
+            en: 'Optional game-owned package script used for target gameplay E2E.',
+            ko: '타깃 gameplay E2E에 사용할 선택적 게임 소유 패키지 스크립트.',
           },
           'report-dir': {
             en: 'JSON and Markdown handoff report directory.',
@@ -350,6 +381,12 @@ const gameCommand = defineI18n({
           default: 'playtest',
           description: 'Game-owned package script used for automated playtesting.',
         },
+        'gameplay-script': {
+          type: 'string',
+          required: false,
+          default: 'gameplay:e2e',
+          description: 'Game-owned package script used for target gameplay E2E.',
+        },
         'report-dir': {
           type: 'string',
           required: false,
@@ -381,6 +418,11 @@ const gameCommand = defineI18n({
           required: false,
           description: 'Skip the game-owned playtest package script.',
         },
+        'skip-gameplay-e2e': {
+          type: 'boolean',
+          required: false,
+          description: 'Skip the game-owned target gameplay E2E package script.',
+        },
         'skip-target-build': {
           type: 'boolean',
           required: false,
@@ -411,12 +453,14 @@ const gameCommand = defineI18n({
           aitVariant: readOptionalString(ctx.values['ait-variant']) ?? 'wrapper',
           ...(iosVariant === undefined ? {} : { iosVariant }),
           playtestScript: readOptionalString(ctx.values['playtest-script']) ?? 'playtest',
+          gameplayScript: readOptionalString(ctx.values['gameplay-script']) ?? 'gameplay:e2e',
           ...(reportDir === undefined ? {} : { reportDir }),
           ...(kitPath === undefined ? {} : { kitPath }),
           timeoutMs,
           skipTest: ctx.values['skip-test'] === true,
           skipGraph: ctx.values['skip-graph'] === true,
           skipPlaytest: ctx.values['skip-playtest'] === true,
+          skipGameplayE2E: ctx.values['skip-gameplay-e2e'] === true,
           skipTargetBuild: ctx.values['skip-target-build'] === true,
           skipTargetSmoke: ctx.values['skip-target-smoke'] === true,
         });
@@ -502,12 +546,14 @@ interface AcceptGameInput {
   readonly aitVariant: string;
   readonly iosVariant?: string;
   readonly playtestScript: string;
+  readonly gameplayScript: string;
   readonly reportDir?: string;
   readonly kitPath?: string;
   readonly timeoutMs: number;
   readonly skipTest: boolean;
   readonly skipGraph: boolean;
   readonly skipPlaytest: boolean;
+  readonly skipGameplayE2E: boolean;
   readonly skipTargetBuild: boolean;
   readonly skipTargetSmoke: boolean;
 }
@@ -534,6 +580,8 @@ function acceptGame(input: AcceptGameInput): void {
     ...(input.kitPath === undefined ? {} : { 'kit-path': input.kitPath }),
   });
   const packageManager = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+  const gameplayE2EEnabled = !input.skipGameplayE2E
+    && gamePackage.scripts?.[input.gameplayScript] !== undefined;
   const steps: GameAcceptanceStep[] = [
     packageScriptAcceptanceStep({
       id: acceptanceStepIds.check,
@@ -612,24 +660,40 @@ function acceptGame(input: AcceptGameInput): void {
       ...(input.iosVariant === undefined ? {} : { iosVariant: input.iosVariant }),
       skipped: input.skipTargetSmoke,
     }),
+    packageScriptAcceptanceStep({
+      id: acceptanceStepIds.gameplayE2E,
+      label: 'Target gameplay E2E',
+      script: input.gameplayScript,
+      gameRoot,
+      packageManager,
+      scripts: gamePackage.scripts,
+      required: false,
+      skipped: input.skipGameplayE2E,
+    }),
   ];
   const reportDir = path.resolve(gameRoot, input.reportDir ?? 'artifacts/acceptance');
   const releaseManifestFile = resolveGameAcceptanceReleaseManifestFile(gameRoot);
+  const gameplayE2EReportFile = resolveGameplayE2EReportFile(gameRoot);
   const result = runGameAcceptance({
     gameRoot,
     reportDir,
     ...(input.skipTargetBuild
       ? {}
       : { releaseManifestFile }),
+    ...(gameplayE2EEnabled
+      ? { gameplayE2EReportFile, requireGameplayE2EReport: true }
+      : {}),
     options: {
       targets: input.targets,
       profile: input.profile,
       aitVariant: input.aitVariant,
       iosVariant: input.iosVariant ?? null,
       playtestScript: input.playtestScript,
+      gameplayScript: input.gameplayScript,
       skipTest: input.skipTest,
       skipGraph: input.skipGraph,
       skipPlaytest: input.skipPlaytest,
+      skipGameplayE2E: input.skipGameplayE2E,
       skipTargetBuild: input.skipTargetBuild,
       skipTargetSmoke: input.skipTargetSmoke,
       timeoutMs: String(input.timeoutMs),
@@ -639,7 +703,10 @@ function acceptGame(input: AcceptGameInput): void {
     env: {
       ...process.env,
       MPGD_KIT_PATH: kitPath,
+      MPGD_ACCEPTANCE_TARGETS: input.targets,
+      MPGD_ACCEPTANCE_PROFILE: input.profile,
       MPGD_RELEASE_MANIFEST_FILE: releaseManifestFile,
+      MPGD_GAMEPLAY_E2E_REPORT_FILE: gameplayE2EReportFile,
     },
   });
 

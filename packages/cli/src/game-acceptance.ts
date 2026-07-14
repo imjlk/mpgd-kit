@@ -1,6 +1,9 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+
+import { collectGameplayE2EPathEvidence } from './gameplay-e2e.js';
 
 export const defaultGameAcceptanceCommandTimeoutMs = 30 * 60 * 1_000;
 const defaultGameAcceptanceReleaseManifestFile = 'artifacts/release-manifest.json';
@@ -59,6 +62,13 @@ export interface GameAcceptanceReport {
       readonly parseError: string | null;
       readonly value: unknown;
     } | null;
+    readonly gameplayE2E: {
+      readonly file: string;
+      readonly found: boolean;
+      readonly parseError: string | null;
+      readonly validationError: string | null;
+      readonly value: unknown;
+    } | null;
   };
 }
 
@@ -75,6 +85,8 @@ export interface RunGameAcceptanceInput {
   readonly gameRoot: string;
   readonly reportDir: string;
   readonly releaseManifestFile?: string;
+  readonly gameplayE2EReportFile?: string;
+  readonly requireGameplayE2EReport?: boolean;
   readonly options: Readonly<Record<string, string | boolean | null>>;
   readonly steps: readonly GameAcceptanceStep[];
   readonly env?: NodeJS.ProcessEnv;
@@ -163,18 +175,32 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
     failed = status === 'failed';
   }
 
-  const finishedAtMs = now();
   const releaseManifest = readOptionalJsonEvidence(input.releaseManifestFile, gameRoot);
+  const gameplayE2E = readGameplayE2EEvidence(
+    input.gameplayE2EReportFile,
+    gameRoot,
+    input.releaseManifestFile,
+    typeof input.options.profile === 'string' ? input.options.profile : undefined,
+  );
+  const evidenceFailed = input.requireGameplayE2EReport === true
+    && (
+      gameplayE2E === null
+      || !gameplayE2E.found
+      || gameplayE2E.parseError !== null
+      || gameplayE2E.validationError !== null
+    );
+  const finishedAtMs = now();
   const report: GameAcceptanceReport = {
     schemaVersion: 1,
     generatedAt: new Date(finishedAtMs).toISOString(),
-    status: failed ? 'failed' : 'passed',
+    status: failed || evidenceFailed ? 'failed' : 'passed',
     gameRoot,
     durationMs: Math.max(0, finishedAtMs - startedAtMs),
     options: input.options,
     steps: results,
     evidence: {
       releaseManifest,
+      gameplayE2E,
     },
   };
   const reportDir = path.resolve(input.reportDir);
@@ -225,6 +251,28 @@ export function renderGameAcceptanceMarkdown(report: GameAcceptanceReport): stri
     );
   } else {
     lines.push(`- Release manifest: ${escapeMarkdownInline(report.evidence.releaseManifest.file)}`);
+  }
+
+  lines.push('', '## Gameplay E2E Evidence', '');
+
+  if (report.evidence.gameplayE2E === null) {
+    lines.push('- Gameplay E2E evidence collection disabled.');
+  } else if (!report.evidence.gameplayE2E.found) {
+    lines.push(
+      `- Gameplay E2E report not found: ${escapeMarkdownInline(report.evidence.gameplayE2E.file)}`,
+    );
+  } else if (report.evidence.gameplayE2E.parseError !== null) {
+    lines.push(
+      `- Gameplay E2E report is invalid JSON: ${escapeMarkdownInline(report.evidence.gameplayE2E.file)}`,
+      `  - ${escapeMarkdownInline(report.evidence.gameplayE2E.parseError)}`,
+    );
+  } else if (report.evidence.gameplayE2E.validationError !== null) {
+    lines.push(
+      `- Gameplay E2E report failed validation: ${escapeMarkdownInline(report.evidence.gameplayE2E.file)}`,
+      `  - ${escapeMarkdownInline(report.evidence.gameplayE2E.validationError)}`,
+    );
+  } else {
+    lines.push(`- Gameplay E2E report: ${escapeMarkdownInline(report.evidence.gameplayE2E.file)}`);
   }
 
   return `${lines.join('\n')}\n`;
@@ -335,6 +383,196 @@ function readOptionalJsonEvidence(
       value: null,
     };
   }
+}
+
+function readGameplayE2EEvidence(
+  file: string | undefined,
+  gameRoot: string,
+  releaseManifestFile: string | undefined,
+  expectedProfile: string | undefined,
+): GameAcceptanceReport['evidence']['gameplayE2E'] {
+  if (file === undefined) {
+    return null;
+  }
+
+  const resolved = path.resolve(gameRoot, file);
+  const displayFile = relativeOrAbsolute(gameRoot, resolved);
+
+  if (!existsSync(resolved)) {
+    return {
+      file: displayFile,
+      found: false,
+      parseError: null,
+      validationError: null,
+      value: null,
+    };
+  }
+
+  let value: unknown;
+
+  try {
+    value = JSON.parse(readFileSync(resolved, 'utf8')) as unknown;
+  } catch (error) {
+    return {
+      file: displayFile,
+      found: true,
+      parseError: formatError(error),
+      validationError: null,
+      value: null,
+    };
+  }
+
+  return {
+    file: displayFile,
+    found: true,
+    parseError: null,
+    validationError: validateGameplayE2EEvidence(
+      value,
+      gameRoot,
+      releaseManifestFile,
+      expectedProfile,
+    ),
+    value,
+  };
+}
+
+function validateGameplayE2EEvidence(
+  value: unknown,
+  gameRoot: string,
+  releaseManifestFile: string | undefined,
+  expectedProfile: string | undefined,
+): string | null {
+  if (!isRecord(value)) {
+    return 'Gameplay E2E report must be an object.';
+  }
+
+  if (value.schemaVersion !== 1) {
+    return 'Gameplay E2E report schemaVersion must be 1.';
+  }
+
+  if (value.status !== 'passed') {
+    return 'Gameplay E2E report status must be passed.';
+  }
+
+  if (typeof value.target !== 'string' || value.target.length === 0) {
+    return 'Gameplay E2E report target must be a non-empty string.';
+  }
+
+  if (typeof value.profile !== 'string' || value.profile.length === 0) {
+    return 'Gameplay E2E report profile must be a non-empty string.';
+  }
+
+  if (expectedProfile !== undefined && value.profile !== expectedProfile) {
+    return `Gameplay E2E report profile must match acceptance profile ${expectedProfile}.`;
+  }
+
+  if (!isPathEvidence(value.artifact)) {
+    return 'Gameplay E2E report must link a hashed target artifact.';
+  }
+
+  const artifactError = validateCurrentPathEvidence(value.artifact, gameRoot, 'target artifact');
+
+  if (artifactError !== null) {
+    return artifactError;
+  }
+
+  if (!isPathEvidence(value.plan) || value.plan.kind !== 'file') {
+    return 'Gameplay E2E report must link its hashed manifest plan.';
+  }
+
+  const planError = validateCurrentPathEvidence(value.plan, gameRoot, 'manifest plan');
+
+  if (planError !== null) {
+    return planError;
+  }
+
+  if (releaseManifestFile !== undefined) {
+    if (!isPathEvidence(value.releaseManifest) || value.releaseManifest.kind !== 'file') {
+      return 'Gameplay E2E report must link the current release manifest.';
+    }
+
+    const resolvedReleaseManifest = path.resolve(gameRoot, releaseManifestFile);
+
+    if (!existsSync(resolvedReleaseManifest)) {
+      return 'Gameplay E2E report cannot link a missing acceptance release manifest.';
+    }
+
+    if (path.resolve(gameRoot, value.releaseManifest.file) !== resolvedReleaseManifest) {
+      return 'Gameplay E2E report must link the acceptance release manifest path.';
+    }
+
+    if (value.releaseManifest.sha256 !== sha256File(resolvedReleaseManifest)) {
+      return 'Gameplay E2E report release manifest hash does not match the acceptance build.';
+    }
+  }
+
+  if (!Array.isArray(value.states) || value.states.length === 0) {
+    return 'Gameplay E2E report must contain at least one state.';
+  }
+
+  for (const state of value.states) {
+    if (
+      !isRecord(state)
+      || state.status !== 'passed'
+      || !isPathEvidence(state.screenshot)
+      || state.screenshot.kind !== 'file'
+    ) {
+      return 'Every gameplay E2E state must have passed with a hashed screenshot.';
+    }
+
+    const screenshotError = validateCurrentPathEvidence(
+      state.screenshot,
+      gameRoot,
+      'state screenshot',
+    );
+
+    if (screenshotError !== null) {
+      return screenshotError;
+    }
+  }
+
+  return null;
+}
+
+interface GameplayPathEvidenceValue {
+  readonly file: string;
+  readonly kind: 'directory' | 'file' | 'symbolic-link';
+  readonly sha256: string;
+}
+
+function isPathEvidence(value: unknown): value is GameplayPathEvidenceValue {
+  return isRecord(value)
+    && typeof value.file === 'string'
+    && value.file.length > 0
+    && (value.kind === 'file' || value.kind === 'directory' || value.kind === 'symbolic-link')
+    && typeof value.sha256 === 'string'
+    && /^[a-f0-9]{64}$/u.test(value.sha256);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function validateCurrentPathEvidence(
+  evidence: GameplayPathEvidenceValue,
+  gameRoot: string,
+  label: string,
+): string | null {
+  let current: GameplayPathEvidenceValue;
+
+  try {
+    current = collectGameplayE2EPathEvidence(gameRoot, evidence.file, label);
+  } catch (error) {
+    return `Gameplay E2E ${label} is unavailable: ${formatError(error)}`;
+  }
+
+  return current.kind === evidence.kind && current.sha256 === evidence.sha256
+    ? null
+    : `Gameplay E2E ${label} hash does not match its current contents.`;
+}
+
+function sha256File(file: string): string {
+  return createHash('sha256').update(readFileSync(file)).digest('hex');
 }
 
 function relativeOrAbsolute(root: string, file: string): string {

@@ -53,11 +53,12 @@ manifest loading, and optional game-services client creation without copying the
 demo game's score/coin loop.
 
 `mpgd game accept` provides one reusable handoff gate for game check, optional
-test and playtest scripts, game build, ttsc graph preflight, and the target
-build/smoke matrix. It writes both JSON and Markdown reports under
-`artifacts/acceptance` by default. Games keep playtest scenarios in their own
-package and expose them through a `playtest` script; the CLI records absent
-optional scripts as skipped instead of inventing game-specific behavior.
+test and browser `playtest` scripts, game build, ttsc graph preflight, the target
+build/smoke matrix, and an optional target `gameplay:e2e` script. It writes both
+JSON and Markdown reports under `artifacts/acceptance` by default. Games keep
+state inspection and platform automation in their own package; the CLI validates
+the shared manifest plan and attaches hashed gameplay evidence without
+inventing game-specific behavior. See [Gameplay E2E](docs/GAMEPLAY_E2E.md).
 Each command has a 30-minute timeout by default; use `--timeout-ms` for a
 different per-step limit.
 

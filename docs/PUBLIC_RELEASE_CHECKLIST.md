@@ -96,4 +96,4 @@ pnpm smoke:target reddit
 - The Game Services Worker is deployable, but the default config is a starter profile. Production persistence requires a D1 binding and `MPGD_STORE = "d1"`.
 - Platform SDK callbacks are treated as evidence only. Production grants should add real Google Play, App Store, AdMob SSV, Apps in Toss, and Devvit payment/reward backend verification.
 - Catalog and ad placement IDs are sample defaults until replaced by a game-specific release configuration.
-- Emulator smoke currently checks install, launch, crash-free startup, screenshot capture, and embedded target config evidence. Full gameplay E2E remains a follow-up.
+- Emulator smoke checks install, launch, crash-free startup, screenshot capture, and embedded target config evidence. Target gameplay coverage is available through the optional manifest-driven `gameplay:e2e` contract; each game must still provide its own automation and state-inspection driver before treating that evidence as a release gate.

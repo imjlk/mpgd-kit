@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import {
+  collectGameplayE2EPathEvidence,
   renderGameAcceptanceMarkdown,
   resolveGameAcceptanceReleaseManifestFile,
   runGameAcceptance,
@@ -72,6 +73,7 @@ try {
     ['passed', 'skipped'],
   );
   assert.equal(passed.report.evidence.releaseManifest?.found, false);
+  assert.equal(passed.report.evidence.gameplayE2E, null);
   assert.equal(JSON.parse(readFileSync(passed.jsonFile, 'utf8')).schemaVersion, 1);
   assert.match(readFileSync(passed.markdownFile, 'utf8'), /Game Acceptance Report/u);
 
@@ -139,6 +141,38 @@ try {
   assert.equal(invalidEvidence.report.evidence.releaseManifest?.found, true);
   assert.match(invalidEvidence.report.evidence.releaseManifest?.parseError ?? '', /JSON/u);
   assert.match(readFileSync(invalidEvidence.markdownFile, 'utf8'), /Release manifest is invalid/u);
+  const gameplayEvidenceFile = path.join(fixtureRoot, 'artifacts/gameplay-e2e/report.json');
+
+  mkdirSync(path.dirname(gameplayEvidenceFile), { recursive: true });
+  writeFileSync(gameplayEvidenceFile, `${JSON.stringify({
+    schemaVersion: 1,
+    status: 'failed',
+    target: 'android',
+    profile: 'staging',
+    artifact: {
+      file: 'artifacts/app.apk',
+      kind: 'file',
+      sha256: 'a'.repeat(64),
+    },
+    states: [{ id: 'launch', status: 'failed' }],
+  })}\n`);
+  const failedGameplayEvidence = runGameAcceptance({
+    gameRoot: fixtureRoot,
+    reportDir: path.join(fixtureRoot, 'failed-gameplay-evidence-report'),
+    gameplayE2EReportFile: gameplayEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: {},
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  assert.equal(failedGameplayEvidence.report.status, 'failed');
+  assert.match(
+    failedGameplayEvidence.report.evidence.gameplayE2E?.validationError ?? '',
+    /status must be passed/u,
+  );
+  assert.match(readFileSync(failedGameplayEvidence.markdownFile, 'utf8'), /failed validation/u);
   const escapedMarkdown = renderGameAcceptanceMarkdown({
     ...invalidEvidence.report,
     gameRoot: 'root *game* <tag>\nnext',
@@ -149,6 +183,7 @@ try {
         parseError: 'bad *value* [detail] <tag>',
         value: null,
       },
+      gameplayE2E: null,
     },
   });
 
@@ -200,12 +235,54 @@ try {
       scripts: {
         check: 'node --version',
         build: 'node --version',
+        'gameplay:e2e': 'node ./write-gameplay-evidence.mjs',
       },
     }, null, 2)}\n`,
   );
   writeFileSync(
     path.join(cliGameRoot, 'mpgd.targets.json'),
     `${JSON.stringify({ schemaVersion: 1, targets: {} }, null, 2)}\n`,
+  );
+  writeFileSync(
+    path.join(cliGameRoot, 'mpgd.game.json'),
+    `${JSON.stringify({
+      acceptance: {
+        gameplay: {
+          schemaVersion: 1,
+          states: [{ id: 'launch', label: 'Launch', actions: [] }],
+        },
+      },
+    })}\n`,
+  );
+  writeFileSync(path.join(cliGameRoot, 'app.apk'), 'fixture artifact\n');
+  writeFileSync(path.join(cliGameRoot, 'launch.png'), 'fixture screenshot\n');
+  writeFileSync(
+    path.join(cliGameRoot, 'gameplay-evidence-source.json'),
+    `${JSON.stringify({
+      schemaVersion: 1,
+      status: 'passed',
+      target: 'android',
+      profile: 'staging',
+      plan: collectGameplayE2EPathEvidence(cliGameRoot, 'mpgd.game.json', 'plan'),
+      artifact: collectGameplayE2EPathEvidence(cliGameRoot, 'app.apk', 'artifact'),
+      states: [{
+        id: 'launch',
+        status: 'passed',
+        screenshot: collectGameplayE2EPathEvidence(cliGameRoot, 'launch.png', 'screenshot'),
+      }],
+    })}\n`,
+  );
+  writeFileSync(
+    path.join(cliGameRoot, 'write-gameplay-evidence.mjs'),
+    [
+      "import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';",
+      "import path from 'node:path';",
+      'const file = process.env.MPGD_GAMEPLAY_E2E_REPORT_FILE;',
+      "if (file === undefined) throw new Error('Missing gameplay E2E report file.');",
+      'mkdirSync(path.dirname(file), { recursive: true });',
+      "writeFileSync(file, readFileSync('gameplay-evidence-source.json'));",
+      '',
+    ].join('\n'),
   );
 
   await runMpgdCli([
@@ -228,7 +305,10 @@ try {
   ) as GameAcceptanceReport;
 
   assert.equal(cliReport.status, 'passed');
-  assert.equal(cliReport.steps.length, 7);
+  assert.equal(cliReport.steps.length, 8);
+  assert.equal(cliReport.steps[7]?.status, 'passed');
+  assert.equal(cliReport.evidence.gameplayE2E?.found, true);
+  assert.equal(cliReport.evidence.gameplayE2E?.validationError, null);
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });
 }

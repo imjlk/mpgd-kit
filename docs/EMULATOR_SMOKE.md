@@ -39,3 +39,16 @@ Defaults:
 The script runs the iOS target sync, builds a Debug simulator app through
 `xcodebuild`, verifies the app contains `mpgd-effective-target.json` for the iOS
 target, installs `dev.mpgd.kit`, launches it, and captures a screenshot.
+
+## Gameplay E2E Boundary
+
+These smoke scripts intentionally stop at build, install, launch, crash/config
+checks, and screenshot capture. A game that needs input/state coverage declares
+its shared states in `mpgd.game.json` and implements the optional game-owned
+`gameplay:e2e` driver described in [Gameplay E2E](GAMEPLAY_E2E.md).
+
+Android drivers can map normalized actions through ADB or a dedicated test
+harness. Standard `xcrun simctl` does not expose portable tap/key injection, so
+iOS gameplay drivers must use XCUITest, Appium, or another explicitly managed
+automation tool. Both targets return state observations and stable session ids
+to the same kit runner for pause/resume validation and hashed evidence output.

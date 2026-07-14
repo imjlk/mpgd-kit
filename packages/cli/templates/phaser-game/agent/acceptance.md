@@ -8,11 +8,15 @@ pnpm icons:verify
 pnpm accept
 ```
 
-`pnpm accept` runs the configured game check, optional test and playtest scripts,
-game build, kit TypeScript graph preflight, and the reusable target build/smoke
-matrix. It writes `artifacts/acceptance/acceptance-report.json` and
-`acceptance-report.md` for handoff. Missing optional `test` or `playtest` scripts
-are recorded as skipped; check and build remain required.
+`pnpm accept` runs the configured game check, optional test and browser playtest
+scripts, game build, kit TypeScript graph preflight, the reusable target
+build/smoke matrix, and an optional `gameplay:e2e` target script. It writes
+`artifacts/acceptance/acceptance-report.json` and `acceptance-report.md` for
+handoff. Missing optional `test`, `playtest`, or `gameplay:e2e` scripts are
+recorded as skipped; check and build remain required. When `gameplay:e2e`
+exists, it must execute the `mpgd.game.json` acceptance states through a
+game-owned driver and write the standard hashed report requested by
+`MPGD_GAMEPLAY_E2E_REPORT_FILE`.
 
 For Apps in Toss changes, use the apps-in-toss MCP before implementation and
 keep SDK calls inside adapters or target wrappers.

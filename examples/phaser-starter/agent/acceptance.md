@@ -12,6 +12,12 @@ pnpm --dir examples/phaser-starter check
 pnpm --dir examples/phaser-starter build
 ```
 
+`examples/phaser-starter/mpgd.game.json` also defines reusable `gameplay:e2e`
+states for launch, primary input, and pause/resume continuity. They become an
+automated release gate only after a consuming game supplies a target driver;
+the starter does not pretend that generic emulator smoke can inspect
+game-specific state.
+
 ## Manual
 
 - The first screen shows app title, target, viewport orientation policy, effective config, player, and game-services mode.

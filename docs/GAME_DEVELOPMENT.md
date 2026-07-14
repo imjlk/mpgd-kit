@@ -223,6 +223,10 @@ new reusable mechanic, evolve the starter, or plan a platform adapter. The
 workflow keeps reusable blocks capability-named and keeps platform SDK imports
 behind adapters, native plugins, or target wrappers.
 
+Use [Gameplay E2E](GAMEPLAY_E2E.md) when promoting a browser playtest into a
+target acceptance gate. Keep the manifest states shared, but keep Playwright,
+ADB, XCUITest, Appium, and state-inspection code in the game-owned driver.
+
 ## Adding Gameplay
 
 1. Add deterministic rules to the generated game's serializable game modules.
