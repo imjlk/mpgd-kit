@@ -538,6 +538,41 @@ assertEqual(
   'reward_continue',
 );
 
+const redditEffectiveConfig = createEffectiveTargetConfig({
+  target: 'reddit',
+  targetConfigVersion: targetConfigMatrix.version,
+  config: createTargetConfig({
+    iap: true,
+    rewardedAds: false,
+    interstitialAds: false,
+    leaderboard: false,
+    localization: true,
+  }),
+  catalog: {
+    version: 'reddit-catalog',
+    products: [
+      {
+        id: 'FINAL_NINE_EMBER_THEME',
+        type: 'non_consumable',
+        grant: {
+          type: 'entitlement',
+          entitlement: 'cosmetic.final-nine.ember',
+        },
+        platformProductIds: {
+          reddit: 'ttokdoku_final_nine_ember',
+        },
+      },
+    ],
+  },
+  adPlacements: {
+    version: 'reddit-ads',
+    placements: [],
+  },
+});
+const redditProduct = getEffectiveProductConfig(redditEffectiveConfig, 'FINAL_NINE_EMBER_THEME');
+assertEqual(redditProduct?.enabled, true);
+assertEqual(redditProduct?.platformProductId, 'ttokdoku_final_nine_ember');
+
 const blankEffectiveConfig = createEffectiveTargetConfig({
   target: 'android',
   targetConfigVersion: targetConfigMatrix.version,
