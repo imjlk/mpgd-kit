@@ -260,7 +260,12 @@ export async function runGameplayE2E(
   const screenshotsDir = path.join(reportDir, 'screenshots');
   const startedAtMs = now();
   const plan = parseGameplayE2EPlan(input.plan);
-  const configuredPlan = readGameplayE2EPlan(gameRoot, input.planFile);
+  const planLabel = 'gameplay E2E plan';
+  const planEvidence = collectGameplayE2EPathEvidence(gameRoot, input.planFile, planLabel);
+
+  assertPathEvidenceKind(planEvidence, ['file'], planLabel);
+
+  const configuredPlan = readGameplayE2EPlan(gameRoot, planEvidence.file);
 
   if (configuredPlan === null) {
     throw new Error('Gameplay E2E plan file must define acceptance.gameplay.');
@@ -274,11 +279,6 @@ export async function runGameplayE2E(
   const releaseManifest = input.releaseManifestFile === undefined
     ? null
     : collectGameplayE2EPathEvidence(gameRoot, input.releaseManifestFile, 'release manifest');
-  const planEvidence = collectGameplayE2EPathEvidence(
-    gameRoot,
-    configuredPlan.file,
-    'gameplay E2E plan',
-  );
   const states: GameplayE2EStateResult[] = [];
   let failed = false;
 
@@ -287,8 +287,6 @@ export async function runGameplayE2E(
   if (releaseManifest !== null) {
     assertPathEvidenceKind(releaseManifest, ['file'], 'release manifest');
   }
-
-  assertPathEvidenceKind(planEvidence, ['file'], 'gameplay E2E plan');
 
   mkdirSync(screenshotsDir, { recursive: true });
 
@@ -359,12 +357,21 @@ export function renderGameplayE2EMarkdown(report: GameplayE2EReport): string {
       state.status,
       formatDuration(state.durationMs),
       escapeMarkdownTable(state.screenshot?.file ?? ''),
-      escapeMarkdownTable(state.detail ?? state.observation?.detail ?? ''),
+      escapeMarkdownTable(gameplayStateDetail(state)),
     ].join(' | ')).map((row) => `| ${row} |`),
     '',
   ];
 
   return `${lines.join('\n')}\n`;
+}
+
+function gameplayStateDetail(state: GameplayE2EStateResult): string {
+  return [
+    state.detail,
+    ...state.actions.map((action) => action.detail),
+    state.observation?.detail,
+  ].filter((detail): detail is string =>
+    detail !== null && detail !== undefined && detail.length > 0).join('; ');
 }
 
 interface RunGameplayStateInput {
@@ -735,13 +742,15 @@ export function collectGameplayE2EPathEvidence(
   label: string,
   limits: GameplayE2EHashLimits = defaultGameplayE2EHashLimits,
 ): GameplayE2EPathEvidence {
-  const resolved = path.resolve(gameRoot, file);
+  const resolved = resolveEvidencePathInsideGameRoot(gameRoot, file, label);
 
-  if (!existsSync(resolved)) {
-    throw new Error(`Missing ${label}: ${resolved}`);
+  let stats: ReturnType<typeof lstatSync>;
+
+  try {
+    stats = lstatSync(resolved);
+  } catch (error) {
+    throw new Error(`Unable to inspect ${label} at ${resolved}: ${formatError(error)}`);
   }
-
-  const stats = lstatSync(resolved);
   const kind = stats.isSymbolicLink()
     ? 'symbolic-link'
     : stats.isDirectory()
@@ -759,6 +768,58 @@ export function collectGameplayE2EPathEvidence(
     kind,
     sha256: hashPath(resolved, validateHashLimits(limits)),
   };
+}
+
+function resolveEvidencePathInsideGameRoot(
+  gameRoot: string,
+  file: string,
+  label: string,
+): string {
+  const resolvedRoot = path.resolve(gameRoot);
+  const resolved = path.resolve(resolvedRoot, file);
+  const relative = path.relative(resolvedRoot, resolved);
+
+  if (pathEscapesRoot(relative)) {
+    // Keep host paths out of validation errors when untrusted input escapes the game root.
+    throw new Error(`${label} path must stay inside the game root.`);
+  }
+
+  if (resolved === resolvedRoot) {
+    return resolved;
+  }
+
+  const relativeParent = path.relative(resolvedRoot, path.dirname(resolved));
+  let current = resolvedRoot;
+
+  for (const segment of relativeParent.split(path.sep).filter((entry) => entry.length > 0)) {
+    current = path.join(current, segment);
+
+    let stats: ReturnType<typeof lstatSync>;
+
+    try {
+      stats = lstatSync(current);
+    } catch (error) {
+      throw new Error(
+        `Unable to inspect ${label} parent directory at ${current}: ${formatError(error)}`,
+      );
+    }
+
+    if (stats.isSymbolicLink()) {
+      throw new Error(`${label} path must not cross symbolic-link ancestors: ${current}`);
+    }
+
+    if (!stats.isDirectory()) {
+      throw new Error(`${label} parent path must be a directory.`);
+    }
+  }
+
+  return resolved;
+}
+
+function pathEscapesRoot(relative: string): boolean {
+  return relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative);
 }
 
 function assertPathEvidenceKind(

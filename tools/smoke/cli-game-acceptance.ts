@@ -263,7 +263,7 @@ try {
     `${JSON.stringify({
       schemaVersion: 1,
       status: 'passed',
-      target: 'android',
+      target: 'web-preview',
       profile: 'staging',
       plan: collectGameplayE2EPathEvidence(cliGameRoot, 'mpgd.game.json', 'plan'),
       artifact: collectGameplayE2EPathEvidence(cliGameRoot, 'app.apk', 'artifact'),
@@ -283,6 +283,9 @@ try {
       "if (file === undefined) throw new Error('Missing gameplay E2E report file.');",
       'mkdirSync(path.dirname(file), { recursive: true });',
       "const report = JSON.parse(readFileSync('gameplay-evidence-source.json', 'utf8'));",
+      "if (process.env.MPGD_ACCEPTANCE_TARGETS !== 'web-preview') {",
+      "  throw new Error('Expected normalized acceptance targets.');",
+      '}',
       'writeFileSync(file, `${JSON.stringify({ ...report, generatedAt: new Date().toISOString() })}\\n`);',
       '',
     ].join('\n'),
@@ -297,7 +300,7 @@ try {
     '--report-dir',
     'handoff',
     '--targets',
-    'android',
+    'web',
     '--skip-test',
     '--skip-graph',
     '--skip-playtest',
@@ -332,7 +335,7 @@ try {
     linkedReleaseManifestFile,
     `${JSON.stringify({
       targets: {
-        android: {
+        'web-preview': {
           artifact: 'app.apk',
           profile: 'staging',
         },
@@ -461,7 +464,7 @@ try {
     linkedReleaseManifestFile,
     `${JSON.stringify({
       targets: {
-        android: {
+        'web-preview': {
           artifact: 'different.apk',
           profile: 'staging',
         },
@@ -501,7 +504,7 @@ try {
     linkedReleaseManifestFile,
     `${JSON.stringify({
       targets: {
-        android: {
+        'web-preview': {
           artifact: 'app.apk',
           profile: 'staging',
         },
@@ -712,11 +715,11 @@ try {
     outsideLinkedEvidenceFile,
     `${JSON.stringify({
       ...validGameplayEvidence,
-      releaseManifest: collectGameplayE2EPathEvidence(
-        cliGameRoot,
-        outsideReleaseManifestFile,
-        'outside release manifest',
-      ),
+      releaseManifest: {
+        file: path.relative(cliGameRoot, outsideReleaseManifestFile),
+        kind: 'file',
+        sha256: 'a'.repeat(64),
+      },
     })}\n`,
   );
   const outsideLinkedEvidence = runGameAcceptance({
@@ -778,11 +781,11 @@ try {
     escapingGameplayEvidenceFile,
     `${JSON.stringify({
       ...validGameplayEvidence,
-      artifact: collectGameplayE2EPathEvidence(
-        cliGameRoot,
-        path.join(fixtureRoot, 'relative-release.json'),
-        'outside artifact',
-      ),
+      artifact: {
+        file: path.relative(cliGameRoot, path.join(fixtureRoot, 'relative-release.json')),
+        kind: 'file',
+        sha256: 'a'.repeat(64),
+      },
     })}\n`,
   );
   const escapingEvidence = runGameAcceptance({

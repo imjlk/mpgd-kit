@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -17,6 +25,7 @@ import {
 } from '../../packages/cli/src/index';
 
 const fixtureRoot = mkdtempSync(path.join(tmpdir(), 'mpgd-gameplay-e2e-'));
+const outsideRoot = mkdtempSync(path.join(tmpdir(), 'mpgd-gameplay-e2e-outside-'));
 const artifactFile = path.join(fixtureRoot, 'artifacts/target/app.bin');
 const releaseManifestFile = path.join(fixtureRoot, 'artifacts/release-manifest.json');
 const gameConfigFile = path.join(fixtureRoot, 'mpgd.game.json');
@@ -127,8 +136,43 @@ try {
   assert.match(passed.report.releaseManifest?.sha256 ?? '', /^[a-f0-9]{64}$/u);
   assert.equal(passed.report.states[2]?.observation?.sessionId, 'session-1');
   assert.match(readFileSync(passed.jsonFile, 'utf8'), /"target": "android"/u);
-  assert.match(readFileSync(passed.markdownFile, 'utf8'), /Session preserved/u);
+  expectTextMatch(
+    readFileSync(passed.markdownFile, 'utf8'),
+    /Session preserved/u,
+    'pause/resume Markdown detail',
+  );
   assert.match(renderGameplayE2EMarkdown(passed.report), /Gameplay E2E Report/u);
+
+  const outsideArtifactFile = path.join(outsideRoot, 'outside.bin');
+
+  writeFileSync(outsideArtifactFile, 'outside artifact\n');
+  const collectOutsideArtifact = () => collectGameplayE2EPathEvidence(
+    fixtureRoot,
+    outsideArtifactFile,
+    'outside artifact',
+  );
+
+  expectCallError(
+    collectOutsideArtifact,
+    /must stay inside the game root/u,
+    'outside gameplay evidence path',
+  );
+
+  const linkedArtifactsDir = path.join(fixtureRoot, 'linked-artifacts');
+
+  symlinkSync(outsideRoot, linkedArtifactsDir, 'dir');
+  const collectSymlinkedArtifact = () => collectGameplayE2EPathEvidence(
+    fixtureRoot,
+    path.join(linkedArtifactsDir, 'outside.bin'),
+    'symlinked artifact',
+  );
+
+  expectCallError(
+    collectSymlinkedArtifact,
+    /must not cross symbolic-link ancestors/u,
+    'symlinked gameplay evidence ancestor',
+  );
+  unlinkSync(linkedArtifactsDir);
   let mismatchedPlanError: unknown;
   let mismatchedPlanRejected = false;
 
@@ -267,6 +311,7 @@ try {
   assert.match(dualFailure.report.states[0]?.detail ?? '', /fixture resume failure/u);
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });
+  rmSync(outsideRoot, { recursive: true, force: true });
 }
 
 console.log('CLI gameplay E2E smoke passed.');
@@ -327,5 +372,31 @@ function expectErrorMatch(value: unknown, pattern: RegExp): void {
 
   if (!pattern.test(message)) {
     throw new Error(`Expected error to match ${String(pattern)}, received ${message}.`);
+  }
+}
+
+function expectTextMatch(value: string, pattern: RegExp, label: string): void {
+  if (!pattern.test(value)) {
+    throw new Error(`${label}: expected ${String(pattern)} in ${value}.`);
+  }
+}
+
+function expectCallError(action: () => unknown, pattern: RegExp, label: string): void {
+  let error: unknown;
+
+  try {
+    action();
+  } catch (caught) {
+    error = caught;
+  }
+
+  if (error === undefined) {
+    throw new Error(`${label}: expected the call to throw.`);
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (!pattern.test(message)) {
+    throw new Error(`${label}: expected ${String(pattern)}, received ${message}.`);
   }
 }

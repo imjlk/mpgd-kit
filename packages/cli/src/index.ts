@@ -717,7 +717,9 @@ function acceptGame(input: AcceptGameInput): void {
     env: {
       ...process.env,
       MPGD_KIT_PATH: kitPath,
-      MPGD_ACCEPTANCE_TARGETS: input.targets,
+      MPGD_ACCEPTANCE_TARGETS: gameplayE2EEnabled
+        ? gameplayE2ETargets.join(',')
+        : input.targets,
       MPGD_ACCEPTANCE_PROFILE: input.profile,
       MPGD_RELEASE_MANIFEST_FILE: releaseManifestFile,
       MPGD_GAMEPLAY_E2E_REPORT_FILE: gameplayE2EReportFile,
