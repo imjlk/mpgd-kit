@@ -703,39 +703,47 @@ try {
   mkdirSync(mutableGameplayReportDir);
   writeFileSync(mutableGameplayReportFile, `${JSON.stringify(validGameplayEvidence)}\n`);
   try {
-    expectCallError(
-      () => runGameAcceptance({
-        gameRoot: cliGameRoot,
-        reportDir: path.join(cliGameRoot, 'mutable-gameplay-report-output'),
-        gameplayE2EReportFile: mutableGameplayReportFile,
-        requireGameplayE2EReport: true,
-        gameplayE2EStepId: 'gameplay-e2e',
-        options: { profile: 'staging' },
-        steps: [
-          {
-            id: 'replace-report-directory',
-            label: 'Replace report directory',
-            command: 'replace-report-directory',
-            cwd: cliGameRoot,
-          },
-          {
-            id: 'gameplay-e2e',
-            label: 'Gameplay E2E',
-            command: 'noop',
-            cwd: cliGameRoot,
-          },
-        ],
-        commandRunner: (step) => {
-          if (step.command === 'replace-report-directory') {
-            rmSync(mutableGameplayReportDir, { recursive: true });
-            symlinkSync(outsideSymlinkedReportDir, mutableGameplayReportDir, 'dir');
-          }
-
-          return { exitCode: 0 };
+    const mutatedResult = runGameAcceptance({
+      gameRoot: cliGameRoot,
+      reportDir: path.join(cliGameRoot, 'mutable-gameplay-report-output'),
+      gameplayE2EReportFile: mutableGameplayReportFile,
+      requireGameplayE2EReport: true,
+      gameplayE2EStepId: 'gameplay-e2e',
+      options: { profile: 'staging' },
+      steps: [
+        {
+          id: 'replace-report-directory',
+          label: 'Replace report directory',
+          command: 'replace-report-directory',
+          cwd: cliGameRoot,
         },
-        now: createClock(),
-        log: () => undefined,
-      }),
+        {
+          id: 'gameplay-e2e',
+          label: 'Gameplay E2E',
+          command: 'noop',
+          cwd: cliGameRoot,
+        },
+      ],
+      commandRunner: (step) => {
+        if (step.command === 'replace-report-directory') {
+          rmSync(mutableGameplayReportDir, { recursive: true });
+          symlinkSync(outsideSymlinkedReportDir, mutableGameplayReportDir, 'dir');
+        }
+
+        return { exitCode: 0 };
+      },
+      now: createClock(),
+      log: () => undefined,
+    });
+
+    expectEqual(mutatedResult.report.status, 'failed', 'mutated report path status');
+    expectEqual(
+      mutatedResult.report.steps[1]?.status,
+      'failed',
+      'mutated report path gameplay step',
+    );
+    expectMatch(
+      mutatedResult.report.steps[1]?.detail,
       /must not cross symbolic-link ancestors/u,
       'gameplay report deletion time-of-check/time-of-use',
     );

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -71,6 +72,13 @@ expectCallError(
   }),
   /must stay inside the game root/u,
   'outside gameplay report path',
+);
+expectCallError(
+  () => resolveGameplayE2EReportFile(fixtureRoot, {
+    MPGD_GAMEPLAY_E2E_REPORT_FILE: 'artifacts/gameplay-e2e/report.md',
+  }),
+  /must not use a Markdown extension/u,
+  'Markdown gameplay JSON report path',
 );
 
 assert.throws(() => parseGameplayE2EPlan({ ...plan, unsupported: true }), /unsupported fields/u);
@@ -149,6 +157,54 @@ try {
     'pause/resume Markdown detail',
   );
   assert.match(renderGameplayE2EMarkdown(passed.report), /Gameplay E2E Report/u);
+  await expectAsyncCallError(
+    () => runGameplayE2E({
+      gameRoot: fixtureRoot,
+      reportDir,
+      reportFile: 'artifacts/gameplay-e2e/collision.MD',
+      plan: loaded?.plan ?? plan,
+      planFile: gameConfigFile,
+      target: 'android',
+      profile: 'staging',
+      artifactFile,
+      driver,
+      now: createClock(),
+      log: () => undefined,
+    }),
+    /must not use a Markdown extension/u,
+    'direct Markdown gameplay JSON report path',
+  );
+  const staleScreenshotReportDir = path.join(fixtureRoot, 'artifacts/stale-screenshot');
+  const staleScreenshotFile = path.join(staleScreenshotReportDir, 'screenshots/launch-ready.png');
+
+  mkdirSync(path.dirname(staleScreenshotFile), { recursive: true });
+  writeFileSync(staleScreenshotFile, 'stale screenshot\n');
+  const staleScreenshot = await runGameplayE2E({
+    gameRoot: fixtureRoot,
+    reportDir: staleScreenshotReportDir,
+    plan: loaded?.plan ?? plan,
+    planFile: gameConfigFile,
+    target: 'android',
+    profile: 'staging',
+    artifactFile,
+    driver: { ...driver, captureScreenshot: async () => undefined },
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  if (staleScreenshot.report.status !== 'failed') {
+    throw new Error('A no-op screenshot driver must not reuse stale evidence.');
+  }
+
+  expectTextMatch(
+    staleScreenshot.report.states[0]?.detail ?? '',
+    /Screenshot failed/u,
+    'stale screenshot rejection',
+  );
+
+  if (existsSync(staleScreenshotFile)) {
+    throw new Error('The stale gameplay screenshot must be removed before capture.');
+  }
 
   const outsideArtifactFile = path.join(outsideRoot, 'outside.bin');
 
@@ -242,7 +298,22 @@ try {
     { maximumDepth: 10, maximumEntries: 10, maximumTotalFileBytes: 4 },
   );
 
-  assert.throws(collectBoundedArtifact, /maximum hashed bytes/u);
+  expectCallError(collectBoundedArtifact, /maximum hashed bytes/u, 'bounded artifact bytes');
+  const entryLimitedArtifactDir = path.join(fixtureRoot, 'artifacts/entry-limited');
+
+  mkdirSync(entryLimitedArtifactDir);
+  writeFileSync(path.join(entryLimitedArtifactDir, 'a.bin'), 'a\n');
+  writeFileSync(path.join(entryLimitedArtifactDir, 'b.bin'), 'b\n');
+  expectCallError(
+    () => collectGameplayE2EPathEvidence(
+      fixtureRoot,
+      entryLimitedArtifactDir,
+      'entry-limited artifact',
+      { maximumDepth: 10, maximumEntries: 2, maximumTotalFileBytes: 100 },
+    ),
+    /maximum hash entries 2/u,
+    'bounded artifact entries',
+  );
 
   // Session mismatch: continuity failure stops later states while still capturing evidence.
   const mismatchLifecycle: string[] = [];

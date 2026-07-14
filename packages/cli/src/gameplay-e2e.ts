@@ -4,11 +4,12 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  opendirSync,
   openSync,
-  readdirSync,
   readFileSync,
   readlinkSync,
   readSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -173,14 +174,16 @@ export function resolveGameplayE2EReportFile(
   env: NodeJS.ProcessEnv = process.env,
 ): string {
   const configuredFile = env.MPGD_GAMEPLAY_E2E_REPORT_FILE;
-
-  return resolveGameplayE2EPathInsideGameRoot(
+  const resolved = resolveGameplayE2EPathInsideGameRoot(
     gameRoot,
     configuredFile === undefined || configuredFile.length === 0
       ? defaultGameplayE2EReportFile
       : configuredFile,
     'Gameplay E2E report',
   );
+
+  assertGameplayE2EJsonReportFile(resolved);
+  return resolved;
 }
 
 export function readGameplayE2EPlan(
@@ -263,6 +266,9 @@ export async function runGameplayE2E(
     requestedReportFile,
     'Gameplay E2E report',
   );
+
+  assertGameplayE2EJsonReportFile(jsonFile);
+
   const markdownFile = resolveGameplayE2EPathInsideGameRoot(
     gameRoot,
     replaceFileExtension(jsonFile, '.md'),
@@ -472,6 +478,7 @@ async function runGameplayState(
       'Gameplay screenshot',
     );
 
+    rmSync(screenshotFile, { force: true });
     await input.driver.captureScreenshot({ state: input.state, file: screenshotFile });
     screenshot = collectGameplayE2EPathEvidence(
       input.gameRoot,
@@ -913,9 +920,7 @@ function appendPathToHash(
   state.entryCount += 1;
 
   if (state.entryCount > state.limits.maximumEntries) {
-    throw new Error(
-      `Gameplay evidence exceeds maximum hash entries ${state.limits.maximumEntries}.`,
-    );
+    throwMaximumHashEntries(state.limits.maximumEntries);
   }
 
   const stats = lstatSync(file);
@@ -929,7 +934,7 @@ function appendPathToHash(
   if (stats.isDirectory()) {
     hash.update(`D\0${relative}\0`);
 
-    for (const entry of readdirSync(file).sort()) {
+    for (const entry of readBoundedDirectoryEntries(file, state)) {
       appendPathToHash(hash, root, path.join(file, entry), state, depth + 1);
     }
 
@@ -943,6 +948,37 @@ function appendPathToHash(
   }
 
   throw new Error(`Unsupported artifact path type: ${file}`);
+}
+
+function readBoundedDirectoryEntries(file: string, state: GameplayE2EHashState): string[] {
+  const remainingEntries = state.limits.maximumEntries - state.entryCount;
+  const directory = opendirSync(file);
+
+  try {
+    const entries: string[] = [];
+
+    while (true) {
+      const entry = directory.readSync();
+
+      if (entry === null) {
+        break;
+      }
+
+      if (entries.length >= remainingEntries) {
+        throwMaximumHashEntries(state.limits.maximumEntries);
+      }
+
+      entries.push(entry.name);
+    }
+
+    return entries.sort();
+  } finally {
+    directory.closeSync();
+  }
+}
+
+function throwMaximumHashEntries(maximumEntries: number): never {
+  throw new Error(`Gameplay evidence exceeds maximum hash entries ${maximumEntries}.`);
 }
 
 function appendFileContentsToHash(
@@ -1067,6 +1103,12 @@ function replaceFileExtension(file: string, extension: string): string {
   return currentExtension.length === 0
     ? `${file}${extension}`
     : `${file.slice(0, -currentExtension.length)}${extension}`;
+}
+
+function assertGameplayE2EJsonReportFile(file: string): void {
+  if (path.extname(file).toLowerCase() === '.md') {
+    throw new Error('Gameplay E2E JSON report file must not use a Markdown extension.');
+  }
 }
 
 function escapeMarkdownTable(value: string): string {

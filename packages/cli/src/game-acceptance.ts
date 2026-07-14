@@ -161,14 +161,20 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
       && step.id === input.gameplayE2EStepId
       && gameplayE2EReportFileToReplace !== undefined
     ) {
-      // Earlier acceptance commands are untrusted and may have changed the path hierarchy.
-      const verifiedGameplayE2EReportFile = resolveGameplayE2EPathInsideGameRoot(
-        gameRoot,
-        gameplayE2EReportFileToReplace,
-        'Gameplay E2E report',
-      );
+      try {
+        // Earlier acceptance commands are untrusted and may have changed the path hierarchy.
+        const verifiedGameplayE2EReportFile = resolveGameplayE2EPathInsideGameRoot(
+          gameRoot,
+          gameplayE2EReportFileToReplace,
+          'Gameplay E2E report',
+        );
 
-      rmSync(verifiedGameplayE2EReportFile, { force: true });
+        rmSync(verifiedGameplayE2EReportFile, { force: true });
+      } catch (error) {
+        results.push(failedStepResult(step, now(), formatError(error)));
+        failed = true;
+        continue;
+      }
     }
 
     if (failed) {
