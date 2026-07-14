@@ -16,7 +16,7 @@ import { createBridgeRpcNodeHandler } from '@mpgd/bridge/orpc/node';
 const redisKeyComponentPattern = /^[A-Za-z0-9:_-]{1,128}$/;
 const maxStorageKeyLength = 128;
 const maxEncodedStorageKeyLength = 384;
-const maxRequestBodySize = 1_000_000;
+const maxRequestBodySize = 1_048_576;
 const leaderboardUpdateMaxAttempts = 3;
 const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
