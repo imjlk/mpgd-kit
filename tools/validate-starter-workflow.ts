@@ -55,6 +55,7 @@ const requiredFiles = [
   '.agents/skills/add-platform-adapter/SKILL.md',
   '.agents/skills/validate-agentic-game-workflow/SKILL.md',
   'docs/AGENTIC_GAME_WORKFLOW.md',
+  'tools/run-mcp-server.sh',
   'examples/phaser-starter/AGENTS.md',
   'examples/phaser-starter/agent/brief.template.md',
   'examples/phaser-starter/agent/acceptance.md',
@@ -1184,15 +1185,24 @@ function assertMcpServerCommand(
     return;
   }
 
-  assertEqual(server.command, 'npx', `${label}.command`);
-
   if (!Array.isArray(server.args)) {
     failures.push(`${label}.args must be an array.`);
     return;
   }
 
-  assertIncludes(server.args, '-y', `${label}.args`);
-  assertIncludes(server.args, packageName, `${label}.args`);
+  if (server.command === 'npx') {
+    assertIncludes(server.args, '-y', `${label}.args`);
+    assertIncludes(server.args, packageName, `${label}.args`);
+    return;
+  }
+
+  if (server.command === '/bin/sh') {
+    assertEqual(server.args[0], 'tools/run-mcp-server.sh', `${label}.args[0]`);
+    assertEqual(server.args[1], packageName, `${label}.args[1]`);
+    return;
+  }
+
+  failures.push(`${label}.command must use npx or the portable MCP runner.`);
 }
 
 function assertMcpRequirements(input: unknown, label: string): void {

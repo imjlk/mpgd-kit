@@ -1,12 +1,12 @@
 {
   "mcpServers": {
     "devvit": {
-      "command": "npx",
-      "args": ["-y", "@devvit/mcp"]
+      "command": "/bin/sh",
+      "args": ["tools/run-mcp-server.sh", "@devvit/mcp"]
     },
     "ttsc-graph": {
-      "command": "npx",
-      "args": ["-y", "@ttsc/graph"]
+      "command": "/bin/sh",
+      "args": ["tools/run-mcp-server.sh", "@ttsc/graph"]
     }
   }
 }
