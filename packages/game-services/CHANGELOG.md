@@ -1,5 +1,26 @@
 # @mpgd/game-services
 
+## 0.8.0 — 2026-07-15
+
+### Added
+
+- [947a834](https://github.com/imjlk/mpgd-kit/commit/947a8347ec6e55c07b086ff06954deab7ad331c3) Add a server-driven platform order contract for Reddit fulfillment and refunds,
+  including strict runtime assertions and deterministic order idempotency keys. — Thanks @imjlk!
+- [ec79bf0](https://github.com/imjlk/mpgd-kit/commit/ec79bf095f2a35b78d18b0b8a91ebdb5124c9df2) Added a provider-neutral purchase and rewarded-ad evidence verifier boundary,
+  versioned adapter evidence envelopes, explicit development verifier helpers,
+  bounded verifier execution, authority-level replay protection, and fail-closed
+  entitlement grants when production verification is unavailable. Idempotency
+  retries now reject changes to the original logical grant or platform target,
+  including raced writes, while concurrent identical retries return the original
+  successful ledger result. Existing stores can use list fallbacks when optional
+  indexed idempotency, authority-evidence, or historical platform-evidence
+  lookups are not implemented; both evidence identities are serialized per store
+  instance before the fallback write. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: analytics@0.3.6, catalog@0.4.0, platform@0.6.0
+
 ## 0.7.0 — 2026-07-14
 
 ### Added

@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/cli",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "description": "Gunshi CLI for mpgd-kit starter generation and target workflow orchestration.",
   "license": "MIT",
   "repository": {

@@ -1,5 +1,38 @@
 # @mpgd/adapter-devvit
 
+## 0.8.0 — 2026-07-15
+
+### Added
+
+- [7d1108e](https://github.com/imjlk/mpgd-kit/commit/7d1108ef1d81262b5a707af6f7e57289b6c5f2b3) Add conservatively indexed durable Devvit post operations and scope-bound cursor
+  pagination for bounded recovery workers. Stable registry membership is created
+  before durable state and retained across every transition, preventing live work
+  from disappearing through partial cross-key updates. Discovery remains read-only
+  and keeps attempted and terminal outcomes fail-closed instead of restoring submit
+  permission. Exact operation reads and transitions lazily backfill stable registry
+  membership for durable records created before indexed discovery was enabled.
+  Best-effort read backfills use the stored descriptor even on conflicts and never
+  mask an already-readable durable result, while state mutations still require
+  registry membership first. — Thanks @imjlk!
+- [8248bcf](https://github.com/imjlk/mpgd-kit/commit/8248bcfed031669cf70b13996bb8ad2bf9bc0063) Add Devvit payment order normalization, a commerce adapter that keeps checkout
+  results separate from authoritative server entitlement reads, and a gateway
+  installer that advertises IAP only when that adapter is configured. — Thanks @imjlk!
+- [cddcba8](https://github.com/imjlk/mpgd-kit/commit/cddcba899e912b28e18fdca3b1520cbda992ccd7) Add an official-terminology Devvit view mode API with a concurrency-safe,
+  retryable inline mode gameplay loader. Generated Phaser starters now keep their
+  initial launch screen lightweight, start gameplay inside the post after an
+  explicit click, and retain the separate expanded mode game entry. — Thanks @imjlk!
+
+### Fixed
+
+- [e4a89d7](https://github.com/imjlk/mpgd-kit/commit/e4a89d7d7788e7b103a17bbefc5389534c1e7b32) Stop advertising a native Devvit leaderboard and disable the generic client
+  score submission path in both the shared target and generated starters. Devvit
+  games continue to use the server-only verified leaderboard provider from
+  authoritative completion handlers. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: game-services@0.8.0, platform@0.6.0
+
 ## 0.7.0 — 2026-07-14
 
 ### Changed

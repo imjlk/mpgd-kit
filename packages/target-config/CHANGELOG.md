@@ -1,5 +1,25 @@
 # @mpgd/target-config
 
+## 0.7.0 — 2026-07-15
+
+### Changed
+
+- [6888e52](https://github.com/imjlk/mpgd-kit/commit/6888e52724788139fadb425459d92b5ed409cc4c) Allow game-owned Reddit product SKUs in product catalogs, mark Devvit IAP as
+  target-supported, and gate commerce calls on the runtime IAP capability until
+  a payments adapter is installed. Devvit artifact smoke checks validate payment
+  endpoints and require products.json SKUs to match the effective game catalog. — Thanks @imjlk!
+
+### Fixed
+
+- [e4a89d7](https://github.com/imjlk/mpgd-kit/commit/e4a89d7d7788e7b103a17bbefc5389534c1e7b32) Stop advertising a native Devvit leaderboard and disable the generic client
+  score submission path in both the shared target and generated starters. Devvit
+  games continue to use the server-only verified leaderboard provider from
+  authoritative completion handlers. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.4.0, i18n@0.5.2, platform@0.6.0
+
 ## 0.6.1 — 2026-07-14
 
 ### Changed
