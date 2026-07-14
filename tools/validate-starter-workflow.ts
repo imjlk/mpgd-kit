@@ -814,6 +814,7 @@ function validatePhaserTemplateDevvitViewModes(): void {
         'mpgdPreserveBrowserTouchGestures',
         "await import('../main')",
         "requestDevvitExpandedMode(event, 'game')",
+        "setBusy(false, '')",
       ]) {
         assertIncludesText(source, requiredText, `${devvitEntryPath}: Devvit view modes.`);
       }

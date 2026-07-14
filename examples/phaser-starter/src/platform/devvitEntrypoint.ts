@@ -72,10 +72,14 @@ function renderInlineLaunchScreen(
   expandButton.addEventListener('click', (event) => {
     setBusy(true, 'Opening expanded mode…');
 
-    void requestDevvitExpandedMode(event, 'game').catch((error: unknown) => {
-      console.error('[devvit] expanded mode request failed.', error);
-      setBusy(false, 'Expanded mode is unavailable. Try again.');
-    });
+    void requestDevvitExpandedMode(event, 'game')
+      .then(() => {
+        setBusy(false, '');
+      })
+      .catch((error: unknown) => {
+        console.error('[devvit] expanded mode request failed.', error);
+        setBusy(false, 'Expanded mode is unavailable. Try again.');
+      });
   });
 
   actions.append(playInlineButton, expandButton);
