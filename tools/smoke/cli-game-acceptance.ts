@@ -296,6 +296,8 @@ try {
     process.cwd(),
     '--report-dir',
     'handoff',
+    '--targets',
+    'android',
     '--skip-test',
     '--skip-graph',
     '--skip-playtest',
@@ -365,6 +367,56 @@ try {
     linkedEvidence.report.evidence.gameplayE2E?.validationError,
     null,
     'linked release evidence validation',
+  );
+
+  const mismatchedAcceptanceTarget = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'mismatched-acceptance-target-report'),
+    gameplayE2EReportFile: linkedGameplayEvidenceFile,
+    requireGameplayE2EReport: true,
+    gameplayE2ETargets: ['ios'],
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectMatch(
+    mismatchedAcceptanceTarget.report.evidence.gameplayE2E?.validationError,
+    /must match an acceptance target: ios/u,
+    'acceptance target binding',
+  );
+
+  const symbolicLinkArtifactEvidenceFile = path.join(
+    cliGameRoot,
+    'symbolic-link-artifact-evidence.json',
+  );
+
+  writeFileSync(
+    symbolicLinkArtifactEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      artifact: {
+        ...expectRecordValue(validGameplayEvidence.artifact, 'valid gameplay artifact'),
+        kind: 'symbolic-link',
+      },
+    })}\n`,
+  );
+  const symbolicLinkArtifactEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'symbolic-link-artifact-report'),
+    gameplayE2EReportFile: symbolicLinkArtifactEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+
+  expectMatch(
+    symbolicLinkArtifactEvidence.report.evidence.gameplayE2E?.validationError,
+    /hashed file or directory target artifact/u,
+    'symbolic-link artifact rejection',
   );
 
   const spoofedPlanFile = path.join(cliGameRoot, 'spoofed-plan.json');
@@ -556,13 +608,27 @@ try {
     requireGameplayE2EReport: true,
     gameplayE2EStepId: 'gameplay-e2e',
     options: { profile: 'staging' },
-    steps: [{
-      id: 'gameplay-e2e',
-      label: 'Gameplay E2E',
-      command: 'noop',
-      cwd: cliGameRoot,
-    }],
-    commandRunner: () => ({ exitCode: 0 }),
+    steps: [
+      {
+        id: 'prepare',
+        label: 'Prepare stale evidence',
+        command: 'write-stale-evidence',
+        cwd: cliGameRoot,
+      },
+      {
+        id: 'gameplay-e2e',
+        label: 'Gameplay E2E',
+        command: 'noop',
+        cwd: cliGameRoot,
+      },
+    ],
+    commandRunner: (step) => {
+      if (step.command === 'write-stale-evidence') {
+        writeFileSync(staleGameplayEvidenceFile, `${JSON.stringify(validGameplayEvidence)}\n`);
+      }
+
+      return { exitCode: 0 };
+    },
     now: createClock(),
     log: () => undefined,
   });
@@ -638,6 +704,43 @@ try {
     || outsideReleaseParseError.includes(fixtureRoot)
   ) {
     throw new Error('Outside release manifest validation must not expose host paths.');
+  }
+
+  const outsideLinkedEvidenceFile = path.join(cliGameRoot, 'outside-linked-evidence.json');
+
+  writeFileSync(
+    outsideLinkedEvidenceFile,
+    `${JSON.stringify({
+      ...validGameplayEvidence,
+      releaseManifest: collectGameplayE2EPathEvidence(
+        cliGameRoot,
+        outsideReleaseManifestFile,
+        'outside release manifest',
+      ),
+    })}\n`,
+  );
+  const outsideLinkedEvidence = runGameAcceptance({
+    gameRoot: cliGameRoot,
+    reportDir: path.join(cliGameRoot, 'outside-linked-report'),
+    releaseManifestFile: outsideReleaseManifestFile,
+    gameplayE2EReportFile: outsideLinkedEvidenceFile,
+    requireGameplayE2EReport: true,
+    options: { profile: 'staging' },
+    steps: [],
+    now: createClock(),
+    log: () => undefined,
+  });
+  const outsideLinkedValidationError = outsideLinkedEvidence.report.evidence.gameplayE2E
+    ?.validationError;
+
+  if (
+    typeof outsideLinkedValidationError !== 'string'
+    || !outsideLinkedValidationError.includes('must stay inside the game root')
+    || outsideLinkedValidationError.includes(fixtureRoot)
+  ) {
+    throw new Error(
+      'Gameplay evidence must reject outside release manifests without probing them.',
+    );
   }
 
   const oversizedGameplayEvidenceFile = path.join(cliGameRoot, 'oversized-gameplay-evidence.json');

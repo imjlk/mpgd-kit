@@ -585,6 +585,12 @@ function acceptGame(input: AcceptGameInput): void {
   const packageManager = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
   const gameplayE2EEnabled = !input.skipGameplayE2E
     && gamePackage.scripts?.[input.gameplayScript] !== undefined;
+  const gameplayE2ETargets = gameplayE2EEnabled
+    ? parseTargetList(input.targets, {
+        ...process.env,
+        MPGD_PLATFORM_TARGETS_FILE: targetsFile,
+      })
+    : [];
   const steps: GameAcceptanceStep[] = [
     packageScriptAcceptanceStep({
       id: acceptanceStepIds.check,
@@ -688,6 +694,7 @@ function acceptGame(input: AcceptGameInput): void {
           gameplayE2EReportFile,
           requireGameplayE2EReport: true,
           gameplayE2EStepId: acceptanceStepIds.gameplayE2E,
+          gameplayE2ETargets,
         }
       : {}),
     options: {

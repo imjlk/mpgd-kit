@@ -102,6 +102,8 @@ export interface RunGameAcceptanceInput {
   readonly requireGameplayE2EReport?: boolean;
   /** Step that must replace any previous gameplay report before evidence is accepted. */
   readonly gameplayE2EStepId?: string;
+  /** Resolved acceptance targets that gameplay evidence is allowed to represent. */
+  readonly gameplayE2ETargets?: readonly string[];
   readonly options: Readonly<Record<string, string | boolean | null>>;
   readonly steps: readonly GameAcceptanceStep[];
   readonly env?: NodeJS.ProcessEnv;
@@ -132,6 +134,7 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
   const startedAtMs = now();
   const results: GameAcceptanceStepResult[] = [];
   let failed = false;
+  let gameplayE2EReportFileToReplace: string | undefined;
 
   if (input.gameplayE2EStepId !== undefined) {
     if (input.gameplayE2EReportFile === undefined) {
@@ -144,16 +147,22 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
       );
     }
 
-    const reportFile = resolvePathInsideGameRoot(
+    gameplayE2EReportFileToReplace = resolvePathInsideGameRoot(
       gameRoot,
       input.gameplayE2EReportFile,
       'Gameplay E2E report',
     );
-
-    rmSync(reportFile, { force: true });
   }
 
   for (const step of input.steps) {
+    if (
+      !failed
+      && step.id === input.gameplayE2EStepId
+      && gameplayE2EReportFileToReplace !== undefined
+    ) {
+      rmSync(gameplayE2EReportFileToReplace, { force: true });
+    }
+
     if (failed) {
       results.push(skippedStepResult(step, now(), 'A previous acceptance step failed.'));
       continue;
@@ -216,6 +225,7 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
     gameRoot,
     input.releaseManifestFile,
     typeof input.options.profile === 'string' ? input.options.profile : undefined,
+    input.gameplayE2ETargets,
   );
   const evidenceFailed = input.requireGameplayE2EReport === true
     && (
@@ -449,6 +459,7 @@ function readGameplayE2EEvidence(
   gameRoot: string,
   releaseManifestFile: string | undefined,
   expectedProfile: string | undefined,
+  expectedTargets: readonly string[] | undefined,
 ): GameAcceptanceReport['evidence']['gameplayE2E'] {
   if (file === undefined) {
     return null;
@@ -516,6 +527,7 @@ function readGameplayE2EEvidence(
       gameRoot,
       releaseManifestFile,
       expectedProfile,
+      expectedTargets,
     ),
     value,
   };
@@ -526,6 +538,7 @@ function validateGameplayE2EEvidence(
   gameRoot: string,
   releaseManifestFile: string | undefined,
   expectedProfile: string | undefined,
+  expectedTargets: readonly string[] | undefined,
 ): string | null {
   if (!isRecord(value)) {
     return 'Gameplay E2E report must be an object.';
@@ -555,6 +568,10 @@ function validateGameplayE2EEvidence(
     return 'Gameplay E2E report target must be a non-empty string.';
   }
 
+  if (expectedTargets !== undefined && !expectedTargets.includes(value.target)) {
+    return `Gameplay E2E report target must match an acceptance target: ${expectedTargets.join(', ')}.`;
+  }
+
   if (typeof value.profile !== 'string' || value.profile.length === 0) {
     return 'Gameplay E2E report profile must be a non-empty string.';
   }
@@ -563,8 +580,8 @@ function validateGameplayE2EEvidence(
     return `Gameplay E2E report profile must match acceptance profile ${expectedProfile}.`;
   }
 
-  if (!isPathEvidence(value.artifact)) {
-    return 'Gameplay E2E report must link a hashed target artifact.';
+  if (!isPathEvidence(value.artifact) || value.artifact.kind === 'symbolic-link') {
+    return 'Gameplay E2E report must link a hashed file or directory target artifact.';
   }
 
   const artifactError = validateCurrentPathEvidence(value.artifact, gameRoot, 'target artifact');
@@ -604,10 +621,16 @@ function validateGameplayE2EEvidence(
       return 'Gameplay E2E report must link the current release manifest.';
     }
 
-    const resolvedReleaseManifest = path.resolve(gameRoot, releaseManifestFile);
+    let resolvedReleaseManifest: string;
 
-    if (!existsSync(resolvedReleaseManifest)) {
-      return 'Gameplay E2E report cannot link a missing acceptance release manifest.';
+    try {
+      resolvedReleaseManifest = resolvePathInsideGameRoot(
+        gameRoot,
+        releaseManifestFile,
+        'Gameplay E2E release manifest',
+      );
+    } catch (error) {
+      return formatError(error);
     }
 
     if (path.resolve(gameRoot, value.releaseManifest.file) !== resolvedReleaseManifest) {
