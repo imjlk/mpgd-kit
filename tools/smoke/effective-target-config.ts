@@ -295,11 +295,20 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
       true,
       'reddit ads should be disabled until Devvit ad rewards are wired',
     );
-    assertEqual(config.leaderboard.enabled, true, 'reddit leaderboard should be enabled');
+    assertEqual(
+      config.leaderboard.enabled,
+      false,
+      'reddit platform leaderboard should be disabled',
+    );
+    assertEqual(
+      config.leaderboard.native,
+      false,
+      'reddit should not advertise a native leaderboard',
+    );
     assertEqual(
       config.leaderboard.defaultLeaderboardId,
-      'default',
-      'reddit leaderboard id should be stable',
+      undefined,
+      'reddit should not expose a generic platform leaderboard id',
     );
     assertEqual(config.storage.support, 'native', 'reddit should use Devvit server storage');
     assertEqual(config.localization.enabled, true, 'reddit localization should be enabled');

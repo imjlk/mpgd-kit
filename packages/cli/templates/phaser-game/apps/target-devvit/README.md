@@ -46,6 +46,13 @@ Play button requests the `game` entrypoint, which loads the separate
 `game.html` Phaser document. Keep inline UI free of game runtime imports so the
 card remains lightweight before expansion.
 
+The generated bridge does not advertise or accept a generic platform
+leaderboard. Devvit ranking should be owned by a server completion handler that
+validates the game-specific attempt, records it through the verified leaderboard
+provider from `@mpgd/adapter-devvit/server`, and exposes only an authenticated
+game-scoped snapshot route. Do not enable `nativeLeaderboard` or trust a raw
+client score submission for that flow.
+
 `devvit playtest` runs the official unified Vite build in watch mode, so a
 separate client/server watcher or staging prebuild is not required.
 

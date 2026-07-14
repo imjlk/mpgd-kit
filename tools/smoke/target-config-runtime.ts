@@ -204,8 +204,8 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
     );
     assertEqual(
       runtime.features.leaderboard.reason,
-      'available',
-      'reddit leaderboard should be available',
+      'target-disabled',
+      'reddit platform leaderboard should be disabled',
     );
     assertDeepEqual(
       await gateway.commerce.purchase({
@@ -230,16 +230,22 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       },
       'reddit rewarded ad should be unavailable',
     );
-    await gateway.leaderboard.submitScore({
-      leaderboardId: 'default',
-      score: 1,
-      runId: 'reddit-run',
-      submittedAt: new Date().toISOString(),
-    });
+    assertDeepEqual(
+      await gateway.leaderboard.submitScore({
+        leaderboardId: 'default',
+        score: 1,
+        runId: 'reddit-run',
+        submittedAt: new Date().toISOString(),
+      }),
+      {
+        submitted: false,
+      },
+      'reddit should reject generic platform leaderboard submissions',
+    );
     assertDeepEqual(
       targetGateway.calls,
-      ['submitScore'],
-      'reddit should delegate enabled leaderboard actions',
+      [],
+      'reddit should not delegate disabled leaderboard actions',
     );
     return;
   }
@@ -379,7 +385,7 @@ function createTargetGateway(target: PlatformTarget): {
           nativeAds: !isReddit,
           rewardedAds: !isReddit,
           interstitialAds: !isReddit,
-          nativeLeaderboard: true,
+          nativeLeaderboard: !isReddit,
           achievements: false,
           cloudSave: isReddit,
           socialShare: target === 'ait' || target === 'reddit',

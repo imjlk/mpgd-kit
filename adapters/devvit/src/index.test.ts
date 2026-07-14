@@ -261,7 +261,7 @@ describe('adapter-devvit', () => {
     } satisfies Partial<DevvitBridgeError>);
   });
 
-  it('provides sandbox identity, storage, unavailable ads, and leaderboard behavior', async () => {
+  it('provides sandbox identity, storage, and unavailable platform services', async () => {
     const gateway = createDevvitPlatformGateway({
       appVersion: '1.2.3',
       buildId: 'build-reddit',
@@ -297,7 +297,7 @@ describe('adapter-devvit', () => {
       gateway.notifications?.requestSubscription('daily-ready'),
     ).resolves.toBe('unavailable');
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
-      nativeLeaderboard: true,
+      nativeLeaderboard: false,
       cloudSave: true,
       socialShare: false,
     });
@@ -324,7 +324,7 @@ describe('adapter-devvit', () => {
         submittedAt: '2026-07-04T00:00:00.000Z',
       }),
     ).resolves.toEqual({
-      submitted: true,
+      submitted: false,
     });
     await expect(gateway.leaderboard.open({ leaderboardId: 'default' })).rejects.toMatchObject({
       code: 'DEVVIT_LEADERBOARD_OPEN_UNAVAILABLE',

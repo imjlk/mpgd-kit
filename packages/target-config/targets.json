@@ -222,7 +222,7 @@
         "iap": false,
         "rewardedAds": false,
         "interstitialAds": false,
-        "leaderboard": true,
+        "leaderboard": false,
         "localization": true
       },
       "capabilities": {
@@ -238,7 +238,7 @@
         "interstitialAds": false
       },
       "leaderboard": {
-        "native": true
+        "native": false
       },
       "release": {
         "profile": "devvit"

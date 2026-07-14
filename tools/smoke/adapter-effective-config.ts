@@ -228,18 +228,34 @@ async function verifyDevvitAdapter(): Promise<void> {
     false,
     'reddit rewarded placement should be disabled',
   );
+  assertEqual(
+    effectiveConfig.leaderboard.enabled,
+    false,
+    'reddit platform leaderboard should be disabled',
+  );
+  assertEqual(
+    runtime.capabilities.nativeLeaderboard,
+    false,
+    'reddit should not advertise a native leaderboard',
+  );
 
-  await gateway.leaderboard.submitScore({
-    leaderboardId: 'default',
-    score: 1,
-    runId: 'reddit-parity-run',
-    submittedAt: new Date().toISOString(),
-  });
+  assertDeepEqual(
+    await gateway.leaderboard.submitScore({
+      leaderboardId: 'default',
+      score: 1,
+      runId: 'reddit-parity-run',
+      submittedAt: new Date().toISOString(),
+    }),
+    {
+      submitted: false,
+    },
+    'reddit should reject generic platform leaderboard submissions',
+  );
 
   assertDeepEqual(
     bridge.methods.slice(1),
-    ['leaderboard.submitScore'],
-    'reddit adapter should delegate enabled leaderboard actions',
+    [],
+    'reddit adapter should not delegate disabled leaderboard actions',
   );
 }
 
@@ -343,7 +359,7 @@ function enabledCapabilities(target: AdapterBridgeTarget): PlatformCapabilities 
     nativeAds: target !== 'reddit',
     rewardedAds: target !== 'reddit',
     interstitialAds: target !== 'reddit',
-    nativeLeaderboard: true,
+    nativeLeaderboard: target !== 'reddit',
     achievements: false,
     cloudSave: target === 'reddit',
     socialShare: target === 'ait' || target === 'reddit',
