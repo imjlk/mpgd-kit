@@ -78,6 +78,9 @@ export function withDevvitCommerceAdapter(
   if (gateway.target !== 'reddit') {
     throw new TypeError('Devvit commerce can only be installed on a reddit gateway.');
   }
+  if ('getTargetRuntime' in gateway && typeof gateway.getTargetRuntime === 'function') {
+    throw new TypeError('Devvit commerce must be installed before target availability is applied.');
+  }
 
   return {
     ...gateway,

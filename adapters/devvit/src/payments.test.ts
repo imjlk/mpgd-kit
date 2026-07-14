@@ -144,6 +144,14 @@ describe('Devvit commerce adapter', () => {
     expect(gateway.commerce).toBe(baseCommerce);
     expect(() => withDevvitCommerceAdapter(createGateway('browser'), baseCommerce))
       .toThrow('only be installed on a reddit gateway');
+    const targetConfiguredGateway = {
+      ...createGateway('reddit'),
+      async getTargetRuntime() {
+        return {};
+      },
+    };
+    expect(() => withDevvitCommerceAdapter(targetConfiguredGateway, baseCommerce))
+      .toThrow('before target availability is applied');
   });
 });
 
