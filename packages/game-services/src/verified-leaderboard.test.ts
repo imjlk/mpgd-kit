@@ -13,6 +13,7 @@ const firstAttempt = createAttempt({
   participantLabel: 'Player One',
   attemptId: 'attempt-1',
   score: 9_000,
+  metrics: { elapsedMs: 9_000, hints: 0, mistakes: 1 },
   completedAt: '2026-07-13T08:00:00.000Z',
 });
 const firstRecord = await service.recordVerifiedAttempt(firstAttempt);
@@ -21,6 +22,11 @@ assertEqual(firstRecord.recorded, true, 'verified attempt should be recorded');
 assertEqual(firstRecord.alreadyProcessed, false, 'new attempt should not be a retry');
 assertEqual(firstRecord.retained, true, 'first attempt should be retained');
 assertEqual(firstRecord.entry.rank, 1, 'first attempt should initially rank first');
+assertEqual(firstRecord.entry.metrics?.elapsedMs, 9_000, 'record responses should expose metrics');
+assert(
+  Object.isFrozen(firstRecord.entry.metrics),
+  'record response metrics should be immutable copies',
+);
 
 const renamedFirstRetry = await service.recordVerifiedAttempt({
   ...firstAttempt,
@@ -35,6 +41,9 @@ const unlabeledFirstRetry = await service.recordVerifiedAttempt({
     participantId: firstAttempt.attempt.participantId,
     attemptId: firstAttempt.attempt.attemptId,
     score: firstAttempt.attempt.score,
+    ...(firstAttempt.attempt.metrics === undefined
+      ? {}
+      : { metrics: firstAttempt.attempt.metrics }),
     completedAt: firstAttempt.attempt.completedAt,
     verification: firstAttempt.attempt.verification,
   },
@@ -118,6 +127,11 @@ assertEqual(
 );
 assertEqual(snapshot.totalParticipants, 2, 'snapshot should count retained participants');
 assertEqual(snapshot.generatedAt, now, 'snapshot should use the injected server clock');
+assertEqual(
+  snapshot.participantEntry?.metrics?.mistakes,
+  1,
+  'participant snapshots should expose retained metrics',
+);
 
 const maximumIdentifier = '\u0000'.repeat(verifiedLeaderboardIdentifierMaximumLength);
 const maximumIdentifierService = createInMemoryVerifiedLeaderboardService({ now: () => now });
@@ -361,6 +375,18 @@ await assertRejects(
   'attempt id reuse with a different score should fail closed',
 );
 
+await assertRejects(
+  () => service.recordVerifiedAttempt({
+    ...firstAttempt,
+    attempt: {
+      ...firstAttempt.attempt,
+      metrics: { elapsedMs: 9_000, hints: 1, mistakes: 1 },
+    },
+  }),
+  'Attempt id conflict',
+  'attempt id reuse with different metrics should fail closed',
+);
+
 const mutationService = createInMemoryVerifiedLeaderboardService({ now: () => now });
 const mutableRequest = {
   definition: {
@@ -373,6 +399,7 @@ const mutableRequest = {
     participantLabel: 'Mutable Player',
     attemptId: 'attempt-mutable',
     score: 42,
+    metrics: { elapsedMs: 42, hints: 1 },
     completedAt: '2026-07-13T08:06:00.000Z',
     verification: {
       authorityId: 'test-attempt-coordinator',
@@ -384,6 +411,7 @@ const mutableRequest = {
 
 await mutationService.recordVerifiedAttempt(mutableRequest);
 mutableRequest.attempt.score = 1;
+mutableRequest.attempt.metrics.elapsedMs = 1;
 mutableRequest.attempt.verification.evidenceId = 'mutated-evidence';
 const mutationSnapshot = await mutationService.getSnapshot({ leaderboardId: 'daily:mutation' });
 
@@ -391,6 +419,11 @@ assertEqual(
   mutationSnapshot?.entries[0]?.score,
   42,
   'stored attempt should resist caller mutation',
+);
+assertEqual(
+  mutationSnapshot?.entries[0]?.metrics?.elapsedMs,
+  42,
+  'stored metrics should resist caller mutation',
 );
 await assertRejects(
   () => mutationService.recordVerifiedAttempt(mutableRequest),
@@ -435,6 +468,50 @@ await assertRejects(
   ),
   'timezone-qualified timestamp',
   'unsupported sub-millisecond timestamps should fail closed',
+);
+
+await assertRejects(
+  () => service.recordVerifiedAttempt(
+    createAttempt({
+      participantId: 'player-invalid-metric-key',
+      attemptId: 'attempt-invalid-metric-key',
+      score: 1,
+      metrics: { '1elapsedMs': 1 },
+      completedAt: '2026-07-13T08:07:00.000Z',
+    }),
+  ),
+  'metric keys must start with an ASCII letter',
+  'invalid metric keys should fail closed',
+);
+
+await assertRejects(
+  () => service.recordVerifiedAttempt(
+    createAttempt({
+      participantId: 'player-invalid-metric-value',
+      attemptId: 'attempt-invalid-metric-value',
+      score: 1,
+      metrics: { elapsedMs: -1 },
+      completedAt: '2026-07-13T08:07:00.000Z',
+    }),
+  ),
+  'metric values must be non-negative safe integers',
+  'invalid metric values should fail closed',
+);
+
+await assertRejects(
+  () => service.recordVerifiedAttempt(
+    createAttempt({
+      participantId: 'player-too-many-metrics',
+      attemptId: 'attempt-too-many-metrics',
+      score: 1,
+      metrics: Object.fromEntries(
+        Array.from({ length: 17 }, (_, index) => [`metric${String(index)}`, index]),
+      ),
+      completedAt: '2026-07-13T08:07:00.000Z',
+    }),
+  ),
+  'metrics must contain at most 16 keys',
+  'too many metrics should fail closed',
 );
 
 const invalidEvidenceTimestampRequest = createAttempt({
@@ -494,6 +571,7 @@ function createAttempt(
     readonly participantLabel?: string;
     readonly attemptId: string;
     readonly score: number;
+    readonly metrics?: Readonly<Record<string, number>>;
     readonly completedAt: string;
   },
 ): RecordVerifiedLeaderboardAttemptRequest {
@@ -510,6 +588,7 @@ function createAttempt(
         : { participantLabel: input.participantLabel }),
       attemptId: input.attemptId,
       score: input.score,
+      ...(input.metrics === undefined ? {} : { metrics: input.metrics }),
       completedAt: input.completedAt,
       verification: {
         authorityId: 'test-attempt-coordinator',

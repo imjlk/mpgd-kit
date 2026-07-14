@@ -36,11 +36,10 @@ export function validateTargetConfigFile(path?: string) {
 
     if (
       target.kind === 'devvit-web'
-      && target.buildStrategy === 'devvit-vite'
       && resolvePath(target.webDir) !== resolve(resolvePath(target.wrapperApp), 'dist/client')
     ) {
       throw new Error(
-        `Target ${targetName} webDir must be <wrapperApp>/dist/client for devvit-vite builds.`,
+        `Target ${targetName} webDir must be <wrapperApp>/dist/client for Devvit builds.`,
       );
     }
 

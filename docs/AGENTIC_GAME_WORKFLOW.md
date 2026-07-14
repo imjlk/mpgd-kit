@@ -100,7 +100,7 @@ Implemented shape:
 - `adapters/devvit`
 - `apps/target-devvit`
 - bridge fixtures
-- `/api/mpgd/bridge` server boundary
+- `/api/mpgd/rpc` oRPC server boundary
 - duplicate-safe, ambiguity-safe durable post operations through the
   `@mpgd/adapter-devvit/server` entry
 - smoke tests

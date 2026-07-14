@@ -106,17 +106,7 @@ function assertPlatformTargetConfigShape(
       assertString(input.wrapperApp, `${target}.wrapperApp`);
       assertString(input.webDir, `${target}.webDir`);
       assertString(input.artifact, `${target}.artifact`);
-
-      if (input.kind === 'devvit-web') {
-        assertDevvitBuildStrategy(input.buildStrategy, target);
-      }
       break;
-  }
-}
-
-function assertDevvitBuildStrategy(input: unknown, target: string): void {
-  if (input !== undefined && input !== 'devvit-vite') {
-    throw new Error(`${target}.buildStrategy must be devvit-vite when configured.`);
   }
 }
 

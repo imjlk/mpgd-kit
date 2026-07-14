@@ -6,6 +6,7 @@ import {
   assertVerifiedLeaderboardDefinition,
   assertVerifiedLeaderboardSnapshot,
   createVerifiedLeaderboardCursor,
+  normalizeVerifiedLeaderboardMetrics,
   parseVerifiedLeaderboardCursor,
   type GetVerifiedLeaderboardSnapshotRequest,
   type LeaderboardRankedEntry,
@@ -464,6 +465,9 @@ function toRankedEntries(
       : { participantLabel: attempt.participantLabel }),
     attemptId: attempt.attemptId,
     score: attempt.score,
+    ...(attempt.metrics === undefined
+      ? {}
+      : { metrics: normalizeVerifiedLeaderboardMetrics(attempt.metrics) }),
     completedAt: attempt.completedAt,
   }));
 }
@@ -548,6 +552,7 @@ function assertSameAttempt(
     existing.participantId !== candidate.participantId
     || existing.attemptId !== candidate.attemptId
     || existing.score !== candidate.score
+    || !areMetricsEqual(existing.metrics, candidate.metrics)
     || Date.parse(existing.completedAt) !== Date.parse(candidate.completedAt)
     || existing.verification.authorityId !== candidate.verification.authorityId
     || existing.verification.evidenceId !== candidate.verification.evidenceId
@@ -642,6 +647,9 @@ function cloneAttempt(input: VerifiedLeaderboardAttempt): VerifiedLeaderboardAtt
       : { participantLabel: input.participantLabel }),
     attemptId: input.attemptId,
     score: input.score,
+    ...(input.metrics === undefined
+      ? {}
+      : { metrics: normalizeVerifiedLeaderboardMetrics(input.metrics) }),
     completedAt: input.completedAt,
     verification: {
       authorityId: input.verification.authorityId,
@@ -667,12 +675,30 @@ function cloneRecordResponse(
         : { participantLabel: input.entry.participantLabel }),
       attemptId: input.entry.attemptId,
       score: input.entry.score,
+      ...(input.entry.metrics === undefined
+        ? {}
+        : { metrics: normalizeVerifiedLeaderboardMetrics(input.entry.metrics) }),
       completedAt: input.entry.completedAt,
     },
     ...(input.reason === undefined ? {} : { reason: input.reason }),
   };
   assertRecordVerifiedLeaderboardAttemptResponse(response);
   return response;
+}
+
+function areMetricsEqual(
+  left: VerifiedLeaderboardAttempt['metrics'],
+  right: VerifiedLeaderboardAttempt['metrics'],
+): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key) => left[key] === right[key]);
 }
 
 async function bestEffortReset(

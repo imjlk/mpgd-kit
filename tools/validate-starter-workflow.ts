@@ -80,7 +80,7 @@ const requiredDevvitQueries = [
   'playtest',
   'payments',
 ] as const;
-const expectedDevvitVersion = '0.13.7';
+const expectedDevvitVersion = '0.13.8';
 const requiredMcpRequirements = [
   {
     target: 'ait',
@@ -906,11 +906,9 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
         "from '@mpgd/bridge/orpc/node'",
         `${serverPath}: direct oRPC Node HTTP adapter.`,
       );
-      assertIncludesText(
-        source,
-        "const legacyBridgeEndpoint = '/api/mpgd/bridge'",
-        `${serverPath}: legacy bridge compatibility route.`,
-      );
+      if (source.includes('/api/mpgd/bridge')) {
+        failures.push(`${serverPath}: must expose only the oRPC bridge route.`);
+      }
 
       for (const forbiddenPackage of ['express', 'helmet', 'hono']) {
         if (
@@ -963,15 +961,15 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
     'packages/cli/templates/phaser-game/mpgd.targets.json',
   ]) {
     const config = readJson(path) as {
-      readonly targets?: Record<string, { readonly buildStrategy?: unknown }>;
+      readonly targets?: Record<string, { readonly kind?: unknown; readonly buildStrategy?: unknown }>;
     } | null;
 
     if (config !== null) {
-      assertEqual(
-        config.targets?.reddit?.buildStrategy,
-        'devvit-vite',
-        `${path}: targets.reddit.buildStrategy`,
-      );
+      assertEqual(config.targets?.reddit?.kind, 'devvit-web', `${path}: targets.reddit.kind`);
+
+      if (config.targets?.reddit?.buildStrategy !== undefined) {
+        failures.push(`${path}: Devvit targets must not configure a legacy build strategy.`);
+      }
     }
   }
 }

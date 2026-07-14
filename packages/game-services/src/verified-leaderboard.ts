@@ -1,7 +1,12 @@
 export type VerifiedLeaderboardScoreOrder = 'ascending' | 'descending';
 export type VerifiedLeaderboardAttemptSelection = 'first' | 'best';
+export type VerifiedLeaderboardMetrics = Readonly<Record<string, number>>;
 
 export const verifiedLeaderboardIdentifierMaximumLength = 512;
+export const verifiedLeaderboardMetricsMaximumCount = 16;
+export const verifiedLeaderboardMetricKeyMaximumLength = 64;
+
+const verifiedLeaderboardMetricKeyPattern = /^[A-Za-z][A-Za-z0-9._-]{0,63}$/;
 
 const timestampPattern = new RegExp(
   '^(\\d{4})-(\\d{2})-(\\d{2})'
@@ -26,6 +31,7 @@ export interface VerifiedLeaderboardAttempt {
   readonly participantLabel?: string;
   readonly attemptId: string;
   readonly score: number;
+  readonly metrics?: VerifiedLeaderboardMetrics;
   readonly completedAt: string;
   readonly verification: LeaderboardVerificationEvidence;
 }
@@ -41,6 +47,7 @@ export interface LeaderboardRankedEntry {
   readonly participantLabel?: string;
   readonly attemptId: string;
   readonly score: number;
+  readonly metrics?: VerifiedLeaderboardMetrics;
   readonly completedAt: string;
 }
 
@@ -307,6 +314,7 @@ export function assertVerifiedLeaderboardAttempt(
   assertOptionalNonEmptyString(input.participantLabel, 'participantLabel');
   assertVerifiedLeaderboardIdentifier(input.attemptId, 'attemptId');
   assertFiniteNumber(input.score, 'score');
+  assertVerifiedLeaderboardMetrics(input.metrics);
   assertTimestamp(input.completedAt, 'completedAt');
   assertLeaderboardVerificationEvidence(input.verification);
 }
@@ -375,7 +383,61 @@ export function assertLeaderboardRankedEntry(
   assertOptionalNonEmptyString(input.participantLabel, 'participantLabel');
   assertVerifiedLeaderboardIdentifier(input.attemptId, 'attemptId');
   assertFiniteNumber(input.score, 'score');
+  assertVerifiedLeaderboardMetrics(input.metrics);
   assertTimestamp(input.completedAt, 'completedAt');
+}
+
+export function assertVerifiedLeaderboardMetrics(
+  input: unknown,
+): asserts input is VerifiedLeaderboardMetrics | undefined {
+  if (input === undefined) {
+    return;
+  }
+
+  assertRecord(input, 'metrics');
+  const keys = Object.keys(input);
+
+  if (keys.length > verifiedLeaderboardMetricsMaximumCount) {
+    throw new Error(
+      `metrics must contain at most ${String(verifiedLeaderboardMetricsMaximumCount)} keys.`,
+    );
+  }
+
+  for (const key of keys) {
+    if (!verifiedLeaderboardMetricKeyPattern.test(key)) {
+      throw new Error(
+        'metric keys must start with an ASCII letter and contain at most '
+          + `${String(verifiedLeaderboardMetricKeyMaximumLength)} ASCII letters, digits, dots, `
+          + 'underscores, or hyphens.',
+      );
+    }
+
+    const value = input[key];
+
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+      throw new Error('metric values must be non-negative safe integers.');
+    }
+  }
+}
+
+export function normalizeVerifiedLeaderboardMetrics(input: undefined): undefined;
+export function normalizeVerifiedLeaderboardMetrics(
+  input: VerifiedLeaderboardMetrics,
+): VerifiedLeaderboardMetrics;
+export function normalizeVerifiedLeaderboardMetrics(
+  input: VerifiedLeaderboardMetrics | undefined,
+): VerifiedLeaderboardMetrics | undefined {
+  assertVerifiedLeaderboardMetrics(input);
+
+  if (input === undefined) {
+    return undefined;
+  }
+
+  return Object.freeze(
+    Object.fromEntries(
+      Object.entries(input).sort(([left], [right]) => compareOrdinal(left, right)),
+    ),
+  );
 }
 
 export function assertVerifiedLeaderboardSnapshot(
@@ -533,6 +595,9 @@ function toRankedEntry(
       : { participantLabel: attempt.participantLabel }),
     attemptId: attempt.attemptId,
     score: attempt.score,
+    ...(attempt.metrics === undefined
+      ? {}
+      : { metrics: normalizeVerifiedLeaderboardMetrics(attempt.metrics) }),
     completedAt: attempt.completedAt,
   };
   assertLeaderboardRankedEntry(entry);
@@ -547,6 +612,7 @@ function assertSameAttempt(
     existing.participantId !== candidate.participantId
     || existing.attemptId !== candidate.attemptId
     || existing.score !== candidate.score
+    || !areVerifiedLeaderboardMetricsEqual(existing.metrics, candidate.metrics)
     || parseTimestamp(existing.completedAt) !== parseTimestamp(candidate.completedAt)
     || existing.verification.authorityId !== candidate.verification.authorityId
     || existing.verification.evidenceId !== candidate.verification.evidenceId
@@ -577,6 +643,9 @@ function cloneVerifiedLeaderboardAttempt(
       : { participantLabel: input.participantLabel }),
     attemptId: input.attemptId,
     score: input.score,
+    ...(input.metrics === undefined
+      ? {}
+      : { metrics: normalizeVerifiedLeaderboardMetrics(input.metrics) }),
     completedAt: input.completedAt,
     verification: {
       authorityId: input.verification.authorityId,
@@ -602,6 +671,9 @@ function cloneRecordResponse(
         : { participantLabel: input.entry.participantLabel }),
       attemptId: input.entry.attemptId,
       score: input.entry.score,
+      ...(input.entry.metrics === undefined
+        ? {}
+        : { metrics: normalizeVerifiedLeaderboardMetrics(input.entry.metrics) }),
       completedAt: input.entry.completedAt,
     },
     ...(input.reason === undefined ? {} : { reason: input.reason }),
@@ -747,6 +819,21 @@ function compareOrdinal(left: string, right: string): number {
   }
 
   return left > right ? 1 : 0;
+}
+
+function areVerifiedLeaderboardMetricsEqual(
+  left: VerifiedLeaderboardMetrics | undefined,
+  right: VerifiedLeaderboardMetrics | undefined,
+): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key) => left[key] === right[key]);
 }
 
 function compareRankedEntryToCursor(

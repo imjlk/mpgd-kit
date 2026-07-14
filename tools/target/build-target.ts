@@ -126,10 +126,7 @@ if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'pr
   });
 }
 
-const usesDevvitVitePlugin = target.kind === 'devvit-web'
-  && target.buildStrategy === 'devvit-vite';
-
-if (!usesDevvitVitePlugin) {
+if (target.kind !== 'devvit-web') {
   run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
   embedEffectiveTargetConfig(targetName, `${gameApp}/dist`, env);
   stageWebIconEvidence(generatedIcons, `${gameApp}/dist`);
@@ -190,28 +187,9 @@ switch (target.kind) {
     const wrapperApp = targetPath(wrapperAppConfigPath);
     stageWrapperIcon(generatedIcons, wrapperApp);
 
-    if (usesDevvitVitePlugin) {
-      run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
-      embedEffectiveTargetConfig(targetName, webDir, env);
-      stageWebIconEvidence(generatedIcons, webDir);
-    } else {
-      replaceDirectory(`${gameApp}/dist`, webDir);
-      run(
-        'pnpm',
-        [
-          '--dir',
-          wrapperApp,
-          'exec',
-          'vite',
-          'build',
-          '--config',
-          'vite.server.config.ts',
-          '--mode',
-          profile,
-        ],
-        env,
-      );
-    }
+    run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
+    embedEffectiveTargetConfig(targetName, webDir, env);
+    stageWebIconEvidence(generatedIcons, webDir);
     writeManifest(targetName, profile, `${wrapperAppConfigPath}/dist`, env);
     break;
   }

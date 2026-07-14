@@ -3,7 +3,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer, context, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { UiResponse } from '@devvit/web/shared';
 import {
-  assertBridgeRequest,
   createBridgeError,
   type BridgeRequest,
   type BridgeResponse,
@@ -18,7 +17,6 @@ const redisKeyComponentPattern = /^[A-Za-z0-9:_-]{1,128}$/;
 const maxStorageKeyLength = 128;
 const maxEncodedStorageKeyLength = 384;
 const maxRequestBodySize = 1_000_000;
-const legacyBridgeEndpoint = '/api/mpgd/bridge';
 const leaderboardUpdateMaxAttempts = 3;
 const leaderboardBackoffBaseMs = 25;
 const leaderboardLockTtlMs = 2_000;
@@ -57,11 +55,6 @@ async function handleHttpRequest(
     return;
   }
 
-  if (request.method === 'POST' && requestPathname(request) === legacyBridgeEndpoint) {
-    await handleLegacyBridgeRequest(request, response);
-    return;
-  }
-
   if (await bridgeRpcHandler(request, response)) {
     return;
   }
@@ -69,73 +62,6 @@ async function handleHttpRequest(
   sendJson(response, 404, {
     error: 'NOT_FOUND',
   });
-}
-
-async function handleLegacyBridgeRequest(
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<void> {
-  let body: unknown;
-
-  try {
-    body = await readJsonRequestBody(request, maxRequestBodySize);
-  } catch (error) {
-    const responseError = describeLegacyBridgeBodyError(error);
-
-    if (error instanceof RequestBodyTooLargeError) {
-      discardOversizedRequestBody(request, response);
-    }
-
-    if (responseError.retryable) {
-      console.error(`devvit legacy bridge body read failed: ${errorMessage(error)}`, error);
-    }
-
-    sendJson(
-      response,
-      responseError.status,
-      createBridgeError(
-        'unknown',
-        responseError.code,
-        responseError.message,
-        responseError.retryable,
-      ),
-    );
-    return;
-  }
-
-  let bridgeRequest: BridgeRequest;
-
-  try {
-    bridgeRequest = assertBridgeRequest(body);
-  } catch (error) {
-    console.warn(`devvit legacy bridge validation failed: ${errorMessage(error)}`);
-    sendJson(
-      response,
-      400,
-      createBridgeError(
-        requestIdFromBody(body),
-        'INVALID_BRIDGE_REQUEST',
-        'Invalid bridge request.',
-      ),
-    );
-    return;
-  }
-
-  try {
-    sendJson(response, 200, await handleBridgeRequest(bridgeRequest));
-  } catch (error) {
-    console.error(`devvit legacy bridge request failed: ${errorMessage(error)}`, error);
-    sendJson(
-      response,
-      500,
-      createBridgeError(
-        bridgeRequest.id,
-        'DEVVIT_BRIDGE_INTERNAL_ERROR',
-        'Devvit bridge request failed.',
-        true,
-      ),
-    );
-  }
 }
 
 async function handleCreatePostMenu(response: ServerResponse): Promise<void> {
@@ -688,38 +614,6 @@ function requestPathname(request: IncomingMessage): string {
 
 class RequestBodyTooLargeError extends Error {}
 
-function describeLegacyBridgeBodyError(error: unknown): {
-  readonly status: number;
-  readonly code: string;
-  readonly message: string;
-  readonly retryable: boolean;
-} {
-  if (error instanceof RequestBodyTooLargeError) {
-    return {
-      status: 413,
-      code: 'BRIDGE_REQUEST_TOO_LARGE',
-      message: 'Bridge request body is too large.',
-      retryable: false,
-    };
-  }
-
-  if (error instanceof SyntaxError) {
-    return {
-      status: 400,
-      code: 'INVALID_BRIDGE_REQUEST',
-      message: 'Bridge request body is not valid JSON.',
-      retryable: false,
-    };
-  }
-
-  return {
-    status: 500,
-    code: 'DEVVIT_BRIDGE_INTERNAL_ERROR',
-    message: 'Bridge request body could not be read.',
-    retryable: true,
-  };
-}
-
 async function* readRequestBodyChunks(
   request: IncomingMessage,
   maxBodySize: number,
@@ -749,19 +643,6 @@ async function drainRequestBody(
   }
 }
 
-async function readJsonRequestBody(
-  request: IncomingMessage,
-  maxBodySize: number,
-): Promise<unknown> {
-  const chunks: Buffer[] = [];
-
-  for await (const chunk of readRequestBodyChunks(request, maxBodySize)) {
-    chunks.push(chunk);
-  }
-
-  return JSON.parse(Buffer.concat(chunks).toString('utf8'));
-}
-
 function assertContentLengthWithinLimit(
   request: IncomingMessage,
   maxBodySize: number,
@@ -783,15 +664,6 @@ function discardOversizedRequestBody(
 ): void {
   response.setHeader('connection', 'close');
   request.resume();
-}
-
-function requestIdFromBody(input: unknown): string {
-  if (typeof input !== 'object' || input === null || !('id' in input)) {
-    return 'unknown';
-  }
-
-  const id = (input as { readonly id?: unknown }).id;
-  return typeof id === 'string' && id.length > 0 ? id : 'unknown';
 }
 
 function setResponseSecurityHeaders(response: ServerResponse): void {

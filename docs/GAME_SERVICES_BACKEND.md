@@ -140,7 +140,9 @@ work without provisioning cloud resources. For production persistence, create a
 D1 database, apply every migration in `apps/game-services-worker/migrations/`
 in filename order, uncomment the D1 binding, and set `MPGD_STORE = "d1"`.
 The `0002_verified_leaderboards.sql` migration adds durable definition,
-processed-attempt decision, and retained-entry tables.
+processed-attempt decision, and retained-entry tables. Apply
+`0003_verified_leaderboard_metrics.sql` afterward to persist optional immutable
+numeric attempt metrics on processed decisions and ranked entries.
 
 Configure the private `VERIFIED_LEADERBOARD_AUTH` service binding to mount the
 public read-only verified leaderboard snapshot route. Its RPC method validates
