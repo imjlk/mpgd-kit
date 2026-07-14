@@ -27,6 +27,7 @@ export interface VerifyPurchaseEvidenceInput {
   readonly product: ProductCatalog['products'][number];
   readonly platformProductId: string;
   readonly signal: AbortSignal;
+  readonly timeoutMs: number;
 }
 
 export interface VerifyAdRewardEvidenceInput {
@@ -34,6 +35,7 @@ export interface VerifyAdRewardEvidenceInput {
   readonly placement: AdPlacements['placements'][number];
   readonly platformPlacementId?: string;
   readonly signal: AbortSignal;
+  readonly timeoutMs: number;
 }
 
 export interface GameServicesEvidenceVerifier {

@@ -137,6 +137,9 @@ Verifier calls receive an `AbortSignal` and default to a 10-second server-side
 timeout. Configure `evidenceVerificationTimeoutMs` when constructing the
 backend if a provider needs a different bounded deadline. Timeouts fail closed
 with `EVIDENCE_VERIFIER_TIMEOUT` and never reach the entitlement ledger.
+The Worker service-binding wrapper keeps `AbortSignal` local because it is not
+an RPC-cloneable value; it forwards the numeric `timeoutMs` so the bound
+verifier can apply the same provider-side deadline.
 
 ## Cloudflare Worker Starter
 

@@ -12,6 +12,7 @@ import {
   type ClaimAdRewardRequest,
   type GameServicesBackendApi,
   type GameServicesEvidenceVerifier,
+  type EvidenceVerificationDecision,
   type GameServicesStore,
   type GetVerifiedLeaderboardSnapshotRequest,
   type RecordLeaderboardScoreRequest,
@@ -21,6 +22,8 @@ import {
   type VerifiedLeaderboardSnapshotPrincipal,
   type VerifiedLeaderboardSnapshot,
   type VerifyPurchaseRequest,
+  type VerifyPurchaseEvidenceInput,
+  type VerifyAdRewardEvidenceInput,
 } from '@mpgd/game-services';
 import type { ProductCatalog } from '@mpgd/catalog';
 
@@ -32,7 +35,16 @@ export interface GameServicesWorkerEnv {
   readonly MPGD_STORE?: 'memory' | 'd1';
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   readonly VERIFIED_LEADERBOARD_AUTH?: VerifiedLeaderboardAuthBinding;
-  readonly GAME_SERVICES_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifier;
+  readonly GAME_SERVICES_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+}
+
+export interface GameServicesEvidenceVerifierBinding {
+  verifyPurchase(
+    input: Omit<VerifyPurchaseEvidenceInput, 'signal'>,
+  ): Promise<EvidenceVerificationDecision>;
+  verifyAdReward(
+    input: Omit<VerifyAdRewardEvidenceInput, 'signal'>,
+  ): Promise<EvidenceVerificationDecision>;
 }
 
 export interface VerifiedLeaderboardAuthBindingRequest {
@@ -224,7 +236,26 @@ function resolveWorkerEvidenceVerifier(
   env: GameServicesWorkerEnv,
 ): GameServicesEvidenceVerifier | undefined {
   if (env.GAME_SERVICES_EVIDENCE_VERIFIER !== undefined) {
-    return env.GAME_SERVICES_EVIDENCE_VERIFIER;
+    const binding = env.GAME_SERVICES_EVIDENCE_VERIFIER;
+
+    return {
+      verifyPurchase({ request, product, platformProductId, timeoutMs }) {
+        return binding.verifyPurchase({
+          request,
+          product,
+          platformProductId,
+          timeoutMs,
+        });
+      },
+      verifyAdReward({ request, placement, platformPlacementId, timeoutMs }) {
+        return binding.verifyAdReward({
+          request,
+          placement,
+          ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
+          timeoutMs,
+        });
+      },
+    };
   }
 
   return env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true'

@@ -533,6 +533,7 @@ async function verifyPurchaseWithStore(
       product,
       platformProductId,
       signal,
+      timeoutMs: context.evidenceVerificationTimeoutMs,
     });
   }, context.evidenceVerificationTimeoutMs);
 
@@ -623,6 +624,7 @@ async function claimAdRewardWithStore(
       placement,
       ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
       signal,
+      timeoutMs: context.evidenceVerificationTimeoutMs,
     });
   }, context.evidenceVerificationTimeoutMs);
 
