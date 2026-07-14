@@ -46,6 +46,10 @@ expose snapshots through an authenticated game-scoped read route. Do not add a
 generic client score-submit endpoint. Cursor pagination and provider semantics
 are documented in
 [Verified Leaderboard Service Boundary](../../docs/VERIFIED_LEADERBOARD_SERVICE.md).
+This server-owned provider does not make Devvit a native `PlatformGateway`
+leaderboard target: the default Devvit capability and target feature remain
+disabled until an application supplies its own verified completion and snapshot
+flow.
 
 Local Reddit playtest still needs a Devvit login token:
 

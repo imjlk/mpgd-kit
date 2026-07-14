@@ -190,6 +190,13 @@ The client bridge should expose only a game-scoped snapshot read plus the
 game-specific completion command. Completion performs the write internally; a
 generic client score-submit bridge must not be added.
 
+This provider is a server-side application service, not a Devvit-native
+`PlatformGateway` leaderboard. The default Devvit adapter therefore reports
+`nativeLeaderboard: false`, and the shared Reddit target configuration keeps the
+generic leaderboard feature disabled. A game enables ranking through its
+verified completion and authenticated snapshot routes instead of changing that
+platform capability.
+
 The adapter hashes board and attempt IDs into bounded Redis keys and fields,
 then checks stored identities so a digest collision fails closed. Each write
 watches the board definition, idempotency decisions, retained-entry hash, and

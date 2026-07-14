@@ -13,15 +13,9 @@ import {
 } from '@mpgd/bridge/orpc';
 import { createBridgeRpcNodeHandler } from '@mpgd/bridge/orpc/node';
 
-const redisKeyComponentPattern = /^[A-Za-z0-9:_-]{1,128}$/;
 const maxStorageKeyLength = 128;
 const maxEncodedStorageKeyLength = 384;
 const maxRequestBodySize = 1_048_576;
-const leaderboardUpdateMaxAttempts = 3;
-const leaderboardBackoffBaseMs = 25;
-const leaderboardLockTtlMs = 2_000;
-const leaderboardLockTtlSeconds = Math.ceil(leaderboardLockTtlMs / 1_000);
-const leaderboardLockRetryBudgetMs = leaderboardLockTtlSeconds * 1_000;
 const gameName = '__GAME_NAME__';
 const gameTitle = __GAME_TITLE_TS_LITERAL__;
 const bridgeRpcHandler = createBridgeRpcNodeHandler(
@@ -143,7 +137,7 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
         nativeAds: false,
         rewardedAds: false,
         interstitialAds: false,
-        nativeLeaderboard: true,
+        nativeLeaderboard: false,
         achievements: false,
         cloudSave: true,
         socialShare: false,
@@ -246,7 +240,9 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
       });
 
     case 'leaderboard.submitScore':
-      return submitLeaderboardScore(input);
+      return ok(input, {
+        submitted: false,
+      });
 
     case 'storage.load':
       return loadStorage(input);
@@ -261,48 +257,6 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
         `Unsupported Devvit bridge method: ${input.method}`,
       );
   }
-}
-
-async function submitLeaderboardScore(input: BridgeRequest): Promise<BridgeResponse> {
-  const payload = optionalObjectPayload(input.payload) as {
-    readonly leaderboardId?: unknown;
-    readonly score?: unknown;
-  };
-  const leaderboardId = leaderboardIdFromPayload(input, payload.leaderboardId);
-  const playerId = currentPlayerId();
-
-  if (typeof leaderboardId !== 'string') {
-    return leaderboardId;
-  }
-
-  if (typeof payload.score !== 'number' || !Number.isFinite(payload.score)) {
-    return createBridgeError(
-      input.id,
-      'INVALID_LEADERBOARD_SCORE',
-      'Finite leaderboard score is required.',
-    );
-  }
-
-  if (playerId === undefined) {
-    return ok(input, {
-      submitted: false,
-    });
-  }
-
-  const redisKey = leaderboardKey(leaderboardId);
-  let scoreUpdate: 'updated' | 'unchanged' | 'failed';
-
-  try {
-    scoreUpdate = await submitMaxLeaderboardScore(redisKey, playerId, payload.score);
-  } catch (error) {
-    console.warn(`devvit leaderboard score submission failed: ${errorMessage(error)}`);
-    scoreUpdate = 'failed';
-  }
-
-  return ok(input, {
-    submitted: scoreUpdate !== 'failed',
-    highScoreUpdated: scoreUpdate === 'updated',
-  });
 }
 
 async function loadStorage(input: BridgeRequest): Promise<BridgeResponse> {
@@ -391,179 +345,6 @@ function storageKey(input: BridgeRequest, playerId: string): string | BridgeResp
   }
 
   return `${gameName}:save:${encodeURIComponent(playerId)}:${encodedKey}`;
-}
-
-function leaderboardIdFromPayload(
-  input: BridgeRequest,
-  value: unknown,
-): string | BridgeResponse {
-  if (value === undefined) {
-    return 'default';
-  }
-
-  if (typeof value !== 'string' || !isValidRedisKeyComponent(value)) {
-    return createBridgeError(
-      input.id,
-      'INVALID_LEADERBOARD_ID',
-      'Leaderboard id format is invalid.',
-    );
-  }
-
-  return value;
-}
-
-function leaderboardKey(leaderboardId: string): string {
-  return `${gameName}:leaderboard:${encodeURIComponent(leaderboardId)}`;
-}
-
-async function submitMaxLeaderboardScore(
-  redisKey: string,
-  playerId: string,
-  score: number,
-): Promise<'updated' | 'unchanged' | 'failed'> {
-  const lockKey = leaderboardLockKey(redisKey, playerId);
-  const startedAt = Date.now();
-  let attempt = 0;
-
-  while (Date.now() - startedAt <= leaderboardLockRetryBudgetMs) {
-    const lockToken = createLockToken();
-    const acquiredLock = await acquireLeaderboardLock(lockKey, lockToken);
-
-    if (!acquiredLock) {
-      await delay(nextLeaderboardRetryDelay(attempt, startedAt));
-      attempt += 1;
-      continue;
-    }
-
-    try {
-      const currentScore = await redis.zScore(redisKey, playerId);
-
-      if (currentScore !== undefined && score <= currentScore) {
-        return 'unchanged';
-      }
-
-      if (await writeLeaderboardScoreIfLockHeld(lockKey, lockToken, redisKey, playerId, score)) {
-        return 'updated';
-      }
-
-      await delay(nextLeaderboardRetryDelay(attempt, startedAt));
-      attempt += 1;
-    } finally {
-      try {
-        await releaseLeaderboardLock(lockKey, lockToken);
-      } catch (error) {
-        console.warn(`devvit leaderboard lock release failed: ${errorMessage(error)}`);
-      }
-    }
-  }
-
-  console.warn(`devvit leaderboard lock contention exceeded retry budget for key: ${lockKey}`);
-
-  return 'failed';
-}
-
-function leaderboardLockKey(redisKey: string, playerId: string): string {
-  return `${redisKey}:lock:${encodeURIComponent(playerId)}`;
-}
-
-function createLockToken(): string {
-  const cryptoImpl = globalThis.crypto;
-
-  if (typeof cryptoImpl?.randomUUID === 'function') {
-    return cryptoImpl.randomUUID();
-  }
-
-  if (typeof cryptoImpl?.getRandomValues === 'function') {
-    const values = new Uint32Array(4);
-    cryptoImpl.getRandomValues(values);
-
-    return Array.from(values, (value) => value.toString(36).padStart(7, '0')).join('');
-  }
-
-  throw new Error('Web Crypto is required to create a Devvit leaderboard lock token.');
-}
-
-async function acquireLeaderboardLock(lockKey: string, lockToken: string): Promise<boolean> {
-  const result = await redis.set(lockKey, lockToken, {
-    nx: true,
-    expiration: leaderboardLockExpirationDate(),
-  });
-
-  return result === 'OK';
-}
-
-function leaderboardLockExpirationDate(): Date {
-  // Devvit Redis SetOptions expects a Date and converts it to Redis EX seconds internally.
-  return new Date(Date.now() + leaderboardLockTtlMs);
-}
-
-async function writeLeaderboardScoreIfLockHeld(
-  lockKey: string,
-  lockToken: string,
-  redisKey: string,
-  playerId: string,
-  score: number,
-): Promise<boolean> {
-  const transaction = await redis.watch(lockKey);
-  const currentToken = await redis.get(lockKey);
-
-  if (currentToken !== lockToken) {
-    await transaction.unwatch();
-    return false;
-  }
-
-  await transaction.multi();
-  await transaction.zAdd(redisKey, {
-    member: playerId,
-    score,
-  });
-
-  const results = await transaction.exec();
-
-  return Array.isArray(results) && results.length > 0;
-}
-
-async function releaseLeaderboardLock(lockKey: string, lockToken: string): Promise<void> {
-  for (let attempt = 0; attempt < leaderboardUpdateMaxAttempts; attempt += 1) {
-    const transaction = await redis.watch(lockKey);
-    const currentToken = await redis.get(lockKey);
-
-    if (currentToken !== lockToken) {
-      await transaction.unwatch();
-      return;
-    }
-
-    await transaction.multi();
-    await transaction.del(lockKey);
-
-    const results = await transaction.exec();
-
-    if (Array.isArray(results) && results.length > 0) {
-      return;
-    }
-
-    await delay(leaderboardBackoffBaseMs * (attempt + 1));
-  }
-
-  console.warn(`devvit leaderboard lock release exhausted retries for key: ${lockKey}`);
-}
-
-function delay(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
-function nextLeaderboardRetryDelay(attempt: number, startedAt: number): number {
-  const elapsed = Date.now() - startedAt;
-  const remaining = Math.max(0, leaderboardLockRetryBudgetMs - elapsed);
-  const backoff = leaderboardBackoffBaseMs * (attempt + 1);
-
-  return Math.min(backoff, remaining);
-}
-
-function isValidRedisKeyComponent(value: string): boolean {
-  return redisKeyComponentPattern.test(value);
 }
 
 function errorMessage(error: unknown): string {

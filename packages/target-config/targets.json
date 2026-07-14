@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-12",
+  "version": "2026-07-14",
   "targets": {
     "web-preview": {
       "runtime": "web-preview",
@@ -222,7 +222,7 @@
         "iap": false,
         "rewardedAds": false,
         "interstitialAds": false,
-        "leaderboard": true,
+        "leaderboard": false,
         "localization": true
       },
       "capabilities": {
@@ -238,7 +238,7 @@
         "interstitialAds": false
       },
       "leaderboard": {
-        "native": true
+        "native": false
       },
       "release": {
         "profile": "devvit"

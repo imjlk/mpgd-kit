@@ -362,7 +362,7 @@ export function createDevvitSandboxBridge(): DevvitBridge {
             nativeAds: false,
             rewardedAds: false,
             interstitialAds: false,
-            nativeLeaderboard: true,
+            nativeLeaderboard: false,
             achievements: false,
             cloudSave: true,
             socialShare: false,
@@ -449,7 +449,7 @@ export function createDevvitSandboxBridge(): DevvitBridge {
 
         case 'leaderboard.submitScore':
           return ok(input, {
-            submitted: true,
+            submitted: false,
           });
 
         case 'storage.load': {
