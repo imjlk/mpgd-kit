@@ -63,7 +63,9 @@ automation starts.
 ## Game-Owned Driver
 
 Add a non-interactive `gameplay:e2e` package script only after the game has a
-real driver. The script can import the reusable runner from `@mpgd/cli`:
+real driver. The Android-specific example below assumes acceptance runs with
+`mpgd game accept . --targets android`; the script can import the reusable
+runner from `@mpgd/cli`:
 
 ```ts
 import { existsSync } from 'node:fs';
@@ -98,7 +100,7 @@ const result = await runGameplayE2E({
   planFile: configured.file,
   target: 'android',
   profile: process.env.MPGD_ACCEPTANCE_PROFILE ?? 'staging',
-  artifactFile: 'artifacts/android/app.apk',
+  artifactFile: 'release-output/android/app-release.aab',
   ...(releaseManifestFile === undefined ? {} : { releaseManifestFile }),
   driver,
 });

@@ -65,6 +65,13 @@ assert.equal(
   resolveGameplayE2EReportFile(fixtureRoot, { MPGD_GAMEPLAY_E2E_REPORT_FILE: 'custom/e2e.json' }),
   path.join(fixtureRoot, 'custom/e2e.json'),
 );
+expectCallError(
+  () => resolveGameplayE2EReportFile(fixtureRoot, {
+    MPGD_GAMEPLAY_E2E_REPORT_FILE: path.join(outsideRoot, 'outside-report.json'),
+  }),
+  /must stay inside the game root/u,
+  'outside gameplay report path',
+);
 
 assert.throws(() => parseGameplayE2EPlan({ ...plan, unsupported: true }), /unsupported fields/u);
 assert.throws(
@@ -167,12 +174,41 @@ try {
     'symlinked artifact',
   );
 
-  expectCallError(
-    collectSymlinkedArtifact,
-    /must not cross symbolic-link ancestors/u,
-    'symlinked gameplay evidence ancestor',
-  );
-  unlinkSync(linkedArtifactsDir);
+  try {
+    expectCallError(
+      collectSymlinkedArtifact,
+      /must not cross symbolic-link ancestors/u,
+      'symlinked gameplay evidence ancestor',
+    );
+  } finally {
+    unlinkSync(linkedArtifactsDir);
+  }
+
+  const linkedReportsDir = path.join(fixtureRoot, 'linked-reports');
+
+  symlinkSync(outsideRoot, linkedReportsDir, 'dir');
+
+  try {
+    await expectAsyncCallError(
+      () => runGameplayE2E({
+        gameRoot: fixtureRoot,
+        reportDir: linkedReportsDir,
+        plan: loaded?.plan ?? plan,
+        planFile: gameConfigFile,
+        target: 'android',
+        profile: 'staging',
+        artifactFile,
+        driver,
+        now: createClock(),
+        log: () => undefined,
+      }),
+      /must not cross symbolic-link ancestors/u,
+      'symlinked gameplay report directory',
+    );
+  } finally {
+    unlinkSync(linkedReportsDir);
+  }
+
   let mismatchedPlanError: unknown;
   let mismatchedPlanRejected = false;
 
@@ -390,13 +426,40 @@ function expectCallError(action: () => unknown, pattern: RegExp, label: string):
     error = caught;
   }
 
+  assertExpectedError(error, pattern, label, 'throw');
+}
+
+async function expectAsyncCallError(
+  action: () => Promise<unknown>,
+  pattern: RegExp,
+  label: string,
+): Promise<void> {
+  let error: unknown;
+
+  try {
+    await action();
+  } catch (caught) {
+    error = caught;
+  }
+
+  assertExpectedError(error, pattern, label, 'reject');
+}
+
+function assertExpectedError(
+  error: unknown,
+  pattern: RegExp,
+  label: string,
+  behavior: 'reject' | 'throw',
+): void {
   if (error === undefined) {
-    throw new Error(`${label}: expected the call to throw.`);
+    throw new Error(`${label}: expected the call to ${behavior}.`);
   }
 
   const message = error instanceof Error ? error.message : String(error);
 
   if (!pattern.test(message)) {
-    throw new Error(`${label}: expected ${String(pattern)}, received ${message}.`);
+    const detail = `${label}: expected ${String(pattern)}, received ${message}.`;
+
+    throw new Error(detail, { cause: error });
   }
 }

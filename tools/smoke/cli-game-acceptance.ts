@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
@@ -641,6 +649,104 @@ try {
     false,
     'stale gameplay evidence removal',
   );
+  const outsideSymlinkedReportDir = path.join(fixtureRoot, 'outside-symlinked-report');
+  const protectedOutsideEvidenceFile = path.join(
+    outsideSymlinkedReportDir,
+    'protected-gameplay-evidence.json',
+  );
+  const linkedGameplayReportDir = path.join(cliGameRoot, 'linked-gameplay-report');
+
+  mkdirSync(outsideSymlinkedReportDir);
+  writeFileSync(protectedOutsideEvidenceFile, `${JSON.stringify(validGameplayEvidence)}\n`);
+  symlinkSync(outsideSymlinkedReportDir, linkedGameplayReportDir, 'dir');
+
+  try {
+    expectCallError(
+      () => runGameAcceptance({
+        gameRoot: cliGameRoot,
+        reportDir: path.join(cliGameRoot, 'linked-gameplay-report-output'),
+        gameplayE2EReportFile: path.join(
+          linkedGameplayReportDir,
+          'protected-gameplay-evidence.json',
+        ),
+        requireGameplayE2EReport: true,
+        gameplayE2EStepId: 'gameplay-e2e',
+        options: { profile: 'staging' },
+        steps: [{
+          id: 'gameplay-e2e',
+          label: 'Gameplay E2E',
+          command: 'noop',
+          cwd: cliGameRoot,
+        }],
+        commandRunner: () => ({ exitCode: 0 }),
+        now: createClock(),
+        log: () => undefined,
+      }),
+      /must not cross symbolic-link ancestors/u,
+      'symlinked gameplay report ancestor',
+    );
+    expectMatch(
+      readFileSync(protectedOutsideEvidenceFile, 'utf8'),
+      /"schemaVersion":1/u,
+      'outside gameplay report preservation',
+    );
+  } finally {
+    unlinkSync(linkedGameplayReportDir);
+  }
+
+  const mutableGameplayReportDir = path.join(cliGameRoot, 'mutable-gameplay-report');
+  const mutableGameplayReportFile = path.join(
+    mutableGameplayReportDir,
+    'protected-gameplay-evidence.json',
+  );
+
+  mkdirSync(mutableGameplayReportDir);
+  writeFileSync(mutableGameplayReportFile, `${JSON.stringify(validGameplayEvidence)}\n`);
+  try {
+    expectCallError(
+      () => runGameAcceptance({
+        gameRoot: cliGameRoot,
+        reportDir: path.join(cliGameRoot, 'mutable-gameplay-report-output'),
+        gameplayE2EReportFile: mutableGameplayReportFile,
+        requireGameplayE2EReport: true,
+        gameplayE2EStepId: 'gameplay-e2e',
+        options: { profile: 'staging' },
+        steps: [
+          {
+            id: 'replace-report-directory',
+            label: 'Replace report directory',
+            command: 'replace-report-directory',
+            cwd: cliGameRoot,
+          },
+          {
+            id: 'gameplay-e2e',
+            label: 'Gameplay E2E',
+            command: 'noop',
+            cwd: cliGameRoot,
+          },
+        ],
+        commandRunner: (step) => {
+          if (step.command === 'replace-report-directory') {
+            rmSync(mutableGameplayReportDir, { recursive: true });
+            symlinkSync(outsideSymlinkedReportDir, mutableGameplayReportDir, 'dir');
+          }
+
+          return { exitCode: 0 };
+        },
+        now: createClock(),
+        log: () => undefined,
+      }),
+      /must not cross symbolic-link ancestors/u,
+      'gameplay report deletion time-of-check/time-of-use',
+    );
+    expectMatch(
+      readFileSync(protectedOutsideEvidenceFile, 'utf8'),
+      /"schemaVersion":1/u,
+      'outside gameplay report preservation after step mutation',
+    );
+  } finally {
+    rmSync(mutableGameplayReportDir, { recursive: true, force: true });
+  }
 
   const outsideGameplayEvidenceFile = path.join(fixtureRoot, 'outside-gameplay-evidence.json');
 
@@ -835,10 +941,11 @@ try {
     log: () => undefined,
   });
 
-  assert.equal(unreadableEvidence.report.status, 'failed');
-  assert.match(
+  expectEqual(unreadableEvidence.report.status, 'failed', 'directory release manifest status');
+  expectMatch(
     unreadableEvidence.report.evidence.gameplayE2E?.validationError ?? '',
-    /release manifest is unreadable/u,
+    /release manifest hash does not match its current contents/u,
+    'directory release manifest evidence',
   );
 } finally {
   rmSync(fixtureRoot, { recursive: true, force: true });
@@ -866,6 +973,28 @@ function expectMatch(value: unknown, pattern: RegExp, label: string): void {
     const detail = `${label}: expected to match ${String(pattern)}, received ${String(value)}.`;
 
     throw new Error(detail);
+  }
+}
+
+function expectCallError(action: () => unknown, pattern: RegExp, label: string): void {
+  let error: unknown;
+
+  try {
+    action();
+  } catch (caught) {
+    error = caught;
+  }
+
+  if (error === undefined) {
+    throw new Error(`${label}: expected the call to throw.`);
+  }
+
+  const message = error instanceof Error ? error.message : String(error);
+
+  if (!pattern.test(message)) {
+    const detail = `${label}: expected ${String(pattern)}, received ${message}.`;
+
+    throw new Error(detail, { cause: error });
   }
 }
 

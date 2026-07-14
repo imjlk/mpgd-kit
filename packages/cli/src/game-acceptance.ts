@@ -15,6 +15,7 @@ import {
   collectGameplayE2EPathEvidence,
   maximumGameplayE2EStates,
   readGameplayE2EPlan,
+  resolveGameplayE2EPathInsideGameRoot,
 } from './gameplay-e2e.js';
 
 export const defaultGameAcceptanceCommandTimeoutMs = 30 * 60 * 1_000;
@@ -147,7 +148,7 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
       );
     }
 
-    gameplayE2EReportFileToReplace = resolvePathInsideGameRoot(
+    gameplayE2EReportFileToReplace = resolveGameplayE2EPathInsideGameRoot(
       gameRoot,
       input.gameplayE2EReportFile,
       'Gameplay E2E report',
@@ -160,7 +161,14 @@ export function runGameAcceptance(input: RunGameAcceptanceInput): RunGameAccepta
       && step.id === input.gameplayE2EStepId
       && gameplayE2EReportFileToReplace !== undefined
     ) {
-      rmSync(gameplayE2EReportFileToReplace, { force: true });
+      // Earlier acceptance commands are untrusted and may have changed the path hierarchy.
+      const verifiedGameplayE2EReportFile = resolveGameplayE2EPathInsideGameRoot(
+        gameRoot,
+        gameplayE2EReportFileToReplace,
+        'Gameplay E2E report',
+      );
+
+      rmSync(verifiedGameplayE2EReportFile, { force: true });
     }
 
     if (failed) {
@@ -409,7 +417,7 @@ function readOptionalJsonEvidence(
   let resolved: string;
 
   try {
-    resolved = resolvePathInsideGameRoot(gameRoot, file, 'Release manifest');
+    resolved = resolveGameplayE2EPathInsideGameRoot(gameRoot, file, 'Release manifest');
   } catch (error) {
     return {
       file: '<outside-game-root>',
@@ -468,7 +476,7 @@ function readGameplayE2EEvidence(
   let resolved: string;
 
   try {
-    resolved = resolvePathInsideGameRoot(gameRoot, file, 'Gameplay E2E report');
+    resolved = resolveGameplayE2EPathInsideGameRoot(gameRoot, file, 'Gameplay E2E report');
   } catch (error) {
     return {
       file: '<outside-game-root>',
@@ -624,7 +632,7 @@ function validateGameplayE2EEvidence(
     let resolvedReleaseManifest: string;
 
     try {
-      resolvedReleaseManifest = resolvePathInsideGameRoot(
+      resolvedReleaseManifest = resolveGameplayE2EPathInsideGameRoot(
         gameRoot,
         releaseManifestFile,
         'Gameplay E2E release manifest',
@@ -810,21 +818,6 @@ function relativeOrAbsolute(root: string, file: string): string {
   const relative = path.relative(root, file);
 
   return relative.startsWith('..') || path.isAbsolute(relative) ? file : relative || '.';
-}
-
-function resolvePathInsideGameRoot(gameRoot: string, file: string, label: string): string {
-  const resolved = path.resolve(gameRoot, file);
-  const relative = path.relative(gameRoot, resolved);
-
-  if (
-    relative === '..'
-    || relative.startsWith(`..${path.sep}`)
-    || path.isAbsolute(relative)
-  ) {
-    throw new Error(`${label} must stay inside the game root.`);
-  }
-
-  return resolved;
 }
 
 function readBoundedUtf8File(file: string, maximumBytes: number): string | null {

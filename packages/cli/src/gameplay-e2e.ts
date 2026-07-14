@@ -174,11 +174,12 @@ export function resolveGameplayE2EReportFile(
 ): string {
   const configuredFile = env.MPGD_GAMEPLAY_E2E_REPORT_FILE;
 
-  return path.resolve(
+  return resolveGameplayE2EPathInsideGameRoot(
     gameRoot,
     configuredFile === undefined || configuredFile.length === 0
       ? defaultGameplayE2EReportFile
       : configuredFile,
+    'Gameplay E2E report',
   );
 }
 
@@ -254,10 +255,24 @@ export async function runGameplayE2E(
   const now = input.now ?? Date.now;
   const log = input.log ?? console.log;
   const gameRoot = path.resolve(input.gameRoot);
-  const reportDir = input.reportFile === undefined
-    ? path.resolve(input.reportDir)
-    : path.dirname(path.resolve(gameRoot, input.reportFile));
-  const screenshotsDir = path.join(reportDir, 'screenshots');
+  const requestedReportFile = input.reportFile === undefined
+    ? path.join(input.reportDir, 'gameplay-e2e-report.json')
+    : input.reportFile;
+  const jsonFile = resolveGameplayE2EPathInsideGameRoot(
+    gameRoot,
+    requestedReportFile,
+    'Gameplay E2E report',
+  );
+  const markdownFile = resolveGameplayE2EPathInsideGameRoot(
+    gameRoot,
+    replaceFileExtension(jsonFile, '.md'),
+    'Gameplay E2E Markdown report',
+  );
+  const screenshotsDir = resolveGameplayE2EPathInsideGameRoot(
+    gameRoot,
+    path.join(path.dirname(jsonFile), 'screenshots'),
+    'Gameplay E2E screenshots directory',
+  );
   const startedAtMs = now();
   const plan = parseGameplayE2EPlan(input.plan);
   const planLabel = 'gameplay E2E plan';
@@ -323,15 +338,22 @@ export async function runGameplayE2E(
     releaseManifest,
     states,
   };
-  const jsonFile = input.reportFile === undefined
-    ? path.join(reportDir, 'gameplay-e2e-report.json')
-    : path.resolve(gameRoot, input.reportFile);
-  const markdownFile = replaceFileExtension(jsonFile, '.md');
+  // Driver callbacks are untrusted and may have changed output paths while the run was active.
+  const verifiedJsonFile = resolveGameplayE2EPathInsideGameRoot(
+    gameRoot,
+    jsonFile,
+    'Gameplay E2E report',
+  );
+  const verifiedMarkdownFile = resolveGameplayE2EPathInsideGameRoot(
+    gameRoot,
+    markdownFile,
+    'Gameplay E2E Markdown report',
+  );
 
-  writeFileSync(jsonFile, `${JSON.stringify(report, null, 2)}\n`);
-  writeFileSync(markdownFile, renderGameplayE2EMarkdown(report));
+  writeFileSync(verifiedJsonFile, `${JSON.stringify(report, null, 2)}\n`);
+  writeFileSync(verifiedMarkdownFile, renderGameplayE2EMarkdown(report));
 
-  return { report, jsonFile, markdownFile };
+  return { report, jsonFile: verifiedJsonFile, markdownFile: verifiedMarkdownFile };
 }
 
 export function renderGameplayE2EMarkdown(report: GameplayE2EReport): string {
@@ -444,7 +466,11 @@ async function runGameplayState(
   }
 
   try {
-    const screenshotFile = path.join(input.screenshotsDir, `${input.state.id}.png`);
+    const screenshotFile = resolveGameplayE2EPathInsideGameRoot(
+      input.gameRoot,
+      path.join(input.screenshotsDir, `${input.state.id}.png`),
+      'Gameplay screenshot',
+    );
 
     await input.driver.captureScreenshot({ state: input.state, file: screenshotFile });
     screenshot = collectGameplayE2EPathEvidence(
@@ -742,7 +768,7 @@ export function collectGameplayE2EPathEvidence(
   label: string,
   limits: GameplayE2EHashLimits = defaultGameplayE2EHashLimits,
 ): GameplayE2EPathEvidence {
-  const resolved = resolveEvidencePathInsideGameRoot(gameRoot, file, label);
+  const resolved = resolveGameplayE2EPathInsideGameRoot(gameRoot, file, label, true);
 
   let stats: ReturnType<typeof lstatSync>;
 
@@ -770,10 +796,11 @@ export function collectGameplayE2EPathEvidence(
   };
 }
 
-function resolveEvidencePathInsideGameRoot(
+export function resolveGameplayE2EPathInsideGameRoot(
   gameRoot: string,
   file: string,
   label: string,
+  allowSymbolicLinkLeaf = false,
 ): string {
   const resolvedRoot = path.resolve(gameRoot);
   const resolved = path.resolve(resolvedRoot, file);
@@ -788,10 +815,10 @@ function resolveEvidencePathInsideGameRoot(
     return resolved;
   }
 
-  const relativeParent = path.relative(resolvedRoot, path.dirname(resolved));
+  const segments = relative.split(path.sep).filter((entry) => entry.length > 0);
   let current = resolvedRoot;
 
-  for (const segment of relativeParent.split(path.sep).filter((entry) => entry.length > 0)) {
+  for (const [index, segment] of segments.entries()) {
     current = path.join(current, segment);
 
     let stats: ReturnType<typeof lstatSync>;
@@ -799,21 +826,40 @@ function resolveEvidencePathInsideGameRoot(
     try {
       stats = lstatSync(current);
     } catch (error) {
+      if (hasErrorCode(error, 'ENOENT')) {
+        break;
+      }
+
+      const detail = `Unable to inspect ${label} path at ${current}: ${formatError(error)}`;
+
+      throw new Error(detail);
+    }
+
+    const isLeaf = index === segments.length - 1;
+
+    if (stats.isSymbolicLink() && (!isLeaf || !allowSymbolicLinkLeaf)) {
+      const displayPath = path.relative(resolvedRoot, current) || '.';
+
       throw new Error(
-        `Unable to inspect ${label} parent directory at ${current}: ${formatError(error)}`,
+        isLeaf
+          ? `${label} path must not be a symbolic link: ${displayPath}`
+          : `${label} path must not cross symbolic-link ancestors: ${displayPath}`,
       );
     }
 
-    if (stats.isSymbolicLink()) {
-      throw new Error(`${label} path must not cross symbolic-link ancestors: ${current}`);
-    }
-
-    if (!stats.isDirectory()) {
+    if (!isLeaf && !stats.isDirectory()) {
       throw new Error(`${label} parent path must be a directory.`);
     }
   }
 
   return resolved;
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === code;
 }
 
 function pathEscapesRoot(relative: string): boolean {
