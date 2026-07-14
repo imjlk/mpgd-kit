@@ -1,8 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import type { Entitlement, ProductInfo } from '@mpgd/platform';
+import type { Entitlement, PlatformGateway, ProductInfo } from '@mpgd/platform';
 
-import { createDevvitCommerceAdapter } from './payments';
+import { createDevvitCommerceAdapter, withDevvitCommerceAdapter } from './payments';
 
 const product = Object.freeze({
   id: 'FINAL_NINE_EMBER_THEME',
@@ -126,4 +126,89 @@ describe('Devvit commerce adapter', () => {
       client,
     })).toThrow('Duplicate Devvit product SKU');
   });
+
+  it('installs configured commerce and advertises its runtime capability', async () => {
+    const baseCommerce = createDevvitCommerceAdapter({
+      products: [{ info: product, sku: 'ttokdoku_final_nine_ember' }],
+      client: {
+        async purchase() {
+          return { status: 'cancelled' };
+        },
+        async getEntitlements() {
+          return [];
+        },
+      },
+    });
+    const gateway = withDevvitCommerceAdapter(
+      createGateway('reddit'),
+      baseCommerce,
+    );
+
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({ nativeIap: true });
+    expect(gateway.commerce).toBe(baseCommerce);
+    expect(() => withDevvitCommerceAdapter(createGateway('browser'), baseCommerce))
+      .toThrow('only be installed on a reddit gateway');
+  });
 });
+
+function createGateway(target: PlatformGateway['target']): PlatformGateway {
+  return {
+    target,
+    async getCapabilities() {
+      return {
+        nativeIap: false,
+        nativeAds: false,
+        rewardedAds: false,
+        interstitialAds: false,
+        nativeLeaderboard: false,
+        achievements: false,
+        cloudSave: true,
+        socialShare: true,
+        haptics: false,
+        localizedContent: true,
+      };
+    },
+    identity: {
+      async getPlayer() {
+        return null;
+      },
+    },
+    commerce: {
+      async getProducts() {
+        return [];
+      },
+      async purchase() {
+        return { status: 'cancelled', entitlementIds: [] };
+      },
+      async getEntitlements() {
+        return [];
+      },
+    },
+    ads: {
+      async preload() {},
+      async showRewarded() {
+        return { status: 'unavailable', rewardGranted: false };
+      },
+    },
+    leaderboard: {
+      async submitScore() {
+        return { submitted: false };
+      },
+      async open() {},
+    },
+    lifecycle: {
+      onPause() {
+        return () => {};
+      },
+      onResume() {
+        return () => {};
+      },
+    },
+    storage: {
+      async load() {
+        return null;
+      },
+      async save() {},
+    },
+  };
+}
