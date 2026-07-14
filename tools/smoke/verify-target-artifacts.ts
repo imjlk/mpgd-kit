@@ -99,7 +99,7 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     }
 
     if (targetConfig.kind === 'devvit-web') {
-      verifyDevvitWebManifest(target, targetConfig, artifactPath);
+      verifyDevvitWebManifest(target, targetConfig, artifactPath, effectiveConfigPath);
     }
 
     assertEmbeddedTargetConfig(
@@ -557,6 +557,7 @@ function verifyDevvitWebManifest(
   target: string,
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
+  effectiveConfigPath: string,
 ): void {
   const wrapperApp = resolveWrapperApp(target, targetConfig);
   const manifestPath = `${wrapperApp}/devvit.json`;
@@ -662,7 +663,11 @@ function verifyDevvitWebManifest(
   const permissions = manifest.permissions;
   assertRecord(permissions, `${label} permissions`);
   assertBooleanValue(permissions.redis, true, `${label} permissions.redis`);
-  assertDisabledDevvitPermission(permissions.payments, `${label} permissions.payments`);
+  if (permissions.payments === true) {
+    verifyEnabledDevvitPayments(manifest, wrapperApp, effectiveConfigPath, label);
+  } else {
+    assertDisabledDevvitPermission(permissions.payments, `${label} permissions.payments`);
+  }
   assertDisabledDevvitPermission(permissions.realtime, `${label} permissions.realtime`);
   assertEnabledRedditPermission(permissions.reddit, `${label} permissions.reddit`);
 
@@ -672,6 +677,94 @@ function verifyDevvitWebManifest(
 
   if (!menu.items.some(isCreatePostMenuItem)) {
     throw new Error(`${label} must expose a subreddit create-post menu item.`);
+  }
+}
+
+function verifyEnabledDevvitPayments(
+  manifest: Record<string, unknown>,
+  wrapperApp: string,
+  effectiveConfigPath: string,
+  label: string,
+): void {
+  const payments = manifest.payments;
+  assertRecord(payments, `${label} payments`);
+  assertString(payments.productsFile, `${label} payments.productsFile`);
+  const productsFile = resolveDevvitManifestFile(
+    wrapperApp,
+    payments.productsFile,
+    `${label} payments.productsFile`,
+  );
+  assertFileExists(productsFile, `${label} payments products file`);
+
+  const endpoints = payments.endpoints;
+  assertRecord(endpoints, `${label} payments.endpoints`);
+  assertDevvitEndpoint(endpoints.fulfillOrder, `${label} payments.endpoints.fulfillOrder`);
+  assertDevvitEndpoint(endpoints.refundOrder, `${label} payments.endpoints.refundOrder`);
+
+  const productConfig = readJsonFile(productsFile);
+  assertRecord(productConfig, `${label} products file`);
+  assertArray(productConfig.products, `${label} products file products`);
+  const productSkus = readUniqueDevvitProductSkus(
+    productConfig.products,
+    `${label} products file products`,
+  );
+
+  if (productSkus.length === 0) {
+    throw new Error(`${label} payments products file must declare at least one product.`);
+  }
+
+  const effectiveConfig = readJsonFile(effectiveConfigPath);
+  assertRecord(effectiveConfig, `${label} effective target config`);
+  const features = effectiveConfig.features;
+  assertRecord(features, `${label} effective target config features`);
+  assertBooleanValue(features.iap, true, `${label} effective target config features.iap`);
+  const monetization = effectiveConfig.monetization;
+  const monetizationLabel = `${label} effective target config monetization`;
+  assertRecord(monetization, monetizationLabel);
+  assertBooleanValue(monetization.iap, true, `${monetizationLabel}.iap`);
+  assertArray(monetization.products, `${monetizationLabel}.products`);
+  const effectiveSkus = monetization.products.flatMap((product, index) => {
+    assertRecord(product, `${label} effective product ${String(index)}`);
+    if (product.enabled !== true) {
+      return [];
+    }
+    assertString(
+      product.platformProductId,
+      `${label} effective product ${String(index)} platformProductId`,
+    );
+
+    return [product.platformProductId];
+  }).sort();
+
+  if (JSON.stringify(effectiveSkus) !== JSON.stringify([...productSkus].sort())) {
+    throw new Error(
+      `${label} products file SKUs must match enabled effective catalog platform IDs.`,
+    );
+  }
+}
+
+function readUniqueDevvitProductSkus(
+  products: readonly unknown[],
+  label: string,
+): readonly string[] {
+  const skus = new Set<string>();
+
+  for (const [index, product] of products.entries()) {
+    assertRecord(product, `${label}[${String(index)}]`);
+    assertString(product.sku, `${label}[${String(index)}].sku`);
+    if (skus.has(product.sku)) {
+      throw new Error(`${label} contains duplicate SKU: ${product.sku}`);
+    }
+    skus.add(product.sku);
+  }
+
+  return [...skus];
+}
+
+function assertDevvitEndpoint(input: unknown, label: string): asserts input is string {
+  assertString(input, label);
+  if (!input.startsWith('/')) {
+    throw new Error(`${label} must be an absolute app endpoint path.`);
   }
 }
 
