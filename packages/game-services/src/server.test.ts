@@ -124,6 +124,83 @@ function createLegacyCompatibleStore(base: InMemoryGameServicesStore): GameServi
   };
 }
 
+function createLegacyPlatformEvidenceStore(base: InMemoryGameServicesStore): GameServicesStore {
+  const platformEvidenceByLedgerEntryId = new Map<
+    string,
+    { readonly field: 'platformTransactionId' | 'platformImpressionId'; readonly value: string }
+  >();
+
+  return {
+    async recordEntitlementGrant(input) {
+      const field = input.source === 'purchase'
+        ? 'platformTransactionId'
+        : 'platformImpressionId';
+      const platformEvidenceId = input.payload[field];
+      const result = await base.recordEntitlementGrant(
+        typeof platformEvidenceId === 'string'
+          ? {
+              ...input,
+              payload: {
+                ...input.payload,
+                [field]: `legacy-unindexed:${input.playerId}:${input.idempotencyKey}`,
+              },
+            }
+          : input,
+      );
+
+      if (typeof platformEvidenceId === 'string') {
+        platformEvidenceByLedgerEntryId.set(result.ledgerEntryId, {
+          field,
+          value: platformEvidenceId,
+        });
+      }
+
+      return result;
+    },
+    async getEntitlementTransaction(ledgerEntryId) {
+      const transaction = await base.getEntitlementTransaction(ledgerEntryId);
+      return transaction === undefined
+        ? undefined
+        : restoreLegacyPlatformEvidence(transaction, platformEvidenceByLedgerEntryId);
+    },
+    async listEntitlementTransactions() {
+      const transactions = await base.listEntitlementTransactions();
+      return transactions.map((transaction) => {
+        return restoreLegacyPlatformEvidence(transaction, platformEvidenceByLedgerEntryId);
+      });
+    },
+    recordLeaderboardScore: (input, options) => {
+      return base.recordLeaderboardScore(input, options);
+    },
+    getLeaderboardTransaction: (ledgerEntryId) => {
+      return base.getLeaderboardTransaction(ledgerEntryId);
+    },
+    listLeaderboardTransactions: () => base.listLeaderboardTransactions(),
+  };
+}
+
+function restoreLegacyPlatformEvidence<T extends {
+  readonly ledgerEntryId: string;
+  readonly payload: Record<string, string | number | boolean>;
+}>(
+  transaction: T,
+  identities: ReadonlyMap<
+    string,
+    { readonly field: 'platformTransactionId' | 'platformImpressionId'; readonly value: string }
+  >,
+): T {
+  const identity = identities.get(transaction.ledgerEntryId);
+  return identity === undefined
+    ? transaction
+    : {
+        ...transaction,
+        payload: {
+          ...transaction.payload,
+          [identity.field]: identity.value,
+        },
+      };
+}
+
 function withoutTopLevelEvidenceId<T extends { readonly evidenceVerificationId?: string }>(
   transaction: T,
 ): Omit<T, 'evidenceVerificationId'> {
@@ -751,6 +828,97 @@ assertEqual(
   (await concurrentRetryStore.listEntitlementTransactions()).length,
   2,
   'concurrent retries should write one ledger row per grant source',
+);
+
+const platformFallbackStore = createLegacyPlatformEvidenceStore(createInMemoryGameServicesStore());
+let platformFallbackPurchaseVerification = 0;
+let platformFallbackRewardVerification = 0;
+const platformFallbackBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: platformFallbackStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      platformFallbackPurchaseVerification += 1;
+      return {
+        status: 'verified',
+        verificationId: `provider:purchase:unstable:${platformFallbackPurchaseVerification}`,
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+    async verifyAdReward() {
+      platformFallbackRewardVerification += 1;
+      return {
+        status: 'verified',
+        verificationId: `provider:reward:unstable:${platformFallbackRewardVerification}`,
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+  },
+});
+const platformFallbackPurchases = await Promise.all([
+  platformFallbackBackend.purchases.verifyPurchase({
+    target: 'android',
+    playerId: 'player-platform-fallback',
+    productId: 'COINS_100',
+    platformTransactionId: 'txn-platform-fallback',
+    idempotencyKey: 'purchase-platform-fallback-1',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }),
+  platformFallbackBackend.purchases.verifyPurchase({
+    target: 'android',
+    playerId: 'player-platform-fallback',
+    productId: 'COINS_100',
+    platformTransactionId: 'txn-platform-fallback',
+    idempotencyKey: 'purchase-platform-fallback-2',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }),
+]);
+const platformFallbackRewards = await Promise.all([
+  platformFallbackBackend.adRewards.claimAdReward({
+    target: 'android',
+    playerId: 'player-platform-fallback',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    platformImpressionId: 'impression-platform-fallback',
+    idempotencyKey: 'reward-platform-fallback-1',
+    completedAt: '2026-07-04T00:00:00.000Z',
+  }),
+  platformFallbackBackend.adRewards.claimAdReward({
+    target: 'android',
+    playerId: 'player-platform-fallback',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    platformImpressionId: 'impression-platform-fallback',
+    idempotencyKey: 'reward-platform-fallback-2',
+    completedAt: '2026-07-04T00:00:00.000Z',
+  }),
+]);
+
+assertEqual(
+  platformFallbackPurchases.filter((result) => result.verified).length,
+  1,
+  'platform-evidence locks should grant one concurrent purchase with unstable authority ids',
+);
+assertEqual(
+  platformFallbackPurchases.filter((result) => result.reason === 'EVIDENCE_ALREADY_PROCESSED')
+    .length,
+  1,
+  'platform-evidence locks should reject the other concurrent purchase',
+);
+assertEqual(
+  platformFallbackRewards.filter((result) => result.granted).length,
+  1,
+  'platform-evidence locks should grant one concurrent reward with unstable authority ids',
+);
+assertEqual(
+  platformFallbackRewards.filter((result) => result.reason === 'EVIDENCE_ALREADY_PROCESSED')
+    .length,
+  1,
+  'platform-evidence locks should reject the other concurrent reward',
+);
+assertEqual(
+  (await platformFallbackStore.listEntitlementTransactions()).length,
+  2,
+  'platform-evidence fallback races should retain one grant per source identity',
 );
 
 const historicalEvidenceStore = createInMemoryGameServicesStore();

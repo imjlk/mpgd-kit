@@ -130,9 +130,10 @@ dimensions:
 - `findEntitlementTransactionByPlatformEvidence` is an optional indexed lookup
   for verified purchase transaction ids and rewarded-ad impression ids. It
   preserves replay protection for historical ledger rows that predate authority
-  verification ids; stores without it use the ledger-list fallback. The D1
-  migration backfills authority ids already present in payloads and adds unique
-  source/target platform-evidence indexes for historical and new rows.
+  verification ids; stores without it use the ledger-list fallback. The backend
+  serializes both authority and platform evidence keys per store instance. The
+  D1 migration backfills authority ids already present in payloads and adds
+  unique source/target platform-evidence indexes for historical and new rows.
 - Leaderboard records dedupe by `target`, `leaderboardId`, `playerId`, and
   `runId`. Retries with a different score, submission timestamp, or
   `platformSubmissionId` reuse the original `ledgerEntryId`.

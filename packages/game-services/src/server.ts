@@ -875,13 +875,17 @@ async function recordEntitlementGrantWithEvidence(
       source: grant.source,
       evidenceVerificationId,
     } as const;
+    const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
+    const lockKeys = [createEntitlementEvidenceKey(evidenceIdentity)];
+    if (platformEvidenceIdentity !== undefined) {
+      lockKeys.push(createEntitlementPlatformEvidenceKey(platformEvidenceIdentity));
+    }
 
-    return withEntitlementEvidenceLock(store, evidenceIdentity, async () => {
+    return withEntitlementEvidenceLocks(store, lockKeys, async () => {
       const authorityMatch = await findEntitlementTransactionByEvidenceVerificationId(store, {
         source: grant.source,
         evidenceVerificationId,
       });
-      const platformEvidenceIdentity = getEntitlementPlatformEvidenceIdentity(grant);
       const existing = authorityMatch ?? (platformEvidenceIdentity === undefined
         ? undefined
         : await findEntitlementTransactionByPlatformEvidence(
@@ -940,12 +944,28 @@ const entitlementEvidenceLocks = new WeakMap<
   Map<string, Promise<void>>
 >();
 
-async function withEntitlementEvidenceLock<T>(
+async function withEntitlementEvidenceLocks<T>(
   store: GameServicesStore,
-  grant: Required<Pick<EntitlementLedgerGrant, 'source' | 'evidenceVerificationId'>>,
+  lockKeys: readonly string[],
   task: () => Promise<T>,
 ): Promise<T> {
-  const lockKey = createEntitlementEvidenceKey(grant);
+  const orderedLockKeys = [...new Set(lockKeys)].sort((left, right) => left.localeCompare(right));
+
+  async function runWithLock(index: number): Promise<T> {
+    const lockKey = orderedLockKeys[index];
+    return lockKey === undefined
+      ? task()
+      : withEntitlementEvidenceLockKey(store, lockKey, () => runWithLock(index + 1));
+  }
+
+  return runWithLock(0);
+}
+
+async function withEntitlementEvidenceLockKey<T>(
+  store: GameServicesStore,
+  lockKey: string,
+  task: () => Promise<T>,
+): Promise<T> {
   const storeLocks = entitlementEvidenceLocks.get(store) ?? new Map<string, Promise<void>>();
   entitlementEvidenceLocks.set(store, storeLocks);
 

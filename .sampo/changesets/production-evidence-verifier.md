@@ -11,4 +11,5 @@ retries now reject changes to the original logical grant or platform target,
 including raced writes, while concurrent identical retries return the original
 successful ledger result. Existing stores can use list fallbacks when optional
 indexed idempotency, authority-evidence, or historical platform-evidence
-lookups are not implemented.
+lookups are not implemented; both evidence identities are serialized per store
+instance before the fallback write.
