@@ -1,6 +1,8 @@
 const server = await import('../dist/server/index.js');
 
 for (const exportName of [
+  'normalizeDevvitFulfillmentOrder',
+  'normalizeDevvitRefundOrder',
   'createDevvitPostOperationCoordinator',
   'createDevvitRedisPostOperationStore',
   'defineDevvitPostOperation',

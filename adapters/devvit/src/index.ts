@@ -23,6 +23,8 @@ import type {
   ShareResult,
 } from '@mpgd/platform';
 
+export * from './payments.js';
+
 export const defaultDevvitRpcEndpoint = defaultBridgeRpcEndpoint;
 
 type BridgeErrorResponse = Extract<BridgeResponse, { readonly ok: false }>;
