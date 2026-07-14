@@ -1,4 +1,7 @@
-import type { DevvitDurableOperationStore } from './post-operation.js';
+import {
+  devvitPostOperationMaximumPendingPageLimit,
+  type DevvitIndexedDurableOperationStore,
+} from './post-operation.js';
 
 const defaultTransactionAttempts = 3;
 const maximumTransactionAttempts = 32;
@@ -7,6 +10,19 @@ export interface DevvitRedisSetOptions {
   readonly nx?: boolean;
   readonly xx?: boolean;
   readonly expiration?: Date;
+}
+
+export interface DevvitRedisSortedSetMember {
+  readonly member: string;
+  readonly score: number;
+}
+
+export interface DevvitRedisRangeOptions {
+  readonly by: 'lex';
+  readonly limit: {
+    readonly offset: number;
+    readonly count: number;
+  };
 }
 
 export interface DevvitRedisTransactionLike {
@@ -25,6 +41,13 @@ export interface DevvitRedisLike {
     value: string,
     options?: DevvitRedisSetOptions,
   ): Promise<string | undefined | null>;
+  zAdd(key: string, ...members: readonly DevvitRedisSortedSetMember[]): Promise<unknown>;
+  zRange(
+    key: string,
+    start: string,
+    stop: string,
+    options: DevvitRedisRangeOptions,
+  ): Promise<readonly DevvitRedisSortedSetMember[]>;
   watch(...keys: readonly string[]): Promise<DevvitRedisTransactionLike>;
 }
 
@@ -35,14 +58,27 @@ export interface DevvitRedisPostOperationStoreOptions {
 export function createDevvitRedisPostOperationStore(
   redis: DevvitRedisLike,
   options: DevvitRedisPostOperationStoreOptions = {},
-): DevvitDurableOperationStore {
+): DevvitIndexedDurableOperationStore {
   const transactionAttempts = normalizeTransactionAttempts(options.transactionAttempts);
 
   return {
     read(key) {
       return redis.get(key);
     },
+    async ensureIndexed(index) {
+      await redis.zAdd(index.indexKey, { member: index.member, score: 0 });
+    },
     async create(key, value) {
+      return setIfAbsent(redis, key, value);
+    },
+    async createIndexed(key, value, index) {
+      if (index.member !== key) {
+        throw new TypeError('Indexed creation member must equal the durable state key.');
+      }
+
+      // Membership is intentionally established first. If the following state
+      // write fails, listing may see a stale member but cannot miss live work.
+      await redis.zAdd(index.indexKey, { member: index.member, score: 0 });
       return setIfAbsent(redis, key, value);
     },
     async compareAndSet(key, expectedValue, nextValue) {
@@ -52,6 +88,40 @@ export function createDevvitRedisPostOperationStore(
         expectedValue,
         transactionAttempts,
         queueMutation: (transaction) => transaction.set(key, nextValue),
+      });
+    },
+    async compareAndSetIndexed(key, expectedValue, nextValue, index) {
+      if (index.member !== key) {
+        throw new TypeError('Indexed CAS member must equal the durable state key.');
+      }
+
+      // Stable registry membership was established before state creation and
+      // does not change across prepared, attempted, published, or terminal state.
+      // Re-adding it backfills records created before indexed stores existed.
+      await redis.zAdd(index.indexKey, { member: index.member, score: 0 });
+      return mutateIfValue({
+        redis,
+        key,
+        expectedValue,
+        transactionAttempts,
+        queueMutation: (transaction) => transaction.set(key, nextValue),
+      });
+    },
+    async listIndex(key, startExclusive, limit) {
+      assertIndexPageLimit(limit);
+      const members = await redis.zRange(
+        key,
+        startExclusive === undefined ? '-' : `(${startExclusive}`,
+        '+',
+        { by: 'lex', limit: { offset: 0, count: limit } },
+      );
+
+      return members.map((member) => {
+        if (member.score !== 0 || typeof member.member !== 'string') {
+          throw new Error(`Devvit Redis operation registry is invalid for key: ${key}`);
+        }
+
+        return member.member;
       });
     },
     async createLease(key, token, expiresAt) {
@@ -170,6 +240,16 @@ function normalizeTransactionAttempts(value: number | undefined): number {
   }
 
   return transactionAttempts;
+}
+
+function assertIndexPageLimit(value: number): void {
+  const maximum = devvitPostOperationMaximumPendingPageLimit + 1;
+
+  if (!Number.isSafeInteger(value) || value < 1 || value > maximum) {
+    throw new TypeError(
+      `Devvit Redis index page limit must be a safe integer from 1 to ${String(maximum)}.`,
+    );
+  }
 }
 
 function assertExpirationDate(value: Date): void {

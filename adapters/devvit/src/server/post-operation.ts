@@ -3,6 +3,8 @@ const defaultLeaseTtlMs = 30_000;
 const defaultMaxPostDataBytes = 2_048;
 const defaultStoreAttempts = 8;
 const maximumStoreAttempts = 32;
+const defaultPendingPageLimit = 20;
+export const devvitPostOperationMaximumPendingPageLimit = 100;
 const maximumIdentifierLength = 128;
 const maximumOperationTypeLength = 64;
 const maximumLeaseTtlMs = 60 * 60 * 1_000;
@@ -34,6 +36,39 @@ export interface DevvitDurableOperationStore {
   createLease(key: string, token: string, expiresAt: Date): Promise<boolean>;
   /** Deletes a lease only when the current token matches. */
   releaseLease(key: string, token: string): Promise<void>;
+}
+
+export interface DevvitDurableOperationIndexEntry {
+  readonly indexKey: string;
+  readonly member: string;
+}
+
+/**
+ * Optional durable-store capability used to discover pending operations without
+ * scanning the Redis keyspace. Implementations must establish stable registry
+ * membership before creating durable state and retain it for the record's
+ * lifetime. A failed state creation can leave a safe stale member, but a live
+ * operation must never be absent from its registry.
+ */
+export interface DevvitIndexedDurableOperationStore extends DevvitDurableOperationStore {
+  /** Idempotently establishes stable registry membership for an existing record. */
+  ensureIndexed(index: DevvitDurableOperationIndexEntry): Promise<void>;
+  createIndexed(
+    key: string,
+    value: string,
+    index: DevvitDurableOperationIndexEntry,
+  ): Promise<boolean>;
+  compareAndSetIndexed(
+    key: string,
+    expectedValue: string,
+    nextValue: string,
+    index: DevvitDurableOperationIndexEntry,
+  ): Promise<boolean>;
+  listIndex(
+    key: string,
+    startExclusive: string | undefined,
+    limit: number,
+  ): Promise<readonly string[]>;
 }
 
 export interface DevvitPostOperationScope {
@@ -178,6 +213,47 @@ export interface ReconcileDevvitPostOperationInput<
   ) => Promise<readonly DevvitPostReconciliationCandidate[]>;
 }
 
+export interface ListPendingDevvitPostOperationsInput {
+  readonly scope: DevvitPostOperationScope;
+  /** Opaque continuation returned by the previous page for the same scope. */
+  readonly cursor?: string;
+  readonly limit?: number;
+}
+
+export type DevvitPendingPostOperation<
+  TPayload extends DevvitJsonObject,
+  TLaunchParams extends DevvitJsonObject,
+> =
+  | {
+      readonly status: 'prepared';
+      readonly operationId: string;
+      readonly updatedAt: number;
+      readonly postData: DevvitCanonicalPostData<TPayload, TLaunchParams>;
+    }
+  | {
+      readonly status: 'reconciliation-required';
+      readonly operationId: string;
+      readonly reason: 'submission-attempted';
+      readonly updatedAt: number;
+      readonly postData: DevvitCanonicalPostData<TPayload, TLaunchParams>;
+    }
+  | {
+      readonly status: 'terminal-unresolved';
+      readonly operationId: string;
+      readonly reason: 'multiple-exact-matches' | 'published-receipt-conflict';
+      readonly postIds: readonly string[];
+      readonly updatedAt: number;
+      readonly postData: DevvitCanonicalPostData<TPayload, TLaunchParams>;
+    };
+
+export interface DevvitPendingPostOperationPage<
+  TPayload extends DevvitJsonObject,
+  TLaunchParams extends DevvitJsonObject,
+> {
+  readonly operations: readonly DevvitPendingPostOperation<TPayload, TLaunchParams>[];
+  readonly nextCursor?: string;
+}
+
 export interface DevvitPostOperationCoordinator<
   TPayload extends DevvitJsonObject,
   TLaunchParams extends DevvitJsonObject,
@@ -191,6 +267,10 @@ export interface DevvitPostOperationCoordinator<
   reconcile(
     input: ReconcileDevvitPostOperationInput<TPayload, TLaunchParams>,
   ): Promise<DevvitPostOperationResult<TPayload, TLaunchParams>>;
+  /** Lists durable work only; it never invokes a Reddit API or reconciliation callback. */
+  listPending(
+    input: ListPendingDevvitPostOperationsInput,
+  ): Promise<DevvitPendingPostOperationPage<TPayload, TLaunchParams>>;
 }
 
 export interface CreateDevvitPostOperationCoordinatorOptions<
@@ -252,6 +332,7 @@ export function createDevvitPostOperationCoordinator<
   const createToken = input.createToken ?? defaultTokenFactory;
   const leaseTtlMs = input.leaseTtlMs ?? defaultLeaseTtlMs;
   const storeAttempts = input.storeAttempts ?? defaultStoreAttempts;
+  const indexedStore = readIndexedStore(input.store);
 
   assertPositiveSafeInteger(leaseTtlMs, 'leaseTtlMs');
   if (leaseTtlMs > maximumLeaseTtlMs) {
@@ -270,6 +351,7 @@ export function createDevvitPostOperationCoordinator<
     execute,
     read,
     reconcile,
+    listPending,
   };
 
   async function execute(
@@ -287,7 +369,7 @@ export function createDevvitPostOperationCoordinator<
     });
 
     for (let attempt = 0; attempt < storeAttempts; attempt += 1) {
-      let current = await readOperation(operationKey, descriptor, definition, input.store);
+      let current = await readStoredOperation(operationKey, descriptor);
 
       if (current.kind === 'missing') {
         const timestamp = readTimestamp(now);
@@ -302,7 +384,7 @@ export function createDevvitPostOperationCoordinator<
         };
         const preparedRaw = serializeRecord(prepared);
 
-        if (!await input.store.create(operationKey, preparedRaw)) {
+        if (!await createStoredRecord(operationKey, preparedRaw, prepared)) {
           continue;
         }
 
@@ -326,7 +408,13 @@ export function createDevvitPostOperationCoordinator<
           };
           const attemptedRaw = serializeRecord(attempted);
 
-          if (!await input.store.compareAndSet(operationKey, current.raw, attemptedRaw)) {
+          if (!await compareAndSetStoredRecord(
+            operationKey,
+            current.raw,
+            attemptedRaw,
+            current.record,
+            attempted,
+          )) {
             continue;
           }
 
@@ -353,7 +441,7 @@ export function createDevvitPostOperationCoordinator<
       operationType: definition.operationType,
       operationId: request.operationId,
     });
-    const current = await readOperation(operationKey, descriptor, definition, input.store);
+    const current = await readStoredOperation(operationKey, descriptor);
 
     if (current.kind === 'missing') {
       return missingResult(descriptor);
@@ -387,7 +475,7 @@ export function createDevvitPostOperationCoordinator<
       operationType: definition.operationType,
       operationId: request.operationId,
     });
-    const current = await readOperation(operationKey, descriptor, definition, input.store);
+    const current = await readStoredOperation(operationKey, descriptor);
 
     if (current.kind === 'missing') {
       return missingResult(descriptor);
@@ -473,6 +561,73 @@ export function createDevvitPostOperationCoordinator<
     }
   }
 
+  async function listPending(
+    request: ListPendingDevvitPostOperationsInput,
+  ): Promise<DevvitPendingPostOperationPage<TPayload, TLaunchParams>> {
+    if (indexedStore === undefined) {
+      throw new DevvitPostOperationStateError(
+        'The durable post operation store does not support operation registries.',
+      );
+    }
+
+    const scope = normalizeScope(request.scope);
+    const limit = normalizePendingPageLimit(request.limit);
+    const indexKey = createDevvitPostOperationIndexKey({
+      scope,
+      operationType: definition.operationType,
+    });
+    const cursor = normalizePendingCursor(request.cursor, scope, definition.operationType);
+    const members = await indexedStore.listIndex(indexKey, cursor, limit + 1);
+    const pageMembers = members.slice(0, limit);
+    const indexedOperations = await Promise.all(pageMembers.map(async (member) => {
+      const indexed = parsePendingIndexMember(member, scope, definition.operationType);
+      const raw = await indexedStore.read(indexed.operationKey);
+
+      if (raw === undefined) {
+        // Index-first creation can leave a conservative stale member if the
+        // following state write fails. It is safe to skip and advance the cursor.
+        return undefined;
+      }
+
+      const record = parseStoredRecord(raw, indexed.operationKey, definition);
+      const expectedOperationKey = createDevvitPostOperationKey({
+        scope: record.descriptor.mpgd,
+        operationType: record.descriptor.mpgd.operationType,
+        operationId: record.descriptor.mpgd.operationId,
+      });
+      const recordIndexKey = createDevvitPostOperationIndexKey({
+        scope: record.descriptor.mpgd,
+        operationType: record.descriptor.mpgd.operationType,
+      });
+
+      if (expectedOperationKey !== indexed.operationKey || recordIndexKey !== indexKey) {
+        throw new DevvitPostOperationStateError(
+          `Pending operation index scope is inconsistent for state: ${indexed.operationKey}`,
+        );
+      }
+
+      const expectedMember = operationIndexMember(record);
+
+      if (record.phase === 'published') {
+        return undefined;
+      }
+      if (expectedMember !== member) {
+        throw new DevvitPostOperationStateError(
+          `Pending operation index is inconsistent for state: ${indexed.operationKey}`,
+        );
+      }
+
+      return pendingOperationResult(record);
+    }));
+    const operations = indexedOperations.filter((operation) => operation !== undefined);
+    const nextCursor = members.length > limit ? pageMembers.at(-1) : undefined;
+
+    return Object.freeze({
+      operations: Object.freeze(operations),
+      ...(nextCursor === undefined ? {} : { nextCursor }),
+    });
+  }
+
   async function submitOnce(
     record: AttemptedRecord<TPayload, TLaunchParams>,
     raw: string,
@@ -524,20 +679,17 @@ export function createDevvitPostOperationCoordinator<
         recovered,
       };
 
-      if (await input.store.compareAndSet(
+      if (await compareAndSetStoredRecord(
         source.operationKey,
         expectedRaw,
         serializeRecord(published),
+        expectedRecord,
+        published,
       )) {
         return publishedResult(published, successStatus);
       }
 
-      const reread = await readOperation(
-        source.operationKey,
-        source.descriptor,
-        definition,
-        input.store,
-      );
+      const reread = await readStoredOperation(source.operationKey, source.descriptor);
 
       if (reread.kind === 'missing' || reread.kind === 'conflict') {
         throw new DevvitPostOperationStateError(
@@ -613,20 +765,17 @@ export function createDevvitPostOperationCoordinator<
         unresolvedAt: timestamp,
       };
 
-      if (await input.store.compareAndSet(
+      if (await compareAndSetStoredRecord(
         source.operationKey,
         expectedRaw,
         serializeRecord(terminal),
+        expectedRecord,
+        terminal,
       )) {
         return terminalResult(terminal);
       }
 
-      const current = await readOperation(
-        source.operationKey,
-        source.descriptor,
-        definition,
-        input.store,
-      );
+      const current = await readStoredOperation(source.operationKey, source.descriptor);
 
       if (current.kind !== 'record') {
         throw new DevvitPostOperationStateError(
@@ -655,6 +804,60 @@ export function createDevvitPostOperationCoordinator<
 
     return busyResult(source.descriptor, 'store-contention');
   }
+
+  function createStoredRecord(
+    operationKey: string,
+    raw: string,
+    record: StoredRecord<TPayload, TLaunchParams>,
+  ): Promise<boolean> {
+    if (indexedStore === undefined) {
+      return input.store.create(operationKey, raw);
+    }
+
+    return indexedStore.createIndexed(
+      operationKey,
+      raw,
+      createOperationIndexEntry(undefined, record),
+    );
+  }
+
+  async function readStoredOperation(
+    operationKey: string,
+    descriptor: DevvitCanonicalPostData<TPayload, TLaunchParams>,
+  ): Promise<ReadOperation<TPayload, TLaunchParams>> {
+    const current = await readOperation(operationKey, descriptor, definition, input.store);
+
+    if (indexedStore !== undefined && current.kind !== 'missing') {
+      try {
+        await indexedStore.ensureIndexed(createOperationIndexEntry(undefined, current.record));
+      } catch {
+        // A best-effort migration write must not hide an already-readable exact
+        // result. Indexed creation and every state CAS still require registry
+        // membership before mutating durable state.
+      }
+    }
+
+    return current;
+  }
+
+  function compareAndSetStoredRecord(
+    operationKey: string,
+    expectedRaw: string,
+    nextRaw: string,
+    previous: StoredRecord<TPayload, TLaunchParams>,
+    next: StoredRecord<TPayload, TLaunchParams>,
+  ): Promise<boolean> {
+    if (indexedStore === undefined) {
+      return input.store.compareAndSet(operationKey, expectedRaw, nextRaw);
+    }
+
+    return indexedStore.compareAndSetIndexed(
+      operationKey,
+      expectedRaw,
+      nextRaw,
+      createOperationIndexEntry(previous, next),
+    );
+  }
 }
 
 export function createDevvitPostOperationKey(input: {
@@ -675,6 +878,23 @@ export function createDevvitPostOperationKey(input: {
     encodeKeyComponent(input.operationType),
     encodeKeyComponent(operationId),
     'state',
+  ].join(':');
+}
+
+function createDevvitPostOperationIndexKey(input: {
+  readonly scope: DevvitPostOperationScope;
+  readonly operationType: string;
+}): string {
+  const scope = normalizeScope(input.scope);
+
+  assertOperationType(input.operationType);
+
+  return [
+    'mpgd:devvit:post-operation-index:v1',
+    encodeKeyComponent(scope.appScope),
+    encodeKeyComponent(scope.subredditId),
+    encodeKeyComponent(input.operationType),
+    'operations',
   ].join(':');
 }
 
@@ -733,9 +953,180 @@ type StoredRecord<TPayload extends DevvitJsonObject, TLaunchParams extends Devvi
   | PublishedRecord<TPayload, TLaunchParams>
   | TerminalRecord<TPayload, TLaunchParams>;
 
+function readIndexedStore(
+  store: DevvitDurableOperationStore,
+): DevvitIndexedDurableOperationStore | undefined {
+  const candidate = store as Partial<DevvitIndexedDurableOperationStore>;
+  const capabilities = [
+    candidate.createIndexed,
+    candidate.compareAndSetIndexed,
+    candidate.listIndex,
+    candidate.ensureIndexed,
+  ];
+  const supportedCapabilities = capabilities.filter((capability) =>
+    typeof capability === 'function').length;
+
+  if (supportedCapabilities === 0) {
+    return undefined;
+  }
+  if (supportedCapabilities !== capabilities.length) {
+    throw new DevvitPostOperationValidationError(
+      'Indexed durable operation stores must implement createIndexed, '
+        + 'compareAndSetIndexed, ensureIndexed, and listIndex together.',
+    );
+  }
+
+  return candidate as DevvitIndexedDurableOperationStore;
+}
+
+function createOperationIndexEntry<
+  TPayload extends DevvitJsonObject,
+  TLaunchParams extends DevvitJsonObject,
+>(
+  previous: StoredRecord<TPayload, TLaunchParams> | undefined,
+  next: StoredRecord<TPayload, TLaunchParams>,
+): DevvitDurableOperationIndexEntry {
+  const indexKey = createDevvitPostOperationIndexKey({
+    scope: next.descriptor.mpgd,
+    operationType: next.descriptor.mpgd.operationType,
+  });
+
+  if (previous !== undefined) {
+    const previousIndexKey = createDevvitPostOperationIndexKey({
+      scope: previous.descriptor.mpgd,
+      operationType: previous.descriptor.mpgd.operationType,
+    });
+
+    if (previousIndexKey !== indexKey) {
+      throw new DevvitPostOperationStateError(
+        'A durable post operation cannot move between operation registries.',
+      );
+    }
+  }
+
+  return {
+    indexKey,
+    member: operationIndexMember(next),
+  };
+}
+
+function operationIndexMember<
+  TPayload extends DevvitJsonObject,
+  TLaunchParams extends DevvitJsonObject,
+>(record: StoredRecord<TPayload, TLaunchParams>): string {
+  return record.operationKey;
+}
+
+function parsePendingIndexMember(
+  member: string,
+  scope: DevvitPostOperationScope,
+  operationType: string,
+): { readonly operationKey: string } {
+  if (typeof member !== 'string' || member.length > 8_192) {
+    throw new DevvitPostOperationStateError('Pending operation index member is invalid.');
+  }
+
+  const operationKey = member;
+  const operationKeyPrefix = [
+    'mpgd:devvit:post-operation:v1',
+    encodeKeyComponent(scope.appScope),
+    encodeKeyComponent(scope.subredditId),
+    encodeKeyComponent(operationType),
+    '',
+  ].join(':');
+
+  if (
+    !operationKey.startsWith(operationKeyPrefix)
+    || !operationKey.endsWith(':state')
+  ) {
+    throw new DevvitPostOperationStateError('Pending operation index member is invalid.');
+  }
+
+  return { operationKey };
+}
+
+function normalizePendingCursor(
+  cursor: string | undefined,
+  scope: DevvitPostOperationScope,
+  operationType: string,
+): string | undefined {
+  if (cursor === undefined) {
+    return undefined;
+  }
+
+  parsePendingIndexMember(cursor, scope, operationType);
+  return cursor;
+}
+
+function normalizePendingPageLimit(limit: number | undefined): number {
+  const normalized = limit ?? defaultPendingPageLimit;
+
+  if (
+    !Number.isSafeInteger(normalized)
+    || normalized < 1
+    || normalized > devvitPostOperationMaximumPendingPageLimit
+  ) {
+    throw new DevvitPostOperationValidationError(
+      'limit must be a safe integer from 1 to '
+        + `${String(devvitPostOperationMaximumPendingPageLimit)}.`,
+    );
+  }
+
+  return normalized;
+}
+
+function normalizeScope(scope: DevvitPostOperationScope): DevvitPostOperationScope {
+  return Object.freeze({
+    appScope: assertIdentifier(scope.appScope, 'appScope'),
+    subredditId: assertSubredditId(scope.subredditId),
+  });
+}
+
+function pendingOperationResult<
+  TPayload extends DevvitJsonObject,
+  TLaunchParams extends DevvitJsonObject,
+>(
+  record: StoredRecord<TPayload, TLaunchParams>,
+): DevvitPendingPostOperation<TPayload, TLaunchParams> {
+  switch (record.phase) {
+    case 'prepared':
+      return Object.freeze({
+        status: 'prepared',
+        operationId: record.descriptor.mpgd.operationId,
+        updatedAt: record.updatedAt,
+        postData: record.descriptor,
+      });
+    case 'attempted':
+      return Object.freeze({
+        status: 'reconciliation-required',
+        operationId: record.descriptor.mpgd.operationId,
+        reason: 'submission-attempted',
+        updatedAt: record.updatedAt,
+        postData: record.descriptor,
+      });
+    case 'terminal-unresolved':
+      return Object.freeze({
+        status: 'terminal-unresolved',
+        operationId: record.descriptor.mpgd.operationId,
+        reason: record.reason,
+        postIds: record.postIds,
+        updatedAt: record.updatedAt,
+        postData: record.descriptor,
+      });
+    case 'published':
+      throw new DevvitPostOperationStateError(
+        'Published post operation cannot be returned as pending work.',
+      );
+  }
+}
+
 type ReadOperation<TPayload extends DevvitJsonObject, TLaunchParams extends DevvitJsonObject> =
   | { readonly kind: 'missing' }
-  | { readonly kind: 'conflict' }
+  | {
+      readonly kind: 'conflict';
+      readonly raw: string;
+      readonly record: StoredRecord<TPayload, TLaunchParams>;
+    }
   | {
       readonly kind: 'record';
       readonly raw: string;
@@ -800,7 +1191,7 @@ async function readOperation<
   const record = parseStoredRecord(raw, operationKey, definition);
 
   if (canonicalJson(record.descriptor) !== canonicalJson(descriptor)) {
-    return { kind: 'conflict' };
+    return { kind: 'conflict', raw, record };
   }
 
   return { kind: 'record', raw, record };

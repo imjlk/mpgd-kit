@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   createDevvitRedisPostOperationStore,
   type DevvitRedisLike,
+  type DevvitRedisRangeOptions,
   type DevvitRedisSetOptions,
+  type DevvitRedisSortedSetMember,
   type DevvitRedisTransactionLike,
 } from './redis-post-operation-store';
 
@@ -59,6 +61,101 @@ describe('createDevvitRedisPostOperationStore', () => {
     await expect(store.compareAndSet('operation', 'pending', 'published')).resolves.toBe(true);
     await expect(store.read('operation')).resolves.toBe('published');
     expect(redis.unwatchCalls).toBe(1);
+  });
+
+  it('registers state before creation and lists stable members by lex cursor', async () => {
+    const redis = new FakeDevvitRedis();
+    const store = createDevvitRedisPostOperationStore(redis);
+    const first = 'operation-a';
+    const second = 'operation-b';
+
+    await expect(store.createIndexed('operation-a', 'prepared-a', {
+      indexKey: 'operations',
+      member: first,
+    })).resolves.toBe(true);
+    await expect(store.createIndexed('operation-b', 'attempted-b', {
+      indexKey: 'operations',
+      member: second,
+    })).resolves.toBe(true);
+    await expect(store.listIndex('operations', undefined, 1)).resolves.toEqual([first]);
+    await expect(store.listIndex('operations', first, 2)).resolves.toEqual([second]);
+  });
+
+  it('retains stable registry membership across every state CAS', async () => {
+    const redis = new FakeDevvitRedis();
+    const store = createDevvitRedisPostOperationStore(redis);
+    const member = 'operation';
+
+    await store.createIndexed('operation', 'prepared', {
+      indexKey: 'operations',
+      member,
+    });
+    await expect(store.compareAndSetIndexed('operation', 'prepared', 'attempted', {
+      indexKey: 'operations',
+      member,
+    })).resolves.toBe(true);
+    await expect(store.listIndex('operations', undefined, 10)).resolves.toEqual([member]);
+    await expect(store.compareAndSetIndexed('operation', 'attempted', 'published', {
+      indexKey: 'operations',
+      member,
+    })).resolves.toBe(true);
+    await expect(store.listIndex('operations', undefined, 10)).resolves.toEqual([member]);
+  });
+
+  it('backfills a pre-index record before its state CAS', async () => {
+    const redis = new FakeDevvitRedis();
+    const store = createDevvitRedisPostOperationStore(redis);
+
+    await store.create('operation', 'prepared');
+    await expect(store.compareAndSetIndexed('operation', 'prepared', 'attempted', {
+      indexKey: 'operations',
+      member: 'operation',
+    })).resolves.toBe(true);
+    await expect(store.listIndex('operations', undefined, 10)).resolves.toEqual(['operation']);
+  });
+
+  it('does not transition a pre-index record when registry backfill fails', async () => {
+    const redis = new FakeDevvitRedis();
+    const store = createDevvitRedisPostOperationStore(redis);
+
+    await store.create('operation', 'prepared');
+    redis.zAddError = new Error('registry unavailable');
+    await expect(store.compareAndSetIndexed('operation', 'prepared', 'attempted', {
+      indexKey: 'operations',
+      member: 'operation',
+    })).rejects.toThrow('registry unavailable');
+    await expect(store.read('operation')).resolves.toBe('prepared');
+  });
+
+  it('keeps stable index membership while a pending state CAS retries contention', async () => {
+    const redis = new FakeDevvitRedis();
+    const store = createDevvitRedisPostOperationStore(redis, { transactionAttempts: 2 });
+
+    await store.createIndexed('operation', 'prepared', {
+      indexKey: 'operations',
+      member: 'operation',
+    });
+    redis.execOutcomes.push('contention', 'success');
+    await expect(store.compareAndSetIndexed('operation', 'prepared', 'attempted', {
+      indexKey: 'operations',
+      member: 'operation',
+    })).resolves.toBe(true);
+    await expect(store.read('operation')).resolves.toBe('attempted');
+    await expect(store.listIndex('operations', undefined, 10)).resolves.toEqual(['operation']);
+  });
+
+  it('does not create pending state when index establishment fails', async () => {
+    const redis = new FakeDevvitRedis();
+    const indexError = new Error('index unavailable');
+    redis.zAddError = indexError;
+    const store = createDevvitRedisPostOperationStore(redis);
+
+    await expect(store.createIndexed('operation', 'prepared', {
+      indexKey: 'operations',
+      member: 'operation',
+    })).rejects.toBe(indexError);
+    await expect(store.read('operation')).resolves.toBeUndefined();
+    await expect(store.listIndex('operations', undefined, 10)).resolves.toEqual([]);
   });
 
   it('retries confirmed transaction contention within a bounded budget', async () => {
@@ -161,6 +258,7 @@ type ExecOutcome =
 
 class FakeDevvitRedis implements DevvitRedisLike {
   readonly values: Map<string, string>;
+  readonly sortedSets = new Map<string, Map<string, number>>();
   readonly setCalls: Array<{
     readonly key: string;
     readonly value: string;
@@ -170,6 +268,7 @@ class FakeDevvitRedis implements DevvitRedisLike {
   watchCalls = 0;
   unwatchCalls = 0;
   discardCalls = 0;
+  zAddError: Error | undefined;
 
   constructor(entries: readonly (readonly [string, string])[] = []) {
     this.values = new Map(entries);
@@ -194,6 +293,33 @@ class FakeDevvitRedis implements DevvitRedisLike {
     return 'OK';
   }
 
+  async zRange(
+    key: string,
+    start: string,
+    stop: string,
+    options: DevvitRedisRangeOptions,
+  ): Promise<DevvitRedisSortedSetMember[]> {
+    if (stop !== '+' || options.by !== 'lex') {
+      throw new Error('FakeDevvitRedis only supports forward lex ranges.');
+    }
+
+    const exclusiveStart = start === '-' ? undefined : start.slice(1);
+    return [...(this.sortedSets.get(key)?.entries() ?? [])]
+      .filter(([member]) => exclusiveStart === undefined || member > exclusiveStart)
+      .sort(([left], [right]) => left.localeCompare(right))
+      .slice(options.limit.offset, options.limit.offset + options.limit.count)
+      .map(([member, score]) => ({ member, score }));
+  }
+
+  async zAdd(key: string, ...members: readonly DevvitRedisSortedSetMember[]): Promise<number> {
+    if (this.zAddError !== undefined) {
+      throw this.zAddError;
+    }
+    const previousSize = this.sortedSets.get(key)?.size ?? 0;
+    this.applyZAdd(key, members);
+    return (this.sortedSets.get(key)?.size ?? 0) - previousSize;
+  }
+
   async watch(key: string): Promise<DevvitRedisTransactionLike> {
     this.watchCalls += 1;
     return new FakeDevvitRedisTransaction(this, key);
@@ -204,10 +330,19 @@ class FakeDevvitRedis implements DevvitRedisLike {
 
     return typeof configured === 'function' ? configured() : configured;
   }
+
+  applyZAdd(key: string, members: readonly DevvitRedisSortedSetMember[]): void {
+    const set = this.sortedSets.get(key) ?? new Map<string, number>();
+    for (const member of members) {
+      set.set(member.member, member.score);
+    }
+    this.sortedSets.set(key, set);
+  }
+
 }
 
 class FakeDevvitRedisTransaction implements DevvitRedisTransactionLike {
-  private mutation: (() => void) | undefined;
+  private readonly mutations: Array<() => void> = [];
   private multiStarted = false;
 
   constructor(
@@ -221,24 +356,24 @@ class FakeDevvitRedisTransaction implements DevvitRedisTransactionLike {
 
   async discard(): Promise<void> {
     this.redis.discardCalls += 1;
-    this.mutation = undefined;
+    this.mutations.length = 0;
     this.multiStarted = false;
   }
 
   async set(key: string, value: string): Promise<void> {
     this.assertMultiStarted();
-    this.mutation = () => {
+    this.mutations.push(() => {
       this.redis.values.set(key, value);
-    };
+    });
   }
 
   async del(...keys: readonly string[]): Promise<void> {
     this.assertMultiStarted();
-    this.mutation = () => {
+    this.mutations.push(() => {
       for (const key of keys) {
         this.redis.values.delete(key);
       }
-    };
+    });
   }
 
   async exec(): Promise<readonly unknown[] | null> {
@@ -255,7 +390,9 @@ class FakeDevvitRedisTransaction implements DevvitRedisTransactionLike {
       return null;
     }
 
-    this.mutation?.();
+    for (const mutation of this.mutations) {
+      mutation();
+    }
     return ['OK'];
   }
 

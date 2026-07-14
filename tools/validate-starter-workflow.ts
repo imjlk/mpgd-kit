@@ -707,6 +707,7 @@ function validatePhaserTemplateDevvitPostOperations(): void {
       "from '@devvit/web/server'",
       "from '@mpgd/adapter-devvit/server'",
       'createDevvitRedisPostOperationStore',
+      'DevvitIndexedDurableOperationStore',
     ]) {
       assertIncludesText(
         templateStore,
@@ -727,6 +728,7 @@ function validatePhaserTemplateDevvitPostOperations(): void {
       '@mpgd/adapter-devvit/server',
       '`reconciliation-required`',
       '`reconcile`',
+      '`listPending()`',
     ]) {
       assertIncludesText(
         readme,
