@@ -1,5 +1,18 @@
 # @mpgd/create-game
 
+## 0.9.0 — 2026-07-14
+
+### Removed
+
+- [82b9458](https://github.com/imjlk/mpgd-kit/commit/82b94580f3c6021e05a10a06b655ffd968ce43b7) Upgrade generated Devvit targets to the stable 0.13.8 toolchain and remove the
+  deprecated JSON fetch bridge API, JSON route, pre-namespace storage fallback,
+  and split build strategy so Devvit targets use oRPC and the official Vite plugin
+  exclusively. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: cli@0.9.0
+
 ## 0.8.0 — 2026-07-14
 
 ### Added
