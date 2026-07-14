@@ -159,7 +159,7 @@ if (manifest !== null) {
 validatePhaserTemplateAITPolyfill();
 validatePhaserTemplateAITConsoleCli();
 validatePhaserTemplateDevvitPostOperations();
-validatePhaserTemplateDevvitSurfaces();
+validatePhaserTemplateDevvitViewModes();
 validatePhaserTemplateDevvitVitePlugin();
 validatePhaserTemplateBuildGateways();
 validatePhaserTemplateMicrosoftStorePwa();
@@ -739,7 +739,7 @@ function validatePhaserTemplateDevvitPostOperations(): void {
   }
 }
 
-function validatePhaserTemplateDevvitSurfaces(): void {
+function validatePhaserTemplateDevvitViewModes(): void {
   const roots = ['packages/cli/templates/phaser-game', 'examples/phaser-starter'] as const;
 
   for (const root of roots) {
@@ -748,7 +748,7 @@ function validatePhaserTemplateDevvitSurfaces(): void {
     const entryPath = `${root}/src/entry.ts`;
     const gameEntryPath = `${root}/src/gameEntry.ts`;
     const devvitEntryPath = `${root}/src/platform/devvitEntrypoint.ts`;
-    const devvitStylePath = `${root}/src/platform/devvitInlinePreview.css`;
+    const devvitStylePath = `${root}/src/platform/devvitInlineMode.css`;
     const vitePath = `${root}/vite.config.ts`;
 
     for (const path of [
@@ -761,7 +761,7 @@ function validatePhaserTemplateDevvitSurfaces(): void {
       vitePath,
     ]) {
       if (!existsSync(path)) {
-        failures.push(`${path}: required for split Devvit inline and expanded surfaces.`);
+        failures.push(`${path}: required for Devvit inline and expanded view modes.`);
       }
     }
 
@@ -802,11 +802,14 @@ function validatePhaserTemplateDevvitSurfaces(): void {
       const source = readText(devvitEntryPath);
       for (const requiredText of [
         "from '@mpgd/adapter-devvit/web'",
-        'mountInlinePreview',
+        'startDevvitWebView',
+        'mountInlineMode',
+        'context.startGameplay()',
+        'mountGameplayDocument()',
         "await import('../main')",
-        "await requestDevvitExpandedMode(event, 'game')",
+        "requestDevvitExpandedMode(event, 'game')",
       ]) {
-        assertIncludesText(source, requiredText, `${devvitEntryPath}: Devvit surface split.`);
+        assertIncludesText(source, requiredText, `${devvitEntryPath}: Devvit view modes.`);
       }
     }
 
@@ -814,11 +817,11 @@ function validatePhaserTemplateDevvitSurfaces(): void {
       const source = readText(devvitStylePath);
 
       for (const requiredText of [
-        'body.devvit-preview-host',
-        '.devvit-preview',
-        '.devvit-preview__button',
+        'body.devvit-inline-mode-host',
+        '.devvit-launch-screen',
+        '.devvit-launch-screen__button',
       ]) {
-        assertIncludesText(source, requiredText, `${devvitStylePath}: inline preview styles.`);
+        assertIncludesText(source, requiredText, `${devvitStylePath}: inline mode styles.`);
       }
     }
 

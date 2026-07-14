@@ -37,6 +37,10 @@
       "types": "./dist/surface.d.ts",
       "default": "./dist/surface.js"
     },
+    "./view-mode": {
+      "types": "./dist/view-mode.d.ts",
+      "default": "./dist/view-mode.js"
+    },
     "./web": {
       "types": "./dist/web.d.ts",
       "default": "./dist/web.js"

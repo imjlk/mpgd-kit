@@ -46,7 +46,7 @@ Do not name blocks after existing games or brands.
 - i18n locale resolution
 - optional game-services backend client
 - asset manifest keys
-- lightweight Devvit inline preview with a physically separate expanded game entry
+- lightweight Devvit inline mode launch screen with opt-in post gameplay and a separate expanded mode entry
 
 ## Acceptance
 
@@ -62,6 +62,7 @@ Manual playtest:
 - Verify the target, player, effective config summary, and backend mode render.
 - Verify bootstrap resolves `identitySession` and `launchIntent` before creating Phaser scenes.
 - Verify the viewport orientation policy renders and does not assume hard locking in WebViews.
-- Verify the Reddit inline card does not load Phaser before the player opens the expanded game.
+- Verify the Reddit inline mode launch screen does not load Phaser before the player chooses Play here.
+- Verify gameplay can start inside the post and the separate game entry opens in expanded mode.
 - Start the play scene.
 - Verify the simulation loop advances without scene-local gameplay rules becoming the source of truth.

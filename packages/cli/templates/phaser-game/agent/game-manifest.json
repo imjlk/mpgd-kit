@@ -38,7 +38,7 @@
       "owner": "apps/target-devvit"
     },
     {
-      "id": "platform.devvit.surface-split",
+      "id": "platform.devvit.view-modes",
       "owner": "src/platform/devvitEntrypoint.ts"
     },
     {

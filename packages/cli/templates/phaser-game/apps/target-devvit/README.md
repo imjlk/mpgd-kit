@@ -41,10 +41,11 @@ replace the `devvit.json` scheduler endpoint and should not use process-local
 memory when delivery must cross instances. The generated target exposes only
 the oRPC bridge route; the former JSON compatibility route is not generated.
 
-The default post entry uses `index.html` for a lightweight inline preview. Its
-Play button requests the `game` entrypoint, which loads the separate
-`game.html` Phaser document. Keep inline UI free of game runtime imports so the
-card remains lightweight before expansion.
+The default post entry uses `index.html` for a lightweight inline mode launch
+screen. Play here loads Phaser inside the post after a user click. Open expanded
+mode requests the `game` entrypoint, which loads the separate `game.html`
+document. Keep launch UI free of eager game runtime imports, and keep inline
+gameplay tap/click only so the post does not trap feed scrolling.
 
 The generated bridge does not advertise or accept a generic platform
 leaderboard. Devvit ranking should be owned by a server completion handler that

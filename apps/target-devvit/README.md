@@ -9,9 +9,10 @@ client into `dist/client` and the CommonJS server bundle into
 the effective target config. In this repository the configured game app is
 `examples/phaser-starter`.
 
-The client build emits `index.html` for the lightweight inline post preview and
-`game.html` for the expanded Phaser surface. `devvit.json` maps the default and
-`game` entrypoints to those documents respectively.
+The client build emits `index.html` for a lightweight inline mode launch screen
+that can start gameplay inside the post after a user click, and `game.html` for
+the separate expanded mode game entry. `devvit.json` maps the default and `game`
+entrypoints to those documents respectively.
 
 The game client talks to the Devvit server through the shared
 `@mpgd/bridge/orpc` contract at `/api/mpgd/rpc`. The server uses the direct oRPC
