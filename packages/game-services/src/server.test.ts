@@ -282,9 +282,10 @@ const timeoutBackend = createGameServicesBackend({
   evidenceVerificationTimeoutMs: 5,
   evidenceVerifier: {
     verifyPurchase({ signal }) {
-      return new Promise<never>(() => {
+      return new Promise<never>((_resolve, reject) => {
         signal.addEventListener('abort', () => {
           timeoutSignalAborted = signal.aborted;
+          reject(new Error('provider request aborted'));
         }, { once: true });
       });
     },
@@ -375,11 +376,68 @@ const rewardRetry = await retryBackend.adRewards.claimAdReward({
   idempotencyKey: 'reward-retry',
   completedAt: '2026-07-04T00:00:01.000Z',
 });
+const purchaseProductConflict = await retryBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-retry',
+  productId: 'COINS_DIFFERENT',
+  platformTransactionId: 'txn-retry-conflicting-product',
+  idempotencyKey: 'purchase-retry',
+  purchasedAt: '2026-07-04T00:00:02.000Z',
+});
+const purchaseTargetConflict = await retryBackend.purchases.verifyPurchase({
+  target: 'ios',
+  playerId: 'player-retry',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-retry-conflicting-target',
+  idempotencyKey: 'purchase-retry',
+  purchasedAt: '2026-07-04T00:00:03.000Z',
+});
+const rewardPlacementConflict = await retryBackend.adRewards.claimAdReward({
+  target: 'android',
+  playerId: 'player-retry',
+  placementId: 'DIFFERENT_REWARD',
+  platformImpressionId: 'impression-retry-conflicting-placement',
+  idempotencyKey: 'reward-retry',
+  completedAt: '2026-07-04T00:00:04.000Z',
+});
+const rewardTargetConflict = await retryBackend.adRewards.claimAdReward({
+  target: 'ios',
+  playerId: 'player-retry',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'impression-retry-conflicting-target',
+  idempotencyKey: 'reward-retry',
+  completedAt: '2026-07-04T00:00:05.000Z',
+});
 
 assertEqual(purchaseRetry.verified, true, 'granted purchase retries should bypass provider drift');
 assertEqual(purchaseRetry.alreadyProcessed, true, 'purchase retries should return ledger state');
 assertEqual(rewardRetry.granted, true, 'granted reward retries should bypass provider drift');
 assertEqual(rewardRetry.alreadyProcessed, true, 'reward retries should return ledger state');
+assertEqual(
+  purchaseProductConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'purchase retries must preserve the original product dimension',
+);
+assertEqual(
+  purchaseTargetConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'purchase retries must preserve the original target dimension',
+);
+assertEqual(
+  rewardPlacementConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'reward retries must preserve the original placement dimension',
+);
+assertEqual(
+  rewardTargetConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'reward retries must preserve the original target dimension',
+);
+assertEqual(
+  (await retryStore.listEntitlementTransactions()).length,
+  2,
+  'conflicting idempotency retries must not create ledger entries',
+);
 
 const replayStore = createInMemoryGameServicesStore();
 const replayBackend = createGameServicesBackend({

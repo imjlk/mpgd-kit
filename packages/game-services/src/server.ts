@@ -500,6 +500,17 @@ async function verifyPurchaseWithStore(
   });
 
   if (existing !== undefined) {
+    if (
+      existing.grantId !== request.productId
+      || existing.payload.target !== request.target
+    ) {
+      return assertVerifyPurchaseResponse({
+        verified: false,
+        alreadyProcessed: false,
+        reason: 'IDEMPOTENCY_KEY_CONFLICT',
+      });
+    }
+
     return assertVerifyPurchaseResponse({
       verified: true,
       ledgerEntryId: existing.ledgerEntryId,
@@ -600,6 +611,17 @@ async function claimAdRewardWithStore(
   });
 
   if (existing !== undefined) {
+    if (
+      existing.grantId !== request.placementId
+      || existing.payload.target !== request.target
+    ) {
+      return assertClaimAdRewardResponse({
+        granted: false,
+        alreadyProcessed: false,
+        reason: 'IDEMPOTENCY_KEY_CONFLICT',
+      });
+    }
+
     return assertClaimAdRewardResponse({
       granted: true,
       ledgerEntryId: existing.ledgerEntryId,
@@ -687,18 +709,29 @@ async function verifyEvidence(
   timeoutMs: number,
 ): Promise<EvidenceVerificationDecision> {
   const controller = new AbortController();
+  const timeoutDecision = {
+    status: 'rejected',
+    reason: 'EVIDENCE_VERIFIER_TIMEOUT',
+  } as const satisfies EvidenceVerificationDecision;
+  let timedOut = false;
   let timeout: ReturnType<typeof setTimeout> | undefined;
 
   try {
     return await Promise.race([
-      verify(controller.signal).then(assertEvidenceVerificationDecision),
+      verify(controller.signal)
+        .then(assertEvidenceVerificationDecision)
+        .catch((error: unknown) => {
+          if (timedOut) {
+            return timeoutDecision;
+          }
+
+          throw error;
+        }),
       new Promise<EvidenceVerificationDecision>((resolve) => {
         timeout = setTimeout(() => {
+          timedOut = true;
+          resolve(timeoutDecision);
           controller.abort();
-          resolve({
-            status: 'rejected',
-            reason: 'EVIDENCE_VERIFIER_TIMEOUT',
-          });
         }, timeoutMs);
       }),
     ]);

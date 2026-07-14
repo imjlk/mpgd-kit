@@ -18,7 +18,7 @@ const miniflare = new Miniflare({
 
 try {
   const db = await miniflare.getD1Database('DB') as unknown as D1Database;
-  for (const name of ['0001_game_services.sql', '0003_entitlement_evidence.sql']) {
+  for (const name of ['0001_game_services.sql', '0004_entitlement_evidence.sql']) {
     const migration = await readFile(new URL(`../migrations/${name}`, import.meta.url), 'utf8');
     await db.exec(toD1ExecScript(migration));
   }

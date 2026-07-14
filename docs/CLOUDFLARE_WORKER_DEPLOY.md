@@ -165,7 +165,8 @@ mounts a public verified-attempt write route.
   API credentials.
 - `MPGD_STORE = "memory"` is sample-only. Use D1 for persistence.
 - Apply `0001_game_services.sql`, `0002_verified_leaderboards.sql`, and
-  `0003_verified_leaderboard_metrics.sql` in order before switching an existing
+  `0003_verified_leaderboard_metrics.sql`, then
+  `0004_entitlement_evidence.sql` in order before switching an existing
   deployment to D1.
 - The Worker verifies sample product/ad evidence today. Real Google Play,
   App Store, AdMob SSV, and Apps in Toss verification adapters are described in

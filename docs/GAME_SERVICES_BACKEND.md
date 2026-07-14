@@ -108,8 +108,11 @@ dimensions:
   `idempotencyKey` for the same player without colliding because their `source`
   values differ.
 - Duplicate entitlement grants return the original `ledgerEntryId` with
-  `alreadyProcessed: true`. Platform transaction ids, impression ids, and other
-  payload fields are evidence payload, not entitlement idempotency dimensions.
+  `alreadyProcessed: true` only when the original logical product or placement
+  and target also match. Reusing a key for another grant target fails with
+  `IDEMPOTENCY_KEY_CONFLICT`. Platform transaction ids, impression ids, and
+  other payload fields are evidence payload, not entitlement idempotency
+  dimensions.
 - Leaderboard records dedupe by `target`, `leaderboardId`, `playerId`, and
   `runId`. Retries with a different score, submission timestamp, or
   `platformSubmissionId` reuse the original `ledgerEntryId`.
@@ -167,7 +170,9 @@ in filename order, uncomment the D1 binding, and set `MPGD_STORE = "d1"`.
 The `0002_verified_leaderboards.sql` migration adds durable definition,
 processed-attempt decision, and retained-entry tables. Apply
 `0003_verified_leaderboard_metrics.sql` afterward to persist optional immutable
-numeric attempt metrics on processed decisions and ranked entries.
+numeric attempt metrics on processed decisions and ranked entries. Apply
+`0004_entitlement_evidence.sql` next to persist provider verification identities
+and enforce source-scoped evidence replay protection.
 
 Configure the private `VERIFIED_LEADERBOARD_AUTH` service binding to mount the
 public read-only verified leaderboard snapshot route. Its RPC method validates
