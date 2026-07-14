@@ -45,11 +45,23 @@ offset and may carry at most millisecond precision. Invalid calendar dates and
 sub-millisecond values fail closed so every supported runtime compares the same
 instant.
 
+Attempts may also carry generic `metrics` for display and analytics, such as
+`elapsedMs`, `mistakes`, or `hints`. A metric map may contain at most 16 keys;
+each key must start with an ASCII letter, use only ASCII letters, digits, dots,
+underscores, or hyphens, and contain at most 64 characters. Values must be
+non-negative safe integers. Providers reject invalid maps and retain a
+normalized immutable copy. Metrics never participate in ranking or cursor
+ordering: `score`, completion time, and the existing attempt-ID tie breaker
+remain authoritative, so games do not need to pack display data into `score` or
+decode it from ranked entries.
+
 An attempt ID is idempotent within a leaderboard. Reusing it with different
-participant, score, time, or verification evidence fails closed. The optional
-participant label is presentation metadata and may be changed or omitted by a
-retry without changing attempt identity. Retries return the original retention
-decision even if another attempt later replaces the retained entry. A snapshot
+participant, score, metrics, time, or verification evidence fails closed. The
+optional participant label is presentation metadata and may be changed or
+omitted by a retry without changing attempt identity. Retries return the
+original retention decision even if another attempt later replaces the retained
+entry. Ranked entries and snapshots preserve the retained attempt's metrics
+exactly; attempts recorded before metrics support simply omit them. A snapshot
 returns top entries, total participant count, and an optional participant entry
 even when that participant falls outside the requested top-entry limit.
 
@@ -77,13 +89,15 @@ interface.
 `recordVerifiedAttempt()` and `getSnapshot()` use the configured `DB` binding;
 the memory provider remains the local default.
 
-Apply `apps/game-services-worker/migrations/0002_verified_leaderboards.sql`
-after the base game-services migration. Each write uses one D1 `batch()` so the
-definition check, attempt-id decision, retained-entry update, and original
-response snapshot commit atomically. Snapshot and read-after-write operations
-use a `first-primary` D1 session. Attempt IDs carry a derived UTF-16 code-unit
-ordinal key so SQLite ranking matches JavaScript ordering for both BMP and
-supplementary characters.
+Apply every migration through
+`apps/game-services-worker/migrations/0003_verified_leaderboard_metrics.sql`
+after the base game-services migration. `0003` adds nullable canonical JSON
+metric columns, so existing attempts remain valid with omitted metrics. Each
+write uses one D1 `batch()` so the definition check, attempt-id decision,
+retained-entry update, and original response snapshot commit atomically.
+Snapshot and read-after-write operations use a `first-primary` D1 session.
+Attempt IDs carry a derived UTF-16 code-unit ordinal key so SQLite ranking
+matches JavaScript ordering for both BMP and supplementary characters.
 
 The Miniflare smoke runs the public provider conformance suite against the real
 D1 API, including concurrent idempotency, rollback, mutation isolation, and
@@ -141,8 +155,9 @@ The fixture factory is called once per scenario and must return isolated state,
 or namespace each scenario in a shared test database. The suite covers first
 and best retention, original retry-decision preservation, deterministic ties,
 identity and definition conflicts, concurrent duplicate writes, caller-mutation
-isolation, cursor traversal across UTF-16 ties, snapshot behavior, and runtime
-validation. Optional `dispose()` cleanup runs even when a scenario fails.
+isolation, immutable metric persistence and validation, cursor traversal across
+UTF-16 ties, snapshot behavior, and runtime validation. Optional `dispose()`
+cleanup runs even when a scenario fails.
 
 ## Devvit Adapter Shape
 
@@ -184,7 +199,9 @@ decision even after a later attempt replaces the retained entry.
 Snapshot and write-side retained-entry loads retry a bounded number of times if
 a replacement transaction commits between the sorted-set and hash reads.
 Retained values use standard `hGet` reads instead of allowlisted Redis commands
-so the provider works with the default Devvit Redis command set.
+so the provider works with the default Devvit Redis command set. Canonically
+ordered metric maps travel inside the existing versioned JSON records, while
+older records without metrics remain readable.
 
 Redis sorted-set order is not used as the final tie breaker because Redis and
 JavaScript order non-ASCII strings differently. The adapter loads retained

@@ -1,6 +1,7 @@
 import {
   assertGetVerifiedLeaderboardSnapshotRequest,
   assertVerifiedLeaderboardSnapshot,
+  normalizeVerifiedLeaderboardMetrics,
   VerifiedLeaderboardCursorError,
   type GetVerifiedLeaderboardSnapshotRequest,
   type VerifiedLeaderboardReader,
@@ -178,8 +179,39 @@ export function createVerifiedLeaderboardSnapshotFetchClient(
       }
 
       assertVerifiedLeaderboardSnapshot(body);
-      return body;
+      return normalizeSnapshotMetrics(body);
     },
+  };
+}
+
+function normalizeSnapshotMetrics(
+  input: VerifiedLeaderboardSnapshot,
+): VerifiedLeaderboardSnapshot {
+  const normalizeEntry = (
+    entry: VerifiedLeaderboardSnapshot['entries'][number],
+  ): VerifiedLeaderboardSnapshot['entries'][number] => ({
+    rank: entry.rank,
+    participantId: entry.participantId,
+    ...(entry.participantLabel === undefined
+      ? {}
+      : { participantLabel: entry.participantLabel }),
+    attemptId: entry.attemptId,
+    score: entry.score,
+    ...(entry.metrics === undefined
+      ? {}
+      : { metrics: normalizeVerifiedLeaderboardMetrics(entry.metrics) }),
+    completedAt: entry.completedAt,
+  });
+
+  return {
+    definition: input.definition,
+    entries: input.entries.map(normalizeEntry),
+    ...(input.participantEntry === undefined
+      ? {}
+      : { participantEntry: normalizeEntry(input.participantEntry) }),
+    totalParticipants: input.totalParticipants,
+    generatedAt: input.generatedAt,
+    ...(input.nextCursor === undefined ? {} : { nextCursor: input.nextCursor }),
   };
 }
 

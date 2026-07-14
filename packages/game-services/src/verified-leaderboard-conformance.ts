@@ -133,6 +133,7 @@ async function runFirstSelectionAndSnapshotScenario(
     participantLabel: 'First Player',
     attemptId: 'attempt:later',
     score: 20,
+    metrics: { elapsedMs: 20_000, hints: 1, mistakes: 2 },
     completedAt: '2030-01-02T02:02:00.000Z',
   });
   const laterRecord = await context.service.recordVerifiedAttempt(laterRequest);
@@ -143,6 +144,7 @@ async function runFirstSelectionAndSnapshotScenario(
       participantLabel: 'First Player',
       attemptId: 'attempt:earlier',
       score: 30,
+      metrics: { elapsedMs: 30_000, hints: 0, mistakes: 1 },
       completedAt: '2030-01-02T02:01:00.000Z',
     }),
   );
@@ -170,6 +172,7 @@ async function runFirstSelectionAndSnapshotScenario(
       participantLabel: 'First Player',
       attemptId: 'attempt:latest',
       score: 5,
+      metrics: { elapsedMs: 5_000, hints: 2, mistakes: 0 },
       completedAt: '2030-01-02T02:04:00.000Z',
     }),
   );
@@ -182,6 +185,11 @@ async function runFirstSelectionAndSnapshotScenario(
     latestRecord.entry.attemptId,
     'attempt:earlier',
     'rejected later attempts must report the retained earliest attempt',
+  );
+  assertEqual(
+    latestRecord.entry.metrics?.elapsedMs,
+    30_000,
+    'rejected attempts must report the retained entry metrics',
   );
 
   const snapshot = await context.service.getSnapshot({
@@ -201,6 +209,11 @@ async function runFirstSelectionAndSnapshotScenario(
     snapshot.participantEntry?.attemptId,
     'attempt:earlier',
     'participant entries must reflect retained attempts outside the requested page',
+  );
+  assertEqual(
+    snapshot.participantEntry?.metrics?.mistakes,
+    1,
+    'participant entries must preserve generic attempt metrics',
   );
   assertEqual(snapshot.participantEntry?.rank, 2, 'participant entries must carry global rank');
   assertEqual(snapshot.totalParticipants, 2, 'snapshots must count retained participants');
@@ -515,6 +528,7 @@ async function runIdentityAndDefinitionConflictsScenario(
     participantLabel: 'Original Label',
     attemptId: 'attempt:identity',
     score: 42,
+    metrics: { elapsedMs: 42_000, hints: 1, mistakes: 2 },
     completedAt: '2030-01-02T02:30:00.000Z',
   });
   await context.service.recordVerifiedAttempt(request);
@@ -524,6 +538,7 @@ async function runIdentityAndDefinitionConflictsScenario(
     attempt: {
       ...request.attempt,
       participantLabel: 'Changed Label',
+      metrics: { mistakes: 2, elapsedMs: 42_000, hints: 1 },
       completedAt: '2030-01-02T11:30:00.000+09:00',
       verification: {
         ...request.attempt.verification,
@@ -542,6 +557,11 @@ async function runIdentityAndDefinitionConflictsScenario(
     request.attempt.completedAt,
     'equivalent retries must preserve the original timestamp representation',
   );
+  assertEqual(
+    equivalentRetry.entry.metrics?.elapsedMs,
+    42_000,
+    'equivalent retries must preserve the original metrics',
+  );
 
   await assertRejects(
     () => context.service.recordVerifiedAttempt({
@@ -549,6 +569,16 @@ async function runIdentityAndDefinitionConflictsScenario(
       attempt: { ...request.attempt, score: 43 },
     }),
     'attempt IDs reused with a different score must fail closed',
+  );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt({
+      ...request,
+      attempt: {
+        ...request.attempt,
+        metrics: { elapsedMs: 42_000, hints: 0, mistakes: 2 },
+      },
+    }),
+    'attempt IDs reused with different metrics must fail closed',
   );
   await assertRejects(
     () => context.service.recordVerifiedAttempt({
@@ -698,17 +728,27 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
     participantLabel: 'Stable Label',
     attemptId: 'attempt:mutation',
     score: 50,
+    metrics: { elapsedMs: 50_000, hints: 1, mistakes: 2 },
     completedAt: '2030-01-02T02:50:00.000Z',
   });
   const response = await context.service.recordVerifiedAttempt(request);
   request.definition.scoreOrder = 'descending';
   request.attempt.score = -1;
+  if (request.attempt.metrics !== undefined) {
+    request.attempt.metrics.elapsedMs = 1;
+  }
   request.attempt.verification.evidenceId = 'evidence:mutated';
 
   try {
     Object.assign(response.entry, { participantLabel: 'Mutated Label', score: -2 });
   } catch {
     // Frozen provider responses are already isolated from caller mutation.
+  }
+
+  try {
+    Object.assign(response.entry.metrics ?? {}, { elapsedMs: 2 });
+  } catch {
+    // Frozen provider metric copies are already isolated from caller mutation.
   }
 
   const snapshot = await context.service.getSnapshot({
@@ -722,6 +762,7 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
   assert(participantEntry !== undefined, 'participant reads must return the retained entry');
   assertEqual(snapshot.definition.scoreOrder, 'ascending', 'stored definitions must be cloned');
   assertEqual(snapshotEntry.score, 50, 'stored attempts must resist caller mutation');
+  assertEqual(snapshotEntry.metrics?.elapsedMs, 50_000, 'stored metrics must be cloned');
   assertEqual(
     snapshotEntry.participantLabel,
     'Stable Label',
@@ -741,9 +782,21 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
   }
 
   try {
+    Object.assign(snapshotEntry.metrics ?? {}, { elapsedMs: 3 });
+  } catch {
+    // Frozen provider snapshot metrics are already isolated from mutation.
+  }
+
+  try {
     Object.assign(participantEntry, { participantLabel: 'Participant Mutation', score: -4 });
   } catch {
     // Frozen provider participant entries are already isolated from mutation.
+  }
+
+  try {
+    Object.assign(participantEntry.metrics ?? {}, { mistakes: 4 });
+  } catch {
+    // Frozen provider participant metrics are already isolated from mutation.
   }
 
   try {
@@ -772,6 +825,11 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
     'snapshot label mutation must not rewrite presentation metadata',
   );
   assertEqual(
+    rereadSnapshot?.entries[0]?.metrics?.elapsedMs,
+    50_000,
+    'snapshot metric mutation must not rewrite retained metrics',
+  );
+  assertEqual(
     rereadSnapshot?.entries.length,
     1,
     'snapshot array mutation must not rewrite retained entries',
@@ -785,6 +843,11 @@ async function runMutationIsolationScenario(context: ScenarioContext): Promise<v
     rereadSnapshot?.participantEntry?.participantLabel,
     'Stable Label',
     'participant entry mutation must not rewrite presentation metadata',
+  );
+  assertEqual(
+    rereadSnapshot?.participantEntry?.metrics?.mistakes,
+    2,
+    'participant metric mutation must not rewrite retained metrics',
   );
 }
 
@@ -906,6 +969,60 @@ async function runRuntimeValidationScenario(context: ScenarioContext): Promise<v
     ),
     'infinite scores must fail closed',
   );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: 'validation:metric-key',
+        participantId: 'participant:metric-key',
+        attemptId: 'attempt:metric-key',
+        score: 1,
+        metrics: { '1elapsedMs': 1 },
+        completedAt: validVerificationTimestamp,
+      }),
+    ),
+    'invalid metric keys must fail closed',
+  );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: 'validation:metric-value',
+        participantId: 'participant:metric-value',
+        attemptId: 'attempt:metric-value',
+        score: 1,
+        metrics: { mistakes: -1 },
+        completedAt: validVerificationTimestamp,
+      }),
+    ),
+    'negative metric values must fail closed',
+  );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: 'validation:metric-safe-integer',
+        participantId: 'participant:metric-safe-integer',
+        attemptId: 'attempt:metric-safe-integer',
+        score: 1,
+        metrics: { elapsedMs: Number.MAX_SAFE_INTEGER + 1 },
+        completedAt: validVerificationTimestamp,
+      }),
+    ),
+    'unsafe integer metric values must fail closed',
+  );
+  await assertRejects(
+    () => context.service.recordVerifiedAttempt(
+      createAttempt({
+        leaderboardId: 'validation:metric-count',
+        participantId: 'participant:metric-count',
+        attemptId: 'attempt:metric-count',
+        score: 1,
+        metrics: Object.fromEntries(
+          Array.from({ length: 17 }, (_, index) => [`metric${String(index)}`, index]),
+        ),
+        completedAt: validVerificationTimestamp,
+      }),
+    ),
+    'oversized metric maps must fail closed',
+  );
 
   const failedWriteChecks = await Promise.all([
     'validation:calendar',
@@ -914,6 +1031,10 @@ async function runRuntimeValidationScenario(context: ScenarioContext): Promise<v
     'validation:evidence-timezone',
     'validation:score-nan',
     'validation:score-infinity',
+    'validation:metric-key',
+    'validation:metric-value',
+    'validation:metric-safe-integer',
+    'validation:metric-count',
   ].map(async (leaderboardId) => ({
     leaderboardId,
     snapshot: await context.service.getSnapshot({ leaderboardId }),
@@ -962,6 +1083,7 @@ function createAttempt(input: {
   readonly participantLabel?: string;
   readonly attemptId: string;
   readonly score: number;
+  readonly metrics?: Readonly<Record<string, number>>;
   readonly completedAt: string;
   readonly verifiedAt?: string;
 }): RecordVerifiedLeaderboardAttemptRequest {
@@ -976,6 +1098,7 @@ function createMutableAttempt(input: {
   readonly participantLabel?: string;
   readonly attemptId: string;
   readonly score: number;
+  readonly metrics?: Readonly<Record<string, number>>;
   readonly completedAt: string;
   readonly verifiedAt?: string;
 }): {
@@ -989,6 +1112,7 @@ function createMutableAttempt(input: {
     participantLabel?: string;
     attemptId: string;
     score: number;
+    metrics?: Record<string, number>;
     completedAt: string;
     verification: {
       authorityId: string;
@@ -1010,6 +1134,7 @@ function createMutableAttempt(input: {
         : { participantLabel: input.participantLabel }),
       attemptId: input.attemptId,
       score: input.score,
+      ...(input.metrics === undefined ? {} : { metrics: { ...input.metrics } }),
       completedAt: input.completedAt,
       verification: {
         authorityId: 'verified-leaderboard-conformance',

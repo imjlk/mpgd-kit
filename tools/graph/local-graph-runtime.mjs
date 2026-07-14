@@ -112,15 +112,20 @@ export function graphResultFiles(result) {
   return files;
 }
 
-function collectGraphResultFiles(value, files) {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      collectGraphResultFiles(entry, files);
-    }
+function collectGraphResultFiles(value, files, seen = new Set()) {
+  if (typeof value !== 'object' || value === null) {
     return;
   }
 
-  if (typeof value !== 'object' || value === null) {
+  if (seen.has(value)) {
+    return;
+  }
+  seen.add(value);
+
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      collectGraphResultFiles(entry, files, seen);
+    }
     return;
   }
 
@@ -129,6 +134,6 @@ function collectGraphResultFiles(value, files) {
   }
 
   for (const entry of Object.values(value)) {
-    collectGraphResultFiles(entry, files);
+    collectGraphResultFiles(entry, files, seen);
   }
 }

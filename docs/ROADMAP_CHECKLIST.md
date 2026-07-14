@@ -269,7 +269,7 @@ to run xcodebuild archive.
 
 - [x] `@mpgd/adapter-devvit` added without Devvit SDK imports
 - [x] `reddit` target config added with Devvit Web runtime metadata
-- [x] `apps/target-devvit` wrapper added with `/api/mpgd/bridge`
+- [x] `apps/target-devvit` wrapper added with the oRPC-only `/api/mpgd/rpc` bridge
 - [x] `pnpm build:devvit` builds Phaser client artifacts and Devvit server CJS bundle
 - [x] target config, effective config, adapter parity, and target artifact smoke cover `reddit`
 - [x] Devvit Redis verified leaderboards preserve provider conformance and cursor pagination

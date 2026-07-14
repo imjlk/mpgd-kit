@@ -4,11 +4,9 @@ import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpg
 import { createBridgeRpcFetchHandler, createBridgeRpcRouter } from '@mpgd/bridge/orpc';
 
 import {
-  createDevvitFetchBridge,
   createDevvitOrpcBridge,
   createDevvitPlatformGateway,
   createDevvitSandboxBridge,
-  defaultDevvitBridgeEndpoint,
   defaultDevvitRpcEndpoint,
   DevvitBridgeError,
   type DevvitBridge,
@@ -43,6 +41,13 @@ function createLocalStorageMock(): {
 }
 
 describe('adapter-devvit', () => {
+  it('exposes only the oRPC network bridge transport', async () => {
+    const devvitAdapter = await import('./index');
+
+    expect(devvitAdapter).not.toHaveProperty('createDevvitFetchBridge');
+    expect(devvitAdapter).not.toHaveProperty('defaultDevvitBridgeEndpoint');
+  });
+
   it('sends platform requests through the installed Devvit bridge', async () => {
     const requests: BridgeRequest[] = [];
     const bridge: DevvitBridge = {
@@ -82,49 +87,6 @@ describe('adapter-devvit', () => {
     });
   });
 
-  it('uses the Devvit fetch bridge endpoint by default', async () => {
-    const requests: { readonly url: string; readonly init: RequestInit }[] = [];
-    const bridge = createDevvitFetchBridge({
-      async fetch(url, init) {
-        requests.push({
-          url: String(url),
-          init: init ?? {},
-        });
-
-        return new Response(
-          JSON.stringify({
-            id: JSON.parse(String(init?.body)).id,
-            ok: true,
-            data: {
-              playerId: 'fetch-player',
-            },
-          } satisfies BridgeResponse),
-          {
-            status: 200,
-            headers: {
-              'content-type': 'application/json',
-            },
-          },
-        );
-      },
-    });
-    const gateway = createDevvitPlatformGateway({
-      appVersion: '1.2.3',
-      buildId: 'build-reddit',
-      bridge,
-    });
-
-    await expect(gateway.identity.getPlayer()).resolves.toEqual({
-      playerId: 'fetch-player',
-    });
-    expect(requests[0]).toMatchObject({
-      url: defaultDevvitBridgeEndpoint,
-      init: {
-        method: 'POST',
-      },
-    });
-  });
-
   it('uses the Devvit oRPC bridge endpoint by default', async () => {
     let fetchUrl = '';
     let fetchMethod = '';
@@ -160,55 +122,6 @@ describe('adapter-devvit', () => {
       });
       expect(fetchUrl.startsWith(defaultDevvitRpcEndpoint)).toBe(true);
       expect(fetchMethod).toBe('POST');
-    } finally {
-      vi.unstubAllGlobals();
-    }
-  });
-
-  it('preserves legacy Devvit fetch endpoint overrides', async () => {
-    let fetchUrl = '';
-    let fetchMethod = '';
-    let bridgeRequest: BridgeRequest | undefined;
-
-    vi.stubGlobal('fetch', async (url: string | URL | Request, init?: RequestInit) => {
-      fetchUrl = String(url);
-      fetchMethod = init?.method ?? 'GET';
-      const parsedRequest = JSON.parse(String(init?.body)) as BridgeRequest;
-      bridgeRequest = parsedRequest;
-
-      return new Response(
-        JSON.stringify({
-          id: parsedRequest.id,
-          ok: true,
-          data: {
-            playerId: 'legacy-fetch-player',
-          },
-        } satisfies BridgeResponse),
-        {
-          status: 200,
-          headers: {
-            'content-type': 'application/json',
-          },
-        },
-      );
-    });
-
-    try {
-      const gateway = createDevvitPlatformGateway({
-        appVersion: '1.2.3',
-        buildId: 'build-reddit',
-        endpoint: defaultDevvitBridgeEndpoint,
-      });
-
-      await expect(gateway.identity.getPlayer()).resolves.toEqual({
-        playerId: 'legacy-fetch-player',
-      });
-      expect(fetchUrl).toBe(defaultDevvitBridgeEndpoint);
-      expect(fetchMethod).toBe('POST');
-      expect(bridgeRequest).toMatchObject({
-        method: 'identity.getPlayer',
-        payload: {},
-      });
     } finally {
       vi.unstubAllGlobals();
     }
@@ -346,61 +259,6 @@ describe('adapter-devvit', () => {
       code: 'UNSUPPORTED_METHOD',
       retryable: false,
     } satisfies Partial<DevvitBridgeError>);
-  });
-
-  it('returns structured fetch bridge errors for network, http, and parse failures', async () => {
-    const networkBridge = createDevvitFetchBridge({
-      async fetch() {
-        throw new TypeError('connection refused');
-      },
-    });
-    const httpBridge = createDevvitFetchBridge({
-      async fetch() {
-        return new Response('server error', {
-          status: 500,
-        });
-      },
-    });
-    const parseBridge = createDevvitFetchBridge({
-      async fetch() {
-        return new Response('not json', {
-          status: 200,
-        });
-      },
-    });
-    const request = {
-      id: 'request-1',
-      method: 'identity.getPlayer',
-      payload: {},
-      meta: {
-        target: 'reddit',
-        appVersion: '1.0.0',
-        buildId: 'test',
-        sentAt: '2026-07-04T00:00:00.000Z',
-      },
-    } as const;
-
-    await expect(networkBridge.request(request)).resolves.toMatchObject({
-      ok: false,
-      error: {
-        code: 'DEVVIT_BRIDGE_NETWORK_ERROR',
-        retryable: true,
-      },
-    });
-    await expect(httpBridge.request(request)).resolves.toMatchObject({
-      ok: false,
-      error: {
-        code: 'DEVVIT_BRIDGE_HTTP_ERROR',
-        retryable: true,
-      },
-    });
-    await expect(parseBridge.request(request)).resolves.toMatchObject({
-      ok: false,
-      error: {
-        code: 'DEVVIT_BRIDGE_PARSE_ERROR',
-        retryable: false,
-      },
-    });
   });
 
   it('provides sandbox identity, storage, unavailable ads, and leaderboard behavior', async () => {

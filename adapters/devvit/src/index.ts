@@ -1,5 +1,4 @@
 import {
-  assertBridgeResponse,
   createBridgeError,
   type BridgeMethod,
   type BridgeRequest,
@@ -24,7 +23,6 @@ import type {
   ShareResult,
 } from '@mpgd/platform';
 
-export const defaultDevvitBridgeEndpoint = '/api/mpgd/bridge';
 export const defaultDevvitRpcEndpoint = defaultBridgeRpcEndpoint;
 
 type BridgeErrorResponse = Extract<BridgeResponse, { readonly ok: false }>;
@@ -61,7 +59,6 @@ export interface DevvitPlatformGatewayOptions {
   readonly buildId: string;
   readonly bridge?: DevvitBridge;
   readonly fallbackBridge?: DevvitBridge;
-  readonly endpoint?: string;
   readonly rpcEndpoint?: BridgeRpcEndpoint;
 }
 
@@ -75,9 +72,7 @@ export function createDevvitPlatformGateway(
       input.bridge ??
       getBridge() ??
       input.fallbackBridge ??
-      (input.endpoint === undefined
-        ? createDevvitOrpcBridge({ endpoint: input.rpcEndpoint })
-        : createDevvitFetchBridge({ endpoint: input.endpoint }));
+      createDevvitOrpcBridge({ endpoint: input.rpcEndpoint });
 
     const response = await bridge.request({
       id: generateRequestId(),
@@ -323,68 +318,6 @@ export function createDevvitOrpcBridge(input: {
   };
 }
 
-export function createDevvitFetchBridge(input: {
-  readonly endpoint?: string | undefined;
-  readonly fetch?: typeof fetch | undefined;
-} = {}): DevvitBridge {
-  const endpoint = input.endpoint ?? defaultDevvitBridgeEndpoint;
-
-  return {
-    async request(bridgeRequest) {
-      const fetchImpl = input.fetch ?? globalThis.fetch;
-
-      if (typeof fetchImpl !== 'function') {
-        return createBridgeError(
-          bridgeRequest.id,
-          'DEVVIT_FETCH_UNAVAILABLE',
-          'Devvit bridge fetch is not available.',
-          false,
-        );
-      }
-
-      let response: Response;
-
-      try {
-        response = await fetchImpl(endpoint, {
-          method: 'POST',
-          headers: {
-            'content-type': 'application/json',
-          },
-          body: JSON.stringify(bridgeRequest),
-        });
-      } catch (error) {
-        return createBridgeError(
-          bridgeRequest.id,
-          'DEVVIT_BRIDGE_NETWORK_ERROR',
-          `Devvit bridge network request failed: ${errorMessage(error)}`,
-          true,
-        );
-      }
-
-      if (!response.ok) {
-        return createBridgeError(
-          bridgeRequest.id,
-          'DEVVIT_BRIDGE_HTTP_ERROR',
-          `Devvit bridge request failed with HTTP ${response.status}.`,
-          response.status >= 500,
-        );
-      }
-
-      try {
-        const body = await response.json();
-        return assertBridgeResponse(body);
-      } catch (error) {
-        return createBridgeError(
-          bridgeRequest.id,
-          'DEVVIT_BRIDGE_PARSE_ERROR',
-          `Devvit bridge response was not valid JSON: ${errorMessage(error)}`,
-          false,
-        );
-      }
-    },
-  };
-}
-
 function getBridge(): DevvitBridge | undefined {
   const globalBridgeHost = globalThis as {
     __DEVVIT_GAME_PLATFORM_BRIDGE__?: DevvitBridge;
@@ -623,8 +556,6 @@ function removeDevvitStorageFallback(key: string, namespace: string | undefined)
     if (namespace !== undefined) {
       storage.removeItem(devvitStorageFallbackKey(key, namespace));
     }
-
-    storage.removeItem(legacyDevvitStorageFallbackKey(key));
   }
 }
 
@@ -655,10 +586,6 @@ function devvitStorageFallbackNamespace(appVersion: string, playerId: string): s
 
 function devvitStorageFallbackKey(key: string, namespace: string): string {
   return `${devvitFallbackStoragePrefix}${namespace}:${encodeURIComponent(key)}`;
-}
-
-function legacyDevvitStorageFallbackKey(key: string): string {
-  return `${devvitFallbackStoragePrefix}${encodeURIComponent(key)}`;
 }
 
 function browserLocalStorage(): Storage | undefined {

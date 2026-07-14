@@ -51,12 +51,8 @@ export function createGameViteSharedConfig(
       alias: {
         ...createCatalogAliases({
           gameRoot: input.gameRoot,
-          ...(input.productCatalogFile === undefined
-            ? {}
-            : { productCatalogFile: input.productCatalogFile }),
-          ...(input.adPlacementsFile === undefined
-            ? {}
-            : { adPlacementsFile: input.adPlacementsFile }),
+          productCatalogFile: input.productCatalogFile,
+          adPlacementsFile: input.adPlacementsFile,
         }),
         '#mpgd-platform-gateway': resolve(input.gameRoot, buildGatewayModule),
       },
@@ -99,8 +95,8 @@ export function resolveBuildGatewayModule(input: {
 
 function createCatalogAliases(input: {
   readonly gameRoot: string;
-  readonly productCatalogFile?: string;
-  readonly adPlacementsFile?: string;
+  readonly productCatalogFile: string | undefined;
+  readonly adPlacementsFile: string | undefined;
 }): Record<string, string> {
   const productCatalogFile = readConfiguredPath(
     input.productCatalogFile ?? process.env.MPGD_PRODUCT_CATALOG_FILE,
@@ -209,9 +205,8 @@ function resolveCatalogBaseDir(path: string, pairedPath: string, gameRoot: strin
     }
   }
 
-  console.warn(
+  throw new Error(
     `Could not locate catalog files (${path}, ${pairedPath}) in any expected directory; `
-    + `falling back to game root ${gameRoot}.`,
+      + `checked: ${candidates.filter((candidate) => candidate !== undefined).join(', ')}.`,
   );
-  return gameRoot;
 }

@@ -20,6 +20,11 @@ for (const [index, score] of [300, 200, 100].entries()) {
       participantId: `participant:${index + 1}`,
       attemptId: `attempt:${index + 1}`,
       score,
+      metrics: {
+        elapsedMs: (index + 1) * 1_000,
+        hints: index,
+        mistakes: index + 1,
+      },
       completedAt: `2030-01-02T03:0${index}:00.000Z`,
       verification: {
         authorityId: 'transport-test',
@@ -74,9 +79,23 @@ const firstPage = await client.getSnapshot({
 assert(firstPage !== undefined, 'the authenticated client should return known boards');
 assertEqual(firstPage.entries[0]?.attemptId, 'attempt:1', 'the first page should start at rank 1');
 assertEqual(
+  firstPage.entries[0]?.metrics?.elapsedMs,
+  1_000,
+  'snapshot transport should preserve generic metrics',
+);
+assert(
+  Object.isFrozen(firstPage.entries[0]?.metrics),
+  'snapshot clients should normalize metrics into immutable copies',
+);
+assertEqual(
   firstPage.participantEntry?.attemptId,
   'attempt:2',
   'the handler must scope participantEntry from the authenticated principal',
+);
+assertEqual(
+  firstPage.participantEntry?.metrics?.hints,
+  1,
+  'participant entries should preserve metrics through snapshot transport',
 );
 assert(firstPage.nextCursor !== undefined, 'limited client reads should expose nextCursor');
 

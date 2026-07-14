@@ -16,11 +16,16 @@ const miniflare = new Miniflare({
 
 try {
   const db = await miniflare.getD1Database('DB') as unknown as D1Database;
-  const migration = await readFile(
-    new URL('../migrations/0002_verified_leaderboards.sql', import.meta.url),
-    'utf8',
-  );
-  await db.exec(toD1ExecScript(migration));
+  for (const migrationName of [
+    '0002_verified_leaderboards.sql',
+    '0003_verified_leaderboard_metrics.sql',
+  ]) {
+    const migration = await readFile(
+      new URL(`../migrations/${migrationName}`, import.meta.url),
+      'utf8',
+    );
+    await db.exec(toD1ExecScript(migration));
+  }
 
   const report = await runVerifiedLeaderboardConformance({
     createFixture: ({ now }) => ({
@@ -43,6 +48,7 @@ try {
       participantId: 'participant:private-binding',
       attemptId: 'attempt:private-binding',
       score: 123,
+      metrics: { elapsedMs: 12_345, hints: 1, mistakes: 2 },
       completedAt: '2030-01-02T03:00:00.000Z',
       verification: {
         authorityId: 'private-worker',
@@ -60,6 +66,30 @@ try {
     privateSnapshot?.participantEntry?.attemptId,
     'attempt:private-binding',
     'private binding reads should use the durable D1 provider',
+  );
+  assertEqual(
+    privateSnapshot?.participantEntry?.metrics?.elapsedMs,
+    12_345,
+    'private binding reads should preserve verified attempt metrics',
+  );
+
+  await db.prepare(`
+    UPDATE verified_leaderboard_entries
+    SET metrics_json = ?
+    WHERE leaderboard_id = ? AND participant_id = ?
+  `).bind(
+    '{not-json',
+    'private-binding:board',
+    'participant:private-binding',
+  ).run();
+  const snapshotWithCorruptMetrics = await privateService.getSnapshot({
+    leaderboardId: 'private-binding:board',
+    participantId: 'participant:private-binding',
+  });
+  assertEqual(
+    snapshotWithCorruptMetrics?.participantEntry?.metrics,
+    undefined,
+    'corrupt supplementary metrics should not make the leaderboard unavailable',
   );
 } finally {
   await miniflare.dispose();

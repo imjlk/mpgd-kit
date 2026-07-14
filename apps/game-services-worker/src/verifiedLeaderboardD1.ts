@@ -4,6 +4,7 @@ import {
   assertRecordVerifiedLeaderboardAttemptResponse,
   assertVerifiedLeaderboardSnapshot,
   createVerifiedLeaderboardCursor,
+  normalizeVerifiedLeaderboardMetrics,
   parseVerifiedLeaderboardCursor,
   type GetVerifiedLeaderboardSnapshotRequest,
   type LeaderboardRankedEntry,
@@ -27,6 +28,7 @@ type AttemptResponseRow = {
   response_entry_participant_label: string | null;
   response_entry_attempt_id: string;
   response_entry_score: number;
+  response_entry_metrics_json: string | null;
   response_entry_completed_at: string;
   response_reason: 'ATTEMPT_NOT_RETAINED' | null;
 };
@@ -37,6 +39,7 @@ type RankedEntryRow = {
   participant_label: string | null;
   attempt_id: string;
   score: number;
+  metrics_json: string | null;
   completed_at: string;
   completed_at_ms: number;
   attempt_ordinal: string;
@@ -69,6 +72,7 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
     const { definition, attempt } = input;
     const completedAtMs = Date.parse(attempt.completedAt);
     const verifiedAtMs = Date.parse(attempt.verification.verifiedAt);
+    const metricsJson = serializeMetrics(attempt.metrics);
     const session = this.db.withSession('first-primary');
     const statements = [
       session.prepare(
@@ -89,19 +93,21 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
           participant_id,
           participant_label,
           score,
+          metrics_json,
           completed_at,
           completed_at_ms,
           authority_id,
           evidence_id,
           verified_at,
           verified_at_ms
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       ).bind(
         definition.leaderboardId,
         attempt.attemptId,
         attempt.participantId,
         attempt.participantLabel ?? null,
         attempt.score,
+        metricsJson,
         attempt.completedAt,
         completedAtMs,
         attempt.verification.authorityId,
@@ -116,11 +122,12 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
           participant_label,
           attempt_id,
           score,
+          metrics_json,
           completed_at,
           completed_at_ms,
           attempt_ordinal
         )
-        SELECT ?, ?, ?, ?, ?, ?, ?, ?
+        SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?
         WHERE EXISTS (
           SELECT 1
           FROM verified_leaderboard_attempts
@@ -132,6 +139,7 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
           participant_label = excluded.participant_label,
           attempt_id = excluded.attempt_id,
           score = excluded.score,
+          metrics_json = excluded.metrics_json,
           completed_at = excluded.completed_at,
           completed_at_ms = excluded.completed_at_ms,
           attempt_ordinal = excluded.attempt_ordinal
@@ -184,6 +192,7 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
         attempt.participantLabel ?? null,
         attempt.attemptId,
         attempt.score,
+        metricsJson,
         attempt.completedAt,
         completedAtMs,
         toUtf16OrdinalKey(attempt.attemptId),
@@ -221,6 +230,11 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
             FROM verified_leaderboard_entries
             WHERE leaderboard_id = ? AND participant_id = ?
           ),
+          response_entry_metrics_json = (
+            SELECT metrics_json
+            FROM verified_leaderboard_entries
+            WHERE leaderboard_id = ? AND participant_id = ?
+          ),
           response_entry_completed_at = (
             SELECT completed_at
             FROM verified_leaderboard_entries
@@ -238,6 +252,8 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
           AND attempt_id = ?
           AND response_retained IS NULL`,
       ).bind(
+        definition.leaderboardId,
+        attempt.participantId,
         definition.leaderboardId,
         attempt.participantId,
         definition.leaderboardId,
@@ -314,6 +330,7 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
         response_entry_participant_label,
         response_entry_attempt_id,
         response_entry_score,
+        response_entry_metrics_json,
         response_entry_completed_at,
         response_reason
       FROM verified_leaderboard_attempts
@@ -364,6 +381,7 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
       participant_label,
       attempt_id,
       score,
+      metrics_json,
       completed_at,
       completed_at_ms,
       attempt_ordinal
@@ -425,6 +443,7 @@ class D1VerifiedLeaderboardService implements VerifiedLeaderboardService {
                  participant_label,
                  attempt_id,
                  score,
+                 metrics_json,
                  completed_at,
                  completed_at_ms,
                  attempt_ordinal
@@ -475,6 +494,7 @@ function rankedEntryFromResponseRow(row: AttemptResponseRow): LeaderboardRankedE
       : { participantLabel: row.response_entry_participant_label }),
     attemptId: row.response_entry_attempt_id,
     score: row.response_entry_score,
+    ...metricsPropertyFromJson(row.response_entry_metrics_json),
     completedAt: row.response_entry_completed_at,
   };
 }
@@ -486,6 +506,7 @@ function rankedEntryFromRow(row: RankedEntryRow): LeaderboardRankedEntry {
     ...(row.participant_label === null ? {} : { participantLabel: row.participant_label }),
     attemptId: row.attempt_id,
     score: row.score,
+    ...metricsPropertyFromJson(row.metrics_json),
     completedAt: row.completed_at,
   };
 }
@@ -493,6 +514,40 @@ function rankedEntryFromRow(row: RankedEntryRow): LeaderboardRankedEntry {
 function createRankOrderBy(scoreOrder: VerifiedLeaderboardDefinition['scoreOrder']): string {
   const scoreDirection = scoreOrder === 'ascending' ? 'ASC' : 'DESC';
   return `score ${scoreDirection}, completed_at_ms ASC, attempt_ordinal ASC`;
+}
+
+function serializeMetrics(
+  metrics: Readonly<Record<string, number>> | undefined,
+): string | null {
+  return metrics === undefined
+    ? null
+    : JSON.stringify(normalizeVerifiedLeaderboardMetrics(metrics));
+}
+
+function metricsPropertyFromJson(
+  metricsJson: string | null,
+): { readonly metrics?: Readonly<Record<string, number>> } {
+  if (metricsJson === null) {
+    return {};
+  }
+
+  try {
+    const parsed: unknown = JSON.parse(metricsJson);
+
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+      throw new Error('Stored verified leaderboard metrics must be an object.');
+    }
+
+    return {
+      metrics: normalizeVerifiedLeaderboardMetrics(parsed as Readonly<Record<string, number>>),
+    };
+  } catch (error) {
+    console.warn(
+      'Ignoring invalid stored verified leaderboard metrics.',
+      error,
+    );
+    return {};
+  }
 }
 
 function toUtf16OrdinalKey(input: string): string {
