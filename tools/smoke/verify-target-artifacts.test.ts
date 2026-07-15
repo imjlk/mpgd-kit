@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   assertDevvitInternalEndpoint,
   assertDevvitPaymentsReadiness,
+  assertMicrosoftStorePwaManifestSourceContract,
 } from './verify-target-artifacts';
 
 const enabledConfig = {
@@ -60,6 +61,48 @@ assert.throws(
 assert.throws(
   () => assertDevvitInternalEndpoint('/internal/', 'fulfillOrder'),
   /must be a Devvit internal endpoint path/u,
+);
+
+const sourcePwaManifest = {
+  lang: 'en-US',
+  name: 'Fixture',
+  short_name: 'Fixture',
+  description: 'Fixture game',
+  start_url: './',
+  scope: './',
+  display: 'standalone',
+  orientation: 'landscape',
+  background_color: '#020617',
+  theme_color: '#0f172a',
+  categories: ['games', 'entertainment'],
+  icons: [{ src: './icon.svg', sizes: 'any', type: 'image/svg+xml' }],
+};
+
+assert.doesNotThrow(() => assertMicrosoftStorePwaManifestSourceContract(
+  {
+    ...sourcePwaManifest,
+    icons: [{
+      src: './icons/icon-any-192.png',
+      sizes: '192x192',
+      type: 'image/png',
+      purpose: 'any',
+    }],
+  },
+  sourcePwaManifest,
+));
+assert.throws(
+  () => assertMicrosoftStorePwaManifestSourceContract(
+    { ...sourcePwaManifest, description: 'Stale description' },
+    sourcePwaManifest,
+  ),
+  /manifest description differs from public\/manifest\.webmanifest/u,
+);
+assert.throws(
+  () => assertMicrosoftStorePwaManifestSourceContract(
+    { ...sourcePwaManifest, categories: ['games'] },
+    sourcePwaManifest,
+  ),
+  /manifest categories differs from public\/manifest\.webmanifest/u,
 );
 
 console.log('Target artifact readiness tests passed.');

@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { isDeepStrictEqual } from 'node:util';
 import { Script } from 'node:vm';
 
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
@@ -89,7 +90,10 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     }
 
     if (target === 'microsoft-store') {
-      verifyMicrosoftStorePwaManifest(artifactPath);
+      verifyMicrosoftStorePwaManifest(
+        artifactPath,
+        resolveFromPlatformTargetsBase(loadedPlatformTargets.baseDir, targetConfig.gameApp),
+      );
 
       if (entry.profile === 'production') {
         verifyMicrosoftStorePwaRelease(artifactPath, manifest);
@@ -473,7 +477,7 @@ function requiredFilesForTarget(
   }
 }
 
-function verifyMicrosoftStorePwaManifest(artifactPath: string): void {
+function verifyMicrosoftStorePwaManifest(artifactPath: string, gameRoot: string): void {
   const indexPath = `${artifactPath}/index.html`;
   const manifestPath = `${artifactPath}/manifest.webmanifest`;
   const indexHtml = readFileSync(indexPath, 'utf8');
@@ -483,8 +487,14 @@ function verifyMicrosoftStorePwaManifest(artifactPath: string): void {
   }
 
   const manifest = readJsonFile(manifestPath);
+  const sourceManifestPath = resolve(gameRoot, 'public/manifest.webmanifest');
 
   assertRecord(manifest, 'Microsoft Store PWA manifest');
+
+  if (existsSync(sourceManifestPath)) {
+    assertMicrosoftStorePwaManifestSourceContract(manifest, readJsonFile(sourceManifestPath));
+  }
+
   assertString(manifest.name, 'Microsoft Store PWA manifest name');
   assertString(manifest.short_name, 'Microsoft Store PWA manifest short_name');
   assertString(manifest.description, 'Microsoft Store PWA manifest description');
@@ -549,6 +559,26 @@ function verifyMicrosoftStorePwaManifest(artifactPath: string): void {
   for (const size of ['192x192', '512x512']) {
     if (!sizes.has(size)) {
       throw new Error(`Microsoft Store PWA manifest must include size: ${size}.`);
+    }
+  }
+}
+
+export function assertMicrosoftStorePwaManifestSourceContract(
+  manifest: unknown,
+  sourceManifest: unknown,
+): void {
+  assertRecord(manifest, 'Microsoft Store PWA manifest');
+  assertRecord(sourceManifest, 'Microsoft Store PWA source manifest');
+
+  for (const [field, expected] of Object.entries(sourceManifest)) {
+    if (field === 'icons') {
+      continue;
+    }
+
+    if (!isDeepStrictEqual(manifest[field], expected)) {
+      throw new Error(
+        `Microsoft Store PWA manifest ${field} differs from public/manifest.webmanifest.`,
+      );
     }
   }
 }

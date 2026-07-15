@@ -2,24 +2,16 @@ import { createHash, type Hash } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 
+import {
+  assertMicrosoftStorePwaPrecacheUrl,
+  assertMicrosoftStorePwaReleaseEvidence,
+  microsoftStorePwaCacheSchema,
+  type MicrosoftStorePwaReleaseEvidence,
+} from '../../packages/cli/src/microsoft-store-pwa-e2e';
 import { readJsonFile } from '../io';
 
-export const microsoftStorePwaCacheSchema = 'microsoft-store-offline-v1';
-
-export interface MicrosoftStorePwaReleaseEvidence {
-  readonly schemaVersion: 1;
-  readonly cacheSchema: typeof microsoftStorePwaCacheSchema;
-  readonly pwaId: string;
-  readonly appVersion: string;
-  readonly buildId: string;
-  readonly sourceGitSha: string;
-  readonly kitGitSha: string;
-  readonly configTarget: 'microsoft-store';
-  readonly revision: string;
-  readonly cachePrefix: string;
-  readonly cacheNamePattern: string;
-  readonly precacheUrls: readonly string[];
-}
+export { microsoftStorePwaCacheSchema };
+export type { MicrosoftStorePwaReleaseEvidence };
 
 export interface MicrosoftStorePwaProvenance {
   readonly appVersion: string;
@@ -221,44 +213,7 @@ self.addEventListener('fetch', (event) => {
 export function readMicrosoftStorePwaReleaseEvidence(
   path: string,
 ): MicrosoftStorePwaReleaseEvidence {
-  const input = readJsonFile(path);
-
-  if (!isRecord(input)) {
-    throw new Error('PWA release evidence must be an object.');
-  }
-
-  if (input.schemaVersion !== 1 || input.cacheSchema !== microsoftStorePwaCacheSchema) {
-    throw new Error('Unsupported Microsoft Store PWA release evidence schema.');
-  }
-
-  if (input.configTarget !== 'microsoft-store') {
-    throw new Error('PWA release evidence must target microsoft-store.');
-  }
-
-  if (!Array.isArray(input.precacheUrls)) {
-    throw new Error('PWA release evidence precacheUrls must be an array.');
-  }
-
-  const evidence = createMicrosoftStorePwaReleaseEvidence({
-    pwaId: requireNonEmptyString(input.pwaId, 'PWA ID'),
-    appVersion: requireNonEmptyString(input.appVersion, 'PWA app version'),
-    buildId: requireNonEmptyString(input.buildId, 'PWA build ID'),
-    sourceGitSha: requireGitSha(input.sourceGitSha, 'PWA source Git SHA'),
-    kitGitSha: requireGitSha(input.kitGitSha, 'PWA kit Git SHA'),
-    revision: requireRevision(input.revision),
-    precacheUrls: input.precacheUrls.map((value) =>
-      requireNonEmptyString(value, 'PWA precache URL'),
-    ),
-  });
-
-  if (
-    input.cachePrefix !== evidence.cachePrefix
-    || input.cacheNamePattern !== evidence.cacheNamePattern
-  ) {
-    throw new Error('PWA release evidence cache identity is inconsistent.');
-  }
-
-  return evidence;
+  return assertMicrosoftStorePwaReleaseEvidence(readJsonFile(path));
 }
 
 function listPrecacheEntries(artifactRoot: string): readonly PrecacheEntry[] {
@@ -300,7 +255,7 @@ function normalizePrecacheEntries(entries: readonly PrecacheEntry[]): readonly P
   const entriesByUrl = new Map<string, string | Uint8Array>();
 
   for (const entry of entries) {
-    const url = requirePrecacheUrl(entry.url);
+    const url = assertMicrosoftStorePwaPrecacheUrl(entry.url);
 
     if (entriesByUrl.has(url)) {
       throw new Error(`Duplicate PWA precache URL: ${url}`);
@@ -319,7 +274,7 @@ function normalizePrecacheEntries(entries: readonly PrecacheEntry[]): readonly P
 }
 
 function normalizePrecacheUrls(urls: readonly string[]): readonly string[] {
-  const normalized = urls.map(requirePrecacheUrl);
+  const normalized = urls.map(assertMicrosoftStorePwaPrecacheUrl);
 
   if (new Set(normalized).size !== normalized.length) {
     throw new Error('PWA precache URLs must be unique.');
@@ -330,41 +285,7 @@ function normalizePrecacheUrls(urls: readonly string[]): readonly string[] {
 
 function toPrecacheUrl(root: string, path: string): string {
   const portablePath = relative(root, path).split(sep).join('/');
-  return requirePrecacheUrl(`./${portablePath}`);
-}
-
-function requirePrecacheUrl(value: string): string {
-  const url = requireNonEmptyString(value, 'PWA precache URL');
-
-  if (
-    !url.startsWith('./')
-    || url.includes('\\')
-    || url.includes('?')
-    || url.includes('#')
-    || hasDotSegment(url)
-  ) {
-    throw new Error(`Unsafe PWA precache URL: ${url}`);
-  }
-
-  return url;
-}
-
-function hasDotSegment(url: string): boolean {
-  for (const segment of url.slice(2).split('/')) {
-    let decoded: string;
-
-    try {
-      decoded = decodeURIComponent(segment);
-    } catch {
-      return true;
-    }
-
-    if (decoded === '.' || decoded === '..') {
-      return true;
-    }
-  }
-
-  return false;
+  return assertMicrosoftStorePwaPrecacheUrl(`./${portablePath}`);
 }
 
 function readPwaId(input: unknown): string {
