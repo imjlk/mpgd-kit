@@ -40,9 +40,21 @@ export function loadEffectiveTargetConfigMatrix(): EffectiveTargetConfigMatrix {
   const catalog = readJsonFile(productCatalogFilePath()) as ProductCatalog;
   const adPlacements = readJsonFile(adPlacementsFilePath()) as AdPlacements;
   const platformTargets = loadPlatformTargetsConfig().config as PlatformTargetsConfig;
+  const configuredTargetEntries = Object.keys(platformTargets.targets).map((target) => {
+    const config = configMatrix.targets[target];
+
+    if (config === undefined) {
+      throw new Error(`Missing target config for configured platform target: ${target}`);
+    }
+
+    return [target, config] as const;
+  });
 
   return createEffectiveTargetConfigMatrix({
-    configMatrix,
+    configMatrix: {
+      ...configMatrix,
+      targets: Object.fromEntries(configuredTargetEntries),
+    },
     catalog,
     adPlacements,
     platformTargets: Object.fromEntries(
@@ -92,7 +104,9 @@ export function writeEffectiveTargetConfigs(
   const indexPath = join(outputDir, 'index.json');
   const previousArtifacts = readExistingArtifactIndex(indexPath, matrix.version).artifacts;
   const artifactsByTarget = new Map(
-    previousArtifacts.map((artifact) => [artifact.target, artifact]),
+    previousArtifacts
+      .filter((artifact) => matrix.targets[artifact.target] !== undefined)
+      .map((artifact) => [artifact.target, artifact]),
   );
 
   for (const artifact of artifacts) {
@@ -161,10 +175,17 @@ function writeEffectiveTargetConfig(
 
 function validateEffectiveTargetConfig(config: EffectiveTargetConfig): void {
   const expectedPlatformKind = platformKindForRuntime(config.runtime);
+  const expectedPlatformAdapter = platformAdapterForRuntime(config.runtime);
 
   if (config.sources.platformTargetKind !== expectedPlatformKind) {
     throw new Error(
       `Effective target ${config.target} runtime ${config.runtime} does not match platform target kind ${config.sources.platformTargetKind}.`,
+    );
+  }
+
+  if (config.sources.platformAdapter !== expectedPlatformAdapter) {
+    throw new Error(
+      `Effective target ${config.target} runtime ${config.runtime} does not match platform adapter ${config.sources.platformAdapter ?? 'undefined'}; expected ${expectedPlatformAdapter}.`,
     );
   }
 
@@ -258,6 +279,25 @@ function platformKindForRuntime(runtime: EffectiveTargetConfig['runtime']): stri
       return 'apps-in-toss';
     case 'devvit-web':
       return 'devvit-web';
+    case 'verse8-web':
+      return 'web';
+  }
+}
+
+function platformAdapterForRuntime(runtime: EffectiveTargetConfig['runtime']): string {
+  switch (runtime) {
+    case 'web-preview':
+    case 'microsoft-store-pwa':
+      return 'browser';
+    case 'capacitor-android':
+    case 'capacitor-ios':
+      return 'capacitor';
+    case 'apps-in-toss':
+      return 'ait';
+    case 'devvit-web':
+      return 'devvit';
+    case 'verse8-web':
+      return 'verse8';
   }
 }
 

@@ -125,6 +125,7 @@ export function targetViewportShellForRuntime(
     case 'apps-in-toss':
       return 'mobile-webview';
     case 'devvit-web':
+    case 'verse8-web':
       return 'embedded-webview';
     case 'web-preview':
     case 'microsoft-store-pwa':

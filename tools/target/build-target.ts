@@ -319,7 +319,11 @@ function mirrorAitRuntimeAssets(gameApp: string, wrapperApp: string): void {
 }
 
 function appTargetForBuild(target: PlatformTargetConfig, name: string): string {
-  return target.kind === 'web' ? 'browser' : name;
+  if (target.kind !== 'web') {
+    return name;
+  }
+
+  return target.adapter === 'browser' ? 'browser' : name;
 }
 
 function targetReleaseMetadataEnv(target: PlatformTargetConfig): NodeJS.ProcessEnv {

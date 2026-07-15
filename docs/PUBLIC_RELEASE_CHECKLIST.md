@@ -38,6 +38,8 @@ Use this before making the repository public or announcing a package release.
 - [ ] npm Trusted Publishing/OIDC is configured per package for `.github/workflows/release.yml` before relying on automated publishes.
 - [x] `@mpgd/adapter-devvit` has been initial-published locally and verified with `npm view @mpgd/adapter-devvit version` before the first automated Devvit adapter release.
 - [x] `@mpgd/adapter-devvit` npm Trusted Publishing/OIDC is configured for `.github/workflows/release.yml` before adding it to the Sampo fixed release group.
+- [x] `@mpgd/adapter-verse8` has been initial-published as `0.1.0` and verified with `npm view @mpgd/adapter-verse8 version` before its first automated release.
+- [x] `@mpgd/adapter-verse8` npm Trusted Publishing/OIDC is configured for `.github/workflows/release.yml` before adding its independent singleton Sampo linked group.
 - [x] `@mpgd/cli` has been initial-published locally and verified with `npm view @mpgd/cli version` before the first automated CLI release.
 - [x] `@mpgd/create-game` has been initial-published locally and verified with `npm view @mpgd/create-game version` before the first automated create-package release.
 - [ ] `@mpgd/cli` and `@mpgd/create-game` npm Trusted Publishing/OIDC are configured for `.github/workflows/release.yml`.
@@ -61,6 +63,8 @@ pnpm graph:preflight
 pnpm sampo:release:dry-run
 pnpm build:web
 pnpm smoke:target web-preview
+pnpm build:verse8
+pnpm smoke:target verse8
 pnpm build:microsoft-store
 pnpm smoke:target microsoft-store
 pnpm build:devvit
@@ -87,6 +91,7 @@ pnpm smoke:target reddit
 - [ ] For Android, run `pnpm build:android && pnpm smoke:target android`.
 - [ ] For iOS, run `pnpm build:ios && pnpm smoke:target ios`.
 - [ ] For Microsoft Store, run `pnpm build:microsoft-store && pnpm smoke:target microsoft-store`, then package the PWA with PWABuilder.
+- [ ] For Verse8, run `pnpm build:verse8 && pnpm smoke:target verse8`.
 - [ ] For Apps in Toss, run `pnpm build:ait && pnpm smoke:target ait`.
 - [ ] For Reddit Devvit, run `pnpm build:devvit && pnpm smoke:target reddit` to verify the Devvit manifest, client/server artifact paths, permissions, menu entry, and embedded target config.
 - [ ] Emulator smoke is optional but recommended for local release confidence.

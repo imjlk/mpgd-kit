@@ -21,7 +21,13 @@ export function detectRuntime(): RuntimeConfig {
 }
 
 export function normalizeTarget(value: string): PlatformTarget {
-  if (value === 'android' || value === 'ios' || value === 'ait' || value === 'reddit') {
+  if (
+    value === 'android'
+    || value === 'ios'
+    || value === 'ait'
+    || value === 'reddit'
+    || value === 'verse8'
+  ) {
     return value;
   }
 

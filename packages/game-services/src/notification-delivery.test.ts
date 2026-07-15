@@ -602,6 +602,18 @@ assertEqual(
   'unavailable',
   'a target without a provider should return unavailable',
 );
+const verse8Unavailable = await unavailableService.deliver({
+  ...unavailableRequest,
+  target: 'verse8',
+  recipient: 'verse8-account-1',
+  idempotencyKey: 'notification-verse8-unavailable',
+});
+
+assertEqual(
+  verse8Unavailable.status,
+  'unavailable',
+  'Verse8 should remain a valid platform target when notifications are unavailable',
+);
 
 let recoveredUnavailableCalls = 0;
 const recoveredProvider = {

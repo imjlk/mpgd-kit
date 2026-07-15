@@ -1,4 +1,4 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -11,12 +11,17 @@ import {
   targetIntegrations,
 } from '../../packages/target-config/src/runtime';
 import {
+  loadEffectiveTargetConfigMatrix,
   validateEffectiveTargetConfigMatrix,
   writeEffectiveTargetConfigs,
 } from '../target/effective-config';
 import { loadPlatformTargetsConfig } from '../target/platform-targets';
 import { assertPlatformTargetsConfig } from '../target/schemas';
 import { validateTargetConfigMatrixFile } from '../validate-target-config';
+
+interface TargetArtifactIndex {
+  readonly artifacts: readonly { readonly target: string }[];
+}
 
 const matrix = validateEffectiveTargetConfigMatrix();
 const webStoreIntegrationConfig = {
@@ -30,6 +35,14 @@ const webStoreIntegrationConfig = {
 const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
   'web-preview': webStoreIntegrationConfig,
   'microsoft-store': webStoreIntegrationConfig,
+  verse8: {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'unsupported',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+    presentationMode: 'fullscreen',
+  },
   android: {
     identityUpgrade: 'configuration-required',
     presentation: 'available',
@@ -68,13 +81,8 @@ for (const [target, config] of Object.entries(matrix.targets)) {
   verifyEffectiveConfig(target, config);
 }
 
-for (const expectedTarget of Object.keys(expectedIntegrations)) {
-  if (matrix.targets[expectedTarget] === undefined) {
-    throw new Error(`Stale integration expectation for removed target ${expectedTarget}.`);
-  }
-}
-
 verifyGameOwnedIntegrationOverrides();
+verifyRuntimeAdapterValidation();
 
 console.log(`Effective target config smoke passed: ${Object.keys(matrix.targets).join(', ')}`);
 
@@ -203,10 +211,43 @@ function verifyGameOwnedIntegrationOverrides(): void {
     }
 
     writeFileSync(targetsPath, `${JSON.stringify(platformTargets, null, 2)}\n`);
+    validateTargetConfigMatrixFile('packages/target-config/targets.json', targetsPath);
+    const configuredOnlyMatrix = validateEffectiveTargetConfigMatrix(
+      loadEffectiveTargetConfigMatrix(),
+    );
+    assertEqual(
+      Object.keys(configuredOnlyMatrix.targets).join(','),
+      'reddit',
+      'effective config should only require game-configured targets',
+    );
+    mkdirSync(outputDir, { recursive: true });
+    writeFileSync(
+      join(outputDir, 'index.json'),
+      `${JSON.stringify({
+        version: configuredOnlyMatrix.version,
+        artifacts: [
+          {
+            target: 'verse8',
+            path: join(outputDir, 'verse8.json'),
+            digest: 'stale-verse8-digest',
+            version: configuredOnlyMatrix.version,
+          },
+        ],
+      }, null, 2)}\n`,
+    );
     writeEffectiveTargetConfigs({
       targets: ['reddit'],
       outputDir,
     });
+    const artifactIndex = JSON.parse(
+      readFileSync(join(outputDir, 'index.json'), 'utf8'),
+    ) as TargetArtifactIndex;
+
+    assertEqual(
+      artifactIndex.artifacts.map((entry) => entry.target).join(','),
+      'reddit',
+      'effective config indexes should drop targets removed from the game config',
+    );
     const artifact = JSON.parse(
       readFileSync(join(outputDir, 'reddit.json'), 'utf8'),
     ) as EffectiveTargetConfig;
@@ -247,6 +288,40 @@ function verifyGameOwnedIntegrationOverrides(): void {
   }
 }
 
+function verifyRuntimeAdapterValidation(): void {
+  const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-runtime-adapter-'));
+  const targetsPath = join(tempDir, 'mpgd.targets.json');
+  const previousTargetsPath = process.env.MPGD_PLATFORM_TARGETS_FILE;
+  const mismatchedVerse8Target = {
+    targets: {
+      verse8: {
+        kind: 'web',
+        gameApp: '.',
+        adapter: 'browser',
+        output: 'artifacts/verse8',
+      },
+    },
+  } as const;
+
+  try {
+    writeFileSync(targetsPath, `${JSON.stringify(mismatchedVerse8Target, null, 2)}\n`);
+    process.env.MPGD_PLATFORM_TARGETS_FILE = targetsPath;
+    assertThrows(
+      () => validateEffectiveTargetConfigMatrix(loadEffectiveTargetConfigMatrix()),
+      'effective config validation should reject a Verse8 runtime using the browser adapter',
+      'expected verse8',
+    );
+  } finally {
+    if (previousTargetsPath === undefined) {
+      delete process.env.MPGD_PLATFORM_TARGETS_FILE;
+    } else {
+      process.env.MPGD_PLATFORM_TARGETS_FILE = previousTargetsPath;
+    }
+
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
 function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): void {
   const expectedIntegrationConfig = expectedIntegrations[target];
 
@@ -268,7 +343,7 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     `${target} presentation mode should match its runtime surface`,
   );
 
-  if (target === 'web-preview' || target === 'microsoft-store') {
+  if (target === 'web-preview' || target === 'microsoft-store' || target === 'verse8') {
     assertEqual(
       config.monetization.products.every((product) => !product.enabled),
       true,

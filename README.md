@@ -10,7 +10,7 @@ distribution target gets the right adapter and validation path.
 ## What Works Today
 
 - Phaser 4 browser game shell and validation demo.
-- Browser preview, Capacitor Android/iOS, Apps in Toss WebView, and Reddit Devvit Web target builds.
+- Browser preview, Verse8 iframe, Capacitor Android/iOS, Apps in Toss WebView, and Reddit Devvit Web target builds.
 - Single-source PNG/SVG app icon generation with versioned profiles and release evidence for every target.
 - `PlatformGateway` contracts for identity, storage, IAP, ads, leaderboard, and lifecycle.
 - Target-specific feature availability through `@mpgd/target-config`.
@@ -179,6 +179,8 @@ pnpm build:web
 pnpm smoke:target web-preview
 pnpm build:microsoft-store
 pnpm smoke:target microsoft-store
+pnpm build:verse8
+pnpm smoke:target verse8
 pnpm build:devvit
 pnpm smoke:target reddit
 ```
@@ -187,8 +189,8 @@ For generated games, prefer the CLI wrapper so `${MPGD_KIT_PATH}` target-file
 tokens are resolved before the existing target scripts run:
 
 ```sh
-pnpm mpgd target build-all --targets-file ./mpgd.targets.json --targets web,microsoft-store,ait,reddit --ait-variant wrapper --kit-path <path-to-mpgd-kit>
-pnpm mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,microsoft-store,ait,reddit --kit-path <path-to-mpgd-kit>
+pnpm mpgd target build-all --targets-file ./mpgd.targets.json --targets web,microsoft-store,verse8,ait,reddit --ait-variant wrapper --kit-path <path-to-mpgd-kit>
+pnpm mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,microsoft-store,verse8,ait,reddit --kit-path <path-to-mpgd-kit>
 ```
 
 Generated Phaser starters own their Reddit Devvit app root in

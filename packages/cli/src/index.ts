@@ -104,13 +104,18 @@ const packageRoot = resolvePackageRoot(sourceDir);
 const detectedKitRoot = resolveDefaultKitRoot();
 const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
 const cliVersion = readPackageVersion(packageRoot);
-const recommendedMatrixTargets = 'web,microsoft-store,ait,reddit';
+const recommendedMatrixTargets = 'web,microsoft-store,verse8,ait,reddit';
 const defaultDependencyVersion = `^${cliVersion}`;
+const standaloneTemplateDependencyVersionFallbacks: Readonly<Record<string, string>> = {
+  // Initial-published independently from the CLI release line; package metadata wins once concrete.
+  '@mpgd/adapter-verse8': '^0.1.0',
+};
 const mpgdTemplateDependencyPackages = [
   { name: '@mpgd/adapter-ait', packageDir: 'adapters/ait' },
   { name: '@mpgd/adapter-browser', packageDir: 'adapters/browser' },
   { name: '@mpgd/adapter-capacitor', packageDir: 'adapters/capacitor' },
   { name: '@mpgd/adapter-devvit', packageDir: 'adapters/devvit' },
+  { name: '@mpgd/adapter-verse8', packageDir: 'adapters/verse8' },
   { name: '@mpgd/analytics', packageDir: 'packages/analytics' },
   { name: '@mpgd/bridge', packageDir: 'packages/bridge' },
   { name: '@mpgd/catalog', packageDir: 'packages/catalog' },
@@ -121,10 +126,17 @@ const mpgdTemplateDependencyPackages = [
   { name: '@mpgd/platform', packageDir: 'packages/platform' },
   { name: '@mpgd/target-config', packageDir: 'packages/target-config' },
 ] as const;
-const recommendedMatrixTargetOrder = ['web-preview', 'microsoft-store', 'ait', 'reddit'] as const;
+const recommendedMatrixTargetOrder = [
+  'web-preview',
+  'microsoft-store',
+  'verse8',
+  'ait',
+  'reddit',
+] as const;
 const allMatrixTargetOrder = [
   'web-preview',
   'microsoft-store',
+  'verse8',
   'android',
   'ios',
   'ait',
@@ -137,6 +149,7 @@ const supportedBuildTargets = [
   'web-preview',
   'microsoft-store',
   'msstore',
+  'verse8',
   'android',
   'ios',
   'ait',
@@ -1617,6 +1630,7 @@ function resolveMpgdDependencyVersionReplacements(input: {
       ?? (input.workspace ? 'workspace:*' : undefined)
       ?? resolvePublishedTemplateDependencyVersion(dependency.name, packageJson)
       ?? resolveWorkspaceTemplateDependencyVersion(kitRoot, dependency.packageDir)
+      ?? standaloneTemplateDependencyVersionFallbacks[dependency.name]
       ?? defaultDependencyVersion;
 
     return {

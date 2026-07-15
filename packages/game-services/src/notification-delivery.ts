@@ -8,6 +8,7 @@ const platformTargets = new Set<PlatformTarget>([
   'ios',
   'ait',
   'reddit',
+  'verse8',
   'telegram',
   'tauri',
 ]);

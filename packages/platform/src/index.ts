@@ -1,4 +1,12 @@
-export type PlatformTarget = 'browser' | 'android' | 'ios' | 'ait' | 'reddit' | 'telegram' | 'tauri';
+export type PlatformTarget =
+  | 'browser'
+  | 'android'
+  | 'ios'
+  | 'ait'
+  | 'reddit'
+  | 'verse8'
+  | 'telegram'
+  | 'tauri';
 
 export type StarterLogicalProductId = 'COINS_100' | 'COINS_500' | 'REMOVE_ADS';
 

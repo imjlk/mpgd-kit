@@ -20,7 +20,7 @@ pnpm check
 pnpm build
 pnpm icons:generate
 pnpm icons:verify
-pnpm exec mpgd target build-all --targets-file ./mpgd.targets.json --kit-path ../mpgd-kit --targets web,microsoft-store,ait,reddit --profile staging --ait-variant wrapper
+pnpm exec mpgd target build-all --targets-file ./mpgd.targets.json --kit-path ../mpgd-kit --targets web,microsoft-store,verse8,ait,reddit --profile staging --ait-variant wrapper
 pnpm devvit:login
 pnpm devvit:init
 pnpm devvit:playtest

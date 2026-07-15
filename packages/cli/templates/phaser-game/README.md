@@ -31,17 +31,17 @@ platform-specific artifacts. Keep an `mpgd-kit` checkout nearby and pass it with
 pnpm exec mpgd target build-all \
   --targets-file ./mpgd.targets.json \
   --kit-path ../mpgd-kit \
-  --targets web,microsoft-store,ait,reddit \
+  --targets web,microsoft-store,verse8,ait,reddit \
   --profile staging \
   --ait-variant wrapper
 pnpm exec mpgd target smoke-all \
   --targets-file ./mpgd.targets.json \
   --kit-path ../mpgd-kit \
-  --targets web,microsoft-store,ait,reddit
+  --targets web,microsoft-store,verse8,ait,reddit
 pnpm exec mpgd target doctor \
   --targets-file ./mpgd.targets.json \
   --kit-path ../mpgd-kit \
-  --targets web,microsoft-store,ait,reddit
+  --targets web,microsoft-store,verse8,ait,reddit
 ```
 
 When developing the kit itself, the same commands work through the repository
@@ -51,7 +51,7 @@ script:
 pnpm --dir ../mpgd-kit mpgd target build-all \
   --targets-file "$PWD/mpgd.targets.json" \
   --kit-path ../mpgd-kit \
-  --targets web,microsoft-store,ait,reddit \
+  --targets web,microsoft-store,verse8,ait,reddit \
   --profile staging \
   --ait-variant wrapper
 ```
@@ -285,6 +285,11 @@ submission.
   app; do not force activation with `skipWaiting()`. Keep the web manifest `id`
   game-specific because the cache namespace uses it to isolate apps sharing an
   origin.
+- Verse8 is a game-owned iframe web target that writes to `artifacts/verse8`.
+  The adapter verifies the host-provided auth credential and distinguishes
+  Verse8-signed accounts from self-signed guest accounts. Ads, VXShop, Agent8
+  cloud state, and leaderboard capabilities remain disabled until their
+  server-side evidence paths are configured.
 - Reddit Devvit is game-owned in `apps/target-devvit`.
 - Apps in Toss currently uses the kit reference wrapper at
   `${MPGD_KIT_PATH}/apps/target-ait` for smoke packaging. Before a real Toss

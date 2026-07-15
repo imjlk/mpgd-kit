@@ -17,6 +17,7 @@ Use this brief when asking an agent to build a new game from `examples/phaser-st
 
 - Browser preview:
 - Microsoft Store PWA:
+- Verse8 iframe:
 - Android Capacitor:
 - iOS Capacitor:
 - Apps in Toss:
