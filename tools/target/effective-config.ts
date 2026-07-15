@@ -104,7 +104,9 @@ export function writeEffectiveTargetConfigs(
   const indexPath = join(outputDir, 'index.json');
   const previousArtifacts = readExistingArtifactIndex(indexPath, matrix.version).artifacts;
   const artifactsByTarget = new Map(
-    previousArtifacts.map((artifact) => [artifact.target, artifact]),
+    previousArtifacts
+      .filter((artifact) => matrix.targets[artifact.target] !== undefined)
+      .map((artifact) => [artifact.target, artifact]),
   );
 
   for (const artifact of artifacts) {

@@ -106,6 +106,10 @@ const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
 const cliVersion = readPackageVersion(packageRoot);
 const recommendedMatrixTargets = 'web,microsoft-store,verse8,ait,reddit';
 const defaultDependencyVersion = `^${cliVersion}`;
+const standaloneTemplateDependencyVersionFallbacks: Readonly<Record<string, string>> = {
+  // Initial-published independently from the CLI release line; package metadata wins once concrete.
+  '@mpgd/adapter-verse8': '^0.1.0',
+};
 const mpgdTemplateDependencyPackages = [
   { name: '@mpgd/adapter-ait', packageDir: 'adapters/ait' },
   { name: '@mpgd/adapter-browser', packageDir: 'adapters/browser' },
@@ -1626,6 +1630,7 @@ function resolveMpgdDependencyVersionReplacements(input: {
       ?? (input.workspace ? 'workspace:*' : undefined)
       ?? resolvePublishedTemplateDependencyVersion(dependency.name, packageJson)
       ?? resolveWorkspaceTemplateDependencyVersion(kitRoot, dependency.packageDir)
+      ?? standaloneTemplateDependencyVersionFallbacks[dependency.name]
       ?? defaultDependencyVersion;
 
     return {
