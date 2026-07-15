@@ -258,6 +258,8 @@ function platformKindForRuntime(runtime: EffectiveTargetConfig['runtime']): stri
       return 'apps-in-toss';
     case 'devvit-web':
       return 'devvit-web';
+    case 'verse8-web':
+      return 'web';
   }
 }
 

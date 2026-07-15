@@ -127,6 +127,7 @@ const gateway = createGateway();
 
 assertEqual(targetConfigKeyForPlatform('browser'), 'web-preview');
 assertEqual(targetConfigKeyForPlatform('android'), 'android');
+assertEqual(targetConfigKeyForPlatform('verse8'), 'verse8');
 assertViewportPlans();
 
 const webConfig = getTargetConfig(targetConfigMatrix, targetConfigKeyForPlatform('browser'));
@@ -874,6 +875,11 @@ function assertViewportPlans(): void {
     ...desktopBrowserDimensions,
     runtime: 'web-preview',
   });
+  const verse8Iframe = resolveTargetViewportPlan({
+    ...desktopBrowserDimensions,
+    runtime: 'verse8-web',
+    source: 'container',
+  });
   const landscapePhoneBrowser = resolveTargetViewportPlan({
     ...landscapePhoneBrowserDimensions,
     runtime: 'web-preview',
@@ -904,6 +910,9 @@ function assertViewportPlans(): void {
   assertEqual(desktopDevvit.recommendation.primaryControls, 'side');
   assertEqual(desktopDevvit.recommendation.secondaryPanels, 'side');
   assertEqual(desktopDevvit.recommendation.safeAreaAware, true);
+  assertEqual(verse8Iframe.layout.shell, 'embedded-webview');
+  assertEqual(verse8Iframe.layout.source, 'container');
+  assertEqual(verse8Iframe.recommendation.safeAreaAware, true);
   assertEqual(phoneWebView.layout.shell, 'mobile-webview');
   assertEqual(phoneWebView.layout.orientation, 'portrait');
   assertEqual(phoneWebView.layout.sizeClass, 'compact');

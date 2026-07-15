@@ -88,6 +88,8 @@ export function resolveBuildGatewayModule(input: {
       return input.debug && input.buildId === devvitSandboxBuildId
         ? 'src/platform/buildGateways/redditSandbox.ts'
         : 'src/platform/buildGateways/reddit.ts';
+    case 'verse8':
+      return 'src/platform/buildGateways/verse8.ts';
     default:
       return 'src/platform/buildGateways/browser.ts';
   }

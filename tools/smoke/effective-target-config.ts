@@ -30,6 +30,14 @@ const webStoreIntegrationConfig = {
 const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
   'web-preview': webStoreIntegrationConfig,
   'microsoft-store': webStoreIntegrationConfig,
+  verse8: {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'unsupported',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+    presentationMode: 'fullscreen',
+  },
   android: {
     identityUpgrade: 'configuration-required',
     presentation: 'available',
@@ -268,7 +276,7 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     `${target} presentation mode should match its runtime surface`,
   );
 
-  if (target === 'web-preview' || target === 'microsoft-store') {
+  if (target === 'web-preview' || target === 'microsoft-store' || target === 'verse8') {
     assertEqual(
       config.monetization.products.every((product) => !product.enabled),
       true,

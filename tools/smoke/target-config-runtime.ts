@@ -2,6 +2,7 @@ import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import type { PlatformGateway, PlatformTarget } from '@mpgd/platform';
 
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
+import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
 import { resolveTargetMpgdLocale } from '../../packages/i18n/src/index';
 import {
   createEffectiveTargetConfig,
@@ -36,6 +37,7 @@ const platformFeatures = [
 const configTargets = [
   'web-preview',
   'microsoft-store',
+  'verse8',
   'android',
   'ios',
   'ait',
@@ -176,7 +178,11 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
     `${configTarget} localization feature should control locale resolution`,
   );
 
-  if (configTarget === 'web-preview' || configTarget === 'microsoft-store') {
+  if (
+    configTarget === 'web-preview'
+    || configTarget === 'microsoft-store'
+    || configTarget === 'verse8'
+  ) {
     assertEqual(
       getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
       'target-disabled',
@@ -292,7 +298,7 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
 
 async function verifyBrowserOnlyFallbacks(
   gateway: TargetConfiguredGateway,
-  configTarget: 'web-preview' | 'microsoft-store',
+  configTarget: 'web-preview' | 'microsoft-store' | 'verse8',
 ): Promise<void> {
   const runtime = await gateway.getTargetRuntime();
 
@@ -320,8 +326,8 @@ async function verifyBrowserOnlyFallbacks(
   );
   assertEqual(
     runtime.integrations.inboundShare.state,
-    'available',
-    'browser inbound sharing should remain available through URL parsing',
+    configTarget === 'verse8' ? 'unsupported' : 'available',
+    `${configTarget} inbound sharing should match its configured adapter surface`,
   );
   assertEqual(
     runtime.features.localization.reason,
@@ -372,6 +378,23 @@ function createTargetGateway(target: PlatformTarget): {
   if (target === 'browser') {
     return {
       gateway: createBrowserPlatformGateway(),
+      calls: [],
+    };
+  }
+
+  if (target === 'verse8') {
+    return {
+      gateway: createVerse8PlatformGateway({
+        authClient: {
+          getUser() {
+            return {
+              account: '0x1234567890abcdef',
+              verse: 'production',
+              exp: 4_000_000_000,
+            };
+          },
+        },
+      }),
       calls: [],
     };
   }

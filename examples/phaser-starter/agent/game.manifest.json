@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "engine": "phaser-4",
   "intent": "Minimal mpgd starter showing platform, target-config, i18n, game-services, asset, and simulation boundaries.",
-  "targets": ["web-preview", "microsoft-store", "android", "ios", "ait", "reddit"],
+  "targets": ["web-preview", "microsoft-store", "verse8", "android", "ios", "ait", "reddit"],
   "futureTargets": ["telegram", "tauri"],
   "agentWorkflow": {
     "brief": "agent/brief.template.md",

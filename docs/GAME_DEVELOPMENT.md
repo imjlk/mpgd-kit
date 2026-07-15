@@ -155,8 +155,8 @@ Use the kit CLI for generated target builds because it resolves
 existing kit target scripts:
 
 ```sh
-pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --targets web,microsoft-store,ait,reddit --profile staging --ait-variant wrapper --kit-path .
-pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,microsoft-store,ait,reddit --kit-path .
+pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --targets web,microsoft-store,verse8,ait,reddit --profile staging --ait-variant wrapper --kit-path .
+pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,microsoft-store,verse8,ait,reddit --kit-path .
 ```
 
 Use `staging` while an AIT or Capacitor entry points at a kit reference wrapper

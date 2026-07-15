@@ -149,6 +149,7 @@ if (manifest !== null) {
   assertIncludes(manifest.targets, 'ait', `${manifestPath}: targets`);
   assertIncludes(manifest.targets, 'web-preview', `${manifestPath}: targets`);
   assertIncludes(manifest.targets, 'microsoft-store', `${manifestPath}: targets`);
+  assertIncludes(manifest.targets, 'verse8', `${manifestPath}: targets`);
   assertIncludes(manifest.targets, 'reddit', `${manifestPath}: targets`);
   assertStringArray(manifest.futureTargets, `${manifestPath}: futureTargets`);
   assertIncludes(manifest.futureTargets, 'telegram', `${manifestPath}: futureTargets`);
@@ -353,6 +354,7 @@ function validatePhaserTemplateBuildGateways(): void {
     'src/platform/buildGateways/aitSandbox.ts',
     'src/platform/buildGateways/reddit.ts',
     'src/platform/buildGateways/redditSandbox.ts',
+    'src/platform/buildGateways/verse8.ts',
   ] as const;
 
   for (const relativePath of gatewayFiles) {
@@ -386,6 +388,7 @@ function validatePhaserTemplateBuildGateways(): void {
       "return 'src/platform/buildGateways/browser.ts'",
       "'src/platform/buildGateways/aitSandbox.ts'",
       "'src/platform/buildGateways/redditSandbox.ts'",
+      "'src/platform/buildGateways/verse8.ts'",
     ]) {
       assertIncludesText(readText(vitePath), requiredText, `${vitePath}: build gateway isolation.`);
     }

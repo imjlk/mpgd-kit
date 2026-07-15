@@ -52,6 +52,7 @@
     "build:target": "pnpm i18n:build && MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/target/build-target.ts",
     "build:web": "pnpm build:target web-preview production",
     "build:microsoft-store": "pnpm build:target microsoft-store production",
+    "build:verse8": "pnpm build:target verse8 production",
     "build:android": "pnpm build:target android production",
     "build:ios": "pnpm build:target ios production",
     "build:ait": "pnpm build:target ait production",
@@ -105,6 +106,7 @@
   },
   "devDependencies": {
     "@mpgd/adapter-devvit": "workspace:*",
+    "@mpgd/adapter-verse8": "workspace:*",
     "@mpgd/analytics": "workspace:*",
     "@mpgd/backend-ad-reward-ledger": "workspace:*",
     "@mpgd/backend-entitlement-ledger": "workspace:*",

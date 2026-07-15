@@ -6,6 +6,7 @@ import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
 import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
+import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
 import {
   getEffectiveAdPlacementConfig,
   getEffectiveProductConfig,
@@ -38,13 +39,14 @@ type CapacitorBridgeTarget = Extract<AdapterBridgeTarget, 'android' | 'ios'>;
 
 await verifyBrowserAdapter();
 await verifyMicrosoftStoreAdapter();
+await verifyVerse8Adapter();
 await verifyCapacitorAdapter('android');
 await verifyCapacitorAdapter('ios');
 await verifyAitAdapter();
 await verifyDevvitAdapter();
 
 console.log(
-  'Adapter effective target config smoke passed: browser, microsoft-store, android, ios, ait, reddit',
+  'Adapter effective target config smoke passed: browser, microsoft-store, verse8, android, ios, ait, reddit',
 );
 
 async function verifyBrowserAdapter(): Promise<void> {
@@ -104,6 +106,47 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
       entitlementIds: [],
     },
     'microsoft-store purchase should be target-disabled',
+  );
+}
+
+async function verifyVerse8Adapter(): Promise<void> {
+  const gateway = wrapGateway(
+    'verse8',
+    createVerse8PlatformGateway({
+      authClient: {
+        getUser() {
+          return {
+            account: '0x1234567890abcdef',
+            verse: 'production',
+            exp: 4_000_000_000,
+          };
+        },
+      },
+    }),
+  );
+  const runtime = await gateway.getTargetRuntime();
+  const effectiveConfig = requireEffectiveConfig(runtime.effectiveConfig, 'verse8');
+
+  assertEqual(effectiveConfig.target, 'verse8', 'verse8 effective target');
+  assertEqual(runtime.config.runtime, 'verse8-web', 'verse8 runtime kind');
+  assertEqual(
+    getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
+    false,
+    'verse8 products should remain disabled before VXShop integration',
+  );
+  assertEqual(
+    getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
+    false,
+    'verse8 rewarded placements should remain disabled before ads integration',
+  );
+  assertDeepEqual(
+    await gateway.identity.getSession?.(),
+    {
+      identityLevel: 'authenticated',
+      playerId: '0x1234567890abcdef',
+      trustLevel: 'server-verified',
+    },
+    'verse8 should preserve the verified identity session',
   );
 }
 

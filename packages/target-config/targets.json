@@ -87,6 +87,49 @@
         "requiresAitReview": false
       }
     },
+    "verse8": {
+      "runtime": "verse8-web",
+      "features": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false,
+        "leaderboard": false,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "local",
+        "localization": true
+      },
+      "localization": {
+        "fallbackLocale": "en"
+      },
+      "monetization": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false
+      },
+      "leaderboard": {
+        "native": false
+      },
+      "release": {
+        "profile": "verse8"
+      },
+      "integrations": {
+        "identityUpgrade": "unsupported",
+        "presentation": "available",
+        "sharing": "unsupported",
+        "inboundShare": "unsupported",
+        "notifications": "unsupported",
+        "presentationMode": "fullscreen"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": false,
+        "requiresAitReview": false
+      }
+    },
     "android": {
       "runtime": "capacitor-android",
       "features": {

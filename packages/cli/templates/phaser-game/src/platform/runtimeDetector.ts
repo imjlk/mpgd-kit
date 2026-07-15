@@ -5,6 +5,7 @@ const validTargets = new Set<string>([
   'ios',
   'ait',
   'reddit',
+  'verse8',
   'telegram',
   'tauri',
 ] satisfies readonly PlatformTarget[]);
