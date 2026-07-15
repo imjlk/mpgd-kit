@@ -154,15 +154,26 @@ evidence without contacting a provider and must not be used for production
 grants. The Worker starter enables it only when
 `MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE = "true"` is explicitly set in a
 local environment. Checked-in deploy configuration remains fail-closed in both
-memory and D1 modes. Production deployments must provide a
-`GAME_SERVICES_EVIDENCE_VERIFIER` service binding.
+memory and D1 modes. Production deployments can provide the legacy aggregate
+`GAME_SERVICES_EVIDENCE_VERIFIER` service binding or separate
+`GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER`,
+`GAME_SERVICES_IOS_EVIDENCE_VERIFIER`, and
+`GAME_SERVICES_AIT_EVIDENCE_VERIFIER` bindings.
+
+If any target-specific binding is configured, the Worker enters strict
+target-specific mode. Each purchase or rewarded-ad request is sent only to the
+binding matching its target. A missing match fails closed with
+`EVIDENCE_VERIFIER_UNAVAILABLE`; it never falls back to another target or the
+aggregate binding. Configure every target served by a deployment before
+enabling target-specific mode. Deployments with no target-specific bindings
+keep the aggregate binding behavior for backwards compatibility.
 
 Verifier calls receive an `AbortSignal` and default to a 10-second server-side
 timeout. Configure `evidenceVerificationTimeoutMs` when constructing the
 backend if a provider needs a different bounded deadline. Timeouts fail closed
 with `EVIDENCE_VERIFIER_TIMEOUT` and never reach the entitlement ledger.
-The Worker service-binding wrapper keeps `AbortSignal` local because it is not
-an RPC-cloneable value; it forwards the numeric `timeoutMs` so the bound
+The Worker service-binding wrappers keep `AbortSignal` local because it is not
+an RPC-cloneable value; they forward the numeric `timeoutMs` so each bound
 verifier can apply the same provider-side deadline.
 
 ## Cloudflare Worker Starter

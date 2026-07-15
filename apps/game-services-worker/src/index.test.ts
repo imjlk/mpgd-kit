@@ -3,7 +3,11 @@ import {
   createGameServicesOrpcClient,
 } from '@mpgd/game-services';
 
-import { createWorkerFetchHandler, createWorkerService } from './handler.js';
+import {
+  createWorkerFetchHandler,
+  createWorkerService,
+  type GameServicesEvidenceVerifierBinding,
+} from './handler.js';
 
 const workerEnv = {
   MPGD_STORE: 'memory',
@@ -119,6 +123,140 @@ assertEqual(
   rewardVerifierBindingReceivedSignal,
   false,
   'reward verifier bindings must not receive non-cloneable AbortSignal values',
+);
+
+const targetVerifierCalls: string[] = [];
+const targetVerifierReceivedSignals: boolean[] = [];
+const targetVerifierTimeouts: number[] = [];
+const targetVerifierService = createWorkerService({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER: createTargetVerifierBinding('android'),
+  GAME_SERVICES_IOS_EVIDENCE_VERIFIER: createTargetVerifierBinding('ios'),
+  GAME_SERVICES_AIT_EVIDENCE_VERIFIER: createTargetVerifierBinding('ait'),
+});
+const targetAndroidPurchase = await targetVerifierService.verifyPurchase({
+  target: 'android',
+  playerId: 'target-binding-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'target-binding-android-txn',
+  idempotencyKey: 'target-binding-android-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const targetIosReward = await targetVerifierService.claimAdReward({
+  target: 'ios',
+  playerId: 'target-binding-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'target-binding-ios-impression',
+  idempotencyKey: 'target-binding-ios-reward',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
+const targetAitPurchase = await targetVerifierService.verifyPurchase({
+  target: 'ait',
+  playerId: 'target-binding-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'target-binding-ait-txn',
+  idempotencyKey: 'target-binding-ait-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+
+assertEqual(
+  (targetAndroidPurchase as { readonly verified: boolean }).verified,
+  true,
+  'Android evidence should use the Android verifier binding',
+);
+assertEqual(
+  (targetIosReward as { readonly granted: boolean }).granted,
+  true,
+  'iOS evidence should use the iOS verifier binding',
+);
+assertEqual(
+  (targetAitPurchase as { readonly verified: boolean }).verified,
+  true,
+  'Apps in Toss evidence should use the Apps in Toss verifier binding',
+);
+assertDeepEqual(
+  targetVerifierCalls,
+  ['android:purchase:android', 'ios:ad-reward:ios', 'ait:purchase:ait'],
+  'target-specific evidence should dispatch only to its matching binding',
+);
+assertDeepEqual(
+  targetVerifierReceivedSignals,
+  [false, false, false],
+  'target-specific verifier bindings must not receive AbortSignal values',
+);
+assertDeepEqual(
+  targetVerifierTimeouts,
+  [10_000, 10_000, 10_000],
+  'target-specific verifier bindings should receive the local timeout budget',
+);
+
+let aggregateFallbackCalls = 0;
+let partialAndroidBindingCalls = 0;
+const partialTargetVerifierService = createWorkerService({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_EVIDENCE_VERIFIER: {
+    async verifyPurchase() {
+      aggregateFallbackCalls += 1;
+      return verifiedDecision('aggregate-fallback:purchase');
+    },
+    async verifyAdReward() {
+      aggregateFallbackCalls += 1;
+      return verifiedDecision('aggregate-fallback:ad-reward');
+    },
+  },
+  GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER: {
+    async verifyPurchase() {
+      partialAndroidBindingCalls += 1;
+      return verifiedDecision('partial-android:purchase');
+    },
+    async verifyAdReward() {
+      partialAndroidBindingCalls += 1;
+      return verifiedDecision('partial-android:ad-reward');
+    },
+  },
+});
+const partialAndroidPurchase = await partialTargetVerifierService.verifyPurchase({
+  target: 'android',
+  playerId: 'partial-binding-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'partial-binding-android-txn',
+  idempotencyKey: 'partial-binding-android-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const missingIosPurchase = await partialTargetVerifierService.verifyPurchase({
+  target: 'ios',
+  playerId: 'partial-binding-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'partial-binding-ios-txn',
+  idempotencyKey: 'partial-binding-ios-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+}) as { readonly verified: boolean; readonly reason?: string };
+
+assertEqual(
+  (partialAndroidPurchase as { readonly verified: boolean }).verified,
+  true,
+  'a configured target binding should take precedence over the aggregate binding',
+);
+assertEqual(partialAndroidBindingCalls, 1, 'Android evidence should reach only Android');
+assertEqual(
+  missingIosPurchase.verified,
+  false,
+  'a missing target-specific verifier binding should fail closed',
+);
+assertEqual(
+  missingIosPurchase.reason,
+  'EVIDENCE_VERIFIER_UNAVAILABLE',
+  'missing target-specific verifier state should remain observable',
+);
+assertEqual(
+  partialAndroidBindingCalls,
+  1,
+  'iOS evidence must not fall back to the Android verifier binding',
+);
+assertEqual(
+  aggregateFallbackCalls,
+  0,
+  'strict target-specific mode must not fall back to the aggregate binding',
 );
 
 const health = await workerFetch(new Request(`${baseUrl}/health`));
@@ -288,6 +426,33 @@ assertEqual(untrustedWrite.status, 404, 'verified writes must not be exposed ove
 
 console.log('Game services Worker smoke passed: HTTP, oRPC, and private binding surfaces');
 
+function createTargetVerifierBinding(
+  bindingTarget: 'android' | 'ios' | 'ait',
+): GameServicesEvidenceVerifierBinding {
+  return {
+    async verifyPurchase(input) {
+      targetVerifierCalls.push(`${bindingTarget}:purchase:${input.request.target}`);
+      targetVerifierReceivedSignals.push(Object.hasOwn(input, 'signal'));
+      targetVerifierTimeouts.push(input.timeoutMs);
+      return verifiedDecision(`${bindingTarget}:purchase`);
+    },
+    async verifyAdReward(input) {
+      targetVerifierCalls.push(`${bindingTarget}:ad-reward:${input.request.target}`);
+      targetVerifierReceivedSignals.push(Object.hasOwn(input, 'signal'));
+      targetVerifierTimeouts.push(input.timeoutMs);
+      return verifiedDecision(`${bindingTarget}:ad-reward`);
+    },
+  };
+}
+
+function verifiedDecision(verificationId: string) {
+  return {
+    status: 'verified' as const,
+    verificationId,
+    verifiedAt: '2026-07-04T00:00:00.000Z',
+  };
+}
+
 async function postJson(pathname: string, body: unknown): Promise<Response> {
   return workerFetch(
     new Request(`${baseUrl}${pathname}`, {
@@ -303,5 +468,20 @@ async function postJson(pathname: string, body: unknown): Promise<Response> {
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}.`);
+  }
+}
+
+function assertDeepEqual<T>(
+  actual: readonly T[],
+  expected: readonly T[],
+  message: string,
+): void {
+  if (
+    actual.length !== expected.length
+    || actual.some((value, index) => !Object.is(value, expected[index]))
+  ) {
+    throw new Error(
+      `${message}: expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}.`,
+    );
   }
 }

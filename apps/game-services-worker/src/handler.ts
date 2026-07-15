@@ -36,6 +36,9 @@ export interface GameServicesWorkerEnv {
   readonly MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE?: 'true';
   readonly VERIFIED_LEADERBOARD_AUTH?: VerifiedLeaderboardAuthBinding;
   readonly GAME_SERVICES_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  readonly GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  readonly GAME_SERVICES_IOS_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  readonly GAME_SERVICES_AIT_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
 }
 
 export interface GameServicesEvidenceVerifierBinding {
@@ -235,32 +238,89 @@ function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi
 function resolveWorkerEvidenceVerifier(
   env: GameServicesWorkerEnv,
 ): GameServicesEvidenceVerifier | undefined {
+  if (hasTargetSpecificEvidenceVerifierBinding(env)) {
+    return createWorkerEvidenceVerifier((target) =>
+      resolveTargetSpecificEvidenceVerifierBinding(env, target));
+  }
+
   if (env.GAME_SERVICES_EVIDENCE_VERIFIER !== undefined) {
     const binding = env.GAME_SERVICES_EVIDENCE_VERIFIER;
 
-    return {
-      verifyPurchase({ request, product, platformProductId, timeoutMs }) {
-        return binding.verifyPurchase({
-          request,
-          product,
-          platformProductId,
-          timeoutMs,
-        });
-      },
-      verifyAdReward({ request, placement, platformPlacementId, timeoutMs }) {
-        return binding.verifyAdReward({
-          request,
-          placement,
-          ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
-          timeoutMs,
-        });
-      },
-    };
+    return createWorkerEvidenceVerifier(() => binding);
   }
 
   return env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true'
     ? createDevelopmentGameServicesEvidenceVerifier()
     : undefined;
+}
+
+function hasTargetSpecificEvidenceVerifierBinding(env: GameServicesWorkerEnv): boolean {
+  return env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER !== undefined
+    || env.GAME_SERVICES_IOS_EVIDENCE_VERIFIER !== undefined
+    || env.GAME_SERVICES_AIT_EVIDENCE_VERIFIER !== undefined;
+}
+
+function resolveTargetSpecificEvidenceVerifierBinding(
+  env: GameServicesWorkerEnv,
+  target: VerifyPurchaseRequest['target'],
+): GameServicesEvidenceVerifierBinding | undefined {
+  switch (target) {
+    case 'android':
+      return env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER;
+    case 'ios':
+      return env.GAME_SERVICES_IOS_EVIDENCE_VERIFIER;
+    case 'ait':
+      return env.GAME_SERVICES_AIT_EVIDENCE_VERIFIER;
+    default: {
+      const unsupportedTarget: never = target;
+
+      throw new Error(`Unsupported evidence verifier target: ${String(unsupportedTarget)}`);
+    }
+  }
+}
+
+function createWorkerEvidenceVerifier(
+  resolveBinding: (
+    target: VerifyPurchaseRequest['target'],
+  ) => GameServicesEvidenceVerifierBinding | undefined,
+): GameServicesEvidenceVerifier {
+  return {
+    async verifyPurchase({ request, product, platformProductId, timeoutMs }) {
+      const binding = resolveBinding(request.target);
+
+      if (binding === undefined) {
+        return unavailableEvidenceVerificationDecision();
+      }
+
+      return binding.verifyPurchase({
+        request,
+        product,
+        platformProductId,
+        timeoutMs,
+      });
+    },
+    async verifyAdReward({ request, placement, platformPlacementId, timeoutMs }) {
+      const binding = resolveBinding(request.target);
+
+      if (binding === undefined) {
+        return unavailableEvidenceVerificationDecision();
+      }
+
+      return binding.verifyAdReward({
+        request,
+        placement,
+        ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
+        timeoutMs,
+      });
+    },
+  };
+}
+
+function unavailableEvidenceVerificationDecision(): EvidenceVerificationDecision {
+  return {
+    status: 'rejected',
+    reason: 'EVIDENCE_VERIFIER_UNAVAILABLE',
+  };
 }
 
 function createWorkerStore(env: GameServicesWorkerEnv): GameServicesStore {
