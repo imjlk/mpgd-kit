@@ -77,6 +77,23 @@ export {
 } from './gameplay-e2e.js';
 
 export {
+  assertMicrosoftStorePwaCacheTransition,
+  assertMicrosoftStorePwaReleaseEvidence,
+  inspectMicrosoftStorePwaBrowserCacheTransition,
+  microsoftStorePwaCacheSchema,
+  readMicrosoftStorePwaBrowserReleaseEvidence,
+  requestMicrosoftStorePwaBrowserUpdate,
+  resolveMicrosoftStorePwaScopedCacheName,
+  type AssertMicrosoftStorePwaCacheTransitionInput,
+  type InspectMicrosoftStorePwaCacheTransitionInput,
+  type MicrosoftStorePwaBrowserPage,
+  type MicrosoftStorePwaCachedIndexObservation,
+  type MicrosoftStorePwaCacheTransitionEvidence,
+  type MicrosoftStorePwaCacheTransitionObservation,
+  type MicrosoftStorePwaReleaseEvidence,
+} from './microsoft-store-pwa-e2e.js';
+
+export {
   assertProductionTargetReadiness,
   type ProductionTargetReadinessInput,
 } from './production-target-readiness.js';

@@ -2,24 +2,15 @@ import { createHash, type Hash } from 'node:crypto';
 import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 
+import {
+  assertMicrosoftStorePwaReleaseEvidence,
+  microsoftStorePwaCacheSchema,
+  type MicrosoftStorePwaReleaseEvidence,
+} from '../../packages/cli/src/microsoft-store-pwa-e2e';
 import { readJsonFile } from '../io';
 
-export const microsoftStorePwaCacheSchema = 'microsoft-store-offline-v1';
-
-export interface MicrosoftStorePwaReleaseEvidence {
-  readonly schemaVersion: 1;
-  readonly cacheSchema: typeof microsoftStorePwaCacheSchema;
-  readonly pwaId: string;
-  readonly appVersion: string;
-  readonly buildId: string;
-  readonly sourceGitSha: string;
-  readonly kitGitSha: string;
-  readonly configTarget: 'microsoft-store';
-  readonly revision: string;
-  readonly cachePrefix: string;
-  readonly cacheNamePattern: string;
-  readonly precacheUrls: readonly string[];
-}
+export { microsoftStorePwaCacheSchema };
+export type { MicrosoftStorePwaReleaseEvidence };
 
 export interface MicrosoftStorePwaProvenance {
   readonly appVersion: string;
@@ -221,44 +212,7 @@ self.addEventListener('fetch', (event) => {
 export function readMicrosoftStorePwaReleaseEvidence(
   path: string,
 ): MicrosoftStorePwaReleaseEvidence {
-  const input = readJsonFile(path);
-
-  if (!isRecord(input)) {
-    throw new Error('PWA release evidence must be an object.');
-  }
-
-  if (input.schemaVersion !== 1 || input.cacheSchema !== microsoftStorePwaCacheSchema) {
-    throw new Error('Unsupported Microsoft Store PWA release evidence schema.');
-  }
-
-  if (input.configTarget !== 'microsoft-store') {
-    throw new Error('PWA release evidence must target microsoft-store.');
-  }
-
-  if (!Array.isArray(input.precacheUrls)) {
-    throw new Error('PWA release evidence precacheUrls must be an array.');
-  }
-
-  const evidence = createMicrosoftStorePwaReleaseEvidence({
-    pwaId: requireNonEmptyString(input.pwaId, 'PWA ID'),
-    appVersion: requireNonEmptyString(input.appVersion, 'PWA app version'),
-    buildId: requireNonEmptyString(input.buildId, 'PWA build ID'),
-    sourceGitSha: requireGitSha(input.sourceGitSha, 'PWA source Git SHA'),
-    kitGitSha: requireGitSha(input.kitGitSha, 'PWA kit Git SHA'),
-    revision: requireRevision(input.revision),
-    precacheUrls: input.precacheUrls.map((value) =>
-      requireNonEmptyString(value, 'PWA precache URL'),
-    ),
-  });
-
-  if (
-    input.cachePrefix !== evidence.cachePrefix
-    || input.cacheNamePattern !== evidence.cacheNamePattern
-  ) {
-    throw new Error('PWA release evidence cache identity is inconsistent.');
-  }
-
-  return evidence;
+  return assertMicrosoftStorePwaReleaseEvidence(readJsonFile(path));
 }
 
 function listPrecacheEntries(artifactRoot: string): readonly PrecacheEntry[] {

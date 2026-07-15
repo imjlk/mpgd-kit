@@ -93,6 +93,44 @@ and writes PNG screenshots to the exact path requested by the runner. Generic
 browser actions stay shared; pause/resume semantics and state inspection stay
 explicit because they depend on the game and its hosting surface.
 
+## Microsoft Store PWA Updates
+
+Microsoft Store PWA harnesses can additionally use the browser helpers exported
+by `@mpgd/cli`. They keep Playwright consumer-owned while sharing release
+evidence validation, service worker update requests, deployment-scoped cache
+resolution, and the atomic A-to-B cache transition assertions.
+
+```ts
+import {
+  inspectMicrosoftStorePwaBrowserCacheTransition,
+  readMicrosoftStorePwaBrowserReleaseEvidence,
+  requestMicrosoftStorePwaBrowserUpdate,
+} from '@mpgd/cli';
+
+const releaseA = await readMicrosoftStorePwaBrowserReleaseEvidence(page);
+
+// Switch the test server to release B before requesting the update.
+await requestMicrosoftStorePwaBrowserUpdate(page);
+
+const transition = await inspectMicrosoftStorePwaBrowserCacheTransition({
+  page,
+  releaseA,
+  releaseB,
+  releaseAIndexMarker: './assets/game.release-a.js',
+  releaseBIndexMarker: './assets/game.release-b.js',
+  releaseBIndexRequestCount,
+  preservedCacheNames: ['unrelated-origin-cache'],
+});
+```
+
+The consumer still owns building two releases, switching the static server,
+waiting for the update to enter the installed state, closing old clients, and
+game-specific viewport or input checks. The shared transition assertion proves
+that the activated cache belongs to release B, the release A cache was removed,
+unrelated caches survived, the cached index does not reference stale release A
+assets, and release B fetched its index instead of reusing a poisoned HTTP
+cache entry.
+
 ## Game-Owned Runner
 
 Add a non-interactive `gameplay:e2e` package script only after the game has a
