@@ -538,9 +538,52 @@ function assertVerifiedLeaderboardSnapshotEntries(
     }
   }
 
-  if (participantEntry !== undefined && participantEntry.rank > totalParticipants) {
-    throw new Error('participantEntry rank must not exceed totalParticipants.');
+  if (participantEntry !== undefined) {
+    if (participantEntry.rank > totalParticipants) {
+      throw new Error('participantEntry rank must not exceed totalParticipants.');
+    }
+
+    const overlappingEntry = entries.find((entry) =>
+      entry.rank === participantEntry.rank
+      || entry.participantId === participantEntry.participantId
+      || entry.attemptId === participantEntry.attemptId);
+
+    if (
+      overlappingEntry !== undefined
+      && !areLeaderboardRankedEntriesEqual(overlappingEntry, participantEntry)
+    ) {
+      throw new Error('participantEntry must match overlapping snapshot entries.');
+    }
+
+    for (const entry of entries) {
+      if (entry.rank === participantEntry.rank) {
+        continue;
+      }
+
+      const order = compareLeaderboardOrder(definition.scoreOrder, participantEntry, entry);
+      const participantRanksBeforeEntry = participantEntry.rank < entry.rank;
+
+      if (
+        (participantRanksBeforeEntry && order >= 0)
+        || (!participantRanksBeforeEntry && order <= 0)
+      ) {
+        throw new Error('participantEntry must follow the leaderboard ranking order.');
+      }
+    }
   }
+}
+
+function areLeaderboardRankedEntriesEqual(
+  left: LeaderboardRankedEntry,
+  right: LeaderboardRankedEntry,
+): boolean {
+  return left.rank === right.rank
+    && left.participantId === right.participantId
+    && left.participantLabel === right.participantLabel
+    && left.attemptId === right.attemptId
+    && left.score === right.score
+    && parseTimestamp(left.completedAt) === parseTimestamp(right.completedAt)
+    && areVerifiedLeaderboardMetricsEqual(left.metrics, right.metrics);
 }
 
 function assertVerifiedLeaderboardSnapshotCursor(

@@ -188,6 +188,58 @@ assertThrows(
   'entry ranks must be contiguous within a snapshot page',
   'snapshots must not skip ranks inside a page',
 );
+assertVerifiedLeaderboardSnapshot({
+  ...fullSnapshot,
+  participantEntry: {
+    ...firstFullEntry,
+    completedAt: '2026-07-13T17:00:01.000+09:00',
+  },
+});
+assertThrows(
+  () => assertVerifiedLeaderboardSnapshot({
+    ...fullSnapshot,
+    participantEntry: { ...firstFullEntry, score: firstFullEntry.score + 1 },
+  }),
+  'participantEntry must match overlapping snapshot entries',
+  'snapshots must reject conflicting participant entries on the current page',
+);
+assertThrows(
+  () => assertVerifiedLeaderboardSnapshot({
+    ...fullSnapshot,
+    participantEntry: {
+      ...firstFullEntry,
+      participantId: 'conflicting-attempt-participant',
+    },
+  }),
+  'participantEntry must match overlapping snapshot entries',
+  'snapshots must reject attempt identities assigned to another participant',
+);
+assertThrows(
+  () => assertVerifiedLeaderboardSnapshot({
+    ...fullSnapshot,
+    participantEntry: {
+      ...firstFullEntry,
+      participantId: 'conflicting-rank-participant',
+      attemptId: 'conflicting-rank-attempt',
+    },
+  }),
+  'participantEntry must match overlapping snapshot entries',
+  'snapshots must reject different entries assigned to the same rank',
+);
+assertThrows(
+  () => assertVerifiedLeaderboardSnapshot({
+    ...snapshot,
+    participantEntry: {
+      rank: 2,
+      participantId: 'out-of-order-participant',
+      attemptId: 'out-of-order-attempt',
+      score: snapshotPageEntry.score - 1,
+      completedAt: snapshotPageEntry.completedAt,
+    },
+  }),
+  'participantEntry must follow the leaderboard ranking order',
+  'snapshots must reject off-page participant entries that contradict visible ordering',
+);
 assertThrows(
   () => assertVerifiedLeaderboardSnapshot({
     ...fullSnapshot,
