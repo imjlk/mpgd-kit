@@ -15,7 +15,12 @@ release_date_timezone = "Asia/Seoul"
 
 [packages]
 ignore_unpublished = true
-fixed = [[
-  "npm/@mpgd/cli",
-  "npm/@mpgd/create-game",
-]]
+fixed = [
+  [
+    "npm/@mpgd/cli",
+    "npm/@mpgd/create-game",
+  ],
+]
+# Explicitly register the independently versioned Verse8 adapter without
+# fixed-group dependency bumps changing its requested SemVer level.
+linked = [["npm/@mpgd/adapter-verse8"]]
