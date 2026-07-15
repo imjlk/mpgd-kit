@@ -11,6 +11,7 @@ import {
   targetIntegrations,
 } from '../../packages/target-config/src/runtime';
 import {
+  loadEffectiveTargetConfigMatrix,
   validateEffectiveTargetConfigMatrix,
   writeEffectiveTargetConfigs,
 } from '../target/effective-config';
@@ -211,6 +212,15 @@ function verifyGameOwnedIntegrationOverrides(): void {
     }
 
     writeFileSync(targetsPath, `${JSON.stringify(platformTargets, null, 2)}\n`);
+    validateTargetConfigMatrixFile('packages/target-config/targets.json', targetsPath);
+    const configuredOnlyMatrix = validateEffectiveTargetConfigMatrix(
+      loadEffectiveTargetConfigMatrix(),
+    );
+    assertEqual(
+      Object.keys(configuredOnlyMatrix.targets).join(','),
+      'reddit',
+      'effective config should only require game-configured targets',
+    );
     writeEffectiveTargetConfigs({
       targets: ['reddit'],
       outputDir,

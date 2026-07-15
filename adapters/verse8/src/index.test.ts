@@ -124,7 +124,30 @@ describe('adapter-verse8', () => {
 
     await gateway.storage.save({ key: 'save:v1', value: { coins: 25 } });
 
-    expect(values.get('mpgd:verse8:save:v1')).toBe('{"coins":25}');
+    expect(values.get(`mpgd:verse8:${credential.account}:save:v1`)).toBe('{"coins":25}');
+    await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
+      value: { coins: 25 },
+    });
+
+    const guestGateway = createVerse8PlatformGateway({
+      authClient: {
+        getUser() {
+          throw new Error('missing auth token');
+        },
+      },
+      storage: {
+        getItem(key) {
+          return values.get(key) ?? null;
+        },
+        setItem(key, value) {
+          values.set(key, value);
+        },
+      },
+    });
+
+    await guestGateway.storage.save({ key: 'save:v1', value: { coins: 0 } });
+
+    expect(values.get('mpgd:verse8:guest:save:v1')).toBe('{"coins":0}');
     await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
       value: { coins: 25 },
     });

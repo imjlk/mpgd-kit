@@ -121,7 +121,7 @@ export function createVerse8PlatformGateway(
     storage: {
       async load(input) {
         const storage = options.storage ?? resolveStorage();
-        const value = storage?.getItem(storageKey(input.key));
+        const value = storage?.getItem(storageKey(authClient, input.key));
 
         return value === undefined || value === null
           ? null
@@ -129,7 +129,7 @@ export function createVerse8PlatformGateway(
       },
       async save(input) {
         const storage = options.storage ?? resolveStorage();
-        storage?.setItem(storageKey(input.key), JSON.stringify(input.value));
+        storage?.setItem(storageKey(authClient, input.key), JSON.stringify(input.value));
       },
     },
     presentation: {
@@ -192,8 +192,11 @@ function createResolvedIdentity(
   };
 }
 
-function storageKey(key: string): string {
-  return `mpgd:verse8:${key}`;
+function storageKey(authClient: Verse8AuthClient, key: string): string {
+  const playerId = resolveVerse8Identity(authClient).player?.playerId;
+  const identityNamespace = playerId === undefined ? 'guest' : playerId.toLowerCase();
+
+  return `mpgd:verse8:${identityNamespace}:${key}`;
 }
 
 function resolveStorage(): Verse8Storage | undefined {

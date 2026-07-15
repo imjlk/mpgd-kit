@@ -40,9 +40,21 @@ export function loadEffectiveTargetConfigMatrix(): EffectiveTargetConfigMatrix {
   const catalog = readJsonFile(productCatalogFilePath()) as ProductCatalog;
   const adPlacements = readJsonFile(adPlacementsFilePath()) as AdPlacements;
   const platformTargets = loadPlatformTargetsConfig().config as PlatformTargetsConfig;
+  const configuredTargetEntries = Object.keys(platformTargets.targets).map((target) => {
+    const config = configMatrix.targets[target];
+
+    if (config === undefined) {
+      throw new Error(`Missing target config for configured platform target: ${target}`);
+    }
+
+    return [target, config] as const;
+  });
 
   return createEffectiveTargetConfigMatrix({
-    configMatrix,
+    configMatrix: {
+      ...configMatrix,
+      targets: Object.fromEntries(configuredTargetEntries),
+    },
     catalog,
     adPlacements,
     platformTargets: Object.fromEntries(

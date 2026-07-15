@@ -1,6 +1,7 @@
 {
   "name": "@mpgd/adapter-verse8",
   "version": "0.1.0",
+  "private": true,
   "description": "Verse8 iframe platform adapter for mpgd games.",
   "license": "MIT",
   "repository": {
@@ -49,8 +50,5 @@
     "vitest": "^4.0.0"
   },
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "types": "./dist/index.d.ts"
 }

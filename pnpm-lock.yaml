@@ -581,6 +581,9 @@ importers:
       '@mpgd/adapter-devvit':
         specifier: workspace:*
         version: link:../../adapters/devvit
+      '@mpgd/adapter-verse8':
+        specifier: workspace:*
+        version: link:../../adapters/verse8
       '@mpgd/analytics':
         specifier: workspace:*
         version: link:../analytics

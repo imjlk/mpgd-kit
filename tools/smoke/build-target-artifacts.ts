@@ -16,6 +16,7 @@ for (const path of generatedPaths) {
 for (const args of [
   ['build:web'],
   ['build:microsoft-store'],
+  ['build:verse8'],
   ['build:target', 'android', 'staging'],
   ['build:target', 'ios', 'staging'],
   ['build:target', 'ait', 'staging'],

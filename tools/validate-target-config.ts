@@ -17,8 +17,9 @@ export function validateTargetConfigMatrixFile(
   const configMatrix = assertTargetConfigMatrix(readJsonFile(path));
   const platformTargets = assertPlatformTargetsConfigShape(readJsonFile(targetsPath));
   const targets = readTargetFilterFromEnv('MPGD_TARGET_CONFIG_TARGETS');
+  const validationTargets = targets ?? Object.keys(platformTargets.targets);
 
-  for (const target of targets ?? Object.keys(configMatrix.targets)) {
+  for (const target of validationTargets) {
     const config = configMatrix.targets[target];
 
     if (config === undefined) {
@@ -28,23 +29,9 @@ export function validateTargetConfigMatrixFile(
     validateTargetConfigConsistency(target, config);
   }
 
-  if (targets === undefined) {
-    for (const target of Object.keys(platformTargets.targets)) {
-      if (configMatrix.targets[target] === undefined) {
-        throw new Error(`Missing target config for configured platform target: ${target}`);
-      }
-    }
-
-    for (const target of Object.keys(configMatrix.targets)) {
-      if (platformTargets.targets[target] === undefined) {
-        throw new Error(`Target config is not configured in the target build config: ${target}`);
-      }
-    }
-  } else {
-    for (const target of targets) {
-      if (platformTargets.targets[target] === undefined) {
-        throw new Error(`Target config is not configured in the target build config: ${target}`);
-      }
+  for (const target of validationTargets) {
+    if (platformTargets.targets[target] === undefined) {
+      throw new Error(`Target config is not configured in the target build config: ${target}`);
     }
   }
 
