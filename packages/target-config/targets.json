@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-15",
+  "version": "2026-07-15.1",
   "targets": {
     "web-preview": {
       "runtime": "web-preview",
