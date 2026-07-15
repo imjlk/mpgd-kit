@@ -41,6 +41,15 @@ export {
 } from './game-acceptance.js';
 
 export {
+  createBrowserGameplayE2EDriver,
+  type BrowserGameplayE2EInspectInput,
+  type BrowserGameplayE2EPage,
+  type BrowserGameplayE2EScreenshotOptions,
+  type BrowserGameplayE2EViewport,
+  type CreateBrowserGameplayE2EDriverInput,
+} from './browser-gameplay-e2e.js';
+
+export {
   collectGameplayE2EPathEvidence,
   defaultGameplayE2EReportFile,
   maximumGameplayE2EStates,
