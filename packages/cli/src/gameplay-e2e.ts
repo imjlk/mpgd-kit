@@ -10,9 +10,17 @@ import {
   readlinkSync,
   readSync,
   rmSync,
-  writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
+
+import {
+  escapeMarkdownInline,
+  escapeMarkdownTable,
+  formatDuration,
+  formatError as formatEvidenceError,
+  relativeOrAbsolute,
+  writeEvidenceReportFiles,
+} from './evidence-io.js';
 
 export const defaultGameplayE2EReportFile =
   'artifacts/gameplay-e2e/gameplay-e2e-report.json';
@@ -356,8 +364,12 @@ export async function runGameplayE2E(
     'Gameplay E2E Markdown report',
   );
 
-  writeFileSync(verifiedJsonFile, `${JSON.stringify(report, null, 2)}\n`);
-  writeFileSync(verifiedMarkdownFile, renderGameplayE2EMarkdown(report));
+  writeEvidenceReportFiles({
+    jsonFile: verifiedJsonFile,
+    markdownFile: verifiedMarkdownFile,
+    report,
+    markdown: renderGameplayE2EMarkdown(report),
+  });
 
   return { report, jsonFile: verifiedJsonFile, markdownFile: verifiedMarkdownFile };
 }
@@ -1091,12 +1103,6 @@ function readBoundedInteger(
   return result;
 }
 
-function relativeOrAbsolute(root: string, file: string): string {
-  const relative = path.relative(root, file);
-
-  return relative.startsWith('..') || path.isAbsolute(relative) ? file : relative || '.';
-}
-
 function replaceFileExtension(file: string, extension: string): string {
   const currentExtension = path.extname(file);
 
@@ -1111,27 +1117,10 @@ function assertGameplayE2EJsonReportFile(file: string): void {
   }
 }
 
-function escapeMarkdownTable(value: string): string {
-  return escapeMarkdownInline(value).replaceAll('|', '\\|');
-}
-
-function escapeMarkdownInline(value: string): string {
-  return value
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replace(/([\\`*_[\]])/gu, '\\$1')
-    .replaceAll('\n', ' ');
-}
-
-function formatDuration(durationMs: number): string {
-  return durationMs < 1_000 ? `${durationMs}ms` : `${(durationMs / 1_000).toFixed(1)}s`;
-}
-
 function formatError(error: unknown): string {
   if (error instanceof GameplayE2EAggregatedError) {
     return `${error.message} ${error.errors.map(formatError).join(' ')}`;
   }
 
-  return error instanceof Error ? error.message : String(error);
+  return formatEvidenceError(error);
 }

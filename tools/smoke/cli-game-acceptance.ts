@@ -190,7 +190,7 @@ try {
       releaseManifest: {
         file: 'artifacts/[release]*.json\nnext',
         found: true,
-        parseError: 'bad *value* [detail] <tag>',
+        parseError: 'bad *value* [detail] <tag> (safe)',
         value: null,
       },
       gameplayE2E: null,
@@ -198,6 +198,7 @@ try {
   });
 
   assert.match(escapedMarkdown, /bad \\\*value\\\* \\\[detail\\\] &lt;tag&gt;/u);
+  assert.ok(escapedMarkdown.includes('(safe)'));
   assert.match(escapedMarkdown, /Game root: root \\\*game\\\* &lt;tag&gt; next/u);
   assert.match(escapedMarkdown, /artifacts\/\\\[release\\\]\\\*\.json next/u);
 
