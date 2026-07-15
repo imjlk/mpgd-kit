@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/game-services",
-  "version": "0.8.1",
+  "version": "0.8.2",
   "description": "Client, contract, server, store, and test helpers for authoritative mpgd game services.",
   "license": "MIT",
   "repository": {

@@ -1,5 +1,11 @@
 # @mpgd/game-services
 
+## 0.8.2 — 2026-07-15
+
+### Fixed
+
+- [d5a434a](https://github.com/imjlk/mpgd-kit/commit/d5a434a05d1b23e9fb8046a995a691cb8bfe7c18) Reject verified leaderboard snapshots with inconsistent page ordering, ranks, totals, or continuation cursors before they cross provider and transport boundaries. — Thanks @imjlk!
+
 ## 0.8.1 — 2026-07-15
 
 ### Fixed

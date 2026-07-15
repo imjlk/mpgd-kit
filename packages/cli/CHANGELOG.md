@@ -1,5 +1,20 @@
 # @mpgd/cli
 
+## 0.11.0 — 2026-07-15
+
+### Added
+
+- [61f208f](https://github.com/imjlk/mpgd-kit/commit/61f208fa4c38df57ffd75e052913ac4d1b4cfe66) Add a reusable Playwright-compatible browser Gameplay E2E driver that shares normalized input and screenshot handling while keeping lifecycle and game-state inspection hooks consumer-owned. — Thanks @imjlk!
+- [59640c1](https://github.com/imjlk/mpgd-kit/commit/59640c17c4189ae7f5550e3e7d23975dd9b99217) Add Playwright-compatible Microsoft Store PWA helpers for reading release evidence, requesting service worker updates, resolving deployment-scoped caches, and verifying atomic A-to-B cache transitions. — Thanks @imjlk!
+
+### Fixed
+
+- [8934ce1](https://github.com/imjlk/mpgd-kit/commit/8934ce1cb5c00a085ce59ea5c12f0813aad32c26) Share bounded evidence reads, path display normalization, Markdown formatting, error formatting, and deterministic JSON and Markdown report writes across CLI verification workflows. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-devvit@0.8.2, game-services@0.8.2
+
 ## 0.10.1 — 2026-07-15
 
 ### Patch changes
