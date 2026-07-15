@@ -78,6 +78,7 @@ export {
 
 export {
   assertMicrosoftStorePwaCacheTransition,
+  assertMicrosoftStorePwaPrecacheUrl,
   assertMicrosoftStorePwaReleaseEvidence,
   inspectMicrosoftStorePwaBrowserCacheTransition,
   microsoftStorePwaCacheSchema,

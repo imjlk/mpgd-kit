@@ -80,10 +80,33 @@ export async function readMicrosoftStorePwaBrowserReleaseEvidence<
   TPage extends MicrosoftStorePwaBrowserPage,
 >(
   page: TPage,
-  releaseUrl = './pwa-release.json',
+  releaseUrl?: string,
 ): Promise<MicrosoftStorePwaReleaseEvidence> {
-  const url = requireNonEmptyString(releaseUrl, 'PWA release evidence URL');
-  const input = await page.evaluate(async (requestedUrl) => {
+  const explicitReleaseUrl = releaseUrl === undefined
+    ? undefined
+    : requireNonEmptyString(releaseUrl, 'PWA release evidence URL');
+  const input = await page.evaluate(async (browserInput) => {
+    let requestedUrl = browserInput.releaseUrl;
+
+    if (requestedUrl === undefined) {
+      const browser = globalThis as unknown as {
+        readonly navigator: {
+          readonly serviceWorker: {
+            getRegistration(clientURL?: string): Promise<{
+              readonly scope: string;
+            } | undefined>;
+          };
+        };
+      };
+      const registration = await browser.navigator.serviceWorker.getRegistration();
+
+      if (registration === undefined) {
+        throw new Error('Missing service worker registration before reading release evidence.');
+      }
+
+      requestedUrl = new URL('./pwa-release.json', registration.scope).href;
+    }
+
     const response = await fetch(requestedUrl);
 
     if (!response.ok) {
@@ -91,7 +114,7 @@ export async function readMicrosoftStorePwaBrowserReleaseEvidence<
     }
 
     return response.json() as Promise<unknown>;
-  }, url);
+  }, { releaseUrl: explicitReleaseUrl });
 
   return assertMicrosoftStorePwaReleaseEvidence(input);
 }
@@ -158,7 +181,8 @@ export async function inspectMicrosoftStorePwaBrowserCacheTransition<
     };
     const cacheNames = await browser.caches.keys();
     const releaseBCache = await browser.caches.open(scopedCacheNames.b);
-    const cachedIndexResponse = await releaseBCache.match('./index.html');
+    const cachedIndexUrl = new URL('./index.html', registration.scope).href;
+    const cachedIndexResponse = await releaseBCache.match(cachedIndexUrl);
 
     if (cachedIndexResponse === undefined) {
       throw new Error('Release B cache is missing index.html.');
@@ -297,8 +321,7 @@ export function assertMicrosoftStorePwaReleaseEvidence(
     .slice(0, 12)}-`;
   const cachePrefix = requireNonEmptyString(input.cachePrefix, 'PWA cache prefix');
   const cacheNamePattern = requireNonEmptyString(input.cacheNamePattern, 'PWA cache name pattern');
-  const precacheUrls = input.precacheUrls.map((url) =>
-    requireNonEmptyString(url, 'PWA precache URL'));
+  const precacheUrls = input.precacheUrls.map(assertMicrosoftStorePwaPrecacheUrl);
 
   if (cachePrefix !== expectedCachePrefix) {
     throw new Error('PWA cache prefix is inconsistent with its application ID.');
@@ -332,6 +355,40 @@ export function assertMicrosoftStorePwaReleaseEvidence(
     cacheNamePattern,
     precacheUrls,
   };
+}
+
+export function assertMicrosoftStorePwaPrecacheUrl(input: unknown): string {
+  const url = requireNonEmptyString(input, 'PWA precache URL');
+
+  if (
+    !url.startsWith('./')
+    || url.includes('\\')
+    || url.includes('?')
+    || url.includes('#')
+    || hasDotSegment(url)
+  ) {
+    throw new Error(`Unsafe PWA precache URL: ${url}`);
+  }
+
+  return url;
+}
+
+function hasDotSegment(url: string): boolean {
+  for (const segment of url.slice(2).split('/')) {
+    let decoded: string;
+
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      return true;
+    }
+
+    if (decoded === '.' || decoded === '..') {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function requireGameSpecificPwaId(input: unknown): string {

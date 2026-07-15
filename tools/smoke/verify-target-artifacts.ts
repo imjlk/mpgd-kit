@@ -90,7 +90,10 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
     }
 
     if (target === 'microsoft-store') {
-      verifyMicrosoftStorePwaManifest(artifactPath, loadedPlatformTargets.baseDir);
+      verifyMicrosoftStorePwaManifest(
+        artifactPath,
+        resolveFromPlatformTargetsBase(loadedPlatformTargets.baseDir, targetConfig.gameApp),
+      );
 
       if (entry.profile === 'production') {
         verifyMicrosoftStorePwaRelease(artifactPath, manifest);

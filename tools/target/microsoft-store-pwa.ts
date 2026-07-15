@@ -3,6 +3,7 @@ import { readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 
 import {
+  assertMicrosoftStorePwaPrecacheUrl,
   assertMicrosoftStorePwaReleaseEvidence,
   microsoftStorePwaCacheSchema,
   type MicrosoftStorePwaReleaseEvidence,
@@ -254,7 +255,7 @@ function normalizePrecacheEntries(entries: readonly PrecacheEntry[]): readonly P
   const entriesByUrl = new Map<string, string | Uint8Array>();
 
   for (const entry of entries) {
-    const url = requirePrecacheUrl(entry.url);
+    const url = assertMicrosoftStorePwaPrecacheUrl(entry.url);
 
     if (entriesByUrl.has(url)) {
       throw new Error(`Duplicate PWA precache URL: ${url}`);
@@ -273,7 +274,7 @@ function normalizePrecacheEntries(entries: readonly PrecacheEntry[]): readonly P
 }
 
 function normalizePrecacheUrls(urls: readonly string[]): readonly string[] {
-  const normalized = urls.map(requirePrecacheUrl);
+  const normalized = urls.map(assertMicrosoftStorePwaPrecacheUrl);
 
   if (new Set(normalized).size !== normalized.length) {
     throw new Error('PWA precache URLs must be unique.');
@@ -284,41 +285,7 @@ function normalizePrecacheUrls(urls: readonly string[]): readonly string[] {
 
 function toPrecacheUrl(root: string, path: string): string {
   const portablePath = relative(root, path).split(sep).join('/');
-  return requirePrecacheUrl(`./${portablePath}`);
-}
-
-function requirePrecacheUrl(value: string): string {
-  const url = requireNonEmptyString(value, 'PWA precache URL');
-
-  if (
-    !url.startsWith('./')
-    || url.includes('\\')
-    || url.includes('?')
-    || url.includes('#')
-    || hasDotSegment(url)
-  ) {
-    throw new Error(`Unsafe PWA precache URL: ${url}`);
-  }
-
-  return url;
-}
-
-function hasDotSegment(url: string): boolean {
-  for (const segment of url.slice(2).split('/')) {
-    let decoded: string;
-
-    try {
-      decoded = decodeURIComponent(segment);
-    } catch {
-      return true;
-    }
-
-    if (decoded === '.' || decoded === '..') {
-      return true;
-    }
-  }
-
-  return false;
+  return assertMicrosoftStorePwaPrecacheUrl(`./${portablePath}`);
 }
 
 function readPwaId(input: unknown): string {

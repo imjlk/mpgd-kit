@@ -53,7 +53,11 @@ class FakeBrowserPage implements MicrosoftStorePwaBrowserPage {
       return undefined as TResult;
     }
 
-    if (typeof argument === 'string') {
+    if (
+      typeof argument === 'object'
+      && argument !== null
+      && 'releaseUrl' in argument
+    ) {
       return this.release as TResult;
     }
 
@@ -79,6 +83,20 @@ assert.throws(
     sourceGitSha: '1234567',
   }),
   /full 40-character lowercase Git SHA/u,
+);
+assert.throws(
+  () => assertMicrosoftStorePwaReleaseEvidence({
+    ...releaseA,
+    precacheUrls: ['./assets/game.release-a.js?stale'],
+  }),
+  /Unsafe PWA precache URL/u,
+);
+assert.throws(
+  () => assertMicrosoftStorePwaReleaseEvidence({
+    ...releaseA,
+    precacheUrls: ['./%2e%2e/escape.js'],
+  }),
+  /Unsafe PWA precache URL/u,
 );
 assert.throws(
   () => assertMicrosoftStorePwaReleaseEvidence({
