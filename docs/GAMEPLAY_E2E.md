@@ -1,9 +1,10 @@
 # Gameplay E2E
 
-`@mpgd/cli` provides a target-neutral gameplay acceptance contract. Games own
-the scenario-specific state inspection and platform automation driver; the kit
-owns plan validation, lifecycle continuity checks, evidence hashing, and the
-JSON/Markdown report format.
+`@mpgd/cli` provides a target-neutral gameplay acceptance contract. The kit
+owns plan validation, lifecycle continuity checks, evidence hashing, the
+JSON/Markdown report format, and a reusable browser driver for generic input
+and screenshot operations. Games own scenario-specific state inspection,
+lifecycle hooks, and non-browser platform automation drivers.
 
 This boundary keeps browser automation, Android tooling, iOS tooling, and
 platform credentials out of generated runtime code. It also prevents the kit
@@ -60,12 +61,43 @@ Plan parsing is strict: unknown fields, duplicate or unsafe state ids,
 out-of-range coordinates, excessive waits, and unsupported actions fail before
 automation starts.
 
-## Game-Owned Driver
+## Browser Reference Driver
+
+Browser acceptance can use `createBrowserGameplayE2EDriver` with a Playwright
+`Page`. The CLI package does not depend on Playwright: install it in the game
+or acceptance harness and pass the page through the structural contract. This
+keeps browser versions and credentials local to the consumer while sharing the
+portable tap, key, wait, and screenshot implementation.
+
+```ts
+import { chromium } from 'playwright';
+
+import { createBrowserGameplayE2EDriver } from '@mpgd/cli';
+
+const browser = await chromium.launch();
+const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+
+const driver = createBrowserGameplayE2EDriver({
+  page,
+  pause: async (currentPage) => pauseGame(currentPage),
+  resume: async (currentPage) => resumeGame(currentPage),
+  inspect: async ({ page: currentPage, state, phase }) =>
+    inspectGameState({ page: currentPage, state, phase }),
+});
+```
+
+The page must have a configured positive integer viewport so normalized taps
+can be mapped to pixels. The driver reads the viewport for every tap, clamps
+the normalized `1` boundary to the final pixel, forwards key names and waits,
+and writes PNG screenshots to the exact path requested by the runner. Generic
+browser actions stay shared; pause/resume semantics and state inspection stay
+explicit because they depend on the game and its hosting surface.
+
+## Game-Owned Runner
 
 Add a non-interactive `gameplay:e2e` package script only after the game has a
-real driver. The Android-specific example below assumes acceptance runs with
-`mpgd game accept . --targets android`; the script can import the reusable
-runner from `@mpgd/cli`:
+real driver. The example below assumes acceptance runs with `mpgd game accept`
+and imports the reusable runner from `@mpgd/cli`:
 
 ```ts
 import { existsSync } from 'node:fs';
@@ -98,9 +130,9 @@ const result = await runGameplayE2E({
   reportFile,
   plan: configured.plan,
   planFile: configured.file,
-  target: 'android',
+  target: 'web-preview',
   profile: process.env.MPGD_ACCEPTANCE_PROFILE ?? 'staging',
-  artifactFile: 'release-output/android/app-release.aab',
+  artifactFile: 'dist/index.html',
   ...(releaseManifestFile === undefined ? {} : { releaseManifestFile }),
   driver,
 });
@@ -110,7 +142,9 @@ if (result.report.status !== 'passed') {
 }
 ```
 
-The driver implements five operations:
+Every driver implements five operations. The browser factory supplies
+`perform` and `captureScreenshot`; its consumer hooks supply `pause`, `resume`,
+and `inspect`:
 
 - `perform` maps normalized tap, key, and wait actions to the selected target.
 - `pause` backgrounds or suspends the app.
@@ -119,8 +153,8 @@ The driver implements five operations:
   stable session id plus JSON-scalar metadata.
 - `captureScreenshot` writes a PNG to the exact path requested by the runner.
 
-Keep browser/Playwright, ADB, XCUITest, Appium, or other automation imports in
-the game-owned script or target test harness. Do not import them from Phaser
+Keep Playwright, ADB, XCUITest, Appium, or other automation imports in the
+game-owned script or target test harness. Do not import them from Phaser
 scenes. Standard `xcrun simctl` can boot, install, launch, and capture an iOS
 Simulator screen, but it does not provide portable tap/key input; use an
 XCUITest/Appium-compatible driver or another explicitly managed automation
