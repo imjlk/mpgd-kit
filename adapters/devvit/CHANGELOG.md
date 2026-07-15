@@ -1,5 +1,16 @@
 # @mpgd/adapter-devvit
 
+## 0.8.1 — 2026-07-15
+
+### Fixed
+
+- [ae8ffdb](https://github.com/imjlk/mpgd-kit/commit/ae8ffdb449db4fc05e41bc9d4e2b2af149d4339c) Prevent the Devvit commerce installer from bypassing target-config IAP gating by
+  failing closed when invoked after target availability has already been applied. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: game-services@0.8.1
+
 ## 0.8.0 — 2026-07-15
 
 ### Added

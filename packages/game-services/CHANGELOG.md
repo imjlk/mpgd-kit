@@ -1,5 +1,12 @@
 # @mpgd/game-services
 
+## 0.8.1 — 2026-07-15
+
+### Fixed
+
+- [a18483a](https://github.com/imjlk/mpgd-kit/commit/a18483a286bfae17641951e0322fedd7ca45a7df) Reject calendar-impossible UTC timestamps in server-driven platform fulfillment
+  and refund orders instead of accepting `Date.parse` overflow normalization. — Thanks @imjlk!
+
 ## 0.8.0 — 2026-07-15
 
 ### Added
