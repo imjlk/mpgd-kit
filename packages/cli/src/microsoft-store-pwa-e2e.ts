@@ -103,13 +103,13 @@ export async function requestMicrosoftStorePwaBrowserUpdate<
     const browser = globalThis as unknown as {
       readonly navigator: {
         readonly serviceWorker: {
-          getRegistration(scope: string): Promise<{
+          getRegistration(clientURL?: string): Promise<{
             update(): Promise<unknown>;
           } | undefined>;
         };
       };
     };
-    const registration = await browser.navigator.serviceWorker.getRegistration('./');
+    const registration = await browser.navigator.serviceWorker.getRegistration();
 
     if (registration === undefined) {
       throw new Error('Missing service worker registration before update.');
@@ -156,6 +156,7 @@ export async function inspectMicrosoftStorePwaBrowserCacheTransition<
       a: browserInput.releaseACacheNamePattern.replace('{scope}', encodedScope),
       b: browserInput.releaseBCacheNamePattern.replace('{scope}', encodedScope),
     };
+    const cacheNames = await browser.caches.keys();
     const releaseBCache = await browser.caches.open(scopedCacheNames.b);
     const cachedIndexResponse = await releaseBCache.match('./index.html');
 
@@ -168,7 +169,7 @@ export async function inspectMicrosoftStorePwaBrowserCacheTransition<
     return {
       registrationScope: registration.scope,
       scopedCacheNames,
-      cacheNames: await browser.caches.keys(),
+      cacheNames,
       cachedReleaseBIndex: {
         referencesReleaseA: cachedIndex.includes(browserInput.releaseAIndexMarker),
         referencesReleaseB: cachedIndex.includes(browserInput.releaseBIndexMarker),
