@@ -26,3 +26,24 @@ head_sampling_rate = 1
 # [[services]]
 # binding = "VERIFIED_LEADERBOARD_AUTH"
 # service = "game-identity"
+
+# Bind either one aggregate evidence verifier Worker or one verifier per
+# production target. If any target-specific binding is configured, configure
+# every target served by this deployment; missing targets fail closed and do
+# not fall back to the aggregate binding.
+#
+# [[services]]
+# binding = "GAME_SERVICES_EVIDENCE_VERIFIER"
+# service = "game-evidence-verifier"
+#
+# [[services]]
+# binding = "GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER"
+# service = "game-evidence-verifier-android"
+#
+# [[services]]
+# binding = "GAME_SERVICES_IOS_EVIDENCE_VERIFIER"
+# service = "game-evidence-verifier-ios"
+#
+# [[services]]
+# binding = "GAME_SERVICES_AIT_EVIDENCE_VERIFIER"
+# service = "game-evidence-verifier-ait"
