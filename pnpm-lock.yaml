@@ -171,9 +171,15 @@ importers:
 
   adapters/verse8:
     dependencies:
+      '@mpgd/game-services':
+        specifier: workspace:*
+        version: link:../../packages/game-services
       '@mpgd/platform':
         specifier: workspace:*
         version: link:../../packages/platform
+      '@verse8/ads':
+        specifier: 0.4.0
+        version: 0.4.0
       '@verse8/platform':
         specifier: 2.1.0
         version: 2.1.0(react@18.2.0)
@@ -190,6 +196,9 @@ importers:
 
   apps/game-services-worker:
     dependencies:
+      '@mpgd/adapter-verse8':
+        specifier: workspace:*
+        version: link:../../adapters/verse8
       '@mpgd/catalog':
         specifier: workspace:*
         version: link:../../packages/catalog
@@ -4893,6 +4902,9 @@ packages:
 
   '@typia/utils@13.0.2':
     resolution: {integrity: sha512-xBaSdfviUgGJPdunaxKI/KFI5AFubDag2BYy8O+fd64yVaNgh/OaaWnOuHU2M7m+88pyR2WeVz0BisHcUJ7V7A==}
+
+  '@verse8/ads@0.4.0':
+    resolution: {integrity: sha512-FfcriXmSe4aQr8MW3N/uNpg11iitOA/3dBAIv5uQFKH/xeqZGZDCrE/RMmiHcq0xXVlVVg1Zi24zr5dEXQMdXA==}
 
   '@verse8/platform@2.1.0':
     resolution: {integrity: sha512-DEtCdoTyUgk0QwgTvzdRljIVWjnOlWbsEIJLzB1Ro4FjVq9BOD27G8ThgEKsNQtYa4pchWbHGTm3Z8tZ7PkwKQ==}
@@ -15691,6 +15703,8 @@ snapshots:
   '@typia/utils@13.0.2':
     dependencies:
       '@typia/interface': 13.0.2
+
+  '@verse8/ads@0.4.0': {}
 
   '@verse8/platform@2.1.0(react@18.2.0)':
     dependencies:

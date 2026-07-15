@@ -2,7 +2,7 @@ import typia from 'typia';
 
 import type { LogicalAdPlacementId, LogicalProductId, ProductType } from '@mpgd/platform';
 
-export type CatalogTarget = 'android' | 'ios' | 'ait' | 'reddit';
+export type CatalogTarget = 'android' | 'ios' | 'ait' | 'reddit' | 'verse8';
 
 export type AdPlacementTarget = Exclude<CatalogTarget, 'reddit'>;
 

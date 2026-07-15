@@ -97,7 +97,7 @@ Codex agents, skills, starter manifests, and Apps in Toss MCP guidance.
 - `@mpgd/platform`: shared platform gateway surface.
 - `@mpgd/bridge`: typed native bridge request/response protocol.
 - `@mpgd/adapter-browser`, `@mpgd/adapter-capacitor`, `@mpgd/adapter-ait`,
-  `@mpgd/adapter-devvit`: target adapters.
+  `@mpgd/adapter-devvit`, `@mpgd/adapter-verse8`: target adapters.
 - `@mpgd/target-config`: target runtime, capability, release profile, and platform policy availability.
 - `@mpgd/catalog`: product catalog and ad placement config schemas plus sample JSON.
 - `@mpgd/i18n`: Paraglide-backed localized messages.
@@ -132,6 +132,13 @@ public JSON endpoints, `/rpc/*` oRPC procedures, `/health`, and
 `MPGD_STORE = "d1"`. The same D1 binding durably stores verified leaderboard
 definitions, idempotent attempt decisions, optional bounded numeric metrics,
 and retained ranked entries.
+
+Verse8 rewarded ads use `@verse8/ads` only to collect a correlated
+`requestId`. The adapter ignores client-reported reward values, and
+`@mpgd/adapter-verse8/server` consumes `/ads/verify` before the catalog-backed
+game-services ledger decides the grant. The Worker remains fail-closed unless
+`VERSE8_ADS_VERIFIER_AUTHORIZATION` is configured as a secret containing the
+complete server Authorization header issued for that endpoint.
 
 Read:
 

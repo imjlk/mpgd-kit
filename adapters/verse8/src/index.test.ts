@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   createVerse8PlatformGateway,
+  type Verse8AdsClient,
   type Verse8AuthClient,
   type Verse8VisibilitySource,
 } from './index';
@@ -13,16 +14,16 @@ const credential = {
 };
 
 describe('adapter-verse8', () => {
-  it('exposes only foundation capabilities', async () => {
+  it('exposes Verse8 host ads while keeping unimplemented capabilities unavailable', async () => {
     const gateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),
     });
 
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
       nativeIap: false,
-      nativeAds: false,
-      rewardedAds: false,
-      interstitialAds: false,
+      nativeAds: true,
+      rewardedAds: true,
+      interstitialAds: true,
       nativeLeaderboard: false,
       cloudSave: false,
       localizedContent: true,
@@ -82,7 +83,7 @@ describe('adapter-verse8', () => {
     });
   });
 
-  it('keeps commerce, ads, and leaderboard unavailable', async () => {
+  it('keeps commerce, unmapped ads, and leaderboard unavailable', async () => {
     const gateway = createVerse8PlatformGateway({ authClient: authenticatedClient() });
 
     await expect(
@@ -106,6 +107,117 @@ describe('adapter-verse8', () => {
         submittedAt: new Date().toISOString(),
       }),
     ).resolves.toEqual({ submitted: false });
+  });
+
+  it('turns rewarded callbacks into evidence candidates without trusting reward values', async () => {
+    const calls: unknown[] = [];
+    const gateway = createVerse8PlatformGateway({
+      authClient: authenticatedClient(),
+      adsClient: createAdsClient({
+        async showRewarded(input) {
+          calls.push(input);
+          return {
+            status: 'rewarded',
+            requestId: 'verse8-request-1',
+            reward: {
+              amount: 999_999,
+              type: 'untrusted-client-value',
+            },
+            platform: 'web',
+          };
+        },
+      }),
+      adsTimeoutMs: 12_000,
+      resolveAdPlacementId(placementId) {
+        return placementId === 'CONTINUE_AFTER_FAIL' ? 'rewarded_continue' : undefined;
+      },
+    });
+
+    await expect(
+      gateway.ads.showRewarded({
+        placementId: 'CONTINUE_AFTER_FAIL',
+        idempotencyKey: 'reward-1',
+      }),
+    ).resolves.toEqual({
+      status: 'completed',
+      rewardGranted: true,
+      ledgerEntryId: 'verse8-request-1',
+      evidence: {
+        schema: 'verse8.ads.reward.v1',
+        payload: {
+          requestId: 'verse8-request-1',
+          placementId: 'rewarded_continue',
+          platform: 'web',
+        },
+      },
+    });
+    expect(calls).toEqual([
+      {
+        placementId: 'rewarded_continue',
+        timeoutMs: 12_000,
+        meta: {
+          logicalPlacementId: 'CONTINUE_AFTER_FAIL',
+        },
+      },
+    ]);
+  });
+
+  it('maps dismissed and unsupported host outcomes without producing grant evidence', async () => {
+    const dismissedGateway = createVerse8PlatformGateway({
+      authClient: authenticatedClient(),
+      adsClient: createAdsClient({
+        async showRewarded() {
+          return {
+            status: 'dismissed',
+            requestId: 'dismissed-request',
+          };
+        },
+        async showInterstitial() {
+          return {
+            status: 'dismissed',
+            requestId: 'interstitial-request',
+          };
+        },
+      }),
+      resolveAdPlacementId() {
+        return 'verse8-placement';
+      },
+    });
+
+    await expect(
+      dismissedGateway.ads.showRewarded({
+        placementId: 'CONTINUE_AFTER_FAIL',
+        idempotencyKey: 'dismissed',
+      }),
+    ).resolves.toEqual({ status: 'skipped', rewardGranted: false });
+    await expect(
+      dismissedGateway.ads.showInterstitial?.({
+        placementId: 'STAGE_END_INTERSTITIAL',
+      }),
+    ).resolves.toEqual({ status: 'shown' });
+
+    const unsupportedGateway = createVerse8PlatformGateway({
+      authClient: authenticatedClient(),
+      adsClient: createAdsClient({
+        async showRewarded() {
+          return {
+            status: 'failed',
+            requestId: 'unsupported-request',
+            error: { code: 'unsupported_env' },
+          };
+        },
+      }),
+      resolveAdPlacementId() {
+        return 'verse8-placement';
+      },
+    });
+
+    await expect(
+      unsupportedGateway.ads.showRewarded({
+        placementId: 'CONTINUE_AFTER_FAIL',
+        idempotencyKey: 'unsupported',
+      }),
+    ).resolves.toEqual({ status: 'unavailable', rewardGranted: false });
   });
 
   it('persists local data with a Verse8-specific namespace', async () => {
@@ -187,5 +299,27 @@ function authenticatedClient(): Verse8AuthClient {
     getUser() {
       return credential;
     },
+  };
+}
+
+function createAdsClient(
+  overrides: Partial<Verse8AdsClient> = {},
+): Verse8AdsClient {
+  return {
+    async showRewarded() {
+      return {
+        status: 'failed',
+        requestId: 'default-rewarded-request',
+        error: { code: 'platform_error' },
+      };
+    },
+    async showInterstitial() {
+      return {
+        status: 'failed',
+        requestId: 'default-interstitial-request',
+        error: { code: 'platform_error' },
+      };
+    },
+    ...overrides,
   };
 }

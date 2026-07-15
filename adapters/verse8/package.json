@@ -27,6 +27,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
     }
   },
   "files": [
@@ -37,10 +41,12 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run"
+    "test": "vitest run && node test/server-dist-import.mjs"
   },
   "dependencies": {
+    "@mpgd/game-services": "workspace:*",
     "@mpgd/platform": "workspace:*",
+    "@verse8/ads": "0.4.0",
     "@verse8/platform": "2.1.0"
   },
   "devDependencies": {

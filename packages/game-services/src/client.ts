@@ -499,7 +499,7 @@ function normalizeSegment(value: string): string {
 }
 
 function isGameServicesStoreTarget(target: GameServicesLedgerTarget): target is GameServicesStoreTarget {
-  return target === 'android' || target === 'ios' || target === 'ait';
+  return target === 'android' || target === 'ios' || target === 'ait' || target === 'verse8';
 }
 
 async function sendGameServicesBackendRequest<TRequest, TResponse>(

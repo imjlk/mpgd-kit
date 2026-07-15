@@ -158,7 +158,13 @@ memory and D1 modes. Production deployments can provide the legacy aggregate
 `GAME_SERVICES_EVIDENCE_VERIFIER` service binding or separate
 `GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER`,
 `GAME_SERVICES_IOS_EVIDENCE_VERIFIER`, and
-`GAME_SERVICES_AIT_EVIDENCE_VERIFIER` bindings.
+`GAME_SERVICES_AIT_EVIDENCE_VERIFIER`, and
+`GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER` bindings. Verse8 deployments can
+instead configure the built-in `@mpgd/adapter-verse8/server` verifier by
+setting the Worker's `VERSE8_ADS_VERIFIER_AUTHORIZATION` secret to the complete
+server Authorization header issued for the consume-once `/ads/verify`
+endpoint. `VERSE8_ADS_VERIFIER_BASE_URL` is optional and defaults to the
+production Verse8 verifier.
 
 If any target-specific binding is configured, the Worker enters strict
 target-specific mode. Each purchase or rewarded-ad request is sent only to the
@@ -245,6 +251,9 @@ for read-only pages; the server, not the client, chooses `participantEntry` scop
   grant after partner backend grant succeeds.
 - Rewarded ads should treat SDK reward callbacks as evidence. For AdMob-backed
   targets, server-side verification callbacks should be the backend grant signal.
+- Verse8 rewarded callbacks provide correlation only. The server verifier must
+  consume the matching request, placement, and user before the catalog-backed
+  ledger grants; client or verifier reward amounts never select the grant.
 - Apps in Toss rewarded ads must follow `loadFullScreenAd` then `showFullScreenAd`;
   rewards are tied to `userEarnedReward`, not `dismissed`.
 

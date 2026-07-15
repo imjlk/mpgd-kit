@@ -9,10 +9,13 @@ import type {
 
 export type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 
-export type GameServicesStoreTarget = Extract<PlatformTarget, 'android' | 'ios' | 'ait'>;
+export type GameServicesStoreTarget = Extract<
+  PlatformTarget,
+  'android' | 'ios' | 'ait' | 'verse8'
+>;
 export type GameServicesLedgerTarget = Extract<
   PlatformTarget,
-  'browser' | 'android' | 'ios' | 'ait' | 'reddit'
+  'browser' | 'android' | 'ios' | 'ait' | 'reddit' | 'verse8'
 >;
 
 export type PurchaseIdempotencyKey = string;
@@ -245,8 +248,8 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 }
 
 function assertStoreTarget(input: unknown): asserts input is GameServicesStoreTarget {
-  if (input !== 'android' && input !== 'ios' && input !== 'ait') {
-    throw new Error('target must be android, ios, or ait.');
+  if (input !== 'android' && input !== 'ios' && input !== 'ait' && input !== 'verse8') {
+    throw new Error('target must be android, ios, ait, or verse8.');
   }
 }
 
@@ -257,8 +260,9 @@ function assertLeaderboardTarget(input: unknown): asserts input is GameServicesL
     && input !== 'ios'
     && input !== 'ait'
     && input !== 'reddit'
+    && input !== 'verse8'
   ) {
-    throw new Error('target must be browser, android, ios, ait, or reddit.');
+    throw new Error('target must be browser, android, ios, ait, reddit, or verse8.');
   }
 }
 

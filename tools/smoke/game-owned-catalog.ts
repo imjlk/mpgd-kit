@@ -70,6 +70,7 @@ try {
             android: 'android_sudoku_hint_rewarded',
             ios: 'ios_sudoku_hint_rewarded',
             ait: 'ait_sudoku_hint_rewarded',
+            verse8: 'verse8_sudoku_hint_rewarded',
           },
         },
         {
@@ -83,6 +84,7 @@ try {
             android: 'android_sudoku_stage_end',
             ios: 'ios_sudoku_stage_end',
             ait: 'ait_sudoku_stage_end',
+            verse8: 'verse8_sudoku_stage_end',
           },
         },
       ],

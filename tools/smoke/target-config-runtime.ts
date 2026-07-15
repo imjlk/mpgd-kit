@@ -178,11 +178,7 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
     `${configTarget} localization feature should control locale resolution`,
   );
 
-  if (
-    configTarget === 'web-preview'
-    || configTarget === 'microsoft-store'
-    || configTarget === 'verse8'
-  ) {
+  if (configTarget === 'web-preview' || configTarget === 'microsoft-store') {
     assertEqual(
       getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
       'target-disabled',
@@ -192,6 +188,21 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.reason,
       'target-disabled',
       `${configTarget} ad placements should be target-disabled`,
+    );
+    await verifyBrowserOnlyFallbacks(gateway, configTarget);
+    return;
+  }
+
+  if (configTarget === 'verse8') {
+    assertEqual(
+      getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
+      'target-disabled',
+      'verse8 products should be target-disabled before VXShop integration',
+    );
+    assertEqual(
+      getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
+      true,
+      'verse8 ad placements should be enabled',
     );
     await verifyBrowserOnlyFallbacks(gateway, configTarget);
     return;
@@ -301,18 +312,19 @@ async function verifyBrowserOnlyFallbacks(
   configTarget: 'web-preview' | 'microsoft-store' | 'verse8',
 ): Promise<void> {
   const runtime = await gateway.getTargetRuntime();
+  const adsEnabled = configTarget === 'verse8';
 
   assertEqual(runtime.configTarget, configTarget, 'browser-only config target should match');
   assertEqual(runtime.features.iap.reason, 'target-disabled', 'IAP should be target-disabled');
   assertEqual(
     runtime.features.rewardedAds.reason,
-    'target-disabled',
-    'rewarded ads should be target-disabled',
+    adsEnabled ? 'available' : 'target-disabled',
+    `rewarded ads should match ${configTarget} availability`,
   );
   assertEqual(
     runtime.features.interstitialAds.reason,
-    'target-disabled',
-    'interstitial ads should be target-disabled',
+    adsEnabled ? 'available' : 'target-disabled',
+    `interstitial ads should match ${configTarget} availability`,
   );
   assertEqual(
     runtime.features.leaderboard.reason,
@@ -334,16 +346,20 @@ async function verifyBrowserOnlyFallbacks(
     'available',
     'localization should be available',
   );
-  assertEqual(runtime.capabilities.rewardedAds, false, 'rewarded capability should be clamped');
+  assertEqual(
+    runtime.capabilities.rewardedAds,
+    adsEnabled,
+    `rewarded capability should match ${configTarget} availability`,
+  );
   assertEqual(
     runtime.capabilities.localizedContent,
     true,
     'localized content capability should remain available',
   );
   assertEqual(
-    runtime.adPlacements.every((placement) => !placement.enabled),
+    runtime.adPlacements.every((placement) => placement.enabled === adsEnabled),
     true,
-    `all ${configTarget} ad placements should be disabled`,
+    `all ${configTarget} ad placements should match target availability`,
   );
   assertDeepEqual(await gateway.commerce.getProducts(), [], 'IAP products should be hidden');
   assertDeepEqual(

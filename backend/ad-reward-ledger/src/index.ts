@@ -5,7 +5,7 @@ import type { LogicalAdPlacementId } from '@mpgd/platform';
 export type AdRewardIdempotencyKey = string;
 
 export interface ClaimAdRewardRequest {
-  readonly target: 'android' | 'ios' | 'ait';
+  readonly target: 'android' | 'ios' | 'ait' | 'verse8';
   readonly playerId: string;
   readonly placementId: LogicalAdPlacementId;
   readonly platformImpressionId?: string;
@@ -106,8 +106,8 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 }
 
 function assertStoreTarget(input: unknown): asserts input is ClaimAdRewardRequest['target'] {
-  if (input !== 'android' && input !== 'ios' && input !== 'ait') {
-    throw new Error('target must be android, ios, or ait.');
+  if (input !== 'android' && input !== 'ios' && input !== 'ait' && input !== 'verse8') {
+    throw new Error('target must be android, ios, ait, or verse8.');
   }
 }
 

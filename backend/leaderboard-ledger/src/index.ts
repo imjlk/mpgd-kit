@@ -1,6 +1,12 @@
 import type { LeaderboardScoreInput } from '@mpgd/platform';
 
-export type LeaderboardLedgerTarget = 'browser' | 'android' | 'ios' | 'ait' | 'reddit';
+export type LeaderboardLedgerTarget =
+  | 'browser'
+  | 'android'
+  | 'ios'
+  | 'ait'
+  | 'reddit'
+  | 'verse8';
 
 export interface RecordLeaderboardScoreRequest extends LeaderboardScoreInput {
   readonly target: LeaderboardLedgerTarget;
@@ -165,8 +171,9 @@ function assertLedgerTarget(input: unknown): asserts input is LeaderboardLedgerT
     && input !== 'ios'
     && input !== 'ait'
     && input !== 'reddit'
+    && input !== 'verse8'
   ) {
-    throw new Error('target must be browser, android, ios, ait, or reddit.');
+    throw new Error('target must be browser, android, ios, ait, reddit, or verse8.');
   }
 }
 

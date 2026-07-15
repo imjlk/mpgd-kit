@@ -136,8 +136,8 @@ async function verifyVerse8Adapter(): Promise<void> {
   );
   assertEqual(
     getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
-    false,
-    'verse8 rewarded placements should remain disabled before ads integration',
+    true,
+    'verse8 rewarded placements should be enabled after ads integration',
   );
   assertDeepEqual(
     await gateway.identity.getSession?.(),

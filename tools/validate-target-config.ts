@@ -69,10 +69,6 @@ function validateTargetConfigConsistency(target: string, config: TargetConfig): 
     throw new Error(`Target ${target} has feature availability mismatches: ${names}`);
   }
 
-  if (!config.features.iap && (config.features.rewardedAds || config.features.interstitialAds)) {
-    throw new Error(`Target ${target} enables ads while iap is disabled; review target config.`);
-  }
-
   if (target === 'ait' && !config.policy.requiresAitReview) {
     throw new Error('AIT target must require AppsInToss review.');
   }

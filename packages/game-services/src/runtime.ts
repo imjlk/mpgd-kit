@@ -120,6 +120,7 @@ export function resolveGameServicesLedgerTarget(
     || target === 'ios'
     || target === 'ait'
     || target === 'reddit'
+    || target === 'verse8'
   ) {
     return target;
   }
