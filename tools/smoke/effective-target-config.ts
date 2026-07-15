@@ -84,6 +84,7 @@ for (const expectedTarget of Object.keys(expectedIntegrations)) {
 }
 
 verifyGameOwnedIntegrationOverrides();
+verifyRuntimeAdapterValidation();
 
 console.log(`Effective target config smoke passed: ${Object.keys(matrix.targets).join(', ')}`);
 
@@ -253,6 +254,40 @@ function verifyGameOwnedIntegrationOverrides(): void {
       artifact.integrations.presentationMode,
       'fullscreen',
       'reddit presentation mode should use the game-owned target override',
+    );
+  } finally {
+    if (previousTargetsPath === undefined) {
+      delete process.env.MPGD_PLATFORM_TARGETS_FILE;
+    } else {
+      process.env.MPGD_PLATFORM_TARGETS_FILE = previousTargetsPath;
+    }
+
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+}
+
+function verifyRuntimeAdapterValidation(): void {
+  const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-runtime-adapter-'));
+  const targetsPath = join(tempDir, 'mpgd.targets.json');
+  const previousTargetsPath = process.env.MPGD_PLATFORM_TARGETS_FILE;
+  const mismatchedVerse8Target = {
+    targets: {
+      verse8: {
+        kind: 'web',
+        gameApp: '.',
+        adapter: 'browser',
+        output: 'artifacts/verse8',
+      },
+    },
+  } as const;
+
+  try {
+    writeFileSync(targetsPath, `${JSON.stringify(mismatchedVerse8Target, null, 2)}\n`);
+    process.env.MPGD_PLATFORM_TARGETS_FILE = targetsPath;
+    assertThrows(
+      () => validateEffectiveTargetConfigMatrix(loadEffectiveTargetConfigMatrix()),
+      'effective config validation should reject a Verse8 runtime using the browser adapter',
+      'expected verse8',
     );
   } finally {
     if (previousTargetsPath === undefined) {

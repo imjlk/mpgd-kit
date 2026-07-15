@@ -173,10 +173,17 @@ function writeEffectiveTargetConfig(
 
 function validateEffectiveTargetConfig(config: EffectiveTargetConfig): void {
   const expectedPlatformKind = platformKindForRuntime(config.runtime);
+  const expectedPlatformAdapter = platformAdapterForRuntime(config.runtime);
 
   if (config.sources.platformTargetKind !== expectedPlatformKind) {
     throw new Error(
       `Effective target ${config.target} runtime ${config.runtime} does not match platform target kind ${config.sources.platformTargetKind}.`,
+    );
+  }
+
+  if (config.sources.platformAdapter !== expectedPlatformAdapter) {
+    throw new Error(
+      `Effective target ${config.target} runtime ${config.runtime} does not match platform adapter ${config.sources.platformAdapter ?? 'undefined'}; expected ${expectedPlatformAdapter}.`,
     );
   }
 
@@ -272,6 +279,23 @@ function platformKindForRuntime(runtime: EffectiveTargetConfig['runtime']): stri
       return 'devvit-web';
     case 'verse8-web':
       return 'web';
+  }
+}
+
+function platformAdapterForRuntime(runtime: EffectiveTargetConfig['runtime']): string {
+  switch (runtime) {
+    case 'web-preview':
+    case 'microsoft-store-pwa':
+      return 'browser';
+    case 'capacitor-android':
+    case 'capacitor-ios':
+      return 'capacitor';
+    case 'apps-in-toss':
+      return 'ait';
+    case 'devvit-web':
+      return 'devvit';
+    case 'verse8-web':
+      return 'verse8';
   }
 }
 
