@@ -137,6 +137,10 @@ describe('adapter-ait', () => {
         coins: 7,
       },
     });
+    await gateway.storage.save({ key: 'nullable-save:v1', value: null });
+    await expect(gateway.storage.load({ key: 'nullable-save:v1' })).resolves.toEqual({
+      value: null,
+    });
     await expect(
       gateway.commerce.purchase({
         productId: 'COINS_100',

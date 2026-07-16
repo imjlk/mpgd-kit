@@ -144,21 +144,24 @@ public class CapacitorGameServicesPlugin extends Plugin {
 
         try {
             String serializedValue = localStorage().load(key);
-            Object value;
 
             if (serializedValue == null) {
-                value = JSONObject.NULL;
-            } else {
-                JSONObject wrapper = new JSONObject(serializedValue);
-
-                if (!wrapper.has("value")) {
-                    throw new IllegalStateException("Stored JSON wrapper is missing its value.");
-                }
-
-                value = wrapper.opt("value");
+                call.resolve(okResponse(id, new JSObject().put("found", false)));
+                return;
             }
 
-            call.resolve(okResponse(id, value));
+            JSONObject wrapper = new JSONObject(serializedValue);
+
+            if (!wrapper.has("value")) {
+                throw new IllegalStateException("Stored JSON wrapper is missing its value.");
+            }
+
+            call.resolve(okResponse(
+                id,
+                new JSObject()
+                    .put("found", true)
+                    .put("value", wrapper.opt("value"))
+            ));
         } catch (LocalJsonStorage.StorageException error) {
             call.resolve(errorResponse(
                 id,
@@ -221,6 +224,13 @@ public class CapacitorGameServicesPlugin extends Plugin {
                 error.getCode(),
                 error.getMessage(),
                 error.isRetryable()
+            ));
+        } catch (Exception error) {
+            call.resolve(errorResponse(
+                id,
+                "NATIVE_STORAGE_SAVE_FAILED",
+                "Native storage could not be saved.",
+                true
             ));
         }
     }

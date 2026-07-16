@@ -25,3 +25,12 @@ export type BridgeResponse =
         readonly retryable: boolean;
       };
     };
+
+export type BridgeStorageLoadData =
+  | {
+      readonly found: false;
+    }
+  | {
+      readonly found: true;
+      readonly value: unknown;
+    };

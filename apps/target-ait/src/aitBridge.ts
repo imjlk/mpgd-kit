@@ -21,7 +21,7 @@ import {
   resolveAitGameIdentity,
   type AitGameUserKeyProvider,
 } from './aitIdentity';
-import type { BridgeRequest, BridgeResponse } from './bridgeTypes';
+import type { BridgeRequest, BridgeResponse, BridgeStorageLoadData } from './bridgeTypes';
 
 const storage = new Map<string, unknown>();
 const launchEntries = new Set<LaunchEntry>([
@@ -222,11 +222,15 @@ export function installAitBridge(options: InstallAitBridgeOptions = {}): void {
 
         case 'storage.load': {
           const payload = request.payload as { readonly key?: string };
+          const value = payload.key === undefined ? undefined : storage.get(payload.key);
 
           return {
             id: request.id,
             ok: true,
-            data: payload.key === undefined ? null : (storage.get(payload.key) ?? null),
+            data:
+              value === undefined
+                ? ({ found: false } satisfies BridgeStorageLoadData)
+                : ({ found: true, value } satisfies BridgeStorageLoadData),
           };
         }
 

@@ -5,7 +5,12 @@ import {
   validBridgeRequest,
   validNewBridgeRequests,
 } from './fixtures';
-import { assertBridgeRequest, assertBridgeResponse, createBridgeError } from './index';
+import {
+  assertBridgeRequest,
+  assertBridgeResponse,
+  createBridgeError,
+  decodeBridgeStorageLoadData,
+} from './index';
 
 assertDoesNotThrow(() => assertBridgeRequest(validBridgeRequest), 'valid request should pass');
 assertDoesNotThrow(() => assertBridgeResponse(validBridgeOkResponse), 'ok response should pass');
@@ -32,6 +37,21 @@ assertEqual(error.id, 'request-2', 'createBridgeError should preserve id');
 if (!error.ok) {
   assertEqual(error.error.retryable, true, 'createBridgeError should preserve retryable flag');
 }
+
+assertEqual(
+  decodeBridgeStorageLoadData({ found: false }),
+  null,
+  'a missing storage bridge value should decode as null',
+);
+assertEqual(
+  decodeBridgeStorageLoadData({ found: true, value: null })?.value,
+  null,
+  'a stored top-level JSON null should remain present',
+);
+assertThrows(
+  () => decodeBridgeStorageLoadData({ found: true }),
+  'a present storage bridge response without a value should fail closed',
+);
 
 console.log('Bridge protocol fixture validation passed.');
 

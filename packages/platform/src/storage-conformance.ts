@@ -141,6 +141,13 @@ async function runRoundTripAndOverwriteScenario(
     { value: second },
     'later saves must replace the value for the same key',
   );
+
+  await fixture.storage.save({ key, value: null });
+  assertJsonEqual(
+    await fixture.storage.load({ key }),
+    { value: null },
+    'a stored top-level JSON null must remain distinguishable from a missing value',
+  );
 }
 
 async function runStorageScopeIsolationScenario(
@@ -204,10 +211,14 @@ async function runMutationIsolationScenario(
 
   try {
     mutableLoadedValue.progress.coins = -1;
+  } catch {
+    // Immutable values are acceptable; the later read still proves isolation.
+  }
+
+  try {
     mutableLoadedValue.inventory.push('mutated-after-load');
   } catch {
-    // Deeply immutable loaded values already prevent callers from mutating
-    // provider state. The following read still proves isolation.
+    // Immutable values are acceptable; each nested branch is probed independently.
   }
 
   assertJsonEqual(

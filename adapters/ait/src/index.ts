@@ -1,4 +1,10 @@
-import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import {
+  decodeBridgeStorageLoadData,
+  type BridgeMethod,
+  type BridgeRequest,
+  type BridgeResponse,
+  type BridgeStorageLoadData,
+} from '@mpgd/bridge';
 import type {
   IdentitySession,
   IdentityUpgradeResult,
@@ -99,9 +105,7 @@ export function createAitPlatformGateway(input: {
     },
     storage: {
       async load(payload) {
-        const value = await request<unknown | null>('storage.load', payload);
-
-        return value === null ? null : { value };
+        return decodeBridgeStorageLoadData(await request<unknown>('storage.load', payload));
       },
       save: (payload) => request('storage.save', payload),
     },
@@ -227,7 +231,13 @@ export function createAitSandboxBridge(): GamePlatformBridge {
 
         case 'storage.load': {
           const payload = input.payload as { readonly key?: string };
-          return ok(input, payload.key === undefined ? null : (storage.get(payload.key) ?? null));
+          const value = payload.key === undefined ? undefined : storage.get(payload.key);
+          return ok(
+            input,
+            value === undefined
+              ? ({ found: false } satisfies BridgeStorageLoadData)
+              : ({ found: true, value } satisfies BridgeStorageLoadData),
+          );
         }
 
         case 'storage.save': {

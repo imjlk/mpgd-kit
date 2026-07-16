@@ -1,8 +1,10 @@
 import {
   createBridgeError,
+  decodeBridgeStorageLoadData,
   type BridgeMethod,
   type BridgeRequest,
   type BridgeResponse,
+  type BridgeStorageLoadData,
 } from '@mpgd/bridge';
 import {
   createBridgeOrpcClient,
@@ -139,8 +141,7 @@ export function createDevvitPlatformGateway(
     },
     storage: {
       async load(payload) {
-        const value = await request<unknown | null>('storage.load', payload);
-        return value === null ? null : { value };
+        return decodeBridgeStorageLoadData(await request<unknown>('storage.load', payload));
       },
       async save(payload) {
         const result = await request<DevvitStorageSaveResponse>('storage.save', payload);
@@ -316,7 +317,14 @@ export function createDevvitSandboxBridge(): DevvitBridge {
         case 'storage.load': {
           const payload = optionalObjectPayload(input.payload);
           const key = typeof payload.key === 'string' ? payload.key : undefined;
-          return ok(input, key === undefined ? null : (storage.get(key) ?? null));
+          const value = key === undefined ? undefined : storage.get(key);
+
+          return ok(
+            input,
+            value === undefined
+              ? ({ found: false } satisfies BridgeStorageLoadData)
+              : ({ found: true, value } satisfies BridgeStorageLoadData),
+          );
         }
 
         case 'storage.save': {

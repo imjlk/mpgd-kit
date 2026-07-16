@@ -101,6 +101,41 @@ private func runConformance() throws {
         try primary.load(key: "save") == "{\"revision\":2}",
         "A later load must recover after a transient failure."
     )
+
+    try runFileBackendConformance()
+}
+
+private func runFileBackendConformance() throws {
+    let fileManager = FileManager.default
+    let root = fileManager.temporaryDirectory
+        .appendingPathComponent("mpgd-native-storage-\(UUID().uuidString)", isDirectory: true)
+
+    defer {
+        try? fileManager.removeItem(at: root)
+    }
+
+    let fileStorage = LocalJsonStorage(
+        backend: FileLocalJsonStorageBackend(fileManager: fileManager, directoryURL: root),
+        maximumValueBytes: 64
+    )
+    try fileStorage.save(key: "save", serializedValue: "null")
+    require(
+        try fileStorage.load(key: "save") == "null",
+        "The atomic file backend must round-trip a top-level JSON null."
+    )
+
+    let blockedDirectory = root.appendingPathComponent("blocked", isDirectory: false)
+    try Data("not-a-directory".utf8).write(to: blockedDirectory, options: .atomic)
+    let failingStorage = LocalJsonStorage(
+        backend: FileLocalJsonStorageBackend(
+            fileManager: fileManager,
+            directoryURL: blockedDirectory
+        ),
+        maximumValueBytes: 64
+    )
+    requireStorageError(code: "NATIVE_STORAGE_SAVE_FAILED", retryable: true) {
+        try failingStorage.save(key: "save", serializedValue: "{\"revision\":1}")
+    }
 }
 
 do {

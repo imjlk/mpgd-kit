@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 
 protocol LocalJsonStorageBackend {
@@ -82,14 +83,64 @@ struct LocalJsonStorage {
     }
 }
 
-struct UserDefaultsLocalJsonStorageBackend: LocalJsonStorageBackend {
-    let defaults: UserDefaults
+private enum FileLocalJsonStorageBackendError: Error {
+    case applicationSupportDirectoryUnavailable
+    case expectedFile
+}
+
+struct FileLocalJsonStorageBackend: LocalJsonStorageBackend {
+    private let fileManager: FileManager
+    private let directoryURL: URL?
+
+    init(
+        fileManager: FileManager = .default,
+        directoryURL: URL? = nil
+    ) {
+        self.fileManager = fileManager
+        self.directoryURL = directoryURL ?? fileManager
+            .urls(for: .applicationSupportDirectory, in: .userDomainMask)
+            .first?
+            .appendingPathComponent("mpgd-local-storage-v1", isDirectory: true)
+    }
 
     func string(forKey key: String) throws -> String? {
-        return defaults.string(forKey: key)
+        let fileURL = try storageFileURL(forKey: key)
+        var isDirectory: ObjCBool = false
+
+        guard fileManager.fileExists(atPath: fileURL.path, isDirectory: &isDirectory) else {
+            return nil
+        }
+
+        guard !isDirectory.boolValue else {
+            throw FileLocalJsonStorageBackendError.expectedFile
+        }
+
+        return try String(contentsOf: fileURL, encoding: .utf8)
     }
 
     func set(_ value: String, forKey key: String) throws {
-        defaults.set(value, forKey: key)
+        let directoryURL = try requiredDirectoryURL()
+        try fileManager.createDirectory(
+            at: directoryURL,
+            withIntermediateDirectories: true
+        )
+        try Data(value.utf8).write(
+            to: try storageFileURL(forKey: key),
+            options: .atomic
+        )
+    }
+
+    private func storageFileURL(forKey key: String) throws -> URL {
+        let digest = SHA256.hash(data: Data(key.utf8))
+        let filename = digest.map { String(format: "%02x", $0) }.joined() + ".json"
+        return try requiredDirectoryURL().appendingPathComponent(filename, isDirectory: false)
+    }
+
+    private func requiredDirectoryURL() throws -> URL {
+        guard let directoryURL else {
+            throw FileLocalJsonStorageBackendError.applicationSupportDirectoryUnavailable
+        }
+
+        return directoryURL
     }
 }

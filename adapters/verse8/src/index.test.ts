@@ -99,15 +99,25 @@ describe('adapter-verse8', () => {
   });
 
   it('fails closed when local storage is unavailable', async () => {
-    Reflect.deleteProperty(globalThis, 'localStorage');
-    const gateway = createVerse8PlatformGateway({ authClient: authenticatedClient() });
+    const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
 
-    await expect(gateway.storage.load({ key: 'slot-1' })).rejects.toThrow(
-      'Verse8 local storage is unavailable',
-    );
-    await expect(
-      gateway.storage.save({ key: 'slot-1', value: { level: 3 } }),
-    ).rejects.toThrow('Verse8 local storage is unavailable');
+    try {
+      Reflect.deleteProperty(globalThis, 'localStorage');
+      const gateway = createVerse8PlatformGateway({ authClient: authenticatedClient() });
+
+      await expect(gateway.storage.load({ key: 'slot-1' })).rejects.toThrow(
+        'Verse8 local storage is unavailable',
+      );
+      await expect(
+        gateway.storage.save({ key: 'slot-1', value: { level: 3 } }),
+      ).rejects.toThrow('Verse8 local storage is unavailable');
+    } finally {
+      if (descriptor === undefined) {
+        Reflect.deleteProperty(globalThis, 'localStorage');
+      } else {
+        Object.defineProperty(globalThis, 'localStorage', descriptor);
+      }
+    }
   });
 
   it('maps Verse8 signer credentials to a server-verified identity', async () => {

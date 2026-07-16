@@ -27,6 +27,8 @@ import {
 
 const maximumValueBytes = 256;
 const oversizedValue = 'x'.repeat(maximumValueBytes * 2);
+type BridgeTarget = 'android' | 'ios' | 'ait' | 'reddit';
+type StorageConformanceBridge = NativeBridge & GamePlatformBridge & DevvitBridge;
 
 const targets = [
   ['web-preview-local', createBrowserFixture],
@@ -87,51 +89,36 @@ function createVerse8LocalFixture(): StorageAdapterConformanceFixture {
   return createFixture(primary.storage, isolated.storage, provider.faults);
 }
 
-function createBridgeFixture(
-  target: 'android' | 'ios' | 'ait' | 'reddit',
-): StorageAdapterConformanceFixture {
+function createBridgeFixture(target: BridgeTarget): StorageAdapterConformanceFixture {
   const provider = createBridgeStorageProvider(target === 'reddit');
-  let primary: StorageAdapter;
-  let isolated: StorageAdapter;
+  const primary = createBridgeStorage(target, provider.bridge('primary-account', true));
+  const isolated = createBridgeStorage(target, provider.bridge('isolated-account', false));
+
+  return createFixture(primary, isolated, provider.faults);
+}
+
+function createBridgeStorage(
+  target: BridgeTarget,
+  bridge: StorageConformanceBridge,
+): StorageAdapter {
+  const metadata = {
+    appVersion: '1.0.0',
+    buildId: 'storage-conformance',
+  } as const;
 
   if (target === 'android' || target === 'ios') {
-    primary = createCapacitorPlatformGateway({
+    return createCapacitorPlatformGateway({
       target,
-      appVersion: '1.0.0',
-      buildId: 'storage-conformance',
-      bridge: provider.bridge('primary-account', true) as NativeBridge,
-    }).storage;
-    isolated = createCapacitorPlatformGateway({
-      target,
-      appVersion: '1.0.0',
-      buildId: 'storage-conformance',
-      bridge: provider.bridge('isolated-account', false) as NativeBridge,
-    }).storage;
-  } else if (target === 'ait') {
-    primary = createAitPlatformGateway({
-      appVersion: '1.0.0',
-      buildId: 'storage-conformance',
-      bridge: provider.bridge('primary-account', true) as GamePlatformBridge,
-    }).storage;
-    isolated = createAitPlatformGateway({
-      appVersion: '1.0.0',
-      buildId: 'storage-conformance',
-      bridge: provider.bridge('isolated-account', false) as GamePlatformBridge,
-    }).storage;
-  } else {
-    primary = createDevvitPlatformGateway({
-      appVersion: '1.0.0',
-      buildId: 'storage-conformance',
-      bridge: provider.bridge('primary-account', true) as DevvitBridge,
-    }).storage;
-    isolated = createDevvitPlatformGateway({
-      appVersion: '1.0.0',
-      buildId: 'storage-conformance',
-      bridge: provider.bridge('isolated-account', false) as DevvitBridge,
+      ...metadata,
+      bridge,
     }).storage;
   }
 
-  return createFixture(primary, isolated, provider.faults);
+  if (target === 'ait') {
+    return createAitPlatformGateway({ ...metadata, bridge }).storage;
+  }
+
+  return createDevvitPlatformGateway({ ...metadata, bridge }).storage;
 }
 
 function createVerse8Agent8Fixture(): StorageAdapterConformanceFixture {
@@ -315,9 +302,7 @@ function createStringStorageProvider(): {
 }
 
 function createBridgeStorageProvider(devvitSaveAcknowledgment: boolean): {
-  readonly bridge: (scope: string, controlled: boolean) => {
-    request(input: BridgeRequest): Promise<BridgeResponse>;
-  };
+  readonly bridge: (scope: string, controlled: boolean) => StorageConformanceBridge;
   readonly faults: FaultController;
 } {
   const scopes = new Map<string, Map<string, unknown>>();
@@ -354,7 +339,12 @@ function createBridgeStorageProvider(devvitSaveAcknowledgment: boolean): {
             }
 
             const value = getScope(scope).get(payload.key);
-            return ok(input, value === undefined ? null : clone(value));
+            return ok(
+              input,
+              value === undefined
+                ? { found: false }
+                : { found: true, value: clone(value) },
+            );
           }
 
           if (input.method === 'storage.save') {

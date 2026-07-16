@@ -9,7 +9,7 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise)
     ]
     private lazy var localStorage = LocalJsonStorage(
-        backend: UserDefaultsLocalJsonStorageBackend(defaults: .standard)
+        backend: FileLocalJsonStorageBackend()
     )
 
     @objc func request(_ call: CAPPluginCall) {
@@ -120,7 +120,7 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
 
         do {
             guard let serializedValue = try localStorage.load(key: key) else {
-                call.resolve(okResponse(id: id, data: NSNull()))
+                call.resolve(okResponse(id: id, data: ["found": false]))
                 return
             }
 
@@ -128,7 +128,10 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
                 with: Data(serializedValue.utf8),
                 options: [.fragmentsAllowed]
             )
-            call.resolve(okResponse(id: id, data: value))
+            call.resolve(okResponse(id: id, data: [
+                "found": true,
+                "value": value
+            ]))
         } catch let error as LocalJsonStorageError {
             call.resolve(errorResponse(
                 id: id,

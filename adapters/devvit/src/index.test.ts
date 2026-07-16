@@ -307,6 +307,10 @@ describe('adapter-devvit', () => {
         coins: 7,
       },
     });
+    await gateway.storage.save({ key: 'nullable-save:v1', value: null });
+    await expect(gateway.storage.load({ key: 'nullable-save:v1' })).resolves.toEqual({
+      value: null,
+    });
     await expect(
       gateway.ads.showRewarded({
         placementId: 'CONTINUE_AFTER_FAIL',
@@ -349,7 +353,7 @@ describe('adapter-devvit', () => {
           return {
             id: input.id,
             ok: true,
-            data: null,
+            data: { found: false },
           };
         }
 
@@ -397,7 +401,8 @@ describe('adapter-devvit', () => {
             id: input.id,
             ok: true,
             data: {
-              coins: 1,
+              found: true,
+              value: { coins: 1 },
             },
           };
         }
@@ -463,7 +468,8 @@ describe('adapter-devvit', () => {
             id: input.id,
             ok: true,
             data: {
-              coins: 1,
+              found: true,
+              value: { coins: 1 },
             },
           };
         }
@@ -677,7 +683,8 @@ describe('adapter-devvit', () => {
             id: input.id,
             ok: true,
             data: {
-              coins: 1,
+              found: true,
+              value: { coins: 1 },
             },
           };
         }
@@ -754,7 +761,7 @@ describe('adapter-devvit', () => {
           return {
             id: input.id,
             ok: true,
-            data: null,
+            data: { found: false },
           };
         }
 

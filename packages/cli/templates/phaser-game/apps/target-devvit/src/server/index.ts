@@ -6,6 +6,7 @@ import {
   createBridgeError,
   type BridgeRequest,
   type BridgeResponse,
+  type BridgeStorageLoadData,
 } from '@mpgd/bridge';
 import {
   createBridgeRpcRouter,
@@ -282,7 +283,7 @@ async function loadStorage(input: BridgeRequest): Promise<BridgeResponse> {
   try {
     stored = await redis.get(key);
   } catch (error) {
-    console.warn(`devvit storage load failed for key ${key}: ${errorMessage(error)}`);
+    console.warn(`devvit storage load failed: ${errorMessage(error)}`);
     return createBridgeError(
       input.id,
       'DEVVIT_STORAGE_LOAD_FAILED',
@@ -292,11 +293,17 @@ async function loadStorage(input: BridgeRequest): Promise<BridgeResponse> {
   }
 
   if (stored === undefined || stored === null) {
-    return ok(input, null);
+    return ok(input, { found: false } satisfies BridgeStorageLoadData);
   }
 
   try {
-    return ok(input, JSON.parse(stored));
+    return ok(
+      input,
+      {
+        found: true,
+        value: JSON.parse(stored),
+      } satisfies BridgeStorageLoadData,
+    );
   } catch {
     return createBridgeError(input.id, 'CORRUPTED_STORAGE_VALUE', 'Stored data is not valid JSON.');
   }
@@ -349,7 +356,7 @@ async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
   try {
     await redis.set(key, serialized);
   } catch (error) {
-    console.warn(`devvit storage save was not persisted for key ${key}: ${errorMessage(error)}`);
+    console.warn(`devvit storage save was not persisted: ${errorMessage(error)}`);
     return createBridgeError(
       input.id,
       'DEVVIT_STORAGE_SAVE_FAILED',
