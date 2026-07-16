@@ -102,6 +102,10 @@ ledger payload rather than expanding the platform-neutral client contract:
 
 ## Apps in Toss
 
+The reusable boundary is implemented in
+`@mpgd/game-services/apps-in-toss-evidence-verification`; remaining work is the
+game/deployment-specific authority adapter and credentials.
+
 Expected flow:
 
 1. Apps in Toss adapter returns IAP or ad callback evidence from the Toss runtime.
@@ -111,12 +115,13 @@ Expected flow:
 4. Backend records the ledger entry.
 5. Client updates save state only after backend acceptance.
 
-Contract additions to consider:
+Runtime integration inputs:
 
 - Toss app id
 - Toss order/payment id
-- Toss ad impression/reward id
-- partner callback verification metadata
+- Toss ad impression/reward correlation id
+- server-issued reward authority event id
+- runtime-injected mTLS, Toss-login identity, and provider configuration
 
 ## Leaderboard
 

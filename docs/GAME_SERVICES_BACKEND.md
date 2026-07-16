@@ -429,6 +429,12 @@ Protocol references:
   ledger grants; client or verifier reward amounts never select the grant.
 - Apps in Toss rewarded ads must follow `loadFullScreenAd` then `showFullScreenAd`;
   rewards are tied to `userEarnedReward`, not `dismissed`.
+- `@mpgd/game-services/apps-in-toss-evidence-verification` provides versioned
+  callback envelopes and server authority ports. Purchase authorities must bind
+  mTLS order-status results to authenticated Toss-login players; reward
+  authorities must independently verify a consume-once event. Missing or
+  mismatched authorities fail closed. See
+  [Apps in Toss Production Evidence](APPS_IN_TOSS_PRODUCTION_EVIDENCE.md).
 
 ## Production Gaps
 
@@ -441,7 +447,8 @@ starter. Game-specific production integrations still need these pieces:
   verifier boundary.
 - App Store Server API or signed StoreKit transaction verification.
 - Deployment-owned AdMob callback persistence and public-key refresh wiring.
-- Apps in Toss production IAP/ad verification and partner backend callbacks.
+- Game-specific Apps in Toss mTLS/login transport and independently verified
+  rewarded-ad authority implementations behind the included public ports.
 - Real product, ad placement, leaderboard, app, and bundle identifiers.
 - Cloudflare D1 provisioning plus `MPGD_STORE = "d1"` for persistent Worker
   deployments.
@@ -456,6 +463,7 @@ but should not be treated as production entitlement verification.
 pnpm smoke:game-services
 pnpm smoke:game-services:worker
 pnpm smoke:google-play-purchase
+pnpm smoke:apps-in-toss-production-evidence
 ```
 
 The first smoke runs Android, iOS, and Apps in Toss target simulations through

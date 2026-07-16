@@ -86,6 +86,8 @@
     "smoke:admob-ssv-conformance": "node tools/run-ttsx.mjs tools/smoke/admob-ssv-conformance.ts",
     "smoke:google-play-purchase": "node tools/run-ttsx.mjs packages/game-services/src/google-play-purchase.test.ts",
     "smoke:app-store-purchase": "node tools/run-ttsx.mjs packages/game-services/src/app-store-verifier.test.ts",
+    "smoke:apps-in-toss-production-evidence": "pnpm build:packages && pnpm smoke:apps-in-toss-production-evidence:prepared",
+    "smoke:apps-in-toss-production-evidence:prepared": "node tools/run-ttsx.mjs tools/smoke/apps-in-toss-production-evidence.ts",
     "smoke:game-services": "pnpm build:packages && pnpm smoke:game-services:prepared",
     "smoke:game-services:prepared": "node tools/run-ttsx.mjs tools/smoke/game-services-vertical-slice.ts",
     "smoke:game-services:worker": "pnpm build:packages && pnpm smoke:game-services:worker:prepared",

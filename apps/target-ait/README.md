@@ -23,3 +23,13 @@ and the mini-app must be registered as a game. The `dev:plain` script enables a
 local identity provider explicitly with `VITE_MPGD_AIT_MOCK_IDENTITY=1`; release
 builds never use that fixed local player id. Sandbox results are still provided
 by the Apps in Toss SDK and should be verified with a QR test in the Toss app.
+
+Purchase and rewarded-ad callbacks remain evidence only. Use the public
+`@mpgd/game-services/apps-in-toss-evidence-verification` boundary with a
+partner-server authority before granting catalog products or rewards. The
+purchase authority is responsible for authenticated Toss-login identity and
+the mTLS order-status lookup; the reward authority is game-owned because no
+general Apps in Toss server reward callback is assumed. See
+[Apps in Toss Production Evidence](../../docs/APPS_IN_TOSS_PRODUCTION_EVIDENCE.md)
+for pending-order restoration, product-grant completion, sandbox scenarios, and
+runtime-only credential requirements.
