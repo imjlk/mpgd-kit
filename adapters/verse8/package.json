@@ -31,6 +31,10 @@
     "./server": {
       "types": "./dist/server.d.ts",
       "default": "./dist/server.js"
+    },
+    "./agent8": {
+      "types": "./dist/agent8.d.ts",
+      "default": "./dist/agent8.js"
     }
   },
   "files": [
@@ -41,9 +45,10 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run && node test/server-dist-import.mjs"
+    "test": "vitest run && node test/server-dist-import.mjs && node test/agent8-dist-import.mjs"
   },
   "dependencies": {
+    "@mpgd/catalog": "workspace:*",
     "@mpgd/game-services": "workspace:*",
     "@mpgd/platform": "workspace:*",
     "@verse8/ads": "0.4.0",

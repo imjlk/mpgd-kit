@@ -136,8 +136,13 @@ async function verifyVerse8Adapter(): Promise<void> {
   assertEqual(runtime.config.runtime, 'verse8-web', 'verse8 runtime kind');
   assertEqual(
     getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
+    true,
+    'verse8 products should be enabled in the target catalog',
+  );
+  assertEqual(
+    (await gateway.getCapabilities()).nativeIap,
     false,
-    'verse8 products should remain disabled before VXShop integration',
+    'verse8 IAP capability should remain unavailable until VXShop is configured',
   );
   assertEqual(
     getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,

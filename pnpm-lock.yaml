@@ -171,6 +171,9 @@ importers:
 
   adapters/verse8:
     dependencies:
+      '@mpgd/catalog':
+        specifier: workspace:*
+        version: link:../../packages/catalog
       '@mpgd/game-services':
         specifier: workspace:*
         version: link:../../packages/game-services

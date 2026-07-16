@@ -330,8 +330,12 @@ function normalizePlatformId(platformId: string | undefined): string | undefined
 
 function isProductStoreTarget(
   target: string,
-): target is 'android' | 'ios' | 'ait' | 'reddit' {
-  return target === 'android' || target === 'ios' || target === 'ait' || target === 'reddit';
+): target is 'android' | 'ios' | 'ait' | 'reddit' | 'verse8' {
+  return target === 'android'
+    || target === 'ios'
+    || target === 'ait'
+    || target === 'reddit'
+    || target === 'verse8';
 }
 
 function isAdStoreTarget(target: string): target is 'android' | 'ios' | 'ait' | 'verse8' {

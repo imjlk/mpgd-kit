@@ -296,8 +296,7 @@ const verse8Gateway = {
       verse8PurchaseCalls += 1;
 
       return {
-        status: 'completed',
-        transactionId: 'unexpected-verse8-transaction',
+        status: 'pending',
         entitlementIds: [],
       };
     },
@@ -329,6 +328,7 @@ const verse8Client = createGameServicesClient({
   now: () => '2026-07-03T00:00:00.000Z',
   backend,
 });
+const purchaseClaimsBeforeVerse8 = purchaseClaims;
 const verse8Purchase = await verse8Client.purchase({
   productId: 'COINS_100',
   source: 'result',
@@ -345,12 +345,53 @@ const verse8Leaderboard = await verse8Client.submitLeaderboardScore({
   submittedAt: '2026-07-03T00:00:00.000Z',
 });
 
-assertEqual(verse8Purchase.status, 'rejected', 'Verse8 purchases should stay unsupported');
+assertEqual(verse8Purchase.status, 'pending', 'Verse8 purchases should await Agent8 server events');
 assertEqual(verse8Reward.status, 'granted', 'Verse8 rewarded ads should reach the backend');
 assertEqual(verse8Leaderboard.submitted, false, 'Verse8 leaderboards should stay unsupported');
-assertEqual(verse8PurchaseCalls, 0, 'Verse8 purchases should not call platform commerce');
+assertEqual(verse8PurchaseCalls, 1, 'Verse8 purchases should open platform commerce');
+assertEqual(
+  purchaseClaims,
+  purchaseClaimsBeforeVerse8,
+  'Verse8 purchases should not call the external purchase verifier',
+);
 assertEqual(verse8RewardCalls, 1, 'Verse8 rewards should call platform ads');
 assertEqual(verse8LeaderboardCalls, 0, 'Verse8 should not call the platform leaderboard');
+
+const verse8CompletedGateway = {
+  ...verse8Gateway,
+  commerce: {
+    ...verse8Gateway.commerce,
+    async purchase() {
+      return {
+        status: 'completed',
+        transactionId: 'untrusted-client-transaction',
+        entitlementIds: ['untrusted-entitlement'],
+      } as const;
+    },
+  },
+} satisfies PlatformGateway;
+const verse8CompletedClient = createGameServicesClient({
+  gateway: verse8CompletedGateway,
+  playerId,
+  target: 'verse8',
+  backend,
+});
+const verse8CompletedPurchase = await verse8CompletedClient.purchase({
+  productId: 'REMOVE_ADS',
+  source: 'shop',
+  idempotencyKey: 'verse8-untrusted-completion',
+});
+
+assertEqual(
+  verse8CompletedPurchase.status,
+  'rejected',
+  'Verse8 client-side completion should never grant a purchase',
+);
+assertEqual(
+  purchaseClaims,
+  purchaseClaimsBeforeVerse8,
+  'Verse8 client-side completion should not reach the external verifier',
+);
 
 const transportCalls: string[] = [];
 const httpBackend = createGameServicesHttpBackendApi({
