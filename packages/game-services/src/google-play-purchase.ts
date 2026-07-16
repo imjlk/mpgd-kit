@@ -46,6 +46,11 @@ export interface CreateGooglePlayProductPurchaseBoundaryInput {
   readonly client: GooglePlayProductPurchaseClient;
   readonly packageName: string;
   readonly now?: () => string;
+  /**
+   * Explicitly permits purchases without a Google account identifier. Use only
+   * when the caller binds `playerId` to an authenticated application account.
+   */
+  readonly allowUnboundAuthenticatedPlayer?: boolean;
   readonly resolveObfuscatedAccountId?: (
     playerId: string,
   ) => Promise<string | undefined> | string | undefined;
@@ -77,6 +82,14 @@ export function createGooglePlayProductPurchaseBoundary(
   input: CreateGooglePlayProductPurchaseBoundaryInput,
 ): GooglePlayProductPurchaseBoundary {
   const packageName = assertIdentifier(input.packageName, 'packageName', 256);
+  if (
+    input.resolveObfuscatedAccountId === undefined
+    && input.allowUnboundAuthenticatedPlayer !== true
+  ) {
+    throw new TypeError(
+      'Google Play purchases require account binding or explicit authenticated-player attribution.',
+    );
+  }
   const now = input.now ?? (() => new Date().toISOString());
   const inFlightFinalizations = new Map<string, Promise<PurchaseGrantFinalization>>();
 
@@ -104,9 +117,13 @@ export function createGooglePlayProductPurchaseBoundary(
         };
       }
 
-      const expectedObfuscatedAccountId = await input.resolveObfuscatedAccountId?.(
+      const accountBinding = await resolveGooglePlayAccountBinding(
+        input,
         verificationInput.request.playerId,
       );
+      if (accountBinding.status === 'rejected') {
+        return rejected(accountBinding.reason);
+      }
       const inspection = await inspectGooglePlayPurchase({
         client: input.client,
         packageName,
@@ -114,9 +131,9 @@ export function createGooglePlayProductPurchaseBoundary(
         expectedProductId: verificationInput.platformProductId,
         expectedProductType: verificationInput.product.type,
         expectedOrderId: verificationInput.request.platformTransactionId,
-        ...(expectedObfuscatedAccountId === undefined
-          ? {}
-          : { expectedObfuscatedAccountId }),
+        ...(accountBinding.status === 'bound'
+          ? { expectedObfuscatedAccountId: accountBinding.accountId }
+          : {}),
         allowConsumed: false,
         signal: verificationInput.signal,
       });
@@ -205,9 +222,18 @@ async function finalizeGooglePlayPurchase(
     finalizationInput.product.type === 'consumable' ? 'consume' : 'acknowledge';
 
   try {
-    const expectedObfuscatedAccountId = await input.resolveObfuscatedAccountId?.(
+    const accountBinding = await resolveGooglePlayAccountBinding(
+      input,
       finalizationInput.request.playerId,
     );
+    if (accountBinding.status === 'rejected') {
+      return {
+        status: 'pending',
+        action,
+        alreadyCompleted: false,
+        reason: accountBinding.reason,
+      };
+    }
     const inspection = await inspectGooglePlayPurchase({
       client: input.client,
       packageName,
@@ -215,9 +241,9 @@ async function finalizeGooglePlayPurchase(
       expectedProductId: finalizationInput.platformProductId,
       expectedProductType: finalizationInput.product.type,
       expectedOrderId: finalizationInput.request.platformTransactionId,
-      ...(expectedObfuscatedAccountId === undefined
-        ? {}
-        : { expectedObfuscatedAccountId }),
+      ...(accountBinding.status === 'bound'
+        ? { expectedObfuscatedAccountId: accountBinding.accountId }
+        : {}),
       allowConsumed: true,
       signal: finalizationInput.signal,
     });
@@ -359,20 +385,21 @@ async function inspectGooglePlayPurchase(input: {
     return rejected('GOOGLE_PLAY_OFFER_DETAILS_INVALID');
   }
 
-  const quantity = offerDetails.quantity === undefined ? 1 : offerDetails.quantity;
+  const quantity = offerDetails.quantity;
   if (!Number.isSafeInteger(quantity) || quantity !== 1) {
     return rejected('GOOGLE_PLAY_QUANTITY_UNSUPPORTED');
   }
 
   const refundableQuantity = offerDetails.refundableQuantity;
   if (
-    refundableQuantity !== undefined
-    && (
-      typeof refundableQuantity !== 'number'
-      || !Number.isSafeInteger(refundableQuantity)
-      || refundableQuantity < 1
-    )
+    typeof refundableQuantity !== 'number'
+    || !Number.isSafeInteger(refundableQuantity)
+    || refundableQuantity < 0
+    || refundableQuantity > quantity
   ) {
+    return rejected('GOOGLE_PLAY_REFUNDABLE_QUANTITY_INVALID');
+  }
+  if (refundableQuantity !== quantity) {
     return rejected('GOOGLE_PLAY_PURCHASE_REFUNDED');
   }
 
@@ -432,6 +459,35 @@ async function inspectGooglePlayPurchase(input: {
         : { obfuscatedExternalAccountId }),
     },
   };
+}
+
+type GooglePlayAccountBinding =
+  | { readonly status: 'bound'; readonly accountId: string }
+  | { readonly status: 'unbound' }
+  | { readonly status: 'rejected'; readonly reason: string };
+
+async function resolveGooglePlayAccountBinding(
+  input: CreateGooglePlayProductPurchaseBoundaryInput,
+  playerId: string,
+): Promise<GooglePlayAccountBinding> {
+  if (input.resolveObfuscatedAccountId === undefined) {
+    return { status: 'unbound' };
+  }
+
+  const resolved = await input.resolveObfuscatedAccountId(playerId);
+  if (resolved === undefined && input.allowUnboundAuthenticatedPlayer === true) {
+    return { status: 'unbound' };
+  }
+
+  const accountId = readOptionalIdentifier(resolved, 256);
+  if (accountId === undefined) {
+    return {
+      status: 'rejected',
+      reason: 'GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED',
+    };
+  }
+
+  return { status: 'bound', accountId };
 }
 
 function createVerificationPayload(
@@ -537,7 +593,9 @@ function createGooglePlayVerificationId(purchaseTokenDigest: string): string {
   return `google-play:product:${purchaseTokenDigest}`;
 }
 
-function rejected(reason: string): GooglePlayPurchaseInspection {
+function rejected(
+  reason: string,
+): Extract<GooglePlayPurchaseInspection, { readonly status: 'rejected' }> {
   return { status: 'rejected', reason };
 }
 

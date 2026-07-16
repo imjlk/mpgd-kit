@@ -105,7 +105,8 @@ class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
 function createHarness(input: {
   readonly token: string;
   readonly response: Readonly<Record<string, unknown>>;
-  readonly resolveObfuscatedAccountId?: (playerId: string) => string;
+  readonly allowUnboundAuthenticatedPlayer?: boolean;
+  readonly resolveObfuscatedAccountId?: (playerId: string) => string | undefined;
 }) {
   const events: string[] = [];
   const client = new FixtureGooglePlayClient(events);
@@ -116,8 +117,19 @@ function createHarness(input: {
     packageName: 'dev.mpgd.conformance',
     now: () => '2030-01-02T03:04:06.000Z',
     ...(input.resolveObfuscatedAccountId === undefined
-      ? {}
-      : { resolveObfuscatedAccountId: input.resolveObfuscatedAccountId }),
+      ? {
+          allowUnboundAuthenticatedPlayer:
+            input.allowUnboundAuthenticatedPlayer ?? true,
+        }
+      : {
+          resolveObfuscatedAccountId: input.resolveObfuscatedAccountId,
+          ...(input.allowUnboundAuthenticatedPlayer === undefined
+            ? {}
+            : {
+                allowUnboundAuthenticatedPlayer:
+                  input.allowUnboundAuthenticatedPlayer,
+              }),
+        }),
   });
   const developmentVerifier = createDevelopmentGameServicesEvidenceVerifier();
   const backend = createGameServicesBackend({
@@ -143,6 +155,7 @@ function createRequest(input: {
   readonly playerId?: string;
   readonly idempotencyKey?: string;
   readonly orderId?: string;
+  readonly purchasedAt?: string;
   readonly schema?: string;
 }): VerifyPurchaseRequest {
   return {
@@ -151,7 +164,7 @@ function createRequest(input: {
     productId: input.productId ?? 'COINS_100',
     platformTransactionId: input.orderId ?? 'GPA.conformance-1',
     idempotencyKey: input.idempotencyKey ?? `purchase:${input.token}`,
-    purchasedAt: '2030-01-02T03:04:05.000Z',
+    purchasedAt: input.purchasedAt ?? '2030-01-02T03:04:05.000Z',
     evidence: {
       schema: input.schema ?? googlePlayProductPurchaseConformanceEvidence.schema,
       payload: { purchaseToken: input.token },
@@ -209,6 +222,14 @@ assert(
     payload: storedConsumable?.payload,
   }).includes('token-consumable'),
   'the raw purchase token must not be persisted in the ledger',
+);
+
+assertThrows(
+  () => createGooglePlayProductPurchaseBoundary({
+    client: new FixtureGooglePlayClient([]),
+    packageName: 'dev.mpgd.conformance',
+  }),
+  'account binding must not be disabled implicitly',
 );
 
 const nonConsumable = createHarness({
@@ -311,6 +332,18 @@ await assertRejectedFixture(
   createGooglePlayProductPurchaseConformanceFixture({ refundableQuantity: 0 }),
   'GOOGLE_PLAY_PURCHASE_REFUNDED',
 );
+const missingRefundableQuantity = cloneRecord(createGooglePlayProductPurchaseConformanceFixture());
+deleteProductOfferField(missingRefundableQuantity, 'refundableQuantity');
+await assertRejectedFixture(
+  'token-refundable-missing',
+  missingRefundableQuantity,
+  'GOOGLE_PLAY_REFUNDABLE_QUANTITY_INVALID',
+);
+await assertRejectedFixture(
+  'token-refundable-exceeds-quantity',
+  createGooglePlayProductPurchaseConformanceFixture({ refundableQuantity: 2 }),
+  'GOOGLE_PLAY_REFUNDABLE_QUANTITY_INVALID',
+);
 await assertRejectedFixture(
   'token-quantity',
   createGooglePlayProductPurchaseConformanceFixture({ quantity: 2 }),
@@ -359,6 +392,52 @@ const orderMismatchResult = await orderMismatch.backend.purchases.verifyPurchase
 assertEqual(orderMismatchResult.reason, 'GOOGLE_PLAY_ORDER_MISMATCH');
 assertEqual((await orderMismatch.store.listEntitlementTransactions()).length, 0);
 
+const missingOrderResponse = cloneRecord(createGooglePlayProductPurchaseConformanceFixture());
+delete missingOrderResponse.orderId;
+const missingOrder = createHarness({
+  token: 'token-order-missing',
+  response: missingOrderResponse,
+});
+const missingOrderResult = await missingOrder.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-order-missing' }),
+);
+assertEqual(missingOrderResult.verified, true, 'provider order ids are optional');
+const storedMissingOrder = (await missingOrder.store.listEntitlementTransactions())[0];
+assertEqual(storedMissingOrder?.payload.googlePlayOrderId, undefined);
+
+const providerTime = '2030-02-03T04:05:06.000Z';
+const clientTime = '2029-01-02T03:04:05.000Z';
+const mismatchedClientTime = createHarness({
+  token: 'token-client-time-mismatch',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    purchaseCompletionTime: providerTime,
+  }),
+});
+const mismatchedClientTimeResult = await mismatchedClientTime.backend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-client-time-mismatch',
+    purchasedAt: clientTime,
+  }),
+);
+assertEqual(
+  mismatchedClientTimeResult.verified,
+  true,
+  'client timestamps must not override provider verification',
+);
+const storedMismatchedClientTime = (
+  await mismatchedClientTime.store.listEntitlementTransactions()
+)[0];
+assertEqual(
+  storedMismatchedClientTime?.payload.googlePlayPurchaseCompletionTime,
+  providerTime,
+  'the provider completion time is the authoritative purchase time',
+);
+assertEqual(
+  storedMismatchedClientTime?.payload.purchasedAt,
+  clientTime,
+  'the generic request timestamp remains client-reported metadata',
+);
+
 const accountMismatch = createHarness({
   token: 'token-account-mismatch',
   response: createGooglePlayProductPurchaseConformanceFixture({
@@ -371,6 +450,18 @@ const accountMismatchResult = await accountMismatch.backend.purchases.verifyPurc
 );
 assertEqual(accountMismatchResult.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
 assertEqual((await accountMismatch.store.listEntitlementTransactions()).length, 0);
+
+const missingAccountBinding = createHarness({
+  token: 'token-account-binding-missing',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedAccountId: () => undefined,
+});
+const missingAccountBindingResult = await missingAccountBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-account-binding-missing' }),
+);
+assertEqual(missingAccountBindingResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
+assertEqual(missingAccountBinding.events.length, 0, 'missing account binding must fail closed');
+assertEqual((await missingAccountBinding.store.listEntitlementTransactions()).length, 0);
 
 const wrongSchema = createHarness({
   token: 'token-wrong-schema',
@@ -481,6 +572,15 @@ function assertEqual(actual: unknown, expected: unknown, message = 'values shoul
   if (actual !== expected) {
     throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}.`);
   }
+}
+
+function assertThrows(action: () => unknown, message: string): void {
+  try {
+    action();
+  } catch {
+    return;
+  }
+  throw new Error(message);
 }
 
 function assert(condition: unknown, message: string): asserts condition {

@@ -278,12 +278,24 @@ belong in the game client, generated artifacts, or this repository.
 
 The Android callback sends a `google-play.product-purchase.v2` evidence envelope
 whose payload contains only the purchase token. Configure the package name on
-the trusted server and, when available, provide `resolveObfuscatedAccountId` to
-bind the Google response to the authenticated mpgd player. The boundary checks
-the ProductPurchaseV2 purchase state, line-item product id, single quantity,
-refundable quantity, order id, completion timestamp, and optional obfuscated
-account id before returning verified evidence. It stores only a SHA-256 token
-identity in the entitlement ledger, never the raw purchase token.
+the trusted server and provide `resolveObfuscatedAccountId` to bind the Google
+response to the authenticated mpgd player. If a game accepts promotion
+redemptions or other purchases made outside the app, where Google does not
+return an account identifier, it must explicitly set
+`allowUnboundAuthenticatedPlayer: true` and bind `playerId` to the logged-in
+account before calling this boundary. A configured resolver that unexpectedly
+returns no identifier fails closed unless that opt-in is present.
+
+The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
+single quantity, remaining refundable quantity, optional order id, provider
+completion timestamp, and configured obfuscated account id before returning
+verified evidence. `refundableQuantity` must equal the purchased quantity;
+missing, malformed, fully refunded, and partially refunded values do not grant.
+Google may omit `orderId`, so a missing provider order is accepted while a
+present order must match the request. The client-reported `purchasedAt` is not
+compared with provider time; the authoritative time is persisted as
+`googlePlayPurchaseCompletionTime`. The ledger stores only a SHA-256 token
+identity, never the raw purchase token.
 
 Compose both halves of the boundary with the authoritative backend:
 
