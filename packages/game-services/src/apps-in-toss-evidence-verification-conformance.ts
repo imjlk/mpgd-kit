@@ -103,18 +103,16 @@ const placements = {
   ],
 } as const satisfies AdPlacements;
 
-const scenarioRunners: ReadonlyArray<
-  readonly [AppsInTossProductionEvidenceConformanceScenario, ScenarioRunner]
-> = [
-  ['callback-only-fail-closed', runCallbackOnlyFailClosedScenario],
-  ['purchase-product-grant-callback', runPurchaseProductGrantCallbackScenario],
-  ['purchase-authority-retry', runPurchaseAuthorityRetryScenario],
-  ['purchase-pending-order-restore', runPurchasePendingOrderRestoreScenario],
-  ['purchase-authority-matching', runPurchaseAuthorityMatchingScenario],
-  ['purchase-timestamp-normalization', runPurchaseTimestampNormalizationScenario],
-  ['reward-authority-retry-and-replay', runRewardAuthorityRetryAndReplayScenario],
-  ['authority-errors-and-reward-matching', runAuthorityErrorsAndRewardMatchingScenario],
-];
+const scenarioRunners = {
+  'callback-only-fail-closed': runCallbackOnlyFailClosedScenario,
+  'purchase-product-grant-callback': runPurchaseProductGrantCallbackScenario,
+  'purchase-authority-retry': runPurchaseAuthorityRetryScenario,
+  'purchase-pending-order-restore': runPurchasePendingOrderRestoreScenario,
+  'purchase-authority-matching': runPurchaseAuthorityMatchingScenario,
+  'purchase-timestamp-normalization': runPurchaseTimestampNormalizationScenario,
+  'reward-authority-retry-and-replay': runRewardAuthorityRetryAndReplayScenario,
+  'authority-errors-and-reward-matching': runAuthorityErrorsAndRewardMatchingScenario,
+} satisfies Record<AppsInTossProductionEvidenceConformanceScenario, ScenarioRunner>;
 
 /**
  * Runs deterministic client-callback, authority, and ledger scenarios without
@@ -127,7 +125,8 @@ export async function runAppsInTossProductionEvidenceConformance(
   const now = input.now ?? '2030-01-02T03:04:05.000Z';
   const passedScenarios: AppsInTossProductionEvidenceConformanceScenario[] = [];
 
-  for (const [scenario, runScenario] of scenarioRunners) {
+  for (const scenario of appsInTossProductionEvidenceConformanceScenarios) {
+    const runScenario = scenarioRunners[scenario];
     try {
       await runScenario(createVerifier, now);
     } catch (error) {
@@ -153,19 +152,19 @@ AppsInTossProductionEvidenceAuthorityFixture {
     purchaseAuthority: {
       async getOrderStatus(input) {
         purchaseInputs.push(input);
-        return shiftFixtureResult(
-          purchaseResults,
-          'AIT_PURCHASE_AUTHORITY_FIXTURE_EXHAUSTED',
-        );
+        return shiftFixtureResult(purchaseResults, {
+          decision: 'rejected',
+          reason: 'AIT_PURCHASE_AUTHORITY_FIXTURE_EXHAUSTED',
+        });
       },
     },
     rewardAuthority: {
       async verifyReward(input) {
         rewardInputs.push(input);
-        return shiftFixtureResult(
-          rewardResults,
-          'AIT_REWARD_AUTHORITY_FIXTURE_EXHAUSTED',
-        );
+        return shiftFixtureResult(rewardResults, {
+          decision: 'rejected',
+          reason: 'AIT_REWARD_AUTHORITY_FIXTURE_EXHAUSTED',
+        });
       },
     },
     enqueuePurchaseResult(result) {
@@ -726,11 +725,11 @@ function createConformanceProductGrantVerificationPort(
   });
 }
 
-function shiftFixtureResult<T>(queue: Array<T | Error>, exhaustedReason: string): T {
+function shiftFixtureResult<T>(queue: Array<T | Error>, exhaustedResult: T): T {
   const result = queue.shift();
 
   if (result === undefined) {
-    return { decision: 'rejected', reason: exhaustedReason } as T;
+    return exhaustedResult;
   }
 
   if (result instanceof Error) {
@@ -752,7 +751,11 @@ async function assertEntitlementCount(
   );
 }
 
-function assertEqual<T>(actual: T, expected: T, label: string): void {
+function assertEqual<T extends string | number | boolean | null | undefined>(
+  actual: T,
+  expected: T,
+  label: string,
+): void {
   if (actual !== expected) {
     throw new Error(`${label}: expected ${String(expected)}, received ${String(actual)}.`);
   }
