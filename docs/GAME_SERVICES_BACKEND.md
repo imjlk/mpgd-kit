@@ -115,6 +115,10 @@ authorization tokens from a game client or checked-in configuration. Connect
 certificate chain and signature before returning the decoded transaction
 payload; the official App Store Server Library is the recommended production
 implementation.
+The bearer-token provider receives the request `AbortSignal`; it should throw
+`AppStoreDependencyUnavailableError` only for a transient signing dependency
+outage and let cancellation, invalid credentials, and programming errors
+propagate.
 
 The verifier matches the signed transaction to the configured bundle and
 environment, the catalog's platform product and type, the submitted transaction
@@ -129,6 +133,11 @@ represents one catalog grant, any signed quantity must be `1`; omission keeps
 StoreKit's default single-purchase semantics.
 Revoked, upgraded, expired, mismatched, malformed, or invalidly signed
 transactions are rejected before the entitlement ledger.
+Malformed App Store Server API `200` responses and fresh transaction lookup
+misses remain pending for retry, while malformed payloads returned as verified
+by the signed-transaction adapter are rejected. Non-consumable replay identity
+uses Apple's `originalTransactionId`; consumables continue to use each purchase's
+current `transactionId` so distinct purchases remain grantable.
 Provider outages, rate limits, account-binding outages, and authorization-provider
 outages return a retryable pending decision and do not grant. Caller cancellation
 continues to propagate instead of being converted into a retryable outage.

@@ -52,6 +52,13 @@ const baseTransaction = createAppStoreTransactionConformanceFixture({
   appAccountToken: 'f15f2ed7-f92a-4c5a-90e1-15d26cd729f2',
 }) satisfies AppStoreTransactionPayload;
 
+const defaultConformanceTransaction = createAppStoreTransactionConformanceFixture();
+assertEqual(
+  defaultConformanceTransaction.purchaseDate,
+  Date.parse('2020-01-02T03:04:05.000Z'),
+  'the deterministic conformance baseline must not default to a future purchase date',
+);
+
 let requestedUrl = '';
 let requestedAuthorization = '';
 const serverApiClient = createAppStoreServerApiClient({
@@ -119,6 +126,66 @@ assertEqual(
   'retries should return the same provider verification identity',
 );
 
+const nonConsumableProductId = 'com.example.game.removeads';
+const nonConsumableOriginalTransactionId = '2000000123457000';
+const firstNonConsumableInput = {
+  ...baseInput,
+  request: {
+    ...baseInput.request,
+    productId: 'REMOVE_ADS',
+    platformTransactionId: '2000000123457001',
+    idempotencyKey: 'purchase-app-store-remove-ads-1',
+  },
+  product: {
+    ...baseInput.product,
+    id: 'REMOVE_ADS',
+    type: 'non_consumable',
+    platformProductIds: { ios: nonConsumableProductId },
+  },
+  platformProductId: nonConsumableProductId,
+} satisfies VerifyPurchaseEvidenceInput;
+const restoredNonConsumableInput = {
+  ...firstNonConsumableInput,
+  request: {
+    ...firstNonConsumableInput.request,
+    platformTransactionId: '2000000123457002',
+    idempotencyKey: 'purchase-app-store-remove-ads-restore',
+  },
+} satisfies VerifyPurchaseEvidenceInput;
+const firstNonConsumable = await createVerifier({
+  transaction: {
+    ...baseTransaction,
+    transactionId: firstNonConsumableInput.request.platformTransactionId,
+    originalTransactionId: nonConsumableOriginalTransactionId,
+    productId: nonConsumableProductId,
+    type: 'Non-Consumable',
+  },
+}).verifyPurchase(firstNonConsumableInput);
+const restoredNonConsumable = await createVerifier({
+  transaction: {
+    ...baseTransaction,
+    transactionId: restoredNonConsumableInput.request.platformTransactionId,
+    originalTransactionId: nonConsumableOriginalTransactionId,
+    productId: nonConsumableProductId,
+    type: 'Non-Consumable',
+  },
+}).verifyPurchase(restoredNonConsumableInput);
+assertEqual(
+  firstNonConsumable.status,
+  'verified',
+  'the original non-consumable transaction should verify',
+);
+assertEqual(
+  restoredNonConsumable.status,
+  'verified',
+  'a restored non-consumable transaction should verify as the same grant identity',
+);
+assertEqual(
+  restoredNonConsumable.status === 'verified' ? restoredNonConsumable.verificationId : '',
+  firstNonConsumable.status === 'verified' ? firstNonConsumable.verificationId : '',
+  'restored non-consumables must dedupe by the original transaction identity',
+);
+
 const rejectedSignature = await createVerifier({
   signedTransactionVerifier: {
     async verifyAndDecode() {
@@ -131,6 +198,20 @@ assertDecision(
   'rejected',
   'APP_STORE_SIGNATURE_INVALID',
   'invalid JWS signatures must fail closed',
+);
+
+const malformedVerifiedPayload = await createVerifier({
+  signedTransactionVerifier: {
+    async verifyAndDecode() {
+      return { status: 'verified', payload: {} as AppStoreTransactionPayload };
+    },
+  },
+}).verifyPurchase(baseInput);
+assertDecision(
+  malformedVerifiedPayload,
+  'rejected',
+  'APP_STORE_SIGNATURE_RESULT_INVALID',
+  'a malformed payload returned as signature-verified must fail closed permanently',
 );
 
 const wrongAccount = await createVerifier({
@@ -463,6 +544,56 @@ const rateLimitedClient = createAppStoreServerApiClient({
     return new Response('{}', { status: 429 });
   },
 });
+const malformedJsonClient = createAppStoreServerApiClient({
+  getBearerToken: () => 'signed-provider-jwt',
+  async fetch() {
+    return new Response('{', { status: 200 });
+  },
+});
+const malformedJson = await malformedJsonClient.getTransactionInfo({
+  transactionId: baseInput.request.platformTransactionId,
+  environment: 'Production',
+  signal: controller.signal,
+});
+assertDecision(
+  malformedJson,
+  'pending',
+  'APP_STORE_SERVER_API_INVALID_RESPONSE',
+  'a truncated App Store 200 response should remain retryable without granting',
+);
+
+const missingSignedTransactionClient = createAppStoreServerApiClient({
+  getBearerToken: () => 'signed-provider-jwt',
+  async fetch() {
+    return new Response('{}', { status: 200 });
+  },
+});
+const missingSignedTransaction = await missingSignedTransactionClient.getTransactionInfo({
+  transactionId: baseInput.request.platformTransactionId,
+  environment: 'Production',
+  signal: controller.signal,
+});
+assertDecision(
+  missingSignedTransaction,
+  'pending',
+  'APP_STORE_SERVER_API_INVALID_RESPONSE',
+  'an App Store 200 response without signedTransactionInfo should remain retryable',
+);
+
+let rateLimitBodyCancelled = false;
+const cancellingRateLimitedClient = createAppStoreServerApiClient({
+  getBearerToken: () => 'signed-provider-jwt',
+  async fetch() {
+    return {
+      status: 429,
+      body: new ReadableStream({
+        cancel() {
+          rateLimitBodyCancelled = true;
+        },
+      }),
+    };
+  },
+});
 const rateLimited = await rateLimitedClient.getTransactionInfo({
   transactionId: baseInput.request.platformTransactionId,
   environment: 'Sandbox',
@@ -473,6 +604,91 @@ assertDecision(
   'pending',
   'APP_STORE_SERVER_API_UNAVAILABLE',
   'rate limits should be represented as retryable without trusting the client',
+);
+await cancellingRateLimitedClient.getTransactionInfo({
+  transactionId: baseInput.request.platformTransactionId,
+  environment: 'Sandbox',
+  signal: controller.signal,
+});
+assertEqual(
+  rateLimitBodyCancelled,
+  true,
+  'non-200 App Store response bodies must be cancelled before returning',
+);
+
+let missingTransactionBodyCancelled = false;
+const missingTransactionClient = createAppStoreServerApiClient({
+  getBearerToken: () => 'signed-provider-jwt',
+  async fetch() {
+    return {
+      status: 404,
+      body: new ReadableStream({
+        cancel() {
+          missingTransactionBodyCancelled = true;
+        },
+      }),
+    };
+  },
+});
+const missingTransaction = await missingTransactionClient.getTransactionInfo({
+  transactionId: baseInput.request.platformTransactionId,
+  environment: 'Production',
+  signal: controller.signal,
+});
+assertDecision(
+  missingTransaction,
+  'pending',
+  'APP_STORE_TRANSACTION_NOT_FOUND',
+  'a fresh App Store transaction miss should remain retryable',
+);
+assertEqual(
+  missingTransactionBodyCancelled,
+  true,
+  'not-found App Store response bodies must be cancelled before returning',
+);
+
+const unavailableTokenVerifier = createVerifier({
+  serverApi: createAppStoreServerApiClient({
+    getBearerToken() {
+      throw new AppStoreDependencyUnavailableError('token signing dependency unavailable');
+    },
+  }),
+});
+const unavailableToken = await unavailableTokenVerifier.verifyPurchase(baseInput);
+assertDecision(
+  unavailableToken,
+  'pending',
+  'APP_STORE_SERVER_API_UNAVAILABLE',
+  'an explicitly transient bearer-token provider outage should remain retryable',
+);
+
+await assertRejects(
+  () => createVerifier({
+    serverApi: createAppStoreServerApiClient({
+      getBearerToken() {
+        throw new Error('token provider configuration bug');
+      },
+    }),
+  }).verifyPurchase(baseInput),
+  'token provider configuration bug',
+  'permanent bearer-token provider errors must escape the retryable outage path',
+);
+
+const tokenAbortController = new AbortController();
+tokenAbortController.abort(new Error('token caller cancelled'));
+await assertRejects(
+  () => createVerifier({
+    serverApi: createAppStoreServerApiClient({
+      getBearerToken({ signal }) {
+        throw signal.reason;
+      },
+    }),
+  }).verifyPurchase({
+    ...baseInput,
+    signal: tokenAbortController.signal,
+  }),
+  'token caller cancelled',
+  'bearer-token generation must receive and propagate caller cancellation',
 );
 
 const transportFailureVerifier = createVerifier({

@@ -23,6 +23,13 @@ export class AppStoreDependencyUnavailableError extends Error {
   }
 }
 
+class AppStoreResponseTooLargeError extends Error {
+  constructor() {
+    super('App Store Server API response exceeded maxResponseBytes.');
+    this.name = 'AppStoreResponseTooLargeError';
+  }
+}
+
 export type AppStoreServerApiTransactionResult =
   | {
       readonly status: 'found';
@@ -87,7 +94,9 @@ export interface AppStoreSignedTransactionVerifier {
 }
 
 export interface CreateAppStoreServerApiClientOptions {
-  readonly getBearerToken: () => string | Promise<string>;
+  readonly getBearerToken: (input: {
+    readonly signal: AbortSignal;
+  }) => string | Promise<string>;
   readonly fetch?: AppStoreFetch;
   readonly maxResponseBytes?: number;
 }
@@ -132,15 +141,7 @@ export function createAppStoreServerApiClient(
     async getTransactionInfo(input) {
       assertNonEmptyString(input.transactionId, 'transactionId');
       assertAppStoreEnvironment(input.environment);
-      let token: string;
-      try {
-        token = await options.getBearerToken();
-      } catch (error) {
-        throw new AppStoreDependencyUnavailableError(
-          'App Store bearer token provider is unavailable.',
-          error,
-        );
-      }
+      const token = await options.getBearerToken({ signal: input.signal });
       assertAuthorizationValue(token, 'App Store bearer token');
       const url = new URL(
         `/inApps/v1/transactions/${encodeURIComponent(input.transactionId)}`,
@@ -167,21 +168,35 @@ export function createAppStoreServerApiClient(
       }
 
       if (response.status === 200) {
-        const body = await readBoundedJson(response, maxResponseBytes, input.signal);
-        assertRecord(body, 'App Store transaction response');
-        assertNonEmptyString(body.signedTransactionInfo, 'signedTransactionInfo');
+        let body: unknown;
+        try {
+          body = await readBoundedJson(response, maxResponseBytes, input.signal);
+          assertRecord(body, 'App Store transaction response');
+          assertNonEmptyString(body.signedTransactionInfo, 'signedTransactionInfo');
+        } catch (error) {
+          if (
+            input.signal.aborted
+            || error instanceof AppStoreDependencyUnavailableError
+            || error instanceof AppStoreResponseTooLargeError
+          ) {
+            throw error;
+          }
+          return { status: 'pending', reason: 'APP_STORE_SERVER_API_INVALID_RESPONSE' };
+        }
         return {
           status: 'found',
           signedTransactionInfo: body.signedTransactionInfo,
         };
       }
 
+      await cancelResponseBody(response);
+
       if (response.status === 400) {
         return { status: 'rejected', reason: 'APP_STORE_INVALID_TRANSACTION_ID' };
       }
 
       if (response.status === 404) {
-        return { status: 'rejected', reason: 'APP_STORE_TRANSACTION_NOT_FOUND' };
+        return { status: 'pending', reason: 'APP_STORE_TRANSACTION_NOT_FOUND' };
       }
 
       if (response.status === 401 || response.status === 403) {
@@ -254,7 +269,7 @@ async function verifyAppStorePurchase(
     return { status: 'pending', reason: 'APP_STORE_SERVER_API_INVALID_RESPONSE' };
   }
   if (transactionResult.status !== 'found') {
-    return transactionResult;
+    return { status: transactionResult.status, reason: transactionResult.reason };
   }
 
   let signatureResult: AppStoreSignedTransactionVerificationResult;
@@ -275,10 +290,10 @@ async function verifyAppStorePurchase(
   try {
     assertAppStoreSignedTransactionVerificationResult(signatureResult);
   } catch {
-    return { status: 'pending', reason: 'APP_STORE_SIGNATURE_RESULT_INVALID' };
+    return { status: 'rejected', reason: 'APP_STORE_SIGNATURE_RESULT_INVALID' };
   }
   if (signatureResult.status === 'rejected') {
-    return signatureResult;
+    return { status: 'rejected', reason: signatureResult.reason };
   }
 
   const transaction = assertAppStoreTransactionPayload(signatureResult.payload);
@@ -403,11 +418,14 @@ function validateTransaction(
 }
 
 function createVerificationId(transaction: AppStoreTransactionPayload): string {
+  const grantTransactionId = transaction.type === 'Non-Consumable'
+    ? transaction.originalTransactionId
+    : transaction.transactionId;
   return [
     'app-store',
     transaction.environment,
     transaction.bundleId,
-    transaction.transactionId,
+    grantTransactionId,
   ].map(encodeVerificationIdSegment).join(':');
 }
 
@@ -512,7 +530,7 @@ async function readBoundedJson(
       }
       byteLength += chunk.value.byteLength;
       if (byteLength > maxResponseBytes) {
-        throw new Error('App Store Server API response exceeded maxResponseBytes.');
+        throw new AppStoreResponseTooLargeError();
       }
       text += decoder.decode(chunk.value, { stream: true });
     }
@@ -524,6 +542,10 @@ async function readBoundedJson(
     reader.releaseLock();
   }
   return JSON.parse(text) as unknown;
+}
+
+async function cancelResponseBody(response: AppStoreFetchResponse): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
 }
 
 function readGlobalFetch(): AppStoreFetch {
