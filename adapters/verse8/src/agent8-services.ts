@@ -27,6 +27,8 @@ const defaultMaximumStorageValueBytes = 64 * 1024;
 const defaultMaximumStorageStateBytes = 512 * 1024;
 const defaultMaximumLeaderboardParticipants = 1_000;
 const maximumLeaderboardParticipantsLimit = 10_000;
+const minimumPersistenceSecretBytes = 32;
+const maximumPersistenceSecretBytes = 1_024;
 const sha256DigestPattern = /^[0-9a-f]{64}$/;
 const sha256RoundConstants = Uint32Array.from(
   (
@@ -75,10 +77,31 @@ export interface Verse8Agent8ServiceContext extends Verse8Agent8StateContext {
 }
 
 export interface Verse8Agent8StorageOptions {
+  readonly persistenceSecret: string;
+  readonly codec: Verse8Agent8PrivateStorageCodec;
   readonly stateNamespace?: string;
   readonly maximumEntries?: number;
   readonly maximumValueBytes?: number;
   readonly maximumStateBytes?: number;
+}
+
+export interface Verse8Agent8PrivateStorageEnvelope {
+  readonly keyId: string;
+  readonly ciphertext: string;
+}
+
+export interface Verse8Agent8PrivateStorageCodec {
+  readonly security: 'authenticated-encryption';
+  seal(input: {
+    readonly account: string;
+    readonly key: string;
+    readonly value: unknown;
+  }): Promise<Verse8Agent8PrivateStorageEnvelope>;
+  open(input: {
+    readonly account: string;
+    readonly key: string;
+    readonly envelope: Verse8Agent8PrivateStorageEnvelope;
+  }): Promise<unknown>;
 }
 
 export interface Verse8Agent8StorageService {
@@ -95,13 +118,19 @@ export interface Verse8Agent8StorageService {
 }
 
 interface StoredStorageState {
-  readonly version: 1;
-  readonly values: Readonly<Record<string, unknown>>;
+  readonly version: 2;
+  readonly values: Readonly<Record<string, Verse8Agent8PrivateStorageEnvelope>>;
 }
 
 export function createVerse8Agent8StorageService(
-  options: Verse8Agent8StorageOptions = {},
+  options: Verse8Agent8StorageOptions,
 ): Verse8Agent8StorageService {
+  if (!isRecord(options)) {
+    throw new Error('Verse8 Agent8 storage options are required.');
+  }
+
+  assertPrivateStorageCodec(options.codec);
+  const persistenceKey = readPersistenceSecret(options.persistenceSecret, 'persistenceSecret');
   const namespace = normalizeNamespace(
     options.stateNamespace ?? defaultStorageStateNamespace,
     'stateNamespace',
@@ -129,14 +158,30 @@ export function createVerse8Agent8StorageService(
       assertStorageKey(input.key);
       const userState = await context.getUserState(account);
       const state = readStorageState(userState[namespace]);
+      assertStorageStateSize(state, maximumStateBytes);
+      const storageKey = createPrivateStorageKey(persistenceKey, account, input.key);
 
-      if (!Object.hasOwn(state.values, input.key)) {
+      if (!Object.hasOwn(state.values, storageKey)) {
         return null;
       }
 
-      const value = state.values[input.key];
+      const envelope = state.values[storageKey];
 
-      return { value: cloneJsonValue(value) };
+      if (envelope === undefined) {
+        throw new Error('Stored Verse8 cloud save state is invalid.');
+      }
+
+      const value = cloneJsonValue(await options.codec.open({
+        account,
+        key: input.key,
+        envelope: cloneStorageEnvelope(envelope),
+      }));
+
+      if (utf8Bytes(JSON.stringify(value)).length > maximumValueBytes) {
+        throw new Error('Decrypted Verse8 cloud save value exceeds maximumValueBytes.');
+      }
+
+      return { value };
     },
     async save(account, input, context) {
       assertAccount(account);
@@ -147,20 +192,32 @@ export function createVerse8Agent8StorageService(
         throw new Error('Verse8 cloud save value exceeds maximumValueBytes.');
       }
 
+      const storageKey = createPrivateStorageKey(persistenceKey, account, input.key);
+      const envelope = readStorageEnvelope(await options.codec.seal({
+        account,
+        key: input.key,
+        value: cloneJsonValue(value),
+      }));
+
+      if (utf8Bytes(JSON.stringify(envelope)).length > maximumStateBytes) {
+        throw new Error('Encrypted Verse8 cloud save value exceeds maximumStateBytes.');
+      }
+
       await context.lock(storageLockKey(account), async () => {
         const userState = await context.getUserState(account);
         const state = readStorageState(userState[namespace]);
-        const isNewKey = !Object.hasOwn(state.values, input.key);
+        assertStorageStateSize(state, maximumStateBytes);
+        const isNewKey = !Object.hasOwn(state.values, storageKey);
 
         if (isNewKey && Object.keys(state.values).length >= maximumEntries) {
           throw new Error('Verse8 cloud save exceeds maximumEntries.');
         }
 
         const next = {
-          version: 1,
+          version: 2,
           values: {
             ...state.values,
-            [input.key]: value,
+            [storageKey]: envelope,
           },
         } satisfies StoredStorageState;
 
@@ -175,6 +232,7 @@ export function createVerse8Agent8StorageService(
 }
 
 export interface Verse8Agent8VerifiedLeaderboardOptions {
+  readonly persistenceSecret: string;
   readonly collectionNamespace?: string;
   readonly maximumParticipants?: number;
   readonly now?: () => string;
@@ -279,8 +337,13 @@ interface StoredAttemptDecision {
 
 export function createVerse8Agent8VerifiedLeaderboardProvider(
   context: Verse8Agent8ServiceContext,
-  options: Verse8Agent8VerifiedLeaderboardOptions = {},
+  options: Verse8Agent8VerifiedLeaderboardOptions,
 ): VerifiedLeaderboardService {
+  if (!isRecord(options)) {
+    throw new Error('Verse8 Agent8 leaderboard options are required.');
+  }
+
+  const persistenceKey = readPersistenceSecret(options.persistenceSecret, 'persistenceSecret');
   const namespace = normalizeNamespace(
     options.collectionNamespace ?? defaultLeaderboardCollectionNamespace,
     'collectionNamespace',
@@ -303,12 +366,13 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
       assertRecordVerifiedLeaderboardAttemptRequest(input);
       const definition = cloneDefinition(input.definition);
       const attempt = cloneAttempt(input.attempt);
-      const attemptDigest = createAttemptDigest(attempt);
+      const attemptDigest = createAttemptDigest(persistenceKey, attempt);
       const collections = createLeaderboardCollections(namespace, definition.leaderboardId);
       const decisionCollection = createAttemptDecisionCollection(
         namespace,
         definition.leaderboardId,
         attempt.attemptId,
+        persistenceKey,
       );
 
       return context.lock(leaderboardLockKey(definition.leaderboardId), async () => {
@@ -470,8 +534,13 @@ function createAttemptDecisionCollection(
   namespace: string,
   leaderboardId: string,
   attemptId: string,
+  persistenceKey: Uint8Array,
 ): string {
-  return `${namespace}A${sha256(JSON.stringify(['attempt', leaderboardId, attemptId]))}`;
+  const decisionDigest = hmacSha256(
+    persistenceKey,
+    JSON.stringify(['attempt-decision', leaderboardId, attemptId]),
+  );
+  return `${namespace}A${decisionDigest}`;
 }
 
 async function ensureDefinition(
@@ -799,16 +868,20 @@ function cloneRecordResponse(
   return response;
 }
 
-function createAttemptDigest(attempt: VerifiedLeaderboardAttempt): string {
+function createAttemptDigest(
+  persistenceKey: Uint8Array,
+  attempt: VerifiedLeaderboardAttempt,
+): string {
   const metrics = attempt.metrics === undefined
     ? null
     : Object.keys(attempt.metrics)
         .sort(compareOrdinal)
         .map((key) => [key, attempt.metrics?.[key]]);
 
-  return sha256(
+  return hmacSha256(
+    persistenceKey,
     JSON.stringify([
-      1,
+      'attempt-integrity-v1',
       attempt.participantId,
       attempt.attemptId,
       Object.is(attempt.score, -0) ? 0 : attempt.score,
@@ -868,21 +941,79 @@ function readItemId(item: Verse8Agent8CollectionItem, label: string): string {
 
 function readStorageState(value: unknown): StoredStorageState {
   if (value === undefined) {
-    return { version: 1, values: {} };
+    return { version: 2, values: {} };
   }
 
-  if (!isRecord(value) || value.version !== 1 || !isRecord(value.values)) {
+  if (
+    !isRecord(value)
+    || Object.keys(value).length !== 2
+    || !Object.hasOwn(value, 'version')
+    || !Object.hasOwn(value, 'values')
+    || value.version !== 2
+    || !isRecord(value.values)
+  ) {
     throw new Error('Stored Verse8 cloud save state is invalid.');
   }
 
-  const values: Record<string, unknown> = {};
+  const values: Record<string, Verse8Agent8PrivateStorageEnvelope> = {};
 
   for (const [key, storedValue] of Object.entries(value.values)) {
-    assertStorageKey(key);
-    values[key] = cloneJsonValue(storedValue);
+    if (!sha256DigestPattern.test(key)) {
+      throw new Error('Stored Verse8 cloud save state is invalid.');
+    }
+
+    values[key] = readStorageEnvelope(storedValue);
   }
 
-  return { version: 1, values };
+  return { version: 2, values };
+}
+
+function assertStorageStateSize(state: StoredStorageState, maximumStateBytes: number): void {
+  if (utf8Bytes(JSON.stringify(state)).length > maximumStateBytes) {
+    throw new Error('Stored Verse8 cloud save state exceeds maximumStateBytes.');
+  }
+}
+
+function assertPrivateStorageCodec(codec: Verse8Agent8PrivateStorageCodec): void {
+  if (
+    typeof codec !== 'object'
+    || codec === null
+    || codec.security !== 'authenticated-encryption'
+    || typeof codec.seal !== 'function'
+    || typeof codec.open !== 'function'
+  ) {
+    throw new Error('A Verse8 private storage codec is required.');
+  }
+}
+
+function readStorageEnvelope(input: unknown): Verse8Agent8PrivateStorageEnvelope {
+  if (
+    !isRecord(input)
+    || Object.keys(input).length !== 2
+    || !Object.hasOwn(input, 'keyId')
+    || !Object.hasOwn(input, 'ciphertext')
+    || typeof input.keyId !== 'string'
+    || !/^[A-Za-z0-9._:-]{1,128}$/.test(input.keyId)
+    || typeof input.ciphertext !== 'string'
+    || input.ciphertext.length === 0
+    || !isWellFormedUnicode(input.ciphertext)
+  ) {
+    throw new Error('Verse8 private storage envelope is invalid.');
+  }
+
+  return {
+    keyId: input.keyId,
+    ciphertext: input.ciphertext,
+  };
+}
+
+function cloneStorageEnvelope(
+  envelope: Verse8Agent8PrivateStorageEnvelope,
+): Verse8Agent8PrivateStorageEnvelope {
+  return {
+    keyId: envelope.keyId,
+    ciphertext: envelope.ciphertext,
+  };
 }
 
 function cloneJsonValue(input: unknown): unknown {
@@ -965,7 +1096,13 @@ function positiveSafeInteger(value: number, label: string): number {
 }
 
 function assertAccount(value: unknown): asserts value is string {
-  if (typeof value !== 'string' || value.trim() !== value || value.length === 0 || value.length > 256) {
+  if (
+    typeof value !== 'string'
+    || value.trim() !== value
+    || value.length === 0
+    || value.length > 256
+    || !isWellFormedUnicode(value)
+  ) {
     throw new Error('account must be a canonical bounded string.');
   }
 }
@@ -1016,8 +1153,58 @@ function leaderboardLockKey(leaderboardId: string): string {
   return `mpgd:verse8:leaderboard:${sha256(leaderboardId)}`;
 }
 
+function createPrivateStorageKey(
+  persistenceKey: Uint8Array,
+  account: string,
+  storageKey: string,
+): string {
+  return hmacSha256(persistenceKey, JSON.stringify(['storage-slot', account, storageKey]));
+}
+
+function readPersistenceSecret(value: unknown, label: string): Uint8Array {
+  if (
+    typeof value !== 'string'
+    || value.trim() !== value
+    || !isWellFormedUnicode(value)
+  ) {
+    throw new Error(`${label} must be a canonical server-only secret.`);
+  }
+
+  const bytes = utf8Bytes(value);
+
+  if (
+    bytes.length < minimumPersistenceSecretBytes
+    || bytes.length > maximumPersistenceSecretBytes
+  ) {
+    throw new Error(
+      `${label} must contain between ${String(minimumPersistenceSecretBytes)}`
+        + ` and ${String(maximumPersistenceSecretBytes)} UTF-8 bytes.`,
+    );
+  }
+
+  return bytes;
+}
+
 function sha256(input: string): string {
-  const bytes = utf8Bytes(input);
+  return bytesToHex(sha256Bytes(utf8Bytes(input)));
+}
+
+function hmacSha256(key: Uint8Array, input: string): string {
+  const normalizedKey = key.length > 64 ? sha256Bytes(key) : key.slice();
+  const innerPad = new Uint8Array(64);
+  const outerPad = new Uint8Array(64);
+
+  for (let index = 0; index < 64; index += 1) {
+    const keyByte = normalizedKey[index] ?? 0;
+    innerPad[index] = keyByte ^ 0x36;
+    outerPad[index] = keyByte ^ 0x5c;
+  }
+
+  const innerDigest = sha256Bytes(concatenateBytes(innerPad, utf8Bytes(input)));
+  return bytesToHex(sha256Bytes(concatenateBytes(outerPad, innerDigest)));
+}
+
+function sha256Bytes(bytes: Uint8Array): Uint8Array {
   const bitLength = bytes.length * 8;
   const paddedLength = Math.ceil((bytes.length + 9) / 64) * 64;
   const message = new Uint8Array(paddedLength);
@@ -1101,7 +1288,25 @@ function sha256(input: string): string {
     hash[7] = ((hash[7] as number) + h) >>> 0;
   }
 
-  return [...hash].map((value) => value.toString(16).padStart(8, '0')).join('');
+  const digest = new Uint8Array(32);
+  const digestView = new DataView(digest.buffer);
+
+  for (let index = 0; index < hash.length; index += 1) {
+    digestView.setUint32(index * 4, hash[index] as number, false);
+  }
+
+  return digest;
+}
+
+function concatenateBytes(left: Uint8Array, right: Uint8Array): Uint8Array {
+  const output = new Uint8Array(left.length + right.length);
+  output.set(left);
+  output.set(right, left.length);
+  return output;
+}
+
+function bytesToHex(bytes: Uint8Array): string {
+  return [...bytes].map((value) => value.toString(16).padStart(2, '0')).join('');
 }
 
 function rotateRight(value: number, bits: number): number {

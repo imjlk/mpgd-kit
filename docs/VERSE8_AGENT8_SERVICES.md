@@ -7,7 +7,8 @@ for Agent8 user state and collections.
 
 The default starter does not configure either integration. Keep cloud storage
 and the generic leaderboard unavailable until the game owns the Agent8 server,
-RPC authentication, and deployment lifecycle.
+RPC authentication, server-only secrets, authenticated encryption, and
+deployment lifecycle.
 
 ## Agent8 context
 
@@ -44,7 +45,10 @@ browser payload:
 ```ts
 import { createVerse8Agent8StorageService } from '@mpgd/adapter-verse8/agent8';
 
-const storage = createVerse8Agent8StorageService();
+const storage = createVerse8Agent8StorageService({
+  persistenceSecret: serverOnlyStorageIndexSecret,
+  codec: gameOwnedAuthenticatedEncryptionCodec,
+});
 
 export class Server {
   loadMpgdSave(input: { readonly key: string }) {
@@ -57,10 +61,16 @@ export class Server {
 }
 ```
 
-The helper stores versioned JSON values under `mpgdVerse8Storage`, serializes
-updates per account, clones values across the boundary, rejects malformed
-stored state, and applies bounded entry, value, and namespace-state limits.
-Adjust the limits explicitly when a game has measured Agent8 storage quotas.
+Agent8 global user state is client-subscribable, including by account. The
+helper therefore refuses to provide a plaintext default: `persistenceSecret`
+HMACs account/slot identifiers, and `codec` must use authenticated encryption
+with a server-only key, fresh nonce, and the supplied account/key as associated
+data. Base64, reversible encoding, hashing, or client-held keys are not safe
+codecs. The helper stores only versioned opaque envelopes under
+`mpgdVerse8Storage`, serializes updates per account, rejects malformed state,
+and applies bounded entry, plaintext-value, and namespace-state limits. Keep
+old decryption keys available through `keyId` during rotation, and adjust limits
+only after measuring Agent8 quotas.
 
 Wrap those game-owned remote methods at the adapter boundary:
 
@@ -100,6 +110,7 @@ interface CompleteRankedRun {
 
 const leaderboard = createVerse8Agent8LeaderboardBoundary<CompleteRankedRun>({
   context,
+  persistenceSecret: serverOnlyLeaderboardPersistenceSecret,
   async verifySubmission({ account, submission }) {
     const completion = await attemptCoordinator.verifyCompletion({
       account,
@@ -145,10 +156,13 @@ provider for an already-authoritative coordinator; never expose its trusted
 recorder directly to a game client.
 
 Agent8 global collections may be client-subscribable. The provider therefore
-stores only public retained-entry fields plus SHA-256 identity digests. It does
-not persist verification evidence or the raw history of non-retained attempts.
-Board and attempt collection IDs are also derived from bounded digests rather
-than raw game identifiers.
+stores only public retained-entry fields plus HMAC-SHA-256 identity digests. It
+does not persist verification evidence or the raw history of non-retained
+attempts. Public board collection IDs use bounded SHA-256 digests; private
+attempt-decision collection IDs and integrity markers require the stable
+server-only `persistenceSecret`, so predictable attempt IDs do not reveal those
+records. Use a high-entropy secret of at least 32 UTF-8 bytes, keep it out of
+client bundles and source control, and retain it across deployments.
 
 Pages use the shared versioned opaque cursor. Internally, the adapter loads at
 most `maximumParticipants + 1` retained entries from the board-specific

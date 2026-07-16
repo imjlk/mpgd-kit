@@ -296,9 +296,10 @@ submission.
   `VXShop.onClose`, client metadata, or a client-created transaction ID as
   purchase evidence. Keep `@agent8/gameserver-node` in the separate Agent8
   server project and use `@mpgd/adapter-verse8/agent8` there for the locked,
-  consume-once catalog grant. Agent8 cloud state is available only after the
-  gateway receives a game-owned remote storage client; the starter does not
-  install the React browser SDK or configure that client. Agent8 verified
+  consume-once catalog grant. Authenticated-encrypted Agent8 cloud state is
+  available only after the gateway receives a game-owned remote storage client;
+  the starter does not install the React browser SDK, configure that client, or
+  ship server persistence secrets. Agent8 verified
   leaderboards stay server-only and require a game-specific completion
   verifier, so the generic platform leaderboard capability remains disabled.
 - Reddit Devvit is game-owned in `apps/target-devvit`.

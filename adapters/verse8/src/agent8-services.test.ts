@@ -12,13 +12,18 @@ import {
   createVerse8Agent8VerifiedLeaderboardProvider,
   type Verse8Agent8CollectionItem,
   type Verse8Agent8CollectionOptions,
+  type Verse8Agent8PrivateStorageCodec,
   type Verse8Agent8ServiceContext,
+  type Verse8Agent8StorageOptions,
+  type Verse8Agent8VerifiedLeaderboardOptions,
 } from './agent8-services';
+
+const testPersistenceSecret = 'test-only-persistence-secret-32-bytes';
 
 describe('Verse8 Agent8 storage service', () => {
   it('round-trips isolated JSON values through locked user state updates', async () => {
     const fixture = createAgent8Context();
-    const service = createVerse8Agent8StorageService();
+    const service = createTestStorageService();
     const input = { progress: { level: 3 }, inventory: ['key'] };
 
     await service.save('0xplayer', { key: 'slot-1', value: input }, fixture.context);
@@ -36,14 +41,22 @@ describe('Verse8 Agent8 storage service', () => {
     });
     expect(fixture.lockKeys).toHaveLength(1);
     expect(fixture.userUpdates).toHaveLength(1);
+    const stored = JSON.stringify(fixture.userUpdates);
+    expect(stored).toContain('ciphertext');
+    expect(stored).toContain(
+      '7f6ae71a3ed927442fdf9e356977bd623e944c0bc10f48e466296e0083615ffb',
+    );
+    expect(stored).not.toContain('progress');
+    expect(stored).not.toContain('inventory');
+    expect(stored).not.toContain('slot-1');
   });
 
   it('rejects malformed state, non-JSON values, and configured limits', async () => {
     const fixture = createAgent8Context();
-    const service = createVerse8Agent8StorageService({
+    const service = createTestStorageService({
       maximumEntries: 1,
       maximumValueBytes: 32,
-      maximumStateBytes: 128,
+      maximumStateBytes: 512,
     });
 
     await expect(
@@ -61,16 +74,32 @@ describe('Verse8 Agent8 storage service', () => {
     ).rejects.toThrow('maximumEntries');
 
     fixture.userStates.set('0xbroken', {
-      mpgdVerse8Storage: { version: 2, values: {} },
+      mpgdVerse8Storage: { version: 1, values: {} },
     });
     await expect(
       service.load('0xbroken', { key: 'first' }, fixture.context),
     ).rejects.toThrow('cloud save state is invalid');
+
+    fixture.userStates.set('0xbroken', {
+      mpgdVerse8Storage: {
+        version: 2,
+        values: {
+          ['0'.repeat(64)]: {
+            keyId: 'test-key-v1',
+            ciphertext: 'opaque',
+            plaintext: 'must-not-be-stored',
+          },
+        },
+      },
+    });
+    await expect(
+      service.load('0xbroken', { key: 'first' }, fixture.context),
+    ).rejects.toThrow('envelope is invalid');
   });
 
   it('treats inherited property names as ordinary storage keys', async () => {
     const fixture = createAgent8Context();
-    const service = createVerse8Agent8StorageService({ maximumEntries: 1 });
+    const service = createTestStorageService({ maximumEntries: 1 });
 
     await expect(
       service.load('0xplayer', { key: 'toString' }, fixture.context),
@@ -84,7 +113,7 @@ describe('Verse8 Agent8 storage service', () => {
 
   it('rejects trailing unpaired high surrogates', async () => {
     const fixture = createAgent8Context();
-    const service = createVerse8Agent8StorageService();
+    const service = createTestStorageService();
     const malformed = '\ud800';
 
     await expect(
@@ -99,6 +128,22 @@ describe('Verse8 Agent8 storage service', () => {
         value: { [malformed]: 'bad' },
       }, fixture.context),
     ).rejects.toThrow('object keys must contain well-formed Unicode');
+    await expect(
+      service.load(malformed, { key: 'slot' }, fixture.context),
+    ).rejects.toThrow('account must be a canonical bounded string');
+  });
+
+  it('requires a private codec and strong server-only persistence secret', () => {
+    expect(() => createVerse8Agent8StorageService({
+      codec: {} as Verse8Agent8PrivateStorageCodec,
+      persistenceSecret: testPersistenceSecret,
+    })).toThrow('private storage codec');
+    expect(() => createTestStorageService({ persistenceSecret: 'short' })).toThrow(
+      'between 32 and 1024 UTF-8 bytes',
+    );
+    expect(() => createTestLeaderboardProvider(createAgent8Context().context, {
+      persistenceSecret: 'short',
+    })).toThrow('between 32 and 1024 UTF-8 bytes');
   });
 });
 
@@ -108,7 +153,7 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
       createFixture: ({ now }) => {
         const fixture = createAgent8Context();
         return {
-          service: createVerse8Agent8VerifiedLeaderboardProvider(fixture.context, {
+          service: createTestLeaderboardProvider(fixture.context, {
             now: () => now,
           }),
         };
@@ -120,7 +165,7 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
 
   it('sorts bounded per-board collections server-side for opaque cursor pages', async () => {
     const fixture = createAgent8Context();
-    const service = createVerse8Agent8VerifiedLeaderboardProvider(fixture.context, {
+    const service = createTestLeaderboardProvider(fixture.context, {
       now: () => '2030-01-02T03:04:05.000Z',
     });
 
@@ -148,9 +193,9 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
       !('filters' in read) && !('orderBy' in read))).toBe(true);
   });
 
-  it('stores only public retained fields and SHA-256 attempt digests', async () => {
+  it('stores only public retained fields and keyed attempt digests', async () => {
     const fixture = createAgent8Context();
-    const service = createVerse8Agent8VerifiedLeaderboardProvider(fixture.context);
+    const service = createTestLeaderboardProvider(fixture.context);
 
     await service.recordVerifiedAttempt(createAttempt({
       participantId: 'participant',
@@ -174,12 +219,27 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
       'mpgdVerse8LeaderboardD29f5f5467c00c51768ef8e1229005167'
         + '763052fef08742dbbd37ec4b975c8734',
     );
-    expect(fixture.collectionIds).toContain(
-      'mpgdVerse8LeaderboardA4aa56d3b787ecd323aa7b3f6f63fb48c'
-        + '2bfb294190bbba41048f13c5ed295152',
+    const decisionCollection = fixture.collectionIds.find((collectionId) =>
+      collectionId.startsWith('mpgdVerse8LeaderboardA'));
+    expect(decisionCollection).toBe(
+      'mpgdVerse8LeaderboardAeb0af2420d9558c517b2dc9daa61981fb'
+        + 'f75cd08175fab0f445009da2e297d3c',
     );
     expect(fixture.collectionIds.every((collectionId) =>
       !collectionId.includes('retained-attempt'))).toBe(true);
+
+    const alternateFixture = createAgent8Context();
+    const alternateService = createTestLeaderboardProvider(alternateFixture.context, {
+      persistenceSecret: 'alternate-test-persistence-secret-32-bytes',
+    });
+    await alternateService.recordVerifiedAttempt(createAttempt({
+      participantId: 'participant',
+      attemptId: 'retained-attempt',
+      score: 10,
+    }));
+    const alternateDecisionCollection = alternateFixture.collectionIds.find((collectionId) =>
+      collectionId.startsWith('mpgdVerse8LeaderboardA'));
+    expect(alternateDecisionCollection).not.toBe(decisionCollection);
   });
 
   it('recovers when an entry write succeeds before its decision marker', async () => {
@@ -199,7 +259,7 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
         return fixture.context.addCollectionItem(collectionId, item);
       },
     };
-    const service = createVerse8Agent8VerifiedLeaderboardProvider(context, {
+    const service = createTestLeaderboardProvider(context, {
       now: () => '2030-01-02T03:04:05.000Z',
     });
     const input = createAttempt({
@@ -239,6 +299,7 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
     let verified: RecordVerifiedLeaderboardAttemptRequest | null = null;
     const boundary = createVerse8Agent8LeaderboardBoundary<{ readonly runId: string }>({
       context: fixture.context,
+      persistenceSecret: testPersistenceSecret,
       async verifySubmission() {
         return verified;
       },
@@ -269,6 +330,67 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
     });
   });
 });
+
+type TestStorageOptions = Omit<
+  Verse8Agent8StorageOptions,
+  'codec' | 'persistenceSecret'
+> & {
+  readonly codec?: Verse8Agent8PrivateStorageCodec;
+  readonly persistenceSecret?: string;
+};
+
+function createTestStorageService(options: TestStorageOptions = {}) {
+  return createVerse8Agent8StorageService({
+    codec: testPrivateStorageCodec,
+    persistenceSecret: testPersistenceSecret,
+    ...options,
+  });
+}
+
+type TestLeaderboardOptions = Omit<
+  Verse8Agent8VerifiedLeaderboardOptions,
+  'persistenceSecret'
+> & {
+  readonly persistenceSecret?: string;
+};
+
+function createTestLeaderboardProvider(
+  context: Verse8Agent8ServiceContext,
+  options: TestLeaderboardOptions = {},
+) {
+  return createVerse8Agent8VerifiedLeaderboardProvider(context, {
+    persistenceSecret: testPersistenceSecret,
+    ...options,
+  });
+}
+
+const testPrivateStorageCodec: Verse8Agent8PrivateStorageCodec = {
+  security: 'authenticated-encryption',
+  async seal({ account, key, value }) {
+    const plaintext = JSON.stringify({ account, key, value });
+    return {
+      keyId: 'test-key-v1',
+      ciphertext: reverseText(plaintext),
+    };
+  },
+  async open({ account, key, envelope }) {
+    const decoded = JSON.parse(reverseText(envelope.ciphertext)) as {
+      readonly account: string;
+      readonly key: string;
+      readonly value: unknown;
+    };
+
+    if (decoded.account !== account || decoded.key !== key) {
+      throw new Error('Test private storage associated data mismatch.');
+    }
+
+    return decoded.value;
+  },
+};
+
+function reverseText(input: string): string {
+  return [...input].reverse().join('');
+}
 
 function createAttempt(input: {
   readonly participantId: string;
