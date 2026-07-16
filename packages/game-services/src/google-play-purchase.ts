@@ -353,7 +353,11 @@ async function finalizeGooglePlayPurchase(
       action,
       alreadyCompleted: false,
     };
-  } catch {
+  } catch (error: unknown) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      throw error;
+    }
+
     return {
       status: 'pending',
       action,

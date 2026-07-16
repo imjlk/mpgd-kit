@@ -201,6 +201,14 @@ persistence and rotating keys; the kit does not embed credentials or a key
 fetch endpoint. See [AdMob Server-Side Verification](ADMOB_SSV.md) and run
 `pnpm smoke:admob-ssv-conformance` before enabling production grants.
 
+Post-ledger purchase finalization uses a separate 15-second deadline because
+provider acknowledgement or consumption can have a different latency profile
+than evidence verification. Configure `purchaseGrantFinalizationTimeoutMs`
+independently when constructing the backend. Timeouts preserve the durable
+grant, return `PURCHASE_FINALIZER_TIMEOUT`, abort the provider signal, and can be
+retried idempotently. Finalization status, action, completion state, and reason
+are included in purchase analytics for operational diagnosis.
+
 ## Cloudflare Worker Starter
 
 `apps/game-services-worker` is a Cloudflare Vite plugin Worker starter. Vite

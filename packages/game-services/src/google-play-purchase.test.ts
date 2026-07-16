@@ -66,6 +66,8 @@ class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
   readonly responses = new Map<string, Record<string, unknown>>();
   readonly failingConsumeTokens = new Set<string>();
   readonly failingAcknowledgeTokens = new Set<string>();
+  readonly stallingConsumeTokens = new Set<string>();
+  readonly abortedConsumeTokens = new Set<string>();
   readonly finalizedProductIds: string[] = [];
   readonly orderIdsAfterFirstRead = new Map<string, string>();
   readonly readCounts = new Map<string, number>();
@@ -107,9 +109,22 @@ class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
   async consumeProductPurchase(input: {
     readonly productId: string;
     readonly purchaseToken: string;
+    readonly signal: AbortSignal;
   }): Promise<void> {
     this.events.push(`provider:consume:${input.purchaseToken}`);
     this.finalizedProductIds.push(input.productId);
+    if (this.stallingConsumeTokens.has(input.purchaseToken)) {
+      await new Promise<void>((_resolve, reject) => {
+        input.signal.addEventListener(
+          'abort',
+          () => {
+            this.abortedConsumeTokens.add(input.purchaseToken);
+            reject(input.signal.reason);
+          },
+          { once: true },
+        );
+      });
+    }
     if (this.failingConsumeTokens.has(input.purchaseToken)) {
       throw new Error('simulated consume failure');
     }
@@ -135,6 +150,7 @@ function createHarness(input: {
   ) => Promise<string | undefined> | string | undefined;
   readonly catalog?: ProductCatalog;
   readonly evidenceVerificationTimeoutMs?: number;
+  readonly purchaseGrantFinalizationTimeoutMs?: number;
 }) {
   const events: string[] = [];
   const client = new FixtureGooglePlayClient(events);
@@ -174,6 +190,9 @@ function createHarness(input: {
     ...(input.evidenceVerificationTimeoutMs === undefined
       ? {}
       : { evidenceVerificationTimeoutMs: input.evidenceVerificationTimeoutMs }),
+    ...(input.purchaseGrantFinalizationTimeoutMs === undefined
+      ? {}
+      : { purchaseGrantFinalizationTimeoutMs: input.purchaseGrantFinalizationTimeoutMs }),
     now: () => '2030-01-02T03:04:07.000Z',
   });
 
@@ -398,6 +417,24 @@ const recoveredFinalization = await recoverable.backend.purchases.verifyPurchase
 assertEqual(recoveredFinalization.alreadyProcessed, true);
 assertEqual(recoveredFinalization.finalization?.status, 'completed');
 assertEqual((await recoverable.store.listEntitlementTransactions()).length, 1);
+
+const timedFinalization = createHarness({
+  token: 'token-finalization-timeout',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  purchaseGrantFinalizationTimeoutMs: 5,
+});
+timedFinalization.client.stallingConsumeTokens.add('token-finalization-timeout');
+const timedFinalizationResult = await timedFinalization.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-finalization-timeout' }),
+);
+assertEqual(timedFinalizationResult.verified, true, 'finalizer timeout follows the durable grant');
+assertEqual(timedFinalizationResult.finalization?.status, 'pending');
+assertEqual(timedFinalizationResult.finalization?.reason, 'PURCHASE_FINALIZER_TIMEOUT');
+assert(
+  timedFinalization.client.abortedConsumeTokens.has('token-finalization-timeout'),
+  'the dedicated finalization timeout must abort the provider write',
+);
+assertEqual((await timedFinalization.store.listEntitlementTransactions()).length, 1);
 
 let retryAccountId = 'account:original';
 const accountRotationRetry = createHarness({
@@ -771,6 +808,7 @@ assert(
 const throwingSupportEvents: string[] = [];
 const throwingSupportStore = new TrackingStore(throwingSupportEvents);
 let throwingSupportFinalizerCalls = 0;
+let throwingSupportAnalyticsReason: unknown;
 const throwingSupportBackend = createGameServicesBackend({
   catalog,
   placements,
@@ -787,6 +825,11 @@ const throwingSupportBackend = createGameServicesBackend({
       return { status: 'completed', action: 'consume', alreadyCompleted: false };
     },
   },
+  analytics: {
+    track(event) {
+      throwingSupportAnalyticsReason = event.properties.finalizationReason;
+    },
+  },
   now: () => '2030-01-02T03:04:07.000Z',
 });
 const throwingSupportResult = await throwingSupportBackend.purchases.verifyPurchase(
@@ -799,6 +842,11 @@ assertEqual(throwingSupportResult.verified, true, 'the durable ledger grant must
 assertEqual(throwingSupportResult.finalization?.status, 'pending');
 assertEqual(throwingSupportResult.finalization?.reason, 'PURCHASE_FINALIZER_ERROR');
 assertEqual(throwingSupportFinalizerCalls, 0, 'a failed support hook must skip provider writes');
+assertEqual(
+  throwingSupportAnalyticsReason,
+  'PURCHASE_FINALIZER_ERROR',
+  'finalizer failures must remain observable through purchase analytics',
+);
 assertEqual((await throwingSupportStore.listEntitlementTransactions()).length, 1);
 
 const wrongSchema = createHarness({

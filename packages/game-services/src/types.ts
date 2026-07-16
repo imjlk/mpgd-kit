@@ -162,6 +162,9 @@ export function assertPurchaseGrantFinalization(
   if (input.action !== undefined) {
     assertPurchaseGrantFinalizationAction(input.action);
   }
+  if (input.status === 'completed' && input.action === undefined) {
+    throw new Error('completed finalization requires an action.');
+  }
   assertBoolean(input.alreadyCompleted, 'finalization.alreadyCompleted');
   assertOptionalNonEmptyString(input.reason, 'finalization.reason');
 

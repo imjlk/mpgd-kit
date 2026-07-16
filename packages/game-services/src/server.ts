@@ -58,6 +58,7 @@ export interface CreateGameServicesBackendInput {
   readonly version?: string;
   readonly evidenceVerifier?: GameServicesEvidenceVerifier;
   readonly evidenceVerificationTimeoutMs?: number;
+  readonly purchaseGrantFinalizationTimeoutMs?: number;
   readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
 }
 
@@ -308,6 +309,9 @@ export function createGameServicesBackend(
   const evidenceVerificationTimeoutMs = resolveEvidenceVerificationTimeout(
     input.evidenceVerificationTimeoutMs,
   );
+  const purchaseGrantFinalizationTimeoutMs = resolvePurchaseGrantFinalizationTimeout(
+    input.purchaseGrantFinalizationTimeoutMs,
+  );
   const analytics = createAnalyticsReporter({
     target: 'server',
     sessionId: input.analyticsSessionId ?? 'game-services',
@@ -325,6 +329,7 @@ export function createGameServicesBackend(
           now,
           evidenceVerifier,
           evidenceVerificationTimeoutMs,
+          purchaseGrantFinalizationTimeoutMs,
           ...(input.purchaseGrantFinalizer === undefined
             ? {}
             : { purchaseGrantFinalizer: input.purchaseGrantFinalizer }),
@@ -339,6 +344,10 @@ export function createGameServicesBackend(
             ledgerEntryId: verification.ledgerEntryId,
             alreadyProcessed: verification.alreadyProcessed,
             reason: verification.reason,
+            finalizationStatus: verification.finalization?.status,
+            finalizationAction: verification.finalization?.action,
+            finalizationAlreadyCompleted: verification.finalization?.alreadyCompleted,
+            finalizationReason: verification.finalization?.reason,
           },
         });
 
@@ -545,6 +554,7 @@ async function verifyPurchaseWithStore(
     readonly now: () => string;
     readonly evidenceVerifier: GameServicesEvidenceVerifier;
     readonly evidenceVerificationTimeoutMs: number;
+    readonly purchaseGrantFinalizationTimeoutMs: number;
     readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
   },
 ): Promise<VerifyPurchaseResponse> {
@@ -680,7 +690,7 @@ async function verifyPurchaseWithStore(
       : { evidencePayload: verification.payload }),
     ledgerEntryId: grant.result.ledgerEntryId,
     alreadyProcessed: grant.result.alreadyProcessed,
-    timeoutMs: context.evidenceVerificationTimeoutMs,
+    timeoutMs: context.purchaseGrantFinalizationTimeoutMs,
   });
 
   return assertVerifyPurchaseResponse({
@@ -698,6 +708,7 @@ async function finalizeExistingPurchaseGrant(
     readonly catalog: ProductCatalog;
     readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
     readonly evidenceVerificationTimeoutMs: number;
+    readonly purchaseGrantFinalizationTimeoutMs: number;
   },
 ): Promise<PurchaseGrantFinalization | undefined> {
   if (context.purchaseGrantFinalizer === undefined) {
@@ -734,7 +745,7 @@ async function finalizeExistingPurchaseGrant(
     evidencePayload: transaction.payload,
     ledgerEntryId: transaction.ledgerEntryId,
     alreadyProcessed: true,
-    timeoutMs: context.evidenceVerificationTimeoutMs,
+    timeoutMs: context.purchaseGrantFinalizationTimeoutMs,
   });
 }
 
@@ -826,6 +837,11 @@ function createStoredPurchaseProduct(
   };
 }
 
+/**
+ * Reuses the current request only for retry dimensions already matched against
+ * the stored grant, while restoring provider identity and time metadata from
+ * the durable transaction for a coherent finalization retry.
+ */
 function createStoredPurchaseRequest(
   request: VerifyPurchaseRequest,
   transaction: ProductGrantTransaction,
@@ -1312,6 +1328,16 @@ function resolveEvidenceVerificationTimeout(timeoutMs: number | undefined): numb
 
   if (!Number.isFinite(resolved) || resolved <= 0) {
     throw new Error('evidenceVerificationTimeoutMs must be a positive finite number.');
+  }
+
+  return resolved;
+}
+
+function resolvePurchaseGrantFinalizationTimeout(timeoutMs: number | undefined): number {
+  const resolved = timeoutMs ?? 15_000;
+
+  if (!Number.isFinite(resolved) || resolved <= 0) {
+    throw new Error('purchaseGrantFinalizationTimeoutMs must be a positive finite number.');
   }
 
   return resolved;

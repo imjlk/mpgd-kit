@@ -1,4 +1,8 @@
-import { assertProductGrantTransaction, type ProductGrantTransaction } from './types';
+import {
+  assertProductGrantTransaction,
+  assertPurchaseGrantFinalization,
+  type ProductGrantTransaction,
+} from './types';
 
 const resourceTransaction = Object.freeze({
   ledgerEntryId: 'ledger-resource-hints-1',
@@ -48,6 +52,13 @@ assertThrows(
     grant: { type: 'resource', resource: 'hint', amount: Number.POSITIVE_INFINITY },
   }),
   'resource grants should require a finite amount',
+);
+assertThrows(
+  () => assertPurchaseGrantFinalization({
+    status: 'completed',
+    alreadyCompleted: false,
+  }),
+  'completed purchase finalization should require the provider action',
 );
 
 console.log('GameServices product grant transaction validation test passed.');
