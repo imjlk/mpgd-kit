@@ -401,12 +401,22 @@ async function verifyAppsInTossPurchase(
     return rejected('AIT_PURCHASE_AUTHORITY_UNAVAILABLE');
   }
 
-  const result = assertPurchaseAuthorityResult(await authority.getOrderStatus({
-    orderId: request.platformTransactionId,
-    playerId: request.playerId,
-    platformSku: platformProductId,
-    signal: input.signal,
-  }));
+  let result: AppsInTossPurchaseAuthorityResult;
+
+  try {
+    result = assertPurchaseAuthorityResult(await authority.getOrderStatus({
+      orderId: request.platformTransactionId,
+      playerId: request.playerId,
+      platformSku: platformProductId,
+      signal: input.signal,
+    }));
+  } catch (error) {
+    if (input.signal.aborted) {
+      throw error;
+    }
+
+    return rejected('AIT_PURCHASE_AUTHORITY_ERROR');
+  }
 
   if (result.decision === 'pending') {
     return pending(result.reason ?? 'AIT_PURCHASE_AUTHORITY_PENDING');
@@ -494,12 +504,22 @@ async function verifyAppsInTossReward(
     return rejected('AIT_REWARD_AUTHORITY_UNAVAILABLE');
   }
 
-  const result = assertRewardAuthorityResult(await authority.verifyReward({
-    correlationId,
-    playerId: request.playerId,
-    platformPlacementId,
-    signal: input.signal,
-  }));
+  let result: AppsInTossRewardAuthorityResult;
+
+  try {
+    result = assertRewardAuthorityResult(await authority.verifyReward({
+      correlationId,
+      playerId: request.playerId,
+      platformPlacementId,
+      signal: input.signal,
+    }));
+  } catch (error) {
+    if (input.signal.aborted) {
+      throw error;
+    }
+
+    return rejected('AIT_REWARD_AUTHORITY_ERROR');
+  }
 
   if (result.decision === 'pending') {
     return pending(result.reason ?? 'AIT_REWARD_AUTHORITY_PENDING');

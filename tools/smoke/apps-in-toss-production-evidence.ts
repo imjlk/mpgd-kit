@@ -6,8 +6,8 @@ import {
 const report = await runAppsInTossProductionEvidenceConformance();
 
 if (
-  report.passedScenarios.length
-  !== appsInTossProductionEvidenceConformanceScenarios.length
+  JSON.stringify(report.passedScenarios)
+  !== JSON.stringify(appsInTossProductionEvidenceConformanceScenarios)
 ) {
   throw new Error('Apps in Toss production evidence smoke did not run every scenario.');
 }

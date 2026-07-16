@@ -422,8 +422,8 @@ async function runPurchasePendingOrderRestoreScenario(
   assertEqual(initial.verified, false, 'server failure must not grant');
   assertEqual(
     initial.reason,
-    'EVIDENCE_VERIFIER_ERROR',
-    'server failure must surface as verifier failure',
+    'AIT_PURCHASE_AUTHORITY_ERROR',
+    'server failure must surface as a purchase authority failure',
   );
   assertEqual(restored.verified, true, 'restored payment-completed order must grant');
   assertEqual(restored.alreadyProcessed, false, 'restored order must create one grant');
@@ -731,10 +731,10 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
   assertEqual(purchasePending.reason, diagnosticReason, 'purchase pending reason forwarding');
   assertEqual(
     purchaseOversizedReason.reason,
-    'EVIDENCE_VERIFIER_ERROR',
+    'AIT_PURCHASE_AUTHORITY_ERROR',
     'oversized purchase authority reason must fail closed',
   );
-  assertEqual(failed.reason, 'EVIDENCE_VERIFIER_ERROR', 'reward authority error');
+  assertEqual(failed.reason, 'AIT_REWARD_AUTHORITY_ERROR', 'reward authority error');
   assertEqual(
     correlationMismatch.reason,
     'AIT_REWARD_AUTHORITY_CORRELATION_ID_MISMATCH',
@@ -755,7 +755,7 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
   assertEqual(rewardPending.reason, diagnosticReason, 'reward pending reason forwarding');
   assertEqual(
     rewardOversizedReason.reason,
-    'EVIDENCE_VERIFIER_ERROR',
+    'AIT_REWARD_AUTHORITY_ERROR',
     'oversized reward authority reason must fail closed',
   );
   await assertEntitlementCount(context.store, 0, 'reward errors and mismatches');
