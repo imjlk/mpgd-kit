@@ -629,6 +629,7 @@ async function verifyPurchaseWithStore(
       ...verification.payload,
       target: request.target,
       productId: request.productId,
+      productType: product.type,
       platformProductId,
       platformTransactionId: request.platformTransactionId,
       purchasedAt: request.purchasedAt,
@@ -687,8 +688,11 @@ async function finalizeExistingPurchaseGrant(
     return undefined;
   }
 
-  const product = context.catalog.products.find((entry) => entry.id === request.productId);
-  const platformProductId = product?.platformProductIds[request.target];
+  const currentProduct = context.catalog.products.find((entry) => entry.id === request.productId);
+  const storedPlatformProductId = readStoredPlatformProductId(transaction);
+  const product = createStoredPurchaseProduct(request, transaction) ?? currentProduct;
+  const platformProductId = storedPlatformProductId
+    ?? currentProduct?.platformProductIds[request.target];
   const evidenceVerificationId = transaction.evidenceVerificationId
     ?? transaction.payload.evidenceVerificationId;
 
@@ -720,7 +724,10 @@ async function finalizePurchaseGrant(
   finalizer: GameServicesPurchaseGrantFinalizer | undefined,
   input: Omit<FinalizePurchaseGrantInput, 'signal'>,
 ): Promise<PurchaseGrantFinalization | undefined> {
-  if (finalizer === undefined) {
+  if (
+    finalizer === undefined
+    || finalizer.supportsPurchaseGrant?.(input) === false
+  ) {
     return undefined;
   }
 
@@ -763,6 +770,41 @@ async function finalizePurchaseGrant(
       clearTimeout(timeout);
     }
   }
+}
+
+function readStoredPlatformProductId(
+  transaction: ProductGrantTransaction,
+): string | undefined {
+  const platformProductId = transaction.payload.platformProductId;
+  return typeof platformProductId === 'string' && platformProductId.length > 0
+    ? platformProductId
+    : undefined;
+}
+
+function createStoredPurchaseProduct(
+  request: VerifyPurchaseRequest,
+  transaction: ProductGrantTransaction,
+): ProductCatalog['products'][number] | undefined {
+  const productType = transaction.payload.productType;
+  const platformProductId = readStoredPlatformProductId(transaction);
+  if (
+    transaction.grant === undefined
+    || platformProductId === undefined
+    || (
+      productType !== 'consumable'
+      && productType !== 'non_consumable'
+      && productType !== 'subscription'
+    )
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: request.productId,
+    type: productType,
+    grant: transaction.grant,
+    platformProductIds: { [request.target]: platformProductId },
+  };
 }
 
 async function claimAdRewardWithStore(

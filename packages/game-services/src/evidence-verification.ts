@@ -51,6 +51,9 @@ export interface FinalizePurchaseGrantInput {
 }
 
 export interface GameServicesPurchaseGrantFinalizer {
+  supportsPurchaseGrant?(
+    input: Omit<FinalizePurchaseGrantInput, 'signal'>,
+  ): boolean;
   finalizePurchaseGrant(
     input: FinalizePurchaseGrantInput,
   ): Promise<PurchaseGrantFinalization>;

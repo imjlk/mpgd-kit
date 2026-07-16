@@ -23,7 +23,7 @@ const catalog = {
       id: 'COINS_100',
       type: 'consumable',
       grant: { type: 'currency', currency: 'coin', amount: 100 },
-      platformProductIds: { android: 'coins_100_android' },
+      platformProductIds: { android: 'coins_100_android', ios: 'coins_100_ios' },
     },
     {
       id: 'REMOVE_ADS',
@@ -60,6 +60,7 @@ class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
   readonly responses = new Map<string, Record<string, unknown>>();
   readonly failingConsumeTokens = new Set<string>();
   readonly failingAcknowledgeTokens = new Set<string>();
+  readonly finalizedProductIds: string[] = [];
 
   constructor(events: string[]) {
     this.events = events;
@@ -74,8 +75,12 @@ class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
     return cloneRecord(response);
   }
 
-  async acknowledgeProductPurchase(input: { readonly purchaseToken: string }): Promise<void> {
+  async acknowledgeProductPurchase(input: {
+    readonly productId: string;
+    readonly purchaseToken: string;
+  }): Promise<void> {
     this.events.push(`provider:acknowledge:${input.purchaseToken}`);
+    this.finalizedProductIds.push(input.productId);
     if (this.failingAcknowledgeTokens.has(input.purchaseToken)) {
       throw new Error('simulated acknowledge failure');
     }
@@ -85,8 +90,12 @@ class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
     );
   }
 
-  async consumeProductPurchase(input: { readonly purchaseToken: string }): Promise<void> {
+  async consumeProductPurchase(input: {
+    readonly productId: string;
+    readonly purchaseToken: string;
+  }): Promise<void> {
     this.events.push(`provider:consume:${input.purchaseToken}`);
+    this.finalizedProductIds.push(input.productId);
     if (this.failingConsumeTokens.has(input.purchaseToken)) {
       throw new Error('simulated consume failure');
     }
@@ -106,7 +115,12 @@ function createHarness(input: {
   readonly token: string;
   readonly response: Readonly<Record<string, unknown>>;
   readonly allowUnboundAuthenticatedPlayer?: boolean;
-  readonly resolveObfuscatedAccountId?: (playerId: string) => string | undefined;
+  readonly resolveObfuscatedAccountId?: (
+    playerId: string,
+    signal: AbortSignal,
+  ) => Promise<string | undefined> | string | undefined;
+  readonly catalog?: ProductCatalog;
+  readonly evidenceVerificationTimeoutMs?: number;
 }) {
   const events: string[] = [];
   const client = new FixtureGooglePlayClient(events);
@@ -133,7 +147,7 @@ function createHarness(input: {
   });
   const developmentVerifier = createDevelopmentGameServicesEvidenceVerifier();
   const backend = createGameServicesBackend({
-    catalog,
+    catalog: input.catalog ?? catalog,
     placements,
     store,
     evidenceVerifier: {
@@ -143,6 +157,9 @@ function createHarness(input: {
       },
     },
     purchaseGrantFinalizer: boundary,
+    ...(input.evidenceVerificationTimeoutMs === undefined
+      ? {}
+      : { evidenceVerificationTimeoutMs: input.evidenceVerificationTimeoutMs }),
     now: () => '2030-01-02T03:04:07.000Z',
   });
 
@@ -157,9 +174,10 @@ function createRequest(input: {
   readonly orderId?: string;
   readonly purchasedAt?: string;
   readonly schema?: string;
+  readonly target?: VerifyPurchaseRequest['target'];
 }): VerifyPurchaseRequest {
   return {
-    target: 'android',
+    target: input.target ?? 'android',
     playerId: input.playerId ?? 'player-google-play',
     productId: input.productId ?? 'COINS_100',
     platformTransactionId: input.orderId ?? 'GPA.conformance-1',
@@ -295,6 +313,48 @@ const recoveredFinalization = await recoverable.backend.purchases.verifyPurchase
 assertEqual(recoveredFinalization.alreadyProcessed, true);
 assertEqual(recoveredFinalization.finalization?.status, 'completed');
 assertEqual((await recoverable.store.listEntitlementTransactions()).length, 1);
+
+const retryPlatformProductIds: { android?: string } = {
+  android: 'coins_100_android',
+};
+const retryCatalog: ProductCatalog = {
+  version: 'google-play-retry',
+  products: [
+    {
+      id: 'COINS_100',
+      type: 'consumable',
+      grant: { type: 'currency', currency: 'coin', amount: 100 },
+      platformProductIds: retryPlatformProductIds,
+    },
+  ],
+};
+const catalogChangeRetry = createHarness({
+  token: 'token-catalog-change-retry',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  catalog: retryCatalog,
+});
+catalogChangeRetry.client.failingConsumeTokens.add('token-catalog-change-retry');
+const catalogChangeRequest = createRequest({ token: 'token-catalog-change-retry' });
+const catalogChangePending = await catalogChangeRetry.backend.purchases.verifyPurchase(
+  catalogChangeRequest,
+);
+assertEqual(catalogChangePending.finalization?.status, 'pending');
+delete retryPlatformProductIds.android;
+catalogChangeRetry.client.failingConsumeTokens.delete('token-catalog-change-retry');
+const catalogChangeRecovered = await catalogChangeRetry.backend.purchases.verifyPurchase(
+  catalogChangeRequest,
+);
+assertEqual(
+  catalogChangeRecovered.finalization?.status,
+  'completed',
+  'a durable grant should finalize after its catalog SKU is removed',
+);
+assert(
+  catalogChangeRetry.client.finalizedProductIds.every(
+    (productId) => productId === 'coins_100_android',
+  ),
+  'finalization retries must use the platform product id stored with the grant',
+);
 
 const replay = createHarness({
   token: 'token-replay',
@@ -462,6 +522,68 @@ const missingAccountBindingResult = await missingAccountBinding.backend.purchase
 assertEqual(missingAccountBindingResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
 assertEqual(missingAccountBinding.events.length, 0, 'missing account binding must fail closed');
 assertEqual((await missingAccountBinding.store.listEntitlementTransactions()).length, 0);
+
+let accountResolverSignal: AbortSignal | undefined;
+const stalledAccountBinding = createHarness({
+  token: 'token-account-binding-timeout',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  evidenceVerificationTimeoutMs: 5,
+  resolveObfuscatedAccountId: (_playerId, signal) => {
+    accountResolverSignal = signal;
+    return new Promise<string | undefined>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    });
+  },
+});
+const stalledAccountBindingResult = await stalledAccountBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-account-binding-timeout' }),
+);
+assertEqual(stalledAccountBindingResult.reason, 'EVIDENCE_VERIFIER_TIMEOUT');
+assertEqual(
+  accountResolverSignal?.aborted,
+  true,
+  'account binding lookup must receive cancellation',
+);
+assertEqual(
+  stalledAccountBinding.events.length,
+  0,
+  'a timed-out account lookup must not reach Google Play',
+);
+
+const mixedTargetEvents: string[] = [];
+const mixedTargetClient = new FixtureGooglePlayClient(mixedTargetEvents);
+const mixedTargetBoundary = createGooglePlayProductPurchaseBoundary({
+  client: mixedTargetClient,
+  packageName: 'dev.mpgd.conformance',
+  allowUnboundAuthenticatedPlayer: true,
+});
+const mixedTargetBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: new TrackingStore(mixedTargetEvents),
+  evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(
+    () => '2030-01-02T03:04:06.000Z',
+  ),
+  purchaseGrantFinalizer: mixedTargetBoundary,
+  now: () => '2030-01-02T03:04:07.000Z',
+});
+const iosPurchase = await mixedTargetBackend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-ios',
+    target: 'ios',
+    idempotencyKey: 'purchase:ios',
+  }),
+);
+assertEqual(iosPurchase.verified, true, 'another target verifier may share the backend');
+assertEqual(
+  iosPurchase.finalization,
+  undefined,
+  'the Google Play finalizer must not mark another target as pending',
+);
+assert(
+  mixedTargetEvents.every((event) => !event.startsWith('provider:')),
+  'the Google Play finalizer must not receive another target purchase',
+);
 
 const wrongSchema = createHarness({
   token: 'token-wrong-schema',

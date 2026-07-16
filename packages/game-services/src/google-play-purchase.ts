@@ -53,6 +53,7 @@ export interface CreateGooglePlayProductPurchaseBoundaryInput {
   readonly allowUnboundAuthenticatedPlayer?: boolean;
   readonly resolveObfuscatedAccountId?: (
     playerId: string,
+    signal: AbortSignal,
   ) => Promise<string | undefined> | string | undefined;
 }
 
@@ -94,6 +95,10 @@ export function createGooglePlayProductPurchaseBoundary(
   const inFlightFinalizations = new Map<string, Promise<PurchaseGrantFinalization>>();
 
   return {
+    supportsPurchaseGrant(finalizationInput) {
+      return finalizationInput.request.target === 'android';
+    },
+
     async verifyPurchase(verificationInput) {
       if (verificationInput.request.target !== 'android') {
         return {
@@ -120,6 +125,7 @@ export function createGooglePlayProductPurchaseBoundary(
       const accountBinding = await resolveGooglePlayAccountBinding(
         input,
         verificationInput.request.playerId,
+        verificationInput.signal,
       );
       if (accountBinding.status === 'rejected') {
         return rejected(accountBinding.reason);
@@ -221,10 +227,20 @@ async function finalizeGooglePlayPurchase(
   const action =
     finalizationInput.product.type === 'consumable' ? 'consume' : 'acknowledge';
 
+  if (finalizationInput.request.target !== 'android') {
+    return {
+      status: 'pending',
+      action,
+      alreadyCompleted: false,
+      reason: 'GOOGLE_PLAY_TARGET_REQUIRED',
+    };
+  }
+
   try {
     const accountBinding = await resolveGooglePlayAccountBinding(
       input,
       finalizationInput.request.playerId,
+      finalizationInput.signal,
     );
     if (accountBinding.status === 'rejected') {
       return {
@@ -469,12 +485,13 @@ type GooglePlayAccountBinding =
 async function resolveGooglePlayAccountBinding(
   input: CreateGooglePlayProductPurchaseBoundaryInput,
   playerId: string,
+  signal: AbortSignal,
 ): Promise<GooglePlayAccountBinding> {
   if (input.resolveObfuscatedAccountId === undefined) {
     return { status: 'unbound' };
   }
 
-  const resolved = await input.resolveObfuscatedAccountId(playerId);
+  const resolved = await input.resolveObfuscatedAccountId(playerId, signal);
   if (resolved === undefined && input.allowUnboundAuthenticatedPlayer === true) {
     return { status: 'unbound' };
   }
