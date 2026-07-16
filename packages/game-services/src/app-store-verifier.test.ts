@@ -5,6 +5,7 @@ import {
   type AppStoreSignedTransactionVerifier,
   type AppStoreTransactionPayload,
 } from './app-store-verifier';
+import { createAppStoreTransactionConformanceFixture } from './app-store-verifier-conformance';
 import type { VerifyPurchaseEvidenceInput } from './evidence-verification';
 
 const controller = new AbortController();
@@ -37,7 +38,7 @@ const baseInput = {
   timeoutMs: 1_000,
 } satisfies VerifyPurchaseEvidenceInput;
 
-const baseTransaction = {
+const baseTransaction = createAppStoreTransactionConformanceFixture({
   transactionId: baseInput.request.platformTransactionId,
   originalTransactionId: '2000000123456000',
   bundleId: 'com.example.game',
@@ -46,8 +47,9 @@ const baseTransaction = {
   signedDate,
   environment: 'Production',
   type: 'Consumable',
+  quantity: 1,
   appAccountToken: 'f15f2ed7-f92a-4c5a-90e1-15d26cd729f2',
-} satisfies AppStoreTransactionPayload;
+}) satisfies AppStoreTransactionPayload;
 
 let requestedUrl = '';
 let requestedAuthorization = '';
@@ -56,12 +58,9 @@ const serverApiClient = createAppStoreServerApiClient({
   async fetch(url, init) {
     requestedUrl = url;
     requestedAuthorization = init.headers.authorization ?? '';
-    return {
+    return new Response(JSON.stringify({ signedTransactionInfo: 'signed-transaction-jws' }), {
       status: 200,
-      async text() {
-        return JSON.stringify({ signedTransactionInfo: 'signed-transaction-jws' });
-      },
-    };
+    });
   },
 });
 
@@ -101,6 +100,16 @@ assertEqual(
   baseTransaction.originalTransactionId,
   'verified evidence should retain the original transaction identity',
 );
+assertEqual(
+  verified.payload?.appStorePurchaseDate,
+  purchaseDate,
+  "verified evidence should retain Apple's signed purchase date as provider authority",
+);
+assertEqual(
+  verified.payload?.appStoreQuantity,
+  1,
+  'verified evidence should retain the single signed grant quantity',
+);
 
 const replayed = await verifier.verifyPurchase(baseInput);
 assertEqual(
@@ -136,6 +145,28 @@ assertDecision(
   'signed transactions must bind to the expected game account',
 );
 
+const canonicalAccountToken = await createVerifier({
+  transaction: {
+    ...baseTransaction,
+    appAccountToken: 'F15F2ED7-F92A-4C5A-90E1-15D26CD729F2',
+  },
+}).verifyPurchase(baseInput);
+assertEqual(
+  canonicalAccountToken.status,
+  'verified',
+  'UUID account identity comparison should be canonical and case-insensitive',
+);
+
+const invalidResolvedAccount = await createVerifier({
+  resolveAppAccountToken: () => 'not-a-uuid',
+}).verifyPurchase(baseInput);
+assertDecision(
+  invalidResolvedAccount,
+  'pending',
+  'APP_STORE_ACCOUNT_BINDING_UNAVAILABLE',
+  'an invalid server-side account binding must not authorize a grant',
+);
+
 const wrongProduct = await createVerifier({
   transaction: {
     ...baseTransaction,
@@ -149,6 +180,20 @@ assertDecision(
   'signed products must match the configured catalog product',
 );
 
+const clientPurchaseDateMismatch = await verifier.verifyPurchase({
+  ...baseInput,
+  request: {
+    ...baseInput.request,
+    purchasedAt: '2026-07-16T12:00:00.001Z',
+  },
+});
+assertDecision(
+  clientPurchaseDateMismatch,
+  'rejected',
+  'APP_STORE_PURCHASE_DATE_MISMATCH',
+  'an untrusted client timestamp must exactly reproduce the signed provider purchase date',
+);
+
 const revoked = await createVerifier({
   transaction: {
     ...baseTransaction,
@@ -160,6 +205,118 @@ assertDecision(
   'rejected',
   'APP_STORE_TRANSACTION_REVOKED',
   'revoked transactions must never authorize a grant',
+);
+
+const upgraded = await createVerifier({
+  transaction: {
+    ...baseTransaction,
+    isUpgraded: true,
+  },
+}).verifyPurchase(baseInput);
+assertDecision(
+  upgraded,
+  'rejected',
+  'APP_STORE_TRANSACTION_UPGRADED',
+  'upgraded transactions must never authorize the replaced grant',
+);
+
+const expired = await createVerifier({
+  transaction: {
+    ...baseTransaction,
+    expiresDate: Date.parse('2026-07-16T12:30:00.000Z'),
+  },
+}).verifyPurchase(baseInput);
+assertDecision(
+  expired,
+  'rejected',
+  'APP_STORE_TRANSACTION_EXPIRED',
+  'expired transaction state must never authorize a grant',
+);
+
+const futurePurchase = await createVerifier({
+  transaction: createAppStoreTransactionConformanceFixture({
+    ...baseTransaction,
+    purchaseDate: Date.parse('2026-07-16T13:10:00.000Z'),
+    signedDate: Date.parse('2026-07-16T13:10:01.000Z'),
+  }),
+}).verifyPurchase({
+  ...baseInput,
+  request: {
+    ...baseInput.request,
+    purchasedAt: '2026-07-16T13:10:00.000Z',
+  },
+});
+assertDecision(
+  futurePurchase,
+  'rejected',
+  'APP_STORE_PURCHASE_DATE_IN_FUTURE',
+  'provider purchase dates beyond the allowed clock skew must fail closed',
+);
+
+const futureSignature = await createVerifier({
+  transaction: {
+    ...baseTransaction,
+    signedDate: Date.parse('2026-07-16T13:10:00.000Z'),
+  },
+}).verifyPurchase(baseInput);
+assertDecision(
+  futureSignature,
+  'rejected',
+  'APP_STORE_SIGNED_DATE_IN_FUTURE',
+  'provider signatures beyond the allowed clock skew must fail closed',
+);
+
+const multipleQuantity = await createVerifier({
+  transaction: {
+    ...baseTransaction,
+    quantity: 2,
+  },
+}).verifyPurchase(baseInput);
+assertDecision(
+  multipleQuantity,
+  'rejected',
+  'APP_STORE_QUANTITY_UNSUPPORTED',
+  'multiple-item purchases must not receive a single static catalog grant',
+);
+
+const missingQuantity = await createVerifier({
+  transaction: createAppStoreTransactionConformanceFixture({
+    ...baseTransaction,
+    includeQuantity: false,
+  }),
+}).verifyPurchase(baseInput);
+assertDecision(
+  missingQuantity,
+  'rejected',
+  'APP_STORE_QUANTITY_UNSUPPORTED',
+  'a consumable without signed quantity must fail closed',
+);
+
+let subscriptionServerApiCalled = false;
+const unsupportedSubscription = await createVerifier({
+  serverApi: {
+    async getTransactionInfo() {
+      subscriptionServerApiCalled = true;
+      return { status: 'found', signedTransactionInfo: 'unexpected' };
+    },
+  },
+}).verifyPurchase({
+  ...baseInput,
+  product: {
+    ...baseInput.product,
+    type: 'subscription',
+  },
+});
+assertDecision(
+  unsupportedSubscription,
+  'rejected',
+  'APP_STORE_SUBSCRIPTION_UNSUPPORTED',
+  'subscriptions require a lifecycle-aware ledger instead of a durable one-time grant',
+);
+assertEqual(
+  subscriptionServerApiCalled,
+  false,
+  'unsupported subscriptions should fail before provider authorization is requested',
 );
 
 const retryable = await createVerifier({
@@ -220,12 +377,7 @@ assertDecision(
 const rateLimitedClient = createAppStoreServerApiClient({
   getBearerToken: () => 'signed-provider-jwt',
   async fetch() {
-    return {
-      status: 429,
-      async text() {
-        return '{}';
-      },
-    };
+    return new Response('{}', { status: 429 });
   },
 });
 const rateLimited = await rateLimitedClient.getTransactionInfo({
@@ -240,12 +392,32 @@ assertDecision(
   'rate limits should be represented as retryable without trusting the client',
 );
 
+const oversizedClient = createAppStoreServerApiClient({
+  getBearerToken: () => 'signed-provider-jwt',
+  maxResponseBytes: 8,
+  async fetch() {
+    return new Response(JSON.stringify({ signedTransactionInfo: 'too-large' }), {
+      status: 200,
+    });
+  },
+});
+await assertRejects(
+  () => oversizedClient.getTransactionInfo({
+    transactionId: baseInput.request.platformTransactionId,
+    environment: 'Production',
+    signal: controller.signal,
+  }),
+  'response exceeded maxResponseBytes',
+  'the Server API client must stop reading oversized response streams',
+);
+
 console.log('App Store signed transaction verifier tests passed.');
 
 function createVerifier(input: {
   readonly serverApi?: AppStoreServerApiClient;
   readonly signedTransactionVerifier?: AppStoreSignedTransactionVerifier;
   readonly transaction?: AppStoreTransactionPayload;
+  readonly resolveAppAccountToken?: () => string | Promise<string>;
 } = {}) {
   return createAppStoreGameServicesEvidenceVerifier({
     bundleId: baseTransaction.bundleId,
@@ -253,9 +425,29 @@ function createVerifier(input: {
     serverApi: input.serverApi ?? createFoundServerApi(),
     signedTransactionVerifier: input.signedTransactionVerifier
       ?? createSignedTransactionVerifier(input.transaction ?? baseTransaction),
-    resolveAppAccountToken: () => baseTransaction.appAccountToken ?? '',
+    resolveAppAccountToken:
+      input.resolveAppAccountToken ?? (() => baseTransaction.appAccountToken ?? ''),
     now: () => '2026-07-16T13:00:00.000Z',
   });
+}
+
+async function assertRejects(
+  operation: () => Promise<unknown>,
+  expectedMessagePart: string,
+  message: string,
+): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    const actualMessage = error instanceof Error ? error.message : String(error);
+    if (actualMessage.includes(expectedMessagePart)) {
+      return;
+    }
+    throw new Error(
+      `${message}: expected error containing ${expectedMessagePart}, received ${actualMessage}.`,
+    );
+  }
+  throw new Error(`${message}: expected operation to reject.`);
 }
 
 function createFoundServerApi(): AppStoreServerApiClient {

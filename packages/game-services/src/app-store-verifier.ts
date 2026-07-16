@@ -8,10 +8,10 @@ import type {
 
 export type AppStoreEnvironment = 'Production' | 'Sandbox';
 
-export const appStoreServerApiBaseUrls = {
+export const appStoreServerApiBaseUrls = Object.freeze({
   Production: 'https://api.storekit.apple.com',
   Sandbox: 'https://api.storekit-sandbox.apple.com',
-} as const satisfies Readonly<Record<AppStoreEnvironment, string>>;
+} as const) satisfies Readonly<Record<AppStoreEnvironment, string>>;
 
 export type AppStoreServerApiTransactionResult =
   | {
@@ -50,6 +50,7 @@ export interface AppStoreTransactionPayload {
   readonly signedDate: number;
   readonly environment: AppStoreEnvironment;
   readonly type: AppStoreInAppPurchaseType;
+  readonly quantity?: number;
   readonly appAccountToken?: string;
   readonly expiresDate?: number;
   readonly revocationDate?: number;
@@ -78,7 +79,6 @@ export interface AppStoreSignedTransactionVerifier {
 export interface CreateAppStoreServerApiClientOptions {
   readonly getBearerToken: () => string | Promise<string>;
   readonly fetch?: AppStoreFetch;
-  readonly baseUrls?: Partial<Readonly<Record<AppStoreEnvironment, string>>>;
   readonly maxResponseBytes?: number;
 }
 
@@ -97,7 +97,7 @@ export interface CreateAppStoreEvidenceVerifierOptions {
 
 export interface AppStoreFetchResponse {
   readonly status: number;
-  text(): Promise<string>;
+  readonly body: ReadableStream<Uint8Array> | null;
 }
 
 export type AppStoreFetch = (
@@ -117,14 +117,6 @@ export function createAppStoreServerApiClient(
     options.maxResponseBytes ?? 128 * 1024,
     'maxResponseBytes',
   );
-  const baseUrls = {
-    Production: normalizeBaseUrl(
-      options.baseUrls?.Production ?? appStoreServerApiBaseUrls.Production,
-    ),
-    Sandbox: normalizeBaseUrl(
-      options.baseUrls?.Sandbox ?? appStoreServerApiBaseUrls.Sandbox,
-    ),
-  } satisfies Readonly<Record<AppStoreEnvironment, string>>;
 
   return {
     async getTransactionInfo(input) {
@@ -134,7 +126,7 @@ export function createAppStoreServerApiClient(
       assertAuthorizationValue(token, 'App Store bearer token');
       const url = new URL(
         `/inApps/v1/transactions/${encodeURIComponent(input.transactionId)}`,
-        baseUrls[input.environment],
+        appStoreServerApiBaseUrls[input.environment],
       );
       const response = await fetch(url.toString(), {
         method: 'GET',
@@ -208,6 +200,9 @@ async function verifyAppStorePurchase(
 ): Promise<EvidenceVerificationDecision> {
   if (input.request.target !== 'ios') {
     return { status: 'rejected', reason: 'APP_STORE_TARGET_MISMATCH' };
+  }
+  if (input.product.type === 'subscription') {
+    return { status: 'rejected', reason: 'APP_STORE_SUBSCRIPTION_UNSUPPORTED' };
   }
 
   let transactionResult: AppStoreServerApiTransactionResult;
@@ -283,6 +278,8 @@ async function verifyAppStorePurchase(
       appStoreBundleId: transaction.bundleId,
       appStoreEnvironment: transaction.environment,
       appStoreOriginalTransactionId: transaction.originalTransactionId,
+      appStorePurchaseDate: transaction.purchaseDate,
+      appStoreQuantity: transaction.quantity ?? 1,
       appStoreSignedDate: transaction.signedDate,
       appStoreTransactionType: transaction.type,
     },
@@ -301,8 +298,7 @@ async function resolveExpectedAppAccountToken(
       playerId: input.request.playerId,
       signal: input.signal,
     });
-    assertNonEmptyString(value, 'resolved appAccountToken');
-    return { status: 'verified', value };
+    return { status: 'verified', value: normalizeAppAccountToken(value) };
   } catch {
     return { status: 'pending', reason: 'APP_STORE_ACCOUNT_BINDING_UNAVAILABLE' };
   }
@@ -328,7 +324,10 @@ function validateTransaction(
   if (transaction.environment !== options.environment) {
     return 'APP_STORE_ENVIRONMENT_MISMATCH';
   }
-  if (transaction.appAccountToken !== expectedAccountToken) {
+  if (
+    transaction.appAccountToken === undefined
+    || normalizeAppAccountToken(transaction.appAccountToken) !== expectedAccountToken
+  ) {
     return 'APP_STORE_ACCOUNT_TOKEN_MISMATCH';
   }
   if (toCatalogProductType(transaction.type) !== input.product.type) {
@@ -336,6 +335,14 @@ function validateTransaction(
   }
   if (Date.parse(input.request.purchasedAt) !== transaction.purchaseDate) {
     return 'APP_STORE_PURCHASE_DATE_MISMATCH';
+  }
+  if (
+    (transaction.type === 'Consumable' && transaction.quantity !== 1)
+    || (transaction.type !== 'Consumable'
+      && transaction.quantity !== undefined
+      && transaction.quantity !== 1)
+  ) {
+    return 'APP_STORE_QUANTITY_UNSUPPORTED';
   }
   if (transaction.purchaseDate > nowMs + clockSkewMs) {
     return 'APP_STORE_PURCHASE_DATE_IN_FUTURE';
@@ -425,7 +432,8 @@ export function assertAppStoreTransactionPayload(
   assertNonNegativeSafeInteger(input.signedDate, 'signedDate');
   assertAppStoreEnvironment(input.environment);
   assertAppStoreInAppPurchaseType(input.type);
-  assertOptionalNonEmptyString(input.appAccountToken, 'appAccountToken');
+  assertOptionalPositiveSafeInteger(input.quantity, 'quantity');
+  assertOptionalAppAccountToken(input.appAccountToken);
   assertOptionalNonNegativeSafeInteger(input.expiresDate, 'expiresDate');
   assertOptionalNonNegativeSafeInteger(input.revocationDate, 'revocationDate');
   assertOptionalBoolean(input.isUpgraded, 'isUpgraded');
@@ -436,24 +444,35 @@ async function readBoundedJson(
   response: AppStoreFetchResponse,
   maxResponseBytes: number,
 ): Promise<unknown> {
-  const text = await response.text();
-  if (new TextEncoder().encode(text).byteLength > maxResponseBytes) {
-    throw new Error('App Store Server API response exceeded maxResponseBytes.');
+  if (response.body === null) {
+    throw new Error('App Store Server API response body is missing.');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let byteLength = 0;
+  let text = '';
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      if (!(chunk.value instanceof Uint8Array)) {
+        throw new Error('App Store Server API response body yielded an invalid chunk.');
+      }
+      byteLength += chunk.value.byteLength;
+      if (byteLength > maxResponseBytes) {
+        await reader.cancel('maxResponseBytes exceeded').catch(() => undefined);
+        throw new Error('App Store Server API response exceeded maxResponseBytes.');
+      }
+      text += decoder.decode(chunk.value, { stream: true });
+    }
+    text += decoder.decode();
+  } finally {
+    reader.releaseLock();
   }
   return JSON.parse(text) as unknown;
-}
-
-function normalizeBaseUrl(input: string): string {
-  assertNonEmptyString(input, 'App Store Server API base URL');
-  const url = new URL(input);
-  if (url.protocol !== 'https:') {
-    throw new Error('App Store Server API base URL must use HTTPS.');
-  }
-  url.username = '';
-  url.password = '';
-  url.search = '';
-  url.hash = '';
-  return url.toString();
 }
 
 function readGlobalFetch(): AppStoreFetch {
@@ -465,8 +484,26 @@ function readGlobalFetch(): AppStoreFetch {
 
 function assertAuthorizationValue(input: unknown, label: string): asserts input is string {
   assertNonEmptyString(input, label);
-  if (input.trim() !== input || /[\r\n]/u.test(input)) {
+  if (/\s/u.test(input)) {
     throw new Error(`${label} must not contain whitespace or header control characters.`);
+  }
+}
+
+function normalizeAppAccountToken(input: unknown): string {
+  assertNonEmptyString(input, 'appAccountToken');
+  if (!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/iu.test(input)) {
+    throw new Error('appAccountToken must be a UUID.');
+  }
+  const normalized = input.toLowerCase();
+  if (normalized === '00000000-0000-0000-0000-000000000000') {
+    throw new Error('appAccountToken must not be the nil UUID.');
+  }
+  return normalized;
+}
+
+function assertOptionalAppAccountToken(input: unknown): asserts input is string | undefined {
+  if (input !== undefined) {
+    normalizeAppAccountToken(input);
   }
 }
 
@@ -501,15 +538,6 @@ function assertNonEmptyString(input: unknown, label: string): asserts input is s
   }
 }
 
-function assertOptionalNonEmptyString(
-  input: unknown,
-  label: string,
-): asserts input is string | undefined {
-  if (input !== undefined) {
-    assertNonEmptyString(input, label);
-  }
-}
-
 function assertNonNegativeSafeInteger(
   input: unknown,
   label: string,
@@ -525,6 +553,15 @@ function assertOptionalNonNegativeSafeInteger(
 ): asserts input is number | undefined {
   if (input !== undefined) {
     assertNonNegativeSafeInteger(input, label);
+  }
+}
+
+function assertOptionalPositiveSafeInteger(
+  input: unknown,
+  label: string,
+): asserts input is number | undefined {
+  if (input !== undefined && (!Number.isSafeInteger(input) || (input as number) <= 0)) {
+    throw new Error(`${label} must be a positive safe integer when provided.`);
   }
 }
 

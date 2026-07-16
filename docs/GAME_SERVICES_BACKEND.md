@@ -103,8 +103,8 @@ The development verifier is intentionally insecure and belongs only in local
 demos and tests. Production backends must install a provider verifier.
 
 For App Store purchases, `@mpgd/game-services/app-store-verifier` provides a
-fail-closed `GameServicesEvidenceVerifier` and a bounded App Store Server API
-client. The client calls Apple's
+fail-closed `GameServicesEvidenceVerifier` and a stream-bounded App Store Server
+API client. The client calls Apple's fixed production or sandbox
 [`Get Transaction Info`](https://developer.apple.com/documentation/appstoreserverapi/get-transaction-info)
 endpoint using a freshly generated bearer token supplied at runtime according
 to Apple's
@@ -118,14 +118,28 @@ implementation.
 
 The verifier matches the signed transaction to the configured bundle and
 environment, the catalog's platform product and type, the submitted transaction
-and purchase timestamp, and an `appAccountToken` resolved server-side for the
-authenticated player. Revoked, upgraded, expired, mismatched, malformed, or
-invalidly signed transactions are rejected before the entitlement ledger.
+and purchase timestamp, and a valid non-nil UUID `appAccountToken` resolved
+server-side for the authenticated player. UUID text is compared canonically so
+letter case doesn't change the account identity. The signed App Store purchase
+date and effective quantity are retained in ledger evidence; because the shared
+grant contract represents one catalog grant, consumables must have signed
+quantity `1`. Revoked, upgraded, expired, mismatched, malformed, or invalidly
+signed transactions are rejected before the entitlement ledger.
 Provider outages, rate limits, account-binding outages, and authorization
 configuration failures return a retryable pending decision and do not grant.
 Use distinct deployments or runtime configuration for Apple's production and
 sandbox environments; never select the authority from an untrusted client
 payload.
+
+This boundary rejects auto-renewable and non-renewing subscriptions. A single
+transaction lookup doesn't model renewal, grace-period, upgrade, expiration,
+refund-reversal, or server-notification-driven entitlement removal, while the
+shared entitlement ledger currently records only durable grants. Add a separate
+subscription lifecycle ledger and verify Apple's subscription status and Server
+Notifications V2 before enabling catalog products of type `subscription`.
+Provider adapters can use
+`@mpgd/game-services/app-store-verifier-conformance` for deterministic decoded
+JWS fixtures without copying credentials or live signed transactions.
 
 ## Ledger Idempotency Contract
 

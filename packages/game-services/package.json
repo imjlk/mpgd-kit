@@ -41,6 +41,10 @@
       "types": "./dist/app-store-verifier.d.ts",
       "default": "./dist/app-store-verifier.js"
     },
+    "./app-store-verifier-conformance": {
+      "types": "./dist/app-store-verifier-conformance.d.ts",
+      "default": "./dist/app-store-verifier-conformance.js"
+    },
     "./client": {
       "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
