@@ -12,7 +12,6 @@ import {
   createVerse8Agent8VerifiedLeaderboardProvider,
   type Verse8Agent8CollectionItem,
   type Verse8Agent8CollectionOptions,
-  type Verse8Agent8QueryFilter,
   type Verse8Agent8ServiceContext,
 } from './agent8-services';
 
@@ -86,7 +85,7 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
     expect(report.passedScenarios).toEqual(verifiedLeaderboardConformanceScenarios);
   });
 
-  it('uses sort-key range filters for opaque cursor pages', async () => {
+  it('sorts bounded per-board collections server-side for opaque cursor pages', async () => {
     const fixture = createAgent8Context();
     const service = createVerse8Agent8VerifiedLeaderboardProvider(fixture.context, {
       now: () => '2030-01-02T03:04:05.000Z',
@@ -111,13 +110,43 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
       ...(first?.nextCursor === undefined ? {} : { cursor: first.nextCursor }),
     });
     expect(second?.entries.map((entry) => entry.score)).toEqual([10]);
-    expect(fixture.collectionReads).toContainEqual(expect.objectContaining({
-      filters: expect.arrayContaining([
-        expect.objectContaining({ field: 'sortKey', operator: '>' }),
-      ]),
-      orderBy: [{ field: 'sortKey', direction: 'asc' }],
-      limit: 3,
+    expect(fixture.collectionReads).toContainEqual({ limit: 1_001 });
+    expect(fixture.collectionReads.every((read) =>
+      !('filters' in read) && !('orderBy' in read))).toBe(true);
+  });
+
+  it('stores only public retained fields and SHA-256 attempt digests', async () => {
+    const fixture = createAgent8Context();
+    const service = createVerse8Agent8VerifiedLeaderboardProvider(fixture.context);
+
+    await service.recordVerifiedAttempt(createAttempt({
+      participantId: 'participant',
+      attemptId: 'retained-attempt',
+      score: 10,
     }));
+    await service.recordVerifiedAttempt(createAttempt({
+      participantId: 'participant',
+      attemptId: 'non-retained-attempt',
+      score: 5,
+    }));
+
+    const stored = JSON.stringify(fixture.collectionWrites);
+    expect(stored).not.toContain('verification');
+    expect(stored).not.toContain('evidence:retained-attempt');
+    expect(stored).not.toContain('evidence:non-retained-attempt');
+    expect(fixture.collectionWrites).toContainEqual(expect.objectContaining({
+      attemptDigest: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }));
+    expect(fixture.collectionIds).toContain(
+      'mpgdVerse8LeaderboardD29f5f5467c00c51768ef8e1229005167'
+        + '763052fef08742dbbd37ec4b975c8734',
+    );
+    expect(fixture.collectionIds).toContain(
+      'mpgdVerse8LeaderboardA4aa56d3b787ecd323aa7b3f6f63fb48c'
+        + '2bfb294190bbba41048f13c5ed295152',
+    );
+    expect(fixture.collectionIds.every((collectionId) =>
+      !collectionId.includes('retained-attempt'))).toBe(true);
   });
 
   it('requires game-specific verification and authenticated participant scope', async () => {
@@ -188,6 +217,7 @@ interface Agent8ContextFixture {
   readonly lockKeys: string[];
   readonly collectionReads: Verse8Agent8CollectionOptions[];
   readonly collectionWrites: Readonly<Record<string, unknown>>[];
+  readonly collectionIds: string[];
 }
 
 function createAgent8Context(): Agent8ContextFixture {
@@ -196,11 +226,13 @@ function createAgent8Context(): Agent8ContextFixture {
   const lockKeys: string[] = [];
   const collectionReads: Verse8Agent8CollectionOptions[] = [];
   const collectionWrites: Readonly<Record<string, unknown>>[] = [];
+  const collectionIds: string[] = [];
   const collections = new Map<string, Map<string, Verse8Agent8CollectionItem>>();
   const lockTails = new Map<string, Promise<void>>();
   let nextItemId = 1;
 
   const getCollection = (collectionId: string) => {
+    collectionIds.push(collectionId);
     const existing = collections.get(collectionId);
 
     if (existing !== undefined) {
@@ -245,17 +277,7 @@ function createAgent8Context(): Agent8ContextFixture {
     },
     async getCollectionItems(collectionId, options = {}) {
       collectionReads.push(clone(options));
-      let items = [...getCollection(collectionId).values()]
-        .filter((item) => (options.filters ?? []).every((filter) => matchesFilter(item, filter)));
-
-      for (const order of [...(options.orderBy ?? [])].reverse()) {
-        items = items.sort((left, right) => {
-          const comparison = compareValues(left[order.field], right[order.field]);
-          return order.direction === 'asc' ? comparison : -comparison;
-        });
-      }
-
-      return items.slice(0, options.limit).map(clone);
+      return [...getCollection(collectionId).values()].slice(0, options.limit).map(clone);
     },
     async addCollectionItem(collectionId, item) {
       const itemId = `item-${String(nextItemId)}`;
@@ -277,11 +299,6 @@ function createAgent8Context(): Agent8ContextFixture {
       collectionWrites.push(clone(stored));
       return clone(stored);
     },
-    async countCollectionItems(collectionId, options = {}) {
-      return [...getCollection(collectionId).values()]
-        .filter((item) => (options.filters ?? []).every((filter) => matchesFilter(item, filter)))
-        .length;
-    },
   };
 
   return {
@@ -291,47 +308,8 @@ function createAgent8Context(): Agent8ContextFixture {
     lockKeys,
     collectionReads,
     collectionWrites,
+    collectionIds,
   };
-}
-
-function matchesFilter(
-  item: Verse8Agent8CollectionItem,
-  filter: Verse8Agent8QueryFilter,
-): boolean {
-  const comparison = compareValues(item[filter.field], filter.value);
-
-  switch (filter.operator) {
-    case '==':
-      return comparison === 0;
-    case '!=':
-      return comparison !== 0;
-    case '<':
-      return comparison < 0;
-    case '<=':
-      return comparison <= 0;
-    case '>':
-      return comparison > 0;
-    case '>=':
-      return comparison >= 0;
-    default:
-      throw new Error(`Unsupported test filter: ${filter.operator}`);
-  }
-}
-
-function compareValues(left: unknown, right: unknown): number {
-  if (left === right) {
-    return 0;
-  }
-
-  if (typeof left === 'number' && typeof right === 'number') {
-    return left - right;
-  }
-
-  if (typeof left === 'string' && typeof right === 'string') {
-    return left < right ? -1 : 1;
-  }
-
-  return -1;
 }
 
 function clone<T>(input: T): T {

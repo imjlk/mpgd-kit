@@ -1,6 +1,6 @@
 import {
-  areVerifiedLeaderboardMetricsEqual,
   assertGetVerifiedLeaderboardSnapshotRequest,
+  assertLeaderboardRankedEntry,
   assertRecordVerifiedLeaderboardAttemptRequest,
   assertRecordVerifiedLeaderboardAttemptResponse,
   assertVerifiedLeaderboardAttempt,
@@ -13,6 +13,7 @@ import {
   type RecordVerifiedLeaderboardAttemptRequest,
   type RecordVerifiedLeaderboardAttemptResponse,
   type VerifiedLeaderboardAttempt,
+  type VerifiedLeaderboardCursorPosition,
   type VerifiedLeaderboardDefinition,
   type VerifiedLeaderboardService,
   type VerifiedLeaderboardSnapshot,
@@ -24,6 +25,22 @@ const defaultLeaderboardCollectionNamespace = 'mpgdVerse8Leaderboard';
 const defaultMaximumStorageEntries = 128;
 const defaultMaximumStorageValueBytes = 64 * 1024;
 const defaultMaximumStorageStateBytes = 512 * 1024;
+const defaultMaximumLeaderboardParticipants = 1_000;
+const maximumLeaderboardParticipantsLimit = 10_000;
+const sha256DigestPattern = /^[0-9a-f]{64}$/;
+const sha256RoundConstants = Uint32Array.from(
+  (
+    '428a2f98 71374491 b5c0fbcf e9b5dba5 3956c25b 59f111f1 923f82a4 ab1c5ed5 '
+    + 'd807aa98 12835b01 243185be 550c7dc3 72be5d74 80deb1fe 9bdc06a7 c19bf174 '
+    + 'e49b69c1 efbe4786 0fc19dc6 240ca1cc 2de92c6f 4a7484aa 5cb0a9dc 76f988da '
+    + '983e5152 a831c66d b00327c8 bf597fc7 c6e00bf3 d5a79147 06ca6351 14292967 '
+    + '27b70a85 2e1b2138 4d2c6dfc 53380d13 650a7354 766a0abb 81c2c92e 92722c85 '
+    + 'a2bfe8a1 a81a664b c24b8b70 c76c51a3 d192e819 d6990624 f40e3585 106aa070 '
+    + '19a4c116 1e376c08 2748774c 34b0bcb5 391c0cb3 4ed8aa4a 5b9cca4f 682e6ff3 '
+    + '748f82ee 78a5636f 84c87814 8cc70208 90befffa a4506ceb bef9a3f7 c67178f2'
+  ).split(' '),
+  (value) => Number.parseInt(value, 16),
+);
 
 export interface Verse8Agent8StateContext {
   getUserState(account: string): Promise<Readonly<Record<string, unknown>>>;
@@ -34,30 +51,7 @@ export interface Verse8Agent8StateContext {
   lock<T>(key: string, callback: () => T | Promise<T>): Promise<T>;
 }
 
-export type Verse8Agent8QueryOperator =
-  | '<'
-  | '<='
-  | '=='
-  | '!='
-  | '>='
-  | '>'
-  | 'array-contains'
-  | 'in'
-  | 'not-in'
-  | 'array-contains-any';
-
-export interface Verse8Agent8QueryFilter {
-  readonly field: string;
-  readonly operator: Verse8Agent8QueryOperator;
-  readonly value: unknown;
-}
-
 export interface Verse8Agent8CollectionOptions {
-  filters?: Verse8Agent8QueryFilter[];
-  orderBy?: Array<{
-    readonly field: string;
-    readonly direction: 'asc' | 'desc';
-  }>;
   limit?: number;
 }
 
@@ -78,10 +72,6 @@ export interface Verse8Agent8ServiceContext extends Verse8Agent8StateContext {
     collectionId: string,
     item: Readonly<Record<string, unknown>> & { readonly __id: string },
   ): Promise<Verse8Agent8CollectionItem>;
-  countCollectionItems(
-    collectionId: string,
-    options?: Verse8Agent8CollectionOptions,
-  ): Promise<number>;
 }
 
 export interface Verse8Agent8StorageOptions {
@@ -148,7 +138,7 @@ export function createVerse8Agent8StorageService(
       assertStorageKey(input.key);
       const value = cloneJsonValue(input.value);
 
-      if (utf8ByteLength(JSON.stringify(value)) > maximumValueBytes) {
+      if (utf8Bytes(JSON.stringify(value)).length > maximumValueBytes) {
         throw new Error('Verse8 cloud save value exceeds maximumValueBytes.');
       }
 
@@ -169,7 +159,7 @@ export function createVerse8Agent8StorageService(
           },
         } satisfies StoredStorageState;
 
-        if (utf8ByteLength(JSON.stringify(next)) > maximumStateBytes) {
+        if (utf8Bytes(JSON.stringify(next)).length > maximumStateBytes) {
           throw new Error('Verse8 cloud save state exceeds maximumStateBytes.');
         }
 
@@ -181,6 +171,7 @@ export function createVerse8Agent8StorageService(
 
 export interface Verse8Agent8VerifiedLeaderboardOptions {
   readonly collectionNamespace?: string;
+  readonly maximumParticipants?: number;
   readonly now?: () => string;
 }
 
@@ -263,25 +254,21 @@ export function createVerse8Agent8LeaderboardBoundary<TSubmission>(
 }
 
 interface LeaderboardCollections {
+  readonly leaderboardId: string;
   readonly definitions: string;
-  readonly attempts: string;
   readonly entries: string;
 }
 
-interface StoredDefinition {
-  readonly itemId: string;
-  readonly definition: VerifiedLeaderboardDefinition;
-}
+type StoredLeaderboardAttempt = Omit<VerifiedLeaderboardAttempt, 'verification'>;
 
 interface StoredEntry {
   readonly itemId: string;
-  readonly leaderboardId: string;
-  readonly sortKey: string;
-  readonly attempt: VerifiedLeaderboardAttempt;
+  readonly attemptDigest: string;
+  readonly attempt: StoredLeaderboardAttempt;
 }
 
 interface StoredAttemptDecision {
-  readonly attempt: VerifiedLeaderboardAttempt;
+  readonly attemptDigest: string;
   readonly response: RecordVerifiedLeaderboardAttemptResponse;
 }
 
@@ -293,7 +280,17 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
     options.collectionNamespace ?? defaultLeaderboardCollectionNamespace,
     'collectionNamespace',
   );
-  const collections = createLeaderboardCollections(namespace);
+  const maximumParticipants = positiveSafeInteger(
+    options.maximumParticipants ?? defaultMaximumLeaderboardParticipants,
+    'maximumParticipants',
+  );
+
+  if (maximumParticipants > maximumLeaderboardParticipantsLimit) {
+    throw new Error(
+      `maximumParticipants must not exceed ${String(maximumLeaderboardParticipantsLimit)}.`,
+    );
+  }
+
   const now = options.now ?? (() => new Date().toISOString());
 
   return {
@@ -301,80 +298,99 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
       assertRecordVerifiedLeaderboardAttemptRequest(input);
       const definition = cloneDefinition(input.definition);
       const attempt = cloneAttempt(input.attempt);
+      const attemptDigest = createAttemptDigest(attempt);
+      const collections = createLeaderboardCollections(namespace, definition.leaderboardId);
+      const decisionCollection = createAttemptDecisionCollection(
+        namespace,
+        definition.leaderboardId,
+        attempt.attemptId,
+      );
 
       return context.lock(leaderboardLockKey(definition.leaderboardId), async () => {
         await ensureDefinition(context, collections, definition);
         const existingDecision = await loadAttemptDecision(
           context,
-          collections,
-          definition.leaderboardId,
-          attempt.attemptId,
+          decisionCollection,
+          attempt,
+          attemptDigest,
         );
 
         if (existingDecision !== undefined) {
-          assertSameAttempt(existingDecision.attempt, attempt);
           return cloneRecordResponse(existingDecision.response, true);
         }
 
-        const orphanedAttemptEntry = await loadUniqueEntry(
+        const entries = await loadEntries(
           context,
           collections,
           definition,
-          'attemptId',
-          attempt.attemptId,
+          maximumParticipants,
+        );
+        const orphanedAttemptEntry = entries.find(
+          (entry) => entry.attempt.attemptId === attempt.attemptId,
         );
 
-        if (orphanedAttemptEntry !== undefined) {
-          assertSameAttempt(orphanedAttemptEntry.attempt, attempt);
+        if (
+          orphanedAttemptEntry !== undefined
+          && orphanedAttemptEntry.attemptDigest !== attemptDigest
+        ) {
+          throw attemptConflict(attempt.attemptId);
         }
 
-        const retained = await loadUniqueEntry(
-          context,
-          collections,
-          definition,
-          'participantId',
-          attempt.participantId,
+        const retained = entries.find(
+          (entry) => entry.attempt.participantId === attempt.participantId,
         );
+        let nextEntry = createStoredEntry('', attempt, attemptDigest);
+        let nextEntries: readonly StoredEntry[];
 
         if (retained === undefined) {
-          await context.addCollectionItem(
+          if (entries.length >= maximumParticipants) {
+            throw new Error('Verse8 leaderboard exceeds maximumParticipants.');
+          }
+
+          const added = await context.addCollectionItem(
             collections.entries,
-            createEntryItem(definition, attempt),
+            createEntryItem(attempt, attemptDigest),
           );
+          nextEntry = createStoredEntry(
+            readItemId(added, 'Verse8 retained leaderboard entry'),
+            attempt,
+            attemptDigest,
+          );
+          nextEntries = [...entries, nextEntry];
         } else if (shouldReplaceRetainedAttempt(definition, retained.attempt, attempt)) {
           await context.updateCollectionItem(collections.entries, {
             __id: retained.itemId,
-            ...createEntryItem(definition, attempt),
+            ...createEntryItem(attempt, attemptDigest),
           });
+          nextEntry = createStoredEntry(retained.itemId, attempt, attemptDigest);
+          nextEntries = entries.map((entry) =>
+            entry.itemId === retained.itemId ? nextEntry : entry,
+          );
+        } else {
+          nextEntries = entries;
         }
 
-        const current = await loadUniqueEntry(
-          context,
-          collections,
-          definition,
-          'participantId',
-          attempt.participantId,
+        const rankedEntries = rankEntries(definition, nextEntries);
+        const current = rankedEntries.find(
+          (entry) => entry.participantId === attempt.participantId,
         );
 
         if (current === undefined) {
           throw new Error('Retained Verse8 leaderboard entry was not found after recording.');
         }
 
-        const entry = await createRankedEntry(context, collections, definition, current);
-        const attemptRetained = current.attempt.attemptId === attempt.attemptId;
+        const attemptRetained = current.attemptId === attempt.attemptId;
         const response = {
           recorded: true,
           alreadyProcessed: false,
           retained: attemptRetained,
-          entry,
+          entry: current,
           ...(attemptRetained ? {} : { reason: 'ATTEMPT_NOT_RETAINED' as const }),
         } satisfies RecordVerifiedLeaderboardAttemptResponse;
         assertRecordVerifiedLeaderboardAttemptResponse(response);
 
-        await context.addCollectionItem(collections.attempts, {
-          leaderboardId: definition.leaderboardId,
-          attemptId: attempt.attemptId,
-          attempt,
+        await context.addCollectionItem(decisionCollection, {
+          attemptDigest,
           response,
         });
 
@@ -383,72 +399,45 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
     },
     async getSnapshot(input) {
       assertGetVerifiedLeaderboardSnapshotRequest(input);
+      const collections = createLeaderboardCollections(namespace, input.leaderboardId);
 
       return context.lock(leaderboardLockKey(input.leaderboardId), async () => {
-        const storedDefinition = await loadDefinition(
-          context,
-          collections,
-          input.leaderboardId,
-        );
+        const definition = await loadDefinition(context, collections);
 
-        if (storedDefinition === undefined) {
+        if (definition === undefined) {
           return undefined;
         }
 
-        const definition = storedDefinition.definition;
-        const limit = input.limit ?? 10;
+        const entries = await loadEntries(
+          context,
+          collections,
+          definition,
+          maximumParticipants,
+        );
+        const rankedEntries = rankEntries(definition, entries);
         const cursorPosition = input.cursor === undefined
           ? undefined
           : parseVerifiedLeaderboardCursor(input.cursor, definition);
-        const cursorSortKey = cursorPosition === undefined
-          ? undefined
-          : createLeaderboardSortKey(
-              definition,
-              cursorPosition.score,
-              cursorPosition.completedAtMs,
-              cursorPosition.attemptId,
+        const firstPageIndex = cursorPosition === undefined
+          ? 0
+          : rankedEntries.findIndex(
+              (entry) => compareRankedEntryToCursor(definition, entry, cursorPosition) > 0,
             );
-        const pageItems = await context.getCollectionItems(collections.entries, {
-          filters: [
-            equalityFilter('leaderboardId', definition.leaderboardId),
-            ...(cursorSortKey === undefined
-              ? []
-              : [{ field: 'sortKey', operator: '>' as const, value: cursorSortKey }]),
-          ],
-          orderBy: [{ field: 'sortKey', direction: 'asc' }],
-          limit: limit + 1,
-        });
-        const parsedPage = pageItems.map((item) => readEntry(item, definition));
-        const retainedPage = parsedPage.slice(0, limit);
-        const totalParticipants = await countEntries(context, collections, definition);
-        const pageOffset = retainedPage[0] === undefined
-          ? totalParticipants
-          : await countEntriesBefore(
-              context,
-              collections,
-              definition,
-              retainedPage[0].sortKey,
-            );
-        const entries = retainedPage.map((entry, index) =>
-          toRankedEntry(entry.attempt, pageOffset + index + 1),
-        );
+        const pageStart = firstPageIndex < 0 ? rankedEntries.length : firstPageIndex;
+        const pageEnd = pageStart + (input.limit ?? 10);
+        const pageEntries = rankedEntries.slice(pageStart, pageEnd);
         const participantEntry = input.participantId === undefined
           ? undefined
-          : await loadParticipantRankedEntry(
-              context,
-              collections,
-              definition,
-              input.participantId,
-            );
-        const lastEntry = entries.at(-1);
-        const nextCursor = parsedPage.length > limit && lastEntry !== undefined
+          : rankedEntries.find((entry) => entry.participantId === input.participantId);
+        const lastEntry = pageEntries.at(-1);
+        const nextCursor = lastEntry !== undefined && pageEnd < rankedEntries.length
           ? createVerifiedLeaderboardCursor(definition, lastEntry)
           : undefined;
         const snapshot = {
           definition: cloneDefinition(definition),
-          entries,
+          entries: pageEntries,
           ...(participantEntry === undefined ? {} : { participantEntry }),
-          totalParticipants,
+          totalParticipants: rankedEntries.length,
           generatedAt: now(),
           ...(nextCursor === undefined ? {} : { nextCursor }),
         } satisfies VerifiedLeaderboardSnapshot;
@@ -459,12 +448,25 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
   };
 }
 
-function createLeaderboardCollections(namespace: string): LeaderboardCollections {
+function createLeaderboardCollections(
+  namespace: string,
+  leaderboardId: string,
+): LeaderboardCollections {
+  const boardDigest = sha256(JSON.stringify(['board', leaderboardId]));
+
   return {
-    definitions: `${namespace}Definitions`,
-    attempts: `${namespace}Attempts`,
-    entries: `${namespace}Entries`,
+    leaderboardId,
+    definitions: `${namespace}D${boardDigest}`,
+    entries: `${namespace}E${boardDigest}`,
   };
+}
+
+function createAttemptDecisionCollection(
+  namespace: string,
+  leaderboardId: string,
+  attemptId: string,
+): string {
+  return `${namespace}A${sha256(JSON.stringify(['attempt', leaderboardId, attemptId]))}`;
 }
 
 async function ensureDefinition(
@@ -472,7 +474,7 @@ async function ensureDefinition(
   collections: LeaderboardCollections,
   definition: VerifiedLeaderboardDefinition,
 ): Promise<void> {
-  const existing = await loadDefinition(context, collections, definition.leaderboardId);
+  const existing = await loadDefinition(context, collections);
 
   if (existing === undefined) {
     await context.addCollectionItem(collections.definitions, { ...definition });
@@ -480,8 +482,8 @@ async function ensureDefinition(
   }
 
   if (
-    existing.definition.scoreOrder !== definition.scoreOrder
-    || existing.definition.attemptSelection !== definition.attemptSelection
+    existing.scoreOrder !== definition.scoreOrder
+    || existing.attemptSelection !== definition.attemptSelection
   ) {
     throw new Error(
       `Leaderboard definition conflict for ${JSON.stringify(definition.leaderboardId)}.`,
@@ -492,12 +494,10 @@ async function ensureDefinition(
 async function loadDefinition(
   context: Verse8Agent8ServiceContext,
   collections: LeaderboardCollections,
-  leaderboardId: string,
-): Promise<StoredDefinition | undefined> {
-  const item = await loadUniqueCollectionItem(
+): Promise<VerifiedLeaderboardDefinition | undefined> {
+  const item = await loadSingleCollectionItem(
     context,
     collections.definitions,
-    [equalityFilter('leaderboardId', leaderboardId)],
     'Verse8 leaderboard definition',
   );
 
@@ -512,26 +512,22 @@ async function loadDefinition(
   };
   assertVerifiedLeaderboardDefinition(definition);
 
-  return {
-    itemId: item.__id,
-    definition: cloneDefinition(definition),
-  };
+  if (definition.leaderboardId !== collections.leaderboardId) {
+    throw new Error('Stored Verse8 leaderboard definition is invalid.');
+  }
+
+  return cloneDefinition(definition);
 }
 
 async function loadAttemptDecision(
   context: Verse8Agent8ServiceContext,
-  collections: LeaderboardCollections,
-  leaderboardId: string,
-  attemptId: string,
+  collectionId: string,
+  attempt: VerifiedLeaderboardAttempt,
+  expectedDigest: string,
 ): Promise<StoredAttemptDecision | undefined> {
-  const filters = [
-    equalityFilter('leaderboardId', leaderboardId),
-    equalityFilter('attemptId', attemptId),
-  ];
-  const item = await loadUniqueCollectionItem(
+  const item = await loadSingleCollectionItem(
     context,
-    collections.attempts,
-    filters,
+    collectionId,
     'Verse8 leaderboard attempt decision',
   );
 
@@ -539,228 +535,148 @@ async function loadAttemptDecision(
     return undefined;
   }
 
-  if (item.leaderboardId !== leaderboardId || item.attemptId !== attemptId) {
-    throw new Error('Stored Verse8 leaderboard attempt decision is invalid.');
+  if (item.attemptDigest !== expectedDigest) {
+    throw attemptConflict(attempt.attemptId);
   }
 
-  const attempt = cloneAttempt(item.attempt);
   assertRecordVerifiedLeaderboardAttemptResponse(item.response);
   assertStoredAttemptDecision(attempt, item.response);
 
   return {
-    attempt,
-    response: cloneRecordResponse(item.response, item.response.alreadyProcessed),
+    attemptDigest: expectedDigest,
+    response: cloneRecordResponse(item.response, false),
   };
 }
 
-async function loadUniqueEntry(
+async function loadEntries(
   context: Verse8Agent8ServiceContext,
   collections: LeaderboardCollections,
   definition: VerifiedLeaderboardDefinition,
-  field: 'attemptId' | 'participantId',
-  value: string,
-): Promise<StoredEntry | undefined> {
-  const filters = [
-    equalityFilter('leaderboardId', definition.leaderboardId),
-    equalityFilter(field, value),
-  ];
-  const item = await loadUniqueCollectionItem(
-    context,
-    collections.entries,
-    filters,
-    'Verse8 retained leaderboard entry',
-  );
+  maximumParticipants: number,
+): Promise<readonly StoredEntry[]> {
+  const items = await context.getCollectionItems(collections.entries, {
+    limit: maximumParticipants + 1,
+  });
 
-  return item === undefined ? undefined : readEntry(item, definition);
+  if (items.length > maximumParticipants) {
+    throw new Error('Verse8 leaderboard exceeds maximumParticipants.');
+  }
+
+  const entries = items.map((item) => readEntry(item));
+  const participantIds = new Set<string>();
+  const attemptIds = new Set<string>();
+
+  for (const entry of entries) {
+    if (
+      participantIds.has(entry.attempt.participantId)
+      || attemptIds.has(entry.attempt.attemptId)
+    ) {
+      throw new Error('Stored Verse8 leaderboard entries are duplicated.');
+    }
+
+    participantIds.add(entry.attempt.participantId);
+    attemptIds.add(entry.attempt.attemptId);
+  }
+
+  return [...entries].sort((left, right) =>
+    compareLeaderboardOrder(definition.scoreOrder, left.attempt, right.attempt),
+  );
 }
 
-async function loadUniqueCollectionItem(
+async function loadSingleCollectionItem(
   context: Verse8Agent8ServiceContext,
   collectionId: string,
-  filters: readonly Verse8Agent8QueryFilter[],
   label: string,
 ): Promise<Verse8Agent8CollectionItem | undefined> {
-  const items = await context.getCollectionItems(collectionId, {
-    filters: [...filters],
-    limit: 2,
-  });
+  const items = await context.getCollectionItems(collectionId, { limit: 2 });
 
   if (items.length > 1) {
     throw new Error(`${label} is duplicated.`);
   }
 
-  if (items[0] !== undefined && (typeof items[0].__id !== 'string' || items[0].__id.length === 0)) {
-    throw new Error(`${label} has an invalid item ID.`);
+  if (items[0] !== undefined) {
+    readItemId(items[0], label);
   }
 
   return items[0];
 }
 
-function readEntry(
-  item: Verse8Agent8CollectionItem,
-  definition: VerifiedLeaderboardDefinition,
-): StoredEntry {
-  if (
-    typeof item.leaderboardId !== 'string'
-    || typeof item.sortKey !== 'string'
-    || item.sortKey.length === 0
-  ) {
+function readEntry(item: Verse8Agent8CollectionItem): StoredEntry {
+  const itemId = readItemId(item, 'Verse8 retained leaderboard entry');
+
+  if (typeof item.attemptDigest !== 'string' || !sha256DigestPattern.test(item.attemptDigest)) {
     throw new Error('Stored Verse8 leaderboard entry is invalid.');
   }
 
-  const attempt = cloneAttempt(item.attempt);
+  return createStoredEntry(itemId, readStoredAttempt(item.attempt), item.attemptDigest);
+}
 
-  if (attempt.participantId !== item.participantId || attempt.attemptId !== item.attemptId) {
+function readStoredAttempt(input: unknown): StoredLeaderboardAttempt {
+  if (!isRecord(input)) {
     throw new Error('Stored Verse8 leaderboard entry is invalid.');
   }
 
-  const expectedSortKey = createLeaderboardSortKey(
-    definition,
-    attempt.score,
-    Date.parse(attempt.completedAt),
-    attempt.attemptId,
-  );
-
-  if (item.leaderboardId !== definition.leaderboardId || item.sortKey !== expectedSortKey) {
-    throw new Error('Stored Verse8 leaderboard entry is invalid.');
-  }
+  const rankedEntry: unknown = {
+    rank: 1,
+    participantId: input.participantId,
+    ...(input.participantLabel === undefined
+      ? {}
+      : { participantLabel: input.participantLabel }),
+    attemptId: input.attemptId,
+    score: input.score,
+    ...(input.metrics === undefined ? {} : { metrics: input.metrics }),
+    completedAt: input.completedAt,
+  };
+  assertLeaderboardRankedEntry(rankedEntry);
 
   return {
-    itemId: item.__id,
-    leaderboardId: item.leaderboardId,
-    sortKey: item.sortKey,
-    attempt,
+    participantId: rankedEntry.participantId,
+    ...(rankedEntry.participantLabel === undefined
+      ? {}
+      : { participantLabel: rankedEntry.participantLabel }),
+    attemptId: rankedEntry.attemptId,
+    score: rankedEntry.score,
+    ...(rankedEntry.metrics === undefined ? {} : { metrics: { ...rankedEntry.metrics } }),
+    completedAt: rankedEntry.completedAt,
+  };
+}
+
+function createStoredEntry(
+  itemId: string,
+  attempt: StoredLeaderboardAttempt,
+  attemptDigest: string,
+): StoredEntry {
+  return {
+    itemId,
+    attemptDigest,
+    attempt: cloneStoredAttempt(attempt),
   };
 }
 
 function createEntryItem(
-  definition: VerifiedLeaderboardDefinition,
   attempt: VerifiedLeaderboardAttempt,
+  attemptDigest: string,
 ): Readonly<Record<string, unknown>> {
   return {
-    leaderboardId: definition.leaderboardId,
-    participantId: attempt.participantId,
-    attemptId: attempt.attemptId,
-    sortKey: createLeaderboardSortKey(
-      definition,
-      attempt.score,
-      Date.parse(attempt.completedAt),
-      attempt.attemptId,
-    ),
-    attempt: cloneAttempt(attempt),
+    attemptDigest,
+    attempt: cloneStoredAttempt(attempt),
   };
 }
 
-async function createRankedEntry(
-  context: Verse8Agent8ServiceContext,
-  collections: LeaderboardCollections,
+function rankEntries(
   definition: VerifiedLeaderboardDefinition,
-  entry: StoredEntry,
-): Promise<LeaderboardRankedEntry> {
-  const rank = (await countEntriesBefore(context, collections, definition, entry.sortKey)) + 1;
-
-  return toRankedEntry(entry.attempt, rank);
-}
-
-async function loadParticipantRankedEntry(
-  context: Verse8Agent8ServiceContext,
-  collections: LeaderboardCollections,
-  definition: VerifiedLeaderboardDefinition,
-  participantId: string,
-): Promise<LeaderboardRankedEntry | undefined> {
-  const entry = await loadUniqueEntry(
-    context,
-    collections,
-    definition,
-    'participantId',
-    participantId,
-  );
-
-  if (entry === undefined) {
-    return undefined;
-  }
-
-  const rank = (await countEntriesBefore(context, collections, definition, entry.sortKey)) + 1;
-  return toRankedEntry(entry.attempt, rank);
-}
-
-function countEntries(
-  context: Verse8Agent8ServiceContext,
-  collections: LeaderboardCollections,
-  definition: VerifiedLeaderboardDefinition,
-): Promise<number> {
-  return context.countCollectionItems(collections.entries, {
-    filters: [equalityFilter('leaderboardId', definition.leaderboardId)],
-  });
-}
-
-function countEntriesBefore(
-  context: Verse8Agent8ServiceContext,
-  collections: LeaderboardCollections,
-  definition: VerifiedLeaderboardDefinition,
-  sortKey: string,
-): Promise<number> {
-  return context.countCollectionItems(collections.entries, {
-    filters: [
-      equalityFilter('leaderboardId', definition.leaderboardId),
-      { field: 'sortKey', operator: '<', value: sortKey },
-    ],
-  });
-}
-
-function equalityFilter(field: string, value: unknown): Verse8Agent8QueryFilter {
-  return { field, operator: '==', value };
-}
-
-function createLeaderboardSortKey(
-  definition: VerifiedLeaderboardDefinition,
-  score: number,
-  completedAtMs: number,
-  attemptId: string,
-): string {
-  return [
-    sortableNumber(score, definition.scoreOrder === 'descending'),
-    sortableNumber(completedAtMs, false),
-    sortableOrdinal(attemptId),
-  ].join(':');
-}
-
-function sortableNumber(value: number, descending: boolean): string {
-  const buffer = new ArrayBuffer(8);
-  const view = new DataView(buffer);
-  view.setFloat64(0, Object.is(value, -0) ? 0 : value, false);
-  const bytes = new Uint8Array(buffer);
-
-  if ((bytes[0] as number) >= 0x80) {
-    for (let index = 0; index < bytes.length; index += 1) {
-      bytes[index] = 0xff - (bytes[index] as number);
-    }
-  } else {
-    bytes[0] = (bytes[0] as number) ^ 0x80;
-  }
-
-  if (descending) {
-    for (let index = 0; index < bytes.length; index += 1) {
-      bytes[index] = 0xff - (bytes[index] as number);
-    }
-  }
-
-  return [...bytes].map((byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-function sortableOrdinal(value: string): string {
-  let encoded = '';
-
-  for (let index = 0; index < value.length; index += 1) {
-    encoded += (value.charCodeAt(index) + 1).toString(16).padStart(5, '0');
-  }
-
-  return `${encoded}00000`;
+  entries: readonly StoredEntry[],
+): readonly LeaderboardRankedEntry[] {
+  return [...entries]
+    .sort((left, right) =>
+      compareLeaderboardOrder(definition.scoreOrder, left.attempt, right.attempt),
+    )
+    .map((entry, index) => toRankedEntry(entry.attempt, index + 1));
 }
 
 function shouldReplaceRetainedAttempt(
   definition: VerifiedLeaderboardDefinition,
-  retained: VerifiedLeaderboardAttempt,
+  retained: StoredLeaderboardAttempt,
   candidate: VerifiedLeaderboardAttempt,
 ): boolean {
   if (definition.attemptSelection === 'first') {
@@ -770,9 +686,26 @@ function shouldReplaceRetainedAttempt(
   return compareLeaderboardOrder(definition.scoreOrder, candidate, retained) < 0;
 }
 
+function compareRankedEntryToCursor(
+  definition: VerifiedLeaderboardDefinition,
+  entry: LeaderboardRankedEntry,
+  cursor: VerifiedLeaderboardCursorPosition,
+): number {
+  if (entry.score !== cursor.score) {
+    return definition.scoreOrder === 'ascending'
+      ? entry.score - cursor.score
+      : cursor.score - entry.score;
+  }
+
+  const completedAtDifference = Date.parse(entry.completedAt) - cursor.completedAtMs;
+  return completedAtDifference === 0
+    ? compareOrdinal(entry.attemptId, cursor.attemptId)
+    : completedAtDifference;
+}
+
 function compareAttemptChronology(
-  left: VerifiedLeaderboardAttempt,
-  right: VerifiedLeaderboardAttempt,
+  left: StoredLeaderboardAttempt,
+  right: StoredLeaderboardAttempt,
 ): number {
   const timestampDifference = Date.parse(left.completedAt) - Date.parse(right.completedAt);
   return timestampDifference === 0
@@ -782,8 +715,8 @@ function compareAttemptChronology(
 
 function compareLeaderboardOrder(
   scoreOrder: VerifiedLeaderboardDefinition['scoreOrder'],
-  left: VerifiedLeaderboardAttempt,
-  right: VerifiedLeaderboardAttempt,
+  left: StoredLeaderboardAttempt,
+  right: StoredLeaderboardAttempt,
 ): number {
   if (left.score !== right.score) {
     return scoreOrder === 'ascending' ? left.score - right.score : right.score - left.score;
@@ -797,7 +730,7 @@ function compareOrdinal(left: string, right: string): number {
 }
 
 function toRankedEntry(
-  attempt: VerifiedLeaderboardAttempt,
+  attempt: StoredLeaderboardAttempt,
   rank: number,
 ): LeaderboardRankedEntry {
   return {
@@ -823,18 +756,23 @@ function cloneDefinition(input: VerifiedLeaderboardDefinition): VerifiedLeaderbo
 
 function cloneAttempt(input: unknown): VerifiedLeaderboardAttempt {
   assertVerifiedLeaderboardAttempt(input);
-  const attempt = input;
 
   return {
-    participantId: attempt.participantId,
-    ...(attempt.participantLabel === undefined
+    ...cloneStoredAttempt(input),
+    verification: { ...input.verification },
+  };
+}
+
+function cloneStoredAttempt(input: StoredLeaderboardAttempt): StoredLeaderboardAttempt {
+  return {
+    participantId: input.participantId,
+    ...(input.participantLabel === undefined
       ? {}
-      : { participantLabel: attempt.participantLabel }),
-    attemptId: attempt.attemptId,
-    score: attempt.score,
-    ...(attempt.metrics === undefined ? {} : { metrics: { ...attempt.metrics } }),
-    completedAt: attempt.completedAt,
-    verification: { ...attempt.verification },
+      : { participantLabel: input.participantLabel }),
+    attemptId: input.attemptId,
+    score: input.score,
+    ...(input.metrics === undefined ? {} : { metrics: { ...input.metrics } }),
+    completedAt: input.completedAt,
   };
 }
 
@@ -856,23 +794,26 @@ function cloneRecordResponse(
   return response;
 }
 
-function assertSameAttempt(
-  existing: VerifiedLeaderboardAttempt,
-  candidate: VerifiedLeaderboardAttempt,
-): void {
-  if (
-    existing.participantId !== candidate.participantId
-    || existing.attemptId !== candidate.attemptId
-    || existing.score !== candidate.score
-    || !areVerifiedLeaderboardMetricsEqual(existing.metrics, candidate.metrics)
-    || Date.parse(existing.completedAt) !== Date.parse(candidate.completedAt)
-    || existing.verification.authorityId !== candidate.verification.authorityId
-    || existing.verification.evidenceId !== candidate.verification.evidenceId
-    || Date.parse(existing.verification.verifiedAt)
-      !== Date.parse(candidate.verification.verifiedAt)
-  ) {
-    throw new Error(`Attempt id conflict for ${JSON.stringify(candidate.attemptId)}.`);
-  }
+function createAttemptDigest(attempt: VerifiedLeaderboardAttempt): string {
+  const metrics = attempt.metrics === undefined
+    ? null
+    : Object.keys(attempt.metrics)
+        .sort(compareOrdinal)
+        .map((key) => [key, attempt.metrics?.[key]]);
+
+  return sha256(
+    JSON.stringify([
+      1,
+      attempt.participantId,
+      attempt.attemptId,
+      Object.is(attempt.score, -0) ? 0 : attempt.score,
+      metrics,
+      Date.parse(attempt.completedAt),
+      attempt.verification.authorityId,
+      attempt.verification.evidenceId,
+      Date.parse(attempt.verification.verifiedAt),
+    ]),
+  );
 }
 
 function assertStoredAttemptDecision(
@@ -885,13 +826,39 @@ function assertStoredAttemptDecision(
     || (response.retained && (
       response.entry.attemptId !== attempt.attemptId
       || response.entry.score !== attempt.score
-      || !areVerifiedLeaderboardMetricsEqual(response.entry.metrics, attempt.metrics)
+      || !areMetricMapsEqual(response.entry.metrics, attempt.metrics)
       || Date.parse(response.entry.completedAt) !== Date.parse(attempt.completedAt)
     ))
     || (!response.retained && response.entry.attemptId === attempt.attemptId)
   ) {
     throw new Error('Stored Verse8 leaderboard attempt decision is invalid.');
   }
+}
+
+function areMetricMapsEqual(
+  left: Readonly<Record<string, number>> | undefined,
+  right: Readonly<Record<string, number>> | undefined,
+): boolean {
+  if (left === undefined || right === undefined) {
+    return left === right;
+  }
+
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  return leftKeys.length === rightKeys.length
+    && leftKeys.every((key) => left[key] === right[key]);
+}
+
+function attemptConflict(attemptId: string): Error {
+  return new Error(`Attempt id conflict for ${JSON.stringify(attemptId)}.`);
+}
+
+function readItemId(item: Verse8Agent8CollectionItem, label: string): string {
+  if (typeof item.__id !== 'string' || item.__id.length === 0) {
+    throw new Error(`${label} has an invalid item ID.`);
+  }
+
+  return item.__id;
 }
 
 function readStorageState(value: unknown): StoredStorageState {
@@ -974,27 +941,6 @@ function assertJsonValue(input: unknown, seen: Set<object>, depth: number): void
   seen.delete(input);
 }
 
-function utf8ByteLength(input: string): number {
-  let bytes = 0;
-
-  for (let index = 0; index < input.length; index += 1) {
-    const codeUnit = input.charCodeAt(index);
-
-    if (codeUnit < 0x80) {
-      bytes += 1;
-    } else if (codeUnit < 0x800) {
-      bytes += 2;
-    } else if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      bytes += 4;
-      index += 1;
-    } else {
-      bytes += 3;
-    }
-  }
-
-  return bytes;
-}
-
 function normalizeNamespace(value: string, label: string): string {
   const normalized = value.trim();
 
@@ -1054,26 +1000,141 @@ function isWellFormedUnicode(input: string): boolean {
 }
 
 function storageLockKey(account: string): string {
-  return `mpgd:verse8:storage:${stableLockDigest(account)}`;
+  return `mpgd:verse8:storage:${sha256(account)}`;
 }
 
 function leaderboardLockKey(leaderboardId: string): string {
-  return `mpgd:verse8:leaderboard:${stableLockDigest(leaderboardId)}`;
+  return `mpgd:verse8:leaderboard:${sha256(leaderboardId)}`;
 }
 
-function stableLockDigest(input: string): string {
-  let first = 0x811c9dc5;
-  let second = 0x9e3779b9;
+function sha256(input: string): string {
+  const bytes = utf8Bytes(input);
+  const bitLength = bytes.length * 8;
+  const paddedLength = Math.ceil((bytes.length + 9) / 64) * 64;
+  const message = new Uint8Array(paddedLength);
+  message.set(bytes);
+  message[bytes.length] = 0x80;
+  const view = new DataView(message.buffer);
+  view.setUint32(paddedLength - 8, Math.floor(bitLength / 0x1_0000_0000), false);
+  view.setUint32(paddedLength - 4, bitLength >>> 0, false);
+  const hash = new Uint32Array(8);
+  hash[0] = 0x6a09e667;
+  hash[1] = 0xbb67ae85;
+  hash[2] = 0x3c6ef372;
+  hash[3] = 0xa54ff53a;
+  hash[4] = 0x510e527f;
+  hash[5] = 0x9b05688c;
+  hash[6] = 0x1f83d9ab;
+  hash[7] = 0x5be0cd19;
+  const schedule = new Uint32Array(64);
 
-  for (let index = 0; index < input.length; index += 1) {
-    const codeUnit = input.charCodeAt(index);
-    first = Math.imul(first ^ codeUnit, 0x01000193);
-    second = Math.imul(second ^ codeUnit, 0x85ebca6b);
+  for (let offset = 0; offset < message.length; offset += 64) {
+    for (let index = 0; index < 16; index += 1) {
+      schedule[index] = view.getUint32(offset + index * 4, false);
+    }
+
+    for (let index = 16; index < 64; index += 1) {
+      const previous15 = schedule[index - 15] as number;
+      const previous2 = schedule[index - 2] as number;
+      const sigma0 = rotateRight(previous15, 7)
+        ^ rotateRight(previous15, 18)
+        ^ (previous15 >>> 3);
+      const sigma1 = rotateRight(previous2, 17)
+        ^ rotateRight(previous2, 19)
+        ^ (previous2 >>> 10);
+      schedule[index] = (
+        (schedule[index - 16] as number)
+        + sigma0
+        + (schedule[index - 7] as number)
+        + sigma1
+      ) >>> 0;
+    }
+
+    let a = hash[0] as number;
+    let b = hash[1] as number;
+    let c = hash[2] as number;
+    let d = hash[3] as number;
+    let e = hash[4] as number;
+    let f = hash[5] as number;
+    let g = hash[6] as number;
+    let h = hash[7] as number;
+
+    for (let index = 0; index < 64; index += 1) {
+      const sum1 = rotateRight(e, 6) ^ rotateRight(e, 11) ^ rotateRight(e, 25);
+      const choice = (e & f) ^ (~e & g);
+      const temporary1 = (
+        h
+        + sum1
+        + choice
+        + (sha256RoundConstants[index] as number)
+        + (schedule[index] as number)
+      ) >>> 0;
+      const sum0 = rotateRight(a, 2) ^ rotateRight(a, 13) ^ rotateRight(a, 22);
+      const majority = (a & b) ^ (a & c) ^ (b & c);
+      const temporary2 = (sum0 + majority) >>> 0;
+      h = g;
+      g = f;
+      f = e;
+      e = (d + temporary1) >>> 0;
+      d = c;
+      c = b;
+      b = a;
+      a = (temporary1 + temporary2) >>> 0;
+    }
+
+    hash[0] = ((hash[0] as number) + a) >>> 0;
+    hash[1] = ((hash[1] as number) + b) >>> 0;
+    hash[2] = ((hash[2] as number) + c) >>> 0;
+    hash[3] = ((hash[3] as number) + d) >>> 0;
+    hash[4] = ((hash[4] as number) + e) >>> 0;
+    hash[5] = ((hash[5] as number) + f) >>> 0;
+    hash[6] = ((hash[6] as number) + g) >>> 0;
+    hash[7] = ((hash[7] as number) + h) >>> 0;
   }
 
-  return [first, second]
-    .map((value) => (value >>> 0).toString(16).padStart(8, '0'))
-    .join('');
+  return [...hash].map((value) => value.toString(16).padStart(8, '0')).join('');
+}
+
+function rotateRight(value: number, bits: number): number {
+  return (value >>> bits) | (value << (32 - bits));
+}
+
+function utf8Bytes(input: string): Uint8Array {
+  const bytes: number[] = [];
+
+  for (let index = 0; index < input.length; index += 1) {
+    let codePoint = input.charCodeAt(index);
+
+    if (codePoint >= 0xd800 && codePoint <= 0xdbff) {
+      const next = input.charCodeAt(index + 1);
+
+      if (next >= 0xdc00 && next <= 0xdfff) {
+        codePoint = 0x10000 + ((codePoint - 0xd800) << 10) + (next - 0xdc00);
+        index += 1;
+      }
+    }
+
+    if (codePoint < 0x80) {
+      bytes.push(codePoint);
+    } else if (codePoint < 0x800) {
+      bytes.push(0xc0 | (codePoint >>> 6), 0x80 | (codePoint & 0x3f));
+    } else if (codePoint < 0x10000) {
+      bytes.push(
+        0xe0 | (codePoint >>> 12),
+        0x80 | ((codePoint >>> 6) & 0x3f),
+        0x80 | (codePoint & 0x3f),
+      );
+    } else {
+      bytes.push(
+        0xf0 | (codePoint >>> 18),
+        0x80 | ((codePoint >>> 12) & 0x3f),
+        0x80 | ((codePoint >>> 6) & 0x3f),
+        0x80 | (codePoint & 0x3f),
+      );
+    }
+  }
+
+  return Uint8Array.from(bytes);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

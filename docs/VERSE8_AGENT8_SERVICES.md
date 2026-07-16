@@ -28,15 +28,13 @@ const context: Verse8Agent8ServiceContext = {
     $global.addCollectionItem(collectionId, item),
   updateCollectionItem: (collectionId, item) =>
     $global.updateCollectionItem(collectionId, item),
-  countCollectionItems: (collectionId, options) =>
-    $global.countCollectionItems(collectionId, options),
 };
 ```
 
-This contract uses the public Agent8 user-state, collection, query-filter,
-ordering, count, and `$lock` APIs. It intentionally does not depend on
-`startAfter`: the current local Agent8 runtime does not implement that option
-consistently with the published type surface.
+This contract uses the public Agent8 user-state, collection, and `$lock` APIs.
+It intentionally does not combine collection filters with ordering and does not
+depend on `startAfter`; those paths are not implemented consistently across the
+current Agent8 runtime and published type surface.
 
 ## Cloud storage
 
@@ -141,12 +139,21 @@ ordering, and retries preserve their original retention decision. The exported
 provider for an already-authoritative coordinator; never expose its trusted
 recorder directly to a game client.
 
-Pages use the shared versioned opaque cursor. Internally, the adapter creates a
-monotonic sort key and requests the next page with a `sortKey > cursor` range,
-ordered ascending with `limit + 1`. This avoids raw `startAfter` values and
-keeps rank counts scoped to the same board. Cursors remain continuation hints,
-not credentials, and separate page requests have weak snapshot consistency if
-the leaderboard changes between them.
+Agent8 global collections may be client-subscribable. The provider therefore
+stores only public retained-entry fields plus SHA-256 identity digests. It does
+not persist verification evidence or the raw history of non-retained attempts.
+Board and attempt collection IDs are also derived from bounded digests rather
+than raw game identifiers.
+
+Pages use the shared versioned opaque cursor. Internally, the adapter loads at
+most `maximumParticipants + 1` retained entries from the board-specific
+collection, rejects an oversized board, and applies the contract's exact
+JavaScript ordering and cursor slice on the server. The default participant cap
+is 1,000 and can be lowered for a game with tighter runtime limits. This avoids
+filter-plus-order and indexed-string limits while preserving 512-character
+attempt IDs. Cursors remain continuation hints, not credentials, and separate
+page requests have weak snapshot consistency if the leaderboard changes
+between them.
 
 The generic Verse8 `PlatformGateway.leaderboard` and target feature remain
 disabled. This service is a game-server verified leaderboard, not a Verse8
