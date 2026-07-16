@@ -243,7 +243,7 @@ function createEffectiveProductConfig(
   product: ProductCatalogEntry,
 ): EffectiveProductConfig {
   const platformProductId = productPlatformId(product, target);
-  const reason = effectiveItemReason(config.features.iap, platformProductId);
+  const reason = effectiveProductReason(target, config.features.iap, product, platformProductId);
 
   return {
     id: product.id,
@@ -253,6 +253,23 @@ function createEffectiveProductConfig(
     reason,
     ...(platformProductId === undefined ? {} : { platformProductId }),
   };
+}
+
+function effectiveProductReason(
+  target: string,
+  targetEnabled: boolean,
+  product: ProductCatalogEntry,
+  platformProductId: string | undefined,
+): EffectiveAvailabilityReason {
+  if (!targetEnabled) {
+    return 'target-disabled';
+  }
+
+  if (target === 'verse8' && product.grant.type === 'resource') {
+    return 'capability-unsupported';
+  }
+
+  return effectiveItemReason(targetEnabled, platformProductId);
 }
 
 function createEffectiveAdPlacementConfig(
