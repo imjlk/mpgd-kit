@@ -453,7 +453,7 @@ function assertPurchaseAuthorityResult(
   }
 
   if (input.decision === 'rejected') {
-    requireIdentifier(input.reason, 'purchase authority reason');
+    requireNonEmptyString(input.reason, 'purchase authority reason');
     return input;
   }
 
@@ -482,7 +482,7 @@ function assertRewardAuthorityResult(
   }
 
   if (input.decision === 'rejected') {
-    requireIdentifier(input.reason, 'reward authority reason');
+    requireNonEmptyString(input.reason, 'reward authority reason');
     return input;
   }
 
@@ -599,7 +599,13 @@ function requireIdentifier(input: unknown, label: string): asserts input is stri
 
 function requireOptionalReason(input: unknown): asserts input is string | undefined {
   if (input !== undefined) {
-    requireIdentifier(input, 'authority reason');
+    requireNonEmptyString(input, 'authority reason');
+  }
+}
+
+function requireNonEmptyString(input: unknown, label: string): asserts input is string {
+  if (typeof input !== 'string' || input.length === 0) {
+    throw new TypeError(`${label} must be a non-empty string.`);
   }
 }
 

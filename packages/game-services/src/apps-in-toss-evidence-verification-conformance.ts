@@ -488,6 +488,9 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
   now: string,
 ): Promise<void> {
   const fixture = createAppsInTossProductionEvidenceAuthorityFixture();
+  const diagnosticReason = `Authority temporarily unavailable: ${'x'.repeat(512)} `;
+  fixture.enqueuePurchaseResult({ decision: 'rejected', reason: diagnosticReason });
+  fixture.enqueuePurchaseResult({ decision: 'pending', reason: diagnosticReason });
   fixture.enqueueRewardResult(new Error('simulated reward authority failure'));
   fixture.enqueueRewardResult(
     verifiedReward({
@@ -507,9 +510,18 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
     }),
   );
   fixture.enqueueRewardResult({ decision: 'pending' });
+  fixture.enqueueRewardResult({ decision: 'rejected', reason: diagnosticReason });
+  fixture.enqueueRewardResult({ decision: 'pending', reason: diagnosticReason });
   const context = createScenarioContext(createVerifier, now, {
+    purchaseAuthority: fixture.purchaseAuthority,
     rewardAuthority: fixture.rewardAuthority,
   });
+  const purchaseRejected = await context.backend.purchases.verifyPurchase(
+    purchaseRequest({ idempotencyKey: 'purchase-free-form-rejected' }),
+  );
+  const purchasePending = await context.backend.purchases.verifyPurchase(
+    purchaseRequest({ idempotencyKey: 'purchase-free-form-pending' }),
+  );
   const failed = await context.backend.adRewards.claimAdReward(rewardRequest());
   const correlationMismatch = await context.backend.adRewards.claimAdReward(
     rewardRequest({
@@ -535,7 +547,21 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
       evidence: rewardEvidence('ait-correlation-pending'),
     }),
   );
+  const rewardRejected = await context.backend.adRewards.claimAdReward(
+    rewardRequest({
+      idempotencyKey: 'reward-free-form-rejected',
+      evidence: rewardEvidence('ait-correlation-free-form-rejected'),
+    }),
+  );
+  const rewardPending = await context.backend.adRewards.claimAdReward(
+    rewardRequest({
+      idempotencyKey: 'reward-free-form-pending',
+      evidence: rewardEvidence('ait-correlation-free-form-pending'),
+    }),
+  );
 
+  assertEqual(purchaseRejected.reason, diagnosticReason, 'purchase rejection reason forwarding');
+  assertEqual(purchasePending.reason, diagnosticReason, 'purchase pending reason forwarding');
   assertEqual(failed.reason, 'EVIDENCE_VERIFIER_ERROR', 'reward authority error');
   assertEqual(
     correlationMismatch.reason,
@@ -553,6 +579,8 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
     'reward placement mismatch',
   );
   assertEqual(pending.reason, 'AIT_REWARD_AUTHORITY_PENDING', 'reward pending decision');
+  assertEqual(rewardRejected.reason, diagnosticReason, 'reward rejection reason forwarding');
+  assertEqual(rewardPending.reason, diagnosticReason, 'reward pending reason forwarding');
   await assertEntitlementCount(context.store, 0, 'reward errors and mismatches');
 }
 
