@@ -157,6 +157,9 @@ export function createAppStoreServerApiClient(
           signal: input.signal,
         });
       } catch (error) {
+        if (input.signal.aborted) {
+          throw error;
+        }
         throw new AppStoreDependencyUnavailableError(
           'App Store Server API transport is unavailable.',
           error,
@@ -164,7 +167,7 @@ export function createAppStoreServerApiClient(
       }
 
       if (response.status === 200) {
-        const body = await readBoundedJson(response, maxResponseBytes);
+        const body = await readBoundedJson(response, maxResponseBytes, input.signal);
         assertRecord(body, 'App Store transaction response');
         assertNonEmptyString(body.signedTransactionInfo, 'signedTransactionInfo');
         return {
@@ -477,6 +480,7 @@ export function assertAppStoreTransactionPayload(
 async function readBoundedJson(
   response: AppStoreFetchResponse,
   maxResponseBytes: number,
+  signal: AbortSignal,
 ): Promise<unknown> {
   if (response.body === null) {
     throw new Error('App Store Server API response body is missing.');
@@ -488,7 +492,18 @@ async function readBoundedJson(
   let text = '';
   try {
     for (;;) {
-      const chunk = await reader.read();
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try {
+        chunk = await reader.read();
+      } catch (error) {
+        if (signal.aborted) {
+          throw error;
+        }
+        throw new AppStoreDependencyUnavailableError(
+          'App Store Server API response stream is unavailable.',
+          error,
+        );
+      }
       if (chunk.done) {
         break;
       }

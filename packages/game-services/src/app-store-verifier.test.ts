@@ -491,6 +491,48 @@ assertDecision(
   'the built-in transport should classify network failures as explicit retryable outages',
 );
 
+const abortedController = new AbortController();
+abortedController.abort(new Error('caller cancelled'));
+const abortedTransportVerifier = createVerifier({
+  serverApi: createAppStoreServerApiClient({
+    getBearerToken: () => 'signed-provider-jwt',
+    async fetch(_url, init) {
+      throw init.signal.reason;
+    },
+  }),
+});
+await assertRejects(
+  () => abortedTransportVerifier.verifyPurchase({
+    ...baseInput,
+    signal: abortedController.signal,
+  }),
+  'caller cancelled',
+  'caller cancellation must propagate instead of becoming a retryable provider outage',
+);
+
+const interruptedStreamVerifier = createVerifier({
+  serverApi: createAppStoreServerApiClient({
+    getBearerToken: () => 'signed-provider-jwt',
+    async fetch() {
+      return {
+        status: 200,
+        body: new ReadableStream({
+          start(streamController) {
+            streamController.error(new TypeError('response stream disconnected'));
+          },
+        }),
+      };
+    },
+  }),
+});
+const interruptedStream = await interruptedStreamVerifier.verifyPurchase(baseInput);
+assertDecision(
+  interruptedStream,
+  'pending',
+  'APP_STORE_SERVER_API_UNAVAILABLE',
+  'response-stream transport failures should remain explicitly retryable',
+);
+
 const invalidAuthorizationClient = createAppStoreServerApiClient({
   getBearerToken: () => 'invalid bearer token',
   async fetch() {

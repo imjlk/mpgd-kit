@@ -129,8 +129,9 @@ represents one catalog grant, any signed quantity must be `1`; omission keeps
 StoreKit's default single-purchase semantics.
 Revoked, upgraded, expired, mismatched, malformed, or invalidly signed
 transactions are rejected before the entitlement ledger.
-Provider outages, rate limits, account-binding outages, and authorization
-configuration failures return a retryable pending decision and do not grant.
+Provider outages, rate limits, account-binding outages, and authorization-provider
+outages return a retryable pending decision and do not grant. Caller cancellation
+continues to propagate instead of being converted into a retryable outage.
 Provider ports should throw `AppStoreDependencyUnavailableError` only for
 explicit transient dependency failures. Unexpected adapter exceptions and
 invalid runtime values propagate to the outer verifier boundary as errors
