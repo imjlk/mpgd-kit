@@ -82,29 +82,33 @@ interface AdMobSsvConformanceContext {
   readonly verifier: GameServicesEvidenceVerifier;
 }
 
+interface CreateAdMobSsvConformanceContextOptions {
+  readonly includeSecp256k1Fixture: boolean;
+}
+
 async function createAdMobSsvConformanceContext(
   input: RunAdMobSsvConformanceInput,
+  options: CreateAdMobSsvConformanceContextOptions,
 ): Promise<AdMobSsvConformanceContext> {
   const subtle = input.subtle ?? readGlobalSubtleCrypto();
-  const [publicKey, secp256k1PublicKey] = await Promise.all([
-    importAdMobSsvPublicKey(fixturePublicKey, subtle),
-    importAdMobSsvPublicKey(secp256k1FixturePublicKey, subtle),
-  ]);
+  const publicKey = await importAdMobSsvPublicKey(fixturePublicKey, subtle);
   const callbacks = new Map([
     ['reward-1', fixtureCallback('reward-1', firstFixtureSignature)],
     ['reward-2', fixtureCallback('reward-2', secondFixtureSignature)],
-    [
+  ]);
+  const publicKeys = new Map<string, AdMobSsvPublicKey>([[fixtureKeyId, publicKey]]);
+
+  if (options.includeSecp256k1Fixture) {
+    const secp256k1PublicKey = await importAdMobSsvPublicKey(secp256k1FixturePublicKey, subtle);
+    callbacks.set(
       'reward-secp',
       fixtureCallback('reward-secp', secp256k1FixtureSignature, {
         keyId: secp256k1FixtureKeyId,
         transactionId: secp256k1FixtureTransactionId,
       }),
-    ],
-  ]);
-  const publicKeys = new Map([
-    [fixtureKeyId, publicKey],
-    [secp256k1FixtureKeyId, secp256k1PublicKey],
-  ]);
+    );
+    publicKeys.set(secp256k1FixtureKeyId, secp256k1PublicKey);
+  }
   const callbackSource = mapCallbackSource(callbacks);
   const publicKeySource = fixedPublicKeySource(publicKeys);
 
@@ -124,7 +128,9 @@ async function createAdMobSsvConformanceContext(
 export async function createAdMobSsvConformanceFixture(
   input: RunAdMobSsvConformanceInput = {},
 ): Promise<AdMobSsvConformanceFixture> {
-  const { verifier } = await createAdMobSsvConformanceContext(input);
+  const { verifier } = await createAdMobSsvConformanceContext(input, {
+    includeSecp256k1Fixture: false,
+  });
 
   return {
     verifier,
@@ -142,7 +148,9 @@ export async function runAdMobSsvConformance(
     publicKeySource,
     subtle,
     verifier,
-  } = await createAdMobSsvConformanceContext(input);
+  } = await createAdMobSsvConformanceContext(input, {
+    includeSecp256k1Fixture: true,
+  });
   const firstRequest = rewardRequest('reward-1');
   const firstDecision = await verifier.verifyAdReward(verificationInput(firstRequest));
 
