@@ -125,7 +125,8 @@ sanity-checked observation timestamp generated after the platform purchase
 resolves;
 Apple's signed `purchaseDate` remains authoritative and is retained in ledger
 evidence together with the effective quantity. Because the shared grant contract
-represents one catalog grant, consumables must have signed quantity `1`.
+represents one catalog grant, any signed quantity must be `1`; omission keeps
+StoreKit's default single-purchase semantics.
 Revoked, upgraded, expired, mismatched, malformed, or invalidly signed
 transactions are rejected before the entitlement ledger.
 Provider outages, rate limits, account-binding outages, and authorization

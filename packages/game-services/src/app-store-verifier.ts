@@ -375,12 +375,7 @@ function validateTransaction(
   if (clientPurchaseObservedAt > nowMs + clockSkewMs) {
     return 'APP_STORE_CLIENT_PURCHASE_TIME_IN_FUTURE';
   }
-  if (
-    (transaction.type === 'Consumable' && transaction.quantity !== 1)
-    || (transaction.type !== 'Consumable'
-      && transaction.quantity !== undefined
-      && transaction.quantity !== 1)
-  ) {
+  if (transaction.quantity !== undefined && transaction.quantity !== 1) {
     return 'APP_STORE_QUANTITY_UNSUPPORTED';
   }
   if (transaction.purchaseDate > nowMs + clockSkewMs) {

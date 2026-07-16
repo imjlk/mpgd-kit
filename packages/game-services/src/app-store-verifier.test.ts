@@ -338,11 +338,15 @@ const missingQuantity = await createVerifier({
     includeQuantity: false,
   }),
 }).verifyPurchase(baseInput);
-assertDecision(
-  missingQuantity,
-  'rejected',
-  'APP_STORE_QUANTITY_UNSUPPORTED',
-  'a consumable without signed quantity must fail closed',
+assertEqual(
+  missingQuantity.status,
+  'verified',
+  "an omitted optional quantity should preserve StoreKit's default single purchase",
+);
+assertEqual(
+  missingQuantity.status === 'verified' ? missingQuantity.payload?.appStoreQuantity : 0,
+  1,
+  'an omitted optional quantity should record one effective catalog grant',
 );
 
 let subscriptionServerApiCalled = false;
