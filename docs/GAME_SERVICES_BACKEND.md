@@ -304,7 +304,8 @@ the response carries both.
 The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
 single quantity, remaining refundable quantity, optional order id, provider
 completion timestamp, and configured obfuscated account id before returning
-verified evidence. `refundableQuantity` must equal the purchased quantity;
+verified evidence. Rental purchase options fail closed because the catalog grant
+contract does not carry rental expiry semantics. `refundableQuantity` must equal the purchased quantity;
 missing, malformed, fully refunded, and partially refunded values do not grant.
 Google may omit `orderId`, so a missing provider order is accepted while a
 present order must match the request. The client-reported `purchasedAt` is not

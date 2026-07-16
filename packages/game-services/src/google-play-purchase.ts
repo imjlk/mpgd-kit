@@ -435,6 +435,9 @@ async function inspectGooglePlayPurchase(input: {
   if (!isRecord(offerDetails)) {
     return rejected('GOOGLE_PLAY_OFFER_DETAILS_INVALID');
   }
+  if (offerDetails.rentOfferDetails !== undefined) {
+    return rejected('GOOGLE_PLAY_RENTAL_UNSUPPORTED');
+  }
 
   const quantity = offerDetails.quantity;
   if (!Number.isSafeInteger(quantity) || quantity !== 1) {

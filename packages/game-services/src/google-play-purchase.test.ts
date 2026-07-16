@@ -592,6 +592,11 @@ await assertRejectedFixture(
   'GOOGLE_PLAY_QUANTITY_UNSUPPORTED',
 );
 await assertRejectedFixture(
+  'token-rental',
+  createGooglePlayProductPurchaseConformanceFixture({ rentOffer: true }),
+  'GOOGLE_PLAY_RENTAL_UNSUPPORTED',
+);
+await assertRejectedFixture(
   'token-product-mismatch',
   createGooglePlayProductPurchaseConformanceFixture({ productId: 'unexpected_product' }),
   'GOOGLE_PLAY_PRODUCT_MISMATCH',

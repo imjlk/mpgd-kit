@@ -30,6 +30,7 @@ export interface CreateGooglePlayProductPurchaseConformanceFixtureInput {
   >;
   readonly quantity?: number;
   readonly refundableQuantity?: number;
+  readonly rentOffer?: boolean;
   readonly obfuscatedExternalAccountId?: string;
   readonly obfuscatedExternalProfileId?: string;
 }
@@ -51,6 +52,7 @@ export function createGooglePlayProductPurchaseConformanceFixture(
           refundableQuantity: input.refundableQuantity ?? 1,
           consumptionState:
             input.consumptionState ?? 'CONSUMPTION_STATE_YET_TO_BE_CONSUMED',
+          ...(input.rentOffer === true ? { rentOfferDetails: {} } : {}),
         },
       },
     ],
