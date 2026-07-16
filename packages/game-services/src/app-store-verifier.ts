@@ -177,7 +177,6 @@ export function createAppStoreServerApiClient(
           if (
             input.signal.aborted
             || error instanceof AppStoreDependencyUnavailableError
-            || error instanceof AppStoreResponseTooLargeError
           ) {
             throw error;
           }
@@ -296,7 +295,7 @@ async function verifyAppStorePurchase(
     return { status: 'rejected', reason: signatureResult.reason };
   }
 
-  const transaction = assertAppStoreTransactionPayload(signatureResult.payload);
+  const transaction = signatureResult.payload;
   const expectedAccountToken = await resolveExpectedAppAccountToken(input, options);
   if (expectedAccountToken.status !== 'verified') {
     return expectedAccountToken;

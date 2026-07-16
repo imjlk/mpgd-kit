@@ -811,14 +811,16 @@ const oversizedClient = createAppStoreServerApiClient({
     };
   },
 });
-await assertRejects(
-  () => oversizedClient.getTransactionInfo({
-    transactionId: baseInput.request.platformTransactionId,
-    environment: 'Production',
-    signal: controller.signal,
-  }),
-  'response exceeded maxResponseBytes',
-  'the Server API client must stop reading oversized response streams',
+const oversizedResponse = await oversizedClient.getTransactionInfo({
+  transactionId: baseInput.request.platformTransactionId,
+  environment: 'Production',
+  signal: controller.signal,
+});
+assertDecision(
+  oversizedResponse,
+  'pending',
+  'APP_STORE_SERVER_API_INVALID_RESPONSE',
+  'the Server API client must contain oversized response failures without authorizing a grant',
 );
 assertEqual(
   oversizedStreamCancelled,
