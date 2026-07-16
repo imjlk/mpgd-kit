@@ -61,6 +61,8 @@ class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
   readonly failingConsumeTokens = new Set<string>();
   readonly failingAcknowledgeTokens = new Set<string>();
   readonly finalizedProductIds: string[] = [];
+  readonly orderIdsAfterFirstRead = new Map<string, string>();
+  readonly readCounts = new Map<string, number>();
 
   constructor(events: string[]) {
     this.events = events;
@@ -71,6 +73,12 @@ class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
     const response = this.responses.get(input.purchaseToken);
     if (response === undefined) {
       throw new Error('fixture purchase not found');
+    }
+    const readCount = this.readCounts.get(input.purchaseToken) ?? 0;
+    this.readCounts.set(input.purchaseToken, readCount + 1);
+    const lateOrderId = this.orderIdsAfterFirstRead.get(input.purchaseToken);
+    if (readCount > 0 && lateOrderId !== undefined) {
+      response.orderId = lateOrderId;
     }
     return cloneRecord(response);
   }
@@ -486,10 +494,16 @@ const missingOrder = createHarness({
   token: 'token-order-missing',
   response: missingOrderResponse,
 });
+missingOrder.client.orderIdsAfterFirstRead.set('token-order-missing', 'GPA.late-order');
 const missingOrderResult = await missingOrder.backend.purchases.verifyPurchase(
   createRequest({ token: 'token-order-missing' }),
 );
 assertEqual(missingOrderResult.verified, true, 'provider order ids are optional');
+assertEqual(
+  missingOrderResult.finalization?.status,
+  'completed',
+  'a token-authoritative finalization may observe an order id assigned later',
+);
 const storedMissingOrder = (await missingOrder.store.listEntitlementTransactions())[0];
 assertEqual(storedMissingOrder?.payload.googlePlayOrderId, undefined);
 assertEqual(

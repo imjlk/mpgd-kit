@@ -139,10 +139,11 @@ export function createGooglePlayProductPurchaseBoundary(
         purchaseToken,
         expectedProductId: verificationInput.platformProductId,
         expectedProductType: verificationInput.product.type,
-        expectedOrderId: verificationInput.request.platformTransactionId,
-        orderIdMatch: 'if-present',
-        expectedObfuscatedAccountId:
-          accountBinding.status === 'bound' ? accountBinding.accountId : undefined,
+        orderMatch: {
+          mode: 'if-present',
+          orderId: verificationInput.request.platformTransactionId,
+        },
+        accountBinding,
         allowConsumed: false,
         signal: verificationInput.signal,
       });
@@ -270,12 +271,11 @@ async function finalizeGooglePlayPurchase(
       purchaseToken,
       expectedProductId: finalizationInput.platformProductId,
       expectedProductType: productType,
-      expectedOrderId: verifiedContext === undefined
-        ? finalizationInput.request.platformTransactionId
-        : verifiedContext.orderId,
-      orderIdMatch: verifiedContext === undefined ? 'if-present' : 'exact',
-      expectedObfuscatedAccountId:
-        accountBinding.status === 'bound' ? accountBinding.accountId : undefined,
+      orderMatch: createGooglePlayFinalizationOrderMatch(
+        verifiedContext,
+        finalizationInput.request.platformTransactionId,
+      ),
+      accountBinding,
       allowConsumed: true,
       signal: finalizationInput.signal,
     });
@@ -369,9 +369,8 @@ async function inspectGooglePlayPurchase(input: {
   readonly purchaseToken: string;
   readonly expectedProductId: string;
   readonly expectedProductType: 'consumable' | 'non_consumable';
-  readonly expectedOrderId: string | undefined;
-  readonly orderIdMatch: 'if-present' | 'exact';
-  readonly expectedObfuscatedAccountId: string | undefined;
+  readonly orderMatch: GooglePlayOrderMatch;
+  readonly accountBinding: VerifiedGooglePlayAccountBinding;
   readonly allowConsumed: boolean;
   readonly signal: AbortSignal;
 }): Promise<GooglePlayPurchaseInspection> {
@@ -458,11 +457,11 @@ async function inspectGooglePlayPurchase(input: {
     return rejected('GOOGLE_PLAY_ORDER_INVALID');
   }
   if (
-    (input.orderIdMatch === 'exact' && orderId !== input.expectedOrderId)
+    (input.orderMatch.mode === 'exact' && orderId !== input.orderMatch.orderId)
     || (
-      input.orderIdMatch === 'if-present'
+      input.orderMatch.mode === 'if-present'
       && orderId !== undefined
-      && orderId !== input.expectedOrderId
+      && orderId !== input.orderMatch.orderId
     )
   ) {
     return rejected('GOOGLE_PLAY_ORDER_MISMATCH');
@@ -480,9 +479,12 @@ async function inspectGooglePlayPurchase(input: {
   ) {
     return rejected('GOOGLE_PLAY_ACCOUNT_INVALID');
   }
-  if (
-    obfuscatedExternalAccountId !== input.expectedObfuscatedAccountId
-  ) {
+  if (input.accountBinding.status === 'bound'
+    && obfuscatedExternalAccountId !== input.accountBinding.accountId) {
+    return rejected('GOOGLE_PLAY_ACCOUNT_MISMATCH');
+  }
+  // The unbound opt-in is safe only when the provider response is also unbound.
+  if (input.accountBinding.status === 'unbound' && obfuscatedExternalAccountId !== undefined) {
     return rejected('GOOGLE_PLAY_ACCOUNT_MISMATCH');
   }
 
@@ -519,6 +521,24 @@ type VerifiedGooglePlayAccountBinding = Exclude<
 interface GooglePlayVerifiedContext {
   readonly orderId?: string;
   readonly accountBinding: VerifiedGooglePlayAccountBinding;
+}
+
+type GooglePlayOrderMatch =
+  | { readonly mode: 'if-present'; readonly orderId: string }
+  | { readonly mode: 'exact'; readonly orderId: string }
+  | { readonly mode: 'token-only' };
+
+function createGooglePlayFinalizationOrderMatch(
+  verifiedContext: GooglePlayVerifiedContext | undefined,
+  clientOrderId: string,
+): GooglePlayOrderMatch {
+  if (verifiedContext === undefined) {
+    return { mode: 'if-present', orderId: clientOrderId };
+  }
+  if (verifiedContext.orderId === undefined) {
+    return { mode: 'token-only' };
+  }
+  return { mode: 'exact', orderId: verifiedContext.orderId };
 }
 
 function readGooglePlayVerifiedContext(
