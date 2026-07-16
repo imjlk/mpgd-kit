@@ -1,6 +1,8 @@
 import type { ProductCatalog, ProductGrant } from '@mpgd/catalog';
 import type { Entitlement, LogicalProductId } from '@mpgd/platform';
 
+export * from './agent8-services.js';
+
 const defaultStateNamespace = 'mpgdVerse8Commerce';
 
 export interface Verse8Agent8PurchaseEvent {
