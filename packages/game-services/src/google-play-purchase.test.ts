@@ -308,11 +308,39 @@ assertEqual((await recoverable.store.listEntitlementTransactions()).length, 1);
 
 recoverable.client.failingConsumeTokens.delete('token-recoverable');
 const recoveredFinalization = await recoverable.backend.purchases.verifyPurchase(
-  recoverableRequest,
+  createRequest({
+    token: 'token-recoverable',
+    orderId: 'GPA.retry-drift-must-not-replace-stored-order',
+  }),
 );
 assertEqual(recoveredFinalization.alreadyProcessed, true);
 assertEqual(recoveredFinalization.finalization?.status, 'completed');
 assertEqual((await recoverable.store.listEntitlementTransactions()).length, 1);
+
+let retryAccountId = 'account:original';
+const accountRotationRetry = createHarness({
+  token: 'token-account-rotation-retry',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: retryAccountId,
+  }),
+  resolveObfuscatedAccountId: () => retryAccountId,
+});
+accountRotationRetry.client.failingConsumeTokens.add('token-account-rotation-retry');
+const accountRotationRequest = createRequest({ token: 'token-account-rotation-retry' });
+const accountRotationPending = await accountRotationRetry.backend.purchases.verifyPurchase(
+  accountRotationRequest,
+);
+assertEqual(accountRotationPending.finalization?.status, 'pending');
+retryAccountId = 'account:rotated';
+accountRotationRetry.client.failingConsumeTokens.delete('token-account-rotation-retry');
+const accountRotationRecovered = await accountRotationRetry.backend.purchases.verifyPurchase(
+  accountRotationRequest,
+);
+assertEqual(
+  accountRotationRecovered.finalization?.status,
+  'completed',
+  'finalization retries must reuse the account binding stored with the grant',
+);
 
 const retryPlatformProductIds: { android?: string } = {
   android: 'coins_100_android',
@@ -464,6 +492,21 @@ const missingOrderResult = await missingOrder.backend.purchases.verifyPurchase(
 assertEqual(missingOrderResult.verified, true, 'provider order ids are optional');
 const storedMissingOrder = (await missingOrder.store.listEntitlementTransactions())[0];
 assertEqual(storedMissingOrder?.payload.googlePlayOrderId, undefined);
+assertEqual(
+  storedMissingOrder?.payload.platformTransactionId,
+  undefined,
+  'an unverified client order id must not become a replay identity',
+);
+missingOrder.client.responses.set('token-order-missing-second', cloneRecord(missingOrderResponse));
+const secondMissingOrderResult = await missingOrder.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-order-missing-second' }),
+);
+assertEqual(
+  secondMissingOrderResult.verified,
+  true,
+  'distinct provider tokens may share a client fallback transaction id',
+);
+assertEqual((await missingOrder.store.listEntitlementTransactions()).length, 2);
 
 const providerTime = '2030-02-03T04:05:06.000Z';
 const clientTime = '2029-01-02T03:04:05.000Z';
@@ -510,6 +553,19 @@ const accountMismatchResult = await accountMismatch.backend.purchases.verifyPurc
 );
 assertEqual(accountMismatchResult.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
 assertEqual((await accountMismatch.store.listEntitlementTransactions()).length, 0);
+
+const boundTokenInUnboundMode = createHarness({
+  token: 'token-bound-in-unbound-mode',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:another-player',
+  }),
+  allowUnboundAuthenticatedPlayer: true,
+});
+const boundTokenInUnboundModeResult = await boundTokenInUnboundMode.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-bound-in-unbound-mode' }),
+);
+assertEqual(boundTokenInUnboundModeResult.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
+assertEqual((await boundTokenInUnboundMode.store.listEntitlementTransactions()).length, 0);
 
 const missingAccountBinding = createHarness({
   token: 'token-account-binding-missing',
@@ -604,6 +660,24 @@ assertEqual(
 assert(
   mixedTargetEvents.every((event) => !event.startsWith('provider:')),
   'the one-time Google Play finalizer must not receive a subscription',
+);
+const mixedEvidencePurchase = await mixedTargetBackend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-non-google-evidence',
+    schema: 'development.purchase.v1',
+    idempotencyKey: 'purchase:non-google-evidence',
+    orderId: 'development-order-1',
+  }),
+);
+assertEqual(mixedEvidencePurchase.verified, true, 'another Android verifier may share the backend');
+assertEqual(
+  mixedEvidencePurchase.finalization,
+  undefined,
+  'the Google Play finalizer must not claim another evidence schema',
+);
+assert(
+  mixedTargetEvents.every((event) => !event.startsWith('provider:')),
+  'the Google Play finalizer must not receive another evidence schema',
 );
 
 const wrongSchema = createHarness({

@@ -97,7 +97,9 @@ export function createGooglePlayProductPurchaseBoundary(
   return {
     supportsPurchaseGrant(finalizationInput) {
       return finalizationInput.request.target === 'android'
-        && finalizationInput.product.type !== 'subscription';
+        && finalizationInput.product.type !== 'subscription'
+        && finalizationInput.request.evidence?.schema
+          === googlePlayProductPurchaseEvidenceSchema;
     },
 
     async verifyPurchase(verificationInput) {
@@ -138,9 +140,9 @@ export function createGooglePlayProductPurchaseBoundary(
         expectedProductId: verificationInput.platformProductId,
         expectedProductType: verificationInput.product.type,
         expectedOrderId: verificationInput.request.platformTransactionId,
-        ...(accountBinding.status === 'bound'
-          ? { expectedObfuscatedAccountId: accountBinding.accountId }
-          : {}),
+        orderIdMatch: 'if-present',
+        expectedObfuscatedAccountId:
+          accountBinding.status === 'bound' ? accountBinding.accountId : undefined,
         allowConsumed: false,
         signal: verificationInput.signal,
       });
@@ -155,6 +157,7 @@ export function createGooglePlayProductPurchaseBoundary(
           inspection.purchase.purchaseTokenDigest,
         ),
         verifiedAt: now(),
+        platformEvidenceId: inspection.purchase.orderId ?? null,
         payload: createVerificationPayload(packageName, inspection.purchase),
       };
     },
@@ -194,6 +197,12 @@ export function createGooglePlayProductPurchaseBoundary(
           reason: 'GOOGLE_PLAY_FINALIZATION_EVIDENCE_MISMATCH',
         };
       }
+      const verifiedContext = readGooglePlayVerifiedContext(
+        finalizationInput.evidencePayload,
+        packageName,
+        finalizationInput.platformProductId,
+        purchaseTokenDigest,
+      );
 
       const existing = inFlightFinalizations.get(finalizationInput.evidenceVerificationId);
       if (existing !== undefined) {
@@ -206,6 +215,7 @@ export function createGooglePlayProductPurchaseBoundary(
         purchaseToken,
         finalizationInput.product.type,
         action,
+        verifiedContext,
         finalizationInput,
       );
       inFlightFinalizations.set(finalizationInput.evidenceVerificationId, finalization);
@@ -227,6 +237,7 @@ async function finalizeGooglePlayPurchase(
   purchaseToken: string,
   productType: 'consumable' | 'non_consumable',
   action: 'consume' | 'acknowledge',
+  verifiedContext: GooglePlayVerifiedContext | undefined,
   finalizationInput: FinalizePurchaseGrantInput,
 ): Promise<PurchaseGrantFinalization> {
   if (finalizationInput.request.target !== 'android') {
@@ -239,11 +250,12 @@ async function finalizeGooglePlayPurchase(
   }
 
   try {
-    const accountBinding = await resolveGooglePlayAccountBinding(
-      input,
-      finalizationInput.request.playerId,
-      finalizationInput.signal,
-    );
+    const accountBinding = verifiedContext?.accountBinding
+      ?? await resolveGooglePlayAccountBinding(
+        input,
+        finalizationInput.request.playerId,
+        finalizationInput.signal,
+      );
     if (accountBinding.status === 'rejected') {
       return {
         status: 'pending',
@@ -258,10 +270,12 @@ async function finalizeGooglePlayPurchase(
       purchaseToken,
       expectedProductId: finalizationInput.platformProductId,
       expectedProductType: productType,
-      expectedOrderId: finalizationInput.request.platformTransactionId,
-      ...(accountBinding.status === 'bound'
-        ? { expectedObfuscatedAccountId: accountBinding.accountId }
-        : {}),
+      expectedOrderId: verifiedContext === undefined
+        ? finalizationInput.request.platformTransactionId
+        : verifiedContext.orderId,
+      orderIdMatch: verifiedContext === undefined ? 'if-present' : 'exact',
+      expectedObfuscatedAccountId:
+        accountBinding.status === 'bound' ? accountBinding.accountId : undefined,
       allowConsumed: true,
       signal: finalizationInput.signal,
     });
@@ -355,8 +369,9 @@ async function inspectGooglePlayPurchase(input: {
   readonly purchaseToken: string;
   readonly expectedProductId: string;
   readonly expectedProductType: 'consumable' | 'non_consumable';
-  readonly expectedOrderId: string;
-  readonly expectedObfuscatedAccountId?: string;
+  readonly expectedOrderId: string | undefined;
+  readonly orderIdMatch: 'if-present' | 'exact';
+  readonly expectedObfuscatedAccountId: string | undefined;
   readonly allowConsumed: boolean;
   readonly signal: AbortSignal;
 }): Promise<GooglePlayPurchaseInspection> {
@@ -442,7 +457,14 @@ async function inspectGooglePlayPurchase(input: {
   if (raw.orderId !== undefined && orderId === undefined) {
     return rejected('GOOGLE_PLAY_ORDER_INVALID');
   }
-  if (orderId !== undefined && orderId !== input.expectedOrderId) {
+  if (
+    (input.orderIdMatch === 'exact' && orderId !== input.expectedOrderId)
+    || (
+      input.orderIdMatch === 'if-present'
+      && orderId !== undefined
+      && orderId !== input.expectedOrderId
+    )
+  ) {
     return rejected('GOOGLE_PLAY_ORDER_MISMATCH');
   }
 
@@ -453,8 +475,13 @@ async function inspectGooglePlayPurchase(input: {
 
   const obfuscatedExternalAccountId = readOptionalIdentifier(raw.obfuscatedExternalAccountId, 256);
   if (
-    input.expectedObfuscatedAccountId !== undefined
-    && obfuscatedExternalAccountId !== input.expectedObfuscatedAccountId
+    raw.obfuscatedExternalAccountId !== undefined
+    && obfuscatedExternalAccountId === undefined
+  ) {
+    return rejected('GOOGLE_PLAY_ACCOUNT_INVALID');
+  }
+  if (
+    obfuscatedExternalAccountId !== input.expectedObfuscatedAccountId
   ) {
     return rejected('GOOGLE_PLAY_ACCOUNT_MISMATCH');
   }
@@ -483,6 +510,50 @@ type GooglePlayAccountBinding =
   | { readonly status: 'bound'; readonly accountId: string }
   | { readonly status: 'unbound' }
   | { readonly status: 'rejected'; readonly reason: string };
+
+type VerifiedGooglePlayAccountBinding = Exclude<
+  GooglePlayAccountBinding,
+  { readonly status: 'rejected' }
+>;
+
+interface GooglePlayVerifiedContext {
+  readonly orderId?: string;
+  readonly accountBinding: VerifiedGooglePlayAccountBinding;
+}
+
+function readGooglePlayVerifiedContext(
+  payload: EntitlementLedgerPayload | undefined,
+  packageName: string,
+  productId: string,
+  purchaseTokenDigest: string,
+): GooglePlayVerifiedContext | undefined {
+  if (
+    payload?.googlePlayPackageName !== packageName
+    || payload.googlePlayProductId !== productId
+    || payload.googlePlayPurchaseTokenDigest !== purchaseTokenDigest
+  ) {
+    return undefined;
+  }
+
+  const orderId = readOptionalIdentifier(payload.googlePlayOrderId, 512);
+  if (payload.googlePlayOrderId !== undefined && orderId === undefined) {
+    return undefined;
+  }
+  const accountId = readOptionalIdentifier(payload.googlePlayObfuscatedExternalAccountId, 256);
+  if (
+    payload.googlePlayObfuscatedExternalAccountId !== undefined
+    && accountId === undefined
+  ) {
+    return undefined;
+  }
+
+  return {
+    ...(orderId === undefined ? {} : { orderId }),
+    accountBinding: accountId === undefined
+      ? { status: 'unbound' }
+      : { status: 'bound', accountId },
+  };
+}
 
 async function resolveGooglePlayAccountBinding(
   input: CreateGooglePlayProductPurchaseBoundaryInput,

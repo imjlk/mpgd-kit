@@ -295,7 +295,9 @@ Google may omit `orderId`, so a missing provider order is accepted while a
 present order must match the request. The client-reported `purchasedAt` is not
 compared with provider time; the authoritative time is persisted as
 `googlePlayPurchaseCompletionTime`. The ledger stores only a SHA-256 token
-identity, never the raw purchase token.
+identity in its evidence fields, never the raw purchase token. Callers must
+also keep the raw token out of `idempotencyKey` and `platformTransactionId`,
+because those client-supplied request fields are persisted as ledger metadata.
 
 Compose both halves of the boundary with the authoritative backend:
 
@@ -324,7 +326,11 @@ Consumables use `purchases.products:consume`; non-consumables use
 returns `finalization.status = "pending"`; retrying the same request reuses that
 grant and retries only the incomplete platform action. A completed provider
 state is treated as an idempotent success. Subscription products fail closed
-and require a separate subscriptions verifier.
+and require a separate subscriptions verifier. Because the durable grant is
+already committed, `verified` remains true when finalization is pending. A
+production backend must inspect that status and enqueue the same idempotency
+key and evidence for server-side retry; it must not depend on the game client
+starting another billing flow.
 
 Protocol references:
 

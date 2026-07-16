@@ -631,7 +631,12 @@ async function verifyPurchaseWithStore(
       productId: request.productId,
       productType: product.type,
       platformProductId,
-      platformTransactionId: request.platformTransactionId,
+      ...(verification.platformEvidenceId === null
+        ? {}
+        : {
+            platformTransactionId:
+              verification.platformEvidenceId ?? request.platformTransactionId,
+          }),
       purchasedAt: request.purchasedAt,
       evidenceVerificationId: verification.verificationId,
       evidenceVerifiedAt: verification.verifiedAt,
@@ -662,6 +667,9 @@ async function verifyPurchaseWithStore(
     product,
     platformProductId,
     evidenceVerificationId: verification.verificationId,
+    ...(verification.payload === undefined
+      ? {}
+      : { evidencePayload: verification.payload }),
     ledgerEntryId: grant.result.ledgerEntryId,
     alreadyProcessed: grant.result.alreadyProcessed,
     timeoutMs: context.evidenceVerificationTimeoutMs,
@@ -695,6 +703,7 @@ async function finalizeExistingPurchaseGrant(
     ?? currentProduct?.platformProductIds[request.target];
   const evidenceVerificationId = transaction.evidenceVerificationId
     ?? transaction.payload.evidenceVerificationId;
+  const finalizationRequest = createStoredPurchaseRequest(request, transaction);
 
   if (
     product === undefined
@@ -710,10 +719,11 @@ async function finalizeExistingPurchaseGrant(
   }
 
   return finalizePurchaseGrant(context.purchaseGrantFinalizer, {
-    request,
+    request: finalizationRequest,
     product,
     platformProductId,
     evidenceVerificationId,
+    evidencePayload: transaction.payload,
     ledgerEntryId: transaction.ledgerEntryId,
     alreadyProcessed: true,
     timeoutMs: context.evidenceVerificationTimeoutMs,
@@ -804,6 +814,24 @@ function createStoredPurchaseProduct(
     type: productType,
     grant: transaction.grant,
     platformProductIds: { [request.target]: platformProductId },
+  };
+}
+
+function createStoredPurchaseRequest(
+  request: VerifyPurchaseRequest,
+  transaction: ProductGrantTransaction,
+): VerifyPurchaseRequest {
+  const platformTransactionId = transaction.payload.platformTransactionId;
+  const purchasedAt = transaction.payload.purchasedAt;
+
+  return {
+    ...request,
+    ...(typeof platformTransactionId === 'string' && platformTransactionId.length > 0
+      ? { platformTransactionId }
+      : {}),
+    ...(typeof purchasedAt === 'string' && purchasedAt.length > 0
+      ? { purchasedAt }
+      : {}),
   };
 }
 
@@ -999,6 +1027,12 @@ function assertEvidenceVerificationDecision(
           throw new Error(`Evidence verification payload.${key} must be primitive.`);
         }
       }
+    }
+    if (
+      decision.platformEvidenceId !== undefined
+      && decision.platformEvidenceId !== null
+    ) {
+      assertNonEmptyDecisionString(decision.platformEvidenceId, 'platformEvidenceId');
     }
     return decision;
   }

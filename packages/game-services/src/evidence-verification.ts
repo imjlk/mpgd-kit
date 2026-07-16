@@ -13,6 +13,11 @@ export type EvidenceVerificationDecision =
       readonly verificationId: string;
       readonly verifiedAt: string;
       readonly payload?: EntitlementLedgerPayload;
+      /**
+       * An authoritative provider identity for cross-idempotency replay checks.
+       * `null` explicitly suppresses the client-reported platform identity.
+       */
+      readonly platformEvidenceId?: string | null;
     }
   | {
       readonly status: 'pending';
@@ -44,6 +49,7 @@ export interface FinalizePurchaseGrantInput {
   readonly product: ProductCatalog['products'][number];
   readonly platformProductId: string;
   readonly evidenceVerificationId: string;
+  readonly evidencePayload?: EntitlementLedgerPayload;
   readonly ledgerEntryId: string;
   readonly alreadyProcessed: boolean;
   readonly signal: AbortSignal;
