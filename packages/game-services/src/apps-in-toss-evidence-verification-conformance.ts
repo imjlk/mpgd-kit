@@ -314,23 +314,14 @@ async function runPurchaseProductGrantCallbackScenario(
   assertEqual(transportFailures.length, 1, 'product-grant failures must be observable');
   const deadlineStore = new AbortAwareConformanceStore();
   const deadlineSignals: AbortSignal[] = [];
-  let releaseDeadlineAuthority: (() => void) | undefined;
-  const deadlineAuthorityGate = new Promise<void>((resolve) => {
-    releaseDeadlineAuthority = resolve;
-  });
-  let markDeadlineAuthorityStarted: (() => void) | undefined;
-  const deadlineAuthorityStarted = new Promise<void>((resolve) => {
-    markDeadlineAuthorityStarted = resolve;
-  });
-  let markLateVerificationSettled: (() => void) | undefined;
-  const lateVerificationSettled = new Promise<void>((resolve) => {
-    markLateVerificationSettled = resolve;
-  });
+  const deadlineAuthorityGate = createVoidDeferred();
+  const deadlineAuthorityStarted = createVoidDeferred();
+  const lateVerificationSettled = createVoidDeferred();
   const deadlineContext = createScenarioContext(createVerifier, now, {
     purchaseAuthority: {
       async getOrderStatus() {
-        markDeadlineAuthorityStarted?.();
-        await deadlineAuthorityGate;
+        deadlineAuthorityStarted.resolve();
+        await deadlineAuthorityGate.promise;
         return resolvedOrder({ orderId: 'ait-order-deadline' });
       },
     },
@@ -345,7 +336,7 @@ async function runPurchaseProductGrantCallbackScenario(
             () => deadlineContext.backend.purchases.verifyPurchase(request),
           );
         } finally {
-          markLateVerificationSettled?.();
+          lateVerificationSettled.resolve();
         }
       },
     ),
@@ -356,11 +347,11 @@ async function runPurchaseProductGrantCallbackScenario(
     now: () => now,
   });
   const deadlineResult = deadlineCallback({ orderId: 'ait-order-deadline' });
-  await deadlineAuthorityStarted;
+  await deadlineAuthorityStarted.promise;
   assertEqual(await deadlineResult, false, 'product-grant deadline must return false to the SDK');
   assertEqual(deadlineSignals[0]?.aborted, true, 'product-grant deadline must abort transport');
-  releaseDeadlineAuthority?.();
-  await lateVerificationSettled;
+  deadlineAuthorityGate.resolve();
+  await lateVerificationSettled.promise;
   await assertEntitlementCount(deadlineStore, 0, 'aborted late product grant');
   await assertEntitlementCount(failClosedContext.store, 0, 'fail-closed product-grant callback');
 
@@ -937,6 +928,18 @@ async function assertEntitlementCount(
     expected,
     `${label} ledger count`,
   );
+}
+
+function createVoidDeferred(): {
+  readonly promise: Promise<void>;
+  readonly resolve: () => void;
+} {
+  let resolve!: () => void;
+  const promise = new Promise<void>((promiseResolve) => {
+    resolve = promiseResolve;
+  });
+
+  return { promise, resolve };
 }
 
 function assertEqual<T extends string | number | boolean | null | undefined>(
