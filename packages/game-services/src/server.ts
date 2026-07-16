@@ -16,7 +16,9 @@ import { gameServicesContract, type GameServicesHealthResponse } from './contrac
 import {
   createRejectingGameServicesEvidenceVerifier,
   type EvidenceVerificationDecision,
+  type FinalizePurchaseGrantInput,
   type GameServicesEvidenceVerifier,
+  type GameServicesPurchaseGrantFinalizer,
 } from './evidence-verification';
 import {
   assertClaimAdRewardRequest,
@@ -25,6 +27,7 @@ import {
   assertEntitlementLedgerResult,
   assertLeaderboardScoreTransaction,
   assertProductGrantTransaction,
+  assertPurchaseGrantFinalization,
   assertRecordLeaderboardScoreRequest,
   assertRecordLeaderboardScoreResponse,
   assertVerifyPurchaseRequest,
@@ -36,6 +39,7 @@ import {
   type EntitlementLedgerResult,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
+  type PurchaseGrantFinalization,
   type RecordLeaderboardScoreRequest,
   type RecordLeaderboardScoreResponse,
   type VerifyPurchaseRequest,
@@ -54,6 +58,7 @@ export interface CreateGameServicesBackendInput {
   readonly version?: string;
   readonly evidenceVerifier?: GameServicesEvidenceVerifier;
   readonly evidenceVerificationTimeoutMs?: number;
+  readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
 }
 
 export interface GameServicesBackendApiHandler {
@@ -320,6 +325,9 @@ export function createGameServicesBackend(
           now,
           evidenceVerifier,
           evidenceVerificationTimeoutMs,
+          ...(input.purchaseGrantFinalizer === undefined
+            ? {}
+            : { purchaseGrantFinalizer: input.purchaseGrantFinalizer }),
         });
 
         await analytics.track({
@@ -537,6 +545,7 @@ async function verifyPurchaseWithStore(
     readonly now: () => string;
     readonly evidenceVerifier: GameServicesEvidenceVerifier;
     readonly evidenceVerificationTimeoutMs: number;
+    readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
   },
 ): Promise<VerifyPurchaseResponse> {
   const request = assertVerifyPurchaseRequest(input);
@@ -558,10 +567,13 @@ async function verifyPurchaseWithStore(
       });
     }
 
+    const finalization = await finalizeExistingPurchaseGrant(request, existing, context);
+
     return assertVerifyPurchaseResponse({
       verified: true,
       ledgerEntryId: existing.ledgerEntryId,
       alreadyProcessed: true,
+      ...(finalization === undefined ? {} : { finalization }),
     });
   }
 
@@ -644,11 +656,113 @@ async function verifyPurchaseWithStore(
     });
   }
 
+  const finalization = await finalizePurchaseGrant(context.purchaseGrantFinalizer, {
+    request,
+    product,
+    platformProductId,
+    evidenceVerificationId: verification.verificationId,
+    ledgerEntryId: grant.result.ledgerEntryId,
+    alreadyProcessed: grant.result.alreadyProcessed,
+    timeoutMs: context.evidenceVerificationTimeoutMs,
+  });
+
   return assertVerifyPurchaseResponse({
     verified: true,
     ledgerEntryId: grant.result.ledgerEntryId,
     alreadyProcessed: grant.result.alreadyProcessed,
+    ...(finalization === undefined ? {} : { finalization }),
   });
+}
+
+async function finalizeExistingPurchaseGrant(
+  request: VerifyPurchaseRequest,
+  transaction: ProductGrantTransaction,
+  context: {
+    readonly catalog: ProductCatalog;
+    readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
+    readonly evidenceVerificationTimeoutMs: number;
+  },
+): Promise<PurchaseGrantFinalization | undefined> {
+  if (context.purchaseGrantFinalizer === undefined) {
+    return undefined;
+  }
+
+  const product = context.catalog.products.find((entry) => entry.id === request.productId);
+  const platformProductId = product?.platformProductIds[request.target];
+  const evidenceVerificationId = transaction.evidenceVerificationId
+    ?? transaction.payload.evidenceVerificationId;
+
+  if (
+    product === undefined
+    || platformProductId === undefined
+    || typeof evidenceVerificationId !== 'string'
+    || evidenceVerificationId.length === 0
+  ) {
+    return assertPurchaseGrantFinalization({
+      status: 'pending',
+      alreadyCompleted: false,
+      reason: 'PURCHASE_FINALIZER_CONTEXT_UNAVAILABLE',
+    });
+  }
+
+  return finalizePurchaseGrant(context.purchaseGrantFinalizer, {
+    request,
+    product,
+    platformProductId,
+    evidenceVerificationId,
+    ledgerEntryId: transaction.ledgerEntryId,
+    alreadyProcessed: true,
+    timeoutMs: context.evidenceVerificationTimeoutMs,
+  });
+}
+
+async function finalizePurchaseGrant(
+  finalizer: GameServicesPurchaseGrantFinalizer | undefined,
+  input: Omit<FinalizePurchaseGrantInput, 'signal'>,
+): Promise<PurchaseGrantFinalization | undefined> {
+  if (finalizer === undefined) {
+    return undefined;
+  }
+
+  const controller = new AbortController();
+  const timeoutDecision = assertPurchaseGrantFinalization({
+    status: 'pending',
+    alreadyCompleted: false,
+    reason: 'PURCHASE_FINALIZER_TIMEOUT',
+  });
+  let timedOut = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      finalizer.finalizePurchaseGrant({ ...input, signal: controller.signal })
+        .then(assertPurchaseGrantFinalization)
+        .catch((error: unknown) => {
+          if (timedOut) {
+            return timeoutDecision;
+          }
+
+          throw error;
+        }),
+      new Promise<PurchaseGrantFinalization>((resolve) => {
+        timeout = setTimeout(() => {
+          timedOut = true;
+          resolve(timeoutDecision);
+          controller.abort();
+        }, input.timeoutMs);
+      }),
+    ]);
+  } catch {
+    return assertPurchaseGrantFinalization({
+      status: 'pending',
+      alreadyCompleted: false,
+      reason: 'PURCHASE_FINALIZER_ERROR',
+    });
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 async function claimAdRewardWithStore(

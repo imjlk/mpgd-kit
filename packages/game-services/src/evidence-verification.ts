@@ -3,6 +3,7 @@ import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import type {
   ClaimAdRewardRequest,
   EntitlementLedgerPayload,
+  PurchaseGrantFinalization,
   VerifyPurchaseRequest,
 } from './types';
 
@@ -36,6 +37,23 @@ export interface VerifyAdRewardEvidenceInput {
   readonly platformPlacementId?: string;
   readonly signal: AbortSignal;
   readonly timeoutMs: number;
+}
+
+export interface FinalizePurchaseGrantInput {
+  readonly request: VerifyPurchaseRequest;
+  readonly product: ProductCatalog['products'][number];
+  readonly platformProductId: string;
+  readonly evidenceVerificationId: string;
+  readonly ledgerEntryId: string;
+  readonly alreadyProcessed: boolean;
+  readonly signal: AbortSignal;
+  readonly timeoutMs: number;
+}
+
+export interface GameServicesPurchaseGrantFinalizer {
+  finalizePurchaseGrant(
+    input: FinalizePurchaseGrantInput,
+  ): Promise<PurchaseGrantFinalization>;
 }
 
 export interface GameServicesEvidenceVerifier {

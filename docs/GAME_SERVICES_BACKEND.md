@@ -268,6 +268,59 @@ for read-only pages; the server, not the client, chooses `participantEntry` scop
 
 ## Target Notes
 
+### Google Play one-time products
+
+`@mpgd/game-services/google-play-purchase` provides a backend-only boundary for
+Google Play one-time products. The game-owned backend supplies a
+`GooglePlayProductPurchaseClient` implementation using its own OAuth/service
+account environment; credentials, access tokens, and API endpoints do not
+belong in the game client, generated artifacts, or this repository.
+
+The Android callback sends a `google-play.product-purchase.v2` evidence envelope
+whose payload contains only the purchase token. Configure the package name on
+the trusted server and, when available, provide `resolveObfuscatedAccountId` to
+bind the Google response to the authenticated mpgd player. The boundary checks
+the ProductPurchaseV2 purchase state, line-item product id, single quantity,
+refundable quantity, order id, completion timestamp, and optional obfuscated
+account id before returning verified evidence. It stores only a SHA-256 token
+identity in the entitlement ledger, never the raw purchase token.
+
+Compose both halves of the boundary with the authoritative backend:
+
+```ts
+const googlePlay = createGooglePlayProductPurchaseBoundary({
+  client: gameOwnedGooglePlayClient,
+  packageName: gameOwnedPackageName,
+  resolveObfuscatedAccountId: resolvePlayerAccountHash,
+});
+
+const backend = createGameServicesBackend({
+  catalog,
+  placements,
+  store,
+  evidenceVerifier: {
+    verifyPurchase: (input) => googlePlay.verifyPurchase(input),
+    verifyAdReward: (input) => adEvidenceVerifier.verifyAdReward(input),
+  },
+  purchaseGrantFinalizer: googlePlay,
+});
+```
+
+The backend records the idempotent ledger grant before calling the finalizer.
+Consumables use `purchases.products:consume`; non-consumables use
+`purchases.products:acknowledge`. A provider error leaves the grant durable and
+returns `finalization.status = "pending"`; retrying the same request reuses that
+grant and retries only the incomplete platform action. A completed provider
+state is treated as an idempotent success. Subscription products fail closed
+and require a separate subscriptions verifier.
+
+Protocol references:
+
+- [ProductPurchaseV2 resource](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.productsv2)
+- [One-time purchase processing](https://developer.android.com/google/play/billing/integrate#process)
+- [Acknowledge endpoint](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.products/acknowledge)
+- [Consume endpoint](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.products/consume)
+
 - Android purchase flow should follow Google Play Billing's server verification,
   grant, then acknowledge or consume sequence.
 - iOS purchase flow should send StoreKit/App Store signed transaction evidence to
@@ -288,7 +341,9 @@ This repository provides the reusable contract, client orchestration, backend
 ledger boundary, memory/D1 store implementations, and a deployable Worker
 starter. Game-specific production integrations still need these pieces:
 
-- Google Play purchase token verification, acknowledgement, and consume flows.
+- A game-owned authenticated Google Play API client and production package,
+  product, and obfuscated account identifiers for the shared one-time product
+  verifier boundary.
 - App Store Server API or signed StoreKit transaction verification.
 - Deployment-owned AdMob callback persistence and public-key refresh wiring.
 - Apps in Toss production IAP/ad verification and partner backend callbacks.
@@ -305,6 +360,7 @@ but should not be treated as production entitlement verification.
 ```sh
 pnpm smoke:game-services
 pnpm smoke:game-services:worker
+pnpm smoke:google-play-purchase
 ```
 
 The first smoke runs Android, iOS, and Apps in Toss target simulations through

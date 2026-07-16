@@ -251,7 +251,9 @@ new starter `@mpgd/*` pins without a separate hard-coded template version edit.
 
 ## Known Production Gaps
 
-- Google Play purchase token verification plus acknowledge/consume.
+- A production-authenticated Google Play API client and real package/product
+  configuration for the shared one-time-product verification plus
+  acknowledge/consume boundary; subscriptions remain separate.
 - StoreKit/App Store signed transaction or Server API verification.
 - Deployment-owned AdMob SSV callback persistence and public-key refresh wiring.
 - Apps in Toss production IAP/ad callback verification.

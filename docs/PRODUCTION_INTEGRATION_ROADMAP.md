@@ -26,6 +26,12 @@ query parameters.
 
 ## Google Play Billing
 
+The shared one-time-product verification and post-ledger finalization boundary
+is implemented in `@mpgd/game-services/google-play-purchase`. Consumers still
+own the authenticated Google Play API client, package/product configuration,
+and production account-binding policy. Subscriptions remain a separate
+follow-up because their lifecycle and acknowledgement rules differ.
+
 Expected flow:
 
 1. Android adapter returns purchase token, product id, transaction/order id, and
@@ -38,13 +44,13 @@ Expected flow:
    consumables after the grant is durable.
 6. Client updates save state only after the backend response confirms the grant.
 
-Contract additions to consider:
+Implemented contract evidence and result metadata:
 
-- `packageName`
-- `purchaseToken`
-- `orderId`
-- `isConsumable`
-- acknowledgement/consume result metadata
+- server-owned package name
+- `google-play.product-purchase.v2` purchase-token evidence
+- ProductPurchaseV2 order, product, state, quantity, refund, and account checks
+- catalog-owned consumable/non-consumable selection
+- acknowledgement/consume finalization status and retry metadata
 
 ## StoreKit and App Store
 
