@@ -4,6 +4,7 @@ import {
   createAdMobSsvEvidenceVerifier,
   importAdMobSsvPublicKey,
   type AdMobSsvCallbackSource,
+  type AdMobSsvPublicKey,
   type AdMobSsvPublicKeySource,
 } from './admob-ssv.js';
 import type {
@@ -16,9 +17,10 @@ export const adMobSsvConformanceChecks = [
   'verified callback reaches the ledger',
   'missing callback remains pending',
   'tampered signature fails closed',
-  'raw signed query bytes reject equivalent percent-encoding',
+  'AdMob-decoded signed query bytes accept equivalent percent-encoding',
   'missing and duplicate signed fields fail closed',
   'unknown key fails closed',
+  'secp256k1 key feed entries verify',
   'signed identity mismatch fails closed',
   'timestamp age and future-skew boundaries fail closed',
   'transaction replay preserves one authority identity',
@@ -42,9 +44,14 @@ export interface AdMobSsvConformanceFixture {
 
 const fixtureTimestampMs = 1_784_160_000_000;
 const fixtureKeyId = '1234567890';
-const fixturePublicKey = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvYEdl5vbYIy+udYlF2Qfw+LLwZs09vcw9WQ3iKFHLiPRCyic1goA3pDBiydEIcVsrnqHFdCmKQBcPMlTVnqkqA==';
-const firstFixtureSignature = 'MEUCIGhBVO1Bw89dklPTxgevCJM0YJi43YuSfCGaCNMVWf4-AiEAzPVTSggVLJSSSl0R3QdSf6GqoEB9snN94cIg-bTorM8';
-const secondFixtureSignature = 'MEYCIQDXBqcZQkMOPagwxaDgkwii1S4TUcfC5Tak9CJj8RTfEQIhAKYZm_vbWG1EOto6yq8jAkx8mxLpGzipJIzkxfpHghDT';
+const fixturePublicKey = 'MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEvYnh4p45wAsdENipvmqwXzvdNaCgRqx2IvxoYI8kiummEYytzHIhL738YLr3vs5vG/A8xY8QiCLDqVV2c5sUZw==';
+const firstFixtureSignature = 'MEYCIQDR1_VmQ4xw4WHff8KGDgv4insP7p5VAw8MhP5mZTFTgAIhAJ2Ejy5MU75UxeAxFqdLzvJwzL43qXl3PwuHMGYbjaiR';
+const secondFixtureSignature = 'MEYCIQCq2WuuqIuZmykTaoF0fCZYgLmaYS8fdqNosnuK7UTDyQIhAJRNgIDOqFFvMGboT37xjjynNi8sYlI5_l4y-qUmQeR4';
+const secp256k1FixtureKeyId = '3901585526';
+const secp256k1FixturePublicKey = 'MFYwEAYHKoZIzj0CAQYFK4EEAAoDQgAEYWHOBDbohSMvoXvGOhnElOsG6JzFP3K3dbpoJqOF7xzRwM0FGLLSwIvECbFxctV5pcq7JVAut5Imaa75p+lcKw==';
+const secp256k1FixtureSignature = 'MEYCIQDXWRwz4J2pZbcRcQJyNFI3cwQDeC5aulegoedKeJ9EcwIhAJnkRWFOzL4KD2hyWRdmSp3lYGPcrN_yPYyM2nfDt4Of';
+const fixtureTransactionId = '18fa792de1bca816048293fc71035638';
+const secp256k1FixtureTransactionId = '28fa792de1bca816048293fc71035639';
 
 const placement = {
   id: 'CONTINUE_AFTER_FAIL',
@@ -58,8 +65,8 @@ const placement = {
     maxPerSession: 3,
   },
   platformPlacementIds: {
-    android: 'reward_continue',
-    ios: 'reward_continue',
+    android: 'ca-app-pub-test/reward_continue',
+    ios: 'ca-app-pub-test/reward_continue',
   },
 } as const satisfies AdPlacementEntry;
 
@@ -81,7 +88,7 @@ export async function createAdMobSsvConformanceFixture(
   return {
     verifier: createAdMobSsvEvidenceVerifier({
       callbackSource: mapCallbackSource(callbacks),
-      publicKeySource: fixedPublicKeySource(publicKey),
+      publicKeySource: fixedPublicKeySource(new Map([[fixtureKeyId, publicKey]])),
       subtle,
       now: () => fixtureTimestampMs + 1_000,
     }),
@@ -95,12 +102,26 @@ export async function runAdMobSsvConformance(
   input: RunAdMobSsvConformanceInput = {},
 ): Promise<AdMobSsvConformanceReport> {
   const subtle = input.subtle ?? readGlobalSubtleCrypto();
-  const publicKey = await importAdMobSsvPublicKey(fixturePublicKey, subtle);
+  const [publicKey, secp256k1PublicKey] = await Promise.all([
+    importAdMobSsvPublicKey(fixturePublicKey, subtle),
+    importAdMobSsvPublicKey(secp256k1FixturePublicKey, subtle),
+  ]);
   const callbacks = new Map([
     ['reward-1', fixtureCallback('reward-1', firstFixtureSignature)],
     ['reward-2', fixtureCallback('reward-2', secondFixtureSignature)],
+    [
+      'reward-secp',
+      fixtureCallback('reward-secp', secp256k1FixtureSignature, {
+        keyId: secp256k1FixtureKeyId,
+        transactionId: secp256k1FixtureTransactionId,
+      }),
+    ],
   ]);
-  const publicKeySource = fixedPublicKeySource(publicKey);
+  const publicKeys = new Map([
+    [fixtureKeyId, publicKey],
+    [secp256k1FixtureKeyId, secp256k1PublicKey],
+  ]);
+  const publicKeySource = fixedPublicKeySource(publicKeys);
   const callbackSource = mapCallbackSource(callbacks);
   const verifier = createAdMobSsvEvidenceVerifier({
     callbackSource,
@@ -126,10 +147,7 @@ export async function runAdMobSsvConformance(
   }).verifyAdReward(verificationInput(firstRequest));
   assertDecision(pending, 'pending', 'ADMOB_SSV_EVIDENCE_PENDING');
 
-  const tamperedCallback = fixtureCallback(
-    'reward-1',
-    firstFixtureSignature.replace('bTorM8', 'bTorN8'),
-  );
+  const tamperedCallback = fixtureCallback('reward-1', `${firstFixtureSignature.slice(0, -1)}S`);
   const tampered = await createAdMobSsvEvidenceVerifier({
     callbackSource: fixedCallbackSource(tamperedCallback),
     publicKeySource,
@@ -146,7 +164,10 @@ export async function runAdMobSsvConformance(
     subtle,
     now: () => fixtureTimestampMs + 1_000,
   }).verifyAdReward(verificationInput(firstRequest));
-  assertDecision(equivalentPercentEncoding, 'rejected', 'ADMOB_SSV_SIGNATURE_INVALID');
+  assert(
+    equivalentPercentEncoding.status === 'verified',
+    'equivalent percent-encoding must verify against AdMob-decoded query bytes',
+  );
 
   const validCallback = fixtureCallback('reward-1', firstFixtureSignature);
   const duplicateSignedField = await createAdMobSsvEvidenceVerifier({
@@ -184,6 +205,16 @@ export async function runAdMobSsvConformance(
     now: () => fixtureTimestampMs + 1_000,
   }).verifyAdReward(verificationInput(firstRequest));
   assertDecision(unknownKey, 'rejected', 'ADMOB_SSV_KEY_UNAVAILABLE');
+
+  const secp256k1Decision = await verifier.verifyAdReward(
+    verificationInput(rewardRequest('reward-secp')),
+  );
+  assert(
+    secp256k1Decision.status === 'verified'
+      && secp256k1Decision.verificationId
+        === `admob:ssv:${secp256k1FixtureTransactionId}`,
+    'a signed secp256k1 callback must verify when the key feed rotates curves',
+  );
 
   const identityMismatch = await verifier.verifyAdReward(
     verificationInput({
@@ -248,7 +279,7 @@ function verificationInput(request: ClaimAdRewardRequest): VerifyAdRewardEvidenc
   return {
     request,
     placement,
-    platformPlacementId: 'reward_continue',
+    platformPlacementId: placement.platformPlacementIds.android,
     signal: new AbortController().signal,
     timeoutMs: 10_000,
   };
@@ -264,7 +295,14 @@ function rewardRequest(idempotencyKey: string): ClaimAdRewardRequest {
   };
 }
 
-function fixtureCallback(idempotencyKey: string, signature: string): string {
+function fixtureCallback(
+  idempotencyKey: string,
+  signature: string,
+  input: {
+    readonly keyId?: string;
+    readonly transactionId?: string;
+  } = {},
+): string {
   const customData = encodeURIComponent(
     JSON.stringify({
       schema: 'mpgd.admob.ssv.binding.v1',
@@ -280,11 +318,11 @@ function fixtureCallback(idempotencyKey: string, signature: string): string {
     'reward_amount=1',
     'reward_item=continue',
     `timestamp=${String(fixtureTimestampMs)}`,
-    'transaction_id=18fa792de1bca816048293fc71035638',
+    `transaction_id=${input.transactionId ?? fixtureTransactionId}`,
     'user_id=player-1',
   ].join('&');
 
-  return `https://game.example.test/admob/ssv?${query}&signature=${signature}&key_id=${fixtureKeyId}`;
+  return `https://game.example.test/admob/ssv?${query}&signature=${signature}&key_id=${input.keyId ?? fixtureKeyId}`;
 }
 
 function mapCallbackSource(callbacks: ReadonlyMap<string, string>): AdMobSsvCallbackSource {
@@ -303,10 +341,12 @@ function fixedCallbackSource(callback: string): AdMobSsvCallbackSource {
   };
 }
 
-function fixedPublicKeySource(publicKey: CryptoKey): AdMobSsvPublicKeySource {
+function fixedPublicKeySource(
+  publicKeys: ReadonlyMap<string, AdMobSsvPublicKey>,
+): AdMobSsvPublicKeySource {
   return {
     async getPublicKey({ keyId }) {
-      return keyId === fixtureKeyId ? publicKey : undefined;
+      return publicKeys.get(keyId);
     },
   };
 }

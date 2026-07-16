@@ -104,6 +104,7 @@
     "@mpgd/analytics": "workspace:*",
     "@mpgd/catalog": "workspace:*",
     "@mpgd/platform": "workspace:*",
+    "@noble/secp256k1": "3.1.0",
     "@orpc/client": "2.0.0-beta.14",
     "@orpc/contract": "2.0.0-beta.14",
     "@orpc/server": "2.0.0-beta.14"

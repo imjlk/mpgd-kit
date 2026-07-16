@@ -1,3 +1,5 @@
+import { Point, verify as verifySecp256k1 } from '@noble/secp256k1';
+
 import type { AdPlacementEntry } from '@mpgd/catalog';
 
 import type {
@@ -14,6 +16,11 @@ export const defaultAdMobSsvMaximumFutureSkewMs = 300_000;
 const signatureMarker = '&signature=';
 const maximumCallbackUrlLength = 65_536;
 const maximumDateTimestampMs = 8_640_000_000_000_000;
+const ecPublicKeyObjectIdentifier = Uint8Array.of(0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01);
+const p256ObjectIdentifier = Uint8Array.of(0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07);
+const p384ObjectIdentifier = Uint8Array.of(0x2b, 0x81, 0x04, 0x00, 0x22);
+const p521ObjectIdentifier = Uint8Array.of(0x2b, 0x81, 0x04, 0x00, 0x23);
+const secp256k1ObjectIdentifier = Uint8Array.of(0x2b, 0x81, 0x04, 0x00, 0x0a);
 const requiredSignedParameters = [
   'ad_network',
   'ad_unit',
@@ -46,8 +53,21 @@ export interface AdMobSsvPublicKeyLookupInput {
   readonly signal: AbortSignal;
 }
 
+export interface AdMobSsvSecp256k1PublicKey {
+  readonly kind: 'secp256k1';
+  readonly publicKey: Uint8Array<ArrayBuffer>;
+}
+
+export type AdMobSsvPublicKey = CryptoKey | AdMobSsvSecp256k1PublicKey;
+
 export interface AdMobSsvPublicKeySource {
-  getPublicKey(input: AdMobSsvPublicKeyLookupInput): Promise<CryptoKey | undefined>;
+  getPublicKey(input: AdMobSsvPublicKeyLookupInput): Promise<AdMobSsvPublicKey | undefined>;
+}
+
+export interface ResolveAdMobSsvAdUnitInput {
+  readonly request: ClaimAdRewardRequest;
+  readonly placement: AdPlacementEntry;
+  readonly platformPlacementId: string;
 }
 
 export interface ResolveAdMobSsvRewardItemInput {
@@ -62,7 +82,15 @@ export interface CreateAdMobSsvEvidenceVerifierInput {
   readonly now?: () => number;
   readonly maximumCallbackAgeMs?: number;
   readonly maximumFutureSkewMs?: number;
+  readonly resolveAdUnit?: (input: ResolveAdMobSsvAdUnitInput) => string;
   readonly resolveRewardItem?: (input: ResolveAdMobSsvRewardItemInput) => string;
+}
+
+type AdMobSsvSpkiNamedCurve = 'P-256' | 'P-384' | 'P-521' | 'secp256k1';
+
+interface ParsedAdMobSsvSubjectPublicKeyInfo {
+  readonly namedCurve: AdMobSsvSpkiNamedCurve;
+  readonly publicKey: Uint8Array<ArrayBuffer>;
 }
 
 interface ParsedAdMobSsvCallback {
@@ -129,15 +157,37 @@ export function decodeAdMobSsvCustomData(
 export async function importAdMobSsvPublicKey(
   base64Spki: string,
   subtle: SubtleCrypto = readGlobalSubtleCrypto(),
-): Promise<CryptoKey> {
+): Promise<AdMobSsvPublicKey> {
   requireNonEmptyString(base64Spki, 'base64Spki');
+
+  const spki = decodeBase64(base64Spki);
+  const parsed = parseAdMobSsvSubjectPublicKeyInfo(spki);
+
+  if (parsed === undefined) {
+    throw new Error('base64Spki must contain a supported EC SubjectPublicKeyInfo key.');
+  }
+
+  if (parsed.namedCurve === 'secp256k1') {
+    let publicKey: Uint8Array<ArrayBuffer>;
+
+    try {
+      publicKey = new Uint8Array(Point.fromBytes(parsed.publicKey).toBytes(false));
+    } catch {
+      throw new Error('base64Spki contains an invalid secp256k1 public key.');
+    }
+
+    return {
+      kind: 'secp256k1',
+      publicKey,
+    };
+  }
 
   return subtle.importKey(
     'spki',
-    decodeBase64(base64Spki),
+    spki,
     {
       name: 'ECDSA',
-      namedCurve: 'P-256',
+      namedCurve: parsed.namedCurve,
     },
     false,
     ['verify'],
@@ -153,6 +203,7 @@ export function createAdMobSsvEvidenceVerifier(
     ?? defaultAdMobSsvMaximumCallbackAgeMs;
   const maximumFutureSkewMs = input.maximumFutureSkewMs
     ?? defaultAdMobSsvMaximumFutureSkewMs;
+  const resolveAdUnit = input.resolveAdUnit ?? defaultAdUnit;
   const resolveRewardItem = input.resolveRewardItem ?? defaultRewardItem;
 
   requireNonNegativeFiniteNumber(maximumCallbackAgeMs, 'maximumCallbackAgeMs');
@@ -170,6 +221,7 @@ export function createAdMobSsvEvidenceVerifier(
         now,
         maximumCallbackAgeMs,
         maximumFutureSkewMs,
+        resolveAdUnit,
         resolveRewardItem,
       }, verificationInput);
     },
@@ -184,6 +236,7 @@ async function verifyAdMobSsvReward(
     readonly now: () => number;
     readonly maximumCallbackAgeMs: number;
     readonly maximumFutureSkewMs: number;
+    readonly resolveAdUnit: (input: ResolveAdMobSsvAdUnitInput) => string;
     readonly resolveRewardItem: (input: ResolveAdMobSsvRewardItemInput) => string;
   },
   input: VerifyAdRewardEvidenceInput,
@@ -217,7 +270,7 @@ async function verifyAdMobSsvReward(
     return rejected('ADMOB_SSV_CALLBACK_INVALID');
   }
 
-  let publicKey: CryptoKey | undefined;
+  let publicKey: AdMobSsvPublicKey | undefined;
 
   try {
     publicKey = await context.publicKeySource.getPublicKey({
@@ -236,7 +289,10 @@ async function verifyAdMobSsvReward(
     return rejected('ADMOB_SSV_KEY_UNAVAILABLE');
   }
 
-  const signature = convertDerEcdsaSignature(callback.signature, publicKey);
+  const componentLength = getAdMobSsvSignatureComponentLength(publicKey);
+  const signature = componentLength === undefined
+    ? undefined
+    : convertDerEcdsaSignature(callback.signature, componentLength);
 
   if (signature === undefined) {
     return rejected('ADMOB_SSV_KEY_OR_SIGNATURE_INVALID');
@@ -245,11 +301,8 @@ async function verifyAdMobSsvReward(
   let signatureVerified: boolean;
 
   try {
-    signatureVerified = await context.subtle.verify(
-      {
-        name: 'ECDSA',
-        hash: 'SHA-256',
-      },
+    signatureVerified = await verifyAdMobSsvSignature(
+      context.subtle,
       publicKey,
       signature,
       callback.signedContent,
@@ -262,7 +315,17 @@ async function verifyAdMobSsvReward(
     return rejected('ADMOB_SSV_SIGNATURE_INVALID');
   }
 
-  if (callback.adUnit !== platformPlacementId) {
+  const expectedAdUnit = context.resolveAdUnit({
+    request,
+    placement,
+    platformPlacementId,
+  });
+
+  if (!isNonEmptyString(expectedAdUnit)) {
+    return rejected('ADMOB_SSV_AD_UNIT_UNCONFIGURED');
+  }
+
+  if (callback.adUnit !== expectedAdUnit) {
     return rejected('ADMOB_SSV_AD_UNIT_MISMATCH');
   }
 
@@ -357,6 +420,7 @@ function parseAdMobSsvCallback(input: string): ParsedAdMobSsvCallback | undefine
     }
 
     const signedContent = query.slice(0, signatureIndex);
+    const decodedSignedContent = decodeURIComponent(signedContent);
     const signatureAndKey = query.slice(signatureIndex + 1);
     const suffixMatch = /^signature=([^&]+)&key_id=([^&]+)$/.exec(signatureAndKey);
 
@@ -409,7 +473,7 @@ function parseAdMobSsvCallback(input: string): ParsedAdMobSsvCallback | undefine
       rewardAmount,
       rewardItem,
       signature,
-      signedContent: new TextEncoder().encode(signedContent),
+      signedContent: new TextEncoder().encode(decodedSignedContent),
       timestampMs,
       transactionId,
       userId,
@@ -421,25 +485,8 @@ function parseAdMobSsvCallback(input: string): ParsedAdMobSsvCallback | undefine
 
 function convertDerEcdsaSignature(
   signature: Uint8Array<ArrayBuffer>,
-  key: CryptoKey,
+  componentLength: number,
 ): Uint8Array<ArrayBuffer> | undefined {
-  if (key.type !== 'public' || key.algorithm.name !== 'ECDSA') {
-    return undefined;
-  }
-
-  const namedCurve = (key.algorithm as EcKeyAlgorithm).namedCurve;
-  const componentLength = namedCurve === 'P-256'
-    ? 32
-    : namedCurve === 'P-384'
-      ? 48
-      : namedCurve === 'P-521'
-        ? 66
-        : undefined;
-
-  if (componentLength === undefined) {
-    return undefined;
-  }
-
   const sequence = readDerElement(signature, 0, 0x30);
 
   if (sequence === undefined || sequence.end !== signature.length) {
@@ -470,6 +517,140 @@ function convertDerEcdsaSignature(
   raw.set(rawS, componentLength);
 
   return raw;
+}
+
+async function verifyAdMobSsvSignature(
+  subtle: SubtleCrypto,
+  publicKey: AdMobSsvPublicKey,
+  signature: Uint8Array<ArrayBuffer>,
+  signedContent: Uint8Array<ArrayBuffer>,
+): Promise<boolean> {
+  if (isAdMobSsvSecp256k1PublicKey(publicKey)) {
+    const digest = new Uint8Array(await subtle.digest('SHA-256', signedContent));
+
+    return verifySecp256k1(signature, digest, publicKey.publicKey, {
+      format: 'compact',
+      lowS: false,
+      prehash: false,
+    });
+  }
+
+  return subtle.verify(
+    {
+      name: 'ECDSA',
+      hash: 'SHA-256',
+    },
+    publicKey,
+    signature,
+    signedContent,
+  );
+}
+
+function getAdMobSsvSignatureComponentLength(
+  publicKey: AdMobSsvPublicKey,
+): number | undefined {
+  if (isAdMobSsvSecp256k1PublicKey(publicKey)) {
+    return 32;
+  }
+
+  if (publicKey.type !== 'public' || publicKey.algorithm.name !== 'ECDSA') {
+    return undefined;
+  }
+
+  const namedCurve = (publicKey.algorithm as EcKeyAlgorithm).namedCurve;
+
+  return namedCurve === 'P-256'
+    ? 32
+    : namedCurve === 'P-384'
+      ? 48
+      : namedCurve === 'P-521'
+        ? 66
+        : undefined;
+}
+
+function isAdMobSsvSecp256k1PublicKey(
+  input: AdMobSsvPublicKey,
+): input is AdMobSsvSecp256k1PublicKey {
+  return 'kind' in input && input.kind === 'secp256k1';
+}
+
+function parseAdMobSsvSubjectPublicKeyInfo(
+  input: Uint8Array<ArrayBuffer>,
+): ParsedAdMobSsvSubjectPublicKeyInfo | undefined {
+  const subjectPublicKeyInfo = readDerElement(input, 0, 0x30);
+
+  if (subjectPublicKeyInfo === undefined || subjectPublicKeyInfo.end !== input.length) {
+    return undefined;
+  }
+
+  const algorithm = readDerElement(input, subjectPublicKeyInfo.contentStart, 0x30);
+
+  if (algorithm === undefined) {
+    return undefined;
+  }
+
+  const algorithmObjectIdentifier = readDerElement(input, algorithm.contentStart, 0x06);
+
+  if (
+    algorithmObjectIdentifier === undefined
+    || !bytesEqual(
+      input.slice(algorithmObjectIdentifier.contentStart, algorithmObjectIdentifier.end),
+      ecPublicKeyObjectIdentifier,
+    )
+  ) {
+    return undefined;
+  }
+
+  const curveObjectIdentifier = readDerElement(input, algorithmObjectIdentifier.end, 0x06);
+
+  if (curveObjectIdentifier === undefined || curveObjectIdentifier.end !== algorithm.end) {
+    return undefined;
+  }
+
+  const namedCurve = readAdMobSsvSpkiNamedCurve(
+    input.slice(curveObjectIdentifier.contentStart, curveObjectIdentifier.end),
+  );
+  const subjectPublicKey = readDerElement(input, algorithm.end, 0x03);
+
+  if (
+    namedCurve === undefined
+    || subjectPublicKey === undefined
+    || subjectPublicKey.end !== subjectPublicKeyInfo.end
+    || input[subjectPublicKey.contentStart] !== 0
+  ) {
+    return undefined;
+  }
+
+  return {
+    namedCurve,
+    publicKey: input.slice(subjectPublicKey.contentStart + 1, subjectPublicKey.end),
+  };
+}
+
+function readAdMobSsvSpkiNamedCurve(
+  objectIdentifier: Uint8Array<ArrayBuffer>,
+): AdMobSsvSpkiNamedCurve | undefined {
+  if (bytesEqual(objectIdentifier, p256ObjectIdentifier)) {
+    return 'P-256';
+  }
+
+  if (bytesEqual(objectIdentifier, p384ObjectIdentifier)) {
+    return 'P-384';
+  }
+
+  if (bytesEqual(objectIdentifier, p521ObjectIdentifier)) {
+    return 'P-521';
+  }
+
+  return bytesEqual(objectIdentifier, secp256k1ObjectIdentifier) ? 'secp256k1' : undefined;
+}
+
+function bytesEqual(
+  first: Uint8Array<ArrayBuffer>,
+  second: Uint8Array<ArrayBuffer>,
+): boolean {
+  return first.length === second.length
+    && first.every((byte, index) => byte === second[index]);
 }
 
 function readDerElement(
@@ -570,6 +751,14 @@ function normalizeDerInteger(
   normalized.set(input, componentLength - input.length);
 
   return normalized;
+}
+
+function defaultAdUnit(input: ResolveAdMobSsvAdUnitInput): string {
+  const separatorIndex = input.platformPlacementId.lastIndexOf('/');
+
+  return separatorIndex < 0
+    ? input.platformPlacementId
+    : input.platformPlacementId.slice(separatorIndex + 1);
 }
 
 function defaultRewardItem(input: ResolveAdMobSsvRewardItemInput): string {

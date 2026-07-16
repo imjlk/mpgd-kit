@@ -96,7 +96,7 @@ assertEqual(
 
 const report = await runAdMobSsvConformance();
 assert(report.passed, 'AdMob SSV conformance should pass');
-assertEqual(report.checks.length, 9, 'AdMob SSV conformance should cover every security case');
+assertEqual(report.checks.length, 10, 'AdMob SSV conformance should cover every security case');
 
 const ledgerFixture = await createAdMobSsvConformanceFixture();
 const backend = createGameServicesBackend({
