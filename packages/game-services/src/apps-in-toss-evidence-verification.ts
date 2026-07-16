@@ -322,8 +322,9 @@ export function createAppsInTossProductGrantCallback(
       ]);
 
       if (!verification.verified) {
+        const reason = verification.reason ?? 'BACKEND_REJECTED';
         const verificationError = new Error(
-          `Apps in Toss product-grant verification failed: ${verification.reason}.`,
+          `Apps in Toss product-grant verification failed: ${reason}.`,
         );
         reportProductGrantVerificationError(input.onVerificationError, verificationError);
       }
