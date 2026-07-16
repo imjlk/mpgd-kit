@@ -349,10 +349,16 @@ function runGeneratedGameCreate(gameRoot: string): void {
     throw result.error;
   }
 
+  if (result.signal !== null) {
+    throw new Error(
+      `Generated game CLI was killed by signal ${result.signal}:\n${result.stderr || result.stdout || '(no output)'}`,
+    );
+  }
+
   expectEqual(
     result.status,
     0,
-    `generated game CLI:\n${result.stderr || result.stdout || '(no output)'}`,
+    `generated game CLI exited with status ${String(result.status)}:\n${result.stderr || result.stdout || '(no output)'}`,
   );
 }
 
