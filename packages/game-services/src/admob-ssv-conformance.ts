@@ -167,6 +167,7 @@ export async function runAdMobSsvConformance(
     callbackSource: mapCallbackSource(new Map()),
     publicKeySource,
     subtle,
+    now: () => fixtureTimestampMs + 1_000,
   }).verifyAdReward(verificationInput(firstRequest));
   assertDecision(pending, 'pending', 'ADMOB_SSV_EVIDENCE_PENDING');
 

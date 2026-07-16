@@ -251,11 +251,21 @@ async function verifyAdMobSsvReward(
     return rejected('ADMOB_SSV_AD_UNIT_UNCONFIGURED');
   }
 
-  const callbackUrl = await context.callbackSource.findCallback({
-    request,
-    platformPlacementId,
-    signal,
-  });
+  let callbackUrl: string | undefined;
+
+  try {
+    callbackUrl = await context.callbackSource.findCallback({
+      request,
+      platformPlacementId,
+      signal,
+    });
+  } catch (error) {
+    if (signal.aborted) {
+      throw error;
+    }
+
+    return rejected('ADMOB_SSV_CALLBACK_ERROR');
+  }
 
   if (callbackUrl === undefined) {
     return {
@@ -420,7 +430,14 @@ function parseAdMobSsvCallback(input: string): ParsedAdMobSsvCallback | undefine
     }
 
     const signedContent = query.slice(0, signatureIndex);
-    const decodedSignedContent = decodeURIComponent(signedContent);
+    let decodedSignedContent: string;
+
+    try {
+      decodedSignedContent = decodeURIComponent(signedContent);
+    } catch {
+      return undefined;
+    }
+
     const signatureAndKey = query.slice(signatureIndex + 1);
     const suffixMatch = /^signature=([^&]+)&key_id=([^&]+)$/.exec(signatureAndKey);
 
@@ -559,13 +576,16 @@ function getAdMobSsvSignatureComponentLength(
 
   const namedCurve = (publicKey.algorithm as EcKeyAlgorithm).namedCurve;
 
-  return namedCurve === 'P-256'
-    ? 32
-    : namedCurve === 'P-384'
-      ? 48
-      : namedCurve === 'P-521'
-        ? 66
-        : undefined;
+  switch (namedCurve) {
+    case 'P-256':
+      return 32;
+    case 'P-384':
+      return 48;
+    case 'P-521':
+      return 66;
+    default:
+      return undefined;
+  }
 }
 
 function isAdMobSsvSecp256k1PublicKey(

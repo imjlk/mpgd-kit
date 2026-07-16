@@ -58,31 +58,7 @@ const keyFailureVerifier = createAdMobSsvEvidenceVerifier({
   now: () => 1_784_160_001_000,
 });
 const keyFailure = await keyFailureVerifier.verifyAdReward({
-  request: {
-    target: 'android',
-    playerId: 'player-1',
-    placementId: 'CONTINUE_AFTER_FAIL',
-    idempotencyKey: 'reward-1',
-    completedAt: '2026-07-16T00:00:01.000Z',
-  },
-  placement: {
-    id: 'CONTINUE_AFTER_FAIL',
-    type: 'rewarded',
-    reward: {
-      type: 'continue',
-      amount: 1,
-    },
-    frequencyCap: {
-      cooldownSeconds: 60,
-      maxPerSession: 3,
-    },
-    platformPlacementIds: {
-      android: 'reward_continue',
-    },
-  },
-  platformPlacementId: 'reward_continue',
-  signal: new AbortController().signal,
-  timeoutMs: 10_000,
+  ...verificationInput(),
 });
 
 assertEqual(
@@ -92,6 +68,52 @@ assertEqual(
     reason: 'ADMOB_SSV_KEY_ERROR',
   },
   'key provider failures should return a stable fail-closed decision',
+);
+
+const callbackFailureVerifier = createAdMobSsvEvidenceVerifier({
+  callbackSource: {
+    async findCallback() {
+      throw new Error('callback store unavailable');
+    },
+  },
+  publicKeySource: {
+    async getPublicKey() {
+      throw new Error('public key source must not be called');
+    },
+  },
+});
+const callbackFailure = await callbackFailureVerifier.verifyAdReward(verificationInput());
+
+assertEqual(
+  callbackFailure,
+  {
+    status: 'rejected',
+    reason: 'ADMOB_SSV_CALLBACK_ERROR',
+  },
+  'callback provider failures should return a stable fail-closed decision',
+);
+
+const malformedEncodingVerifier = createAdMobSsvEvidenceVerifier({
+  callbackSource: {
+    async findCallback() {
+      return 'https://game.example.test/admob/ssv?ad_network=1&ad_unit=reward_continue&custom_data=%ZZ&reward_amount=1&reward_item=continue&timestamp=1784160000000&transaction_id=deadbeef&user_id=player-1&signature=MEUCIQAA&key_id=1';
+    },
+  },
+  publicKeySource: {
+    async getPublicKey() {
+      throw new Error('public key source must not be called');
+    },
+  },
+});
+const malformedEncoding = await malformedEncodingVerifier.verifyAdReward(verificationInput());
+
+assertEqual(
+  malformedEncoding,
+  {
+    status: 'rejected',
+    reason: 'ADMOB_SSV_CALLBACK_INVALID',
+  },
+  'malformed callback percent-encoding should fail closed',
 );
 
 const report = await runAdMobSsvConformance();
@@ -139,4 +161,34 @@ function assertEqual<T>(actual: T, expected: T, message: string): void {
       `${message}: expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`,
     );
   }
+}
+
+function verificationInput() {
+  return {
+    request: {
+      target: 'android',
+      playerId: 'player-1',
+      placementId: 'CONTINUE_AFTER_FAIL',
+      idempotencyKey: 'reward-1',
+      completedAt: '2026-07-16T00:00:01.000Z',
+    },
+    placement: {
+      id: 'CONTINUE_AFTER_FAIL',
+      type: 'rewarded',
+      reward: {
+        type: 'continue',
+        amount: 1,
+      },
+      frequencyCap: {
+        cooldownSeconds: 60,
+        maxPerSession: 3,
+      },
+      platformPlacementIds: {
+        android: 'reward_continue',
+      },
+    },
+    platformPlacementId: 'reward_continue',
+    signal: new AbortController().signal,
+    timeoutMs: 10_000,
+  } as const;
 }
