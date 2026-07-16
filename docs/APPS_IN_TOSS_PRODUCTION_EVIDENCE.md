@@ -41,8 +41,9 @@ deadline by default, aborts the verification request, and returns `false` on
 timeout. Its `purchaseVerification` port must carry the provided `AbortSignal`
 through the transport and server-side ledger deadline so an aborted request
 cannot commit a late grant. `timeoutMs` may only shorten the 25-second default.
-Provide `onVerificationError` to route backend, transport, and deadline failures
-to deployment diagnostics while the SDK callback still returns `false`.
+Provide `onVerificationError` to route fail-closed backend responses, transport
+errors, and deadline failures to deployment diagnostics while the SDK callback
+still returns `false`.
 
 The generic `createGameServicesClient().purchase()` flow verifies after
 `gateway.commerce.purchase()` returns, so it cannot satisfy this callback

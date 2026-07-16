@@ -259,6 +259,7 @@ async function runPurchaseProductGrantCallbackScenario(
   now: string,
 ): Promise<void> {
   const failClosedContext = createScenarioContext(createVerifier, now);
+  const backendFailures: unknown[] = [];
   const failClosedCallback = createAppsInTossProductGrantCallback({
     purchaseVerification: createConformanceProductGrantVerificationPort(
       failClosedContext.backend.purchases.verifyPurchase,
@@ -266,6 +267,7 @@ async function runPurchaseProductGrantCallbackScenario(
     playerId: 'ait-player-1',
     productId: 'CONFORMANCE_COINS',
     platformSku: 'ait.conformance.coins',
+    onVerificationError: (error) => backendFailures.push(error),
     now: () => now,
   });
 
@@ -273,6 +275,13 @@ async function runPurchaseProductGrantCallbackScenario(
     await failClosedCallback({ orderId: 'ait-order-fail-closed' }),
     false,
     'product-grant callback must fail closed without authority',
+  );
+  assertEqual(backendFailures.length, 1, 'backend rejection must be observable');
+  assertEqual(
+    backendFailures[0] instanceof Error
+      && backendFailures[0].message.includes('AIT_PURCHASE_AUTHORITY_UNAVAILABLE'),
+    true,
+    'backend rejection diagnostics must retain the server reason',
   );
   const transportFailures: unknown[] = [];
   const transportFailureCallback = createAppsInTossProductGrantCallback({

@@ -321,14 +321,17 @@ export function createAppsInTossProductGrantCallback(
         }),
       ]);
 
+      if (!verification.verified) {
+        const verificationError = new Error(
+          `Apps in Toss product-grant verification failed: ${verification.reason}.`,
+        );
+        reportProductGrantVerificationError(input.onVerificationError, verificationError);
+      }
+
       return verification.verified;
     } catch (error) {
       abortController.abort();
-      try {
-        input.onVerificationError?.(error);
-      } catch {
-        // Diagnostics must never break the SDK's required boolean callback contract.
-      }
+      reportProductGrantVerificationError(input.onVerificationError, error);
       return false;
     } finally {
       if (timeout !== undefined) {
@@ -336,6 +339,17 @@ export function createAppsInTossProductGrantCallback(
       }
     }
   };
+}
+
+function reportProductGrantVerificationError(
+  onVerificationError: ((error: unknown) => void) | undefined,
+  error: unknown,
+): void {
+  try {
+    onVerificationError?.(error);
+  } catch {
+    // Diagnostics must never break the SDK's required boolean callback contract.
+  }
 }
 
 export function createAppsInTossProductionEvidenceVerifier(
