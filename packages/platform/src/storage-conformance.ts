@@ -201,8 +201,14 @@ async function runMutationIsolationScenario(
     progress: { coins: number };
     inventory: string[];
   };
-  mutableLoadedValue.progress.coins = -1;
-  mutableLoadedValue.inventory.push('mutated-after-load');
+
+  try {
+    mutableLoadedValue.progress.coins = -1;
+    mutableLoadedValue.inventory.push('mutated-after-load');
+  } catch {
+    // Deeply immutable loaded values already prevent callers from mutating
+    // provider state. The following read still proves isolation.
+  }
 
   assertJsonEqual(
     await fixture.storage.load({ key }),
@@ -284,12 +290,45 @@ async function assertRejects(run: () => Promise<unknown>, message: string): Prom
 }
 
 function assertJsonEqual(actual: unknown, expected: unknown, message: string): void {
-  const actualJson = JSON.stringify(actual);
-  const expectedJson = JSON.stringify(expected);
-
-  if (actualJson !== expectedJson) {
-    throw new Error(`${message}. Expected ${expectedJson}, received ${actualJson}.`);
+  if (!jsonValuesEqual(actual, expected)) {
+    throw new Error(
+      `${message}. Expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}.`,
+    );
   }
+}
+
+function jsonValuesEqual(actual: unknown, expected: unknown): boolean {
+  if (actual === expected) {
+    return true;
+  }
+
+  if (Array.isArray(actual) || Array.isArray(expected)) {
+    return (
+      Array.isArray(actual) &&
+      Array.isArray(expected) &&
+      actual.length === expected.length &&
+      actual.every((value, index) => jsonValuesEqual(value, expected[index]))
+    );
+  }
+
+  if (!isJsonObject(actual) || !isJsonObject(expected)) {
+    return false;
+  }
+
+  const actualKeys = Object.keys(actual);
+  const expectedKeys = Object.keys(expected);
+
+  return (
+    actualKeys.length === expectedKeys.length &&
+    actualKeys.every(
+      (key) =>
+        Object.hasOwn(expected, key) && jsonValuesEqual(actual[key], expected[key]),
+    )
+  );
+}
+
+function isJsonObject(value: unknown): value is Readonly<Record<string, unknown>> {
+  return typeof value === 'object' && value !== null;
 }
 
 function assert(condition: unknown, message: string): asserts condition {

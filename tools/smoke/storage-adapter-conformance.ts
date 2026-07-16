@@ -31,8 +31,8 @@ const oversizedValue = 'x'.repeat(maximumValueBytes * 2);
 const targets = [
   ['web-preview-local', createBrowserFixture],
   ['microsoft-store-local', createBrowserFixture],
-  ['android-bridge', () => createBridgeFixture('android')],
-  ['ios-bridge', () => createBridgeFixture('ios')],
+  ['android-js-bridge-boundary', () => createBridgeFixture('android')],
+  ['ios-js-bridge-boundary', () => createBridgeFixture('ios')],
   ['ait-bridge', () => createBridgeFixture('ait')],
   ['reddit-devvit-remote', () => createBridgeFixture('reddit')],
   ['verse8-local', createVerse8LocalFixture],

@@ -8,6 +8,9 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
     public let pluginMethods: [CAPPluginMethod] = [
         CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise)
     ]
+    private lazy var localStorage = LocalJsonStorage(
+        backend: UserDefaultsLocalJsonStorageBackend(defaults: .standard)
+    )
 
     @objc func request(_ call: CAPPluginCall) {
         let id = call.getString("id") ?? "ios-native-mock"
@@ -72,9 +75,9 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
         case "leaderboard.open":
             call.resolve(okResponse(id: id, data: ["opened": true]))
         case "storage.load":
-            call.resolve(okResponse(id: id, data: NSNull()))
+            loadStorage(call, id: id)
         case "storage.save":
-            call.resolve(okResponse(id: id, data: [:]))
+            saveStorage(call, id: id)
         default:
             call.resolve(errorResponse(id: id, code: "UNSUPPORTED_METHOD", message: "Unsupported bridge method: \(method)"))
         }
@@ -88,16 +91,130 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
         ]
     }
 
-    private func errorResponse(id: String, code: String, message: String) -> [String: Any] {
+    private func errorResponse(
+        id: String,
+        code: String,
+        message: String,
+        retryable: Bool = false
+    ) -> [String: Any] {
         return [
             "id": id,
             "ok": false,
             "error": [
                 "code": code,
                 "message": message,
-                "retryable": false
+                "retryable": retryable
             ]
         ]
+    }
+
+    private func loadStorage(_ call: CAPPluginCall, id: String) {
+        guard let key = storageKey(call) else {
+            call.resolve(errorResponse(
+                id: id,
+                code: "INVALID_STORAGE_KEY",
+                message: "Storage key must be a string."
+            ))
+            return
+        }
+
+        do {
+            guard let serializedValue = try localStorage.load(key: key) else {
+                call.resolve(okResponse(id: id, data: NSNull()))
+                return
+            }
+
+            let value = try JSONSerialization.jsonObject(
+                with: Data(serializedValue.utf8),
+                options: [.fragmentsAllowed]
+            )
+            call.resolve(okResponse(id: id, data: value))
+        } catch let error as LocalJsonStorageError {
+            call.resolve(errorResponse(
+                id: id,
+                code: error.bridgeCode,
+                message: error.bridgeMessage,
+                retryable: error.retryable
+            ))
+        } catch {
+            call.resolve(errorResponse(
+                id: id,
+                code: "NATIVE_STORAGE_LOAD_FAILED",
+                message: "Native storage contained an invalid JSON value."
+            ))
+        }
+    }
+
+    private func saveStorage(_ call: CAPPluginCall, id: String) {
+        guard let payload = call.getObject("payload"),
+              let key = payload["key"] as? String else {
+            call.resolve(errorResponse(
+                id: id,
+                code: "INVALID_STORAGE_KEY",
+                message: "Storage key must be a string."
+            ))
+            return
+        }
+
+        guard payload.keys.contains("value"), let value = payload["value"] else {
+            call.resolve(errorResponse(
+                id: id,
+                code: "INVALID_STORAGE_VALUE",
+                message: "Storage value must be JSON serializable."
+            ))
+            return
+        }
+
+        let serializedValue: String
+
+        do {
+            let data = try JSONSerialization.data(
+                withJSONObject: value,
+                options: [.fragmentsAllowed]
+            )
+
+            guard let candidate = String(data: data, encoding: .utf8) else {
+                throw EncodingError.invalidValue(
+                    value,
+                    EncodingError.Context(
+                        codingPath: [],
+                        debugDescription: "JSON serialization did not produce UTF-8."
+                    )
+                )
+            }
+
+            serializedValue = candidate
+        } catch {
+            call.resolve(errorResponse(
+                id: id,
+                code: "INVALID_STORAGE_VALUE",
+                message: "Storage value must be JSON serializable."
+            ))
+            return
+        }
+
+        do {
+            try localStorage.save(key: key, serializedValue: serializedValue)
+            call.resolve(okResponse(id: id, data: ["saved": true]))
+        } catch let error as LocalJsonStorageError {
+            call.resolve(errorResponse(
+                id: id,
+                code: error.bridgeCode,
+                message: error.bridgeMessage,
+                retryable: error.retryable
+            ))
+        } catch {
+            call.resolve(errorResponse(
+                id: id,
+                code: "NATIVE_STORAGE_SAVE_FAILED",
+                message: "Native storage could not be saved.",
+                retryable: true
+            ))
+        }
+    }
+
+    private func storageKey(_ call: CAPPluginCall) -> String? {
+        return call.getObject("payload")?["key"] as? String
     }
 
     private func capabilities() -> [String: Any] {

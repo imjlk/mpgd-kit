@@ -27,4 +27,5 @@ repositories {
 
 dependencies {
     implementation project(':capacitor-android')
+    testImplementation 'junit:junit:4.13.2'
 }

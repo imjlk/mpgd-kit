@@ -1,5 +1,7 @@
 package dev.mpgd.capacitor;
 
+import android.content.Context;
+import android.content.SharedPreferences;
 import com.getcapacitor.JSObject;
 import com.getcapacitor.Plugin;
 import com.getcapacitor.PluginCall;
@@ -9,6 +11,10 @@ import org.json.JSONObject;
 
 @CapacitorPlugin(name = "CapacitorGameServices")
 public class CapacitorGameServicesPlugin extends Plugin {
+    private static final String STORAGE_PREFERENCES =
+        "dev.mpgd.capacitor.gameservices.storage";
+    private LocalJsonStorage localStorage;
+
     @PluginMethod
     public void request(PluginCall call) {
         String id = call.getString("id");
@@ -93,10 +99,10 @@ public class CapacitorGameServicesPlugin extends Plugin {
                 call.resolve(okResponse(id, new JSObject().put("opened", true)));
                 return;
             case "storage.load":
-                call.resolve(okResponse(id, JSONObject.NULL));
+                loadStorage(call, id);
                 return;
             case "storage.save":
-                call.resolve(okResponse(id, new JSObject()));
+                saveStorage(call, id);
                 return;
             default:
                 call.resolve(errorResponse(id, "UNSUPPORTED_METHOD", "Unsupported bridge method: " + method));
@@ -111,13 +117,159 @@ public class CapacitorGameServicesPlugin extends Plugin {
     }
 
     private JSObject errorResponse(String id, String code, String message) {
+        return errorResponse(id, code, message, false);
+    }
+
+    private JSObject errorResponse(String id, String code, String message, boolean retryable) {
         return new JSObject()
             .put("id", id)
             .put("ok", false)
             .put("error", new JSObject()
                 .put("code", code)
                 .put("message", message)
-                .put("retryable", false));
+                .put("retryable", retryable));
+    }
+
+    private void loadStorage(PluginCall call, String id) {
+        String key = storageKey(call);
+
+        if (key == null) {
+            call.resolve(errorResponse(
+                id,
+                "INVALID_STORAGE_KEY",
+                "Storage key must be a string."
+            ));
+            return;
+        }
+
+        try {
+            String serializedValue = localStorage().load(key);
+            Object value;
+
+            if (serializedValue == null) {
+                value = JSONObject.NULL;
+            } else {
+                JSONObject wrapper = new JSONObject(serializedValue);
+
+                if (!wrapper.has("value")) {
+                    throw new IllegalStateException("Stored JSON wrapper is missing its value.");
+                }
+
+                value = wrapper.opt("value");
+            }
+
+            call.resolve(okResponse(id, value));
+        } catch (LocalJsonStorage.StorageException error) {
+            call.resolve(errorResponse(
+                id,
+                error.getCode(),
+                error.getMessage(),
+                error.isRetryable()
+            ));
+        } catch (Exception error) {
+            call.resolve(errorResponse(
+                id,
+                "NATIVE_STORAGE_LOAD_FAILED",
+                "Native storage contained an invalid JSON value."
+            ));
+        }
+    }
+
+    private void saveStorage(PluginCall call, String id) {
+        JSObject payload = call.getObject("payload");
+        String key = storageKey(payload);
+
+        if (key == null) {
+            call.resolve(errorResponse(
+                id,
+                "INVALID_STORAGE_KEY",
+                "Storage key must be a string."
+            ));
+            return;
+        }
+
+        if (payload == null || !payload.has("value")) {
+            call.resolve(errorResponse(
+                id,
+                "INVALID_STORAGE_VALUE",
+                "Storage value must be JSON serializable."
+            ));
+            return;
+        }
+
+        final String serializedValue;
+
+        try {
+            serializedValue = new JSONObject()
+                .put("value", payload.opt("value"))
+                .toString();
+        } catch (Exception error) {
+            call.resolve(errorResponse(
+                id,
+                "INVALID_STORAGE_VALUE",
+                "Storage value must be JSON serializable."
+            ));
+            return;
+        }
+
+        try {
+            localStorage().save(key, serializedValue);
+            call.resolve(okResponse(id, new JSObject().put("saved", true)));
+        } catch (LocalJsonStorage.StorageException error) {
+            call.resolve(errorResponse(
+                id,
+                error.getCode(),
+                error.getMessage(),
+                error.isRetryable()
+            ));
+        }
+    }
+
+    private String storageKey(PluginCall call) {
+        return storageKey(call.getObject("payload"));
+    }
+
+    private String storageKey(JSObject payload) {
+        return payload == null ? null : payload.getString("key");
+    }
+
+    private synchronized LocalJsonStorage localStorage() {
+        if (localStorage != null) {
+            return localStorage;
+        }
+
+        SharedPreferences preferences = getContext().getSharedPreferences(
+            STORAGE_PREFERENCES,
+            Context.MODE_PRIVATE
+        );
+        localStorage = new LocalJsonStorage(new LocalJsonStorage.Backend() {
+            @Override
+            public String get(String key) {
+                return preferences.getString(key, null);
+            }
+
+            @Override
+            public boolean put(String key, String value) {
+                boolean hadPreviousValue = preferences.contains(key);
+                String previousValue = hadPreviousValue ? preferences.getString(key, null) : null;
+                boolean committed = preferences.edit().putString(key, value).commit();
+
+                if (!committed) {
+                    SharedPreferences.Editor rollback = preferences.edit();
+
+                    if (hadPreviousValue) {
+                        rollback.putString(key, previousValue);
+                    } else {
+                        rollback.remove(key);
+                    }
+
+                    rollback.commit();
+                }
+
+                return committed;
+            }
+        });
+        return localStorage;
     }
 
     private JSObject capabilities() {

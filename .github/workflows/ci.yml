@@ -130,6 +130,9 @@ jobs:
       - run: pnpm build:target android staging
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
+      - name: Test Android native storage conformance
+        working-directory: apps/mobile-capacitor/android
+        run: ./gradlew :mpgd-capacitor-game-services:testDebugUnitTest
       - run: pnpm smoke:target android
 
       - uses: actions/upload-artifact@v6
@@ -167,6 +170,13 @@ jobs:
       - run: pnpm build:target ios staging
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
+      - name: Test iOS native storage conformance
+        run: |
+          xcrun swiftc \
+            native-plugins/capacitor-game-services/ios/Sources/CapacitorGameServices/LocalJsonStorage.swift \
+            native-plugins/capacitor-game-services/ios/Tests/LocalJsonStorageConformance/main.swift \
+            -o "$RUNNER_TEMP/native-storage-conformance"
+          "$RUNNER_TEMP/native-storage-conformance"
       - run: pnpm smoke:target ios
 
       - uses: actions/upload-artifact@v6
