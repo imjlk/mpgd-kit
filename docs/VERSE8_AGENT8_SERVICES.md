@@ -183,3 +183,20 @@ between them.
 The generic Verse8 `PlatformGateway.leaderboard` and target feature remain
 disabled. This service is a game-server verified leaderboard, not a Verse8
 native leaderboard API.
+
+## Structured-server acceptance
+
+Run `pnpm smoke:verse8-agent8-acceptance` in mpgd-kit before handing off changes
+to this integration. The harness invokes the real leaderboard boundary with an
+ephemeral runtime secret and an in-memory structural Agent8 context. It proves
+blank-account rejection, game-owned completion rejection, malformed structured
+attempt rejection, authenticated participant matching, verified recording, and
+account-scoped snapshot reads.
+
+The same run creates a fresh game through the CLI and verifies that its Verse8
+build/smoke commands and target metadata produce the expected effective target:
+`verse8-web`, local storage by default, and no generic/native leaderboard. It
+also rejects generated personal MCP, environment, credential, and auth-state
+files. This is a deterministic contract check, not a deployed-server probe;
+production endpoints, persistence secrets, encryption keys, and authentication
+must remain runtime-injected in the separate game-owned Agent8 server.

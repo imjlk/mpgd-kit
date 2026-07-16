@@ -47,3 +47,17 @@ Before changing AIT behavior, use the apps-in-toss MCP and search Korean docs fo
 - `알림 동의`
 
 AIT IAP and ad callbacks are evidence only. Backend ledger APIs remain the source of truth for grants.
+
+## Verse8 Agent8 Structured Server
+
+Keep the Agent8 server in a separate game-owned project. Its acceptance flow
+must call `createVerse8Agent8LeaderboardBoundary` with an authenticated sender
+account and a game-specific completion verifier, then cover rejected malformed
+submissions, verified recording, and account-scoped snapshot reads.
+
+Inject endpoints, persistence secrets, encryption keys, and authentication at
+runtime. Do not commit personal MCP configuration, `.env` files, credentials,
+tokens, or Agent8 authentication state to this starter. Run
+`pnpm smoke:verse8-agent8-acceptance` from mpgd-kit to validate the generic
+structured-server contract and generated Verse8 target surface; it does not
+validate a deployed game server or replace game-owned production evidence.
