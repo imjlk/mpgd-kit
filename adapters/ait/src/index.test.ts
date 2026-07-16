@@ -141,6 +141,31 @@ describe('adapter-ait', () => {
     await expect(gateway.storage.load({ key: 'nullable-save:v1' })).resolves.toEqual({
       value: null,
     });
+    const mutableSave = {
+      progress: { coins: 11 },
+      inventory: ['shield'],
+    };
+    await gateway.storage.save({ key: 'isolated-save:v1', value: mutableSave });
+    mutableSave.progress.coins = -1;
+    mutableSave.inventory.push('mutated-after-save');
+    const firstIsolatedLoad = await gateway.storage.load({ key: 'isolated-save:v1' });
+    expect(firstIsolatedLoad).toEqual({
+      value: {
+        progress: { coins: 11 },
+        inventory: ['shield'],
+      },
+    });
+    if (firstIsolatedLoad !== null) {
+      const loadedValue = firstIsolatedLoad.value as typeof mutableSave;
+      loadedValue.progress.coins = -2;
+      loadedValue.inventory.push('mutated-after-load');
+    }
+    await expect(gateway.storage.load({ key: 'isolated-save:v1' })).resolves.toEqual({
+      value: {
+        progress: { coins: 11 },
+        inventory: ['shield'],
+      },
+    });
     await expect(
       gateway.commerce.purchase({
         productId: 'COINS_100',

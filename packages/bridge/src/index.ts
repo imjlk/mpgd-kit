@@ -66,8 +66,16 @@ export const assertBridgeResponse = typia.createAssert<BridgeResponse>();
 export function decodeBridgeStorageLoadData(
   input: unknown,
 ): { readonly value: unknown } | null {
-  if (typeof input !== 'object' || input === null || !('found' in input)) {
+  if (input === null) {
+    return null;
+  }
+
+  if (input === undefined) {
     throw new Error('Storage bridge load returned an invalid response.');
+  }
+
+  if (typeof input !== 'object' || !('found' in input)) {
+    return { value: input };
   }
 
   const response = input as { readonly found?: unknown; readonly value?: unknown };
@@ -76,7 +84,11 @@ export function decodeBridgeStorageLoadData(
     return null;
   }
 
-  if (response.found !== true || !Object.prototype.hasOwnProperty.call(response, 'value')) {
+  if (response.found !== true) {
+    return { value: input };
+  }
+
+  if (!Object.prototype.hasOwnProperty.call(response, 'value')) {
     throw new Error('Storage bridge load returned an invalid response.');
   }
 

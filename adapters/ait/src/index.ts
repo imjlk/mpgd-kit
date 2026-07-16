@@ -231,10 +231,13 @@ export function createAitSandboxBridge(): GamePlatformBridge {
 
         case 'storage.load': {
           const payload = input.payload as { readonly key?: string };
-          const value = payload.key === undefined ? undefined : storage.get(payload.key);
+          const found = payload.key !== undefined && storage.has(payload.key);
+          const value = found && payload.key !== undefined
+            ? cloneJsonValue(storage.get(payload.key))
+            : undefined;
           return ok(
             input,
-            value === undefined
+            !found
               ? ({ found: false } satisfies BridgeStorageLoadData)
               : ({ found: true, value } satisfies BridgeStorageLoadData),
           );
@@ -244,7 +247,7 @@ export function createAitSandboxBridge(): GamePlatformBridge {
           const payload = input.payload as { readonly key?: string; readonly value?: unknown };
 
           if (payload.key !== undefined) {
-            storage.set(payload.key, payload.value);
+            storage.set(payload.key, cloneJsonValue(payload.value));
           }
 
           return ok(input, {});
@@ -263,6 +266,14 @@ export function createAitSandboxBridge(): GamePlatformBridge {
       }
     },
   };
+}
+
+function cloneJsonValue(input: unknown): unknown {
+  const serialized = JSON.stringify(input);
+  if (serialized === undefined) {
+    throw new Error('AIT sandbox storage values must be JSON-serializable.');
+  }
+  return JSON.parse(serialized) as unknown;
 }
 
 function ok(input: BridgeRequest, data: unknown): BridgeResponse {

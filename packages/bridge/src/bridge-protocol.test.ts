@@ -48,9 +48,33 @@ assertEqual(
   null,
   'a stored top-level JSON null should remain present',
 );
+assertEqual(
+  decodeBridgeStorageLoadData(null),
+  null,
+  'a legacy null response should remain a missing value',
+);
+assertEqual(
+  decodeBridgeStorageLoadData('legacy-value')?.value,
+  'legacy-value',
+  'a legacy raw primitive should remain a stored value',
+);
+assertEqual(
+  JSON.stringify(decodeBridgeStorageLoadData({ coins: 7 })?.value),
+  JSON.stringify({ coins: 7 }),
+  'a legacy raw object should remain a stored value',
+);
+assertEqual(
+  JSON.stringify(decodeBridgeStorageLoadData({ found: 'legacy-field', coins: 7 })?.value),
+  JSON.stringify({ found: 'legacy-field', coins: 7 }),
+  'a legacy raw object may use a non-protocol found field',
+);
 assertThrows(
   () => decodeBridgeStorageLoadData({ found: true }),
   'a present storage bridge response without a value should fail closed',
+);
+assertThrows(
+  () => decodeBridgeStorageLoadData(undefined),
+  'an absent bridge response should fail closed',
 );
 
 console.log('Bridge protocol fixture validation passed.');
