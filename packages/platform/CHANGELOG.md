@@ -1,5 +1,20 @@
 # @mpgd/platform
 
+## 0.7.0 — 2026-07-17
+
+### Added
+
+- [204fe80](https://github.com/imjlk/mpgd-kit/commit/204fe807cdc476bb8555693433c636c8fa6b06ea) Add reusable local and remote storage conformance checks, injectable browser
+  storage, and fail-closed persistence behavior across browser, native bridge,
+  Apps in Toss, Devvit, and Verse8 targets. Generated Devvit servers now reject
+  identity, provider, serialization, and quota failures without switching to a
+  browser fallback store. Bridge-backed targets preserve top-level JSON `null`
+  without confusing it with a missing key. Capacitor's shipped Android and iOS bridges now persist
+  bounded JSON values through native local storage and run native conformance
+  tests in CI. — Thanks @imjlk!
+- [5845206](https://github.com/imjlk/mpgd-kit/commit/5845206ec7675e43873b8232ecd9a1628b167040) Add a first-class Verse8 iframe target with verified host identity mapping, target-isolated starter builds, notification target normalization, and explicit unavailable monetization and Agent8 service capabilities. — Thanks @imjlk!
+- [e3fb909](https://github.com/imjlk/mpgd-kit/commit/e3fb90993fa5b33fdbd293413903d77f52686c08) Add a provider-neutral PlatformGateway capability conformance runner, keep target-configured capability reads live, and isolate bridge-owned capability snapshots before exposing them to callers. — Thanks @imjlk!
+
 ## 0.6.0 — 2026-07-15
 
 ### Added

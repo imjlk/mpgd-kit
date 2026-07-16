@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/capacitor-game-services",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Capacitor native plugin bridge for mpgd game services.",
   "license": "MIT",
   "repository": {
