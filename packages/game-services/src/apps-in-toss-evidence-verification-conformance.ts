@@ -447,6 +447,7 @@ async function runPurchaseAuthorityMatchingScenario(
   now: string,
 ): Promise<void> {
   const fixture = createAppsInTossProductionEvidenceAuthorityFixture();
+  fixture.enqueuePurchaseResult(resolvedOrder({ orderId: 'different-order' }));
   fixture.enqueuePurchaseResult(resolvedOrder({ playerId: 'different-player' }));
   fixture.enqueuePurchaseResult(
     resolvedOrder({
@@ -470,7 +471,10 @@ async function runPurchaseAuthorityMatchingScenario(
     purchaseAuthority: fixture.purchaseAuthority,
   });
 
-  const playerMismatch = await context.backend.purchases.verifyPurchase(purchaseRequest());
+  const orderMismatch = await context.backend.purchases.verifyPurchase(purchaseRequest());
+  const playerMismatch = await context.backend.purchases.verifyPurchase(
+    purchaseRequest({ idempotencyKey: 'purchase-player' }),
+  );
   const skuMismatch = await context.backend.purchases.verifyPurchase(
     purchaseRequest({
       platformTransactionId: 'ait-order-sku',
@@ -493,6 +497,11 @@ async function runPurchaseAuthorityMatchingScenario(
     }),
   );
 
+  assertEqual(
+    orderMismatch.reason,
+    'AIT_PURCHASE_AUTHORITY_ORDER_ID_MISMATCH',
+    'purchase order identifier mismatch',
+  );
   assertEqual(
     playerMismatch.reason,
     'AIT_PURCHASE_AUTHORITY_PLAYER_MISMATCH',
