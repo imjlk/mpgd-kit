@@ -611,15 +611,13 @@ async function runRewardTimestampValidationScenario(
   });
 
   const offsetFree = await context.backend.adRewards.claimAdReward(
-    rewardRequest({
+    rewardRequestForCorrelation('ait-correlation-offset-free', {
       idempotencyKey: 'reward-offset-free',
-      evidence: rewardEvidence('ait-correlation-offset-free'),
     }),
   );
   const explicitOffset = await context.backend.adRewards.claimAdReward(
-    rewardRequest({
+    rewardRequestForCorrelation('ait-correlation-offset', {
       idempotencyKey: 'reward-explicit-offset',
-      evidence: rewardEvidence('ait-correlation-offset'),
     }),
   );
 
@@ -683,47 +681,46 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
   const purchaseOversizedReason = await context.backend.purchases.verifyPurchase(
     purchaseRequest({ idempotencyKey: 'purchase-oversized-reason' }),
   );
+  const requestCorrelationMismatch = await context.backend.adRewards.claimAdReward(
+    rewardRequest({
+      idempotencyKey: 'reward-request-correlation',
+      platformImpressionId: 'different-request-correlation',
+    }),
+  );
   const failed = await context.backend.adRewards.claimAdReward(rewardRequest());
   const correlationMismatch = await context.backend.adRewards.claimAdReward(
-    rewardRequest({
+    rewardRequestForCorrelation('ait-correlation-mismatch', {
       idempotencyKey: 'reward-correlation',
-      evidence: rewardEvidence('ait-correlation-mismatch'),
     }),
   );
   const playerMismatch = await context.backend.adRewards.claimAdReward(
-    rewardRequest({
+    rewardRequestForCorrelation('ait-correlation-player', {
       idempotencyKey: 'reward-player',
-      evidence: rewardEvidence('ait-correlation-player'),
     }),
   );
   const placementMismatch = await context.backend.adRewards.claimAdReward(
-    rewardRequest({
+    rewardRequestForCorrelation('ait-correlation-placement', {
       idempotencyKey: 'reward-placement',
-      evidence: rewardEvidence('ait-correlation-placement'),
     }),
   );
   const pending = await context.backend.adRewards.claimAdReward(
-    rewardRequest({
+    rewardRequestForCorrelation('ait-correlation-pending', {
       idempotencyKey: 'reward-pending',
-      evidence: rewardEvidence('ait-correlation-pending'),
     }),
   );
   const rewardRejected = await context.backend.adRewards.claimAdReward(
-    rewardRequest({
+    rewardRequestForCorrelation('ait-correlation-free-form-rejected', {
       idempotencyKey: 'reward-free-form-rejected',
-      evidence: rewardEvidence('ait-correlation-free-form-rejected'),
     }),
   );
   const rewardPending = await context.backend.adRewards.claimAdReward(
-    rewardRequest({
+    rewardRequestForCorrelation('ait-correlation-free-form-pending', {
       idempotencyKey: 'reward-free-form-pending',
-      evidence: rewardEvidence('ait-correlation-free-form-pending'),
     }),
   );
   const rewardOversizedReason = await context.backend.adRewards.claimAdReward(
-    rewardRequest({
+    rewardRequestForCorrelation('ait-correlation-oversized-reason', {
       idempotencyKey: 'reward-oversized-reason',
-      evidence: rewardEvidence('ait-correlation-oversized-reason'),
     }),
   );
 
@@ -735,6 +732,11 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
     'oversized purchase authority reason must fail closed',
   );
   assertEqual(failed.reason, 'AIT_REWARD_AUTHORITY_ERROR', 'reward authority error');
+  assertEqual(
+    requestCorrelationMismatch.reason,
+    'AIT_REWARD_CORRELATION_ID_MISMATCH',
+    'reward request correlation mismatch',
+  );
   assertEqual(
     correlationMismatch.reason,
     'AIT_REWARD_AUTHORITY_CORRELATION_ID_MISMATCH',
@@ -804,11 +806,23 @@ function rewardRequest(
     target: 'ait',
     playerId: 'ait-player-1',
     placementId: 'CONFORMANCE_REWARD',
+    platformImpressionId: 'ait-correlation-1',
     idempotencyKey: 'reward-1',
     completedAt: '2030-01-02T03:01:00.000Z',
     evidence: rewardEvidence('ait-correlation-1'),
     ...overrides,
   };
+}
+
+function rewardRequestForCorrelation(
+  correlationId: string,
+  overrides: Partial<ClaimAdRewardRequest> = {},
+): ClaimAdRewardRequest {
+  return rewardRequest({
+    platformImpressionId: correlationId,
+    evidence: rewardEvidence(correlationId),
+    ...overrides,
+  });
 }
 
 function purchaseEvidence(orderId: string) {

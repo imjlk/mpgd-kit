@@ -98,6 +98,10 @@ export interface CreateAppsInTossProductGrantCallbackInput {
   readonly idempotencyKey?: (orderId: string) => string;
   /** May be shortened, but never extended beyond the SDK-safe default. */
   readonly timeoutMs?: number;
+  /**
+   * Supplies the callback-attempt timestamp required by `VerifyPurchaseRequest`.
+   * The purchase authority's status timestamp remains the authoritative purchase time.
+   */
   readonly now?: () => string;
   /** Receives backend, transport, and deadline failures before the callback fails closed. */
   readonly onVerificationError?: (error: unknown) => void;
@@ -494,6 +498,14 @@ async function verifyAppsInTossReward(
 
   if (correlationId === undefined) {
     return rejected('AIT_REWARD_CORRELATION_ID_REQUIRED');
+  }
+
+  if (request.platformImpressionId === undefined) {
+    return rejected('AIT_REWARD_REQUEST_CORRELATION_ID_REQUIRED');
+  }
+
+  if (request.platformImpressionId !== correlationId) {
+    return rejected('AIT_REWARD_CORRELATION_ID_MISMATCH');
   }
 
   if (evidencePlacementId !== platformPlacementId) {

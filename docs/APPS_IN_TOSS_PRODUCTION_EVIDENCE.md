@@ -45,6 +45,11 @@ Provide `onVerificationError` to route fail-closed backend responses, transport
 errors, and deadline failures to deployment diagnostics while the SDK callback
 still returns `false`.
 
+The SDK callback supplies only `orderId`. Its `purchasedAt` request field is
+therefore the callback/grant-attempt observation time provided by `now`, not an
+authoritative financial timestamp. Use the purchase authority's normalized
+`statusDeterminedAt` for reconciliation and other time-sensitive decisions.
+
 The generic `createGameServicesClient().purchase()` flow verifies after
 `gateway.commerce.purchase()` returns, so it cannot satisfy this callback
 timing by itself. Wire the callback-specific API directly into the AIT SDK:
@@ -123,7 +128,11 @@ closed instead of relying on deployment-local `Date.parse()` behavior.
 
 `userEarnedReward` is client evidence, not grant authority. The wrapper can use
 `createAppsInTossRewardCallbackEvidence()` to correlate the callback with an
-identifier created by the game before `showFullScreenAd()` and the configured placement.
+identifier created by the game before `showFullScreenAd()` and the configured
+placement. Copy that same identifier into
+`ClaimAdRewardRequest.platformImpressionId`; the verifier requires the request,
+evidence envelope, and authority result to agree. For AIT this field carries a
+game-issued correlation identifier, not a Toss-issued impression identifier.
 The official event only contains `unitType` and `unitAmount`, so the contract
 does not require a nonexistent Toss impression id. The production backend must
 inject an `AppsInTossRewardAuthority` that independently confirms:
