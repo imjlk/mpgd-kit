@@ -502,12 +502,14 @@ async function readBoundedJson(
       }
       byteLength += chunk.value.byteLength;
       if (byteLength > maxResponseBytes) {
-        await reader.cancel('maxResponseBytes exceeded').catch(() => undefined);
         throw new Error('App Store Server API response exceeded maxResponseBytes.');
       }
       text += decoder.decode(chunk.value, { stream: true });
     }
     text += decoder.decode();
+  } catch (error) {
+    await reader.cancel(error).catch(() => undefined);
+    throw error;
   } finally {
     reader.releaseLock();
   }

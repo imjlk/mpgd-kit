@@ -146,6 +146,19 @@ assertDecision(
   'signed transactions must bind to the expected game account',
 );
 
+const missingAccount = await createVerifier({
+  transaction: createAppStoreTransactionConformanceFixture({
+    ...baseTransaction,
+    includeAppAccountToken: false,
+  }),
+}).verifyPurchase(baseInput);
+assertDecision(
+  missingAccount,
+  'rejected',
+  'APP_STORE_ACCOUNT_TOKEN_MISMATCH',
+  'a signed transaction without the required account binding must fail closed',
+);
+
 const canonicalAccountToken = await createVerifier({
   transaction: {
     ...baseTransaction,
@@ -490,13 +503,24 @@ await assertRejects(
   'invalid bearer-token configuration must not be hidden as a transient network failure',
 );
 
+let oversizedStreamCancelled = false;
 const oversizedClient = createAppStoreServerApiClient({
   getBearerToken: () => 'signed-provider-jwt',
   maxResponseBytes: 8,
   async fetch() {
-    return new Response(JSON.stringify({ signedTransactionInfo: 'too-large' }), {
+    return {
       status: 200,
-    });
+      body: new ReadableStream({
+        start(streamController) {
+          streamController.enqueue(
+            new TextEncoder().encode(JSON.stringify({ signedTransactionInfo: 'too-large' })),
+          );
+        },
+        cancel() {
+          oversizedStreamCancelled = true;
+        },
+      }),
+    };
   },
 });
 await assertRejects(
@@ -507,6 +531,11 @@ await assertRejects(
   }),
   'response exceeded maxResponseBytes',
   'the Server API client must stop reading oversized response streams',
+);
+assertEqual(
+  oversizedStreamCancelled,
+  true,
+  'the Server API client must cancel an oversized response stream before releasing it',
 );
 
 console.log('App Store signed transaction verifier tests passed.');

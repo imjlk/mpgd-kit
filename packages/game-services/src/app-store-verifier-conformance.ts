@@ -15,6 +15,8 @@ export interface CreateAppStoreTransactionConformanceFixtureInput {
   readonly type?: AppStoreInAppPurchaseType;
   readonly includeQuantity?: boolean;
   readonly quantity?: number;
+  /** Set to false to omit the default signed account token for fail-closed tests. */
+  readonly includeAppAccountToken?: boolean;
   readonly appAccountToken?: string;
   readonly expiresDate?: number;
   readonly revocationDate?: number;
@@ -39,8 +41,12 @@ export function createAppStoreTransactionConformanceFixture(
     environment: input.environment ?? 'Production',
     type: input.type ?? 'Consumable',
     ...(input.includeQuantity === false ? {} : { quantity: input.quantity ?? 1 }),
-    appAccountToken:
-      input.appAccountToken ?? 'f15f2ed7-f92a-4c5a-90e1-15d26cd729f2',
+    ...(input.includeAppAccountToken === false
+      ? {}
+      : {
+          appAccountToken:
+            input.appAccountToken ?? 'f15f2ed7-f92a-4c5a-90e1-15d26cd729f2',
+        }),
     ...(input.expiresDate === undefined ? {} : { expiresDate: input.expiresDate }),
     ...(input.revocationDate === undefined
       ? {}
