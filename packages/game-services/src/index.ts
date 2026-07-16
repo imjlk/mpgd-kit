@@ -3,7 +3,6 @@ export * from './client';
 export * from './contract';
 export * from './evidence-verification';
 export * from './google-play-purchase';
-export * from './google-play-purchase-conformance';
 export * from './notification-delivery';
 export * from './platform-order';
 export * from './progress-link';
