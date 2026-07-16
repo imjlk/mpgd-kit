@@ -369,7 +369,7 @@ async function finalizeGooglePlayPurchase(
       alreadyCompleted: false,
     };
   } catch (error: unknown) {
-    if (error instanceof Error && error.name === 'AbortError') {
+    if (isAbortError(error)) {
       throw error;
     }
 
@@ -485,6 +485,8 @@ async function inspectGooglePlayPurchase(input: {
   ) {
     return rejected('GOOGLE_PLAY_ORDER_MISMATCH');
   }
+  // `token-only` deliberately skips order matching because the stored token
+  // digest is the authoritative replay identity when Google omitted the order.
 
   const purchaseCompletionTime = readTimestamp(raw.purchaseCompletionTime);
   if (purchaseCompletionTime === undefined) {
@@ -506,6 +508,8 @@ async function inspectGooglePlayPurchase(input: {
     return rejected('GOOGLE_PLAY_PROFILE_INVALID');
   }
   if (input.accountBinding.status === 'bound') {
+    // Defensive invariant: every bound context must carry at least one
+    // identifier, even though the constructors below already enforce it.
     if (
       input.accountBinding.accountId === undefined
       && input.accountBinding.profileId === undefined
@@ -672,7 +676,10 @@ async function resolveGooglePlayAccountBinding(
       input.resolveObfuscatedAccountId?.(playerId, signal),
       input.resolveObfuscatedProfileId?.(playerId, signal),
     ]);
-  } catch {
+  } catch (error: unknown) {
+    if (isAbortError(error)) {
+      throw error;
+    }
     return {
       status: 'rejected',
       reason: 'GOOGLE_PLAY_ACCOUNT_BINDING_ERROR',
@@ -686,12 +693,8 @@ async function resolveGooglePlayAccountBinding(
     return { status: 'unbound' };
   }
 
-  const accountId = resolvedAccountId === undefined
-    ? undefined
-    : readOptionalIdentifier(resolvedAccountId, 256);
-  const profileId = resolvedProfileId === undefined
-    ? undefined
-    : readOptionalIdentifier(resolvedProfileId, 256);
+  const accountId = readOptionalIdentifier(resolvedAccountId, 256);
+  const profileId = readOptionalIdentifier(resolvedProfileId, 256);
   if (resolvedAccountId !== undefined && accountId === undefined) {
     return {
       status: 'rejected',
@@ -830,6 +833,13 @@ function rejected(
   reason: string,
 ): Extract<GooglePlayPurchaseInspection, { readonly status: 'rejected' }> {
   return { status: 'rejected', reason };
+}
+
+function isAbortError(input: unknown): boolean {
+  return typeof input === 'object'
+    && input !== null
+    && 'name' in input
+    && input.name === 'AbortError';
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

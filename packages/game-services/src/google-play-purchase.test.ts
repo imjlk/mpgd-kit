@@ -858,6 +858,19 @@ const throwingProfileBindingResult = await throwingProfileBinding.backend.purcha
 assertEqual(throwingProfileBindingResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_ERROR');
 assertEqual(throwingProfileBinding.events.length, 0, 'failed profile lookup must not reach Google');
 
+const abortedProfileBinding = createHarness({
+  token: 'token-profile-binding-aborted',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedProfileId: () => {
+    throw new DOMException('simulated profile resolver abort', 'AbortError');
+  },
+});
+const abortedProfileBindingResult = await abortedProfileBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-binding-aborted' }),
+);
+assertEqual(abortedProfileBindingResult.reason, 'EVIDENCE_VERIFIER_ERROR');
+assertEqual(abortedProfileBinding.events.length, 0, 'aborted profile lookup must not reach Google');
+
 let accountResolverSignal: AbortSignal | undefined;
 const stalledAccountBinding = createHarness({
   token: 'token-account-binding-timeout',
