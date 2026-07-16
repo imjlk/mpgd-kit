@@ -13,6 +13,7 @@ import org.json.JSONObject;
 public class CapacitorGameServicesPlugin extends Plugin {
     private static final String STORAGE_PREFERENCES =
         "dev.mpgd.capacitor.gameservices.storage";
+    private static final String STORAGE_LOAD_PROTOCOL = "mpgd.storage.load.v1";
     private LocalJsonStorage localStorage;
 
     @PluginMethod
@@ -146,7 +147,12 @@ public class CapacitorGameServicesPlugin extends Plugin {
             String serializedValue = localStorage().load(key);
 
             if (serializedValue == null) {
-                call.resolve(okResponse(id, new JSObject().put("found", false)));
+                call.resolve(okResponse(
+                    id,
+                    new JSObject()
+                        .put("__mpgdBridgeProtocol", STORAGE_LOAD_PROTOCOL)
+                        .put("found", false)
+                ));
                 return;
             }
 
@@ -159,6 +165,7 @@ public class CapacitorGameServicesPlugin extends Plugin {
             call.resolve(okResponse(
                 id,
                 new JSObject()
+                    .put("__mpgdBridgeProtocol", STORAGE_LOAD_PROTOCOL)
                     .put("found", true)
                     .put("value", wrapper.opt("value"))
             ));

@@ -6,7 +6,7 @@ import {
   type CloudflarePagesServiceBinding,
   type MpgdCloudflarePagesHostEnv,
 } from './cloudflare-pages';
-import type { BridgeRequest, BridgeResponse } from './index';
+import { bridgeStorageLoadProtocol, type BridgeRequest, type BridgeResponse } from './index';
 import { createBridgeOrpcClient, defaultBridgeRpcEndpoint } from './orpc';
 
 const baseUrl = 'https://pages-host.test';
@@ -80,7 +80,7 @@ const missingStorage = await client.request({
 });
 assertDeepEqual(
   missingStorage.ok ? missingStorage.data : undefined,
-  { found: false },
+  { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false },
   'default Pages storage should use the shared missing-value envelope',
 );
 

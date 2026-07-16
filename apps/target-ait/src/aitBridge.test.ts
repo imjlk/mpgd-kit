@@ -158,6 +158,7 @@ if (!firstLoad.ok) {
 }
 
 const firstLoadedValue = firstLoad.data as {
+  readonly __mpgdBridgeProtocol: 'mpgd.storage.load.v1';
   readonly found: true;
   readonly value: {
     progress: { coins: number };
@@ -165,6 +166,7 @@ const firstLoadedValue = firstLoad.data as {
   };
 };
 assert.deepEqual(firstLoadedValue, {
+  __mpgdBridgeProtocol: 'mpgd.storage.load.v1',
   found: true,
   value: {
     progress: { coins: 7 },
@@ -187,6 +189,7 @@ const secondLoad = await installedBridge.request({
 });
 assert.equal(secondLoad.ok, true);
 assert.deepEqual(secondLoad.ok ? secondLoad.data : undefined, {
+  __mpgdBridgeProtocol: 'mpgd.storage.load.v1',
   found: true,
   value: {
     progress: { coins: 7 },

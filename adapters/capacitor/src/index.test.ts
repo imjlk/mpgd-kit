@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { bridgeStorageLoadProtocol, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 
 import { createCapacitorPlatformGateway, type NativeBridge } from './index';
 
@@ -67,8 +67,8 @@ describe('adapter-capacitor', () => {
             ok: true,
             data:
               payload.key === 'nullable-save:v1'
-                ? { found: true, value: null }
-                : { found: false },
+                ? { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: true, value: null }
+                : { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false },
           } satisfies BridgeResponse;
         }
 

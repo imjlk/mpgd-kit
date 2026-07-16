@@ -3,6 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { createServer, context, getServerPort, reddit, redis } from '@devvit/web/server';
 import type { UiResponse } from '@devvit/web/shared';
 import {
+  bridgeStorageLoadProtocol,
   createBridgeError,
   type BridgeRequest,
   type BridgeResponse,
@@ -291,13 +292,17 @@ async function loadStorage(input: BridgeRequest): Promise<BridgeResponse> {
   }
 
   if (stored === undefined || stored === null) {
-    return ok(input, { found: false } satisfies BridgeStorageLoadData);
+    return ok(input, {
+      __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+      found: false,
+    } satisfies BridgeStorageLoadData);
   }
 
   try {
     return ok(
       input,
       {
+        __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
         found: true,
         value: JSON.parse(stored),
       } satisfies BridgeStorageLoadData,

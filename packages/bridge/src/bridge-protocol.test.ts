@@ -8,6 +8,7 @@ import {
 import {
   assertBridgeRequest,
   assertBridgeResponse,
+  bridgeStorageLoadProtocol,
   createBridgeError,
   decodeBridgeStorageLoadData,
 } from './index';
@@ -39,12 +40,19 @@ if (!error.ok) {
 }
 
 assertEqual(
-  decodeBridgeStorageLoadData({ found: false }),
+  decodeBridgeStorageLoadData({
+    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+    found: false,
+  }),
   null,
   'a missing storage bridge value should decode as null',
 );
 assertEqual(
-  decodeBridgeStorageLoadData({ found: true, value: null })?.value,
+  decodeBridgeStorageLoadData({
+    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+    found: true,
+    value: null,
+  })?.value,
   null,
   'a stored top-level JSON null should remain present',
 );
@@ -64,12 +72,20 @@ assertEqual(
   'a legacy raw object should remain a stored value',
 );
 assertEqual(
-  JSON.stringify(decodeBridgeStorageLoadData({ found: 'legacy-field', coins: 7 })?.value),
-  JSON.stringify({ found: 'legacy-field', coins: 7 }),
-  'a legacy raw object may use a non-protocol found field',
+  JSON.stringify(decodeBridgeStorageLoadData({ found: false, coins: 7 })?.value),
+  JSON.stringify({ found: false, coins: 7 }),
+  'a legacy raw object may use a false found field',
+);
+assertEqual(
+  JSON.stringify(decodeBridgeStorageLoadData({ found: true })?.value),
+  JSON.stringify({ found: true }),
+  'a legacy raw object may use a true found field without a value field',
 );
 assertThrows(
-  () => decodeBridgeStorageLoadData({ found: true }),
+  () => decodeBridgeStorageLoadData({
+    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+    found: true,
+  }),
   'a present storage bridge response without a value should fail closed',
 );
 assertThrows(

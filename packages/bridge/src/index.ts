@@ -51,11 +51,15 @@ export type BridgeResponse<TData = unknown> =
       };
     };
 
+export const bridgeStorageLoadProtocol = 'mpgd.storage.load.v1' as const;
+
 export type BridgeStorageLoadData =
   | {
+      readonly __mpgdBridgeProtocol: typeof bridgeStorageLoadProtocol;
       readonly found: false;
     }
   | {
+      readonly __mpgdBridgeProtocol: typeof bridgeStorageLoadProtocol;
       readonly found: true;
       readonly value: unknown;
     };
@@ -74,18 +78,26 @@ export function decodeBridgeStorageLoadData(
     throw new Error('Storage bridge load returned an invalid response.');
   }
 
-  if (typeof input !== 'object' || !('found' in input)) {
+  if (
+    typeof input !== 'object' ||
+    !(input !== null && '__mpgdBridgeProtocol' in input) ||
+    input.__mpgdBridgeProtocol !== bridgeStorageLoadProtocol
+  ) {
     return { value: input };
   }
 
-  const response = input as { readonly found?: unknown; readonly value?: unknown };
+  const response = input as {
+    readonly __mpgdBridgeProtocol: typeof bridgeStorageLoadProtocol;
+    readonly found?: unknown;
+    readonly value?: unknown;
+  };
 
   if (response.found === false) {
     return null;
   }
 
   if (response.found !== true) {
-    return { value: input };
+    throw new Error('Storage bridge load returned an invalid response.');
   }
 
   if (!Object.prototype.hasOwnProperty.call(response, 'value')) {

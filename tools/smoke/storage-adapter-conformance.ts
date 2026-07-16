@@ -1,4 +1,9 @@
-import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
+import {
+  bridgeStorageLoadProtocol,
+  createBridgeError,
+  type BridgeRequest,
+  type BridgeResponse,
+} from '@mpgd/bridge';
 import type { StorageAdapter } from '@mpgd/platform';
 import {
   runStorageAdapterConformance,
@@ -342,8 +347,12 @@ function createBridgeStorageProvider(devvitSaveAcknowledgment: boolean): {
             return ok(
               input,
               value === undefined
-                ? { found: false }
-                : { found: true, value: clone(value) },
+                ? { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false }
+                : {
+                    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+                    found: true,
+                    value: clone(value),
+                  },
             );
           }
 

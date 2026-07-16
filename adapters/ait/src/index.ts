@@ -1,4 +1,5 @@
 import {
+  bridgeStorageLoadProtocol,
   decodeBridgeStorageLoadData,
   type BridgeMethod,
   type BridgeRequest,
@@ -238,8 +239,8 @@ export function createAitSandboxBridge(): GamePlatformBridge {
           return ok(
             input,
             !found
-              ? ({ found: false } satisfies BridgeStorageLoadData)
-              : ({ found: true, value } satisfies BridgeStorageLoadData),
+              ? ({ __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false } satisfies BridgeStorageLoadData)
+              : ({ __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: true, value } satisfies BridgeStorageLoadData),
           );
         }
 

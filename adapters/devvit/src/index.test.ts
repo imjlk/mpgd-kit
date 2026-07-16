@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
+import {
+  bridgeStorageLoadProtocol,
+  createBridgeError,
+  type BridgeRequest,
+  type BridgeResponse,
+} from '@mpgd/bridge';
 import { createBridgeRpcFetchHandler, createBridgeRpcRouter } from '@mpgd/bridge/orpc';
 
 import {
@@ -378,7 +383,7 @@ describe('adapter-devvit', () => {
           return {
             id: input.id,
             ok: true,
-            data: { found: false },
+            data: { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false },
           };
         }
 
@@ -426,6 +431,7 @@ describe('adapter-devvit', () => {
             id: input.id,
             ok: true,
             data: {
+              __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
               found: true,
               value: { coins: 1 },
             },
@@ -493,6 +499,7 @@ describe('adapter-devvit', () => {
             id: input.id,
             ok: true,
             data: {
+              __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
               found: true,
               value: { coins: 1 },
             },
@@ -708,6 +715,7 @@ describe('adapter-devvit', () => {
             id: input.id,
             ok: true,
             data: {
+              __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
               found: true,
               value: { coins: 1 },
             },
@@ -786,7 +794,7 @@ describe('adapter-devvit', () => {
           return {
             id: input.id,
             ok: true,
-            data: { found: false },
+            data: { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false },
           };
         }
 

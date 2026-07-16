@@ -3,6 +3,7 @@ import Foundation
 
 @objc(CapacitorGameServicesPlugin)
 public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
+    private let storageLoadProtocol = "mpgd.storage.load.v1"
     public let identifier = "CapacitorGameServicesPlugin"
     public let jsName = "CapacitorGameServices"
     public let pluginMethods: [CAPPluginMethod] = [
@@ -123,7 +124,10 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
 
         do {
             guard let serializedValue = try localStorage.load(key: key) else {
-                call.resolve(okResponse(id: id, data: ["found": false]))
+                call.resolve(okResponse(id: id, data: [
+                    "__mpgdBridgeProtocol": storageLoadProtocol,
+                    "found": false
+                ]))
                 return
             }
 
@@ -132,6 +136,7 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
                 options: [.fragmentsAllowed]
             )
             call.resolve(okResponse(id: id, data: [
+                "__mpgdBridgeProtocol": storageLoadProtocol,
                 "found": true,
                 "value": value
             ]))

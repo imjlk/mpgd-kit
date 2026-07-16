@@ -1,5 +1,6 @@
 import {
   assertBridgeRequest,
+  bridgeStorageLoadProtocol,
   createBridgeError,
   type BridgeRequest,
   type BridgeResponse,
@@ -247,6 +248,7 @@ export function createMpgdCloudflarePagesBridgeHandler<
 
       case 'storage.load':
         return ok(input.bridgeRequest, {
+          __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
           found: false,
         } satisfies BridgeStorageLoadData);
 

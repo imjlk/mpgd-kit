@@ -21,7 +21,12 @@ import {
   resolveAitGameIdentity,
   type AitGameUserKeyProvider,
 } from './aitIdentity';
-import type { BridgeRequest, BridgeResponse, BridgeStorageLoadData } from './bridgeTypes';
+import {
+  bridgeStorageLoadProtocol,
+  type BridgeRequest,
+  type BridgeResponse,
+  type BridgeStorageLoadData,
+} from './bridgeTypes';
 
 const storage = new Map<string, unknown>();
 const launchEntries = new Set<LaunchEntry>([
@@ -229,8 +234,12 @@ export function installAitBridge(options: InstallAitBridgeOptions = {}): void {
             ok: true,
             data:
               value === undefined
-                ? ({ found: false } satisfies BridgeStorageLoadData)
+                ? ({
+                    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+                    found: false,
+                  } satisfies BridgeStorageLoadData)
                 : ({
+                    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
                     found: true,
                     value: cloneJsonValue(value),
                   } satisfies BridgeStorageLoadData),

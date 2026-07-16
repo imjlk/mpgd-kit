@@ -1,4 +1,5 @@
 import {
+  bridgeStorageLoadProtocol,
   createBridgeError,
   decodeBridgeStorageLoadData,
   type BridgeMethod,
@@ -322,8 +323,9 @@ export function createDevvitSandboxBridge(): DevvitBridge {
           return ok(
             input,
             value === undefined
-              ? ({ found: false } satisfies BridgeStorageLoadData)
+              ? ({ __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false } satisfies BridgeStorageLoadData)
               : ({
+                  __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
                   found: true,
                   value: cloneJsonValue(value),
                 } satisfies BridgeStorageLoadData),
