@@ -95,6 +95,22 @@ describe('Verse8 Agent8 storage service', () => {
     await expect(
       service.load('0xbroken', { key: 'first' }, fixture.context),
     ).rejects.toThrow('envelope is invalid');
+
+    fixture.userStates.set('0xoversized', {
+      mpgdVerse8Storage: {
+        version: 2,
+        values: {
+          ['0'.repeat(64)]: { keyId: 'test-key-v1', ciphertext: 'opaque-1' },
+          ['1'.repeat(64)]: { keyId: 'test-key-v1', ciphertext: 'opaque-2' },
+        },
+      },
+    });
+    await expect(
+      service.load('0xoversized', { key: 'first' }, fixture.context),
+    ).rejects.toThrow('maximumEntries');
+    await expect(
+      service.save('0xoversized', { key: 'first', value: 'updated' }, fixture.context),
+    ).rejects.toThrow('maximumEntries');
   });
 
   it('treats inherited property names as ordinary storage keys', async () => {
@@ -267,30 +283,36 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
       attemptId: 'interrupted-attempt',
       score: 10,
     });
+    const later = createAttempt({
+      participantId: 'participant',
+      attemptId: 'later-better-attempt',
+      score: 20,
+    });
 
     await expect(service.recordVerifiedAttempt(input)).rejects.toThrow(
       'simulated interruption',
     );
 
-    const recovered = await service.recordVerifiedAttempt(input);
-    expect(recovered).toMatchObject({
-      recorded: true,
-      alreadyProcessed: false,
+    await expect(service.recordVerifiedAttempt(later)).resolves.toMatchObject({
       retained: true,
       entry: {
         rank: 1,
         participantId: 'participant',
-        attemptId: 'interrupted-attempt',
-        score: 10,
+        attemptId: 'later-better-attempt',
+        score: 20,
       },
     });
     await expect(service.recordVerifiedAttempt(input)).resolves.toMatchObject({
       alreadyProcessed: true,
       retained: true,
+      entry: {
+        attemptId: 'interrupted-attempt',
+        score: 10,
+      },
     });
     await expect(service.getSnapshot({ leaderboardId: 'board' })).resolves.toMatchObject({
       totalParticipants: 1,
-      entries: [{ attemptId: 'interrupted-attempt' }],
+      entries: [{ attemptId: 'later-better-attempt' }],
     });
   });
 

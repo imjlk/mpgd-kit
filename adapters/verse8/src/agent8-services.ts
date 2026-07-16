@@ -159,6 +159,7 @@ export function createVerse8Agent8StorageService(
       const userState = await context.getUserState(account);
       const state = readStorageState(userState[namespace]);
       assertStorageStateSize(state, maximumStateBytes);
+      assertStorageEntryCount(state, maximumEntries);
       const storageKey = createPrivateStorageKey(persistenceKey, account, input.key);
 
       if (!Object.hasOwn(state.values, storageKey)) {
@@ -207,6 +208,7 @@ export function createVerse8Agent8StorageService(
         const userState = await context.getUserState(account);
         const state = readStorageState(userState[namespace]);
         assertStorageStateSize(state, maximumStateBytes);
+        assertStorageEntryCount(state, maximumEntries);
         const isNewKey = !Object.hasOwn(state.values, storageKey);
 
         if (isNewKey && Object.keys(state.values).length >= maximumEntries) {
@@ -328,6 +330,7 @@ interface StoredEntry {
   readonly itemId: string;
   readonly attemptDigest: string;
   readonly attempt: StoredLeaderboardAttempt;
+  readonly pendingDecision?: StoredAttemptDecision;
 }
 
 interface StoredAttemptDecision {
@@ -377,6 +380,20 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
 
       return context.lock(leaderboardLockKey(definition.leaderboardId), async () => {
         await ensureDefinition(context, collections, definition);
+        const loadedEntries = await loadEntries(
+          context,
+          collections,
+          definition,
+          maximumParticipants,
+        );
+        const entries = await flushPendingEntryDecisions(
+          context,
+          namespace,
+          collections,
+          definition,
+          loadedEntries,
+          persistenceKey,
+        );
         const existingDecision = await loadAttemptDecision(
           context,
           decisionCollection,
@@ -388,12 +405,6 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
           return cloneRecordResponse(existingDecision.response, true);
         }
 
-        const entries = await loadEntries(
-          context,
-          collections,
-          definition,
-          maximumParticipants,
-        );
         const orphanedAttemptEntry = entries.find(
           (entry) => entry.attempt.attemptId === attempt.attemptId,
         );
@@ -408,7 +419,6 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
         const retained = entries.find(
           (entry) => entry.attempt.participantId === attempt.participantId,
         );
-        let nextEntry = createStoredEntry('', attempt, attemptDigest);
         let nextEntries: readonly StoredEntry[];
 
         if (retained === undefined) {
@@ -416,22 +426,9 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
             throw new Error('Verse8 leaderboard exceeds maximumParticipants.');
           }
 
-          const added = await context.addCollectionItem(
-            collections.entries,
-            createEntryItem(attempt, attemptDigest),
-          );
-          nextEntry = createStoredEntry(
-            readItemId(added, 'Verse8 retained leaderboard entry'),
-            attempt,
-            attemptDigest,
-          );
-          nextEntries = [...entries, nextEntry];
+          nextEntries = [...entries, createStoredEntry('', attempt, attemptDigest)];
         } else if (shouldReplaceRetainedAttempt(definition, retained.attempt, attempt)) {
-          await context.updateCollectionItem(collections.entries, {
-            __id: retained.itemId,
-            ...createEntryItem(attempt, attemptDigest),
-          });
-          nextEntry = createStoredEntry(retained.itemId, attempt, attemptDigest);
+          const nextEntry = createStoredEntry(retained.itemId, attempt, attemptDigest);
           nextEntries = entries.map((entry) =>
             entry.itemId === retained.itemId ? nextEntry : entry,
           );
@@ -458,10 +455,46 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
         } satisfies RecordVerifiedLeaderboardAttemptResponse;
         assertRecordVerifiedLeaderboardAttemptResponse(response);
 
-        await context.addCollectionItem(decisionCollection, {
+        const pendingDecision = {
           attemptDigest,
-          response,
-        });
+          response: cloneRecordResponse(response, false),
+        } satisfies StoredAttemptDecision;
+
+        if (attemptRetained) {
+          let retainedItemId: string;
+
+          if (retained === undefined) {
+            const added = await context.addCollectionItem(
+              collections.entries,
+              createEntryItem(attempt, attemptDigest, pendingDecision),
+            );
+            retainedItemId = readItemId(added, 'Verse8 retained leaderboard entry');
+          } else {
+            retainedItemId = retained.itemId;
+            await context.updateCollectionItem(collections.entries, {
+              __id: retainedItemId,
+              ...createEntryItem(attempt, attemptDigest, pendingDecision),
+            });
+          }
+
+          await ensureAttemptDecision(
+            context,
+            decisionCollection,
+            attempt,
+            pendingDecision,
+          );
+          await context.updateCollectionItem(collections.entries, {
+            __id: retainedItemId,
+            ...createEntryItem(attempt, attemptDigest),
+          });
+        } else {
+          await ensureAttemptDecision(
+            context,
+            decisionCollection,
+            attempt,
+            pendingDecision,
+          );
+        }
 
         return cloneRecordResponse(response, false);
       });
@@ -477,11 +510,19 @@ export function createVerse8Agent8VerifiedLeaderboardProvider(
           return undefined;
         }
 
-        const entries = await loadEntries(
+        const loadedEntries = await loadEntries(
           context,
           collections,
           definition,
           maximumParticipants,
+        );
+        const entries = await flushPendingEntryDecisions(
+          context,
+          namespace,
+          collections,
+          definition,
+          loadedEntries,
+          persistenceKey,
         );
         const rankedEntries = rankEntries(definition, entries);
         const cursorPosition = input.cursor === undefined
@@ -596,7 +637,7 @@ async function loadDefinition(
 async function loadAttemptDecision(
   context: Verse8Agent8ServiceContext,
   collectionId: string,
-  attempt: VerifiedLeaderboardAttempt,
+  attempt: StoredLeaderboardAttempt,
   expectedDigest: string,
 ): Promise<StoredAttemptDecision | undefined> {
   const item = await loadSingleCollectionItem(
@@ -620,6 +661,64 @@ async function loadAttemptDecision(
     attemptDigest: expectedDigest,
     response: cloneRecordResponse(item.response, false),
   };
+}
+
+async function ensureAttemptDecision(
+  context: Verse8Agent8ServiceContext,
+  collectionId: string,
+  attempt: StoredLeaderboardAttempt,
+  decision: StoredAttemptDecision,
+): Promise<void> {
+  const existing = await loadAttemptDecision(
+    context,
+    collectionId,
+    attempt,
+    decision.attemptDigest,
+  );
+
+  if (existing === undefined) {
+    await context.addCollectionItem(collectionId, {
+      attemptDigest: decision.attemptDigest,
+      response: cloneRecordResponse(decision.response, false),
+    });
+    return;
+  }
+
+  if (!areRecordResponsesEqual(existing.response, decision.response)) {
+    throw new Error('Stored Verse8 leaderboard attempt decision is invalid.');
+  }
+}
+
+async function flushPendingEntryDecisions(
+  context: Verse8Agent8ServiceContext,
+  namespace: string,
+  collections: LeaderboardCollections,
+  definition: VerifiedLeaderboardDefinition,
+  entries: readonly StoredEntry[],
+  persistenceKey: Uint8Array,
+): Promise<readonly StoredEntry[]> {
+  const nextEntries = [...entries];
+
+  for (const [index, entry] of nextEntries.entries()) {
+    if (entry.pendingDecision === undefined) {
+      continue;
+    }
+
+    const decisionCollection = createAttemptDecisionCollection(
+      namespace,
+      definition.leaderboardId,
+      entry.attempt.attemptId,
+      persistenceKey,
+    );
+    await ensureAttemptDecision(context, decisionCollection, entry.attempt, entry.pendingDecision);
+    await context.updateCollectionItem(collections.entries, {
+      __id: entry.itemId,
+      ...createEntryItem(entry.attempt, entry.attemptDigest),
+    });
+    nextEntries[index] = createStoredEntry(entry.itemId, entry.attempt, entry.attemptDigest);
+  }
+
+  return nextEntries;
 }
 
 async function loadEntries(
@@ -682,7 +781,40 @@ function readEntry(item: Verse8Agent8CollectionItem): StoredEntry {
     throw new Error('Stored Verse8 leaderboard entry is invalid.');
   }
 
-  return createStoredEntry(itemId, readStoredAttempt(item.attempt), item.attemptDigest);
+  const attempt = readStoredAttempt(item.attempt);
+  const pendingDecision = item.pendingDecision === undefined
+    ? undefined
+    : readPendingAttemptDecision(item.pendingDecision, attempt, item.attemptDigest);
+
+  return createStoredEntry(itemId, attempt, item.attemptDigest, pendingDecision);
+}
+
+function readPendingAttemptDecision(
+  input: unknown,
+  attempt: StoredLeaderboardAttempt,
+  expectedDigest: string,
+): StoredAttemptDecision {
+  if (
+    !isRecord(input)
+    || Object.keys(input).length !== 2
+    || !Object.hasOwn(input, 'attemptDigest')
+    || !Object.hasOwn(input, 'response')
+    || input.attemptDigest !== expectedDigest
+  ) {
+    throw new Error('Stored Verse8 leaderboard pending decision is invalid.');
+  }
+
+  assertRecordVerifiedLeaderboardAttemptResponse(input.response);
+  assertStoredAttemptDecision(attempt, input.response);
+
+  if (!input.response.retained) {
+    throw new Error('Stored Verse8 leaderboard pending decision is invalid.');
+  }
+
+  return {
+    attemptDigest: expectedDigest,
+    response: cloneRecordResponse(input.response, false),
+  };
 }
 
 function readStoredAttempt(input: unknown): StoredLeaderboardAttempt {
@@ -719,21 +851,39 @@ function createStoredEntry(
   itemId: string,
   attempt: StoredLeaderboardAttempt,
   attemptDigest: string,
+  pendingDecision?: StoredAttemptDecision,
 ): StoredEntry {
   return {
     itemId,
     attemptDigest,
     attempt: cloneStoredAttempt(attempt),
+    ...(pendingDecision === undefined
+      ? {}
+      : {
+          pendingDecision: {
+            attemptDigest: pendingDecision.attemptDigest,
+            response: cloneRecordResponse(pendingDecision.response, false),
+          },
+        }),
   };
 }
 
 function createEntryItem(
-  attempt: VerifiedLeaderboardAttempt,
+  attempt: StoredLeaderboardAttempt,
   attemptDigest: string,
+  pendingDecision?: StoredAttemptDecision,
 ): Readonly<Record<string, unknown>> {
   return {
     attemptDigest,
     attempt: cloneStoredAttempt(attempt),
+    ...(pendingDecision === undefined
+      ? {}
+      : {
+          pendingDecision: {
+            attemptDigest: pendingDecision.attemptDigest,
+            response: cloneRecordResponse(pendingDecision.response, false),
+          },
+        }),
   };
 }
 
@@ -895,7 +1045,7 @@ function createAttemptDigest(
 }
 
 function assertStoredAttemptDecision(
-  attempt: VerifiedLeaderboardAttempt,
+  attempt: StoredLeaderboardAttempt,
   response: RecordVerifiedLeaderboardAttemptResponse,
 ): void {
   if (
@@ -911,6 +1061,23 @@ function assertStoredAttemptDecision(
   ) {
     throw new Error('Stored Verse8 leaderboard attempt decision is invalid.');
   }
+}
+
+function areRecordResponsesEqual(
+  left: RecordVerifiedLeaderboardAttemptResponse,
+  right: RecordVerifiedLeaderboardAttemptResponse,
+): boolean {
+  return left.recorded === right.recorded
+    && left.alreadyProcessed === right.alreadyProcessed
+    && left.retained === right.retained
+    && left.reason === right.reason
+    && left.entry.rank === right.entry.rank
+    && left.entry.participantId === right.entry.participantId
+    && left.entry.participantLabel === right.entry.participantLabel
+    && left.entry.attemptId === right.entry.attemptId
+    && left.entry.score === right.entry.score
+    && areMetricMapsEqual(left.entry.metrics, right.entry.metrics)
+    && Date.parse(left.entry.completedAt) === Date.parse(right.entry.completedAt);
 }
 
 function areMetricMapsEqual(
@@ -971,6 +1138,12 @@ function readStorageState(value: unknown): StoredStorageState {
 function assertStorageStateSize(state: StoredStorageState, maximumStateBytes: number): void {
   if (utf8Bytes(JSON.stringify(state)).length > maximumStateBytes) {
     throw new Error('Stored Verse8 cloud save state exceeds maximumStateBytes.');
+  }
+}
+
+function assertStorageEntryCount(state: StoredStorageState, maximumEntries: number): void {
+  if (Object.keys(state.values).length > maximumEntries) {
+    throw new Error('Stored Verse8 cloud save state exceeds maximumEntries.');
   }
 }
 

@@ -155,6 +155,12 @@ ordering, and retries preserve their original retention decision. The exported
 provider for an already-authoritative coordinator; never expose its trusted
 recorder directly to a game client.
 
+Retained-entry writes include a transient public `pendingDecision` containing
+only the response and its keyed digest. Every board operation must durably
+write or validate the private attempt marker and clear that pending value
+before it can continue, so a marker interruption cannot let a later attempt
+replace the entry before the original decision is recoverable.
+
 Agent8 global collections may be client-subscribable. The provider therefore
 stores only public retained-entry fields plus HMAC-SHA-256 identity digests. It
 does not persist verification evidence or the raw history of non-retained
