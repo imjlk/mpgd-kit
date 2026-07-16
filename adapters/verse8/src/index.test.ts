@@ -225,6 +225,22 @@ describe('adapter-verse8', () => {
       idempotencyKey: 'purchase-standalone',
     })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
 
+    const throwingAvailabilityGateway = createVerse8PlatformGateway({
+      authClient: authenticatedClient(),
+      vxShop: {
+        ...baseOptions,
+        canOpenShop() {
+          throw new Error('host inspection failed');
+        },
+      },
+    });
+
+    await expect(throwingAvailabilityGateway.commerce.purchase({
+      productId: 'REMOVE_ADS',
+      source: 'shop',
+      idempotencyKey: 'purchase-host-error',
+    })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+
     const missingProductGateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),
       vxShop: {

@@ -215,7 +215,9 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
             status,
             reason: purchase.status === 'completed'
               ? 'verse8_grants_require_agent8_purchase_event'
-              : 'agent8_purchase_event_pending',
+              : purchase.status === 'pending'
+                ? 'agent8_purchase_event_pending'
+                : undefined,
           },
         });
 

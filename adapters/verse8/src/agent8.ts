@@ -67,7 +67,7 @@ interface StoredCommerceState {
   readonly version: 1;
   readonly balances: Readonly<Record<'coin' | 'gem', number>>;
   readonly entitlements: readonly Entitlement[];
-  readonly purchases: readonly StoredPurchase[];
+  readonly purchasesById: Readonly<Record<string, StoredPurchase>>;
 }
 
 export function createVerse8Agent8CommerceService(
@@ -94,9 +94,7 @@ export function createVerse8Agent8CommerceService(
         async () => {
           const userState = await context.getUserState(normalized.account);
           const current = readCommerceState(userState[namespace]);
-          const existing = current.purchases.find(
-            (purchase) => purchase.purchaseId === purchaseId,
-          );
+          const existing = current.purchasesById[purchaseId];
 
           if (existing !== undefined) {
             assertSamePurchase(existing, normalized, product.id);
@@ -123,7 +121,10 @@ export function createVerse8Agent8CommerceService(
           } satisfies StoredPurchase;
           const next = {
             ...applied.state,
-            purchases: [...applied.state.purchases, purchase],
+            purchasesById: {
+              ...applied.state.purchasesById,
+              [purchaseId]: purchase,
+            },
           } satisfies StoredCommerceState;
 
           // The grant and its consume-once marker share one Agent8 user-state
@@ -244,6 +245,10 @@ function applyGrant(
     };
   }
 
+  if (quantity !== 1) {
+    throw new Error('Verse8 entitlement purchases must have quantity 1.');
+  }
+
   const existing = state.entitlements.find((entitlement) => entitlement.id === grant.entitlement);
   const entitlements = existing === undefined
     ? [
@@ -278,7 +283,7 @@ function readCommerceState(value: unknown): StoredCommerceState {
     version: 1,
     balances: readBalances(value.balances),
     entitlements: readEntitlements(value.entitlements),
-    purchases: readPurchases(value.purchases),
+    purchasesById: readPurchaseIndex(value.purchasesById),
   };
 }
 
@@ -287,7 +292,7 @@ function emptyCommerceState(): StoredCommerceState {
     version: 1,
     balances: { coin: 0, gem: 0 },
     entitlements: [],
-    purchases: [],
+    purchasesById: {},
   };
 }
 
@@ -332,18 +337,18 @@ function readEntitlements(value: unknown): readonly Entitlement[] {
   });
 }
 
-function readPurchases(value: unknown): readonly StoredPurchase[] {
-  if (!Array.isArray(value)) {
+function readPurchaseIndex(value: unknown): Readonly<Record<string, StoredPurchase>> {
+  if (!isRecord(value)) {
     throw invalidStoredState();
   }
 
-  const purchaseIds = new Set<string>();
+  const purchasesById: Record<string, StoredPurchase> = {};
 
-  return value.map((entry) => {
+  for (const [purchaseId, entry] of Object.entries(value)) {
     if (
-      !isRecord(entry)
-      || typeof entry.purchaseId !== 'string'
-      || entry.purchaseId.length === 0
+      !isCanonicalPurchaseId(purchaseId)
+      || !isRecord(entry)
+      || entry.purchaseId !== purchaseId
       || typeof entry.platformProductId !== 'string'
       || entry.platformProductId.length === 0
       || typeof entry.logicalProductId !== 'string'
@@ -354,22 +359,27 @@ function readPurchases(value: unknown): readonly StoredPurchase[] {
       || entry.grantedAt.length === 0
       || !Array.isArray(entry.entitlementIds)
       || !entry.entitlementIds.every((id) => typeof id === 'string' && id.length > 0)
-      || purchaseIds.has(entry.purchaseId)
     ) {
       throw invalidStoredState();
     }
 
-    purchaseIds.add(entry.purchaseId);
-
-    return {
-      purchaseId: entry.purchaseId,
+    purchasesById[purchaseId] = {
+      purchaseId,
       platformProductId: entry.platformProductId,
       logicalProductId: entry.logicalProductId,
       quantity: entry.quantity as number,
       grantedAt: entry.grantedAt,
       entitlementIds: entry.entitlementIds as readonly string[],
     };
-  });
+  }
+
+  return purchasesById;
+}
+
+function isCanonicalPurchaseId(value: string): boolean {
+  const parsed = Number(value);
+
+  return Number.isSafeInteger(parsed) && parsed >= 0 && String(parsed) === value;
 }
 
 function assertSafeNonNegativeInteger(value: unknown): number {

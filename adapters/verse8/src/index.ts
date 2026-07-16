@@ -373,11 +373,15 @@ function createVerse8Commerce(
     async purchase(input) {
       const product = products.find((candidate) => candidate.id === input.productId);
 
-      if (product === undefined || !(options.canOpenShop ?? canOpenDefaultVerse8Shop)()) {
+      if (product === undefined) {
         return failedPurchase();
       }
 
       try {
+        if (!(options.canOpenShop ?? canOpenDefaultVerse8Shop)()) {
+          return failedPurchase();
+        }
+
         ensureInitialized();
         await client.refresh();
         const item = client.getItem(product.platformProductId);

@@ -79,7 +79,7 @@ The helper applies these controls:
 - maps the platform product to a catalog grant and ignores event metadata;
 - validates positive safe-integer purchase IDs and quantities;
 - serializes purchases per account with `$lock`;
-- writes the grant and permanent purchase marker in one user-state update;
+- writes the grant and purchase-ID-indexed permanent marker in one user-state update;
 - returns the stored result for an identical retry;
 - rejects purchase-ID collisions and malformed stored state.
 
