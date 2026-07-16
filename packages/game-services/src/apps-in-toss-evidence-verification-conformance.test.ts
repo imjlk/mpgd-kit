@@ -35,7 +35,7 @@ const purchaseInput = {
   signal,
 };
 const rewardInput = {
-  impressionId: 'impression-1',
+  correlationId: 'correlation-1',
   playerId: 'player-1',
   platformPlacementId: 'placement-1',
   signal,
@@ -82,14 +82,14 @@ assertJsonEqual(
 );
 assertJsonEqual(
   createAppsInTossRewardCallbackEvidence({
-    impressionId: 'impression-1',
+    correlationId: 'correlation-1',
     platformPlacementId: 'placement-1',
   }),
   {
     schema: appsInTossRewardCallbackEvidenceSchema,
     payload: {
       event: 'user-earned-reward',
-      impressionId: 'impression-1',
+      correlationId: 'correlation-1',
       placementId: 'placement-1',
     },
   },

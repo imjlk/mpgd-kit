@@ -1,6 +1,7 @@
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 
 import {
+  createAppsInTossProductGrantCallback,
   createAppsInTossProductionEvidenceVerifier,
   createAppsInTossPurchaseCallbackEvidence,
   createAppsInTossRewardCallbackEvidence,
@@ -23,9 +24,11 @@ import type { ClaimAdRewardRequest, VerifyPurchaseRequest } from './types';
 
 export const appsInTossProductionEvidenceConformanceScenarios = [
   'callback-only-fail-closed',
+  'purchase-product-grant-callback',
   'purchase-authority-retry',
   'purchase-pending-order-restore',
   'purchase-authority-matching',
+  'purchase-timestamp-normalization',
   'reward-authority-retry-and-replay',
   'authority-errors-and-reward-matching',
 ] as const;
@@ -103,9 +106,11 @@ const scenarioRunners: ReadonlyArray<
   readonly [AppsInTossProductionEvidenceConformanceScenario, ScenarioRunner]
 > = [
   ['callback-only-fail-closed', runCallbackOnlyFailClosedScenario],
+  ['purchase-product-grant-callback', runPurchaseProductGrantCallbackScenario],
   ['purchase-authority-retry', runPurchaseAuthorityRetryScenario],
   ['purchase-pending-order-restore', runPurchasePendingOrderRestoreScenario],
   ['purchase-authority-matching', runPurchaseAuthorityMatchingScenario],
+  ['purchase-timestamp-normalization', runPurchaseTimestampNormalizationScenario],
   ['reward-authority-retry-and-replay', runRewardAuthorityRetryAndReplayScenario],
   ['authority-errors-and-reward-matching', runAuthorityErrorsAndRewardMatchingScenario],
 ];
@@ -228,6 +233,69 @@ async function runPurchaseAuthorityRetryScenario(
   );
 }
 
+async function runPurchaseProductGrantCallbackScenario(
+  createVerifier: CreateAppsInTossProductionEvidenceVerifier,
+  now: string,
+): Promise<void> {
+  const failClosedContext = createScenarioContext(createVerifier, now);
+  const failClosedCallback = createAppsInTossProductGrantCallback({
+    purchaseVerification: failClosedContext.backend.purchases,
+    playerId: 'ait-player-1',
+    productId: 'CONFORMANCE_COINS',
+    platformSku: 'ait.conformance.coins',
+    now: () => now,
+  });
+
+  assertEqual(
+    await failClosedCallback({ orderId: 'ait-order-fail-closed' }),
+    false,
+    'product-grant callback must fail closed without authority',
+  );
+  const transportFailureCallback = createAppsInTossProductGrantCallback({
+    purchaseVerification: {
+      async verifyPurchase() {
+        throw new Error('simulated callback transport failure');
+      },
+    },
+    playerId: 'ait-player-1',
+    productId: 'CONFORMANCE_COINS',
+    platformSku: 'ait.conformance.coins',
+    now: () => now,
+  });
+  assertEqual(
+    await transportFailureCallback({ orderId: 'ait-order-transport-failure' }),
+    false,
+    'product-grant transport failure must return false to the SDK',
+  );
+  await assertEntitlementCount(failClosedContext.store, 0, 'fail-closed product-grant callback');
+
+  const fixture = createAppsInTossProductionEvidenceAuthorityFixture();
+  fixture.enqueuePurchaseResult(resolvedOrder());
+  const context = createScenarioContext(createVerifier, now, {
+    purchaseAuthority: fixture.purchaseAuthority,
+  });
+  const callback = createAppsInTossProductGrantCallback({
+    purchaseVerification: context.backend.purchases,
+    playerId: 'ait-player-1',
+    productId: 'CONFORMANCE_COINS',
+    platformSku: 'ait.conformance.coins',
+    now: () => now,
+  });
+
+  assertEqual(
+    await callback({ orderId: 'ait-order-1' }),
+    true,
+    'product-grant callback must wait for an authoritative ledger grant',
+  );
+  await assertEntitlementCount(context.store, 1, 'authoritative product-grant callback');
+  const [transaction] = await context.store.listEntitlementTransactions();
+  assertEqual(
+    transaction?.idempotencyKey,
+    'apps-in-toss:purchase:ait-order-1',
+    'product-grant callback must derive restart-stable order idempotency',
+  );
+}
+
 async function runPurchasePendingOrderRestoreScenario(
   createVerifier: CreateAppsInTossProductionEvidenceVerifier,
   now: string,
@@ -332,6 +400,57 @@ async function runPurchaseAuthorityMatchingScenario(
   await assertEntitlementCount(context.store, 0, 'purchase mismatches and status');
 }
 
+async function runPurchaseTimestampNormalizationScenario(
+  createVerifier: CreateAppsInTossProductionEvidenceVerifier,
+  now: string,
+): Promise<void> {
+  const fixture = createAppsInTossProductionEvidenceAuthorityFixture();
+  fixture.enqueuePurchaseResult(
+    resolvedOrder({
+      orderId: 'ait-order-kst',
+      statusDeterminedAt: '2025-09-12T16:57:12',
+    }),
+  );
+  fixture.enqueuePurchaseResult(
+    resolvedOrder({
+      orderId: 'ait-order-invalid-date',
+      statusDeterminedAt: '2025-02-30T16:57:12',
+    }),
+  );
+  const context = createScenarioContext(createVerifier, now, {
+    purchaseAuthority: fixture.purchaseAuthority,
+  });
+
+  const kstOrder = await context.backend.purchases.verifyPurchase(
+    purchaseRequest({
+      platformTransactionId: 'ait-order-kst',
+      idempotencyKey: 'purchase-kst',
+      evidence: purchaseEvidence('ait-order-kst'),
+    }),
+  );
+  const invalidDate = await context.backend.purchases.verifyPurchase(
+    purchaseRequest({
+      platformTransactionId: 'ait-order-invalid-date',
+      idempotencyKey: 'purchase-invalid-date',
+      evidence: purchaseEvidence('ait-order-invalid-date'),
+    }),
+  );
+
+  assertEqual(kstOrder.verified, true, 'documented KST timestamp must verify deterministically');
+  assertEqual(
+    invalidDate.reason,
+    'AIT_PURCHASE_AUTHORITY_TIMESTAMP_INVALID',
+    'calendar-overflow timestamp must be rejected',
+  );
+  const [transaction] = await context.store.listEntitlementTransactions();
+  assertEqual(
+    transaction?.payload.evidenceVerifiedAt,
+    '2025-09-12T07:57:12.000Z',
+    'offset-free order timestamps must normalize as documented KST',
+  );
+  await assertEntitlementCount(context.store, 1, 'deterministic timestamp normalization');
+}
+
 async function runRewardAuthorityRetryAndReplayScenario(
   createVerifier: CreateAppsInTossProductionEvidenceVerifier,
   now: string,
@@ -372,13 +491,18 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
   fixture.enqueueRewardResult(new Error('simulated reward authority failure'));
   fixture.enqueueRewardResult(
     verifiedReward({
-      impressionId: 'ait-impression-player',
+      correlationId: 'different-correlation',
+    }),
+  );
+  fixture.enqueueRewardResult(
+    verifiedReward({
+      correlationId: 'ait-correlation-player',
       playerId: 'different-player',
     }),
   );
   fixture.enqueueRewardResult(
     verifiedReward({
-      impressionId: 'ait-impression-placement',
+      correlationId: 'ait-correlation-placement',
       platformPlacementId: 'different-placement',
     }),
   );
@@ -387,29 +511,37 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
     rewardAuthority: fixture.rewardAuthority,
   });
   const failed = await context.backend.adRewards.claimAdReward(rewardRequest());
+  const correlationMismatch = await context.backend.adRewards.claimAdReward(
+    rewardRequest({
+      idempotencyKey: 'reward-correlation',
+      evidence: rewardEvidence('ait-correlation-mismatch'),
+    }),
+  );
   const playerMismatch = await context.backend.adRewards.claimAdReward(
     rewardRequest({
-      platformImpressionId: 'ait-impression-player',
       idempotencyKey: 'reward-player',
-      evidence: rewardEvidence('ait-impression-player'),
+      evidence: rewardEvidence('ait-correlation-player'),
     }),
   );
   const placementMismatch = await context.backend.adRewards.claimAdReward(
     rewardRequest({
-      platformImpressionId: 'ait-impression-placement',
       idempotencyKey: 'reward-placement',
-      evidence: rewardEvidence('ait-impression-placement'),
+      evidence: rewardEvidence('ait-correlation-placement'),
     }),
   );
   const pending = await context.backend.adRewards.claimAdReward(
     rewardRequest({
-      platformImpressionId: 'ait-impression-pending',
       idempotencyKey: 'reward-pending',
-      evidence: rewardEvidence('ait-impression-pending'),
+      evidence: rewardEvidence('ait-correlation-pending'),
     }),
   );
 
   assertEqual(failed.reason, 'EVIDENCE_VERIFIER_ERROR', 'reward authority error');
+  assertEqual(
+    correlationMismatch.reason,
+    'AIT_REWARD_AUTHORITY_CORRELATION_ID_MISMATCH',
+    'reward correlation mismatch',
+  );
   assertEqual(
     playerMismatch.reason,
     'AIT_REWARD_AUTHORITY_PLAYER_MISMATCH',
@@ -468,10 +600,9 @@ function rewardRequest(
     target: 'ait',
     playerId: 'ait-player-1',
     placementId: 'CONFORMANCE_REWARD',
-    platformImpressionId: 'ait-impression-1',
     idempotencyKey: 'reward-1',
     completedAt: '2030-01-02T03:01:00.000Z',
-    evidence: rewardEvidence('ait-impression-1'),
+    evidence: rewardEvidence('ait-correlation-1'),
     ...overrides,
   };
 }
@@ -484,9 +615,9 @@ function purchaseEvidence(orderId: string) {
   });
 }
 
-function rewardEvidence(impressionId: string) {
+function rewardEvidence(correlationId: string) {
   return createAppsInTossRewardCallbackEvidence({
-    impressionId,
+    correlationId,
     platformPlacementId: 'ait.conformance.reward',
   });
 }
@@ -513,7 +644,7 @@ function verifiedReward(
   return {
     decision: 'verified',
     authorityEventId: 'ait-authority-event-1',
-    impressionId: 'ait-impression-1',
+    correlationId: 'ait-correlation-1',
     playerId: 'ait-player-1',
     platformPlacementId: 'ait.conformance.reward',
     verifiedAt: '2030-01-02T03:02:00.000Z',

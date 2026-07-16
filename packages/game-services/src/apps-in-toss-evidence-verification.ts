@@ -1,4 +1,4 @@
-import type { PlatformEvidenceEnvelope } from '@mpgd/platform';
+import type { LogicalProductId, PlatformEvidenceEnvelope } from '@mpgd/platform';
 
 import type {
   EvidenceVerificationDecision,
@@ -6,6 +6,7 @@ import type {
   VerifyAdRewardEvidenceInput,
   VerifyPurchaseEvidenceInput,
 } from './evidence-verification';
+import type { VerifyPurchaseRequest, VerifyPurchaseResponse } from './types';
 
 export const appsInTossPurchaseCallbackEvidenceSchema =
   'apps-in-toss.iap.callback.v1';
@@ -34,9 +35,43 @@ export interface AppsInTossPurchaseCallbackEvidenceInput {
 }
 
 export interface AppsInTossRewardCallbackEvidenceInput {
-  readonly impressionId: string;
+  /** Game-issued correlation id created before showing the rewarded ad. */
+  readonly correlationId: string;
   readonly platformPlacementId: string;
 }
+
+export interface AppsInTossProductGrantVerificationPort {
+  verifyPurchase(input: VerifyPurchaseRequest): Promise<VerifyPurchaseResponse>;
+}
+
+export interface VerifyAppsInTossProductGrantInput {
+  readonly purchaseVerification: AppsInTossProductGrantVerificationPort;
+  readonly orderId: string;
+  readonly playerId: string;
+  readonly productId: LogicalProductId;
+  readonly platformSku: string;
+  readonly idempotencyKey?: string;
+  readonly source: AppsInTossPurchaseCallbackSource;
+  readonly purchasedAt: string;
+}
+
+export interface CreateAppsInTossProductGrantCallbackInput {
+  readonly purchaseVerification: AppsInTossProductGrantVerificationPort;
+  readonly playerId: string;
+  readonly productId: LogicalProductId;
+  readonly platformSku: string;
+  /** Override only when the same function can be recreated for pending restore. */
+  readonly idempotencyKey?: (orderId: string) => string;
+  readonly now?: () => string;
+}
+
+export interface AppsInTossProcessProductGrantInput {
+  readonly orderId: string;
+}
+
+export type AppsInTossProcessProductGrant = (
+  input: AppsInTossProcessProductGrantInput,
+) => Promise<boolean>;
 
 export interface AppsInTossPurchaseAuthorityInput {
   readonly orderId: string;
@@ -78,7 +113,8 @@ export interface AppsInTossPurchaseAuthority {
 }
 
 export interface AppsInTossRewardAuthorityInput {
-  readonly impressionId: string;
+  /** Game-issued id that correlates the show request and reward callback. */
+  readonly correlationId: string;
   readonly playerId: string;
   readonly platformPlacementId: string;
   readonly signal: AbortSignal;
@@ -89,7 +125,7 @@ export type AppsInTossRewardAuthorityResult =
       readonly decision: 'verified';
       /** Stable, consume-once identity issued by the production authority. */
       readonly authorityEventId: string;
-      readonly impressionId: string;
+      readonly correlationId: string;
       readonly playerId: string;
       readonly platformPlacementId: string;
       readonly verifiedAt: string;
@@ -147,16 +183,78 @@ export function createAppsInTossPurchaseCallbackEvidence(
 export function createAppsInTossRewardCallbackEvidence(
   input: AppsInTossRewardCallbackEvidenceInput,
 ): PlatformEvidenceEnvelope {
-  requireIdentifier(input.impressionId, 'impressionId');
+  requireIdentifier(input.correlationId, 'correlationId');
   requireIdentifier(input.platformPlacementId, 'platformPlacementId');
 
   return {
     schema: appsInTossRewardCallbackEvidenceSchema,
     payload: {
       event: 'user-earned-reward',
-      impressionId: input.impressionId,
+      correlationId: input.correlationId,
       placementId: input.platformPlacementId,
     },
+  };
+}
+
+/**
+ * Sends an Apps in Toss product-grant callback to the authoritative backend.
+ * This is intentionally callable from inside the SDK's `processProductGrant`
+ * callback, before `createOneTimePurchaseOrder` emits its success event.
+ */
+export function verifyAppsInTossProductGrant(
+  input: VerifyAppsInTossProductGrantInput,
+): Promise<VerifyPurchaseResponse> {
+  const evidence = createAppsInTossPurchaseCallbackEvidence({
+    orderId: input.orderId,
+    platformSku: input.platformSku,
+    source: input.source,
+  });
+
+  return input.purchaseVerification.verifyPurchase({
+    target: 'ait',
+    playerId: input.playerId,
+    productId: input.productId,
+    platformTransactionId: input.orderId,
+    idempotencyKey: input.idempotencyKey ?? createAppsInTossPurchaseIdempotencyKey(input.orderId),
+    purchasedAt: input.purchasedAt,
+    evidence,
+  });
+}
+
+export function createAppsInTossPurchaseIdempotencyKey(orderId: string): string {
+  requireIdentifier(orderId, 'orderId');
+  return `apps-in-toss:purchase:${encodeURIComponent(orderId)}`;
+}
+
+/**
+ * Creates the exact async boolean callback expected by Apps in Toss IAP.
+ * Backend rejection and transport failures both return `false` so the SDK can
+ * retain the order for later pending-order recovery.
+ */
+export function createAppsInTossProductGrantCallback(
+  input: CreateAppsInTossProductGrantCallbackInput,
+): AppsInTossProcessProductGrant {
+  const now = input.now ?? (() => new Date().toISOString());
+
+  return async ({ orderId }) => {
+    try {
+      const verification = await verifyAppsInTossProductGrant({
+        purchaseVerification: input.purchaseVerification,
+        orderId,
+        playerId: input.playerId,
+        productId: input.productId,
+        platformSku: input.platformSku,
+        ...(input.idempotencyKey === undefined
+          ? {}
+          : { idempotencyKey: input.idempotencyKey(orderId) }),
+        source: 'process-product-grant',
+        purchasedAt: now(),
+      });
+
+      return verification.verified;
+    } catch {
+      return false;
+    }
   };
 }
 
@@ -276,25 +374,20 @@ async function verifyAppsInTossReward(
     return rejected('AIT_REWARD_PLACEMENT_UNCONFIGURED');
   }
 
-  const impressionId = request.platformImpressionId;
-  if (impressionId === undefined) {
-    return rejected('AIT_REWARD_IMPRESSION_ID_REQUIRED');
-  }
-
   if (request.evidence?.schema !== appsInTossRewardCallbackEvidenceSchema) {
     return rejected('AIT_REWARD_EVIDENCE_SCHEMA_INVALID');
   }
 
   const callbackEvent = readEvidenceString(request.evidence.payload, 'event');
-  const evidenceImpressionId = readEvidenceString(request.evidence.payload, 'impressionId');
+  const correlationId = readEvidenceString(request.evidence.payload, 'correlationId');
   const evidencePlacementId = readEvidenceString(request.evidence.payload, 'placementId');
 
   if (callbackEvent !== 'user-earned-reward') {
     return rejected('AIT_REWARD_CALLBACK_EVENT_INVALID');
   }
 
-  if (evidenceImpressionId !== impressionId) {
-    return rejected('AIT_REWARD_IMPRESSION_ID_MISMATCH');
+  if (correlationId === undefined) {
+    return rejected('AIT_REWARD_CORRELATION_ID_REQUIRED');
   }
 
   if (evidencePlacementId !== platformPlacementId) {
@@ -306,7 +399,7 @@ async function verifyAppsInTossReward(
   }
 
   const result = assertRewardAuthorityResult(await authority.verifyReward({
-    impressionId,
+    correlationId,
     playerId: request.playerId,
     platformPlacementId,
     signal: input.signal,
@@ -320,8 +413,8 @@ async function verifyAppsInTossReward(
     return rejected(result.reason);
   }
 
-  if (result.impressionId !== impressionId) {
-    return rejected('AIT_REWARD_AUTHORITY_IMPRESSION_ID_MISMATCH');
+  if (result.correlationId !== correlationId) {
+    return rejected('AIT_REWARD_AUTHORITY_CORRELATION_ID_MISMATCH');
   }
 
   if (result.playerId !== request.playerId) {
@@ -343,7 +436,7 @@ async function verifyAppsInTossReward(
     verifiedAt,
     payload: {
       appsInTossRewardAuthorityEventId: result.authorityEventId,
-      appsInTossRewardImpressionId: result.impressionId,
+      appsInTossRewardCorrelationId: result.correlationId,
       appsInTossRewardPlacementId: result.platformPlacementId,
     },
   };
@@ -398,7 +491,7 @@ function assertRewardAuthorityResult(
   }
 
   requireIdentifier(input.authorityEventId, 'reward authority event id');
-  requireIdentifier(input.impressionId, 'reward authority impression id');
+  requireIdentifier(input.correlationId, 'reward authority correlation id');
   requireIdentifier(input.playerId, 'reward authority player id');
   requireIdentifier(input.platformPlacementId, 'reward authority placement id');
   requireIdentifier(input.verifiedAt, 'reward authority verifiedAt');
@@ -419,8 +512,63 @@ function readEvidenceString(
 }
 
 function normalizeTimestamp(value: string): string | undefined {
-  const timestamp = Date.parse(value);
-  return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : undefined;
+  const timestampPattern = new RegExp(
+    String.raw`^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})`
+      + String.raw`(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))?$`,
+    'u',
+  );
+  const match = timestampPattern.exec(value);
+  if (match === null) {
+    return undefined;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const hour = Number(match[4]);
+  const minute = Number(match[5]);
+  const second = Number(match[6]);
+  const millisecond = Number((match[7] ?? '').padEnd(3, '0'));
+
+  if (
+    year < 1000
+    || month < 1
+    || month > 12
+    || day < 1
+    || day > 31
+    || hour > 23
+    || minute > 59
+    || second > 59
+  ) {
+    return undefined;
+  }
+
+  const wallClock = Date.UTC(year, month - 1, day, hour, minute, second, millisecond);
+  const wallClockDate = new Date(wallClock);
+  if (
+    wallClockDate.getUTCFullYear() !== year
+    || wallClockDate.getUTCMonth() !== month - 1
+    || wallClockDate.getUTCDate() !== day
+    || wallClockDate.getUTCHours() !== hour
+    || wallClockDate.getUTCMinutes() !== minute
+    || wallClockDate.getUTCSeconds() !== second
+  ) {
+    return undefined;
+  }
+
+  let offsetMinutes = 9 * 60;
+  if (match[8] === 'Z') {
+    offsetMinutes = 0;
+  } else if (match[9] !== undefined) {
+    const offsetHour = Number(match[10]);
+    const offsetMinute = Number(match[11]);
+    if (offsetHour > 14 || offsetMinute > 59 || (offsetHour === 14 && offsetMinute !== 0)) {
+      return undefined;
+    }
+    offsetMinutes = (offsetHour * 60 + offsetMinute) * (match[9] === '+' ? 1 : -1);
+  }
+
+  return new Date(wallClock - offsetMinutes * 60_000).toISOString();
 }
 
 function pending(reason: string): EvidenceVerificationDecision {

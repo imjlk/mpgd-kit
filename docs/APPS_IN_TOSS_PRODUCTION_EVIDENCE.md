@@ -12,14 +12,16 @@ ledger grant is written.
 
 ## Purchase flow
 
-Apps in Toss SDK 1.1.3 and later requires product-grant completion, and SDK
-1.2.2 and later supports pending-order restoration. The recommended flow is:
+Apps in Toss SDK 1.1.3 and later requires product-grant completion. The current
+`getPendingOrders()` support table requires WebView/RN SDK 1.4.8 and Toss app
+iOS 5.231.0 or Android 5.235.0. Use those newer minimums when shipping the
+pending-order recovery flow below.
 
-1. `processProductGrant({ orderId })` creates an
-   `apps-in-toss.iap.callback.v1` envelope with
-   `createAppsInTossPurchaseCallbackEvidence()`.
-2. The client sends the logical product, order id, authenticated player, and
-   envelope to the game-services purchase endpoint.
+1. Before calling `IAP.createOneTimePurchaseOrder()`, create an async boolean
+   callback with `createAppsInTossProductGrantCallback()`.
+2. The SDK invokes that callback as `processProductGrant({ orderId })`. It
+   creates an `apps-in-toss.iap.callback.v1` envelope and awaits the
+   game-services purchase endpoint before returning `true` or `false`.
 3. The injected `AppsInTossPurchaseAuthority` uses the partner-server order
    status API. Its adapter must associate the lookup with the authenticated
    Toss login user and return that server-authenticated game player identity.
@@ -30,9 +32,42 @@ Apps in Toss SDK 1.1.3 and later requires product-grant completion, and SDK
 6. Return `true` from `processProductGrant` only after the backend reports
    `verified: true`.
 
+The generic `createGameServicesClient().purchase()` flow verifies after
+`gateway.commerce.purchase()` returns, so it cannot satisfy this callback
+timing by itself. Wire the callback-specific API directly into the AIT SDK:
+
+```ts
+import { IAP } from '@apps-in-toss/web-framework';
+import {
+  createAppsInTossProductGrantCallback,
+} from '@mpgd/game-services/apps-in-toss-evidence-verification';
+
+const processProductGrant = createAppsInTossProductGrantCallback({
+  purchaseVerification: backend.purchases,
+  playerId,
+  productId: 'COINS_100',
+  platformSku: 'ait.production.coins-100',
+});
+
+let cleanup = () => {};
+cleanup = IAP.createOneTimePurchaseOrder({
+  options: {
+    sku: 'ait.production.coins-100',
+    processProductGrant,
+  },
+  onEvent: () => cleanup(),
+  onError: () => cleanup(),
+});
+```
+
+`backend.purchases` can be an HTTP-backed `PurchaseVerificationApi`; it must not
+contain mTLS credentials in the client. The helper derives its idempotency key
+from the order id, so the same order remains replay-safe across restarts.
+
 For a grant-server failure, return `false`. At the next launch, read
-`getPendingOrders()`, submit each order with source `pending-order-restore`, and
-call `completeProductGrant()` only after the backend accepts the ledger grant.
+`getPendingOrders()`, submit each order with
+`verifyAppsInTossProductGrant({ source: 'pending-order-restore', ... })`, and call
+`completeProductGrant()` only after the backend accepts the ledger grant.
 If completion itself fails, the same request can be retried: the ledger returns
 the prior grant without duplicating it, after which completion can be attempted
 again.
@@ -51,15 +86,22 @@ integration. Keep the mTLS certificate/private key, login tokens, user-key
 mapping, base URL overrides, and transport configuration in the deployment
 runtime. Do not commit them or include them in client bundles.
 
+The order-status API documents offset-free `statusDeterminedAt` values as KST.
+The verifier parses that exact calendar form as UTC+09:00 and also accepts
+explicit UTC/offset timestamps; malformed dates and calendar overflows fail
+closed instead of relying on deployment-local `Date.parse()` behavior.
+
 ## Rewarded-ad flow
 
 `userEarnedReward` is client evidence, not grant authority. The wrapper can use
 `createAppsInTossRewardCallbackEvidence()` to correlate the callback with an
-impression and configured placement, but the production backend must inject an
-`AppsInTossRewardAuthority` that independently confirms:
+id created by the game before `showFullScreenAd()` and the configured placement.
+The official event only contains `unitType` and `unitAmount`, so the contract
+does not require a nonexistent Toss impression id. The production backend must
+inject an `AppsInTossRewardAuthority` that independently confirms:
 
 - a stable consume-once authority event id;
-- impression id;
+- the game-issued correlation id;
 - authenticated player id;
 - configured platform placement id;
 - verification timestamp.
@@ -89,9 +131,11 @@ const backend = createGameServicesBackend({
 });
 ```
 
-The authority adapters, authenticated session exchange, mTLS agent, secrets,
-and endpoints are game/deployment responsibilities. The public contract remains
-deterministic and transport-neutral.
+The AIT target must wire the purchase callback and reward envelope at its SDK
+boundary; the generic gateway does not synthesize either from a completed
+result. Authority adapters, authenticated session exchange, mTLS agent,
+secrets, and endpoints are game/deployment responsibilities. The public
+contract remains deterministic and transport-neutral.
 
 ## Conformance and sandbox
 
@@ -101,10 +145,11 @@ Run the credential-free contract suite locally and in CI:
 pnpm smoke:apps-in-toss-production-evidence
 ```
 
-It covers callback-only rejection, purchase success and idempotent retry,
-server-grant failure followed by pending-order restoration, authoritative
-player/SKU/status matching, reward retry/replay rejection, authority errors,
-and reward player/placement matching. No failure path writes a ledger grant.
+It covers callback-only rejection, in-callback backend grants, purchase success
+and idempotent retry, server-grant failure followed by pending-order restoration,
+deterministic KST timestamp parsing, authoritative player/SKU/status matching,
+reward retry/replay rejection, authority errors, and reward player/placement
+matching. No failure path writes a ledger grant.
 
 Before release, also run the Apps in Toss sandbox scenarios on a real test app:
 

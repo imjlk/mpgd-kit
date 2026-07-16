@@ -102,13 +102,16 @@ ledger payload rather than expanding the platform-neutral client contract:
 
 ## Apps in Toss
 
-The reusable boundary is implemented in
-`@mpgd/game-services/apps-in-toss-evidence-verification`; remaining work is the
-game/deployment-specific authority adapter and credentials.
+The reusable boundary and SDK-compatible product-grant callback are implemented
+in `@mpgd/game-services/apps-in-toss-evidence-verification`; remaining work is
+the game/deployment-specific AIT wrapper wiring, authority adapter, and
+credentials.
 
 Expected flow:
 
-1. Apps in Toss adapter returns IAP or ad callback evidence from the Toss runtime.
+1. The AIT wrapper invokes the callback-specific game-services API from
+   `processProductGrant`, or emits rewarded-ad evidence with a game-issued
+   correlation id from `userEarnedReward`.
 2. Partner backend verifies the Toss callback/order/ad reward state.
 3. Backend checks Toss product/placement mapping, player identity, duplicate
    grants, and review-policy constraints.
@@ -119,7 +122,7 @@ Runtime integration inputs:
 
 - Toss app id
 - Toss order/payment id
-- Toss ad impression/reward correlation id
+- game-issued Toss ad reward correlation id
 - server-issued reward authority event id
 - runtime-injected mTLS, Toss-login identity, and provider configuration
 
