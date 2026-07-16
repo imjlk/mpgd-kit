@@ -152,6 +152,10 @@ function createHarness(input: {
     playerId: string,
     signal: AbortSignal,
   ) => Promise<string | undefined> | string | undefined;
+  readonly resolveObfuscatedProfileId?: (
+    playerId: string,
+    signal: AbortSignal,
+  ) => Promise<string | undefined> | string | undefined;
   readonly catalog?: ProductCatalog;
   readonly evidenceVerificationTimeoutMs?: number;
   readonly purchaseGrantFinalizationTimeoutMs?: number;
@@ -165,19 +169,19 @@ function createHarness(input: {
     packageName: 'dev.mpgd.conformance',
     now: () => '2030-01-02T03:04:06.000Z',
     ...(input.resolveObfuscatedAccountId === undefined
-      ? {
-          allowUnboundAuthenticatedPlayer:
-            input.allowUnboundAuthenticatedPlayer ?? true,
-        }
-      : {
-          resolveObfuscatedAccountId: input.resolveObfuscatedAccountId,
-          ...(input.allowUnboundAuthenticatedPlayer === undefined
-            ? {}
-            : {
-                allowUnboundAuthenticatedPlayer:
-                  input.allowUnboundAuthenticatedPlayer,
-              }),
-        }),
+      ? {}
+      : { resolveObfuscatedAccountId: input.resolveObfuscatedAccountId }),
+    ...(input.resolveObfuscatedProfileId === undefined
+      ? {}
+      : { resolveObfuscatedProfileId: input.resolveObfuscatedProfileId }),
+    ...(input.allowUnboundAuthenticatedPlayer === undefined
+      ? (
+          input.resolveObfuscatedAccountId === undefined
+          && input.resolveObfuscatedProfileId === undefined
+            ? { allowUnboundAuthenticatedPlayer: true }
+            : {}
+        )
+      : { allowUnboundAuthenticatedPlayer: input.allowUnboundAuthenticatedPlayer }),
   });
   const developmentVerifier = createDevelopmentGameServicesEvidenceVerifier();
   const backend = createGameServicesBackend({
@@ -738,6 +742,73 @@ const profileBoundTokenInUnboundModeResult = await (
 assertEqual(profileBoundTokenInUnboundModeResult.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
 assertEqual((await profileBoundTokenInUnboundMode.store.listEntitlementTransactions()).length, 0);
 
+const unresolvedProfileBinding = createHarness({
+  token: 'token-profile-binding-required',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:shared',
+    obfuscatedExternalProfileId: 'profile:current',
+  }),
+  resolveObfuscatedAccountId: () => 'account:shared',
+});
+const unresolvedProfileBindingResult = await (
+  unresolvedProfileBinding.backend.purchases.verifyPurchase(
+    createRequest({ token: 'token-profile-binding-required' }),
+  )
+);
+assertEqual(unresolvedProfileBindingResult.reason, 'GOOGLE_PLAY_PROFILE_BINDING_REQUIRED');
+assertEqual((await unresolvedProfileBinding.store.listEntitlementTransactions()).length, 0);
+
+const profileMismatch = createHarness({
+  token: 'token-profile-mismatch',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:shared',
+    obfuscatedExternalProfileId: 'profile:other',
+  }),
+  resolveObfuscatedAccountId: () => 'account:shared',
+  resolveObfuscatedProfileId: () => 'profile:current',
+});
+const profileMismatchResult = await profileMismatch.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-mismatch' }),
+);
+assertEqual(profileMismatchResult.reason, 'GOOGLE_PLAY_PROFILE_MISMATCH');
+assertEqual((await profileMismatch.store.listEntitlementTransactions()).length, 0);
+
+const unresolvedAccountBinding = createHarness({
+  token: 'token-account-binding-required',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:shared',
+    obfuscatedExternalProfileId: 'profile:current',
+  }),
+  resolveObfuscatedProfileId: () => 'profile:current',
+});
+const unresolvedAccountBindingResult = await (
+  unresolvedAccountBinding.backend.purchases.verifyPurchase(
+    createRequest({ token: 'token-account-binding-required' }),
+  )
+);
+assertEqual(unresolvedAccountBindingResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
+assertEqual((await unresolvedAccountBinding.store.listEntitlementTransactions()).length, 0);
+
+const matchedProfileBinding = createHarness({
+  token: 'token-profile-match',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:shared',
+    obfuscatedExternalProfileId: 'profile:current',
+  }),
+  resolveObfuscatedAccountId: () => 'account:shared',
+  resolveObfuscatedProfileId: () => 'profile:current',
+});
+const matchedProfileBindingResult = await matchedProfileBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-match' }),
+);
+assertEqual(matchedProfileBindingResult.verified, true);
+const storedProfileBinding = (await matchedProfileBinding.store.listEntitlementTransactions())[0];
+assertEqual(
+  storedProfileBinding?.payload.googlePlayObfuscatedExternalProfileId,
+  'profile:current',
+  'verified profile binding must be persisted for finalization retries',
+);
+
 const missingAccountBinding = createHarness({
   token: 'token-account-binding-missing',
   response: createGooglePlayProductPurchaseConformanceFixture(),
@@ -749,6 +820,43 @@ const missingAccountBindingResult = await missingAccountBinding.backend.purchase
 assertEqual(missingAccountBindingResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
 assertEqual(missingAccountBinding.events.length, 0, 'missing account binding must fail closed');
 assertEqual((await missingAccountBinding.store.listEntitlementTransactions()).length, 0);
+
+const malformedProfileBinding = createHarness({
+  token: 'token-profile-binding-malformed',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedProfileId: () => ' profile:invalid',
+});
+const malformedProfileBindingResult = await (
+  malformedProfileBinding.backend.purchases.verifyPurchase(
+    createRequest({ token: 'token-profile-binding-malformed' }),
+  )
+);
+assertEqual(malformedProfileBindingResult.reason, 'GOOGLE_PLAY_PROFILE_BINDING_REQUIRED');
+assertEqual(malformedProfileBinding.events.length, 0, 'invalid profile binding must fail closed');
+
+const missingProfileBinding = createHarness({
+  token: 'token-profile-binding-missing',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedProfileId: () => undefined,
+});
+const missingProfileBindingResult = await missingProfileBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-binding-missing' }),
+);
+assertEqual(missingProfileBindingResult.reason, 'GOOGLE_PLAY_PROFILE_BINDING_REQUIRED');
+assertEqual(missingProfileBinding.events.length, 0, 'missing profile binding must fail closed');
+
+const throwingProfileBinding = createHarness({
+  token: 'token-profile-binding-error',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedProfileId: () => {
+    throw new Error('simulated profile resolver failure');
+  },
+});
+const throwingProfileBindingResult = await throwingProfileBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-binding-error' }),
+);
+assertEqual(throwingProfileBindingResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_ERROR');
+assertEqual(throwingProfileBinding.events.length, 0, 'failed profile lookup must not reach Google');
 
 let accountResolverSignal: AbortSignal | undefined;
 const stalledAccountBinding = createHarness({

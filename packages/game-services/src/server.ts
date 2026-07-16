@@ -566,10 +566,10 @@ async function verifyPurchaseWithStore(
     grantId: request.productId,
     target: request.target,
   } as const;
-  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
-
-  if (existing !== undefined) {
-    if (!matchesEntitlementRetry(existing, retryIdentity)) {
+  const completeExistingRetry = async (
+    transaction: ProductGrantTransaction,
+  ): Promise<VerifyPurchaseResponse> => {
+    if (!matchesEntitlementRetry(transaction, retryIdentity)) {
       return assertVerifyPurchaseResponse({
         verified: false,
         alreadyProcessed: false,
@@ -577,14 +577,19 @@ async function verifyPurchaseWithStore(
       });
     }
 
-    const finalization = await finalizeExistingPurchaseGrant(request, existing, context);
+    const finalization = await finalizeExistingPurchaseGrant(request, transaction, context);
 
     return assertVerifyPurchaseResponse({
       verified: true,
-      ledgerEntryId: existing.ledgerEntryId,
+      ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: true,
       ...(finalization === undefined ? {} : { finalization }),
     });
+  };
+  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
+
+  if (existing !== undefined) {
+    return completeExistingRetry(existing);
   }
 
   const product = context.catalog.products.find((entry) => entry.id === request.productId);
@@ -618,6 +623,16 @@ async function verifyPurchaseWithStore(
   }, context.evidenceVerificationTimeoutMs);
 
   if (verification.status !== 'verified') {
+    // A matching grant can land while provider verification is in flight. Recheck
+    // before returning a stale provider state such as an already-consumed token.
+    const racedExisting = await findEntitlementTransactionByIdempotency(
+      context.store,
+      retryIdentity,
+    );
+    if (racedExisting !== undefined) {
+      return completeExistingRetry(racedExisting);
+    }
+
     return assertVerifyPurchaseResponse({
       verified: false,
       alreadyProcessed: false,
@@ -626,6 +641,8 @@ async function verifyPurchaseWithStore(
         : verification.reason,
     });
   }
+
+  const verificationPayload = createPurchaseVerificationPayload(verification);
 
   const grant = await recordEntitlementGrantWithEvidence(context.store, {
     playerId: request.playerId,
@@ -636,7 +653,7 @@ async function verifyPurchaseWithStore(
     grant: product.grant,
     evidenceVerificationId: verification.verificationId,
     payload: {
-      ...verification.payload,
+      ...verificationPayload,
       target: request.target,
       productId: request.productId,
       productType: product.type,
@@ -1022,6 +1039,19 @@ async function verifyEvidence(
       clearTimeout(timeout);
     }
   }
+}
+
+function createPurchaseVerificationPayload(
+  verification: Extract<EvidenceVerificationDecision, { readonly status: 'verified' }>,
+): EntitlementLedgerPayload | undefined {
+  if (verification.platformEvidenceId !== null || verification.payload === undefined) {
+    return verification.payload;
+  }
+
+  const { platformTransactionId: suppressedPlatformTransactionId, ...payload }
+    = verification.payload;
+  void suppressedPlatformTransactionId;
+  return payload;
 }
 
 function assertEvidenceVerificationDecision(

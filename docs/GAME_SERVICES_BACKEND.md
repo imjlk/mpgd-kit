@@ -295,7 +295,11 @@ account before calling this boundary. A configured resolver that unexpectedly
 returns no identifier fails closed unless that opt-in is present. Unbound mode
 also rejects responses carrying either `obfuscatedExternalAccountId` or
 `obfuscatedExternalProfileId`; a purchase associated with another app account
-or profile must never be attributed to the current player implicitly.
+or profile must never be attributed to the current player implicitly. Games
+that set BillingClient's profile identifier must also provide
+`resolveObfuscatedProfileId`; profile-bearing provider responses fail closed
+when no expected profile is available, and both identifiers are matched when
+the response carries both.
 
 The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
 single quantity, remaining refundable quantity, optional order id, provider
@@ -317,6 +321,7 @@ const googlePlay = createGooglePlayProductPurchaseBoundary({
   client: gameOwnedGooglePlayClient,
   packageName: gameOwnedPackageName,
   resolveObfuscatedAccountId: resolvePlayerAccountHash,
+  resolveObfuscatedProfileId: resolvePlayerProfileHash,
 });
 
 const backend = createGameServicesBackend({

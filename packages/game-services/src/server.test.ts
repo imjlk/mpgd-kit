@@ -1102,6 +1102,111 @@ assertEqual(
   'evidence replay protection should retain only one grant per source identity',
 );
 
+const consumedRetryRaceStore = new HiddenIdempotencyLookupStore();
+const consumedRetryLedger = await consumedRetryRaceStore.recordEntitlementGrant({
+  playerId: 'player-consumed-retry-race',
+  grantId: 'COINS_100',
+  source: 'purchase',
+  idempotencyKey: 'purchase-consumed-retry-race',
+  grantedAt: '2026-07-04T00:00:00.000Z',
+  payload: {
+    target: 'android',
+    productId: 'COINS_100',
+    evidenceVerificationId: 'provider:purchase:consumed-retry-race',
+  },
+  evidenceVerificationId: 'provider:purchase:consumed-retry-race',
+});
+consumedRetryRaceStore.hideIdempotencyLookups = true;
+const consumedRetryRaceBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: consumedRetryRaceStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      consumedRetryRaceStore.hideIdempotencyLookups = false;
+      return {
+        status: 'rejected',
+        reason: 'GOOGLE_PLAY_PURCHASE_ALREADY_CONSUMED',
+      } as const;
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+  },
+});
+const consumedRetryRaceResult = await consumedRetryRaceBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-consumed-retry-race',
+  productId: 'COINS_100',
+  platformTransactionId: 'txn-consumed-retry-race',
+  idempotencyKey: 'purchase-consumed-retry-race',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+assertEqual(
+  consumedRetryRaceResult.ledgerEntryId,
+  consumedRetryLedger.ledgerEntryId,
+  'a grant recorded during provider verification must win over the stale consumed response',
+);
+assertEqual(consumedRetryRaceResult.verified, true, 'idempotent retry should remain verified');
+assertEqual(
+  consumedRetryRaceResult.alreadyProcessed,
+  true,
+  'the raced grant should be reported as already processed',
+);
+
+const suppressedPlatformPayloadStore = createInMemoryGameServicesStore();
+let suppressedPlatformVerificationSequence = 0;
+const suppressedPlatformPayloadBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: suppressedPlatformPayloadStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      suppressedPlatformVerificationSequence += 1;
+      return {
+        status: 'verified',
+        verificationId: `provider:purchase:suppressed:${suppressedPlatformVerificationSequence}`,
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+        platformEvidenceId: null,
+        payload: {
+          platformTransactionId: 'payload-untrusted-transaction',
+          providerMetadata: 'preserved',
+        },
+      } as const;
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_TESTED' } as const;
+    },
+  },
+});
+for (const idempotencyKey of ['purchase-suppressed-1', 'purchase-suppressed-2']) {
+  const result = await suppressedPlatformPayloadBackend.purchases.verifyPurchase({
+    target: 'android',
+    playerId: 'player-suppressed-platform-payload',
+    productId: 'COINS_100',
+    platformTransactionId: 'client-untrusted-transaction',
+    idempotencyKey,
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  });
+  assertEqual(result.verified, true, 'suppressed provider identities should not collide');
+}
+const suppressedPlatformTransactions = await (
+  suppressedPlatformPayloadStore.listEntitlementTransactions()
+);
+assertEqual(
+  suppressedPlatformTransactions.length,
+  2,
+  'null provider identities must suppress cross-idempotency client replay checks',
+);
+assertEqual(
+  suppressedPlatformTransactions.every((transaction) => {
+    return transaction.payload.platformTransactionId === undefined
+      && transaction.payload.providerMetadata === 'preserved';
+  }),
+  true,
+  'suppression must remove only the reserved platform transaction field',
+);
+
 const invalidPayloadStore = createInMemoryGameServicesStore();
 const invalidPayloadBackend = createGameServicesBackend({
   catalog,

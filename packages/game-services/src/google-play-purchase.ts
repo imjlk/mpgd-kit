@@ -55,6 +55,10 @@ export interface CreateGooglePlayProductPurchaseBoundaryInput {
     playerId: string,
     signal: AbortSignal,
   ) => Promise<string | undefined> | string | undefined;
+  readonly resolveObfuscatedProfileId?: (
+    playerId: string,
+    signal: AbortSignal,
+  ) => Promise<string | undefined> | string | undefined;
 }
 
 export interface GooglePlayProductPurchaseBoundary extends GameServicesPurchaseGrantFinalizer {
@@ -72,6 +76,7 @@ interface InspectedGooglePlayPurchase {
   readonly consumptionState: GooglePlayConsumptionState;
   readonly acknowledgementState: GooglePlayAcknowledgementState;
   readonly obfuscatedExternalAccountId?: string;
+  readonly obfuscatedExternalProfileId?: string;
 }
 
 type GooglePlayPurchaseInspection =
@@ -85,6 +90,7 @@ export function createGooglePlayProductPurchaseBoundary(
   const packageName = assertIdentifier(input.packageName, 'packageName', 256);
   if (
     input.resolveObfuscatedAccountId === undefined
+    && input.resolveObfuscatedProfileId === undefined
     && input.allowUnboundAuthenticatedPlayer !== true
   ) {
     throw new TypeError(
@@ -499,9 +505,37 @@ async function inspectGooglePlayPurchase(input: {
   ) {
     return rejected('GOOGLE_PLAY_PROFILE_INVALID');
   }
-  if (input.accountBinding.status === 'bound'
-    && obfuscatedExternalAccountId !== input.accountBinding.accountId) {
-    return rejected('GOOGLE_PLAY_ACCOUNT_MISMATCH');
+  if (input.accountBinding.status === 'bound') {
+    if (
+      input.accountBinding.accountId === undefined
+      && input.accountBinding.profileId === undefined
+    ) {
+      return rejected('GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
+    }
+    if (
+      input.accountBinding.accountId !== undefined
+      && obfuscatedExternalAccountId !== input.accountBinding.accountId
+    ) {
+      return rejected('GOOGLE_PLAY_ACCOUNT_MISMATCH');
+    }
+    if (
+      input.accountBinding.profileId !== undefined
+      && obfuscatedExternalProfileId !== input.accountBinding.profileId
+    ) {
+      return rejected('GOOGLE_PLAY_PROFILE_MISMATCH');
+    }
+    if (
+      input.accountBinding.profileId === undefined
+      && obfuscatedExternalProfileId !== undefined
+    ) {
+      return rejected('GOOGLE_PLAY_PROFILE_BINDING_REQUIRED');
+    }
+    if (
+      input.accountBinding.accountId === undefined
+      && obfuscatedExternalAccountId !== undefined
+    ) {
+      return rejected('GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
+    }
   }
   // The unbound opt-in is safe only when the provider response is also unbound.
   if (
@@ -530,12 +564,19 @@ async function inspectGooglePlayPurchase(input: {
       ...(obfuscatedExternalAccountId === undefined
         ? {}
         : { obfuscatedExternalAccountId }),
+      ...(obfuscatedExternalProfileId === undefined
+        ? {}
+        : { obfuscatedExternalProfileId }),
     },
   };
 }
 
 type GooglePlayAccountBinding =
-  | { readonly status: 'bound'; readonly accountId: string }
+  | {
+      readonly status: 'bound';
+      readonly accountId?: string;
+      readonly profileId?: string;
+    }
   | { readonly status: 'unbound' }
   | { readonly status: 'rejected'; readonly reason: string };
 
@@ -592,12 +633,23 @@ function readGooglePlayVerifiedContext(
   ) {
     return undefined;
   }
+  const profileId = readOptionalIdentifier(payload.googlePlayObfuscatedExternalProfileId, 256);
+  if (
+    payload.googlePlayObfuscatedExternalProfileId !== undefined
+    && profileId === undefined
+  ) {
+    return undefined;
+  }
 
   return {
     ...(orderId === undefined ? {} : { orderId }),
-    accountBinding: accountId === undefined
+    accountBinding: accountId === undefined && profileId === undefined
       ? { status: 'unbound' }
-      : { status: 'bound', accountId },
+      : {
+          status: 'bound',
+          ...(accountId === undefined ? {} : { accountId }),
+          ...(profileId === undefined ? {} : { profileId }),
+        },
   };
 }
 
@@ -606,24 +658,66 @@ async function resolveGooglePlayAccountBinding(
   playerId: string,
   signal: AbortSignal,
 ): Promise<GooglePlayAccountBinding> {
-  if (input.resolveObfuscatedAccountId === undefined) {
+  if (
+    input.resolveObfuscatedAccountId === undefined
+    && input.resolveObfuscatedProfileId === undefined
+  ) {
     return { status: 'unbound' };
   }
 
-  const resolved = await input.resolveObfuscatedAccountId(playerId, signal);
-  if (resolved === undefined && input.allowUnboundAuthenticatedPlayer === true) {
+  let resolvedAccountId: string | undefined;
+  let resolvedProfileId: string | undefined;
+  try {
+    [resolvedAccountId, resolvedProfileId] = await Promise.all([
+      input.resolveObfuscatedAccountId?.(playerId, signal),
+      input.resolveObfuscatedProfileId?.(playerId, signal),
+    ]);
+  } catch {
+    return {
+      status: 'rejected',
+      reason: 'GOOGLE_PLAY_ACCOUNT_BINDING_ERROR',
+    };
+  }
+  if (
+    resolvedAccountId === undefined
+    && resolvedProfileId === undefined
+    && input.allowUnboundAuthenticatedPlayer === true
+  ) {
     return { status: 'unbound' };
   }
 
-  const accountId = readOptionalIdentifier(resolved, 256);
-  if (accountId === undefined) {
+  const accountId = resolvedAccountId === undefined
+    ? undefined
+    : readOptionalIdentifier(resolvedAccountId, 256);
+  const profileId = resolvedProfileId === undefined
+    ? undefined
+    : readOptionalIdentifier(resolvedProfileId, 256);
+  if (resolvedAccountId !== undefined && accountId === undefined) {
     return {
       status: 'rejected',
       reason: 'GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED',
     };
   }
+  if (resolvedProfileId !== undefined && profileId === undefined) {
+    return {
+      status: 'rejected',
+      reason: 'GOOGLE_PLAY_PROFILE_BINDING_REQUIRED',
+    };
+  }
+  if (accountId === undefined && profileId === undefined) {
+    return {
+      status: 'rejected',
+      reason: input.resolveObfuscatedAccountId === undefined
+        ? 'GOOGLE_PLAY_PROFILE_BINDING_REQUIRED'
+        : 'GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED',
+    };
+  }
 
-  return { status: 'bound', accountId };
+  return {
+    status: 'bound',
+    ...(accountId === undefined ? {} : { accountId }),
+    ...(profileId === undefined ? {} : { profileId }),
+  };
 }
 
 function createVerificationPayload(
@@ -641,6 +735,9 @@ function createVerificationPayload(
     ...(purchase.obfuscatedExternalAccountId === undefined
       ? {}
       : { googlePlayObfuscatedExternalAccountId: purchase.obfuscatedExternalAccountId }),
+    ...(purchase.obfuscatedExternalProfileId === undefined
+      ? {}
+      : { googlePlayObfuscatedExternalProfileId: purchase.obfuscatedExternalProfileId }),
   };
 }
 
