@@ -199,6 +199,22 @@ async function runReplacementAfterInterruptedRetainedWriteScenario(
   assert(snapshot !== undefined, 'the recovered board must return a snapshot');
   assertVerifiedLeaderboardSnapshot(snapshot);
   assertEqual(snapshot.totalParticipants, 1, 'the replacement must keep one participant');
+  assertEqual(snapshot.entries.length, 1, 'the replacement must keep one ranked entry');
+  assertEqual(
+    snapshot.entries[0]?.participantId,
+    later.attempt.participantId,
+    'the ranked snapshot must contain the replacement participant',
+  );
+  assertEqual(
+    snapshot.entries[0]?.attemptId,
+    later.attempt.attemptId,
+    'the ranked snapshot must contain the later better attempt',
+  );
+  assertEqual(
+    snapshot.entries[0]?.score,
+    later.attempt.score,
+    'the ranked snapshot must contain the later better score',
+  );
   assertEqual(
     snapshot.participantEntry?.attemptId,
     later.attempt.attemptId,
@@ -262,6 +278,23 @@ async function runSnapshotAfterInterruptedRetainedWriteScenario(
   });
   assert(snapshot !== undefined, 'reads must recover an interrupted retained record');
   assertVerifiedLeaderboardSnapshot(snapshot);
+  assertEqual(snapshot.totalParticipants, 1, 'recovery must restore one participant');
+  assertEqual(snapshot.entries.length, 1, 'recovery must restore one ranked entry');
+  assertEqual(
+    snapshot.entries[0]?.participantId,
+    interrupted.attempt.participantId,
+    'reads must expose the recovered participant in ranked entries',
+  );
+  assertEqual(
+    snapshot.entries[0]?.attemptId,
+    interrupted.attempt.attemptId,
+    'reads must expose the recovered attempt in ranked entries',
+  );
+  assertEqual(
+    snapshot.entries[0]?.score,
+    interrupted.attempt.score,
+    'reads must expose the recovered score in ranked entries',
+  );
   assertEqual(
     snapshot.participantEntry?.attemptId,
     interrupted.attempt.attemptId,
