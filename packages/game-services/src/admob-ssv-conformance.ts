@@ -8,6 +8,7 @@ import {
   type AdMobSsvPublicKeySource,
 } from './admob-ssv.js';
 import type {
+  EvidenceVerificationDecision,
   GameServicesEvidenceVerifier,
   VerifyAdRewardEvidenceInput,
 } from './evidence-verification';
@@ -23,7 +24,7 @@ export const adMobSsvConformanceChecks = [
   'secp256k1 key feed entries verify',
   'signed identity mismatch fails closed',
   'timestamp age and future-skew boundaries fail closed',
-  'transaction replay preserves one authority identity',
+  'callbacks sharing one signed transaction preserve one authority identity',
 ] as const;
 
 export interface AdMobSsvConformanceReport {
@@ -281,14 +282,14 @@ export async function runAdMobSsvConformance(
     'the maximum future skew boundary must remain valid',
   );
 
-  const replayedDecision = await verifier.verifyAdReward(
+  const sharedTransactionDecision = await verifier.verifyAdReward(
     verificationInput(rewardRequest('reward-2')),
   );
   assert(
-    replayedDecision.status === 'verified'
+    sharedTransactionDecision.status === 'verified'
       && firstDecision.status === 'verified'
-      && replayedDecision.verificationId === firstDecision.verificationId,
-    'a signed transaction replay must preserve one ledger authority identity',
+      && sharedTransactionDecision.verificationId === firstDecision.verificationId,
+    'callbacks sharing a signed transaction must preserve one ledger authority identity',
   );
 
   return {
@@ -373,14 +374,25 @@ function fixedPublicKeySource(
   };
 }
 
+type AdMobSsvConformanceReason =
+  | 'ADMOB_SSV_CALLBACK_EXPIRED'
+  | 'ADMOB_SSV_CALLBACK_INVALID'
+  | 'ADMOB_SSV_EVIDENCE_PENDING'
+  | 'ADMOB_SSV_KEY_UNAVAILABLE'
+  | 'ADMOB_SSV_SIGNATURE_INVALID'
+  | 'ADMOB_SSV_TIMESTAMP_IN_FUTURE'
+  | 'ADMOB_SSV_USER_MISMATCH';
+
 function assertDecision(
-  decision: { readonly status: string; readonly reason?: string },
-  status: string,
-  reason: string,
+  decision: EvidenceVerificationDecision,
+  status: 'pending' | 'rejected',
+  reason: AdMobSsvConformanceReason,
 ): void {
+  const receivedReason = decision.status === 'verified' ? undefined : decision.reason;
+
   assert(
-    decision.status === status && decision.reason === reason,
-    `expected ${status}/${reason}, received ${decision.status}/${String(decision.reason)}`,
+    decision.status === status && receivedReason === reason,
+    `expected ${status}/${reason}, received ${decision.status}/${String(receivedReason)}`,
   );
 }
 
