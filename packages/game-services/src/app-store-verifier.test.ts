@@ -180,18 +180,53 @@ assertDecision(
   'signed products must match the configured catalog product',
 );
 
-const clientPurchaseDateMismatch = await verifier.verifyPurchase({
+const differentClientObservationTime = await verifier.verifyPurchase({
   ...baseInput,
   request: {
     ...baseInput.request,
-    purchasedAt: '2026-07-16T12:00:00.001Z',
+    purchasedAt: '2026-07-16T12:45:00.000Z',
+  },
+});
+assertEqual(
+  differentClientObservationTime.status,
+  'verified',
+  'the signed provider purchase date must remain authoritative over client observation time',
+);
+if (differentClientObservationTime.status !== 'verified') {
+  throw new Error('Expected a valid client observation time to preserve provider authority.');
+}
+assertEqual(
+  differentClientObservationTime.payload?.appStorePurchaseDate,
+  purchaseDate,
+  'client observation time must not replace the signed provider purchase date',
+);
+
+const invalidClientObservationTime = await verifier.verifyPurchase({
+  ...baseInput,
+  request: {
+    ...baseInput.request,
+    purchasedAt: 'not-a-timestamp',
   },
 });
 assertDecision(
-  clientPurchaseDateMismatch,
+  invalidClientObservationTime,
   'rejected',
-  'APP_STORE_PURCHASE_DATE_MISMATCH',
-  'an untrusted client timestamp must exactly reproduce the signed provider purchase date',
+  'APP_STORE_CLIENT_PURCHASE_TIME_INVALID',
+  'malformed client observation time must fail closed without replacing provider authority',
+);
+
+const futureClientObservationTime = await verifier.verifyPurchase({
+  ...baseInput,
+  request: {
+    ...baseInput.request,
+    purchasedAt: '2026-07-16T13:10:00.000Z',
+  },
+});
+assertDecision(
+  futureClientObservationTime,
+  'rejected',
+  'APP_STORE_CLIENT_PURCHASE_TIME_IN_FUTURE',
+  'client observation time beyond the configured clock skew must fail closed',
 );
 
 const revoked = await createVerifier({
@@ -239,13 +274,7 @@ const futurePurchase = await createVerifier({
     purchaseDate: Date.parse('2026-07-16T13:10:00.000Z'),
     signedDate: Date.parse('2026-07-16T13:10:01.000Z'),
   }),
-}).verifyPurchase({
-  ...baseInput,
-  request: {
-    ...baseInput.request,
-    purchasedAt: '2026-07-16T13:10:00.000Z',
-  },
-});
+}).verifyPurchase(baseInput);
 assertDecision(
   futurePurchase,
   'rejected',

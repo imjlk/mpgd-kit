@@ -118,13 +118,16 @@ implementation.
 
 The verifier matches the signed transaction to the configured bundle and
 environment, the catalog's platform product and type, the submitted transaction
-and purchase timestamp, and a valid non-nil UUID `appAccountToken` resolved
-server-side for the authenticated player. UUID text is compared canonically so
-letter case doesn't change the account identity. The signed App Store purchase
-date and effective quantity are retained in ledger evidence; because the shared
-grant contract represents one catalog grant, consumables must have signed
-quantity `1`. Revoked, upgraded, expired, mismatched, malformed, or invalidly
-signed transactions are rejected before the entitlement ledger.
+identifier, and a valid non-nil UUID `appAccountToken` resolved server-side for
+the authenticated player. UUID text is compared canonically so letter case
+doesn't change the account identity. The client `purchasedAt` value is only a
+sanity-checked observation timestamp generated after the platform purchase
+resolves;
+Apple's signed `purchaseDate` remains authoritative and is retained in ledger
+evidence together with the effective quantity. Because the shared grant contract
+represents one catalog grant, consumables must have signed quantity `1`.
+Revoked, upgraded, expired, mismatched, malformed, or invalidly signed
+transactions are rejected before the entitlement ledger.
 Provider outages, rate limits, account-binding outages, and authorization
 configuration failures return a retryable pending decision and do not grant.
 Use distinct deployments or runtime configuration for Apple's production and

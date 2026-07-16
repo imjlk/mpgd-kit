@@ -333,8 +333,12 @@ function validateTransaction(
   if (toCatalogProductType(transaction.type) !== input.product.type) {
     return 'APP_STORE_PRODUCT_TYPE_MISMATCH';
   }
-  if (Date.parse(input.request.purchasedAt) !== transaction.purchaseDate) {
-    return 'APP_STORE_PURCHASE_DATE_MISMATCH';
+  const clientPurchaseObservedAt = Date.parse(input.request.purchasedAt);
+  if (!Number.isFinite(clientPurchaseObservedAt)) {
+    return 'APP_STORE_CLIENT_PURCHASE_TIME_INVALID';
+  }
+  if (clientPurchaseObservedAt > nowMs + clockSkewMs) {
+    return 'APP_STORE_CLIENT_PURCHASE_TIME_IN_FUTURE';
   }
   if (
     (transaction.type === 'Consumable' && transaction.quantity !== 1)
