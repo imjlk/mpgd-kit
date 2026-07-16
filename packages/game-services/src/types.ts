@@ -9,9 +9,14 @@ import type {
 
 export type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 
-export type GameServicesStoreTarget = Extract<
+export type GameServicesStoreTarget = Extract<PlatformTarget, 'android' | 'ios' | 'ait'>;
+export type GameServicesAdRewardTarget = Extract<
   PlatformTarget,
   'android' | 'ios' | 'ait' | 'verse8'
+>;
+export type GameServicesLeaderboardTarget = Extract<
+  PlatformTarget,
+  'browser' | 'android' | 'ios' | 'ait' | 'reddit'
 >;
 export type GameServicesLedgerTarget = Extract<
   PlatformTarget,
@@ -43,7 +48,7 @@ export interface VerifyPurchaseResponse {
 }
 
 export interface ClaimAdRewardRequest {
-  readonly target: GameServicesStoreTarget;
+  readonly target: GameServicesAdRewardTarget;
   readonly playerId: string;
   readonly placementId: LogicalAdPlacementId;
   readonly platformImpressionId?: string;
@@ -60,7 +65,7 @@ export interface ClaimAdRewardResponse {
 }
 
 export interface RecordLeaderboardScoreRequest extends LeaderboardScoreInput {
-  readonly target: GameServicesLedgerTarget;
+  readonly target: GameServicesLeaderboardTarget;
   readonly playerId: string;
   readonly platformSubmissionId?: string;
 }
@@ -134,7 +139,7 @@ export function assertClaimAdRewardRequest(
   input: ClaimAdRewardRequest,
 ): ClaimAdRewardRequest {
   assertRecord(input, 'ClaimAdRewardRequest');
-  assertStoreTarget(input.target);
+  assertAdRewardTarget(input.target);
   assertNonEmptyString(input.playerId, 'playerId');
   assertNonEmptyString(input.placementId, 'placementId');
   assertOptionalNonEmptyString(input.platformImpressionId, 'platformImpressionId');
@@ -248,21 +253,26 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 }
 
 function assertStoreTarget(input: unknown): asserts input is GameServicesStoreTarget {
+  if (input !== 'android' && input !== 'ios' && input !== 'ait') {
+    throw new Error('target must be android, ios, or ait.');
+  }
+}
+
+function assertAdRewardTarget(input: unknown): asserts input is GameServicesAdRewardTarget {
   if (input !== 'android' && input !== 'ios' && input !== 'ait' && input !== 'verse8') {
     throw new Error('target must be android, ios, ait, or verse8.');
   }
 }
 
-function assertLeaderboardTarget(input: unknown): asserts input is GameServicesLedgerTarget {
+function assertLeaderboardTarget(input: unknown): asserts input is GameServicesLeaderboardTarget {
   if (
     input !== 'browser'
     && input !== 'android'
     && input !== 'ios'
     && input !== 'ait'
     && input !== 'reddit'
-    && input !== 'verse8'
   ) {
-    throw new Error('target must be browser, android, ios, ait, reddit, or verse8.');
+    throw new Error('target must be browser, android, ios, ait, or reddit.');
   }
 }
 

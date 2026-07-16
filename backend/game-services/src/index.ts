@@ -220,8 +220,18 @@ export function createGameServicesBackend(
       },
     },
     adRewards: {
-      claimAdReward(request) {
-        return claimAdRewardWithStore(request, {
+      async claimAdReward(request) {
+        const target = request.target;
+
+        if (target === 'verse8') {
+          return {
+            granted: false,
+            alreadyProcessed: false,
+            reason: 'EVIDENCE_VERIFICATION_REQUIRED',
+          };
+        }
+
+        return claimAdRewardWithStore({ ...request, target }, {
           placements: input.placements,
           store,
           now,

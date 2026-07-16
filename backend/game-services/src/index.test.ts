@@ -89,6 +89,14 @@ const reward = await backend.adRewards.claimAdReward({
   idempotencyKey: 'reward-1',
   completedAt: '2026-07-04T00:00:01.000Z',
 });
+const unverifiedVerse8Reward = await backend.adRewards.claimAdReward({
+  target: 'verse8',
+  playerId: 'player-1',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'unverified-verse8-impression',
+  idempotencyKey: 'unverified-verse8-reward',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
 const score = await backend.leaderboard.recordScore({
   target: 'android',
   playerId: 'player-1',
@@ -111,6 +119,11 @@ const invalidTransportRequest = await handler.handle({
 assertEqual(purchase.verified, true, 'purchase should be verified');
 assertEqual(duplicatePurchase.alreadyProcessed, true, 'purchase should dedupe');
 assertEqual(reward.granted, true, 'reward should be granted');
+assertEqual(
+  unverifiedVerse8Reward.reason,
+  'EVIDENCE_VERIFICATION_REQUIRED',
+  'the legacy backend must reject Verse8 rewards without evidence verification',
+);
 assertEqual(score.submitted, true, 'score should be recorded');
 assertEqual((await store.listEntitlementTransactions()).length, 2, 'two grants should be recorded');
 assertEqual((await store.listLeaderboardTransactions()).length, 1, 'one score should be recorded');

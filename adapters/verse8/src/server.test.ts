@@ -146,14 +146,14 @@ describe('Verse8 Ads evidence verifier', () => {
     });
   });
 
-  it('keeps Verse8 purchase evidence unavailable', async () => {
+  it('keeps purchase evidence unavailable from the ads-only verifier', async () => {
     const verifier = createVerse8AdsEvidenceVerifier({
       client: fixedClient(verifiedRecord()),
     });
 
     await expect(verifier.verifyPurchase({
       request: {
-        target: 'verse8',
+        target: 'android',
         playerId: '0xabcdef1234567890',
         productId: 'COINS_100',
         platformTransactionId: 'untrusted-client-transaction',

@@ -122,6 +122,11 @@ async function verifyVerse8Adapter(): Promise<void> {
           };
         },
       },
+      resolveAdPlacementId(placementId) {
+        return placementId === 'CONTINUE_AFTER_FAIL'
+          ? 'rewarded_continue'
+          : 'stage_end_interstitial';
+      },
     }),
   );
   const runtime = await gateway.getTargetRuntime();

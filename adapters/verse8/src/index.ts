@@ -70,6 +70,7 @@ export function createVerse8PlatformGateway(
 ): PlatformGateway {
   const authClient = options.authClient ?? createDefaultAuthClient();
   const adsClient = options.adsClient ?? Verse8Ads;
+  const adsAvailable = options.resolveAdPlacementId !== undefined;
   const pauseListeners = new Set<() => void>();
   const resumeListeners = new Set<() => void>();
   const visibility = options.visibility ?? resolveVisibilitySource();
@@ -88,9 +89,9 @@ export function createVerse8PlatformGateway(
     async getCapabilities() {
       return {
         ...createUnsupportedCapabilities(),
-        nativeAds: true,
-        rewardedAds: true,
-        interstitialAds: true,
+        nativeAds: adsAvailable,
+        rewardedAds: adsAvailable,
+        interstitialAds: adsAvailable,
         localizedContent: true,
       };
     },

@@ -410,6 +410,11 @@ function createTargetGateway(target: PlatformTarget): {
             };
           },
         },
+        resolveAdPlacementId(placementId) {
+          return placementId === 'CONTINUE_AFTER_FAIL'
+            ? 'rewarded_continue'
+            : 'stage_end_interstitial';
+        },
       }),
       calls: [],
     };

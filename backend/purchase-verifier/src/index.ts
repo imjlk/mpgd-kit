@@ -5,7 +5,7 @@ import type { LogicalProductId } from '@mpgd/platform';
 export type PurchaseIdempotencyKey = string;
 
 export interface VerifyPurchaseRequest {
-  readonly target: 'android' | 'ios' | 'ait' | 'verse8';
+  readonly target: 'android' | 'ios' | 'ait';
   readonly playerId: string;
   readonly productId: LogicalProductId;
   readonly platformTransactionId: string;
@@ -107,8 +107,8 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 }
 
 function assertStoreTarget(input: unknown): asserts input is VerifyPurchaseRequest['target'] {
-  if (input !== 'android' && input !== 'ios' && input !== 'ait' && input !== 'verse8') {
-    throw new Error('target must be android, ios, ait, or verse8.');
+  if (input !== 'android' && input !== 'ios' && input !== 'ait') {
+    throw new Error('target must be android, ios, or ait.');
   }
 }
 

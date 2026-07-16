@@ -17,6 +17,9 @@ describe('adapter-verse8', () => {
   it('exposes Verse8 host ads while keeping unimplemented capabilities unavailable', async () => {
     const gateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),
+      resolveAdPlacementId() {
+        return 'verse8-placement';
+      },
     });
 
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
@@ -85,6 +88,12 @@ describe('adapter-verse8', () => {
 
   it('keeps commerce, unmapped ads, and leaderboard unavailable', async () => {
     const gateway = createVerse8PlatformGateway({ authClient: authenticatedClient() });
+
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeAds: false,
+      rewardedAds: false,
+      interstitialAds: false,
+    });
 
     await expect(
       gateway.commerce.purchase({

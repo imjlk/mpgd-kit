@@ -164,7 +164,9 @@ instead configure the built-in `@mpgd/adapter-verse8/server` verifier by
 setting the Worker's `VERSE8_ADS_VERIFIER_AUTHORIZATION` secret to the complete
 server Authorization header issued for the consume-once `/ads/verify`
 endpoint. `VERSE8_ADS_VERIFIER_BASE_URL` is optional and defaults to the
-production Verse8 verifier.
+production Verse8 verifier. This authenticated game-server endpoint is distinct
+from the public `GET /ads/status` polling endpoint used by the Verse8 browser
+parent; the status endpoint does not consume evidence for a ledger grant.
 
 If any target-specific binding is configured, the Worker enters strict
 target-specific mode. Each purchase or rewarded-ad request is sent only to the

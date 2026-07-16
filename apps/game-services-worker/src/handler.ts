@@ -258,25 +258,39 @@ function resolveWorkerEvidenceVerifier(
   if (env.GAME_SERVICES_EVIDENCE_VERIFIER !== undefined) {
     const binding = env.GAME_SERVICES_EVIDENCE_VERIFIER;
 
-    return createWorkerEvidenceVerifier(() => binding);
+    return createWorkerEvidenceVerifier(
+      (target) => target === 'verse8' && verse8Verifier !== undefined
+        ? undefined
+        : binding,
+      verse8Verifier,
+    );
   }
 
-  return env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true'
+  const developmentVerifier = env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true'
     ? createDevelopmentGameServicesEvidenceVerifier()
     : undefined;
+
+  if (verse8Verifier !== undefined) {
+    return createWorkerEvidenceVerifier(
+      () => undefined,
+      verse8Verifier,
+      developmentVerifier,
+    );
+  }
+
+  return developmentVerifier;
 }
 
 function hasTargetSpecificEvidenceVerifierBinding(env: GameServicesWorkerEnv): boolean {
   return env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER !== undefined
     || env.GAME_SERVICES_IOS_EVIDENCE_VERIFIER !== undefined
     || env.GAME_SERVICES_AIT_EVIDENCE_VERIFIER !== undefined
-    || env.GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER !== undefined
-    || hasVerse8AdsVerifierConfiguration(env);
+    || env.GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER !== undefined;
 }
 
 function resolveTargetSpecificEvidenceVerifierBinding(
   env: GameServicesWorkerEnv,
-  target: VerifyPurchaseRequest['target'],
+  target: ClaimAdRewardRequest['target'],
 ): GameServicesEvidenceVerifierBinding | undefined {
   switch (target) {
     case 'android':
@@ -297,9 +311,10 @@ function resolveTargetSpecificEvidenceVerifierBinding(
 
 function createWorkerEvidenceVerifier(
   resolveBinding: (
-    target: VerifyPurchaseRequest['target'],
+    target: ClaimAdRewardRequest['target'],
   ) => GameServicesEvidenceVerifierBinding | undefined,
   verse8Verifier?: GameServicesEvidenceVerifier,
+  fallbackVerifier?: GameServicesEvidenceVerifier,
 ): GameServicesEvidenceVerifier {
   return {
     async verifyPurchase(input) {
@@ -315,9 +330,8 @@ function createWorkerEvidenceVerifier(
         });
       }
 
-      return request.target === 'verse8' && verse8Verifier !== undefined
-        ? verse8Verifier.verifyPurchase(input)
-        : unavailableEvidenceVerificationDecision();
+      return fallbackVerifier?.verifyPurchase(input)
+        ?? unavailableEvidenceVerificationDecision();
     },
     async verifyAdReward(input) {
       const { request, placement, platformPlacementId, timeoutMs } = input;
@@ -334,7 +348,8 @@ function createWorkerEvidenceVerifier(
 
       return request.target === 'verse8' && verse8Verifier !== undefined
         ? verse8Verifier.verifyAdReward(input)
-        : unavailableEvidenceVerificationDecision();
+        : fallbackVerifier?.verifyAdReward(input)
+          ?? unavailableEvidenceVerificationDecision();
     },
   };
 }
@@ -356,10 +371,6 @@ function resolveVerse8AdsEvidenceVerifier(
         : { baseUrl: env.VERSE8_ADS_VERIFIER_BASE_URL }),
     }),
   });
-}
-
-function hasVerse8AdsVerifierConfiguration(env: GameServicesWorkerEnv): boolean {
-  return (env.VERSE8_ADS_VERIFIER_AUTHORIZATION?.trim().length ?? 0) > 0;
 }
 
 function unavailableEvidenceVerificationDecision(): EvidenceVerificationDecision {

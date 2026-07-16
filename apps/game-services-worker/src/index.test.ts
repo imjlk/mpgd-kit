@@ -211,6 +211,7 @@ assertDeepEqual(
 
 const originalFetch = globalThis.fetch;
 const verse8VerifierRequests: Request[] = [];
+let aggregateWithVerse8Calls = 0;
 globalThis.fetch = async (input, init) => {
   const request = new Request(input, init);
   verse8VerifierRequests.push(request);
@@ -230,7 +231,25 @@ try {
   const verse8VerifierService = createWorkerService({
     MPGD_STORE: 'memory',
     VERSE8_ADS_VERIFIER_AUTHORIZATION: 'Bearer worker-verse8-secret',
+    GAME_SERVICES_EVIDENCE_VERIFIER: {
+      async verifyPurchase() {
+        aggregateWithVerse8Calls += 1;
+        return verifiedDecision('aggregate-with-verse8:purchase');
+      },
+      async verifyAdReward() {
+        aggregateWithVerse8Calls += 1;
+        return verifiedDecision('aggregate-with-verse8:ad-reward');
+      },
+    },
   });
+  const aggregateAndroidPurchase = await verse8VerifierService.verifyPurchase({
+    target: 'android',
+    playerId: 'aggregate-with-verse8-player',
+    productId: 'COINS_100',
+    platformTransactionId: 'aggregate-with-verse8-transaction',
+    idempotencyKey: 'aggregate-with-verse8-purchase',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }) as { readonly verified: boolean };
   const verse8Reward = await verse8VerifierService.claimAdReward({
     target: 'verse8',
     playerId: '0xabcdef1234567890',
@@ -247,6 +266,16 @@ try {
     },
   }) as { readonly granted: boolean };
 
+  assertEqual(
+    aggregateAndroidPurchase.verified,
+    true,
+    'the Verse8 credential must preserve aggregate verification for other targets',
+  );
+  assertEqual(
+    aggregateWithVerse8Calls,
+    1,
+    'the built-in Verse8 verifier should override the aggregate binding only for Verse8',
+  );
   assertEqual(
     verse8Reward.granted,
     true,
