@@ -32,11 +32,17 @@ pending-order recovery flow below.
 6. Return `true` from `processProductGrant` only after the backend reports
    `verified: true`.
 
+Only `process-product-grant` and `pending-order-restore` evidence sources are
+grantable. The SDK success event occurs after the product-grant callback and is
+therefore never accepted as an authority path.
+
 The SDK documents a 30-second product-grant window. The helper uses a 25-second
 deadline by default, aborts the verification request, and returns `false` on
 timeout. Its `purchaseVerification` port must carry the provided `AbortSignal`
 through the transport and server-side ledger deadline so an aborted request
 cannot commit a late grant. `timeoutMs` may only shorten the 25-second default.
+Provide `onVerificationError` to route backend, transport, and deadline failures
+to deployment diagnostics while the SDK callback still returns `false`.
 
 The generic `createGameServicesClient().purchase()` flow verifies after
 `gateway.commerce.purchase()` returns, so it cannot satisfy this callback
@@ -125,7 +131,11 @@ inject an `AppsInTossRewardAuthority` that independently confirms:
 - the game-issued correlation id;
 - authenticated player id;
 - configured platform placement id;
-- verification timestamp.
+- verification timestamp with an explicit UTC or numeric offset.
+
+Unlike the documented order-status timestamp, a game-owned reward authority
+has no Apps in Toss KST default. Offset-free reward timestamps fail closed so
+deployment locale cannot shift audit and reconciliation times.
 
 Apps in Toss documents the client reward event but does not document a general
 partner-server rewarded-ad callback endpoint. The package therefore does not
@@ -169,7 +179,8 @@ pnpm smoke:apps-in-toss-production-evidence
 It covers callback-only rejection, in-callback backend grants, purchase success
 and idempotent retry, server-grant failure followed by pending-order restoration,
 deterministic KST timestamp parsing, authoritative player/SKU/status matching,
-reward retry/replay rejection, authority errors, and reward player/placement
+post-success purchase rejection, reward retry/replay rejection, explicit-zone
+reward timestamp validation, authority errors, and reward player/placement
 matching. No failure path writes a ledger grant.
 
 Before release, also run the Apps in Toss sandbox scenarios on a real test app:

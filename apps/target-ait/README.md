@@ -36,7 +36,10 @@ backend API is intentionally not accepted. The current gateway bridge does not
 synthesize purchase or reward evidence from a completed result. The purchase authority is
 responsible for authenticated Toss-login identity and the mTLS order-status
 lookup; the reward authority validates a game-issued correlation id because the
-official `userEarnedReward` event has no impression id. See
+official `userEarnedReward` event has no impression id and returns an
+explicit-zone verification timestamp. Purchase success events occur too late to
+grant; only the product-grant callback and pending-order restore are accepted.
+See
 [Apps in Toss Production Evidence](../../docs/APPS_IN_TOSS_PRODUCTION_EVIDENCE.md)
 for pending-order restoration, product-grant completion, sandbox scenarios, and
 runtime-only credential requirements.

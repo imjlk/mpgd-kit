@@ -17,11 +17,15 @@ export const appsInTossProductGrantCallbackTimeoutMs = 25_000;
 
 // Offset-free order-status timestamps are documented as KST (UTC+09:00).
 const appsInTossKstOffsetMinutes = 9 * 60;
+const appsInTossTimestampPattern = new RegExp(
+  String.raw`^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})`
+    + String.raw`(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))?$`,
+  'u',
+);
 
 export type AppsInTossPurchaseCallbackSource =
   | 'process-product-grant'
-  | 'pending-order-restore'
-  | 'success-event';
+  | 'pending-order-restore';
 
 export type AppsInTossPurchaseOrderStatus =
   | 'PURCHASED'
@@ -94,6 +98,8 @@ export interface CreateAppsInTossProductGrantCallbackInput {
   /** May be shortened, but never extended beyond the SDK-safe default. */
   readonly timeoutMs?: number;
   readonly now?: () => string;
+  /** Receives backend, transport, and deadline failures before the callback fails closed. */
+  readonly onVerificationError?: (error: unknown) => void;
 }
 
 export interface AppsInTossProcessProductGrantInput {
@@ -316,8 +322,13 @@ export function createAppsInTossProductGrantCallback(
       ]);
 
       return verification.verified;
-    } catch {
+    } catch (error) {
       abortController.abort();
+      try {
+        input.onVerificationError?.(error);
+      } catch {
+        // Diagnostics must never break the SDK's required boolean callback contract.
+      }
       return false;
     } finally {
       if (timeout !== undefined) {
@@ -403,7 +414,7 @@ async function verifyAppsInTossPurchase(
     return rejected('AIT_PURCHASE_AUTHORITY_SKU_MISMATCH');
   }
 
-  const verifiedAt = normalizeTimestamp(order.statusDeterminedAt);
+  const verifiedAt = normalizeTimestamp(order.statusDeterminedAt, appsInTossKstOffsetMinutes);
   if (verifiedAt === undefined) {
     return rejected('AIT_PURCHASE_AUTHORITY_TIMESTAMP_INVALID');
   }
@@ -580,13 +591,11 @@ function readEvidenceString(
   return typeof value === 'string' && value.length > 0 ? value : undefined;
 }
 
-function normalizeTimestamp(value: string): string | undefined {
-  const timestampPattern = new RegExp(
-    String.raw`^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})`
-      + String.raw`(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))?$`,
-    'u',
-  );
-  const match = timestampPattern.exec(value);
+function normalizeTimestamp(
+  value: string,
+  offsetFreeOffsetMinutes?: number,
+): string | undefined {
+  const match = appsInTossTimestampPattern.exec(value);
   if (match === null) {
     return undefined;
   }
@@ -625,7 +634,7 @@ function normalizeTimestamp(value: string): string | undefined {
     return undefined;
   }
 
-  let offsetMinutes = appsInTossKstOffsetMinutes;
+  let offsetMinutes = offsetFreeOffsetMinutes;
   if (match[8] === 'Z') {
     offsetMinutes = 0;
   } else if (match[9] !== undefined) {
@@ -635,6 +644,10 @@ function normalizeTimestamp(value: string): string | undefined {
       return undefined;
     }
     offsetMinutes = (offsetHour * 60 + offsetMinute) * (match[9] === '+' ? 1 : -1);
+  }
+
+  if (offsetMinutes === undefined) {
+    return undefined;
   }
 
   return new Date(wallClock - offsetMinutes * 60_000).toISOString();
@@ -702,8 +715,7 @@ function isPurchaseCallbackSource(
   input: unknown,
 ): input is AppsInTossPurchaseCallbackSource {
   return input === 'process-product-grant'
-    || input === 'pending-order-restore'
-    || input === 'success-event';
+    || input === 'pending-order-restore';
 }
 
 function requirePurchaseOrderStatus(

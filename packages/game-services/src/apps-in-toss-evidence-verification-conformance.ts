@@ -1,6 +1,7 @@
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 
 import {
+  appsInTossPurchaseCallbackEvidenceSchema,
   createAppsInTossProductGrantCallback,
   createAppsInTossProductGrantVerificationPort,
   createAppsInTossProductionEvidenceVerifier,
@@ -31,6 +32,7 @@ export const appsInTossProductionEvidenceConformanceScenarios = [
   'purchase-authority-matching',
   'purchase-timestamp-normalization',
   'reward-authority-retry-and-replay',
+  'reward-timestamp-validation',
   'authority-errors-and-reward-matching',
 ] as const;
 
@@ -111,6 +113,7 @@ const scenarioRunners = {
   'purchase-authority-matching': runPurchaseAuthorityMatchingScenario,
   'purchase-timestamp-normalization': runPurchaseTimestampNormalizationScenario,
   'reward-authority-retry-and-replay': runRewardAuthorityRetryAndReplayScenario,
+  'reward-timestamp-validation': runRewardTimestampValidationScenario,
   'authority-errors-and-reward-matching': runAuthorityErrorsAndRewardMatchingScenario,
 } satisfies Record<AppsInTossProductionEvidenceConformanceScenario, ScenarioRunner>;
 
@@ -189,6 +192,19 @@ async function runCallbackOnlyFailClosedScenario(
   const context = createScenarioContext(createVerifier, now);
   const purchase = await context.backend.purchases.verifyPurchase(purchaseRequest());
   const reward = await context.backend.adRewards.claimAdReward(rewardRequest());
+  const postSuccessPurchase = await context.backend.purchases.verifyPurchase(
+    purchaseRequest({
+      idempotencyKey: 'purchase-post-success',
+      evidence: {
+        schema: appsInTossPurchaseCallbackEvidenceSchema,
+        payload: {
+          orderId: 'ait-order-1',
+          sku: 'ait.conformance.coins',
+          source: 'success-event',
+        },
+      },
+    }),
+  );
 
   assertEqual(purchase.verified, false, 'callback-only purchase must not grant');
   assertEqual(
@@ -201,6 +217,11 @@ async function runCallbackOnlyFailClosedScenario(
     reward.reason,
     'AIT_REWARD_AUTHORITY_UNAVAILABLE',
     'callback-only reward must identify the missing authority',
+  );
+  assertEqual(
+    postSuccessPurchase.reason,
+    'AIT_PURCHASE_CALLBACK_SOURCE_INVALID',
+    'post-success purchase evidence must never be grantable',
   );
   await assertEntitlementCount(context.store, 0, 'callback-only evidence');
 }
@@ -253,6 +274,7 @@ async function runPurchaseProductGrantCallbackScenario(
     false,
     'product-grant callback must fail closed without authority',
   );
+  const transportFailures: unknown[] = [];
   const transportFailureCallback = createAppsInTossProductGrantCallback({
     purchaseVerification: createAppsInTossProductGrantVerificationPort(
       async () => {
@@ -262,6 +284,7 @@ async function runPurchaseProductGrantCallbackScenario(
     playerId: 'ait-player-1',
     productId: 'CONFORMANCE_COINS',
     platformSku: 'ait.conformance.coins',
+    onVerificationError: (error) => transportFailures.push(error),
     now: () => now,
   });
   assertEqual(
@@ -269,6 +292,7 @@ async function runPurchaseProductGrantCallbackScenario(
     false,
     'product-grant transport failure must return false to the SDK',
   );
+  assertEqual(transportFailures.length, 1, 'product-grant failures must be observable');
   const deadlineSignals: AbortSignal[] = [];
   const deadlineCallback = createAppsInTossProductGrantCallback({
     purchaseVerification: createAppsInTossProductGrantVerificationPort(
@@ -511,6 +535,57 @@ async function runRewardAuthorityRetryAndReplayScenario(
   );
   assertEqual(fixture.rewardInputs.length, 2, 'retry must skip authority, replay must query it');
   await assertEntitlementCount(context.store, 1, 'reward retry and replay');
+}
+
+async function runRewardTimestampValidationScenario(
+  createVerifier: CreateAppsInTossProductionEvidenceVerifier,
+  now: string,
+): Promise<void> {
+  const fixture = createAppsInTossProductionEvidenceAuthorityFixture();
+  fixture.enqueueRewardResult(
+    verifiedReward({
+      authorityEventId: 'ait-authority-event-offset-free',
+      correlationId: 'ait-correlation-offset-free',
+      verifiedAt: '2030-01-02T03:02:00',
+    }),
+  );
+  fixture.enqueueRewardResult(
+    verifiedReward({
+      authorityEventId: 'ait-authority-event-offset',
+      correlationId: 'ait-correlation-offset',
+      verifiedAt: '2030-01-02T12:02:00+09:00',
+    }),
+  );
+  const context = createScenarioContext(createVerifier, now, {
+    rewardAuthority: fixture.rewardAuthority,
+  });
+
+  const offsetFree = await context.backend.adRewards.claimAdReward(
+    rewardRequest({
+      idempotencyKey: 'reward-offset-free',
+      evidence: rewardEvidence('ait-correlation-offset-free'),
+    }),
+  );
+  const explicitOffset = await context.backend.adRewards.claimAdReward(
+    rewardRequest({
+      idempotencyKey: 'reward-explicit-offset',
+      evidence: rewardEvidence('ait-correlation-offset'),
+    }),
+  );
+
+  assertEqual(
+    offsetFree.reason,
+    'AIT_REWARD_AUTHORITY_TIMESTAMP_INVALID',
+    'reward authority timestamps without a zone must fail closed',
+  );
+  assertEqual(explicitOffset.granted, true, 'explicit-offset reward timestamp must grant');
+  const [transaction] = await context.store.listEntitlementTransactions();
+  assertEqual(
+    transaction?.payload.evidenceVerifiedAt,
+    '2030-01-02T03:02:00.000Z',
+    'explicit-offset reward timestamps must normalize without KST fallback',
+  );
+  await assertEntitlementCount(context.store, 1, 'reward timestamp validation');
 }
 
 async function runAuthorityErrorsAndRewardMatchingScenario(
