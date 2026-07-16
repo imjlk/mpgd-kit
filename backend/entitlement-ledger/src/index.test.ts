@@ -25,10 +25,57 @@ assertEqual(second.alreadyProcessed, true, 'second grant should be deduplicated'
 assertEqual(second.ledgerEntryId, first.ledgerEntryId, 'deduplicated grant should reuse entry id');
 assertEqual(ledger.listTransactions().length, 1, 'ledger should store one transaction');
 
+const resourceInput = {
+  ...input,
+  grantId: 'HINT_PACK_5',
+  idempotencyKey: 'reddit:order-hints-1',
+  grant: {
+    type: 'resource' as const,
+    resource: 'hint',
+    amount: 5,
+  },
+  payload: {
+    productId: 'HINT_PACK_5',
+  },
+};
+const resourceResult = ledger.recordGrant(resourceInput);
+const resourceTransaction = ledger.getTransaction(resourceResult.ledgerEntryId);
+
+assertEqual(
+  JSON.stringify(resourceTransaction?.grant),
+  JSON.stringify(resourceInput.grant),
+  'resource grants should be preserved in legacy ledger transactions',
+);
+assertThrows(
+  () => ledger.recordGrant({
+    ...resourceInput,
+    idempotencyKey: 'reddit:invalid-resource-name',
+    grant: { type: 'resource', resource: '', amount: 5 },
+  }),
+  'resource grants should require a non-empty resource name',
+);
+assertThrows(
+  () => ledger.recordGrant({
+    ...resourceInput,
+    idempotencyKey: 'reddit:invalid-resource-amount',
+    grant: { type: 'resource', resource: 'hint', amount: 0 },
+  }),
+  'resource grants should require a positive amount',
+);
+
 console.log('InMemoryEntitlementLedger idempotency smoke test passed.');
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}.`);
   }
+}
+
+function assertThrows(callback: () => unknown, message: string): void {
+  try {
+    callback();
+  } catch {
+    return;
+  }
+  throw new Error(message);
 }

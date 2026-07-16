@@ -4,4 +4,4 @@ npm/@mpgd/game-services: minor (Added)
 npm/@mpgd/adapter-verse8: patch (Fixed)
 ---
 
-Add generic consumable resource product grants, preserve them through authoritative game-services ledger transactions, and keep Verse8 catalog application fail-closed for unsupported resource wallets.
+Add validated generic consumable resource product grants, preserve them through current and legacy authoritative ledger transactions, and keep unsupported resource products out of Verse8 shops.

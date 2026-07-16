@@ -1,4 +1,4 @@
-import typia from 'typia';
+import typia, { type tags } from 'typia';
 
 import type { LogicalAdPlacementId, LogicalProductId, ProductType } from '@mpgd/platform';
 
@@ -18,8 +18,10 @@ export type ProductGrant =
     }
   | {
       readonly type: 'resource';
-      readonly resource: string;
-      readonly amount: number;
+      readonly resource: string & tags.MinLength<1>;
+      readonly amount: number
+        & tags.ExclusiveMinimum<0>
+        & tags.Maximum<1.7976931348623157e308>;
     };
 
 export interface ProductCatalogEntry {
