@@ -603,8 +603,10 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
 ): Promise<void> {
   const fixture = createAppsInTossProductionEvidenceAuthorityFixture();
   const diagnosticReason = `Authority temporarily unavailable: ${'x'.repeat(512)} `;
+  const oversizedDiagnosticReason = 'x'.repeat(4_097);
   fixture.enqueuePurchaseResult({ decision: 'rejected', reason: diagnosticReason });
   fixture.enqueuePurchaseResult({ decision: 'pending', reason: diagnosticReason });
+  fixture.enqueuePurchaseResult({ decision: 'pending', reason: oversizedDiagnosticReason });
   fixture.enqueueRewardResult(new Error('simulated reward authority failure'));
   fixture.enqueueRewardResult(
     verifiedReward({
@@ -626,6 +628,7 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
   fixture.enqueueRewardResult({ decision: 'pending' });
   fixture.enqueueRewardResult({ decision: 'rejected', reason: diagnosticReason });
   fixture.enqueueRewardResult({ decision: 'pending', reason: diagnosticReason });
+  fixture.enqueueRewardResult({ decision: 'rejected', reason: oversizedDiagnosticReason });
   const context = createScenarioContext(createVerifier, now, {
     purchaseAuthority: fixture.purchaseAuthority,
     rewardAuthority: fixture.rewardAuthority,
@@ -635,6 +638,9 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
   );
   const purchasePending = await context.backend.purchases.verifyPurchase(
     purchaseRequest({ idempotencyKey: 'purchase-free-form-pending' }),
+  );
+  const purchaseOversizedReason = await context.backend.purchases.verifyPurchase(
+    purchaseRequest({ idempotencyKey: 'purchase-oversized-reason' }),
   );
   const failed = await context.backend.adRewards.claimAdReward(rewardRequest());
   const correlationMismatch = await context.backend.adRewards.claimAdReward(
@@ -673,9 +679,20 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
       evidence: rewardEvidence('ait-correlation-free-form-pending'),
     }),
   );
+  const rewardOversizedReason = await context.backend.adRewards.claimAdReward(
+    rewardRequest({
+      idempotencyKey: 'reward-oversized-reason',
+      evidence: rewardEvidence('ait-correlation-oversized-reason'),
+    }),
+  );
 
   assertEqual(purchaseRejected.reason, diagnosticReason, 'purchase rejection reason forwarding');
   assertEqual(purchasePending.reason, diagnosticReason, 'purchase pending reason forwarding');
+  assertEqual(
+    purchaseOversizedReason.reason,
+    'EVIDENCE_VERIFIER_ERROR',
+    'oversized purchase authority reason must fail closed',
+  );
   assertEqual(failed.reason, 'EVIDENCE_VERIFIER_ERROR', 'reward authority error');
   assertEqual(
     correlationMismatch.reason,
@@ -695,6 +712,11 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
   assertEqual(pending.reason, 'AIT_REWARD_AUTHORITY_PENDING', 'reward pending decision');
   assertEqual(rewardRejected.reason, diagnosticReason, 'reward rejection reason forwarding');
   assertEqual(rewardPending.reason, diagnosticReason, 'reward pending reason forwarding');
+  assertEqual(
+    rewardOversizedReason.reason,
+    'EVIDENCE_VERIFIER_ERROR',
+    'oversized reward authority reason must fail closed',
+  );
   await assertEntitlementCount(context.store, 0, 'reward errors and mismatches');
 }
 

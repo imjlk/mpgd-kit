@@ -17,6 +17,7 @@ export const appsInTossProductGrantCallbackTimeoutMs = 25_000;
 
 // Offset-free order-status timestamps are documented as KST (UTC+09:00).
 const appsInTossKstOffsetMinutes = 9 * 60;
+const appsInTossAuthorityReasonMaxLength = 4_096;
 const appsInTossTimestampPattern = new RegExp(
   String.raw`^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})`
     + String.raw`(?:\.(\d{1,3}))?(Z|([+-])(\d{2}):(\d{2}))?$`,
@@ -548,7 +549,7 @@ function assertPurchaseAuthorityResult(
   }
 
   if (input.decision === 'rejected') {
-    requireNonEmptyString(input.reason, 'purchase authority reason');
+    requireAuthorityReason(input.reason, 'purchase authority reason');
     return input;
   }
 
@@ -577,7 +578,7 @@ function assertRewardAuthorityResult(
   }
 
   if (input.decision === 'rejected') {
-    requireNonEmptyString(input.reason, 'reward authority reason');
+    requireAuthorityReason(input.reason, 'reward authority reason');
     return input;
   }
 
@@ -696,13 +697,20 @@ function requireIdentifier(input: unknown, label: string): asserts input is stri
 
 function requireOptionalReason(input: unknown): asserts input is string | undefined {
   if (input !== undefined) {
-    requireNonEmptyString(input, 'authority reason');
+    requireAuthorityReason(input, 'authority reason');
   }
 }
 
-function requireNonEmptyString(input: unknown, label: string): asserts input is string {
-  if (typeof input !== 'string' || input.trim().length === 0) {
-    throw new TypeError(`${label} must be a non-empty string.`);
+function requireAuthorityReason(input: unknown, label: string): asserts input is string {
+  if (
+    typeof input !== 'string'
+    || input.trim().length === 0
+    || input.length > appsInTossAuthorityReasonMaxLength
+  ) {
+    throw new TypeError(
+      `${label} must be a non-empty string no longer than `
+      + `${appsInTossAuthorityReasonMaxLength} characters.`,
+    );
   }
 }
 
