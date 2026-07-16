@@ -707,7 +707,6 @@ async function finalizeExistingPurchaseGrant(
   context: {
     readonly catalog: ProductCatalog;
     readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
-    readonly evidenceVerificationTimeoutMs: number;
     readonly purchaseGrantFinalizationTimeoutMs: number;
   },
 ): Promise<PurchaseGrantFinalization | undefined> {
