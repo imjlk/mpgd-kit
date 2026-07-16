@@ -2,6 +2,7 @@ import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 
 import {
   createAppsInTossProductGrantCallback,
+  createAppsInTossProductGrantVerificationPort,
   createAppsInTossProductionEvidenceVerifier,
   createAppsInTossPurchaseCallbackEvidence,
   createAppsInTossRewardCallbackEvidence,
@@ -20,7 +21,7 @@ import {
   createInMemoryGameServicesStore,
   type InMemoryGameServicesStore,
 } from './server';
-import type { ClaimAdRewardRequest, VerifyPurchaseRequest } from './types';
+import type { ClaimAdRewardRequest, VerifyPurchaseRequest, VerifyPurchaseResponse } from './types';
 
 export const appsInTossProductionEvidenceConformanceScenarios = [
   'callback-only-fail-closed',
@@ -239,7 +240,9 @@ async function runPurchaseProductGrantCallbackScenario(
 ): Promise<void> {
   const failClosedContext = createScenarioContext(createVerifier, now);
   const failClosedCallback = createAppsInTossProductGrantCallback({
-    purchaseVerification: failClosedContext.backend.purchases,
+    purchaseVerification: createConformanceProductGrantVerificationPort(
+      failClosedContext.backend.purchases.verifyPurchase,
+    ),
     playerId: 'ait-player-1',
     productId: 'CONFORMANCE_COINS',
     platformSku: 'ait.conformance.coins',
@@ -252,11 +255,11 @@ async function runPurchaseProductGrantCallbackScenario(
     'product-grant callback must fail closed without authority',
   );
   const transportFailureCallback = createAppsInTossProductGrantCallback({
-    purchaseVerification: {
-      async verifyPurchase() {
+    purchaseVerification: createAppsInTossProductGrantVerificationPort(
+      async () => {
         throw new Error('simulated callback transport failure');
       },
-    },
+    ),
     playerId: 'ait-player-1',
     productId: 'CONFORMANCE_COINS',
     platformSku: 'ait.conformance.coins',
@@ -269,8 +272,8 @@ async function runPurchaseProductGrantCallbackScenario(
   );
   const deadlineSignals: AbortSignal[] = [];
   const deadlineCallback = createAppsInTossProductGrantCallback({
-    purchaseVerification: {
-      verifyPurchase(_request, { signal }) {
+    purchaseVerification: createAppsInTossProductGrantVerificationPort(
+      ({ signal }) => {
         deadlineSignals.push(signal);
         return new Promise((_resolve, reject) => {
           signal.addEventListener(
@@ -280,7 +283,7 @@ async function runPurchaseProductGrantCallbackScenario(
           );
         });
       },
-    },
+    ),
     playerId: 'ait-player-1',
     productId: 'CONFORMANCE_COINS',
     platformSku: 'ait.conformance.coins',
@@ -301,7 +304,9 @@ async function runPurchaseProductGrantCallbackScenario(
     purchaseAuthority: fixture.purchaseAuthority,
   });
   const callback = createAppsInTossProductGrantCallback({
-    purchaseVerification: context.backend.purchases,
+    purchaseVerification: createConformanceProductGrantVerificationPort(
+      context.backend.purchases.verifyPurchase,
+    ),
     playerId: 'ait-player-1',
     productId: 'CONFORMANCE_COINS',
     platformSku: 'ait.conformance.coins',
@@ -704,6 +709,21 @@ function verifiedReward(
     verifiedAt: '2030-01-02T03:02:00.000Z',
     ...overrides,
   };
+}
+
+function createConformanceProductGrantVerificationPort(
+  verifyPurchase: (request: VerifyPurchaseRequest) => Promise<VerifyPurchaseResponse>,
+) {
+  return createAppsInTossProductGrantVerificationPort(async ({ request, signal }) => {
+    if (signal.aborted) {
+      throw signal.reason;
+    }
+    const response = await verifyPurchase(request);
+    if (signal.aborted) {
+      throw signal.reason;
+    }
+    return response;
+  });
 }
 
 function shiftFixtureResult<T>(queue: Array<T | Error>, exhaustedReason: string): T {

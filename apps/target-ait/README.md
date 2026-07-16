@@ -30,7 +30,9 @@ partner-server authority before granting catalog products or rewards. The
 generic `createGameServicesClient().purchase()` path runs too late for the SDK
 callback; wire `createAppsInTossProductGrantCallback()` directly into
 `processProductGrant` with an abort-aware verification port that enforces the
-helper's 25-second ledger deadline. The current gateway bridge does not
+helper's 25-second ledger deadline. Construct that nominal port with
+`createAppsInTossProductGrantVerificationPort()`; the legacy one-argument
+backend API is intentionally not accepted. The current gateway bridge does not
 synthesize purchase or reward evidence from a completed result. The purchase authority is
 responsible for authenticated Toss-login identity and the mTLS order-status
 lookup; the reward authority validates a game-issued correlation id because the

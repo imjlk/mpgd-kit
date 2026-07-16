@@ -45,21 +45,31 @@ export interface AppsInTossRewardCallbackEvidenceInput {
   readonly platformPlacementId: string;
 }
 
+const appsInTossProductGrantVerificationPortBrand: unique symbol = Symbol(
+  'AppsInTossProductGrantVerificationPort',
+);
+
+export interface AppsInTossProductGrantVerificationInput {
+  readonly request: VerifyPurchaseRequest;
+  readonly signal: AbortSignal;
+  readonly timeoutMs: number;
+}
+
 export interface AppsInTossProductGrantVerificationPort {
+  readonly [appsInTossProductGrantVerificationPortBrand]: true;
   /**
-   * Must honor `signal` through the transport and authoritative ledger write.
+   * Must honor `signal` and `timeoutMs` through the transport and authoritative ledger write.
    * Once aborted, the implementation must guarantee that the request cannot
    * later commit a grant after the SDK callback has returned `false`.
    */
   verifyPurchase(
-    input: VerifyPurchaseRequest,
-    context: AppsInTossProductGrantVerificationContext,
+    input: AppsInTossProductGrantVerificationInput,
   ): Promise<VerifyPurchaseResponse>;
 }
 
-export interface AppsInTossProductGrantVerificationContext {
-  readonly signal: AbortSignal;
-}
+export type AppsInTossProductGrantVerification = (
+  input: AppsInTossProductGrantVerificationInput,
+) => Promise<VerifyPurchaseResponse>;
 
 export interface VerifyAppsInTossProductGrantInput {
   readonly purchaseVerification: AppsInTossProductGrantVerificationPort;
@@ -70,7 +80,8 @@ export interface VerifyAppsInTossProductGrantInput {
   readonly idempotencyKey?: string;
   readonly source: AppsInTossPurchaseCallbackSource;
   readonly purchasedAt: string;
-  readonly signal?: AbortSignal;
+  readonly signal: AbortSignal;
+  readonly timeoutMs: number;
 }
 
 export interface CreateAppsInTossProductGrantCallbackInput {
@@ -217,6 +228,19 @@ export function createAppsInTossRewardCallbackEvidence(
 }
 
 /**
+ * Creates a nominal, abort-aware port so the legacy one-argument backend API
+ * cannot be passed to the SDK callback accidentally.
+ */
+export function createAppsInTossProductGrantVerificationPort(
+  verifyPurchase: AppsInTossProductGrantVerification,
+): AppsInTossProductGrantVerificationPort {
+  return {
+    [appsInTossProductGrantVerificationPortBrand]: true,
+    verifyPurchase,
+  };
+}
+
+/**
  * Sends an Apps in Toss product-grant callback to the authoritative backend.
  * This is intentionally callable from inside the SDK's `processProductGrant`
  * callback, before `createOneTimePurchaseOrder` emits its success event.
@@ -230,8 +254,8 @@ export function verifyAppsInTossProductGrant(
     source: input.source,
   });
 
-  return input.purchaseVerification.verifyPurchase(
-    {
+  return input.purchaseVerification.verifyPurchase({
+    request: {
       target: 'ait',
       playerId: input.playerId,
       productId: input.productId,
@@ -241,8 +265,9 @@ export function verifyAppsInTossProductGrant(
       purchasedAt: input.purchasedAt,
       evidence,
     },
-    { signal: input.signal ?? new AbortController().signal },
-  );
+    signal: input.signal,
+    timeoutMs: input.timeoutMs,
+  });
 }
 
 export function createAppsInTossPurchaseIdempotencyKey(orderId: string): string {
@@ -280,6 +305,7 @@ export function createAppsInTossProductGrantCallback(
           source: 'process-product-grant',
           purchasedAt: now(),
           signal: abortController.signal,
+          timeoutMs,
         }),
         new Promise<never>((_resolve, reject) => {
           timeout = setTimeout(() => {

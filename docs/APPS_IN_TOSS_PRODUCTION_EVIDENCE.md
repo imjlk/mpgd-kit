@@ -46,7 +46,17 @@ timing by itself. Wire the callback-specific API directly into the AIT SDK:
 import { IAP } from '@apps-in-toss/web-framework';
 import {
   createAppsInTossProductGrantCallback,
+  createAppsInTossProductGrantVerificationPort,
 } from '@mpgd/game-services/apps-in-toss-evidence-verification';
+
+const abortAwarePurchaseVerification = createAppsInTossProductGrantVerificationPort(
+  ({ request, signal, timeoutMs }) => {
+    return callbackSpecificPurchaseTransport.verifyPurchase(request, {
+      signal,
+      timeoutMs,
+    });
+  },
+);
 
 const processProductGrant = createAppsInTossProductGrantCallback({
   purchaseVerification: abortAwarePurchaseVerification,
@@ -66,15 +76,18 @@ cleanup = IAP.createOneTimePurchaseOrder({
 });
 ```
 
-`abortAwarePurchaseVerification` can wrap an HTTP-backed purchase endpoint, but
-it must pass the port's `signal` into the request and enforce the same deadline
-before its authoritative ledger commit. It must not contain mTLS credentials in
-the client. The helper derives its idempotency key from the order id, so the same
-order remains replay-safe across restarts.
+The nominal port factory deliberately rejects the legacy one-argument
+`backend.purchases` API. `callbackSpecificPurchaseTransport` may call an
+HTTP-backed purchase endpoint, but it must pass both `signal` and `timeoutMs`
+through the request and enforce the deadline before its authoritative ledger
+commit. It must not contain mTLS credentials in the client. The helper derives
+its idempotency key from the order id, so the same order remains replay-safe
+across restarts.
 
 For a grant-server failure, return `false`. At the next launch, read
 `getPendingOrders()`, submit each order with
-`verifyAppsInTossProductGrant({ source: 'pending-order-restore', ... })`, and call
+`verifyAppsInTossProductGrant({ source: 'pending-order-restore', signal,
+timeoutMs, ... })`, and call
 `completeProductGrant()` only after the backend accepts the ledger grant.
 If completion itself fails, the same request can be retried: the ledger returns
 the prior grant without duplicating it, after which completion can be attempted
