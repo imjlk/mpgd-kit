@@ -75,32 +75,16 @@ const placements = {
   placements: [placement],
 } as const satisfies AdPlacements;
 
-export async function createAdMobSsvConformanceFixture(
-  input: RunAdMobSsvConformanceInput = {},
-): Promise<AdMobSsvConformanceFixture> {
-  const subtle = input.subtle ?? readGlobalSubtleCrypto();
-  const publicKey = await importAdMobSsvPublicKey(fixturePublicKey, subtle);
-  const callbacks = new Map([
-    ['reward-1', fixtureCallback('reward-1', firstFixtureSignature)],
-    ['reward-2', fixtureCallback('reward-2', secondFixtureSignature)],
-  ]);
-
-  return {
-    verifier: createAdMobSsvEvidenceVerifier({
-      callbackSource: mapCallbackSource(callbacks),
-      publicKeySource: fixedPublicKeySource(new Map([[fixtureKeyId, publicKey]])),
-      subtle,
-      now: () => fixtureTimestampMs + 1_000,
-    }),
-    placements,
-    firstRequest: rewardRequest('reward-1'),
-    replayRequest: rewardRequest('reward-2'),
-  };
+interface AdMobSsvConformanceContext {
+  readonly callbackSource: AdMobSsvCallbackSource;
+  readonly publicKeySource: AdMobSsvPublicKeySource;
+  readonly subtle: SubtleCrypto;
+  readonly verifier: GameServicesEvidenceVerifier;
 }
 
-export async function runAdMobSsvConformance(
-  input: RunAdMobSsvConformanceInput = {},
-): Promise<AdMobSsvConformanceReport> {
+async function createAdMobSsvConformanceContext(
+  input: RunAdMobSsvConformanceInput,
+): Promise<AdMobSsvConformanceContext> {
   const subtle = input.subtle ?? readGlobalSubtleCrypto();
   const [publicKey, secp256k1PublicKey] = await Promise.all([
     importAdMobSsvPublicKey(fixturePublicKey, subtle),
@@ -121,14 +105,44 @@ export async function runAdMobSsvConformance(
     [fixtureKeyId, publicKey],
     [secp256k1FixtureKeyId, secp256k1PublicKey],
   ]);
-  const publicKeySource = fixedPublicKeySource(publicKeys);
   const callbackSource = mapCallbackSource(callbacks);
-  const verifier = createAdMobSsvEvidenceVerifier({
+  const publicKeySource = fixedPublicKeySource(publicKeys);
+
+  return {
     callbackSource,
     publicKeySource,
     subtle,
-    now: () => fixtureTimestampMs + 1_000,
-  });
+    verifier: createAdMobSsvEvidenceVerifier({
+      callbackSource,
+      publicKeySource,
+      subtle,
+      now: () => fixtureTimestampMs + 1_000,
+    }),
+  };
+}
+
+export async function createAdMobSsvConformanceFixture(
+  input: RunAdMobSsvConformanceInput = {},
+): Promise<AdMobSsvConformanceFixture> {
+  const { verifier } = await createAdMobSsvConformanceContext(input);
+
+  return {
+    verifier,
+    placements,
+    firstRequest: rewardRequest('reward-1'),
+    replayRequest: rewardRequest('reward-2'),
+  };
+}
+
+export async function runAdMobSsvConformance(
+  input: RunAdMobSsvConformanceInput = {},
+): Promise<AdMobSsvConformanceReport> {
+  const {
+    callbackSource,
+    publicKeySource,
+    subtle,
+    verifier,
+  } = await createAdMobSsvConformanceContext(input);
   const firstRequest = rewardRequest('reward-1');
   const firstDecision = await verifier.verifyAdReward(verificationInput(firstRequest));
 
