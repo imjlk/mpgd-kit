@@ -9,7 +9,10 @@ public class CapacitorGameServicesPlugin: CAPPlugin, CAPBridgedPlugin {
         CAPPluginMethod(name: "request", returnType: CAPPluginReturnPromise)
     ]
     private lazy var localStorage = LocalJsonStorage(
-        backend: FileLocalJsonStorageBackend()
+        backend: MigratingFileLocalJsonStorageBackend(
+            backend: FileLocalJsonStorageBackend(),
+            legacyDefaults: .standard
+        )
     )
 
     @objc func request(_ call: CAPPluginCall) {

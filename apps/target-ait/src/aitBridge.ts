@@ -230,7 +230,10 @@ export function installAitBridge(options: InstallAitBridgeOptions = {}): void {
             data:
               value === undefined
                 ? ({ found: false } satisfies BridgeStorageLoadData)
-                : ({ found: true, value } satisfies BridgeStorageLoadData),
+                : ({
+                    found: true,
+                    value: cloneJsonValue(value),
+                  } satisfies BridgeStorageLoadData),
           };
         }
 
@@ -238,7 +241,7 @@ export function installAitBridge(options: InstallAitBridgeOptions = {}): void {
           const payload = request.payload as { readonly key?: string; readonly value?: unknown };
 
           if (payload.key !== undefined) {
-            storage.set(payload.key, payload.value);
+            storage.set(payload.key, cloneJsonValue(payload.value));
           }
 
           return {
@@ -257,6 +260,16 @@ export function installAitBridge(options: InstallAitBridgeOptions = {}): void {
       }
     },
   };
+}
+
+function cloneJsonValue(value: unknown): unknown {
+  const serialized = JSON.stringify(value);
+
+  if (serialized === undefined) {
+    throw new TypeError('Storage values must be JSON-serializable.');
+  }
+
+  return JSON.parse(serialized) as unknown;
 }
 
 function parseBridgeRequest(input: unknown): BridgeRequest {

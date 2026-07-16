@@ -45,7 +45,7 @@ enum LocalJsonStorageError: Error {
 
 struct LocalJsonStorage {
     static let defaultMaximumValueBytes = 262_144
-    private static let storageKeyPrefix = "mpgd:storage:"
+    static let storageKeyPrefix = "mpgd:storage:"
 
     private let backend: LocalJsonStorageBackend
     private let maximumValueBytes: Int
@@ -142,5 +142,60 @@ struct FileLocalJsonStorageBackend: LocalJsonStorageBackend {
         }
 
         return directoryURL
+    }
+}
+
+final class MigratingFileLocalJsonStorageBackend: LocalJsonStorageBackend {
+    private let backend: FileLocalJsonStorageBackend
+    private let legacyDefaults: UserDefaults
+    private let migrationLock = NSLock()
+    private var didMigrateLegacyValues = false
+
+    init(
+        backend: FileLocalJsonStorageBackend,
+        legacyDefaults: UserDefaults
+    ) {
+        self.backend = backend
+        self.legacyDefaults = legacyDefaults
+    }
+
+    func string(forKey key: String) throws -> String? {
+        try migrateLegacyValuesIfNeeded()
+        return try backend.string(forKey: key)
+    }
+
+    func set(_ value: String, forKey key: String) throws {
+        try migrateLegacyValuesIfNeeded()
+        try backend.set(value, forKey: key)
+    }
+
+    private func migrateLegacyValuesIfNeeded() throws {
+        migrationLock.lock()
+        defer { migrationLock.unlock() }
+
+        guard !didMigrateLegacyValues else {
+            return
+        }
+
+        let legacyValues: [(key: String, value: String)] = legacyDefaults
+            .dictionaryRepresentation()
+            .compactMap { key, value in
+                guard
+                    key.hasPrefix(LocalJsonStorage.storageKeyPrefix),
+                    let serializedValue = value as? String
+                else {
+                    return nil
+                }
+
+                return (key: key, value: serializedValue)
+            }
+            .sorted { $0.key < $1.key }
+
+        for legacyValue in legacyValues {
+            try backend.set(legacyValue.value, forKey: legacyValue.key)
+            legacyDefaults.removeObject(forKey: legacyValue.key)
+        }
+
+        didMigrateLegacyValues = true
     }
 }

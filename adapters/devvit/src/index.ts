@@ -323,7 +323,10 @@ export function createDevvitSandboxBridge(): DevvitBridge {
             input,
             value === undefined
               ? ({ found: false } satisfies BridgeStorageLoadData)
-              : ({ found: true, value } satisfies BridgeStorageLoadData),
+              : ({
+                  found: true,
+                  value: cloneJsonValue(value),
+                } satisfies BridgeStorageLoadData),
           );
         }
 
@@ -335,7 +338,7 @@ export function createDevvitSandboxBridge(): DevvitBridge {
           const key = typeof payload.key === 'string' ? payload.key : undefined;
 
           if (key !== undefined) {
-            storage.set(key, payload.value);
+            storage.set(key, cloneJsonValue(payload.value));
           }
 
           return ok(input, {
@@ -352,6 +355,16 @@ export function createDevvitSandboxBridge(): DevvitBridge {
       }
     },
   };
+}
+
+function cloneJsonValue(value: unknown): unknown {
+  const serialized = JSON.stringify(value);
+
+  if (serialized === undefined) {
+    throw new TypeError('Storage values must be JSON-serializable.');
+  }
+
+  return JSON.parse(serialized) as unknown;
 }
 
 function optionalObjectPayload(payload: unknown): Record<string, unknown> {

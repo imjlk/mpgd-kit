@@ -301,10 +301,35 @@ describe('adapter-devvit', () => {
       cloudSave: true,
       socialShare: false,
     });
-    await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+    const savedValue = {
+      progress: { coins: 7 },
+      inventory: ['seed'],
+    };
+    await gateway.storage.save({ key: 'save:v1', value: savedValue });
+    savedValue.progress.coins = -1;
+    savedValue.inventory.push('mutated-after-save');
+    const firstLoad = await gateway.storage.load({ key: 'save:v1' });
+    expect(firstLoad).toEqual({
+      value: {
+        progress: { coins: 7 },
+        inventory: ['seed'],
+      },
+    });
+
+    if (firstLoad === null) {
+      throw new Error('Expected the Devvit sandbox save to be present.');
+    }
+
+    const firstLoadedValue = firstLoad.value as {
+      progress: { coins: number };
+      inventory: string[];
+    };
+    firstLoadedValue.progress.coins = -2;
+    firstLoadedValue.inventory.push('mutated-after-load');
     await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
       value: {
-        coins: 7,
+        progress: { coins: 7 },
+        inventory: ['seed'],
       },
     });
     await gateway.storage.save({ key: 'nullable-save:v1', value: null });

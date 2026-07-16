@@ -124,6 +124,8 @@ private func runFileBackendConformance() throws {
         "The atomic file backend must round-trip a top-level JSON null."
     )
 
+    try runLegacyMigrationConformance(fileManager: fileManager, root: root)
+
     let blockedDirectory = root.appendingPathComponent("blocked", isDirectory: false)
     try Data("not-a-directory".utf8).write(to: blockedDirectory, options: .atomic)
     let failingStorage = LocalJsonStorage(
@@ -136,6 +138,91 @@ private func runFileBackendConformance() throws {
     requireStorageError(code: "NATIVE_STORAGE_SAVE_FAILED", retryable: true) {
         try failingStorage.save(key: "save", serializedValue: "{\"revision\":1}")
     }
+
+    try runFailedLegacyMigrationConformance(
+        fileManager: fileManager,
+        blockedDirectory: blockedDirectory
+    )
+}
+
+private func runLegacyMigrationConformance(
+    fileManager: FileManager,
+    root: URL
+) throws {
+    let suiteName = "dev.mpgd.local-storage-migration.\(UUID().uuidString)"
+
+    guard let legacyDefaults = UserDefaults(suiteName: suiteName) else {
+        fatalError("Expected an isolated UserDefaults suite.")
+    }
+
+    defer {
+        legacyDefaults.removePersistentDomain(forName: suiteName)
+    }
+
+    let legacyStorageKey = LocalJsonStorage.storageKeyPrefix + "legacy-save"
+    legacyDefaults.set("{\"revision\":1}", forKey: legacyStorageKey)
+    let migrationDirectory = root.appendingPathComponent("migrated", isDirectory: true)
+    let backend = MigratingFileLocalJsonStorageBackend(
+        backend: FileLocalJsonStorageBackend(
+            fileManager: fileManager,
+            directoryURL: migrationDirectory
+        ),
+        legacyDefaults: legacyDefaults
+    )
+    let storage = LocalJsonStorage(backend: backend, maximumValueBytes: 64)
+
+    require(
+        try storage.load(key: "legacy-save") == "{\"revision\":1}",
+        "The file backend must expose migrated UserDefaults values on first access."
+    )
+    require(
+        legacyDefaults.object(forKey: legacyStorageKey) == nil,
+        "A legacy UserDefaults value must be removed after its file write succeeds."
+    )
+    try storage.save(key: "legacy-save", serializedValue: "{\"revision\":2}")
+    require(
+        try storage.load(key: "legacy-save") == "{\"revision\":2}",
+        "Normal file-backed saves must continue after migration."
+    )
+}
+
+private func runFailedLegacyMigrationConformance(
+    fileManager: FileManager,
+    blockedDirectory: URL
+) throws {
+    let suiteName = "dev.mpgd.local-storage-migration-failure.\(UUID().uuidString)"
+
+    guard let legacyDefaults = UserDefaults(suiteName: suiteName) else {
+        fatalError("Expected an isolated UserDefaults suite.")
+    }
+
+    defer {
+        legacyDefaults.removePersistentDomain(forName: suiteName)
+    }
+
+    let legacyStorageKey = LocalJsonStorage.storageKeyPrefix + "legacy-save"
+    let legacyValue = "{\"revision\":1}"
+    legacyDefaults.set(legacyValue, forKey: legacyStorageKey)
+    let backend = MigratingFileLocalJsonStorageBackend(
+        backend: FileLocalJsonStorageBackend(
+            fileManager: fileManager,
+            directoryURL: blockedDirectory
+        ),
+        legacyDefaults: legacyDefaults
+    )
+    var migrationFailed = false
+
+    do {
+        _ = try backend.string(forKey: legacyStorageKey)
+    } catch {
+        migrationFailed = true
+    }
+
+    require(migrationFailed, "A failed legacy file write must surface an error.")
+    require(
+        legacyDefaults.string(forKey: legacyStorageKey) == legacyValue,
+        "A legacy UserDefaults value must remain when its file write fails."
+    )
 }
 
 do {

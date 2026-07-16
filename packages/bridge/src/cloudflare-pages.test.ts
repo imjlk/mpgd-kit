@@ -72,6 +72,18 @@ const player = await client.request({
 
 assertEqual(player.ok ? player.data : undefined, null, 'default oRPC identity should be anonymous');
 
+const missingStorage = await client.request({
+  id: 'storage-load-1',
+  method: 'storage.load',
+  payload: { key: 'missing:v1' },
+  meta: requestMeta(),
+});
+assertDeepEqual(
+  missingStorage.ok ? missingStorage.data : undefined,
+  { found: false },
+  'default Pages storage should use the shared missing-value envelope',
+);
+
 const session = await client.request({
   id: 'session-1',
   method: 'identity.getSession',
