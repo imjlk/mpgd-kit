@@ -146,6 +146,14 @@ async function assertStructuredServerBoundary(): Promise<void> {
   expectEqual(bobRecord.record.entry.participantId, '0xbob', 'Bob participant');
   expect(fixture.collectionWrites.length > initialWrites, 'accepted records must write');
 
+  await fixture.context.addCollectionItem('acceptance-unbounded', { ordinal: 1 });
+  await fixture.context.addCollectionItem('acceptance-unbounded', { ordinal: 2 });
+  expectEqual(
+    (await fixture.context.getCollectionItems('acceptance-unbounded')).length,
+    2,
+    'unbounded collection read',
+  );
+
   const spoofedPage = {
     leaderboardId: 'ranked-runs',
     participantId: '0xbob',
@@ -397,9 +405,8 @@ function createAgent8Context(): Agent8ContextFixture {
       }
     },
     async getCollectionItems(collectionId, options = {}) {
-      return [...getCollection(collectionId).values()]
-        .slice(0, options.limit)
-        .map(clone);
+      const items = [...getCollection(collectionId).values()];
+      return (options.limit === undefined ? items : items.slice(0, options.limit)).map(clone);
     },
     async addCollectionItem(collectionId, item) {
       const itemId = `item-${String(nextItemId)}`;
