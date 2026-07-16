@@ -510,6 +510,32 @@ await assertRejects(
   'caller cancellation must propagate instead of becoming a retryable provider outage',
 );
 
+const streamingAbortController = new AbortController();
+const streamingAbortVerifier = createVerifier({
+  serverApi: createAppStoreServerApiClient({
+    getBearerToken: () => 'signed-provider-jwt',
+    async fetch() {
+      return {
+        status: 200,
+        body: new ReadableStream({
+          pull(streamController) {
+            streamingAbortController.abort(new Error('stream caller cancelled'));
+            streamController.error(streamingAbortController.signal.reason);
+          },
+        }),
+      };
+    },
+  }),
+});
+await assertRejects(
+  () => streamingAbortVerifier.verifyPurchase({
+    ...baseInput,
+    signal: streamingAbortController.signal,
+  }),
+  'stream caller cancelled',
+  'cancellation during response streaming must propagate instead of becoming retryable',
+);
+
 const interruptedStreamVerifier = createVerifier({
   serverApi: createAppStoreServerApiClient({
     getBearerToken: () => 'signed-provider-jwt',
