@@ -20,9 +20,15 @@ import type { GameServicesEvidenceVerifier } from './evidence-verification';
 import {
   createGameServicesBackend,
   createInMemoryGameServicesStore,
-  type InMemoryGameServicesStore,
+  InMemoryGameServicesStore,
 } from './server';
-import type { ClaimAdRewardRequest, VerifyPurchaseRequest, VerifyPurchaseResponse } from './types';
+import type {
+  ClaimAdRewardRequest,
+  EntitlementLedgerGrant,
+  EntitlementLedgerResult,
+  VerifyPurchaseRequest,
+  VerifyPurchaseResponse,
+} from './types';
 
 export const appsInTossProductionEvidenceConformanceScenarios = [
   'callback-only-fail-closed',
@@ -258,11 +264,15 @@ async function runPurchaseProductGrantCallbackScenario(
   createVerifier: CreateAppsInTossProductionEvidenceVerifier,
   now: string,
 ): Promise<void> {
-  const failClosedContext = createScenarioContext(createVerifier, now);
+  const failClosedStore = new AbortAwareConformanceStore();
+  const failClosedContext = createScenarioContext(createVerifier, now, {}, failClosedStore);
   const backendFailures: unknown[] = [];
   const failClosedCallback = createAppsInTossProductGrantCallback({
     purchaseVerification: createConformanceProductGrantVerificationPort(
-      failClosedContext.backend.purchases.verifyPurchase,
+      (request, signal) => failClosedStore.runWithGrantSignal(
+        signal,
+        () => failClosedContext.backend.purchases.verifyPurchase(request),
+      ),
     ),
     playerId: 'ait-player-1',
     productId: 'CONFORMANCE_COINS',
@@ -332,12 +342,19 @@ async function runPurchaseProductGrantCallbackScenario(
 
   const fixture = createAppsInTossProductionEvidenceAuthorityFixture();
   fixture.enqueuePurchaseResult(resolvedOrder());
-  const context = createScenarioContext(createVerifier, now, {
-    purchaseAuthority: fixture.purchaseAuthority,
-  });
+  const store = new AbortAwareConformanceStore();
+  const context = createScenarioContext(
+    createVerifier,
+    now,
+    { purchaseAuthority: fixture.purchaseAuthority },
+    store,
+  );
   const callback = createAppsInTossProductGrantCallback({
     purchaseVerification: createConformanceProductGrantVerificationPort(
-      context.backend.purchases.verifyPurchase,
+      (request, signal) => store.runWithGrantSignal(
+        signal,
+        () => context.backend.purchases.verifyPurchase(request),
+      ),
     ),
     playerId: 'ait-player-1',
     productId: 'CONFORMANCE_COINS',
@@ -724,12 +741,11 @@ function createScenarioContext(
   createVerifier: CreateAppsInTossProductionEvidenceVerifier,
   now: string,
   authorities: CreateAppsInTossProductionEvidenceVerifierInput = {},
+  store: InMemoryGameServicesStore = createInMemoryGameServicesStore(),
 ): {
   readonly backend: ReturnType<typeof createGameServicesBackend>;
   readonly store: InMemoryGameServicesStore;
 } {
-  const store = createInMemoryGameServicesStore();
-
   return {
     backend: createGameServicesBackend({
       catalog,
@@ -817,18 +833,51 @@ function verifiedReward(
 }
 
 function createConformanceProductGrantVerificationPort(
-  verifyPurchase: (request: VerifyPurchaseRequest) => Promise<VerifyPurchaseResponse>,
+  verifyPurchase: (
+    request: VerifyPurchaseRequest,
+    signal: AbortSignal,
+  ) => Promise<VerifyPurchaseResponse>,
 ) {
   return createAppsInTossProductGrantVerificationPort(async ({ request, signal }) => {
     if (signal.aborted) {
       throw signal.reason;
     }
-    const response = await verifyPurchase(request);
+    const response = await verifyPurchase(request, signal);
     if (signal.aborted) {
       throw signal.reason;
     }
     return response;
   });
+}
+
+class AbortAwareConformanceStore extends InMemoryGameServicesStore {
+  private grantSignal: AbortSignal | undefined;
+
+  async runWithGrantSignal<T>(signal: AbortSignal, operation: () => Promise<T>): Promise<T> {
+    if (this.grantSignal !== undefined) {
+      throw new Error('Concurrent conformance grants are not supported.');
+    }
+
+    this.grantSignal = signal;
+    try {
+      return await operation();
+    } finally {
+      this.grantSignal = undefined;
+    }
+  }
+
+  override async recordEntitlementGrant(
+    input: EntitlementLedgerGrant,
+  ): Promise<EntitlementLedgerResult> {
+    if (this.grantSignal === undefined) {
+      throw new Error('Conformance grant signal is required.');
+    }
+    if (this.grantSignal.aborted) {
+      throw this.grantSignal.reason ?? new Error('Conformance grant was aborted.');
+    }
+
+    return super.recordEntitlementGrant(input);
+  }
 }
 
 function shiftFixtureResult<T>(queue: Array<T | Error>, exhaustedResult: T): T {
