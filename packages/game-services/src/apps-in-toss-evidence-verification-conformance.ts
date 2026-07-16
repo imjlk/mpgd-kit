@@ -312,18 +312,41 @@ async function runPurchaseProductGrantCallbackScenario(
     'product-grant transport failure must return false to the SDK',
   );
   assertEqual(transportFailures.length, 1, 'product-grant failures must be observable');
+  const deadlineStore = new AbortAwareConformanceStore();
   const deadlineSignals: AbortSignal[] = [];
+  let releaseDeadlineAuthority: (() => void) | undefined;
+  const deadlineAuthorityGate = new Promise<void>((resolve) => {
+    releaseDeadlineAuthority = resolve;
+  });
+  let markDeadlineAuthorityStarted: (() => void) | undefined;
+  const deadlineAuthorityStarted = new Promise<void>((resolve) => {
+    markDeadlineAuthorityStarted = resolve;
+  });
+  let markLateVerificationSettled: (() => void) | undefined;
+  const lateVerificationSettled = new Promise<void>((resolve) => {
+    markLateVerificationSettled = resolve;
+  });
+  const deadlineContext = createScenarioContext(createVerifier, now, {
+    purchaseAuthority: {
+      async getOrderStatus() {
+        markDeadlineAuthorityStarted?.();
+        await deadlineAuthorityGate;
+        return resolvedOrder({ orderId: 'ait-order-deadline' });
+      },
+    },
+  }, deadlineStore);
   const deadlineCallback = createAppsInTossProductGrantCallback({
-    purchaseVerification: createAppsInTossProductGrantVerificationPort(
-      ({ signal }) => {
+    purchaseVerification: createConformanceProductGrantVerificationPort(
+      async (request, signal) => {
         deadlineSignals.push(signal);
-        return new Promise((_resolve, reject) => {
-          signal.addEventListener(
-            'abort',
-            () => reject(new Error('simulated abort-aware transport deadline')),
-            { once: true },
+        try {
+          return await deadlineStore.runWithGrantSignal(
+            signal,
+            () => deadlineContext.backend.purchases.verifyPurchase(request),
           );
-        });
+        } finally {
+          markLateVerificationSettled?.();
+        }
       },
     ),
     playerId: 'ait-player-1',
@@ -332,12 +355,13 @@ async function runPurchaseProductGrantCallbackScenario(
     timeoutMs: 1,
     now: () => now,
   });
-  assertEqual(
-    await deadlineCallback({ orderId: 'ait-order-deadline' }),
-    false,
-    'product-grant deadline must return false to the SDK',
-  );
+  const deadlineResult = deadlineCallback({ orderId: 'ait-order-deadline' });
+  await deadlineAuthorityStarted;
+  assertEqual(await deadlineResult, false, 'product-grant deadline must return false to the SDK');
   assertEqual(deadlineSignals[0]?.aborted, true, 'product-grant deadline must abort transport');
+  releaseDeadlineAuthority?.();
+  await lateVerificationSettled;
+  await assertEntitlementCount(deadlineStore, 0, 'aborted late product grant');
   await assertEntitlementCount(failClosedContext.store, 0, 'fail-closed product-grant callback');
 
   const fixture = createAppsInTossProductionEvidenceAuthorityFixture();
