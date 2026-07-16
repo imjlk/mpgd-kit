@@ -584,6 +584,27 @@ assert(
   mixedTargetEvents.every((event) => !event.startsWith('provider:')),
   'the Google Play finalizer must not receive another target purchase',
 );
+const mixedSubscription = await mixedTargetBackend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-subscription-routed-elsewhere',
+    productId: 'PASS_MONTHLY',
+    idempotencyKey: 'purchase:subscription-routed-elsewhere',
+  }),
+);
+assertEqual(
+  mixedSubscription.verified,
+  true,
+  'another subscription verifier may share the backend',
+);
+assertEqual(
+  mixedSubscription.finalization,
+  undefined,
+  'the one-time Google Play finalizer must not claim subscriptions',
+);
+assert(
+  mixedTargetEvents.every((event) => !event.startsWith('provider:')),
+  'the one-time Google Play finalizer must not receive a subscription',
+);
 
 const wrongSchema = createHarness({
   token: 'token-wrong-schema',

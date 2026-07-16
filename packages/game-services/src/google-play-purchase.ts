@@ -96,7 +96,8 @@ export function createGooglePlayProductPurchaseBoundary(
 
   return {
     supportsPurchaseGrant(finalizationInput) {
-      return finalizationInput.request.target === 'android';
+      return finalizationInput.request.target === 'android'
+        && finalizationInput.product.type !== 'subscription';
     },
 
     async verifyPurchase(verificationInput) {
@@ -159,6 +160,14 @@ export function createGooglePlayProductPurchaseBoundary(
     },
 
     async finalizePurchaseGrant(finalizationInput) {
+      if (finalizationInput.product.type === 'subscription') {
+        return {
+          status: 'pending',
+          alreadyCompleted: false,
+          reason: 'GOOGLE_PLAY_SUBSCRIPTION_VERIFIER_REQUIRED',
+        };
+      }
+
       const action = finalizationInput.product.type === 'consumable'
         ? 'consume'
         : 'acknowledge';
@@ -195,6 +204,8 @@ export function createGooglePlayProductPurchaseBoundary(
         input,
         packageName,
         purchaseToken,
+        finalizationInput.product.type,
+        action,
         finalizationInput,
       );
       inFlightFinalizations.set(finalizationInput.evidenceVerificationId, finalization);
@@ -214,19 +225,10 @@ async function finalizeGooglePlayPurchase(
   input: CreateGooglePlayProductPurchaseBoundaryInput,
   packageName: string,
   purchaseToken: string,
+  productType: 'consumable' | 'non_consumable',
+  action: 'consume' | 'acknowledge',
   finalizationInput: FinalizePurchaseGrantInput,
 ): Promise<PurchaseGrantFinalization> {
-  if (finalizationInput.product.type === 'subscription') {
-    return {
-      status: 'pending',
-      alreadyCompleted: false,
-      reason: 'GOOGLE_PLAY_SUBSCRIPTION_VERIFIER_REQUIRED',
-    };
-  }
-
-  const action =
-    finalizationInput.product.type === 'consumable' ? 'consume' : 'acknowledge';
-
   if (finalizationInput.request.target !== 'android') {
     return {
       status: 'pending',
@@ -255,7 +257,7 @@ async function finalizeGooglePlayPurchase(
       packageName,
       purchaseToken,
       expectedProductId: finalizationInput.platformProductId,
-      expectedProductType: finalizationInput.product.type,
+      expectedProductType: productType,
       expectedOrderId: finalizationInput.request.platformTransactionId,
       ...(accountBinding.status === 'bound'
         ? { expectedObfuscatedAccountId: accountBinding.accountId }
