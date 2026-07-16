@@ -149,6 +149,58 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
       !collectionId.includes('retained-attempt'))).toBe(true);
   });
 
+  it('recovers when an entry write succeeds before its decision marker', async () => {
+    const fixture = createAgent8Context();
+    let interruptDecisionWrite = true;
+    const context: Verse8Agent8ServiceContext = {
+      ...fixture.context,
+      async addCollectionItem(collectionId, item) {
+        if (
+          interruptDecisionWrite
+          && collectionId.startsWith('mpgdVerse8LeaderboardA')
+        ) {
+          interruptDecisionWrite = false;
+          throw new Error('simulated interruption');
+        }
+
+        return fixture.context.addCollectionItem(collectionId, item);
+      },
+    };
+    const service = createVerse8Agent8VerifiedLeaderboardProvider(context, {
+      now: () => '2030-01-02T03:04:05.000Z',
+    });
+    const input = createAttempt({
+      participantId: 'participant',
+      attemptId: 'interrupted-attempt',
+      score: 10,
+    });
+
+    await expect(service.recordVerifiedAttempt(input)).rejects.toThrow(
+      'simulated interruption',
+    );
+
+    const recovered = await service.recordVerifiedAttempt(input);
+    expect(recovered).toMatchObject({
+      recorded: true,
+      alreadyProcessed: false,
+      retained: true,
+      entry: {
+        rank: 1,
+        participantId: 'participant',
+        attemptId: 'interrupted-attempt',
+        score: 10,
+      },
+    });
+    await expect(service.recordVerifiedAttempt(input)).resolves.toMatchObject({
+      alreadyProcessed: true,
+      retained: true,
+    });
+    await expect(service.getSnapshot({ leaderboardId: 'board' })).resolves.toMatchObject({
+      totalParticipants: 1,
+      entries: [{ attemptId: 'interrupted-attempt' }],
+    });
+  });
+
   it('requires game-specific verification and authenticated participant scope', async () => {
     const fixture = createAgent8Context();
     let verified: RecordVerifiedLeaderboardAttemptRequest | null = null;
