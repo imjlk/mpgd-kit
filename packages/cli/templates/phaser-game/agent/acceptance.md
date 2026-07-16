@@ -36,5 +36,19 @@ For Microsoft Store changes, keep the first pass as a PWA/web target that uses
 the browser adapter. Add a dedicated Store commerce adapter only when wiring
 Digital Goods API and Payment Request through backend ledger verification.
 
+## Verse8 Agent8 Structured Server
+
+Keep the Agent8 server in a separate game-owned project. Its acceptance flow
+must call `createVerse8Agent8LeaderboardBoundary` with an authenticated sender
+account and a game-specific completion verifier, then cover rejected malformed
+submissions, verified recording, and account-scoped snapshot reads.
+
+Inject endpoints, persistence secrets, encryption keys, and authentication at
+runtime. Do not commit personal MCP configuration, `.env` files, credentials,
+tokens, or Agent8 authentication state to this generated game. The kit command
+`pnpm smoke:verse8-agent8-acceptance` validates the generic structured-server
+contract and generated Verse8 target surface; it does not validate a deployed
+game server or replace game-owned production evidence.
+
 Verify the first screen reports the viewport orientation policy, and treat
 locked orientation modes as soft prompts instead of unsafe WebView hard locks.
