@@ -5,7 +5,13 @@ import {
   validBridgeRequest,
   validNewBridgeRequests,
 } from './fixtures';
-import { assertBridgeRequest, assertBridgeResponse, createBridgeError } from './index';
+import {
+  assertBridgeRequest,
+  assertBridgeResponse,
+  bridgeStorageLoadProtocol,
+  createBridgeError,
+  decodeBridgeStorageLoadData,
+} from './index';
 
 assertDoesNotThrow(() => assertBridgeRequest(validBridgeRequest), 'valid request should pass');
 assertDoesNotThrow(() => assertBridgeResponse(validBridgeOkResponse), 'ok response should pass');
@@ -32,6 +38,60 @@ assertEqual(error.id, 'request-2', 'createBridgeError should preserve id');
 if (!error.ok) {
   assertEqual(error.error.retryable, true, 'createBridgeError should preserve retryable flag');
 }
+
+assertEqual(
+  decodeBridgeStorageLoadData({
+    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+    found: false,
+  }),
+  null,
+  'a missing storage bridge value should decode as null',
+);
+assertEqual(
+  decodeBridgeStorageLoadData({
+    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+    found: true,
+    value: null,
+  })?.value,
+  null,
+  'a stored top-level JSON null should remain present',
+);
+assertEqual(
+  decodeBridgeStorageLoadData(null),
+  null,
+  'a legacy null response should remain a missing value',
+);
+assertEqual(
+  decodeBridgeStorageLoadData('legacy-value')?.value,
+  'legacy-value',
+  'a legacy raw primitive should remain a stored value',
+);
+assertEqual(
+  JSON.stringify(decodeBridgeStorageLoadData({ coins: 7 })?.value),
+  JSON.stringify({ coins: 7 }),
+  'a legacy raw object should remain a stored value',
+);
+assertEqual(
+  JSON.stringify(decodeBridgeStorageLoadData({ found: false, coins: 7 })?.value),
+  JSON.stringify({ found: false, coins: 7 }),
+  'a legacy raw object may use a false found field',
+);
+assertEqual(
+  JSON.stringify(decodeBridgeStorageLoadData({ found: true })?.value),
+  JSON.stringify({ found: true }),
+  'a legacy raw object may use a true found field without a value field',
+);
+assertThrows(
+  () => decodeBridgeStorageLoadData({
+    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+    found: true,
+  }),
+  'a present storage bridge response without a value should fail closed',
+);
+assertThrows(
+  () => decodeBridgeStorageLoadData(undefined),
+  'an absent bridge response should fail closed',
+);
 
 console.log('Bridge protocol fixture validation passed.');
 

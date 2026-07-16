@@ -302,7 +302,9 @@ submission.
   ship server persistence secrets. Agent8 verified
   leaderboards stay server-only and require a game-specific completion
   verifier, so the generic platform leaderboard capability remains disabled.
-- Reddit Devvit is game-owned in `apps/target-devvit`.
+- Reddit Devvit is game-owned in `apps/target-devvit`. Its Redis-backed storage
+  bridge fails closed on identity, provider, serialization, and quota errors;
+  it never switches progress to browser `localStorage`.
 - Apps in Toss currently uses the kit reference wrapper at
   `${MPGD_KIT_PATH}/apps/target-ait` for smoke packaging. Before a real Toss
   submission, create a game-owned wrapper/config so the app name, CLI state, and

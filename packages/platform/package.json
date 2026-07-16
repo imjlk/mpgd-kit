@@ -32,6 +32,10 @@
     "./capability-conformance": {
       "types": "./dist/capability-conformance.d.ts",
       "default": "./dist/capability-conformance.js"
+    },
+    "./storage-conformance": {
+      "types": "./dist/storage-conformance.d.ts",
+      "default": "./dist/storage-conformance.js"
     }
   },
   "files": [
@@ -42,7 +46,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run && node test/capability-conformance-dist-import.mjs"
+    "test": "vitest run && node test/capability-conformance-dist-import.mjs && node test/storage-conformance-dist-import.mjs"
   },
   "devDependencies": {
     "ttsc": "0.18.4",

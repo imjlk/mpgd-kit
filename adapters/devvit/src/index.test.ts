@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { createBridgeError, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
+import {
+  bridgeStorageLoadProtocol,
+  createBridgeError,
+  type BridgeRequest,
+  type BridgeResponse,
+} from '@mpgd/bridge';
 import { createBridgeRpcFetchHandler, createBridgeRpcRouter } from '@mpgd/bridge/orpc';
 
 import {
@@ -301,11 +306,40 @@ describe('adapter-devvit', () => {
       cloudSave: true,
       socialShare: false,
     });
-    await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+    const savedValue = {
+      progress: { coins: 7 },
+      inventory: ['seed'],
+    };
+    await gateway.storage.save({ key: 'save:v1', value: savedValue });
+    savedValue.progress.coins = -1;
+    savedValue.inventory.push('mutated-after-save');
+    const firstLoad = await gateway.storage.load({ key: 'save:v1' });
+    expect(firstLoad).toEqual({
+      value: {
+        progress: { coins: 7 },
+        inventory: ['seed'],
+      },
+    });
+
+    if (firstLoad === null) {
+      throw new Error('Expected the Devvit sandbox save to be present.');
+    }
+
+    const firstLoadedValue = firstLoad.value as {
+      progress: { coins: number };
+      inventory: string[];
+    };
+    firstLoadedValue.progress.coins = -2;
+    firstLoadedValue.inventory.push('mutated-after-load');
     await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
       value: {
-        coins: 7,
+        progress: { coins: 7 },
+        inventory: ['seed'],
       },
+    });
+    await gateway.storage.save({ key: 'nullable-save:v1', value: null });
+    await expect(gateway.storage.load({ key: 'nullable-save:v1' })).resolves.toEqual({
+      value: null,
     });
     await expect(
       gateway.ads.showRewarded({
@@ -331,7 +365,7 @@ describe('adapter-devvit', () => {
     });
   });
 
-  it('uses local fallback storage when the Devvit server reports a skipped save', async () => {
+  it('rejects an unconfirmed Devvit save even when browser storage is available', async () => {
     const { storage: localStorageMock } = createLocalStorageMock();
     const bridge: DevvitBridge = {
       async request(input) {
@@ -349,7 +383,7 @@ describe('adapter-devvit', () => {
           return {
             id: input.id,
             ok: true,
-            data: null,
+            data: { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false },
           };
         }
 
@@ -369,19 +403,16 @@ describe('adapter-devvit', () => {
     vi.stubGlobal('localStorage', localStorageMock);
 
     try {
-      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
-
-      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
-        value: {
-          coins: 7,
-        },
-      });
+      await expect(
+        gateway.storage.save({ key: 'save:v1', value: { coins: 7 } }),
+      ).rejects.toThrow('Devvit storage save was not persisted');
+      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('prefers newer local fallback storage over stale server storage', async () => {
+  it('keeps the server value authoritative after an unconfirmed save', async () => {
     const { storage: localStorageMock } = createLocalStorageMock();
     const bridge: DevvitBridge = {
       async request(input) {
@@ -400,7 +431,9 @@ describe('adapter-devvit', () => {
             id: input.id,
             ok: true,
             data: {
-              coins: 1,
+              __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+              found: true,
+              value: { coins: 1 },
             },
           };
         }
@@ -421,11 +454,13 @@ describe('adapter-devvit', () => {
     vi.stubGlobal('localStorage', localStorageMock);
 
     try {
-      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+      await expect(
+        gateway.storage.save({ key: 'save:v1', value: { coins: 7 } }),
+      ).rejects.toThrow('Devvit storage save was not persisted');
 
       await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
         value: {
-          coins: 7,
+          coins: 1,
         },
       });
     } finally {
@@ -433,7 +468,7 @@ describe('adapter-devvit', () => {
     }
   });
 
-  it('namespaces local fallback storage by Devvit player', async () => {
+  it('does not synthesize player-scoped browser saves after server rejection', async () => {
     const { storage: localStorageMock } = createLocalStorageMock();
     let currentPlayerId = 'reddit-player-a';
     const bridge: DevvitBridge = {
@@ -464,7 +499,9 @@ describe('adapter-devvit', () => {
             id: input.id,
             ok: true,
             data: {
-              coins: 1,
+              __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+              found: true,
+              value: { coins: 1 },
             },
           };
         }
@@ -485,7 +522,9 @@ describe('adapter-devvit', () => {
     vi.stubGlobal('localStorage', localStorageMock);
 
     try {
-      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+      await expect(
+        gateway.storage.save({ key: 'save:v1', value: { coins: 7 } }),
+      ).rejects.toThrow('Devvit storage save was not persisted');
 
       currentPlayerId = 'reddit-player-b';
       await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
@@ -497,7 +536,7 @@ describe('adapter-devvit', () => {
       currentPlayerId = 'reddit-player-a';
       await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
         value: {
-          coins: 7,
+          coins: 1,
         },
       });
     } finally {
@@ -505,7 +544,7 @@ describe('adapter-devvit', () => {
     }
   });
 
-  it('uses namespaced fallback storage when Devvit storage load fails', async () => {
+  it('surfaces Devvit load failures instead of reading browser fallback storage', async () => {
     const { storage: localStorageMock } = createLocalStorageMock();
     const bridge: DevvitBridge = {
       async request(input) {
@@ -555,19 +594,19 @@ describe('adapter-devvit', () => {
     vi.stubGlobal('localStorage', localStorageMock);
 
     try {
-      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
-
-      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
-        value: {
-          coins: 7,
-        },
+      await expect(
+        gateway.storage.save({ key: 'save:v1', value: { coins: 7 } }),
+      ).rejects.toThrow('Devvit storage save was not persisted');
+      await expect(gateway.storage.load({ key: 'save:v1' })).rejects.toMatchObject({
+        code: 'DEVVIT_BRIDGE_HTTP_ERROR',
+        retryable: true,
       });
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('reuses cached identity namespace when a later Devvit storage save fails', async () => {
+  it('does not reuse cached identity to hide later Devvit storage failures', async () => {
     const { items: localItems, storage: localStorageMock } = createLocalStorageMock();
     let bridgeOffline = false;
     const bridge: DevvitBridge = {
@@ -621,22 +660,23 @@ describe('adapter-devvit', () => {
       });
 
       bridgeOffline = true;
-      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
-
-      expect(localItems.get('mpgd:devvit:fallback:1.2.3:reddit-player-a:save%3Av1')).toBe(
-        JSON.stringify({ coins: 7 }),
-      );
-      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
-        value: {
-          coins: 7,
-        },
+      await expect(
+        gateway.storage.save({ key: 'save:v1', value: { coins: 7 } }),
+      ).rejects.toMatchObject({
+        code: 'DEVVIT_BRIDGE_NETWORK_ERROR',
+        retryable: true,
+      });
+      expect(localItems.size).toBe(0);
+      await expect(gateway.storage.load({ key: 'save:v1' })).rejects.toMatchObject({
+        code: 'DEVVIT_BRIDGE_NETWORK_ERROR',
+        retryable: true,
       });
     } finally {
       vi.unstubAllGlobals();
     }
   });
 
-  it('does not use a cached fallback namespace over a successful storage load value', async () => {
+  it('returns a successful Devvit load value without consulting browser storage', async () => {
     const { storage: localStorageMock } = createLocalStorageMock();
     let bridgeOffline = false;
     const bridge: DevvitBridge = {
@@ -675,7 +715,9 @@ describe('adapter-devvit', () => {
             id: input.id,
             ok: true,
             data: {
-              coins: 1,
+              __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+              found: true,
+              value: { coins: 1 },
             },
           };
         }
@@ -699,7 +741,9 @@ describe('adapter-devvit', () => {
       await expect(gateway.identity.getPlayer()).resolves.toEqual({
         playerId: 'reddit-player-a',
       });
-      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+      await expect(
+        gateway.storage.save({ key: 'save:v1', value: { coins: 7 } }),
+      ).rejects.toThrow('Devvit storage save was not persisted');
 
       bridgeOffline = true;
       await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
@@ -712,7 +756,7 @@ describe('adapter-devvit', () => {
     }
   });
 
-  it('reuses cached identity namespace after an empty storage load', async () => {
+  it('keeps an empty Devvit load empty after a rejected save', async () => {
     const { storage: localStorageMock } = createLocalStorageMock();
     let bridgeOffline = false;
     const bridge: DevvitBridge = {
@@ -750,7 +794,7 @@ describe('adapter-devvit', () => {
           return {
             id: input.id,
             ok: true,
-            data: null,
+            data: { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false },
           };
         }
 
@@ -773,14 +817,12 @@ describe('adapter-devvit', () => {
       await expect(gateway.identity.getPlayer()).resolves.toEqual({
         playerId: 'reddit-player-a',
       });
-      await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
+      await expect(
+        gateway.storage.save({ key: 'save:v1', value: { coins: 7 } }),
+      ).rejects.toThrow('Devvit storage save was not persisted');
 
       bridgeOffline = true;
-      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
-        value: {
-          coins: 7,
-        },
-      });
+      await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toBeNull();
     } finally {
       vi.unstubAllGlobals();
     }

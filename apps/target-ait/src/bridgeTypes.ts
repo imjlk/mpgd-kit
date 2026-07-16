@@ -25,3 +25,16 @@ export type BridgeResponse =
         readonly retryable: boolean;
       };
     };
+
+export const bridgeStorageLoadProtocol = 'mpgd.storage.load.v1' as const;
+
+export type BridgeStorageLoadData =
+  | {
+      readonly __mpgdBridgeProtocol: typeof bridgeStorageLoadProtocol;
+      readonly found: false;
+    }
+  | {
+      readonly __mpgdBridgeProtocol: typeof bridgeStorageLoadProtocol;
+      readonly found: true;
+      readonly value: unknown;
+    };

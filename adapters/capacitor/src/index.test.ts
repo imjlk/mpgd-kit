@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import { bridgeStorageLoadProtocol, type BridgeRequest, type BridgeResponse } from '@mpgd/bridge';
 
 import { createCapacitorPlatformGateway, type NativeBridge } from './index';
 
@@ -55,6 +55,41 @@ describe('adapter-capacitor', () => {
         buildId: 'build-android',
       },
     });
+  });
+
+  it('distinguishes a stored top-level JSON null from a missing native value', async () => {
+    const bridge: NativeBridge = {
+      async request(input) {
+        if (input.method === 'storage.load') {
+          const payload = input.payload as { readonly key?: string };
+          return {
+            id: input.id,
+            ok: true,
+            data:
+              payload.key === 'nullable-save:v1'
+                ? { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: true, value: null }
+                : { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false },
+          } satisfies BridgeResponse;
+        }
+
+        return {
+          id: input.id,
+          ok: true,
+          data: {},
+        } satisfies BridgeResponse;
+      },
+    };
+    const gateway = createCapacitorPlatformGateway({
+      target: 'android',
+      appVersion: '1.2.3',
+      buildId: 'build-android',
+      bridge,
+    });
+
+    await expect(gateway.storage.load({ key: 'nullable-save:v1' })).resolves.toEqual({
+      value: null,
+    });
+    await expect(gateway.storage.load({ key: 'missing:v1' })).resolves.toBeNull();
   });
 
   it('throws native bridge errors as JavaScript errors', async () => {

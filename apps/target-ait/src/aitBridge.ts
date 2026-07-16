@@ -21,7 +21,12 @@ import {
   resolveAitGameIdentity,
   type AitGameUserKeyProvider,
 } from './aitIdentity';
-import type { BridgeRequest, BridgeResponse } from './bridgeTypes';
+import {
+  bridgeStorageLoadProtocol,
+  type BridgeRequest,
+  type BridgeResponse,
+  type BridgeStorageLoadData,
+} from './bridgeTypes';
 
 const storage = new Map<string, unknown>();
 const launchEntries = new Set<LaunchEntry>([
@@ -222,11 +227,22 @@ export function installAitBridge(options: InstallAitBridgeOptions = {}): void {
 
         case 'storage.load': {
           const payload = request.payload as { readonly key?: string };
+          const value = payload.key === undefined ? undefined : storage.get(payload.key);
 
           return {
             id: request.id,
             ok: true,
-            data: payload.key === undefined ? null : (storage.get(payload.key) ?? null),
+            data:
+              value === undefined
+                ? ({
+                    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+                    found: false,
+                  } satisfies BridgeStorageLoadData)
+                : ({
+                    __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+                    found: true,
+                    value: cloneJsonValue(value),
+                  } satisfies BridgeStorageLoadData),
           };
         }
 
@@ -234,7 +250,7 @@ export function installAitBridge(options: InstallAitBridgeOptions = {}): void {
           const payload = request.payload as { readonly key?: string; readonly value?: unknown };
 
           if (payload.key !== undefined) {
-            storage.set(payload.key, payload.value);
+            storage.set(payload.key, cloneJsonValue(payload.value));
           }
 
           return {
@@ -253,6 +269,16 @@ export function installAitBridge(options: InstallAitBridgeOptions = {}): void {
       }
     },
   };
+}
+
+function cloneJsonValue(value: unknown): unknown {
+  const serialized = JSON.stringify(value);
+
+  if (serialized === undefined) {
+    throw new TypeError('Storage values must be JSON-serializable.');
+  }
+
+  return JSON.parse(serialized) as unknown;
 }
 
 function parseBridgeRequest(input: unknown): BridgeRequest {

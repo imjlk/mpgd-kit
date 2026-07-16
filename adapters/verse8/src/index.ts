@@ -295,8 +295,8 @@ export function createVerse8PlatformGateway(
           return options.agent8Storage.load(input);
         }
 
-        const storage = options.storage ?? resolveStorage();
-        const value = storage?.getItem(storageKey(authClient, input.key));
+        const storage = resolveStorage(options.storage);
+        const value = storage.getItem(storageKey(authClient, input.key));
 
         return value === undefined || value === null
           ? null
@@ -308,8 +308,10 @@ export function createVerse8PlatformGateway(
           return;
         }
 
-        const storage = options.storage ?? resolveStorage();
-        storage?.setItem(storageKey(authClient, input.key), JSON.stringify(input.value));
+        resolveStorage(options.storage).setItem(
+          storageKey(authClient, input.key),
+          serializeStorageValue(input.value),
+        );
       },
     },
     presentation: {
@@ -544,8 +546,30 @@ function storageKey(authClient: Verse8AuthClient, key: string): string {
   return `mpgd:verse8:${identityNamespace}:${key}`;
 }
 
-function resolveStorage(): Verse8Storage | undefined {
-  return typeof localStorage === 'undefined' ? undefined : localStorage;
+function resolveStorage(override: Verse8Storage | undefined): Verse8Storage {
+  if (override !== undefined) {
+    return override;
+  }
+
+  try {
+    if (globalThis.localStorage !== undefined) {
+      return globalThis.localStorage;
+    }
+  } catch {
+    // Access to browser storage can be denied by the embedding environment.
+  }
+
+  throw new Error('Verse8 local storage is unavailable.');
+}
+
+function serializeStorageValue(value: unknown): string {
+  const serialized = JSON.stringify(value);
+
+  if (typeof serialized !== 'string') {
+    throw new Error('Verse8 local storage values must be JSON serializable.');
+  }
+
+  return serialized;
 }
 
 function resolveVisibilitySource(): Verse8VisibilitySource | undefined {

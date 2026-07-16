@@ -250,6 +250,7 @@ export interface StorageLoadResult {
 
 export interface StorageAdapter {
   load(input: { readonly key: string }): Promise<StorageLoadResult | null>;
+  /** Persist a JSON-serializable value or reject without replacing the prior value. */
   save(input: { readonly key: string; readonly value: unknown }): Promise<void>;
 }
 

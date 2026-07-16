@@ -236,6 +236,16 @@ ADB, XCUITest, Appium, and state-inspection code in the game-owned driver.
 4. Save serializable state through `PlatformGateway.storage`; never save Phaser
    objects, sprites, tweens, cameras, or DOM nodes.
 
+`StorageAdapter` values must be JSON serializable. A missing key resolves to
+`null`, while provider, identity, quota, serialization, and transport failures
+reject. Remote adapters must not hide those failures by switching to a local
+browser store because that can split progress across two authorities. Run the
+same local/remote contract against every target adapter with:
+
+```sh
+pnpm smoke:storage-adapter-conformance
+```
+
 ## Adding Assets
 
 Generated games own their asset conventions. The template demonstrates
@@ -263,4 +273,7 @@ the initial WebView bundle.
 
 Devvit Web launches should treat client fetch and storage limits as first-class
 constraints. Keep persistent game state behind `/api/` endpoints and Redis-backed
-server storage rather than relying on browser-only localStorage.
+server storage rather than relying on browser-only localStorage. The starter
+bridge rejects missing player identity, Redis failures, malformed values, and
+values above its conservative 256 KiB per-value limit; it never falls back to
+browser storage.

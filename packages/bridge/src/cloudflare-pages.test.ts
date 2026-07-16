@@ -6,7 +6,7 @@ import {
   type CloudflarePagesServiceBinding,
   type MpgdCloudflarePagesHostEnv,
 } from './cloudflare-pages';
-import type { BridgeRequest, BridgeResponse } from './index';
+import { bridgeStorageLoadProtocol, type BridgeRequest, type BridgeResponse } from './index';
 import { createBridgeOrpcClient, defaultBridgeRpcEndpoint } from './orpc';
 
 const baseUrl = 'https://pages-host.test';
@@ -71,6 +71,18 @@ const player = await client.request({
 });
 
 assertEqual(player.ok ? player.data : undefined, null, 'default oRPC identity should be anonymous');
+
+const missingStorage = await client.request({
+  id: 'storage-load-1',
+  method: 'storage.load',
+  payload: { key: 'missing:v1' },
+  meta: requestMeta(),
+});
+assertDeepEqual(
+  missingStorage.ok ? missingStorage.data : undefined,
+  { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false },
+  'default Pages storage should use the shared missing-value envelope',
+);
 
 const session = await client.request({
   id: 'session-1',

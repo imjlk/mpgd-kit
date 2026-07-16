@@ -1,4 +1,11 @@
-import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import {
+  bridgeStorageLoadProtocol,
+  decodeBridgeStorageLoadData,
+  type BridgeMethod,
+  type BridgeRequest,
+  type BridgeResponse,
+  type BridgeStorageLoadData,
+} from '@mpgd/bridge';
 import type {
   IdentitySession,
   IdentityUpgradeResult,
@@ -99,9 +106,7 @@ export function createAitPlatformGateway(input: {
     },
     storage: {
       async load(payload) {
-        const value = await request<unknown | null>('storage.load', payload);
-
-        return value === null ? null : { value };
+        return decodeBridgeStorageLoadData(await request<unknown>('storage.load', payload));
       },
       save: (payload) => request('storage.save', payload),
     },
@@ -227,14 +232,23 @@ export function createAitSandboxBridge(): GamePlatformBridge {
 
         case 'storage.load': {
           const payload = input.payload as { readonly key?: string };
-          return ok(input, payload.key === undefined ? null : (storage.get(payload.key) ?? null));
+          const found = payload.key !== undefined && storage.has(payload.key);
+          const value = found && payload.key !== undefined
+            ? cloneJsonValue(storage.get(payload.key))
+            : undefined;
+          return ok(
+            input,
+            !found
+              ? ({ __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false } satisfies BridgeStorageLoadData)
+              : ({ __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: true, value } satisfies BridgeStorageLoadData),
+          );
         }
 
         case 'storage.save': {
           const payload = input.payload as { readonly key?: string; readonly value?: unknown };
 
           if (payload.key !== undefined) {
-            storage.set(payload.key, payload.value);
+            storage.set(payload.key, cloneJsonValue(payload.value));
           }
 
           return ok(input, {});
@@ -253,6 +267,14 @@ export function createAitSandboxBridge(): GamePlatformBridge {
       }
     },
   };
+}
+
+function cloneJsonValue(input: unknown): unknown {
+  const serialized = JSON.stringify(input);
+  if (serialized === undefined) {
+    throw new Error('AIT sandbox storage values must be JSON-serializable.');
+  }
+  return JSON.parse(serialized) as unknown;
 }
 
 function ok(input: BridgeRequest, data: unknown): BridgeResponse {

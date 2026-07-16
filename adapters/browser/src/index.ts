@@ -26,6 +26,8 @@ export interface BrowserPlatformGatewayOptions {
   readonly locationHref?: string;
   readonly share?: (data: ShareData) => Promise<void>;
   readonly writeClipboardText?: (text: string) => Promise<void>;
+  /** Override browser storage for embedded runtimes and deterministic tests. */
+  readonly storage?: Pick<Storage, 'getItem' | 'setItem'>;
 }
 
 export function createBrowserPlatformGateway(
@@ -52,7 +54,7 @@ export function createBrowserPlatformGateway(
         ...createUnsupportedCapabilities(),
         rewardedAds: true,
         interstitialAds: true,
-        cloudSave: true,
+        cloudSave: tryResolveBrowserStorage(options.storage) !== undefined,
         socialShare: shareSupported,
         localizedContent: true,
       };
@@ -156,20 +158,57 @@ export function createBrowserPlatformGateway(
     },
     storage: {
       async load(input) {
-        if (typeof localStorage === 'undefined') {
-          return null;
-        }
-
-        const value = localStorage.getItem(`mpgd:${input.key}`);
+        const value = resolveBrowserStorage(options.storage).getItem(`mpgd:${input.key}`);
         return value === null ? null : { value: JSON.parse(value) };
       },
       async save(input) {
-        if (typeof localStorage !== 'undefined') {
-          localStorage.setItem(`mpgd:${input.key}`, JSON.stringify(input.value));
-        }
+        resolveBrowserStorage(options.storage).setItem(
+          `mpgd:${input.key}`,
+          serializeBrowserStorageValue(input.value),
+        );
       },
     },
   };
+}
+
+function resolveBrowserStorage(
+  override: Pick<Storage, 'getItem' | 'setItem'> | undefined,
+): Pick<Storage, 'getItem' | 'setItem'> {
+  const storage = tryResolveBrowserStorage(override);
+
+  if (storage !== undefined) {
+    return storage;
+  }
+
+  throw new Error('Browser storage is unavailable.');
+}
+
+function tryResolveBrowserStorage(
+  override: Pick<Storage, 'getItem' | 'setItem'> | undefined,
+): Pick<Storage, 'getItem' | 'setItem'> | undefined {
+  if (override !== undefined) {
+    return override;
+  }
+
+  try {
+    if (globalThis.localStorage !== undefined) {
+      return globalThis.localStorage;
+    }
+  } catch {
+    // Access to browser storage can be denied by the embedding environment.
+  }
+
+  return undefined;
+}
+
+function serializeBrowserStorageValue(value: unknown): string {
+  const serialized = JSON.stringify(value);
+
+  if (typeof serialized !== 'string') {
+    throw new Error('Browser storage values must be JSON serializable.');
+  }
+
+  return serialized;
 }
 
 const launchEntries = new Set<LaunchEntry>([

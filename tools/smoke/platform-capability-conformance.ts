@@ -187,6 +187,12 @@ function createBrowserGateway(): CreatedGateway {
   return {
     gateway: createBrowserPlatformGateway({
       async share() {},
+      storage: {
+        getItem() {
+          return null;
+        },
+        setItem() {},
+      },
     }),
     expectedCapabilities: {
       nativeIap: false,

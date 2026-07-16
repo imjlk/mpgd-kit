@@ -1,4 +1,9 @@
-import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
+import {
+  decodeBridgeStorageLoadData,
+  type BridgeMethod,
+  type BridgeRequest,
+  type BridgeResponse,
+} from '@mpgd/bridge';
 import { CapacitorGameServices } from '@mpgd/capacitor-game-services';
 import type {
   IdentitySession,
@@ -97,9 +102,7 @@ export function createCapacitorPlatformGateway(input: {
     },
     storage: {
       async load(payload) {
-        const value = await request<unknown | null>('storage.load', payload);
-
-        return value === null ? null : { value };
+        return decodeBridgeStorageLoadData(await request<unknown>('storage.load', payload));
       },
       save: (payload) => request('storage.save', payload),
     },
