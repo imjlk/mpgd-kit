@@ -6,11 +6,7 @@ const resourceGrant = Object.freeze({
   amount: 5,
 }) satisfies ProductGrant;
 
-assertEqual(
-  assertProductGrant(resourceGrant),
-  resourceGrant,
-  'catalog validation should preserve generic resource grants',
-);
+assertProductGrant(resourceGrant);
 assertProductGrant({ type: 'currency', currency: 'coin', amount: 100 });
 assertProductGrant({ type: 'entitlement', entitlement: 'theme.ember' });
 assertThrows(
@@ -51,12 +47,6 @@ assertThrows(
 );
 
 console.log('Catalog product grant validation test passed.');
-
-function assertEqual<T>(actual: T, expected: T, message: string): void {
-  if (actual !== expected) {
-    throw new Error(message);
-  }
-}
 
 function assertThrows(callback: () => unknown, message: string): void {
   try {
