@@ -267,6 +267,32 @@ async function runPurchaseProductGrantCallbackScenario(
     false,
     'product-grant transport failure must return false to the SDK',
   );
+  const deadlineSignals: AbortSignal[] = [];
+  const deadlineCallback = createAppsInTossProductGrantCallback({
+    purchaseVerification: {
+      verifyPurchase(_request, { signal }) {
+        deadlineSignals.push(signal);
+        return new Promise((_resolve, reject) => {
+          signal.addEventListener(
+            'abort',
+            () => reject(new Error('simulated abort-aware transport deadline')),
+            { once: true },
+          );
+        });
+      },
+    },
+    playerId: 'ait-player-1',
+    productId: 'CONFORMANCE_COINS',
+    platformSku: 'ait.conformance.coins',
+    timeoutMs: 1,
+    now: () => now,
+  });
+  assertEqual(
+    await deadlineCallback({ orderId: 'ait-order-deadline' }),
+    false,
+    'product-grant deadline must return false to the SDK',
+  );
+  assertEqual(deadlineSignals[0]?.aborted, true, 'product-grant deadline must abort transport');
   await assertEntitlementCount(failClosedContext.store, 0, 'fail-closed product-grant callback');
 
   const fixture = createAppsInTossProductionEvidenceAuthorityFixture();

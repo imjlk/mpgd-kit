@@ -29,8 +29,9 @@ Purchase and rewarded-ad callbacks remain evidence only. Use the public
 partner-server authority before granting catalog products or rewards. The
 generic `createGameServicesClient().purchase()` path runs too late for the SDK
 callback; wire `createAppsInTossProductGrantCallback()` directly into
-`processProductGrant`. The current gateway bridge does not synthesize purchase
-or reward evidence from a completed result. The purchase authority is
+`processProductGrant` with an abort-aware verification port that enforces the
+helper's 25-second ledger deadline. The current gateway bridge does not
+synthesize purchase or reward evidence from a completed result. The purchase authority is
 responsible for authenticated Toss-login identity and the mTLS order-status
 lookup; the reward authority validates a game-issued correlation id because the
 official `userEarnedReward` event has no impression id. See

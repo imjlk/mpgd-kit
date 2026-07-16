@@ -12,6 +12,11 @@ export const appsInTossPurchaseCallbackEvidenceSchema =
   'apps-in-toss.iap.callback.v1';
 export const appsInTossRewardCallbackEvidenceSchema =
   'apps-in-toss.rewarded-ad.callback.v1';
+/** Leaves five seconds of headroom inside the SDK's documented 30-second window. */
+export const appsInTossProductGrantCallbackTimeoutMs = 25_000;
+
+// Offset-free order-status timestamps are documented as KST (UTC+09:00).
+const appsInTossKstOffsetMinutes = 9 * 60;
 
 export type AppsInTossPurchaseCallbackSource =
   | 'process-product-grant'
@@ -41,7 +46,19 @@ export interface AppsInTossRewardCallbackEvidenceInput {
 }
 
 export interface AppsInTossProductGrantVerificationPort {
-  verifyPurchase(input: VerifyPurchaseRequest): Promise<VerifyPurchaseResponse>;
+  /**
+   * Must honor `signal` through the transport and authoritative ledger write.
+   * Once aborted, the implementation must guarantee that the request cannot
+   * later commit a grant after the SDK callback has returned `false`.
+   */
+  verifyPurchase(
+    input: VerifyPurchaseRequest,
+    context: AppsInTossProductGrantVerificationContext,
+  ): Promise<VerifyPurchaseResponse>;
+}
+
+export interface AppsInTossProductGrantVerificationContext {
+  readonly signal: AbortSignal;
 }
 
 export interface VerifyAppsInTossProductGrantInput {
@@ -53,6 +70,7 @@ export interface VerifyAppsInTossProductGrantInput {
   readonly idempotencyKey?: string;
   readonly source: AppsInTossPurchaseCallbackSource;
   readonly purchasedAt: string;
+  readonly signal?: AbortSignal;
 }
 
 export interface CreateAppsInTossProductGrantCallbackInput {
@@ -62,6 +80,8 @@ export interface CreateAppsInTossProductGrantCallbackInput {
   readonly platformSku: string;
   /** Override only when the same function can be recreated for pending restore. */
   readonly idempotencyKey?: (orderId: string) => string;
+  /** May be shortened, but never extended beyond the SDK-safe default. */
+  readonly timeoutMs?: number;
   readonly now?: () => string;
 }
 
@@ -210,15 +230,19 @@ export function verifyAppsInTossProductGrant(
     source: input.source,
   });
 
-  return input.purchaseVerification.verifyPurchase({
-    target: 'ait',
-    playerId: input.playerId,
-    productId: input.productId,
-    platformTransactionId: input.orderId,
-    idempotencyKey: input.idempotencyKey ?? createAppsInTossPurchaseIdempotencyKey(input.orderId),
-    purchasedAt: input.purchasedAt,
-    evidence,
-  });
+  return input.purchaseVerification.verifyPurchase(
+    {
+      target: 'ait',
+      playerId: input.playerId,
+      productId: input.productId,
+      platformTransactionId: input.orderId,
+      idempotencyKey: input.idempotencyKey
+        ?? createAppsInTossPurchaseIdempotencyKey(input.orderId),
+      purchasedAt: input.purchasedAt,
+      evidence,
+    },
+    { signal: input.signal ?? new AbortController().signal },
+  );
 }
 
 export function createAppsInTossPurchaseIdempotencyKey(orderId: string): string {
@@ -235,25 +259,44 @@ export function createAppsInTossProductGrantCallback(
   input: CreateAppsInTossProductGrantCallbackInput,
 ): AppsInTossProcessProductGrant {
   const now = input.now ?? (() => new Date().toISOString());
+  const timeoutMs = input.timeoutMs ?? appsInTossProductGrantCallbackTimeoutMs;
+  requireProductGrantCallbackTimeout(timeoutMs);
 
   return async ({ orderId }) => {
+    const abortController = new AbortController();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+
     try {
-      const verification = await verifyAppsInTossProductGrant({
-        purchaseVerification: input.purchaseVerification,
-        orderId,
-        playerId: input.playerId,
-        productId: input.productId,
-        platformSku: input.platformSku,
-        ...(input.idempotencyKey === undefined
-          ? {}
-          : { idempotencyKey: input.idempotencyKey(orderId) }),
-        source: 'process-product-grant',
-        purchasedAt: now(),
-      });
+      const verification = await Promise.race([
+        verifyAppsInTossProductGrant({
+          purchaseVerification: input.purchaseVerification,
+          orderId,
+          playerId: input.playerId,
+          productId: input.productId,
+          platformSku: input.platformSku,
+          ...(input.idempotencyKey === undefined
+            ? {}
+            : { idempotencyKey: input.idempotencyKey(orderId) }),
+          source: 'process-product-grant',
+          purchasedAt: now(),
+          signal: abortController.signal,
+        }),
+        new Promise<never>((_resolve, reject) => {
+          timeout = setTimeout(() => {
+            abortController.abort();
+            reject(new Error('Apps in Toss product-grant verification timed out.'));
+          }, timeoutMs);
+        }),
+      ]);
 
       return verification.verified;
     } catch {
+      abortController.abort();
       return false;
+    } finally {
+      if (timeout !== undefined) {
+        clearTimeout(timeout);
+      }
     }
   };
 }
@@ -556,7 +599,7 @@ function normalizeTimestamp(value: string): string | undefined {
     return undefined;
   }
 
-  let offsetMinutes = 9 * 60;
+  let offsetMinutes = appsInTossKstOffsetMinutes;
   if (match[8] === 'Z') {
     offsetMinutes = 0;
   } else if (match[9] !== undefined) {
@@ -604,8 +647,20 @@ function requireOptionalReason(input: unknown): asserts input is string | undefi
 }
 
 function requireNonEmptyString(input: unknown, label: string): asserts input is string {
-  if (typeof input !== 'string' || input.length === 0) {
+  if (typeof input !== 'string' || input.trim().length === 0) {
     throw new TypeError(`${label} must be a non-empty string.`);
+  }
+}
+
+function requireProductGrantCallbackTimeout(input: number): void {
+  if (
+    !Number.isInteger(input)
+    || input < 1
+    || input > appsInTossProductGrantCallbackTimeoutMs
+  ) {
+    throw new RangeError(
+      `timeoutMs must be an integer between 1 and ${appsInTossProductGrantCallbackTimeoutMs}.`,
+    );
   }
 }
 

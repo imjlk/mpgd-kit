@@ -32,6 +32,12 @@ pending-order recovery flow below.
 6. Return `true` from `processProductGrant` only after the backend reports
    `verified: true`.
 
+The SDK documents a 30-second product-grant window. The helper uses a 25-second
+deadline by default, aborts the verification request, and returns `false` on
+timeout. Its `purchaseVerification` port must carry the provided `AbortSignal`
+through the transport and server-side ledger deadline so an aborted request
+cannot commit a late grant. `timeoutMs` may only shorten the 25-second default.
+
 The generic `createGameServicesClient().purchase()` flow verifies after
 `gateway.commerce.purchase()` returns, so it cannot satisfy this callback
 timing by itself. Wire the callback-specific API directly into the AIT SDK:
@@ -43,7 +49,7 @@ import {
 } from '@mpgd/game-services/apps-in-toss-evidence-verification';
 
 const processProductGrant = createAppsInTossProductGrantCallback({
-  purchaseVerification: backend.purchases,
+  purchaseVerification: abortAwarePurchaseVerification,
   playerId,
   productId: 'COINS_100',
   platformSku: 'ait.production.coins-100',
@@ -60,9 +66,11 @@ cleanup = IAP.createOneTimePurchaseOrder({
 });
 ```
 
-`backend.purchases` can be an HTTP-backed `PurchaseVerificationApi`; it must not
-contain mTLS credentials in the client. The helper derives its idempotency key
-from the order id, so the same order remains replay-safe across restarts.
+`abortAwarePurchaseVerification` can wrap an HTTP-backed purchase endpoint, but
+it must pass the port's `signal` into the request and enforce the same deadline
+before its authoritative ledger commit. It must not contain mTLS credentials in
+the client. The helper derives its idempotency key from the order id, so the same
+order remains replay-safe across restarts.
 
 For a grant-server failure, return `false`. At the next launch, read
 `getPendingOrders()`, submit each order with
