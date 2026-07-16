@@ -221,12 +221,21 @@ export function createGooglePlayProductPurchaseBoundary(
       );
       inFlightFinalizations.set(finalizationInput.evidenceVerificationId, finalization);
 
-      try {
-        return await finalization;
-      } finally {
+      const releaseFinalization = () => {
+        finalizationInput.signal.removeEventListener('abort', releaseFinalization);
         if (inFlightFinalizations.get(finalizationInput.evidenceVerificationId) === finalization) {
           inFlightFinalizations.delete(finalizationInput.evidenceVerificationId);
         }
+      };
+      finalizationInput.signal.addEventListener('abort', releaseFinalization, { once: true });
+      if (finalizationInput.signal.aborted) {
+        releaseFinalization();
+      }
+
+      try {
+        return await finalization;
+      } finally {
+        releaseFinalization();
       }
     },
   };
@@ -483,12 +492,25 @@ async function inspectGooglePlayPurchase(input: {
   ) {
     return rejected('GOOGLE_PLAY_ACCOUNT_INVALID');
   }
+  const obfuscatedExternalProfileId = readOptionalIdentifier(raw.obfuscatedExternalProfileId, 256);
+  if (
+    raw.obfuscatedExternalProfileId !== undefined
+    && obfuscatedExternalProfileId === undefined
+  ) {
+    return rejected('GOOGLE_PLAY_PROFILE_INVALID');
+  }
   if (input.accountBinding.status === 'bound'
     && obfuscatedExternalAccountId !== input.accountBinding.accountId) {
     return rejected('GOOGLE_PLAY_ACCOUNT_MISMATCH');
   }
   // The unbound opt-in is safe only when the provider response is also unbound.
-  if (input.accountBinding.status === 'unbound' && obfuscatedExternalAccountId !== undefined) {
+  if (
+    input.accountBinding.status === 'unbound'
+    && (
+      obfuscatedExternalAccountId !== undefined
+      || obfuscatedExternalProfileId !== undefined
+    )
+  ) {
     return rejected('GOOGLE_PLAY_ACCOUNT_MISMATCH');
   }
 

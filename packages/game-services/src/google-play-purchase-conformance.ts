@@ -31,6 +31,7 @@ export interface CreateGooglePlayProductPurchaseConformanceFixtureInput {
   readonly quantity?: number;
   readonly refundableQuantity?: number;
   readonly obfuscatedExternalAccountId?: string;
+  readonly obfuscatedExternalProfileId?: string;
 }
 
 /**
@@ -64,5 +65,8 @@ export function createGooglePlayProductPurchaseConformanceFixture(
     ...(input.obfuscatedExternalAccountId === undefined
       ? {}
       : { obfuscatedExternalAccountId: input.obfuscatedExternalAccountId }),
+    ...(input.obfuscatedExternalProfileId === undefined
+      ? {}
+      : { obfuscatedExternalProfileId: input.obfuscatedExternalProfileId }),
   };
 }

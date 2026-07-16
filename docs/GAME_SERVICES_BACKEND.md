@@ -292,7 +292,10 @@ redemptions or other purchases made outside the app, where Google does not
 return an account identifier, it must explicitly set
 `allowUnboundAuthenticatedPlayer: true` and bind `playerId` to the logged-in
 account before calling this boundary. A configured resolver that unexpectedly
-returns no identifier fails closed unless that opt-in is present.
+returns no identifier fails closed unless that opt-in is present. Unbound mode
+also rejects responses carrying either `obfuscatedExternalAccountId` or
+`obfuscatedExternalProfileId`; a purchase associated with another app account
+or profile must never be attributed to the current player implicitly.
 
 The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
 single quantity, remaining refundable quantity, optional order id, provider
@@ -338,7 +341,10 @@ and require a separate subscriptions verifier. Because the durable grant is
 already committed, `verified` remains true when finalization is pending. A
 production backend must inspect that status and enqueue the same idempotency
 key and evidence for server-side retry; it must not depend on the game client
-starting another billing flow.
+starting another billing flow. The boundary releases its same-process
+finalization lease when the backend aborts a timed-out provider call, so a
+provider client that fails to settle after cancellation cannot permanently
+block later retry workers.
 
 Protocol references:
 
