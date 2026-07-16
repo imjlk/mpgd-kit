@@ -651,15 +651,23 @@ async function verifyPurchaseWithStore(
     });
   }
 
-  if (
-    grant.result.alreadyProcessed
-    && !await recordedEntitlementMatchesRetry(context.store, grant.result, retryIdentity)
-  ) {
-    return assertVerifyPurchaseResponse({
-      verified: false,
-      alreadyProcessed: false,
-      reason: 'IDEMPOTENCY_KEY_CONFLICT',
-    });
+  if (grant.result.alreadyProcessed) {
+    const recordedTransaction = await context.store.getEntitlementTransaction(
+      grant.result.ledgerEntryId,
+    );
+    const storedEvidenceVerificationId = recordedTransaction?.evidenceVerificationId
+      ?? recordedTransaction?.payload.evidenceVerificationId;
+    if (
+      recordedTransaction === undefined
+      || !matchesEntitlementRetry(recordedTransaction, retryIdentity)
+      || storedEvidenceVerificationId !== verification.verificationId
+    ) {
+      return assertVerifyPurchaseResponse({
+        verified: false,
+        alreadyProcessed: false,
+        reason: 'IDEMPOTENCY_KEY_CONFLICT',
+      });
+    }
   }
 
   const finalization = await finalizePurchaseGrant(context.purchaseGrantFinalizer, {
@@ -734,10 +742,7 @@ async function finalizePurchaseGrant(
   finalizer: GameServicesPurchaseGrantFinalizer | undefined,
   input: Omit<FinalizePurchaseGrantInput, 'signal'>,
 ): Promise<PurchaseGrantFinalization | undefined> {
-  if (
-    finalizer === undefined
-    || finalizer.supportsPurchaseGrant?.(input) === false
-  ) {
+  if (finalizer === undefined) {
     return undefined;
   }
 
@@ -751,6 +756,10 @@ async function finalizePurchaseGrant(
   let timeout: ReturnType<typeof setTimeout> | undefined;
 
   try {
+    if (finalizer.supportsPurchaseGrant?.(input) === false) {
+      return undefined;
+    }
+
     return await Promise.race([
       finalizer.finalizePurchaseGrant({ ...input, signal: controller.signal })
         .then(assertPurchaseGrantFinalization)

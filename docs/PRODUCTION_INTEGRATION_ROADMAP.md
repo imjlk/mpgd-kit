@@ -34,9 +34,10 @@ follow-up because their lifecycle and acknowledgement rules differ.
 
 Expected flow:
 
-1. Android adapter returns purchase token, product id, transaction/order id, and
-   purchase state evidence.
-2. Backend verifies the token with Google Play Developer APIs.
+1. Android adapter submits the purchase token plus product, transaction/order,
+   player, and idempotency request metadata; it does not assert purchase state.
+2. Backend verifies the token with Google Play Developer APIs, whose
+   ProductPurchaseV2 response supplies the authoritative purchase state.
 3. Backend checks product id, package name, purchase state, duplicate grants, and
    entitlement eligibility.
 4. Backend records the ledger grant with an idempotency key.
@@ -46,9 +47,11 @@ Expected flow:
 
 Implemented contract evidence and result metadata:
 
+- client-submitted `google-play.product-purchase.v2` purchase-token evidence and
+  generic request metadata, without client-authored purchase state
 - server-owned package name
-- `google-play.product-purchase.v2` purchase-token evidence
-- ProductPurchaseV2 order, product, state, quantity, refund, and account checks
+- provider-authoritative ProductPurchaseV2 order, product, state, quantity,
+  refund, and account checks
 - catalog-owned consumable/non-consumable selection
 - acknowledgement/consume finalization status and retry metadata
 

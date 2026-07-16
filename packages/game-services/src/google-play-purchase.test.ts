@@ -55,6 +55,12 @@ class TrackingStore extends InMemoryGameServicesStore {
   }
 }
 
+class HiddenIdempotencyTrackingStore extends TrackingStore {
+  override async findEntitlementTransactionByIdempotency(): Promise<undefined> {
+    return undefined;
+  }
+}
+
 class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
   readonly events: string[];
   readonly responses = new Map<string, Record<string, unknown>>();
@@ -249,6 +255,74 @@ assert(
   }).includes('token-consumable'),
   'the raw purchase token must not be persisted in the ledger',
 );
+
+const raceEvents: string[] = [];
+const raceClient = new FixtureGooglePlayClient(raceEvents);
+raceClient.responses.set(
+  'token-race-a',
+  createGooglePlayProductPurchaseConformanceFixture({ orderId: 'GPA.race-a' }),
+);
+raceClient.responses.set(
+  'token-race-b',
+  createGooglePlayProductPurchaseConformanceFixture({ orderId: 'GPA.race-b' }),
+);
+const raceStore = new HiddenIdempotencyTrackingStore(raceEvents);
+const raceBoundary = createGooglePlayProductPurchaseBoundary({
+  client: raceClient,
+  packageName: 'dev.mpgd.conformance',
+  allowUnboundAuthenticatedPlayer: true,
+});
+const raceBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: raceStore,
+  evidenceVerifier: {
+    verifyPurchase: (verificationInput) => raceBoundary.verifyPurchase(verificationInput),
+    verifyAdReward: createDevelopmentGameServicesEvidenceVerifier().verifyAdReward,
+  },
+  purchaseGrantFinalizer: raceBoundary,
+  now: () => '2030-01-02T03:04:07.000Z',
+});
+const raceTokens = ['token-race-a', 'token-race-b'] as const;
+const raceRequests = [
+  createRequest({
+    token: raceTokens[0],
+    orderId: 'GPA.race-a',
+    idempotencyKey: 'purchase:token-race',
+  }),
+  createRequest({
+    token: raceTokens[1],
+    orderId: 'GPA.race-b',
+    idempotencyKey: 'purchase:token-race',
+  }),
+] as const;
+const raceResults = await Promise.all(
+  raceRequests.map((request) => raceBackend.purchases.verifyPurchase(request)),
+);
+const winningRaceIndex = raceResults.findIndex((result) => result.verified);
+const losingRaceIndex = winningRaceIndex === 0 ? 1 : 0;
+
+assert(winningRaceIndex >= 0, 'one raced purchase must retain the ledger grant');
+assertEqual(
+  raceResults.filter((result) => result.verified).length,
+  1,
+  'different purchase tokens racing one idempotency key must not both grant',
+);
+assertEqual(
+  raceResults[losingRaceIndex]?.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'the token that loses the idempotency race must fail before finalization',
+);
+assertEqual(
+  raceEvents.filter((event) => event.startsWith('provider:consume:')).length,
+  1,
+  'only the token stored in the ledger may be consumed',
+);
+assert(
+  !raceEvents.includes(`provider:consume:${raceTokens[losingRaceIndex]}`),
+  'the losing purchase token must never reach a provider write',
+);
+assertEqual((await raceStore.listEntitlementTransactions()).length, 1);
 
 assertThrows(
   () => createGooglePlayProductPurchaseBoundary({
@@ -693,6 +767,39 @@ assert(
   mixedTargetEvents.every((event) => !event.startsWith('provider:')),
   'the Google Play finalizer must not receive another evidence schema',
 );
+
+const throwingSupportEvents: string[] = [];
+const throwingSupportStore = new TrackingStore(throwingSupportEvents);
+let throwingSupportFinalizerCalls = 0;
+const throwingSupportBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: throwingSupportStore,
+  evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(
+    () => '2030-01-02T03:04:06.000Z',
+  ),
+  purchaseGrantFinalizer: {
+    supportsPurchaseGrant() {
+      throw new Error('simulated supportsPurchaseGrant failure');
+    },
+    async finalizePurchaseGrant() {
+      throwingSupportFinalizerCalls += 1;
+      return { status: 'completed', action: 'consume', alreadyCompleted: false };
+    },
+  },
+  now: () => '2030-01-02T03:04:07.000Z',
+});
+const throwingSupportResult = await throwingSupportBackend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-throwing-support',
+    idempotencyKey: 'purchase:throwing-support',
+  }),
+);
+assertEqual(throwingSupportResult.verified, true, 'the durable ledger grant must be retained');
+assertEqual(throwingSupportResult.finalization?.status, 'pending');
+assertEqual(throwingSupportResult.finalization?.reason, 'PURCHASE_FINALIZER_ERROR');
+assertEqual(throwingSupportFinalizerCalls, 0, 'a failed support hook must skip provider writes');
+assertEqual((await throwingSupportStore.listEntitlementTransactions()).length, 1);
 
 const wrongSchema = createHarness({
   token: 'token-wrong-schema',
