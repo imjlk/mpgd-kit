@@ -1,6 +1,11 @@
 import { readFile } from 'node:fs/promises';
 
 import { runVerifiedLeaderboardConformance } from '@mpgd/game-services/verified-leaderboard-conformance';
+import {
+  createAmbiguousCommitVerifiedLeaderboardDurabilityFixture,
+  runVerifiedLeaderboardDurabilityConformance,
+  verifiedLeaderboardDurabilityConformanceScenarios,
+} from '@mpgd/game-services/verified-leaderboard-durability-conformance';
 import { Miniflare } from 'miniflare';
 
 import { createWorkerService } from './handler.js';
@@ -33,6 +38,17 @@ try {
     }),
   });
   assertEqual(report.passedScenarios.length, 7, 'D1 should pass every conformance scenario');
+
+  const durabilityReport = await runVerifiedLeaderboardDurabilityConformance({
+    createFixture: ({ now }) => createAmbiguousCommitVerifiedLeaderboardDurabilityFixture(
+      createD1VerifiedLeaderboardService(db, { now: () => now }),
+    ),
+  });
+  assertEqual(
+    durabilityReport.passedScenarios.length,
+    verifiedLeaderboardDurabilityConformanceScenarios.length,
+    'D1 should pass every durability conformance scenario',
+  );
 
   const privateService = createWorkerService({
     DB: db,
