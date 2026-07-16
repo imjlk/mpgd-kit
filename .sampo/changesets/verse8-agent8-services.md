@@ -1,6 +1,5 @@
 ---
 npm/@mpgd/adapter-verse8: minor (Added)
-npm/@mpgd/target-config: minor (Changed)
 npm/@mpgd/cli: minor (Changed)
 ---
 

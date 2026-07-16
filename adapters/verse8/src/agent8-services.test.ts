@@ -67,6 +67,39 @@ describe('Verse8 Agent8 storage service', () => {
       service.load('0xbroken', { key: 'first' }, fixture.context),
     ).rejects.toThrow('cloud save state is invalid');
   });
+
+  it('treats inherited property names as ordinary storage keys', async () => {
+    const fixture = createAgent8Context();
+    const service = createVerse8Agent8StorageService({ maximumEntries: 1 });
+
+    await expect(
+      service.load('0xplayer', { key: 'toString' }, fixture.context),
+    ).resolves.toBeNull();
+    await service.save('0xplayer', { key: 'toString', value: 'first' }, fixture.context);
+    await service.save('0xplayer', { key: 'toString', value: 'updated' }, fixture.context);
+    await expect(
+      service.load('0xplayer', { key: 'toString' }, fixture.context),
+    ).resolves.toEqual({ value: 'updated' });
+  });
+
+  it('rejects trailing unpaired high surrogates', async () => {
+    const fixture = createAgent8Context();
+    const service = createVerse8Agent8StorageService();
+    const malformed = '\ud800';
+
+    await expect(
+      service.save('0xplayer', { key: malformed, value: 'bad' }, fixture.context),
+    ).rejects.toThrow('cloud save key');
+    await expect(
+      service.save('0xplayer', { key: 'bad-value', value: malformed }, fixture.context),
+    ).rejects.toThrow('well-formed Unicode');
+    await expect(
+      service.save('0xplayer', {
+        key: 'bad-object-key',
+        value: { [malformed]: 'bad' },
+      }, fixture.context),
+    ).rejects.toThrow('object keys must contain well-formed Unicode');
+  });
 });
 
 describe('Verse8 Agent8 verified leaderboard provider', () => {

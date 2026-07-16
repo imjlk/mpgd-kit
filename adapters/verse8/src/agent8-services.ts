@@ -129,9 +129,14 @@ export function createVerse8Agent8StorageService(
       assertStorageKey(input.key);
       const userState = await context.getUserState(account);
       const state = readStorageState(userState[namespace]);
+
+      if (!Object.hasOwn(state.values, input.key)) {
+        return null;
+      }
+
       const value = state.values[input.key];
 
-      return value === undefined ? null : { value: cloneJsonValue(value) };
+      return { value: cloneJsonValue(value) };
     },
     async save(account, input, context) {
       assertAccount(account);
@@ -145,7 +150,7 @@ export function createVerse8Agent8StorageService(
       await context.lock(storageLockKey(account), async () => {
         const userState = await context.getUserState(account);
         const state = readStorageState(userState[namespace]);
-        const isNewKey = state.values[input.key] === undefined;
+        const isNewKey = !Object.hasOwn(state.values, input.key);
 
         if (isNewKey && Object.keys(state.values).length >= maximumEntries) {
           throw new Error('Verse8 cloud save exceeds maximumEntries.');
@@ -984,6 +989,10 @@ function isWellFormedUnicode(input: string): boolean {
     const codeUnit = input.charCodeAt(index);
 
     if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      if (index + 1 >= input.length) {
+        return false;
+      }
+
       const next = input.charCodeAt(index + 1);
 
       if (next < 0xdc00 || next > 0xdfff) {

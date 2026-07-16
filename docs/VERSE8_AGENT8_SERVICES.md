@@ -78,6 +78,10 @@ const gateway = createVerse8PlatformGateway({
 `cloudSave` becomes true only when `agent8Storage` is present. Once configured,
 remote errors propagate and the adapter never falls back to local storage;
 silently splitting progress between local and cloud state would be unsafe.
+The static Verse8 target metadata therefore remains `local`: it describes the
+default starter, not an optional server deployment. Gate cloud-save UI and
+behavior on `gateway.features.cloudSave` after constructing the gateway rather
+than treating the effective target config as proof that Agent8 RPC is present.
 
 ## Verified leaderboard boundary
 

@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-16.3",
+  "version": "2026-07-16.2",
   "targets": {
     "web-preview": {
       "runtime": "web-preview",
@@ -97,7 +97,7 @@
         "localization": true
       },
       "capabilities": {
-        "storage": "native",
+        "storage": "local",
         "localization": true
       },
       "localization": {
