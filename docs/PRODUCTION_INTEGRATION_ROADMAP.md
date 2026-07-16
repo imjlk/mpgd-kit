@@ -68,6 +68,11 @@ Contract additions to consider:
 
 ## AdMob Rewarded Ads
 
+The reusable implementation lives in `@mpgd/game-services/admob-ssv`; see
+[AdMob Server-Side Verification](ADMOB_SSV.md). Deployments still own the HTTPS
+callback route, raw callback persistence, and the rotating AdMob public-key
+cache.
+
 Expected flow:
 
 1. Client shows rewarded ad and receives SDK completion evidence.
@@ -78,7 +83,8 @@ Expected flow:
 5. Client polls, receives push, or submits a claim that resolves only after SSV
    evidence exists.
 
-Contract additions to consider:
+The verifier keeps these provider fields inside its callback source and trusted
+ledger payload rather than expanding the platform-neutral client contract:
 
 - `adUnitId`
 - `ssvTransactionId`

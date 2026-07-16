@@ -83,6 +83,7 @@
     "smoke:platform-capability-conformance": "node tools/run-ttsx.mjs tools/smoke/platform-capability-conformance.ts",
     "smoke:storage-adapter-conformance": "node tools/run-ttsx.mjs tools/smoke/storage-adapter-conformance.ts",
     "smoke:verse8-agent8-acceptance": "node tools/run-ttsx.mjs tools/smoke/verse8-agent8-acceptance.ts",
+    "smoke:admob-ssv-conformance": "node tools/run-ttsx.mjs tools/smoke/admob-ssv-conformance.ts",
     "smoke:game-services": "pnpm build:packages && pnpm smoke:game-services:prepared",
     "smoke:game-services:prepared": "node tools/run-ttsx.mjs tools/smoke/game-services-vertical-slice.ts",
     "smoke:game-services:worker": "pnpm build:packages && pnpm smoke:game-services:worker:prepared",

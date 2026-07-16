@@ -83,7 +83,7 @@ pnpm smoke:target reddit
 - [ ] Confirm Microsoft Store release settings: Partner Center app reservation, PWA manifest/icons, PWABuilder package output, Store listing metadata, age ratings, and whether Digital Goods API commerce is intentionally disabled. Use Microsoft's PWA Store and Digital Goods API docs as the policy source before enabling Store commerce.
 - [ ] Confirm Reddit Devvit release settings: app name, test subreddit, Devvit login state, Redis usage, and whether playtest/upload/publish are intentionally local-only.
 - [ ] Confirm placeholder IDs in `packages/catalog/catalog.json`, `packages/catalog/placements.json`, and `apps/game-services-worker/wrangler.toml` are either intentionally sample-only or replaced.
-- [ ] Confirm README/docs state that real Google Play Billing, StoreKit/App Store Server API, AdMob SSV, and Apps in Toss production verification adapters are not bundled yet.
+- [ ] Confirm README/docs state that real Google Play Billing, StoreKit/App Store Server API, and Apps in Toss production verification adapters are not bundled yet, and that AdMob SSV deployments provide durable raw callbacks plus rotating public keys.
 - [ ] Confirm emulator smoke results are attached or explicitly skipped for the public release.
 
 ## Release Artifacts
@@ -99,6 +99,6 @@ pnpm smoke:target reddit
 ## Known Starter Limits
 
 - The Game Services Worker is deployable, but the default config is a starter profile. Production persistence requires a D1 binding and `MPGD_STORE = "d1"`.
-- Platform SDK callbacks are treated as evidence only. Production grants should add real Google Play, App Store, AdMob SSV, Apps in Toss, and Devvit payment/reward backend verification.
+- Platform SDK callbacks are treated as evidence only. Production grants should add real Google Play, App Store, Apps in Toss, and Devvit payment/reward backend verification; AdMob-backed rewards should use the SSV verifier with deployment-owned callback and key stores.
 - Catalog and ad placement IDs are sample defaults until replaced by a game-specific release configuration.
 - Emulator smoke checks install, launch, crash-free startup, screenshot capture, and embedded target config evidence. Target gameplay coverage is available through the optional manifest-driven `gameplay:e2e` contract; each game must still provide its own automation and state-inspection driver before treating that evidence as a release gate.
