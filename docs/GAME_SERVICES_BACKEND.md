@@ -221,6 +221,12 @@ numeric attempt metrics on processed decisions and ranked entries. Apply
 `0004_entitlement_evidence.sql` next to persist provider verification identities
 and enforce source-scoped evidence replay protection.
 
+Durable leaderboard providers should also run
+`@mpgd/game-services/verified-leaderboard-durability-conformance`. Its fault
+fixtures cover an interrupted retained write followed by replacement,
+concurrent retry, and snapshot recovery without requiring D1, Redis, or Agent8
+to share a persistence implementation.
+
 Configure the private `VERIFIED_LEADERBOARD_AUTH` service binding to mount the
 public read-only verified leaderboard snapshot route. Its RPC method validates
 the Authorization header and returns the authenticated participant ID. Without

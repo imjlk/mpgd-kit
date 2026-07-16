@@ -5,6 +5,10 @@ import {
   runVerifiedLeaderboardConformance,
   verifiedLeaderboardConformanceScenarios,
 } from '@mpgd/game-services/verified-leaderboard-conformance';
+import {
+  runVerifiedLeaderboardDurabilityConformance,
+  verifiedLeaderboardDurabilityConformanceScenarios,
+} from '@mpgd/game-services/verified-leaderboard-durability-conformance';
 
 import {
   createVerse8Agent8LeaderboardBoundary,
@@ -258,62 +262,38 @@ describe('Verse8 Agent8 verified leaderboard provider', () => {
     expect(alternateDecisionCollection).not.toBe(decisionCollection);
   });
 
-  it('recovers when an entry write succeeds before its decision marker', async () => {
-    const fixture = createAgent8Context();
-    let interruptDecisionWrite = true;
-    const context: Verse8Agent8ServiceContext = {
-      ...fixture.context,
-      async addCollectionItem(collectionId, item) {
-        if (
-          interruptDecisionWrite
-          && collectionId.startsWith('mpgdVerse8LeaderboardA')
-        ) {
-          interruptDecisionWrite = false;
-          throw new Error('simulated interruption');
-        }
+  it('passes the provider-neutral durability conformance suite', async () => {
+    const report = await runVerifiedLeaderboardDurabilityConformance({
+      createFixture: ({ now }) => {
+        const fixture = createAgent8Context();
+        let interruptDecisionWrite = false;
+        const context: Verse8Agent8ServiceContext = {
+          ...fixture.context,
+          async addCollectionItem(collectionId, item) {
+            if (
+              interruptDecisionWrite
+              && collectionId.startsWith('mpgdVerse8LeaderboardA')
+            ) {
+              interruptDecisionWrite = false;
+              throw new Error('simulated interruption');
+            }
 
-        return fixture.context.addCollectionItem(collectionId, item);
+            return fixture.context.addCollectionItem(collectionId, item);
+          },
+        };
+
+        return {
+          service: createTestLeaderboardProvider(context, { now: () => now }),
+          interruptNextRetainedRecord() {
+            interruptDecisionWrite = true;
+          },
+        };
       },
-    };
-    const service = createTestLeaderboardProvider(context, {
-      now: () => '2030-01-02T03:04:05.000Z',
-    });
-    const input = createAttempt({
-      participantId: 'participant',
-      attemptId: 'interrupted-attempt',
-      score: 10,
-    });
-    const later = createAttempt({
-      participantId: 'participant',
-      attemptId: 'later-better-attempt',
-      score: 20,
     });
 
-    await expect(service.recordVerifiedAttempt(input)).rejects.toThrow(
-      'simulated interruption',
+    expect(report.passedScenarios).toEqual(
+      verifiedLeaderboardDurabilityConformanceScenarios,
     );
-
-    await expect(service.recordVerifiedAttempt(later)).resolves.toMatchObject({
-      retained: true,
-      entry: {
-        rank: 1,
-        participantId: 'participant',
-        attemptId: 'later-better-attempt',
-        score: 20,
-      },
-    });
-    await expect(service.recordVerifiedAttempt(input)).resolves.toMatchObject({
-      alreadyProcessed: true,
-      retained: true,
-      entry: {
-        attemptId: 'interrupted-attempt',
-        score: 10,
-      },
-    });
-    await expect(service.getSnapshot({ leaderboardId: 'board' })).resolves.toMatchObject({
-      totalParticipants: 1,
-      entries: [{ attemptId: 'later-better-attempt' }],
-    });
   });
 
   it('requires game-specific verification and authenticated participant scope', async () => {

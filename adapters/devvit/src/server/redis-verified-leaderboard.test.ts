@@ -4,6 +4,11 @@ import {
   runVerifiedLeaderboardConformance,
   verifiedLeaderboardConformanceScenarios,
 } from '@mpgd/game-services/verified-leaderboard-conformance';
+import {
+  createAmbiguousCommitVerifiedLeaderboardDurabilityFixture,
+  runVerifiedLeaderboardDurabilityConformance,
+  verifiedLeaderboardDurabilityConformanceScenarios,
+} from '@mpgd/game-services/verified-leaderboard-durability-conformance';
 
 import {
   createDevvitRedisVerifiedLeaderboardService,
@@ -24,6 +29,22 @@ describe('createDevvitRedisVerifiedLeaderboardService', () => {
     });
 
     expect(report.passedScenarios).toEqual(verifiedLeaderboardConformanceScenarios);
+  });
+
+  it('passes the provider-neutral durability conformance suite', async () => {
+    const report = await runVerifiedLeaderboardDurabilityConformance({
+      createFixture: ({ scenario, now }) =>
+        createAmbiguousCommitVerifiedLeaderboardDurabilityFixture(
+          createDevvitRedisVerifiedLeaderboardService(new FakeDevvitRedis(), {
+            keyPrefix: `durability:${scenario}`,
+            now: () => now,
+          }),
+        ),
+    });
+
+    expect(report.passedScenarios).toEqual(
+      verifiedLeaderboardDurabilityConformanceScenarios,
+    );
   });
 
   it('uses bounded opaque Redis keys for maximum-length board identifiers', async () => {
