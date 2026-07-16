@@ -283,6 +283,75 @@ assertEqual(
   'unsupported target rewarded ad should not call ad reward backend',
 );
 
+let verse8PurchaseCalls = 0;
+let verse8RewardCalls = 0;
+let verse8LeaderboardCalls = 0;
+const verse8BaseGateway = createMockGateway();
+const verse8Gateway = {
+  ...verse8BaseGateway,
+  target: 'verse8',
+  commerce: {
+    ...verse8BaseGateway.commerce,
+    async purchase() {
+      verse8PurchaseCalls += 1;
+
+      return {
+        status: 'completed',
+        transactionId: 'unexpected-verse8-transaction',
+        entitlementIds: [],
+      };
+    },
+  },
+  ads: {
+    ...verse8BaseGateway.ads,
+    async showRewarded() {
+      verse8RewardCalls += 1;
+
+      return {
+        status: 'completed',
+        rewardGranted: true,
+        ledgerEntryId: 'verse8-impression',
+      };
+    },
+  },
+  leaderboard: {
+    ...verse8BaseGateway.leaderboard,
+    async submitScore() {
+      verse8LeaderboardCalls += 1;
+      return { submitted: true };
+    },
+  },
+} satisfies PlatformGateway;
+const verse8Client = createGameServicesClient({
+  gateway: verse8Gateway,
+  playerId,
+  target: 'verse8',
+  now: () => '2026-07-03T00:00:00.000Z',
+  backend,
+});
+const verse8Purchase = await verse8Client.purchase({
+  productId: 'COINS_100',
+  source: 'result',
+  idempotencyKey: 'verse8-purchase',
+});
+const verse8Reward = await verse8Client.claimRewardedAd({
+  placementId: 'CONTINUE_AFTER_FAIL',
+  idempotencyKey: 'verse8-reward',
+});
+const verse8Leaderboard = await verse8Client.submitLeaderboardScore({
+  leaderboardId: 'default',
+  score: 500,
+  runId: 'verse8-run',
+  submittedAt: '2026-07-03T00:00:00.000Z',
+});
+
+assertEqual(verse8Purchase.status, 'rejected', 'Verse8 purchases should stay unsupported');
+assertEqual(verse8Reward.status, 'granted', 'Verse8 rewarded ads should reach the backend');
+assertEqual(verse8Leaderboard.submitted, false, 'Verse8 leaderboards should stay unsupported');
+assertEqual(verse8PurchaseCalls, 0, 'Verse8 purchases should not call platform commerce');
+assertEqual(verse8RewardCalls, 1, 'Verse8 rewards should call platform ads');
+assertEqual(verse8LeaderboardCalls, 0, 'Verse8 should not call the platform leaderboard');
+
 const transportCalls: string[] = [];
 const httpBackend = createGameServicesHttpBackendApi({
   transport: {

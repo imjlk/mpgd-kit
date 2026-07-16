@@ -22,6 +22,14 @@ head_sampling_rate = 1
 
 # Bind a private identity Worker to enable authenticated public snapshot reads.
 # The service must implement authenticateVerifiedLeaderboardSnapshot({ authorization }).
+
+# Verse8 rewarded-ad grants can use the built-in verifier credential:
+#   pnpm exec wrangler secret put VERSE8_ADS_VERIFIER_AUTHORIZATION
+# Store the complete Authorization header value issued for the Verse8
+# consume-once /ads/verify endpoint. VERSE8_ADS_VERIFIER_BASE_URL is optional
+# and defaults to https://ads-verifier.verse8.io. Alternatively, bind a private
+# GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER service below; that binding takes
+# precedence over the built-in verifier.
 #
 # [[services]]
 # binding = "VERIFIED_LEADERBOARD_AUTH"
@@ -47,3 +55,7 @@ head_sampling_rate = 1
 # [[services]]
 # binding = "GAME_SERVICES_AIT_EVIDENCE_VERIFIER"
 # service = "game-evidence-verifier-ait"
+#
+# [[services]]
+# binding = "GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER"
+# service = "game-evidence-verifier-verse8"

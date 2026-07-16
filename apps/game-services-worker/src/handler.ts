@@ -26,6 +26,10 @@ import {
   type VerifyAdRewardEvidenceInput,
 } from '@mpgd/game-services';
 import type { ProductCatalog } from '@mpgd/catalog';
+import {
+  createVerse8AdsEvidenceVerifier,
+  createVerse8AdsVerifierHttpClient,
+} from '@mpgd/adapter-verse8/server';
 
 import { createD1GameServicesStore } from './d1Store.js';
 import { createD1VerifiedLeaderboardService } from './verifiedLeaderboardD1.js';
@@ -39,6 +43,9 @@ export interface GameServicesWorkerEnv {
   readonly GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_IOS_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_AIT_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  readonly GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  readonly VERSE8_ADS_VERIFIER_AUTHORIZATION?: string;
+  readonly VERSE8_ADS_VERIFIER_BASE_URL?: string;
 }
 
 export interface GameServicesEvidenceVerifierBinding {
@@ -109,6 +116,7 @@ const adPlacements = {
         android: 'reward_continue',
         ios: 'reward_continue',
         ait: 'reward_continue',
+        verse8: 'rewarded_continue',
       },
     },
   ],
@@ -238,31 +246,51 @@ function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi
 function resolveWorkerEvidenceVerifier(
   env: GameServicesWorkerEnv,
 ): GameServicesEvidenceVerifier | undefined {
+  const verse8Verifier = resolveVerse8AdsEvidenceVerifier(env);
+
   if (hasTargetSpecificEvidenceVerifierBinding(env)) {
-    return createWorkerEvidenceVerifier((target) =>
-      resolveTargetSpecificEvidenceVerifierBinding(env, target));
+    return createWorkerEvidenceVerifier(
+      (target) => resolveTargetSpecificEvidenceVerifierBinding(env, target),
+      verse8Verifier,
+    );
   }
 
   if (env.GAME_SERVICES_EVIDENCE_VERIFIER !== undefined) {
     const binding = env.GAME_SERVICES_EVIDENCE_VERIFIER;
 
-    return createWorkerEvidenceVerifier(() => binding);
+    return createWorkerEvidenceVerifier(
+      (target) => target === 'verse8' && verse8Verifier !== undefined
+        ? undefined
+        : binding,
+      verse8Verifier,
+    );
   }
 
-  return env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true'
+  const developmentVerifier = env.MPGD_ALLOW_INSECURE_DEVELOPMENT_EVIDENCE === 'true'
     ? createDevelopmentGameServicesEvidenceVerifier()
     : undefined;
+
+  if (verse8Verifier !== undefined) {
+    return createWorkerEvidenceVerifier(
+      () => undefined,
+      verse8Verifier,
+      developmentVerifier,
+    );
+  }
+
+  return developmentVerifier;
 }
 
 function hasTargetSpecificEvidenceVerifierBinding(env: GameServicesWorkerEnv): boolean {
   return env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER !== undefined
     || env.GAME_SERVICES_IOS_EVIDENCE_VERIFIER !== undefined
-    || env.GAME_SERVICES_AIT_EVIDENCE_VERIFIER !== undefined;
+    || env.GAME_SERVICES_AIT_EVIDENCE_VERIFIER !== undefined
+    || env.GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER !== undefined;
 }
 
 function resolveTargetSpecificEvidenceVerifierBinding(
   env: GameServicesWorkerEnv,
-  target: VerifyPurchaseRequest['target'],
+  target: ClaimAdRewardRequest['target'],
 ): GameServicesEvidenceVerifierBinding | undefined {
   switch (target) {
     case 'android':
@@ -271,6 +299,8 @@ function resolveTargetSpecificEvidenceVerifierBinding(
       return env.GAME_SERVICES_IOS_EVIDENCE_VERIFIER;
     case 'ait':
       return env.GAME_SERVICES_AIT_EVIDENCE_VERIFIER;
+    case 'verse8':
+      return env.GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER;
     default: {
       const unsupportedTarget: never = target;
 
@@ -281,39 +311,66 @@ function resolveTargetSpecificEvidenceVerifierBinding(
 
 function createWorkerEvidenceVerifier(
   resolveBinding: (
-    target: VerifyPurchaseRequest['target'],
+    target: ClaimAdRewardRequest['target'],
   ) => GameServicesEvidenceVerifierBinding | undefined,
+  verse8Verifier?: GameServicesEvidenceVerifier,
+  fallbackVerifier?: GameServicesEvidenceVerifier,
 ): GameServicesEvidenceVerifier {
   return {
-    async verifyPurchase({ request, product, platformProductId, timeoutMs }) {
+    async verifyPurchase(input) {
+      const { request, product, platformProductId, timeoutMs } = input;
       const binding = resolveBinding(request.target);
 
-      if (binding === undefined) {
-        return unavailableEvidenceVerificationDecision();
+      if (binding !== undefined) {
+        return binding.verifyPurchase({
+          request,
+          product,
+          platformProductId,
+          timeoutMs,
+        });
       }
 
-      return binding.verifyPurchase({
-        request,
-        product,
-        platformProductId,
-        timeoutMs,
-      });
+      return fallbackVerifier?.verifyPurchase(input)
+        ?? unavailableEvidenceVerificationDecision();
     },
-    async verifyAdReward({ request, placement, platformPlacementId, timeoutMs }) {
+    async verifyAdReward(input) {
+      const { request, placement, platformPlacementId, timeoutMs } = input;
       const binding = resolveBinding(request.target);
 
-      if (binding === undefined) {
-        return unavailableEvidenceVerificationDecision();
+      if (binding !== undefined) {
+        return binding.verifyAdReward({
+          request,
+          placement,
+          ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
+          timeoutMs,
+        });
       }
 
-      return binding.verifyAdReward({
-        request,
-        placement,
-        ...(platformPlacementId === undefined ? {} : { platformPlacementId }),
-        timeoutMs,
-      });
+      return request.target === 'verse8' && verse8Verifier !== undefined
+        ? verse8Verifier.verifyAdReward(input)
+        : fallbackVerifier?.verifyAdReward(input)
+          ?? unavailableEvidenceVerificationDecision();
     },
   };
+}
+
+function resolveVerse8AdsEvidenceVerifier(
+  env: GameServicesWorkerEnv,
+): GameServicesEvidenceVerifier | undefined {
+  const authorization = env.VERSE8_ADS_VERIFIER_AUTHORIZATION?.trim();
+
+  if (authorization === undefined || authorization.length === 0) {
+    return undefined;
+  }
+
+  return createVerse8AdsEvidenceVerifier({
+    client: createVerse8AdsVerifierHttpClient({
+      authorization,
+      ...(env.VERSE8_ADS_VERIFIER_BASE_URL === undefined
+        ? {}
+        : { baseUrl: env.VERSE8_ADS_VERIFIER_BASE_URL }),
+    }),
+  });
 }
 
 function unavailableEvidenceVerificationDecision(): EvidenceVerificationDecision {

@@ -14,6 +14,7 @@
     "test": "cd ../.. && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/index.test.ts && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/d1Store.test.ts && node tools/run-ttsx.mjs --project apps/game-services-worker/tsconfig.json apps/game-services-worker/src/verifiedLeaderboardD1.test.ts"
   },
   "dependencies": {
+    "@mpgd/adapter-verse8": "workspace:*",
     "@mpgd/catalog": "workspace:*",
     "@mpgd/game-services": "workspace:*"
   },

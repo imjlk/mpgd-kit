@@ -1,11 +1,21 @@
+import {
+  Verse8Ads,
+  type InterstitialAdResult as Verse8InterstitialAdResult,
+  type RewardedAdResult as Verse8RewardedAdResult,
+} from '@verse8/ads';
 import { Verse8 } from '@verse8/platform/vanilla';
 
 import {
   createUnsupportedCapabilities,
   type IdentitySession,
+  type LogicalAdPlacementId,
   type PlatformGateway,
   type PlayerIdentity,
 } from '@mpgd/platform';
+
+import { verse8AdsRewardEvidenceSchema } from './ads-contract.js';
+
+export { verse8AdsRewardEvidenceSchema } from './ads-contract.js';
 
 export interface Verse8Credential {
   readonly account: `0x${string}`;
@@ -28,8 +38,24 @@ export interface Verse8VisibilitySource {
   removeEventListener(type: 'visibilitychange', callback: () => void): void;
 }
 
+export interface Verse8AdsClient {
+  showRewarded(input: {
+    readonly placementId: string;
+    readonly timeoutMs?: number;
+    readonly meta?: Record<string, unknown>;
+  }): Promise<Verse8RewardedAdResult>;
+  showInterstitial(input: {
+    readonly placementId: string;
+    readonly timeoutMs?: number;
+    readonly meta?: Record<string, unknown>;
+  }): Promise<Verse8InterstitialAdResult>;
+}
+
 export interface Verse8PlatformGatewayOptions {
   readonly authClient?: Verse8AuthClient;
+  readonly adsClient?: Verse8AdsClient;
+  readonly adsTimeoutMs?: number;
+  readonly resolveAdPlacementId?: (placementId: LogicalAdPlacementId) => string | undefined;
   readonly storage?: Verse8Storage;
   readonly visibility?: Verse8VisibilitySource;
 }
@@ -43,6 +69,8 @@ export function createVerse8PlatformGateway(
   options: Verse8PlatformGatewayOptions = {},
 ): PlatformGateway {
   const authClient = options.authClient ?? createDefaultAuthClient();
+  const adsClient = options.adsClient ?? Verse8Ads;
+  const adsAvailable = options.resolveAdPlacementId !== undefined;
   const pauseListeners = new Set<() => void>();
   const resumeListeners = new Set<() => void>();
   const visibility = options.visibility ?? resolveVisibilitySource();
@@ -61,6 +89,9 @@ export function createVerse8PlatformGateway(
     async getCapabilities() {
       return {
         ...createUnsupportedCapabilities(),
+        nativeAds: adsAvailable,
+        rewardedAds: adsAvailable,
+        interstitialAds: adsAvailable,
         localizedContent: true,
       };
     },
@@ -88,16 +119,88 @@ export function createVerse8PlatformGateway(
     },
     ads: {
       async preload() {},
-      async showRewarded() {
-        return {
-          status: 'unavailable',
-          rewardGranted: false,
-        };
+      async showRewarded(input) {
+        const placementId = options.resolveAdPlacementId?.(input.placementId);
+
+        if (placementId === undefined) {
+          return unavailableReward();
+        }
+
+        try {
+          const result = await adsClient.showRewarded({
+            placementId,
+            ...(options.adsTimeoutMs === undefined
+              ? {}
+              : { timeoutMs: options.adsTimeoutMs }),
+            meta: {
+              logicalPlacementId: input.placementId,
+            },
+          });
+
+          if (result.status === 'rewarded') {
+            return {
+              status: 'completed',
+              rewardGranted: true,
+              ledgerEntryId: result.requestId,
+              evidence: {
+                schema: verse8AdsRewardEvidenceSchema,
+                payload: {
+                  requestId: result.requestId,
+                  placementId,
+                  ...(result.platform === undefined ? {} : { platform: result.platform }),
+                },
+              },
+            };
+          }
+
+          if (result.status === 'dismissed') {
+            return {
+              status: 'skipped',
+              rewardGranted: false,
+            };
+          }
+
+          return result.error.code === 'unsupported_env'
+            ? unavailableReward()
+            : {
+                status: 'failed',
+                rewardGranted: false,
+              };
+        } catch {
+          return {
+            status: 'failed',
+            rewardGranted: false,
+          };
+        }
       },
-      async showInterstitial() {
-        return {
-          status: 'unavailable',
-        };
+      async showInterstitial(input) {
+        const placementId = options.resolveAdPlacementId?.(input.placementId);
+
+        if (placementId === undefined) {
+          return { status: 'unavailable' };
+        }
+
+        try {
+          const result = await adsClient.showInterstitial({
+            placementId,
+            ...(options.adsTimeoutMs === undefined
+              ? {}
+              : { timeoutMs: options.adsTimeoutMs }),
+            meta: {
+              logicalPlacementId: input.placementId,
+            },
+          });
+
+          if (result.status === 'dismissed') {
+            return { status: 'shown' };
+          }
+
+          return result.error.code === 'unsupported_env'
+            ? { status: 'unavailable' }
+            : { status: 'skipped' };
+        } catch {
+          return { status: 'skipped' };
+        }
       },
     },
     leaderboard: {
@@ -142,6 +245,13 @@ export function createVerse8PlatformGateway(
         return 'already-fullscreen';
       },
     },
+  };
+}
+
+function unavailableReward() {
+  return {
+    status: 'unavailable' as const,
+    rewardGranted: false,
   };
 }
 

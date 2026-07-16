@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-03",
+  "version": "2026-07-16",
   "placements": [
     {
       "id": "CONTINUE_AFTER_FAIL",
@@ -15,7 +15,8 @@
       "platformPlacementIds": {
         "android": "ca-app-pub-xxx/reward_continue",
         "ios": "ca-app-pub-yyy/reward_continue",
-        "ait": "ait_reward_continue"
+        "ait": "ait_reward_continue",
+        "verse8": "rewarded_continue"
       }
     },
     {
@@ -28,7 +29,8 @@
       "platformPlacementIds": {
         "android": "ca-app-pub-xxx/inter_stage_end",
         "ios": "ca-app-pub-yyy/inter_stage_end",
-        "ait": "ait_inter_stage_end"
+        "ait": "ait_inter_stage_end",
+        "verse8": "stage_end_interstitial"
       }
     }
   ]

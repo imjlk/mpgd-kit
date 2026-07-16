@@ -18,6 +18,8 @@ import type {
 import type {
   ClaimAdRewardRequest,
   ClaimAdRewardResponse,
+  GameServicesAdRewardTarget,
+  GameServicesLeaderboardTarget,
   GameServicesLedgerTarget,
   GameServicesStoreTarget,
   RecordLeaderboardScoreRequest,
@@ -255,7 +257,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
     async claimRewardedAd(rewardInput) {
       const target = input.target;
 
-      if (!isGameServicesStoreTarget(target)) {
+      if (!isGameServicesAdRewardTarget(target)) {
         const reward = {
           status: 'unavailable',
           rewardGranted: false,
@@ -329,6 +331,26 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
     },
 
     async submitLeaderboardScore(scoreInput) {
+      const target = input.target;
+
+      if (!isGameServicesLeaderboardTarget(target)) {
+        await analytics.track({
+          name: 'leaderboard_submitted',
+          properties: {
+            leaderboardId: scoreInput.leaderboardId,
+            score: scoreInput.score,
+            submitted: false,
+            reason: 'unsupported_target',
+          },
+        });
+
+        return {
+          submitted: false,
+          platformSubmitted: false,
+          alreadyProcessed: false,
+        };
+      }
+
       const platformResult = await input.gateway.leaderboard.submitScore(scoreInput);
 
       if (!platformResult.submitted) {
@@ -349,7 +371,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       }
 
       const record = await input.backend.leaderboard.recordScore({
-        target: input.target,
+        target,
         playerId: input.playerId,
         ...scoreInput,
       });
@@ -500,6 +522,18 @@ function normalizeSegment(value: string): string {
 
 function isGameServicesStoreTarget(target: GameServicesLedgerTarget): target is GameServicesStoreTarget {
   return target === 'android' || target === 'ios' || target === 'ait';
+}
+
+function isGameServicesAdRewardTarget(
+  target: GameServicesLedgerTarget,
+): target is GameServicesAdRewardTarget {
+  return target === 'android' || target === 'ios' || target === 'ait' || target === 'verse8';
+}
+
+function isGameServicesLeaderboardTarget(
+  target: GameServicesLedgerTarget,
+): target is GameServicesLeaderboardTarget {
+  return target !== 'verse8';
 }
 
 async function sendGameServicesBackendRequest<TRequest, TResponse>(

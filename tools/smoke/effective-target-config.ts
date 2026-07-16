@@ -343,7 +343,7 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     `${target} presentation mode should match its runtime surface`,
   );
 
-  if (target === 'web-preview' || target === 'microsoft-store' || target === 'verse8') {
+  if (target === 'web-preview' || target === 'microsoft-store') {
     assertEqual(
       config.monetization.products.every((product) => !product.enabled),
       true,
@@ -356,6 +356,22 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     );
     assertEqual(config.localization.enabled, true, `${target} localization should be enabled`);
     assertEqual(config.storage.support, 'local', `${target} should use local storage`);
+    return;
+  }
+
+  if (target === 'verse8') {
+    assertEqual(
+      config.monetization.products.every((product) => !product.enabled),
+      true,
+      'verse8 products should be disabled before VXShop integration',
+    );
+    assertEqual(
+      config.ads.placements.every((placement) => placement.enabled),
+      true,
+      'verse8 ads should be enabled',
+    );
+    assertEqual(config.localization.enabled, true, 'verse8 localization should be enabled');
+    assertEqual(config.storage.support, 'local', 'verse8 should use local storage');
     return;
   }
 

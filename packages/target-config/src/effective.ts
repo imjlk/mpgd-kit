@@ -334,8 +334,8 @@ function isProductStoreTarget(
   return target === 'android' || target === 'ios' || target === 'ait' || target === 'reddit';
 }
 
-function isAdStoreTarget(target: string): target is 'android' | 'ios' | 'ait' {
-  return target === 'android' || target === 'ios' || target === 'ait';
+function isAdStoreTarget(target: string): target is 'android' | 'ios' | 'ait' | 'verse8' {
+  return target === 'android' || target === 'ios' || target === 'ait' || target === 'verse8';
 }
 
 function isRewardedPlacement(placement: AdPlacementEntry): boolean {

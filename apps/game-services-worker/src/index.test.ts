@@ -133,6 +133,7 @@ const targetVerifierService = createWorkerService({
   GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER: createTargetVerifierBinding('android'),
   GAME_SERVICES_IOS_EVIDENCE_VERIFIER: createTargetVerifierBinding('ios'),
   GAME_SERVICES_AIT_EVIDENCE_VERIFIER: createTargetVerifierBinding('ait'),
+  GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER: createTargetVerifierBinding('verse8'),
 });
 const targetAndroidPurchase = await targetVerifierService.verifyPurchase({
   target: 'android',
@@ -158,6 +159,14 @@ const targetAitPurchase = await targetVerifierService.verifyPurchase({
   idempotencyKey: 'target-binding-ait-purchase',
   purchasedAt: '2026-07-04T00:00:00.000Z',
 });
+const targetVerse8Reward = await targetVerifierService.claimAdReward({
+  target: 'verse8',
+  playerId: 'target-binding-player',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'target-binding-verse8-impression',
+  idempotencyKey: 'target-binding-verse8-reward',
+  completedAt: '2026-07-04T00:00:00.000Z',
+});
 
 assertEqual(
   (targetAndroidPurchase as { readonly verified: boolean }).verified,
@@ -174,21 +183,122 @@ assertEqual(
   true,
   'Apps in Toss evidence should use the Apps in Toss verifier binding',
 );
+assertEqual(
+  (targetVerse8Reward as { readonly granted: boolean }).granted,
+  true,
+  'Verse8 evidence should use the Verse8 verifier binding',
+);
 assertDeepEqual(
   targetVerifierCalls,
-  ['android:purchase:android', 'ios:ad-reward:ios', 'ait:purchase:ait'],
+  [
+    'android:purchase:android',
+    'ios:ad-reward:ios',
+    'ait:purchase:ait',
+    'verse8:ad-reward:verse8',
+  ],
   'target-specific evidence should dispatch only to its matching binding',
 );
 assertDeepEqual(
   targetVerifierReceivedSignals,
-  [false, false, false],
+  [false, false, false, false],
   'target-specific verifier bindings must not receive AbortSignal values',
 );
 assertDeepEqual(
   targetVerifierTimeouts,
-  [10_000, 10_000, 10_000],
+  [10_000, 10_000, 10_000, 10_000],
   'target-specific verifier bindings should receive the local timeout budget',
 );
+
+const originalFetch = globalThis.fetch;
+const verse8VerifierRequests: Request[] = [];
+let aggregateWithVerse8Calls = 0;
+globalThis.fetch = async (input, init) => {
+  const request = new Request(input, init);
+  verse8VerifierRequests.push(request);
+
+  return Response.json({
+    verified: true,
+    status: 'verified',
+    requestId: 'worker-verse8-request',
+    placementId: 'rewarded_continue',
+    userId: '0xabcdef1234567890',
+    adNetwork: 'google',
+    verifiedAt: '2026-07-04T00:00:00.000Z',
+  });
+};
+
+try {
+  const verse8VerifierService = createWorkerService({
+    MPGD_STORE: 'memory',
+    VERSE8_ADS_VERIFIER_AUTHORIZATION: 'Bearer worker-verse8-secret',
+    GAME_SERVICES_EVIDENCE_VERIFIER: {
+      async verifyPurchase() {
+        aggregateWithVerse8Calls += 1;
+        return verifiedDecision('aggregate-with-verse8:purchase');
+      },
+      async verifyAdReward() {
+        aggregateWithVerse8Calls += 1;
+        return verifiedDecision('aggregate-with-verse8:ad-reward');
+      },
+    },
+  });
+  const aggregateAndroidPurchase = await verse8VerifierService.verifyPurchase({
+    target: 'android',
+    playerId: 'aggregate-with-verse8-player',
+    productId: 'COINS_100',
+    platformTransactionId: 'aggregate-with-verse8-transaction',
+    idempotencyKey: 'aggregate-with-verse8-purchase',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }) as { readonly verified: boolean };
+  const verse8Reward = await verse8VerifierService.claimAdReward({
+    target: 'verse8',
+    playerId: '0xabcdef1234567890',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    platformImpressionId: 'worker-verse8-request',
+    idempotencyKey: 'worker-verse8-reward',
+    completedAt: '2026-07-04T00:00:00.000Z',
+    evidence: {
+      schema: 'verse8.ads.reward.v1',
+      payload: {
+        requestId: 'worker-verse8-request',
+        placementId: 'rewarded_continue',
+      },
+    },
+  }) as { readonly granted: boolean };
+
+  assertEqual(
+    aggregateAndroidPurchase.verified,
+    true,
+    'the Verse8 credential must preserve aggregate verification for other targets',
+  );
+  assertEqual(
+    aggregateWithVerse8Calls,
+    1,
+    'the built-in Verse8 verifier should override the aggregate binding only for Verse8',
+  );
+  assertEqual(
+    verse8Reward.granted,
+    true,
+    'the Worker should grant only after the concrete Verse8 verifier consumes evidence',
+  );
+  assertEqual(
+    verse8VerifierRequests.length,
+    1,
+    'the Worker should consume Verse8 evidence exactly once',
+  );
+  assertEqual(
+    verse8VerifierRequests[0]?.url,
+    'https://ads-verifier.verse8.io/ads/verify',
+    'the Worker should use the production Verse8 verifier endpoint by default',
+  );
+  assertEqual(
+    verse8VerifierRequests[0]?.headers.get('Authorization'),
+    'Bearer worker-verse8-secret',
+    'the Worker should keep verifier authorization on the server request',
+  );
+} finally {
+  globalThis.fetch = originalFetch;
+}
 
 let aggregateFallbackCalls = 0;
 let partialAndroidBindingCalls = 0;
@@ -427,7 +537,7 @@ assertEqual(untrustedWrite.status, 404, 'verified writes must not be exposed ove
 console.log('Game services Worker smoke passed: HTTP, oRPC, and private binding surfaces');
 
 function createTargetVerifierBinding(
-  bindingTarget: 'android' | 'ios' | 'ait',
+  bindingTarget: 'android' | 'ios' | 'ait' | 'verse8',
 ): GameServicesEvidenceVerifierBinding {
   return {
     async verifyPurchase(input) {
