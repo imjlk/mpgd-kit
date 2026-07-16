@@ -15,7 +15,7 @@ import type {
 import type { ClaimAdRewardRequest } from './types';
 
 export const adMobSsvConformanceChecks = [
-  'verified callback reaches the ledger',
+  'verified callback emits one transaction authority identity',
   'missing callback remains pending',
   'tampered signature fails closed',
   'AdMob-decoded signed query bytes accept equivalent percent-encoding',

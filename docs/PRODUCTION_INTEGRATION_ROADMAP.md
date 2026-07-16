@@ -86,10 +86,9 @@ Expected flow:
 The verifier keeps these provider fields inside its callback source and trusted
 ledger payload rather than expanding the platform-neutral client contract:
 
-- `adUnitId`
-- `ssvTransactionId`
-- `ssvSignature`
-- `ssvKeyId`
+- `admobSsvTransactionId`
+- `admobSsvAdUnit`
+- `admobSsvKeyId`
 - custom data payload
 
 ## Apps in Toss

@@ -195,7 +195,7 @@ Android and iOS backends can use
 `createAdMobSsvEvidenceVerifier()` from
 `@mpgd/game-services/admob-ssv`. It verifies the ordered callback query using
 Google's percent-decoded verification bytes and rotating EC keys, requires
-signed player, custom claim, ad unit, reward, and timestamp matches, and derives
+signed values for the player, custom claim, ad unit, reward, and timestamp, and derives
 the authority replay identity from AdMob's `transaction_id`. The deployment supplies raw callback
 persistence and rotating keys; the kit does not embed credentials or a key
 fetch endpoint. See [AdMob Server-Side Verification](ADMOB_SSV.md) and run
