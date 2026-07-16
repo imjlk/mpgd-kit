@@ -15,6 +15,7 @@ import { createBridgeRpcNodeHandler } from '@mpgd/bridge/orpc/node';
 
 const maxStorageKeyLength = 128;
 const maxEncodedStorageKeyLength = 384;
+const maxStorageValueBytes = 262_144;
 const maxRequestBodySize = 1_048_576;
 const bridgeRpcHandler = createBridgeRpcNodeHandler(
   createBridgeRpcRouter(handleBridgeRequest),
@@ -261,7 +262,11 @@ async function loadStorage(input: BridgeRequest): Promise<BridgeResponse> {
   const playerId = currentPlayerId();
 
   if (playerId === undefined) {
-    return ok(input, null);
+    return createBridgeError(
+      input.id,
+      'DEVVIT_STORAGE_IDENTITY_REQUIRED',
+      'A current Reddit player is required to load storage.',
+    );
   }
 
   const key = storageKey(input, playerId);
@@ -270,7 +275,19 @@ async function loadStorage(input: BridgeRequest): Promise<BridgeResponse> {
     return key;
   }
 
-  const stored = await redis.get(key);
+  let stored: string | null | undefined;
+
+  try {
+    stored = await redis.get(key);
+  } catch (error) {
+    console.warn(`devvit storage load failed for key ${key}: ${errorMessage(error)}`);
+    return createBridgeError(
+      input.id,
+      'DEVVIT_STORAGE_LOAD_FAILED',
+      'Devvit storage could not be loaded.',
+      true,
+    );
+  }
 
   if (stored === undefined || stored === null) {
     return ok(input, null);
@@ -287,9 +304,11 @@ async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
   const playerId = currentPlayerId();
 
   if (playerId === undefined) {
-    return ok(input, {
-      saved: false,
-    });
+    return createBridgeError(
+      input.id,
+      'DEVVIT_STORAGE_IDENTITY_REQUIRED',
+      'A current Reddit player is required to save storage.',
+    );
   }
 
   const key = storageKey(input, playerId);
@@ -299,16 +318,42 @@ async function saveStorage(input: BridgeRequest): Promise<BridgeResponse> {
   }
 
   const payload = optionalObjectPayload(input.payload) as { readonly value?: unknown };
+  let serialized: string;
 
   try {
-    await redis.set(key, JSON.stringify(payload.value ?? null));
+    const candidate = JSON.stringify(payload.value);
+
+    if (typeof candidate !== 'string') {
+      throw new Error('JSON serialization did not produce a string.');
+    }
+
+    serialized = candidate;
+  } catch {
+    return createBridgeError(
+      input.id,
+      'INVALID_STORAGE_VALUE',
+      'Storage values must be JSON serializable.',
+    );
+  }
+
+  if (new TextEncoder().encode(serialized).length > maxStorageValueBytes) {
+    return createBridgeError(
+      input.id,
+      'DEVVIT_STORAGE_QUOTA_EXCEEDED',
+      `Storage values must not exceed ${String(maxStorageValueBytes)} UTF-8 bytes.`,
+    );
+  }
+
+  try {
+    await redis.set(key, serialized);
   } catch (error) {
     console.warn(`devvit storage save was not persisted for key ${key}: ${errorMessage(error)}`);
-
-    return ok(input, {
-      saved: false,
-      playerId,
-    });
+    return createBridgeError(
+      input.id,
+      'DEVVIT_STORAGE_SAVE_FAILED',
+      'Devvit storage could not be saved.',
+      true,
+    );
   }
 
   return ok(input, {

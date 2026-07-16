@@ -8,7 +8,14 @@ afterEach(() => {
 
 describe('adapter-browser', () => {
   it('exposes browser capabilities and identity', async () => {
-    const gateway = createBrowserPlatformGateway();
+    const gateway = createBrowserPlatformGateway({
+      storage: {
+        getItem() {
+          return null;
+        },
+        setItem() {},
+      },
+    });
 
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
       nativeAds: false,
@@ -128,5 +135,17 @@ describe('adapter-browser', () => {
         coins: 25,
       },
     });
+  });
+
+  it('fails closed when browser storage is unavailable', async () => {
+    const gateway = createBrowserPlatformGateway();
+
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({ cloudSave: false });
+    await expect(gateway.storage.load({ key: 'save:v1' })).rejects.toThrow(
+      'Browser storage is unavailable',
+    );
+    await expect(
+      gateway.storage.save({ key: 'save:v1', value: { coins: 25 } }),
+    ).rejects.toThrow('Browser storage is unavailable');
   });
 });
