@@ -17,6 +17,7 @@ import type {
   LaunchIntent,
   NotificationSubscriptionResult,
   NotificationSubscriptionStatus,
+  PlatformCapabilities,
   PlatformGateway,
   PlayerIdentity,
   PresentationResult,
@@ -97,7 +98,9 @@ export function createDevvitPlatformGateway(
 
   return {
     target: 'reddit',
-    getCapabilities: () => request('runtime.getCapabilities', {}),
+    async getCapabilities() {
+      return { ...await request<PlatformCapabilities>('runtime.getCapabilities', {}) };
+    },
     identity: {
       getPlayer: async () => {
         const player = await request<PlayerIdentity | null>('identity.getPlayer', {});

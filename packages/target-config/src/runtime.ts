@@ -396,12 +396,9 @@ export function withTargetAvailability(
   config: TargetConfig,
   options: TargetAvailabilityOptions = {},
 ): TargetConfiguredGateway {
-  let cachedGatewayCapabilities: PlatformCapabilities | undefined;
-  const getGatewayCapabilities = async (): Promise<PlatformCapabilities> => {
-    cachedGatewayCapabilities ??= await gateway.getCapabilities();
-
-    return cachedGatewayCapabilities;
-  };
+  const getGatewayCapabilities = (): Promise<PlatformCapabilities> => (
+    gateway.getCapabilities()
+  );
   const configTarget = options.configTarget ?? targetConfigKeyForPlatform(gateway.target);
   const {
     identity: gatewayIdentity,

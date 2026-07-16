@@ -28,6 +28,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./capability-conformance": {
+      "types": "./dist/capability-conformance.d.ts",
+      "default": "./dist/capability-conformance.js"
     }
   },
   "files": [
@@ -38,7 +42,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "vitest run"
+    "test": "vitest run && node test/capability-conformance-dist-import.mjs"
   },
   "devDependencies": {
     "ttsc": "0.18.4",

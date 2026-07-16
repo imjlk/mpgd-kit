@@ -7,6 +7,7 @@ import type {
   LaunchIntent,
   NotificationSubscriptionResult,
   NotificationSubscriptionStatus,
+  PlatformCapabilities,
   PlatformGateway,
   PlatformTarget,
   PresentationResult,
@@ -47,7 +48,9 @@ export function createCapacitorPlatformGateway(input: {
 
   return {
     target: input.target,
-    getCapabilities: () => request('runtime.getCapabilities', {}),
+    async getCapabilities() {
+      return { ...await request<PlatformCapabilities>('runtime.getCapabilities', {}) };
+    },
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),
       getSession: () => request<IdentitySession>('identity.getSession', {}),
