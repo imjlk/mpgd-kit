@@ -191,6 +191,16 @@ The Worker service-binding wrappers keep `AbortSignal` local because it is not
 an RPC-cloneable value; they forward the numeric `timeoutMs` so each bound
 verifier can apply the same provider-side deadline.
 
+Android and iOS backends can use
+`createAdMobSsvEvidenceVerifier()` from
+`@mpgd/game-services/admob-ssv`. It verifies the ordered callback query using
+Google's percent-decoded verification bytes and rotating EC keys, requires
+signed values for the player, custom claim, ad unit, reward, and timestamp, and derives
+the authority replay identity from AdMob's `transaction_id`. The deployment supplies raw callback
+persistence and rotating keys; the kit does not embed credentials or a key
+fetch endpoint. See [AdMob Server-Side Verification](ADMOB_SSV.md) and run
+`pnpm smoke:admob-ssv-conformance` before enabling production grants.
+
 ## Cloudflare Worker Starter
 
 `apps/game-services-worker` is a Cloudflare Vite plugin Worker starter. Vite
@@ -280,7 +290,7 @@ starter. Game-specific production integrations still need these pieces:
 
 - Google Play purchase token verification, acknowledgement, and consume flows.
 - App Store Server API or signed StoreKit transaction verification.
-- AdMob server-side verification callbacks for rewarded ads.
+- Deployment-owned AdMob callback persistence and public-key refresh wiring.
 - Apps in Toss production IAP/ad verification and partner backend callbacks.
 - Real product, ad placement, leaderboard, app, and bundle identifiers.
 - Cloudflare D1 provisioning plus `MPGD_STORE = "d1"` for persistent Worker

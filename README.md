@@ -243,15 +243,17 @@ new starter `@mpgd/*` pins without a separate hard-coded template version edit.
 - Browser, Capacitor, Apps in Toss, and Devvit adapters include mock or bridge-contract
   behavior suitable for local validation.
 - Worker `MPGD_STORE = "memory"` is a starter default, not production persistence.
-- The in-repo backend verifier accepts sample evidence. Real Google Play, App
-  Store, AdMob SSV, and Apps in Toss verification adapters are production
-  follow-ups.
+- The development backend verifier accepts sample evidence. Production AdMob
+  rewards can use the reusable [SSV verification boundary](docs/ADMOB_SSV.md);
+  each deployment must still provide callback persistence and rotating public
+  keys. Google Play, App Store, and Apps in Toss verification adapters remain
+  production follow-ups.
 
 ## Known Production Gaps
 
 - Google Play purchase token verification plus acknowledge/consume.
 - StoreKit/App Store signed transaction or Server API verification.
-- AdMob rewarded ad server-side verification callbacks.
+- Deployment-owned AdMob SSV callback persistence and public-key refresh wiring.
 - Apps in Toss production IAP/ad callback verification.
 - Microsoft Store Digital Goods API and Payment Request integration.
 - Devvit production payments/ad reward mapping and publish/playtest credentials.

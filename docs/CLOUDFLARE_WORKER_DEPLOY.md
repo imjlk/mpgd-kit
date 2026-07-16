@@ -168,9 +168,11 @@ mounts a public verified-attempt write route.
   `0003_verified_leaderboard_metrics.sql`, then
   `0004_entitlement_evidence.sql` in order before switching an existing
   deployment to D1.
-- The Worker verifies sample product/ad evidence today. Real Google Play,
-  App Store, AdMob SSV, and Apps in Toss verification adapters are described in
-  [Production Integration Roadmap](PRODUCTION_INTEGRATION_ROADMAP.md).
+- The Worker verifies sample product/ad evidence by default. Real Google Play,
+  App Store, and Apps in Toss verification adapters are described in
+  [Production Integration Roadmap](PRODUCTION_INTEGRATION_ROADMAP.md). AdMob
+  backends can inject the reusable [SSV verifier](ADMOB_SSV.md) after providing
+  durable raw-callback persistence and rotating public keys.
 - Prefer service binding RPC for Worker-to-Worker calls and public HTTP/oRPC for
   external game clients.
 
