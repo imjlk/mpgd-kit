@@ -1,4 +1,5 @@
 import {
+  AppStoreDependencyUnavailableError,
   createAppStoreGameServicesEvidenceVerifier,
   createAppStoreServerApiClient,
   type AppStoreServerApiClient,
@@ -157,14 +158,24 @@ assertEqual(
   'UUID account identity comparison should be canonical and case-insensitive',
 );
 
-const invalidResolvedAccount = await createVerifier({
-  resolveAppAccountToken: () => 'not-a-uuid',
+await assertRejects(
+  () => createVerifier({
+    resolveAppAccountToken: () => 'not-a-uuid',
+  }).verifyPurchase(baseInput),
+  'appAccountToken must be a UUID',
+  'invalid server-side account configuration must surface as a verifier error',
+);
+
+const unavailableAccountBinding = await createVerifier({
+  resolveAppAccountToken() {
+    throw new AppStoreDependencyUnavailableError('account binding store unavailable');
+  },
 }).verifyPurchase(baseInput);
 assertDecision(
-  invalidResolvedAccount,
+  unavailableAccountBinding,
   'pending',
   'APP_STORE_ACCOUNT_BINDING_UNAVAILABLE',
-  'an invalid server-side account binding must not authorize a grant',
+  'an explicit account-binding outage should remain retryable without granting',
 );
 
 const wrongProduct = await createVerifier({
@@ -362,6 +373,32 @@ assertDecision(
   'retryable provider failures should not authorize a grant',
 );
 
+await assertRejects(
+  () => createVerifier({
+    serverApi: {
+      async getTransactionInfo() {
+        throw new Error('server API adapter bug');
+      },
+    },
+  }).verifyPurchase(baseInput),
+  'server API adapter bug',
+  'unexpected Server API adapter errors must not be hidden as retryable outages',
+);
+
+const unavailableSignatureVerifier = await createVerifier({
+  signedTransactionVerifier: {
+    async verifyAndDecode() {
+      throw new AppStoreDependencyUnavailableError('signature verifier unavailable');
+    },
+  },
+}).verifyPurchase(baseInput);
+assertDecision(
+  unavailableSignatureVerifier,
+  'pending',
+  'APP_STORE_SIGNATURE_VERIFIER_UNAVAILABLE',
+  'an explicit signature-verifier outage should remain retryable without granting',
+);
+
 const wrongTarget = await verifier.verifyPurchase({
   ...baseInput,
   request: {
@@ -419,6 +456,38 @@ assertDecision(
   'pending',
   'APP_STORE_SERVER_API_UNAVAILABLE',
   'rate limits should be represented as retryable without trusting the client',
+);
+
+const transportFailureVerifier = createVerifier({
+  serverApi: createAppStoreServerApiClient({
+    getBearerToken: () => 'signed-provider-jwt',
+    async fetch() {
+      throw new TypeError('network unavailable');
+    },
+  }),
+});
+const transportFailure = await transportFailureVerifier.verifyPurchase(baseInput);
+assertDecision(
+  transportFailure,
+  'pending',
+  'APP_STORE_SERVER_API_UNAVAILABLE',
+  'the built-in transport should classify network failures as explicit retryable outages',
+);
+
+const invalidAuthorizationClient = createAppStoreServerApiClient({
+  getBearerToken: () => 'invalid bearer token',
+  async fetch() {
+    throw new Error('fetch must not run for invalid authorization');
+  },
+});
+await assertRejects(
+  () => invalidAuthorizationClient.getTransactionInfo({
+    transactionId: baseInput.request.platformTransactionId,
+    environment: 'Production',
+    signal: controller.signal,
+  }),
+  'must not contain whitespace',
+  'invalid bearer-token configuration must not be hidden as a transient network failure',
 );
 
 const oversizedClient = createAppStoreServerApiClient({

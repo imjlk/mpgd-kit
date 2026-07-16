@@ -13,6 +13,16 @@ export const appStoreServerApiBaseUrls = Object.freeze({
   Sandbox: 'https://api.storekit-sandbox.apple.com',
 } as const) satisfies Readonly<Record<AppStoreEnvironment, string>>;
 
+export class AppStoreDependencyUnavailableError extends Error {
+  override readonly cause: unknown;
+
+  constructor(message: string, cause?: unknown) {
+    super(message);
+    this.name = 'AppStoreDependencyUnavailableError';
+    this.cause = cause;
+  }
+}
+
 export type AppStoreServerApiTransactionResult =
   | {
       readonly status: 'found';
@@ -122,20 +132,36 @@ export function createAppStoreServerApiClient(
     async getTransactionInfo(input) {
       assertNonEmptyString(input.transactionId, 'transactionId');
       assertAppStoreEnvironment(input.environment);
-      const token = await options.getBearerToken();
+      let token: string;
+      try {
+        token = await options.getBearerToken();
+      } catch (error) {
+        throw new AppStoreDependencyUnavailableError(
+          'App Store bearer token provider is unavailable.',
+          error,
+        );
+      }
       assertAuthorizationValue(token, 'App Store bearer token');
       const url = new URL(
         `/inApps/v1/transactions/${encodeURIComponent(input.transactionId)}`,
         appStoreServerApiBaseUrls[input.environment],
       );
-      const response = await fetch(url.toString(), {
-        method: 'GET',
-        headers: {
-          accept: 'application/json',
-          authorization: `Bearer ${token}`,
-        },
-        signal: input.signal,
-      });
+      let response: AppStoreFetchResponse;
+      try {
+        response = await fetch(url.toString(), {
+          method: 'GET',
+          headers: {
+            accept: 'application/json',
+            authorization: `Bearer ${token}`,
+          },
+          signal: input.signal,
+        });
+      } catch (error) {
+        throw new AppStoreDependencyUnavailableError(
+          'App Store Server API transport is unavailable.',
+          error,
+        );
+      }
 
       if (response.status === 200) {
         const body = await readBoundedJson(response, maxResponseBytes);
@@ -212,7 +238,10 @@ async function verifyAppStorePurchase(
       environment: options.environment,
       signal: input.signal,
     });
-  } catch {
+  } catch (error) {
+    if (!(error instanceof AppStoreDependencyUnavailableError)) {
+      throw error;
+    }
     return { status: 'pending', reason: 'APP_STORE_SERVER_API_UNAVAILABLE' };
   }
 
@@ -233,7 +262,10 @@ async function verifyAppStorePurchase(
       bundleId: options.bundleId,
       signal: input.signal,
     });
-  } catch {
+  } catch (error) {
+    if (!(error instanceof AppStoreDependencyUnavailableError)) {
+      throw error;
+    }
     return { status: 'pending', reason: 'APP_STORE_SIGNATURE_VERIFIER_UNAVAILABLE' };
   }
 
@@ -299,7 +331,10 @@ async function resolveExpectedAppAccountToken(
       signal: input.signal,
     });
     return { status: 'verified', value: normalizeAppAccountToken(value) };
-  } catch {
+  } catch (error) {
+    if (!(error instanceof AppStoreDependencyUnavailableError)) {
+      throw error;
+    }
     return { status: 'pending', reason: 'APP_STORE_ACCOUNT_BINDING_UNAVAILABLE' };
   }
 }

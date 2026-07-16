@@ -130,6 +130,10 @@ Revoked, upgraded, expired, mismatched, malformed, or invalidly signed
 transactions are rejected before the entitlement ledger.
 Provider outages, rate limits, account-binding outages, and authorization
 configuration failures return a retryable pending decision and do not grant.
+Provider ports should throw `AppStoreDependencyUnavailableError` only for
+explicit transient dependency failures. Unexpected adapter exceptions and
+invalid runtime values propagate to the outer verifier boundary as errors
+instead of being silently converted into an infinite retry loop.
 Use distinct deployments or runtime configuration for Apple's production and
 sandbox environments; never select the authority from an untrusted client
 payload.
