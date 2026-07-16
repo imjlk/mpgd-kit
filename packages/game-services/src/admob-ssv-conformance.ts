@@ -16,9 +16,11 @@ export const adMobSsvConformanceChecks = [
   'verified callback reaches the ledger',
   'missing callback remains pending',
   'tampered signature fails closed',
+  'raw signed query bytes reject equivalent percent-encoding',
+  'missing and duplicate signed fields fail closed',
   'unknown key fails closed',
   'signed identity mismatch fails closed',
-  'expired callback fails closed',
+  'timestamp age and future-skew boundaries fail closed',
   'transaction replay preserves one authority identity',
 ] as const;
 
@@ -112,7 +114,8 @@ export async function runAdMobSsvConformance(
   assert(
     firstDecision.status === 'verified'
       && firstDecision.verificationId
-        === 'admob:ssv:18fa792de1bca816048293fc71035638',
+        === 'admob:ssv:18fa792de1bca816048293fc71035638'
+      && firstDecision.verifiedAt === '2026-07-16T00:00:00.000Z',
     'a verified callback must emit the signed transaction authority identity',
   );
 
@@ -134,6 +137,40 @@ export async function runAdMobSsvConformance(
     now: () => fixtureTimestampMs + 1_000,
   }).verifyAdReward(verificationInput(firstRequest));
   assertDecision(tampered, 'rejected', 'ADMOB_SSV_SIGNATURE_INVALID');
+
+  const equivalentPercentEncoding = await createAdMobSsvEvidenceVerifier({
+    callbackSource: fixedCallbackSource(
+      fixtureCallback('reward-1', firstFixtureSignature).replace('%7B', '%7b'),
+    ),
+    publicKeySource,
+    subtle,
+    now: () => fixtureTimestampMs + 1_000,
+  }).verifyAdReward(verificationInput(firstRequest));
+  assertDecision(equivalentPercentEncoding, 'rejected', 'ADMOB_SSV_SIGNATURE_INVALID');
+
+  const validCallback = fixtureCallback('reward-1', firstFixtureSignature);
+  const duplicateSignedField = await createAdMobSsvEvidenceVerifier({
+    callbackSource: fixedCallbackSource(
+      validCallback.replace(
+        '&signature=',
+        '&user_id=player-1&signature=',
+      ),
+    ),
+    publicKeySource,
+    subtle,
+    now: () => fixtureTimestampMs + 1_000,
+  }).verifyAdReward(verificationInput(firstRequest));
+  assertDecision(duplicateSignedField, 'rejected', 'ADMOB_SSV_CALLBACK_INVALID');
+
+  const missingSignedField = await createAdMobSsvEvidenceVerifier({
+    callbackSource: fixedCallbackSource(
+      validCallback.replace('&user_id=player-1', ''),
+    ),
+    publicKeySource,
+    subtle,
+    now: () => fixtureTimestampMs + 1_000,
+  }).verifyAdReward(verificationInput(firstRequest));
+  assertDecision(missingSignedField, 'rejected', 'ADMOB_SSV_CALLBACK_INVALID');
 
   const unknownKey = await createAdMobSsvEvidenceVerifier({
     callbackSource: fixedCallbackSource(
@@ -163,6 +200,33 @@ export async function runAdMobSsvConformance(
     now: () => fixtureTimestampMs + 86_400_001,
   }).verifyAdReward(verificationInput(firstRequest));
   assertDecision(expired, 'rejected', 'ADMOB_SSV_CALLBACK_EXPIRED');
+
+  const future = await createAdMobSsvEvidenceVerifier({
+    callbackSource,
+    publicKeySource,
+    subtle,
+    now: () => fixtureTimestampMs - 300_001,
+  }).verifyAdReward(verificationInput(firstRequest));
+  assertDecision(future, 'rejected', 'ADMOB_SSV_TIMESTAMP_IN_FUTURE');
+
+  const ageBoundary = await createAdMobSsvEvidenceVerifier({
+    callbackSource,
+    publicKeySource,
+    subtle,
+    now: () => fixtureTimestampMs + 86_400_000,
+  }).verifyAdReward(verificationInput(firstRequest));
+  assert(ageBoundary.status === 'verified', 'the maximum callback age boundary must remain valid');
+
+  const futureSkewBoundary = await createAdMobSsvEvidenceVerifier({
+    callbackSource,
+    publicKeySource,
+    subtle,
+    now: () => fixtureTimestampMs - 300_000,
+  }).verifyAdReward(verificationInput(firstRequest));
+  assert(
+    futureSkewBoundary.status === 'verified',
+    'the maximum future skew boundary must remain valid',
+  );
 
   const replayedDecision = await verifier.verifyAdReward(
     verificationInput(rewardRequest('reward-2')),

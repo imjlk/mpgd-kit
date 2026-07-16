@@ -110,11 +110,17 @@ export function decodeAdMobSsvCustomData(
       return undefined;
     }
 
-    return {
+    const binding = {
       playerId: parsed.playerId,
       placementId: parsed.placementId,
       idempotencyKey: parsed.idempotencyKey,
     };
+
+    if (encodeAdMobSsvCustomData(binding) !== input) {
+      return undefined;
+    }
+
+    return binding;
   } catch {
     return undefined;
   }

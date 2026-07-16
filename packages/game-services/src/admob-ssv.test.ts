@@ -26,6 +26,24 @@ assertEqual(
   'unknown custom data schemas should fail closed',
 );
 
+const canonicalCustomData = encodeAdMobSsvCustomData(binding);
+assertEqual(
+  decodeAdMobSsvCustomData(
+    canonicalCustomData.replace(
+      '"playerId":"player-1"',
+      '"playerId":"different-player","playerId":"player-1"',
+    ),
+  ),
+  undefined,
+  'duplicate custom data fields should fail closed',
+);
+const additionalCustomData = `${canonicalCustomData.slice(0, -1)},"unexpected":true}`;
+assertEqual(
+  decodeAdMobSsvCustomData(additionalCustomData),
+  undefined,
+  'additional custom data fields should fail closed',
+);
+
 const keyFailureVerifier = createAdMobSsvEvidenceVerifier({
   callbackSource: {
     async findCallback() {
@@ -78,7 +96,7 @@ assertEqual(
 
 const report = await runAdMobSsvConformance();
 assert(report.passed, 'AdMob SSV conformance should pass');
-assertEqual(report.checks.length, 7, 'AdMob SSV conformance should cover every security case');
+assertEqual(report.checks.length, 9, 'AdMob SSV conformance should cover every security case');
 
 const ledgerFixture = await createAdMobSsvConformanceFixture();
 const backend = createGameServicesBackend({
