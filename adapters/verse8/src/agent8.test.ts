@@ -51,6 +51,21 @@ describe('Verse8 Agent8 commerce service', () => {
       logicalProductId: 'COINS_100',
       entitlementIds: [],
     });
+    const retiredProductService = createVerse8Agent8CommerceService({
+      catalog: {
+        ...catalog,
+        products: catalog.products.filter((product) => product.id !== 'COINS_100'),
+      },
+    });
+    await expect(
+      retiredProductService.handleItemPurchased(event, fixture.context),
+    ).resolves.toEqual({
+      success: true,
+      alreadyProcessed: true,
+      purchaseId: '42',
+      logicalProductId: 'COINS_100',
+      entitlementIds: [],
+    });
 
     expect(fixture.updates).toHaveLength(1);
     expect(fixture.states.get('0xplayer')).toMatchObject({

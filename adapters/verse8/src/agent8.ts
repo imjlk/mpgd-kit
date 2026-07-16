@@ -81,11 +81,6 @@ export function createVerse8Agent8CommerceService(
     async handleItemPurchased(event, context) {
       const normalized = assertPurchaseEvent(event);
       const product = products.get(normalized.productId);
-
-      if (product === undefined) {
-        throw new Error('Unknown Verse8 VXShop product.');
-      }
-
       const purchaseId = String(normalized.purchaseId);
       const lockAccount = normalizeLockAccount(normalized.account);
 
@@ -97,7 +92,7 @@ export function createVerse8Agent8CommerceService(
           const existing = current.purchasesById[purchaseId];
 
           if (existing !== undefined) {
-            assertSamePurchase(existing, normalized, product.id);
+            assertSamePurchase(existing, normalized, product?.id);
 
             return {
               success: true,
@@ -106,6 +101,10 @@ export function createVerse8Agent8CommerceService(
               logicalProductId: existing.logicalProductId,
               entitlementIds: existing.entitlementIds,
             };
+          }
+
+          if (product === undefined) {
+            throw new Error('Unknown Verse8 VXShop product.');
           }
 
           const grantedAt = now();
@@ -203,12 +202,15 @@ function assertPurchaseEvent(event: Verse8Agent8PurchaseEvent): Verse8Agent8Purc
 function assertSamePurchase(
   existing: StoredPurchase,
   event: Verse8Agent8PurchaseEvent,
-  logicalProductId: LogicalProductId,
+  logicalProductId: LogicalProductId | undefined,
 ): void {
   if (
     existing.platformProductId !== event.productId
-    || existing.logicalProductId !== logicalProductId
     || existing.quantity !== event.quantity
+    || (
+      logicalProductId !== undefined
+      && existing.logicalProductId !== logicalProductId
+    )
   ) {
     throw new Error('Verse8 purchase ID was reused with different purchase data.');
   }
