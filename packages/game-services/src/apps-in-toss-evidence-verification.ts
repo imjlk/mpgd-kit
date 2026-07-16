@@ -303,8 +303,15 @@ export function createAppsInTossProductGrantCallback(
     let timeout: ReturnType<typeof setTimeout> | undefined;
 
     try {
-      const verification = await Promise.race([
-        verifyAppsInTossProductGrant({
+      const verification = await new Promise<VerifyPurchaseResponse>((resolve, reject) => {
+        timeout = setTimeout(() => {
+          abortController.abort();
+          reject(new Error('Apps in Toss product-grant verification timed out.'));
+        }, timeoutMs);
+
+        // Attach both handlers immediately so a rejection that arrives after
+        // the deadline remains observed even though this promise is settled.
+        void verifyAppsInTossProductGrant({
           purchaseVerification: input.purchaseVerification,
           orderId,
           playerId: input.playerId,
@@ -317,14 +324,8 @@ export function createAppsInTossProductGrantCallback(
           purchasedAt: now(),
           signal: abortController.signal,
           timeoutMs,
-        }),
-        new Promise<never>((_resolve, reject) => {
-          timeout = setTimeout(() => {
-            abortController.abort();
-            reject(new Error('Apps in Toss product-grant verification timed out.'));
-          }, timeoutMs);
-        }),
-      ]);
+        }).then(resolve, reject);
+      });
 
       if (!verification.verified) {
         const reason = verification.reason ?? 'BACKEND_REJECTED';
