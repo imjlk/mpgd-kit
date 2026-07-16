@@ -27,6 +27,7 @@
       "@mpgd/adapter-verse8/server": ["./adapters/verse8/src/server.ts"],
       "@mpgd/catalog/*": ["./packages/catalog/*"],
       "@mpgd/game-services/*": ["./packages/game-services/src/*"],
+      "@mpgd/platform/*": ["./packages/platform/src/*"],
       "@mpgd/adapter-*": ["./adapters/*/src"],
       "@mpgd/backend-*": ["./backend/*/src"],
       "@mpgd/capacitor-game-services": ["./native-plugins/capacitor-game-services/src"],

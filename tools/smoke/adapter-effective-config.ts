@@ -36,6 +36,12 @@ const adPlacementTypes = new Map<string, 'rewarded' | 'interstitial'>(
 );
 type AdapterBridgeTarget = 'android' | 'ios' | 'ait' | 'reddit';
 type CapacitorBridgeTarget = Extract<AdapterBridgeTarget, 'android' | 'ios'>;
+const enabledActionMethods = [
+  'runtime.getCapabilities',
+  'commerce.purchase',
+  'ads.showRewarded',
+  'leaderboard.submitScore',
+] as const;
 
 await verifyBrowserAdapter();
 await verifyMicrosoftStoreAdapter();
@@ -204,7 +210,7 @@ async function verifyCapacitorAdapter(target: CapacitorBridgeTarget): Promise<vo
 
   assertDeepEqual(
     bridge.methods.slice(1),
-    ['commerce.purchase', 'ads.showRewarded', 'leaderboard.submitScore'],
+    enabledActionMethods,
     `${target} adapter should delegate enabled actions`,
   );
 }
@@ -252,7 +258,7 @@ async function verifyAitAdapter(): Promise<void> {
 
   assertDeepEqual(
     bridge.methods.slice(1),
-    ['commerce.purchase', 'ads.showRewarded', 'leaderboard.submitScore'],
+    enabledActionMethods,
     'ait adapter should delegate enabled actions',
   );
 }

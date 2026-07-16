@@ -51,6 +51,26 @@ run until a console setting, server exchange, native implementation, or platform
 allowlist is ready. Missing integration config normalizes to safe disabled or
 unsupported defaults.
 
+### Capability snapshots stay live
+
+`getCapabilities()` returns a complete snapshot of the adapter's current
+provider state. Each call returns a fresh object; callers may retain or freeze a
+snapshot without mutating later reads. Bridge-backed adapters also re-query the
+bridge on every call, and `withTargetAvailability()` applies target-config
+masking to that latest response instead of permanently caching the first one.
+
+This matters when a native service finishes initialization, a remote provider
+becomes unavailable, or an optional server boundary is installed after startup.
+Games should re-read capabilities at the point where availability matters and
+must still handle the operation failing after a positive snapshot.
+
+`@mpgd/platform/capability-conformance` exports a provider-neutral runner for
+adapter and target-wrapper fixtures. The repository smoke suite applies it to
+raw and target-configured gateways for web preview, Microsoft Store, Verse8,
+Android, iOS, Apps in Toss, and Reddit. It verifies the exact boolean shape,
+snapshot isolation, target identity, target masking, and live provider
+transitions without importing platform SDKs into the shared package.
+
 The checked-in targets intentionally describe current kit readiness, not the
 desired end state. For example, Apps in Toss sharing is available through
 `getTossShareLink` plus the native share sheet, while notification subscription

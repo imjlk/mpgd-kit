@@ -6,6 +6,7 @@ import type {
   LaunchIntent,
   NotificationSubscriptionResult,
   NotificationSubscriptionStatus,
+  PlatformCapabilities,
   PlatformGateway,
   PresentationResult,
   ShareResult,
@@ -49,7 +50,9 @@ export function createAitPlatformGateway(input: {
 
   return {
     target: 'ait',
-    getCapabilities: () => request('runtime.getCapabilities', {}),
+    async getCapabilities() {
+      return { ...await request<PlatformCapabilities>('runtime.getCapabilities', {}) };
+    },
     identity: {
       getPlayer: () => request('identity.getPlayer', {}),
       getSession: () => request<IdentitySession>('identity.getSession', {}),
