@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-16.1",
+  "version": "2026-07-16.2",
   "targets": {
     "web-preview": {
       "runtime": "web-preview",
@@ -90,7 +90,7 @@
     "verse8": {
       "runtime": "verse8-web",
       "features": {
-        "iap": false,
+        "iap": true,
         "rewardedAds": true,
         "interstitialAds": true,
         "leaderboard": false,
@@ -104,7 +104,7 @@
         "fallbackLocale": "en"
       },
       "monetization": {
-        "iap": false,
+        "iap": true,
         "rewardedAds": true,
         "interstitialAds": true
       },

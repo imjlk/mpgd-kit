@@ -168,6 +168,13 @@ production Verse8 verifier. This authenticated game-server endpoint is distinct
 from the public `GET /ads/status` polling endpoint used by the Verse8 browser
 parent; the status endpoint does not consume evidence for a ledger grant.
 
+Verse8 VXShop purchases do not use `verifyPurchase` or a Worker evidence
+binding. The browser can only open the shop and report a pending state. The
+reserved Agent8 `$onItemPurchased` system event is the purchase authority and
+must apply the game-owned catalog grant through a consume-once server path. See
+[Verse8 VXShop and Agent8 Commerce](VERSE8_COMMERCE.md) for the supported
+boundary.
+
 If any target-specific binding is configured, the Worker enters strict
 target-specific mode. Each purchase or rewarded-ad request is sent only to the
 binding matching its target. A missing match fails closed with

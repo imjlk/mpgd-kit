@@ -140,9 +140,17 @@ game-services ledger decides the grant. The Worker remains fail-closed unless
 `VERSE8_ADS_VERIFIER_AUTHORIZATION` is configured as a secret containing the
 complete server Authorization header issued for that endpoint.
 
+Verse8 purchases use a separate authority path. The iframe adapter opens
+VXShop and returns `pending`; it never manufactures a transaction or grants an
+entitlement. `@mpgd/adapter-verse8/agent8` consumes the reserved Agent8
+`$onItemPurchased` event under a per-account lock, ignores client metadata, and
+writes the catalog grant with its consume-once marker in the same user-state
+update. See [Verse8 VXShop and Agent8 Commerce](docs/VERSE8_COMMERCE.md).
+
 Read:
 
 - [Game Services Backend](docs/GAME_SERVICES_BACKEND.md)
+- [Verse8 VXShop and Agent8 Commerce](docs/VERSE8_COMMERCE.md)
 - [Cloudflare Worker Deploy Runbook](docs/CLOUDFLARE_WORKER_DEPLOY.md)
 - [Cloudflare Pages Host Runbook](docs/CLOUDFLARE_PAGES_HOST.md)
 - [Production Integration Roadmap](docs/PRODUCTION_INTEGRATION_ROADMAP.md)

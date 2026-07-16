@@ -196,8 +196,8 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
   if (configTarget === 'verse8') {
     assertEqual(
       getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
-      'target-disabled',
-      'verse8 products should be target-disabled before VXShop integration',
+      'available',
+      'verse8 products should be available when the adapter supports VXShop',
     );
     assertEqual(
       getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
@@ -315,7 +315,11 @@ async function verifyBrowserOnlyFallbacks(
   const adsEnabled = configTarget === 'verse8';
 
   assertEqual(runtime.configTarget, configTarget, 'browser-only config target should match');
-  assertEqual(runtime.features.iap.reason, 'target-disabled', 'IAP should be target-disabled');
+  assertEqual(
+    runtime.features.iap.reason,
+    configTarget === 'verse8' ? 'capability-unsupported' : 'target-disabled',
+    `IAP should match ${configTarget} adapter availability`,
+  );
   assertEqual(
     runtime.features.rewardedAds.reason,
     adsEnabled ? 'available' : 'target-disabled',

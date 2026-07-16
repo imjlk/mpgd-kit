@@ -361,9 +361,9 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
 
   if (target === 'verse8') {
     assertEqual(
-      config.monetization.products.every((product) => !product.enabled),
+      config.monetization.products.every((product) => product.enabled),
       true,
-      'verse8 products should be disabled before VXShop integration',
+      'verse8 catalog products should be enabled for VXShop wiring',
     );
     assertEqual(
       config.ads.placements.every((placement) => placement.enabled),

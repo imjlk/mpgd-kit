@@ -182,7 +182,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
     async purchase(purchaseInput) {
       const target = input.target;
 
-      if (!isGameServicesStoreTarget(target)) {
+      if (!isGameServicesCommerceTarget(target)) {
         const purchase = {
           status: 'failed',
           entitlementIds: [],
@@ -204,6 +204,26 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
       }
 
       const purchase = await input.gateway.commerce.purchase(purchaseInput);
+
+      if (target === 'verse8') {
+        const status = purchase.status === 'completed' ? 'rejected' : purchase.status;
+
+        await analytics.track({
+          name: 'purchase_rejected',
+          properties: {
+            productId: purchaseInput.productId,
+            status,
+            reason: purchase.status === 'completed'
+              ? 'verse8_grants_require_agent8_purchase_event'
+              : 'agent8_purchase_event_pending',
+          },
+        });
+
+        return {
+          status,
+          purchase,
+        };
+      }
 
       if (purchase.status !== 'completed' || purchase.transactionId === undefined) {
         await analytics.track({
@@ -520,8 +540,10 @@ function normalizeSegment(value: string): string {
   return value.replaceAll(/[^a-zA-Z0-9_-]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 64);
 }
 
-function isGameServicesStoreTarget(target: GameServicesLedgerTarget): target is GameServicesStoreTarget {
-  return target === 'android' || target === 'ios' || target === 'ait';
+function isGameServicesCommerceTarget(
+  target: GameServicesLedgerTarget,
+): target is GameServicesStoreTarget | 'verse8' {
+  return target === 'android' || target === 'ios' || target === 'ait' || target === 'verse8';
 }
 
 function isGameServicesAdRewardTarget(
@@ -533,7 +555,11 @@ function isGameServicesAdRewardTarget(
 function isGameServicesLeaderboardTarget(
   target: GameServicesLedgerTarget,
 ): target is GameServicesLeaderboardTarget {
-  return target !== 'verse8';
+  return target === 'browser'
+    || target === 'android'
+    || target === 'ios'
+    || target === 'ait'
+    || target === 'reddit';
 }
 
 async function sendGameServicesBackendRequest<TRequest, TResponse>(

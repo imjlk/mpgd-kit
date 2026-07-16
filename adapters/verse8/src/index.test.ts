@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  createVerse8CommerceProducts,
   createVerse8PlatformGateway,
   type Verse8AdsClient,
   type Verse8AuthClient,
   type Verse8VisibilitySource,
+  type Verse8VXShopClient,
 } from './index';
 
 const credential = {
@@ -14,6 +16,27 @@ const credential = {
 };
 
 describe('adapter-verse8', () => {
+  it('derives VXShop mappings only from catalog products configured for Verse8', () => {
+    expect(createVerse8CommerceProducts({
+      version: 'test',
+      products: [{
+        id: 'COINS_100',
+        type: 'consumable',
+        grant: { type: 'currency', currency: 'coin', amount: 100 },
+        platformProductIds: { verse8: 'coins-100' },
+      }, {
+        id: 'REMOVE_ADS',
+        type: 'non_consumable',
+        grant: { type: 'entitlement', entitlement: 'remove_ads' },
+        platformProductIds: { android: 'remove_ads' },
+      }],
+    })).toEqual([{
+      id: 'COINS_100',
+      type: 'consumable',
+      platformProductId: 'coins-100',
+    }]);
+  });
+
   it('exposes Verse8 host ads while keeping unimplemented capabilities unavailable', async () => {
     const gateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),
@@ -116,6 +139,110 @@ describe('adapter-verse8', () => {
         submittedAt: new Date().toISOString(),
       }),
     ).resolves.toEqual({ submitted: false });
+  });
+
+  it('opens VXShop as pending while entitlements remain Agent8-server authoritative', async () => {
+    const shopCalls: unknown[] = [];
+    const shop = createShopClient(shopCalls);
+    const gateway = createVerse8PlatformGateway({
+      authClient: authenticatedClient(),
+      vxShop: {
+        purchaseEventAuthority: 'agent8-server',
+        products: [{
+          id: 'REMOVE_ADS',
+          type: 'non_consumable',
+          platformProductId: 'remove-ads',
+        }],
+        async loadEntitlements() {
+          return [{
+            id: 'remove_ads',
+            source: 'purchase',
+            grantedAt: '2026-07-16T00:00:00.000Z',
+          }];
+        },
+        client: shop,
+        canOpenShop: () => true,
+      },
+    });
+
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({ nativeIap: true });
+    await expect(gateway.commerce.getProducts()).resolves.toEqual([{
+      id: 'REMOVE_ADS',
+      type: 'non_consumable',
+      title: 'Remove Ads',
+      description: 'Remove advertisements.',
+      price: {
+        formatted: '100 VX',
+        currencyCode: 'VX',
+      },
+    }]);
+    await expect(gateway.commerce.purchase({
+      productId: 'REMOVE_ADS',
+      source: 'shop',
+      idempotencyKey: 'purchase-1',
+    })).resolves.toEqual({
+      status: 'pending',
+      entitlementIds: [],
+    });
+    await expect(gateway.commerce.getEntitlements()).resolves.toEqual([{
+      id: 'remove_ads',
+      source: 'purchase',
+      grantedAt: '2026-07-16T00:00:00.000Z',
+    }]);
+    expect(shopCalls).toEqual([
+      ['init', { autoRefresh: false }],
+      ['refresh'],
+      ['refresh'],
+      ['buyItem', 'remove-ads'],
+    ]);
+  });
+
+  it('fails closed when VXShop cannot open or the configured product is unavailable', async () => {
+    const shop = createShopClient([]);
+    const baseOptions = {
+      purchaseEventAuthority: 'agent8-server' as const,
+      products: [{
+        id: 'REMOVE_ADS',
+        type: 'non_consumable' as const,
+        platformProductId: 'remove-ads',
+      }],
+      async loadEntitlements() {
+        return [];
+      },
+      client: shop,
+    };
+    const standaloneGateway = createVerse8PlatformGateway({
+      authClient: authenticatedClient(),
+      vxShop: {
+        ...baseOptions,
+        canOpenShop: () => false,
+      },
+    });
+
+    await expect(standaloneGateway.commerce.purchase({
+      productId: 'REMOVE_ADS',
+      source: 'shop',
+      idempotencyKey: 'purchase-standalone',
+    })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+
+    const missingProductGateway = createVerse8PlatformGateway({
+      authClient: authenticatedClient(),
+      vxShop: {
+        ...baseOptions,
+        products: [{
+          id: 'COINS_100',
+          type: 'consumable',
+          platformProductId: 'missing-product',
+        }],
+        canOpenShop: () => true,
+      },
+    });
+
+    await expect(missingProductGateway.commerce.purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'purchase-missing',
+    })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
   });
 
   it('turns rewarded callbacks into evidence candidates without trusting reward values', async () => {
@@ -330,5 +457,34 @@ function createAdsClient(
       };
     },
     ...overrides,
+  };
+}
+
+function createShopClient(calls: unknown[]): Verse8VXShopClient {
+  const item = {
+    productId: 'remove-ads',
+    name: 'Remove Ads',
+    description: 'Remove advertisements.',
+    price: 100,
+    purchasable: true,
+    purchaseLimitReached: false,
+  };
+
+  return {
+    init(options) {
+      calls.push(['init', options]);
+    },
+    getItem(productId) {
+      return productId === item.productId ? item : undefined;
+    },
+    getItems() {
+      return [item];
+    },
+    buyItem(productId) {
+      calls.push(['buyItem', productId]);
+    },
+    async refresh() {
+      calls.push(['refresh']);
+    },
   };
 }

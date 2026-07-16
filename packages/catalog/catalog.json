@@ -1,5 +1,5 @@
 {
-  "version": "2026-07-03",
+  "version": "2026-07-16",
   "products": [
     {
       "id": "COINS_100",
@@ -12,7 +12,8 @@
       "platformProductIds": {
         "android": "coins_100",
         "ios": "com.mpgd.game.coins100",
-        "ait": "coins_100"
+        "ait": "coins_100",
+        "verse8": "coins-100"
       }
     },
     {
@@ -26,7 +27,8 @@
       "platformProductIds": {
         "android": "coins_500",
         "ios": "com.mpgd.game.coins500",
-        "ait": "coins_500"
+        "ait": "coins_500",
+        "verse8": "coins-500"
       }
     },
     {
@@ -39,7 +41,8 @@
       "platformProductIds": {
         "android": "remove_ads",
         "ios": "com.mpgd.game.remove_ads",
-        "ait": "remove_ads"
+        "ait": "remove_ads",
+        "verse8": "remove-ads"
       }
     }
   ]

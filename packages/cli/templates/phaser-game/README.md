@@ -287,9 +287,18 @@ submission.
   origin.
 - Verse8 is a game-owned iframe web target that writes to `artifacts/verse8`.
   The adapter verifies the host-provided auth credential and distinguishes
-  Verse8-signed accounts from self-signed guest accounts. Ads, VXShop, Agent8
-  cloud state, and leaderboard capabilities remain disabled until their
-  server-side evidence paths are configured.
+  Verse8-signed accounts from self-signed guest accounts. Ads are available
+  only when placement mappings are present. VXShop stays capability-disabled
+  until the gateway receives the literal `purchaseEventAuthority:
+  'agent8-server'`, catalog product mappings, and an authenticated Agent8
+  entitlement reader. The client purchase result is always `pending`; grants
+  belong only in the reserved Agent8 `$onItemPurchased` event. Do not use
+  `VXShop.onClose`, client metadata, or a client-created transaction ID as
+  purchase evidence. Keep `@agent8/gameserver-node` in the separate Agent8
+  server project and use `@mpgd/adapter-verse8/agent8` there for the locked,
+  consume-once catalog grant. Agent8 cloud state and verified leaderboard
+  capabilities remain disabled until their later server integrations are
+  explicitly configured.
 - Reddit Devvit is game-owned in `apps/target-devvit`.
 - Apps in Toss currently uses the kit reference wrapper at
   `${MPGD_KIT_PATH}/apps/target-ait` for smoke packaging. Before a real Toss

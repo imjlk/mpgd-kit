@@ -44,6 +44,7 @@ try {
             android: 'android_sudoku_hint_pack',
             ios: 'ios.sudoku.hint-pack',
             ait: 'ait_sudoku_hint_pack',
+            verse8: 'sudoku-hint-pack',
           },
         },
       ],
