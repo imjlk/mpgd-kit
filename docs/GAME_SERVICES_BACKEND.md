@@ -102,6 +102,31 @@ const backend = createGameServicesHttpBackendApi({
 The development verifier is intentionally insecure and belongs only in local
 demos and tests. Production backends must install a provider verifier.
 
+For App Store purchases, `@mpgd/game-services/app-store-verifier` provides a
+fail-closed `GameServicesEvidenceVerifier` and a bounded App Store Server API
+client. The client calls Apple's
+[`Get Transaction Info`](https://developer.apple.com/documentation/appstoreserverapi/get-transaction-info)
+endpoint using a freshly generated bearer token supplied at runtime according
+to Apple's
+[`Generating JSON Web Tokens for API requests`](https://developer.apple.com/documentation/appstoreserverapi/generating-json-web-tokens-for-api-requests)
+contract. It never accepts App Store credentials, private keys, or signed
+authorization tokens from a game client or checked-in configuration. Connect
+`AppStoreSignedTransactionVerifier` to a verifier that validates Apple's JWS
+certificate chain and signature before returning the decoded transaction
+payload; the official App Store Server Library is the recommended production
+implementation.
+
+The verifier matches the signed transaction to the configured bundle and
+environment, the catalog's platform product and type, the submitted transaction
+and purchase timestamp, and an `appAccountToken` resolved server-side for the
+authenticated player. Revoked, upgraded, expired, mismatched, malformed, or
+invalidly signed transactions are rejected before the entitlement ledger.
+Provider outages, rate limits, account-binding outages, and authorization
+configuration failures return a retryable pending decision and do not grant.
+Use distinct deployments or runtime configuration for Apple's production and
+sandbox environments; never select the authority from an untrusted client
+payload.
+
 ## Ledger Idempotency Contract
 
 `@mpgd/game-services` treats platform callbacks as evidence, not as the grant
