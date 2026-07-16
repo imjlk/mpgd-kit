@@ -15,6 +15,11 @@ export type ProductGrant =
   | {
       readonly type: 'entitlement';
       readonly entitlement: string;
+    }
+  | {
+      readonly type: 'resource';
+      readonly resource: string;
+      readonly amount: number;
     };
 
 export interface ProductCatalogEntry {

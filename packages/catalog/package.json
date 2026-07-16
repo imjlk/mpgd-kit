@@ -39,6 +39,7 @@
   ],
   "scripts": {
     "check": "ttsc --noEmit",
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/catalog/src/index.test.ts",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix"

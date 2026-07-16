@@ -249,6 +249,10 @@ function applyGrant(
     };
   }
 
+  if (grant.type === 'resource') {
+    throw new Error('Verse8 resource grants are not supported.');
+  }
+
   if (quantity !== 1) {
     throw new Error('Verse8 entitlement purchases must have quantity 1.');
   }
