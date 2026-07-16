@@ -1,5 +1,12 @@
+import {
+  googlePlayProductPurchaseEvidenceSchema,
+  type GooglePlayAcknowledgementState,
+  type GooglePlayConsumptionState,
+  type GooglePlayPurchaseState,
+} from './google-play-purchase';
+
 export const googlePlayProductPurchaseConformanceEvidence = Object.freeze({
-  schema: 'google-play.product-purchase.v2',
+  schema: googlePlayProductPurchaseEvidenceSchema,
   payload: Object.freeze({
     purchaseToken: 'google-play-conformance-token',
   }),
@@ -8,14 +15,19 @@ export const googlePlayProductPurchaseConformanceEvidence = Object.freeze({
 export interface CreateGooglePlayProductPurchaseConformanceFixtureInput {
   readonly productId?: string;
   readonly orderId?: string;
-  readonly purchaseState?: 'PURCHASED' | 'CANCELLED' | 'PENDING';
+  readonly purchaseState?: Exclude<
+    GooglePlayPurchaseState,
+    'PURCHASE_STATE_UNSPECIFIED'
+  >;
   readonly purchaseCompletionTime?: string;
-  readonly consumptionState?:
-    | 'CONSUMPTION_STATE_YET_TO_BE_CONSUMED'
-    | 'CONSUMPTION_STATE_CONSUMED';
-  readonly acknowledgementState?:
-    | 'ACKNOWLEDGEMENT_STATE_PENDING'
-    | 'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED';
+  readonly consumptionState?: Exclude<
+    GooglePlayConsumptionState,
+    'CONSUMPTION_STATE_UNSPECIFIED'
+  >;
+  readonly acknowledgementState?: Exclude<
+    GooglePlayAcknowledgementState,
+    'ACKNOWLEDGEMENT_STATE_UNSPECIFIED'
+  >;
   readonly quantity?: number;
   readonly refundableQuantity?: number;
   readonly obfuscatedExternalAccountId?: string;
