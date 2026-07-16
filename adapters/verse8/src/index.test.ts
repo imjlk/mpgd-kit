@@ -29,6 +29,11 @@ describe('adapter-verse8', () => {
         type: 'non_consumable',
         grant: { type: 'entitlement', entitlement: 'remove_ads' },
         platformProductIds: { android: 'remove_ads' },
+      }, {
+        id: 'HINT_PACK_5',
+        type: 'consumable',
+        grant: { type: 'resource', resource: 'hint', amount: 5 },
+        platformProductIds: { verse8: 'hint-pack-5' },
       }],
     })).toEqual([{
       id: 'COINS_100',

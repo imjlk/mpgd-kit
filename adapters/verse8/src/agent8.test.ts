@@ -19,6 +19,12 @@ const catalog = {
       grant: { type: 'entitlement', entitlement: 'remove_ads' },
       platformProductIds: { verse8: 'remove-ads' },
     },
+    {
+      id: 'HINT_PACK_5',
+      type: 'consumable',
+      grant: { type: 'resource', resource: 'hint', amount: 5 },
+      platformProductIds: { verse8: 'hint-pack-5' },
+    },
   ],
 } satisfies ProductCatalog;
 
@@ -139,6 +145,12 @@ describe('Verse8 Agent8 commerce service', () => {
       productId: 'remove-ads',
       quantity: 2,
     }, fixture.context)).rejects.toThrow('entitlement purchases must have quantity 1');
+    await expect(service.handleItemPurchased({
+      account: '0xplayer',
+      purchaseId: 3,
+      productId: 'hint-pack-5',
+      quantity: 1,
+    }, fixture.context)).rejects.toThrow('Verse8 resource grants are not supported');
     expect(fixture.updates).toHaveLength(0);
 
     await service.handleItemPurchased({

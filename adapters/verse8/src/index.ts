@@ -114,7 +114,7 @@ export function createVerse8CommerceProducts(
     catalog.products.flatMap((product) => {
       const platformProductId = product.platformProductIds.verse8;
 
-      return platformProductId === undefined
+      return platformProductId === undefined || product.grant.type === 'resource'
         ? []
         : [
             {

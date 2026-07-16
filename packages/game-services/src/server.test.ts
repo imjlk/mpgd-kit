@@ -47,6 +47,18 @@ const catalog = {
         android: 'coins_200_android',
       },
     },
+    {
+      id: 'HINT_PACK_5',
+      type: 'consumable',
+      grant: {
+        type: 'resource',
+        resource: 'hint',
+        amount: 5,
+      },
+      platformProductIds: {
+        android: 'hint_pack_5_android',
+      },
+    },
   ],
 } as const satisfies ProductCatalog;
 
@@ -301,6 +313,30 @@ assertEqual(
   invalidTransportRequest.status,
   400,
   'invalid in-process request bodies should return 400 instead of rejecting',
+);
+
+const resourceGrantStore = createInMemoryGameServicesStore();
+const resourceGrantBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: resourceGrantStore,
+  evidenceVerifier,
+});
+const resourcePurchase = await resourceGrantBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-resource-hints',
+  productId: 'HINT_PACK_5',
+  platformTransactionId: 'txn-resource-hints',
+  idempotencyKey: 'purchase-resource-hints',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const resourceTransactions = await resourceGrantStore.listEntitlementTransactions();
+assertEqual(resourcePurchase.verified, true, 'resource product purchases should be granted');
+assertEqual(resourceTransactions.length, 1, 'resource purchases should write one transaction');
+assertEqual(
+  JSON.stringify(resourceTransactions[0]?.grant),
+  JSON.stringify({ type: 'resource', resource: 'hint', amount: 5 }),
+  'resource grants should be preserved in authoritative ledger transactions',
 );
 
 const failClosedStore = createInMemoryGameServicesStore();

@@ -574,6 +574,43 @@ const redditProduct = getEffectiveProductConfig(redditEffectiveConfig, 'FINAL_NI
 assertEqual(redditProduct?.enabled, true);
 assertEqual(redditProduct?.platformProductId, 'ttokdoku_final_nine_ember');
 
+const verse8ResourceEffectiveConfig = createEffectiveTargetConfig({
+  target: 'verse8',
+  targetConfigVersion: targetConfigMatrix.version,
+  config: createTargetConfig({
+    iap: true,
+    rewardedAds: false,
+    interstitialAds: false,
+    leaderboard: false,
+    localization: true,
+  }),
+  catalog: {
+    version: 'verse8-resource-catalog',
+    products: [
+      {
+        id: 'HINTS_5',
+        type: 'consumable',
+        grant: {
+          type: 'resource',
+          resource: 'hint',
+          amount: 5,
+        },
+        platformProductIds: {
+          verse8: 'hints_5',
+        },
+      },
+    ],
+  },
+  adPlacements: {
+    version: 'verse8-resource-ads',
+    placements: [],
+  },
+});
+const verse8ResourceProduct = getEffectiveProductConfig(verse8ResourceEffectiveConfig, 'HINTS_5');
+assertEqual(verse8ResourceProduct?.enabled, false);
+assertEqual(verse8ResourceProduct?.reason, 'capability-unsupported');
+assertEqual(verse8ResourceProduct?.platformProductId, 'hints_5');
+
 const blankEffectiveConfig = createEffectiveTargetConfig({
   target: 'android',
   targetConfigVersion: targetConfigMatrix.version,

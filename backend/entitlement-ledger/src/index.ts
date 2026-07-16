@@ -207,7 +207,16 @@ function assertProductGrant(input: unknown): asserts input is ProductGrant {
     return;
   }
 
-  throw new Error('grant.type must be currency or entitlement.');
+  if (input.type === 'resource') {
+    assertNonEmptyString(input.resource, 'grant.resource');
+    assertFiniteNumber(input.amount, 'grant.amount');
+    if (input.amount <= 0) {
+      throw new Error('grant.amount must be greater than zero for a resource grant.');
+    }
+    return;
+  }
+
+  throw new Error('grant.type must be currency, entitlement, or resource.');
 }
 
 function assertPayload(input: unknown): asserts input is EntitlementLedgerPayload {
