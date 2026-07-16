@@ -16,7 +16,9 @@ import { gameServicesContract, type GameServicesHealthResponse } from './contrac
 import {
   createRejectingGameServicesEvidenceVerifier,
   type EvidenceVerificationDecision,
+  type FinalizePurchaseGrantInput,
   type GameServicesEvidenceVerifier,
+  type GameServicesPurchaseGrantFinalizer,
 } from './evidence-verification';
 import {
   assertClaimAdRewardRequest,
@@ -25,6 +27,7 @@ import {
   assertEntitlementLedgerResult,
   assertLeaderboardScoreTransaction,
   assertProductGrantTransaction,
+  assertPurchaseGrantFinalization,
   assertRecordLeaderboardScoreRequest,
   assertRecordLeaderboardScoreResponse,
   assertVerifyPurchaseRequest,
@@ -36,6 +39,7 @@ import {
   type EntitlementLedgerResult,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
+  type PurchaseGrantFinalization,
   type RecordLeaderboardScoreRequest,
   type RecordLeaderboardScoreResponse,
   type VerifyPurchaseRequest,
@@ -54,6 +58,8 @@ export interface CreateGameServicesBackendInput {
   readonly version?: string;
   readonly evidenceVerifier?: GameServicesEvidenceVerifier;
   readonly evidenceVerificationTimeoutMs?: number;
+  readonly purchaseGrantFinalizationTimeoutMs?: number;
+  readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
 }
 
 export interface GameServicesBackendApiHandler {
@@ -303,6 +309,9 @@ export function createGameServicesBackend(
   const evidenceVerificationTimeoutMs = resolveEvidenceVerificationTimeout(
     input.evidenceVerificationTimeoutMs,
   );
+  const purchaseGrantFinalizationTimeoutMs = resolvePurchaseGrantFinalizationTimeout(
+    input.purchaseGrantFinalizationTimeoutMs,
+  );
   const analytics = createAnalyticsReporter({
     target: 'server',
     sessionId: input.analyticsSessionId ?? 'game-services',
@@ -320,6 +329,10 @@ export function createGameServicesBackend(
           now,
           evidenceVerifier,
           evidenceVerificationTimeoutMs,
+          purchaseGrantFinalizationTimeoutMs,
+          ...(input.purchaseGrantFinalizer === undefined
+            ? {}
+            : { purchaseGrantFinalizer: input.purchaseGrantFinalizer }),
         });
 
         await analytics.track({
@@ -331,6 +344,10 @@ export function createGameServicesBackend(
             ledgerEntryId: verification.ledgerEntryId,
             alreadyProcessed: verification.alreadyProcessed,
             reason: verification.reason,
+            finalizationStatus: verification.finalization?.status,
+            finalizationAction: verification.finalization?.action,
+            finalizationAlreadyCompleted: verification.finalization?.alreadyCompleted,
+            finalizationReason: verification.finalization?.reason,
           },
         });
 
@@ -537,6 +554,8 @@ async function verifyPurchaseWithStore(
     readonly now: () => string;
     readonly evidenceVerifier: GameServicesEvidenceVerifier;
     readonly evidenceVerificationTimeoutMs: number;
+    readonly purchaseGrantFinalizationTimeoutMs: number;
+    readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
   },
 ): Promise<VerifyPurchaseResponse> {
   const request = assertVerifyPurchaseRequest(input);
@@ -547,10 +566,10 @@ async function verifyPurchaseWithStore(
     grantId: request.productId,
     target: request.target,
   } as const;
-  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
-
-  if (existing !== undefined) {
-    if (!matchesEntitlementRetry(existing, retryIdentity)) {
+  const completeExistingRetry = async (
+    transaction: ProductGrantTransaction,
+  ): Promise<VerifyPurchaseResponse> => {
+    if (!matchesEntitlementRetry(transaction, retryIdentity)) {
       return assertVerifyPurchaseResponse({
         verified: false,
         alreadyProcessed: false,
@@ -558,11 +577,19 @@ async function verifyPurchaseWithStore(
       });
     }
 
+    const finalization = await finalizeExistingPurchaseGrant(request, transaction, context);
+
     return assertVerifyPurchaseResponse({
       verified: true,
-      ledgerEntryId: existing.ledgerEntryId,
+      ledgerEntryId: transaction.ledgerEntryId,
       alreadyProcessed: true,
+      ...(finalization === undefined ? {} : { finalization }),
     });
+  };
+  const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
+
+  if (existing !== undefined) {
+    return completeExistingRetry(existing);
   }
 
   const product = context.catalog.products.find((entry) => entry.id === request.productId);
@@ -596,6 +623,16 @@ async function verifyPurchaseWithStore(
   }, context.evidenceVerificationTimeoutMs);
 
   if (verification.status !== 'verified') {
+    // A matching grant can land while provider verification is in flight. Recheck
+    // before returning a stale provider state such as an already-consumed token.
+    const racedExisting = await findEntitlementTransactionByIdempotency(
+      context.store,
+      retryIdentity,
+    );
+    if (racedExisting !== undefined) {
+      return completeExistingRetry(racedExisting);
+    }
+
     return assertVerifyPurchaseResponse({
       verified: false,
       alreadyProcessed: false,
@@ -604,6 +641,8 @@ async function verifyPurchaseWithStore(
         : verification.reason,
     });
   }
+
+  const verificationPayload = createPurchaseVerificationPayload(verification);
 
   const grant = await recordEntitlementGrantWithEvidence(context.store, {
     playerId: request.playerId,
@@ -614,11 +653,17 @@ async function verifyPurchaseWithStore(
     grant: product.grant,
     evidenceVerificationId: verification.verificationId,
     payload: {
-      ...verification.payload,
+      ...verificationPayload,
       target: request.target,
       productId: request.productId,
+      productType: product.type,
       platformProductId,
-      platformTransactionId: request.platformTransactionId,
+      ...(verification.platformEvidenceId === null
+        ? {}
+        : {
+            platformTransactionId:
+              verification.platformEvidenceId ?? request.platformTransactionId,
+          }),
       purchasedAt: request.purchasedAt,
       evidenceVerificationId: verification.verificationId,
       evidenceVerifiedAt: verification.verifiedAt,
@@ -633,22 +678,202 @@ async function verifyPurchaseWithStore(
     });
   }
 
-  if (
-    grant.result.alreadyProcessed
-    && !await recordedEntitlementMatchesRetry(context.store, grant.result, retryIdentity)
-  ) {
-    return assertVerifyPurchaseResponse({
-      verified: false,
-      alreadyProcessed: false,
-      reason: 'IDEMPOTENCY_KEY_CONFLICT',
-    });
+  if (grant.result.alreadyProcessed) {
+    const recordedTransaction = await context.store.getEntitlementTransaction(
+      grant.result.ledgerEntryId,
+    );
+    const storedEvidenceVerificationId = recordedTransaction?.evidenceVerificationId
+      ?? recordedTransaction?.payload.evidenceVerificationId;
+    if (
+      recordedTransaction === undefined
+      || !matchesEntitlementRetry(recordedTransaction, retryIdentity)
+      || storedEvidenceVerificationId !== verification.verificationId
+    ) {
+      return assertVerifyPurchaseResponse({
+        verified: false,
+        alreadyProcessed: false,
+        reason: 'IDEMPOTENCY_KEY_CONFLICT',
+      });
+    }
   }
+
+  const finalization = await finalizePurchaseGrant(context.purchaseGrantFinalizer, {
+    request,
+    product,
+    platformProductId,
+    evidenceVerificationId: verification.verificationId,
+    ...(verification.payload === undefined
+      ? {}
+      : { evidencePayload: verification.payload }),
+    ledgerEntryId: grant.result.ledgerEntryId,
+    alreadyProcessed: grant.result.alreadyProcessed,
+    timeoutMs: context.purchaseGrantFinalizationTimeoutMs,
+  });
 
   return assertVerifyPurchaseResponse({
     verified: true,
     ledgerEntryId: grant.result.ledgerEntryId,
     alreadyProcessed: grant.result.alreadyProcessed,
+    ...(finalization === undefined ? {} : { finalization }),
   });
+}
+
+async function finalizeExistingPurchaseGrant(
+  request: VerifyPurchaseRequest,
+  transaction: ProductGrantTransaction,
+  context: {
+    readonly catalog: ProductCatalog;
+    readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
+    readonly purchaseGrantFinalizationTimeoutMs: number;
+  },
+): Promise<PurchaseGrantFinalization | undefined> {
+  if (context.purchaseGrantFinalizer === undefined) {
+    return undefined;
+  }
+
+  const currentProduct = context.catalog.products.find((entry) => entry.id === request.productId);
+  const storedPlatformProductId = readStoredPlatformProductId(transaction);
+  const product = createStoredPurchaseProduct(request, transaction) ?? currentProduct;
+  const platformProductId = storedPlatformProductId
+    ?? currentProduct?.platformProductIds[request.target];
+  const evidenceVerificationId = transaction.evidenceVerificationId
+    ?? transaction.payload.evidenceVerificationId;
+  const finalizationRequest = createStoredPurchaseRequest(request, transaction);
+
+  if (
+    product === undefined
+    || platformProductId === undefined
+    || typeof evidenceVerificationId !== 'string'
+    || evidenceVerificationId.length === 0
+  ) {
+    return assertPurchaseGrantFinalization({
+      status: 'pending',
+      alreadyCompleted: false,
+      reason: 'PURCHASE_FINALIZER_CONTEXT_UNAVAILABLE',
+    });
+  }
+
+  return finalizePurchaseGrant(context.purchaseGrantFinalizer, {
+    request: finalizationRequest,
+    product,
+    platformProductId,
+    evidenceVerificationId,
+    evidencePayload: transaction.payload,
+    ledgerEntryId: transaction.ledgerEntryId,
+    alreadyProcessed: true,
+    timeoutMs: context.purchaseGrantFinalizationTimeoutMs,
+  });
+}
+
+async function finalizePurchaseGrant(
+  finalizer: GameServicesPurchaseGrantFinalizer | undefined,
+  input: Omit<FinalizePurchaseGrantInput, 'signal'>,
+): Promise<PurchaseGrantFinalization | undefined> {
+  if (finalizer === undefined) {
+    return undefined;
+  }
+
+  const controller = new AbortController();
+  const timeoutDecision = assertPurchaseGrantFinalization({
+    status: 'pending',
+    alreadyCompleted: false,
+    reason: 'PURCHASE_FINALIZER_TIMEOUT',
+  });
+  let timedOut = false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+
+  try {
+    if (finalizer.supportsPurchaseGrant?.(input) === false) {
+      return undefined;
+    }
+
+    return await Promise.race([
+      finalizer.finalizePurchaseGrant({ ...input, signal: controller.signal })
+        .then(assertPurchaseGrantFinalization)
+        .catch((error: unknown) => {
+          if (timedOut) {
+            return timeoutDecision;
+          }
+
+          throw error;
+        }),
+      new Promise<PurchaseGrantFinalization>((resolve) => {
+        timeout = setTimeout(() => {
+          timedOut = true;
+          resolve(timeoutDecision);
+          controller.abort();
+        }, input.timeoutMs);
+      }),
+    ]);
+  } catch {
+    return assertPurchaseGrantFinalization({
+      status: 'pending',
+      alreadyCompleted: false,
+      reason: 'PURCHASE_FINALIZER_ERROR',
+    });
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
+function readStoredPlatformProductId(
+  transaction: ProductGrantTransaction,
+): string | undefined {
+  const platformProductId = transaction.payload.platformProductId;
+  return typeof platformProductId === 'string' && platformProductId.length > 0
+    ? platformProductId
+    : undefined;
+}
+
+function createStoredPurchaseProduct(
+  request: VerifyPurchaseRequest,
+  transaction: ProductGrantTransaction,
+): ProductCatalog['products'][number] | undefined {
+  const productType = transaction.payload.productType;
+  const platformProductId = readStoredPlatformProductId(transaction);
+  if (
+    transaction.grant === undefined
+    || platformProductId === undefined
+    || (
+      productType !== 'consumable'
+      && productType !== 'non_consumable'
+      && productType !== 'subscription'
+    )
+  ) {
+    return undefined;
+  }
+
+  return {
+    id: request.productId,
+    type: productType,
+    grant: transaction.grant,
+    platformProductIds: { [request.target]: platformProductId },
+  };
+}
+
+/**
+ * Reuses the current request only for retry dimensions already matched against
+ * the stored grant, while restoring provider identity and time metadata from
+ * the durable transaction for a coherent finalization retry.
+ */
+function createStoredPurchaseRequest(
+  request: VerifyPurchaseRequest,
+  transaction: ProductGrantTransaction,
+): VerifyPurchaseRequest {
+  const platformTransactionId = transaction.payload.platformTransactionId;
+  const purchasedAt = transaction.payload.purchasedAt;
+
+  return {
+    ...request,
+    ...(typeof platformTransactionId === 'string' && platformTransactionId.length > 0
+      ? { platformTransactionId }
+      : {}),
+    ...(typeof purchasedAt === 'string' && purchasedAt.length > 0
+      ? { purchasedAt }
+      : {}),
+  };
 }
 
 async function claimAdRewardWithStore(
@@ -816,6 +1041,19 @@ async function verifyEvidence(
   }
 }
 
+function createPurchaseVerificationPayload(
+  verification: Extract<EvidenceVerificationDecision, { readonly status: 'verified' }>,
+): EntitlementLedgerPayload | undefined {
+  if (verification.platformEvidenceId !== null || verification.payload === undefined) {
+    return verification.payload;
+  }
+
+  const { platformTransactionId: suppressedPlatformTransactionId, ...payload }
+    = verification.payload;
+  void suppressedPlatformTransactionId;
+  return payload;
+}
+
 function assertEvidenceVerificationDecision(
   decision: EvidenceVerificationDecision,
 ): EvidenceVerificationDecision {
@@ -843,6 +1081,12 @@ function assertEvidenceVerificationDecision(
           throw new Error(`Evidence verification payload.${key} must be primitive.`);
         }
       }
+    }
+    if (
+      decision.platformEvidenceId !== undefined
+      && decision.platformEvidenceId !== null
+    ) {
+      assertNonEmptyDecisionString(decision.platformEvidenceId, 'platformEvidenceId');
     }
     return decision;
   }
@@ -1113,6 +1357,16 @@ function resolveEvidenceVerificationTimeout(timeoutMs: number | undefined): numb
 
   if (!Number.isFinite(resolved) || resolved <= 0) {
     throw new Error('evidenceVerificationTimeoutMs must be a positive finite number.');
+  }
+
+  return resolved;
+}
+
+function resolvePurchaseGrantFinalizationTimeout(timeoutMs: number | undefined): number {
+  const resolved = timeoutMs ?? 15_000;
+
+  if (!Number.isFinite(resolved) || resolved <= 0) {
+    throw new Error('purchaseGrantFinalizationTimeoutMs must be a positive finite number.');
   }
 
   return resolved;

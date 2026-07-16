@@ -45,6 +45,20 @@ export interface VerifyPurchaseResponse {
   readonly ledgerEntryId?: string;
   readonly alreadyProcessed: boolean;
   readonly reason?: string;
+  readonly finalization?: PurchaseGrantFinalization;
+}
+
+export type PurchaseGrantFinalizationAction =
+  | 'acknowledge'
+  | 'consume'
+  | 'finish'
+  | 'complete';
+
+export interface PurchaseGrantFinalization {
+  readonly status: 'completed' | 'pending';
+  readonly action?: PurchaseGrantFinalizationAction;
+  readonly alreadyCompleted: boolean;
+  readonly reason?: string;
 }
 
 export interface ClaimAdRewardRequest {
@@ -131,6 +145,35 @@ export function assertVerifyPurchaseResponse(
   assertOptionalNonEmptyString(input.ledgerEntryId, 'ledgerEntryId');
   assertBoolean(input.alreadyProcessed, 'alreadyProcessed');
   assertOptionalNonEmptyString(input.reason, 'reason');
+  if (input.finalization !== undefined) {
+    assertPurchaseGrantFinalization(input.finalization);
+  }
+
+  return input;
+}
+
+export function assertPurchaseGrantFinalization(
+  input: PurchaseGrantFinalization,
+): PurchaseGrantFinalization {
+  assertRecord(input, 'PurchaseGrantFinalization');
+  if (input.status !== 'completed' && input.status !== 'pending') {
+    throw new Error('finalization.status must be completed or pending.');
+  }
+  if (input.action !== undefined) {
+    assertPurchaseGrantFinalizationAction(input.action);
+  }
+  if (input.status === 'completed' && input.action === undefined) {
+    throw new Error('completed finalization requires an action.');
+  }
+  assertBoolean(input.alreadyCompleted, 'finalization.alreadyCompleted');
+  assertOptionalNonEmptyString(input.reason, 'finalization.reason');
+
+  if (input.status === 'pending' && input.alreadyCompleted) {
+    throw new Error('pending finalization cannot already be completed.');
+  }
+  if (input.status === 'pending' && input.reason === undefined) {
+    throw new Error('pending finalization requires a reason.');
+  }
 
   return input;
 }
@@ -300,6 +343,19 @@ function assertFiniteNumber(input: unknown, label: string): asserts input is num
 function assertBoolean(input: unknown, label: string): asserts input is boolean {
   if (typeof input !== 'boolean') {
     throw new Error(`${label} must be a boolean.`);
+  }
+}
+
+function assertPurchaseGrantFinalizationAction(
+  input: unknown,
+): asserts input is PurchaseGrantFinalizationAction {
+  if (
+    input !== 'acknowledge'
+    && input !== 'consume'
+    && input !== 'finish'
+    && input !== 'complete'
+  ) {
+    throw new Error('finalization.action must be acknowledge, consume, finish, or complete.');
   }
 }
 

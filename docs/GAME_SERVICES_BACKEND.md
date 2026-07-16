@@ -201,6 +201,14 @@ persistence and rotating keys; the kit does not embed credentials or a key
 fetch endpoint. See [AdMob Server-Side Verification](ADMOB_SSV.md) and run
 `pnpm smoke:admob-ssv-conformance` before enabling production grants.
 
+Post-ledger purchase finalization uses a separate 15-second deadline because
+provider acknowledgement or consumption can have a different latency profile
+than evidence verification. Configure `purchaseGrantFinalizationTimeoutMs`
+independently when constructing the backend. Timeouts preserve the durable
+grant, return `PURCHASE_FINALIZER_TIMEOUT`, abort the provider signal, and can be
+retried idempotently. Finalization status, action, completion state, and reason
+are included in purchase analytics for operational diagnosis.
+
 ## Cloudflare Worker Starter
 
 `apps/game-services-worker` is a Cloudflare Vite plugin Worker starter. Vite
@@ -268,6 +276,89 @@ for read-only pages; the server, not the client, chooses `participantEntry` scop
 
 ## Target Notes
 
+### Google Play one-time products
+
+`@mpgd/game-services/google-play-purchase` provides a backend-only boundary for
+Google Play one-time products. The game-owned backend supplies a
+`GooglePlayProductPurchaseClient` implementation using its own OAuth/service
+account environment; credentials, access tokens, and API endpoints do not
+belong in the game client, generated artifacts, or this repository.
+
+The Android callback sends a `google-play.product-purchase.v2` evidence envelope
+whose payload contains only the purchase token. Configure the package name on
+the trusted server and provide `resolveObfuscatedAccountId` to bind the Google
+response to the authenticated mpgd player. If a game accepts promotion
+redemptions or other purchases made outside the app, where Google does not
+return an account identifier, it must explicitly set
+`allowUnboundAuthenticatedPlayer: true` and bind `playerId` to the logged-in
+account before calling this boundary. A configured resolver that unexpectedly
+returns no identifier fails closed unless that opt-in is present. Unbound mode
+also rejects responses carrying either `obfuscatedExternalAccountId` or
+`obfuscatedExternalProfileId`; a purchase associated with another app account
+or profile must never be attributed to the current player implicitly. Games
+that set BillingClient's profile identifier must also provide
+`resolveObfuscatedProfileId`; profile-bearing provider responses fail closed
+when no expected profile is available, and both identifiers are matched when
+the response carries both.
+
+The boundary checks the ProductPurchaseV2 purchase state, line-item product id,
+single quantity, remaining refundable quantity, optional order id, provider
+completion timestamp, and configured obfuscated account id before returning
+verified evidence. Rental purchase options fail closed because the catalog grant
+contract does not carry rental expiry semantics. `refundableQuantity` must equal the purchased quantity;
+missing, malformed, fully refunded, and partially refunded values do not grant.
+Google may omit `orderId`, so a missing provider order is accepted while a
+present order must match the request. The client-reported `purchasedAt` is not
+compared with provider time; the authoritative time is persisted as
+`googlePlayPurchaseCompletionTime`. The ledger stores only a SHA-256 token
+identity in its evidence fields, never the raw purchase token. Callers must
+also keep the raw token out of `idempotencyKey` and `platformTransactionId`,
+because those client-supplied request fields are persisted as ledger metadata.
+
+Compose both halves of the boundary with the authoritative backend:
+
+```ts
+const googlePlay = createGooglePlayProductPurchaseBoundary({
+  client: gameOwnedGooglePlayClient,
+  packageName: gameOwnedPackageName,
+  resolveObfuscatedAccountId: resolvePlayerAccountHash,
+  resolveObfuscatedProfileId: resolvePlayerProfileHash,
+});
+
+const backend = createGameServicesBackend({
+  catalog,
+  placements,
+  store,
+  evidenceVerifier: {
+    verifyPurchase: (input) => googlePlay.verifyPurchase(input),
+    verifyAdReward: (input) => adEvidenceVerifier.verifyAdReward(input),
+  },
+  purchaseGrantFinalizer: googlePlay,
+});
+```
+
+The backend records the idempotent ledger grant before calling the finalizer.
+Consumables use `purchases.products:consume`; non-consumables use
+`purchases.products:acknowledge`. A provider error leaves the grant durable and
+returns `finalization.status = "pending"`; retrying the same request reuses that
+grant and retries only the incomplete platform action. A completed provider
+state is treated as an idempotent success. Subscription products fail closed
+and require a separate subscriptions verifier. Because the durable grant is
+already committed, `verified` remains true when finalization is pending. A
+production backend must inspect that status and enqueue the same idempotency
+key and evidence for server-side retry; it must not depend on the game client
+starting another billing flow. The boundary releases its same-process
+finalization lease when the backend aborts a timed-out provider call, so a
+provider client that fails to settle after cancellation cannot permanently
+block later retry workers.
+
+Protocol references:
+
+- [ProductPurchaseV2 resource](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.productsv2)
+- [One-time purchase processing](https://developer.android.com/google/play/billing/integrate#process)
+- [Acknowledge endpoint](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.products/acknowledge)
+- [Consume endpoint](https://developers.google.com/android-publisher/api-ref/rest/v3/purchases.products/consume)
+
 - Android purchase flow should follow Google Play Billing's server verification,
   grant, then acknowledge or consume sequence.
 - iOS purchase flow should send StoreKit/App Store signed transaction evidence to
@@ -288,7 +379,9 @@ This repository provides the reusable contract, client orchestration, backend
 ledger boundary, memory/D1 store implementations, and a deployable Worker
 starter. Game-specific production integrations still need these pieces:
 
-- Google Play purchase token verification, acknowledgement, and consume flows.
+- A game-owned authenticated Google Play API client and production package,
+  product, and obfuscated account identifiers for the shared one-time product
+  verifier boundary.
 - App Store Server API or signed StoreKit transaction verification.
 - Deployment-owned AdMob callback persistence and public-key refresh wiring.
 - Apps in Toss production IAP/ad verification and partner backend callbacks.
@@ -305,6 +398,7 @@ but should not be treated as production entitlement verification.
 ```sh
 pnpm smoke:game-services
 pnpm smoke:game-services:worker
+pnpm smoke:google-play-purchase
 ```
 
 The first smoke runs Android, iOS, and Apps in Toss target simulations through

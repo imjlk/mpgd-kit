@@ -1,0 +1,1156 @@
+import type { ProductCatalog } from '@mpgd/catalog';
+
+import {
+  createGooglePlayProductPurchaseBoundary,
+  type GooglePlayProductPurchaseClient,
+} from './google-play-purchase';
+import {
+  createGooglePlayProductPurchaseConformanceFixture,
+  googlePlayProductPurchaseConformanceEvidence,
+} from './google-play-purchase-conformance';
+import {
+  createDevelopmentGameServicesEvidenceVerifier,
+  createGameServicesBackend,
+  InMemoryGameServicesStore,
+  type EntitlementLedgerGrant,
+  type VerifyPurchaseRequest,
+} from './index';
+
+const catalog = {
+  version: 'google-play-conformance',
+  products: [
+    {
+      id: 'COINS_100',
+      type: 'consumable',
+      grant: { type: 'currency', currency: 'coin', amount: 100 },
+      platformProductIds: { android: 'coins_100_android', ios: 'coins_100_ios' },
+    },
+    {
+      id: 'REMOVE_ADS',
+      type: 'non_consumable',
+      grant: { type: 'entitlement', entitlement: 'remove_ads' },
+      platformProductIds: { android: 'remove_ads_android' },
+    },
+    {
+      id: 'PASS_MONTHLY',
+      type: 'subscription',
+      grant: { type: 'entitlement', entitlement: 'monthly_pass' },
+      platformProductIds: { android: 'pass_monthly_android' },
+    },
+  ],
+} as const satisfies ProductCatalog;
+const placements = { version: 'google-play-conformance', placements: [] } as const;
+
+class TrackingStore extends InMemoryGameServicesStore {
+  readonly events: string[];
+
+  constructor(events: string[]) {
+    super();
+    this.events = events;
+  }
+
+  override async recordEntitlementGrant(input: EntitlementLedgerGrant) {
+    this.events.push(`ledger:${input.idempotencyKey}`);
+    return super.recordEntitlementGrant(input);
+  }
+}
+
+class HiddenIdempotencyTrackingStore extends TrackingStore {
+  override async findEntitlementTransactionByIdempotency(): Promise<undefined> {
+    return undefined;
+  }
+}
+
+class FixtureGooglePlayClient implements GooglePlayProductPurchaseClient {
+  readonly events: string[];
+  readonly responses = new Map<string, Record<string, unknown>>();
+  readonly failingConsumeTokens = new Set<string>();
+  readonly failingAcknowledgeTokens = new Set<string>();
+  readonly stallingConsumeTokens = new Set<string>();
+  readonly ignoringAbortConsumeTokens = new Set<string>();
+  readonly abortedConsumeTokens = new Set<string>();
+  readonly finalizedProductIds: string[] = [];
+  readonly orderIdsAfterFirstRead = new Map<string, string>();
+  readonly readCounts = new Map<string, number>();
+
+  constructor(events: string[]) {
+    this.events = events;
+  }
+
+  async getProductPurchaseV2(input: { readonly purchaseToken: string }): Promise<unknown> {
+    this.events.push(`provider:get:${input.purchaseToken}`);
+    const response = this.responses.get(input.purchaseToken);
+    if (response === undefined) {
+      throw new Error('fixture purchase not found');
+    }
+    const readCount = this.readCounts.get(input.purchaseToken) ?? 0;
+    this.readCounts.set(input.purchaseToken, readCount + 1);
+    const lateOrderId = this.orderIdsAfterFirstRead.get(input.purchaseToken);
+    if (readCount > 0 && lateOrderId !== undefined) {
+      response.orderId = lateOrderId;
+    }
+    return cloneRecord(response);
+  }
+
+  async acknowledgeProductPurchase(input: {
+    readonly productId: string;
+    readonly purchaseToken: string;
+  }): Promise<void> {
+    this.events.push(`provider:acknowledge:${input.purchaseToken}`);
+    this.finalizedProductIds.push(input.productId);
+    if (this.failingAcknowledgeTokens.has(input.purchaseToken)) {
+      throw new Error('simulated acknowledge failure');
+    }
+    updateAcknowledgementState(
+      this.requireResponse(input.purchaseToken),
+      'ACKNOWLEDGEMENT_STATE_ACKNOWLEDGED',
+    );
+  }
+
+  async consumeProductPurchase(input: {
+    readonly productId: string;
+    readonly purchaseToken: string;
+    readonly signal: AbortSignal;
+  }): Promise<void> {
+    this.events.push(`provider:consume:${input.purchaseToken}`);
+    this.finalizedProductIds.push(input.productId);
+    if (this.ignoringAbortConsumeTokens.has(input.purchaseToken)) {
+      await new Promise<void>(() => undefined);
+    }
+    if (this.stallingConsumeTokens.has(input.purchaseToken)) {
+      await new Promise<void>((_resolve, reject) => {
+        input.signal.addEventListener(
+          'abort',
+          () => {
+            this.abortedConsumeTokens.add(input.purchaseToken);
+            reject(input.signal.reason);
+          },
+          { once: true },
+        );
+      });
+    }
+    if (this.failingConsumeTokens.has(input.purchaseToken)) {
+      throw new Error('simulated consume failure');
+    }
+    updateConsumptionState(this.requireResponse(input.purchaseToken), 'CONSUMPTION_STATE_CONSUMED');
+  }
+
+  private requireResponse(purchaseToken: string): Record<string, unknown> {
+    const response = this.responses.get(purchaseToken);
+    if (response === undefined) {
+      throw new Error(`Missing fixture response for ${purchaseToken}.`);
+    }
+    return response;
+  }
+}
+
+function createHarness(input: {
+  readonly token: string;
+  readonly response: Readonly<Record<string, unknown>>;
+  readonly allowUnboundAuthenticatedPlayer?: boolean;
+  readonly resolveObfuscatedAccountId?: (
+    playerId: string,
+    signal: AbortSignal,
+  ) => Promise<string | undefined> | string | undefined;
+  readonly resolveObfuscatedProfileId?: (
+    playerId: string,
+    signal: AbortSignal,
+  ) => Promise<string | undefined> | string | undefined;
+  readonly catalog?: ProductCatalog;
+  readonly evidenceVerificationTimeoutMs?: number;
+  readonly purchaseGrantFinalizationTimeoutMs?: number;
+}) {
+  const events: string[] = [];
+  const client = new FixtureGooglePlayClient(events);
+  client.responses.set(input.token, cloneRecord(input.response));
+  const store = new TrackingStore(events);
+  const boundary = createGooglePlayProductPurchaseBoundary({
+    client,
+    packageName: 'dev.mpgd.conformance',
+    now: () => '2030-01-02T03:04:06.000Z',
+    ...(input.resolveObfuscatedAccountId === undefined
+      ? {}
+      : { resolveObfuscatedAccountId: input.resolveObfuscatedAccountId }),
+    ...(input.resolveObfuscatedProfileId === undefined
+      ? {}
+      : { resolveObfuscatedProfileId: input.resolveObfuscatedProfileId }),
+    ...(input.allowUnboundAuthenticatedPlayer === undefined
+      ? (
+          input.resolveObfuscatedAccountId === undefined
+          && input.resolveObfuscatedProfileId === undefined
+            ? { allowUnboundAuthenticatedPlayer: true }
+            : {}
+        )
+      : { allowUnboundAuthenticatedPlayer: input.allowUnboundAuthenticatedPlayer }),
+  });
+  const developmentVerifier = createDevelopmentGameServicesEvidenceVerifier();
+  const backend = createGameServicesBackend({
+    catalog: input.catalog ?? catalog,
+    placements,
+    store,
+    evidenceVerifier: {
+      verifyPurchase: (verificationInput) => boundary.verifyPurchase(verificationInput),
+      verifyAdReward: (verificationInput) => {
+        return developmentVerifier.verifyAdReward(verificationInput);
+      },
+    },
+    purchaseGrantFinalizer: boundary,
+    ...(input.evidenceVerificationTimeoutMs === undefined
+      ? {}
+      : { evidenceVerificationTimeoutMs: input.evidenceVerificationTimeoutMs }),
+    ...(input.purchaseGrantFinalizationTimeoutMs === undefined
+      ? {}
+      : { purchaseGrantFinalizationTimeoutMs: input.purchaseGrantFinalizationTimeoutMs }),
+    now: () => '2030-01-02T03:04:07.000Z',
+  });
+
+  return { backend, client, events, store };
+}
+
+function createRequest(input: {
+  readonly token: string;
+  readonly productId?: 'COINS_100' | 'REMOVE_ADS' | 'PASS_MONTHLY';
+  readonly playerId?: string;
+  readonly idempotencyKey?: string;
+  readonly orderId?: string;
+  readonly purchasedAt?: string;
+  readonly schema?: string;
+  readonly target?: VerifyPurchaseRequest['target'];
+}): VerifyPurchaseRequest {
+  return {
+    target: input.target ?? 'android',
+    playerId: input.playerId ?? 'player-google-play',
+    productId: input.productId ?? 'COINS_100',
+    platformTransactionId: input.orderId ?? 'GPA.conformance-1',
+    idempotencyKey: input.idempotencyKey ?? createFixtureIdempotencyKey(input.token),
+    purchasedAt: input.purchasedAt ?? '2030-01-02T03:04:05.000Z',
+    evidence: {
+      schema: input.schema ?? googlePlayProductPurchaseConformanceEvidence.schema,
+      payload: { purchaseToken: input.token },
+    },
+  };
+}
+
+const consumable = createHarness({
+  token: 'token-consumable',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+});
+const consumableRequest = createRequest({ token: 'token-consumable' });
+const firstConsumable = await consumable.backend.purchases.verifyPurchase(consumableRequest);
+
+assertEqual(firstConsumable.verified, true, 'purchased consumable should be granted');
+assertEqual(firstConsumable.finalization?.status, 'completed', 'consume should complete');
+assertEqual(firstConsumable.finalization?.action, 'consume', 'consumables should be consumed');
+assertEqual(
+  firstConsumable.finalization?.alreadyCompleted,
+  false,
+  'first consume should perform provider work',
+);
+assertSequence(
+  consumable.events,
+  [
+    'provider:get:token-consumable',
+    `ledger:${createFixtureIdempotencyKey('token-consumable')}`,
+    'provider:get:token-consumable',
+    'provider:consume:token-consumable',
+  ],
+  'consumable verification must grant durably before consume',
+);
+
+const consumableRetry = await consumable.backend.purchases.verifyPurchase(consumableRequest);
+assertEqual(consumableRetry.alreadyProcessed, true, 'retry should reuse the ledger grant');
+assertEqual(
+  consumableRetry.finalization?.alreadyCompleted,
+  true,
+  'retry should observe the provider-completed consume',
+);
+assertEqual(
+  consumable.events.filter((event) => event.startsWith('ledger:')).length,
+  1,
+  'finalization retry must not create a duplicate grant',
+);
+assertEqual(
+  consumable.events.filter((event) => event.startsWith('provider:consume:')).length,
+  1,
+  'already consumed purchase must not be consumed again',
+);
+const storedConsumable = (await consumable.store.listEntitlementTransactions())[0];
+assert(
+  !JSON.stringify(storedConsumable).includes('token-consumable'),
+  'the raw purchase token must not be persisted in the ledger',
+);
+
+const raceEvents: string[] = [];
+const raceClient = new FixtureGooglePlayClient(raceEvents);
+raceClient.responses.set(
+  'token-race-a',
+  createGooglePlayProductPurchaseConformanceFixture({ orderId: 'GPA.race-a' }),
+);
+raceClient.responses.set(
+  'token-race-b',
+  createGooglePlayProductPurchaseConformanceFixture({ orderId: 'GPA.race-b' }),
+);
+const raceStore = new HiddenIdempotencyTrackingStore(raceEvents);
+const raceBoundary = createGooglePlayProductPurchaseBoundary({
+  client: raceClient,
+  packageName: 'dev.mpgd.conformance',
+  allowUnboundAuthenticatedPlayer: true,
+});
+const raceBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: raceStore,
+  evidenceVerifier: {
+    verifyPurchase: (verificationInput) => raceBoundary.verifyPurchase(verificationInput),
+    verifyAdReward: createDevelopmentGameServicesEvidenceVerifier().verifyAdReward,
+  },
+  purchaseGrantFinalizer: raceBoundary,
+  now: () => '2030-01-02T03:04:07.000Z',
+});
+const raceTokens = ['token-race-a', 'token-race-b'] as const;
+const raceRequests = [
+  createRequest({
+    token: raceTokens[0],
+    orderId: 'GPA.race-a',
+    idempotencyKey: 'purchase:token-race',
+  }),
+  createRequest({
+    token: raceTokens[1],
+    orderId: 'GPA.race-b',
+    idempotencyKey: 'purchase:token-race',
+  }),
+] as const;
+const raceResults = await Promise.all(
+  raceRequests.map((request) => raceBackend.purchases.verifyPurchase(request)),
+);
+const winningRaceIndex = raceResults.findIndex((result) => result.verified);
+const losingRaceIndex = winningRaceIndex === 0 ? 1 : 0;
+
+assert(winningRaceIndex >= 0, 'one raced purchase must retain the ledger grant');
+assertEqual(
+  raceResults.filter((result) => result.verified).length,
+  1,
+  'different purchase tokens racing one idempotency key must not both grant',
+);
+assertEqual(
+  raceResults[losingRaceIndex]?.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'the token that loses the idempotency race must fail before finalization',
+);
+assertEqual(
+  raceEvents.filter((event) => event.startsWith('provider:consume:')).length,
+  1,
+  'only the token stored in the ledger may be consumed',
+);
+assert(
+  !raceEvents.includes(`provider:consume:${raceTokens[losingRaceIndex]}`),
+  'the losing purchase token must never reach a provider write',
+);
+assertEqual((await raceStore.listEntitlementTransactions()).length, 1);
+
+assertThrows(
+  () => createGooglePlayProductPurchaseBoundary({
+    client: new FixtureGooglePlayClient([]),
+    packageName: 'dev.mpgd.conformance',
+  }),
+  'account binding must not be disabled implicitly',
+);
+
+const nonConsumable = createHarness({
+  token: 'token-non-consumable',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    productId: 'remove_ads_android',
+  }),
+});
+const nonConsumableRequest = createRequest({
+  token: 'token-non-consumable',
+  productId: 'REMOVE_ADS',
+});
+const firstNonConsumable = await nonConsumable.backend.purchases.verifyPurchase(
+  nonConsumableRequest,
+);
+const nonConsumableRetry = await nonConsumable.backend.purchases.verifyPurchase(
+  nonConsumableRequest,
+);
+
+assertEqual(firstNonConsumable.finalization?.action, 'acknowledge');
+assertEqual(firstNonConsumable.finalization?.status, 'completed');
+assertEqual(nonConsumableRetry.alreadyProcessed, true);
+assertEqual(nonConsumableRetry.finalization?.alreadyCompleted, true);
+assertEqual(
+  nonConsumable.events.filter((event) => event.startsWith('provider:acknowledge:')).length,
+  1,
+  'acknowledged retry must not acknowledge again',
+);
+assertEqual((await nonConsumable.store.listEntitlementTransactions()).length, 1);
+
+const pending = createHarness({
+  token: 'token-pending',
+  response: createGooglePlayProductPurchaseConformanceFixture({ purchaseState: 'PENDING' }),
+});
+const pendingResult = await pending.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-pending' }),
+);
+assertEqual(pendingResult.verified, false, 'pending purchases must not grant');
+assertEqual(pendingResult.reason, 'GOOGLE_PLAY_PURCHASE_PENDING');
+assertEqual((await pending.store.listEntitlementTransactions()).length, 0);
+assert(
+  pending.events.every((event) => !event.startsWith('provider:consume:')),
+  'pending purchases must not be consumed',
+);
+
+const recoverable = createHarness({
+  token: 'token-recoverable',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+});
+recoverable.client.failingConsumeTokens.add('token-recoverable');
+const recoverableRequest = createRequest({ token: 'token-recoverable' });
+const failedFinalization = await recoverable.backend.purchases.verifyPurchase(recoverableRequest);
+
+assertEqual(failedFinalization.verified, true, 'durable grant survives provider failure');
+assertEqual(failedFinalization.finalization?.status, 'pending');
+assertEqual(failedFinalization.finalization?.reason, 'GOOGLE_PLAY_API_ERROR');
+assertEqual((await recoverable.store.listEntitlementTransactions()).length, 1);
+
+recoverable.client.failingConsumeTokens.delete('token-recoverable');
+const recoveredFinalization = await recoverable.backend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-recoverable',
+    orderId: 'GPA.retry-drift-must-not-replace-stored-order',
+  }),
+);
+assertEqual(recoveredFinalization.alreadyProcessed, true);
+assertEqual(recoveredFinalization.finalization?.status, 'completed');
+assertEqual((await recoverable.store.listEntitlementTransactions()).length, 1);
+
+const timedFinalization = createHarness({
+  token: 'token-finalization-timeout',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  purchaseGrantFinalizationTimeoutMs: 5,
+});
+timedFinalization.client.stallingConsumeTokens.add('token-finalization-timeout');
+const timedFinalizationResult = await timedFinalization.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-finalization-timeout' }),
+);
+assertEqual(timedFinalizationResult.verified, true, 'finalizer timeout follows the durable grant');
+assertEqual(timedFinalizationResult.finalization?.status, 'pending');
+assertEqual(timedFinalizationResult.finalization?.reason, 'PURCHASE_FINALIZER_TIMEOUT');
+assert(
+  timedFinalization.client.abortedConsumeTokens.has('token-finalization-timeout'),
+  'the dedicated finalization timeout must abort the provider write',
+);
+assertEqual((await timedFinalization.store.listEntitlementTransactions()).length, 1);
+
+const ignoredAbortFinalization = createHarness({
+  token: 'token-ignored-finalization-abort',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  purchaseGrantFinalizationTimeoutMs: 5,
+});
+ignoredAbortFinalization.client.ignoringAbortConsumeTokens.add('token-ignored-finalization-abort');
+const ignoredAbortRequest = createRequest({ token: 'token-ignored-finalization-abort' });
+const ignoredAbortResult = await ignoredAbortFinalization.backend.purchases.verifyPurchase(
+  ignoredAbortRequest,
+);
+assertEqual(ignoredAbortResult.finalization?.reason, 'PURCHASE_FINALIZER_TIMEOUT');
+ignoredAbortFinalization.client.ignoringAbortConsumeTokens.delete(
+  'token-ignored-finalization-abort',
+);
+const ignoredAbortRetry = await ignoredAbortFinalization.backend.purchases.verifyPurchase(
+  ignoredAbortRequest,
+);
+assertEqual(
+  ignoredAbortRetry.finalization?.status,
+  'completed',
+  'a provider call that ignores abort must not poison later finalization retries',
+);
+assertEqual(
+  ignoredAbortFinalization.events.filter(
+    (event) => event === 'provider:consume:token-ignored-finalization-abort',
+  ).length,
+  2,
+  'the retry must issue a fresh provider finalization after the timed-out lease is released',
+);
+
+let retryAccountId = 'account:original';
+const accountRotationRetry = createHarness({
+  token: 'token-account-rotation-retry',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: retryAccountId,
+  }),
+  resolveObfuscatedAccountId: () => retryAccountId,
+});
+accountRotationRetry.client.failingConsumeTokens.add('token-account-rotation-retry');
+const accountRotationRequest = createRequest({ token: 'token-account-rotation-retry' });
+const accountRotationPending = await accountRotationRetry.backend.purchases.verifyPurchase(
+  accountRotationRequest,
+);
+assertEqual(accountRotationPending.finalization?.status, 'pending');
+retryAccountId = 'account:rotated';
+accountRotationRetry.client.failingConsumeTokens.delete('token-account-rotation-retry');
+const accountRotationRecovered = await accountRotationRetry.backend.purchases.verifyPurchase(
+  accountRotationRequest,
+);
+assertEqual(
+  accountRotationRecovered.finalization?.status,
+  'completed',
+  'finalization retries must reuse the account binding stored with the grant',
+);
+
+const retryPlatformProductIds: { android?: string } = {
+  android: 'coins_100_android',
+};
+const retryCatalog: ProductCatalog = {
+  version: 'google-play-retry',
+  products: [
+    {
+      id: 'COINS_100',
+      type: 'consumable',
+      grant: { type: 'currency', currency: 'coin', amount: 100 },
+      platformProductIds: retryPlatformProductIds,
+    },
+  ],
+};
+const catalogChangeRetry = createHarness({
+  token: 'token-catalog-change-retry',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  catalog: retryCatalog,
+});
+catalogChangeRetry.client.failingConsumeTokens.add('token-catalog-change-retry');
+const catalogChangeRequest = createRequest({ token: 'token-catalog-change-retry' });
+const catalogChangePending = await catalogChangeRetry.backend.purchases.verifyPurchase(
+  catalogChangeRequest,
+);
+assertEqual(catalogChangePending.finalization?.status, 'pending');
+delete retryPlatformProductIds.android;
+catalogChangeRetry.client.failingConsumeTokens.delete('token-catalog-change-retry');
+const catalogChangeRecovered = await catalogChangeRetry.backend.purchases.verifyPurchase(
+  catalogChangeRequest,
+);
+assertEqual(
+  catalogChangeRecovered.finalization?.status,
+  'completed',
+  'a durable grant should finalize after its catalog SKU is removed',
+);
+assert(
+  catalogChangeRetry.client.finalizedProductIds.every(
+    (productId) => productId === 'coins_100_android',
+  ),
+  'finalization retries must use the platform product id stored with the grant',
+);
+
+const replay = createHarness({
+  token: 'token-replay',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    productId: 'remove_ads_android',
+  }),
+});
+await replay.backend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-replay',
+    productId: 'REMOVE_ADS',
+    playerId: 'player-original',
+    idempotencyKey: 'purchase:replay:original',
+  }),
+);
+const replayAttempt = await replay.backend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-replay',
+    productId: 'REMOVE_ADS',
+    playerId: 'player-attacker',
+    idempotencyKey: 'purchase:replay:attacker',
+  }),
+);
+assertEqual(replayAttempt.verified, false, 'one token must not grant two ledger entries');
+assertEqual(replayAttempt.reason, 'EVIDENCE_ALREADY_PROCESSED');
+assertEqual((await replay.store.listEntitlementTransactions()).length, 1);
+
+await assertRejectedFixture(
+  'token-cancelled',
+  createGooglePlayProductPurchaseConformanceFixture({ purchaseState: 'CANCELLED' }),
+  'GOOGLE_PLAY_PURCHASE_CANCELLED',
+);
+await assertRejectedFixture(
+  'token-refunded',
+  createGooglePlayProductPurchaseConformanceFixture({ refundableQuantity: 0 }),
+  'GOOGLE_PLAY_PURCHASE_REFUNDED',
+);
+const missingRefundableQuantity = cloneRecord(createGooglePlayProductPurchaseConformanceFixture());
+deleteProductOfferField(missingRefundableQuantity, 'refundableQuantity');
+await assertRejectedFixture(
+  'token-refundable-missing',
+  missingRefundableQuantity,
+  'GOOGLE_PLAY_REFUNDABLE_QUANTITY_INVALID',
+);
+await assertRejectedFixture(
+  'token-refundable-exceeds-quantity',
+  createGooglePlayProductPurchaseConformanceFixture({ refundableQuantity: 2 }),
+  'GOOGLE_PLAY_REFUNDABLE_QUANTITY_INVALID',
+);
+await assertRejectedFixture(
+  'token-quantity',
+  createGooglePlayProductPurchaseConformanceFixture({ quantity: 2 }),
+  'GOOGLE_PLAY_QUANTITY_UNSUPPORTED',
+);
+await assertRejectedFixture(
+  'token-rental',
+  createGooglePlayProductPurchaseConformanceFixture({ rentOffer: true }),
+  'GOOGLE_PLAY_RENTAL_UNSUPPORTED',
+);
+await assertRejectedFixture(
+  'token-product-mismatch',
+  createGooglePlayProductPurchaseConformanceFixture({ productId: 'unexpected_product' }),
+  'GOOGLE_PLAY_PRODUCT_MISMATCH',
+);
+const missingConsumptionState = cloneRecord(createGooglePlayProductPurchaseConformanceFixture());
+deleteProductOfferField(missingConsumptionState, 'consumptionState');
+await assertRejectedFixture(
+  'token-consumption-unspecified',
+  missingConsumptionState,
+  'GOOGLE_PLAY_CONSUMPTION_STATE_UNSPECIFIED',
+);
+
+const missingAcknowledgementState = cloneRecord(
+  createGooglePlayProductPurchaseConformanceFixture({ productId: 'remove_ads_android' }),
+);
+delete missingAcknowledgementState.acknowledgementState;
+const missingAcknowledgement = createHarness({
+  token: 'token-acknowledgement-unspecified',
+  response: missingAcknowledgementState,
+});
+const missingAcknowledgementResult = await missingAcknowledgement.backend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-acknowledgement-unspecified',
+    productId: 'REMOVE_ADS',
+  }),
+);
+assertEqual(missingAcknowledgementResult.reason, 'GOOGLE_PLAY_ACKNOWLEDGEMENT_STATE_UNSPECIFIED');
+assertEqual((await missingAcknowledgement.store.listEntitlementTransactions()).length, 0);
+
+const orderMismatch = createHarness({
+  token: 'token-order-mismatch',
+  response: createGooglePlayProductPurchaseConformanceFixture({ orderId: 'GPA.provider' }),
+});
+const orderMismatchResult = await orderMismatch.backend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-order-mismatch',
+    orderId: 'GPA.client',
+  }),
+);
+assertEqual(orderMismatchResult.reason, 'GOOGLE_PLAY_ORDER_MISMATCH');
+assertEqual((await orderMismatch.store.listEntitlementTransactions()).length, 0);
+
+const missingOrderResponse = cloneRecord(createGooglePlayProductPurchaseConformanceFixture());
+delete missingOrderResponse.orderId;
+const missingOrder = createHarness({
+  token: 'token-order-missing',
+  response: missingOrderResponse,
+});
+missingOrder.client.orderIdsAfterFirstRead.set('token-order-missing', 'GPA.late-order');
+const missingOrderResult = await missingOrder.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-order-missing' }),
+);
+assertEqual(missingOrderResult.verified, true, 'provider order ids are optional');
+assertEqual(
+  missingOrderResult.finalization?.status,
+  'completed',
+  'a token-authoritative finalization may observe an order id assigned later',
+);
+const storedMissingOrder = (await missingOrder.store.listEntitlementTransactions())[0];
+assertEqual(storedMissingOrder?.payload.googlePlayOrderId, undefined);
+assertEqual(
+  storedMissingOrder?.payload.platformTransactionId,
+  undefined,
+  'an unverified client order id must not become a replay identity',
+);
+missingOrder.client.responses.set('token-order-missing-second', cloneRecord(missingOrderResponse));
+const secondMissingOrderResult = await missingOrder.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-order-missing-second' }),
+);
+assertEqual(
+  secondMissingOrderResult.verified,
+  true,
+  'distinct provider tokens may share a client fallback transaction id',
+);
+assertEqual((await missingOrder.store.listEntitlementTransactions()).length, 2);
+
+const providerTime = '2030-02-03T04:05:06.000Z';
+const clientTime = '2029-01-02T03:04:05.000Z';
+const mismatchedClientTime = createHarness({
+  token: 'token-client-time-mismatch',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    purchaseCompletionTime: providerTime,
+  }),
+});
+const mismatchedClientTimeResult = await mismatchedClientTime.backend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-client-time-mismatch',
+    purchasedAt: clientTime,
+  }),
+);
+assertEqual(
+  mismatchedClientTimeResult.verified,
+  true,
+  'client timestamps must not override provider verification',
+);
+const storedMismatchedClientTime = (
+  await mismatchedClientTime.store.listEntitlementTransactions()
+)[0];
+assertEqual(
+  storedMismatchedClientTime?.payload.googlePlayPurchaseCompletionTime,
+  providerTime,
+  'the provider completion time is the authoritative purchase time',
+);
+assertEqual(
+  storedMismatchedClientTime?.payload.purchasedAt,
+  clientTime,
+  'the generic request timestamp remains client-reported metadata',
+);
+
+const accountMismatch = createHarness({
+  token: 'token-account-mismatch',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:provider',
+  }),
+  resolveObfuscatedAccountId: () => 'account:expected',
+});
+const accountMismatchResult = await accountMismatch.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-account-mismatch' }),
+);
+assertEqual(accountMismatchResult.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
+assertEqual((await accountMismatch.store.listEntitlementTransactions()).length, 0);
+
+const boundTokenInUnboundMode = createHarness({
+  token: 'token-bound-in-unbound-mode',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:another-player',
+  }),
+  allowUnboundAuthenticatedPlayer: true,
+});
+const boundTokenInUnboundModeResult = await boundTokenInUnboundMode.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-bound-in-unbound-mode' }),
+);
+assertEqual(boundTokenInUnboundModeResult.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
+assertEqual((await boundTokenInUnboundMode.store.listEntitlementTransactions()).length, 0);
+
+const profileBoundTokenInUnboundMode = createHarness({
+  token: 'token-profile-bound-in-unbound-mode',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalProfileId: 'profile:another-player',
+  }),
+  allowUnboundAuthenticatedPlayer: true,
+});
+const profileBoundTokenInUnboundModeResult = await (
+  profileBoundTokenInUnboundMode.backend.purchases.verifyPurchase(
+    createRequest({ token: 'token-profile-bound-in-unbound-mode' }),
+  )
+);
+assertEqual(profileBoundTokenInUnboundModeResult.reason, 'GOOGLE_PLAY_ACCOUNT_MISMATCH');
+assertEqual((await profileBoundTokenInUnboundMode.store.listEntitlementTransactions()).length, 0);
+
+const unresolvedProfileBinding = createHarness({
+  token: 'token-profile-binding-required',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:shared',
+    obfuscatedExternalProfileId: 'profile:current',
+  }),
+  resolveObfuscatedAccountId: () => 'account:shared',
+});
+const unresolvedProfileBindingResult = await (
+  unresolvedProfileBinding.backend.purchases.verifyPurchase(
+    createRequest({ token: 'token-profile-binding-required' }),
+  )
+);
+assertEqual(unresolvedProfileBindingResult.reason, 'GOOGLE_PLAY_PROFILE_BINDING_REQUIRED');
+assertEqual((await unresolvedProfileBinding.store.listEntitlementTransactions()).length, 0);
+
+const profileMismatch = createHarness({
+  token: 'token-profile-mismatch',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:shared',
+    obfuscatedExternalProfileId: 'profile:other',
+  }),
+  resolveObfuscatedAccountId: () => 'account:shared',
+  resolveObfuscatedProfileId: () => 'profile:current',
+});
+const profileMismatchResult = await profileMismatch.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-mismatch' }),
+);
+assertEqual(profileMismatchResult.reason, 'GOOGLE_PLAY_PROFILE_MISMATCH');
+assertEqual((await profileMismatch.store.listEntitlementTransactions()).length, 0);
+
+const unresolvedAccountBinding = createHarness({
+  token: 'token-account-binding-required',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:shared',
+    obfuscatedExternalProfileId: 'profile:current',
+  }),
+  resolveObfuscatedProfileId: () => 'profile:current',
+});
+const unresolvedAccountBindingResult = await (
+  unresolvedAccountBinding.backend.purchases.verifyPurchase(
+    createRequest({ token: 'token-account-binding-required' }),
+  )
+);
+assertEqual(unresolvedAccountBindingResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
+assertEqual((await unresolvedAccountBinding.store.listEntitlementTransactions()).length, 0);
+
+const matchedProfileBinding = createHarness({
+  token: 'token-profile-match',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    obfuscatedExternalAccountId: 'account:shared',
+    obfuscatedExternalProfileId: 'profile:current',
+  }),
+  resolveObfuscatedAccountId: () => 'account:shared',
+  resolveObfuscatedProfileId: () => 'profile:current',
+});
+const matchedProfileBindingResult = await matchedProfileBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-match' }),
+);
+assertEqual(matchedProfileBindingResult.verified, true);
+const storedProfileBinding = (await matchedProfileBinding.store.listEntitlementTransactions())[0];
+assertEqual(
+  storedProfileBinding?.payload.googlePlayObfuscatedExternalProfileId,
+  'profile:current',
+  'verified profile binding must be persisted for finalization retries',
+);
+
+const missingAccountBinding = createHarness({
+  token: 'token-account-binding-missing',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedAccountId: () => undefined,
+});
+const missingAccountBindingResult = await missingAccountBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-account-binding-missing' }),
+);
+assertEqual(missingAccountBindingResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_REQUIRED');
+assertEqual(missingAccountBinding.events.length, 0, 'missing account binding must fail closed');
+assertEqual((await missingAccountBinding.store.listEntitlementTransactions()).length, 0);
+
+const malformedProfileBinding = createHarness({
+  token: 'token-profile-binding-malformed',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedProfileId: () => ' profile:invalid',
+});
+const malformedProfileBindingResult = await (
+  malformedProfileBinding.backend.purchases.verifyPurchase(
+    createRequest({ token: 'token-profile-binding-malformed' }),
+  )
+);
+assertEqual(malformedProfileBindingResult.reason, 'GOOGLE_PLAY_PROFILE_BINDING_REQUIRED');
+assertEqual(malformedProfileBinding.events.length, 0, 'invalid profile binding must fail closed');
+
+const missingProfileBinding = createHarness({
+  token: 'token-profile-binding-missing',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedProfileId: () => undefined,
+});
+const missingProfileBindingResult = await missingProfileBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-binding-missing' }),
+);
+assertEqual(missingProfileBindingResult.reason, 'GOOGLE_PLAY_PROFILE_BINDING_REQUIRED');
+assertEqual(missingProfileBinding.events.length, 0, 'missing profile binding must fail closed');
+
+const throwingProfileBinding = createHarness({
+  token: 'token-profile-binding-error',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedProfileId: () => {
+    throw new Error('simulated profile resolver failure');
+  },
+});
+const throwingProfileBindingResult = await throwingProfileBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-binding-error' }),
+);
+assertEqual(throwingProfileBindingResult.reason, 'GOOGLE_PLAY_ACCOUNT_BINDING_ERROR');
+assertEqual(throwingProfileBinding.events.length, 0, 'failed profile lookup must not reach Google');
+
+const abortedProfileBinding = createHarness({
+  token: 'token-profile-binding-aborted',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  resolveObfuscatedProfileId: () => {
+    throw new DOMException('simulated profile resolver abort', 'AbortError');
+  },
+});
+const abortedProfileBindingResult = await abortedProfileBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-profile-binding-aborted' }),
+);
+assertEqual(abortedProfileBindingResult.reason, 'EVIDENCE_VERIFIER_ERROR');
+assertEqual(abortedProfileBinding.events.length, 0, 'aborted profile lookup must not reach Google');
+
+let accountResolverSignal: AbortSignal | undefined;
+const stalledAccountBinding = createHarness({
+  token: 'token-account-binding-timeout',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+  evidenceVerificationTimeoutMs: 5,
+  resolveObfuscatedAccountId: (_playerId, signal) => {
+    accountResolverSignal = signal;
+    return new Promise<string | undefined>((_resolve, reject) => {
+      signal.addEventListener('abort', () => reject(new Error('aborted')), { once: true });
+    });
+  },
+});
+const stalledAccountBindingResult = await stalledAccountBinding.backend.purchases.verifyPurchase(
+  createRequest({ token: 'token-account-binding-timeout' }),
+);
+assertEqual(stalledAccountBindingResult.reason, 'EVIDENCE_VERIFIER_TIMEOUT');
+assertEqual(
+  accountResolverSignal?.aborted,
+  true,
+  'account binding lookup must receive cancellation',
+);
+assertEqual(
+  stalledAccountBinding.events.length,
+  0,
+  'a timed-out account lookup must not reach Google Play',
+);
+
+const mixedTargetEvents: string[] = [];
+const mixedTargetClient = new FixtureGooglePlayClient(mixedTargetEvents);
+const mixedTargetBoundary = createGooglePlayProductPurchaseBoundary({
+  client: mixedTargetClient,
+  packageName: 'dev.mpgd.conformance',
+  allowUnboundAuthenticatedPlayer: true,
+});
+const mixedTargetBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: new TrackingStore(mixedTargetEvents),
+  evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(
+    () => '2030-01-02T03:04:06.000Z',
+  ),
+  purchaseGrantFinalizer: mixedTargetBoundary,
+  now: () => '2030-01-02T03:04:07.000Z',
+});
+const iosPurchase = await mixedTargetBackend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-ios',
+    target: 'ios',
+    idempotencyKey: 'purchase:ios',
+  }),
+);
+assertEqual(iosPurchase.verified, true, 'another target verifier may share the backend');
+assertEqual(
+  iosPurchase.finalization,
+  undefined,
+  'the Google Play finalizer must not mark another target as pending',
+);
+assert(
+  mixedTargetEvents.every((event) => !event.startsWith('provider:')),
+  'the Google Play finalizer must not receive another target purchase',
+);
+const mixedSubscription = await mixedTargetBackend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-subscription-routed-elsewhere',
+    productId: 'PASS_MONTHLY',
+    idempotencyKey: 'purchase:subscription-routed-elsewhere',
+  }),
+);
+assertEqual(
+  mixedSubscription.verified,
+  true,
+  'another subscription verifier may share the backend',
+);
+assertEqual(
+  mixedSubscription.finalization,
+  undefined,
+  'the one-time Google Play finalizer must not claim subscriptions',
+);
+assert(
+  mixedTargetEvents.every((event) => !event.startsWith('provider:')),
+  'the one-time Google Play finalizer must not receive a subscription',
+);
+const mixedEvidencePurchase = await mixedTargetBackend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-non-google-evidence',
+    schema: 'development.purchase.v1',
+    idempotencyKey: 'purchase:non-google-evidence',
+    orderId: 'development-order-1',
+  }),
+);
+assertEqual(mixedEvidencePurchase.verified, true, 'another Android verifier may share the backend');
+assertEqual(
+  mixedEvidencePurchase.finalization,
+  undefined,
+  'the Google Play finalizer must not claim another evidence schema',
+);
+assert(
+  mixedTargetEvents.every((event) => !event.startsWith('provider:')),
+  'the Google Play finalizer must not receive another evidence schema',
+);
+
+const throwingSupportEvents: string[] = [];
+const throwingSupportStore = new TrackingStore(throwingSupportEvents);
+let throwingSupportFinalizerCalls = 0;
+let throwingSupportAnalyticsReason: unknown;
+const throwingSupportBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: throwingSupportStore,
+  evidenceVerifier: createDevelopmentGameServicesEvidenceVerifier(
+    () => '2030-01-02T03:04:06.000Z',
+  ),
+  purchaseGrantFinalizer: {
+    supportsPurchaseGrant() {
+      throw new Error('simulated supportsPurchaseGrant failure');
+    },
+    async finalizePurchaseGrant() {
+      throwingSupportFinalizerCalls += 1;
+      return { status: 'completed', action: 'consume', alreadyCompleted: false };
+    },
+  },
+  analytics: {
+    track(event) {
+      throwingSupportAnalyticsReason = event.properties.finalizationReason;
+    },
+  },
+  now: () => '2030-01-02T03:04:07.000Z',
+});
+const throwingSupportResult = await throwingSupportBackend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-throwing-support',
+    idempotencyKey: 'purchase:throwing-support',
+  }),
+);
+assertEqual(throwingSupportResult.verified, true, 'the durable ledger grant must be retained');
+assertEqual(throwingSupportResult.finalization?.status, 'pending');
+assertEqual(throwingSupportResult.finalization?.reason, 'PURCHASE_FINALIZER_ERROR');
+assertEqual(throwingSupportFinalizerCalls, 0, 'a failed support hook must skip provider writes');
+assertEqual(
+  throwingSupportAnalyticsReason,
+  'PURCHASE_FINALIZER_ERROR',
+  'finalizer failures must remain observable through purchase analytics',
+);
+assertEqual((await throwingSupportStore.listEntitlementTransactions()).length, 1);
+
+const wrongSchema = createHarness({
+  token: 'token-wrong-schema',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+});
+const wrongSchemaResult = await wrongSchema.backend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-wrong-schema',
+    schema: 'client.callback.v1',
+  }),
+);
+assertEqual(wrongSchemaResult.reason, 'GOOGLE_PLAY_PURCHASE_TOKEN_REQUIRED');
+assertEqual(wrongSchema.events.length, 0, 'client callbacks alone must not call Google or grant');
+
+const subscription = createHarness({
+  token: 'token-subscription',
+  response: createGooglePlayProductPurchaseConformanceFixture({
+    productId: 'pass_monthly_android',
+  }),
+});
+const subscriptionResult = await subscription.backend.purchases.verifyPurchase(
+  createRequest({
+    token: 'token-subscription',
+    productId: 'PASS_MONTHLY',
+  }),
+);
+assertEqual(subscriptionResult.reason, 'GOOGLE_PLAY_SUBSCRIPTION_VERIFIER_REQUIRED');
+assertEqual(subscription.events.length, 0);
+
+const concurrent = createHarness({
+  token: 'token-concurrent',
+  response: createGooglePlayProductPurchaseConformanceFixture(),
+});
+const concurrentRequest = createRequest({ token: 'token-concurrent' });
+const concurrentResults = await Promise.all([
+  concurrent.backend.purchases.verifyPurchase(concurrentRequest),
+  concurrent.backend.purchases.verifyPurchase(concurrentRequest),
+]);
+assert(
+  concurrentResults.every((result) => result.verified),
+  'concurrent retry should grant',
+);
+assertEqual((await concurrent.store.listEntitlementTransactions()).length, 1);
+assertEqual(
+  concurrent.events.filter((event) => event.startsWith('provider:consume:')).length,
+  1,
+  'same-instance concurrent finalization should share one consume call',
+);
+
+console.log('Google Play purchase verification and finalization conformance tests passed.');
+
+function createFixtureIdempotencyKey(token: string): string {
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < token.length; index += 1) {
+    hash = Math.imul(hash ^ token.charCodeAt(index), 0x01000193);
+  }
+  return `purchase:fixture:${(hash >>> 0).toString(16).padStart(8, '0')}`;
+}
+
+async function assertRejectedFixture(
+  token: string,
+  response: Readonly<Record<string, unknown>>,
+  reason: string,
+): Promise<void> {
+  const harness = createHarness({ token, response });
+  const result = await harness.backend.purchases.verifyPurchase(createRequest({ token }));
+  assertEqual(result.verified, false);
+  assertEqual(result.reason, reason);
+  assertEqual((await harness.store.listEntitlementTransactions()).length, 0);
+}
+
+function updateConsumptionState(
+  response: Record<string, unknown>,
+  state: string,
+): void {
+  const lineItems = response.productLineItem;
+  if (!Array.isArray(lineItems) || !isRecord(lineItems[0])) {
+    throw new Error('Invalid product line item fixture.');
+  }
+  const offerDetails = lineItems[0].productOfferDetails;
+  if (!isRecord(offerDetails)) {
+    throw new Error('Invalid product offer fixture.');
+  }
+  offerDetails.consumptionState = state;
+}
+
+function deleteProductOfferField(response: Record<string, unknown>, field: string): void {
+  const lineItems = response.productLineItem;
+  if (!Array.isArray(lineItems) || !isRecord(lineItems[0])) {
+    throw new Error('Invalid product line item fixture.');
+  }
+  const offerDetails = lineItems[0].productOfferDetails;
+  if (!isRecord(offerDetails)) {
+    throw new Error('Invalid product offer fixture.');
+  }
+  delete offerDetails[field];
+}
+
+function updateAcknowledgementState(response: Record<string, unknown>, state: string): void {
+  response.acknowledgementState = state;
+}
+
+function cloneRecord(input: Readonly<Record<string, unknown>>): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(input)) as Record<string, unknown>;
+}
+
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === 'object' && input !== null && !Array.isArray(input);
+}
+
+function assertSequence(actual: readonly string[], expected: readonly string[], message: string): void {
+  assertEqual(JSON.stringify(actual), JSON.stringify(expected), message);
+}
+
+function assertEqual(actual: unknown, expected: unknown, message = 'values should match'): void {
+  if (actual !== expected) {
+    throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}.`);
+  }
+}
+
+function assertThrows(action: () => unknown, message: string): void {
+  try {
+    action();
+  } catch {
+    return;
+  }
+  throw new Error(message);
+}
+
+function assert(condition: unknown, message: string): asserts condition {
+  if (!condition) {
+    throw new Error(message);
+  }
+}

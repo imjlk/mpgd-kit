@@ -3,6 +3,7 @@ import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import type {
   ClaimAdRewardRequest,
   EntitlementLedgerPayload,
+  PurchaseGrantFinalization,
   VerifyPurchaseRequest,
 } from './types';
 
@@ -12,6 +13,11 @@ export type EvidenceVerificationDecision =
       readonly verificationId: string;
       readonly verifiedAt: string;
       readonly payload?: EntitlementLedgerPayload;
+      /**
+       * An authoritative provider identity for cross-idempotency replay checks.
+       * `null` explicitly suppresses the client-reported platform identity.
+       */
+      readonly platformEvidenceId?: string | null;
     }
   | {
       readonly status: 'pending';
@@ -36,6 +42,27 @@ export interface VerifyAdRewardEvidenceInput {
   readonly platformPlacementId?: string;
   readonly signal: AbortSignal;
   readonly timeoutMs: number;
+}
+
+export interface FinalizePurchaseGrantInput {
+  readonly request: VerifyPurchaseRequest;
+  readonly product: ProductCatalog['products'][number];
+  readonly platformProductId: string;
+  readonly evidenceVerificationId: string;
+  readonly evidencePayload?: EntitlementLedgerPayload;
+  readonly ledgerEntryId: string;
+  readonly alreadyProcessed: boolean;
+  readonly signal: AbortSignal;
+  readonly timeoutMs: number;
+}
+
+export interface GameServicesPurchaseGrantFinalizer {
+  supportsPurchaseGrant?(
+    input: Omit<FinalizePurchaseGrantInput, 'signal'>,
+  ): boolean;
+  finalizePurchaseGrant(
+    input: FinalizePurchaseGrantInput,
+  ): Promise<PurchaseGrantFinalization>;
 }
 
 export interface GameServicesEvidenceVerifier {
