@@ -59,6 +59,40 @@ describe('adapter-verse8', () => {
     expect(gateway.notifications).toBeUndefined();
   });
 
+  it('uses explicitly injected Agent8 cloud storage without a local fallback', async () => {
+    const values = new Map<string, unknown>();
+    const calls: string[] = [];
+    const gateway = createVerse8PlatformGateway({
+      authClient: authenticatedClient(),
+      agent8Storage: {
+        async load(input) {
+          calls.push(`load:${input.key}`);
+          const value = values.get(input.key);
+          return value === undefined ? null : { value };
+        },
+        async save(input) {
+          calls.push(`save:${input.key}`);
+          values.set(input.key, input.value);
+        },
+      },
+      storage: {
+        getItem() {
+          throw new Error('local storage must not be read');
+        },
+        setItem() {
+          throw new Error('local storage must not be written');
+        },
+      },
+    });
+
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({ cloudSave: true });
+    await gateway.storage.save({ key: 'slot-1', value: { level: 3 } });
+    await expect(gateway.storage.load({ key: 'slot-1' })).resolves.toEqual({
+      value: { level: 3 },
+    });
+    expect(calls).toEqual(['save:slot-1', 'load:slot-1']);
+  });
+
   it('maps Verse8 signer credentials to a server-verified identity', async () => {
     const gateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),

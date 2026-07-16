@@ -296,9 +296,11 @@ submission.
   `VXShop.onClose`, client metadata, or a client-created transaction ID as
   purchase evidence. Keep `@agent8/gameserver-node` in the separate Agent8
   server project and use `@mpgd/adapter-verse8/agent8` there for the locked,
-  consume-once catalog grant. Agent8 cloud state and verified leaderboard
-  capabilities remain disabled until their later server integrations are
-  explicitly configured.
+  consume-once catalog grant. Agent8 cloud state is available only after the
+  gateway receives a game-owned remote storage client; the starter does not
+  install the React browser SDK or configure that client. Agent8 verified
+  leaderboards stay server-only and require a game-specific completion
+  verifier, so the generic platform leaderboard capability remains disabled.
 - Reddit Devvit is game-owned in `apps/target-devvit`.
 - Apps in Toss currently uses the kit reference wrapper at
   `${MPGD_KIT_PATH}/apps/target-ait` for smoke packaging. Before a real Toss

@@ -371,7 +371,11 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
       'verse8 ads should be enabled',
     );
     assertEqual(config.localization.enabled, true, 'verse8 localization should be enabled');
-    assertEqual(config.storage.support, 'local', 'verse8 should use local storage');
+    assertEqual(
+      config.storage.support,
+      'native',
+      'verse8 should expose opt-in Agent8 storage support',
+    );
     return;
   }
 

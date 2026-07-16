@@ -16,6 +16,7 @@ import {
   type PlatformGateway,
   type PlayerIdentity,
   type ProductType,
+  type StorageAdapter,
 } from '@mpgd/platform';
 
 import { verse8AdsRewardEvidenceSchema } from './ads-contract.js';
@@ -36,6 +37,12 @@ export interface Verse8Storage {
   getItem(key: string): string | null;
   setItem(key: string, value: string): void;
 }
+
+/**
+ * Game-owned Agent8 RPC wrapper. The adapter deliberately does not import the
+ * React-based Agent8 browser SDK.
+ */
+export interface Verse8Agent8StorageClient extends StorageAdapter {}
 
 export interface Verse8VisibilitySource {
   readonly hidden: boolean;
@@ -126,6 +133,7 @@ export interface Verse8PlatformGatewayOptions {
   readonly adsTimeoutMs?: number;
   readonly resolveAdPlacementId?: (placementId: LogicalAdPlacementId) => string | undefined;
   readonly vxShop?: Verse8CommerceOptions;
+  readonly agent8Storage?: Verse8Agent8StorageClient;
   readonly storage?: Verse8Storage;
   readonly visibility?: Verse8VisibilitySource;
 }
@@ -164,6 +172,7 @@ export function createVerse8PlatformGateway(
         nativeAds: adsAvailable,
         rewardedAds: adsAvailable,
         interstitialAds: adsAvailable,
+        cloudSave: options.agent8Storage !== undefined,
         localizedContent: true,
       };
     },
@@ -282,6 +291,10 @@ export function createVerse8PlatformGateway(
     },
     storage: {
       async load(input) {
+        if (options.agent8Storage !== undefined) {
+          return options.agent8Storage.load(input);
+        }
+
         const storage = options.storage ?? resolveStorage();
         const value = storage?.getItem(storageKey(authClient, input.key));
 
@@ -290,6 +303,11 @@ export function createVerse8PlatformGateway(
           : { value: JSON.parse(value) as unknown };
       },
       async save(input) {
+        if (options.agent8Storage !== undefined) {
+          await options.agent8Storage.save(input);
+          return;
+        }
+
         const storage = options.storage ?? resolveStorage();
         storage?.setItem(storageKey(authClient, input.key), JSON.stringify(input.value));
       },
