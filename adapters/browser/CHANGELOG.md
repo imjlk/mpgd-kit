@@ -1,5 +1,22 @@
 # @mpgd/adapter-browser
 
+## 0.5.0 — 2026-07-17
+
+### Added
+
+- [204fe80](https://github.com/imjlk/mpgd-kit/commit/204fe807cdc476bb8555693433c636c8fa6b06ea) Add reusable local and remote storage conformance checks, injectable browser
+  storage, and fail-closed persistence behavior across browser, native bridge,
+  Apps in Toss, Devvit, and Verse8 targets. Generated Devvit servers now reject
+  identity, provider, serialization, and quota failures without switching to a
+  browser fallback store. Bridge-backed targets preserve top-level JSON `null`
+  without confusing it with a missing key. Capacitor's shipped Android and iOS bridges now persist
+  bounded JSON values through native local storage and run native conformance
+  tests in CI. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.7.0
+
 ## 0.4.3 — 2026-07-15
 
 ### Patch changes
