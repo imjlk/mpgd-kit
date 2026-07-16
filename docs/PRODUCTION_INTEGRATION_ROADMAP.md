@@ -112,7 +112,8 @@ Expected flow:
 1. The AIT wrapper invokes the callback-specific game-services API from
    `processProductGrant`, or emits rewarded-ad evidence with a game-issued
    correlation id from `userEarnedReward`.
-2. Partner backend verifies the Toss callback/order/ad reward state.
+2. Partner backend verifies purchases through Toss order status, while the
+   game-owned reward authority independently verifies rewarded-ad events.
 3. Backend checks Toss product/placement mapping, player identity, duplicate
    grants, and review-policy constraints.
 4. Backend records the ledger entry.

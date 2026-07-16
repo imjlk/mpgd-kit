@@ -123,7 +123,7 @@ closed instead of relying on deployment-local `Date.parse()` behavior.
 
 `userEarnedReward` is client evidence, not grant authority. The wrapper can use
 `createAppsInTossRewardCallbackEvidence()` to correlate the callback with an
-id created by the game before `showFullScreenAd()` and the configured placement.
+identifier created by the game before `showFullScreenAd()` and the configured placement.
 The official event only contains `unitType` and `unitAmount`, so the contract
 does not require a nonexistent Toss impression id. The production backend must
 inject an `AppsInTossRewardAuthority` that independently confirms:
@@ -182,7 +182,8 @@ and idempotent retry, server-grant failure followed by pending-order restoration
 deterministic KST timestamp parsing, authoritative player/SKU/status matching,
 post-success purchase rejection, reward retry/replay rejection, explicit-zone
 reward timestamp validation, authority errors, and reward player/placement
-matching. No failure path writes a ledger grant.
+matching. No failed verification or rejection path writes a ledger grant;
+product completion can still fail after a durable grant and must then be retried.
 
 Before release, also run the Apps in Toss sandbox scenarios on a real test app:
 

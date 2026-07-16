@@ -59,6 +59,7 @@ pnpm validate:effective-config
 pnpm validate:targets
 pnpm smoke:game-services
 pnpm smoke:game-services:worker
+pnpm smoke:apps-in-toss-production-evidence
 pnpm graph:preflight
 pnpm sampo:release:dry-run
 pnpm build:web
