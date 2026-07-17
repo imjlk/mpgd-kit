@@ -22,6 +22,7 @@ const packageId = '12345Acme.FixtureGame';
 const publisherId = 'CN=01234567-89ab-cdef-0123-456789abcdef';
 let emittedPublisherId = publisherId;
 let certificationResult: 'PASS' | 'FAIL' = 'PASS';
+let mutatePackageDuringCertification = false;
 
 try {
   rmSync(fixtureRoot, { force: true, recursive: true });
@@ -102,6 +103,17 @@ try {
   );
   emittedPublisherId = publisherId;
 
+  mutatePackageDuringCertification = true;
+  assert.throws(
+    () => runMicrosoftStorePackageAcceptance(
+      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+      runtime,
+    ),
+    /package changed during acceptance/u,
+  );
+  mutatePackageDuringCertification = false;
+  writeFileSync(packageFile, 'fixture bundle');
+
   const outsidePackage = join(fixtureRoot, 'outside.msix');
   const escapedPackage = join(packagesDir, 'escaped.msix');
   writeFileSync(outsidePackage, 'outside');
@@ -113,6 +125,20 @@ try {
     ),
     /must stay inside the game root/u,
   );
+
+  const outsideEvidence = join(fixtureRoot, 'outside-evidence.json');
+  const acceptanceJson = join(outputDir, 'package-acceptance.json');
+  writeFileSync(outsideEvidence, 'must remain unchanged');
+  rmSync(acceptanceJson);
+  symlinkSync(outsideEvidence, acceptanceJson);
+  assert.throws(
+    () => runMicrosoftStorePackageAcceptance(
+      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+      runtime,
+    ),
+    /package acceptance JSON must not be a symbolic link/u,
+  );
+  assert.equal(readFileSync(outsideEvidence, 'utf8'), 'must remain unchanged');
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });
 }
@@ -150,6 +176,10 @@ function runCommand(command: string, args: readonly string[]): void {
     }
 
     if (args[0] === 'test') {
+      if (mutatePackageDuringCertification) {
+        writeFileSync(packageFile, 'mutated package');
+      }
+
       writeFileSync(
         requiredArgumentAfter(args, '-reportoutputpath'),
         `<REPORT OVERALL_RESULT="${certificationResult}"/>`,

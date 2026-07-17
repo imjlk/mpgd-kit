@@ -2,6 +2,8 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   closeSync,
+  existsSync,
+  fstatSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -128,8 +130,13 @@ export function runMicrosoftStorePackageAcceptance(
     input.submissionEvidenceFile,
     'Microsoft Store submission evidence',
   );
+  const submissionEvidenceContents = readFileSync(submissionEvidenceFile);
   const submissionEvidence = parseSubmissionEvidence(
-    readJson(submissionEvidenceFile, 'Microsoft Store submission evidence'),
+    parseJson(
+      submissionEvidenceContents.toString('utf8'),
+      submissionEvidenceFile,
+      'Microsoft Store submission evidence',
+    ),
   );
   const packageFiles = input.packageFiles.map((file) => readCanonicalPackage(gameRoot, file));
 
@@ -137,10 +144,33 @@ export function runMicrosoftStorePackageAcceptance(
     throw new Error('Microsoft Store package acceptance package paths must be unique.');
   }
 
+  const jsonFile = resolveOutputFileInside(
+    gameRoot,
+    path.join(outputDir, 'package-acceptance.json'),
+    'package acceptance JSON',
+  );
+  const markdownFile = resolveOutputFileInside(
+    gameRoot,
+    path.join(outputDir, 'package-acceptance.md'),
+    'package acceptance Markdown',
+  );
+
+  assertDistinctEvidenceFiles(
+    [
+      { file: jsonFile, label: 'package acceptance JSON' },
+      { file: markdownFile, label: 'package acceptance Markdown' },
+    ],
+    [
+      { file: submissionEvidenceFile, label: 'submission evidence' },
+      ...packageFiles.map((file) => ({ file, label: 'Microsoft Store package' })),
+    ],
+  );
+
   const tempRoot = mkdtempSync(path.join(tmpdir(), 'mpgd-microsoft-store-package-'));
 
   try {
     const packages = packageFiles.map((packageFile, index) => {
+      const packageSnapshot = hashFileSnapshot(packageFile);
       const inspected = inspectPackage({
         packageFile,
         tempRoot: path.join(tempRoot, String(index + 1).padStart(2, '0')),
@@ -171,24 +201,36 @@ export function runMicrosoftStorePackageAcceptance(
         reportFile,
         'Windows App Certification Kit report',
       );
+      const reportContents = readFileSync(canonicalReportFile);
       const result = parseWindowsAppCertificationResult(
-        readFileSync(canonicalReportFile, 'utf8'),
+        reportContents.toString('utf8'),
       );
 
       if (result !== 'PASS') {
         throw new Error(`Windows App Certification Kit failed for ${packageFile}.`);
       }
 
+      const acceptedPackageSnapshot = hashFileSnapshot(packageFile);
+
+      if (
+        acceptedPackageSnapshot.sizeBytes !== packageSnapshot.sizeBytes
+        || acceptedPackageSnapshot.sha256 !== packageSnapshot.sha256
+      ) {
+        throw new Error(
+          `Microsoft Store package changed during acceptance: ${packageFile}`,
+        );
+      }
+
       return {
         file: relativeOrAbsolute(gameRoot, packageFile),
-        sizeBytes: statSync(packageFile).size,
-        sha256: hashFile(packageFile),
+        sizeBytes: packageSnapshot.sizeBytes,
+        sha256: packageSnapshot.sha256,
         identity: inspected.identity,
         payloadIdentities: inspected.payloadIdentities,
         certification: {
           result,
           reportFile: relativeOrAbsolute(gameRoot, canonicalReportFile),
-          reportSha256: hashFile(canonicalReportFile),
+          reportSha256: hashBuffer(reportContents),
         },
       };
     });
@@ -196,12 +238,10 @@ export function runMicrosoftStorePackageAcceptance(
       schemaVersion: microsoftStorePackageAcceptanceSchemaVersion,
       target: 'microsoft-store',
       submissionEvidenceFile: relativeOrAbsolute(gameRoot, submissionEvidenceFile),
-      submissionEvidenceSha256: hashFile(submissionEvidenceFile),
+      submissionEvidenceSha256: hashBuffer(submissionEvidenceContents),
       productIdentity: submissionEvidence.productIdentity,
       packages,
     };
-    const jsonFile = path.join(outputDir, 'package-acceptance.json');
-    const markdownFile = path.join(outputDir, 'package-acceptance.md');
 
     writeFileSync(jsonFile, `${JSON.stringify(evidence, null, 2)}\n`);
     writeFileSync(markdownFile, renderMicrosoftStorePackageAcceptanceMarkdown(evidence));
@@ -514,18 +554,19 @@ function listFiles(dir: string): readonly string[] {
   return files.sort(compareCodeUnits);
 }
 
-function readJson(file: string, label: string): unknown {
+function parseJson(source: string, file: string, label: string): unknown {
   try {
-    return JSON.parse(readFileSync(file, 'utf8')) as unknown;
+    return JSON.parse(source) as unknown;
   } catch (error) {
     throw new Error(`Failed to read ${label} ${file}: ${formatError(error)}`);
   }
 }
 
-function hashFile(file: string): string {
+function hashFileSnapshot(file: string): { readonly sizeBytes: number; readonly sha256: string } {
   const hash = createHash('sha256');
   const buffer = Buffer.allocUnsafe(1024 * 1024);
   const descriptor = openSync(file, 'r');
+  const before = fstatSync(descriptor);
 
   try {
     while (true) {
@@ -541,7 +582,23 @@ function hashFile(file: string): string {
     closeSync(descriptor);
   }
 
-  return hash.digest('hex');
+  const after = statSync(file);
+
+  if (
+    after.dev !== before.dev
+    || after.ino !== before.ino
+    || after.size !== before.size
+    || after.mtimeMs !== before.mtimeMs
+    || after.ctimeMs !== before.ctimeMs
+  ) {
+    throw new Error(`File changed while it was being hashed: ${file}`);
+  }
+
+  return { sizeBytes: before.size, sha256: hash.digest('hex') };
+}
+
+function hashBuffer(input: Uint8Array): string {
+  return createHash('sha256').update(input).digest('hex');
 }
 
 function readCanonicalDirectory(input: string, label: string): string {
@@ -582,6 +639,79 @@ function readCanonicalFileInside(root: string, input: string, label: string): st
   }
 
   return canonical;
+}
+
+function resolveOutputFileInside(root: string, file: string, label: string): string {
+  const parent = readCanonicalDirectory(path.dirname(file), `${label} directory`);
+  assertInside(root, parent, label);
+  let metadata: ReturnType<typeof lstatSync> | undefined;
+
+  try {
+    metadata = lstatSync(file);
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      throw error;
+    }
+  }
+
+  if (metadata !== undefined) {
+    if (metadata.isSymbolicLink()) {
+      throw new Error(`${label} must not be a symbolic link: ${file}`);
+    }
+
+    if (!metadata.isFile()) {
+      throw new Error(`${label} must be a regular file when it already exists: ${file}`);
+    }
+  }
+
+  let resolved = path.join(parent, path.basename(file));
+
+  if (metadata !== undefined) {
+    try {
+      resolved = realpathSync(file);
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
+    }
+  }
+
+  assertInside(root, resolved, label);
+  return resolved;
+}
+
+function assertDistinctEvidenceFiles(
+  outputs: readonly { readonly file: string; readonly label: string }[],
+  protectedFiles: readonly { readonly file: string; readonly label: string }[],
+): void {
+  for (const [index, output] of outputs.entries()) {
+    for (const candidate of [...outputs.slice(index + 1), ...protectedFiles]) {
+      if (sameFile(output.file, candidate.file)) {
+        throw new Error(`${output.label} must not alias ${candidate.label}: ${output.file}`);
+      }
+    }
+  }
+}
+
+function sameFile(left: string, right: string): boolean {
+  if (path.relative(left, right).length === 0) {
+    return true;
+  }
+
+  if (!existsSync(left) || !existsSync(right)) {
+    return false;
+  }
+
+  const leftMetadata = statSync(left);
+  const rightMetadata = statSync(right);
+  return leftMetadata.dev === rightMetadata.dev && leftMetadata.ino === rightMetadata.ino;
+}
+
+function isMissingFileError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === 'ENOENT';
 }
 
 function assertInside(root: string, candidate: string, label: string): void {
