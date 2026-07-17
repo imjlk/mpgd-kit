@@ -288,7 +288,8 @@ submission.
   Before Partner Center submission, replace every placeholder in
   `mpgd.microsoft-store.json`, add at least one real PNG screenshot per listing
   locale (maximum 50 MB and at least 1366 x 768 in either orientation), and run
-  `pnpm exec mpgd target preflight microsoft-store`. The command
+  `pnpm preflight:microsoft-store`. The generated script supplies the game
+  target config and the configured kit path. The command
   validates the game-owned Store identity and listing against the built PWA and
   writes deterministic JSON and Markdown evidence under
   `release-output/microsoft-store`.

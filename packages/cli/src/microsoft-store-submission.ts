@@ -369,13 +369,16 @@ function parseManifest(input: unknown, artifactRoot: string): ParsedManifest {
     throw new Error('Web app manifest icons must not be empty.');
   }
 
+  const purposes = new Set<string>();
+  const sizes = new Set<string>();
   const parsedIcons = icons.map((icon, index) => {
     const record = requireRecord(icon, `web app manifest icons[${index}]`);
     const label = `web app manifest icons[${index}]`;
     const src = requireManifestUrl(record.src, `${label}.src`);
     const type = requireNonEmptyString(record.type, `${label}.type`);
-    const sizes = requireNonEmptyString(record.sizes, `${label}.sizes`);
-    const sizeMatch = /^(\d+)x(\d+)$/u.exec(sizes);
+    const iconSizes = requireNonEmptyString(record.sizes, `${label}.sizes`);
+    const purpose = requireNonEmptyString(record.purpose, `${label}.purpose`);
+    const sizeMatch = /^(\d+)x(\d+)$/u.exec(iconSizes);
 
     if (type !== 'image/png') {
       throw new Error(`${label}.type must be image/png.`);
@@ -385,6 +388,9 @@ function parseManifest(input: unknown, artifactRoot: string): ParsedManifest {
       throw new Error(`${label}.sizes must declare one width and height in pixels.`);
     }
 
+    purposes.add(purpose);
+    sizes.add(iconSizes);
+
     const declaredWidth = Number(sizeMatch[1]);
     const declaredHeight = Number(sizeMatch[2]);
     const iconFile = readManifestAssetFile(artifactRoot, src, label);
@@ -393,13 +399,29 @@ function parseManifest(input: unknown, artifactRoot: string): ParsedManifest {
       maximumBytes: maximumStoreScreenshotBytes,
       validateDimensions: (width, height) => {
         if (width !== declaredWidth || height !== declaredHeight) {
-          throw new Error(`${label} dimensions must match ${sizes}: ${iconFile}`);
+          throw new Error(`${label} dimensions must match ${iconSizes}: ${iconFile}`);
         }
       },
     });
 
     return { file: iconFile, ...image };
   });
+
+  for (const purpose of ['any', 'maskable']) {
+    if (!purposes.has(purpose)) {
+      throw new Error(`Web app manifest icons must include purpose: ${purpose}.`);
+    }
+  }
+
+  for (const size of ['192x192', '512x512']) {
+    if (!sizes.has(size)) {
+      throw new Error(`Web app manifest icons must include size: ${size}.`);
+    }
+  }
+
+  if (manifest.display !== 'standalone') {
+    throw new Error('Web app manifest display must be standalone.');
+  }
 
   return {
     source: manifest,
@@ -424,7 +446,6 @@ function collectManifestWarnings(
 
   for (const [field, label] of [
     ['description', 'description'],
-    ['display', 'display mode'],
     ['background_color', 'splash background color'],
     ['orientation', 'orientation'],
     ['screenshots', 'manifest screenshots'],
@@ -433,22 +454,6 @@ function collectManifestWarnings(
     if (manifest.source[field] === undefined) {
       warnings.push(`The web app manifest does not declare the recommended ${label}.`);
     }
-  }
-
-  const icons = manifest.source.icons;
-
-  if (!Array.isArray(icons)) {
-    warnings.push('The web app manifest does not declare valid icons.');
-    return warnings;
-  }
-
-  const hasMaskableIcon = icons.some((icon) => {
-    const purpose = isRecord(icon) ? icon.purpose : undefined;
-    return typeof purpose === 'string' && purpose.split(/\s+/u).includes('maskable');
-  });
-
-  if (!hasMaskableIcon) {
-    warnings.push('The web app manifest does not declare a recommended maskable icon.');
   }
 
   return warnings;

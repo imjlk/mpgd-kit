@@ -16,6 +16,7 @@ const outputDir = join(gameRoot, 'release-output', 'microsoft-store');
 const screenshotFile = join(gameRoot, 'store-assets', 'en-US', '01.png');
 const manifestFile = join(artifactRoot, 'manifest.webmanifest');
 const iconFile = join(artifactRoot, 'icon.png');
+const icon192File = join(artifactRoot, 'icon-192.png');
 const targetsFile = join(gameRoot, 'mpgd.targets.json');
 const submissionFile = join(gameRoot, 'mpgd.microsoft-store.json');
 const kitRoot = process.cwd();
@@ -29,6 +30,7 @@ try {
   mkdirSync(join(gameRoot, 'store-assets', 'en-US'), { recursive: true });
   const validScreenshot = createPng(1366, 768);
   const validIcon = createPng(512, 512);
+  const validIcon192 = createPng(192, 192);
   const validManifest = {
     id: 'com.acme.fixture-game',
     name: 'Fixture Game',
@@ -41,10 +43,14 @@ try {
     orientation: 'landscape',
     screenshots: [{ src: './screenshot.png', sizes: '1280x720', type: 'image/png' }],
     categories: ['games'],
-    icons: [{ src: './icon.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
+    icons: [
+      { src: './icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+      { src: './icon.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+    ],
   };
   writeFileSync(screenshotFile, validScreenshot);
   writeFileSync(iconFile, validIcon);
+  writeFileSync(icon192File, validIcon192);
   writeJson(targetsFile, {
     targets: {
       'microsoft-store': {
@@ -122,7 +128,7 @@ try {
   };
   assert.equal(evidence.target, 'microsoft-store');
   assert.equal(evidence.manifest.id, 'com.acme.fixture-game');
-  assert.equal(evidence.manifest.icons.length, 1);
+  assert.equal(evidence.manifest.icons.length, 2);
   assert.equal(evidence.listing.personalData.accessedOrTransmitted, true);
   assert.deepEqual(Object.keys(evidence.listing.locales), ['en-US']);
   assert.equal(evidence.commerce.mode, 'disabled');
@@ -271,6 +277,50 @@ try {
       'Windows package string|package string restrictions',
     );
   }
+
+  writeJson(manifestFile, { ...validManifest, display: 'browser' });
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'browser-display.json'),
+      markdownFile: join(outputDir, 'browser-display.md'),
+    }),
+    /display must be standalone/u,
+  );
+  writeJson(manifestFile, {
+    ...validManifest,
+    icons: validManifest.icons.filter((icon) => icon.purpose === 'any'),
+  });
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'missing-maskable.json'),
+      markdownFile: join(outputDir, 'missing-maskable.md'),
+    }),
+    /must include purpose: maskable/u,
+  );
+  writeJson(manifestFile, {
+    ...validManifest,
+    icons: [
+      { src: './icon.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+      { src: './icon.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+    ],
+  });
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'missing-192.json'),
+      markdownFile: join(outputDir, 'missing-192.md'),
+    }),
+    /must include size: 192x192/u,
+  );
+  writeJson(manifestFile, validManifest);
 
   writeJson(manifestFile, { ...validManifest, start_url: 'https://outside.example/game' });
   assert.throws(
