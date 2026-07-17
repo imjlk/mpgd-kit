@@ -48,6 +48,12 @@ try {
     icons: [{ src: './icon.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
   });
   writeJson(submissionFile, validConfig());
+  const spawnOptions = {
+    cwd: process.cwd(),
+    encoding: 'utf8' as const,
+    env: process.env,
+    timeout: 30_000,
+  };
 
   const result = spawnSync(
     process.execPath,
@@ -66,12 +72,7 @@ try {
       '--output-dir',
       outputDir,
     ],
-    {
-      cwd: process.cwd(),
-      encoding: 'utf8',
-      env: process.env,
-      timeout: 30_000,
-    },
+    spawnOptions,
   );
 
   if (result.error !== undefined) {
@@ -315,13 +316,19 @@ try {
       '--output-dir',
       linkedOutputDirectory,
     ],
-    {
-      cwd: process.cwd(),
-      encoding: 'utf8',
-      env: process.env,
-      timeout: 30_000,
-    },
+    spawnOptions,
   );
+
+  if (linkedResult.error !== undefined) {
+    throw linkedResult.error;
+  }
+
+  if (linkedResult.signal !== null) {
+    throw new Error(
+      `CLI fixture was killed by signal ${linkedResult.signal}:\n${linkedResult.stderr || linkedResult.stdout || '(no output)'}`,
+    );
+  }
+
   assert.notEqual(linkedResult.status, 0, 'Symlinked output directory unexpectedly passed.');
   assert.match(linkedResult.stderr || linkedResult.stdout, /must stay inside the game root/u);
 } finally {

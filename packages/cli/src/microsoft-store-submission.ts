@@ -611,7 +611,7 @@ function requireIdentityToken(input: unknown, label: string): string {
 
 function requireProductionString(input: unknown, label: string): string {
   const value = requireNonEmptyString(input, label);
-  const exactTemplateToken = /^(?:TODO|FIXME|PLACEHOLDER|DUMMY|SAMPLE|LOREM(?:_IPSUM)?)$/u;
+  const exactTemplateToken = /^(?:TODO|FIXME|PLACEHOLDER|DUMMY|LOREM(?:_IPSUM)?)$/u;
   const templateIdentityField =
     label.startsWith('productIdentity.')
     || label.startsWith('web app manifest')
@@ -1117,10 +1117,17 @@ function readCanonicalFileInside(root: string, input: string, label: string): st
 function resolveOutputFileInside(root: string, file: string, label: string): string {
   const parent = readCanonicalDirectory(path.dirname(file), `${label} directory`);
   assertInside(root, parent, label);
+  let metadata: ReturnType<typeof lstatSync> | undefined;
 
-  if (existsSync(file)) {
-    const metadata = lstatSync(file);
+  try {
+    metadata = lstatSync(file);
+  } catch (error) {
+    if (!isRecord(error) || error.code !== 'ENOENT') {
+      throw error;
+    }
+  }
 
+  if (metadata !== undefined) {
     if (metadata.isSymbolicLink()) {
       throw new Error(`${label} must not be a symbolic link: ${file}`);
     }
@@ -1130,7 +1137,18 @@ function resolveOutputFileInside(root: string, file: string, label: string): str
     }
   }
 
-  const resolved = existsSync(file) ? realpathSync(file) : path.join(parent, path.basename(file));
+  let resolved = path.join(parent, path.basename(file));
+
+  if (metadata !== undefined) {
+    try {
+      resolved = realpathSync(file);
+    } catch (error) {
+      if (!isRecord(error) || error.code !== 'ENOENT') {
+        throw error;
+      }
+    }
+  }
+
   assertInside(root, resolved, label);
   return resolved;
 }
