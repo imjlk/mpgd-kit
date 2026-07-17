@@ -91,7 +91,7 @@ pnpm smoke:target reddit
 
 - [ ] For Android, run `pnpm build:android && pnpm smoke:target android`.
 - [ ] For iOS, run `pnpm build:ios && pnpm smoke:target ios`.
-- [ ] For Microsoft Store, run `pnpm build:microsoft-store && pnpm smoke:target microsoft-store`, complete `mpgd.microsoft-store.json`, and run `pnpm exec mpgd target preflight microsoft-store` before packaging the PWA with PWABuilder.
+- [ ] For Microsoft Store, run `pnpm build:microsoft-store && pnpm smoke:target microsoft-store`, complete `mpgd.microsoft-store.json` with valid desktop PNG screenshots (maximum 50 MB and at least 1366 x 768 in either orientation), and run `pnpm exec mpgd target preflight microsoft-store` before packaging the PWA with PWABuilder.
 - [ ] For Verse8, run `pnpm build:verse8 && pnpm smoke:target verse8`.
 - [ ] For Apps in Toss, run `pnpm build:ait && pnpm smoke:target ait`.
 - [ ] For Reddit Devvit, run `pnpm build:devvit && pnpm smoke:target reddit` to verify the Devvit manifest, client/server artifact paths, permissions, menu entry, and embedded target config.

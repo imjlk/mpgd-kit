@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { deflateSync } from 'node:zlib';
 
 import {
   parseMicrosoftStoreSubmissionConfig,
@@ -20,7 +21,8 @@ try {
   rmSync(fixtureRoot, { force: true, recursive: true });
   mkdirSync(artifactRoot, { recursive: true });
   mkdirSync(join(gameRoot, 'store-assets', 'en-US'), { recursive: true });
-  writeFileSync(screenshotFile, 'fixture screenshot');
+  const validScreenshot = createPng(1366, 768);
+  writeFileSync(screenshotFile, validScreenshot);
   writeJson(targetsFile, {
     targets: {
       'microsoft-store': {
@@ -152,6 +154,32 @@ try {
     'valid public HTTPS URL',
   );
 
+  for (const packageId of ['ab', 'con', 'abc.', 'xn--fixture', 'fixture.xn--name']) {
+    expectConfigError(
+      {
+        ...base,
+        productIdentity: {
+          ...base.productIdentity,
+          packageId,
+        },
+      },
+      'Windows package string|package string restrictions',
+    );
+  }
+
+  writeFileSync(screenshotFile, 'not a PNG');
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'invalid-screenshot.json'),
+      markdownFile: join(outputDir, 'invalid-screenshot.md'),
+    }),
+    /must be a valid PNG/u,
+  );
+  writeFileSync(screenshotFile, validScreenshot);
+
   const linkedOutputFile = join(outputDir, 'linked-submission-preflight.json');
   const outsideOutputFile = join(fixtureRoot, 'outside-evidence.json');
   writeFileSync(outsideOutputFile, 'outside');
@@ -240,4 +268,45 @@ function expectConfigError(input: unknown, message: string): void {
 
 function writeJson(file: string, value: unknown): void {
   writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+function createPng(width: number, height: number): Buffer {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
+  const rowLength = width * 4 + 1;
+  const pixels = Buffer.alloc(rowLength * height);
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    createPngChunk('IHDR', header),
+    createPngChunk('IDAT', deflateSync(pixels)),
+    createPngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+function createPngChunk(type: string, data: Buffer): Buffer {
+  const typeBuffer = Buffer.from(type, 'ascii');
+  const chunk = Buffer.alloc(12 + data.length);
+  chunk.writeUInt32BE(data.length, 0);
+  typeBuffer.copy(chunk, 4);
+  data.copy(chunk, 8);
+  chunk.writeUInt32BE(crc32(Buffer.concat([typeBuffer, data])), 8 + data.length);
+  return chunk;
+}
+
+function crc32(input: Buffer): number {
+  let crc = 0xffff_ffff;
+
+  for (const byte of input) {
+    crc ^= byte;
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb8_8320 : 0);
+    }
+  }
+
+  return (crc ^ 0xffff_ffff) >>> 0;
 }

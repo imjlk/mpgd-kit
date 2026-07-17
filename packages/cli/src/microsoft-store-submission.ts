@@ -7,6 +7,7 @@ import {
   readFileSync,
   readSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import { isIP } from 'node:net';
@@ -75,6 +76,8 @@ export interface MicrosoftStoreSubmissionEvidence {
       readonly screenshots: readonly {
         readonly file: string;
         readonly sha256: string;
+        readonly width: number;
+        readonly height: number;
       }[];
     }>>;
   };
@@ -126,11 +129,13 @@ export function runMicrosoftStoreSubmissionPreflight(
               path.resolve(gameRoot, file),
               `Microsoft Store ${locale} screenshot`,
             );
-            assertScreenshotExtension(screenshotFile);
+            const image = readMicrosoftStoreScreenshot(screenshotFile);
 
             return {
               file: relativeOrAbsolute(gameRoot, screenshotFile),
               sha256: hashFile(screenshotFile, `Microsoft Store ${locale} screenshot`),
+              width: image.width,
+              height: image.height,
             };
           }),
         },
@@ -457,9 +462,24 @@ function optionalPublicHttpsUrl(input: unknown, label: string): string | undefin
 
 function requireIdentityToken(input: unknown, label: string): string {
   const value = requireProductionString(input, label);
+  const normalized = value.toLowerCase();
+  const reserved = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/u;
 
-  if (!/^[A-Za-z0-9.-]+$/u.test(value)) {
-    throw new Error(`${label} must contain only letters, digits, periods, and hyphens.`);
+  if (value.length < 3 || value.length > 50 || !/^[A-Za-z0-9.-]+$/u.test(value)) {
+    throw new Error(
+      `${label} must be a Windows package string of 3 to 50 letters, digits, periods, or hyphens.`,
+    );
+  }
+
+  if (
+    normalized === '.'
+    || normalized === '..'
+    || reserved.test(normalized)
+    || normalized.startsWith('xn--')
+    || normalized.endsWith('.')
+    || normalized.includes('.xn--')
+  ) {
+    throw new Error(`${label} violates Windows package string restrictions.`);
   }
 
   return value;
@@ -540,9 +560,88 @@ function assertLocale(locale: string): void {
   }
 }
 
-function assertScreenshotExtension(file: string): void {
-  if (!['.jpeg', '.jpg', '.png'].includes(path.extname(file).toLowerCase())) {
-    throw new Error(`Microsoft Store screenshot must be PNG or JPEG: ${file}`);
+function readMicrosoftStoreScreenshot(file: string): { readonly width: number; readonly height: number } {
+  if (path.extname(file).toLowerCase() !== '.png') {
+    throw new Error(`Microsoft Store screenshot must be PNG: ${file}`);
+  }
+
+  const size = statSync(file).size;
+  const maximumScreenshotBytes = 50 * 1024 * 1024;
+
+  if (size > maximumScreenshotBytes) {
+    throw new Error(`Microsoft Store screenshot must not exceed 50 MB: ${file}`);
+  }
+
+  const descriptor = openSync(file, 'r');
+
+  try {
+    const header = Buffer.alloc(24);
+
+    if (readSync(descriptor, header, 0, header.length, 0) !== header.length) {
+      throw new Error(`Microsoft Store screenshot must be a valid PNG: ${file}`);
+    }
+
+    const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+    if (
+      !header.subarray(0, 8).equals(signature)
+      || header.readUInt32BE(8) !== 13
+      || header.toString('ascii', 12, 16) !== 'IHDR'
+    ) {
+      throw new Error(`Microsoft Store screenshot must be a valid PNG: ${file}`);
+    }
+
+    const width = header.readUInt32BE(16);
+    const height = header.readUInt32BE(20);
+
+    if (Math.max(width, height) < 1366 || Math.min(width, height) < 768) {
+      throw new Error(
+        `Microsoft Store desktop screenshot must be at least 1366 x 768 in landscape or portrait orientation: ${file}`,
+      );
+    }
+
+    assertPngChunkStructure(descriptor, size, file);
+    return { width, height };
+  } finally {
+    closeSync(descriptor);
+  }
+}
+
+function assertPngChunkStructure(descriptor: number, size: number, file: string): void {
+  let offset = 8;
+  let chunkIndex = 0;
+  let foundImageData = false;
+  let foundEnd = false;
+  const chunkHeader = Buffer.alloc(8);
+
+  while (offset + 12 <= size) {
+    if (readSync(descriptor, chunkHeader, 0, chunkHeader.length, offset) !== chunkHeader.length) {
+      break;
+    }
+
+    const dataLength = chunkHeader.readUInt32BE(0);
+    const type = chunkHeader.toString('ascii', 4, 8);
+    const nextOffset = offset + 12 + dataLength;
+
+    if (nextOffset > size || (chunkIndex === 0 && (type !== 'IHDR' || dataLength !== 13))) {
+      break;
+    }
+
+    if (type === 'IDAT') {
+      foundImageData = true;
+    }
+
+    if (type === 'IEND') {
+      foundEnd = dataLength === 0 && nextOffset === size;
+      break;
+    }
+
+    offset = nextOffset;
+    chunkIndex += 1;
+  }
+
+  if (!foundImageData || !foundEnd) {
+    throw new Error(`Microsoft Store screenshot must be a valid PNG: ${file}`);
   }
 }
 

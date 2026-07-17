@@ -286,8 +286,9 @@ submission.
   game-specific because the cache namespace uses it to isolate apps sharing an
   origin.
   Before Partner Center submission, replace every placeholder in
-  `mpgd.microsoft-store.json`, add at least one real screenshot per listing
-  locale, and run `pnpm exec mpgd target preflight microsoft-store`. The command
+  `mpgd.microsoft-store.json`, add at least one real PNG screenshot per listing
+  locale (maximum 50 MB and at least 1366 x 768 in either orientation), and run
+  `pnpm exec mpgd target preflight microsoft-store`. The command
   validates the game-owned Store identity and listing against the built PWA and
   writes deterministic JSON and Markdown evidence under
   `release-output/microsoft-store`.

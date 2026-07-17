@@ -245,7 +245,9 @@ Product Identity values into the game-owned `mpgd.microsoft-store.json` and run
 `pnpm exec mpgd target preflight microsoft-store`. The preflight rejects
 placeholder identity, missing listing screenshots, incomplete privacy or age
 rating declarations, and commerce modes that do not yet have server-side ledger
-verification. It writes deterministic submission evidence under
+verification. Desktop screenshots must be valid PNG files, no larger than
+50 MB, and at least 1366 x 768 in landscape or portrait orientation. It writes
+deterministic submission evidence under
 `release-output/microsoft-store`.
 
 The starter dependency range is derived from the released `@mpgd/cli` package
