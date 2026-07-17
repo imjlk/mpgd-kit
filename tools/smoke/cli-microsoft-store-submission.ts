@@ -312,6 +312,8 @@ try {
   for (const invalidScreenshot of [
     Buffer.from('not a PNG'),
     createPngWithEmptyImageData(1366, 768),
+    createPngWithUnknownCriticalChunk(1366, 768),
+    createPngWithDuplicatePalette(1366, 768),
     createPng(1366, 1366),
   ]) {
     writeFileSync(screenshotFile, invalidScreenshot);
@@ -484,6 +486,30 @@ function createPngWithEmptyImageData(width: number, height: number): Buffer {
     createPngChunk('IHDR', header),
     createPngChunk('IDAT', Buffer.alloc(0)),
     createPngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+function createPngWithUnknownCriticalChunk(width: number, height: number): Buffer {
+  const png = createPng(width, height);
+  const endOffset = png.length - 12;
+
+  return Buffer.concat([
+    png.subarray(0, endOffset),
+    createPngChunk('ABCD', Buffer.alloc(0)),
+    png.subarray(endOffset),
+  ]);
+}
+
+function createPngWithDuplicatePalette(width: number, height: number): Buffer {
+  const png = createPng(width, height);
+  const imageDataOffset = png.indexOf(Buffer.from('IDAT', 'ascii')) - 4;
+  const palette = createPngChunk('PLTE', Buffer.from([0, 0, 0]));
+
+  return Buffer.concat([
+    png.subarray(0, imageDataOffset),
+    palette,
+    palette,
+    png.subarray(imageDataOffset),
   ]);
 }
 

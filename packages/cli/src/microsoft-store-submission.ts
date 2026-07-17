@@ -921,6 +921,7 @@ function assertDecodedPng(input: {
   let foundPalette = false;
   const imageData: Buffer[] = [];
   const chunkHeader = Buffer.alloc(8);
+  const knownCriticalChunks = new Set(['IHDR', 'PLTE', 'IDAT', 'IEND']);
 
   while (offset + 12 <= input.size) {
     if (
@@ -932,10 +933,13 @@ function assertDecodedPng(input: {
 
     const dataLength = chunkHeader.readUInt32BE(0);
     const type = chunkHeader.toString('ascii', 4, 8);
+    const critical = ((chunkHeader[4] ?? 0) & 0x20) === 0;
     const nextOffset = offset + 12 + dataLength;
 
     if (
       nextOffset > input.size
+      || !/^[A-Za-z]{4}$/u.test(type)
+      || (critical && !knownCriticalChunks.has(type))
       || (chunkIndex === 0 && (type !== 'IHDR' || dataLength !== 13))
       || (chunkIndex > 0 && type === 'IHDR')
     ) {
@@ -954,7 +958,13 @@ function assertDecodedPng(input: {
     }
 
     if (type === 'PLTE') {
-      if (foundImageData || dataLength === 0 || dataLength % 3 !== 0 || dataLength > 768) {
+      if (
+        foundPalette
+        || foundImageData
+        || dataLength === 0
+        || dataLength % 3 !== 0
+        || dataLength > 768
+      ) {
         break;
       }
 
