@@ -238,6 +238,7 @@ try {
   for (const invalidScreenshot of [
     Buffer.from('not a PNG'),
     createPngWithEmptyImageData(1366, 768),
+    createPng(1366, 1366),
   ]) {
     writeFileSync(screenshotFile, invalidScreenshot);
     assert.throws(
@@ -248,7 +249,7 @@ try {
         jsonFile: join(outputDir, 'invalid-screenshot.json'),
         markdownFile: join(outputDir, 'invalid-screenshot.md'),
       }),
-      /must be a valid PNG/u,
+      /must be a valid PNG|must be landscape or portrait/u,
     );
   }
   writeFileSync(screenshotFile, validScreenshot);

@@ -24,6 +24,15 @@ import {
 
 export const microsoftStoreSubmissionSchemaVersion = 1 as const;
 
+// Microsoft Store listing and package identity limits documented by Microsoft Learn.
+const maximumStoreDescriptionCharacters = 10_000;
+const maximumStoreDesktopScreenshots = 10;
+const maximumStoreScreenshotBytes = 50 * 1024 * 1024;
+const minimumStoreScreenshotLongEdge = 1366;
+const minimumStoreScreenshotShortEdge = 768;
+const maximumDecodedScreenshotBytes = 256 * 1024 * 1024;
+const reservedPackageStringPrefix = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/u;
+
 export interface MicrosoftStoreSubmissionConfig {
   readonly schemaVersion: 1;
   readonly productIdentity: {
@@ -419,8 +428,10 @@ function parseListings(input: unknown): MicrosoftStoreSubmissionConfig['listing'
       throw new Error(`listing.locales.${locale}.screenshots must not be empty.`);
     }
 
-    if (screenshots.length > 10) {
-      throw new Error(`listing.locales.${locale}.screenshots must contain at most 10 files.`);
+    if (screenshots.length > maximumStoreDesktopScreenshots) {
+      throw new Error(
+        `listing.locales.${locale}.screenshots must contain at most ${maximumStoreDesktopScreenshots} files.`,
+      );
     }
 
     const description = requireProductionString(
@@ -428,8 +439,10 @@ function parseListings(input: unknown): MicrosoftStoreSubmissionConfig['listing'
       `listing.locales.${locale}.description`,
     );
 
-    if (Array.from(description).length > 10_000) {
-      throw new Error(`listing.locales.${locale}.description must not exceed 10000 characters.`);
+    if (Array.from(description).length > maximumStoreDescriptionCharacters) {
+      throw new Error(
+        `listing.locales.${locale}.description must not exceed ${maximumStoreDescriptionCharacters} characters.`,
+      );
     }
 
     return [locale, {
@@ -575,7 +588,6 @@ function findDistinguishedNameEquals(component: string): number {
 function requireIdentityToken(input: unknown, label: string): string {
   const value = requireProductionString(input, label);
   const normalized = value.toLowerCase();
-  const reserved = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/u;
 
   if (value.length < 3 || value.length > 50 || !/^[A-Za-z0-9.-]+$/u.test(value)) {
     throw new Error(
@@ -586,7 +598,7 @@ function requireIdentityToken(input: unknown, label: string): string {
   if (
     normalized === '.'
     || normalized === '..'
-    || reserved.test(normalized)
+    || reservedPackageStringPrefix.test(normalized)
     || normalized.startsWith('xn--')
     || normalized.endsWith('.')
     || normalized.includes('.xn--')
@@ -689,13 +701,12 @@ function readMicrosoftStoreScreenshot(file: string): {
     throw new Error(`Microsoft Store screenshot must be PNG: ${file}`);
   }
 
-  const maximumScreenshotBytes = 50 * 1024 * 1024;
   const descriptor = openSync(file, 'r');
 
   try {
     const before = fstatSync(descriptor);
 
-    if (before.size > maximumScreenshotBytes) {
+    if (before.size > maximumStoreScreenshotBytes) {
       throw new Error(`Microsoft Store screenshot must not exceed 50 MB: ${file}`);
     }
 
@@ -723,9 +734,13 @@ function readMicrosoftStoreScreenshot(file: string): {
     const filterMethod = header[27] ?? 0;
     const interlaceMethod = header[28] ?? 0;
 
-    if (Math.max(width, height) < 1366 || Math.min(width, height) < 768) {
+    if (
+      width === height
+      || Math.max(width, height) < minimumStoreScreenshotLongEdge
+      || Math.min(width, height) < minimumStoreScreenshotShortEdge
+    ) {
       throw new Error(
-        `Microsoft Store desktop screenshot must be at least 1366 x 768 in landscape or portrait orientation: ${file}`,
+        `Microsoft Store desktop screenshot must be landscape or portrait and at least ${minimumStoreScreenshotLongEdge} x ${minimumStoreScreenshotShortEdge}: ${file}`,
       );
     }
 
@@ -867,8 +882,6 @@ function assertDecodedPng(input: {
     (total, pass) => total + (pass.rowBytes + 1) * pass.rowCount,
     0,
   );
-  const maximumDecodedScreenshotBytes = 256 * 1024 * 1024;
-
   if (!Number.isSafeInteger(expectedBytes) || expectedBytes > maximumDecodedScreenshotBytes) {
     throw new Error(`Microsoft Store screenshot decoded pixel data is too large: ${input.file}`);
   }
