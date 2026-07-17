@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "productIdentity": {
+    "packageId": "REPLACE_ME",
+    "publisherId": "CN=REPLACE_ME",
+    "publisherDisplayName": "REPLACE_ME",
+    "reservedName": "REPLACE_ME"
+  },
+  "listing": {
+    "category": "Games",
+    "supportUrl": "https://example.com/support",
+    "personalData": {
+      "accessedOrTransmitted": true,
+      "privacyPolicyUrl": "https://example.com/privacy"
+    },
+    "locales": {
+      "en-US": {
+        "description": "REPLACE_ME",
+        "screenshots": ["store-assets/en-US/01.png"]
+      }
+    }
+  },
+  "ageRating": {
+    "questionnaireCompleted": false
+  },
+  "commerce": {
+    "mode": "disabled"
+  }
+}

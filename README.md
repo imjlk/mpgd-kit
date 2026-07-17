@@ -240,6 +240,14 @@ PWABuilder packaging and Partner Center submission. A dedicated Microsoft Store
 commerce adapter should be added only when wiring Microsoft Edge's Digital Goods
 API and Payment Request API through backend ledger verification.
 
+After reserving the product in Partner Center and building the target, copy the
+Product Identity values into the game-owned `mpgd.microsoft-store.json` and run
+`pnpm exec mpgd target preflight microsoft-store`. The preflight rejects
+placeholder identity, missing listing screenshots, incomplete privacy or age
+rating declarations, and commerce modes that do not yet have server-side ledger
+verification. It writes deterministic submission evidence under
+`release-output/microsoft-store`.
+
 The starter dependency range is derived from the released `@mpgd/cli` package
 version. Release PRs that bump the fixed public package group therefore update
 new starter `@mpgd/*` pins without a separate hard-coded template version edit.

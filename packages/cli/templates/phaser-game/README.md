@@ -285,6 +285,12 @@ submission.
   app; do not force activation with `skipWaiting()`. Keep the web manifest `id`
   game-specific because the cache namespace uses it to isolate apps sharing an
   origin.
+  Before Partner Center submission, replace every placeholder in
+  `mpgd.microsoft-store.json`, add at least one real screenshot per listing
+  locale, and run `pnpm exec mpgd target preflight microsoft-store`. The command
+  validates the game-owned Store identity and listing against the built PWA and
+  writes deterministic JSON and Markdown evidence under
+  `release-output/microsoft-store`.
 - Verse8 is a game-owned iframe web target that writes to `artifacts/verse8`.
   The adapter verifies the host-provided auth credential and distinguishes
   Verse8-signed accounts from self-signed guest accounts. Ads are available
