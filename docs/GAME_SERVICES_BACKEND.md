@@ -102,6 +102,63 @@ const backend = createGameServicesHttpBackendApi({
 The development verifier is intentionally insecure and belongs only in local
 demos and tests. Production backends must install a provider verifier.
 
+For App Store purchases, `@mpgd/game-services/app-store-verifier` provides a
+fail-closed `GameServicesEvidenceVerifier` and a stream-bounded App Store Server
+API client. The client calls Apple's fixed production or sandbox
+[`Get Transaction Info`](https://developer.apple.com/documentation/appstoreserverapi/get-transaction-info)
+endpoint using a freshly generated bearer token supplied at runtime according
+to Apple's
+[`Generating JSON Web Tokens for API requests`](https://developer.apple.com/documentation/appstoreserverapi/generating-json-web-tokens-for-api-requests)
+contract. It never accepts App Store credentials, private keys, or signed
+authorization tokens from a game client or checked-in configuration. Connect
+`AppStoreSignedTransactionVerifier` to a verifier that validates Apple's JWS
+certificate chain and signature before returning the decoded transaction
+payload; the official App Store Server Library is the recommended production
+implementation.
+The bearer-token provider receives the request `AbortSignal`; it should throw
+`AppStoreDependencyUnavailableError` only for a transient signing dependency
+outage and let cancellation, invalid credentials, and programming errors
+propagate.
+
+The verifier matches the signed transaction to the configured bundle and
+environment, the catalog's platform product and type, the submitted transaction
+identifier, and a valid non-nil UUID `appAccountToken` resolved server-side for
+the authenticated player. UUID text is compared canonically so letter case
+doesn't change the account identity. The client `purchasedAt` value is only a
+sanity-checked observation timestamp generated after the platform purchase
+resolves;
+Apple's signed `purchaseDate` remains authoritative and is retained in ledger
+evidence together with the effective quantity. Because the shared grant contract
+represents one catalog grant, any signed quantity must be `1`; omission keeps
+StoreKit's default single-purchase semantics.
+Revoked, upgraded, expired, mismatched, malformed, or invalidly signed
+transactions are rejected before the entitlement ledger.
+Malformed App Store Server API `200` responses and fresh transaction lookup
+misses remain pending for retry, while malformed payloads returned as verified
+by the signed-transaction adapter are rejected. Non-consumable replay identity
+uses Apple's `originalTransactionId`; consumables continue to use each purchase's
+current `transactionId` so distinct purchases remain grantable.
+Provider outages, rate limits, account-binding outages, and authorization-provider
+outages return a retryable pending decision and do not grant. Caller cancellation
+continues to propagate instead of being converted into a retryable outage.
+Provider ports should throw `AppStoreDependencyUnavailableError` only for
+explicit transient dependency failures. Unexpected adapter exceptions and
+invalid runtime values propagate to the outer verifier boundary as errors
+instead of being silently converted into an infinite retry loop.
+Use distinct deployments or runtime configuration for Apple's production and
+sandbox environments; never select the authority from an untrusted client
+payload.
+
+This boundary rejects auto-renewable and non-renewing subscriptions. A single
+transaction lookup doesn't model renewal, grace-period, upgrade, expiration,
+refund-reversal, or server-notification-driven entitlement removal, while the
+shared entitlement ledger currently records only durable grants. Add a separate
+subscription lifecycle ledger and verify Apple's subscription status and Server
+Notifications V2 before enabling catalog products of type `subscription`.
+Provider adapters can use
+`@mpgd/game-services/app-store-verifier-conformance` for deterministic decoded
+JWS fixtures without copying credentials or live signed transactions.
+
 ## Ledger Idempotency Contract
 
 `@mpgd/game-services` treats platform callbacks as evidence, not as the grant

@@ -37,6 +37,14 @@
       "types": "./dist/admob-ssv-conformance.d.ts",
       "default": "./dist/admob-ssv-conformance.js"
     },
+    "./app-store-verifier": {
+      "types": "./dist/app-store-verifier.d.ts",
+      "default": "./dist/app-store-verifier.js"
+    },
+    "./app-store-verifier-conformance": {
+      "types": "./dist/app-store-verifier-conformance.d.ts",
+      "default": "./dist/app-store-verifier-conformance.js"
+    },
     "./client": {
       "types": "./dist/client.d.ts",
       "default": "./dist/client.js"
@@ -106,7 +114,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/game-services/src/client.test.ts && node tools/run-ttsx.mjs packages/game-services/src/runtime.test.ts && node tools/run-ttsx.mjs packages/game-services/src/types.test.ts && node tools/run-ttsx.mjs packages/game-services/src/server.test.ts && node tools/run-ttsx.mjs packages/game-services/src/google-play-purchase.test.ts && node tools/run-ttsx.mjs packages/game-services/src/platform-order.test.ts && node tools/run-ttsx.mjs packages/game-services/src/progress-link.test.ts && node tools/run-ttsx.mjs packages/game-services/src/notification-delivery.test.ts && node tools/run-ttsx.mjs packages/game-services/src/admob-ssv.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-durability-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-transport.test.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/game-services/src/client.test.ts && node tools/run-ttsx.mjs packages/game-services/src/runtime.test.ts && node tools/run-ttsx.mjs packages/game-services/src/types.test.ts && node tools/run-ttsx.mjs packages/game-services/src/server.test.ts && node tools/run-ttsx.mjs packages/game-services/src/google-play-purchase.test.ts && node tools/run-ttsx.mjs packages/game-services/src/platform-order.test.ts && node tools/run-ttsx.mjs packages/game-services/src/progress-link.test.ts && node tools/run-ttsx.mjs packages/game-services/src/notification-delivery.test.ts && node tools/run-ttsx.mjs packages/game-services/src/admob-ssv.test.ts && node tools/run-ttsx.mjs packages/game-services/src/app-store-verifier.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-durability-conformance.test.ts && node tools/run-ttsx.mjs packages/game-services/src/verified-leaderboard-transport.test.ts"
   },
   "dependencies": {
     "@mpgd/analytics": "workspace:*",
