@@ -122,7 +122,7 @@ Expected flow:
 Runtime integration inputs:
 
 - Toss app id
-- Toss order/payment id
+- Apps in Toss IAP `orderId`
 - game-issued Toss ad reward correlation id
 - server-issued reward authority event id
 - runtime-injected mTLS, Toss-login identity, and provider configuration
