@@ -302,6 +302,17 @@ try {
   );
   writeJson(manifestFile, {
     ...validManifest,
+    icons: validManifest.icons.map((icon) => ({ ...icon, purpose: 'any maskable' })),
+  });
+  runMicrosoftStoreSubmissionPreflight({
+    gameRoot,
+    artifactRoot,
+    configFile: submissionFile,
+    jsonFile: join(outputDir, 'combined-icon-purposes.json'),
+    markdownFile: join(outputDir, 'combined-icon-purposes.md'),
+  });
+  writeJson(manifestFile, {
+    ...validManifest,
     icons: validManifest.icons.filter((icon) => icon.purpose === 'any'),
   });
   assert.throws(

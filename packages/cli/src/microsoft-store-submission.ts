@@ -390,7 +390,11 @@ function parseManifest(input: unknown, artifactRoot: string): ParsedManifest {
       throw new Error(`${label}.sizes must declare one width and height in pixels.`);
     }
 
-    purposes.add(purpose);
+    for (const token of purpose.split(/[\t\n\f\r ]+/u)) {
+      if (token.length > 0) {
+        purposes.add(token);
+      }
+    }
     sizes.add(iconSizes);
 
     const declaredWidth = Number(sizeMatch[1]);
