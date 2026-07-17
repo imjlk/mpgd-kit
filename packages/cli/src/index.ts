@@ -2286,11 +2286,13 @@ function resolveMicrosoftStoreArtifactRoot(targetsFile: string): string {
 }
 
 function resolveGameRelativePath(gameRoot: string, candidate: string): string {
-  return path.isAbsolute(candidate) ? path.resolve(candidate) : path.resolve(gameRoot, candidate);
+  return path.resolve(gameRoot, candidate);
 }
 
 function assertGameOwnedOutputDirectory(gameRoot: string, outputDir: string): void {
-  const relative = path.relative(gameRoot, outputDir);
+  const canonicalGameRoot = realpathSync(gameRoot);
+  const canonicalOutputDir = resolvePotentiallyMissingPath(outputDir);
+  const relative = path.relative(canonicalGameRoot, canonicalOutputDir);
 
   if (
     relative.length === 0
@@ -2298,8 +2300,27 @@ function assertGameOwnedOutputDirectory(gameRoot: string, outputDir: string): vo
     || relative.startsWith(`..${path.sep}`)
     || path.isAbsolute(relative)
   ) {
-    throw new Error('Microsoft Store submission output directory must stay inside the game root.');
+    throw new Error(
+      `Microsoft Store submission output directory must stay inside the game root: ${canonicalOutputDir} is not inside ${canonicalGameRoot}.`,
+    );
   }
+}
+
+function resolvePotentiallyMissingPath(input: string): string {
+  const resolved = path.resolve(input);
+  let existingAncestor = resolved;
+
+  while (!existsSync(existingAncestor)) {
+    const parent = path.dirname(existingAncestor);
+
+    if (parent === existingAncestor) {
+      throw new Error(`Could not find an existing ancestor for output path: ${resolved}`);
+    }
+
+    existingAncestor = parent;
+  }
+
+  return path.resolve(realpathSync(existingAncestor), path.relative(existingAncestor, resolved));
 }
 
 function normalizeConfiguredBuildTarget(target: string): string | undefined {

@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
-import { parseMicrosoftStoreSubmissionConfig } from '../../packages/cli/src/index';
+import {
+  parseMicrosoftStoreSubmissionConfig,
+  runMicrosoftStoreSubmissionPreflight,
+} from '../../packages/cli/src/index';
 
 const fixtureRoot = resolve('node_modules/.cache/mpgd-cli-microsoft-store-submission');
 const gameRoot = join(fixtureRoot, 'game');
@@ -69,10 +72,20 @@ try {
     },
   );
 
+  if (result.error !== undefined) {
+    throw result.error;
+  }
+
+  if (result.signal !== null) {
+    throw new Error(
+      `CLI fixture was killed by signal ${result.signal}:\n${result.stderr || result.stdout || '(no output)'}`,
+    );
+  }
+
   assert.equal(
     result.status,
     0,
-    `CLI fixture failed:\n${result.stderr || result.stdout || '(no output)'}`,
+    `CLI fixture exited with status ${String(result.status)}:\n${result.stderr || result.stdout || '(no output)'}`,
   );
   assert.match(
     result.stdout,
@@ -98,11 +111,13 @@ try {
     /# Microsoft Store Submission Preflight/u,
   );
 
+  const base = validConfig();
+
   expectConfigError(
     {
-      ...validConfig(),
+      ...base,
       productIdentity: {
-        ...validConfig().productIdentity,
+        ...base.productIdentity,
         packageId: 'REPLACE_ME',
       },
     },
@@ -110,9 +125,9 @@ try {
   );
   expectConfigError(
     {
-      ...validConfig(),
+      ...base,
       listing: {
-        ...validConfig().listing,
+        ...base.listing,
         personalData: { accessedOrTransmitted: true },
       },
     },
@@ -120,11 +135,68 @@ try {
   );
   expectConfigError(
     {
-      ...validConfig(),
+      ...base,
       commerce: { mode: 'microsoft-store' },
     },
     'server-side ledger verification',
   );
+
+  expectConfigError(
+    {
+      ...base,
+      listing: {
+        ...base.listing,
+        supportUrl: 'https://127.0.0.1/support',
+      },
+    },
+    'valid public HTTPS URL',
+  );
+
+  const linkedOutputFile = join(outputDir, 'linked-submission-preflight.json');
+  const outsideOutputFile = join(fixtureRoot, 'outside-evidence.json');
+  writeFileSync(outsideOutputFile, 'outside');
+  symlinkSync(outsideOutputFile, linkedOutputFile);
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: linkedOutputFile,
+      markdownFile: join(outputDir, 'linked-submission-preflight.md'),
+    }),
+    /must not be a symbolic link/u,
+  );
+
+  const outsideDirectory = join(fixtureRoot, 'outside-directory');
+  const linkedOutputDirectory = join(gameRoot, 'linked-output');
+  mkdirSync(outsideDirectory);
+  symlinkSync(outsideDirectory, linkedOutputDirectory, 'dir');
+  const linkedResult = spawnSync(
+    process.execPath,
+    [
+      'tools/run-ttsx.mjs',
+      '--no-plugins',
+      '--mpgd-cli',
+      'packages/cli/src/bin.ts',
+      'target',
+      'preflight',
+      'microsoft-store',
+      '--targets-file',
+      targetsFile,
+      '--submission-file',
+      submissionFile,
+      '--output-dir',
+      linkedOutputDirectory,
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: process.env,
+      timeout: 30_000,
+    },
+  );
+  assert.notEqual(linkedResult.status, 0, 'Symlinked output directory unexpectedly passed.');
+  assert.match(linkedResult.stderr || linkedResult.stdout, /must stay inside the game root/u);
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });
 }

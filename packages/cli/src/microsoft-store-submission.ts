@@ -1,8 +1,23 @@
 import { createHash } from 'node:crypto';
-import { lstatSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
+import { isIP } from 'node:net';
 import path from 'node:path';
 
-import { escapeMarkdownInline, escapeMarkdownTable, relativeOrAbsolute } from './evidence-io.js';
+import {
+  escapeMarkdownInline,
+  escapeMarkdownTable,
+  formatError,
+  relativeOrAbsolute,
+} from './evidence-io.js';
 
 export const microsoftStoreSubmissionSchemaVersion = 1 as const;
 
@@ -115,7 +130,7 @@ export function runMicrosoftStoreSubmissionPreflight(
 
             return {
               file: relativeOrAbsolute(gameRoot, screenshotFile),
-              sha256: hashFile(screenshotFile),
+              sha256: hashFile(screenshotFile, `Microsoft Store ${locale} screenshot`),
             };
           }),
         },
@@ -129,7 +144,7 @@ export function runMicrosoftStoreSubmissionPreflight(
     productIdentity: config.productIdentity,
     manifest: {
       file: relativeOrAbsolute(gameRoot, manifestFile),
-      sha256: hashFile(manifestFile),
+      sha256: hashFile(manifestFile, 'Microsoft Store web app manifest'),
       id: manifest.id,
       name: manifest.name,
       shortName: manifest.shortName,
@@ -339,7 +354,13 @@ function collectManifestWarnings(
     }
   }
 
-  const icons = manifest.source.icons as readonly unknown[];
+  const icons = manifest.source.icons;
+
+  if (!Array.isArray(icons)) {
+    warnings.push('The web app manifest does not declare valid icons.');
+    return warnings;
+  }
+
   const hasMaskableIcon = icons.some((icon) => {
     const purpose = isRecord(icon) ? icon.purpose : undefined;
     return typeof purpose === 'string' && purpose.split(/\s+/u).includes('maskable');
@@ -407,6 +428,7 @@ function requirePublicHttpsUrl(input: unknown, label: string): string {
   }
 
   const hostname = url.hostname.toLowerCase().replace(/\.$/u, '');
+  const unbracketedHostname = hostname.replace(/^\[|\]$/gu, '');
 
   if (
     url.protocol !== 'https:'
@@ -421,6 +443,7 @@ function requirePublicHttpsUrl(input: unknown, label: string): string {
     || hostname.endsWith('.example.net')
     || hostname === 'example.org'
     || hostname.endsWith('.example.org')
+    || isIP(unbracketedHostname) !== 0
   ) {
     throw new Error(`${label} must be a valid public HTTPS URL.`);
   }
@@ -445,7 +468,10 @@ function requireIdentityToken(input: unknown, label: string): string {
 function requireProductionString(input: unknown, label: string): string {
   const value = requireNonEmptyString(input, label);
 
-  if (/contoso|change[-_ ]?me|replace[-_ ]?me|your[-_ ]/iu.test(value)) {
+  if (
+    /contoso|change[-_ ]?me|replace[-_ ]?me|your[-_ ]|\b(?:todo|fixme|placeholder|dummy|sample|lorem)\b/iu
+      .test(value)
+  ) {
     throw new Error(`${label} still contains placeholder content.`);
   }
 
@@ -528,8 +554,30 @@ function readJson(file: string, label: string): unknown {
   }
 }
 
-function hashFile(file: string): string {
-  return createHash('sha256').update(readFileSync(file)).digest('hex');
+function hashFile(file: string, label: string): string {
+  try {
+    const descriptor = openSync(file, 'r');
+    const hash = createHash('sha256');
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+
+    try {
+      while (true) {
+        const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+
+        if (bytesRead === 0) {
+          break;
+        }
+
+        hash.update(buffer.subarray(0, bytesRead));
+      }
+    } finally {
+      closeSync(descriptor);
+    }
+
+    return hash.digest('hex');
+  } catch (error) {
+    throw new Error(`Failed to hash ${label} ${file}: ${formatError(error)}`);
+  }
 }
 
 function readCanonicalDirectory(input: string, label: string): string {
@@ -575,6 +623,10 @@ function readCanonicalFileInside(root: string, input: string, label: string): st
 function assertOutputFileInside(root: string, file: string, label: string): void {
   const parent = readCanonicalDirectory(path.dirname(file), `${label} directory`);
   assertInside(root, parent, label);
+
+  if (existsSync(file) && lstatSync(file).isSymbolicLink()) {
+    throw new Error(`${label} must not be a symbolic link: ${file}`);
+  }
 }
 
 function assertInside(root: string, candidate: string, label: string): void {
@@ -587,8 +639,4 @@ function assertInside(root: string, candidate: string, label: string): void {
 
 function compareCodeUnits(left: string, right: string): number {
   return left < right ? -1 : left > right ? 1 : 0;
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
