@@ -687,6 +687,17 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
       platformImpressionId: 'different-request-correlation',
     }),
   );
+  const requestCorrelationMissingRequest: ClaimAdRewardRequest = {
+    target: 'ait',
+    playerId: 'ait-player-1',
+    placementId: 'CONFORMANCE_REWARD',
+    idempotencyKey: 'reward-request-correlation-missing',
+    completedAt: '2030-01-02T03:01:00.000Z',
+    evidence: rewardEvidence('ait-correlation-1'),
+  };
+  const requestCorrelationMissing = await context.backend.adRewards.claimAdReward(
+    requestCorrelationMissingRequest,
+  );
   const failed = await context.backend.adRewards.claimAdReward(rewardRequest());
   const correlationMismatch = await context.backend.adRewards.claimAdReward(
     rewardRequestForCorrelation('ait-correlation-mismatch', {
@@ -736,6 +747,11 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
     requestCorrelationMismatch.reason,
     'AIT_REWARD_CORRELATION_ID_MISMATCH',
     'reward request correlation mismatch',
+  );
+  assertEqual(
+    requestCorrelationMissing.reason,
+    'AIT_REWARD_REQUEST_CORRELATION_ID_REQUIRED',
+    'reward request correlation required',
   );
   assertEqual(
     correlationMismatch.reason,
