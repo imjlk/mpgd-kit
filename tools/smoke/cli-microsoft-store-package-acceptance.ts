@@ -77,6 +77,14 @@ try {
     publisher: publisherId,
     version: '1.2.3.4',
   });
+  assert.deepEqual(
+    parseMicrosoftStorePackageIdentity(identityXml(packageId, 'CN=Acme&#x2c; Inc')),
+    {
+      name: packageId,
+      publisher: 'CN=Acme, Inc',
+      version: '1.2.3.4',
+    },
+  );
   assert.equal(parseWindowsAppCertificationResult('<REPORT OVERALL_RESULT="Pass"/>'), 'PASS');
   assert.throws(
     () => parseWindowsAppCertificationResult('<REPORT OVERALL_RESULT="UNKNOWN"/>'),

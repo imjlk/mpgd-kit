@@ -1277,6 +1277,11 @@ const targetCommand = defineI18n({
           .map((file) => file.trim())
           .filter((file) => file.length > 0)
           .map((file) => resolveGameRelativePath(gameRoot, file));
+
+        if (packages.length === 0) {
+          throw new Error('--packages must be a non-empty comma-separated list.');
+        }
+
         const outputDir = resolveGameRelativePath(
           gameRoot,
           readOptionalString(ctx.values['output-dir']) ?? 'release-output/microsoft-store',

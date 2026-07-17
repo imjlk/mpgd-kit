@@ -498,7 +498,29 @@ function requireXmlAttribute(attributes: ReadonlyMap<string, string>, name: stri
 }
 
 function decodeXmlAttribute(value: string): string {
-  return value
+  const numericDecoded = value.replace(
+    /&#(?:x([0-9A-Fa-f]+)|([0-9]+));/gu,
+    (_reference, hexadecimal: string | undefined, decimal: string | undefined) => {
+      const codePoint = Number.parseInt(hexadecimal ?? decimal ?? '', hexadecimal === undefined ? 10 : 16);
+
+      if (
+        !Number.isInteger(codePoint)
+        || codePoint === 0
+        || codePoint > 0x10ffff
+        || (codePoint >= 0xd800 && codePoint <= 0xdfff)
+      ) {
+        throw new Error(`Microsoft Store XML contains an invalid character reference: ${value}`);
+      }
+
+      return String.fromCodePoint(codePoint);
+    },
+  );
+
+  if (/&(?!(?:quot|apos|lt|gt|amp);)/u.test(numericDecoded)) {
+    throw new Error(`Microsoft Store XML contains an unsupported entity reference: ${value}`);
+  }
+
+  return numericDecoded
     .replaceAll('&quot;', '"')
     .replaceAll('&apos;', "'")
     .replaceAll('&lt;', '<')
@@ -765,7 +787,7 @@ function assertInside(root: string, candidate: string, label: string): void {
   const relative = path.relative(root, candidate);
 
   if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error(`${label} must stay inside the game root.`);
+    throw new Error(`${label} must stay inside its allowed root: ${root}`);
   }
 }
 
