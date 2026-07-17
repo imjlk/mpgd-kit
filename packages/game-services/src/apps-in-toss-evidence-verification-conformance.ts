@@ -687,6 +687,7 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
       platformImpressionId: 'different-request-correlation',
     }),
   );
+  // Build this request directly so platformImpressionId is absent, not present with undefined.
   const requestCorrelationMissingRequest: ClaimAdRewardRequest = {
     target: 'ait',
     playerId: 'ait-player-1',
@@ -775,6 +776,11 @@ async function runAuthorityErrorsAndRewardMatchingScenario(
     rewardOversizedReason.reason,
     'AIT_REWARD_AUTHORITY_ERROR',
     'oversized reward authority reason must fail closed',
+  );
+  assertEqual(
+    fixture.rewardInputs.length,
+    8,
+    'request-level correlation failures must not call the reward authority',
   );
   await assertEntitlementCount(context.store, 0, 'reward errors and mismatches');
 }
