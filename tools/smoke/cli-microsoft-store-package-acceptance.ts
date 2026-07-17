@@ -211,7 +211,7 @@ try {
       { gameRoot, submissionEvidenceFile, packageFiles: [escapedPackage], outputDir },
       runtime,
     ),
-    /must stay inside the game root/u,
+    /Microsoft Store package must stay inside its allowed root/u,
   );
 
   const outsideEvidence = join(fixtureRoot, 'outside-evidence.json');
