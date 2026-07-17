@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import {
@@ -22,6 +21,7 @@ const packageId = '12345Acme.FixtureGame';
 const publisherId = 'CN=01234567-89ab-cdef-0123-456789abcdef';
 let emittedPublisherId = publisherId;
 let certificationResult: 'PASS' | 'FAIL' = 'PASS';
+let emitSymlinkPayload = false;
 let mutatePackageDuringCertification = false;
 
 try {
@@ -103,6 +103,16 @@ try {
   );
   emittedPublisherId = publisherId;
 
+  emitSymlinkPayload = true;
+  assert.throws(
+    () => runMicrosoftStorePackageAcceptance(
+      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+      runtime,
+    ),
+    /package symlink is not allowed/u,
+  );
+  emitSymlinkPayload = false;
+
   mutatePackageDuringCertification = true;
   assert.throws(
     () => runMicrosoftStorePackageAcceptance(
@@ -157,6 +167,11 @@ function runCommand(command: string, args: readonly string[]): void {
         identityXml(packageId, emittedPublisherId),
       );
       writeFileSync(join(outputDirArg, 'neutral.appx'), 'fixture payload');
+
+      if (emitSymlinkPayload) {
+        symlinkSync(packageFile, join(outputDirArg, 'linked.appx'));
+      }
+
       return;
     }
 

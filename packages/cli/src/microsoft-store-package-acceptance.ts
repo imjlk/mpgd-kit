@@ -24,6 +24,8 @@ import { escapeMarkdownInline, escapeMarkdownTable, relativeOrAbsolute } from '.
 export const microsoftStorePackageAcceptanceSchemaVersion = 1 as const;
 
 const supportedPackageExtensions = ['.appx', '.appxbundle', '.msix', '.msixbundle'] as const;
+const maximumWindowsPackageCommandDurationMs = 60 * 60 * 1_000;
+const maximumWindowsPackageCommandOutputBytes = 16 * 1024 * 1024;
 
 export interface MicrosoftStorePackageIdentity {
   readonly name: string;
@@ -183,7 +185,7 @@ export function runMicrosoftStorePackageAcceptance(
 
       const reportFile = path.join(
         outputDir,
-        `${String(index + 1).padStart(2, '0')}-${safeFileStem(path.basename(packageFile))}.wack.xml`,
+        `${String(index + 1).padStart(2, '0')}-${safeFileNameSegment(path.basename(packageFile))}.wack.xml`,
       );
 
       rmSync(reportFile, { force: true });
@@ -325,6 +327,10 @@ function inspectPackage(input: {
 
   if (extension === '.appxbundle' || extension === '.msixbundle') {
     const bundleDir = path.join(input.tempRoot, 'bundle');
+    const canonicalTempRoot = readCanonicalDirectory(
+      input.tempRoot,
+      'Microsoft Store package inspection directory',
+    );
     input.runtime.runCommand(input.runtime.makeAppxExecutable, [
       'unbundle',
       '/p',
@@ -335,6 +341,11 @@ function inspectPackage(input: {
     ]);
     const canonicalBundleDir = readCanonicalDirectory(
       bundleDir,
+      'Microsoft Store unpacked bundle directory',
+    );
+    assertInside(
+      canonicalTempRoot,
+      canonicalBundleDir,
       'Microsoft Store unpacked bundle directory',
     );
 
@@ -384,6 +395,10 @@ function inspectSinglePackage(
   outputDir: string,
   runtime: MicrosoftStorePackageAcceptanceRuntime,
 ): MicrosoftStorePackageIdentity {
+  const canonicalParent = readCanonicalDirectory(
+    path.dirname(outputDir),
+    'Microsoft Store package inspection directory',
+  );
   runtime.runCommand(runtime.makeAppxExecutable, [
     'unpack',
     '/p',
@@ -396,6 +411,7 @@ function inspectSinglePackage(
     outputDir,
     'Microsoft Store unpacked package directory',
   );
+  assertInside(canonicalParent, canonicalOutputDir, 'Microsoft Store unpacked package directory');
 
   return parseMicrosoftStorePackageIdentity(
     readFileSync(
@@ -523,18 +539,47 @@ function readCanonicalTool(file: string, label: string): string {
 
 function runWindowsCommand(command: string, args: readonly string[]): void {
   const result = spawnSync(command, [...args], {
-    stdio: 'inherit',
+    encoding: 'utf8',
+    killSignal: 'SIGTERM',
+    maxBuffer: maximumWindowsPackageCommandOutputBytes,
+    timeout: maximumWindowsPackageCommandDurationMs,
     windowsHide: true,
   });
+  const output = [result.stdout, result.stderr]
+    .filter((value) => value.length > 0)
+    .join('\n')
+    .trim();
 
   if (result.error !== undefined) {
-    throw result.error;
+    if (isTimeoutError(result.error)) {
+      throw new Error(
+        `Windows package command timed out after ${maximumWindowsPackageCommandDurationMs}ms: ${command} ${args.join(' ')}${formatCommandOutput(output)}`,
+      );
+    }
+
+    throw new Error(
+      `Windows package command could not complete: ${command} ${args.join(' ')} (${formatError(result.error)})${formatCommandOutput(output)}`,
+    );
+  }
+
+  if (result.signal !== null) {
+    throw new Error(
+      `Windows package command was killed by signal ${result.signal}: ${command} ${args.join(' ')}${formatCommandOutput(output)}`,
+    );
   }
 
   if (result.status !== 0) {
     throw new Error(
-      `Windows package command failed with exit code ${String(result.status)}: ${command} ${args.join(' ')}`,
+      `Windows package command failed with exit code ${String(result.status)}: ${command} ${args.join(' ')}${formatCommandOutput(output)}`,
     );
+  }
+
+  if (result.stdout.length > 0) {
+    process.stdout.write(result.stdout);
+  }
+
+  if (result.stderr.length > 0) {
+    process.stderr.write(result.stderr);
   }
 }
 
@@ -544,7 +589,9 @@ function listFiles(dir: string): readonly string[] {
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     const file = path.join(dir, entry.name);
 
-    if (entry.isDirectory()) {
+    if (entry.isSymbolicLink()) {
+      throw new Error(`Unpacked package symlink is not allowed: ${file}`);
+    } else if (entry.isDirectory()) {
       files.push(...listFiles(file));
     } else if (entry.isFile()) {
       files.push(file);
@@ -746,13 +793,32 @@ function requireNonEmptyString(input: unknown, label: string): string {
   return input;
 }
 
-function safeFileStem(value: string): string {
+function safeFileNameSegment(value: string): string {
   const stem = value.replace(/[^A-Za-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '');
   return stem.length === 0 ? 'package' : stem;
 }
 
 function compareCodeUnits(left: string, right: string): number {
-  return left < right ? -1 : left > right ? 1 : 0;
+  if (left < right) {
+    return -1;
+  }
+
+  if (left > right) {
+    return 1;
+  }
+
+  return 0;
+}
+
+function isTimeoutError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === 'ETIMEDOUT';
+}
+
+function formatCommandOutput(output: string): string {
+  return output.length === 0 ? '' : `\n${output}`;
 }
 
 function formatError(error: unknown): string {
