@@ -1123,6 +1123,13 @@ const targetCommand = defineI18n({
           readOptionalString(ctx.values['targets-file']) ?? 'mpgd.targets.json',
         );
         const gameRoot = path.dirname(targetsFile);
+        const commandEnv = createTargetCommandEnv(ctx.values);
+        const preparedTargetsFile = commandEnv.MPGD_PLATFORM_TARGETS_FILE;
+
+        if (preparedTargetsFile === undefined || preparedTargetsFile.length === 0) {
+          throw new Error('Failed to prepare the game target config for submission preflight.');
+        }
+
         const configFile = resolveGameRelativePath(
           gameRoot,
           readOptionalString(ctx.values['submission-file']) ?? 'mpgd.microsoft-store.json',
@@ -1136,7 +1143,7 @@ const targetCommand = defineI18n({
         mkdirSync(outputDir, { recursive: true });
         const evidence = runMicrosoftStoreSubmissionPreflight({
           gameRoot,
-          artifactRoot: resolveMicrosoftStoreArtifactRoot(targetsFile),
+          artifactRoot: resolveMicrosoftStoreArtifactRoot(preparedTargetsFile),
           configFile,
           jsonFile: path.join(outputDir, 'submission-preflight.json'),
           markdownFile: path.join(outputDir, 'submission-preflight.md'),

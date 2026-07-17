@@ -29,7 +29,7 @@ try {
         kind: 'web',
         gameApp: '.',
         adapter: 'browser',
-        output: 'artifacts/microsoft-store',
+        output: '${MPGD_GAME_ROOT}/artifacts/microsoft-store',
       },
     },
   });
@@ -208,6 +208,20 @@ try {
     'at most 10 files',
   );
 
+  const ordinaryDescription = parseMicrosoftStoreSubmissionConfig({
+    ...base,
+    listing: {
+      ...base.listing,
+      locales: {
+        'en-US': {
+          ...base.listing.locales['en-US'],
+          description: 'Collect a sample and bring it back to your research station.',
+        },
+      },
+    },
+  });
+  assert.match(ordinaryDescription.listing.locales['en-US']?.description ?? '', /sample/u);
+
   for (const packageId of ['ab', 'con', 'abc.', 'xn--fixture', 'fixture.xn--name']) {
     expectConfigError(
       {
@@ -221,17 +235,22 @@ try {
     );
   }
 
-  writeFileSync(screenshotFile, 'not a PNG');
-  assert.throws(
-    () => runMicrosoftStoreSubmissionPreflight({
-      gameRoot,
-      artifactRoot,
-      configFile: submissionFile,
-      jsonFile: join(outputDir, 'invalid-screenshot.json'),
-      markdownFile: join(outputDir, 'invalid-screenshot.md'),
-    }),
-    /must be a valid PNG/u,
-  );
+  for (const invalidScreenshot of [
+    Buffer.from('not a PNG'),
+    createPngWithEmptyImageData(1366, 768),
+  ]) {
+    writeFileSync(screenshotFile, invalidScreenshot);
+    assert.throws(
+      () => runMicrosoftStoreSubmissionPreflight({
+        gameRoot,
+        artifactRoot,
+        configFile: submissionFile,
+        jsonFile: join(outputDir, 'invalid-screenshot.json'),
+        markdownFile: join(outputDir, 'invalid-screenshot.md'),
+      }),
+      /must be a valid PNG/u,
+    );
+  }
   writeFileSync(screenshotFile, validScreenshot);
 
   const originalSubmission = readFileSync(submissionFile, 'utf8');
@@ -362,6 +381,21 @@ function createPng(width: number, height: number): Buffer {
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     createPngChunk('IHDR', header),
     createPngChunk('IDAT', deflateSync(pixels)),
+    createPngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+function createPngWithEmptyImageData(width: number, height: number): Buffer {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    createPngChunk('IHDR', header),
+    createPngChunk('IDAT', Buffer.alloc(0)),
     createPngChunk('IEND', Buffer.alloc(0)),
   ]);
 }

@@ -13,6 +13,7 @@ import {
 } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
+import { inflateSync } from 'node:zlib';
 
 import {
   escapeMarkdownInline,
@@ -598,10 +599,18 @@ function requireIdentityToken(input: unknown, label: string): string {
 
 function requireProductionString(input: unknown, label: string): string {
   const value = requireNonEmptyString(input, label);
+  const exactTemplateToken = /^(?:TODO|FIXME|PLACEHOLDER|DUMMY|SAMPLE|LOREM(?:_IPSUM)?)$/u;
+  const templateIdentityField =
+    label.startsWith('productIdentity.')
+    || label.startsWith('web app manifest')
+    || label === 'ageRating.iarcId';
 
   if (
-    /contoso|change[-_ ]?me|replace[-_ ]?me|your[-_ ]|\b(?:todo|fixme|placeholder|dummy|sample|lorem)\b/iu
-      .test(value)
+    exactTemplateToken.test(value)
+    || (
+      templateIdentityField
+      && /contoso|change[-_ ]?me|replace[-_ ]?me|^your[-_ ][A-Za-z0-9_-]+$/iu.test(value)
+    )
   ) {
     throw new Error(`${label} still contains placeholder content.`);
   }
@@ -690,7 +699,7 @@ function readMicrosoftStoreScreenshot(file: string): {
       throw new Error(`Microsoft Store screenshot must not exceed 50 MB: ${file}`);
     }
 
-    const header = Buffer.alloc(24);
+    const header = Buffer.alloc(29);
 
     if (readSync(descriptor, header, 0, header.length, 0) !== header.length) {
       throw new Error(`Microsoft Store screenshot must be a valid PNG: ${file}`);
@@ -708,6 +717,11 @@ function readMicrosoftStoreScreenshot(file: string): {
 
     const width = header.readUInt32BE(16);
     const height = header.readUInt32BE(20);
+    const bitDepth = header[24] ?? 0;
+    const colorType = header[25] ?? 0;
+    const compressionMethod = header[26] ?? 0;
+    const filterMethod = header[27] ?? 0;
+    const interlaceMethod = header[28] ?? 0;
 
     if (Math.max(width, height) < 1366 || Math.min(width, height) < 768) {
       throw new Error(
@@ -715,7 +729,18 @@ function readMicrosoftStoreScreenshot(file: string): {
       );
     }
 
-    assertPngChunkStructure(descriptor, before.size, file);
+    assertDecodedPng({
+      descriptor,
+      size: before.size,
+      file,
+      width,
+      height,
+      bitDepth,
+      colorType,
+      compressionMethod,
+      filterMethod,
+      interlaceMethod,
+    });
     const sha256 = hashOpenFile(descriptor);
     const after = fstatSync(descriptor);
 
@@ -733,15 +758,53 @@ function readMicrosoftStoreScreenshot(file: string): {
   }
 }
 
-function assertPngChunkStructure(descriptor: number, size: number, file: string): void {
+function assertDecodedPng(input: {
+  readonly descriptor: number;
+  readonly size: number;
+  readonly file: string;
+  readonly width: number;
+  readonly height: number;
+  readonly bitDepth: number;
+  readonly colorType: number;
+  readonly compressionMethod: number;
+  readonly filterMethod: number;
+  readonly interlaceMethod: number;
+}): void {
+  const channels = pngColorChannels(input.colorType);
+  const supportedBitDepths = pngSupportedBitDepths(input.colorType);
+
+  if (
+    input.width === 0
+    || input.height === 0
+    || !supportedBitDepths.includes(input.bitDepth)
+    || input.compressionMethod !== 0
+    || input.filterMethod !== 0
+    || (input.interlaceMethod !== 0 && input.interlaceMethod !== 1)
+  ) {
+    throw new Error(`Microsoft Store screenshot must be a valid PNG: ${input.file}`);
+  }
+
+  const passes = calculatePngPasses(
+    input.width,
+    input.height,
+    channels * input.bitDepth,
+    input.interlaceMethod,
+    input.file,
+  );
   let offset = 8;
   let chunkIndex = 0;
   let foundImageData = false;
   let foundEnd = false;
+  let imageDataEnded = false;
+  let foundPalette = false;
+  const imageData: Buffer[] = [];
   const chunkHeader = Buffer.alloc(8);
 
-  while (offset + 12 <= size) {
-    if (readSync(descriptor, chunkHeader, 0, chunkHeader.length, offset) !== chunkHeader.length) {
+  while (offset + 12 <= input.size) {
+    if (
+      readSync(input.descriptor, chunkHeader, 0, chunkHeader.length, offset)
+      !== chunkHeader.length
+    ) {
       break;
     }
 
@@ -749,16 +812,46 @@ function assertPngChunkStructure(descriptor: number, size: number, file: string)
     const type = chunkHeader.toString('ascii', 4, 8);
     const nextOffset = offset + 12 + dataLength;
 
-    if (nextOffset > size || (chunkIndex === 0 && (type !== 'IHDR' || dataLength !== 13))) {
+    if (
+      nextOffset > input.size
+      || (chunkIndex === 0 && (type !== 'IHDR' || dataLength !== 13))
+      || (chunkIndex > 0 && type === 'IHDR')
+    ) {
       break;
     }
 
+    const data = Buffer.alloc(dataLength);
+    const storedCrc = Buffer.alloc(4);
+
+    if (
+      readSync(input.descriptor, data, 0, data.length, offset + 8) !== data.length
+      || readSync(input.descriptor, storedCrc, 0, 4, offset + 8 + dataLength) !== 4
+      || storedCrc.readUInt32BE(0) !== crc32Png([chunkHeader.subarray(4, 8), data])
+    ) {
+      break;
+    }
+
+    if (type === 'PLTE') {
+      if (foundImageData || dataLength === 0 || dataLength % 3 !== 0 || dataLength > 768) {
+        break;
+      }
+
+      foundPalette = true;
+    }
+
     if (type === 'IDAT') {
+      if (imageDataEnded) {
+        break;
+      }
+
       foundImageData = true;
+      imageData.push(data);
+    } else if (foundImageData && type !== 'IEND') {
+      imageDataEnded = true;
     }
 
     if (type === 'IEND') {
-      foundEnd = dataLength === 0 && nextOffset === size;
+      foundEnd = dataLength === 0 && nextOffset === input.size;
       break;
     }
 
@@ -766,9 +859,131 @@ function assertPngChunkStructure(descriptor: number, size: number, file: string)
     chunkIndex += 1;
   }
 
-  if (!foundImageData || !foundEnd) {
-    throw new Error(`Microsoft Store screenshot must be a valid PNG: ${file}`);
+  if (!foundImageData || !foundEnd || (input.colorType === 3 && !foundPalette)) {
+    throw new Error(`Microsoft Store screenshot must be a valid PNG: ${input.file}`);
   }
+
+  const expectedBytes = passes.reduce(
+    (total, pass) => total + (pass.rowBytes + 1) * pass.rowCount,
+    0,
+  );
+  const maximumDecodedScreenshotBytes = 256 * 1024 * 1024;
+
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes > maximumDecodedScreenshotBytes) {
+    throw new Error(`Microsoft Store screenshot decoded pixel data is too large: ${input.file}`);
+  }
+
+  let decoded: Buffer;
+
+  try {
+    decoded = inflateSync(Buffer.concat(imageData), { maxOutputLength: expectedBytes });
+  } catch {
+    throw new Error(`Microsoft Store screenshot must be a valid PNG: ${input.file}`);
+  }
+
+  if (decoded.length !== expectedBytes) {
+    throw new Error(`Microsoft Store screenshot must be a valid PNG: ${input.file}`);
+  }
+
+  let decodedOffset = 0;
+
+  for (const pass of passes) {
+    for (let row = 0; row < pass.rowCount; row += 1) {
+      if ((decoded[decodedOffset] ?? 5) > 4) {
+        throw new Error(`Microsoft Store screenshot must be a valid PNG: ${input.file}`);
+      }
+
+      decodedOffset += pass.rowBytes + 1;
+    }
+  }
+}
+
+function pngColorChannels(colorType: number): number {
+  const channels = new Map([
+    [0, 1],
+    [2, 3],
+    [3, 1],
+    [4, 2],
+    [6, 4],
+  ]).get(colorType);
+
+  if (channels === undefined) {
+    return 0;
+  }
+
+  return channels;
+}
+
+function pngSupportedBitDepths(colorType: number): readonly number[] {
+  switch (colorType) {
+    case 0:
+      return [1, 2, 4, 8, 16];
+    case 2:
+    case 4:
+    case 6:
+      return [8, 16];
+    case 3:
+      return [1, 2, 4, 8];
+    default:
+      return [];
+  }
+}
+
+function calculatePngPasses(
+  width: number,
+  height: number,
+  bitsPerPixel: number,
+  interlaceMethod: number,
+  file: string,
+): readonly { readonly rowBytes: number; readonly rowCount: number }[] {
+  const patterns = interlaceMethod === 0
+    ? [[0, 0, 1, 1] as const]
+    : [
+        [0, 0, 8, 8] as const,
+        [4, 0, 8, 8] as const,
+        [0, 4, 4, 8] as const,
+        [2, 0, 4, 4] as const,
+        [0, 2, 2, 4] as const,
+        [1, 0, 2, 2] as const,
+        [0, 1, 1, 2] as const,
+      ];
+
+  return patterns.flatMap(([xStart, yStart, xStep, yStep]) => {
+    const passWidth = pngPassLength(width, xStart, xStep);
+    const rowCount = pngPassLength(height, yStart, yStep);
+
+    if (passWidth === 0 || rowCount === 0) {
+      return [];
+    }
+
+    const rowBytes = Math.ceil((passWidth * bitsPerPixel) / 8);
+
+    if (!Number.isSafeInteger(rowBytes) || !Number.isSafeInteger((rowBytes + 1) * rowCount)) {
+      throw new Error(`Microsoft Store screenshot decoded pixel data is too large: ${file}`);
+    }
+
+    return [{ rowBytes, rowCount }];
+  });
+}
+
+function pngPassLength(size: number, start: number, step: number): number {
+  return size <= start ? 0 : Math.ceil((size - start) / step);
+}
+
+function crc32Png(parts: readonly Buffer[]): number {
+  let crc = 0xffff_ffff;
+
+  for (const part of parts) {
+    for (const byte of part) {
+      crc ^= byte;
+
+      for (let bit = 0; bit < 8; bit += 1) {
+        crc = (crc >>> 1) ^ (crc & 1 ? 0xedb8_8320 : 0);
+      }
+    }
+  }
+
+  return (crc ^ 0xffff_ffff) >>> 0;
 }
 
 function readJson(file: string, label: string): unknown {
