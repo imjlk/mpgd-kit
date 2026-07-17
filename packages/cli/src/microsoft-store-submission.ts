@@ -77,6 +77,12 @@ export interface MicrosoftStoreSubmissionEvidence {
     readonly startUrl: string;
     readonly scope: string;
     readonly iconCount: number;
+    readonly icons: readonly {
+      readonly file: string;
+      readonly sha256: string;
+      readonly width: number;
+      readonly height: number;
+    }[];
   };
   readonly listing: {
     readonly category: 'Games';
@@ -126,11 +132,15 @@ export function runMicrosoftStoreSubmissionPreflight(
     'Microsoft Store web app manifest',
   );
   const manifestSnapshot = readJsonSnapshot(manifestFile, 'web app manifest', 1024 * 1024);
-  const manifest = parseManifest(manifestSnapshot.value);
+  const manifest = parseManifest(manifestSnapshot.value, artifactRoot);
   const warnings = collectManifestWarnings(manifest, config.productIdentity.reservedName);
   const protectedFiles: { readonly file: string; readonly label: string }[] = [
     { file: configFile, label: 'Microsoft Store submission config' },
     { file: manifestFile, label: 'Microsoft Store web app manifest' },
+    ...manifest.icons.map((icon) => ({
+      file: icon.file,
+      label: 'Microsoft Store web app manifest icon',
+    })),
   ];
   const locales = Object.fromEntries(
     Object.entries(config.listing.locales)
@@ -175,7 +185,13 @@ export function runMicrosoftStoreSubmissionPreflight(
       shortName: manifest.shortName,
       startUrl: manifest.startUrl,
       scope: manifest.scope,
-      iconCount: manifest.iconCount,
+      iconCount: manifest.icons.length,
+      icons: manifest.icons.map((icon) => ({
+        file: relativeOrAbsolute(gameRoot, icon.file),
+        sha256: icon.sha256,
+        width: icon.width,
+        height: icon.height,
+      })),
     },
     listing: {
       category: config.listing.category,
@@ -302,6 +318,7 @@ export function renderMicrosoftStoreSubmissionMarkdown(
     `- Publisher ID: ${escapeMarkdownInline(evidence.productIdentity.publisherId)}`,
     `- Reserved name: ${escapeMarkdownInline(evidence.productIdentity.reservedName)}`,
     `- Manifest: ${escapeMarkdownInline(evidence.manifest.file)} (${evidence.manifest.sha256})`,
+    `- Manifest icons: ${evidence.manifest.iconCount}`,
     `- Commerce: ${evidence.commerce.mode}`,
     `- Personal data accessed or transmitted: ${String(evidence.listing.personalData.accessedOrTransmitted)}`,
     `- Privacy policy: ${escapeMarkdownInline(evidence.listing.personalData.privacyPolicyUrl ?? 'Not required')}`,
@@ -336,10 +353,15 @@ interface ParsedManifest {
   readonly shortName: string;
   readonly startUrl: string;
   readonly scope: string;
-  readonly iconCount: number;
+  readonly icons: readonly {
+    readonly file: string;
+    readonly sha256: string;
+    readonly width: number;
+    readonly height: number;
+  }[];
 }
 
-function parseManifest(input: unknown): ParsedManifest {
+function parseManifest(input: unknown, artifactRoot: string): ParsedManifest {
   const manifest = requireRecord(input, 'web app manifest');
   const icons = requireArray(manifest.icons, 'web app manifest icons');
 
@@ -347,10 +369,37 @@ function parseManifest(input: unknown): ParsedManifest {
     throw new Error('Web app manifest icons must not be empty.');
   }
 
-  for (const [index, icon] of icons.entries()) {
+  const parsedIcons = icons.map((icon, index) => {
     const record = requireRecord(icon, `web app manifest icons[${index}]`);
-    requireNonEmptyString(record.src, `web app manifest icons[${index}].src`);
-  }
+    const label = `web app manifest icons[${index}]`;
+    const src = requireManifestUrl(record.src, `${label}.src`);
+    const type = requireNonEmptyString(record.type, `${label}.type`);
+    const sizes = requireNonEmptyString(record.sizes, `${label}.sizes`);
+    const sizeMatch = /^(\d+)x(\d+)$/u.exec(sizes);
+
+    if (type !== 'image/png') {
+      throw new Error(`${label}.type must be image/png.`);
+    }
+
+    if (sizeMatch === null) {
+      throw new Error(`${label}.sizes must declare one width and height in pixels.`);
+    }
+
+    const declaredWidth = Number(sizeMatch[1]);
+    const declaredHeight = Number(sizeMatch[2]);
+    const iconFile = readManifestAssetFile(artifactRoot, src, label);
+    const image = readMicrosoftStorePng(iconFile, {
+      label,
+      maximumBytes: maximumStoreScreenshotBytes,
+      validateDimensions: (width, height) => {
+        if (width !== declaredWidth || height !== declaredHeight) {
+          throw new Error(`${label} dimensions must match ${sizes}: ${iconFile}`);
+        }
+      },
+    });
+
+    return { file: iconFile, ...image };
+  });
 
   return {
     source: manifest,
@@ -359,7 +408,7 @@ function parseManifest(input: unknown): ParsedManifest {
     shortName: requireProductionString(manifest.short_name, 'web app manifest short_name'),
     startUrl: requireManifestUrl(manifest.start_url, 'web app manifest start_url'),
     scope: requireManifestUrl(manifest.scope, 'web app manifest scope'),
-    iconCount: icons.length,
+    icons: parsedIcons,
   };
 }
 
@@ -454,13 +503,37 @@ function parseListings(input: unknown): MicrosoftStoreSubmissionConfig['listing'
 
 function requireManifestUrl(input: unknown, label: string): string {
   const value = requireNonEmptyString(input, label);
-  const url = new URL(value, 'https://mpgd.invalid/');
+  const base = new URL('https://mpgd.invalid/');
+  const url = new URL(value, base);
 
-  if (url.protocol !== 'https:') {
-    throw new Error(`${label} must resolve to HTTPS.`);
+  if (
+    !value.startsWith('./')
+    || url.origin !== base.origin
+    || url.pathname.startsWith('//')
+    || value !== `.${url.pathname}${url.search}${url.hash}`
+  ) {
+    throw new Error(`${label} must be an artifact-relative URL beginning with ./`);
   }
 
   return value;
+}
+
+function readManifestAssetFile(artifactRoot: string, src: string, label: string): string {
+  const url = new URL(src, 'https://mpgd.invalid/');
+
+  if (url.search.length > 0 || url.hash.length > 0) {
+    throw new Error(`${label}.src must identify one artifact file without a query or fragment.`);
+  }
+
+  let pathname: string;
+
+  try {
+    pathname = decodeURIComponent(url.pathname);
+  } catch {
+    throw new Error(`${label}.src must use valid URL encoding.`);
+  }
+
+  return readCanonicalFileInside(artifactRoot, path.resolve(artifactRoot, `.${pathname}`), label);
 }
 
 function requirePublicHttpsUrl(input: unknown, label: string): string {
@@ -526,9 +599,18 @@ function requirePublisherDistinguishedName(input: unknown, label: string): strin
     ) {
       throw new Error(`${label} must be a complete X.509 distinguished name beginning with CN=.`);
     }
+
+    requireProductionString(
+      unwrapDistinguishedNameValue(attributeValue),
+      `${label} ${attribute} value`,
+    );
   }
 
   return value;
+}
+
+function unwrapDistinguishedNameValue(value: string): string {
+  return value.startsWith('"') && value.endsWith('"') ? value.slice(1, -1) : value;
 }
 
 function splitDistinguishedName(value: string, label: string): readonly string[] {
@@ -698,8 +780,37 @@ function readMicrosoftStoreScreenshot(file: string): {
   readonly height: number;
   readonly sha256: string;
 } {
+  return readMicrosoftStorePng(file, {
+    label: 'Microsoft Store screenshot',
+    maximumBytes: maximumStoreScreenshotBytes,
+    validateDimensions: (width, height) => {
+      if (
+        width === height
+        || Math.max(width, height) < minimumStoreScreenshotLongEdge
+        || Math.min(width, height) < minimumStoreScreenshotShortEdge
+      ) {
+        throw new Error(
+          `Microsoft Store desktop screenshot must be landscape or portrait and at least ${minimumStoreScreenshotLongEdge} x ${minimumStoreScreenshotShortEdge}: ${file}`,
+        );
+      }
+    },
+  });
+}
+
+function readMicrosoftStorePng(
+  file: string,
+  input: {
+    readonly label: string;
+    readonly maximumBytes: number;
+    readonly validateDimensions: (width: number, height: number) => void;
+  },
+): {
+  readonly width: number;
+  readonly height: number;
+  readonly sha256: string;
+} {
   if (path.extname(file).toLowerCase() !== '.png') {
-    throw new Error(`Microsoft Store screenshot must be PNG: ${file}`);
+    throw new Error(`${input.label} must be PNG: ${file}`);
   }
 
   const descriptor = openSync(file, 'r');
@@ -707,14 +818,14 @@ function readMicrosoftStoreScreenshot(file: string): {
   try {
     const before = fstatSync(descriptor);
 
-    if (before.size > maximumStoreScreenshotBytes) {
-      throw new Error(`Microsoft Store screenshot must not exceed 50 MB: ${file}`);
+    if (before.size > input.maximumBytes) {
+      throw new Error(`${input.label} exceeds its maximum file size: ${file}`);
     }
 
     const header = Buffer.alloc(29);
 
     if (readSync(descriptor, header, 0, header.length, 0) !== header.length) {
-      throw new Error(`Microsoft Store screenshot must be a valid PNG: ${file}`);
+      throw new Error(`${input.label} must be a valid PNG: ${file}`);
     }
 
     const signature = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -724,7 +835,7 @@ function readMicrosoftStoreScreenshot(file: string): {
       || header.readUInt32BE(8) !== 13
       || header.toString('ascii', 12, 16) !== 'IHDR'
     ) {
-      throw new Error(`Microsoft Store screenshot must be a valid PNG: ${file}`);
+      throw new Error(`${input.label} must be a valid PNG: ${file}`);
     }
 
     const width = header.readUInt32BE(16);
@@ -735,15 +846,7 @@ function readMicrosoftStoreScreenshot(file: string): {
     const filterMethod = header[27] ?? 0;
     const interlaceMethod = header[28] ?? 0;
 
-    if (
-      width === height
-      || Math.max(width, height) < minimumStoreScreenshotLongEdge
-      || Math.min(width, height) < minimumStoreScreenshotShortEdge
-    ) {
-      throw new Error(
-        `Microsoft Store desktop screenshot must be landscape or portrait and at least ${minimumStoreScreenshotLongEdge} x ${minimumStoreScreenshotShortEdge}: ${file}`,
-      );
-    }
+    input.validateDimensions(width, height);
 
     assertDecodedPng({
       descriptor,
@@ -756,6 +859,7 @@ function readMicrosoftStoreScreenshot(file: string): {
       compressionMethod,
       filterMethod,
       interlaceMethod,
+      label: input.label,
     });
     const sha256 = hashOpenFile(descriptor);
     const after = fstatSync(descriptor);
@@ -765,7 +869,7 @@ function readMicrosoftStoreScreenshot(file: string): {
       || before.mtimeMs !== after.mtimeMs
       || before.ctimeMs !== after.ctimeMs
     ) {
-      throw new Error(`Microsoft Store screenshot changed while it was being validated: ${file}`);
+      throw new Error(`${input.label} changed while it was being validated: ${file}`);
     }
 
     return { width, height, sha256 };
@@ -785,6 +889,7 @@ function assertDecodedPng(input: {
   readonly compressionMethod: number;
   readonly filterMethod: number;
   readonly interlaceMethod: number;
+  readonly label: string;
 }): void {
   const channels = pngColorChannels(input.colorType);
   const supportedBitDepths = pngSupportedBitDepths(input.colorType);
@@ -797,7 +902,7 @@ function assertDecodedPng(input: {
     || input.filterMethod !== 0
     || (input.interlaceMethod !== 0 && input.interlaceMethod !== 1)
   ) {
-    throw new Error(`Microsoft Store screenshot must be a valid PNG: ${input.file}`);
+    throw new Error(`${input.label} must be a valid PNG: ${input.file}`);
   }
 
   const passes = calculatePngPasses(
@@ -806,6 +911,7 @@ function assertDecodedPng(input: {
     channels * input.bitDepth,
     input.interlaceMethod,
     input.file,
+    input.label,
   );
   let offset = 8;
   let chunkIndex = 0;
@@ -876,7 +982,7 @@ function assertDecodedPng(input: {
   }
 
   if (!foundImageData || !foundEnd || (input.colorType === 3 && !foundPalette)) {
-    throw new Error(`Microsoft Store screenshot must be a valid PNG: ${input.file}`);
+    throw new Error(`${input.label} must be a valid PNG: ${input.file}`);
   }
 
   const expectedBytes = passes.reduce(
@@ -884,7 +990,7 @@ function assertDecodedPng(input: {
     0,
   );
   if (!Number.isSafeInteger(expectedBytes) || expectedBytes > maximumDecodedScreenshotBytes) {
-    throw new Error(`Microsoft Store screenshot decoded pixel data is too large: ${input.file}`);
+    throw new Error(`${input.label} decoded pixel data is too large: ${input.file}`);
   }
 
   let decoded: Buffer;
@@ -892,11 +998,11 @@ function assertDecodedPng(input: {
   try {
     decoded = inflateSync(Buffer.concat(imageData), { maxOutputLength: expectedBytes });
   } catch {
-    throw new Error(`Microsoft Store screenshot must be a valid PNG: ${input.file}`);
+    throw new Error(`${input.label} must be a valid PNG: ${input.file}`);
   }
 
   if (decoded.length !== expectedBytes) {
-    throw new Error(`Microsoft Store screenshot must be a valid PNG: ${input.file}`);
+    throw new Error(`${input.label} must be a valid PNG: ${input.file}`);
   }
 
   let decodedOffset = 0;
@@ -904,7 +1010,7 @@ function assertDecodedPng(input: {
   for (const pass of passes) {
     for (let row = 0; row < pass.rowCount; row += 1) {
       if ((decoded[decodedOffset] ?? 5) > 4) {
-        throw new Error(`Microsoft Store screenshot must be a valid PNG: ${input.file}`);
+        throw new Error(`${input.label} must be a valid PNG: ${input.file}`);
       }
 
       decodedOffset += pass.rowBytes + 1;
@@ -949,6 +1055,7 @@ function calculatePngPasses(
   bitsPerPixel: number,
   interlaceMethod: number,
   file: string,
+  label: string,
 ): readonly { readonly rowBytes: number; readonly rowCount: number }[] {
   const patterns = interlaceMethod === 0
     ? [[0, 0, 1, 1] as const]
@@ -973,7 +1080,7 @@ function calculatePngPasses(
     const rowBytes = Math.ceil((passWidth * bitsPerPixel) / 8);
 
     if (!Number.isSafeInteger(rowBytes) || !Number.isSafeInteger((rowBytes + 1) * rowCount)) {
-      throw new Error(`Microsoft Store screenshot decoded pixel data is too large: ${file}`);
+      throw new Error(`${label} decoded pixel data is too large: ${file}`);
     }
 
     return [{ rowBytes, rowCount }];

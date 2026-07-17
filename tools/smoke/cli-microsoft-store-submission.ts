@@ -14,6 +14,8 @@ const gameRoot = join(fixtureRoot, 'game');
 const artifactRoot = join(gameRoot, 'artifacts', 'microsoft-store');
 const outputDir = join(gameRoot, 'release-output', 'microsoft-store');
 const screenshotFile = join(gameRoot, 'store-assets', 'en-US', '01.png');
+const manifestFile = join(artifactRoot, 'manifest.webmanifest');
+const iconFile = join(artifactRoot, 'icon.png');
 const targetsFile = join(gameRoot, 'mpgd.targets.json');
 const submissionFile = join(gameRoot, 'mpgd.microsoft-store.json');
 const kitRoot = process.cwd();
@@ -26,18 +28,8 @@ try {
   mkdirSync(artifactRoot, { recursive: true });
   mkdirSync(join(gameRoot, 'store-assets', 'en-US'), { recursive: true });
   const validScreenshot = createPng(1366, 768);
-  writeFileSync(screenshotFile, validScreenshot);
-  writeJson(targetsFile, {
-    targets: {
-      'microsoft-store': {
-        kind: 'web',
-        gameApp: '.',
-        adapter: 'browser',
-        output: '${MPGD_GAME_ROOT}/artifacts/microsoft-store',
-      },
-    },
-  });
-  writeJson(join(artifactRoot, 'manifest.webmanifest'), {
+  const validIcon = createPng(512, 512);
+  const validManifest = {
     id: 'com.acme.fixture-game',
     name: 'Fixture Game',
     short_name: 'Fixture',
@@ -50,7 +42,20 @@ try {
     screenshots: [{ src: './screenshot.png', sizes: '1280x720', type: 'image/png' }],
     categories: ['games'],
     icons: [{ src: './icon.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' }],
+  };
+  writeFileSync(screenshotFile, validScreenshot);
+  writeFileSync(iconFile, validIcon);
+  writeJson(targetsFile, {
+    targets: {
+      'microsoft-store': {
+        kind: 'web',
+        gameApp: '.',
+        adapter: 'browser',
+        output: '${MPGD_GAME_ROOT}/artifacts/microsoft-store',
+      },
+    },
   });
+  writeJson(manifestFile, validManifest);
   writeJson(submissionFile, validConfig());
   const spawnOptions = {
     cwd: gameRoot,
@@ -107,7 +112,7 @@ try {
     readFileSync(join(outputDir, 'submission-preflight.json'), 'utf8'),
   ) as {
     readonly target: string;
-    readonly manifest: { readonly id: string };
+    readonly manifest: { readonly id: string; readonly icons: readonly unknown[] };
     readonly listing: {
       readonly personalData: { readonly accessedOrTransmitted: boolean };
       readonly locales: Record<string, unknown>;
@@ -117,6 +122,7 @@ try {
   };
   assert.equal(evidence.target, 'microsoft-store');
   assert.equal(evidence.manifest.id, 'com.acme.fixture-game');
+  assert.equal(evidence.manifest.icons.length, 1);
   assert.equal(evidence.listing.personalData.accessedOrTransmitted, true);
   assert.deepEqual(Object.keys(evidence.listing.locales), ['en-US']);
   assert.equal(evidence.commerce.mode, 'disabled');
@@ -199,6 +205,13 @@ try {
     },
     'complete X.509 distinguished name',
   );
+  expectConfigError(
+    {
+      ...base,
+      productIdentity: { ...base.productIdentity, publisherId: 'CN=REPLACE_ME' },
+    },
+    'placeholder content',
+  );
 
   expectConfigError(
     {
@@ -258,6 +271,43 @@ try {
       'Windows package string|package string restrictions',
     );
   }
+
+  writeJson(manifestFile, { ...validManifest, start_url: 'https://outside.example/game' });
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'absolute-start-url.json'),
+      markdownFile: join(outputDir, 'absolute-start-url.md'),
+    }),
+    /artifact-relative URL/u,
+  );
+  writeJson(manifestFile, validManifest);
+
+  rmSync(iconFile);
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'missing-icon.json'),
+      markdownFile: join(outputDir, 'missing-icon.md'),
+    }),
+    /must exist/u,
+  );
+  writeFileSync(iconFile, Buffer.from('not a PNG'));
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'invalid-icon.json'),
+      markdownFile: join(outputDir, 'invalid-icon.md'),
+    }),
+    /must be a valid PNG/u,
+  );
+  writeFileSync(iconFile, validIcon);
 
   for (const invalidScreenshot of [
     Buffer.from('not a PNG'),
