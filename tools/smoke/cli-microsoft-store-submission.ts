@@ -153,6 +153,16 @@ try {
   expectConfigError(
     {
       ...base,
+      productIdentity: {
+        ...base.productIdentity,
+        publisherDisplayName: 'CHANGE_ME Inc',
+      },
+    },
+    'placeholder content',
+  );
+  expectConfigError(
+    {
+      ...base,
       listing: {
         ...base.listing,
         locales: {
