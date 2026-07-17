@@ -1,5 +1,14 @@
 # @mpgd/game-services
 
+## 0.10.0 — 2026-07-17
+
+### Added
+
+- [e20c08a](https://github.com/imjlk/mpgd-kit/commit/e20c08a59e15adb664022a120babb07bb1f18dca) Add a Google Play one-time-product server verification boundary with token-safe evidence identities and fixtures, independent account/profile binding resolvers, fail-closed rental handling, race-safe idempotency rechecks and post-ledger acknowledge or consume finalization, authoritative identity suppression, independently bounded and observable finalizer retries, abort-safe lease recovery, stored-context recovery, retry metadata, and deterministic fail-closed conformance fixtures. — Thanks @imjlk!
+- [807eb4b](https://github.com/imjlk/mpgd-kit/commit/807eb4b322f06c879a79f97187b74b9b74fc1a81) Add a fail-closed Apps in Toss purchase and rewarded-ad evidence verifier boundary, a deadline-bounded SDK-compatible in-callback product-grant API with a nominal abort-aware transport port and failure diagnostics, versioned callback envelopes, grant-time purchase source enforcement, deterministic order timestamp parsing, explicit-zone reward timestamps, three-way request/evidence/authority reward correlation, authority fixtures, and conformance coverage for server matching, pending-order recovery, idempotent retries, replays, and authority failures. — Thanks @imjlk!
+- [876992e](https://github.com/imjlk/mpgd-kit/commit/876992e6f76fcf88156f0097200f5819e42f1b1a) Add a fail-closed App Store Server API one-time-purchase verifier, explicit dependency-outage errors with cancellation propagation and bounded response-stream handling, retryable lookup/response handling, original-transaction replay identity for non-consumables, deterministic conformance fixtures, and a CI smoke boundary that accepts only cryptographically verified, single-grant transactions matching the configured app, product, UUID account binding, environment, provider purchase timestamp, and active transaction state. — Thanks @imjlk!
+- [4d3634a](https://github.com/imjlk/mpgd-kit/commit/4d3634adfd1e65aa32c6ab6e1ea19e4c19b9192b) Add a Web Crypto AdMob server-side reward verifier with signed claim binding, bounded callback freshness, deterministic transaction replay protection through the entitlement ledger, and a portable conformance fixture. — Thanks @imjlk!
+
 ## 0.9.0 — 2026-07-17
 
 ### Added
