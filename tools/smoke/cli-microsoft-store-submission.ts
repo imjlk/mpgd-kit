@@ -99,18 +99,22 @@ try {
   ) as {
     readonly target: string;
     readonly manifest: { readonly id: string };
-    readonly listing: { readonly locales: Record<string, unknown> };
+    readonly listing: {
+      readonly personalData: { readonly accessedOrTransmitted: boolean };
+      readonly locales: Record<string, unknown>;
+    };
     readonly commerce: { readonly mode: string };
     readonly warnings: readonly string[];
   };
   assert.equal(evidence.target, 'microsoft-store');
   assert.equal(evidence.manifest.id, 'com.acme.fixture-game');
+  assert.equal(evidence.listing.personalData.accessedOrTransmitted, true);
   assert.deepEqual(Object.keys(evidence.listing.locales), ['en-US']);
   assert.equal(evidence.commerce.mode, 'disabled');
   assert.deepEqual(evidence.warnings, []);
   assert.match(
     readFileSync(join(outputDir, 'submission-preflight.md'), 'utf8'),
-    /# Microsoft Store Submission Preflight/u,
+    /# Microsoft Store Submission Preflight[\s\S]*Personal data accessed or transmitted: true/u,
   );
 
   const base = validConfig();
@@ -154,6 +158,56 @@ try {
     'valid public HTTPS URL',
   );
 
+  for (const supportUrl of ['https://release.invalid/help', 'https://release.test/help']) {
+    expectConfigError(
+      {
+        ...base,
+        listing: { ...base.listing, supportUrl },
+      },
+      'valid public HTTPS URL',
+    );
+  }
+
+  expectConfigError(
+    {
+      ...base,
+      productIdentity: { ...base.productIdentity, publisherId: 'CN=' },
+    },
+    'complete X.509 distinguished name',
+  );
+
+  expectConfigError(
+    {
+      ...base,
+      listing: {
+        ...base.listing,
+        locales: {
+          'en-US': {
+            ...base.listing.locales['en-US'],
+            description: 'x'.repeat(10_001),
+          },
+        },
+      },
+    },
+    'must not exceed 10000 characters',
+  );
+
+  expectConfigError(
+    {
+      ...base,
+      listing: {
+        ...base.listing,
+        locales: {
+          'en-US': {
+            ...base.listing.locales['en-US'],
+            screenshots: Array.from({ length: 11 }, (_, index) => `shot-${index}.png`),
+          },
+        },
+      },
+    },
+    'at most 10 files',
+  );
+
   for (const packageId of ['ab', 'con', 'abc.', 'xn--fixture', 'fixture.xn--name']) {
     expectConfigError(
       {
@@ -179,6 +233,31 @@ try {
     /must be a valid PNG/u,
   );
   writeFileSync(screenshotFile, validScreenshot);
+
+  const originalSubmission = readFileSync(submissionFile, 'utf8');
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: submissionFile,
+      markdownFile: join(outputDir, 'aliased-input.md'),
+    }),
+    /must not alias Microsoft Store submission config/u,
+  );
+  assert.equal(readFileSync(submissionFile, 'utf8'), originalSubmission);
+
+  const sharedOutputFile = join(outputDir, 'shared-evidence');
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: sharedOutputFile,
+      markdownFile: sharedOutputFile,
+    }),
+    /must not alias submission evidence Markdown/u,
+  );
 
   const linkedOutputFile = join(outputDir, 'linked-submission-preflight.json');
   const outsideOutputFile = join(fixtureRoot, 'outside-evidence.json');

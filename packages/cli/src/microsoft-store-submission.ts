@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import {
   closeSync,
   existsSync,
+  fstatSync,
   lstatSync,
   openSync,
   readFileSync,
@@ -70,7 +71,7 @@ export interface MicrosoftStoreSubmissionEvidence {
   readonly listing: {
     readonly category: 'Games';
     readonly supportUrl: string;
-    readonly privacyPolicyUrl?: string;
+    readonly personalData: MicrosoftStoreSubmissionConfig['listing']['personalData'];
     readonly locales: Readonly<Record<string, {
       readonly description: string;
       readonly screenshots: readonly {
@@ -114,8 +115,13 @@ export function runMicrosoftStoreSubmissionPreflight(
     path.join(artifactRoot, 'manifest.webmanifest'),
     'Microsoft Store web app manifest',
   );
-  const manifest = parseManifest(readJson(manifestFile, 'web app manifest'));
+  const manifestSnapshot = readJsonSnapshot(manifestFile, 'web app manifest', 1024 * 1024);
+  const manifest = parseManifest(manifestSnapshot.value);
   const warnings = collectManifestWarnings(manifest, config.productIdentity.reservedName);
+  const protectedFiles: { readonly file: string; readonly label: string }[] = [
+    { file: configFile, label: 'Microsoft Store submission config' },
+    { file: manifestFile, label: 'Microsoft Store web app manifest' },
+  ];
   const locales = Object.fromEntries(
     Object.entries(config.listing.locales)
       .sort(([left], [right]) => compareCodeUnits(left, right))
@@ -129,11 +135,15 @@ export function runMicrosoftStoreSubmissionPreflight(
               path.resolve(gameRoot, file),
               `Microsoft Store ${locale} screenshot`,
             );
+            protectedFiles.push({
+              file: screenshotFile,
+              label: `Microsoft Store ${locale} screenshot`,
+            });
             const image = readMicrosoftStoreScreenshot(screenshotFile);
 
             return {
               file: relativeOrAbsolute(gameRoot, screenshotFile),
-              sha256: hashFile(screenshotFile, `Microsoft Store ${locale} screenshot`),
+              sha256: image.sha256,
               width: image.width,
               height: image.height,
             };
@@ -149,7 +159,7 @@ export function runMicrosoftStoreSubmissionPreflight(
     productIdentity: config.productIdentity,
     manifest: {
       file: relativeOrAbsolute(gameRoot, manifestFile),
-      sha256: hashFile(manifestFile, 'Microsoft Store web app manifest'),
+      sha256: hashBytes(manifestSnapshot.bytes),
       id: manifest.id,
       name: manifest.name,
       shortName: manifest.shortName,
@@ -160,9 +170,7 @@ export function runMicrosoftStoreSubmissionPreflight(
     listing: {
       category: config.listing.category,
       supportUrl: config.listing.supportUrl,
-      ...(config.listing.personalData.privacyPolicyUrl === undefined
-        ? {}
-        : { privacyPolicyUrl: config.listing.personalData.privacyPolicyUrl }),
+      personalData: config.listing.personalData,
       locales,
     },
     ageRating: config.ageRating,
@@ -170,10 +178,21 @@ export function runMicrosoftStoreSubmissionPreflight(
     warnings,
   };
 
-  assertOutputFileInside(gameRoot, input.jsonFile, 'submission evidence JSON');
-  assertOutputFileInside(gameRoot, input.markdownFile, 'submission evidence Markdown');
-  writeFileSync(input.jsonFile, `${JSON.stringify(evidence, null, 2)}\n`);
-  writeFileSync(input.markdownFile, renderMicrosoftStoreSubmissionMarkdown(evidence));
+  const jsonFile = resolveOutputFileInside(gameRoot, input.jsonFile, 'submission evidence JSON');
+  const markdownFile = resolveOutputFileInside(
+    gameRoot,
+    input.markdownFile,
+    'submission evidence Markdown',
+  );
+  assertDistinctEvidenceFiles(
+    [
+      { file: jsonFile, label: 'submission evidence JSON' },
+      { file: markdownFile, label: 'submission evidence Markdown' },
+    ],
+    protectedFiles,
+  );
+  writeFileSync(jsonFile, `${JSON.stringify(evidence, null, 2)}\n`);
+  writeFileSync(markdownFile, renderMicrosoftStoreSubmissionMarkdown(evidence));
 
   return evidence;
 }
@@ -193,14 +212,10 @@ export function parseMicrosoftStoreSubmissionConfig(
   const ageRating = requireRecord(root.ageRating, 'ageRating');
   const commerce = requireRecord(root.commerce, 'commerce');
   const packageId = requireIdentityToken(productIdentity.packageId, 'productIdentity.packageId');
-  const publisherId = requireProductionString(
+  const publisherId = requirePublisherDistinguishedName(
     productIdentity.publisherId,
     'productIdentity.publisherId',
   );
-
-  if (!publisherId.startsWith('CN=')) {
-    throw new Error('productIdentity.publisherId must start with CN=.');
-  }
 
   if (listing.category !== 'Games') {
     throw new Error('listing.category must be Games.');
@@ -278,6 +293,8 @@ export function renderMicrosoftStoreSubmissionMarkdown(
     `- Reserved name: ${escapeMarkdownInline(evidence.productIdentity.reservedName)}`,
     `- Manifest: ${escapeMarkdownInline(evidence.manifest.file)} (${evidence.manifest.sha256})`,
     `- Commerce: ${evidence.commerce.mode}`,
+    `- Personal data accessed or transmitted: ${String(evidence.listing.personalData.accessedOrTransmitted)}`,
+    `- Privacy policy: ${escapeMarkdownInline(evidence.listing.personalData.privacyPolicyUrl ?? 'Not required')}`,
     '',
     '## Store Listings',
     '',
@@ -401,11 +418,21 @@ function parseListings(input: unknown): MicrosoftStoreSubmissionConfig['listing'
       throw new Error(`listing.locales.${locale}.screenshots must not be empty.`);
     }
 
+    if (screenshots.length > 10) {
+      throw new Error(`listing.locales.${locale}.screenshots must contain at most 10 files.`);
+    }
+
+    const description = requireProductionString(
+      listing.description,
+      `listing.locales.${locale}.description`,
+    );
+
+    if (Array.from(description).length > 10_000) {
+      throw new Error(`listing.locales.${locale}.description must not exceed 10000 characters.`);
+    }
+
     return [locale, {
-      description: requireProductionString(
-        listing.description,
-        `listing.locales.${locale}.description`,
-      ),
+      description,
       screenshots,
     }];
   }));
@@ -448,6 +475,9 @@ function requirePublicHttpsUrl(input: unknown, label: string): string {
     || hostname.endsWith('.example.net')
     || hostname === 'example.org'
     || hostname.endsWith('.example.org')
+    || ['invalid', 'test', 'example'].some(
+      (suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`),
+    )
     || isIP(unbracketedHostname) !== 0
   ) {
     throw new Error(`${label} must be a valid public HTTPS URL.`);
@@ -458,6 +488,87 @@ function requirePublicHttpsUrl(input: unknown, label: string): string {
 
 function optionalPublicHttpsUrl(input: unknown, label: string): string | undefined {
   return input === undefined ? undefined : requirePublicHttpsUrl(input, label);
+}
+
+function requirePublisherDistinguishedName(input: unknown, label: string): string {
+  const value = requireProductionString(input, label);
+  const components = splitDistinguishedName(value, label);
+
+  for (const [index, component] of components.entries()) {
+    const separator = findDistinguishedNameEquals(component);
+
+    if (separator <= 0 || separator === component.length - 1) {
+      throw new Error(`${label} must be a complete X.509 distinguished name.`);
+    }
+
+    const attribute = component.slice(0, separator).trim();
+    const attributeValue = component.slice(separator + 1).trim();
+
+    if (
+      !/^(?:[A-Za-z][A-Za-z0-9.-]*|[0-9]+(?:\.[0-9]+)+)$/u.test(attribute)
+      || attributeValue.length === 0
+      || /[\u0000-\u001f\u007f]/u.test(attributeValue)
+      || (index === 0 && attribute.toUpperCase() !== 'CN')
+    ) {
+      throw new Error(`${label} must be a complete X.509 distinguished name beginning with CN=.`);
+    }
+  }
+
+  return value;
+}
+
+function splitDistinguishedName(value: string, label: string): readonly string[] {
+  const components: string[] = [];
+  let current = '';
+  let escaped = false;
+  let quoted = false;
+
+  for (const character of value) {
+    if (escaped) {
+      current += character;
+      escaped = false;
+    } else if (character === '\\') {
+      current += character;
+      escaped = true;
+    } else if (character === '"') {
+      current += character;
+      quoted = !quoted;
+    } else if (!quoted && (character === ',' || character === '+')) {
+      components.push(current.trim());
+      current = '';
+    } else {
+      current += character;
+    }
+  }
+
+  components.push(current.trim());
+
+  if (escaped || quoted || components.some((component) => component.length === 0)) {
+    throw new Error(`${label} must be a complete X.509 distinguished name.`);
+  }
+
+  return components;
+}
+
+function findDistinguishedNameEquals(component: string): number {
+  let escaped = false;
+  let quoted = false;
+
+  for (let index = 0; index < component.length; index += 1) {
+    const character = component[index];
+
+    if (escaped) {
+      escaped = false;
+    } else if (character === '\\') {
+      escaped = true;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (!quoted && character === '=') {
+      return index;
+    }
+  }
+
+  return -1;
 }
 
 function requireIdentityToken(input: unknown, label: string): string {
@@ -560,21 +671,25 @@ function assertLocale(locale: string): void {
   }
 }
 
-function readMicrosoftStoreScreenshot(file: string): { readonly width: number; readonly height: number } {
+function readMicrosoftStoreScreenshot(file: string): {
+  readonly width: number;
+  readonly height: number;
+  readonly sha256: string;
+} {
   if (path.extname(file).toLowerCase() !== '.png') {
     throw new Error(`Microsoft Store screenshot must be PNG: ${file}`);
   }
 
-  const size = statSync(file).size;
   const maximumScreenshotBytes = 50 * 1024 * 1024;
-
-  if (size > maximumScreenshotBytes) {
-    throw new Error(`Microsoft Store screenshot must not exceed 50 MB: ${file}`);
-  }
-
   const descriptor = openSync(file, 'r');
 
   try {
+    const before = fstatSync(descriptor);
+
+    if (before.size > maximumScreenshotBytes) {
+      throw new Error(`Microsoft Store screenshot must not exceed 50 MB: ${file}`);
+    }
+
     const header = Buffer.alloc(24);
 
     if (readSync(descriptor, header, 0, header.length, 0) !== header.length) {
@@ -600,8 +715,19 @@ function readMicrosoftStoreScreenshot(file: string): { readonly width: number; r
       );
     }
 
-    assertPngChunkStructure(descriptor, size, file);
-    return { width, height };
+    assertPngChunkStructure(descriptor, before.size, file);
+    const sha256 = hashOpenFile(descriptor);
+    const after = fstatSync(descriptor);
+
+    if (
+      before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+    ) {
+      throw new Error(`Microsoft Store screenshot changed while it was being validated: ${file}`);
+    }
+
+    return { width, height, sha256 };
   } finally {
     closeSync(descriptor);
   }
@@ -653,30 +779,71 @@ function readJson(file: string, label: string): unknown {
   }
 }
 
-function hashFile(file: string, label: string): string {
+function readJsonSnapshot(
+  file: string,
+  label: string,
+  maximumBytes: number,
+): { readonly bytes: Buffer; readonly value: unknown } {
+  let descriptor: number | undefined;
+
   try {
-    const descriptor = openSync(file, 'r');
-    const hash = createHash('sha256');
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    descriptor = openSync(file, 'r');
+    const before = fstatSync(descriptor);
 
-    try {
-      while (true) {
-        const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
-
-        if (bytesRead === 0) {
-          break;
-        }
-
-        hash.update(buffer.subarray(0, bytesRead));
-      }
-    } finally {
-      closeSync(descriptor);
+    if (before.size > maximumBytes) {
+      throw new Error(`exceeds ${maximumBytes} bytes`);
     }
 
-    return hash.digest('hex');
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+
+    while (offset < bytes.length) {
+      const bytesRead = readSync(descriptor, bytes, offset, bytes.length - offset, null);
+
+      if (bytesRead === 0) {
+        throw new Error('changed while it was being read');
+      }
+
+      offset += bytesRead;
+    }
+
+    const after = fstatSync(descriptor);
+
+    if (
+      before.size !== after.size
+      || before.mtimeMs !== after.mtimeMs
+      || before.ctimeMs !== after.ctimeMs
+    ) {
+      throw new Error('changed while it was being read');
+    }
+
+    return { bytes, value: JSON.parse(bytes.toString('utf8')) as unknown };
   } catch (error) {
-    throw new Error(`Failed to hash ${label} ${file}: ${formatError(error)}`);
+    throw new Error(`Failed to read ${label} ${file}: ${formatError(error)}`);
+  } finally {
+    if (descriptor !== undefined) {
+      closeSync(descriptor);
+    }
   }
+}
+
+function hashOpenFile(descriptor: number): string {
+  const hash = createHash('sha256');
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+
+  while (true) {
+    const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+
+    if (bytesRead === 0) {
+      return hash.digest('hex');
+    }
+
+    hash.update(buffer.subarray(0, bytesRead));
+  }
+}
+
+function hashBytes(bytes: Buffer): string {
+  return createHash('sha256').update(bytes).digest('hex');
 }
 
 function readCanonicalDirectory(input: string, label: string): string {
@@ -719,13 +886,52 @@ function readCanonicalFileInside(root: string, input: string, label: string): st
   return canonical;
 }
 
-function assertOutputFileInside(root: string, file: string, label: string): void {
+function resolveOutputFileInside(root: string, file: string, label: string): string {
   const parent = readCanonicalDirectory(path.dirname(file), `${label} directory`);
   assertInside(root, parent, label);
 
-  if (existsSync(file) && lstatSync(file).isSymbolicLink()) {
-    throw new Error(`${label} must not be a symbolic link: ${file}`);
+  if (existsSync(file)) {
+    const metadata = lstatSync(file);
+
+    if (metadata.isSymbolicLink()) {
+      throw new Error(`${label} must not be a symbolic link: ${file}`);
+    }
+
+    if (!metadata.isFile()) {
+      throw new Error(`${label} must be a regular file when it already exists: ${file}`);
+    }
   }
+
+  const resolved = existsSync(file) ? realpathSync(file) : path.join(parent, path.basename(file));
+  assertInside(root, resolved, label);
+  return resolved;
+}
+
+function assertDistinctEvidenceFiles(
+  outputs: readonly { readonly file: string; readonly label: string }[],
+  protectedFiles: readonly { readonly file: string; readonly label: string }[],
+): void {
+  for (const [index, output] of outputs.entries()) {
+    for (const candidate of [...outputs.slice(index + 1), ...protectedFiles]) {
+      if (sameFile(output.file, candidate.file)) {
+        throw new Error(`${output.label} must not alias ${candidate.label}: ${output.file}`);
+      }
+    }
+  }
+}
+
+function sameFile(left: string, right: string): boolean {
+  if (path.relative(left, right).length === 0) {
+    return true;
+  }
+
+  if (!existsSync(left) || !existsSync(right)) {
+    return false;
+  }
+
+  const leftMetadata = statSync(left);
+  const rightMetadata = statSync(right);
+  return leftMetadata.dev === rightMetadata.dev && leftMetadata.ino === rightMetadata.ino;
 }
 
 function assertInside(root: string, candidate: string, label: string): void {
