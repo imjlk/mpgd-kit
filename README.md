@@ -250,6 +250,13 @@ verification. Desktop screenshots must be valid PNG files, no larger than
 deterministic submission evidence under
 `release-output/microsoft-store`.
 
+After PWABuilder produces `.msix`, `.msixbundle`, `.appx`, or `.appxbundle`
+files, run `mpgd target accept-package microsoft-store --packages <paths>` on
+Windows in an active administrator user session. The acceptance command uses
+MakeAppx to verify every bundle and payload `Identity` against the preflight
+evidence, runs the Windows App Certification Kit, requires its XML
+`OVERALL_RESULT` to be `PASS`, and records package and report hashes.
+
 The starter dependency range is derived from the released `@mpgd/cli` package
 version. Release PRs that bump the fixed public package group therefore update
 new starter `@mpgd/*` pins without a separate hard-coded template version edit.

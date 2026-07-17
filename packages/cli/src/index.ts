@@ -22,6 +22,10 @@ import {
   type GameAcceptanceStep,
 } from './game-acceptance.js';
 import { resolveGameplayE2EReportFile } from './gameplay-e2e.js';
+import {
+  createMicrosoftStorePackageAcceptanceRuntime,
+  runMicrosoftStorePackageAcceptance,
+} from './microsoft-store-package-acceptance.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
 
 export {
@@ -94,6 +98,20 @@ export {
   type MicrosoftStorePwaCacheTransitionObservation,
   type MicrosoftStorePwaReleaseEvidence,
 } from './microsoft-store-pwa-e2e.js';
+
+export {
+  createMicrosoftStorePackageAcceptanceRuntime,
+  microsoftStorePackageAcceptanceSchemaVersion,
+  parseMicrosoftStorePackageIdentity,
+  parseWindowsAppCertificationResult,
+  renderMicrosoftStorePackageAcceptanceMarkdown,
+  runMicrosoftStorePackageAcceptance,
+  type CreateMicrosoftStorePackageAcceptanceRuntimeInput,
+  type MicrosoftStorePackageAcceptanceEvidence,
+  type MicrosoftStorePackageAcceptanceRuntime,
+  type MicrosoftStorePackageIdentity,
+  type RunMicrosoftStorePackageAcceptanceInput,
+} from './microsoft-store-package-acceptance.js';
 
 export {
   microsoftStoreSubmissionSchemaVersion,
@@ -1154,6 +1172,140 @@ const targetCommand = defineI18n({
 
         console.log(
           `Microsoft Store submission preflight passed: ${Object.keys(evidence.listing.locales).length} listing locale(s), ${evidence.warnings.length} warning(s).`,
+        );
+      },
+    }),
+    'accept-package': defineI18n({
+      name: 'accept-package',
+      description: 'Inspect packaged target artifacts and run platform certification.',
+      resource: commandResource(
+        {
+          en: 'Inspect packaged target artifacts and run platform certification.',
+          ko: '패키징된 타깃 산출물을 검사하고 플랫폼 인증을 실행합니다.',
+        },
+        {
+          target: {
+            en: 'Packaged target. Currently supports microsoft-store.',
+            ko: '패키징 타깃. 현재 microsoft-store를 지원합니다.',
+          },
+          packages: {
+            en: 'Comma-separated game-relative MSIX or AppX package paths.',
+            ko: '쉼표로 구분한 게임 상대 MSIX 또는 AppX 패키지 경로.',
+          },
+          'targets-file': {
+            en: 'Game target config file.',
+            ko: '게임 타깃 설정 파일.',
+          },
+          'submission-evidence': {
+            en: 'Submission preflight evidence file.',
+            ko: '제출 사전 검증 증적 파일.',
+          },
+          'output-dir': {
+            en: 'Directory for certification reports and acceptance evidence.',
+            ko: '인증 리포트와 인수 증적을 기록할 디렉터리.',
+          },
+          appcert: {
+            en: 'Optional path to appcert.exe.',
+            ko: '선택적 appcert.exe 경로.',
+          },
+          makeappx: {
+            en: 'Optional path to makeappx.exe.',
+            ko: '선택적 makeappx.exe 경로.',
+          },
+        },
+      ),
+      args: {
+        target: {
+          type: 'positional',
+          required: true,
+          description: 'Packaged target. Currently supports microsoft-store.',
+        },
+        packages: {
+          type: 'string',
+          required: true,
+          description: 'Comma-separated game-relative MSIX or AppX package paths.',
+        },
+        'targets-file': {
+          type: 'string',
+          required: false,
+          default: 'mpgd.targets.json',
+          description: 'Game target config file.',
+        },
+        'submission-evidence': {
+          type: 'string',
+          required: false,
+          default: 'release-output/microsoft-store/submission-preflight.json',
+          description: 'Submission preflight evidence file.',
+        },
+        'output-dir': {
+          type: 'string',
+          required: false,
+          default: 'release-output/microsoft-store',
+          description: 'Directory for certification reports and acceptance evidence.',
+        },
+        appcert: {
+          type: 'string',
+          required: false,
+          description: 'Optional path to appcert.exe.',
+        },
+        makeappx: {
+          type: 'string',
+          required: false,
+          description: 'Optional path to makeappx.exe.',
+        },
+      },
+      run: (ctx) => {
+        const positionals = readLocalPositionals(ctx.positionals, ['target', 'accept-package']);
+        const target = normalizeBuildTarget(readRequiredPositional(positionals, 0, 'target'));
+
+        if (target !== 'microsoft-store') {
+          throw new Error(`Package acceptance is not available for target: ${target}`);
+        }
+
+        const targetsFile = path.resolve(
+          readOptionalString(ctx.values['targets-file']) ?? 'mpgd.targets.json',
+        );
+        const gameRoot = path.dirname(targetsFile);
+        const packageList = readOptionalString(ctx.values.packages);
+
+        if (packageList === undefined) {
+          throw new Error('--packages must be a non-empty comma-separated list.');
+        }
+
+        const packages = packageList
+          .split(',')
+          .map((file) => file.trim())
+          .filter((file) => file.length > 0)
+          .map((file) => resolveGameRelativePath(gameRoot, file));
+        const outputDir = resolveGameRelativePath(
+          gameRoot,
+          readOptionalString(ctx.values['output-dir']) ?? 'release-output/microsoft-store',
+        );
+        const appCertExecutable = readOptionalString(ctx.values.appcert);
+        const makeAppxExecutable = readOptionalString(ctx.values.makeappx);
+
+        resolveMicrosoftStoreArtifactRoot(targetsFile);
+        assertGameOwnedOutputDirectory(gameRoot, outputDir);
+        mkdirSync(outputDir, { recursive: true });
+        const evidence = runMicrosoftStorePackageAcceptance(
+          {
+            gameRoot,
+            submissionEvidenceFile: resolveGameRelativePath(
+              gameRoot,
+              readOptionalString(ctx.values['submission-evidence'])
+                ?? 'release-output/microsoft-store/submission-preflight.json',
+            ),
+            packageFiles: packages,
+            outputDir,
+          },
+          createMicrosoftStorePackageAcceptanceRuntime({
+            ...(appCertExecutable === undefined ? {} : { appCertExecutable }),
+            ...(makeAppxExecutable === undefined ? {} : { makeAppxExecutable }),
+          }),
+        );
+
+        console.log(
+          `Microsoft Store package acceptance passed: ${evidence.packages.length} package(s).`,
         );
       },
     }),

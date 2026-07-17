@@ -1,0 +1,630 @@
+import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import {
+  closeSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import { escapeMarkdownInline, escapeMarkdownTable, relativeOrAbsolute } from './evidence-io.js';
+
+export const microsoftStorePackageAcceptanceSchemaVersion = 1 as const;
+
+const supportedPackageExtensions = ['.appx', '.appxbundle', '.msix', '.msixbundle'] as const;
+
+export interface MicrosoftStorePackageIdentity {
+  readonly name: string;
+  readonly publisher: string;
+  readonly version: string;
+}
+
+export interface MicrosoftStorePackageAcceptanceEvidence {
+  readonly schemaVersion: 1;
+  readonly target: 'microsoft-store';
+  readonly submissionEvidenceFile: string;
+  readonly submissionEvidenceSha256: string;
+  readonly productIdentity: {
+    readonly packageId: string;
+    readonly publisherId: string;
+    readonly publisherDisplayName: string;
+    readonly reservedName: string;
+  };
+  readonly packages: readonly {
+    readonly file: string;
+    readonly sizeBytes: number;
+    readonly sha256: string;
+    readonly identity: MicrosoftStorePackageIdentity;
+    readonly payloadIdentities: readonly MicrosoftStorePackageIdentity[];
+    readonly certification: {
+      readonly result: 'PASS';
+      readonly reportFile: string;
+      readonly reportSha256: string;
+    };
+  }[];
+}
+
+export interface RunMicrosoftStorePackageAcceptanceInput {
+  readonly gameRoot: string;
+  readonly submissionEvidenceFile: string;
+  readonly packageFiles: readonly string[];
+  readonly outputDir: string;
+}
+
+export interface MicrosoftStorePackageAcceptanceRuntime {
+  readonly platform: NodeJS.Platform;
+  readonly appCertExecutable: string;
+  readonly makeAppxExecutable: string;
+  readonly runCommand: (command: string, args: readonly string[]) => void;
+}
+
+export interface CreateMicrosoftStorePackageAcceptanceRuntimeInput {
+  readonly appCertExecutable?: string;
+  readonly makeAppxExecutable?: string;
+}
+
+export function createMicrosoftStorePackageAcceptanceRuntime(
+  input: CreateMicrosoftStorePackageAcceptanceRuntimeInput = {},
+): MicrosoftStorePackageAcceptanceRuntime {
+  if (process.platform !== 'win32') {
+    throw new Error(
+      'Microsoft Store package acceptance must run on Windows with the Windows SDK and an active user session.',
+    );
+  }
+
+  const kitDir = path.join(
+    requireEnvironmentPath(process.env['ProgramFiles(x86)'], 'ProgramFiles(x86)'),
+    'Windows Kits',
+    '10',
+    'App Certification Kit',
+  );
+  const appCertExecutable = readCanonicalTool(
+    input.appCertExecutable ?? path.join(kitDir, 'appcert.exe'),
+    'Windows App Certification Kit executable',
+  );
+  const makeAppxExecutable = readCanonicalTool(
+    input.makeAppxExecutable ?? path.join(kitDir, 'makeappx.exe'),
+    'MakeAppx executable',
+  );
+
+  return {
+    platform: process.platform,
+    appCertExecutable,
+    makeAppxExecutable,
+    runCommand: runWindowsCommand,
+  };
+}
+
+export function runMicrosoftStorePackageAcceptance(
+  input: RunMicrosoftStorePackageAcceptanceInput,
+  runtime = createMicrosoftStorePackageAcceptanceRuntime(),
+): MicrosoftStorePackageAcceptanceEvidence {
+  if (runtime.platform !== 'win32') {
+    throw new Error('Microsoft Store package acceptance runtime must use Windows.');
+  }
+
+  if (input.packageFiles.length === 0) {
+    throw new Error('Microsoft Store package acceptance requires at least one package.');
+  }
+
+  const gameRoot = readCanonicalDirectory(input.gameRoot, 'game root');
+  const outputDir = readCanonicalDirectoryInside(
+    gameRoot,
+    input.outputDir,
+    'Microsoft Store package acceptance output directory',
+  );
+  const submissionEvidenceFile = readCanonicalFileInside(
+    gameRoot,
+    input.submissionEvidenceFile,
+    'Microsoft Store submission evidence',
+  );
+  const submissionEvidence = parseSubmissionEvidence(
+    readJson(submissionEvidenceFile, 'Microsoft Store submission evidence'),
+  );
+  const packageFiles = input.packageFiles.map((file) => readCanonicalPackage(gameRoot, file));
+
+  if (new Set(packageFiles).size !== packageFiles.length) {
+    throw new Error('Microsoft Store package acceptance package paths must be unique.');
+  }
+
+  const tempRoot = mkdtempSync(path.join(tmpdir(), 'mpgd-microsoft-store-package-'));
+
+  try {
+    const packages = packageFiles.map((packageFile, index) => {
+      const inspected = inspectPackage({
+        packageFile,
+        tempRoot: path.join(tempRoot, String(index + 1).padStart(2, '0')),
+        runtime,
+      });
+
+      for (const identity of [inspected.identity, ...inspected.payloadIdentities]) {
+        assertExpectedIdentity(identity, submissionEvidence.productIdentity);
+      }
+
+      const reportFile = path.join(
+        outputDir,
+        `${String(index + 1).padStart(2, '0')}-${safeFileStem(path.basename(packageFile))}.wack.xml`,
+      );
+
+      rmSync(reportFile, { force: true });
+      runtime.runCommand(runtime.appCertExecutable, ['reset']);
+      runtime.runCommand(runtime.appCertExecutable, [
+        'test',
+        '-appxpackagepath',
+        packageFile,
+        '-reportoutputpath',
+        reportFile,
+      ]);
+
+      const canonicalReportFile = readCanonicalFileInside(
+        outputDir,
+        reportFile,
+        'Windows App Certification Kit report',
+      );
+      const result = parseWindowsAppCertificationResult(
+        readFileSync(canonicalReportFile, 'utf8'),
+      );
+
+      if (result !== 'PASS') {
+        throw new Error(`Windows App Certification Kit failed for ${packageFile}.`);
+      }
+
+      return {
+        file: relativeOrAbsolute(gameRoot, packageFile),
+        sizeBytes: statSync(packageFile).size,
+        sha256: hashFile(packageFile),
+        identity: inspected.identity,
+        payloadIdentities: inspected.payloadIdentities,
+        certification: {
+          result,
+          reportFile: relativeOrAbsolute(gameRoot, canonicalReportFile),
+          reportSha256: hashFile(canonicalReportFile),
+        },
+      };
+    });
+    const evidence: MicrosoftStorePackageAcceptanceEvidence = {
+      schemaVersion: microsoftStorePackageAcceptanceSchemaVersion,
+      target: 'microsoft-store',
+      submissionEvidenceFile: relativeOrAbsolute(gameRoot, submissionEvidenceFile),
+      submissionEvidenceSha256: hashFile(submissionEvidenceFile),
+      productIdentity: submissionEvidence.productIdentity,
+      packages,
+    };
+    const jsonFile = path.join(outputDir, 'package-acceptance.json');
+    const markdownFile = path.join(outputDir, 'package-acceptance.md');
+
+    writeFileSync(jsonFile, `${JSON.stringify(evidence, null, 2)}\n`);
+    writeFileSync(markdownFile, renderMicrosoftStorePackageAcceptanceMarkdown(evidence));
+
+    return evidence;
+  } finally {
+    rmSync(tempRoot, { force: true, recursive: true });
+  }
+}
+
+export function parseMicrosoftStorePackageIdentity(xml: string): MicrosoftStorePackageIdentity {
+  const identityTag = xml.match(/<Identity\b([^>]*)\/?\s*>/iu);
+
+  if (identityTag === null) {
+    throw new Error('Microsoft Store package manifest is missing Identity.');
+  }
+
+  const attributes = parseXmlAttributes(identityTag[1] ?? '');
+
+  return {
+    name: requireXmlAttribute(attributes, 'Name'),
+    publisher: requireXmlAttribute(attributes, 'Publisher'),
+    version: requireXmlAttribute(attributes, 'Version'),
+  };
+}
+
+export function parseWindowsAppCertificationResult(xml: string): 'PASS' | 'FAIL' {
+  const reportTag = xml.match(/<REPORT\b([^>]*)>/iu);
+
+  if (reportTag === null) {
+    throw new Error('Windows App Certification Kit report is missing REPORT.');
+  }
+
+  const result = requireXmlAttribute(
+    parseXmlAttributes(reportTag[1] ?? ''),
+    'OVERALL_RESULT',
+  ).toUpperCase();
+
+  if (result !== 'PASS' && result !== 'FAIL') {
+    throw new Error(`Unsupported Windows App Certification Kit result: ${result}`);
+  }
+
+  return result;
+}
+
+export function renderMicrosoftStorePackageAcceptanceMarkdown(
+  evidence: MicrosoftStorePackageAcceptanceEvidence,
+): string {
+  const lines = [
+    '# Microsoft Store Package Acceptance',
+    '',
+    `- Package ID: ${escapeMarkdownInline(evidence.productIdentity.packageId)}`,
+    `- Publisher ID: ${escapeMarkdownInline(evidence.productIdentity.publisherId)}`,
+    `- Submission evidence SHA-256: ${evidence.submissionEvidenceSha256}`,
+    '',
+    '| Package | Version | Bytes | SHA-256 | WACK |',
+    '| --- | --- | ---: | --- | --- |',
+  ];
+
+  for (const acceptedPackage of evidence.packages) {
+    lines.push(
+      `| ${escapeMarkdownTable(acceptedPackage.file)} | ${escapeMarkdownTable(acceptedPackage.identity.version)} | ${acceptedPackage.sizeBytes} | ${acceptedPackage.sha256} | ${acceptedPackage.certification.result} |`,
+    );
+  }
+
+  return `${lines.join('\n')}\n`;
+}
+
+interface InspectedPackage {
+  readonly identity: MicrosoftStorePackageIdentity;
+  readonly payloadIdentities: readonly MicrosoftStorePackageIdentity[];
+}
+
+function inspectPackage(input: {
+  readonly packageFile: string;
+  readonly tempRoot: string;
+  readonly runtime: MicrosoftStorePackageAcceptanceRuntime;
+}): InspectedPackage {
+  const extension = path.extname(input.packageFile).toLowerCase();
+  mkdirSync(input.tempRoot, { recursive: true });
+
+  if (extension === '.appxbundle' || extension === '.msixbundle') {
+    const bundleDir = path.join(input.tempRoot, 'bundle');
+    input.runtime.runCommand(input.runtime.makeAppxExecutable, [
+      'unbundle',
+      '/p',
+      input.packageFile,
+      '/d',
+      bundleDir,
+      '/o',
+    ]);
+    const canonicalBundleDir = readCanonicalDirectory(
+      bundleDir,
+      'Microsoft Store unpacked bundle directory',
+    );
+
+    const identity = parseMicrosoftStorePackageIdentity(
+      readFileSync(
+        readCanonicalFileInside(
+          canonicalBundleDir,
+          path.join(canonicalBundleDir, 'AppxMetadata', 'AppxBundleManifest.xml'),
+          'Microsoft Store bundle manifest',
+        ),
+        'utf8',
+      ),
+    );
+    const payloads = listFiles(canonicalBundleDir).filter((file) => {
+      const payloadExtension = path.extname(file).toLowerCase();
+      return payloadExtension === '.appx' || payloadExtension === '.msix';
+    });
+
+    if (payloads.length === 0) {
+      throw new Error(
+        `Microsoft Store bundle contains no app package payloads: ${input.packageFile}`,
+      );
+    }
+
+    return {
+      identity,
+      payloadIdentities: payloads.map((payload, index) => inspectSinglePackage(
+        payload,
+        path.join(input.tempRoot, `payload-${index + 1}`),
+        input.runtime,
+      )),
+    };
+  }
+
+  return {
+    identity: inspectSinglePackage(
+      input.packageFile,
+      path.join(input.tempRoot, 'package'),
+      input.runtime,
+    ),
+    payloadIdentities: [],
+  };
+}
+
+function inspectSinglePackage(
+  packageFile: string,
+  outputDir: string,
+  runtime: MicrosoftStorePackageAcceptanceRuntime,
+): MicrosoftStorePackageIdentity {
+  runtime.runCommand(runtime.makeAppxExecutable, [
+    'unpack',
+    '/p',
+    packageFile,
+    '/d',
+    outputDir,
+    '/o',
+  ]);
+  const canonicalOutputDir = readCanonicalDirectory(
+    outputDir,
+    'Microsoft Store unpacked package directory',
+  );
+
+  return parseMicrosoftStorePackageIdentity(
+    readFileSync(
+      readCanonicalFileInside(
+        canonicalOutputDir,
+        path.join(canonicalOutputDir, 'AppxManifest.xml'),
+        'Microsoft Store app package manifest',
+      ),
+      'utf8',
+    ),
+  );
+}
+
+function assertExpectedIdentity(
+  identity: MicrosoftStorePackageIdentity,
+  expected: MicrosoftStorePackageAcceptanceEvidence['productIdentity'],
+): void {
+  if (identity.name !== expected.packageId) {
+    throw new Error(
+      `Microsoft Store package identity Name must be ${expected.packageId}; received ${identity.name}.`,
+    );
+  }
+
+  if (identity.publisher !== expected.publisherId) {
+    throw new Error(
+      `Microsoft Store package identity Publisher must be ${expected.publisherId}; received ${identity.publisher}.`,
+    );
+  }
+}
+
+function parseSubmissionEvidence(input: unknown): {
+  readonly productIdentity: MicrosoftStorePackageAcceptanceEvidence['productIdentity'];
+} {
+  const root = requireRecord(input, 'Microsoft Store submission evidence');
+
+  if (root.schemaVersion !== 1 || root.target !== 'microsoft-store') {
+    throw new Error(
+      'Microsoft Store submission evidence must use schemaVersion 1 and target microsoft-store.',
+    );
+  }
+
+  const identity = requireRecord(root.productIdentity, 'submission evidence productIdentity');
+
+  return {
+    productIdentity: {
+      packageId: requireNonEmptyString(identity.packageId, 'submission evidence packageId'),
+      publisherId: requireNonEmptyString(identity.publisherId, 'submission evidence publisherId'),
+      publisherDisplayName: requireNonEmptyString(
+        identity.publisherDisplayName,
+        'submission evidence publisherDisplayName',
+      ),
+      reservedName: requireNonEmptyString(
+        identity.reservedName,
+        'submission evidence reservedName',
+      ),
+    },
+  };
+}
+
+function parseXmlAttributes(source: string): ReadonlyMap<string, string> {
+  const attributes = new Map<string, string>();
+  const pattern = /([A-Za-z_][\w:.-]*)\s*=\s*(["'])(.*?)\2/gu;
+
+  for (const match of source.matchAll(pattern)) {
+    const name = match[1];
+    const value = match[3];
+
+    if (name !== undefined && value !== undefined) {
+      attributes.set(name.toUpperCase(), decodeXmlAttribute(value));
+    }
+  }
+
+  return attributes;
+}
+
+function requireXmlAttribute(attributes: ReadonlyMap<string, string>, name: string): string {
+  const value = attributes.get(name.toUpperCase());
+
+  if (value === undefined || value.length === 0) {
+    throw new Error(`Microsoft Store XML is missing ${name}.`);
+  }
+
+  return value;
+}
+
+function decodeXmlAttribute(value: string): string {
+  return value
+    .replaceAll('&quot;', '"')
+    .replaceAll('&apos;', "'")
+    .replaceAll('&lt;', '<')
+    .replaceAll('&gt;', '>')
+    .replaceAll('&amp;', '&');
+}
+
+function readCanonicalPackage(gameRoot: string, file: string): string {
+  const packageFile = readCanonicalFileInside(gameRoot, file, 'Microsoft Store package');
+  const extension = path.extname(packageFile).toLowerCase();
+
+  if (!supportedPackageExtensions.includes(
+    extension as (typeof supportedPackageExtensions)[number],
+  )) {
+    throw new Error(
+      `Unsupported Microsoft Store package extension ${extension || '(none)'}; expected ${supportedPackageExtensions.join(', ')}.`,
+    );
+  }
+
+  return packageFile;
+}
+
+function readCanonicalTool(file: string, label: string): string {
+  let canonical: string;
+
+  try {
+    canonical = realpathSync(file);
+  } catch (error) {
+    throw new Error(`${label} must exist: ${file} (${formatError(error)})`);
+  }
+
+  if (!lstatSync(canonical).isFile()) {
+    throw new Error(`${label} must be a regular file: ${canonical}`);
+  }
+
+  return canonical;
+}
+
+function runWindowsCommand(command: string, args: readonly string[]): void {
+  const result = spawnSync(command, [...args], {
+    stdio: 'inherit',
+    windowsHide: true,
+  });
+
+  if (result.error !== undefined) {
+    throw result.error;
+  }
+
+  if (result.status !== 0) {
+    throw new Error(
+      `Windows package command failed with exit code ${String(result.status)}: ${command} ${args.join(' ')}`,
+    );
+  }
+}
+
+function listFiles(dir: string): readonly string[] {
+  const files: string[] = [];
+
+  for (const entry of readdirSync(dir, { withFileTypes: true })) {
+    const file = path.join(dir, entry.name);
+
+    if (entry.isDirectory()) {
+      files.push(...listFiles(file));
+    } else if (entry.isFile()) {
+      files.push(file);
+    }
+  }
+
+  return files.sort(compareCodeUnits);
+}
+
+function readJson(file: string, label: string): unknown {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as unknown;
+  } catch (error) {
+    throw new Error(`Failed to read ${label} ${file}: ${formatError(error)}`);
+  }
+}
+
+function hashFile(file: string): string {
+  const hash = createHash('sha256');
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  const descriptor = openSync(file, 'r');
+
+  try {
+    while (true) {
+      const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
+
+      if (bytesRead === 0) {
+        break;
+      }
+
+      hash.update(buffer.subarray(0, bytesRead));
+    }
+  } finally {
+    closeSync(descriptor);
+  }
+
+  return hash.digest('hex');
+}
+
+function readCanonicalDirectory(input: string, label: string): string {
+  let canonical: string;
+
+  try {
+    canonical = realpathSync(input);
+  } catch (error) {
+    throw new Error(`${label} must exist: ${input} (${formatError(error)})`);
+  }
+
+  if (!lstatSync(canonical).isDirectory()) {
+    throw new Error(`${label} must be a directory: ${canonical}`);
+  }
+
+  return canonical;
+}
+
+function readCanonicalDirectoryInside(root: string, input: string, label: string): string {
+  const canonical = readCanonicalDirectory(input, label);
+  assertInside(root, canonical, label);
+  return canonical;
+}
+
+function readCanonicalFileInside(root: string, input: string, label: string): string {
+  let canonical: string;
+
+  try {
+    canonical = realpathSync(input);
+  } catch (error) {
+    throw new Error(`${label} must exist: ${input} (${formatError(error)})`);
+  }
+
+  assertInside(root, canonical, label);
+
+  if (!lstatSync(canonical).isFile()) {
+    throw new Error(`${label} must be a regular file: ${canonical}`);
+  }
+
+  return canonical;
+}
+
+function assertInside(root: string, candidate: string, label: string): void {
+  const relative = path.relative(root, candidate);
+
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error(`${label} must stay inside the game root.`);
+  }
+}
+
+function requireEnvironmentPath(input: string | undefined, label: string): string {
+  if (input === undefined || input.length === 0) {
+    throw new Error(`Missing Windows environment path: ${label}`);
+  }
+
+  return input;
+}
+
+function requireRecord(input: unknown, label: string): Record<string, unknown> {
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) {
+    throw new Error(`${label} must be an object.`);
+  }
+
+  return input as Record<string, unknown>;
+}
+
+function requireNonEmptyString(input: unknown, label: string): string {
+  if (typeof input !== 'string' || input.length === 0 || input.trim() !== input) {
+    throw new Error(`${label} must be a non-empty string without surrounding whitespace.`);
+  }
+
+  return input;
+}
+
+function safeFileStem(value: string): string {
+  const stem = value.replace(/[^A-Za-z0-9._-]+/gu, '-').replace(/^-+|-+$/gu, '');
+  return stem.length === 0 ? 'package' : stem;
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function formatError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
