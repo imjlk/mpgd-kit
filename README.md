@@ -147,6 +147,13 @@ entitlement. `@mpgd/adapter-verse8/agent8` consumes the reserved Agent8
 writes the catalog grant with its consume-once marker in the same user-state
 update. See [Verse8 VXShop and Agent8 Commerce](docs/VERSE8_COMMERCE.md).
 
+Apps in Toss purchase and rewarded-ad callbacks use a public fail-closed
+game-services verifier boundary. The purchase authority normalizes the
+partner-server mTLS order-status lookup and authenticated Toss-login identity;
+the reward authority stays game-owned instead of assuming an undocumented
+server callback. Both paths match server evidence before the replay-safe ledger
+can grant. See [Apps in Toss Production Evidence](docs/APPS_IN_TOSS_PRODUCTION_EVIDENCE.md).
+
 Authenticated-encrypted Agent8 cloud saves are opt-in through a game-owned RPC
 client, so the Phaser starter does not install the React browser SDK. The same
 server-only adapter export provides a collection-backed verified leaderboard
@@ -159,6 +166,7 @@ Read:
 - [Game Services Backend](docs/GAME_SERVICES_BACKEND.md)
 - [Verse8 VXShop and Agent8 Commerce](docs/VERSE8_COMMERCE.md)
 - [Verse8 Agent8 Storage and Verified Leaderboards](docs/VERSE8_AGENT8_SERVICES.md)
+- [Apps in Toss Production Evidence](docs/APPS_IN_TOSS_PRODUCTION_EVIDENCE.md)
 - [Cloudflare Worker Deploy Runbook](docs/CLOUDFLARE_WORKER_DEPLOY.md)
 - [Cloudflare Pages Host Runbook](docs/CLOUDFLARE_PAGES_HOST.md)
 - [Production Integration Roadmap](docs/PRODUCTION_INTEGRATION_ROADMAP.md)
@@ -246,8 +254,10 @@ new starter `@mpgd/*` pins without a separate hard-coded template version edit.
 - The development backend verifier accepts sample evidence. Production AdMob
   rewards can use the reusable [SSV verification boundary](docs/ADMOB_SSV.md);
   each deployment must still provide callback persistence and rotating public
-  keys. Google Play, App Store, and Apps in Toss verification adapters remain
-  production follow-ups.
+  keys. Production Apps in Toss
+  verifier ports are included, while each game still supplies its authenticated
+  mTLS purchase authority and independently verified reward authority. Google
+  Play and App Store verification adapters remain production follow-ups.
 
 ## Known Production Gaps
 
@@ -256,7 +266,8 @@ new starter `@mpgd/*` pins without a separate hard-coded template version edit.
   acknowledge/consume boundary; subscriptions remain separate.
 - StoreKit/App Store signed transaction or Server API verification.
 - Deployment-owned AdMob SSV callback persistence and public-key refresh wiring.
-- Apps in Toss production IAP/ad callback verification.
+- Game-specific Apps in Toss mTLS/login transport and independently verified
+  reward-authority implementations behind the included public ports.
 - Microsoft Store Digital Goods API and Payment Request integration.
 - Devvit production payments/ad reward mapping and publish/playtest credentials.
 - Real product, ad placement, leaderboard, app, package, and bundle IDs.

@@ -55,6 +55,8 @@ jobs:
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm build:packages
         if: ${{ env.IS_RELEASE_PR != 'true' }}
+      - run: pnpm smoke:apps-in-toss-production-evidence:prepared
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist backend/*/dist native-plugins/*/dist
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - uses: actions/upload-artifact@v6

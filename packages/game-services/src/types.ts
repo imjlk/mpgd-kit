@@ -65,6 +65,7 @@ export interface ClaimAdRewardRequest {
   readonly target: GameServicesAdRewardTarget;
   readonly playerId: string;
   readonly placementId: LogicalAdPlacementId;
+  /** Platform evidence identity; AIT uses the game-issued reward correlation identifier. */
   readonly platformImpressionId?: string;
   readonly idempotencyKey: AdRewardIdempotencyKey;
   readonly completedAt: string;

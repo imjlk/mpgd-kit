@@ -1,5 +1,6 @@
 export * from './admob-ssv.js';
 export * from './app-store-verifier';
+export * from './apps-in-toss-evidence-verification';
 export * from './client';
 export * from './contract';
 export * from './evidence-verification';
