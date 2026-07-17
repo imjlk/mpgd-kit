@@ -1076,6 +1076,14 @@ const targetCommand = defineI18n({
             en: 'Game target config file.',
             ko: '게임 타깃 설정 파일.',
           },
+          'kit-path': {
+            en: 'Path to the mpgd-kit checkout used to resolve target config tokens.',
+            ko: '타깃 설정 토큰 해석에 사용할 mpgd-kit 체크아웃 경로.',
+          },
+          'resolved-targets-file': {
+            en: 'Output path for the resolved target config file.',
+            ko: '해석된 타깃 설정 파일의 출력 경로.',
+          },
           'submission-file': {
             en: 'Game-owned Microsoft Store submission config file.',
             ko: '게임 소유 Microsoft Store 제출 설정 파일.',
@@ -1092,12 +1100,7 @@ const targetCommand = defineI18n({
           required: true,
           description: 'Submission target. Currently supports microsoft-store.',
         },
-        'targets-file': {
-          type: 'string',
-          required: false,
-          default: 'mpgd.targets.json',
-          description: 'Game target config file.',
-        },
+        ...targetConfigArgs(),
         'submission-file': {
           type: 'string',
           required: false,

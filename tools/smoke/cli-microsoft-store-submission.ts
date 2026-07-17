@@ -135,6 +135,21 @@ try {
       ...base,
       listing: {
         ...base.listing,
+        locales: {
+          'en-US': {
+            ...base.listing.locales['en-US'],
+            description: 'REPLACE_ME',
+          },
+        },
+      },
+    },
+    'placeholder content',
+  );
+  expectConfigError(
+    {
+      ...base,
+      listing: {
+        ...base.listing,
         personalData: { accessedOrTransmitted: true },
       },
     },

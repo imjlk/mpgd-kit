@@ -30,7 +30,7 @@
     "ait:console:deploy": "aitcc app deploy",
     "build:microsoft-store": "pnpm exec mpgd target build microsoft-store production --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "smoke:microsoft-store": "pnpm exec mpgd target smoke microsoft-store --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
-    "preflight:microsoft-store": "pnpm exec mpgd target preflight microsoft-store --targets-file ./mpgd.targets.json",
+    "preflight:microsoft-store": "pnpm exec mpgd target preflight microsoft-store --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "build:verse8": "pnpm exec mpgd target build verse8 production --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "smoke:verse8": "pnpm exec mpgd target smoke verse8 --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",
     "build:devvit": "pnpm exec mpgd target build reddit production --targets-file ./mpgd.targets.json --kit-path ${MPGD_KIT_PATH:-__DEFAULT_KIT_PATH__}",

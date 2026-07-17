@@ -611,7 +611,8 @@ function requireIdentityToken(input: unknown, label: string): string {
 
 function requireProductionString(input: unknown, label: string): string {
   const value = requireNonEmptyString(input, label);
-  const exactTemplateToken = /^(?:TODO|FIXME|PLACEHOLDER|DUMMY|LOREM(?:_IPSUM)?)$/u;
+  const exactTemplateToken =
+    /^(?:TODO|FIXME|PLACEHOLDER|DUMMY|(?:CHANGE|REPLACE)[-_ ]?ME|LOREM(?:_IPSUM)?)$/iu;
   const templateIdentityField =
     label.startsWith('productIdentity.')
     || label.startsWith('web app manifest')
@@ -621,7 +622,7 @@ function requireProductionString(input: unknown, label: string): string {
     exactTemplateToken.test(value)
     || (
       templateIdentityField
-      && /contoso|change[-_ ]?me|replace[-_ ]?me|^your[-_ ][A-Za-z0-9_-]+$/iu.test(value)
+      && /contoso|^your[-_ ][A-Za-z0-9_-]+$/iu.test(value)
     )
   ) {
     throw new Error(`${label} still contains placeholder content.`);
