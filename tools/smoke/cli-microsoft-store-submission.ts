@@ -16,6 +16,10 @@ const outputDir = join(gameRoot, 'release-output', 'microsoft-store');
 const screenshotFile = join(gameRoot, 'store-assets', 'en-US', '01.png');
 const targetsFile = join(gameRoot, 'mpgd.targets.json');
 const submissionFile = join(gameRoot, 'mpgd.microsoft-store.json');
+const kitRoot = process.cwd();
+const ttsxRunner = join(kitRoot, 'tools', 'run-ttsx.mjs');
+const ttsxProject = join(kitRoot, 'tsconfig.tools.json');
+const cliEntry = join(kitRoot, 'packages', 'cli', 'src', 'bin.ts');
 
 try {
   rmSync(fixtureRoot, { force: true, recursive: true });
@@ -49,7 +53,7 @@ try {
   });
   writeJson(submissionFile, validConfig());
   const spawnOptions = {
-    cwd: process.cwd(),
+    cwd: gameRoot,
     encoding: 'utf8' as const,
     env: process.env,
     timeout: 30_000,
@@ -58,10 +62,12 @@ try {
   const result = spawnSync(
     process.execPath,
     [
-      'tools/run-ttsx.mjs',
+      ttsxRunner,
+      '--project',
+      ttsxProject,
       '--no-plugins',
       '--mpgd-cli',
-      'packages/cli/src/bin.ts',
+      cliEntry,
       'target',
       'preflight',
       'microsoft-store',
@@ -71,6 +77,8 @@ try {
       submissionFile,
       '--output-dir',
       outputDir,
+      '--kit-path',
+      kitRoot,
     ],
     spawnOptions,
   );
@@ -85,11 +93,11 @@ try {
     );
   }
 
-  assert.equal(
-    result.status,
-    0,
-    `CLI fixture exited with status ${String(result.status)}:\n${result.stderr || result.stdout || '(no output)'}`,
-  );
+  if (result.status !== 0) {
+    throw new Error(
+      `CLI fixture exited with status ${String(result.status)}:\n${result.stderr || result.stdout || '(no output)'}`,
+    );
+  }
   assert.match(
     result.stdout,
     /submission preflight passed: 1 listing locale\(s\), 0 warning\(s\)/u,
@@ -317,10 +325,12 @@ try {
   const linkedResult = spawnSync(
     process.execPath,
     [
-      'tools/run-ttsx.mjs',
+      ttsxRunner,
+      '--project',
+      ttsxProject,
       '--no-plugins',
       '--mpgd-cli',
-      'packages/cli/src/bin.ts',
+      cliEntry,
       'target',
       'preflight',
       'microsoft-store',
@@ -330,6 +340,8 @@ try {
       submissionFile,
       '--output-dir',
       linkedOutputDirectory,
+      '--kit-path',
+      kitRoot,
     ],
     spawnOptions,
   );
@@ -344,7 +356,9 @@ try {
     );
   }
 
-  assert.notEqual(linkedResult.status, 0, 'Symlinked output directory unexpectedly passed.');
+  if (linkedResult.status === 0) {
+    throw new Error('Symlinked output directory unexpectedly passed.');
+  }
   assert.match(linkedResult.stderr || linkedResult.stdout, /must stay inside the game root/u);
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });
