@@ -28,9 +28,11 @@ export const microsoftStoreSubmissionSchemaVersion = 1 as const;
 const maximumStoreDescriptionCharacters = 10_000;
 const maximumStoreDesktopScreenshots = 10;
 const maximumStoreScreenshotBytes = 50 * 1024 * 1024;
+const maximumStoreIconBytes = 2 * 1024 * 1024;
 const minimumStoreScreenshotLongEdge = 1366;
 const minimumStoreScreenshotShortEdge = 768;
 const maximumDecodedScreenshotBytes = 256 * 1024 * 1024;
+const maximumDecodedStoreIconBytes = 16 * 1024 * 1024;
 const reservedPackageStringPrefix = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/u;
 
 export interface MicrosoftStoreSubmissionConfig {
@@ -396,7 +398,8 @@ function parseManifest(input: unknown, artifactRoot: string): ParsedManifest {
     const iconFile = readManifestAssetFile(artifactRoot, src, label);
     const image = readMicrosoftStorePng(iconFile, {
       label,
-      maximumBytes: maximumStoreScreenshotBytes,
+      maximumBytes: maximumStoreIconBytes,
+      maximumDecodedBytes: maximumDecodedStoreIconBytes,
       validateDimensions: (width, height) => {
         if (width !== declaredWidth || height !== declaredHeight) {
           throw new Error(`${label} dimensions must match ${iconSizes}: ${iconFile}`);
@@ -788,6 +791,7 @@ function readMicrosoftStoreScreenshot(file: string): {
   return readMicrosoftStorePng(file, {
     label: 'Microsoft Store screenshot',
     maximumBytes: maximumStoreScreenshotBytes,
+    maximumDecodedBytes: maximumDecodedScreenshotBytes,
     validateDimensions: (width, height) => {
       if (
         width === height
@@ -807,6 +811,7 @@ function readMicrosoftStorePng(
   input: {
     readonly label: string;
     readonly maximumBytes: number;
+    readonly maximumDecodedBytes: number;
     readonly validateDimensions: (width: number, height: number) => void;
   },
 ): {
@@ -865,6 +870,7 @@ function readMicrosoftStorePng(
       filterMethod,
       interlaceMethod,
       label: input.label,
+      maximumDecodedBytes: input.maximumDecodedBytes,
     });
     const sha256 = hashOpenFile(descriptor);
     const after = fstatSync(descriptor);
@@ -895,6 +901,7 @@ function assertDecodedPng(input: {
   readonly filterMethod: number;
   readonly interlaceMethod: number;
   readonly label: string;
+  readonly maximumDecodedBytes: number;
 }): void {
   const channels = pngColorChannels(input.colorType);
   const supportedBitDepths = pngSupportedBitDepths(input.colorType);
@@ -1004,7 +1011,7 @@ function assertDecodedPng(input: {
     (total, pass) => total + (pass.rowBytes + 1) * pass.rowCount,
     0,
   );
-  if (!Number.isSafeInteger(expectedBytes) || expectedBytes > maximumDecodedScreenshotBytes) {
+  if (!Number.isSafeInteger(expectedBytes) || expectedBytes > input.maximumDecodedBytes) {
     throw new Error(`${input.label} decoded pixel data is too large: ${input.file}`);
   }
 

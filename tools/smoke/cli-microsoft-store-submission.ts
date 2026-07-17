@@ -17,6 +17,7 @@ const screenshotFile = join(gameRoot, 'store-assets', 'en-US', '01.png');
 const manifestFile = join(artifactRoot, 'manifest.webmanifest');
 const iconFile = join(artifactRoot, 'icon.png');
 const icon192File = join(artifactRoot, 'icon-192.png');
+const oversizedDecodedIconFile = join(artifactRoot, 'icon-oversized-decoded.png');
 const targetsFile = join(gameRoot, 'mpgd.targets.json');
 const submissionFile = join(gameRoot, 'mpgd.microsoft-store.json');
 const kitRoot = process.cwd();
@@ -367,7 +368,42 @@ try {
     }),
     /must be a valid PNG/u,
   );
+  writeFileSync(iconFile, Buffer.alloc(2 * 1024 * 1024 + 1));
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'oversized-icon.json'),
+      markdownFile: join(outputDir, 'oversized-icon.md'),
+    }),
+    /exceeds its maximum file size/u,
+  );
   writeFileSync(iconFile, validIcon);
+  writeFileSync(oversizedDecodedIconFile, createPng(2049, 2049));
+  writeJson(manifestFile, {
+    ...validManifest,
+    icons: [
+      ...validManifest.icons,
+      {
+        src: './icon-oversized-decoded.png',
+        sizes: '2049x2049',
+        type: 'image/png',
+        purpose: 'any',
+      },
+    ],
+  });
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'oversized-decoded-icon.json'),
+      markdownFile: join(outputDir, 'oversized-decoded-icon.md'),
+    }),
+    /decoded pixel data is too large/u,
+  );
+  writeJson(manifestFile, validManifest);
 
   for (const invalidScreenshot of [
     Buffer.from('not a PNG'),
