@@ -962,10 +962,10 @@ const legalCommand = defineI18n({
 
 const targetCommand = defineI18n({
   name: 'target',
-  description: 'Build, smoke, and preflight target artifacts with generated game target config.',
+  description: 'Build, smoke, preflight, and accept target release artifacts.',
   resource: commandResource({
-    en: 'Build, smoke, and preflight target artifacts with generated game target config.',
-    ko: '게임 타깃 설정으로 타깃 산출물을 빌드하고 스모크 및 제출 사전 검증을 수행합니다.',
+    en: 'Build, smoke, preflight, and accept target release artifacts.',
+    ko: '타깃 출시 산출물을 빌드하고 스모크, 제출 사전 검증 및 인수 검증을 수행합니다.',
   }),
   subCommands: {
     build: defineI18n({
@@ -1420,7 +1420,7 @@ const targetCommand = defineI18n({
   },
   run: () => {
     console.log(
-      'Use "mpgd target build <target>", "mpgd target smoke <target>", or "mpgd target preflight <target>".',
+      'Use "mpgd target build <target>", "mpgd target smoke <target>", "mpgd target preflight <target>", or "mpgd target accept-package <target>".',
     );
   },
 });
