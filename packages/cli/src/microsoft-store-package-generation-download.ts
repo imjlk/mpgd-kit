@@ -1,5 +1,13 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { closeSync, existsSync, openSync, renameSync, unlinkSync, writeSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  linkSync,
+  lstatSync,
+  openSync,
+  unlinkSync,
+  writeSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import { formatError } from './evidence-io.js';
@@ -31,6 +39,11 @@ interface WithMicrosoftStorePackageArchiveInput {
   readonly requestBody: string;
   readonly outputFile: string;
   readonly assertInputsUnchanged: () => void;
+}
+
+interface MicrosoftStorePublishedFileIdentity {
+  readonly dev: number;
+  readonly ino: number;
 }
 
 export function createMicrosoftStorePackageGenerationRuntime(
@@ -66,7 +79,7 @@ export async function withMicrosoftStorePackageArchive<Result>(
     `.${path.basename(input.outputFile)}.${process.pid}.${randomUUID()}.tmp`,
   );
   let temporaryFileExists = false;
-  let outputFilePublished = false;
+  let publishedOutputIdentity: MicrosoftStorePublishedFileIdentity | undefined;
   let completed = false;
 
   try {
@@ -78,6 +91,7 @@ export async function withMicrosoftStorePackageArchive<Result>(
         body: input.requestBody,
         headers: {
           accept: 'application/zip',
+          'accept-encoding': 'identity',
           'content-type': 'application/json',
         },
         redirect: 'manual',
@@ -131,15 +145,28 @@ export async function withMicrosoftStorePackageArchive<Result>(
     );
     input.assertInputsUnchanged();
 
-    if (existsSync(input.outputFile)) {
+    const temporaryMetadata = lstatSync(temporaryFile);
+
+    try {
+      linkSync(temporaryFile, input.outputFile);
+    } catch (error) {
+      if (hasErrorCode(error, 'EEXIST')) {
+        throw new Error(
+          `Microsoft Store package ZIP appeared during generation: ${input.outputFile}`,
+        );
+      }
+
       throw new Error(
-        `Microsoft Store package ZIP appeared during generation: ${input.outputFile}`,
+        `Failed to publish Microsoft Store package ZIP: ${input.outputFile} (${formatError(error)})`,
       );
     }
 
-    renameSync(temporaryFile, input.outputFile);
+    publishedOutputIdentity = {
+      dev: temporaryMetadata.dev,
+      ino: temporaryMetadata.ino,
+    };
+    unlinkSync(temporaryFile);
     temporaryFileExists = false;
-    outputFilePublished = true;
     const outputSnapshot = hashMicrosoftStoreFileSnapshot(
       input.outputFile,
       'Microsoft Store package ZIP',
@@ -160,8 +187,8 @@ export async function withMicrosoftStorePackageArchive<Result>(
       unlinkSync(temporaryFile);
     }
 
-    if (outputFilePublished && !completed && existsSync(input.outputFile)) {
-      unlinkSync(input.outputFile);
+    if (publishedOutputIdentity !== undefined && !completed) {
+      unlinkIfIdentityMatches(input.outputFile, publishedOutputIdentity);
     }
   }
 }
@@ -178,7 +205,7 @@ async function assertRemoteManifestIconsMatch(
       icon.url,
       {
         method: 'GET',
-        headers: { accept: 'image/png' },
+        headers: { accept: 'image/png', 'accept-encoding': 'identity' },
         redirect: 'manual',
         signal: AbortSignal.timeout(manifestIconRequestTimeoutMs),
       },
@@ -207,7 +234,10 @@ async function assertRemoteManifestMatches(
     manifestUrl,
     {
       method: 'GET',
-      headers: { accept: 'application/manifest+json, application/json' },
+      headers: {
+        accept: 'application/manifest+json, application/json',
+        'accept-encoding': 'identity',
+      },
       redirect: 'manual',
       signal: AbortSignal.timeout(manifestRequestTimeoutMs),
     },
@@ -363,6 +393,12 @@ function writeAll(descriptor: number, bytes: Buffer): void {
 }
 
 function readContentLength(response: Response, label: string): number | undefined {
+  const contentEncoding = response.headers.get('content-encoding');
+
+  if (contentEncoding !== null && contentEncoding.trim().toLowerCase() !== 'identity') {
+    return undefined;
+  }
+
   const value = response.headers.get('content-length');
 
   if (value === null) {
@@ -380,6 +416,31 @@ function readContentLength(response: Response, label: string): number | undefine
   }
 
   return length;
+}
+
+function unlinkIfIdentityMatches(
+  file: string,
+  expected: MicrosoftStorePublishedFileIdentity,
+): void {
+  let metadata: ReturnType<typeof lstatSync>;
+
+  try {
+    metadata = lstatSync(file);
+  } catch (error) {
+    if (hasErrorCode(error, 'ENOENT')) {
+      return;
+    }
+
+    throw error;
+  }
+
+  if (metadata.dev === expected.dev && metadata.ino === expected.ino) {
+    unlinkSync(file);
+  }
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code;
 }
 
 async function readContentLengthSafely(
