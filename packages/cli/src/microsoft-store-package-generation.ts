@@ -252,7 +252,17 @@ function rollbackEvidenceFilePublication(file: MicrosoftStoreEvidenceFilePublica
     return;
   }
 
-  if (!fileMatchesIdentity(file.finalFile, file.publishedIdentity)) {
+  let matchesIdentity = false;
+
+  try {
+    matchesIdentity = fileMatchesIdentity(file.finalFile, file.publishedIdentity);
+  } catch {
+    // Preserve the primary publication failure when rollback inspection fails.
+    return;
+  }
+
+  if (!matchesIdentity) {
+    // A concurrent writer replaced the final file; preserve the backup for manual recovery.
     file.backupExists = false;
     return;
   }
