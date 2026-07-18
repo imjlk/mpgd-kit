@@ -3,6 +3,7 @@ import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -10,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 
 import {
   microsoftStorePackageGeneratorEndpoint,
@@ -131,6 +132,9 @@ try {
     ],
   );
   assert.ok(calls.every((call) => call.init.redirect === 'manual'));
+  for (const call of calls) {
+    assert.equal(new Headers(call.init.headers).get('accept-encoding'), 'identity');
+  }
 
   const request = JSON.parse(String(calls[3]?.init.body)) as Record<string, unknown>;
   assert.equal(request.name, 'Fixture Game');
@@ -171,6 +175,30 @@ try {
     /Generator contract: unversioned-best-effort[\s\S]*Package inspection: required/u,
   );
 
+  const encodedSuccess = createFixture('encoded-success');
+  const encodedEvidence = await runMicrosoftStorePackageGeneration(
+    encodedSuccess.input,
+    createRuntime({
+      manifestResponses: [
+        encodedResponse(manifestBytes, 'application/manifest+json'),
+        encodedResponse(manifestBytes, 'application/manifest+json'),
+      ],
+      iconResponses: {
+        [icon192Url]: [
+          encodedResponse(icon192Bytes, 'image/png'),
+          encodedResponse(icon192Bytes, 'image/png'),
+        ],
+        [icon512Url]: [
+          encodedResponse(icon512Bytes, 'image/png'),
+          encodedResponse(icon512Bytes, 'image/png'),
+        ],
+      },
+      packageResponse: encodedResponse(validArchive, 'application/zip'),
+    }),
+  );
+  assert.equal(encodedEvidence.archive.sha256, sha256(validArchive));
+  assert.deepEqual(readFileSync(encodedSuccess.input.outputFile), validArchive);
+
   const remoteMismatch = createFixture('remote-mismatch');
   await assert.rejects(
     runMicrosoftStorePackageGeneration(
@@ -205,6 +233,36 @@ try {
   );
   assert.equal(invalidUtf8ManifestCalls.length, 0);
   assertNoGenerationOutputs(invalidUtf8Manifest.input);
+
+  const invalidUtf8Submission = createFixture('invalid-utf8-submission');
+  writeFileSync(
+    invalidUtf8Submission.input.submissionEvidenceFile,
+    Buffer.from([0x7b, 0x22, 0xff, 0x22, 0x7d]),
+  );
+  const invalidUtf8SubmissionCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      invalidUtf8Submission.input,
+      createRuntime({ calls: invalidUtf8SubmissionCalls }),
+    ),
+    /submission evidence must use valid UTF-8/u,
+  );
+  assert.equal(invalidUtf8SubmissionCalls.length, 0);
+  assertNoGenerationOutputs(invalidUtf8Submission.input);
+
+  const danglingEvidence = createFixture('dangling-evidence');
+  symlinkSync(join(fixtureRoot, 'missing-evidence-target'), danglingEvidence.input.jsonFile);
+  const danglingEvidenceCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      danglingEvidence.input,
+      createRuntime({ calls: danglingEvidenceCalls }),
+    ),
+    /package generation JSON must be a regular file when it already exists/u,
+  );
+  assert.equal(danglingEvidenceCalls.length, 0);
+  assert.equal(lstatSync(danglingEvidence.input.jsonFile).isSymbolicLink(), true);
+  assert.equal(existsSync(danglingEvidence.input.outputFile), false);
 
   const localIconMismatch = createFixture('local-icon-mismatch');
   const localIconMismatchCalls: { url: string; init: RequestInit }[] = [];
@@ -486,6 +544,40 @@ try {
   );
   assertNoGenerationOutputs(changedLocalIconAfterCheck.input);
 
+  const competingOutput = createFixture('competing-output');
+  const competingOutputBytes = Buffer.from('competitor package output');
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      competingOutput.input,
+      createRuntime({
+        onPackageRequest: () => {
+          writeFileSync(competingOutput.input.outputFile, competingOutputBytes);
+        },
+      }),
+    ),
+    /package ZIP appeared during generation/u,
+  );
+  assert.deepEqual(readFileSync(competingOutput.input.outputFile), competingOutputBytes);
+  assert.equal(existsSync(competingOutput.input.jsonFile), false);
+  assert.equal(existsSync(competingOutput.input.markdownFile), false);
+  assertNoTemporaryArchive(competingOutput.input.outputFile);
+
+  const reportFailure = createFixture('report-failure');
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      reportFailure.input,
+      createRuntime({
+        onPackageRequest: () => {
+          mkdirSync(reportFailure.input.markdownFile, { recursive: true });
+        },
+      }),
+    ),
+  );
+  assert.equal(existsSync(reportFailure.input.outputFile), false);
+  assert.equal(existsSync(reportFailure.input.jsonFile), false);
+  assert.equal(lstatSync(reportFailure.input.markdownFile).isDirectory(), true);
+  assertNoTemporaryArchive(reportFailure.input.outputFile);
+
   const lengthMismatch = createFixture('length-mismatch');
   await assert.rejects(
     runMicrosoftStorePackageGeneration(
@@ -598,9 +690,10 @@ function createFixture(name: string): {
 
 function createRuntime(options: {
   readonly calls?: { url: string; init: RequestInit }[];
-  readonly manifestResponses?: readonly Buffer[];
+  readonly manifestResponses?: readonly (Buffer | Response)[];
   readonly iconResponses?: Readonly<Record<string, readonly Response[]>>;
   readonly onIconRequest?: (url: string, requestIndex: number) => void;
+  readonly onPackageRequest?: () => void;
   readonly packageResponse?: Response;
 } = {}): MicrosoftStorePackageGenerationRuntime {
   let manifestIndex = 0;
@@ -619,7 +712,7 @@ function createRuntime(options: {
         const values = options.manifestResponses ?? [manifestBytes, manifestBytes];
         const value = values[Math.min(manifestIndex, values.length - 1)] ?? manifestBytes;
         manifestIndex += 1;
-        return response(value, 'application/manifest+json');
+        return value instanceof Response ? value : response(value, 'application/manifest+json');
       }
 
       if ((url === icon192Url || url === icon512Url) && (init.method ?? 'GET') === 'GET') {
@@ -632,6 +725,7 @@ function createRuntime(options: {
       }
 
       if (url === microsoftStorePackageGeneratorEndpoint && init.method === 'POST') {
+        options.onPackageRequest?.();
         return options.packageResponse ?? response(validArchive, 'application/zip');
       }
 
@@ -645,6 +739,17 @@ function response(bytes: Buffer, contentType: string, contentLength = bytes.leng
     status: 200,
     headers: {
       'content-length': String(contentLength),
+      'content-type': contentType,
+    },
+  });
+}
+
+function encodedResponse(bytes: Buffer, contentType: string): Response {
+  return new Response(Uint8Array.from(bytes), {
+    status: 200,
+    headers: {
+      'content-encoding': 'gzip',
+      'content-length': String(Math.max(0, bytes.length - 1)),
       'content-type': contentType,
     },
   });
@@ -686,7 +791,7 @@ function assertNoTemporaryArchive(outputFile: string): void {
   }
 
   assert.deepEqual(
-    readdirSync(directory).filter((entry) => entry.startsWith(`.${outputFile.split('/').at(-1)}.`)),
+    readdirSync(directory).filter((entry) => entry.startsWith(`.${basename(outputFile)}.`)),
     [],
   );
 }
