@@ -76,6 +76,7 @@ export async function runMicrosoftStorePackageGeneration(
       runtime,
       manifestUrl: prepared.manifestUrl,
       manifestSha256: prepared.submission.manifestSha256,
+      manifestIcons: prepared.submission.manifestIcons,
       requestBody,
       outputFile: prepared.outputFile,
       assertInputsUnchanged: () => {
@@ -100,6 +101,17 @@ export async function runMicrosoftStorePackageGeneration(
           url: prepared.manifestUrl,
           sha256: prepared.submission.manifestSha256,
           pinnedInGeneratorRequest: true,
+          icons: {
+            count: prepared.submission.manifestIcons.length,
+            verification: 'before-and-after-generator',
+            entries: prepared.submission.manifestIcons.map((icon) => ({
+              file: relativeOrAbsolute(prepared.gameRoot, icon.file),
+              url: icon.url,
+              sha256: icon.snapshot.sha256,
+              width: icon.width,
+              height: icon.height,
+            })),
+          },
         },
         generator: {
           endpoint: microsoftStorePackageGeneratorEndpoint,
@@ -139,6 +151,7 @@ export function renderMicrosoftStorePackageGenerationMarkdown(
 - Manifest URL: ${escapeMarkdownInline(evidence.manifest.url)}
 - Manifest SHA-256: \`${evidence.manifest.sha256}\`
 - Manifest pinned in generator request: yes
+- Manifest icons verified before and after generator: ${evidence.manifest.icons.count}
 - Modern version: \`${evidence.modernVersion}\`
 - Classic version: \`${evidence.classicVersion}\`
 - Package ID: ${escapeMarkdownInline(evidence.productIdentity.packageId)}
