@@ -1177,11 +1177,11 @@ const targetCommand = defineI18n({
     }),
     'accept-package': defineI18n({
       name: 'accept-package',
-      description: 'Inspect packaged target artifacts and run platform certification.',
+      description: 'Inspect packaged target artifacts and optionally run WACK.',
       resource: commandResource(
         {
-          en: 'Inspect packaged target artifacts and run platform certification.',
-          ko: '패키징된 타깃 산출물을 검사하고 플랫폼 인증을 실행합니다.',
+          en: 'Inspect packaged target artifacts and optionally run WACK.',
+          ko: '패키징된 타깃 산출물을 검사하고 선택적으로 WACK를 실행합니다.',
         },
         {
           target: {
@@ -1201,12 +1201,12 @@ const targetCommand = defineI18n({
             ko: '제출 사전 검증 증적 파일.',
           },
           'output-dir': {
-            en: 'Directory for certification reports and acceptance evidence.',
-            ko: '인증 리포트와 인수 증적을 기록할 디렉터리.',
+            en: 'Directory for optional WACK reports and acceptance evidence.',
+            ko: '선택적 WACK 리포트와 인수 증적을 기록할 디렉터리.',
           },
           appcert: {
-            en: 'Optional path to appcert.exe.',
-            ko: '선택적 appcert.exe 경로.',
+            en: 'Optional appcert.exe path to opt into the recommended WACK check.',
+            ko: '권장 WACK 검사를 선택 실행하기 위한 appcert.exe 경로.',
           },
           makeappx: {
             en: 'Optional path to makeappx.exe.',
@@ -1241,12 +1241,12 @@ const targetCommand = defineI18n({
           type: 'string',
           required: false,
           default: 'release-output/microsoft-store',
-          description: 'Directory for certification reports and acceptance evidence.',
+          description: 'Directory for optional WACK reports and acceptance evidence.',
         },
         appcert: {
           type: 'string',
           required: false,
-          description: 'Optional path to appcert.exe.',
+          description: 'Optional appcert.exe path to opt into the recommended WACK check.',
         },
         makeappx: {
           type: 'string',
