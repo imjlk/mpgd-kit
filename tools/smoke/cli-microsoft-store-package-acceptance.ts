@@ -46,6 +46,7 @@ let certificationResult: 'PASS' | 'FAIL' = 'PASS';
 let emitSymlinkPayload = false;
 let emitUnpackedPackageSymlink = false;
 let mutatePackageDuringCertification = false;
+let blockEvidenceWrite = false;
 
 try {
   rmSync(fixtureRoot, { force: true, recursive: true });
@@ -160,6 +161,7 @@ try {
   assert.equal(readFileSync(wackReportFile, 'utf8'), packageContentsBeforeAliasCheck);
   rmSync(wackReportFile);
 
+  writeFileSync(wackReportFile, 'stale certification report');
   const evidenceWithoutWack = runMicrosoftStorePackageAcceptance(
     { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
     {
@@ -169,6 +171,19 @@ try {
     },
   );
   assert.equal(evidenceWithoutWack.packages[0]?.certification.result, 'NOT_RUN');
+  assert.equal(existsSync(wackReportFile), false);
+
+  blockEvidenceWrite = true;
+  assert.throws(
+    () => runMicrosoftStorePackageAcceptance(
+      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+      runtime,
+    ),
+  );
+  assert.equal(existsSync(join(outputDir, 'package-acceptance.json')), false);
+  assert.equal(existsSync(join(outputDir, 'package-acceptance.md')), false);
+  assert.equal(existsSync(wackReportFile), false);
+  blockEvidenceWrite = false;
 
   emittedPackageId = packageId.toLowerCase();
   assert.equal(
@@ -394,6 +409,12 @@ function runCommand(command: string, args: readonly string[]): void {
         requiredArgumentAfter(args, '-reportoutputpath'),
         `<REPORT OVERALL_RESULT="${certificationResult}"/>`,
       );
+
+      if (blockEvidenceWrite) {
+        const blockedEvidenceTarget = join(fixtureRoot, 'blocked-evidence-target');
+        mkdirSync(blockedEvidenceTarget, { recursive: true });
+        symlinkSync(blockedEvidenceTarget, join(outputDir, 'package-acceptance.md'), 'dir');
+      }
       return;
     }
   }

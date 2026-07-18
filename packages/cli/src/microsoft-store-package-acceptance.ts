@@ -204,19 +204,13 @@ export function runMicrosoftStorePackageAcceptance(
     path.join(outputDir, 'package-acceptance.md'),
     'package acceptance Markdown',
   );
-  const reportFiles: string[] = [];
-
-  if (runtime.appCertExecutable !== undefined) {
-    for (const [index, packageFile] of packageFiles.entries()) {
-      const reportFile = resolveOutputFileInside(
-        gameRoot,
-        windowsAppCertificationReportFile(outputDir, packageFile, index),
-        `Windows App Certification Kit report ${index + 1}`,
-      );
-
-      reportFiles.push(reportFile);
-    }
-  }
+  const reportFiles = packageFiles.map((packageFile, index) =>
+    resolveOutputFileInside(
+      gameRoot,
+      windowsAppCertificationReportFile(outputDir, packageFile, index),
+      `Windows App Certification Kit report ${index + 1}`,
+    ),
+  );
 
   assertDistinctEvidenceFiles(
     [
@@ -297,6 +291,9 @@ export function runMicrosoftStorePackageAcceptance(
     } catch (error) {
       rmSync(jsonFile, { force: true });
       rmSync(markdownFile, { force: true });
+      for (const reportFile of reportFiles) {
+        rmSync(reportFile, { force: true });
+      }
       throw error;
     }
 
