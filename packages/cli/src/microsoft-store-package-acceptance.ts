@@ -230,6 +230,9 @@ export function runMicrosoftStorePackageAcceptance(
       ...packageFiles.map((file) => ({ file, label: 'Microsoft Store package' })),
     ],
   );
+  for (const reportFile of reportFiles) {
+    rmSync(reportFile, { force: true });
+  }
   rmSync(jsonFile, { force: true });
   rmSync(markdownFile, { force: true });
 
@@ -857,6 +860,7 @@ function readCanonicalTool(file: string, label: string): string {
 
 function runWindowsCommand(command: string, args: readonly string[]): void {
   process.stderr.write(`Running Microsoft Store package command: ${path.basename(command)}\n`);
+  const commandSummary = formatWindowsPackageCommand(command, args);
   const result = spawnSync(command, [...args], {
     encoding: 'utf8',
     killSignal: 'SIGTERM',
@@ -874,30 +878,30 @@ function runWindowsCommand(command: string, args: readonly string[]): void {
   if (result.error !== undefined) {
     if (isTimeoutError(result.error)) {
       throw new Error(
-        `Windows package command timed out after ${maximumWindowsPackageCommandDurationMs}ms: ${command} ${args.join(' ')}${formatCommandOutput(output)}`,
+        `Windows package command timed out after ${maximumWindowsPackageCommandDurationMs}ms: ${commandSummary}${formatCommandOutput(output)}`,
       );
     }
 
     if (isMaxBufferError(result.error)) {
       throw new Error(
-        `Windows package command exceeded the ${maximumWindowsPackageCommandOutputBytes}-byte output limit: ${command} ${args.join(' ')}${formatCommandOutput(output)}`,
+        `Windows package command exceeded the ${maximumWindowsPackageCommandOutputBytes}-byte output limit: ${commandSummary}${formatCommandOutput(output)}`,
       );
     }
 
     throw new Error(
-      `Windows package command could not complete: ${command} ${args.join(' ')} (${formatError(result.error)})${formatCommandOutput(output)}`,
+      `Windows package command could not complete: ${commandSummary} (${formatWindowsPackageCommandError(result.error)})${formatCommandOutput(output)}`,
     );
   }
 
   if (result.signal !== null) {
     throw new Error(
-      `Windows package command was killed by signal ${result.signal}: ${command} ${args.join(' ')}${formatCommandOutput(output)}`,
+      `Windows package command was killed by signal ${result.signal}: ${commandSummary}${formatCommandOutput(output)}`,
     );
   }
 
   if (result.status !== 0) {
     throw new Error(
-      `Windows package command failed with exit code ${String(result.status)}: ${command} ${args.join(' ')}${formatCommandOutput(output)}`,
+      `Windows package command failed with exit code ${String(result.status)}: ${commandSummary}${formatCommandOutput(output)}`,
     );
   }
 
@@ -908,6 +912,35 @@ function runWindowsCommand(command: string, args: readonly string[]): void {
   if (stderr.length > 0) {
     process.stderr.write(stderr);
   }
+}
+
+function formatWindowsPackageCommand(command: string, args: readonly string[]): string {
+  const executable = path.basename(command);
+  const operation = args[0]?.toLowerCase();
+
+  if (
+    operation === 'unpack'
+    || operation === 'unbundle'
+    || operation === 'reset'
+    || operation === 'test'
+  ) {
+    return `${executable} ${operation}`;
+  }
+
+  return executable;
+}
+
+function formatWindowsPackageCommandError(error: unknown): string {
+  if (
+    typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && typeof error.code === 'string'
+  ) {
+    return `error code ${error.code}`;
+  }
+
+  return 'unknown error';
 }
 
 function listFiles(dir: string): readonly string[] {
@@ -1076,6 +1109,7 @@ function sameFile(left: string, right: string): boolean {
   try {
     const leftMetadata = statSync(left);
     const rightMetadata = statSync(right);
+    // Windows may report ino=0, which means file identity is unavailable rather than equal.
     return leftMetadata.ino !== 0
       && leftMetadata.dev === rightMetadata.dev
       && leftMetadata.ino === rightMetadata.ino;
@@ -1168,13 +1202,15 @@ function formatCommandOutput(output: string): string {
     return '';
   }
 
-  if (output.length <= maximumWindowsPackageCommandDiagnosticCharacters) {
+  const characters = Array.from(output);
+
+  if (characters.length <= maximumWindowsPackageCommandDiagnosticCharacters) {
     return `\n${output}`;
   }
 
   const headCharacters = Math.floor(maximumWindowsPackageCommandDiagnosticCharacters / 2);
   const tailCharacters = maximumWindowsPackageCommandDiagnosticCharacters - headCharacters;
-  const omittedCharacters = output.length - maximumWindowsPackageCommandDiagnosticCharacters;
+  const omittedCharacters = characters.length - maximumWindowsPackageCommandDiagnosticCharacters;
 
-  return `\n${output.slice(0, headCharacters)}\n... ${omittedCharacters} characters omitted ...\n${output.slice(-tailCharacters)}`;
+  return `\n${characters.slice(0, headCharacters).join('')}\n... ${omittedCharacters} characters omitted ...\n${characters.slice(-tailCharacters).join('')}`;
 }

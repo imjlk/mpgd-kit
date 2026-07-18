@@ -30,6 +30,16 @@ const makeAppxExecutable = join(fixtureRoot, 'makeappx.exe');
 const windowsKitsDir = join(fixtureRoot, 'Windows Kits', '10');
 const packageId = '12345Acme.FixtureGame';
 const publisherId = 'CN=01234567-89ab-cdef-0123-456789abcdef';
+const validSubmissionEvidence = {
+  schemaVersion: 1,
+  target: 'microsoft-store',
+  productIdentity: {
+    packageId,
+    publisherId,
+    publisherDisplayName: 'Acme Games',
+    reservedName: 'Fixture Game',
+  },
+} as const;
 let emittedPackageId = packageId;
 let emittedPublisherId = publisherId;
 let certificationResult: 'PASS' | 'FAIL' = 'PASS';
@@ -103,16 +113,7 @@ try {
     () => findMicrosoftStoreMakeAppxExecutable(windowsKitsDir, 'riscv64'),
     /Unsupported Windows SDK host architecture riscv64/u,
   );
-  writeJson(submissionEvidenceFile, {
-    schemaVersion: 1,
-    target: 'microsoft-store',
-    productIdentity: {
-      packageId,
-      publisherId,
-      publisherDisplayName: 'Acme Games',
-      reservedName: 'Fixture Game',
-    },
-  });
+  writeJson(submissionEvidenceFile, validSubmissionEvidence);
 
   const runtime: MicrosoftStorePackageAcceptanceRuntime = {
     platform: 'win32',
@@ -287,16 +288,7 @@ try {
     ),
     /Failed to parse Microsoft Store submission evidence/u,
   );
-  writeJson(submissionEvidenceFile, {
-    schemaVersion: 1,
-    target: 'microsoft-store',
-    productIdentity: {
-      packageId,
-      publisherId,
-      publisherDisplayName: 'Acme Games',
-      reservedName: 'Fixture Game',
-    },
-  });
+  writeJson(submissionEvidenceFile, validSubmissionEvidence);
 
   const outsidePackage = join(fixtureRoot, 'outside.msix');
   const escapedPackage = join(packagesDir, 'escaped.msix');
