@@ -292,7 +292,25 @@ submission.
   target config and the configured kit path. The command
   validates the game-owned Store identity and listing against the built PWA and
   writes deterministic JSON and Markdown evidence under
-  `release-output/microsoft-store`.
+  `release-output/microsoft-store`. After deploying those exact PWA bytes, run:
+
+  ```sh
+  pnpm package:microsoft-store -- \
+    --pwa-url https://games.example.com/ \
+    --manifest-url https://games.example.com/manifest.webmanifest \
+    --version 1.2.3.0 \
+    --classic-version 1.2.2.0
+  ```
+
+  Package generation uses PWABuilder's fixed, unversioned production endpoint.
+  It downloads one bounded ZIP without extracting it, verifies the deployed
+  manifest against preflight evidence before and after the request, and rejects
+  PWA URLs outside that manifest's deployed scope. It pins the hash-verified
+  local manifest directly in PWABuilder's custom-manifest request while keeping
+  the manifest URL as the relative-resource base. The command also rejects
+  redirects and unsafe ZIP structure and records request, source-revision,
+  archive, and manifest hashes. Inspect the packages in that ZIP with the
+  Microsoft Store acceptance flow before Partner Center submission.
   After PWABuilder creates the Store packages, run the Windows-only package
   gate with the current Windows SDK:
   `pnpm exec mpgd target accept-package microsoft-store --packages <game-relative.msixbundle,game-relative.appxbundle>`.
