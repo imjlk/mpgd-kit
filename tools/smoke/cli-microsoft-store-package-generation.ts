@@ -19,6 +19,7 @@ import {
   type MicrosoftStorePackageGenerationRuntime,
   type RunMicrosoftStorePackageGenerationInput,
 } from '../../packages/cli/src/index';
+import { hashMicrosoftStoreFileSnapshot } from '../../packages/cli/src/microsoft-store-package-generation-integrity';
 
 const fixtureRoot = resolve('node_modules/.cache/mpgd-cli-microsoft-store-package-generation');
 const pwaUrl = 'https://games.acme.dev/store/game/';
@@ -47,6 +48,13 @@ const publisherId = 'CN=01234567-89ab-cdef-0123-456789abcdef';
 
 try {
   rmSync(fixtureRoot, { force: true, recursive: true });
+  assert.throws(
+    () => hashMicrosoftStoreFileSnapshot(
+      join(fixtureRoot, 'missing-input'),
+      'fixture integrity input',
+    ),
+    /Failed to open fixture integrity input/u,
+  );
   const generatedStarter = join(fixtureRoot, 'generated-starter');
   const generatedStarterResult = runCli(['game', 'create', generatedStarter]);
   assert.equal(
@@ -172,6 +180,31 @@ try {
     /Deployed Microsoft Store manifest SHA-256 must match/u,
   );
   assertNoGenerationOutputs(remoteMismatch.input);
+
+  const invalidUtf8Manifest = createFixture('invalid-utf8-manifest');
+  const invalidManifestBytes = Buffer.from([0x7b, 0x22, 0xff, 0x22, 0x7d]);
+  const invalidManifestFile = join(
+    invalidUtf8Manifest.gameRoot,
+    'artifacts',
+    'microsoft-store',
+    'manifest.webmanifest',
+  );
+  writeFileSync(invalidManifestFile, invalidManifestBytes);
+  const invalidManifestEvidence = JSON.parse(
+    readFileSync(invalidUtf8Manifest.input.submissionEvidenceFile, 'utf8'),
+  ) as { manifest: { sha256: string } };
+  invalidManifestEvidence.manifest.sha256 = sha256(invalidManifestBytes);
+  writeJson(invalidUtf8Manifest.input.submissionEvidenceFile, invalidManifestEvidence);
+  const invalidUtf8ManifestCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      invalidUtf8Manifest.input,
+      createRuntime({ calls: invalidUtf8ManifestCalls }),
+    ),
+    /web app manifest must use valid UTF-8/u,
+  );
+  assert.equal(invalidUtf8ManifestCalls.length, 0);
+  assertNoGenerationOutputs(invalidUtf8Manifest.input);
 
   const localIconMismatch = createFixture('local-icon-mismatch');
   const localIconMismatchCalls: { url: string; init: RequestInit }[] = [];
@@ -360,6 +393,46 @@ try {
     ),
     /unsafe ZIP entry path/u,
   );
+
+  const unsafeLocalEntry = createFixture('unsafe-local-entry');
+  const unsafeLocalArchive = Buffer.from(validArchive);
+  Buffer.from('../').copy(unsafeLocalArchive, 30);
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      unsafeLocalEntry.input,
+      createRuntime({
+        packageResponse: response(unsafeLocalArchive, 'application/zip'),
+      }),
+    ),
+    /unsafe ZIP entry path/u,
+  );
+  assertNoGenerationOutputs(unsafeLocalEntry.input);
+
+  const mismatchedLocalEntry = createFixture('mismatched-local-entry');
+  const mismatchedLocalArchive = Buffer.from(validArchive);
+  Buffer.from('q').copy(mismatchedLocalArchive, 30);
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      mismatchedLocalEntry.input,
+      createRuntime({
+        packageResponse: response(mismatchedLocalArchive, 'application/zip'),
+      }),
+    ),
+    /local filename must match its central directory entry/u,
+  );
+  assertNoGenerationOutputs(mismatchedLocalEntry.input);
+
+  const zip64 = createFixture('zip64');
+  const zip64Archive = Buffer.from(validArchive);
+  zip64Archive.writeUInt32LE(0xffffffff, zip64Archive.length - 22 + 16);
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      zip64.input,
+      createRuntime({ packageResponse: response(zip64Archive, 'application/zip') }),
+    ),
+    /must not use ZIP64 extensions/u,
+  );
+  assertNoGenerationOutputs(zip64.input);
 
   const changedManifest = createFixture('changed-manifest');
   await assert.rejects(
