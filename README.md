@@ -252,10 +252,12 @@ deterministic submission evidence under
 
 After PWABuilder produces `.msix`, `.msixbundle`, `.appx`, or `.appxbundle`
 files, run `mpgd target accept-package microsoft-store --packages <paths>` on
-Windows in an active administrator user session. The acceptance command uses
-MakeAppx to verify every bundle and payload `Identity` against the preflight
-evidence, runs the Windows App Certification Kit, requires its XML
-`OVERALL_RESULT` to be `PASS`, and records package and report hashes.
+Windows with the Windows SDK installed. The acceptance command uses MakeAppx
+to verify every bundle and payload `Identity` against the preflight
+evidence and records package hashes. WACK is a recommended optional local check:
+from an active administrator user session, pass
+`--appcert <path-to-appcert.exe>` to run it, require its XML `OVERALL_RESULT`
+to be `PASS`, and add the report hash to the evidence.
 
 The starter dependency range is derived from the released `@mpgd/cli` package
 version. Release PRs that bump the fixed public package group therefore update
