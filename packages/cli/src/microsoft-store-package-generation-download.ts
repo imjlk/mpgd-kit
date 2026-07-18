@@ -7,6 +7,7 @@ import {
   microsoftStorePackageGeneratorEndpoint,
   type CreateMicrosoftStorePackageGenerationRuntimeInput,
   type MicrosoftStoreFileSnapshot,
+  type MicrosoftStoreManifestIconInput,
   type MicrosoftStorePackageGenerationRuntime,
 } from './microsoft-store-package-generation-contract.js';
 import {
@@ -16,14 +17,17 @@ import {
 import { assertMicrosoftStorePackageZip } from './microsoft-store-package-generation-zip.js';
 
 const maximumManifestBytes = 1024 * 1024;
+const maximumManifestIconBytes = 2 * 1024 * 1024;
 const maximumArchiveBytes = 512 * 1024 * 1024;
 const manifestRequestTimeoutMs = 30_000;
+const manifestIconRequestTimeoutMs = 30_000;
 const packageRequestTimeoutMs = 10 * 60 * 1_000;
 
 interface WithMicrosoftStorePackageArchiveInput {
   readonly runtime: MicrosoftStorePackageGenerationRuntime;
   readonly manifestUrl: string;
   readonly manifestSha256: string;
+  readonly manifestIcons: readonly MicrosoftStoreManifestIconInput[];
   readonly requestBody: string;
   readonly outputFile: string;
   readonly assertInputsUnchanged: () => void;
@@ -48,6 +52,11 @@ export async function withMicrosoftStorePackageArchive<Result>(
   await assertRemoteManifestMatches(
     input.manifestUrl,
     input.manifestSha256,
+    input.runtime,
+    'before package generation',
+  );
+  await assertRemoteManifestIconsMatch(
+    input.manifestIcons,
     input.runtime,
     'before package generation',
   );
@@ -115,6 +124,12 @@ export async function withMicrosoftStorePackageArchive<Result>(
       input.runtime,
       'after package generation',
     );
+    await assertRemoteManifestIconsMatch(
+      input.manifestIcons,
+      input.runtime,
+      'after package generation',
+    );
+    input.assertInputsUnchanged();
 
     if (existsSync(input.outputFile)) {
       throw new Error(
@@ -147,6 +162,36 @@ export async function withMicrosoftStorePackageArchive<Result>(
 
     if (outputFilePublished && !completed && existsSync(input.outputFile)) {
       unlinkSync(input.outputFile);
+    }
+  }
+}
+
+async function assertRemoteManifestIconsMatch(
+  icons: readonly MicrosoftStoreManifestIconInput[],
+  runtime: MicrosoftStorePackageGenerationRuntime,
+  phase: string,
+): Promise<void> {
+  for (const [index, icon] of icons.entries()) {
+    const label = `deployed Microsoft Store manifest icon[${index}] ${phase}`;
+    const response = await fetchResponse(
+      runtime,
+      icon.url,
+      {
+        method: 'GET',
+        headers: { accept: 'image/png' },
+        redirect: 'manual',
+        signal: AbortSignal.timeout(manifestIconRequestTimeoutMs),
+      },
+      label,
+    );
+    await assertSuccessfulResponse(response, label);
+    const bytes = await readBoundedResponse(response, maximumManifestIconBytes, label);
+    const actualSha256 = hashMicrosoftStoreBytes(bytes);
+
+    if (actualSha256 !== icon.snapshot.sha256) {
+      throw new Error(
+        `Deployed Microsoft Store manifest icon[${index}] SHA-256 must match submission evidence ${phase}: expected ${icon.snapshot.sha256}, received ${actualSha256}.`,
+      );
     }
   }
 }
