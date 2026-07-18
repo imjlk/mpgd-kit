@@ -525,7 +525,9 @@ function assertDistinctFiles(
         const candidateMetadata = statSync(candidate.file);
 
         if (
-          fileMetadata.dev === candidateMetadata.dev
+          // Windows may report ino=0, which means file identity is unavailable rather than equal.
+          fileMetadata.ino !== 0
+          && fileMetadata.dev === candidateMetadata.dev
           && fileMetadata.ino === candidateMetadata.ino
         ) {
           throw new Error(`${file.label} must not alias ${candidate.label}: ${file.file}`);
