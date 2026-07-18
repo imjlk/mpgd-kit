@@ -78,6 +78,11 @@ try {
     async () => [{ address: '::ffff:10.0.0.1', family: 6 }],
   );
   await assert.rejects(mappedPrivateResolution, /::ffff:10\.0\.0\.1/u);
+  const reservedIpv6Resolution = resolveMicrosoftStorePublicAddresses(
+    'reserved.acme.dev',
+    async () => [{ address: '6000::1', family: 6 }],
+  );
+  await assert.rejects(reservedIpv6Resolution, /6000::1/u);
   await assert.rejects(
     resolveMicrosoftStorePublicAddresses('empty.acme.dev', async () => []),
     /did not resolve/u,

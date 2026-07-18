@@ -38,6 +38,7 @@ const manifestIconRequestTimeoutMs = 30_000;
 const packageRequestTimeoutMs = 10 * 60 * 1_000;
 const blockedIpv4Addresses = createBlockedIpv4Addresses();
 const blockedIpv6Addresses = createBlockedIpv6Addresses();
+const allowedIpv6GlobalUnicastAddresses = createAllowedIpv6GlobalUnicastAddresses();
 
 interface WithMicrosoftStorePackageArchiveInput {
   readonly runtime: MicrosoftStorePackageGenerationRuntime;
@@ -147,7 +148,13 @@ export async function resolveMicrosoftStorePublicAddresses(
     if (
       family === undefined
       || (family === 'ipv4' && blockedIpv4Addresses.check(address.address, family))
-      || (family === 'ipv6' && blockedIpv6Addresses.check(address.address, family))
+      || (
+        family === 'ipv6'
+        && (
+          !allowedIpv6GlobalUnicastAddresses.check(address.address, family)
+          || blockedIpv6Addresses.check(address.address, family)
+        )
+      )
     ) {
       throw new Error(
         `Microsoft Store package generation host must resolve only to public addresses: ${hostname} resolved to ${address.address}.`,
@@ -201,7 +208,6 @@ function createBlockedIpv6Addresses(): BlockList {
     ['2001:db8::', 32],
     ['2002::', 16],
     ['3fff::', 20],
-    ['5f00::', 16],
     ['fc00::', 7],
     ['fe80::', 10],
     ['fec0::', 10],
@@ -210,6 +216,15 @@ function createBlockedIpv6Addresses(): BlockList {
     blockList.addSubnet(network, prefix, 'ipv6');
   }
 
+  return blockList;
+}
+
+function createAllowedIpv6GlobalUnicastAddresses(): BlockList {
+  const blockList = new BlockList();
+
+  // IANA currently assigns public IPv6 global unicast space from 2000::/3.
+  // Special-purpose subnets inside it remain denied by blockedIpv6Addresses.
+  blockList.addSubnet('2000::', 3, 'ipv6');
   return blockList;
 }
 
