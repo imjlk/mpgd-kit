@@ -73,6 +73,11 @@ try {
   ];
   const mixedResolution = resolveMicrosoftStorePublicAddresses('mixed.acme.dev', resolveMixed);
   await assert.rejects(mixedResolution, /fd00::4/u);
+  const mappedPrivateResolution = resolveMicrosoftStorePublicAddresses(
+    'mapped.acme.dev',
+    async () => [{ address: '::ffff:10.0.0.1', family: 6 }],
+  );
+  await assert.rejects(mappedPrivateResolution, /::ffff:10\.0\.0\.1/u);
   await assert.rejects(
     resolveMicrosoftStorePublicAddresses('empty.acme.dev', async () => []),
     /did not resolve/u,

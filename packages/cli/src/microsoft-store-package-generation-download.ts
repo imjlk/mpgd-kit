@@ -82,6 +82,7 @@ function createPublicOnlyFetch(resolveAddresses?: MicrosoftStoreAddressResolver)
       dispatcher,
     });
 
+    // Undici implements Node's global Fetch API, but publishes a distinct Response type.
     return response as unknown as Response;
   }) as typeof fetch;
 }
@@ -97,11 +98,13 @@ function createPublicOnlyLookup(
           return;
         }
 
-        const family = options.family === 'IPv4'
-          ? 4
-          : options.family === 'IPv6'
-            ? 6
-            : options.family;
+        let family = options.family;
+
+        if (family === 'IPv4') {
+          family = 4;
+        } else if (family === 'IPv6') {
+          family = 6;
+        }
         const selected = addresses.find(
           (address) => family === undefined || family === 0 || address.family === family,
         );
@@ -158,6 +161,8 @@ export async function resolveMicrosoftStorePublicAddresses(
 function createBlockedIpv4Addresses(): BlockList {
   const blockList = new BlockList();
 
+  // IANA special-purpose ranges, including private, loopback, link-local,
+  // documentation, benchmarking, multicast, and reserved space (RFC 6890).
   for (const [network, prefix] of [
     ['0.0.0.0', 8],
     ['10.0.0.0', 8],
@@ -184,6 +189,8 @@ function createBlockedIpv4Addresses(): BlockList {
 function createBlockedIpv6Addresses(): BlockList {
   const blockList = new BlockList();
 
+  // IANA special-purpose ranges, including mapped/translated IPv4, loopback,
+  // documentation, unique-local, link-local, multicast, and reserved space.
   for (const [network, prefix] of [
     ['::', 96],
     ['::ffff:0:0', 96],
@@ -194,6 +201,7 @@ function createBlockedIpv6Addresses(): BlockList {
     ['2001:db8::', 32],
     ['2002::', 16],
     ['3fff::', 20],
+    ['5f00::', 16],
     ['fc00::', 7],
     ['fe80::', 10],
     ['fec0::', 10],
