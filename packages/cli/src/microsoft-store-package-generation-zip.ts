@@ -39,6 +39,17 @@ export function assertMicrosoftStorePackageZip(file: string, sizeBytes: number):
     const absoluteEndOffset = sizeBytes - tailLength + endOffset;
 
     if (
+      diskNumber === 0xffff
+      || centralDirectoryDisk === 0xffff
+      || entriesOnDisk === 0xffff
+      || totalEntries === 0xffff
+      || centralDirectorySize === 0xffffffff
+      || centralDirectoryOffset === 0xffffffff
+    ) {
+      throw new Error('PWABuilder package archive must not use ZIP64 extensions.');
+    }
+
+    if (
       diskNumber !== 0
       || centralDirectoryDisk !== 0
       || entriesOnDisk === 0
@@ -78,7 +89,20 @@ function assertSafeZipEntries(
     const fileNameLength = header.readUInt16LE(28);
     const extraLength = header.readUInt16LE(30);
     const commentLength = header.readUInt16LE(32);
+    const diskStart = header.readUInt16LE(34);
+    const compressedSize = header.readUInt32LE(20);
+    const uncompressedSize = header.readUInt32LE(24);
+    const localHeaderOffset = header.readUInt32LE(42);
     const entryLength = header.length + fileNameLength + extraLength + commentLength;
+
+    if (
+      diskStart === 0xffff
+      || compressedSize === 0xffffffff
+      || uncompressedSize === 0xffffffff
+      || localHeaderOffset === 0xffffffff
+    ) {
+      throw new Error('PWABuilder package archive must not use ZIP64 extensions.');
+    }
 
     if (cursor + entryLength > centralDirectoryEnd) {
       throw new Error('PWABuilder package archive has a truncated ZIP central directory entry.');
@@ -94,17 +118,44 @@ function assertSafeZipEntries(
       throw new Error('PWABuilder package archive must not contain symbolic links.');
     }
 
-    const localHeaderOffset = header.readUInt32LE(42);
-
-    if (localHeaderOffset >= centralDirectoryOffset) {
+    if (localHeaderOffset + 30 > centralDirectoryOffset) {
       throw new Error('PWABuilder package archive has an invalid ZIP local header offset.');
     }
 
-    const localHeader = Buffer.allocUnsafe(4);
+    const localHeader = Buffer.allocUnsafe(30);
     readExactly(descriptor, localHeader, localHeaderOffset);
 
     if (localHeader.readUInt32LE(0) !== 0x04034b50) {
       throw new Error('PWABuilder package archive has an invalid ZIP local file header.');
+    }
+
+    const localFileNameLength = localHeader.readUInt16LE(26);
+    const localExtraLength = localHeader.readUInt16LE(28);
+    const localCompressedSize = localHeader.readUInt32LE(18);
+    const localUncompressedSize = localHeader.readUInt32LE(22);
+    const localMetadataEnd = localHeaderOffset + localHeader.length
+      + localFileNameLength
+      + localExtraLength;
+
+    if (localCompressedSize === 0xffffffff || localUncompressedSize === 0xffffffff) {
+      throw new Error('PWABuilder package archive must not use ZIP64 extensions.');
+    }
+
+    if (
+      localMetadataEnd > centralDirectoryOffset
+      || localMetadataEnd + compressedSize > centralDirectoryOffset
+    ) {
+      throw new Error('PWABuilder package archive has a truncated ZIP local file entry.');
+    }
+
+    const localFileNameBytes = Buffer.allocUnsafe(localFileNameLength);
+    readExactly(descriptor, localFileNameBytes, localHeaderOffset + localHeader.length);
+    assertSafeZipEntryName(localFileNameBytes.toString('utf8'));
+
+    if (!localFileNameBytes.equals(fileNameBytes)) {
+      throw new Error(
+        'PWABuilder package archive local filename must match its central directory entry.',
+      );
     }
 
     cursor += entryLength;
