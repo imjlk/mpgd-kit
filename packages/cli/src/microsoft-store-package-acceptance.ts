@@ -365,6 +365,7 @@ function inspectPackage(input: {
       '/d',
       bundleDir,
       '/o',
+      '/l',
     ]);
     const canonicalBundleDir = readCanonicalDirectory(
       bundleDir,
@@ -433,6 +434,7 @@ function inspectSinglePackage(
     '/d',
     outputDir,
     '/o',
+    '/l',
   ]);
   const canonicalOutputDir = readCanonicalDirectory(
     outputDir,
