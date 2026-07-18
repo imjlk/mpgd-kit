@@ -5,7 +5,7 @@ export const microsoftStorePackageGeneratorSourceRevision =
   'ded7914e84d1509c901d2899a3f654f5d44ef08f' as const;
 
 export interface MicrosoftStorePackageGenerationEvidence {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof microsoftStorePackageGenerationSchemaVersion;
   readonly target: 'microsoft-store';
   readonly pwaUrl: string;
   readonly modernVersion: string;
