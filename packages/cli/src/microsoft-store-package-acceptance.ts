@@ -282,13 +282,13 @@ export function runMicrosoftStorePackageAcceptance(
 }
 
 export function parseMicrosoftStorePackageIdentity(xml: string): MicrosoftStorePackageIdentity {
-  const identityTag = xml.match(/<Identity\b([^>]*)\/?\s*>/iu);
+  const identityAttributes = findPackageIdentityAttributes(xml);
 
-  if (identityTag === null) {
+  if (identityAttributes === undefined) {
     throw new Error('Microsoft Store package manifest is missing Identity.');
   }
 
-  const attributes = parseXmlAttributes(identityTag[1] ?? '');
+  const attributes = parseXmlAttributes(identityAttributes);
 
   return {
     name: requireXmlAttribute(attributes, 'Name'),
@@ -456,7 +456,7 @@ function assertExpectedIdentity(
   identity: MicrosoftStorePackageIdentity,
   expected: MicrosoftStorePackageAcceptanceEvidence['productIdentity'],
 ): void {
-  if (identity.name !== expected.packageId) {
+  if (!equalsAsciiCaseInsensitive(identity.name, expected.packageId)) {
     throw new Error(
       `Microsoft Store package identity Name must be ${expected.packageId}; received ${identity.name}.`,
     );
@@ -467,6 +467,135 @@ function assertExpectedIdentity(
       `Microsoft Store package identity Publisher must be ${expected.publisherId}; received ${identity.publisher}.`,
     );
   }
+}
+
+function findPackageIdentityAttributes(xml: string): string | undefined {
+  const stack: string[] = [];
+  let offset = 0;
+
+  while (offset < xml.length) {
+    const start = xml.indexOf('<', offset);
+
+    if (start < 0) {
+      break;
+    }
+
+    if (xml.startsWith('<!--', start)) {
+      offset = requireXmlTerminator(xml, start + 4, '-->', 'comment');
+      continue;
+    }
+
+    if (xml.startsWith('<![CDATA[', start)) {
+      offset = requireXmlTerminator(xml, start + 9, ']]>', 'CDATA section');
+      continue;
+    }
+
+    if (xml.startsWith('<?', start)) {
+      offset = requireXmlTerminator(xml, start + 2, '?>', 'processing instruction');
+      continue;
+    }
+
+    if (/^<!DOCTYPE\b/iu.test(xml.slice(start))) {
+      throw new Error('Microsoft Store package manifest must not contain a DOCTYPE declaration.');
+    }
+
+    if (xml.startsWith('<!', start)) {
+      throw new Error('Microsoft Store package manifest contains unsupported XML markup.');
+    }
+
+    const end = findXmlTagEnd(xml, start + 1);
+    const source = xml.slice(start + 1, end);
+    const closing = /^\s*\//u.test(source);
+    const tagNamePattern = closing ? /^\s*\/\s*([A-Za-z_][\w:.-]*)/u : /^\s*([A-Za-z_][\w:.-]*)/u;
+    const tagName = source.match(tagNamePattern)?.[1];
+
+    if (tagName === undefined) {
+      throw new Error('Microsoft Store package manifest contains malformed XML markup.');
+    }
+
+    if (closing) {
+      const opened = stack.pop();
+
+      if (opened !== tagName) {
+        throw new Error('Microsoft Store package manifest contains mismatched XML elements.');
+      }
+
+      offset = end + 1;
+      continue;
+    }
+
+    const parent = stack.at(-1);
+    const selfClosing = /\/\s*$/u.test(source);
+
+    if (
+      tagName === 'Identity'
+      && stack.length === 1
+      && (parent === 'Package' || parent === 'Bundle')
+    ) {
+      const nameEnd = source.indexOf(tagName) + tagName.length;
+      return source.slice(nameEnd, selfClosing ? source.lastIndexOf('/') : undefined);
+    }
+
+    if (!selfClosing) {
+      stack.push(tagName);
+    }
+
+    offset = end + 1;
+  }
+
+  return undefined;
+}
+
+function findXmlTagEnd(xml: string, start: number): number {
+  let quote: '"' | "'" | undefined;
+
+  for (let index = start; index < xml.length; index += 1) {
+    const character = xml[index];
+
+    if (quote === undefined && (character === '"' || character === "'")) {
+      quote = character;
+    } else if (character === quote) {
+      quote = undefined;
+    } else if (quote === undefined && character === '>') {
+      return index;
+    }
+  }
+
+  throw new Error('Microsoft Store package manifest contains an unterminated XML element.');
+}
+
+function requireXmlTerminator(
+  xml: string,
+  start: number,
+  terminator: string,
+  label: string,
+): number {
+  const end = xml.indexOf(terminator, start);
+
+  if (end < 0) {
+    throw new Error(`Microsoft Store package manifest contains an unterminated XML ${label}.`);
+  }
+
+  return end + terminator.length;
+}
+
+function equalsAsciiCaseInsensitive(left: string, right: string): boolean {
+  if (left.length !== right.length) {
+    return false;
+  }
+
+  for (let index = 0; index < left.length; index += 1) {
+    const leftCode = left.charCodeAt(index);
+    const rightCode = right.charCodeAt(index);
+    const normalizedLeft = leftCode >= 0x41 && leftCode <= 0x5a ? leftCode + 0x20 : leftCode;
+    const normalizedRight = rightCode >= 0x41 && rightCode <= 0x5a ? rightCode + 0x20 : rightCode;
+
+    if (normalizedLeft !== normalizedRight) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function windowsSdkArchitectures(architecture: NodeJS.Architecture): readonly string[] {
