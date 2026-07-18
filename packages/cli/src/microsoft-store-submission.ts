@@ -651,8 +651,13 @@ function requirePublisherDistinguishedName(input: unknown, label: string): strin
       throw new Error(`${label} must be a complete X.509 distinguished name.`);
     }
 
-    const attribute = component.slice(0, separator).trim();
-    const attributeValue = component.slice(separator + 1).trim();
+    const attribute = component.slice(0, separator);
+    const attributeValue = component.slice(separator + 1);
+
+    if (/\s$/u.test(attribute) || /^\s/u.test(attributeValue)) {
+      throw new Error(`${label} must not contain whitespace around attribute separators.`);
+    }
+
     const normalizedAttribute = attribute.toUpperCase();
 
     if (

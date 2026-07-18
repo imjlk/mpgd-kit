@@ -256,6 +256,16 @@ try {
     },
     'must not contain a multivalued RDN',
   );
+  expectConfigError(
+    {
+      ...base,
+      productIdentity: {
+        ...base.productIdentity,
+        publisherId: 'CN = 01234567-89ab-cdef-0123-456789abcdef',
+      },
+    },
+    'must not contain whitespace around attribute separators',
+  );
 
   expectConfigError(
     {
