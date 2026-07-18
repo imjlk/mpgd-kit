@@ -1,8 +1,9 @@
 import { existsSync, lstatSync, mkdirSync, realpathSync, statSync } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
+import { TextDecoder } from 'node:util';
 
-import { formatError, readBoundedUtf8File } from './evidence-io.js';
+import { formatError } from './evidence-io.js';
 import {
   type MicrosoftStoreManifestIconInput,
   type MicrosoftStoreSubmissionEvidenceInput,
@@ -11,7 +12,9 @@ import {
 } from './microsoft-store-package-generation-contract.js';
 import {
   assertMicrosoftStoreSnapshotUnchanged,
+  hashMicrosoftStoreBytes,
   hashMicrosoftStoreFileSnapshot,
+  readBoundedMicrosoftStoreFileBytes,
 } from './microsoft-store-package-generation-integrity.js';
 import {
   assertMicrosoftStorePwaUrlInsideManifestScope,
@@ -35,7 +38,11 @@ export function prepareMicrosoftStorePackageGenerationInput(
     submissionEvidenceFile,
     'Microsoft Store submission evidence',
   );
-  const submissionEvidence = readSubmissionEvidence(submissionEvidenceFile, gameRoot);
+  const submissionEvidence = readSubmissionEvidence(
+    submissionEvidenceFile,
+    gameRoot,
+    submissionBefore,
+  );
   const manifestBefore = hashMicrosoftStoreFileSnapshot(
     submissionEvidence.manifestFile,
     'Microsoft Store web app manifest',
@@ -136,11 +143,35 @@ export function assertMicrosoftStorePackageGenerationInputUnchanged(
 function readSubmissionEvidence(
   file: string,
   gameRoot: string,
+  expected: PreparedMicrosoftStorePackageGenerationInput['submissionBefore'],
 ): Omit<MicrosoftStoreSubmissionEvidenceInput, 'manifest'> {
-  const source = readBoundedUtf8File(file, maximumSubmissionEvidenceBytes);
+  const bytes = readBoundedMicrosoftStoreFileBytes(
+    file,
+    'Microsoft Store submission evidence',
+    maximumSubmissionEvidenceBytes,
+  );
 
-  if (source === null) {
+  if (bytes === null) {
     throw new Error('Microsoft Store submission evidence is too large.');
+  }
+
+  if (bytes.length !== expected.sizeBytes || hashMicrosoftStoreBytes(bytes) !== expected.sha256) {
+    throw new Error(`Microsoft Store submission evidence changed while it was read: ${file}`);
+  }
+
+  assertMicrosoftStoreSnapshotUnchanged(
+    file,
+    expected,
+    'Microsoft Store submission evidence changed while it was parsed',
+  );
+  let source: string;
+
+  try {
+    source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new Error(
+      `Microsoft Store submission evidence must use valid UTF-8: ${formatError(error)}`,
+    );
   }
 
   let parsed: unknown;
@@ -400,16 +431,29 @@ function prepareMissingOutputFile(root: string, input: string, label: string): s
 function resolveEvidenceFile(root: string, input: string, label: string): string {
   const resolved = resolvePotentiallyMissingPath(input);
   assertInside(root, resolved, label);
+  const metadata = lstatIfExists(resolved, label);
 
-  if (existsSync(resolved)) {
-    const metadata = lstatSync(resolved);
-
-    if (metadata.isSymbolicLink() || !metadata.isFile()) {
-      throw new Error(`${label} must be a regular file when it already exists: ${resolved}`);
-    }
+  if (metadata !== undefined && (metadata.isSymbolicLink() || !metadata.isFile())) {
+    throw new Error(`${label} must be a regular file when it already exists: ${resolved}`);
   }
 
   return resolved;
+}
+
+function lstatIfExists(file: string, label: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(file);
+  } catch (error) {
+    if (hasErrorCode(error, 'ENOENT')) {
+      return undefined;
+    }
+
+    throw new Error(`Failed to inspect ${label}: ${file} (${formatError(error)})`);
+  }
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code;
 }
 
 function resolvePotentiallyMissingPath(input: string): string {
