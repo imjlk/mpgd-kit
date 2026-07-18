@@ -716,7 +716,7 @@ function requireProductionString(input: unknown, label: string): string {
     exactTemplateToken.test(value)
     || (
       templateIdentityField
-      && /contoso|(?:change|replace)[-_ ]?me|^your[-_ ][A-Za-z0-9_-]+$/iu.test(value)
+      && /contoso|\b(?:change|replace)[-_ ]?me\b|^your[-_ ][A-Za-z0-9_-]+$/iu.test(value)
     )
   ) {
     throw new Error(`${label} still contains placeholder content.`);

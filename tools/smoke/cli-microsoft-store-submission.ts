@@ -151,6 +151,13 @@ try {
     },
     'placeholder content',
   );
+  for (const publisherDisplayName of ['Exchange Media', 'Change Metadata']) {
+    const config = parseMicrosoftStoreSubmissionConfig({
+      ...base,
+      productIdentity: { ...base.productIdentity, publisherDisplayName },
+    });
+    assert.equal(config.productIdentity.publisherDisplayName, publisherDisplayName);
+  }
   expectConfigError(
     {
       ...base,
