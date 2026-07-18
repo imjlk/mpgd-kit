@@ -811,16 +811,6 @@ function isRecord(input: unknown): input is Record<string, unknown> {
 }
 
 function assertLocale(locale: string): void {
-  try {
-    const normalized = new Intl.Locale(locale).toString();
-
-    if (normalized !== locale) {
-      throw new Error('not normalized');
-    }
-  } catch {
-    throw new Error(`listing locale must be a normalized BCP 47 tag: ${locale}`);
-  }
-
   if (!isMicrosoftStoreSupportedListingLocale(locale)) {
     throw new Error(`listing locale must be supported by Microsoft Store: ${locale}`);
   }

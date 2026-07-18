@@ -312,6 +312,18 @@ try {
     },
   });
   assert.deepEqual(Object.keys(languageOnlyListing.listing.locales), ['en']);
+  for (const legacyStoreLocale of ['prs', 'prs-AF', 'quz-PE', 'sr-Cyrl-CS']) {
+    const config = parseMicrosoftStoreSubmissionConfig({
+      ...base,
+      listing: {
+        ...base.listing,
+        locales: {
+          [legacyStoreLocale]: base.listing.locales['en-US'],
+        },
+      },
+    });
+    assert.deepEqual(Object.keys(config.listing.locales), [legacyStoreLocale]);
+  }
   expectConfigError(
     {
       ...base,
