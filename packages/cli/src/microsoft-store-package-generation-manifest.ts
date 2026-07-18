@@ -1,8 +1,11 @@
-import { formatError, readBoundedUtf8File } from './evidence-io.js';
+import { TextDecoder } from 'node:util';
+
+import { formatError } from './evidence-io.js';
 import { type MicrosoftStoreFileSnapshot } from './microsoft-store-package-generation-contract.js';
 import {
   assertMicrosoftStoreSnapshotUnchanged,
   hashMicrosoftStoreBytes,
+  readBoundedMicrosoftStoreFileBytes,
 } from './microsoft-store-package-generation-integrity.js';
 
 const maximumManifestBytes = 1024 * 1024;
@@ -11,13 +14,15 @@ export function readHashVerifiedMicrosoftStoreManifest(
   file: string,
   expected: MicrosoftStoreFileSnapshot,
 ): Readonly<Record<string, unknown>> {
-  const source = readBoundedUtf8File(file, maximumManifestBytes);
+  const bytes = readBoundedMicrosoftStoreFileBytes(
+    file,
+    'Microsoft Store web app manifest',
+    maximumManifestBytes,
+  );
 
-  if (source === null) {
+  if (bytes === null) {
     throw new Error('Microsoft Store web app manifest is too large.');
   }
-
-  const bytes = Buffer.from(source);
 
   if (
     bytes.length !== expected.sizeBytes
@@ -31,6 +36,13 @@ export function readHashVerifiedMicrosoftStoreManifest(
     expected,
     'Microsoft Store web app manifest changed while it was parsed',
   );
+  let source: string;
+
+  try {
+    source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new Error(`Microsoft Store web app manifest must use valid UTF-8: ${formatError(error)}`);
+  }
 
   let parsed: unknown;
 
