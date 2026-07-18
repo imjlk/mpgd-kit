@@ -442,7 +442,12 @@ function unlinkIfIdentityMatches(
     throw error;
   }
 
-  if (metadata.dev === expected.dev && metadata.ino === expected.ino) {
+  // Windows may report ino=0, which means identity is unavailable rather than equal.
+  if (
+    expected.ino !== 0
+    && metadata.dev === expected.dev
+    && metadata.ino === expected.ino
+  ) {
     unlinkSync(file);
   }
 }
