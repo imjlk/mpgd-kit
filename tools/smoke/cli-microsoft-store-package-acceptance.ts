@@ -81,6 +81,17 @@ try {
     () => findMicrosoftStoreMakeAppxExecutable(join(fixtureRoot, 'missing Windows Kits'), 'x64'),
     /pass --makeappx to select it explicitly/u,
   );
+  const invalidBinKitsDir = join(fixtureRoot, 'invalid bin Windows Kits');
+  mkdirSync(invalidBinKitsDir, { recursive: true });
+  writeFileSync(join(invalidBinKitsDir, 'bin'), 'not a directory');
+  assert.throws(
+    () => findMicrosoftStoreMakeAppxExecutable(invalidBinKitsDir, 'x64'),
+    /Failed to read Windows SDK bin directory/u,
+  );
+  assert.throws(
+    () => findMicrosoftStoreMakeAppxExecutable(windowsKitsDir, 'riscv64'),
+    /Unsupported Windows SDK host architecture riscv64/u,
+  );
   writeJson(submissionEvidenceFile, {
     schemaVersion: 1,
     target: 'microsoft-store',
