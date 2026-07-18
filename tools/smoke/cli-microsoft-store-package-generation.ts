@@ -826,7 +826,7 @@ function assertNoGenerationOutputs(input: RunMicrosoftStorePackageGenerationInpu
 }
 
 function runCli(args: readonly string[]): SpawnSyncReturns<string> {
-  return spawnSync(
+  const result = spawnSync(
     process.execPath,
     ['tools/run-ttsx.mjs', '--mpgd-cli', 'packages/cli/src/bin.ts', ...args],
     {
@@ -836,6 +836,12 @@ function runCli(args: readonly string[]): SpawnSyncReturns<string> {
       timeout: 30_000,
     },
   );
+
+  if (result.error !== undefined) {
+    throw result.error;
+  }
+
+  return result;
 }
 
 function writeJson(file: string, value: unknown): void {
