@@ -70,7 +70,13 @@ export function assertMicrosoftStorePwaUrlInsideManifestScope(
     throw new Error('Web app manifest scope must resolve against the deployed manifest URL.');
   }
 
-  const parsedPwaUrl = new URL(pwaUrl);
+  let parsedPwaUrl: URL;
+
+  try {
+    parsedPwaUrl = new URL(pwaUrl);
+  } catch {
+    throw new Error('Microsoft Store PWA URL must be an absolute URL.');
+  }
   const scopePath = scopeUrl.pathname.endsWith('/') ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
 
   if (
