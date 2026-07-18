@@ -72,6 +72,7 @@ function assertSafeZipEntries(
   totalEntries: number,
 ): void {
   let cursor = centralDirectoryOffset;
+  const seenEntryNames = new Set<string>();
 
   for (let index = 0; index < totalEntries; index += 1) {
     const header = Buffer.allocUnsafe(46);
@@ -90,6 +91,8 @@ function assertSafeZipEntries(
     const extraLength = header.readUInt16LE(30);
     const commentLength = header.readUInt16LE(32);
     const diskStart = header.readUInt16LE(34);
+    const flags = header.readUInt16LE(8);
+    const compressionMethod = header.readUInt16LE(10);
     const compressedSize = header.readUInt32LE(20);
     const uncompressedSize = header.readUInt32LE(24);
     const localHeaderOffset = header.readUInt32LE(42);
@@ -104,13 +107,27 @@ function assertSafeZipEntries(
       throw new Error('PWABuilder package archive must not use ZIP64 extensions.');
     }
 
+    if (diskStart !== 0) {
+      throw new Error('PWABuilder package archive must keep every entry on disk 0.');
+    }
+
     if (cursor + entryLength > centralDirectoryEnd) {
       throw new Error('PWABuilder package archive has a truncated ZIP central directory entry.');
     }
 
     const fileNameBytes = Buffer.allocUnsafe(fileNameLength);
     readExactly(descriptor, fileNameBytes, cursor + header.length);
-    assertSafeZipEntryName(fileNameBytes.toString('utf8'));
+    const fileName = fileNameBytes.toString('utf8');
+    assertSafeZipEntryName(fileName);
+    const canonicalName = canonicalizeZipEntryName(fileName);
+
+    if (seenEntryNames.has(canonicalName)) {
+      throw new Error(
+        `PWABuilder package archive contains a duplicate or case-colliding ZIP entry: ${fileName}`,
+      );
+    }
+
+    seenEntryNames.add(canonicalName);
 
     const unixMode = (header.readUInt32LE(38) >>> 16) & 0o170000;
 
@@ -131,6 +148,8 @@ function assertSafeZipEntries(
 
     const localFileNameLength = localHeader.readUInt16LE(26);
     const localExtraLength = localHeader.readUInt16LE(28);
+    const localFlags = localHeader.readUInt16LE(6);
+    const localCompressionMethod = localHeader.readUInt16LE(8);
     const localCompressedSize = localHeader.readUInt32LE(18);
     const localUncompressedSize = localHeader.readUInt32LE(22);
     const localMetadataEnd = localHeaderOffset + localHeader.length
@@ -139,6 +158,31 @@ function assertSafeZipEntries(
 
     if (localCompressedSize === 0xffffffff || localUncompressedSize === 0xffffffff) {
       throw new Error('PWABuilder package archive must not use ZIP64 extensions.');
+    }
+
+    const usesDataDescriptor = (flags & 0x0008) !== 0;
+
+    if (
+      localFlags !== flags
+      || localCompressionMethod !== compressionMethod
+      || (
+        !usesDataDescriptor
+        && (
+          localCompressedSize !== compressedSize
+          || localUncompressedSize !== uncompressedSize
+        )
+      )
+      || (
+        usesDataDescriptor
+        && (
+          (localCompressedSize !== 0 && localCompressedSize !== compressedSize)
+          || (localUncompressedSize !== 0 && localUncompressedSize !== uncompressedSize)
+        )
+      )
+    ) {
+      throw new Error(
+        'PWABuilder package archive local metadata must match its central directory entry.',
+      );
     }
 
     if (
@@ -164,6 +208,10 @@ function assertSafeZipEntries(
   if (cursor !== centralDirectoryEnd) {
     throw new Error('PWABuilder package archive has an inconsistent ZIP central directory.');
   }
+}
+
+function canonicalizeZipEntryName(input: string): string {
+  return input.replaceAll('\\', '/').replace(/\/+$/u, '').normalize('NFC').toLowerCase();
 }
 
 function assertSafeZipEntryName(input: string): void {

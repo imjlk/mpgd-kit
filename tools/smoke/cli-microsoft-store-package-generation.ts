@@ -492,6 +492,51 @@ try {
   );
   assertNoGenerationOutputs(zip64.input);
 
+  const duplicateEntry = createFixture('duplicate-entry');
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      duplicateEntry.input,
+      createRuntime({
+        packageResponse: response(
+          createZipArchiveEntries([
+            { name: 'packages/Fixture.msix', data: Buffer.from('first') },
+            { name: 'PACKAGES/fixture.msix', data: Buffer.from('second') },
+          ]),
+          'application/zip',
+        ),
+      }),
+    ),
+    /duplicate or case-colliding ZIP entry/u,
+  );
+  assertNoGenerationOutputs(duplicateEntry.input);
+
+  const splitDiskEntry = createFixture('split-disk-entry');
+  const splitDiskArchive = Buffer.from(validArchive);
+  const splitDiskCentralOffset = splitDiskArchive.readUInt32LE(splitDiskArchive.length - 22 + 16);
+  splitDiskArchive.writeUInt16LE(1, splitDiskCentralOffset + 34);
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      splitDiskEntry.input,
+      createRuntime({ packageResponse: response(splitDiskArchive, 'application/zip') }),
+    ),
+    /keep every entry on disk 0/u,
+  );
+  assertNoGenerationOutputs(splitDiskEntry.input);
+
+  const mismatchedLocalMetadata = createFixture('mismatched-local-metadata');
+  const mismatchedLocalMetadataArchive = Buffer.from(validArchive);
+  mismatchedLocalMetadataArchive.writeUInt32LE(1, 18);
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      mismatchedLocalMetadata.input,
+      createRuntime({
+        packageResponse: response(mismatchedLocalMetadataArchive, 'application/zip'),
+      }),
+    ),
+    /local metadata must match its central directory entry/u,
+  );
+  assertNoGenerationOutputs(mismatchedLocalMetadata.input);
+
   const changedManifest = createFixture('changed-manifest');
   await assert.rejects(
     runMicrosoftStorePackageGeneration(
@@ -753,34 +798,51 @@ function encodedResponse(bytes: Buffer, contentType: string): Response {
 }
 
 function createZipArchive(name: string, data: Buffer): Buffer {
-  const fileName = Buffer.from(name);
-  const checksum = crc32(data);
-  const localHeader = Buffer.alloc(30);
-  localHeader.writeUInt32LE(0x04034b50, 0);
-  localHeader.writeUInt16LE(20, 4);
-  localHeader.writeUInt32LE(checksum, 14);
-  localHeader.writeUInt32LE(data.length, 18);
-  localHeader.writeUInt32LE(data.length, 22);
-  localHeader.writeUInt16LE(fileName.length, 26);
+  return createZipArchiveEntries([{ name, data }]);
+}
 
-  const centralOffset = localHeader.length + fileName.length + data.length;
-  const centralHeader = Buffer.alloc(46);
-  centralHeader.writeUInt32LE(0x02014b50, 0);
-  centralHeader.writeUInt16LE(20, 4);
-  centralHeader.writeUInt16LE(20, 6);
-  centralHeader.writeUInt32LE(checksum, 16);
-  centralHeader.writeUInt32LE(data.length, 20);
-  centralHeader.writeUInt32LE(data.length, 24);
-  centralHeader.writeUInt16LE(fileName.length, 28);
+function createZipArchiveEntries(
+  entries: readonly { readonly name: string; readonly data: Buffer }[],
+): Buffer {
+  const localRecords: Buffer[] = [];
+  const centralRecords: Buffer[] = [];
+  let localOffset = 0;
 
+  for (const entry of entries) {
+    const fileName = Buffer.from(entry.name);
+    const checksum = crc32(entry.data);
+    const localHeader = Buffer.alloc(30);
+    localHeader.writeUInt32LE(0x04034b50, 0);
+    localHeader.writeUInt16LE(20, 4);
+    localHeader.writeUInt32LE(checksum, 14);
+    localHeader.writeUInt32LE(entry.data.length, 18);
+    localHeader.writeUInt32LE(entry.data.length, 22);
+    localHeader.writeUInt16LE(fileName.length, 26);
+    const localRecord = Buffer.concat([localHeader, fileName, entry.data]);
+    localRecords.push(localRecord);
+
+    const centralHeader = Buffer.alloc(46);
+    centralHeader.writeUInt32LE(0x02014b50, 0);
+    centralHeader.writeUInt16LE(20, 4);
+    centralHeader.writeUInt16LE(20, 6);
+    centralHeader.writeUInt32LE(checksum, 16);
+    centralHeader.writeUInt32LE(entry.data.length, 20);
+    centralHeader.writeUInt32LE(entry.data.length, 24);
+    centralHeader.writeUInt16LE(fileName.length, 28);
+    centralHeader.writeUInt32LE(localOffset, 42);
+    centralRecords.push(Buffer.concat([centralHeader, fileName]));
+    localOffset += localRecord.length;
+  }
+
+  const centralDirectory = Buffer.concat(centralRecords);
   const end = Buffer.alloc(22);
   end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(1, 8);
-  end.writeUInt16LE(1, 10);
-  end.writeUInt32LE(centralHeader.length + fileName.length, 12);
-  end.writeUInt32LE(centralOffset, 16);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(centralDirectory.length, 12);
+  end.writeUInt32LE(localOffset, 16);
 
-  return Buffer.concat([localHeader, fileName, data, centralHeader, fileName, end]);
+  return Buffer.concat([...localRecords, centralDirectory, end]);
 }
 
 function assertNoTemporaryArchive(outputFile: string): void {
