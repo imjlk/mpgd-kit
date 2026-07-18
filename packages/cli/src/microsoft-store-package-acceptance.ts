@@ -2,7 +2,6 @@ import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   closeSync,
-  existsSync,
   fstatSync,
   lstatSync,
   mkdirSync,
@@ -142,8 +141,12 @@ export function findMicrosoftStoreMakeAppxExecutable(
   candidates.push(path.join(windowsKitsDir, 'App Certification Kit', 'makeappx.exe'));
 
   for (const candidate of candidates) {
-    if (existsSync(candidate)) {
+    try {
       return readCanonicalTool(candidate, 'MakeAppx executable');
+    } catch (error) {
+      if (!isMissingFileError(error)) {
+        throw error;
+      }
     }
   }
 
@@ -655,7 +658,9 @@ function windowsSdkArchitectures(architecture: NodeJS.Architecture): readonly st
     return ['arm'];
   }
 
-  return ['x64', 'x86', 'arm64', 'arm'];
+  throw new Error(
+    `Unsupported Windows SDK host architecture ${architecture}; pass --makeappx to select a compatible executable explicitly.`,
+  );
 }
 
 function readDirectoryNames(dir: string): readonly string[] {
@@ -663,8 +668,12 @@ function readDirectoryNames(dir: string): readonly string[] {
     return readdirSync(dir, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name);
-  } catch {
-    return [];
+  } catch (error) {
+    if (isMissingFileError(error)) {
+      return [];
+    }
+
+    throw new Error(`Failed to read Windows SDK bin directory: ${dir}`, { cause: error });
   }
 }
 
@@ -793,7 +802,7 @@ function readCanonicalTool(file: string, label: string): string {
   try {
     canonical = realpathSync(file);
   } catch (error) {
-    throw new Error(`${label} must exist: ${file} (${formatError(error)})`);
+    throw new Error(`${label} must exist: ${file} (${formatError(error)})`, { cause: error });
   }
 
   if (!lstatSync(canonical).isFile()) {
@@ -1037,10 +1046,15 @@ function sameFile(left: string, right: string): boolean {
 }
 
 function isMissingFileError(error: unknown): boolean {
-  return typeof error === 'object'
-    && error !== null
-    && 'code' in error
-    && error.code === 'ENOENT';
+  if (typeof error !== 'object' || error === null) {
+    return false;
+  }
+
+  if ('code' in error && error.code === 'ENOENT') {
+    return true;
+  }
+
+  return 'cause' in error && isMissingFileError(error.cause);
 }
 
 function assertInside(root: string, candidate: string, label: string): void {
