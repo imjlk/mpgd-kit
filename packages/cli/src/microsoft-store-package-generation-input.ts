@@ -193,6 +193,10 @@ function readSubmissionEvidence(
   const identity = requireRecord(root.productIdentity, 'Microsoft Store product identity');
   const manifest = requireRecord(root.manifest, 'Microsoft Store manifest evidence');
   const manifestIcons = requireArray(manifest.icons, 'Microsoft Store manifest icon evidence');
+  const manifestIconCount = requirePositiveInteger(
+    manifest.iconCount,
+    'Microsoft Store manifest icon evidence count',
+  );
   const listing = requireRecord(root.listing, 'Microsoft Store listing evidence');
   const locales = requireRecord(listing.locales, 'Microsoft Store listing locales');
   const resourceLanguages = Object.keys(locales).sort(compareCodeUnits);
@@ -204,7 +208,7 @@ function readSubmissionEvidence(
   if (
     manifestIcons.length === 0
     || manifestIcons.length > maximumManifestIcons
-    || manifest.iconCount !== manifestIcons.length
+    || manifestIconCount !== manifestIcons.length
   ) {
     throw new Error(
       `Microsoft Store manifest icon evidence must contain 1-${maximumManifestIcons} entries and match iconCount.`,
