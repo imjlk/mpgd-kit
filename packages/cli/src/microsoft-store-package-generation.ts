@@ -321,18 +321,21 @@ function acquireEvidenceFileLock(
   }
 
   file.lockToken = transactionId;
+  let initialized = false;
 
   try {
     file.lockIdentity = fileNodeIdentity(fstatSync(descriptor));
     writeFileSync(descriptor, `${transactionId}\n`);
-  } catch (error) {
-    if (file.lockIdentity === undefined) {
-      unlinkIfPresent(file.lockFile, true);
-    }
-
-    throw error;
+    initialized = true;
   } finally {
-    closeSync(descriptor);
+    try {
+      closeSync(descriptor);
+    } finally {
+      if (!initialized && unlinkImmediately(file.lockFile)) {
+        delete file.lockIdentity;
+        delete file.lockToken;
+      }
+    }
   }
 }
 
@@ -433,6 +436,15 @@ function unlinkIfPresent(file: string, expectedToExist: boolean): void {
     unlinkSync(file);
   } catch {
     // Temporary cleanup must not invalidate otherwise consistent evidence outputs.
+  }
+}
+
+function unlinkImmediately(file: string): boolean {
+  try {
+    unlinkSync(file);
+    return true;
+  } catch {
+    return false;
   }
 }
 
