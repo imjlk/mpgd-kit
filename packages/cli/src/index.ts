@@ -22,6 +22,7 @@ import {
   type GameAcceptanceStep,
 } from './game-acceptance.js';
 import { resolveGameplayE2EReportFile } from './gameplay-e2e.js';
+import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
 
 export {
   renderGameAcceptanceMarkdown,
@@ -93,6 +94,16 @@ export {
   type MicrosoftStorePwaCacheTransitionObservation,
   type MicrosoftStorePwaReleaseEvidence,
 } from './microsoft-store-pwa-e2e.js';
+
+export {
+  microsoftStoreSubmissionSchemaVersion,
+  parseMicrosoftStoreSubmissionConfig,
+  renderMicrosoftStoreSubmissionMarkdown,
+  runMicrosoftStoreSubmissionPreflight,
+  type MicrosoftStoreSubmissionConfig,
+  type MicrosoftStoreSubmissionEvidence,
+  type RunMicrosoftStoreSubmissionPreflightInput,
+} from './microsoft-store-submission.js';
 
 export {
   assertProductionTargetReadiness,
@@ -933,10 +944,10 @@ const legalCommand = defineI18n({
 
 const targetCommand = defineI18n({
   name: 'target',
-  description: 'Build and smoke target artifacts with generated game target config.',
+  description: 'Build, smoke, and preflight target artifacts with generated game target config.',
   resource: commandResource({
-    en: 'Build and smoke target artifacts with generated game target config.',
-    ko: '게임 타깃 설정으로 타깃 산출물을 빌드하고 스모크 검증합니다.',
+    en: 'Build, smoke, and preflight target artifacts with generated game target config.',
+    ko: '게임 타깃 설정으로 타깃 산출물을 빌드하고 스모크 및 제출 사전 검증을 수행합니다.',
   }),
   subCommands: {
     build: defineI18n({
@@ -1046,6 +1057,104 @@ const targetCommand = defineI18n({
           target,
           env: createTargetCommandEnv(ctx.values),
         });
+      },
+    }),
+    preflight: defineI18n({
+      name: 'preflight',
+      description: 'Validate game-owned target submission inputs and write release evidence.',
+      resource: commandResource(
+        {
+          en: 'Validate game-owned target submission inputs and write release evidence.',
+          ko: '게임 소유 타깃 제출 입력을 검증하고 출시 증적을 작성합니다.',
+        },
+        {
+          target: {
+            en: 'Submission target. Currently supports microsoft-store.',
+            ko: '제출 타깃. 현재 microsoft-store를 지원합니다.',
+          },
+          'targets-file': {
+            en: 'Game target config file.',
+            ko: '게임 타깃 설정 파일.',
+          },
+          'kit-path': {
+            en: 'Path to the mpgd-kit checkout used to resolve target config tokens.',
+            ko: '타깃 설정 토큰 해석에 사용할 mpgd-kit 체크아웃 경로.',
+          },
+          'resolved-targets-file': {
+            en: 'Output path for the resolved target config file.',
+            ko: '해석된 타깃 설정 파일의 출력 경로.',
+          },
+          'submission-file': {
+            en: 'Game-owned Microsoft Store submission config file.',
+            ko: '게임 소유 Microsoft Store 제출 설정 파일.',
+          },
+          'output-dir': {
+            en: 'Directory for deterministic submission evidence.',
+            ko: '결정적 제출 증적을 기록할 디렉터리.',
+          },
+        },
+      ),
+      args: {
+        target: {
+          type: 'positional',
+          required: true,
+          description: 'Submission target. Currently supports microsoft-store.',
+        },
+        ...targetConfigArgs(),
+        'submission-file': {
+          type: 'string',
+          required: false,
+          default: 'mpgd.microsoft-store.json',
+          description: 'Game-owned Microsoft Store submission config file.',
+        },
+        'output-dir': {
+          type: 'string',
+          required: false,
+          default: 'release-output/microsoft-store',
+          description: 'Directory for deterministic submission evidence.',
+        },
+      },
+      run: (ctx) => {
+        const positionals = readLocalPositionals(ctx.positionals, ['target', 'preflight']);
+        const target = normalizeBuildTarget(readRequiredPositional(positionals, 0, 'target'));
+
+        if (target !== 'microsoft-store') {
+          throw new Error(`Submission preflight is not available for target: ${target}`);
+        }
+
+        const targetsFile = path.resolve(
+          readOptionalString(ctx.values['targets-file']) ?? 'mpgd.targets.json',
+        );
+        const gameRoot = path.dirname(targetsFile);
+        const commandEnv = createTargetCommandEnv(ctx.values);
+        const preparedTargetsFile = commandEnv.MPGD_PLATFORM_TARGETS_FILE;
+
+        if (preparedTargetsFile === undefined || preparedTargetsFile.length === 0) {
+          throw new Error('Failed to prepare the game target config for submission preflight.');
+        }
+
+        const configFile = resolveGameRelativePath(
+          gameRoot,
+          readOptionalString(ctx.values['submission-file']) ?? 'mpgd.microsoft-store.json',
+        );
+        const outputDir = resolveGameRelativePath(
+          gameRoot,
+          readOptionalString(ctx.values['output-dir']) ?? 'release-output/microsoft-store',
+        );
+
+        assertGameOwnedOutputDirectory(gameRoot, outputDir);
+        mkdirSync(outputDir, { recursive: true });
+        const evidence = runMicrosoftStoreSubmissionPreflight({
+          gameRoot,
+          artifactRoot: resolveMicrosoftStoreArtifactRoot(preparedTargetsFile),
+          configFile,
+          jsonFile: path.join(outputDir, 'submission-preflight.json'),
+          markdownFile: path.join(outputDir, 'submission-preflight.md'),
+        });
+
+        console.log(
+          `Microsoft Store submission preflight passed: ${Object.keys(evidence.listing.locales).length} listing locale(s), ${evidence.warnings.length} warning(s).`,
+        );
       },
     }),
     'build-all': defineI18n({
@@ -1158,7 +1267,9 @@ const targetCommand = defineI18n({
     }),
   },
   run: () => {
-    console.log('Use "mpgd target build <target>" or "mpgd target smoke <target>".');
+    console.log(
+      'Use "mpgd target build <target>", "mpgd target smoke <target>", or "mpgd target preflight <target>".',
+    );
   },
 });
 
@@ -2162,6 +2273,66 @@ function readConfiguredTargetsFile(env: NodeJS.ProcessEnv): string {
   }
 
   return file;
+}
+
+function resolveMicrosoftStoreArtifactRoot(targetsFile: string): string {
+  const parsed = readJsonForCli(targetsFile);
+
+  assertJsonObject(parsed, `targets file ${targetsFile}`);
+  assertJsonObject(parsed.targets, `targets in ${targetsFile}`);
+
+  const target = parsed.targets['microsoft-store'];
+  assertJsonObject(target, `microsoft-store target in ${targetsFile}`);
+
+  if (target.kind !== 'web') {
+    throw new Error(`Microsoft Store target in ${targetsFile} must use kind web.`);
+  }
+
+  const output = readOptionalString(target.output);
+
+  if (output === undefined) {
+    throw new Error(`Microsoft Store target in ${targetsFile} must declare output.`);
+  }
+
+  return resolveGameRelativePath(path.dirname(targetsFile), output);
+}
+
+function resolveGameRelativePath(gameRoot: string, candidate: string): string {
+  return path.resolve(gameRoot, candidate);
+}
+
+function assertGameOwnedOutputDirectory(gameRoot: string, outputDir: string): void {
+  const canonicalGameRoot = realpathSync(gameRoot);
+  const canonicalOutputDir = resolvePotentiallyMissingPath(outputDir);
+  const relative = path.relative(canonicalGameRoot, canonicalOutputDir);
+
+  if (
+    relative.length === 0
+    || relative === '..'
+    || relative.startsWith(`..${path.sep}`)
+    || path.isAbsolute(relative)
+  ) {
+    throw new Error(
+      `Microsoft Store submission output directory must stay inside the game root: ${canonicalOutputDir} is not inside ${canonicalGameRoot}.`,
+    );
+  }
+}
+
+function resolvePotentiallyMissingPath(input: string): string {
+  const resolved = path.resolve(input);
+  let existingAncestor = resolved;
+
+  while (!existsSync(existingAncestor)) {
+    const parent = path.dirname(existingAncestor);
+
+    if (parent === existingAncestor) {
+      throw new Error(`Could not find an existing ancestor for output path: ${resolved}`);
+    }
+
+    existingAncestor = parent;
+  }
+
+  return path.resolve(realpathSync(existingAncestor), path.relative(existingAncestor, resolved));
 }
 
 function normalizeConfiguredBuildTarget(target: string): string | undefined {
