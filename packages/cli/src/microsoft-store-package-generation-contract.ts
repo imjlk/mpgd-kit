@@ -18,6 +18,17 @@ export interface MicrosoftStorePackageGenerationEvidence {
     readonly url: string;
     readonly sha256: string;
     readonly pinnedInGeneratorRequest: true;
+    readonly icons: {
+      readonly count: number;
+      readonly verification: 'before-and-after-generator';
+      readonly entries: readonly {
+        readonly file: string;
+        readonly url: string;
+        readonly sha256: string;
+        readonly width: number;
+        readonly height: number;
+      }[];
+    };
   };
   readonly generator: {
     readonly endpoint: typeof microsoftStorePackageGeneratorEndpoint;
@@ -71,7 +82,16 @@ export interface MicrosoftStoreSubmissionEvidenceInput {
   readonly manifestFile: string;
   readonly manifestSha256: string;
   readonly manifest: Readonly<Record<string, unknown>>;
+  readonly manifestIcons: readonly MicrosoftStoreManifestIconInput[];
   readonly resourceLanguage: string;
+}
+
+export interface MicrosoftStoreManifestIconInput {
+  readonly file: string;
+  readonly url: string;
+  readonly snapshot: MicrosoftStoreFileSnapshot;
+  readonly width: number;
+  readonly height: number;
 }
 
 export interface PreparedMicrosoftStorePackageGenerationInput {
