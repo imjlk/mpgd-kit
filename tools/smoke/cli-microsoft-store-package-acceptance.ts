@@ -122,6 +122,16 @@ try {
     1,
   );
 
+  const evidenceWithoutWack = runMicrosoftStorePackageAcceptance(
+    { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+    {
+      platform: 'win32',
+      makeAppxExecutable,
+      runCommand,
+    },
+  );
+  assert.equal(evidenceWithoutWack.packages[0]?.certification.result, 'NOT_RUN');
+
   emittedPackageId = packageId.toLowerCase();
   assert.equal(
     runMicrosoftStorePackageAcceptance(
