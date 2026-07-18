@@ -1,11 +1,20 @@
-import { mkdirSync } from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import {
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import path from 'node:path';
 
 import {
   escapeMarkdownInline,
   escapeMarkdownTable,
+  formatError,
   relativeOrAbsolute,
-  writeEvidenceReportFiles,
 } from './evidence-io.js';
 import {
   microsoftStorePackageGenerationSchemaVersion,
@@ -130,7 +139,7 @@ export async function runMicrosoftStorePackageGeneration(
 
       mkdirSync(path.dirname(prepared.jsonFile), { recursive: true });
       mkdirSync(path.dirname(prepared.markdownFile), { recursive: true });
-      writeEvidenceReportFiles({
+      writeMicrosoftStorePackageGenerationEvidenceFiles({
         jsonFile: prepared.jsonFile,
         markdownFile: prepared.markdownFile,
         report: evidence,
@@ -140,6 +149,166 @@ export async function runMicrosoftStorePackageGeneration(
       return evidence;
     },
   );
+}
+
+interface MicrosoftStoreEvidenceFilePublication {
+  readonly finalFile: string;
+  readonly temporaryFile: string;
+  readonly backupFile: string;
+  readonly contents: string;
+  temporaryExists: boolean;
+  backupExists: boolean;
+  publishedIdentity?: {
+    readonly dev: number;
+    readonly ino: number;
+  };
+}
+
+function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
+  readonly jsonFile: string;
+  readonly markdownFile: string;
+  readonly report: unknown;
+  readonly markdown: string;
+}): void {
+  const transactionId = `${process.pid}.${randomUUID()}`;
+  const files: MicrosoftStoreEvidenceFilePublication[] = [
+    createEvidenceFilePublication(
+      input.jsonFile,
+      `${JSON.stringify(input.report, null, 2)}\n`,
+      transactionId,
+    ),
+    createEvidenceFilePublication(input.markdownFile, input.markdown, transactionId),
+  ];
+  let completed = false;
+
+  try {
+    for (const file of files) {
+      writeFileSync(file.temporaryFile, file.contents, { flag: 'wx', mode: 0o600 });
+      file.temporaryExists = true;
+    }
+
+    for (const file of files) {
+      const metadata = lstatIfExists(file.finalFile);
+
+      if (metadata === undefined) {
+        continue;
+      }
+
+      if (metadata.isSymbolicLink() || !metadata.isFile()) {
+        throw new Error(
+          `Microsoft Store package generation evidence must be a regular file: ${file.finalFile}`,
+        );
+      }
+
+      linkSync(file.finalFile, file.backupFile);
+      file.backupExists = true;
+    }
+
+    for (const file of files) {
+      const metadata = lstatSync(file.temporaryFile);
+      renameSync(file.temporaryFile, file.finalFile);
+      file.temporaryExists = false;
+      file.publishedIdentity = { dev: metadata.dev, ino: metadata.ino };
+    }
+
+    completed = true;
+  } catch (error) {
+    throw new Error(
+      `Failed to write Microsoft Store package generation evidence: ${formatError(error)}`,
+    );
+  } finally {
+    if (!completed) {
+      for (const file of [...files].reverse()) {
+        rollbackEvidenceFilePublication(file);
+      }
+    }
+
+    for (const file of files) {
+      unlinkIfPresent(file.temporaryFile, file.temporaryExists);
+      unlinkIfPresent(file.backupFile, file.backupExists);
+    }
+  }
+}
+
+function createEvidenceFilePublication(
+  finalFile: string,
+  contents: string,
+  transactionId: string,
+): MicrosoftStoreEvidenceFilePublication {
+  const prefix = `.${path.basename(finalFile)}.${transactionId}`;
+
+  return {
+    finalFile,
+    temporaryFile: path.join(path.dirname(finalFile), `${prefix}.tmp`),
+    backupFile: path.join(path.dirname(finalFile), `${prefix}.bak`),
+    contents,
+    temporaryExists: false,
+    backupExists: false,
+  };
+}
+
+function rollbackEvidenceFilePublication(file: MicrosoftStoreEvidenceFilePublication): void {
+  if (file.publishedIdentity === undefined) {
+    return;
+  }
+
+  if (!fileMatchesIdentity(file.finalFile, file.publishedIdentity)) {
+    file.backupExists = false;
+    return;
+  }
+
+  if (file.backupExists) {
+    try {
+      renameSync(file.backupFile, file.finalFile);
+      file.backupExists = false;
+    } catch {
+      // Preserve the backup for manual recovery when an atomic rollback cannot complete.
+      file.backupExists = false;
+    }
+    return;
+  }
+
+  try {
+    unlinkSync(file.finalFile);
+  } catch {
+    // Do not mask the original evidence publication failure.
+  }
+}
+
+function fileMatchesIdentity(
+  file: string,
+  expected: { readonly dev: number; readonly ino: number },
+): boolean {
+  const metadata = lstatIfExists(file);
+  return metadata !== undefined && metadata.dev === expected.dev && metadata.ino === expected.ino;
+}
+
+function lstatIfExists(file: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(file);
+  } catch (error) {
+    if (hasErrorCode(error, 'ENOENT')) {
+      return undefined;
+    }
+
+    throw error;
+  }
+}
+
+function unlinkIfPresent(file: string, expectedToExist: boolean): void {
+  if (!expectedToExist || !existsSync(file)) {
+    return;
+  }
+
+  try {
+    unlinkSync(file);
+  } catch {
+    // Temporary cleanup must not invalidate otherwise consistent evidence outputs.
+  }
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error && 'code' in error && error.code === code;
 }
 
 export function renderMicrosoftStorePackageGenerationMarkdown(
