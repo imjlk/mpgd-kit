@@ -11,7 +11,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { basename, dirname, join, resolve } from 'node:path';
 
 import {
   microsoftStorePackageGeneratorEndpoint,
@@ -630,8 +630,8 @@ function createFixture(name: string): {
   const outputFile = join(gameRoot, 'release-input', 'microsoft-store', 'package.zip');
   const evidenceDirectory = join(gameRoot, 'release-output', 'microsoft-store');
 
-  mkdirSync(join(manifestFile, '..'), { recursive: true });
-  mkdirSync(join(submissionEvidenceFile, '..'), { recursive: true });
+  mkdirSync(dirname(manifestFile), { recursive: true });
+  mkdirSync(dirname(submissionEvidenceFile), { recursive: true });
   writeFileSync(manifestFile, manifestBytes);
   const icon192File = join(gameRoot, 'artifacts', 'microsoft-store', 'icon-192.png');
   const icon512File = join(gameRoot, 'artifacts', 'microsoft-store', 'icon-512.png');
@@ -690,7 +690,7 @@ function createFixture(name: string): {
 }
 
 function createRuntime(options: {
-  readonly calls?: { url: string; init: RequestInit }[];
+  readonly calls?: { readonly url: string; readonly init: RequestInit }[];
   readonly manifestResponses?: readonly (Buffer | Response)[];
   readonly iconResponses?: Readonly<Record<string, readonly Response[]>>;
   readonly onIconRequest?: (url: string, requestIndex: number) => void;
@@ -702,11 +702,7 @@ function createRuntime(options: {
 
   return {
     fetch: (async (input, init = {}) => {
-      const url = typeof input === 'string'
-        ? input
-        : input instanceof URL
-          ? input.href
-          : input.url;
+      const url = requestUrl(input);
       options.calls?.push({ url, init });
 
       if (url === manifestUrl && (init.method ?? 'GET') === 'GET') {
@@ -758,9 +754,11 @@ function encodedResponse(bytes: Buffer, contentType: string): Response {
 
 function createZipArchive(name: string, data: Buffer): Buffer {
   const fileName = Buffer.from(name);
+  const checksum = crc32(data);
   const localHeader = Buffer.alloc(30);
   localHeader.writeUInt32LE(0x04034b50, 0);
   localHeader.writeUInt16LE(20, 4);
+  localHeader.writeUInt32LE(checksum, 14);
   localHeader.writeUInt32LE(data.length, 18);
   localHeader.writeUInt32LE(data.length, 22);
   localHeader.writeUInt16LE(fileName.length, 26);
@@ -770,6 +768,7 @@ function createZipArchive(name: string, data: Buffer): Buffer {
   centralHeader.writeUInt32LE(0x02014b50, 0);
   centralHeader.writeUInt16LE(20, 4);
   centralHeader.writeUInt16LE(20, 6);
+  centralHeader.writeUInt32LE(checksum, 16);
   centralHeader.writeUInt32LE(data.length, 20);
   centralHeader.writeUInt32LE(data.length, 24);
   centralHeader.writeUInt16LE(fileName.length, 28);
@@ -785,7 +784,7 @@ function createZipArchive(name: string, data: Buffer): Buffer {
 }
 
 function assertNoTemporaryArchive(outputFile: string): void {
-  const directory = join(outputFile, '..');
+  const directory = dirname(outputFile);
 
   if (!existsSync(directory)) {
     return;
@@ -795,6 +794,28 @@ function assertNoTemporaryArchive(outputFile: string): void {
     readdirSync(directory).filter((entry) => entry.startsWith(`.${basename(outputFile)}.`)),
     [],
   );
+}
+
+function requestUrl(input: string | URL | Request): string {
+  if (typeof input === 'string') {
+    return input;
+  }
+
+  return input instanceof URL ? input.href : input.url;
+}
+
+function crc32(bytes: Uint8Array): number {
+  let checksum = 0xffffffff;
+
+  for (const byte of bytes) {
+    checksum ^= byte;
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      checksum = (checksum >>> 1) ^ (-(checksum & 1) & 0xedb88320);
+    }
+  }
+
+  return (checksum ^ 0xffffffff) >>> 0;
 }
 
 function assertNoGenerationOutputs(input: RunMicrosoftStorePackageGenerationInput): void {
