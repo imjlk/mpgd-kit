@@ -264,16 +264,19 @@ pnpm exec mpgd target generate-package microsoft-store \
 ```
 
 The command calls PWABuilder's fixed production package endpoint without
-credentials. It requires the deployed manifest bytes to match the preflight
-evidence both before and after generation and requires the PWA URL to stay
-inside that manifest's deployed scope. The hash-verified local manifest is
-pinned directly in the generator request using PWABuilder's custom-manifest
-mode; the manifest URL remains its relative-resource base. The command bounds
-the download, rejects redirects and unsafe ZIP structure, and atomically writes
-the archive plus request, source-revision, and SHA-256 provenance. PWABuilder's API is
-unversioned, so this remains a best-effort external-service boundary. The ZIP
-is not extracted or accepted as submission-ready; inspect its contained
-packages with the Microsoft Store acceptance flow before uploading it.
+credentials. It requires the deployed manifest and every manifest icon to
+match the preflight evidence both before and after generation, and requires the
+PWA URL to stay inside that manifest's deployed scope. Local icon inputs are
+also hash-checked and monitored for changes. The hash-verified local manifest
+is pinned directly in the generator request using PWABuilder's custom-manifest
+mode; the manifest URL remains its relative-resource base for those deployed
+icons. The command bounds every network response, rejects redirects and unsafe
+ZIP structure, and atomically writes the archive plus request, source-revision,
+manifest, icon, and SHA-256 provenance. PWABuilder's API and the deployed icon
+URLs are mutable external-service boundaries, so the before/after probes detect
+changes but cannot make those resources content-addressed. The ZIP is not
+extracted or accepted as submission-ready; inspect its contained packages with
+the Microsoft Store acceptance flow before uploading it.
 
 After PWABuilder produces `.msix`, `.msixbundle`, `.appx`, or `.appxbundle`
 files, run `mpgd target accept-package microsoft-store --packages <paths>` on
