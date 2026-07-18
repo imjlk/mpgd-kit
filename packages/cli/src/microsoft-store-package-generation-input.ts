@@ -4,6 +4,7 @@ import path from 'node:path';
 
 import { formatError, readBoundedUtf8File } from './evidence-io.js';
 import {
+  type MicrosoftStoreManifestIconInput,
   type MicrosoftStoreSubmissionEvidenceInput,
   type PreparedMicrosoftStorePackageGenerationInput,
   type RunMicrosoftStorePackageGenerationInput,
@@ -18,6 +19,8 @@ import {
 } from './microsoft-store-package-generation-manifest.js';
 
 const maximumSubmissionEvidenceBytes = 4 * 1024 * 1024;
+const maximumManifestIcons = 32;
+const maximumManifestIconBytes = 2 * 1024 * 1024;
 
 export function prepareMicrosoftStorePackageGenerationInput(
   input: RunMicrosoftStorePackageGenerationInput,
@@ -44,16 +47,23 @@ export function prepareMicrosoftStorePackageGenerationInput(
     );
   }
 
+  const manifest = readHashVerifiedMicrosoftStoreManifest(
+    submissionEvidence.manifestFile,
+    manifestBefore,
+  );
+  const pwaUrl = requirePublicHttpsUrl(input.pwaUrl, 'Microsoft Store PWA URL');
+  const manifestUrl = requirePublicHttpsUrl(input.manifestUrl, 'Microsoft Store manifest URL');
   const submission: MicrosoftStoreSubmissionEvidenceInput = {
     ...submissionEvidence,
-    manifest: readHashVerifiedMicrosoftStoreManifest(
-      submissionEvidence.manifestFile,
-      manifestBefore,
+    manifest,
+    manifestIcons: prepareManifestIcons(
+      gameRoot,
+      manifestUrl,
+      manifest,
+      submissionEvidence.manifestIcons,
     ),
   };
 
-  const pwaUrl = requirePublicHttpsUrl(input.pwaUrl, 'Microsoft Store PWA URL');
-  const manifestUrl = requirePublicHttpsUrl(input.manifestUrl, 'Microsoft Store manifest URL');
   assertMicrosoftStorePwaUrlInsideManifestScope(pwaUrl, manifestUrl, submission.manifest);
   const modernVersion = requireStorePackageVersion(input.modernVersion, 'modern package version');
   const classicVersion = requireStorePackageVersion(
@@ -78,6 +88,10 @@ export function prepareMicrosoftStorePackageGenerationInput(
     { file: markdownFile, label: 'package generation Markdown' },
     { file: submissionEvidenceFile, label: 'submission evidence' },
     { file: submission.manifestFile, label: 'web app manifest' },
+    ...submission.manifestIcons.map((icon, index) => ({
+      file: icon.file,
+      label: `web app manifest icon[${index}]`,
+    })),
   ]);
 
   return {
@@ -109,6 +123,14 @@ export function assertMicrosoftStorePackageGenerationInputUnchanged(
     input.manifestBefore,
     'Microsoft Store web app manifest changed during package generation',
   );
+
+  for (const [index, icon] of input.submission.manifestIcons.entries()) {
+    assertMicrosoftStoreSnapshotUnchanged(
+      icon.file,
+      icon.snapshot,
+      `Microsoft Store web app manifest icon[${index}] changed during package generation`,
+    );
+  }
 }
 
 function readSubmissionEvidence(
@@ -139,12 +161,23 @@ function readSubmissionEvidence(
 
   const identity = requireRecord(root.productIdentity, 'Microsoft Store product identity');
   const manifest = requireRecord(root.manifest, 'Microsoft Store manifest evidence');
+  const manifestIcons = requireArray(manifest.icons, 'Microsoft Store manifest icon evidence');
   const listing = requireRecord(root.listing, 'Microsoft Store listing evidence');
   const locales = requireRecord(listing.locales, 'Microsoft Store listing locales');
   const resourceLanguages = Object.keys(locales).sort(compareCodeUnits);
 
   if (resourceLanguages.length === 0) {
     throw new Error('Microsoft Store submission evidence must contain a listing locale.');
+  }
+
+  if (
+    manifestIcons.length === 0
+    || manifestIcons.length > maximumManifestIcons
+    || manifest.iconCount !== manifestIcons.length
+  ) {
+    throw new Error(
+      `Microsoft Store manifest icon evidence must contain 1-${maximumManifestIcons} entries and match iconCount.`,
+    );
   }
 
   return {
@@ -163,8 +196,114 @@ function readSubmissionEvidence(
       'Microsoft Store web app manifest',
     ),
     manifestSha256: requireSha256(manifest.sha256, 'manifest evidence SHA-256'),
+    manifestIcons: manifestIcons.map((icon, index) => {
+      const record = requireRecord(icon, `Microsoft Store manifest icon evidence[${index}]`);
+      const iconFile = readCanonicalFileInside(
+        gameRoot,
+        path.resolve(
+          gameRoot,
+          requireNonEmptyString(
+            record.file,
+            `Microsoft Store manifest icon evidence[${index}].file`,
+          ),
+        ),
+        `Microsoft Store web app manifest icon[${index}]`,
+      );
+      const snapshot = hashMicrosoftStoreFileSnapshot(
+        iconFile,
+        `Microsoft Store web app manifest icon[${index}]`,
+      );
+      const expectedSha256 = requireSha256(
+        record.sha256,
+        `Microsoft Store manifest icon evidence[${index}].sha256`,
+      );
+
+      if (snapshot.sizeBytes > maximumManifestIconBytes) {
+        throw new Error(
+          `Microsoft Store web app manifest icon[${index}] exceeds the ${maximumManifestIconBytes}-byte size limit.`,
+        );
+      }
+
+      if (snapshot.sha256 !== expectedSha256) {
+        throw new Error(
+          `Microsoft Store web app manifest icon[${index}] SHA-256 must match submission evidence: expected ${expectedSha256}, received ${snapshot.sha256}.`,
+        );
+      }
+
+      return {
+        file: iconFile,
+        url: '',
+        snapshot,
+        width: requirePositiveInteger(
+          record.width,
+          `Microsoft Store manifest icon evidence[${index}].width`,
+        ),
+        height: requirePositiveInteger(
+          record.height,
+          `Microsoft Store manifest icon evidence[${index}].height`,
+        ),
+      };
+    }),
     resourceLanguage: resourceLanguages.join(','),
   };
+}
+
+function prepareManifestIcons(
+  gameRoot: string,
+  manifestUrl: string,
+  manifest: Readonly<Record<string, unknown>>,
+  evidenceIcons: readonly MicrosoftStoreManifestIconInput[],
+): readonly MicrosoftStoreManifestIconInput[] {
+  const manifestIcons = requireArray(manifest.icons, 'Microsoft Store web app manifest icons');
+
+  if (manifestIcons.length !== evidenceIcons.length) {
+    throw new Error(
+      'Microsoft Store web app manifest icons must match submission evidence by index.',
+    );
+  }
+
+  return manifestIcons.map((icon, index) => {
+    const record = requireRecord(icon, `Microsoft Store web app manifest icons[${index}]`);
+    const src = requireNonEmptyString(
+      record.src,
+      `Microsoft Store web app manifest icons[${index}].src`,
+    );
+    let resolvedUrl: string;
+
+    try {
+      resolvedUrl = new URL(src, manifestUrl).href;
+    } catch {
+      throw new Error(
+        `Microsoft Store web app manifest icons[${index}].src must resolve against the deployed manifest URL.`,
+      );
+    }
+
+    const evidence = evidenceIcons[index];
+
+    if (evidence === undefined) {
+      throw new Error(`Microsoft Store manifest icon evidence[${index}] is missing.`);
+    }
+
+    assertInside(gameRoot, evidence.file, `Microsoft Store web app manifest icon[${index}]`);
+    const dimensions = requireManifestIconDimensions(
+      record.sizes,
+      `Microsoft Store web app manifest icons[${index}].sizes`,
+    );
+
+    if (evidence.width !== dimensions.width || evidence.height !== dimensions.height) {
+      throw new Error(
+        `Microsoft Store manifest icon evidence[${index}] dimensions must match the hash-verified web app manifest: expected ${dimensions.width}x${dimensions.height}, received ${evidence.width}x${evidence.height}.`,
+      );
+    }
+
+    return {
+      ...evidence,
+      url: requirePublicHttpsUrl(
+        resolvedUrl,
+        `Microsoft Store deployed manifest icon[${index}] URL`,
+      ),
+    };
+  });
 }
 
 function requirePublicHttpsUrl(input: string, label: string): string {
@@ -368,6 +507,14 @@ function requireRecord(input: unknown, label: string): Record<string, unknown> {
   return input as Record<string, unknown>;
 }
 
+function requireArray(input: unknown, label: string): readonly unknown[] {
+  if (!Array.isArray(input)) {
+    throw new Error(`${label} must be an array.`);
+  }
+
+  return input;
+}
+
 function requireNonEmptyString(input: unknown, label: string): string {
   if (typeof input !== 'string' || input.length === 0 || input.trim() !== input) {
     throw new Error(`${label} must be a non-empty string without surrounding whitespace.`);
@@ -384,6 +531,35 @@ function requireSha256(input: unknown, label: string): string {
   }
 
   return value;
+}
+
+function requirePositiveInteger(input: unknown, label: string): number {
+  if (typeof input !== 'number' || !Number.isSafeInteger(input) || input <= 0) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+
+  return input;
+}
+
+function requireManifestIconDimensions(
+  input: unknown,
+  label: string,
+): { readonly width: number; readonly height: number } {
+  const value = requireNonEmptyString(input, label);
+  const match = /^(\d+)x(\d+)$/u.exec(value);
+
+  if (match === null) {
+    throw new Error(`${label} must declare one width and height in pixels.`);
+  }
+
+  const width = Number(match[1]);
+  const height = Number(match[2]);
+
+  if (!Number.isSafeInteger(width) || width <= 0 || !Number.isSafeInteger(height) || height <= 0) {
+    throw new Error(`${label} must declare positive safe-integer dimensions.`);
+  }
+
+  return { width, height };
 }
 
 function compareCodeUnits(left: string, right: string): number {
