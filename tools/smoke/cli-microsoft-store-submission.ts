@@ -236,6 +236,16 @@ try {
     },
     'placeholder content',
   );
+  expectConfigError(
+    {
+      ...base,
+      productIdentity: {
+        ...base.productIdentity,
+        publisherId: `${base.productIdentity.publisherId},BAD=unsupported`,
+      },
+    },
+    'Microsoft Store-supported X.509 attributes',
+  );
 
   expectConfigError(
     {

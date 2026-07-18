@@ -35,6 +35,23 @@ const minimumStoreScreenshotShortEdge = 768;
 const maximumDecodedScreenshotBytes = 256 * 1024 * 1024;
 const maximumDecodedStoreIconBytes = 16 * 1024 * 1024;
 const reservedPackageStringPrefix = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/u;
+const microsoftStorePublisherAttributes = new Set([
+  'CN',
+  'L',
+  'O',
+  'OU',
+  'E',
+  'C',
+  'S',
+  'STREET',
+  'T',
+  'G',
+  'I',
+  'SN',
+  'DC',
+  'SERIALNUMBER',
+]);
+const microsoftStorePublisherOidAttribute = /^OID\.(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))+$/u;
 const pngCrc32Table = createPngCrc32Table();
 
 export interface MicrosoftStoreSubmissionConfig {
@@ -610,12 +627,19 @@ function requirePublisherDistinguishedName(input: unknown, label: string): strin
 
     const attribute = component.slice(0, separator).trim();
     const attributeValue = component.slice(separator + 1).trim();
+    const normalizedAttribute = attribute.toUpperCase();
 
     if (
-      !/^(?:[A-Za-z][A-Za-z0-9.-]*|[0-9]+(?:\.[0-9]+)+)$/u.test(attribute)
-      || attributeValue.length === 0
+      !microsoftStorePublisherAttributes.has(normalizedAttribute)
+      && !microsoftStorePublisherOidAttribute.test(normalizedAttribute)
+    ) {
+      throw new Error(`${label} must use Microsoft Store-supported X.509 attributes.`);
+    }
+
+    if (
+      attributeValue.length === 0
       || /[\u0000-\u001f\u007f]/u.test(attributeValue)
-      || (index === 0 && attribute.toUpperCase() !== 'CN')
+      || (index === 0 && normalizedAttribute !== 'CN')
     ) {
       throw new Error(`${label} must be a complete X.509 distinguished name beginning with CN=.`);
     }
