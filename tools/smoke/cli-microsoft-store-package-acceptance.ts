@@ -8,6 +8,7 @@ import {
   runMicrosoftStorePackageAcceptance,
   type MicrosoftStorePackageAcceptanceRuntime,
 } from '../../packages/cli/src/index';
+import { findMicrosoftStoreMakeAppxExecutable } from '../../packages/cli/src/microsoft-store-package-acceptance';
 
 const fixtureRoot = resolve('node_modules/.cache/mpgd-cli-microsoft-store-package-acceptance');
 const gameRoot = join(fixtureRoot, 'game');
@@ -17,6 +18,7 @@ const packageFile = join(packagesDir, 'fixture.msixbundle');
 const submissionEvidenceFile = join(outputDir, 'submission-preflight.json');
 const appCertExecutable = join(fixtureRoot, 'appcert.exe');
 const makeAppxExecutable = join(fixtureRoot, 'makeappx.exe');
+const windowsKitsDir = join(fixtureRoot, 'Windows Kits', '10');
 const packageId = '12345Acme.FixtureGame';
 const publisherId = 'CN=01234567-89ab-cdef-0123-456789abcdef';
 let emittedPublisherId = publisherId;
@@ -31,6 +33,53 @@ try {
   writeFileSync(packageFile, 'fixture bundle');
   writeFileSync(appCertExecutable, 'fixture appcert');
   writeFileSync(makeAppxExecutable, 'fixture makeappx');
+  const olderSdkMakeAppx = join(windowsKitsDir, 'bin', '10.0.22621.0', 'x64', 'makeappx.exe');
+  const currentSdkMakeAppx = join(windowsKitsDir, 'bin', '10.0.26100.0', 'x64', 'makeappx.exe');
+  const malformedSdkMakeAppx = join(windowsKitsDir, 'bin', '99.0.preview', 'x64', 'makeappx.exe');
+  mkdirSync(join(olderSdkMakeAppx, '..'), { recursive: true });
+  mkdirSync(join(currentSdkMakeAppx, '..'), { recursive: true });
+  mkdirSync(join(malformedSdkMakeAppx, '..'), { recursive: true });
+  writeFileSync(olderSdkMakeAppx, 'older fixture makeappx');
+  writeFileSync(currentSdkMakeAppx, 'current fixture makeappx');
+  writeFileSync(malformedSdkMakeAppx, 'invalid fixture makeappx');
+  assert.equal(findMicrosoftStoreMakeAppxExecutable(windowsKitsDir, 'x64'), currentSdkMakeAppx);
+  assert.equal(findMicrosoftStoreMakeAppxExecutable(windowsKitsDir, 'arm64'), currentSdkMakeAppx);
+
+  const x86FallbackKitsDir = join(fixtureRoot, 'x86 fallback Windows Kits', '10');
+  const x86FallbackMakeAppx = join(
+    x86FallbackKitsDir,
+    'bin',
+    '10.0.26100.0',
+    'x86',
+    'makeappx.exe',
+  );
+  mkdirSync(join(x86FallbackMakeAppx, '..'), { recursive: true });
+  writeFileSync(x86FallbackMakeAppx, 'x86 fallback fixture makeappx');
+  assert.equal(
+    findMicrosoftStoreMakeAppxExecutable(x86FallbackKitsDir, 'arm64'),
+    x86FallbackMakeAppx,
+  );
+
+  const certificationFallbackKitsDir = join(
+    fixtureRoot,
+    'certification fallback Windows Kits',
+    '10',
+  );
+  const certificationFallbackMakeAppx = join(
+    certificationFallbackKitsDir,
+    'App Certification Kit',
+    'makeappx.exe',
+  );
+  mkdirSync(join(certificationFallbackMakeAppx, '..'), { recursive: true });
+  writeFileSync(certificationFallbackMakeAppx, 'certification fallback fixture makeappx');
+  assert.equal(
+    findMicrosoftStoreMakeAppxExecutable(certificationFallbackKitsDir, 'x64'),
+    certificationFallbackMakeAppx,
+  );
+  assert.throws(
+    () => findMicrosoftStoreMakeAppxExecutable(join(fixtureRoot, 'missing Windows Kits'), 'x64'),
+    /pass --makeappx to select it explicitly/u,
+  );
   writeJson(submissionEvidenceFile, {
     schemaVersion: 1,
     target: 'microsoft-store',
