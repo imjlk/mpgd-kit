@@ -167,14 +167,17 @@ interface MicrosoftStoreEvidenceFilePublication {
   readonly contents: string;
   temporaryExists: boolean;
   backupExists: boolean;
-  lockIdentity?: MicrosoftStoreEvidenceFileIdentity;
+  lockIdentity?: MicrosoftStoreFileNodeIdentity;
   previousIdentity?: MicrosoftStoreEvidenceFileIdentity;
   publishedIdentity?: MicrosoftStoreEvidenceFileIdentity;
 }
 
-interface MicrosoftStoreEvidenceFileIdentity {
+interface MicrosoftStoreFileNodeIdentity {
   readonly dev: number;
   readonly ino: number;
+}
+
+interface MicrosoftStoreEvidenceFileIdentity extends MicrosoftStoreFileNodeIdentity {
   readonly size: number;
   readonly mtimeMs: number;
   readonly ctimeMs: number;
@@ -316,8 +319,14 @@ function acquireEvidenceFileLock(
   }
 
   try {
+    file.lockIdentity = fileNodeIdentity(fstatSync(descriptor));
     writeFileSync(descriptor, `${transactionId}\n`);
-    file.lockIdentity = evidenceFileIdentity(fstatSync(descriptor));
+  } catch (error) {
+    if (file.lockIdentity === undefined) {
+      unlinkIfPresent(file.lockFile, true);
+    }
+
+    throw error;
   } finally {
     closeSync(descriptor);
   }
@@ -368,12 +377,23 @@ function fileMatchesIdentity(
 ): boolean {
   const metadata = lstatIfExists(file);
   return metadata !== undefined
-    && expected.ino !== 0
-    && metadata.dev === expected.dev
-    && metadata.ino === expected.ino
+    && metadataMatchesNodeIdentity(metadata, expected)
     && metadata.size === expected.size
     && metadata.mtimeMs === expected.mtimeMs
     && metadata.ctimeMs === expected.ctimeMs;
+}
+
+function fileNodeIdentity(metadata: Stats): MicrosoftStoreFileNodeIdentity {
+  return { dev: metadata.dev, ino: metadata.ino };
+}
+
+function metadataMatchesNodeIdentity(
+  metadata: Stats,
+  expected: MicrosoftStoreFileNodeIdentity,
+): boolean {
+  return expected.ino !== 0
+    && metadata.dev === expected.dev
+    && metadata.ino === expected.ino;
 }
 
 function evidenceFileIdentity(
@@ -414,14 +434,16 @@ function unlinkIfPresent(file: string, expectedToExist: boolean): void {
 
 function unlinkIfIdentityMatches(
   file: string,
-  expected: MicrosoftStoreEvidenceFileIdentity | undefined,
+  expected: MicrosoftStoreFileNodeIdentity | undefined,
 ): void {
   if (expected === undefined) {
     return;
   }
 
   try {
-    if (fileMatchesIdentity(file, expected)) {
+    const metadata = lstatIfExists(file);
+
+    if (metadata !== undefined && metadataMatchesNodeIdentity(metadata, expected)) {
       unlinkSync(file);
     }
   } catch {
