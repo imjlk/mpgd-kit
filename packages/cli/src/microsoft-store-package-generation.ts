@@ -215,6 +215,7 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
   } catch (error) {
     throw new Error(
       `Failed to write Microsoft Store package generation evidence: ${formatError(error)}`,
+      { cause: error },
     );
   } finally {
     if (!completed) {
@@ -290,7 +291,10 @@ function fileMatchesIdentity(
   expected: { readonly dev: number; readonly ino: number },
 ): boolean {
   const metadata = lstatIfExists(file);
-  return metadata !== undefined && metadata.dev === expected.dev && metadata.ino === expected.ino;
+  return metadata !== undefined
+    && expected.ino !== 0
+    && metadata.dev === expected.dev
+    && metadata.ino === expected.ino;
 }
 
 function lstatIfExists(file: string): ReturnType<typeof lstatSync> | undefined {
