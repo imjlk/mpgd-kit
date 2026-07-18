@@ -26,6 +26,7 @@ import {
   createMicrosoftStorePackageAcceptanceRuntime,
   runMicrosoftStorePackageAcceptance,
 } from './microsoft-store-package-acceptance.js';
+import { runMicrosoftStorePackageGeneration } from './microsoft-store-package-generation.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
 
 export {
@@ -112,6 +113,19 @@ export {
   type MicrosoftStorePackageIdentity,
   type RunMicrosoftStorePackageAcceptanceInput,
 } from './microsoft-store-package-acceptance.js';
+
+export {
+  createMicrosoftStorePackageGenerationRuntime,
+  microsoftStorePackageGeneratorEndpoint,
+  microsoftStorePackageGeneratorSourceRevision,
+  microsoftStorePackageGenerationSchemaVersion,
+  renderMicrosoftStorePackageGenerationMarkdown,
+  runMicrosoftStorePackageGeneration,
+  type CreateMicrosoftStorePackageGenerationRuntimeInput,
+  type MicrosoftStorePackageGenerationEvidence,
+  type MicrosoftStorePackageGenerationRuntime,
+  type RunMicrosoftStorePackageGenerationInput,
+} from './microsoft-store-package-generation.js';
 
 export {
   microsoftStoreSubmissionSchemaVersion,
@@ -962,10 +976,10 @@ const legalCommand = defineI18n({
 
 const targetCommand = defineI18n({
   name: 'target',
-  description: 'Build, smoke, preflight, and accept target release artifacts.',
+  description: 'Build, smoke, generate, preflight, and accept target release artifacts.',
   resource: commandResource({
-    en: 'Build, smoke, preflight, and accept target release artifacts.',
-    ko: '타깃 출시 산출물을 빌드하고 스모크, 제출 사전 검증 및 인수 검증을 수행합니다.',
+    en: 'Build, smoke, generate, preflight, and accept target release artifacts.',
+    ko: '타깃 출시 산출물을 빌드하고 스모크, 패키지 생성, 제출 사전 검증 및 인수 검증을 수행합니다.',
   }),
   subCommands: {
     build: defineI18n({
@@ -1075,6 +1089,147 @@ const targetCommand = defineI18n({
           target,
           env: createTargetCommandEnv(ctx.values),
         });
+      },
+    }),
+    'generate-package': defineI18n({
+      name: 'generate-package',
+      description: 'Generate a packaged target artifact with an external platform service.',
+      resource: commandResource(
+        {
+          en: 'Generate a packaged target artifact with an external platform service.',
+          ko: '외부 플랫폼 서비스로 패키징된 타깃 산출물을 생성합니다.',
+        },
+        {
+          target: {
+            en: 'Package target. Currently supports microsoft-store.',
+            ko: '패키지 타깃. 현재 microsoft-store를 지원합니다.',
+          },
+          'pwa-url': {
+            en: 'Public HTTPS URL of the deployed PWA.',
+            ko: '배포된 PWA의 공개 HTTPS URL.',
+          },
+          'manifest-url': {
+            en: 'Public HTTPS URL of the deployed web app manifest.',
+            ko: '배포된 웹 앱 매니페스트의 공개 HTTPS URL.',
+          },
+          version: {
+            en: 'Modern Microsoft Store package version.',
+            ko: '최신 Microsoft Store 패키지 버전.',
+          },
+          'classic-version': {
+            en: 'Lower classic Microsoft Store package version.',
+            ko: '최신 버전보다 낮은 클래식 Microsoft Store 패키지 버전.',
+          },
+          'submission-evidence': {
+            en: 'Submission preflight evidence file.',
+            ko: '제출 사전 검증 증적 파일.',
+          },
+          'output-file': {
+            en: 'New game-owned ZIP file for the package generator response.',
+            ko: '패키지 생성기 응답을 기록할 새 게임 소유 ZIP 파일.',
+          },
+          'output-dir': {
+            en: 'Directory for package generation evidence.',
+            ko: '패키지 생성 증적 디렉터리.',
+          },
+          'targets-file': {
+            en: 'Game target config file.',
+            ko: '게임 타깃 설정 파일.',
+          },
+        },
+      ),
+      args: {
+        target: {
+          type: 'positional',
+          required: true,
+          description: 'Package target. Currently supports microsoft-store.',
+        },
+        'pwa-url': {
+          type: 'string',
+          required: true,
+          description: 'Public HTTPS URL of the deployed PWA.',
+        },
+        'manifest-url': {
+          type: 'string',
+          required: true,
+          description: 'Public HTTPS URL of the deployed web app manifest.',
+        },
+        version: {
+          type: 'string',
+          required: true,
+          description: 'Modern Microsoft Store package version.',
+        },
+        'classic-version': {
+          type: 'string',
+          required: true,
+          description: 'Lower classic Microsoft Store package version.',
+        },
+        'submission-evidence': {
+          type: 'string',
+          required: false,
+          default: 'release-output/microsoft-store/submission-preflight.json',
+          description: 'Submission preflight evidence file.',
+        },
+        'output-file': {
+          type: 'string',
+          required: false,
+          default: 'release-input/microsoft-store/pwabuilder-package.zip',
+          description: 'New game-owned ZIP file for the package generator response.',
+        },
+        'output-dir': {
+          type: 'string',
+          required: false,
+          default: 'release-output/microsoft-store',
+          description: 'Directory for package generation evidence.',
+        },
+        'targets-file': {
+          type: 'string',
+          required: false,
+          default: 'mpgd.targets.json',
+          description: 'Game target config file.',
+        },
+      },
+      run: async (ctx) => {
+        const positionals = readLocalPositionals(ctx.positionals, ['target', 'generate-package']);
+        const target = normalizeBuildTarget(readRequiredPositional(positionals, 0, 'target'));
+
+        if (target !== 'microsoft-store') {
+          throw new Error(`Package generation is not available for target: ${target}`);
+        }
+
+        const targetsFile = path.resolve(
+          readOptionalString(ctx.values['targets-file']) ?? 'mpgd.targets.json',
+        );
+        const gameRoot = path.dirname(targetsFile);
+        const outputDir = resolveGameRelativePath(
+          gameRoot,
+          readOptionalString(ctx.values['output-dir']) ?? 'release-output/microsoft-store',
+        );
+
+        resolveMicrosoftStoreArtifactRoot(targetsFile);
+        const evidence = await runMicrosoftStorePackageGeneration({
+          gameRoot,
+          submissionEvidenceFile: resolveGameRelativePath(
+            gameRoot,
+            readOptionalString(ctx.values['submission-evidence'])
+              ?? 'release-output/microsoft-store/submission-preflight.json',
+          ),
+          pwaUrl: readOptionalString(ctx.values['pwa-url']) ?? '',
+          manifestUrl: readOptionalString(ctx.values['manifest-url']) ?? '',
+          modernVersion: readOptionalString(ctx.values.version) ?? '',
+          classicVersion: readOptionalString(ctx.values['classic-version']) ?? '',
+          outputFile: resolveGameRelativePath(
+            gameRoot,
+            readOptionalString(ctx.values['output-file'])
+              ?? 'release-input/microsoft-store/pwabuilder-package.zip',
+          ),
+          jsonFile: path.join(outputDir, 'package-generation.json'),
+          markdownFile: path.join(outputDir, 'package-generation.md'),
+        });
+
+        console.log(
+          `Microsoft Store package ZIP downloaded to ${evidence.archive.file}; package inspection remains required.`,
+        );
       },
     }),
     preflight: defineI18n({
@@ -1425,7 +1580,7 @@ const targetCommand = defineI18n({
   },
   run: () => {
     console.log(
-      'Use "mpgd target build <target>", "mpgd target smoke <target>", "mpgd target preflight <target>", or "mpgd target accept-package <target> --packages <paths>".',
+      'Use "mpgd target build <target>", "mpgd target smoke <target>", "mpgd target generate-package <target>", "mpgd target preflight <target>", or "mpgd target accept-package <target> --packages <paths>".',
     );
   },
 });
