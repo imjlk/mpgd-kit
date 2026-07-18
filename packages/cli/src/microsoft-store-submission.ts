@@ -27,6 +27,7 @@ export const microsoftStoreSubmissionSchemaVersion = 1 as const;
 // Microsoft Store listing and package identity limits documented by Microsoft Learn.
 const maximumStoreDescriptionCharacters = 10_000;
 const maximumStoreDesktopScreenshots = 10;
+const maximumStoreManifestIcons = 32;
 const maximumStoreScreenshotBytes = 50 * 1024 * 1024;
 const maximumStoreIconBytes = 2 * 1024 * 1024;
 const minimumStoreScreenshotLongEdge = 1366;
@@ -34,6 +35,7 @@ const minimumStoreScreenshotShortEdge = 768;
 const maximumDecodedScreenshotBytes = 256 * 1024 * 1024;
 const maximumDecodedStoreIconBytes = 16 * 1024 * 1024;
 const reservedPackageStringPrefix = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/u;
+const pngCrc32Table = createPngCrc32Table();
 
 export interface MicrosoftStoreSubmissionConfig {
   readonly schemaVersion: 1;
@@ -369,6 +371,12 @@ function parseManifest(input: unknown, artifactRoot: string): ParsedManifest {
 
   if (icons.length === 0) {
     throw new Error('Web app manifest icons must not be empty.');
+  }
+
+  if (icons.length > maximumStoreManifestIcons) {
+    throw new Error(
+      `Web app manifest icons must contain at most ${maximumStoreManifestIcons} entries.`,
+    );
   }
 
   const purposes = new Set<string>();
@@ -1122,15 +1130,27 @@ function crc32Png(parts: readonly Buffer[]): number {
 
   for (const part of parts) {
     for (const byte of part) {
-      crc ^= byte;
-
-      for (let bit = 0; bit < 8; bit += 1) {
-        crc = (crc >>> 1) ^ (crc & 1 ? 0xedb8_8320 : 0);
-      }
+      crc = (crc >>> 8) ^ (pngCrc32Table[(crc ^ byte) & 0xff] ?? 0);
     }
   }
 
   return (crc ^ 0xffff_ffff) >>> 0;
+}
+
+function createPngCrc32Table(): Uint32Array {
+  const table = new Uint32Array(256);
+
+  for (let value = 0; value < table.length; value += 1) {
+    let crc = value;
+
+    for (let bit = 0; bit < 8; bit += 1) {
+      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb8_8320 : 0);
+    }
+
+    table[value] = crc >>> 0;
+  }
+
+  return table;
 }
 
 function readJson(file: string, label: string): unknown {

@@ -309,6 +309,25 @@ try {
   );
   writeJson(manifestFile, {
     ...validManifest,
+    icons: Array.from({ length: 33 }, () => ({
+      src: './icon.png',
+      sizes: '512x512',
+      type: 'image/png',
+      purpose: 'any maskable',
+    })),
+  });
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'too-many-icons.json'),
+      markdownFile: join(outputDir, 'too-many-icons.md'),
+    }),
+    /icons must contain at most 32 entries/u,
+  );
+  writeJson(manifestFile, {
+    ...validManifest,
     icons: validManifest.icons.map((icon) => ({ ...icon, purpose: 'any maskable' })),
   });
   runMicrosoftStoreSubmissionPreflight({
