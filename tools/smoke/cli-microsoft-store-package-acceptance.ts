@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join, resolve } from 'node:path';
 
 import {
@@ -136,6 +144,21 @@ try {
     1,
   );
 
+  const wackReportFile = join(outputDir, '01-fixture.msixbundle.wack.xml');
+  const packageContentsBeforeAliasCheck = readFileSync(packageFile, 'utf8');
+  rmSync(wackReportFile);
+  linkSync(packageFile, wackReportFile);
+  assert.throws(
+    () => runMicrosoftStorePackageAcceptance(
+      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+      runtime,
+    ),
+    /App Certification Kit report 1 must not alias Microsoft Store package/u,
+  );
+  assert.equal(readFileSync(packageFile, 'utf8'), packageContentsBeforeAliasCheck);
+  assert.equal(readFileSync(wackReportFile, 'utf8'), packageContentsBeforeAliasCheck);
+  rmSync(wackReportFile);
+
   const evidenceWithoutWack = runMicrosoftStorePackageAcceptance(
     { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
     {
@@ -201,6 +224,8 @@ try {
     ),
     /Windows App Certification Kit failed/u,
   );
+  assert.equal(existsSync(join(outputDir, 'package-acceptance.json')), false);
+  assert.equal(existsSync(join(outputDir, 'package-acceptance.md')), false);
   certificationResult = 'PASS';
 
   emittedPackageId = 'Different.Package';
@@ -288,7 +313,7 @@ try {
   const outsideEvidence = join(fixtureRoot, 'outside-evidence.json');
   const acceptanceJson = join(outputDir, 'package-acceptance.json');
   writeFileSync(outsideEvidence, 'must remain unchanged');
-  rmSync(acceptanceJson);
+  rmSync(acceptanceJson, { force: true });
   symlinkSync(outsideEvidence, acceptanceJson);
   assert.throws(
     () => runMicrosoftStorePackageAcceptance(
