@@ -184,11 +184,19 @@ export async function withMicrosoftStorePackageArchive<Result>(
     return result;
   } finally {
     if (temporaryFileExists && existsSync(temporaryFile)) {
-      unlinkSync(temporaryFile);
+      try {
+        unlinkSync(temporaryFile);
+      } catch {
+        // Best-effort cleanup must not mask the package generation failure.
+      }
     }
 
     if (publishedOutputIdentity !== undefined && !completed) {
-      unlinkIfIdentityMatches(input.outputFile, publishedOutputIdentity);
+      try {
+        unlinkIfIdentityMatches(input.outputFile, publishedOutputIdentity);
+      } catch {
+        // Best-effort cleanup must not mask the package generation failure.
+      }
     }
   }
 }
