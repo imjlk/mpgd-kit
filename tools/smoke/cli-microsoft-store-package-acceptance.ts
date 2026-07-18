@@ -21,6 +21,7 @@ const makeAppxExecutable = join(fixtureRoot, 'makeappx.exe');
 const windowsKitsDir = join(fixtureRoot, 'Windows Kits', '10');
 const packageId = '12345Acme.FixtureGame';
 const publisherId = 'CN=01234567-89ab-cdef-0123-456789abcdef';
+let emittedPackageId = packageId;
 let emittedPublisherId = publisherId;
 let certificationResult: 'PASS' | 'FAIL' = 'PASS';
 let emitSymlinkPayload = false;
@@ -121,11 +122,31 @@ try {
     1,
   );
 
+  emittedPackageId = packageId.toLowerCase();
+  assert.equal(
+    runMicrosoftStorePackageAcceptance(
+      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+      runtime,
+    ).packages[0]?.identity.name,
+    emittedPackageId,
+  );
+  emittedPackageId = packageId;
+
   assert.deepEqual(parseMicrosoftStorePackageIdentity(identityXml(packageId, publisherId)), {
     name: packageId,
     publisher: publisherId,
     version: '1.2.3.4',
   });
+  assert.deepEqual(
+    parseMicrosoftStorePackageIdentity(
+      `<Package><!-- <Identity Name="Wrong" Publisher="CN=Wrong" Version="0.0.0.0"/> -->${identityTag(packageId, publisherId)}</Package>`,
+    ),
+    {
+      name: packageId,
+      publisher: publisherId,
+      version: '1.2.3.4',
+    },
+  );
   assert.deepEqual(
     parseMicrosoftStorePackageIdentity(identityXml(packageId, 'CN=Acme&#x2c; Inc')),
     {
@@ -221,7 +242,7 @@ function runCommand(command: string, args: readonly string[]): void {
       mkdirSync(join(outputDirArg, 'AppxMetadata'), { recursive: true });
       writeFileSync(
         join(outputDirArg, 'AppxMetadata', 'AppxBundleManifest.xml'),
-        identityXml(packageId, emittedPublisherId),
+        identityXml(emittedPackageId, emittedPublisherId),
       );
       writeFileSync(join(outputDirArg, 'neutral.appx'), 'fixture payload');
 
@@ -236,7 +257,7 @@ function runCommand(command: string, args: readonly string[]): void {
       mkdirSync(outputDirArg, { recursive: true });
       writeFileSync(
         join(outputDirArg, 'AppxManifest.xml'),
-        identityXml(packageId, emittedPublisherId),
+        identityXml(emittedPackageId, emittedPublisherId),
       );
       return;
     }
@@ -275,7 +296,11 @@ function requiredArgumentAfter(args: readonly string[], flag: string): string {
 }
 
 function identityXml(name: string, publisher: string): string {
-  return `<Package><Identity Name="${name}" Publisher="${publisher}" Version="1.2.3.4"/></Package>`;
+  return `<Package>${identityTag(name, publisher)}</Package>`;
+}
+
+function identityTag(name: string, publisher: string): string {
+  return `<Identity Name="${name}" Publisher="${publisher}" Version="1.2.3.4"/>`;
 }
 
 function writeJson(file: string, value: unknown): void {
