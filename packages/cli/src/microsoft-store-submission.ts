@@ -53,6 +53,7 @@ const microsoftStorePublisherAttributes = new Set([
   'SERIALNUMBER',
 ]);
 const microsoftStorePublisherOidAttribute = /^OID\.(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))+$/u;
+const supportedManifestIconPurposes = new Set(['any', 'maskable', 'monochrome']);
 const pngCrc32Table = createPngCrc32Table();
 
 export interface MicrosoftStoreSubmissionConfig {
@@ -418,6 +419,10 @@ function parseManifest(input: unknown, artifactRoot: string): ParsedManifest {
 
     for (const token of purpose.split(/[\t\n\f\r ]+/u)) {
       if (token.length > 0) {
+        if (!supportedManifestIconPurposes.has(token)) {
+          throw new Error(`${label}.purpose contains an unsupported token: ${token}.`);
+        }
+
         purposes.add(token);
       }
     }

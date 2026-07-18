@@ -393,6 +393,20 @@ try {
   });
   writeJson(manifestFile, {
     ...validManifest,
+    icons: validManifest.icons.map((icon) => ({ ...icon, purpose: `${icon.purpose} bogus` })),
+  });
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'unsupported-icon-purpose.json'),
+      markdownFile: join(outputDir, 'unsupported-icon-purpose.md'),
+    }),
+    /purpose contains an unsupported token: bogus/u,
+  );
+  writeJson(manifestFile, {
+    ...validManifest,
     icons: validManifest.icons.filter((icon) => icon.purpose === 'any'),
   });
   assert.throws(
