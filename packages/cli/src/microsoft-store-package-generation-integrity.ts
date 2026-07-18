@@ -1,13 +1,14 @@
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs';
 
+import { formatError } from './evidence-io.js';
 import { type MicrosoftStoreFileSnapshot } from './microsoft-store-package-generation-contract.js';
 
 export function hashMicrosoftStoreFileSnapshot(
   file: string,
   label: string,
 ): MicrosoftStoreFileSnapshot {
-  const descriptor = openSync(file, 'r');
+  const descriptor = openMicrosoftStoreFile(file, label);
 
   try {
     const pathBefore = statSync(file);
@@ -57,6 +58,34 @@ export function hashMicrosoftStoreFileSnapshot(
   }
 }
 
+export function readBoundedMicrosoftStoreFileBytes(
+  file: string,
+  label: string,
+  maximumBytes: number,
+): Buffer | null {
+  const descriptor = openMicrosoftStoreFile(file, label);
+  const buffer = Buffer.allocUnsafe(maximumBytes + 1);
+  let offset = 0;
+
+  try {
+    while (offset < buffer.length) {
+      const bytesRead = readSync(descriptor, buffer, offset, buffer.length - offset, null);
+
+      if (bytesRead === 0) {
+        break;
+      }
+
+      offset += bytesRead;
+    }
+  } catch (error) {
+    throw new Error(`Failed to read ${label}: ${file} (${formatError(error)})`);
+  } finally {
+    closeSync(descriptor);
+  }
+
+  return offset > maximumBytes ? null : buffer.subarray(0, offset);
+}
+
 export function assertMicrosoftStoreSnapshotUnchanged(
   file: string,
   expected: MicrosoftStoreFileSnapshot,
@@ -71,4 +100,12 @@ export function assertMicrosoftStoreSnapshotUnchanged(
 
 export function hashMicrosoftStoreBytes(input: Uint8Array): string {
   return createHash('sha256').update(input).digest('hex');
+}
+
+function openMicrosoftStoreFile(file: string, label: string): number {
+  try {
+    return openSync(file, 'r');
+  } catch (error) {
+    throw new Error(`Failed to open ${label}: ${file} (${formatError(error)})`);
+  }
 }
