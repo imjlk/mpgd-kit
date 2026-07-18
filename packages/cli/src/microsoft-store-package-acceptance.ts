@@ -841,7 +841,7 @@ function parseJson(source: string, file: string, label: string): unknown {
   try {
     return JSON.parse(source) as unknown;
   } catch (error) {
-    throw new Error(`Failed to read ${label} ${file}: ${formatError(error)}`);
+    throw new Error(`Failed to parse ${label} ${file}: ${formatError(error)}`);
   }
 }
 
@@ -849,9 +849,10 @@ function hashFileSnapshot(file: string): { readonly sizeBytes: number; readonly 
   const hash = createHash('sha256');
   const buffer = Buffer.allocUnsafe(1024 * 1024);
   const descriptor = openSync(file, 'r');
-  const before = fstatSync(descriptor);
 
   try {
+    const before = fstatSync(descriptor);
+
     while (true) {
       const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
 
@@ -861,23 +862,23 @@ function hashFileSnapshot(file: string): { readonly sizeBytes: number; readonly 
 
       hash.update(buffer.subarray(0, bytesRead));
     }
+
+    const after = fstatSync(descriptor);
+
+    if (
+      after.dev !== before.dev
+      || after.ino !== before.ino
+      || after.size !== before.size
+      || after.mtimeMs !== before.mtimeMs
+      || after.ctimeMs !== before.ctimeMs
+    ) {
+      throw new Error(`File changed while it was being hashed: ${file}`);
+    }
+
+    return { sizeBytes: before.size, sha256: hash.digest('hex') };
   } finally {
     closeSync(descriptor);
   }
-
-  const after = statSync(file);
-
-  if (
-    after.dev !== before.dev
-    || after.ino !== before.ino
-    || after.size !== before.size
-    || after.mtimeMs !== before.mtimeMs
-    || after.ctimeMs !== before.ctimeMs
-  ) {
-    throw new Error(`File changed while it was being hashed: ${file}`);
-  }
-
-  return { sizeBytes: before.size, sha256: hash.digest('hex') };
 }
 
 function hashBuffer(input: Uint8Array): string {
@@ -981,13 +982,17 @@ function sameFile(left: string, right: string): boolean {
     return true;
   }
 
-  if (!existsSync(left) || !existsSync(right)) {
+  try {
+    const leftMetadata = statSync(left);
+    const rightMetadata = statSync(right);
+    return leftMetadata.dev === rightMetadata.dev && leftMetadata.ino === rightMetadata.ino;
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      throw error;
+    }
+
     return false;
   }
-
-  const leftMetadata = statSync(left);
-  const rightMetadata = statSync(right);
-  return leftMetadata.dev === rightMetadata.dev && leftMetadata.ino === rightMetadata.ino;
 }
 
 function isMissingFileError(error: unknown): boolean {
