@@ -73,7 +73,7 @@ export function readBoundedMicrosoftStoreFileBytes(
       offset += bytesRead;
     }
   } catch (error) {
-    throw new Error(`Failed to read ${label}: ${file} (${formatError(error)})`);
+    throw new Error(`Failed to read ${label}: ${file} (${formatError(error)})`, { cause: error });
   } finally {
     closeSync(descriptor);
   }
@@ -104,7 +104,7 @@ function openMicrosoftStoreFile(file: string, label: string): number {
   try {
     return openSync(file, 'r');
   } catch (error) {
-    throw new Error(`Failed to open ${label}: ${file} (${formatError(error)})`);
+    throw new Error(`Failed to open ${label}: ${file} (${formatError(error)})`, { cause: error });
   }
 }
 
