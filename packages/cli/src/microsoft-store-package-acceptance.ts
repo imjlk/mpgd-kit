@@ -86,20 +86,19 @@ export function createMicrosoftStorePackageAcceptanceRuntime(
     );
   }
 
-  const kitDir = path.join(
+  const windowsKitsDir = path.join(
     requireEnvironmentPath(process.env['ProgramFiles(x86)'], 'ProgramFiles(x86)'),
     'Windows Kits',
     '10',
-    'App Certification Kit',
   );
+  const certificationKitDir = path.join(windowsKitsDir, 'App Certification Kit');
   const appCertExecutable = readCanonicalTool(
-    input.appCertExecutable ?? path.join(kitDir, 'appcert.exe'),
+    input.appCertExecutable ?? path.join(certificationKitDir, 'appcert.exe'),
     'Windows App Certification Kit executable',
   );
-  const makeAppxExecutable = readCanonicalTool(
-    input.makeAppxExecutable ?? path.join(kitDir, 'makeappx.exe'),
-    'MakeAppx executable',
-  );
+  const makeAppxExecutable = input.makeAppxExecutable === undefined
+    ? findMicrosoftStoreMakeAppxExecutable(windowsKitsDir, process.arch)
+    : readCanonicalTool(input.makeAppxExecutable, 'MakeAppx executable');
 
   return {
     platform: process.platform,
@@ -107,6 +106,34 @@ export function createMicrosoftStorePackageAcceptanceRuntime(
     makeAppxExecutable,
     runCommand: runWindowsCommand,
   };
+}
+
+export function findMicrosoftStoreMakeAppxExecutable(
+  windowsKitsDir: string,
+  architecture: NodeJS.Architecture,
+): string {
+  const architectures = windowsSdkArchitectures(architecture);
+  const binDir = path.join(windowsKitsDir, 'bin');
+  const versionDirectories = readDirectoryNames(binDir)
+    .filter((name) => /^\d+(?:\.\d+)+$/u.test(name))
+    .sort(compareWindowsSdkVersionsDescending);
+  const candidates = versionDirectories.flatMap((version) =>
+    architectures.map((candidateArchitecture) =>
+      path.join(binDir, version, candidateArchitecture, 'makeappx.exe'),
+    ),
+  );
+
+  candidates.push(path.join(windowsKitsDir, 'App Certification Kit', 'makeappx.exe'));
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return readCanonicalTool(candidate, 'MakeAppx executable');
+    }
+  }
+
+  throw new Error(
+    'MakeAppx executable must exist in a Windows SDK bin directory or the App Certification Kit; pass --makeappx to select it explicitly.',
+  );
 }
 
 export function runMicrosoftStorePackageAcceptance(
@@ -440,6 +467,52 @@ function assertExpectedIdentity(
       `Microsoft Store package identity Publisher must be ${expected.publisherId}; received ${identity.publisher}.`,
     );
   }
+}
+
+function windowsSdkArchitectures(architecture: NodeJS.Architecture): readonly string[] {
+  if (architecture === 'arm64') {
+    return ['arm64', 'x64', 'x86'];
+  }
+
+  if (architecture === 'x64') {
+    return ['x64', 'x86'];
+  }
+
+  if (architecture === 'ia32') {
+    return ['x86'];
+  }
+
+  if (architecture === 'arm') {
+    return ['arm'];
+  }
+
+  return ['x64', 'x86', 'arm64', 'arm'];
+}
+
+function readDirectoryNames(dir: string): readonly string[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+  } catch {
+    return [];
+  }
+}
+
+function compareWindowsSdkVersionsDescending(left: string, right: string): number {
+  const leftParts = left.split('.').map(Number);
+  const rightParts = right.split('.').map(Number);
+  const length = Math.max(leftParts.length, rightParts.length);
+
+  for (let index = 0; index < length; index += 1) {
+    const difference = (rightParts[index] ?? 0) - (leftParts[index] ?? 0);
+
+    if (difference !== 0) {
+      return difference;
+    }
+  }
+
+  return 0;
 }
 
 function parseSubmissionEvidence(input: unknown): {
