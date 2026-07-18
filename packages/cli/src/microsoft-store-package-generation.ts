@@ -9,6 +9,7 @@ import {
   lstatSync,
   mkdirSync,
   openSync,
+  readSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -168,6 +169,7 @@ interface MicrosoftStoreEvidenceFilePublication {
   temporaryExists: boolean;
   backupExists: boolean;
   lockIdentity?: MicrosoftStoreFileNodeIdentity;
+  lockToken?: string;
   previousIdentity?: MicrosoftStoreEvidenceFileIdentity;
   publishedIdentity?: MicrosoftStoreEvidenceFileIdentity;
 }
@@ -274,7 +276,7 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
     for (const file of files) {
       unlinkIfPresent(file.temporaryFile, file.temporaryExists);
       unlinkIfPresent(file.backupFile, file.backupExists);
-      unlinkIfIdentityMatches(file.lockFile, file.lockIdentity);
+      removeMicrosoftStoreEvidenceLockIfOwned(file.lockFile, file.lockIdentity, file.lockToken);
     }
   }
 }
@@ -317,6 +319,8 @@ function acquireEvidenceFileLock(
 
     throw error;
   }
+
+  file.lockToken = transactionId;
 
   try {
     file.lockIdentity = fileNodeIdentity(fstatSync(descriptor));
@@ -432,22 +436,63 @@ function unlinkIfPresent(file: string, expectedToExist: boolean): void {
   }
 }
 
-function unlinkIfIdentityMatches(
+export function removeMicrosoftStoreEvidenceLockIfOwned(
   file: string,
   expected: MicrosoftStoreFileNodeIdentity | undefined,
+  token: string | undefined,
 ): void {
-  if (expected === undefined) {
+  if (expected === undefined || token === undefined) {
     return;
   }
 
   try {
     const metadata = lstatIfExists(file);
 
-    if (metadata !== undefined && metadataMatchesNodeIdentity(metadata, expected)) {
+    if (
+      metadata !== undefined
+      && metadata.isFile()
+      && (
+        metadataMatchesNodeIdentity(metadata, expected)
+        || (
+          expected.ino === 0
+          && microsoftStoreEvidenceLockMatchesToken(file, token)
+        )
+      )
+    ) {
       unlinkSync(file);
     }
   } catch {
     // Do not remove a lock whose ownership can no longer be proven.
+  }
+}
+
+function microsoftStoreEvidenceLockMatchesToken(file: string, token: string): boolean {
+  const expected = Buffer.from(`${token}\n`);
+  const descriptor = openSync(file, 'r');
+
+  try {
+    const metadata = fstatSync(descriptor);
+
+    if (!metadata.isFile() || metadata.size !== expected.length) {
+      return false;
+    }
+
+    const contents = Buffer.allocUnsafe(expected.length);
+    let offset = 0;
+
+    while (offset < contents.length) {
+      const bytesRead = readSync(descriptor, contents, offset, contents.length - offset, offset);
+
+      if (bytesRead === 0) {
+        return false;
+      }
+
+      offset += bytesRead;
+    }
+
+    return contents.equals(expected);
+  } finally {
+    closeSync(descriptor);
   }
 }
 

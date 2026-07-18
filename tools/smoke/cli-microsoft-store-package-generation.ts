@@ -23,6 +23,7 @@ import {
   type MicrosoftStorePackageGenerationRuntime,
   type RunMicrosoftStorePackageGenerationInput,
 } from '../../packages/cli/src/index';
+import { removeMicrosoftStoreEvidenceLockIfOwned } from '../../packages/cli/src/microsoft-store-package-generation';
 import {
   createMicrosoftStoreDispatcherFetch,
   resolveMicrosoftStorePublicAddresses,
@@ -749,13 +750,27 @@ try {
     dirname(lockedEvidence.input.jsonFile),
     `.${basename(lockedEvidence.input.jsonFile)}.mpgd-package-generation.lock`,
   );
-  writeFileSync(evidenceLockFile, 'competing package generation\n');
+  const evidenceLockToken = 'competing package generation';
+  writeFileSync(evidenceLockFile, `${evidenceLockToken}\n`);
   await assert.rejects(
     runMicrosoftStorePackageGeneration(lockedEvidence.input, createRuntime()),
     /evidence is already being written/u,
   );
-  assert.equal(readFileSync(evidenceLockFile, 'utf8'), 'competing package generation\n');
+  assert.equal(readFileSync(evidenceLockFile, 'utf8'), `${evidenceLockToken}\n`);
   assertNoGenerationOutputs(lockedEvidence.input);
+  const evidenceLockMetadata = lstatSync(evidenceLockFile);
+  removeMicrosoftStoreEvidenceLockIfOwned(
+    evidenceLockFile,
+    { dev: evidenceLockMetadata.dev, ino: 0 },
+    'different transaction',
+  );
+  assert.equal(existsSync(evidenceLockFile), true);
+  removeMicrosoftStoreEvidenceLockIfOwned(
+    evidenceLockFile,
+    { dev: evidenceLockMetadata.dev, ino: 0 },
+    evidenceLockToken,
+  );
+  assert.equal(existsSync(evidenceLockFile), false);
 
   const reportFailure = createFixture('report-failure');
   const previousJsonEvidence = '{"previous":true}\n';
