@@ -12,7 +12,14 @@ import {
 import { BlockList, type LookupFunction } from 'node:net';
 import path from 'node:path';
 
-import { Agent, fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici';
+import {
+  Agent,
+  fetch as undiciFetch,
+  Request as UndiciRequest,
+  type Dispatcher,
+  type RequestInfo as UndiciRequestInfo,
+  type RequestInit as UndiciRequestInit,
+} from 'undici';
 
 import { formatError } from './evidence-io.js';
 import {
@@ -76,9 +83,12 @@ function createPublicOnlyFetch(resolveAddresses?: MicrosoftStoreAddressResolver)
     },
   });
 
+  return createMicrosoftStoreDispatcherFetch(dispatcher);
+}
+
+export function createMicrosoftStoreDispatcherFetch(dispatcher: Dispatcher): typeof fetch {
   return (async (input, init = {}) => {
-    const requestUrl = typeof input === 'string' || input instanceof URL ? input : input.url;
-    const response = await undiciFetch(requestUrl, {
+    const response = await undiciFetch(toUndiciRequestInfo(input), {
       ...(init as UndiciRequestInit),
       dispatcher,
     });
@@ -86,6 +96,32 @@ function createPublicOnlyFetch(resolveAddresses?: MicrosoftStoreAddressResolver)
     // Undici implements Node's global Fetch API, but publishes a distinct Response type.
     return response as unknown as Response;
   }) as typeof fetch;
+}
+
+function toUndiciRequestInfo(input: string | URL | Request): UndiciRequestInfo {
+  if (typeof input === 'string' || input instanceof URL) {
+    return input;
+  }
+
+  return new UndiciRequest(input.url, {
+    cache: input.cache,
+    credentials: input.credentials,
+    headers: Object.fromEntries(input.headers),
+    integrity: input.integrity,
+    keepalive: input.keepalive,
+    method: input.method,
+    mode: input.mode,
+    redirect: input.redirect,
+    referrer: input.referrer,
+    referrerPolicy: input.referrerPolicy,
+    signal: input.signal,
+    ...(input.body === null
+      ? {}
+      : {
+          body: input.body as unknown as AsyncIterable<Uint8Array>,
+          duplex: 'half' as const,
+        }),
+  });
 }
 
 function createPublicOnlyLookup(

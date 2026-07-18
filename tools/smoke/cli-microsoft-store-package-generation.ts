@@ -13,6 +13,8 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 
+import { MockAgent } from 'undici';
+
 import {
   createMicrosoftStorePackageGenerationRuntime,
   microsoftStorePackageGeneratorEndpoint,
@@ -21,7 +23,10 @@ import {
   type MicrosoftStorePackageGenerationRuntime,
   type RunMicrosoftStorePackageGenerationInput,
 } from '../../packages/cli/src/index';
-import { resolveMicrosoftStorePublicAddresses } from '../../packages/cli/src/microsoft-store-package-generation-download';
+import {
+  createMicrosoftStoreDispatcherFetch,
+  resolveMicrosoftStorePublicAddresses,
+} from '../../packages/cli/src/microsoft-store-package-generation-download';
 import { hashMicrosoftStoreFileSnapshot } from '../../packages/cli/src/microsoft-store-package-generation-integrity';
 
 const fixtureRoot = resolve('node_modules/.cache/mpgd-cli-microsoft-store-package-generation');
@@ -99,6 +104,41 @@ try {
       return true;
     },
   );
+  const requestMockAgent = new MockAgent();
+  let observedRequestBody = '';
+  let observedRequestHeader = '';
+  requestMockAgent.disableNetConnect();
+  requestMockAgent
+    .get('https://request.acme.dev')
+    .intercept({
+      path: '/package',
+      method: 'POST',
+      headers: (headers) => {
+        observedRequestHeader = headers['x-mpgd-fixture'] ?? '';
+        return true;
+      },
+      body: (body) => {
+        observedRequestBody = body;
+        return true;
+      },
+    })
+    .reply(200, 'request preserved');
+
+  try {
+    const requestFetch = createMicrosoftStoreDispatcherFetch(requestMockAgent);
+    const requestResponse = await requestFetch(
+      new Request('https://request.acme.dev/package', {
+        method: 'POST',
+        headers: { 'x-mpgd-fixture': 'preserved' },
+        body: 'request body',
+      }),
+    );
+    assert.equal(await requestResponse.text(), 'request preserved');
+    assert.equal(observedRequestHeader, 'preserved');
+    assert.equal(observedRequestBody, 'request body');
+  } finally {
+    await requestMockAgent.close();
+  }
   assert.throws(
     () => hashMicrosoftStoreFileSnapshot(
       join(fixtureRoot, 'missing-input'),
