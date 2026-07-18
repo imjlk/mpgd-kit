@@ -246,6 +246,16 @@ try {
     },
     'Microsoft Store-supported X.509 attributes',
   );
+  expectConfigError(
+    {
+      ...base,
+      productIdentity: {
+        ...base.productIdentity,
+        publisherId: `${base.productIdentity.publisherId}+O=Acme`,
+      },
+    },
+    'must not contain a multivalued RDN',
+  );
 
   expectConfigError(
     {
@@ -292,6 +302,28 @@ try {
     },
   });
   assert.match(ordinaryDescription.listing.locales['en-US']?.description ?? '', /sample/u);
+  const languageOnlyListing = parseMicrosoftStoreSubmissionConfig({
+    ...base,
+    listing: {
+      ...base.listing,
+      locales: {
+        en: base.listing.locales['en-US'],
+      },
+    },
+  });
+  assert.deepEqual(Object.keys(languageOnlyListing.listing.locales), ['en']);
+  expectConfigError(
+    {
+      ...base,
+      listing: {
+        ...base.listing,
+        locales: {
+          'zz-ZZ': base.listing.locales['en-US'],
+        },
+      },
+    },
+    'listing locale must be supported by Microsoft Store',
+  );
 
   for (const packageId of ['ab', 'con', 'abc.', 'xn--fixture', 'fixture.xn--name']) {
     expectConfigError(
@@ -457,6 +489,8 @@ try {
     createPngWithEmptyImageData(1366, 768),
     createPngWithUnknownCriticalChunk(1366, 768),
     createPngWithDuplicatePalette(1366, 768),
+    createPngWithPalette(1366, 768, 8, 0, 1),
+    createPngWithPalette(1366, 768, 1, 3, 3),
     createPng(1366, 1366),
   ]) {
     writeFileSync(screenshotFile, invalidScreenshot);
@@ -653,6 +687,30 @@ function createPngWithDuplicatePalette(width: number, height: number): Buffer {
     palette,
     palette,
     png.subarray(imageDataOffset),
+  ]);
+}
+
+function createPngWithPalette(
+  width: number,
+  height: number,
+  bitDepth: number,
+  colorType: number,
+  paletteEntries: number,
+): Buffer {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = bitDepth;
+  header[9] = colorType;
+  const rowLength = Math.ceil(width * bitDepth / 8) + 1;
+  const pixels = Buffer.alloc(rowLength * height);
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    createPngChunk('IHDR', header),
+    createPngChunk('PLTE', Buffer.alloc(paletteEntries * 3)),
+    createPngChunk('IDAT', deflateSync(pixels)),
+    createPngChunk('IEND', Buffer.alloc(0)),
   ]);
 }
 

@@ -21,6 +21,7 @@ import {
   formatError,
   relativeOrAbsolute,
 } from './evidence-io.js';
+import { isMicrosoftStoreSupportedListingLocale } from './microsoft-store-supported-locales.js';
 
 export const microsoftStoreSubmissionSchemaVersion = 1 as const;
 
@@ -673,7 +674,9 @@ function splitDistinguishedName(value: string, label: string): readonly string[]
     } else if (character === '"') {
       current += character;
       quoted = !quoted;
-    } else if (!quoted && (character === ',' || character === '+')) {
+    } else if (!quoted && character === '+') {
+      throw new Error(`${label} must not contain a multivalued RDN.`);
+    } else if (!quoted && character === ',') {
       components.push(current.trim());
       current = '';
     } else {
@@ -816,6 +819,10 @@ function assertLocale(locale: string): void {
     }
   } catch {
     throw new Error(`listing locale must be a normalized BCP 47 tag: ${locale}`);
+  }
+
+  if (!isMicrosoftStoreSupportedListingLocale(locale)) {
+    throw new Error(`listing locale must be supported by Microsoft Store: ${locale}`);
   }
 }
 
@@ -1006,12 +1013,17 @@ function assertDecodedPng(input: {
     }
 
     if (type === 'PLTE') {
+      const paletteEntries = dataLength / 3;
+
       if (
         foundPalette
         || foundImageData
         || dataLength === 0
         || dataLength % 3 !== 0
         || dataLength > 768
+        || input.colorType === 0
+        || input.colorType === 4
+        || (input.colorType === 3 && paletteEntries > 2 ** input.bitDepth)
       ) {
         break;
       }
