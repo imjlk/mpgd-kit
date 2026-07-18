@@ -176,7 +176,7 @@ interface MicrosoftStoreEvidenceFilePublication {
   lockIdentity?: MicrosoftStoreFileNodeIdentity;
   lockToken?: string;
   previousIdentity?: MicrosoftStoreEvidenceFileIdentity;
-  publishedIdentity?: MicrosoftStoreEvidenceFileIdentity;
+  publishedIdentity?: MicrosoftStorePublishedEvidenceFileIdentity;
 }
 
 interface MicrosoftStoreFileNodeIdentity {
@@ -190,12 +190,19 @@ interface MicrosoftStoreEvidenceFileIdentity
   readonly ctimeMs: number;
 }
 
-function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
+interface MicrosoftStorePublishedEvidenceFileIdentity
+  extends MicrosoftStoreFileNodeIdentity, MicrosoftStoreFileSnapshot {}
+
+interface MicrosoftStoreEvidencePublicationHooks {
+  readonly afterPlacement?: (file: string) => void;
+}
+
+export function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
   readonly jsonFile: string;
   readonly markdownFile: string;
   readonly report: unknown;
   readonly markdown: string;
-}): void {
+}, hooks: MicrosoftStoreEvidencePublicationHooks = {}): void {
   const transactionId = `${process.pid}.${randomUUID()}`;
   const files: MicrosoftStoreEvidenceFilePublication[] = [
     createEvidenceFilePublication(
@@ -252,8 +259,15 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
     }
 
     for (const file of files) {
+      const publishedIdentity = publishedEvidenceFileIdentity(
+        lstatSync(file.temporaryFile),
+        file.contentsSnapshot,
+      );
+
       if (file.previousIdentity === undefined) {
         linkSync(file.temporaryFile, file.finalFile);
+        file.publishedIdentity = publishedIdentity;
+        hooks.afterPlacement?.(file.finalFile);
         unlinkSync(file.temporaryFile);
       } else {
         if (!microsoftStoreEvidenceFileMatchesIdentity(file.finalFile, file.previousIdentity)) {
@@ -263,13 +277,11 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
         }
 
         renameSync(file.temporaryFile, file.finalFile);
+        file.publishedIdentity = publishedIdentity;
+        hooks.afterPlacement?.(file.finalFile);
       }
 
       file.temporaryExists = false;
-      file.publishedIdentity = evidenceFileIdentity(
-        lstatSync(file.finalFile),
-        file.contentsSnapshot,
-      );
     }
 
     completed = true;
@@ -364,7 +376,7 @@ function rollbackEvidenceFilePublication(file: MicrosoftStoreEvidenceFilePublica
   let matchesIdentity = false;
 
   try {
-    matchesIdentity = microsoftStoreEvidenceFileMatchesIdentity(
+    matchesIdentity = microsoftStorePublishedEvidenceFileMatchesIdentity(
       file.finalFile,
       file.publishedIdentity,
     );
@@ -396,6 +408,29 @@ function rollbackEvidenceFilePublication(file: MicrosoftStoreEvidenceFilePublica
   } catch {
     // Do not mask the original evidence publication failure.
   }
+}
+
+function microsoftStorePublishedEvidenceFileMatchesIdentity(
+  file: string,
+  expected: MicrosoftStorePublishedEvidenceFileIdentity,
+): boolean {
+  const metadata = lstatIfExists(file);
+
+  if (
+    metadata === undefined
+    || !metadata.isFile()
+    || metadata.dev !== expected.dev
+    || (expected.ino !== 0 && metadata.ino !== expected.ino)
+  ) {
+    return false;
+  }
+
+  const actual = hashMicrosoftStoreFileSnapshot(
+    file,
+    'published Microsoft Store package generation evidence ownership check',
+  );
+  return actual.sizeBytes === expected.sizeBytes
+    && actual.sha256 === expected.sha256;
 }
 
 export function microsoftStoreEvidenceFileMatchesIdentity(
@@ -446,6 +481,21 @@ function evidenceFileIdentity(
     ...snapshot,
     mtimeMs: metadata.mtimeMs,
     ctimeMs: metadata.ctimeMs,
+  };
+}
+
+function publishedEvidenceFileIdentity(
+  metadata: Stats,
+  snapshot: MicrosoftStoreFileSnapshot,
+): MicrosoftStorePublishedEvidenceFileIdentity {
+  if (metadata.size !== snapshot.sizeBytes) {
+    throw new Error('Microsoft Store package generation temporary evidence size changed.');
+  }
+
+  return {
+    dev: metadata.dev,
+    ino: metadata.ino,
+    ...snapshot,
   };
 }
 

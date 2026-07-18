@@ -26,6 +26,7 @@ import {
 import {
   microsoftStoreEvidenceFileMatchesIdentity,
   removeMicrosoftStoreEvidenceLockIfOwned,
+  writeMicrosoftStorePackageGenerationEvidenceFiles,
 } from '../../packages/cli/src/microsoft-store-package-generation';
 import {
   createMicrosoftStoreDispatcherFetch,
@@ -836,6 +837,55 @@ try {
   assert.equal(lstatSync(reportFailure.input.markdownFile).isDirectory(), true);
   assertNoTemporaryArchive(reportFailure.input.outputFile);
 
+  const linkedPlacementFailure = createFixture('linked-placement-failure');
+  assert.throws(
+    () => writeMicrosoftStorePackageGenerationEvidenceFiles(
+      {
+        jsonFile: linkedPlacementFailure.input.jsonFile,
+        markdownFile: linkedPlacementFailure.input.markdownFile,
+        report: { placed: true },
+        markdown: '# Placed\n',
+      },
+      {
+        afterPlacement: () => {
+          throw new Error('after link placement');
+        },
+      },
+    ),
+    /after link placement/u,
+  );
+  assert.equal(existsSync(linkedPlacementFailure.input.jsonFile), false);
+  assert.equal(existsSync(linkedPlacementFailure.input.markdownFile), false);
+  assertNoEvidencePublicationArtifacts(linkedPlacementFailure.input);
+
+  const renamedPlacementFailure = createFixture('renamed-placement-failure');
+  const previousRenamedJson = '{"previous":"json"}\n';
+  const previousRenamedMarkdown = '# Previous Markdown\n';
+  writeFileSync(renamedPlacementFailure.input.jsonFile, previousRenamedJson);
+  writeFileSync(renamedPlacementFailure.input.markdownFile, previousRenamedMarkdown);
+  assert.throws(
+    () => writeMicrosoftStorePackageGenerationEvidenceFiles(
+      {
+        jsonFile: renamedPlacementFailure.input.jsonFile,
+        markdownFile: renamedPlacementFailure.input.markdownFile,
+        report: { placed: true },
+        markdown: '# Replaced\n',
+      },
+      {
+        afterPlacement: () => {
+          throw new Error('after rename placement');
+        },
+      },
+    ),
+    /after rename placement/u,
+  );
+  assert.equal(readFileSync(renamedPlacementFailure.input.jsonFile, 'utf8'), previousRenamedJson);
+  assert.equal(
+    readFileSync(renamedPlacementFailure.input.markdownFile, 'utf8'),
+    previousRenamedMarkdown,
+  );
+  assertNoEvidencePublicationArtifacts(renamedPlacementFailure.input);
+
   const lengthMismatch = createFixture('length-mismatch');
   await assert.rejects(
     runMicrosoftStorePackageGeneration(
@@ -1097,6 +1147,17 @@ function assertNoGenerationOutputs(input: RunMicrosoftStorePackageGenerationInpu
   assert.equal(existsSync(input.jsonFile), false);
   assert.equal(existsSync(input.markdownFile), false);
   assertNoTemporaryArchive(input.outputFile);
+}
+
+function assertNoEvidencePublicationArtifacts(
+  input: RunMicrosoftStorePackageGenerationInput,
+): void {
+  const outputDirectory = dirname(input.jsonFile);
+  const evidenceBasenames = [basename(input.jsonFile), basename(input.markdownFile)];
+  const leftovers = readdirSync(outputDirectory).filter((entry) =>
+    evidenceBasenames.some((evidenceBasename) => entry.startsWith(`.${evidenceBasename}.`)),
+  );
+  assert.deepEqual(leftovers, []);
 }
 
 function runCli(args: readonly string[]): SpawnSyncReturns<string> {
