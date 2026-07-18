@@ -258,7 +258,8 @@ function rollbackEvidenceFilePublication(file: MicrosoftStoreEvidenceFilePublica
   try {
     matchesIdentity = fileMatchesIdentity(file.finalFile, file.publishedIdentity);
   } catch {
-    // Preserve the primary publication failure when rollback inspection fails.
+    // Preserve the backup for manual recovery when rollback inspection fails.
+    file.backupExists = false;
     return;
   }
 
