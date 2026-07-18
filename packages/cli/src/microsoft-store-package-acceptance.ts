@@ -779,6 +779,7 @@ function readCanonicalTool(file: string, label: string): string {
 }
 
 function runWindowsCommand(command: string, args: readonly string[]): void {
+  process.stderr.write(`Running Microsoft Store package command: ${path.basename(command)}\n`);
   const result = spawnSync(command, [...args], {
     encoding: 'utf8',
     killSignal: 'SIGTERM',
@@ -795,6 +796,12 @@ function runWindowsCommand(command: string, args: readonly string[]): void {
     if (isTimeoutError(result.error)) {
       throw new Error(
         `Windows package command timed out after ${maximumWindowsPackageCommandDurationMs}ms: ${command} ${args.join(' ')}${formatCommandOutput(output)}`,
+      );
+    }
+
+    if (isMaxBufferError(result.error)) {
+      throw new Error(
+        `Windows package command exceeded the ${maximumWindowsPackageCommandOutputBytes}-byte output limit: ${command} ${args.join(' ')}${formatCommandOutput(output)}`,
       );
     }
 
@@ -1063,6 +1070,13 @@ function isTimeoutError(error: unknown): boolean {
     && error !== null
     && 'code' in error
     && error.code === 'ETIMEDOUT';
+}
+
+function isMaxBufferError(error: unknown): boolean {
+  return typeof error === 'object'
+    && error !== null
+    && 'code' in error
+    && error.code === 'ENOBUFS';
 }
 
 function formatCommandOutput(output: string): string {
