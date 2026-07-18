@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { closeSync, fstatSync, openSync, readSync, statSync } from 'node:fs';
 
 import { formatError } from './evidence-io.js';
@@ -22,37 +22,32 @@ export function hashMicrosoftStoreFileSnapshot(
       throw new Error(`${label} changed while it was opened: ${file}`);
     }
 
-    const hash = createHash('sha256');
-    const buffer = Buffer.allocUnsafe(1024 * 1024);
-    let sizeBytes = 0;
-
-    while (true) {
-      const bytesRead = readSync(descriptor, buffer, 0, buffer.length, null);
-
-      if (bytesRead === 0) {
-        break;
-      }
-
-      hash.update(buffer.subarray(0, bytesRead));
-      sizeBytes += bytesRead;
-    }
-
+    const firstSnapshot = hashMicrosoftStoreOpenFile(descriptor);
+    const openedBetween = fstatSync(descriptor);
+    const secondSnapshot = hashMicrosoftStoreOpenFile(descriptor);
     const openedAfter = fstatSync(descriptor);
     const pathAfter = statSync(file);
 
     if (
-      sizeBytes !== openedBefore.size
+      firstSnapshot.sizeBytes !== openedBefore.size
+      || secondSnapshot.sizeBytes !== openedBefore.size
+      || !equalMicrosoftStoreHashes(firstSnapshot.sha256, secondSnapshot.sha256)
+      || openedBetween.size !== openedBefore.size
+      || openedBetween.mtimeMs !== openedBefore.mtimeMs
+      || openedBetween.ctimeMs !== openedBefore.ctimeMs
       || openedAfter.size !== openedBefore.size
       || openedAfter.mtimeMs !== openedBefore.mtimeMs
+      || openedAfter.ctimeMs !== openedBefore.ctimeMs
       || pathAfter.dev !== openedBefore.dev
       || pathAfter.ino !== openedBefore.ino
       || pathAfter.size !== openedBefore.size
       || pathAfter.mtimeMs !== openedBefore.mtimeMs
+      || pathAfter.ctimeMs !== openedBefore.ctimeMs
     ) {
       throw new Error(`${label} changed while it was hashed: ${file}`);
     }
 
-    return { sizeBytes, sha256: hash.digest('hex') };
+    return secondSnapshot;
   } finally {
     closeSync(descriptor);
   }
@@ -93,7 +88,10 @@ export function assertMicrosoftStoreSnapshotUnchanged(
 ): void {
   const actual = hashMicrosoftStoreFileSnapshot(file, message);
 
-  if (actual.sizeBytes !== expected.sizeBytes || actual.sha256 !== expected.sha256) {
+  if (
+    actual.sizeBytes !== expected.sizeBytes
+    || !equalMicrosoftStoreHashes(actual.sha256, expected.sha256)
+  ) {
     throw new Error(`${message}: ${file}`);
   }
 }
@@ -108,4 +106,32 @@ function openMicrosoftStoreFile(file: string, label: string): number {
   } catch (error) {
     throw new Error(`Failed to open ${label}: ${file} (${formatError(error)})`);
   }
+}
+
+function hashMicrosoftStoreOpenFile(descriptor: number): MicrosoftStoreFileSnapshot {
+  const hash = createHash('sha256');
+  const buffer = Buffer.allocUnsafe(1024 * 1024);
+  let sizeBytes = 0;
+
+  while (true) {
+    const bytesRead = readSync(descriptor, buffer, 0, buffer.length, sizeBytes);
+
+    if (bytesRead === 0) {
+      break;
+    }
+
+    hash.update(buffer.subarray(0, bytesRead));
+    sizeBytes += bytesRead;
+  }
+
+  return { sizeBytes, sha256: hash.digest('hex') };
+}
+
+function equalMicrosoftStoreHashes(actual: string, expected: string): boolean {
+  const actualBytes = Buffer.from(actual, 'hex');
+  const expectedBytes = Buffer.from(expected, 'hex');
+
+  return actualBytes.length === expectedBytes.length
+    && actualBytes.length === 32
+    && timingSafeEqual(actualBytes, expectedBytes);
 }
