@@ -292,12 +292,13 @@ submission.
   target config and the configured kit path. The command
   validates the game-owned Store identity and listing against the built PWA and
   writes deterministic JSON and Markdown evidence under
-  `release-output/microsoft-store`. After deploying those exact PWA bytes, run:
+  `release-output/microsoft-store`. After deploying those exact PWA bytes, set
+  `PWA_URL` and `MANIFEST_URL` to their public production endpoints, then run:
 
   ```sh
   pnpm package:microsoft-store -- \
-    --pwa-url https://games.acme.dev/ \
-    --manifest-url https://games.acme.dev/manifest.webmanifest \
+    --pwa-url "$PWA_URL" \
+    --manifest-url "$MANIFEST_URL" \
     --version 1.2.3.0 \
     --classic-version 1.2.2.0
   ```

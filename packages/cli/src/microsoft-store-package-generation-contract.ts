@@ -63,6 +63,16 @@ export interface MicrosoftStorePackageGenerationRuntime {
 
 export interface CreateMicrosoftStorePackageGenerationRuntimeInput {
   readonly fetch?: typeof fetch;
+  readonly resolveAddresses?: MicrosoftStoreAddressResolver;
+}
+
+export type MicrosoftStoreAddressResolver = (
+  hostname: string,
+) => Promise<readonly MicrosoftStoreResolvedAddress[]>;
+
+export interface MicrosoftStoreResolvedAddress {
+  readonly address: string;
+  readonly family: number;
 }
 
 export interface MicrosoftStoreProductIdentity {

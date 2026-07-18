@@ -122,8 +122,10 @@ export {
   renderMicrosoftStorePackageGenerationMarkdown,
   runMicrosoftStorePackageGeneration,
   type CreateMicrosoftStorePackageGenerationRuntimeInput,
+  type MicrosoftStoreAddressResolver,
   type MicrosoftStorePackageGenerationEvidence,
   type MicrosoftStorePackageGenerationRuntime,
+  type MicrosoftStoreResolvedAddress,
   type RunMicrosoftStorePackageGenerationInput,
 } from './microsoft-store-package-generation.js';
 

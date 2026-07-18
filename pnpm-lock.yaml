@@ -580,6 +580,9 @@ importers:
       gunshi:
         specifier: ^0.35.1
         version: 0.35.1
+      undici:
+        specifier: ^7.28.0
+        version: 7.28.0
     devDependencies:
       '@mpgd/adapter-ait':
         specifier: workspace:*

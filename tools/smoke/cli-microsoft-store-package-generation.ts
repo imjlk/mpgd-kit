@@ -14,12 +14,14 @@ import {
 import { basename, dirname, join, resolve } from 'node:path';
 
 import {
+  createMicrosoftStorePackageGenerationRuntime,
   microsoftStorePackageGeneratorEndpoint,
   microsoftStorePackageGeneratorSourceRevision,
   runMicrosoftStorePackageGeneration,
   type MicrosoftStorePackageGenerationRuntime,
   type RunMicrosoftStorePackageGenerationInput,
 } from '../../packages/cli/src/index';
+import { resolveMicrosoftStorePublicAddresses } from '../../packages/cli/src/microsoft-store-package-generation-download';
 import { hashMicrosoftStoreFileSnapshot } from '../../packages/cli/src/microsoft-store-package-generation-integrity';
 
 const fixtureRoot = resolve('node_modules/.cache/mpgd-cli-microsoft-store-package-generation');
@@ -49,6 +51,44 @@ const publisherId = 'CN=01234567-89ab-cdef-0123-456789abcdef';
 
 try {
   rmSync(fixtureRoot, { force: true, recursive: true });
+  assert.deepEqual(
+    await resolveMicrosoftStorePublicAddresses(
+      'games.acme.dev',
+      async () => [
+        { address: '203.0.114.10', family: 4 },
+        { address: '2606:4700:4700::1111', family: 6 },
+      ],
+    ),
+    [
+      { address: '203.0.114.10', family: 4 },
+      { address: '2606:4700:4700::1111', family: 6 },
+    ],
+  );
+  const resolvePrivateAddress = async () => [{ address: '10.0.0.4', family: 4 }];
+  const privateResolution = resolveMicrosoftStorePublicAddresses('intranet', resolvePrivateAddress);
+  await assert.rejects(privateResolution, /must resolve only to public addresses/u);
+  const resolveMixed = async () => [
+    { address: '203.0.114.10', family: 4 },
+    { address: 'fd00::4', family: 6 },
+  ];
+  const mixedResolution = resolveMicrosoftStorePublicAddresses('mixed.acme.dev', resolveMixed);
+  await assert.rejects(mixedResolution, /fd00::4/u);
+  await assert.rejects(
+    resolveMicrosoftStorePublicAddresses('empty.acme.dev', async () => []),
+    /did not resolve/u,
+  );
+  const privateAddressRuntime = createMicrosoftStorePackageGenerationRuntime({
+    resolveAddresses: async () => [{ address: '127.0.0.1', family: 4 }],
+  });
+  await assert.rejects(
+    privateAddressRuntime.fetch('https://private.acme.dev/'),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.ok(error.cause instanceof Error);
+      assert.match(error.cause.message, /must resolve only to public addresses/u);
+      return true;
+    },
+  );
   assert.throws(
     () => hashMicrosoftStoreFileSnapshot(
       join(fixtureRoot, 'missing-input'),

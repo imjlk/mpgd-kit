@@ -1,9 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import {
+  closeSync,
   existsSync,
   linkSync,
   lstatSync,
   mkdirSync,
+  openSync,
   renameSync,
   unlinkSync,
   writeFileSync,
@@ -40,8 +42,10 @@ export {
   microsoftStorePackageGeneratorEndpoint,
   microsoftStorePackageGeneratorSourceRevision,
   type CreateMicrosoftStorePackageGenerationRuntimeInput,
+  type MicrosoftStoreAddressResolver,
   type MicrosoftStorePackageGenerationEvidence,
   type MicrosoftStorePackageGenerationRuntime,
+  type MicrosoftStoreResolvedAddress,
   type RunMicrosoftStorePackageGenerationInput,
 } from './microsoft-store-package-generation-contract.js';
 
@@ -183,8 +187,14 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
 
   try {
     for (const file of files) {
-      writeFileSync(file.temporaryFile, file.contents, { flag: 'wx', mode: 0o600 });
+      const descriptor = openSync(file.temporaryFile, 'wx', 0o600);
       file.temporaryExists = true;
+
+      try {
+        writeFileSync(descriptor, file.contents);
+      } finally {
+        closeSync(descriptor);
+      }
     }
 
     for (const file of files) {

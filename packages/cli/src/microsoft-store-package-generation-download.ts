@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { lookup as lookupDns } from 'node:dns/promises';
 import {
   closeSync,
   existsSync,
@@ -8,15 +9,20 @@ import {
   unlinkSync,
   writeSync,
 } from 'node:fs';
+import { BlockList, type LookupFunction } from 'node:net';
 import path from 'node:path';
+
+import { Agent, fetch as undiciFetch, type RequestInit as UndiciRequestInit } from 'undici';
 
 import { formatError } from './evidence-io.js';
 import {
   microsoftStorePackageGeneratorEndpoint,
   type CreateMicrosoftStorePackageGenerationRuntimeInput,
+  type MicrosoftStoreAddressResolver,
   type MicrosoftStoreFileSnapshot,
   type MicrosoftStoreManifestIconInput,
   type MicrosoftStorePackageGenerationRuntime,
+  type MicrosoftStoreResolvedAddress,
 } from './microsoft-store-package-generation-contract.js';
 import {
   hashMicrosoftStoreBytes,
@@ -30,6 +36,8 @@ const maximumArchiveBytes = 512 * 1024 * 1024;
 const manifestRequestTimeoutMs = 30_000;
 const manifestIconRequestTimeoutMs = 30_000;
 const packageRequestTimeoutMs = 10 * 60 * 1_000;
+const blockedIpv4Addresses = createBlockedIpv4Addresses();
+const blockedIpv6Addresses = createBlockedIpv6Addresses();
 
 interface WithMicrosoftStorePackageArchiveInput {
   readonly runtime: MicrosoftStorePackageGenerationRuntime;
@@ -49,13 +57,152 @@ interface MicrosoftStorePublishedFileIdentity {
 export function createMicrosoftStorePackageGenerationRuntime(
   input: CreateMicrosoftStorePackageGenerationRuntimeInput = {},
 ): MicrosoftStorePackageGenerationRuntime {
-  const fetcher = input.fetch ?? globalThis.fetch;
+  const fetcher = input.fetch ?? createPublicOnlyFetch(input.resolveAddresses);
 
   if (typeof fetcher !== 'function') {
     throw new Error('Microsoft Store package generation requires a Fetch API implementation.');
   }
 
   return { fetch: fetcher };
+}
+
+function createPublicOnlyFetch(resolveAddresses?: MicrosoftStoreAddressResolver): typeof fetch {
+  const dispatcher = new Agent({
+    connect: {
+      lookup: createPublicOnlyLookup(
+        (hostname) => resolveMicrosoftStorePublicAddresses(hostname, resolveAddresses),
+      ),
+    },
+  });
+
+  return (async (input, init = {}) => {
+    const requestUrl = typeof input === 'string' || input instanceof URL ? input : input.url;
+    const response = await undiciFetch(requestUrl, {
+      ...(init as UndiciRequestInit),
+      dispatcher,
+    });
+
+    return response as unknown as Response;
+  }) as typeof fetch;
+}
+
+function createPublicOnlyLookup(
+  resolveAddresses: MicrosoftStoreAddressResolver,
+): LookupFunction {
+  return (hostname, options, callback) => {
+    void resolveAddresses(hostname).then(
+      (addresses) => {
+        if (options.all === true) {
+          callback(null, [...addresses]);
+          return;
+        }
+
+        const family = options.family === 'IPv4'
+          ? 4
+          : options.family === 'IPv6'
+            ? 6
+            : options.family;
+        const selected = addresses.find(
+          (address) => family === undefined || family === 0 || address.family === family,
+        );
+
+        if (selected === undefined) {
+          callback(new Error(`No public address matched the requested family for ${hostname}.`), []);
+          return;
+        }
+
+        callback(null, selected.address, selected.family);
+      },
+      (error: unknown) => {
+        callback(
+          error instanceof Error
+            ? error
+            : new Error(`Failed to resolve a public address for ${hostname}.`),
+          [],
+        );
+      },
+    );
+  };
+}
+
+export async function resolveMicrosoftStorePublicAddresses(
+  hostname: string,
+  resolver: MicrosoftStoreAddressResolver = async (value) => lookupDns(value, {
+    all: true,
+    order: 'verbatim',
+  }),
+): Promise<readonly MicrosoftStoreResolvedAddress[]> {
+  const addresses = await resolver(hostname);
+
+  if (addresses.length === 0) {
+    throw new Error(`Microsoft Store package generation host did not resolve: ${hostname}.`);
+  }
+
+  for (const address of addresses) {
+    const family = address.family === 4 ? 'ipv4' : address.family === 6 ? 'ipv6' : undefined;
+
+    if (
+      family === undefined
+      || (family === 'ipv4' && blockedIpv4Addresses.check(address.address, family))
+      || (family === 'ipv6' && blockedIpv6Addresses.check(address.address, family))
+    ) {
+      throw new Error(
+        `Microsoft Store package generation host must resolve only to public addresses: ${hostname} resolved to ${address.address}.`,
+      );
+    }
+  }
+
+  return addresses;
+}
+
+function createBlockedIpv4Addresses(): BlockList {
+  const blockList = new BlockList();
+
+  for (const [network, prefix] of [
+    ['0.0.0.0', 8],
+    ['10.0.0.0', 8],
+    ['100.64.0.0', 10],
+    ['127.0.0.0', 8],
+    ['169.254.0.0', 16],
+    ['172.16.0.0', 12],
+    ['192.0.0.0', 24],
+    ['192.0.2.0', 24],
+    ['192.88.99.0', 24],
+    ['192.168.0.0', 16],
+    ['198.18.0.0', 15],
+    ['198.51.100.0', 24],
+    ['203.0.113.0', 24],
+    ['224.0.0.0', 4],
+    ['240.0.0.0', 4],
+  ] as const) {
+    blockList.addSubnet(network, prefix, 'ipv4');
+  }
+
+  return blockList;
+}
+
+function createBlockedIpv6Addresses(): BlockList {
+  const blockList = new BlockList();
+
+  for (const [network, prefix] of [
+    ['::', 96],
+    ['::ffff:0:0', 96],
+    ['64:ff9b::', 96],
+    ['64:ff9b:1::', 48],
+    ['100::', 64],
+    ['2001::', 23],
+    ['2001:db8::', 32],
+    ['2002::', 16],
+    ['3fff::', 20],
+    ['fc00::', 7],
+    ['fe80::', 10],
+    ['fec0::', 10],
+    ['ff00::', 8],
+  ] as const) {
+    blockList.addSubnet(network, prefix, 'ipv6');
+  }
+
+  return blockList;
 }
 
 export async function withMicrosoftStorePackageArchive<Result>(

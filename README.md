@@ -250,15 +250,15 @@ verification. Desktop screenshots must be valid PNG files, no larger than
 deterministic submission evidence under
 `release-output/microsoft-store`.
 
-After deploying the exact preflighted PWA, download a PWABuilder package ZIP
-with the public URL, deployed manifest URL, and distinct modern and classic
-package versions:
+After deploying the exact preflighted PWA, set `PWA_URL` and `MANIFEST_URL` to
+its public production endpoints, then download a PWABuilder package ZIP with
+distinct modern and classic package versions:
 
 ```sh
 pnpm exec mpgd target generate-package microsoft-store \
   --targets-file ./mpgd.targets.json \
-  --pwa-url https://games.acme.dev/ \
-  --manifest-url https://games.acme.dev/manifest.webmanifest \
+  --pwa-url "$PWA_URL" \
+  --manifest-url "$MANIFEST_URL" \
   --version 1.2.3.0 \
   --classic-version 1.2.2.0
 ```
