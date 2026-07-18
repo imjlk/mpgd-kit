@@ -294,11 +294,13 @@ submission.
   writes deterministic JSON and Markdown evidence under
   `release-output/microsoft-store`.
   After PWABuilder creates the Store packages, run the Windows-only package
-  gate from an active administrator user session with the current Windows SDK:
+  gate with the current Windows SDK:
   `pnpm exec mpgd target accept-package microsoft-store --packages <game-relative.msixbundle,game-relative.appxbundle>`.
   The gate compares every bundle and payload identity with the submission
-  evidence, runs `appcert.exe`, requires `OVERALL_RESULT="PASS"`, and binds the
-  package and WACK report hashes in `package-acceptance.json`.
+  evidence and binds package hashes in `package-acceptance.json`. WACK is a
+  recommended optional local check; from an active administrator user session,
+  pass `--appcert <path-to-appcert.exe>` to require `OVERALL_RESULT="PASS"`
+  and bind its report hash.
 - Verse8 is a game-owned iframe web target that writes to `artifacts/verse8`.
   The adapter verifies the host-provided auth credential and distinguishes
   Verse8-signed accounts from self-signed guest accounts. Ads are available
