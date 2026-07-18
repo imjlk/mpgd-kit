@@ -32,6 +32,13 @@ const supportedPackageExtensions = ['.appx', '.appxbundle', '.msix', '.msixbundl
 const maximumWindowsPackageCommandDurationMs = 60 * 60 * 1_000;
 const maximumWindowsPackageCommandOutputBytes = 16 * 1024 * 1024;
 const maximumWindowsPackageCommandDiagnosticCharacters = 8 * 1024;
+const xmlNamedEntities: Readonly<Record<string, string>> = {
+  quot: '"',
+  apos: "'",
+  lt: '<',
+  gt: '>',
+  amp: '&',
+};
 
 export interface MicrosoftStorePackageIdentity {
   readonly name: string;
@@ -721,15 +728,7 @@ function decodeXmlAttribute(value: string): string {
       named: string | undefined,
     ) => {
       if (named !== undefined) {
-        const entities: Readonly<Record<string, string>> = {
-          quot: '"',
-          apos: "'",
-          lt: '<',
-          gt: '>',
-          amp: '&',
-        };
-
-        return entities[named] ?? reference;
+        return xmlNamedEntities[named] ?? reference;
       }
 
       const codePoint = Number.parseInt(hexadecimal ?? decimal ?? '', hexadecimal === undefined ? 10 : 16);
