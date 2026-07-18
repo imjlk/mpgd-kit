@@ -542,6 +542,7 @@ function inspectSinglePackage(
     'Microsoft Store unpacked package directory',
   );
   assertInside(canonicalParent, canonicalOutputDir, 'Microsoft Store unpacked package directory');
+  // Traverse for listFiles' fail-closed symlink rejection; the file list is intentionally unused.
   listFiles(canonicalOutputDir);
 
   return parseMicrosoftStorePackageIdentity(
