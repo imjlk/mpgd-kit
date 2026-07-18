@@ -98,11 +98,6 @@ export function createMicrosoftStorePackageAcceptanceRuntime(
     throw new Error('Microsoft Store package acceptance requires Windows and the Windows SDK.');
   }
 
-  const windowsKitsDir = path.join(
-    requireEnvironmentPath(process.env['ProgramFiles(x86)'], 'ProgramFiles(x86)'),
-    'Windows Kits',
-    '10',
-  );
   let appCertExecutable: string | undefined;
 
   if (input.appCertExecutable !== undefined) {
@@ -112,7 +107,14 @@ export function createMicrosoftStorePackageAcceptanceRuntime(
     );
   }
   const makeAppxExecutable = input.makeAppxExecutable === undefined
-    ? findMicrosoftStoreMakeAppxExecutable(windowsKitsDir, process.arch)
+    ? findMicrosoftStoreMakeAppxExecutable(
+        path.join(
+          requireEnvironmentPath(process.env['ProgramFiles(x86)'], 'ProgramFiles(x86)'),
+          'Windows Kits',
+          '10',
+        ),
+        process.arch,
+      )
     : readCanonicalTool(input.makeAppxExecutable, 'MakeAppx executable');
 
   return {
@@ -461,18 +463,31 @@ function inspectPackage(input: {
       'Microsoft Store unpacked bundle directory',
     );
     const bundleFiles = listFiles(canonicalBundleDir);
-
-    const identity = parseMicrosoftStorePackageIdentity(
-      readFileSync(
-        readCanonicalFileInside(
-          canonicalBundleDir,
-          path.join(canonicalBundleDir, 'AppxMetadata', 'AppxBundleManifest.xml'),
-          'Microsoft Store bundle manifest',
-        ),
-        'utf8',
-      ),
+    const bundleManifestFiles = bundleFiles.filter((file) =>
+      equalsAsciiCaseInsensitive(path.basename(file), 'AppxBundleManifest.xml')
+      && equalsAsciiCaseInsensitive(path.basename(path.dirname(file)), 'AppxMetadata'),
     );
-    const payloads = bundleFiles.filter((file) => {
+
+    if (bundleManifestFiles.length !== 1) {
+      throw new Error(
+        `Microsoft Store unpacked bundle must contain exactly one AppxBundleManifest.xml; found ${bundleManifestFiles.length}.`,
+      );
+    }
+
+    const bundleManifestFile = readCanonicalFileInside(
+      canonicalBundleDir,
+      bundleManifestFiles[0] ?? '',
+      'Microsoft Store bundle manifest',
+    );
+    const unpackedBundleRoot = readCanonicalDirectory(
+      path.dirname(path.dirname(bundleManifestFile)),
+      'Microsoft Store unpacked bundle root',
+    );
+    assertInside(canonicalBundleDir, unpackedBundleRoot, 'Microsoft Store unpacked bundle root');
+    const unpackedBundleFiles = listFiles(unpackedBundleRoot);
+
+    const identity = parseMicrosoftStorePackageIdentity(readFileSync(bundleManifestFile, 'utf8'));
+    const payloads = unpackedBundleFiles.filter((file) => {
       const payloadExtension = path.extname(file).toLowerCase();
       return payloadExtension === '.appx' || payloadExtension === '.msix';
     });
@@ -560,6 +575,7 @@ function assertExpectedIdentity(
 
 function findPackageIdentityAttributes(xml: string): string | undefined {
   const stack: string[] = [];
+  let identityAttributes: string | undefined;
   let offset = 0;
 
   while (offset < xml.length) {
@@ -621,8 +637,14 @@ function findPackageIdentityAttributes(xml: string): string | undefined {
       && stack.length === 1
       && (parent === 'Package' || parent === 'Bundle')
     ) {
+      if (identityAttributes !== undefined) {
+        throw new Error(
+          'Microsoft Store package manifest must not contain multiple Identity elements.',
+        );
+      }
+
       const nameEnd = source.indexOf(tagName) + tagName.length;
-      return source.slice(nameEnd, selfClosing ? source.lastIndexOf('/') : undefined);
+      identityAttributes = source.slice(nameEnd, selfClosing ? source.lastIndexOf('/') : undefined);
     }
 
     if (!selfClosing) {
@@ -632,7 +654,11 @@ function findPackageIdentityAttributes(xml: string): string | undefined {
     offset = end + 1;
   }
 
-  return undefined;
+  if (stack.length !== 0) {
+    throw new Error('Microsoft Store package manifest contains unbalanced XML elements.');
+  }
+
+  return identityAttributes;
 }
 
 function findXmlTagEnd(xml: string, start: number): number {

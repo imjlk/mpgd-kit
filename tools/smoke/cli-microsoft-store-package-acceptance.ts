@@ -195,6 +195,28 @@ try {
       version: '1.2.3.4',
     },
   );
+  assert.throws(
+    () => parseMicrosoftStorePackageIdentity(
+      `<Package>${identityTag(packageId, publisherId)}</Wrong>`,
+    ),
+    /mismatched XML elements/u,
+  );
+  assert.throws(
+    () => parseMicrosoftStorePackageIdentity(
+      `<Package>${identityTag(packageId, publisherId)}${identityTag(packageId, publisherId)}</Package>`,
+    ),
+    /multiple Identity elements/u,
+  );
+  assert.throws(
+    () => parseMicrosoftStorePackageIdentity(`<Package>${identityTag(packageId, publisherId)}`),
+    /unbalanced XML elements/u,
+  );
+  assert.throws(
+    () => parseMicrosoftStorePackageIdentity(
+      `<Package>${identityTag(packageId, publisherId)}<!DOCTYPE Package></Package>`,
+    ),
+    /must not contain a DOCTYPE declaration/u,
+  );
   assert.deepEqual(
     parseMicrosoftStorePackageIdentity(identityXml(packageId, 'CN=Acme&#x2c; Inc')),
     {
@@ -328,15 +350,16 @@ function runCommand(command: string, args: readonly string[]): void {
 
     if (action === 'unbundle') {
       assert.ok(args.includes('/l'));
-      mkdirSync(join(outputDirArg, 'AppxMetadata'), { recursive: true });
+      const unpackedBundleDir = join(outputDirArg, 'fixture-bundle-full-name');
+      mkdirSync(join(unpackedBundleDir, 'AppxMetadata'), { recursive: true });
       writeFileSync(
-        join(outputDirArg, 'AppxMetadata', 'AppxBundleManifest.xml'),
+        join(unpackedBundleDir, 'AppxMetadata', 'AppxBundleManifest.xml'),
         identityXml(emittedPackageId, emittedPublisherId),
       );
-      writeFileSync(join(outputDirArg, 'neutral.appx'), 'fixture payload');
+      writeFileSync(join(unpackedBundleDir, 'neutral.appx'), 'fixture payload');
 
       if (emitSymlinkPayload) {
-        symlinkSync(packageFile, join(outputDirArg, 'linked.appx'));
+        symlinkSync(packageFile, join(unpackedBundleDir, 'linked.appx'));
       }
 
       return;
