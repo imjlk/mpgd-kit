@@ -259,7 +259,7 @@ pnpm exec mpgd target generate-package microsoft-store \
   --targets-file ./mpgd.targets.json \
   --pwa-url "$PWA_URL" \
   --manifest-url "$MANIFEST_URL" \
-  --version 1.2.3.0 \
+  --package-version 1.2.3.0 \
   --classic-version 1.2.2.0
 ```
 

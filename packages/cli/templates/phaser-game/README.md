@@ -299,7 +299,7 @@ submission.
   pnpm package:microsoft-store -- \
     --pwa-url "$PWA_URL" \
     --manifest-url "$MANIFEST_URL" \
-    --version 1.2.3.0 \
+    --package-version 1.2.3.0 \
     --classic-version 1.2.2.0
   ```
 

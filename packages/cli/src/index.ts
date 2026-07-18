@@ -1114,7 +1114,7 @@ const targetCommand = defineI18n({
             en: 'Public HTTPS URL of the deployed web app manifest.',
             ko: '배포된 웹 앱 매니페스트의 공개 HTTPS URL.',
           },
-          version: {
+          'package-version': {
             en: 'Modern Microsoft Store package version.',
             ko: '최신 Microsoft Store 패키지 버전.',
           },
@@ -1156,7 +1156,7 @@ const targetCommand = defineI18n({
           required: true,
           description: 'Public HTTPS URL of the deployed web app manifest.',
         },
-        version: {
+        'package-version': {
           type: 'string',
           required: true,
           description: 'Modern Microsoft Store package version.',
@@ -1219,7 +1219,7 @@ const targetCommand = defineI18n({
           ),
           pwaUrl: readOptionalString(ctx.values['pwa-url']) ?? '',
           manifestUrl: readOptionalString(ctx.values['manifest-url']) ?? '',
-          modernVersion: readOptionalString(ctx.values.version) ?? '',
+          modernVersion: readOptionalString(ctx.values['package-version']) ?? '',
           classicVersion: readOptionalString(ctx.values['classic-version']) ?? '',
           outputFile: resolveGameRelativePath(
             gameRoot,

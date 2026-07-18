@@ -89,17 +89,21 @@ export function prepareMicrosoftStorePackageGenerationInput(
     input.markdownFile,
     'package generation Markdown',
   );
-  assertDistinctFiles([
+  const filesThatMustAlwaysBeDistinct = [
     { file: outputFile, label: 'package ZIP' },
     { file: jsonFile, label: 'package generation JSON' },
     { file: markdownFile, label: 'package generation Markdown' },
     { file: submissionEvidenceFile, label: 'submission evidence' },
     { file: submission.manifestFile, label: 'web app manifest' },
-    ...submission.manifestIcons.map((icon, index) => ({
-      file: icon.file,
-      label: `web app manifest icon[${index}]`,
-    })),
-  ]);
+  ];
+  assertDistinctFiles(filesThatMustAlwaysBeDistinct);
+
+  for (const [index, icon] of submission.manifestIcons.entries()) {
+    assertDistinctFiles([
+      ...filesThatMustAlwaysBeDistinct,
+      { file: icon.file, label: `web app manifest icon[${index}]` },
+    ]);
+  }
 
   return {
     gameRoot,

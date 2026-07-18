@@ -135,7 +135,7 @@ try {
     pwaUrl,
     '--manifest-url',
     manifestUrl,
-    '--version',
+    '--package-version',
     '1.2.3.0',
     '--classic-version',
     '1.2.2.0',
@@ -223,6 +223,52 @@ try {
   assert.match(
     readFileSync(success.input.markdownFile, 'utf8'),
     /Generator contract: unversioned-best-effort[\s\S]*Package inspection: required/u,
+  );
+
+  const repeatedIcon = createFixture('repeated-icon');
+  const repeatedIconManifest = {
+    ...manifest,
+    icons: [
+      ...manifest.icons,
+      { src: './icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any' },
+    ],
+  };
+  const repeatedIconManifestBytes = Buffer.from(`${JSON.stringify(repeatedIconManifest)}\n`);
+  const repeatedIconManifestFile = join(
+    repeatedIcon.gameRoot,
+    'artifacts',
+    'microsoft-store',
+    'manifest.webmanifest',
+  );
+  writeFileSync(repeatedIconManifestFile, repeatedIconManifestBytes);
+  const repeatedIconSubmission = JSON.parse(
+    readFileSync(repeatedIcon.input.submissionEvidenceFile, 'utf8'),
+  ) as {
+    manifest: {
+      sha256: string;
+      iconCount: number;
+      icons: Record<string, unknown>[];
+    };
+  };
+  repeatedIconSubmission.manifest.sha256 = sha256(repeatedIconManifestBytes);
+  repeatedIconSubmission.manifest.iconCount = 3;
+  repeatedIconSubmission.manifest.icons.push({
+    file: 'artifacts/microsoft-store/icon-512.png',
+    sha256: sha256(icon512Bytes),
+    width: 512,
+    height: 512,
+  });
+  writeJson(repeatedIcon.input.submissionEvidenceFile, repeatedIconSubmission);
+  const repeatedIconEvidence = await runMicrosoftStorePackageGeneration(
+    repeatedIcon.input,
+    createRuntime({
+      manifestResponses: [repeatedIconManifestBytes, repeatedIconManifestBytes],
+    }),
+  );
+  assert.equal(repeatedIconEvidence.manifest.icons.count, 3);
+  assert.equal(
+    repeatedIconEvidence.manifest.icons.entries[1]?.file,
+    repeatedIconEvidence.manifest.icons.entries[2]?.file,
   );
 
   const encodedSuccess = createFixture('encoded-success');
