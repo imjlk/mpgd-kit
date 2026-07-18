@@ -210,6 +210,25 @@ try {
   mutatePackageDuringCertification = false;
   writeFileSync(packageFile, 'fixture bundle');
 
+  writeFileSync(submissionEvidenceFile, '{');
+  assert.throws(
+    () => runMicrosoftStorePackageAcceptance(
+      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+      runtime,
+    ),
+    /Failed to parse Microsoft Store submission evidence/u,
+  );
+  writeJson(submissionEvidenceFile, {
+    schemaVersion: 1,
+    target: 'microsoft-store',
+    productIdentity: {
+      packageId,
+      publisherId,
+      publisherDisplayName: 'Acme Games',
+      reservedName: 'Fixture Game',
+    },
+  });
+
   const outsidePackage = join(fixtureRoot, 'outside.msix');
   const escapedPackage = join(packagesDir, 'escaped.msix');
   writeFileSync(outsidePackage, 'outside');
