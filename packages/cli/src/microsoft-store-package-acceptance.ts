@@ -702,9 +702,30 @@ function requireXmlAttribute(attributes: ReadonlyMap<string, string>, name: stri
 }
 
 function decodeXmlAttribute(value: string): string {
-  const numericDecoded = value.replace(
-    /&#(?:x([0-9A-Fa-f]+)|([0-9]+));/gu,
-    (_reference, hexadecimal: string | undefined, decimal: string | undefined) => {
+  if (/&(?!(?:#x[0-9A-Fa-f]+|#[0-9]+|quot|apos|lt|gt|amp);)/u.test(value)) {
+    throw new Error(`Microsoft Store XML contains an unsupported entity reference: ${value}`);
+  }
+
+  return value.replace(
+    /&(?:#x([0-9A-Fa-f]+)|#([0-9]+)|(quot|apos|lt|gt|amp));/gu,
+    (
+      reference,
+      hexadecimal: string | undefined,
+      decimal: string | undefined,
+      named: string | undefined,
+    ) => {
+      if (named !== undefined) {
+        const entities: Readonly<Record<string, string>> = {
+          quot: '"',
+          apos: "'",
+          lt: '<',
+          gt: '>',
+          amp: '&',
+        };
+
+        return entities[named] ?? reference;
+      }
+
       const codePoint = Number.parseInt(hexadecimal ?? decimal ?? '', hexadecimal === undefined ? 10 : 16);
 
       if (
@@ -719,17 +740,6 @@ function decodeXmlAttribute(value: string): string {
       return String.fromCodePoint(codePoint);
     },
   );
-
-  if (/&(?!(?:quot|apos|lt|gt|amp);)/u.test(numericDecoded)) {
-    throw new Error(`Microsoft Store XML contains an unsupported entity reference: ${value}`);
-  }
-
-  return numericDecoded
-    .replaceAll('&quot;', '"')
-    .replaceAll('&apos;', "'")
-    .replaceAll('&lt;', '<')
-    .replaceAll('&gt;', '>')
-    .replaceAll('&amp;', '&');
 }
 
 function readCanonicalPackage(gameRoot: string, file: string): string {
