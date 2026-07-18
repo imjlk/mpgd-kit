@@ -1425,7 +1425,7 @@ const targetCommand = defineI18n({
   },
   run: () => {
     console.log(
-      'Use "mpgd target build <target>", "mpgd target smoke <target>", "mpgd target preflight <target>", or "mpgd target accept-package <target>".',
+      'Use "mpgd target build <target>", "mpgd target smoke <target>", "mpgd target preflight <target>", or "mpgd target accept-package <target> --packages <paths>".',
     );
   },
 });
