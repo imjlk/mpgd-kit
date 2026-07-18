@@ -55,6 +55,7 @@ interface WithMicrosoftStorePackageArchiveInput {
   readonly requestBody: string;
   readonly outputFile: string;
   readonly assertInputsUnchanged: () => void;
+  readonly afterPlacement?: (file: string) => void;
 }
 
 interface MicrosoftStorePublishedFileIdentity extends MicrosoftStoreFileSnapshot {
@@ -367,6 +368,13 @@ export async function withMicrosoftStorePackageArchive<Result>(
       );
     }
 
+    publishedOutputIdentity = {
+      dev: temporaryMetadata.dev,
+      ino: temporaryMetadata.ino,
+      sizeBytes: archive.sizeBytes,
+      sha256: archive.sha256,
+    };
+    input.afterPlacement?.(input.outputFile);
     unlinkSync(temporaryFile);
     temporaryFileExists = false;
     const outputSnapshot = hashMicrosoftStoreFileSnapshot(
@@ -380,12 +388,6 @@ export async function withMicrosoftStorePackageArchive<Result>(
     ) {
       throw new Error('Microsoft Store package ZIP changed during atomic publication.');
     }
-
-    publishedOutputIdentity = {
-      dev: temporaryMetadata.dev,
-      ino: temporaryMetadata.ino,
-      ...outputSnapshot,
-    };
 
     const result = await consume(outputSnapshot);
     completed = true;

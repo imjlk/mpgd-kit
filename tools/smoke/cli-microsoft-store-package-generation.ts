@@ -32,6 +32,7 @@ import {
   createMicrosoftStoreDispatcherFetch,
   removeMicrosoftStorePackageZipIfOwned,
   resolveMicrosoftStorePublicAddresses,
+  withMicrosoftStorePackageArchive,
 } from '../../packages/cli/src/microsoft-store-package-generation-download';
 import { hashMicrosoftStoreFileSnapshot } from '../../packages/cli/src/microsoft-store-package-generation-integrity';
 
@@ -279,7 +280,13 @@ try {
   assert.equal(request.url, pwaUrl);
   assert.equal(request.version, '1.2.3.0');
   assert.equal(request.manifestUrl, manifestUrl);
-  assert.deepEqual(request.manifest, manifest);
+  assert.deepEqual(request.manifest, {
+    ...manifest,
+    icons: [
+      { ...manifest.icons[0], src: icon192Url },
+      { ...manifest.icons[1], src: icon512Url },
+    ],
+  });
   assert.equal(request.resourceLanguage, 'en-US,ko-KR');
   assert.equal(request.usePwaBuilderWithCustomManifest, true);
   assert.deepEqual(request.classicPackage, {
@@ -836,6 +843,56 @@ try {
   assert.equal(readFileSync(reportFailure.input.jsonFile, 'utf8'), previousJsonEvidence);
   assert.equal(lstatSync(reportFailure.input.markdownFile).isDirectory(), true);
   assertNoTemporaryArchive(reportFailure.input.outputFile);
+
+  const archivePlacementFailure = createFixture('archive-placement-failure');
+  mkdirSync(dirname(archivePlacementFailure.input.outputFile), { recursive: true });
+  const archivePlacementIconInputs = [
+    {
+      file: join(
+        archivePlacementFailure.gameRoot,
+        'artifacts',
+        'microsoft-store',
+        'icon-192.png',
+      ),
+      url: icon192Url,
+      snapshot: { sizeBytes: icon192Bytes.length, sha256: sha256(icon192Bytes) },
+      width: 192,
+      height: 192,
+    },
+    {
+      file: join(
+        archivePlacementFailure.gameRoot,
+        'artifacts',
+        'microsoft-store',
+        'icon-512.png',
+      ),
+      url: icon512Url,
+      snapshot: { sizeBytes: icon512Bytes.length, sha256: sha256(icon512Bytes) },
+      width: 512,
+      height: 512,
+    },
+  ];
+  await assert.rejects(
+    withMicrosoftStorePackageArchive(
+      {
+        runtime: createRuntime(),
+        manifestUrl,
+        manifestSha256: sha256(manifestBytes),
+        manifestIcons: archivePlacementIconInputs,
+        requestBody: '{}',
+        outputFile: archivePlacementFailure.input.outputFile,
+        assertInputsUnchanged: () => {},
+        afterPlacement: () => {
+          throw new Error('after archive placement');
+        },
+      },
+      () => {
+        assert.fail('archive consumer must not run after a placement failure');
+      },
+    ),
+    /after archive placement/u,
+  );
+  assertNoGenerationOutputs(archivePlacementFailure.input);
 
   const linkedPlacementFailure = createFixture('linked-placement-failure');
   assert.throws(

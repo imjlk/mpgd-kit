@@ -66,6 +66,10 @@ export async function runMicrosoftStorePackageGeneration(
     createMicrosoftStorePackageGenerationRuntime(),
 ): Promise<MicrosoftStorePackageGenerationEvidence> {
   const prepared = prepareMicrosoftStorePackageGenerationInput(input);
+  const pinnedManifest = createMicrosoftStoreGeneratorManifest(
+    prepared.submission.manifest,
+    prepared.submission.manifestIcons.map((icon) => icon.url),
+  );
   const request: MicrosoftStorePackageGeneratorRequest = {
     name: prepared.submission.identity.reservedName,
     packageId: prepared.submission.identity.packageId,
@@ -85,7 +89,7 @@ export async function runMicrosoftStorePackageGeneration(
     },
     edgeChannel: 'stable',
     manifestUrl: prepared.manifestUrl,
-    manifest: prepared.submission.manifest,
+    manifest: pinnedManifest,
     resourceLanguage: prepared.submission.resourceLanguage,
     targetDeviceFamilies: ['Desktop'],
     usePwaBuilderWithCustomManifest: true,
@@ -162,6 +166,37 @@ export async function runMicrosoftStorePackageGeneration(
       return evidence;
     },
   );
+}
+
+function createMicrosoftStoreGeneratorManifest(
+  manifest: Readonly<Record<string, unknown>>,
+  iconUrls: readonly string[],
+): Readonly<Record<string, unknown>> {
+  const icons = manifest.icons;
+
+  if (!Array.isArray(icons) || icons.length !== iconUrls.length) {
+    throw new Error('Microsoft Store generator manifest icons must match verified icon URLs.');
+  }
+
+  return {
+    ...manifest,
+    icons: icons.map((icon, index) => {
+      if (icon === null || typeof icon !== 'object' || Array.isArray(icon)) {
+        throw new Error(`Microsoft Store generator manifest icon[${index}] must be an object.`);
+      }
+
+      const url = iconUrls[index];
+
+      if (url === undefined) {
+        throw new Error(`Microsoft Store generator manifest icon[${index}] URL is missing.`);
+      }
+
+      return {
+        ...(icon as Readonly<Record<string, unknown>>),
+        src: url,
+      };
+    }),
+  };
 }
 
 interface MicrosoftStoreEvidenceFilePublication {
