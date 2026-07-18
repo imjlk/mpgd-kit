@@ -239,6 +239,7 @@ function runCommand(command: string, args: readonly string[]): void {
     const action = args[0];
 
     if (action === 'unbundle') {
+      assert.ok(args.includes('/l'));
       mkdirSync(join(outputDirArg, 'AppxMetadata'), { recursive: true });
       writeFileSync(
         join(outputDirArg, 'AppxMetadata', 'AppxBundleManifest.xml'),
@@ -254,6 +255,7 @@ function runCommand(command: string, args: readonly string[]): void {
     }
 
     if (action === 'unpack') {
+      assert.ok(args.includes('/l'));
       mkdirSync(outputDirArg, { recursive: true });
       writeFileSync(
         join(outputDirArg, 'AppxManifest.xml'),
