@@ -296,8 +296,8 @@ submission.
 
   ```sh
   pnpm package:microsoft-store -- \
-    --pwa-url https://games.example.com/ \
-    --manifest-url https://games.example.com/manifest.webmanifest \
+    --pwa-url https://games.acme.dev/ \
+    --manifest-url https://games.acme.dev/manifest.webmanifest \
     --version 1.2.3.0 \
     --classic-version 1.2.2.0
   ```
