@@ -19,7 +19,12 @@ import {
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { escapeMarkdownInline, escapeMarkdownTable, relativeOrAbsolute } from './evidence-io.js';
+import {
+  escapeMarkdownInline,
+  escapeMarkdownTable,
+  formatError,
+  relativeOrAbsolute,
+} from './evidence-io.js';
 
 export const microsoftStorePackageAcceptanceSchemaVersion = 1 as const;
 
@@ -985,7 +990,9 @@ function sameFile(left: string, right: string): boolean {
   try {
     const leftMetadata = statSync(left);
     const rightMetadata = statSync(right);
-    return leftMetadata.dev === rightMetadata.dev && leftMetadata.ino === rightMetadata.ino;
+    return leftMetadata.ino !== 0
+      && leftMetadata.dev === rightMetadata.dev
+      && leftMetadata.ino === rightMetadata.ino;
   } catch (error) {
     if (!isMissingFileError(error)) {
       throw error;
@@ -1060,8 +1067,4 @@ function isTimeoutError(error: unknown): boolean {
 
 function formatCommandOutput(output: string): string {
   return output.length === 0 ? '' : `\n${output}`;
-}
-
-function formatError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
