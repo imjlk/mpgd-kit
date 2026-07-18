@@ -15,6 +15,7 @@ const gameRoot = join(fixtureRoot, 'game');
 const outputDir = join(gameRoot, 'release-output', 'microsoft-store');
 const packagesDir = join(gameRoot, 'packages');
 const packageFile = join(packagesDir, 'fixture.msixbundle');
+const singlePackageFile = join(packagesDir, 'fixture.msix');
 const submissionEvidenceFile = join(outputDir, 'submission-preflight.json');
 const appCertExecutable = join(fixtureRoot, 'appcert.exe');
 const makeAppxExecutable = join(fixtureRoot, 'makeappx.exe');
@@ -25,6 +26,7 @@ let emittedPackageId = packageId;
 let emittedPublisherId = publisherId;
 let certificationResult: 'PASS' | 'FAIL' = 'PASS';
 let emitSymlinkPayload = false;
+let emitUnpackedPackageSymlink = false;
 let mutatePackageDuringCertification = false;
 
 try {
@@ -32,6 +34,7 @@ try {
   mkdirSync(packagesDir, { recursive: true });
   mkdirSync(outputDir, { recursive: true });
   writeFileSync(packageFile, 'fixture bundle');
+  writeFileSync(singlePackageFile, 'fixture package');
   writeFileSync(appCertExecutable, 'fixture appcert');
   writeFileSync(makeAppxExecutable, 'fixture makeappx');
   const olderSdkMakeAppx = join(windowsKitsDir, 'bin', '10.0.22621.0', 'x64', 'makeappx.exe');
@@ -230,6 +233,16 @@ try {
   );
   emitSymlinkPayload = false;
 
+  emitUnpackedPackageSymlink = true;
+  assert.throws(
+    () => runMicrosoftStorePackageAcceptance(
+      { gameRoot, submissionEvidenceFile, packageFiles: [singlePackageFile], outputDir },
+      runtime,
+    ),
+    /package symlink is not allowed/u,
+  );
+  emitUnpackedPackageSymlink = false;
+
   mutatePackageDuringCertification = true;
   assert.throws(
     () => runMicrosoftStorePackageAcceptance(
@@ -319,6 +332,10 @@ function runCommand(command: string, args: readonly string[]): void {
         join(outputDirArg, 'AppxManifest.xml'),
         identityXml(emittedPackageId, emittedPublisherId),
       );
+
+      if (emitUnpackedPackageSymlink) {
+        symlinkSync(packageFile, join(outputDirArg, 'non-manifest.bin'));
+      }
       return;
     }
   }

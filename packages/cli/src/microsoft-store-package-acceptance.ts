@@ -399,6 +399,7 @@ function inspectPackage(input: {
       input.tempRoot,
       'Microsoft Store package inspection directory',
     );
+    // `/l` preserves links so the fail-closed traversal below can reject them explicitly.
     input.runtime.runCommand(input.runtime.makeAppxExecutable, [
       'unbundle',
       '/p',
@@ -417,6 +418,7 @@ function inspectPackage(input: {
       canonicalBundleDir,
       'Microsoft Store unpacked bundle directory',
     );
+    const bundleFiles = listFiles(canonicalBundleDir);
 
     const identity = parseMicrosoftStorePackageIdentity(
       readFileSync(
@@ -428,7 +430,7 @@ function inspectPackage(input: {
         'utf8',
       ),
     );
-    const payloads = listFiles(canonicalBundleDir).filter((file) => {
+    const payloads = bundleFiles.filter((file) => {
       const payloadExtension = path.extname(file).toLowerCase();
       return payloadExtension === '.appx' || payloadExtension === '.msix';
     });
@@ -468,6 +470,7 @@ function inspectSinglePackage(
     path.dirname(outputDir),
     'Microsoft Store package inspection directory',
   );
+  // `/l` preserves links so the fail-closed traversal below can reject them explicitly.
   runtime.runCommand(runtime.makeAppxExecutable, [
     'unpack',
     '/p',
@@ -482,6 +485,7 @@ function inspectSinglePackage(
     'Microsoft Store unpacked package directory',
   );
   assertInside(canonicalParent, canonicalOutputDir, 'Microsoft Store unpacked package directory');
+  listFiles(canonicalOutputDir);
 
   return parseMicrosoftStorePackageIdentity(
     readFileSync(
