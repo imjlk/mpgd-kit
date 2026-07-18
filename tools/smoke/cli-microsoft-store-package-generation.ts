@@ -270,6 +270,7 @@ try {
     repeatedIconEvidence.manifest.icons.entries[1]?.file,
     repeatedIconEvidence.manifest.icons.entries[2]?.file,
   );
+  assert.deepEqual(readFileSync(repeatedIcon.input.outputFile), validArchive);
 
   const encodedSuccess = createFixture('encoded-success');
   const encodedEvidence = await runMicrosoftStorePackageGeneration(
