@@ -31,6 +31,7 @@ export const microsoftStorePackageAcceptanceSchemaVersion = 1 as const;
 const supportedPackageExtensions = ['.appx', '.appxbundle', '.msix', '.msixbundle'] as const;
 const maximumWindowsPackageCommandDurationMs = 60 * 60 * 1_000;
 const maximumWindowsPackageCommandOutputBytes = 16 * 1024 * 1024;
+const maximumWindowsPackageCommandDiagnosticCharacters = 8 * 1024;
 
 export interface MicrosoftStorePackageIdentity {
   readonly name: string;
@@ -787,7 +788,9 @@ function runWindowsCommand(command: string, args: readonly string[]): void {
     timeout: maximumWindowsPackageCommandDurationMs,
     windowsHide: true,
   });
-  const output = [result.stdout, result.stderr]
+  const stdout = result.stdout ?? '';
+  const stderr = result.stderr ?? '';
+  const output = [stdout, stderr]
     .filter((value) => value.length > 0)
     .join('\n')
     .trim();
@@ -822,12 +825,12 @@ function runWindowsCommand(command: string, args: readonly string[]): void {
     );
   }
 
-  if (result.stdout.length > 0) {
-    process.stdout.write(result.stdout);
+  if (stdout.length > 0) {
+    process.stdout.write(stdout);
   }
 
-  if (result.stderr.length > 0) {
-    process.stderr.write(result.stderr);
+  if (stderr.length > 0) {
+    process.stderr.write(stderr);
   }
 }
 
@@ -1080,5 +1083,17 @@ function isMaxBufferError(error: unknown): boolean {
 }
 
 function formatCommandOutput(output: string): string {
-  return output.length === 0 ? '' : `\n${output}`;
+  if (output.length === 0) {
+    return '';
+  }
+
+  if (output.length <= maximumWindowsPackageCommandDiagnosticCharacters) {
+    return `\n${output}`;
+  }
+
+  const headCharacters = Math.floor(maximumWindowsPackageCommandDiagnosticCharacters / 2);
+  const tailCharacters = maximumWindowsPackageCommandDiagnosticCharacters - headCharacters;
+  const omittedCharacters = output.length - maximumWindowsPackageCommandDiagnosticCharacters;
+
+  return `\n${output.slice(0, headCharacters)}\n... ${omittedCharacters} characters omitted ...\n${output.slice(-tailCharacters)}`;
 }
