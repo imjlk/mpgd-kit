@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   existsSync,
@@ -15,7 +16,6 @@ import {
   microsoftStorePackageGeneratorEndpoint,
   microsoftStorePackageGeneratorSourceRevision,
   runMicrosoftStorePackageGeneration,
-  runMpgdCli,
   type MicrosoftStorePackageGenerationRuntime,
   type RunMicrosoftStorePackageGenerationInput,
 } from '../../packages/cli/src/index';
@@ -23,11 +23,19 @@ import {
 const fixtureRoot = resolve('node_modules/.cache/mpgd-cli-microsoft-store-package-generation');
 const pwaUrl = 'https://games.acme.dev/store/game/';
 const manifestUrl = 'https://games.acme.dev/store/manifest.webmanifest';
+const icon192Url = 'https://games.acme.dev/store/icon-192.png';
+const icon512Url = 'https://games.acme.dev/store/icon-512.png';
+const icon192Bytes = Buffer.from('fixture icon 192');
+const icon512Bytes = Buffer.from('fixture icon 512');
 const manifest = {
   id: 'com.acme.fixture',
   name: 'Fixture Game',
   scope: './game',
   start_url: './game/',
+  icons: [
+    { src: './icon-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
+    { src: './icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+  ],
 };
 const manifestBytes = Buffer.from(`${JSON.stringify(manifest)}\n`);
 const validArchive = createZipArchive(
@@ -40,13 +48,47 @@ const publisherId = 'CN=01234567-89ab-cdef-0123-456789abcdef';
 try {
   rmSync(fixtureRoot, { force: true, recursive: true });
   const generatedStarter = join(fixtureRoot, 'generated-starter');
-  await runMpgdCli(['game', 'create', generatedStarter]);
+  const generatedStarterResult = runCli(['game', 'create', generatedStarter]);
+  assert.equal(
+    generatedStarterResult.status,
+    0,
+    generatedStarterResult.stderr || generatedStarterResult.stdout,
+  );
   assert.ok(
     readFileSync(join(generatedStarter, '.gitignore'), 'utf8')
       .split(/\r?\n/u)
       .includes('release-input/'),
     'generated starter must ignore downloaded package inputs',
   );
+
+  const cliGuardGameRoot = join(fixtureRoot, 'cli-output-guard');
+  const outsideCliOutput = join(fixtureRoot, 'outside-cli-output');
+  mkdirSync(cliGuardGameRoot, { recursive: true });
+  mkdirSync(outsideCliOutput, { recursive: true });
+  symlinkSync(outsideCliOutput, join(cliGuardGameRoot, 'linked-evidence'));
+  const outputGuardResult = runCli([
+    'target',
+    'generate-package',
+    'microsoft-store',
+    '--targets-file',
+    join(cliGuardGameRoot, 'mpgd.targets.json'),
+    '--pwa-url',
+    pwaUrl,
+    '--manifest-url',
+    manifestUrl,
+    '--version',
+    '1.2.3.0',
+    '--classic-version',
+    '1.2.2.0',
+    '--output-dir',
+    'linked-evidence',
+  ]);
+  assert.notEqual(outputGuardResult.status, 0);
+  assert.match(
+    `${outputGuardResult.stderr}${outputGuardResult.stdout}`,
+    /output directory must stay inside the game root/u,
+  );
+  assert.deepEqual(readdirSync(outsideCliOutput), []);
 
   const success = createFixture('success');
   const calls: { readonly url: string; readonly init: RequestInit }[] = [];
@@ -67,14 +109,22 @@ try {
   assert.equal(evidence.archive.sha256, sha256(validArchive));
   assert.equal(evidence.packageInspectionRequired, true);
   assert.deepEqual(readFileSync(success.input.outputFile), validArchive);
-  assert.equal(calls.length, 3);
+  assert.equal(calls.length, 7);
   assert.deepEqual(
     calls.map((call) => call.url),
-    [manifestUrl, microsoftStorePackageGeneratorEndpoint, manifestUrl],
+    [
+      manifestUrl,
+      icon192Url,
+      icon512Url,
+      microsoftStorePackageGeneratorEndpoint,
+      manifestUrl,
+      icon192Url,
+      icon512Url,
+    ],
   );
   assert.ok(calls.every((call) => call.init.redirect === 'manual'));
 
-  const request = JSON.parse(String(calls[1]?.init.body)) as Record<string, unknown>;
+  const request = JSON.parse(String(calls[3]?.init.body)) as Record<string, unknown>;
   assert.equal(request.name, 'Fixture Game');
   assert.equal(request.packageId, packageId);
   assert.equal(request.url, pwaUrl);
@@ -88,8 +138,22 @@ try {
     version: '1.2.2.0',
     url: pwaUrl,
   });
-  assert.equal(evidence.generator.requestSha256, sha256(Buffer.from(String(calls[1]?.init.body))));
+  assert.equal(evidence.generator.requestSha256, sha256(Buffer.from(String(calls[3]?.init.body))));
   assert.equal(evidence.manifest.pinnedInGeneratorRequest, true);
+  assert.equal(evidence.manifest.icons.count, 2);
+  assert.equal(evidence.manifest.icons.verification, 'before-and-after-generator');
+  assert.deepEqual(
+    evidence.manifest.icons.entries.map(({ url, sha256, width, height }) => ({
+      url,
+      sha256,
+      width,
+      height,
+    })),
+    [
+      { url: icon192Url, sha256: sha256(icon192Bytes), width: 192, height: 192 },
+      { url: icon512Url, sha256: sha256(icon512Bytes), width: 512, height: 512 },
+    ],
+  );
   assert.equal(
     JSON.parse(readFileSync(success.input.jsonFile, 'utf8')).archive.sha256,
     sha256(validArchive),
@@ -107,7 +171,140 @@ try {
     ),
     /Deployed Microsoft Store manifest SHA-256 must match/u,
   );
-  assert.equal(existsSync(remoteMismatch.input.outputFile), false);
+  assertNoGenerationOutputs(remoteMismatch.input);
+
+  const localIconMismatch = createFixture('local-icon-mismatch');
+  const localIconMismatchCalls: { url: string; init: RequestInit }[] = [];
+  writeFileSync(
+    join(localIconMismatch.gameRoot, 'artifacts', 'microsoft-store', 'icon-192.png'),
+    Buffer.from('different'),
+  );
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      localIconMismatch.input,
+      createRuntime({ calls: localIconMismatchCalls }),
+    ),
+    /web app manifest icon\[0\] SHA-256 must match submission evidence/u,
+  );
+  assert.equal(localIconMismatchCalls.length, 0);
+  assertNoGenerationOutputs(localIconMismatch.input);
+
+  const iconDimensionMismatch = createFixture('icon-dimension-mismatch');
+  const dimensionEvidence = JSON.parse(
+    readFileSync(iconDimensionMismatch.input.submissionEvidenceFile, 'utf8'),
+  ) as { manifest: { icons: { width: number }[] } };
+  const firstDimensionEvidence = dimensionEvidence.manifest.icons[0];
+
+  if (firstDimensionEvidence === undefined) {
+    throw new Error('Fixture icon evidence is missing.');
+  }
+
+  firstDimensionEvidence.width = 193;
+  writeJson(iconDimensionMismatch.input.submissionEvidenceFile, dimensionEvidence);
+  const iconDimensionMismatchCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      iconDimensionMismatch.input,
+      createRuntime({ calls: iconDimensionMismatchCalls }),
+    ),
+    /icon evidence\[0\] dimensions must match the hash-verified web app manifest/u,
+  );
+  assert.equal(iconDimensionMismatchCalls.length, 0);
+  assertNoGenerationOutputs(iconDimensionMismatch.input);
+
+  const aliasedIconEvidence = createFixture('aliased-icon-evidence');
+  const aliasedIconEvidenceCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      {
+        ...aliasedIconEvidence.input,
+        jsonFile: join(
+          aliasedIconEvidence.gameRoot,
+          'artifacts',
+          'microsoft-store',
+          'icon-192.png',
+        ),
+      },
+      createRuntime({ calls: aliasedIconEvidenceCalls }),
+    ),
+    /package generation JSON must not alias web app manifest icon\[0\]/u,
+  );
+  assert.equal(aliasedIconEvidenceCalls.length, 0);
+  assert.equal(existsSync(aliasedIconEvidence.input.outputFile), false);
+
+  const remoteIconMismatch = createFixture('remote-icon-mismatch');
+  const remoteIconMismatchCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      remoteIconMismatch.input,
+      createRuntime({
+        calls: remoteIconMismatchCalls,
+        iconResponses: { [icon192Url]: [response(Buffer.from('different'), 'image/png')] },
+      }),
+    ),
+    /manifest icon\[0\] SHA-256 must match submission evidence before/u,
+  );
+  assert.equal(
+    remoteIconMismatchCalls.some((call) => call.url === microsoftStorePackageGeneratorEndpoint),
+    false,
+  );
+  assertNoGenerationOutputs(remoteIconMismatch.input);
+
+  const missingRemoteIcon = createFixture('missing-remote-icon');
+  const missingRemoteIconCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      missingRemoteIcon.input,
+      createRuntime({
+        calls: missingRemoteIconCalls,
+        iconResponses: { [icon192Url]: [new Response(null, { status: 404 })] },
+      }),
+    ),
+    /manifest icon\[0\] before package generation must return a 2xx response, received 404/u,
+  );
+  assert.equal(
+    missingRemoteIconCalls.some((call) => call.url === microsoftStorePackageGeneratorEndpoint),
+    false,
+  );
+  assertNoGenerationOutputs(missingRemoteIcon.input);
+
+  const redirectedRemoteIcon = createFixture('redirected-remote-icon');
+  const redirectedRemoteIconCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      redirectedRemoteIcon.input,
+      createRuntime({
+        calls: redirectedRemoteIconCalls,
+        iconResponses: { [icon192Url]: [new Response(null, { status: 302 })] },
+      }),
+    ),
+    /manifest icon\[0\] before package generation must return a 2xx response, received 302/u,
+  );
+  assert.equal(
+    redirectedRemoteIconCalls.some((call) => call.url === microsoftStorePackageGeneratorEndpoint),
+    false,
+  );
+  assertNoGenerationOutputs(redirectedRemoteIcon.input);
+
+  const oversizedRemoteIcon = createFixture('oversized-remote-icon');
+  const oversizedRemoteIconCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      oversizedRemoteIcon.input,
+      createRuntime({
+        calls: oversizedRemoteIconCalls,
+        iconResponses: {
+          [icon192Url]: [response(icon192Bytes, 'image/png', 2 * 1024 * 1024 + 1)],
+        },
+      }),
+    ),
+    /manifest icon\[0\].*exceeds the 2097152-byte size limit/u,
+  );
+  assert.equal(
+    oversizedRemoteIconCalls.some((call) => call.url === microsoftStorePackageGeneratorEndpoint),
+    false,
+  );
+  assertNoGenerationOutputs(oversizedRemoteIcon.input);
 
   const outsideScope = createFixture('outside-scope');
   const outsideScopeCalls: { url: string; init: RequestInit }[] = [];
@@ -175,6 +372,47 @@ try {
   assert.equal(existsSync(changedManifest.input.outputFile), false);
   assertNoTemporaryArchive(changedManifest.input.outputFile);
 
+  const changedRemoteIcon = createFixture('changed-remote-icon');
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      changedRemoteIcon.input,
+      createRuntime({
+        iconResponses: {
+          [icon192Url]: [
+            response(icon192Bytes, 'image/png'),
+            response(Buffer.from('changed'), 'image/png'),
+          ],
+        },
+      }),
+    ),
+    /manifest icon\[0\] SHA-256 must match submission evidence after/u,
+  );
+  assertNoGenerationOutputs(changedRemoteIcon.input);
+
+  const changedLocalIconAfterCheck = createFixture('changed-local-icon-after-check');
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      changedLocalIconAfterCheck.input,
+      createRuntime({
+        onIconRequest: (url, requestIndex) => {
+          if (url === icon192Url && requestIndex === 1) {
+            writeFileSync(
+              join(
+                changedLocalIconAfterCheck.gameRoot,
+                'artifacts',
+                'microsoft-store',
+                'icon-192.png',
+              ),
+              Buffer.from('changed locally'),
+            );
+          }
+        },
+      }),
+    ),
+    /web app manifest icon\[0\] changed during package generation/u,
+  );
+  assertNoGenerationOutputs(changedLocalIconAfterCheck.input);
+
   const lengthMismatch = createFixture('length-mismatch');
   await assert.rejects(
     runMicrosoftStorePackageGeneration(
@@ -194,9 +432,9 @@ try {
   await assert.rejects(invalidVersionRun, /classic package version must be lower/u);
 
   const linkedOutput = createFixture('linked-output');
-  const outside = join(fixtureRoot, 'outside');
-  mkdirSync(outside, { recursive: true });
-  symlinkSync(outside, join(linkedOutput.gameRoot, 'linked-output'));
+  const linkedOutputOutside = join(fixtureRoot, 'outside');
+  mkdirSync(linkedOutputOutside, { recursive: true });
+  symlinkSync(linkedOutputOutside, join(linkedOutput.gameRoot, 'linked-output'));
   const linkedOutputRun = runMicrosoftStorePackageGeneration(
     {
       ...linkedOutput.input,
@@ -229,6 +467,10 @@ function createFixture(name: string): {
   mkdirSync(join(manifestFile, '..'), { recursive: true });
   mkdirSync(join(submissionEvidenceFile, '..'), { recursive: true });
   writeFileSync(manifestFile, manifestBytes);
+  const icon192File = join(gameRoot, 'artifacts', 'microsoft-store', 'icon-192.png');
+  const icon512File = join(gameRoot, 'artifacts', 'microsoft-store', 'icon-512.png');
+  writeFileSync(icon192File, icon192Bytes);
+  writeFileSync(icon512File, icon512Bytes);
   writeJson(submissionEvidenceFile, {
     schemaVersion: 1,
     target: 'microsoft-store',
@@ -241,6 +483,21 @@ function createFixture(name: string): {
     manifest: {
       file: 'artifacts/microsoft-store/manifest.webmanifest',
       sha256: sha256(manifestBytes),
+      iconCount: 2,
+      icons: [
+        {
+          file: 'artifacts/microsoft-store/icon-192.png',
+          sha256: sha256(icon192Bytes),
+          width: 192,
+          height: 192,
+        },
+        {
+          file: 'artifacts/microsoft-store/icon-512.png',
+          sha256: sha256(icon512Bytes),
+          width: 512,
+          height: 512,
+        },
+      ],
     },
     listing: {
       locales: {
@@ -269,9 +526,12 @@ function createFixture(name: string): {
 function createRuntime(options: {
   readonly calls?: { url: string; init: RequestInit }[];
   readonly manifestResponses?: readonly Buffer[];
+  readonly iconResponses?: Readonly<Record<string, readonly Response[]>>;
+  readonly onIconRequest?: (url: string, requestIndex: number) => void;
   readonly packageResponse?: Response;
 } = {}): MicrosoftStorePackageGenerationRuntime {
   let manifestIndex = 0;
+  const iconIndexes = new Map<string, number>();
 
   return {
     fetch: (async (input, init = {}) => {
@@ -287,6 +547,15 @@ function createRuntime(options: {
         const value = values[Math.min(manifestIndex, values.length - 1)] ?? manifestBytes;
         manifestIndex += 1;
         return response(value, 'application/manifest+json');
+      }
+
+      if ((url === icon192Url || url === icon512Url) && (init.method ?? 'GET') === 'GET') {
+        const defaults = url === icon192Url ? icon192Bytes : icon512Bytes;
+        const values = options.iconResponses?.[url];
+        const index = iconIndexes.get(url) ?? 0;
+        iconIndexes.set(url, index + 1);
+        options.onIconRequest?.(url, index);
+        return values?.[Math.min(index, values.length - 1)] ?? response(defaults, 'image/png');
       }
 
       if (url === microsoftStorePackageGeneratorEndpoint && init.method === 'POST') {
@@ -346,6 +615,26 @@ function assertNoTemporaryArchive(outputFile: string): void {
   assert.deepEqual(
     readdirSync(directory).filter((entry) => entry.startsWith(`.${outputFile.split('/').at(-1)}.`)),
     [],
+  );
+}
+
+function assertNoGenerationOutputs(input: RunMicrosoftStorePackageGenerationInput): void {
+  assert.equal(existsSync(input.outputFile), false);
+  assert.equal(existsSync(input.jsonFile), false);
+  assert.equal(existsSync(input.markdownFile), false);
+  assertNoTemporaryArchive(input.outputFile);
+}
+
+function runCli(args: readonly string[]): SpawnSyncReturns<string> {
+  return spawnSync(
+    process.execPath,
+    ['tools/run-ttsx.mjs', '--mpgd-cli', 'packages/cli/src/bin.ts', ...args],
+    {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: process.env,
+      timeout: 30_000,
+    },
   );
 }
 
