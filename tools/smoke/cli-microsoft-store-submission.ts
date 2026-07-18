@@ -449,6 +449,17 @@ try {
     }),
     /artifact-relative URL/u,
   );
+  writeJson(manifestFile, { ...validManifest, start_url: './', scope: './game/' });
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'start-url-outside-scope.json'),
+      markdownFile: join(outputDir, 'start-url-outside-scope.md'),
+    }),
+    /start_url must stay within scope/u,
+  );
   writeJson(manifestFile, validManifest);
 
   rmSync(iconFile);

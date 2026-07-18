@@ -461,13 +461,17 @@ function parseManifest(input: unknown, artifactRoot: string): ParsedManifest {
     throw new Error('Web app manifest display must be standalone.');
   }
 
+  const startUrl = requireManifestUrl(manifest.start_url, 'web app manifest start_url');
+  const scope = requireManifestUrl(manifest.scope, 'web app manifest scope');
+  assertManifestStartUrlInsideScope(startUrl, scope);
+
   return {
     source: manifest,
     id: requireProductionString(manifest.id, 'web app manifest id'),
     name: requireProductionString(manifest.name, 'web app manifest name'),
     shortName: requireProductionString(manifest.short_name, 'web app manifest short_name'),
-    startUrl: requireManifestUrl(manifest.start_url, 'web app manifest start_url'),
-    scope: requireManifestUrl(manifest.scope, 'web app manifest scope'),
+    startUrl,
+    scope,
     icons: parsedIcons,
   };
 }
@@ -559,6 +563,22 @@ function requireManifestUrl(input: unknown, label: string): string {
   }
 
   return value;
+}
+
+function assertManifestStartUrlInsideScope(startUrl: string, scope: string): void {
+  const base = new URL('https://mpgd.invalid/');
+  const resolvedStartUrl = new URL(startUrl, base);
+  const resolvedScope = new URL(scope, base);
+  const scopePath = resolvedScope.pathname.endsWith('/')
+    ? resolvedScope.pathname
+    : `${resolvedScope.pathname}/`;
+
+  if (
+    resolvedStartUrl.pathname !== resolvedScope.pathname
+    && !resolvedStartUrl.pathname.startsWith(scopePath)
+  ) {
+    throw new Error('Web app manifest start_url must stay within scope.');
+  }
 }
 
 function readManifestAssetFile(artifactRoot: string, src: string, label: string): string {
