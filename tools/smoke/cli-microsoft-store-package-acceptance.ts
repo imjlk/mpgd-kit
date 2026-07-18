@@ -200,6 +200,16 @@ try {
   );
   certificationResult = 'PASS';
 
+  emittedPackageId = 'Different.Package';
+  assert.throws(
+    () => runMicrosoftStorePackageAcceptance(
+      { gameRoot, submissionEvidenceFile, packageFiles: [packageFile], outputDir },
+      runtime,
+    ),
+    /identity Name must be/u,
+  );
+  emittedPackageId = packageId;
+
   emittedPublisherId = 'CN=wrong-publisher';
   assert.throws(
     () => runMicrosoftStorePackageAcceptance(
