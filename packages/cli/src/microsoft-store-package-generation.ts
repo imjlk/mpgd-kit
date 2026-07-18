@@ -1,7 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import {
   closeSync,
+  copyFileSync,
   existsSync,
+  constants as fsConstants,
+  fstatSync,
   linkSync,
   lstatSync,
   mkdirSync,
@@ -9,6 +12,7 @@ import {
   renameSync,
   unlinkSync,
   writeFileSync,
+  type Stats,
 } from 'node:fs';
 import path from 'node:path';
 
@@ -159,13 +163,21 @@ interface MicrosoftStoreEvidenceFilePublication {
   readonly finalFile: string;
   readonly temporaryFile: string;
   readonly backupFile: string;
+  readonly lockFile: string;
   readonly contents: string;
   temporaryExists: boolean;
   backupExists: boolean;
-  publishedIdentity?: {
-    readonly dev: number;
-    readonly ino: number;
-  };
+  lockIdentity?: MicrosoftStoreEvidenceFileIdentity;
+  previousIdentity?: MicrosoftStoreEvidenceFileIdentity;
+  publishedIdentity?: MicrosoftStoreEvidenceFileIdentity;
+}
+
+interface MicrosoftStoreEvidenceFileIdentity {
+  readonly dev: number;
+  readonly ino: number;
+  readonly size: number;
+  readonly mtimeMs: number;
+  readonly ctimeMs: number;
 }
 
 function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
@@ -186,6 +198,10 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
   let completed = false;
 
   try {
+    for (const file of files) {
+      acquireEvidenceFileLock(file, transactionId);
+    }
+
     for (const file of files) {
       const descriptor = openSync(file.temporaryFile, 'wx', 0o600);
       file.temporaryExists = true;
@@ -210,15 +226,33 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
         );
       }
 
-      linkSync(file.finalFile, file.backupFile);
+      file.previousIdentity = evidenceFileIdentity(metadata);
+      copyFileSync(file.finalFile, file.backupFile, fsConstants.COPYFILE_EXCL);
       file.backupExists = true;
+
+      if (!fileMatchesIdentity(file.finalFile, file.previousIdentity)) {
+        throw new Error(
+          `Microsoft Store package generation evidence changed while it was backed up: ${file.finalFile}`,
+        );
+      }
     }
 
     for (const file of files) {
-      const metadata = lstatSync(file.temporaryFile);
-      renameSync(file.temporaryFile, file.finalFile);
+      if (file.previousIdentity === undefined) {
+        linkSync(file.temporaryFile, file.finalFile);
+        unlinkSync(file.temporaryFile);
+      } else {
+        if (!fileMatchesIdentity(file.finalFile, file.previousIdentity)) {
+          throw new Error(
+            `Microsoft Store package generation evidence changed before publication: ${file.finalFile}`,
+          );
+        }
+
+        renameSync(file.temporaryFile, file.finalFile);
+      }
+
       file.temporaryExists = false;
-      file.publishedIdentity = { dev: metadata.dev, ino: metadata.ino };
+      file.publishedIdentity = evidenceFileIdentity(lstatSync(file.finalFile));
     }
 
     completed = true;
@@ -237,6 +271,7 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
     for (const file of files) {
       unlinkIfPresent(file.temporaryFile, file.temporaryExists);
       unlinkIfPresent(file.backupFile, file.backupExists);
+      unlinkIfIdentityMatches(file.lockFile, file.lockIdentity);
     }
   }
 }
@@ -252,10 +287,40 @@ function createEvidenceFilePublication(
     finalFile,
     temporaryFile: path.join(path.dirname(finalFile), `${prefix}.tmp`),
     backupFile: path.join(path.dirname(finalFile), `${prefix}.bak`),
+    lockFile: path.join(
+      path.dirname(finalFile),
+      `.${path.basename(finalFile)}.mpgd-package-generation.lock`,
+    ),
     contents,
     temporaryExists: false,
     backupExists: false,
   };
+}
+
+function acquireEvidenceFileLock(
+  file: MicrosoftStoreEvidenceFilePublication,
+  transactionId: string,
+): void {
+  let descriptor: number;
+
+  try {
+    descriptor = openSync(file.lockFile, 'wx', 0o600);
+  } catch (error) {
+    if (hasErrorCode(error, 'EEXIST')) {
+      throw new Error(
+        `Microsoft Store package generation evidence is already being written: ${file.finalFile}`,
+      );
+    }
+
+    throw error;
+  }
+
+  try {
+    writeFileSync(descriptor, `${transactionId}\n`);
+    file.lockIdentity = evidenceFileIdentity(fstatSync(descriptor));
+  } finally {
+    closeSync(descriptor);
+  }
 }
 
 function rollbackEvidenceFilePublication(file: MicrosoftStoreEvidenceFilePublication): void {
@@ -299,16 +364,31 @@ function rollbackEvidenceFilePublication(file: MicrosoftStoreEvidenceFilePublica
 
 function fileMatchesIdentity(
   file: string,
-  expected: { readonly dev: number; readonly ino: number },
+  expected: MicrosoftStoreEvidenceFileIdentity,
 ): boolean {
   const metadata = lstatIfExists(file);
   return metadata !== undefined
     && expected.ino !== 0
     && metadata.dev === expected.dev
-    && metadata.ino === expected.ino;
+    && metadata.ino === expected.ino
+    && metadata.size === expected.size
+    && metadata.mtimeMs === expected.mtimeMs
+    && metadata.ctimeMs === expected.ctimeMs;
 }
 
-function lstatIfExists(file: string): ReturnType<typeof lstatSync> | undefined {
+function evidenceFileIdentity(
+  metadata: Stats,
+): MicrosoftStoreEvidenceFileIdentity {
+  return {
+    dev: metadata.dev,
+    ino: metadata.ino,
+    size: metadata.size,
+    mtimeMs: metadata.mtimeMs,
+    ctimeMs: metadata.ctimeMs,
+  };
+}
+
+function lstatIfExists(file: string): Stats | undefined {
   try {
     return lstatSync(file);
   } catch (error) {
@@ -329,6 +409,23 @@ function unlinkIfPresent(file: string, expectedToExist: boolean): void {
     unlinkSync(file);
   } catch {
     // Temporary cleanup must not invalidate otherwise consistent evidence outputs.
+  }
+}
+
+function unlinkIfIdentityMatches(
+  file: string,
+  expected: MicrosoftStoreEvidenceFileIdentity | undefined,
+): void {
+  if (expected === undefined) {
+    return;
+  }
+
+  try {
+    if (fileMatchesIdentity(file, expected)) {
+      unlinkSync(file);
+    }
+  } catch {
+    // Do not remove a lock whose ownership can no longer be proven.
   }
 }
 

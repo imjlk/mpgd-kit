@@ -744,7 +744,22 @@ try {
   assert.equal(existsSync(competingOutput.input.markdownFile), false);
   assertNoTemporaryArchive(competingOutput.input.outputFile);
 
+  const lockedEvidence = createFixture('locked-evidence');
+  const evidenceLockFile = join(
+    dirname(lockedEvidence.input.jsonFile),
+    `.${basename(lockedEvidence.input.jsonFile)}.mpgd-package-generation.lock`,
+  );
+  writeFileSync(evidenceLockFile, 'competing package generation\n');
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(lockedEvidence.input, createRuntime()),
+    /evidence is already being written/u,
+  );
+  assert.equal(readFileSync(evidenceLockFile, 'utf8'), 'competing package generation\n');
+  assertNoGenerationOutputs(lockedEvidence.input);
+
   const reportFailure = createFixture('report-failure');
+  const previousJsonEvidence = '{"previous":true}\n';
+  writeFileSync(reportFailure.input.jsonFile, previousJsonEvidence);
   await assert.rejects(
     runMicrosoftStorePackageGeneration(
       reportFailure.input,
@@ -757,7 +772,7 @@ try {
     /Failed to write Microsoft Store package generation evidence/u,
   );
   assert.equal(existsSync(reportFailure.input.outputFile), false);
-  assert.equal(existsSync(reportFailure.input.jsonFile), false);
+  assert.equal(readFileSync(reportFailure.input.jsonFile, 'utf8'), previousJsonEvidence);
   assert.equal(lstatSync(reportFailure.input.markdownFile).isDirectory(), true);
   assertNoTemporaryArchive(reportFailure.input.outputFile);
 
