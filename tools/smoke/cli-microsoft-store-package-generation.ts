@@ -23,9 +23,13 @@ import {
   type MicrosoftStorePackageGenerationRuntime,
   type RunMicrosoftStorePackageGenerationInput,
 } from '../../packages/cli/src/index';
-import { removeMicrosoftStoreEvidenceLockIfOwned } from '../../packages/cli/src/microsoft-store-package-generation';
+import {
+  microsoftStoreEvidenceFileMatchesIdentity,
+  removeMicrosoftStoreEvidenceLockIfOwned,
+} from '../../packages/cli/src/microsoft-store-package-generation';
 import {
   createMicrosoftStoreDispatcherFetch,
+  removeMicrosoftStorePackageZipIfOwned,
   resolveMicrosoftStorePublicAddresses,
 } from '../../packages/cli/src/microsoft-store-package-generation-download';
 import { hashMicrosoftStoreFileSnapshot } from '../../packages/cli/src/microsoft-store-package-generation-integrity';
@@ -209,6 +213,47 @@ try {
   assert.equal(evidence.archive.sha256, sha256(validArchive));
   assert.equal(evidence.packageInspectionRequired, true);
   assert.deepEqual(readFileSync(success.input.outputFile), validArchive);
+  const inodeFreeArchiveFile = join(success.gameRoot, 'inode-free-package.zip');
+  writeFileSync(inodeFreeArchiveFile, validArchive);
+  const inodeFreeArchiveMetadata = lstatSync(inodeFreeArchiveFile);
+  const inodeFreeArchiveIdentity = {
+    dev: inodeFreeArchiveMetadata.dev,
+    ino: 0,
+    sizeBytes: validArchive.length,
+    sha256: sha256(validArchive),
+  };
+  const mismatchedArchiveIdentity = { ...inodeFreeArchiveIdentity, sha256: '0'.repeat(64) };
+  removeMicrosoftStorePackageZipIfOwned(inodeFreeArchiveFile, mismatchedArchiveIdentity);
+  assert.equal(existsSync(inodeFreeArchiveFile), true);
+  removeMicrosoftStorePackageZipIfOwned(inodeFreeArchiveFile, inodeFreeArchiveIdentity);
+  assert.equal(existsSync(inodeFreeArchiveFile), false);
+  const inodeFreeEvidenceFile = join(success.gameRoot, 'inode-free-evidence.json');
+  const inodeFreeEvidenceBytes = Buffer.from('{"owned":true}\n');
+  writeFileSync(inodeFreeEvidenceFile, inodeFreeEvidenceBytes);
+  const inodeFreeEvidenceMetadata = lstatSync(inodeFreeEvidenceFile);
+  const inodeFreeEvidenceIdentity = {
+    dev: inodeFreeEvidenceMetadata.dev,
+    ino: 0,
+    sizeBytes: inodeFreeEvidenceBytes.length,
+    sha256: sha256(inodeFreeEvidenceBytes),
+    mtimeMs: inodeFreeEvidenceMetadata.mtimeMs,
+    ctimeMs: inodeFreeEvidenceMetadata.ctimeMs,
+  };
+  const evidenceIdentityMatches = microsoftStoreEvidenceFileMatchesIdentity(
+    inodeFreeEvidenceFile,
+    inodeFreeEvidenceIdentity,
+  );
+  const mismatchedEvidenceIdentity = {
+    ...inodeFreeEvidenceIdentity,
+    sha256: '0'.repeat(64),
+  };
+  const mismatchedEvidenceMatches = microsoftStoreEvidenceFileMatchesIdentity(
+    inodeFreeEvidenceFile,
+    mismatchedEvidenceIdentity,
+  );
+  assert.equal(evidenceIdentityMatches, true);
+  assert.equal(mismatchedEvidenceMatches, false);
+  rmSync(inodeFreeEvidenceFile);
   assert.equal(calls.length, 7);
   assert.deepEqual(
     calls.map((call) => call.url),

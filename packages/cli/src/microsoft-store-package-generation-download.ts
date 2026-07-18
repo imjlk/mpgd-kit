@@ -57,7 +57,7 @@ interface WithMicrosoftStorePackageArchiveInput {
   readonly assertInputsUnchanged: () => void;
 }
 
-interface MicrosoftStorePublishedFileIdentity {
+interface MicrosoftStorePublishedFileIdentity extends MicrosoftStoreFileSnapshot {
   readonly dev: number;
   readonly ino: number;
 }
@@ -367,10 +367,6 @@ export async function withMicrosoftStorePackageArchive<Result>(
       );
     }
 
-    publishedOutputIdentity = {
-      dev: temporaryMetadata.dev,
-      ino: temporaryMetadata.ino,
-    };
     unlinkSync(temporaryFile);
     temporaryFileExists = false;
     const outputSnapshot = hashMicrosoftStoreFileSnapshot(
@@ -384,6 +380,12 @@ export async function withMicrosoftStorePackageArchive<Result>(
     ) {
       throw new Error('Microsoft Store package ZIP changed during atomic publication.');
     }
+
+    publishedOutputIdentity = {
+      dev: temporaryMetadata.dev,
+      ino: temporaryMetadata.ino,
+      ...outputSnapshot,
+    };
 
     const result = await consume(outputSnapshot);
     completed = true;
@@ -399,7 +401,7 @@ export async function withMicrosoftStorePackageArchive<Result>(
 
     if (publishedOutputIdentity !== undefined && !completed) {
       try {
-        unlinkIfIdentityMatches(input.outputFile, publishedOutputIdentity);
+        removeMicrosoftStorePackageZipIfOwned(input.outputFile, publishedOutputIdentity);
       } catch {
         // Best-effort cleanup must not mask the package generation failure.
       }
@@ -632,7 +634,7 @@ function readContentLength(response: Response, label: string): number | undefine
   return length;
 }
 
-function unlinkIfIdentityMatches(
+export function removeMicrosoftStorePackageZipIfOwned(
   file: string,
   expected: MicrosoftStorePublishedFileIdentity,
 ): void {
@@ -648,11 +650,27 @@ function unlinkIfIdentityMatches(
     throw error;
   }
 
-  // Windows may report ino=0, which means identity is unavailable rather than equal.
   if (
     expected.ino !== 0
     && metadata.dev === expected.dev
     && metadata.ino === expected.ino
+  ) {
+    unlinkSync(file);
+    return;
+  }
+
+  if (expected.ino !== 0 || !metadata.isFile() || metadata.dev !== expected.dev) {
+    return;
+  }
+
+  const actual = hashMicrosoftStoreFileSnapshot(
+    file,
+    'published Microsoft Store package ZIP cleanup',
+  );
+
+  if (
+    actual.sizeBytes === expected.sizeBytes
+    && actual.sha256 === expected.sha256
   ) {
     unlinkSync(file);
   }

@@ -27,6 +27,7 @@ import {
   microsoftStorePackageGenerationSchemaVersion,
   microsoftStorePackageGeneratorEndpoint,
   microsoftStorePackageGeneratorSourceRevision,
+  type MicrosoftStoreFileSnapshot,
   type MicrosoftStorePackageGenerationEvidence,
   type MicrosoftStorePackageGenerationRuntime,
   type MicrosoftStorePackageGeneratorRequest,
@@ -40,7 +41,10 @@ import {
   assertMicrosoftStorePackageGenerationInputUnchanged,
   prepareMicrosoftStorePackageGenerationInput,
 } from './microsoft-store-package-generation-input.js';
-import { hashMicrosoftStoreBytes } from './microsoft-store-package-generation-integrity.js';
+import {
+  hashMicrosoftStoreBytes,
+  hashMicrosoftStoreFileSnapshot,
+} from './microsoft-store-package-generation-integrity.js';
 
 export {
   microsoftStorePackageGenerationSchemaVersion,
@@ -166,6 +170,7 @@ interface MicrosoftStoreEvidenceFilePublication {
   readonly backupFile: string;
   readonly lockFile: string;
   readonly contents: string;
+  readonly contentsSnapshot: MicrosoftStoreFileSnapshot;
   temporaryExists: boolean;
   backupExists: boolean;
   lockIdentity?: MicrosoftStoreFileNodeIdentity;
@@ -179,8 +184,8 @@ interface MicrosoftStoreFileNodeIdentity {
   readonly ino: number;
 }
 
-interface MicrosoftStoreEvidenceFileIdentity extends MicrosoftStoreFileNodeIdentity {
-  readonly size: number;
+interface MicrosoftStoreEvidenceFileIdentity
+  extends MicrosoftStoreFileNodeIdentity, MicrosoftStoreFileSnapshot {
   readonly mtimeMs: number;
   readonly ctimeMs: number;
 }
@@ -231,11 +236,15 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
         );
       }
 
-      file.previousIdentity = evidenceFileIdentity(metadata);
       copyFileSync(file.finalFile, file.backupFile, fsConstants.COPYFILE_EXCL);
       file.backupExists = true;
+      const backupSnapshot = hashMicrosoftStoreFileSnapshot(
+        file.backupFile,
+        'Microsoft Store package generation evidence backup',
+      );
+      file.previousIdentity = evidenceFileIdentity(metadata, backupSnapshot);
 
-      if (!fileMatchesIdentity(file.finalFile, file.previousIdentity)) {
+      if (!microsoftStoreEvidenceFileMatchesIdentity(file.finalFile, file.previousIdentity)) {
         throw new Error(
           `Microsoft Store package generation evidence changed while it was backed up: ${file.finalFile}`,
         );
@@ -247,7 +256,7 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
         linkSync(file.temporaryFile, file.finalFile);
         unlinkSync(file.temporaryFile);
       } else {
-        if (!fileMatchesIdentity(file.finalFile, file.previousIdentity)) {
+        if (!microsoftStoreEvidenceFileMatchesIdentity(file.finalFile, file.previousIdentity)) {
           throw new Error(
             `Microsoft Store package generation evidence changed before publication: ${file.finalFile}`,
           );
@@ -257,7 +266,10 @@ function writeMicrosoftStorePackageGenerationEvidenceFiles(input: {
       }
 
       file.temporaryExists = false;
-      file.publishedIdentity = evidenceFileIdentity(lstatSync(file.finalFile));
+      file.publishedIdentity = evidenceFileIdentity(
+        lstatSync(file.finalFile),
+        file.contentsSnapshot,
+      );
     }
 
     completed = true;
@@ -287,6 +299,7 @@ function createEvidenceFilePublication(
   transactionId: string,
 ): MicrosoftStoreEvidenceFilePublication {
   const prefix = `.${path.basename(finalFile)}.${transactionId}`;
+  const contentsBytes = Buffer.from(contents);
 
   return {
     finalFile,
@@ -297,6 +310,10 @@ function createEvidenceFilePublication(
       `.${path.basename(finalFile)}.mpgd-package-generation.lock`,
     ),
     contents,
+    contentsSnapshot: {
+      sizeBytes: contentsBytes.length,
+      sha256: hashMicrosoftStoreBytes(contentsBytes),
+    },
     temporaryExists: false,
     backupExists: false,
   };
@@ -347,7 +364,10 @@ function rollbackEvidenceFilePublication(file: MicrosoftStoreEvidenceFilePublica
   let matchesIdentity = false;
 
   try {
-    matchesIdentity = fileMatchesIdentity(file.finalFile, file.publishedIdentity);
+    matchesIdentity = microsoftStoreEvidenceFileMatchesIdentity(
+      file.finalFile,
+      file.publishedIdentity,
+    );
   } catch {
     // Preserve the backup for manual recovery when rollback inspection fails.
     file.backupExists = false;
@@ -378,16 +398,29 @@ function rollbackEvidenceFilePublication(file: MicrosoftStoreEvidenceFilePublica
   }
 }
 
-function fileMatchesIdentity(
+export function microsoftStoreEvidenceFileMatchesIdentity(
   file: string,
   expected: MicrosoftStoreEvidenceFileIdentity,
 ): boolean {
   const metadata = lstatIfExists(file);
-  return metadata !== undefined
-    && metadataMatchesNodeIdentity(metadata, expected)
-    && metadata.size === expected.size
-    && metadata.mtimeMs === expected.mtimeMs
-    && metadata.ctimeMs === expected.ctimeMs;
+
+  if (metadata === undefined || !metadata.isFile() || metadata.dev !== expected.dev) {
+    return false;
+  }
+
+  if (expected.ino !== 0) {
+    return metadata.ino === expected.ino
+      && metadata.size === expected.sizeBytes
+      && metadata.mtimeMs === expected.mtimeMs
+      && metadata.ctimeMs === expected.ctimeMs;
+  }
+
+  const actual = hashMicrosoftStoreFileSnapshot(
+    file,
+    'Microsoft Store package generation evidence ownership check',
+  );
+  return actual.sizeBytes === expected.sizeBytes
+    && actual.sha256 === expected.sha256;
 }
 
 function fileNodeIdentity(metadata: Stats): MicrosoftStoreFileNodeIdentity {
@@ -405,11 +438,12 @@ function metadataMatchesNodeIdentity(
 
 function evidenceFileIdentity(
   metadata: Stats,
+  snapshot: MicrosoftStoreFileSnapshot,
 ): MicrosoftStoreEvidenceFileIdentity {
   return {
     dev: metadata.dev,
     ino: metadata.ino,
-    size: metadata.size,
+    ...snapshot,
     mtimeMs: metadata.mtimeMs,
     ctimeMs: metadata.ctimeMs,
   };
