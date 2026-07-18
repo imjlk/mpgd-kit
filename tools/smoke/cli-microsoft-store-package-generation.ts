@@ -572,6 +572,7 @@ try {
         },
       }),
     ),
+    /Failed to write Microsoft Store package generation evidence/u,
   );
   assert.equal(existsSync(reportFailure.input.outputFile), false);
   assert.equal(existsSync(reportFailure.input.jsonFile), false);
