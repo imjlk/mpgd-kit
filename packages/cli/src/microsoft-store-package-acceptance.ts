@@ -63,11 +63,13 @@ export interface MicrosoftStorePackageAcceptanceEvidence {
     readonly sha256: string;
     readonly identity: MicrosoftStorePackageIdentity;
     readonly payloadIdentities: readonly MicrosoftStorePackageIdentity[];
-    readonly certification: {
-      readonly result: 'PASS';
-      readonly reportFile: string;
-      readonly reportSha256: string;
-    };
+    readonly certification:
+      | { readonly result: 'NOT_RUN' }
+      | {
+          readonly result: 'PASS';
+          readonly reportFile: string;
+          readonly reportSha256: string;
+        };
   }[];
 }
 
@@ -80,7 +82,7 @@ export interface RunMicrosoftStorePackageAcceptanceInput {
 
 export interface MicrosoftStorePackageAcceptanceRuntime {
   readonly platform: NodeJS.Platform;
-  readonly appCertExecutable: string;
+  readonly appCertExecutable?: string;
   readonly makeAppxExecutable: string;
   readonly runCommand: (command: string, args: readonly string[]) => void;
 }
@@ -94,9 +96,7 @@ export function createMicrosoftStorePackageAcceptanceRuntime(
   input: CreateMicrosoftStorePackageAcceptanceRuntimeInput = {},
 ): MicrosoftStorePackageAcceptanceRuntime {
   if (process.platform !== 'win32') {
-    throw new Error(
-      'Microsoft Store package acceptance must run on Windows with the Windows SDK and an active user session.',
-    );
+    throw new Error('Microsoft Store package acceptance requires Windows and the Windows SDK.');
   }
 
   const windowsKitsDir = path.join(
@@ -104,18 +104,21 @@ export function createMicrosoftStorePackageAcceptanceRuntime(
     'Windows Kits',
     '10',
   );
-  const certificationKitDir = path.join(windowsKitsDir, 'App Certification Kit');
-  const appCertExecutable = readCanonicalTool(
-    input.appCertExecutable ?? path.join(certificationKitDir, 'appcert.exe'),
-    'Windows App Certification Kit executable',
-  );
+  let appCertExecutable: string | undefined;
+
+  if (input.appCertExecutable !== undefined) {
+    appCertExecutable = readCanonicalTool(
+      input.appCertExecutable,
+      'Windows App Certification Kit executable',
+    );
+  }
   const makeAppxExecutable = input.makeAppxExecutable === undefined
     ? findMicrosoftStoreMakeAppxExecutable(windowsKitsDir, process.arch)
     : readCanonicalTool(input.makeAppxExecutable, 'MakeAppx executable');
 
   return {
     platform: process.platform,
-    appCertExecutable,
+    ...(appCertExecutable === undefined ? {} : { appCertExecutable }),
     makeAppxExecutable,
     runCommand: runWindowsCommand,
   };
@@ -223,34 +226,13 @@ export function runMicrosoftStorePackageAcceptance(
         assertExpectedIdentity(identity, submissionEvidence.productIdentity);
       }
 
-      const reportFile = path.join(
-        outputDir,
-        `${String(index + 1).padStart(2, '0')}-${safeFileNameSegment(path.basename(packageFile))}.wack.xml`,
-      );
-
-      rmSync(reportFile, { force: true });
-      runtime.runCommand(runtime.appCertExecutable, ['reset']);
-      runtime.runCommand(runtime.appCertExecutable, [
-        'test',
-        '-appxpackagepath',
+      const certification = runOptionalWindowsAppCertification({
         packageFile,
-        '-reportoutputpath',
-        reportFile,
-      ]);
-
-      const canonicalReportFile = readCanonicalFileInside(
         outputDir,
-        reportFile,
-        'Windows App Certification Kit report',
-      );
-      const reportContents = readFileSync(canonicalReportFile);
-      const result = parseWindowsAppCertificationResult(
-        reportContents.toString('utf8'),
-      );
-
-      if (result !== 'PASS') {
-        throw new Error(`Windows App Certification Kit failed for ${packageFile}.`);
-      }
+        packageIndex: index,
+        runtime,
+        gameRoot,
+      });
 
       const acceptedPackageSnapshot = hashFileSnapshot(packageFile);
 
@@ -269,11 +251,7 @@ export function runMicrosoftStorePackageAcceptance(
         sha256: packageSnapshot.sha256,
         identity: inspected.identity,
         payloadIdentities: inspected.payloadIdentities,
-        certification: {
-          result,
-          reportFile: relativeOrAbsolute(gameRoot, canonicalReportFile),
-          reportSha256: hashBuffer(reportContents),
-        },
+        certification,
       };
     });
     const evidence: MicrosoftStorePackageAcceptanceEvidence = {
@@ -307,6 +285,53 @@ export function parseMicrosoftStorePackageIdentity(xml: string): MicrosoftStoreP
     name: requireXmlAttribute(attributes, 'Name'),
     publisher: requireXmlAttribute(attributes, 'Publisher'),
     version: requireXmlAttribute(attributes, 'Version'),
+  };
+}
+
+function runOptionalWindowsAppCertification(input: {
+  readonly packageFile: string;
+  readonly outputDir: string;
+  readonly packageIndex: number;
+  readonly runtime: MicrosoftStorePackageAcceptanceRuntime;
+  readonly gameRoot: string;
+}): MicrosoftStorePackageAcceptanceEvidence['packages'][number]['certification'] {
+  const appCertExecutable = input.runtime.appCertExecutable;
+
+  if (appCertExecutable === undefined) {
+    return { result: 'NOT_RUN' };
+  }
+
+  const reportFile = path.join(
+    input.outputDir,
+    `${String(input.packageIndex + 1).padStart(2, '0')}-${safeFileNameSegment(path.basename(input.packageFile))}.wack.xml`,
+  );
+
+  rmSync(reportFile, { force: true });
+  input.runtime.runCommand(appCertExecutable, ['reset']);
+  input.runtime.runCommand(appCertExecutable, [
+    'test',
+    '-appxpackagepath',
+    input.packageFile,
+    '-reportoutputpath',
+    reportFile,
+  ]);
+
+  const canonicalReportFile = readCanonicalFileInside(
+    input.outputDir,
+    reportFile,
+    'Windows App Certification Kit report',
+  );
+  const reportContents = readFileSync(canonicalReportFile);
+  const result = parseWindowsAppCertificationResult(reportContents.toString('utf8'));
+
+  if (result !== 'PASS') {
+    throw new Error(`Windows App Certification Kit failed for ${input.packageFile}.`);
+  }
+
+  return {
+    result,
+    reportFile: relativeOrAbsolute(input.gameRoot, canonicalReportFile),
+    reportSha256: hashBuffer(reportContents),
   };
 }
 
