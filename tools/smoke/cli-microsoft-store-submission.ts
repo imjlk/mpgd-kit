@@ -538,6 +538,7 @@ try {
     createPngWithDuplicatePalette(1366, 768),
     createPngWithPalette(1366, 768, 8, 0, 1),
     createPngWithPalette(1366, 768, 1, 3, 3),
+    createPngWithTrailingImageData(1366, 768),
     createPng(1366, 1366),
   ]) {
     writeFileSync(screenshotFile, invalidScreenshot);
@@ -709,6 +710,24 @@ function createPngWithEmptyImageData(width: number, height: number): Buffer {
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     createPngChunk('IHDR', header),
     createPngChunk('IDAT', Buffer.alloc(0)),
+    createPngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+function createPngWithTrailingImageData(width: number, height: number): Buffer {
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(width, 0);
+  header.writeUInt32BE(height, 4);
+  header[8] = 8;
+  header[9] = 6;
+  const rowLength = width * 4 + 1;
+  const pixels = Buffer.alloc(rowLength * height);
+  const imageData = Buffer.concat([deflateSync(pixels), Buffer.from([0])]);
+
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    createPngChunk('IHDR', header),
+    createPngChunk('IDAT', imageData),
     createPngChunk('IEND', Buffer.alloc(0)),
   ]);
 }

@@ -1083,10 +1083,23 @@ function assertDecodedPng(input: {
     throw new Error(`${input.label} decoded pixel data is too large: ${input.file}`);
   }
 
+  const compressedImageData = Buffer.concat(imageData);
   let decoded: Buffer;
 
   try {
-    decoded = inflateSync(Buffer.concat(imageData), { maxOutputLength: expectedBytes });
+    const result = inflateSync(compressedImageData, {
+      info: true,
+      maxOutputLength: expectedBytes,
+    }) as unknown as {
+      readonly buffer: Buffer;
+      readonly engine: { readonly bytesWritten: number };
+    };
+
+    if (result.engine.bytesWritten !== compressedImageData.length) {
+      throw new Error('trailing compressed bytes');
+    }
+
+    decoded = result.buffer;
   } catch {
     throw new Error(`${input.label} must be a valid PNG: ${input.file}`);
   }
