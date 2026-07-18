@@ -1206,6 +1206,7 @@ const targetCommand = defineI18n({
           readOptionalString(ctx.values['output-dir']) ?? 'release-output/microsoft-store',
         );
 
+        assertGameOwnedOutputDirectory(gameRoot, outputDir);
         resolveMicrosoftStoreArtifactRoot(targetsFile);
         const evidence = await runMicrosoftStorePackageGeneration({
           gameRoot,
