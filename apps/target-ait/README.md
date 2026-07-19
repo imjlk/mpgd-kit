@@ -6,7 +6,7 @@ Current scope:
 
 - SDK 2.x-compatible `granite.config.ts`
 - `ait build` script
-- SDK-backed anonymous game identity through `getAnonymousKey`
+- SDK-backed anonymous game identity through `getUserKeyForGame`
 - persistent progress through the native `Storage` API
 - SDK-backed sharing and Ads 2.0 callbacks
 - Game Center leaderboard bridge methods
@@ -20,11 +20,12 @@ The target build also mirrors the copied game's `assets` directory to
 `public/assets` so root-absolute runtime asset requests still resolve during
 local devtools, phone tunnel, and wrapper-web sessions without iframe embedding.
 
-The production bridge maps the stable mini-app-scoped `getAnonymousKey()` hash
+The production bridge maps the stable game-scoped `getUserKeyForGame()` hash
 to `PlatformGateway.identity.getPlayer()` and serializes gateway storage values
 through the native `Storage` API. The `dev:plain` script enables a local identity
 provider explicitly with `VITE_MPGD_AIT_MOCK_IDENTITY=1`; release builds never
-use that fixed local player id. Game Center requires Toss app 5.221.0 or newer.
+use that fixed local player id. Game identity requires Toss app 5.232.0 or newer,
+while Game Center requires Toss app 5.221.0 or newer.
 SDK results must still be verified with a QR test in the Toss app.
 
 Purchases remain unavailable in the reference host. Rewarded Ads 2.0 must be

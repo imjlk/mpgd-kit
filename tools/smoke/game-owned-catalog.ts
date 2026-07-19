@@ -450,6 +450,7 @@ async function assertVitePlatformTargetMetadata(): Promise<void> {
   const expectedMetadata = {
     kind: 'apps-in-toss',
     adapter: 'ait',
+    authoritativeGameServices: false,
     integrations: {
       presentation: 'disabled',
       presentationMode: 'inline-expanded',

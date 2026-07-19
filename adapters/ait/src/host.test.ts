@@ -1,11 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import type { BridgeRequest } from '@mpgd/bridge';
 
 import { createAitHostBridge, shareIntent, type AitHostDependencies } from './host';
 
 describe('AIT production host bridge', () => {
-  it('uses the native anonymous identity and persistent string storage', async () => {
+  it('uses the native game identity and persistent string storage', async () => {
     const values = new Map<string, string>();
     const bridge = createAitHostBridge({
       dependencies: createDependencies({
@@ -41,7 +41,7 @@ describe('AIT production host bridge', () => {
     });
   });
 
-  it('fails closed when the native anonymous identity is invalid', async () => {
+  it('fails closed when the native game identity is invalid', async () => {
     const bridge = createAitHostBridge({
       dependencies: createDependencies({ identityProvider: async () => ({ type: 'HASH' }) }),
     });
@@ -89,9 +89,62 @@ describe('AIT production host bridge', () => {
     })).resolves.toEqual({ status: 'unavailable', rewardGranted: false });
   });
 
+  it('returns a protocol error for a malformed runtime bridge call', async () => {
+    const bridge = createAitHostBridge({ dependencies: createDependencies() });
+    const response: unknown = await Reflect.apply(bridge.request, bridge, [null]);
+    const legacyResponse: unknown = await Reflect.apply(bridge.request, bridge, [{
+      id: 'legacy-request',
+      method: 'runtime.getCapabilities',
+      payload: {},
+    }]);
+
+    expect(response).toMatchObject({
+      id: 'ait-invalid-request',
+      ok: false,
+      error: {
+        code: 'AIT_BRIDGE_REQUEST_FAILED',
+        retryable: true,
+      },
+    });
+    expect(legacyResponse).toMatchObject({
+      id: 'legacy-request',
+      ok: false,
+      error: { code: 'AIT_BRIDGE_REQUEST_FAILED' },
+    });
+  });
+
+  it('treats a configured preload as a no-op when Ads 2.0 is unsupported', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const bridge = createAitHostBridge({
+        adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
+        adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
+        dependencies: createDependencies(),
+      });
+
+      await expect(request(bridge, 'ads.preload', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+      })).resolves.toEqual({});
+      await expect(request(bridge, 'ads.preload', {
+        placementId: 'UNKNOWN_PLACEMENT',
+      })).rejects.toThrow('AIT ad placement is unavailable: UNKNOWN_PLACEMENT');
+      expect(warning).toHaveBeenCalledOnce();
+      expect(warning).toHaveBeenCalledWith(
+        'AIT full-screen ads are not supported; configured preload is a no-op.',
+        'SUDOKU_HINT_REWARDED',
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it('grants a configured rewarded ad only after userEarnedReward and dismissal', async () => {
     let loadCallbacks: LoadAdCallbacks | undefined;
     let showCallbacks: ShowAdCallbacks | undefined;
+    let markShowRegistered = (): void => {};
+    const showRegistered = new Promise<void>((resolve) => {
+      markShowRegistered = resolve;
+    });
     const dependencies = createDependencies({
       loadFullScreenAd: Object.assign(
         (callbacks: LoadAdCallbacks) => {
@@ -103,6 +156,7 @@ describe('AIT production host bridge', () => {
       showFullScreenAd: Object.assign(
         (callbacks: ShowAdCallbacks) => {
           showCallbacks = callbacks;
+          markShowRegistered();
           return () => {};
         },
         { isSupported: () => true },
@@ -122,6 +176,7 @@ describe('AIT production host bridge', () => {
       placementId: 'SUDOKU_HINT_REWARDED',
       idempotencyKey: 'reward-correlation-1',
     });
+    await showRegistered;
     showCallbacks?.onEvent({
       type: 'userEarnedReward',
       data: { unitType: 'hint', unitAmount: 1 },
@@ -143,9 +198,377 @@ describe('AIT production host bridge', () => {
     });
   });
 
-  it('does not grant a reward when the ad is dismissed without the reward event', async () => {
+  it('preserves an earned reward during a long displayed ad', async () => {
+    vi.useFakeTimers();
+    try {
+      let loadCallbacks: LoadAdCallbacks | undefined;
+      let showCallbacks: ShowAdCallbacks | undefined;
+      let markShowRegistered = (): void => {};
+      const showRegistered = new Promise<void>((resolve) => {
+        markShowRegistered = resolve;
+      });
+      const bridge = createAitHostBridge({
+        adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
+        adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
+        adTimeoutMs: 50,
+        adDisplayStartTimeoutMs: 100,
+        dependencies: createDependencies({
+          loadFullScreenAd: Object.assign(
+            (callbacks: LoadAdCallbacks) => {
+              loadCallbacks = callbacks;
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+          showFullScreenAd: Object.assign(
+            (callbacks: ShowAdCallbacks) => {
+              showCallbacks = callbacks;
+              markShowRegistered();
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+        }),
+      });
+
+      const preload = request(bridge, 'ads.preload', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+      });
+      loadCallbacks?.onEvent({ type: 'loaded' });
+      await preload;
+
+      const reward = request(bridge, 'ads.showRewarded', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+        idempotencyKey: 'reward-long-display',
+      });
+      await showRegistered;
+      showCallbacks?.onEvent({ type: 'show' });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      showCallbacks?.onEvent({
+        type: 'userEarnedReward',
+        data: { unitType: 'hint', unitAmount: 1 },
+      });
+      showCallbacks?.onEvent({ type: 'dismissed' });
+
+      await expect(reward).resolves.toMatchObject({
+        status: 'completed',
+        rewardGranted: true,
+        ledgerEntryId: 'reward-long-display',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reports a long displayed interstitial after native dismissal', async () => {
+    vi.useFakeTimers();
+    try {
+      let loadCallbacks: LoadAdCallbacks | undefined;
+      let showCallbacks: ShowAdCallbacks | undefined;
+      let markShowRegistered = (): void => {};
+      const showRegistered = new Promise<void>((resolve) => {
+        markShowRegistered = resolve;
+      });
+      const bridge = createAitHostBridge({
+        adGroupIds: { SUDOKU_BREAK_INTERSTITIAL: 'ait-ad-group-interstitial' },
+        adPlacementTypes: { SUDOKU_BREAK_INTERSTITIAL: 'interstitial' },
+        adTimeoutMs: 50,
+        adDisplayStartTimeoutMs: 100,
+        dependencies: createDependencies({
+          loadFullScreenAd: Object.assign(
+            (callbacks: LoadAdCallbacks) => {
+              loadCallbacks = callbacks;
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+          showFullScreenAd: Object.assign(
+            (callbacks: ShowAdCallbacks) => {
+              showCallbacks = callbacks;
+              markShowRegistered();
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+        }),
+      });
+
+      const preload = request(bridge, 'ads.preload', {
+        placementId: 'SUDOKU_BREAK_INTERSTITIAL',
+      });
+      loadCallbacks?.onEvent({ type: 'loaded' });
+      await preload;
+
+      const interstitial = request(bridge, 'ads.showInterstitial', {
+        placementId: 'SUDOKU_BREAK_INTERSTITIAL',
+      });
+      await showRegistered;
+      showCallbacks?.onEvent({ type: 'show' });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      showCallbacks?.onEvent({ type: 'dismissed' });
+
+      await expect(interstitial).resolves.toEqual({ status: 'shown' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('recovers a rewarded ad when the native terminal callback is omitted', async () => {
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      let loadCallbacks: LoadAdCallbacks | undefined;
+      let showCallbacks: ShowAdCallbacks | undefined;
+      let markShowRegistered = (): void => {};
+      const showRegistered = new Promise<void>((resolve) => {
+        markShowRegistered = resolve;
+      });
+      const bridge = createAitHostBridge({
+        adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
+        adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
+        adTimeoutMs: 50,
+        adMaximumDisplayMs: 100,
+        dependencies: createDependencies({
+          loadFullScreenAd: Object.assign(
+            (callbacks: LoadAdCallbacks) => {
+              loadCallbacks = callbacks;
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+          showFullScreenAd: Object.assign(
+            (callbacks: ShowAdCallbacks) => {
+              showCallbacks = callbacks;
+              markShowRegistered();
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+        }),
+      });
+
+      const preload = request(bridge, 'ads.preload', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+      });
+      loadCallbacks?.onEvent({ type: 'loaded' });
+      await preload;
+
+      const reward = request(bridge, 'ads.showRewarded', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+        idempotencyKey: 'reward-missing-dismissal',
+      });
+      await showRegistered;
+      showCallbacks?.onEvent({ type: 'show' });
+      showCallbacks?.onEvent({
+        type: 'userEarnedReward',
+        data: { unitType: 'hint', unitAmount: 1 },
+      });
+      await vi.advanceTimersByTimeAsync(100);
+
+      await expect(reward).resolves.toMatchObject({
+        status: 'completed',
+        rewardGranted: true,
+        ledgerEntryId: 'reward-missing-dismissal',
+      });
+      expect(warning).toHaveBeenCalledWith(
+        'AIT full-screen ad omitted its terminal callback; recovering the game lifecycle.',
+        'ait-ad-group-1',
+      );
+    } finally {
+      warning.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the requested-to-display wait inside the total show timeout', async () => {
+    vi.useFakeTimers();
+    try {
+      let loadCallbacks: LoadAdCallbacks | undefined;
+      let showCallbacks: ShowAdCallbacks | undefined;
+      let markShowRegistered = (): void => {};
+      const showRegistered = new Promise<void>((resolve) => {
+        markShowRegistered = resolve;
+      });
+      const bridge = createAitHostBridge({
+        adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
+        adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
+        adTimeoutMs: 50,
+        adDisplayStartTimeoutMs: 100,
+        dependencies: createDependencies({
+          loadFullScreenAd: Object.assign(
+            (callbacks: LoadAdCallbacks) => {
+              loadCallbacks = callbacks;
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+          showFullScreenAd: Object.assign(
+            (callbacks: ShowAdCallbacks) => {
+              showCallbacks = callbacks;
+              markShowRegistered();
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+        }),
+      });
+
+      const preload = request(bridge, 'ads.preload', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+      });
+      loadCallbacks?.onEvent({ type: 'loaded' });
+      await preload;
+
+      const reward = request(bridge, 'ads.showRewarded', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+        idempotencyKey: 'reward-total-timeout',
+      });
+      await showRegistered;
+      await vi.advanceTimersByTimeAsync(40);
+      showCallbacks?.onEvent({ type: 'requested' });
+      await vi.advanceTimersByTimeAsync(10);
+
+      await expect(reward).resolves.toEqual({ status: 'failed', rewardGranted: false });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats a shared explicit preload failure as non-fatal and logs it once', async () => {
+    let loadCallbacks: LoadAdCallbacks | undefined;
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const bridge = createAitHostBridge({
+        adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
+        adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
+        dependencies: createDependencies({
+          loadFullScreenAd: Object.assign(
+            (callbacks: LoadAdCallbacks) => {
+              loadCallbacks = callbacks;
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+        }),
+      });
+
+      const firstPreload = request(bridge, 'ads.preload', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+      });
+      const secondPreload = request(bridge, 'ads.preload', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+      });
+      loadCallbacks?.onError(new Error('native load failed'));
+
+      await expect(firstPreload).resolves.toEqual({});
+      await expect(secondPreload).resolves.toEqual({});
+      expect(warning).toHaveBeenCalledTimes(1);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it('serializes native loads for different full-screen ad groups', async () => {
+    const loads: Array<{
+      readonly adGroupId: string;
+      readonly callbacks: LoadAdCallbacks;
+    }> = [];
+    const bridge = createAitHostBridge({
+      adGroupIds: {
+        SUDOKU_HINT_REWARDED: 'ait-ad-group-rewarded',
+        SUDOKU_BREAK_INTERSTITIAL: 'ait-ad-group-interstitial',
+      },
+      adPlacementTypes: {
+        SUDOKU_HINT_REWARDED: 'rewarded',
+        SUDOKU_BREAK_INTERSTITIAL: 'interstitial',
+      },
+      dependencies: createDependencies({
+        loadFullScreenAd: Object.assign(
+          (callbacks: LoadAdCallbacks) => {
+            loads.push({ adGroupId: callbacks.options?.adGroupId ?? 'missing-ad-group', callbacks });
+            return () => {};
+          },
+          { isSupported: () => true },
+        ),
+      }),
+    });
+
+    const rewardedPreload = request(bridge, 'ads.preload', {
+      placementId: 'SUDOKU_HINT_REWARDED',
+    });
+    const interstitialPreload = request(bridge, 'ads.preload', {
+      placementId: 'SUDOKU_BREAK_INTERSTITIAL',
+    });
+
+    expect(loads.map(({ adGroupId }) => adGroupId)).toEqual(['ait-ad-group-rewarded']);
+    loads[0]?.callbacks.onEvent({ type: 'loaded' });
+    await rewardedPreload;
+    await vi.waitFor(() => {
+      expect(loads.map(({ adGroupId }) => adGroupId)).toEqual([
+        'ait-ad-group-rewarded',
+        'ait-ad-group-interstitial',
+      ]);
+    });
+    loads[1]?.callbacks.onEvent({ type: 'loaded' });
+
+    await expect(interstitialPreload).resolves.toEqual({});
+  });
+
+  it('does not let a hung native load extend the next group timeout', async () => {
+    vi.useFakeTimers();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const nativeLoadGroups: string[] = [];
+      const bridge = createAitHostBridge({
+        adGroupIds: {
+          SUDOKU_HINT_REWARDED: 'ait-ad-group-rewarded',
+          SUDOKU_BREAK_INTERSTITIAL: 'ait-ad-group-interstitial',
+        },
+        adPlacementTypes: {
+          SUDOKU_HINT_REWARDED: 'rewarded',
+          SUDOKU_BREAK_INTERSTITIAL: 'interstitial',
+        },
+        adTimeoutMs: 50,
+        adLoadQueueTimeoutMs: 20,
+        dependencies: createDependencies({
+          loadFullScreenAd: Object.assign(
+            (callbacks: LoadAdCallbacks) => {
+              nativeLoadGroups.push(callbacks.options?.adGroupId ?? 'missing-ad-group');
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+        }),
+      });
+
+      const rewardedPreload = request(bridge, 'ads.preload', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+      });
+      const interstitialPreload = request(bridge, 'ads.preload', {
+        placementId: 'SUDOKU_BREAK_INTERSTITIAL',
+      });
+      await vi.advanceTimersByTimeAsync(20);
+
+      await expect(interstitialPreload).resolves.toEqual({});
+      expect(nativeLoadGroups).toEqual(['ait-ad-group-rewarded']);
+      expect(warning).toHaveBeenCalledOnce();
+
+      await vi.advanceTimersByTimeAsync(30);
+      await expect(rewardedPreload).resolves.toEqual({});
+      expect(warning).toHaveBeenCalledTimes(2);
+    } finally {
+      warning.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('loads a configured rewarded ad before a direct show request', async () => {
     let loadCallbacks: LoadAdCallbacks | undefined;
     let showCallbacks: ShowAdCallbacks | undefined;
+    let markShowRegistered = (): void => {};
+    const showRegistered = new Promise<void>((resolve) => {
+      markShowRegistered = resolve;
+    });
     const bridge = createAitHostBridge({
       adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
       adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
@@ -160,6 +583,104 @@ describe('AIT production host bridge', () => {
         showFullScreenAd: Object.assign(
           (callbacks: ShowAdCallbacks) => {
             showCallbacks = callbacks;
+            markShowRegistered();
+            return () => {};
+          },
+          { isSupported: () => true },
+        ),
+      }),
+    });
+
+    const reward = request(bridge, 'ads.showRewarded', {
+      placementId: 'SUDOKU_HINT_REWARDED',
+      idempotencyKey: 'reward-direct-show',
+    });
+
+    expect(loadCallbacks).toBeDefined();
+    expect(showCallbacks).toBeUndefined();
+    loadCallbacks?.onEvent({ type: 'loaded' });
+    await showRegistered;
+    showCallbacks?.onEvent({
+      type: 'userEarnedReward',
+      data: { unitType: 'hint', unitAmount: 1 },
+    });
+    showCallbacks?.onEvent({ type: 'dismissed' });
+
+    await expect(reward).resolves.toMatchObject({
+      status: 'completed',
+      rewardGranted: true,
+      ledgerEntryId: 'reward-direct-show',
+    });
+  });
+
+  it('logs one diagnostic when concurrent shows share a failed ad load', async () => {
+    let loadCallbacks: LoadAdCallbacks | undefined;
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const bridge = createAitHostBridge({
+        adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
+        adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
+        dependencies: createDependencies({
+          loadFullScreenAd: Object.assign(
+            (callbacks: LoadAdCallbacks) => {
+              loadCallbacks = callbacks;
+              return () => {};
+            },
+            { isSupported: () => true },
+          ),
+          showFullScreenAd: Object.assign(
+            () => () => {},
+            { isSupported: () => true },
+          ),
+        }),
+      });
+
+      const firstShow = request(bridge, 'ads.showRewarded', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+        idempotencyKey: 'reward-load-failure-1',
+      });
+      const secondShow = request(bridge, 'ads.showRewarded', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+        idempotencyKey: 'reward-load-failure-2',
+      });
+      loadCallbacks?.onError(new Error('native load failed'));
+
+      await expect(firstShow).resolves.toEqual({
+        status: 'unavailable',
+        rewardGranted: false,
+      });
+      await expect(secondShow).resolves.toEqual({
+        status: 'unavailable',
+        rewardGranted: false,
+      });
+      expect(warning).toHaveBeenCalledTimes(1);
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it('does not grant a reward when the ad is dismissed without the reward event', async () => {
+    let loadCallbacks: LoadAdCallbacks | undefined;
+    let showCallbacks: ShowAdCallbacks | undefined;
+    let markShowRegistered = (): void => {};
+    const showRegistered = new Promise<void>((resolve) => {
+      markShowRegistered = resolve;
+    });
+    const bridge = createAitHostBridge({
+      adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
+      adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
+      dependencies: createDependencies({
+        loadFullScreenAd: Object.assign(
+          (callbacks: LoadAdCallbacks) => {
+            loadCallbacks = callbacks;
+            return () => {};
+          },
+          { isSupported: () => true },
+        ),
+        showFullScreenAd: Object.assign(
+          (callbacks: ShowAdCallbacks) => {
+            showCallbacks = callbacks;
+            markShowRegistered();
             return () => {};
           },
           { isSupported: () => true },
@@ -174,6 +695,7 @@ describe('AIT production host bridge', () => {
       placementId: 'SUDOKU_HINT_REWARDED',
       idempotencyKey: 'reward-correlation-2',
     });
+    await showRegistered;
     showCallbacks?.onEvent({ type: 'dismissed' });
 
     await expect(reward).resolves.toEqual({ status: 'skipped', rewardGranted: false });
