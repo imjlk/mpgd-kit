@@ -1,5 +1,13 @@
 # @mpgd/cli
 
+## 0.14.0 — 2026-07-19
+
+### Added
+
+- [dd2ad0c](https://github.com/imjlk/mpgd-kit/commit/dd2ad0cd4c2cffad32e3b38b50d3ab3b15daaefc) Add Windows package acceptance that verifies MSIX and AppX identity against submission evidence, records package hashes, and can optionally run the recommended Windows App Certification Kit check with report hashing. — Thanks @imjlk!
+- [3b6e93a](https://github.com/imjlk/mpgd-kit/commit/3b6e93a025162253026f5a68cbb61e731177f60b) Add guarded Microsoft Store PWA package generation with scope-bound pinned manifests, public-only DNS-pinned downloads, local and deployed icon integrity checks, ZIP safety, transactional evidence, and provenance records. — Thanks @imjlk!
+- [2c5046a](https://github.com/imjlk/mpgd-kit/commit/2c5046af170f7a31ab93c3f7d3ddb7dee94634ce) Add a game-owned Microsoft Store submission preflight that validates Partner Center identity, listing, privacy, age-rating, commerce, PWA manifest, and screenshot evidence. — Thanks @imjlk!
+
 ## 0.13.0 — 2026-07-17
 
 ### Patch changes
