@@ -15,15 +15,22 @@ import {
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
 
-import { initializeMicrosoftStoreStarter } from '../../packages/cli/src/microsoft-store-starter';
+import {
+  initializeMicrosoftStoreStarter,
+  microsoftStoreBlockEnd,
+  microsoftStoreBlockStart,
+} from '../../packages/cli/src/microsoft-store-starter';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-cli-microsoft-store-starter-onboarding-'));
 const kitRoot = resolve('.');
 const templateRoot = resolve('packages/cli/templates/phaser-game');
 const binaryFixtureFile = /\.(?:avif|gif|ico|jpe?g|otf|png|ttf|wasm|webp|woff2?)$/iu;
 const unresolvedTemplatePlaceholder = /__(?:CAMEL_NAME|DEFAULT_KIT_PATH|DEVVIT_APP_NAME|GAME_NAME|GAME_TITLE(?:_TS_LITERAL)?|LEGAL_LAST_UPDATED|MPGD_DEPENDENCY_VERSION(?:_[A-Z0-9_]+)?|PACKAGE_NAME|PASCAL_NAME|PNPM_WORKSPACE_KIT_PACKAGES|RECOMMENDED_MATRIX_TARGETS|TSCONFIG_(?:EXTENDS_LINE|WORKSPACE_(?:EXCLUDES|INCLUDES))|WORKSPACE_I18N_BUILD_PREFIX)__/u;
-const microsoftStoreBlockStart = '<!-- mpgd:microsoft-store:start -->';
-const microsoftStoreBlockEnd = '<!-- mpgd:microsoft-store:end -->';
+const microsoftStoreManagedDocumentationFiles = new Set([
+  'README.md',
+  'agent/acceptance.md',
+  'agent/brief.md',
+]);
 const storeSkill = '.agents/skills/release-microsoft-store/SKILL.md';
 const storeSkillMetadata = '.agents/skills/release-microsoft-store/agents/openai.yaml';
 const genericSkill = '.agents/skills/use-mpgd-kit/SKILL.md';
@@ -78,15 +85,20 @@ try {
   );
   const initializedReadmeFile = join(initializedGame, 'README.md');
   const initializedReadme = readFileSync(initializedReadmeFile, 'utf8');
-  const editedReadme = initializedReadme.replace(
-    'the mutable generator and icon URLs',
-    'the user-edited generator and icon URLs',
+  const blockStartIndex = initializedReadme.indexOf(microsoftStoreBlockStart);
+  const blockEndIndex = initializedReadme.indexOf(microsoftStoreBlockEnd);
+  assert.ok(
+    blockStartIndex >= 0 && blockEndIndex > blockStartIndex,
+    'README must contain one ordered Microsoft Store managed block',
   );
-  assert.notEqual(editedReadme, initializedReadme);
+  const editedReadme = `${initializedReadme.slice(0, blockEndIndex)}<!-- user-edit-inside-managed-block -->\n${initializedReadme.slice(blockEndIndex)}`;
   writeFileSync(initializedReadmeFile, editedReadme);
   const documentationRefresh = initializeGame(initializedGame);
   assert.match(documentationRefresh.stdout, /1 file\(s\)/u);
-  assert.doesNotMatch(readFileSync(initializedReadmeFile, 'utf8'), /user-edited generator/u);
+  assert.doesNotMatch(
+    readFileSync(initializedReadmeFile, 'utf8'),
+    /user-edit-inside-managed-block/u,
+  );
   assertManagedDocumentationCount(initializedGame, 1);
   const afterFirstInit = snapshotTree(initializedGame);
   const secondInit = initializeGame(initializedGame);
@@ -414,6 +426,15 @@ function assertNoUnresolvedTemplatePlaceholders(gameRoot: string): void {
 
       const relativePath = relative(gameRoot, file).split('\\').join('/');
       const content = readFileSync(file, 'utf8');
+
+      if (!microsoftStoreManagedDocumentationFiles.has(relativePath)) {
+        assert.doesNotMatch(
+          content,
+          /<!-- mpgd:microsoft-store:(?:start|end) -->/u,
+          `${relativePath} must not contain Microsoft Store managed-block markers`,
+        );
+      }
+
       assert.doesNotMatch(
         content,
         unresolvedTemplatePlaceholder,

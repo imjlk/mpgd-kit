@@ -1,6 +1,10 @@
 import { existsSync, readFileSync } from 'node:fs';
 
-import { microsoftStoreDocumentationAnchors } from '../packages/cli/src/microsoft-store-starter';
+import {
+  microsoftStoreBlockEnd,
+  microsoftStoreBlockStart,
+  microsoftStoreDocumentationAnchors,
+} from '../packages/cli/src/microsoft-store-starter';
 
 interface StarterAgentManifest {
   readonly id?: unknown;
@@ -292,19 +296,17 @@ function validateGeneratedConsumerWorkflow(): void {
 
 function assertSingleMicrosoftStoreBlock(file: string, anchor: string | undefined): void {
   const content = readText(file);
-  const start = '<!-- mpgd:microsoft-store:start -->';
-  const end = '<!-- mpgd:microsoft-store:end -->';
-  const startCount = content.split(start).length - 1;
-  const endCount = content.split(end).length - 1;
-  const startIndex = content.indexOf(start);
-  const endIndex = content.indexOf(end);
+  const startCount = content.split(microsoftStoreBlockStart).length - 1;
+  const endCount = content.split(microsoftStoreBlockEnd).length - 1;
+  const startIndex = content.indexOf(microsoftStoreBlockStart);
+  const endIndex = content.indexOf(microsoftStoreBlockEnd);
   const ordered = startIndex >= 0 && endIndex > startIndex;
 
   if (
     startCount !== 1
     || endCount !== 1
     || !ordered
-    || content.slice(startIndex + start.length, endIndex).trim().length === 0
+    || content.slice(startIndex + microsoftStoreBlockStart.length, endIndex).trim().length === 0
   ) {
     failures.push(`${file}: must contain one ordered, non-empty Microsoft Store managed block.`);
   }

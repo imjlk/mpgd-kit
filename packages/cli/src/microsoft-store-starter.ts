@@ -12,8 +12,8 @@ import {
 } from 'node:fs';
 import path from 'node:path';
 
-const microsoftStoreBlockStart = '<!-- mpgd:microsoft-store:start -->';
-const microsoftStoreBlockEnd = '<!-- mpgd:microsoft-store:end -->';
+export const microsoftStoreBlockStart = '<!-- mpgd:microsoft-store:start -->';
+export const microsoftStoreBlockEnd = '<!-- mpgd:microsoft-store:end -->';
 export const defaultMpgdKitPath = '../mpgd-kit';
 export const microsoftStoreDocumentationAnchors = {
   'README.md': '- Verse8 is a game-owned iframe web target',
@@ -211,19 +211,18 @@ export function initializeMicrosoftStoreStarter(
     'src/platform/microsoftStorePwa.ts',
   ] as const) {
     const destination = resolveGameFile(gameRoot, relativePath);
-    const templateContent = readRequiredTemplateFile(templateRoot, relativePath);
 
     if (existsSync(destination)) {
       readRequiredRegularFile(gameRoot, destination, relativePath);
 
       if (microsoftStoreManagedTemplateFiles.has(relativePath)) {
-        plan(relativePath, templateContent);
+        plan(relativePath, readRequiredTemplateFile(templateRoot, relativePath));
       }
 
       continue;
     }
 
-    plan(relativePath, templateContent);
+    plan(relativePath, readRequiredTemplateFile(templateRoot, relativePath));
   }
 
   if (!input.dryRun) {
@@ -457,7 +456,7 @@ function upsertManagedDocumentationBlock(
   const end = source.indexOf(microsoftStoreBlockEnd);
 
   if (startCount > 0 || endCount > 0) {
-    if (startCount !== 1 || endCount !== 1 || start < 0 || end < start) {
+    if (startCount !== 1 || endCount !== 1 || end < start) {
       throw new Error(`${relativePath} has malformed Microsoft Store managed block markers.`);
     }
 
