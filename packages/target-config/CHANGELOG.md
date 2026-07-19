@@ -1,5 +1,25 @@
 # @mpgd/target-config
 
+## 0.9.0 — 2026-07-20
+
+### Changed
+
+- [5c39d37](https://github.com/imjlk/mpgd-kit/commit/5c39d376db59231d35740525f5cf85e4c7dd2df0) Add a reusable Apps in Toss production host bridge backed by the official game identity,
+  Storage, Ads 2.0, sharing, lifecycle, and Game Center APIs. Rewarded ads load before display and
+  forward callback evidence without issuing demo grants, while commerce stays fail-closed until a
+  game installs its own verified purchase flow.
+  
+  Allow game targets to opt out of authoritative game services. Opted-out targets disable IAP and
+  ad features in their effective configuration and no longer require a production backend URL,
+  while targets that enable authoritative grants keep the public HTTPS backend release gate.
+  
+  Scaffold each generated game with its own Apps in Toss wrapper, Granite configuration, and
+  `@ait-co/devtools` workflow. The wrapper reuses the adapter's exported bundle loader while
+  keeping app identity, console state, icons, and review metadata owned by the game repository.
+  Expose a shared AIT ad-placement extractor for wrapper builds, preserve configuration parse
+  causes, and publish package metadata that the official `.ait` dependency collector can resolve
+  from both installed packages and Kit workspaces. — Thanks @imjlk!
+
 ## 0.8.0 — 2026-07-17
 
 ### Fixed
