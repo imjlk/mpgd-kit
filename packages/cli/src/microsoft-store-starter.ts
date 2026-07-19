@@ -760,12 +760,7 @@ function applyPlannedWrites(
         }
 
         recoveryErrors.push(
-          ...removeCreatedDirectories(createdDirectories).map(
-            (failure) => new Error(
-              `${failure.directory}: ${formatError(failure.error)}`,
-              { cause: failure.error },
-            ),
-          ),
+          ...removeCreatedDirectories(createdDirectories).map(wrapDirectoryCleanupFailure),
         );
 
         if (recoveryErrors.length > 0) {
@@ -814,10 +809,7 @@ function applyPlannedWrites(
       for (const failure of removeCreatedDirectories(entry.createdDirectories)) {
         rollbackErrors.push({
           relativePath: entry.planned.relativePath,
-          error: new Error(
-            `${failure.directory}: ${formatError(failure.error)}`,
-            { cause: failure.error },
-          ),
+          error: wrapDirectoryCleanupFailure(failure),
         });
       }
     }
@@ -912,6 +904,12 @@ function removeCreatedDirectories(
   }
 
   return failures;
+}
+
+function wrapDirectoryCleanupFailure(failure: DirectoryCleanupFailure): Error {
+  return new Error(`${failure.directory}: ${formatError(failure.error)}`, {
+    cause: failure.error,
+  });
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {
