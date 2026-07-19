@@ -10,7 +10,8 @@ distribution target gets the right adapter and validation path.
 ## What Works Today
 
 - Phaser 4 browser game shell and validation demo.
-- Browser preview, Verse8 iframe, Capacitor Android/iOS, Apps in Toss WebView, and Reddit Devvit Web target builds.
+- Browser preview, optional Microsoft Store PWA, Verse8 iframe, Capacitor
+  Android/iOS, Apps in Toss WebView, and Reddit Devvit Web target builds.
 - Single-source PNG/SVG app icon generation with versioned profiles and release evidence for every target.
 - `PlatformGateway` contracts for identity, storage, IAP, ads, leaderboard, and lifecycle.
 - Target-specific feature availability through `@mpgd/target-config`.
@@ -18,7 +19,9 @@ distribution target gets the right adapter and validation path.
 - Stateful cross-platform identity, launch, share, and notification contracts; see [Shared Platform Game Flow](docs/PLATFORM_GAME_FLOW.md).
 - Paraglide-backed `@mpgd/i18n` translation-key/message catalog.
 - Ledger-first game-services backend contracts, client orchestration, in-memory store, D1 store, HTTP endpoints, oRPC v2 beta procedures, and Cloudflare Worker starter.
-- Agent-facing Phaser starter manifest, Codex custom agents, repository skills, and Apps in Toss MCP adapter workflow guidance.
+- Agent-facing Phaser starter manifests, generated-game `AGENTS.md`, a kit workflow
+  router skill, target-specific release skills, repository skills, and Apps in
+  Toss MCP adapter guidance.
 - Target artifact smoke tests, package pack smoke tests, public-readiness checks, and ttsc graph presets.
 
 ## Quick Start
@@ -34,6 +37,26 @@ pnpm --dir my-game dev
 Under npm/pnpm/yarn/bun create conventions, the `@mpgd/game` initializer is
 provided by the `@mpgd/create-game` package. The reusable command implementation
 lives in `@mpgd/cli`.
+
+Microsoft Store is an explicit optional target for new games:
+
+```sh
+pnpm create @mpgd/game my-store-game --microsoft-store
+```
+
+Enable it later in an existing generated game without replacing game-owned
+files:
+
+```sh
+pnpm exec mpgd target init microsoft-store --game . --kit-path ../mpgd-kit
+```
+
+Every generated game receives `AGENTS.md`, `agent/game-manifest.json`,
+`.agents/skills/use-mpgd-kit`, and `docs/MPGD_KIT_WORKFLOWS.md`. Together they
+route game and agent work across the platform boundary, target config, icons,
+i18n, analytics, game services, build/smoke, acceptance, and target-specific
+release evidence. Selecting Microsoft Store also adds its dedicated release
+skill, config, scripts, and PWA runtime hook.
 
 For local kit development inside this repository:
 
@@ -232,7 +255,7 @@ under the game app's `artifacts/` and `release-output/` directories. Production
 app metadata should still move into game-owned wrappers before store or Toss
 submission.
 
-Microsoft Store support is modeled as a PWA/web target, not a separate native
+Optional Microsoft Store support is modeled as a PWA/web target, not a separate native
 SDK adapter. `pnpm build:microsoft-store` builds the Phaser game with the
 browser gateway, embeds the `microsoft-store` effective target config, and
 writes `artifacts/microsoft-store` with a linked web app manifest for

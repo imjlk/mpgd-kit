@@ -8,6 +8,13 @@
   "targets": ["web-preview", "microsoft-store", "verse8", "android", "ios", "ait", "reddit"],
   "futureTargets": ["telegram", "tauri"],
   "platformBoundary": "PlatformGateway",
+  "agentWorkflow": {
+    "guide": "docs/MPGD_KIT_WORKFLOWS.md",
+    "routerSkill": ".agents/skills/use-mpgd-kit/SKILL.md",
+    "targetSkills": {
+      "microsoft-store": ".agents/skills/release-microsoft-store/SKILL.md"
+    }
+  },
   "mcpRequirements": {
     "ait": "Use apps-in-toss MCP before Apps in Toss SDK or review-flow changes.",
     "reddit": "Use Devvit documentation/MCP before Devvit SDK or publish-flow changes. Keep Reddit deployment files in apps/target-devvit."

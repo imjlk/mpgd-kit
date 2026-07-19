@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process';
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readdirSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { discoverPublishablePackages, type PackageJson } from './workspace';
@@ -116,8 +116,8 @@ function expectedTemplateFiles(packageDir: string, packageJson: PackageJson): st
 
   return readdirSync(templatesDir)
     .map((entry) => join(templatesDir, entry))
-    .filter((entry) => statSync(entry).isDirectory())
-    .map((templateDir) => {
+    .filter((entry) => lstatSync(entry).isDirectory())
+    .flatMap((templateDir) => {
       const packageJsonPath = join(templateDir, 'package.json');
 
       if (!existsSync(packageJsonPath)) {
@@ -126,7 +126,26 @@ function expectedTemplateFiles(packageDir: string, packageJson: PackageJson): st
         );
       }
 
-      return relative(packageDir, packageJsonPath).split('\\').join('/');
+      return listRegularFiles(templateDir)
+        .map((file) => relative(packageDir, file).split('\\').join('/'));
+    });
+}
+
+function listRegularFiles(directory: string): string[] {
+  return readdirSync(directory)
+    .map((entry) => join(directory, entry))
+    .flatMap((entry) => {
+      const stat = lstatSync(entry);
+
+      if (stat.isSymbolicLink()) {
+        return [];
+      }
+
+      if (stat.isDirectory()) {
+        return listRegularFiles(entry);
+      }
+
+      return stat.isFile() ? [entry] : [];
     });
 }
 

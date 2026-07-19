@@ -1,5 +1,11 @@
 import { existsSync, readFileSync } from 'node:fs';
 
+import {
+  microsoftStoreBlockEnd,
+  microsoftStoreBlockStart,
+  microsoftStoreDocumentationAnchors,
+} from '../packages/cli/src/microsoft-store-starter';
+
 interface StarterAgentManifest {
   readonly id?: unknown;
   readonly version?: unknown;
@@ -61,6 +67,13 @@ const requiredFiles = [
   'examples/phaser-starter/agent/game.manifest.schema.json',
   'examples/phaser-starter/agent/game.manifest.json',
   'examples/phaser-starter/mpgd.game.json',
+  'packages/cli/templates/phaser-game/AGENTS.md',
+  'packages/cli/templates/phaser-game/.agents/skills/use-mpgd-kit/SKILL.md',
+  'packages/cli/templates/phaser-game/.agents/skills/use-mpgd-kit/agents/openai.yaml',
+  'packages/cli/templates/phaser-game/.agents/skills/release-microsoft-store/SKILL.md',
+  'packages/cli/templates/phaser-game/.agents/skills/release-microsoft-store/agents/openai.yaml',
+  'packages/cli/templates/phaser-game/docs/MPGD_KIT_WORKFLOWS.md',
+  'packages/cli/templates/phaser-game/agent/game-manifest.json',
   'packages/cli/templates/phaser-game/mpgd.game.json',
 ] as const;
 
@@ -181,6 +194,7 @@ validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
 validatePhaserTemplateLocalePolicy();
 validatePhaserTemplateAcceptanceCommand();
+validateGeneratedConsumerWorkflow();
 validateGameplayE2EPlan();
 validateAppIconPipeline();
 
@@ -189,6 +203,118 @@ if (failures.length > 0) {
 }
 
 console.log('Starter workflow validation passed.');
+
+function validateGeneratedConsumerWorkflow(): void {
+  const templateRoot = 'packages/cli/templates/phaser-game';
+  const agentsFile = `${templateRoot}/AGENTS.md`;
+  const workflowFile = `${templateRoot}/docs/MPGD_KIT_WORKFLOWS.md`;
+  const routerSkill = `${templateRoot}/.agents/skills/use-mpgd-kit/SKILL.md`;
+  const storeSkill = `${templateRoot}/.agents/skills/release-microsoft-store/SKILL.md`;
+  const manifestFile = `${templateRoot}/agent/game-manifest.json`;
+  const manifest = readJson(manifestFile);
+
+  if (!isJsonObject(manifest)) {
+    failures.push(`${manifestFile}: must be a JSON object.`);
+  } else {
+    const workflow = manifest.agentWorkflow;
+
+    if (!isJsonObject(workflow)) {
+      failures.push(`${manifestFile}: agentWorkflow must be a JSON object.`);
+    } else {
+      assertEqual(workflow.guide, 'docs/MPGD_KIT_WORKFLOWS.md', `${manifestFile}: guide`);
+      assertEqual(
+        workflow.routerSkill,
+        '.agents/skills/use-mpgd-kit/SKILL.md',
+        `${manifestFile}: router skill`,
+      );
+      const targetSkills = workflow.targetSkills;
+
+      if (!isJsonObject(targetSkills)) {
+        failures.push(`${manifestFile}: agentWorkflow.targetSkills must be a JSON object.`);
+      } else {
+        assertEqual(
+          targetSkills['microsoft-store'],
+          '.agents/skills/release-microsoft-store/SKILL.md',
+          `${manifestFile}: Microsoft Store skill`,
+        );
+      }
+    }
+  }
+
+  const agentsContent = readText(agentsFile);
+  for (const requiredText of [
+    '.agents/skills/use-mpgd-kit/SKILL.md',
+    'PlatformGateway',
+    'backend',
+    'pnpm accept',
+  ]) {
+    assertIncludesText(agentsContent, requiredText, `${agentsFile}: consumer routing`);
+  }
+
+  const workflowContent = readText(workflowFile);
+  for (const requiredText of [
+    'Assets and icons',
+    'Localization and orientation',
+    'Analytics, saves, commerce, ads, and leaderboards',
+    'Microsoft Store',
+    'Verse8',
+    'Apps in Toss',
+    'Reddit Devvit',
+    'Android and iOS',
+    'target init microsoft-store',
+    'pnpm accept',
+  ]) {
+    assertIncludesText(workflowContent, requiredText, `${workflowFile}: capability map`);
+  }
+
+  const routerContent = readText(routerSkill);
+  for (const requiredText of [
+    'agent/game-manifest.json',
+    'docs/MPGD_KIT_WORKFLOWS.md',
+    'PlatformGateway',
+    'backend',
+    'pnpm accept',
+  ]) {
+    assertIncludesText(routerContent, requiredText, `${routerSkill}: workflow router`);
+  }
+
+  const storeContent = readText(storeSkill);
+  for (const requiredText of [
+    'build:microsoft-store',
+    'preflight:microsoft-store',
+    'package:microsoft-store',
+    'accept-package microsoft-store',
+    'WACK as optional',
+  ]) {
+    assertIncludesText(storeContent, requiredText, `${storeSkill}: release workflow`);
+  }
+
+  for (const [relativePath, anchor] of Object.entries(microsoftStoreDocumentationAnchors)) {
+    assertSingleMicrosoftStoreBlock(`${templateRoot}/${relativePath}`, anchor);
+  }
+}
+
+function assertSingleMicrosoftStoreBlock(file: string, anchor: string | undefined): void {
+  const content = readText(file);
+  const startCount = content.split(microsoftStoreBlockStart).length - 1;
+  const endCount = content.split(microsoftStoreBlockEnd).length - 1;
+  const startIndex = content.indexOf(microsoftStoreBlockStart);
+  const endIndex = content.indexOf(microsoftStoreBlockEnd);
+  const ordered = startIndex >= 0 && endIndex > startIndex;
+
+  if (
+    startCount !== 1
+    || endCount !== 1
+    || !ordered
+    || content.slice(startIndex + microsoftStoreBlockStart.length, endIndex).trim().length === 0
+  ) {
+    failures.push(`${file}: must contain one ordered, non-empty Microsoft Store managed block.`);
+  }
+
+  if (anchor !== undefined && content.split(anchor).length - 1 !== 1) {
+    failures.push(`${file}: Microsoft Store insertion anchor must appear exactly once: ${anchor}`);
+  }
+}
 
 function validatePhaserTemplateAcceptanceCommand(): void {
   const templateRoot = 'packages/cli/templates/phaser-game';

@@ -27,6 +27,13 @@ pnpm build
 The `@mpgd/game` initializer name resolves to the public `@mpgd/create-game`
 package. The reusable command implementation lives in `@mpgd/cli`.
 
+Pass `--microsoft-store` when the new game should include the Microsoft Store
+PWA target and release workflow. For a game created without it, run
+`pnpm exec mpgd target init microsoft-store --game . --kit-path
+<path-to-mpgd-kit>` later. The initializer is idempotent and stops instead of
+overwriting conflicting scripts, target configuration, bootstrap wiring, or
+agent workflow ownership.
+
 Use `examples/phaser-starter` when developing the starter inside this
 repository. It is a private example workspace that shows the reusable mpgd
 wiring without inheriting the demo game's score, coin, result, or mock purchase
@@ -52,10 +59,15 @@ pnpm --dir examples/phaser-starter check
 pnpm --dir examples/phaser-starter build
 ```
 
-The generated starter includes browser, Capacitor, Apps in Toss, and Reddit
+The generated starter includes `AGENTS.md`, an agent capability manifest, a
+kit-workflow router skill, and a shared workflow guide so downstream agents can
+discover target config, icons, localization, analytics, game services,
+acceptance, and release evidence without depending on this repository's local
+instructions. The starter also includes browser, Capacitor, Apps in Toss, and Reddit
 Devvit adapter selection through `APP_TARGET`, local translation keys,
 best-effort analytics, optional game-services client wiring, and a rewarded ad
-smoke action. It stays intentionally small; real scoring, economy, content, and
+smoke action. Microsoft Store files are generated only when selected or later
+initialized. It stays intentionally small; real scoring, economy, content, and
 save models should be added by each game.
 
 ## Viewport And UI Composition

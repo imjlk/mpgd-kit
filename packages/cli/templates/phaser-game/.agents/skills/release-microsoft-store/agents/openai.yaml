@@ -1,0 +1,4 @@
+interface:
+  display_name: "Release to Microsoft Store"
+  short_description: "Build and verify Microsoft Store PWA releases"
+  default_prompt: "Prepare this game for a Microsoft Store PWA release and produce the required acceptance evidence."

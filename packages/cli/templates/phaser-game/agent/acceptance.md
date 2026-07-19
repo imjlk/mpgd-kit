@@ -2,6 +2,10 @@
 
 Run these checks before handing off a generated game starter:
 
+Use `agent/game-manifest.json` and `.agents/skills/use-mpgd-kit/SKILL.md` to
+select any target-specific acceptance workflow required by the configured
+targets.
+
 ```sh
 pnpm icons:generate
 pnpm icons:verify
@@ -32,9 +36,13 @@ Play here starts gameplay inside the post, and the `game` entry opens the
 separate expanded mode Phaser document. Inline gameplay must remain tap/click
 only and must not trap feed scrolling.
 
+<!-- mpgd:microsoft-store:start -->
 For Microsoft Store changes, keep the first pass as a PWA/web target that uses
 the browser adapter. Add a dedicated Store commerce adapter only when wiring
 Digital Goods API and Payment Request through backend ledger verification.
+Run the generated Store release skill from build and preflight through package
+acceptance; WACK is optional recommended evidence.
+<!-- mpgd:microsoft-store:end -->
 
 ## Verse8 Agent8 Structured Server
 
