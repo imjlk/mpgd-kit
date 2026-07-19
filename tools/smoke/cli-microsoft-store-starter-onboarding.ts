@@ -104,6 +104,39 @@ try {
   assert.match(secondInit.stdout, /0 file\(s\)/u);
   assert.deepEqual(snapshotTree(initializedGame), afterFirstInit);
 
+  const legacyScriptsGame = createGame('legacy-store-scripts', ['--microsoft-store']);
+  const legacyPackageJson = readJson(join(legacyScriptsGame, 'package.json'));
+  const legacyScripts = requireRecord(legacyPackageJson.scripts, 'legacy package scripts');
+  for (const name of [
+    'build:microsoft-store',
+    'smoke:microsoft-store',
+    'preflight:microsoft-store',
+  ]) {
+    const command = legacyScripts[name];
+    assert.equal(typeof command, 'string', `missing legacy script ${name}`);
+    legacyScripts[name] = (command as string)
+      .replace('--kit-path "', '--kit-path ')
+      .replace(/"$/u, '');
+  }
+  writeJson(join(legacyScriptsGame, 'package.json'), legacyPackageJson);
+  rmSync(join(legacyScriptsGame, '.agents/skills/release-microsoft-store'), {
+    force: true,
+    recursive: true,
+  });
+  initializeGame(legacyScriptsGame);
+  assertMicrosoftStoreEnabled(legacyScriptsGame);
+  const migratedScripts = requireRecord(
+    readJson(join(legacyScriptsGame, 'package.json')).scripts,
+    'migrated package scripts',
+  );
+  for (const name of [
+    'build:microsoft-store',
+    'smoke:microsoft-store',
+    'preflight:microsoft-store',
+  ]) {
+    assert.match(String(migratedScripts[name]), /--kit-path "\$\{MPGD_KIT_PATH:-.+\}"$/u);
+  }
+
   const applyRollbackGame = createGame('apply-rollback');
   const beforeApplyRollback = snapshotTree(applyRollbackGame);
   assert.throws(
@@ -125,6 +158,29 @@ try {
     /injected mid-apply failure/u,
   );
   assert.deepEqual(snapshotTree(applyRollbackGame), beforeApplyRollback);
+
+  const directoryRollbackGame = createGame('directory-rollback');
+  rmSync(join(directoryRollbackGame, '.agents'), { force: true, recursive: true });
+  const beforeDirectoryRollback = snapshotTree(directoryRollbackGame);
+  assert.throws(
+    () => initializeMicrosoftStoreStarter(
+      {
+        gameRoot: directoryRollbackGame,
+        templateRoot,
+        defaultKitPath: relative(directoryRollbackGame, kitRoot),
+        dryRun: false,
+      },
+      {
+        beforeCommit: (relativePath) => {
+          if (relativePath === 'mpgd.microsoft-store.json') {
+            throw new Error('injected after nested directories were created');
+          }
+        },
+      },
+    ),
+    /injected after nested directories were created/u,
+  );
+  assert.deepEqual(snapshotTree(directoryRollbackGame), beforeDirectoryRollback);
 
   const incompleteRollbackGame = createGame('incomplete-rollback');
   const packageBeforeIncompleteRollback = readFileSync(
@@ -217,10 +273,50 @@ try {
       kind: 'web',
       gameApp: '.',
       adapter: 'verse8',
+      icon: { profile: 'microsoft-pwa' },
       output: 'artifacts/microsoft-store',
     };
     writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
-  }, /must be a game-owned web target using the browser adapter/u);
+  }, /must use the game root, Store artifact directory, browser adapter/u);
+
+  assertConflictIsAtomic('target-game-app-escape', (gameRoot) => {
+    const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));
+    const targets = requireRecord(targetsJson.targets, 'targets');
+    targets['microsoft-store'] = {
+      kind: 'web',
+      gameApp: '../other-game',
+      adapter: 'browser',
+      icon: { profile: 'microsoft-pwa' },
+      output: 'artifacts/microsoft-store',
+    };
+    writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
+  }, /must use the game root, Store artifact directory, browser adapter/u);
+
+  assertConflictIsAtomic('target-output-escape', (gameRoot) => {
+    const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));
+    const targets = requireRecord(targetsJson.targets, 'targets');
+    targets['microsoft-store'] = {
+      kind: 'web',
+      gameApp: '.',
+      adapter: 'browser',
+      icon: { profile: 'microsoft-pwa' },
+      output: '/tmp/outside-store-artifacts',
+    };
+    writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
+  }, /must use the game root, Store artifact directory, browser adapter/u);
+
+  assertConflictIsAtomic('target-icon-conflict', (gameRoot) => {
+    const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));
+    const targets = requireRecord(targetsJson.targets, 'targets');
+    targets['microsoft-store'] = {
+      kind: 'web',
+      gameApp: '.',
+      adapter: 'browser',
+      icon: { profile: 'web-preview' },
+      output: 'artifacts/microsoft-store',
+    };
+    writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
+  }, /microsoft-pwa icon profile/u);
 
   assertConflictIsAtomic('bootstrap-conflict', (gameRoot) => {
     const mainFile = join(gameRoot, 'src/main.ts');

@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmdirSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -65,6 +66,7 @@ interface AppliedWrite {
   readonly planned: PlannedWrite;
   readonly backupFile: string | undefined;
   readonly temporaryFile: string;
+  readonly createdDirectories: readonly string[];
 }
 
 export interface InitializeMicrosoftStoreStarterInput {
@@ -165,11 +167,13 @@ export function initializeMicrosoftStoreStarter(
   const packageSource = readRequiredRegularFile(gameRoot, packageFile, 'package.json');
   const packageJson = parseJsonObject(packageSource, 'package.json');
   const scripts = requireJsonObject(packageJson.scripts, 'package.json scripts');
+  const legacyScripts = legacyMicrosoftStoreScripts(input.defaultKitPath);
 
   for (const [name, command] of Object.entries(microsoftStoreScripts(input.defaultKitPath))) {
     const existing = scripts[name];
+    const legacyCommand = legacyScripts[name];
 
-    if (existing !== undefined && existing !== command) {
+    if (existing !== undefined && existing !== command && existing !== legacyCommand) {
       throw new Error(`package.json script ${name} already exists with a different command.`);
     }
 
@@ -236,6 +240,17 @@ function microsoftStoreScripts(defaultKitPath: string): Readonly<Record<string, 
   const safeKitPath = requireSafeShellParameterDefaultPath(defaultKitPath);
   const kitPath = `"\${MPGD_KIT_PATH:-${safeKitPath}}"`;
 
+  return createMicrosoftStoreScripts(kitPath);
+}
+
+function legacyMicrosoftStoreScripts(defaultKitPath: string): Readonly<Record<string, string>> {
+  const safeKitPath = requireSafeShellParameterDefaultPath(defaultKitPath);
+  const kitPath = `\${MPGD_KIT_PATH:-${safeKitPath}}`;
+
+  return createMicrosoftStoreScripts(kitPath);
+}
+
+function createMicrosoftStoreScripts(kitPath: string): Readonly<Record<string, string>> {
   return {
     'build:microsoft-store': `pnpm exec mpgd target build microsoft-store production --targets-file ./mpgd.targets.json --kit-path ${kitPath}`,
     'smoke:microsoft-store': `pnpm exec mpgd target smoke microsoft-store --targets-file ./mpgd.targets.json --kit-path ${kitPath}`,
@@ -258,15 +273,17 @@ function requireSafeShellParameterDefaultPath(value: string): string {
 
 function assertCompatibleMicrosoftStoreTarget(value: unknown): void {
   const target = requireJsonObject(value, 'microsoft-store target');
+  const icon = isJsonObject(target.icon) ? target.icon : undefined;
 
   if (
     target.kind !== 'web'
     || target.adapter !== 'browser'
-    || typeof target.gameApp !== 'string'
-    || typeof target.output !== 'string'
+    || target.gameApp !== microsoftStoreTarget.gameApp
+    || target.output !== microsoftStoreTarget.output
+    || icon?.profile !== microsoftStoreTarget.icon.profile
   ) {
     throw new Error(
-      'Existing microsoft-store target must be a game-owned web target using the browser adapter.',
+      'Existing microsoft-store target must use the game root, Store artifact directory, browser adapter, and microsoft-pwa icon profile.',
     );
   }
 }
@@ -549,11 +566,15 @@ function parseJsonObject(source: string, label: string): JsonObject {
 }
 
 function requireJsonObject(value: unknown, label: string): JsonObject {
-  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+  if (!isJsonObject(value)) {
     throw new Error(`${label} must be a JSON object.`);
   }
 
-  return value as JsonObject;
+  return value;
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function formatJson(value: JsonObject): string {
@@ -607,9 +628,7 @@ function lstatIfExists(file: string): ReturnType<typeof lstatSync> | undefined {
 }
 
 function isMissingPathError(error: unknown): boolean {
-  return error instanceof Error
-    && 'code' in error
-    && (error as NodeJS.ErrnoException).code === 'ENOENT';
+  return hasErrorCode(error, 'ENOENT');
 }
 
 function readRequiredRegularFile(
@@ -691,14 +710,7 @@ function applyPlannedWrites(
 
       const parent = path.dirname(planned.file);
       assertSafeWritableParent(gameRoot, parent, planned.relativePath);
-      mkdirSync(parent, { recursive: true });
-
-      if (!isInside(gameRoot, realpathSync(parent))) {
-        throw new Error(
-          `Starter directory resolves outside the game root: ${planned.relativePath}`,
-        );
-      }
-
+      const createdDirectories: string[] = [];
       const suffix = `.mpgd-init-${randomUUID()}`;
       const temporaryFile = `${planned.file}${suffix}.tmp`;
       const backupFile = planned.previous === undefined
@@ -707,6 +719,8 @@ function applyPlannedWrites(
       let backupMoved = false;
 
       try {
+        createMissingDirectories(gameRoot, parent, planned.relativePath, createdDirectories);
+
         writeFileSync(temporaryFile, planned.content, {
           encoding: 'utf8',
           flag: 'wx',
@@ -738,6 +752,8 @@ function applyPlannedWrites(
           recoveryErrors.push(recoveryError);
         }
 
+        recoveryErrors.push(...removeCreatedDirectories(createdDirectories));
+
         if (recoveryErrors.length > 0) {
           throw new Error(
             `Starter write failed and recovery was incomplete for ${planned.relativePath}: ${recoveryErrors.map(formatError).join('; ')}`,
@@ -748,7 +764,7 @@ function applyPlannedWrites(
         throw error;
       }
 
-      applied.push({ planned, backupFile, temporaryFile });
+      applied.push({ planned, backupFile, temporaryFile, createdDirectories });
     }
   } catch (error) {
     const rollbackErrors: { readonly relativePath: string; readonly error: unknown }[] = [];
@@ -776,6 +792,13 @@ function applyPlannedWrites(
           error: rollbackError,
         });
       }
+
+      for (const cleanupError of removeCreatedDirectories(entry.createdDirectories)) {
+        rollbackErrors.push({
+          relativePath: entry.planned.relativePath,
+          error: cleanupError,
+        });
+      }
     }
 
     if (rollbackErrors.length > 0) {
@@ -800,6 +823,84 @@ function applyPlannedWrites(
       }
     }
   }
+}
+
+function listMissingDirectories(parent: string): readonly string[] {
+  const missing: string[] = [];
+  let current = parent;
+
+  while (lstatIfExists(current) === undefined) {
+    missing.push(current);
+    const next = path.dirname(current);
+
+    if (next === current) {
+      break;
+    }
+
+    current = next;
+  }
+
+  return missing;
+}
+
+function createMissingDirectories(
+  gameRoot: string,
+  parent: string,
+  relativePath: string,
+  createdDirectories: string[],
+): void {
+  for (const directory of [...listMissingDirectories(parent)].reverse()) {
+    let created = false;
+
+    try {
+      mkdirSync(directory);
+      created = true;
+    } catch (error) {
+      if (!hasErrorCode(error, 'EEXIST')) {
+        throw error;
+      }
+    }
+
+    const stat = lstatSync(directory);
+
+    if (!stat.isDirectory() || !isInside(gameRoot, realpathSync(directory))) {
+      throw new Error(`Starter directory resolves outside the game root: ${relativePath}`);
+    }
+
+    if (created) {
+      createdDirectories.unshift(directory);
+    }
+  }
+}
+
+function removeCreatedDirectories(
+  directories: readonly string[],
+): readonly unknown[] {
+  const errors: unknown[] = [];
+
+  for (const directory of directories) {
+    try {
+      rmdirSync(directory);
+    } catch (error) {
+      if (isMissingPathError(error) || isNonEmptyDirectoryError(error)) {
+        continue;
+      }
+
+      errors.push(error);
+    }
+  }
+
+  return errors;
+}
+
+function isNonEmptyDirectoryError(error: unknown): boolean {
+  return hasErrorCode(error, 'EEXIST') || hasErrorCode(error, 'ENOTEMPTY');
+}
+
+function hasErrorCode(error: unknown, code: string): boolean {
+  return error instanceof Error
+    && 'code' in error
+    && (error as NodeJS.ErrnoException).code === code;
 }
 
 function assertSafeWritableParent(

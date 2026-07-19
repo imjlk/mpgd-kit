@@ -1057,11 +1057,12 @@ const targetCommand = defineI18n({
       },
       run: (ctx) => {
         const positionals = readLocalPositionals(ctx.positionals, ['target', 'init']);
-        const target = normalizeBuildTarget(readRequiredPositional(positionals, 0, 'target'));
+        const requestedTarget = readRequiredPositional(positionals, 0, 'target');
+        const target = normalizeConfiguredBuildTarget(requestedTarget);
 
         if (target !== 'microsoft-store') {
           throw new Error(
-            `Target initialization is only available for microsoft-store; received: ${target}`,
+            `Target initialization is only available for microsoft-store; received: ${requestedTarget}`,
           );
         }
 
