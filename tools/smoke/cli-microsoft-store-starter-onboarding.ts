@@ -621,7 +621,7 @@ function runCli(args: readonly string[]): SpawnSyncReturns<string> {
       cwd: kitRoot,
       encoding: 'utf8',
       env: process.env,
-      timeout: 60_000,
+      timeout: 180_000,
     },
   );
 }

@@ -69,6 +69,11 @@ interface AppliedWrite {
   readonly createdDirectories: readonly string[];
 }
 
+interface DirectoryCleanupFailure {
+  readonly directory: string;
+  readonly error: unknown;
+}
+
 export interface InitializeMicrosoftStoreStarterInput {
   readonly gameRoot: string;
   readonly templateRoot: string;
@@ -244,6 +249,8 @@ function microsoftStoreScripts(defaultKitPath: string): Readonly<Record<string, 
 }
 
 function legacyMicrosoftStoreScripts(defaultKitPath: string): Readonly<Record<string, string>> {
+  // The previous generated format intentionally omitted shell quotes around the kit path.
+  // Keep this variant only for detecting and migrating those exact managed script values.
   const safeKitPath = requireSafeShellParameterDefaultPath(defaultKitPath);
   const kitPath = `\${MPGD_KIT_PATH:-${safeKitPath}}`;
 
@@ -752,7 +759,14 @@ function applyPlannedWrites(
           recoveryErrors.push(recoveryError);
         }
 
-        recoveryErrors.push(...removeCreatedDirectories(createdDirectories));
+        recoveryErrors.push(
+          ...removeCreatedDirectories(createdDirectories).map(
+            (failure) => new Error(
+              `${failure.directory}: ${formatError(failure.error)}`,
+              { cause: failure.error },
+            ),
+          ),
+        );
 
         if (recoveryErrors.length > 0) {
           throw new Error(
@@ -792,11 +806,18 @@ function applyPlannedWrites(
           error: rollbackError,
         });
       }
+    }
 
-      for (const cleanupError of removeCreatedDirectories(entry.createdDirectories)) {
+    // Restore every file before removing shared parent directories. This keeps cleanup
+    // independent of write order and ensures an unexpected leftover is reported.
+    for (const entry of [...applied].reverse()) {
+      for (const failure of removeCreatedDirectories(entry.createdDirectories)) {
         rollbackErrors.push({
           relativePath: entry.planned.relativePath,
-          error: cleanupError,
+          error: new Error(
+            `${failure.directory}: ${formatError(failure.error)}`,
+            { cause: failure.error },
+          ),
         });
       }
     }
@@ -875,26 +896,22 @@ function createMissingDirectories(
 
 function removeCreatedDirectories(
   directories: readonly string[],
-): readonly unknown[] {
-  const errors: unknown[] = [];
+): readonly DirectoryCleanupFailure[] {
+  const failures: DirectoryCleanupFailure[] = [];
 
   for (const directory of directories) {
     try {
       rmdirSync(directory);
     } catch (error) {
-      if (isMissingPathError(error) || isNonEmptyDirectoryError(error)) {
+      if (isMissingPathError(error)) {
         continue;
       }
 
-      errors.push(error);
+      failures.push({ directory, error });
     }
   }
 
-  return errors;
-}
-
-function isNonEmptyDirectoryError(error: unknown): boolean {
-  return hasErrorCode(error, 'EEXIST') || hasErrorCode(error, 'ENOTEMPTY');
+  return failures;
 }
 
 function hasErrorCode(error: unknown, code: string): boolean {
