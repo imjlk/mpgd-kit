@@ -438,7 +438,7 @@ async function showInterstitialAd(
   dependencies: AitHostDependencies,
   adGroupId: string,
   timeoutMs: number,
-): Promise<{ readonly status: 'shown' | 'skipped' | 'unavailable' }> {
+): Promise<{ readonly status: 'shown' | 'skipped' }> {
   const status = await showAd(dependencies, adGroupId, timeoutMs);
   return { status: status === 'failed' ? 'skipped' : status };
 }
@@ -593,6 +593,8 @@ function decodeStoredValue(serialized: string | null): BridgeStorageLoadData {
       value: JSON.parse(serialized) as unknown,
     };
   } catch {
+    // Malformed native state is treated as absent so the game can recover with
+    // its versioned defaults instead of entering a permanent load-error loop.
     return { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false };
   }
 }
