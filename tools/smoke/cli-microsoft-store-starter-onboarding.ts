@@ -243,7 +243,10 @@ try {
   assert.deepEqual(readdirSync(outside), []);
 
   const unsupported = runCli(['target', 'init', 'telegram', '--game', baseGame]);
-  assertCliFailure(unsupported, /Target initialization is not available for target: telegram/u);
+  assertCliFailure(
+    unsupported,
+    /Target initialization is only available for microsoft-store; received: telegram/u,
+  );
 
   const existingGame = join(fixtureRoot, 'existing-game');
   const sentinel = join(existingGame, 'sentinel.txt');
@@ -459,7 +462,9 @@ function snapshotTree(root: string): Readonly<Record<string, string>> {
       } else if (entry.isSymbolicLink()) {
         snapshot[`${key}:symlink`] = readlinkSync(file);
       } else if (entry.isFile()) {
-        snapshot[`${key}:file`] = readFileSync(file, 'utf8');
+        snapshot[`${key}:file`] = binaryFixtureFile.test(entry.name)
+          ? readFileSync(file).toString('base64')
+          : readFileSync(file, 'utf8');
       } else {
         snapshot[`${key}:other`] = String(lstatSync(file).mode);
       }

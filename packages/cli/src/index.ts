@@ -157,7 +157,10 @@ const detectedKitRoot = resolveDefaultKitRoot();
 const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
 const cliVersion = readPackageVersion(packageRoot);
 const recommendedMatrixTargets = 'web,microsoft-store,verse8,ait,reddit';
-const recommendedMatrixTargetsWithoutMicrosoftStore = 'web,verse8,ait,reddit';
+const recommendedMatrixTargetsWithoutMicrosoftStore = recommendedMatrixTargets
+  .split(',')
+  .filter((target) => target !== 'microsoft-store')
+  .join(',');
 const defaultDependencyVersion = `^${cliVersion}`;
 const standaloneTemplateDependencyVersionFallbacks: Readonly<Record<string, string>> = {
   // Initial-published independently from the CLI release line; package metadata wins once concrete.
@@ -1057,7 +1060,9 @@ const targetCommand = defineI18n({
         const target = normalizeBuildTarget(readRequiredPositional(positionals, 0, 'target'));
 
         if (target !== 'microsoft-store') {
-          throw new Error(`Target initialization is not available for target: ${target}`);
+          throw new Error(
+            `Target initialization is only available for microsoft-store; received: ${target}`,
+          );
         }
 
         const gameRoot = path.resolve(readOptionalString(ctx.values.game) ?? '.');
@@ -1999,12 +2004,14 @@ function createGameApp(input: {
     microsoftStore: input.microsoftStore,
   });
   const files = collectTemplateFiles(gameTemplateDir).flatMap((file) => {
-    const content = prepareBaseGameTemplateFile({
+    const prepared = prepareBaseGameTemplateFile({
       relativePath: file.relativePath,
-      content: renderTemplate(file.content, context),
+      content: file.content,
     });
 
-    return content === undefined ? [] : [{ ...file, content }];
+    return prepared === undefined
+      ? []
+      : [{ ...file, content: renderTemplate(prepared, context) }];
   });
 
   if (input.dryRun) {
