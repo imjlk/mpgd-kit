@@ -2,6 +2,7 @@ node_modules/
 dist/
 artifacts/
 release-output/
+release-input/
 output/
 .mpgd.targets.generated.json
 .mpgd/

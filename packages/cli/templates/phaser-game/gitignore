@@ -3,6 +3,7 @@ dist/
 apps/*/dist/
 apps/target-devvit/generated/
 artifacts/
+release-input/
 release-output/
 .mpgd.targets.generated.json
 .mpgd/

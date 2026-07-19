@@ -250,6 +250,34 @@ verification. Desktop screenshots must be valid PNG files, no larger than
 deterministic submission evidence under
 `release-output/microsoft-store`.
 
+After deploying the exact preflighted PWA, set `PWA_URL` and `MANIFEST_URL` to
+its public production endpoints, then download a PWABuilder package ZIP with
+distinct modern and classic package versions:
+
+```sh
+pnpm exec mpgd target generate-package microsoft-store \
+  --targets-file ./mpgd.targets.json \
+  --pwa-url "$PWA_URL" \
+  --manifest-url "$MANIFEST_URL" \
+  --package-version 1.2.3.0 \
+  --classic-version 1.2.2.0
+```
+
+The command calls PWABuilder's fixed production package endpoint without
+credentials. It requires the deployed manifest and every manifest icon to
+match the preflight evidence both before and after generation, and requires the
+PWA URL to stay inside that manifest's deployed scope. Local icon inputs are
+also hash-checked and monitored for changes. The hash-verified local manifest
+is pinned directly in the generator request using PWABuilder's custom-manifest
+mode; the manifest URL remains its relative-resource base for those deployed
+icons. The command bounds every network response, rejects redirects and unsafe
+ZIP structure, and atomically writes the archive plus request, source-revision,
+manifest, icon, and SHA-256 provenance. PWABuilder's API and the deployed icon
+URLs are mutable external-service boundaries, so the before/after probes detect
+changes but cannot make those resources content-addressed. The ZIP is not
+extracted or accepted as submission-ready; inspect its contained packages with
+the Microsoft Store acceptance flow before uploading it.
+
 After PWABuilder produces `.msix`, `.msixbundle`, `.appx`, or `.appxbundle`
 files, run `mpgd target accept-package microsoft-store --packages <paths>` on
 Windows with the Windows SDK installed. The acceptance command uses MakeAppx
@@ -408,4 +436,5 @@ Official references:
 
 - [Publish a PWA to the Microsoft Store](https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/microsoft-store)
 - [Turn your website into a high quality PWA](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/pwa/turn-your-website-pwa)
+- [PWABuilder Microsoft Store package service source](https://github.com/pwa-builder/PWABuilder/tree/ded7914e84d1509c901d2899a3f654f5d44ef08f/apps/pwabuilder-microsoft-store)
 - [Provide in-app purchases with Digital Goods API](https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/digital-goods-api)
