@@ -265,12 +265,16 @@ async function verifyAitAdapter(): Promise<void> {
     },
     'ait reward should fail closed without authoritative game services',
   );
-  await gateway.leaderboard.submitScore({
-    leaderboardId: 'default',
-    score: 1,
-    runId: 'ait-native-leaderboard-run',
-    submittedAt: new Date().toISOString(),
-  });
+  assertDeepEqual(
+    await gateway.leaderboard.submitScore({
+      leaderboardId: 'default',
+      score: 1,
+      runId: 'ait-native-leaderboard-run',
+      submittedAt: new Date().toISOString(),
+    }),
+    { submitted: true },
+    'ait leaderboard submission should succeed with native delegation',
+  );
 
   assertDeepEqual(
     bridge.methods.slice(1),

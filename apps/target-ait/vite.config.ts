@@ -43,7 +43,13 @@ function readAitAdConfig(path: string | undefined): {
     return { adGroupIds: {}, adPlacementTypes: {} };
   }
 
-  const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+  } catch {
+    throw new Error(`AIT ad placements file is unreadable or invalid JSON: ${path}`);
+  }
 
   if (!isRecord(parsed) || !Array.isArray(parsed.placements)) {
     throw new Error(`AIT ad placements file is invalid: ${path}`);
