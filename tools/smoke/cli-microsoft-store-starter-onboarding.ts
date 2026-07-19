@@ -19,6 +19,7 @@ import {
   initializeMicrosoftStoreStarter,
   microsoftStoreBlockEnd,
   microsoftStoreBlockStart,
+  microsoftStoreDocumentationAnchors,
 } from '../../packages/cli/src/microsoft-store-starter';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-cli-microsoft-store-starter-onboarding-'));
@@ -26,11 +27,9 @@ const kitRoot = resolve('.');
 const templateRoot = resolve('packages/cli/templates/phaser-game');
 const binaryFixtureFile = /\.(?:avif|gif|ico|jpe?g|otf|png|ttf|wasm|webp|woff2?)$/iu;
 const unresolvedTemplatePlaceholder = /__(?:CAMEL_NAME|DEFAULT_KIT_PATH|DEVVIT_APP_NAME|GAME_NAME|GAME_TITLE(?:_TS_LITERAL)?|LEGAL_LAST_UPDATED|MPGD_DEPENDENCY_VERSION(?:_[A-Z0-9_]+)?|PACKAGE_NAME|PASCAL_NAME|PNPM_WORKSPACE_KIT_PACKAGES|RECOMMENDED_MATRIX_TARGETS|TSCONFIG_(?:EXTENDS_LINE|WORKSPACE_(?:EXCLUDES|INCLUDES))|WORKSPACE_I18N_BUILD_PREFIX)__/u;
-const microsoftStoreManagedDocumentationFiles = new Set([
-  'README.md',
-  'agent/acceptance.md',
-  'agent/brief.md',
-]);
+const microsoftStoreManagedDocumentationFiles = new Set(
+  Object.keys(microsoftStoreDocumentationAnchors),
+);
 const storeSkill = '.agents/skills/release-microsoft-store/SKILL.md';
 const storeSkillMetadata = '.agents/skills/release-microsoft-store/agents/openai.yaml';
 const genericSkill = '.agents/skills/use-mpgd-kit/SKILL.md';
@@ -428,9 +427,9 @@ function assertNoUnresolvedTemplatePlaceholders(gameRoot: string): void {
       const content = readFileSync(file, 'utf8');
 
       if (!microsoftStoreManagedDocumentationFiles.has(relativePath)) {
-        assert.doesNotMatch(
-          content,
-          /<!-- mpgd:microsoft-store:(?:start|end) -->/u,
+        assert.ok(
+          !content.includes(microsoftStoreBlockStart)
+            && !content.includes(microsoftStoreBlockEnd),
           `${relativePath} must not contain Microsoft Store managed-block markers`,
         );
       }
