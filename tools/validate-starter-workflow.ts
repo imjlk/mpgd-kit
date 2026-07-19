@@ -185,6 +185,7 @@ if (manifest !== null) {
 }
 
 validatePhaserTemplateAITPolyfill();
+validatePhaserTemplateAITWrapper();
 validatePhaserTemplateAITConsoleCli();
 validatePhaserTemplateDevvitPostOperations();
 validatePhaserTemplateDevvitViewModes();
@@ -849,6 +850,244 @@ function validatePhaserTemplateAITConsoleCli(): void {
         if (!readme.includes(requiredText)) {
           failures.push(`${readmePath}: must document ${requiredText} for the AIT console flow.`);
         }
+      }
+    }
+  }
+}
+
+function validatePhaserTemplateAITWrapper(): void {
+  const templateRoot = 'packages/cli/templates/phaser-game';
+  const wrapperRoot = `${templateRoot}/apps/target-ait`;
+  const wrapperPackagePath = `${wrapperRoot}/package.json`;
+  const wrapperMainPath = `${wrapperRoot}/src/main.ts`;
+  const wrapperVitePath = `${wrapperRoot}/vite.config.ts`;
+  const wrapperGranitePath = `${wrapperRoot}/granite.config.ts`;
+  const targetsPath = `${templateRoot}/mpgd.targets.json`;
+  const rootPackagePath = `${templateRoot}/package.json`;
+  const gitignorePath = `${templateRoot}/gitignore`;
+  const adapterPackagePath = 'adapters/ait/package.json';
+  const baseTsconfigPath = 'tsconfig.base.json';
+
+  for (const path of [
+    wrapperPackagePath,
+    wrapperMainPath,
+    wrapperVitePath,
+    wrapperGranitePath,
+    targetsPath,
+    rootPackagePath,
+    gitignorePath,
+    adapterPackagePath,
+    baseTsconfigPath,
+  ]) {
+    if (!existsSync(path)) {
+      failures.push(`${path}: required for the game-owned AIT wrapper flow.`);
+    }
+  }
+
+  if (existsSync(adapterPackagePath)) {
+    const packageJson = readJson(adapterPackagePath) as {
+      readonly exports?: Record<string, unknown>;
+    } | null;
+
+    if (packageJson !== null) {
+      assertEqual(
+        packageJson.exports?.['./package.json'],
+        './package.json',
+        `${adapterPackagePath}: exports[./package.json]`,
+      );
+
+      for (const [subpath, basename] of [
+        ['./ad-config', 'ad-config'],
+        ['./host', 'host'],
+        ['./wrapper', 'wrapper'],
+      ] as const) {
+        const exported = packageJson.exports?.[subpath];
+
+        if (!isJsonObject(exported)) {
+          failures.push(`${adapterPackagePath}: exports[${subpath}] must be an object.`);
+          continue;
+        }
+
+        assertEqual(
+          exported.types,
+          `./dist/${basename}.d.ts`,
+          `${adapterPackagePath}: exports[${subpath}].types`,
+        );
+        assertEqual(
+          exported.default,
+          `./dist/${basename}.js`,
+          `${adapterPackagePath}: exports[${subpath}].default`,
+        );
+      }
+    }
+  }
+
+  if (existsSync(baseTsconfigPath)) {
+    const tsconfig = readJson(baseTsconfigPath) as {
+      readonly compilerOptions?: {
+        readonly paths?: Record<string, unknown>;
+      };
+    } | null;
+
+    if (tsconfig !== null) {
+      assertIncludes(
+        tsconfig.compilerOptions?.paths?.['@mpgd/adapter-ait/package.json'],
+        './adapters/ait/package.json',
+        `${baseTsconfigPath}: compilerOptions.paths[@mpgd/adapter-ait/package.json]`,
+      );
+    }
+  }
+
+  if (existsSync(wrapperPackagePath)) {
+    const packageJson = readJson(wrapperPackagePath) as {
+      readonly dependencies?: Record<string, unknown>;
+      readonly devDependencies?: Record<string, unknown>;
+      readonly scripts?: Record<string, unknown>;
+    } | null;
+
+    if (packageJson !== null) {
+      assertString(
+        packageJson.dependencies?.['@mpgd/adapter-ait'],
+        `${wrapperPackagePath}: dependencies.@mpgd/adapter-ait`,
+      );
+      assertString(
+        packageJson.dependencies?.['@apps-in-toss/web-framework'],
+        `${wrapperPackagePath}: dependencies.@apps-in-toss/web-framework`,
+      );
+      assertString(
+        packageJson.devDependencies?.['@ait-co/devtools'],
+        `${wrapperPackagePath}: devDependencies.@ait-co/devtools`,
+      );
+      assertEqual(
+        packageJson.scripts?.['devtools:mcp'],
+        'pnpm exec devtools-mcp',
+        `${wrapperPackagePath}: devtools:mcp`,
+      );
+      assertEqual(
+        packageJson.scripts?.['devtools:mcp:mobile'],
+        'pnpm exec devtools-mcp --target=mobile',
+        `${wrapperPackagePath}: devtools:mcp:mobile`,
+      );
+    }
+  }
+
+  if (existsSync(wrapperMainPath)) {
+    const content = readText(wrapperMainPath);
+    for (const requiredText of [
+      "from '@mpgd/adapter-ait/host'",
+      "from '@mpgd/adapter-ait/wrapper'",
+      'installAitHostBridge({',
+      'mountAitGameBundle(app)',
+    ]) {
+      assertIncludesText(content, requiredText, wrapperMainPath);
+    }
+  }
+
+  if (existsSync(wrapperVitePath)) {
+    const content = readText(wrapperVitePath);
+    for (const requiredText of [
+      "from '@ait-co/devtools/unplugin'",
+      "from '@mpgd/adapter-ait/ad-config'",
+      'aitDevtools.vite({ mcp: true',
+      '__MPGD_AIT_AD_GROUP_IDS__',
+      '__MPGD_AIT_AD_PLACEMENT_TYPES__',
+    ]) {
+      assertIncludesText(content, requiredText, wrapperVitePath);
+    }
+  }
+
+  if (existsSync(wrapperGranitePath)) {
+    const content = readText(wrapperGranitePath);
+    for (const requiredText of ['__GAME_NAME__', '__GAME_TITLE__', 'generated/console-icon.png']) {
+      assertIncludesText(content, requiredText, wrapperGranitePath);
+    }
+  }
+
+  if (existsSync(targetsPath)) {
+    const targets = readJson(targetsPath) as {
+      readonly targets?: {
+        readonly ait?: {
+          readonly wrapperApp?: unknown;
+          readonly webDir?: unknown;
+          readonly metadata?: {
+            readonly appName?: unknown;
+            readonly displayName?: unknown;
+            readonly primaryColor?: unknown;
+            readonly sdkMajor?: unknown;
+          };
+        };
+      };
+    } | null;
+
+    if (targets !== null) {
+      assertEqual(
+        targets.targets?.ait?.wrapperApp,
+        'apps/target-ait',
+        `${targetsPath}: targets.ait.wrapperApp`,
+      );
+      assertEqual(
+        targets.targets?.ait?.webDir,
+        'apps/target-ait/public/game',
+        `${targetsPath}: targets.ait.webDir`,
+      );
+      assertEqual(
+        targets.targets?.ait?.metadata?.appName,
+        '__GAME_NAME__',
+        `${targetsPath}: targets.ait.metadata.appName`,
+      );
+      assertEqual(
+        targets.targets?.ait?.metadata?.displayName,
+        '__GAME_TITLE__',
+        `${targetsPath}: targets.ait.metadata.displayName`,
+      );
+      assertEqual(
+        targets.targets?.ait?.metadata?.primaryColor,
+        '#101820',
+        `${targetsPath}: targets.ait.metadata.primaryColor`,
+      );
+      if (targets.targets?.ait?.metadata?.sdkMajor !== 2) {
+        failures.push(`${targetsPath}: targets.ait.metadata.sdkMajor must be 2.`);
+      }
+    }
+  }
+
+  if (existsSync(rootPackagePath)) {
+    const packageJson = readJson(rootPackagePath) as {
+      readonly scripts?: Record<string, unknown>;
+    } | null;
+
+    if (packageJson !== null) {
+      for (const [scriptName, scriptValue] of Object.entries({
+        'dev:ait':
+          "APP_TARGET=ait MPGD_CONFIG_TARGET=ait MPGD_PLATFORM_TARGETS_FILE=./mpgd.targets.json APP_VERSION=0.0.0-dev BUILD_ID=ait-sandbox sh -c '__WORKSPACE_I18N_BUILD_PREFIX__vite --host 0.0.0.0'",
+        'ait:wrapper:dev': 'pnpm --dir apps/target-ait run dev',
+        'ait:wrapper:dev:plain': 'pnpm --dir apps/target-ait run dev:plain',
+        'ait:wrapper:dev:phone': 'pnpm --dir apps/target-ait run dev:phone',
+        'ait:devtools:mcp': 'pnpm --dir apps/target-ait run devtools:mcp',
+        'ait:devtools:mcp:mobile': 'pnpm --dir apps/target-ait run devtools:mcp:mobile',
+      })) {
+        assertEqual(
+          packageJson.scripts?.[scriptName],
+          scriptValue,
+          `${rootPackagePath}: ${scriptName}`,
+        );
+      }
+    }
+  }
+
+  if (existsSync(gitignorePath)) {
+    const ignoredPaths = new Set(readText(gitignorePath).split(/\r?\n/u));
+
+    for (const ignoredPath of [
+      'apps/target-ait/.ait_relay',
+      'apps/target-ait/.ait_urls',
+      'apps/target-ait/.granite/',
+      'apps/target-ait/generated/',
+      'apps/target-ait/public/assets/',
+      'apps/target-ait/public/game/',
+    ]) {
+      if (!ignoredPaths.has(ignoredPath)) {
+        failures.push(`${gitignorePath}: must ignore ${ignoredPath}.`);
       }
     }
   }

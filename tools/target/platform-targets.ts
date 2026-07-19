@@ -88,6 +88,7 @@ function assertPlatformTargetConfigShape(
   assertTargetKind(input.kind, target);
   assertString(input.gameApp, `${target}.gameApp`);
   assertString(input.adapter, `${target}.adapter`);
+  assertOptionalBoolean(input.authoritativeGameServices, `${target}.authoritativeGameServices`);
   assertTargetIntegrations(input.integrations, target);
   assertTargetIcon(input.icon, target);
 
@@ -201,6 +202,12 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 function assertString(input: unknown, label: string): asserts input is string {
   if (typeof input !== 'string' || input.length === 0) {
     throw new Error(`${label} must be a non-empty string.`);
+  }
+}
+
+function assertOptionalBoolean(input: unknown, label: string): void {
+  if (input !== undefined && typeof input !== 'boolean') {
+    throw new Error(`${label} must be a boolean when provided.`);
   }
 }
 

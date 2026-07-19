@@ -28,7 +28,20 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    }
+    },
+    "./host": {
+      "types": "./dist/host.d.ts",
+      "default": "./dist/host.js"
+    },
+    "./wrapper": {
+      "types": "./dist/wrapper.d.ts",
+      "default": "./dist/wrapper.js"
+    },
+    "./ad-config": {
+      "types": "./dist/ad-config.d.ts",
+      "default": "./dist/ad-config.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist"
@@ -44,7 +57,16 @@
     "@mpgd/bridge": "workspace:*",
     "@mpgd/platform": "workspace:*"
   },
+  "peerDependencies": {
+    "@apps-in-toss/web-framework": ">=2.10.4 <3"
+  },
+  "peerDependenciesMeta": {
+    "@apps-in-toss/web-framework": {
+      "optional": true
+    }
+  },
   "devDependencies": {
+    "@apps-in-toss/web-framework": "^2.10.6",
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"

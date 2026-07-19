@@ -116,6 +116,18 @@ function verifyGameOwnedIntegrationOverrides(): void {
   });
   const invalidInputs = [
     {
+      description: 'a non-boolean authoritative game-services flag',
+      config: {
+        targets: {
+          reddit: {
+            ...target,
+            authoritativeGameServices: 'false',
+          },
+        },
+      },
+      expectedMessage: 'authoritativeGameServices must be a boolean',
+    },
+    {
       description: 'an invalid availability state',
       config: invalidPlatformTargets,
       expectedMessage: 'notifications has an unsupported value',
@@ -406,6 +418,28 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     return;
   }
 
+  if (target === 'ait') {
+    assertEqual(
+      config.monetization.products.every((product) => !product.enabled),
+      true,
+      'ait products should stay disabled until app-owned product ids and authority are configured',
+    );
+    assertEqual(
+      config.ads.placements.every((placement) => !placement.enabled),
+      true,
+      'ait ads should stay disabled until app-owned ad group ids are configured',
+    );
+    assertEqual(config.leaderboard.enabled, true, 'ait leaderboard should be enabled');
+    assertEqual(config.leaderboard.native, true, 'ait should use Game Center leaderboard');
+    assertEqual(
+      config.leaderboard.defaultLeaderboardId,
+      'default',
+      'ait leaderboard id should be stable',
+    );
+    assertEqual(config.storage.support, 'native', 'ait should use native Storage');
+    return;
+  }
+
   assertEqual(
     config.monetization.products.every((product) => product.enabled),
     true,
@@ -422,12 +456,7 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     'default',
     `${target} leaderboard id should be stable`,
   );
-
-  if (target === 'ait') {
-    assertEqual(config.storage.support, 'none', 'ait should not rely on native storage');
-  } else {
-    assertEqual(config.storage.support, 'native', `${target} should use native storage`);
-  }
+  assertEqual(config.storage.support, 'native', `${target} should use native storage`);
 }
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {

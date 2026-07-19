@@ -156,11 +156,11 @@ Recommended starter composition:
 Generated games own their Reddit Devvit app root in `apps/target-devvit`.
 Run `pnpm devvit:login`, `pnpm devvit:init`, and `pnpm devvit:playtest` from the
 game root when you are ready to create the Reddit-side app record and test it.
-The starter still uses kit reference shells for Apps in Toss and Capacitor
-artifact smoke checks. The final smoke artifacts are copied back under the
-game app's `artifacts/` and `release-output/` directories, but copy or create
-game-owned shells before real Toss, App Store, or Google Play submission
-metadata is needed.
+The starter owns its Apps in Toss wrapper in `apps/target-ait`, including app
+identity, Granite configuration, community devtools, and console metadata. It
+still uses kit reference Capacitor shells for Android and iOS artifact smoke
+checks. Copy or create game-owned mobile shells before App Store or Google Play
+submission metadata is needed.
 
 Use the kit CLI for generated target builds because it resolves
 `${MPGD_KIT_PATH}` tokens in the game's `mpgd.targets.json` before invoking the
@@ -171,12 +171,15 @@ pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --t
 pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,microsoft-store,verse8,ait,reddit --kit-path .
 ```
 
-Use `staging` while an AIT or Capacitor entry points at a kit reference wrapper
-or shell. Production AIT, Android, and iOS builds fail closed unless the
-wrapper/shell resolves to a dedicated directory inside the game root and
-`VITE_MPGD_GAME_SERVICES_URL` is a public HTTPS URL without credentials.
-Canonical path validation blocks symbolic-link escapes; localhost and literal
-private or reserved IP addresses are also rejected.
+Use `staging` while a Capacitor entry points at a kit reference shell.
+Production AIT, Android, and iOS builds fail closed unless their wrapper or
+shell resolves to a dedicated directory inside the game root. An AIT target
+with `authoritativeGameServices: false` keeps native identity, storage, sharing,
+and Game Center while disabling IAP and ads, so it does not require a backend
+URL. Enabling authoritative AIT grants, or producing Android and iOS releases,
+requires `VITE_MPGD_GAME_SERVICES_URL` to be a public HTTPS URL without
+credentials. Canonical path validation blocks symbolic-link escapes; localhost
+and literal private or reserved IP addresses are also rejected.
 
 For a private sibling game repo, run the same commands from the game repo or kit
 checkout and pass an absolute or relative `--targets-file` plus `--kit-path`.

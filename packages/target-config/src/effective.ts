@@ -26,6 +26,7 @@ export type EffectiveAvailabilityReason =
 export interface EffectivePlatformTargetMetadata {
   readonly kind: string;
   readonly adapter: string;
+  readonly authoritativeGameServices?: boolean;
   readonly artifact?: string;
   readonly output?: string;
   readonly webDir?: string;
@@ -126,19 +127,25 @@ export interface CreateEffectiveTargetConfigMatrixInput {
 }
 
 export const defaultLeaderboardId = 'default';
+const disabledAuthoritativeMonetization = {
+  iap: false,
+  rewardedAds: false,
+  interstitialAds: false,
+} as const;
 
 export function createEffectiveTargetConfig(
   input: CreateEffectiveTargetConfigInput,
 ): EffectiveTargetConfig {
+  const config = resolveAuthoritativeGameServicesConfig(input.config, input.platformTarget);
   const products = input.catalog.products.map((product) =>
-    createEffectiveProductConfig(input.target, input.config, product),
+    createEffectiveProductConfig(input.target, config, product),
   );
   const placements = input.adPlacements.placements.map((placement) =>
-    createEffectiveAdPlacementConfig(input.target, input.config, placement),
+    createEffectiveAdPlacementConfig(input.target, config, placement),
   );
-  const leaderboardEnabled = input.config.features.leaderboard;
+  const leaderboardEnabled = config.features.leaderboard;
   const integrations = normalizeTargetIntegrationConfig({
-    ...input.config.integrations,
+    ...config.integrations,
     ...input.platformTarget?.integrations,
   });
 
@@ -149,12 +156,12 @@ export function createEffectiveTargetConfig(
       adPlacements: input.adPlacements.version,
     }),
     target: input.target,
-    runtime: input.config.runtime,
-    release: input.config.release,
-    features: input.config.features,
-    capabilities: input.config.capabilities,
+    runtime: config.runtime,
+    release: config.release,
+    features: config.features,
+    capabilities: config.capabilities,
     integrations,
-    policy: input.config.policy,
+    policy: config.policy,
     sources: {
       targetConfig: input.targetConfigVersion,
       productCatalog: input.catalog.version,
@@ -167,28 +174,46 @@ export function createEffectiveTargetConfig(
           }),
     },
     monetization: {
-      iap: input.config.monetization.iap,
+      iap: config.monetization.iap,
       products,
     },
     ads: {
-      rewardedAds: input.config.monetization.rewardedAds,
-      interstitialAds: input.config.monetization.interstitialAds,
+      rewardedAds: config.monetization.rewardedAds,
+      interstitialAds: config.monetization.interstitialAds,
       placements,
     },
     leaderboard: {
-      native: input.config.leaderboard.native,
+      native: config.leaderboard.native,
       enabled: leaderboardEnabled,
       reason: leaderboardEnabled ? 'available' : 'target-disabled',
       ...(leaderboardEnabled ? { defaultLeaderboardId } : {}),
     },
     storage: {
-      support: input.config.capabilities.storage,
-      enabled: input.config.capabilities.storage !== 'none',
+      support: config.capabilities.storage,
+      enabled: config.capabilities.storage !== 'none',
     },
     localization: {
-      enabled: input.config.capabilities.localization,
-      fallbackLocale: input.config.localization.fallbackLocale,
+      enabled: config.capabilities.localization,
+      fallbackLocale: config.localization.fallbackLocale,
     },
+  };
+}
+
+function resolveAuthoritativeGameServicesConfig(
+  config: TargetConfig,
+  platformTarget: EffectivePlatformTargetMetadata | undefined,
+): TargetConfig {
+  if (platformTarget?.authoritativeGameServices !== false) {
+    return config;
+  }
+
+  return {
+    ...config,
+    features: {
+      ...config.features,
+      ...disabledAuthoritativeMonetization,
+    },
+    monetization: disabledAuthoritativeMonetization,
   };
 }
 

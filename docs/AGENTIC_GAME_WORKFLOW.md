@@ -20,9 +20,10 @@ The repository separates four concerns:
 - Optional targets may add a generated target skill. Selecting or initializing
   Microsoft Store adds `.agents/skills/release-microsoft-store` together with
   its PWA build and evidence workflow.
-- Generated games own their Reddit Devvit app root in `apps/target-devvit`.
-  Apps in Toss and Capacitor shells remain kit reference shells for smoke builds
-  until a game creates production-owned wrappers and app metadata.
+- Generated games own their Reddit Devvit app root in `apps/target-devvit` and
+  their Apps in Toss wrapper in `apps/target-ait`. Capacitor shells remain kit
+  references for smoke builds until a game creates production-owned Android and
+  iOS shells and app metadata.
 
 Generated game projects remain private by default. The public packages are the
 generator and reusable SDK surfaces. New publishable packages should be added

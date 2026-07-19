@@ -240,6 +240,9 @@ function toEffectivePlatformTargetMetadata(
   const base = {
     kind: config.kind,
     adapter: config.adapter,
+    ...(config.authoritativeGameServices === undefined
+      ? {}
+      : { authoritativeGameServices: config.authoritativeGameServices }),
     ...(config.integrations === undefined ? {} : { integrations: config.integrations }),
   };
 

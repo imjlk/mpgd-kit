@@ -65,18 +65,24 @@ pnpm --dir ../mpgd-kit mpgd target build-all \
 into `.mpgd.targets.generated.json` before calling the kit's existing target
 build and smoke scripts.
 
-The starter's Apps in Toss and Capacitor entries intentionally point at kit
-reference wrappers, so their reusable validation builds use the `staging`
-profile. Before an AIT, Android, or iOS production build, copy or create the
-wrapper/shell under this game directory, update `mpgd.targets.json`, and set
-`VITE_MPGD_GAME_SERVICES_URL` to a public HTTPS endpoint without embedded
-credentials. Production preflight resolves real paths, rejects wrappers or
-shells outside the game root (including symbolic-link escapes), and blocks
-localhost plus literal private or reserved IP addresses.
+The starter owns its Apps in Toss wrapper under `apps/target-ait`. With
+`authoritativeGameServices: false`, production keeps native identity, storage,
+sharing, and Game Center while disabling IAP and ads; no game-services URL is
+required for that fail-closed first release. To enable purchases or ads later,
+set the authority flag to `true`, add app-owned product or ad IDs, and configure
+`VITE_MPGD_GAME_SERVICES_URL` to a public HTTPS verifier without embedded
+credentials.
+
+The Capacitor entries still intentionally point at kit reference shells, so
+their reusable validation builds use the `staging` profile. Before an Android
+or iOS production build, copy or create the shell under this game directory and
+update `mpgd.targets.json`. Production preflight resolves real paths, rejects
+wrappers or shells outside the game root (including symbolic-link escapes), and
+blocks localhost plus literal private or reserved IP addresses.
 
 `mpgd target doctor` verifies that release manifest artifact paths stay under
-this game directory, even when a build used the kit reference Apps in Toss or
-Capacitor wrappers.
+this game directory, including non-production builds that use kit reference
+Capacitor shells.
 
 Optional targets can add their own config, scripts, runtime wiring, and release
 skill. To enable Microsoft Store after creation, run
@@ -224,8 +230,8 @@ pnpm build:ait
 pnpm smoke:ait
 ```
 
-The kit reference wrapper includes the Apps in Toss community devtools package
-for SDK mock and device debugging while the wrapper is still kit-owned:
+The game-owned wrapper includes the Apps in Toss community devtools package for
+SDK mocks and device debugging:
 
 ```sh
 pnpm ait:wrapper:dev
@@ -235,7 +241,7 @@ pnpm ait:devtools:mcp
 pnpm ait:devtools:mcp:mobile
 ```
 
-`ait:wrapper:dev` runs the kit wrapper with the community Vite plugin enabled.
+`ait:wrapper:dev` runs `apps/target-ait` with the community Vite plugin enabled.
 It loads the last game bundle copied by `pnpm build:ait` from the wrapper's
 `public/game` directory, so run `pnpm build:ait` again after game changes before
 opening a wrapper devtools session. Use `ait:wrapper:dev:plain` to disable the
@@ -266,8 +272,8 @@ pnpm ait:console:deploy -- release-output/ait/YOUR_APP.ait
 `ait:console:register` creates the mini-app and writes its `miniAppId` back to
 that file. Before registration, add the real logo, thumbnail, and screenshot
 files referenced by `aitcc.yaml` under `./assets/`. Use `pnpm build:ait` for the
-kit wrapper smoke loop, and run `pnpm build:ait:package` before console deploys
-so `release-output/ait/` contains the `.ait` bundle you pass after `--`.
+game-owned wrapper smoke loop, and run `pnpm build:ait:package` before console
+deploys so `release-output/ait/` contains the `.ait` bundle you pass after `--`.
 
 The starter also installs `@apps-in-toss/web-framework` and awaits
 `install()` from `@ait-co/polyfill` only when `__APP_TARGET__` is `ait`. In the
@@ -281,6 +287,12 @@ verified in the Apps in Toss sandbox or a game-owned devtools setup. If your
 game uses permission-gated APIs such as clipboard or geolocation, declare the
 matching permissions in the game-owned Apps in Toss `granite.config.ts` before
 submission.
+
+The generated AIT target starts with `authoritativeGameServices: false`. Native
+anonymous identity, persistent Storage, sharing, and Game Center remain
+available, while IAP and ads are removed from the effective game configuration.
+Only switch the flag to `true` after adding app-owned catalog/ad ids and a public
+HTTPS game-services backend that verifies purchase or reward evidence.
 
 ## Target Ownership Notes
 
@@ -356,10 +368,10 @@ submission.
 - Reddit Devvit is game-owned in `apps/target-devvit`. Its Redis-backed storage
   bridge fails closed on identity, provider, serialization, and quota errors;
   it never switches progress to browser `localStorage`.
-- Apps in Toss currently uses the kit reference wrapper at
-  `${MPGD_KIT_PATH}/apps/target-ait` for smoke packaging. Before a real Toss
-  submission, create a game-owned wrapper/config so the app name, CLI state, and
-  review metadata are not shared with the kit demo.
+- Apps in Toss is game-owned in `apps/target-ait`. The wrapper keeps the app
+  name, console state, review metadata, and `@ait-co/devtools` development
+  integration local to the game while reusing `@mpgd/adapter-ait` for the
+  production bridge and game-bundle loader.
 - Android and iOS currently use the kit reference Capacitor shell at
   `${MPGD_KIT_PATH}/apps/mobile-capacitor`. That is useful for local artifact
   checks, and final artifacts are copied back to this game's `release-output/`

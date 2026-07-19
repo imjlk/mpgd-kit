@@ -470,6 +470,18 @@ const androidTargetOverrideEffectiveConfig = createEffectiveTargetConfig({
     },
   },
 });
+const androidWithoutAuthorityEffectiveConfig = createEffectiveTargetConfig({
+  target: 'android',
+  targetConfigVersion: targetConfigMatrix.version,
+  config: androidConfig,
+  catalog: productCatalog,
+  adPlacements,
+  platformTarget: {
+    kind: 'capacitor-android',
+    adapter: 'capacitor',
+    authoritativeGameServices: false,
+  },
+});
 const androidTargetOverrideGateway = withTargetAvailability(gateway, androidConfig, {
   effectiveConfig: androidTargetOverrideEffectiveConfig,
   resolveAdPlacementType,
@@ -482,6 +494,23 @@ const androidTargetOverrideRuntime = await androidTargetOverrideGateway.getTarge
 const androidRuntime = await androidGateway.getTargetRuntime();
 
 assertEqual(androidRuntime.presentationMode, 'fullscreen');
+assertEqual(androidWithoutAuthorityEffectiveConfig.features.iap, false);
+assertEqual(androidWithoutAuthorityEffectiveConfig.features.rewardedAds, false);
+assertEqual(androidWithoutAuthorityEffectiveConfig.features.interstitialAds, false);
+assertEqual(androidWithoutAuthorityEffectiveConfig.monetization.iap, false);
+assertEqual(androidWithoutAuthorityEffectiveConfig.ads.rewardedAds, false);
+assertEqual(androidWithoutAuthorityEffectiveConfig.ads.interstitialAds, false);
+assertEqual(
+  getEffectiveProductConfig(androidWithoutAuthorityEffectiveConfig, 'COINS_100')?.reason,
+  'target-disabled',
+);
+assertEqual(
+  getEffectiveAdPlacementConfig(
+    androidWithoutAuthorityEffectiveConfig,
+    'CONTINUE_AFTER_FAIL',
+  )?.reason,
+  'target-disabled',
+);
 assertEqual(androidEffectiveConfig.integrations.identityUpgrade, 'available');
 assertDeepEqual(androidTargetOverrideEffectiveConfig.integrations, {
   identityUpgrade: 'available',

@@ -7,6 +7,7 @@ import type { UserConfig } from 'vite';
 interface RuntimePlatformTargetMetadata {
   readonly kind: string;
   readonly adapter: string;
+  readonly authoritativeGameServices?: boolean;
   readonly integrations?: Record<string, unknown>;
 }
 
@@ -174,9 +175,21 @@ function readRuntimePlatformTarget(
     throw new Error(`Platform target ${configTarget} integrations must be an object.`);
   }
 
+  if (
+    target.authoritativeGameServices !== undefined
+    && typeof target.authoritativeGameServices !== 'boolean'
+  ) {
+    throw new Error(
+      `Platform target ${configTarget} authoritativeGameServices must be a boolean.`,
+    );
+  }
+
   return {
     kind: target.kind,
     adapter: target.adapter,
+    ...(target.authoritativeGameServices === undefined
+      ? {}
+      : { authoritativeGameServices: target.authoritativeGameServices }),
     ...(target.integrations === undefined ? {} : { integrations: target.integrations }),
   };
 }

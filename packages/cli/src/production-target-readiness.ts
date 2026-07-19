@@ -98,7 +98,9 @@ export function assertProductionTargetReadiness(
     }
   }
 
-  assertAuthoritativeGameServicesUrl(input.gameServicesUrl, input.target);
+  if (targetConfig.authoritativeGameServices !== false) {
+    assertAuthoritativeGameServicesUrl(input.gameServicesUrl, input.target);
+  }
 }
 
 function readTargets(targetsFile: string): Record<string, unknown> {

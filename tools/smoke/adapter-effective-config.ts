@@ -1,5 +1,5 @@
 import type { BridgeMethod, BridgeRequest, BridgeResponse } from '@mpgd/bridge';
-import type { AdPlacements } from '@mpgd/catalog';
+import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform';
 
 import { createAitPlatformGateway } from '../../adapters/ait/src/index';
@@ -8,6 +8,7 @@ import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/ind
 import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
 import {
+  createEffectiveTargetConfig,
   getEffectiveAdPlacementConfig,
   getEffectiveProductConfig,
   type EffectiveTargetConfig,
@@ -26,6 +27,7 @@ const targetConfigMatrix = readJsonFile(
 ) as TargetConfigMatrix;
 const effectiveConfigMatrix =
   loadEffectiveTargetConfigMatrix() as EffectiveTargetConfigMatrix;
+const productCatalog = readJsonFile('packages/catalog/catalog.json') as ProductCatalog;
 const adPlacements = readJsonFile('packages/catalog/placements.json') as AdPlacements;
 const targetAdPlacements = adPlacements.placements.map((placement) => ({
   id: placement.id,
@@ -231,35 +233,118 @@ async function verifyAitAdapter(): Promise<void> {
   assertEqual(effectiveConfig.target, 'ait', 'ait effective target');
   assertEqual(
     getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
-    true,
-    'ait product should be enabled',
+    false,
+    'ait product should be disabled without authoritative game services',
   );
   assertEqual(
     getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
-    true,
-    'ait rewarded placement should be enabled',
+    false,
+    'ait rewarded placement should be disabled without authoritative game services',
   );
 
-  await gateway.commerce.purchase({
+  assertDeepEqual(
+    await gateway.commerce.purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'ait-disabled-purchase',
+    }),
+    {
+      status: 'cancelled',
+      entitlementIds: [],
+    },
+    'ait purchase should fail closed without authoritative game services',
+  );
+  assertDeepEqual(
+    await gateway.ads.showRewarded({
+      placementId: 'CONTINUE_AFTER_FAIL',
+      idempotencyKey: 'ait-disabled-reward',
+    }),
+    {
+      status: 'unavailable',
+      rewardGranted: false,
+    },
+    'ait reward should fail closed without authoritative game services',
+  );
+  assertDeepEqual(
+    await gateway.leaderboard.submitScore({
+      leaderboardId: 'default',
+      score: 1,
+      runId: 'ait-native-leaderboard-run',
+      submittedAt: new Date().toISOString(),
+    }),
+    { submitted: true },
+    'ait leaderboard submission should succeed with native delegation',
+  );
+
+  assertDeepEqual(
+    bridge.methods.slice(1),
+    ['leaderboard.submitScore'],
+    'ait adapter should preserve native leaderboard while filtering grants',
+  );
+
+  const authoritativeBridge = createRecordingBridge('ait');
+  const aitConfig = getTargetConfig(targetConfigMatrix, 'ait');
+  const authoritativeEffectiveConfig = createEffectiveTargetConfig({
+    target: 'ait',
+    targetConfigVersion: targetConfigMatrix.version,
+    config: aitConfig,
+    catalog: productCatalog,
+    adPlacements,
+    platformTarget: {
+      kind: 'apps-in-toss',
+      adapter: 'ait',
+      authoritativeGameServices: true,
+    },
+  });
+  const authoritativeGateway = wrapGateway(
+    'ait',
+    createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'build-ait-authoritative',
+      bridge: authoritativeBridge,
+    }),
+    authoritativeEffectiveConfig,
+  );
+  const authoritativeRuntime = await authoritativeGateway.getTargetRuntime();
+  const authoritativeConfig = requireEffectiveConfig(
+    authoritativeRuntime.effectiveConfig,
+    'ait-authoritative',
+  );
+
+  assertEqual(
+    getEffectiveProductConfig(authoritativeConfig, 'COINS_100')?.enabled,
+    true,
+    'authoritative ait product should be enabled',
+  );
+  assertEqual(
+    getEffectiveAdPlacementConfig(
+      authoritativeConfig,
+      'CONTINUE_AFTER_FAIL',
+    )?.enabled,
+    true,
+    'authoritative ait rewarded placement should be enabled',
+  );
+
+  await authoritativeGateway.commerce.purchase({
     productId: 'COINS_100',
     source: 'shop',
-    idempotencyKey: 'ait-parity-purchase',
+    idempotencyKey: 'ait-authoritative-purchase',
   });
-  await gateway.ads.showRewarded({
+  await authoritativeGateway.ads.showRewarded({
     placementId: 'CONTINUE_AFTER_FAIL',
-    idempotencyKey: 'ait-parity-reward',
+    idempotencyKey: 'ait-authoritative-reward',
   });
-  await gateway.leaderboard.submitScore({
+  await authoritativeGateway.leaderboard.submitScore({
     leaderboardId: 'default',
     score: 1,
-    runId: 'ait-parity-run',
+    runId: 'ait-authoritative-run',
     submittedAt: new Date().toISOString(),
   });
 
   assertDeepEqual(
-    bridge.methods.slice(1),
+    authoritativeBridge.methods.slice(1),
     enabledActionMethods,
-    'ait adapter should delegate enabled actions',
+    'authoritative ait adapter should delegate enabled actions',
   );
 }
 
@@ -329,9 +414,14 @@ function requireEffectiveConfig(
   return config;
 }
 
-function wrapGateway(configTarget: string, gateway: PlatformGateway) {
+function wrapGateway(
+  configTarget: string,
+  gateway: PlatformGateway,
+  effectiveConfigOverride?: EffectiveTargetConfig,
+) {
   const config = getTargetConfig(targetConfigMatrix, configTarget);
-  const effectiveConfig = effectiveConfigMatrix.targets[configTarget];
+  const effectiveConfig =
+    effectiveConfigOverride ?? effectiveConfigMatrix.targets[configTarget];
 
   if (effectiveConfig === undefined) {
     throw new Error(`Missing effective target config for ${configTarget}.`);

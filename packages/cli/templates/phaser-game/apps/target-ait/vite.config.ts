@@ -7,11 +7,10 @@ import { defineConfig } from 'vite';
 
 const isTruthyEnv = (value: string | undefined): boolean =>
   value !== undefined && value !== '' && value !== '0' && value.toLowerCase() !== 'false';
-
 const aitDevtoolsTunnel = isTruthyEnv(process.env.AIT_TUNNEL)
   ? { cdp: isTruthyEnv(process.env.AIT_TUNNEL_CDP) }
   : false;
-const aitAppName = process.env.MPGD_AIT_APP_NAME?.trim() || 'mpgd-kit';
+const aitAppName = process.env.MPGD_AIT_APP_NAME?.trim() || '__GAME_NAME__';
 const aitAdConfig = readAitAdConfig(process.env.MPGD_AD_PLACEMENTS_FILE);
 
 export default defineConfig(({ command, isPreview }) => ({
@@ -24,10 +23,7 @@ export default defineConfig(({ command, isPreview }) => ({
     ...(command === 'serve' && !isPreview && process.env.MPGD_AIT_DEVTOOLS !== '0'
       ? [aitDevtools.vite({ mcp: true, tunnel: aitDevtoolsTunnel })]
       : []),
-    ttsc({
-      project: 'tsconfig.bundle.json',
-      plugins: false,
-    }),
+    ttsc({ project: 'tsconfig.json', plugins: false }),
   ],
   build: {
     target: 'es2022',
@@ -45,7 +41,6 @@ function readAitAdConfig(path: string | undefined): {
   }
 
   let parsed: unknown;
-
   try {
     parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
   } catch (error) {

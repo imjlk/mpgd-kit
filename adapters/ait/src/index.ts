@@ -19,6 +19,8 @@ import type {
   ShareResult,
 } from '@mpgd/platform';
 
+import { createAitLifecycleAdapter } from './lifecycle.js';
+
 export interface GamePlatformBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
 }
@@ -96,14 +98,7 @@ export function createAitPlatformGateway(input: {
       submitScore: (payload) => request('leaderboard.submitScore', payload),
       open: (payload) => request('leaderboard.open', payload ?? {}),
     },
-    lifecycle: {
-      onPause() {
-        return () => {};
-      },
-      onResume() {
-        return () => {};
-      },
-    },
+    lifecycle: createAitLifecycleAdapter(),
     storage: {
       async load(payload) {
         return decodeBridgeStorageLoadData(await request<unknown>('storage.load', payload));
@@ -112,6 +107,13 @@ export function createAitPlatformGateway(input: {
     },
   };
 }
+
+export {
+  aitLifecyclePauseEvent,
+  aitLifecycleResumeEvent,
+  createAitLifecycleAdapter,
+  dispatchAitLifecycleEvent,
+} from './lifecycle.js';
 
 function getBridge(): GamePlatformBridge | undefined {
   return (globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge }).__GAME_PLATFORM_BRIDGE__;

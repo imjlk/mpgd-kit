@@ -249,11 +249,10 @@ pnpm mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,micr
 
 Generated Phaser starters own their Reddit Devvit app root in
 `apps/target-devvit`; run `pnpm devvit:init` once after login before live
-playtest/upload. Apps in Toss and Capacitor targets currently use kit reference
-shells for smoke builds, but release artifacts and manifests are copied back
-under the game app's `artifacts/` and `release-output/` directories. Production
-app metadata should still move into game-owned wrappers before store or Toss
-submission.
+playtest/upload. They also own an Apps in Toss wrapper in `apps/target-ait`, so
+app identity, console state, community devtools, icons, and review metadata stay
+with the game. Capacitor targets continue to use kit reference shells for smoke
+builds until a game creates production-owned Android and iOS shells.
 
 Optional Microsoft Store support is modeled as a PWA/web target, not a separate native
 SDK adapter. `pnpm build:microsoft-store` builds the Phaser game with the
@@ -423,10 +422,12 @@ for target overrides, native staging, and the Apps in Toss console URL gate.
 
 ## Apps in Toss
 
-The Apps in Toss target currently uses SDK 2.x compatible `granite.config.ts`
-and `ait build` scripts. Its wrapper resolves the game-specific player id with
-`getUserKeyForGame`; Toss app 5.232.0 or newer and a game-category mini-app are
-required outside the explicit plain-browser mock command. SDK 3.x keeps the feature interface compatible but
+The Apps in Toss target uses SDK 2.x-compatible `granite.config.ts` and `ait
+build` scripts. The reusable production host resolves a stable game-scoped
+player id with the game-only `getUserKeyForGame`, persists gateway state with
+native `Storage`, and delegates sharing, Game Center, and Ads 2.0 to the official SDK. Purchases
+stay fail-closed, and rewarded-ad callbacks remain evidence until a game-owned
+authority verifies them. SDK 3.x keeps the feature interface compatible but
 renames the config file to `apps-in-toss.config.ts`, so that migration should be
 handled as a dedicated follow-up.
 

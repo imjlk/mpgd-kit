@@ -1,5 +1,5 @@
 {
-  "name": "@mpgd/target-ait",
+  "name": "__PACKAGE_NAME__-target-ait",
   "private": true,
   "version": "0.0.0",
   "type": "module",
@@ -12,15 +12,14 @@
     "ait:deploy": "ait deploy --api-key \"$AIT_API_KEY\"",
     "devtools:mcp": "pnpm exec devtools-mcp",
     "devtools:mcp:mobile": "pnpm exec devtools-mcp --target=mobile",
-    "test": "pnpm --dir ../../adapters/ait test",
-    "check": "ttsc --noEmit",
-    "lint": "ttsc --noEmit",
+    "check": "ttsc --noEmit -p tsconfig.json",
+    "lint": "ttsc --noEmit -p tsconfig.json",
     "format": "ttsc format",
     "fix": "ttsc fix"
   },
   "dependencies": {
     "@apps-in-toss/web-framework": "^2.10.6",
-    "@mpgd/adapter-ait": "workspace:*"
+    "@mpgd/adapter-ait": "__MPGD_DEPENDENCY_VERSION_ADAPTER_AIT__"
   },
   "devDependencies": {
     "@ait-co/devtools": "^0.1.138",
