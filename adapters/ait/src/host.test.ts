@@ -55,6 +55,22 @@ describe('AIT production host bridge', () => {
     });
   });
 
+  it('treats corrupted native storage as a missing save', async () => {
+    const bridge = createAitHostBridge({
+      dependencies: createDependencies({
+        storage: {
+          getItem: async () => '{not-valid-json',
+          setItem: async () => {},
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'storage.load', { key: 'save:v1' })).resolves.toEqual({
+      __mpgdBridgeProtocol: 'mpgd.storage.load.v1',
+      found: false,
+    });
+  });
+
   it('fails closed for commerce and unconfigured ads', async () => {
     const bridge = createAitHostBridge({ dependencies: createDependencies() });
 
@@ -161,6 +177,61 @@ describe('AIT production host bridge', () => {
     showCallbacks?.onEvent({ type: 'dismissed' });
 
     await expect(reward).resolves.toEqual({ status: 'skipped', rewardGranted: false });
+  });
+
+  it('consumes a preloaded ad before awaiting the native show result', async () => {
+    let loadCallbacks: LoadAdCallbacks | undefined;
+    let showCallbacks: ShowAdCallbacks | undefined;
+    let showCount = 0;
+    const bridge = createAitHostBridge({
+      adGroupIds: { SUDOKU_HINT_REWARDED: 'ait-ad-group-1' },
+      adPlacementTypes: { SUDOKU_HINT_REWARDED: 'rewarded' },
+      dependencies: createDependencies({
+        loadFullScreenAd: Object.assign(
+          (callbacks: LoadAdCallbacks) => {
+            loadCallbacks = callbacks;
+            return () => {};
+          },
+          { isSupported: () => true },
+        ),
+        showFullScreenAd: Object.assign(
+          (callbacks: ShowAdCallbacks) => {
+            showCount += 1;
+            showCallbacks = callbacks;
+            return () => {};
+          },
+          { isSupported: () => true },
+        ),
+      }),
+    });
+
+    const preload = request(bridge, 'ads.preload', { placementId: 'SUDOKU_HINT_REWARDED' });
+    loadCallbacks?.onEvent({ type: 'loaded' });
+    await preload;
+
+    const firstShow = request(bridge, 'ads.showRewarded', {
+      placementId: 'SUDOKU_HINT_REWARDED',
+      idempotencyKey: 'reward-concurrent-1',
+    });
+    const secondShow = request(bridge, 'ads.showRewarded', {
+      placementId: 'SUDOKU_HINT_REWARDED',
+      idempotencyKey: 'reward-concurrent-2',
+    });
+
+    await expect(secondShow).resolves.toEqual({
+      status: 'unavailable',
+      rewardGranted: false,
+    });
+    showCallbacks?.onEvent({
+      type: 'userEarnedReward',
+      data: { unitType: 'hint', unitAmount: 1 },
+    });
+    showCallbacks?.onEvent({ type: 'dismissed' });
+    await expect(firstShow).resolves.toMatchObject({
+      status: 'completed',
+      rewardGranted: true,
+    });
+    expect(showCount).toBe(1);
   });
 
   it('delegates supported Game Center score submission and opening', async () => {

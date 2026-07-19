@@ -127,6 +127,11 @@ export interface CreateEffectiveTargetConfigMatrixInput {
 }
 
 export const defaultLeaderboardId = 'default';
+const disabledAuthoritativeMonetization = {
+  iap: false,
+  rewardedAds: false,
+  interstitialAds: false,
+} as const;
 
 export function createEffectiveTargetConfig(
   input: CreateEffectiveTargetConfigInput,
@@ -206,15 +211,9 @@ function resolveAuthoritativeGameServicesConfig(
     ...config,
     features: {
       ...config.features,
-      iap: false,
-      rewardedAds: false,
-      interstitialAds: false,
+      ...disabledAuthoritativeMonetization,
     },
-    monetization: {
-      iap: false,
-      rewardedAds: false,
-      interstitialAds: false,
-    },
+    monetization: disabledAuthoritativeMonetization,
   };
 }
 

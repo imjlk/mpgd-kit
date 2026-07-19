@@ -213,13 +213,13 @@ export function createAitHostBridge(
           adGroupId === undefined
           || adPlacementTypes.get(placementId) !== 'rewarded'
           || !dependencies.showFullScreenAd.isSupported()
-          || !loadedAdGroupIds.has(adGroupId)
+          || !consumeLoadedAd(adGroupId, loadedAdGroupIds)
         ) {
           return ok(request, { status: 'unavailable', rewardGranted: false });
         }
 
         const correlationId = readIdempotencyKey(request.payload, request.id);
-        const result = await showRewardedAd(dependencies, adGroupId, loadedAdGroupIds, adTimeoutMs);
+        const result = await showRewardedAd(dependencies, adGroupId, adTimeoutMs);
 
         return ok(
           request,
@@ -250,15 +250,12 @@ export function createAitHostBridge(
           adGroupId === undefined
           || adPlacementTypes.get(placementId) !== 'interstitial'
           || !dependencies.showFullScreenAd.isSupported()
-          || !loadedAdGroupIds.has(adGroupId)
+          || !consumeLoadedAd(adGroupId, loadedAdGroupIds)
         ) {
           return ok(request, { status: 'unavailable' });
         }
 
-        return ok(
-          request,
-          await showInterstitialAd(dependencies, adGroupId, loadedAdGroupIds, adTimeoutMs),
-        );
+        return ok(request, await showInterstitialAd(dependencies, adGroupId, adTimeoutMs));
       }
 
       case 'leaderboard.submitScore': {
@@ -290,14 +287,7 @@ export function createAitHostBridge(
       case 'storage.load': {
         const key = readStorageKey(request.payload);
         const serialized = await dependencies.storage.getItem(key);
-        const data: BridgeStorageLoadData = serialized === null
-          ? { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false }
-          : {
-              __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
-              found: true,
-              value: JSON.parse(serialized) as unknown,
-            };
-        return ok(request, data);
+        return ok(request, decodeStoredValue(serialized));
       }
 
       case 'storage.save': {
@@ -420,22 +410,26 @@ async function preloadAdGroup(
 async function showRewardedAd(
   dependencies: AitHostDependencies,
   adGroupId: string,
-  loaded: Set<string>,
   timeoutMs: number,
 ): Promise<{ readonly status: 'completed' | 'skipped' | 'failed'; readonly rewardGranted: boolean }> {
   let rewardGranted = false;
-  const status = await showAd(dependencies, adGroupId, loaded, timeoutMs, (eventType) => {
+  const status = await showAd(dependencies, adGroupId, timeoutMs, (eventType) => {
     if (eventType === 'userEarnedReward') {
       rewardGranted = true;
     }
   });
+  let resultStatus: 'completed' | 'skipped' | 'failed';
+
+  if (status === 'shown' && rewardGranted) {
+    resultStatus = 'completed';
+  } else if (status === 'failed') {
+    resultStatus = 'failed';
+  } else {
+    resultStatus = 'skipped';
+  }
 
   return {
-    status: status === 'shown' && rewardGranted
-      ? 'completed'
-      : status === 'failed'
-        ? 'failed'
-        : 'skipped',
+    status: resultStatus,
     rewardGranted,
   };
 }
@@ -443,21 +437,18 @@ async function showRewardedAd(
 async function showInterstitialAd(
   dependencies: AitHostDependencies,
   adGroupId: string,
-  loaded: Set<string>,
   timeoutMs: number,
 ): Promise<{ readonly status: 'shown' | 'skipped' | 'unavailable' }> {
-  const status = await showAd(dependencies, adGroupId, loaded, timeoutMs);
+  const status = await showAd(dependencies, adGroupId, timeoutMs);
   return { status: status === 'failed' ? 'skipped' : status };
 }
 
 function showAd(
   dependencies: AitHostDependencies,
   adGroupId: string,
-  loaded: Set<string>,
   timeoutMs: number,
   observe?: (eventType: string) => void,
 ): Promise<'shown' | 'failed'> {
-  loaded.delete(adGroupId);
   dispatchAitLifecycleEvent('pause');
 
   return new Promise((resolve) => {
@@ -490,11 +481,15 @@ function getLaunchIntent(): LaunchIntent {
   const challengeToken = nonEmptyParam(params.get('challengeToken'));
   const puzzleId = nonEmptyParam(params.get('puzzleId'));
   const requestedEntry = nonEmptyParam(params.get('entry'));
-  const entry = requestedEntry !== undefined && launchEntries.has(requestedEntry as LaunchEntry)
-    ? requestedEntry as LaunchEntry
-    : challengeToken === undefined
-      ? 'home'
-      : 'friend-challenge';
+  let entry: LaunchEntry;
+
+  if (requestedEntry !== undefined && launchEntries.has(requestedEntry as LaunchEntry)) {
+    entry = requestedEntry as LaunchEntry;
+  } else if (challengeToken === undefined) {
+    entry = 'home';
+  } else {
+    entry = 'friend-challenge';
+  }
 
   return {
     entry,
@@ -575,6 +570,31 @@ function normalizeAdGroupIds(
       .map(([placementId, adGroupId]) => [placementId.trim(), adGroupId.trim()] as const)
       .filter(([placementId, adGroupId]) => placementId.length > 0 && adGroupId.length > 0),
   );
+}
+
+function consumeLoadedAd(adGroupId: string, loaded: Set<string>): boolean {
+  if (!loaded.has(adGroupId)) {
+    return false;
+  }
+
+  loaded.delete(adGroupId);
+  return true;
+}
+
+function decodeStoredValue(serialized: string | null): BridgeStorageLoadData {
+  if (serialized === null) {
+    return { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false };
+  }
+
+  try {
+    return {
+      __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+      found: true,
+      value: JSON.parse(serialized) as unknown,
+    };
+  } catch {
+    return { __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false };
+  }
 }
 
 function hasConfiguredAdType(

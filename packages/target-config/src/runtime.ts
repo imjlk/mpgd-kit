@@ -340,14 +340,13 @@ export function createTargetRuntimeSnapshot(input: {
   readonly gateway?: PlatformGateway;
 }): TargetRuntimeSnapshot {
   const configTarget = input.configTarget ?? targetConfigKeyForPlatform(input.target);
-  const availabilityConfig = input.effectiveConfig === undefined
-    ? input.config
-    : {
-        ...input.config,
-        features: input.effectiveConfig.features,
-      };
+  const availabilityConfig = resolveAvailabilityConfig(input.config, input.effectiveConfig);
   const features = {
-    iap: getFeatureAvailability('iap', availabilityConfig, input.capabilities),
+    iap: getFeatureAvailability(
+      'iap',
+      availabilityConfig,
+      input.capabilities,
+    ),
     rewardedAds: getFeatureAvailability(
       'rewardedAds',
       availabilityConfig,
@@ -414,12 +413,7 @@ export function withTargetAvailability(
   config: TargetConfig,
   options: TargetAvailabilityOptions = {},
 ): TargetConfiguredGateway {
-  const availabilityConfig = options.effectiveConfig === undefined
-    ? config
-    : {
-        ...config,
-        features: options.effectiveConfig.features,
-      };
+  const availabilityConfig = resolveAvailabilityConfig(config, options.effectiveConfig);
   const getGatewayCapabilities = (): Promise<PlatformCapabilities> => (
     gateway.getCapabilities()
   );
@@ -600,6 +594,18 @@ export function withTargetAvailability(
           async open() {},
         },
   };
+}
+
+function resolveAvailabilityConfig(
+  config: TargetConfig,
+  effectiveConfig: EffectiveTargetConfig | undefined,
+): TargetConfig {
+  return effectiveConfig === undefined
+    ? config
+    : {
+        ...config,
+        features: effectiveConfig.features,
+      };
 }
 
 export function isTargetConfiguredGateway(

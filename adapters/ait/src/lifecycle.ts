@@ -2,6 +2,7 @@ import type { LifecycleAdapter } from '@mpgd/platform';
 
 export const aitLifecyclePauseEvent = 'mpgd:ait:pause';
 export const aitLifecycleResumeEvent = 'mpgd:ait:resume';
+const lifecycleEventDedupeWindowMs = 500;
 
 export function createAitLifecycleAdapter(): LifecycleAdapter {
   return {
@@ -21,25 +22,35 @@ export function dispatchAitLifecycleEvent(type: 'pause' | 'resume'): void {
 }
 
 function subscribeToAitLifecycle(type: 'pause' | 'resume', callback: () => void): () => void {
+  const target = globalThis;
+  const documentTarget = target.document;
   const eventName = type === 'pause' ? aitLifecyclePauseEvent : aitLifecycleResumeEvent;
-  const handleCustomEvent = (): void => callback();
+  let lastFiredAt = Number.NEGATIVE_INFINITY;
+  const fire = (): void => {
+    const now = Date.now();
+
+    if (now - lastFiredAt < lifecycleEventDedupeWindowMs) {
+      return;
+    }
+
+    lastFiredAt = now;
+    callback();
+  };
+  const handleCustomEvent = (): void => fire();
   const handleVisibilityChange = (): void => {
-    if (globalThis.document?.visibilityState === (type === 'pause' ? 'hidden' : 'visible')) {
-      callback();
+    if (documentTarget?.visibilityState === (type === 'pause' ? 'hidden' : 'visible')) {
+      fire();
     }
   };
-  const handlePageTransition = (): void => callback();
+  const handlePageTransition = (): void => fire();
 
-  globalThis.addEventListener?.(eventName, handleCustomEvent);
-  globalThis.document?.addEventListener('visibilitychange', handleVisibilityChange);
-  globalThis.addEventListener?.(type === 'pause' ? 'pagehide' : 'pageshow', handlePageTransition);
+  target.addEventListener?.(eventName, handleCustomEvent);
+  documentTarget?.addEventListener('visibilitychange', handleVisibilityChange);
+  target.addEventListener?.(type === 'pause' ? 'pagehide' : 'pageshow', handlePageTransition);
 
   return () => {
-    globalThis.removeEventListener?.(eventName, handleCustomEvent);
-    globalThis.document?.removeEventListener('visibilitychange', handleVisibilityChange);
-    globalThis.removeEventListener?.(
-      type === 'pause' ? 'pagehide' : 'pageshow',
-      handlePageTransition,
-    );
+    target.removeEventListener?.(eventName, handleCustomEvent);
+    documentTarget?.removeEventListener('visibilitychange', handleVisibilityChange);
+    target.removeEventListener?.(type === 'pause' ? 'pagehide' : 'pageshow', handlePageTransition);
   };
 }
