@@ -340,16 +340,34 @@ export function createTargetRuntimeSnapshot(input: {
   readonly gateway?: PlatformGateway;
 }): TargetRuntimeSnapshot {
   const configTarget = input.configTarget ?? targetConfigKeyForPlatform(input.target);
+  const availabilityConfig = input.effectiveConfig === undefined
+    ? input.config
+    : {
+        ...input.config,
+        features: input.effectiveConfig.features,
+      };
   const features = {
-    iap: getFeatureAvailability('iap', input.config, input.capabilities),
-    rewardedAds: getFeatureAvailability('rewardedAds', input.config, input.capabilities),
-    interstitialAds: getFeatureAvailability(
-      'interstitialAds',
-      input.config,
+    iap: getFeatureAvailability('iap', availabilityConfig, input.capabilities),
+    rewardedAds: getFeatureAvailability(
+      'rewardedAds',
+      availabilityConfig,
       input.capabilities,
     ),
-    leaderboard: getFeatureAvailability('leaderboard', input.config, input.capabilities),
-    localization: getFeatureAvailability('localization', input.config, input.capabilities),
+    interstitialAds: getFeatureAvailability(
+      'interstitialAds',
+      availabilityConfig,
+      input.capabilities,
+    ),
+    leaderboard: getFeatureAvailability(
+      'leaderboard',
+      availabilityConfig,
+      input.capabilities,
+    ),
+    localization: getFeatureAvailability(
+      'localization',
+      availabilityConfig,
+      input.capabilities,
+    ),
   } satisfies Record<PlatformFeature, FeatureAvailability>;
   const integrationConfig = normalizeTargetIntegrationConfig(
     input.effectiveConfig?.integrations ?? input.config.integrations,
@@ -396,6 +414,12 @@ export function withTargetAvailability(
   config: TargetConfig,
   options: TargetAvailabilityOptions = {},
 ): TargetConfiguredGateway {
+  const availabilityConfig = options.effectiveConfig === undefined
+    ? config
+    : {
+        ...config,
+        features: options.effectiveConfig.features,
+      };
   const getGatewayCapabilities = (): Promise<PlatformCapabilities> => (
     gateway.getCapabilities()
   );
@@ -442,7 +466,7 @@ export function withTargetAvailability(
         };
   const notifications = notificationsAvailable ? gatewayNotifications : undefined;
   const isIapAvailable = async (): Promise<boolean> => (
-    config.features.iap && (await getGatewayCapabilities()).nativeIap
+    availabilityConfig.features.iap && (await getGatewayCapabilities()).nativeIap
   );
   const isAdPlacementAllowed = (
     placementId: string,
@@ -455,22 +479,25 @@ export function withTargetAvailability(
     }
 
     return expectedType === 'rewarded'
-      ? config.features.rewardedAds
-      : config.features.interstitialAds;
+      ? availabilityConfig.features.rewardedAds
+      : availabilityConfig.features.interstitialAds;
   };
 
   const canPreloadAdPlacement = (placementId: string): boolean => {
     const actualType = options.resolveAdPlacementType?.(placementId);
 
     if (actualType === 'rewarded') {
-      return config.features.rewardedAds;
+      return availabilityConfig.features.rewardedAds;
     }
 
     if (actualType === 'interstitial') {
-      return config.features.interstitialAds;
+      return availabilityConfig.features.interstitialAds;
     }
 
-    return config.features.rewardedAds || config.features.interstitialAds;
+    return (
+      availabilityConfig.features.rewardedAds ||
+      availabilityConfig.features.interstitialAds
+    );
   };
 
   return {
@@ -492,13 +519,19 @@ export function withTargetAvailability(
         ...(options.effectiveConfig === undefined
           ? {}
           : { effectiveConfig: options.effectiveConfig }),
-        capabilities: applyTargetConfigToCapabilities(await getGatewayCapabilities(), config),
+        capabilities: applyTargetConfigToCapabilities(
+          await getGatewayCapabilities(),
+          availabilityConfig,
+        ),
         adPlacements: options.adPlacements ?? [],
         gateway,
       });
     },
     async getCapabilities() {
-      return applyTargetConfigToCapabilities(await getGatewayCapabilities(), config);
+      return applyTargetConfigToCapabilities(
+        await getGatewayCapabilities(),
+        availabilityConfig,
+      );
     },
     commerce: {
       async getProducts() {
@@ -556,7 +589,7 @@ export function withTargetAvailability(
         return gateway.ads.showInterstitial(input);
       },
     },
-    leaderboard: config.features.leaderboard
+    leaderboard: availabilityConfig.features.leaderboard
       ? gateway.leaderboard
       : {
           async submitScore() {

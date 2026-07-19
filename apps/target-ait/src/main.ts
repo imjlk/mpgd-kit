@@ -1,5 +1,11 @@
 import './styles.css';
-import { installAitBridge, type InstallAitBridgeOptions } from './aitBridge';
+import { installAitHostBridge, type InstallAitHostBridgeOptions } from '@mpgd/adapter-ait/host';
+
+declare const __MPGD_AIT_APP_NAME__: string;
+declare const __MPGD_AIT_AD_GROUP_IDS__: Readonly<Record<string, string>>;
+declare const __MPGD_AIT_AD_PLACEMENT_TYPES__: Readonly<
+  Record<string, 'rewarded' | 'interstitial'>
+>;
 
 const gameBundleBasePath = '/game/';
 const gameBundleIndexPath = `${gameBundleBasePath}index.html`;
@@ -14,7 +20,12 @@ const safeScriptAttributes = new Set([
   'type',
 ]);
 
-installAitBridge(identityBridgeOptions());
+installAitHostBridge({
+  appName: __MPGD_AIT_APP_NAME__,
+  adGroupIds: __MPGD_AIT_AD_GROUP_IDS__,
+  adPlacementTypes: __MPGD_AIT_AD_PLACEMENT_TYPES__,
+  ...identityBridgeOptions(),
+});
 
 const app = document.querySelector<HTMLDivElement>('#app');
 
@@ -22,16 +33,18 @@ if (app !== null) {
   void loadGameBundle(app);
 }
 
-function identityBridgeOptions(): InstallAitBridgeOptions {
+function identityBridgeOptions(): Pick<InstallAitHostBridgeOptions, 'dependencies'> {
   if (import.meta.env.VITE_MPGD_AIT_MOCK_IDENTITY !== '1') {
     return {};
   }
 
   return {
-    getUserKeyForGame: async () => ({
-      type: 'HASH',
-      hash: 'ait-local-player',
-    }),
+    dependencies: {
+      identityProvider: async () => ({
+        type: 'HASH',
+        hash: 'ait-local-player',
+      }),
+    },
   };
 }
 
@@ -213,7 +226,9 @@ function rewriteAndValidateGamePath(path: string, originalUrl: string): string {
     : path;
   const resolvedUrl = new URL(normalizedPath, `${window.location.origin}${gameBundleBasePath}`);
 
-  if (resolvedUrl.origin !== window.location.origin || !resolvedUrl.pathname.startsWith(gameBundleBasePath)) {
+  if (resolvedUrl.origin !== window.location.origin || !resolvedUrl.pathname.startsWith(
+    gameBundleBasePath,
+  )) {
     throw new Error(`Game bundle asset URL escapes the bundle base path: ${originalUrl}`);
   }
 
@@ -331,7 +346,9 @@ function isGameBundleRuntimeError(event: ErrorEvent): boolean {
 
   try {
     const sourceUrl = new URL(event.filename, window.location.href);
-    return sourceUrl.origin === window.location.origin && sourceUrl.pathname.startsWith(gameBundleBasePath);
+    return sourceUrl.origin === window.location.origin && sourceUrl.pathname.startsWith(
+      gameBundleBasePath,
+    );
   } catch {
     return false;
   }

@@ -423,10 +423,12 @@ for target overrides, native staging, and the Apps in Toss console URL gate.
 
 ## Apps in Toss
 
-The Apps in Toss target currently uses SDK 2.x compatible `granite.config.ts`
-and `ait build` scripts. Its wrapper resolves the game-specific player id with
-`getUserKeyForGame`; Toss app 5.232.0 or newer and a game-category mini-app are
-required outside the explicit plain-browser mock command. SDK 3.x keeps the feature interface compatible but
+The Apps in Toss target uses SDK 2.x-compatible `granite.config.ts` and `ait
+build` scripts. The reusable production host resolves a stable mini-app-scoped
+player id with `getAnonymousKey`, persists gateway state with native `Storage`,
+and delegates sharing, Game Center, and Ads 2.0 to the official SDK. Purchases
+stay fail-closed, and rewarded-ad callbacks remain evidence until a game-owned
+authority verifies them. SDK 3.x keeps the feature interface compatible but
 renames the config file to `apps-in-toss.config.ts`, so that migration should be
 handled as a dedicated follow-up.
 

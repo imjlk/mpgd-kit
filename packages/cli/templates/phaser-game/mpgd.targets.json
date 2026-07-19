@@ -44,6 +44,7 @@
       "gameApp": ".",
       "wrapperApp": "${MPGD_KIT_PATH}/apps/target-ait",
       "adapter": "ait",
+      "authoritativeGameServices": false,
       "icon": { "profile": "ait" },
       "webDir": "${MPGD_KIT_PATH}/apps/target-ait/public/game",
       "artifact": ".ait"

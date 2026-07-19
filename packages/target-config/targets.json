@@ -226,7 +226,7 @@
         "localization": true
       },
       "capabilities": {
-        "storage": "none",
+        "storage": "native",
         "localization": true
       },
       "localization": {

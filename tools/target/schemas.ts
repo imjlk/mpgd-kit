@@ -14,6 +14,8 @@ export interface BaseTargetConfig {
   readonly gameApp: string;
   readonly adapter: string;
   readonly metadata?: TargetReleaseMetadata;
+  /** Required when purchases or rewarded grants use a game-owned authority. */
+  readonly authoritativeGameServices?: boolean;
   readonly integrations?: Partial<TargetIntegrationConfig>;
   readonly icon?: TargetIconConfig;
 }

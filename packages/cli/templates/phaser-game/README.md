@@ -282,6 +282,12 @@ game uses permission-gated APIs such as clipboard or geolocation, declare the
 matching permissions in the game-owned Apps in Toss `granite.config.ts` before
 submission.
 
+The generated AIT target starts with `authoritativeGameServices: false`. Native
+anonymous identity, persistent Storage, sharing, and Game Center remain
+available, while IAP and ads are removed from the effective game configuration.
+Only switch the flag to `true` after adding app-owned catalog/ad ids and a public
+HTTPS game-services backend that verifies purchase or reward evidence.
+
 ## Target Ownership Notes
 
 - Browser preview is fully game-owned and writes to `artifacts/web-preview`.

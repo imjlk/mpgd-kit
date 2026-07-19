@@ -17,7 +17,11 @@ try {
   mkdirSync(outsideRoot, { recursive: true });
 
   writeTargets({
-    ait: { wrapperApp: 'apps/target-ait', webDir: 'apps/target-ait/public/game' },
+    ait: {
+      wrapperApp: 'apps/target-ait',
+      webDir: 'apps/target-ait/public/game',
+      authoritativeGameServices: false,
+    },
     android: { shellApp: 'apps/mobile-capacitor', webDir: 'apps/mobile-capacitor/www' },
     ios: { shellApp: 'apps/mobile-capacitor', webDir: 'apps/mobile-capacitor/www' },
   });
@@ -31,6 +35,13 @@ try {
       gameServicesUrl: publicBackend,
     });
   }
+
+  assertProductionTargetReadiness({
+    target: 'ait',
+    profile: 'production',
+    targetsFile,
+    gameRoot,
+  });
 
   for (const target of ['android', 'ios']) {
     const nativePlatformDir = join(gameRoot, 'apps', 'mobile-capacitor', target);
@@ -60,6 +71,14 @@ try {
     { target: 'ait', profile: ' production ', gameServicesUrl: publicBackend },
     'without surrounding whitespace',
   );
+
+  writeTargets({
+    ait: {
+      wrapperApp: 'apps/target-ait',
+      webDir: 'apps/target-ait/public/game',
+      authoritativeGameServices: true,
+    },
+  });
   expectReadinessError(
     { target: 'ait', profile: 'production' },
     'requires VITE_MPGD_GAME_SERVICES_URL',
