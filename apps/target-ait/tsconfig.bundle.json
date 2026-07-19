@@ -9,7 +9,9 @@
     "vite.config.ts",
     "granite.config.ts",
     "../../adapters/ait/src/host.ts",
+    "../../adapters/ait/src/ad-config.ts",
     "../../adapters/ait/src/lifecycle.ts",
+    "../../adapters/ait/src/wrapper.ts",
     "../../packages/bridge/src/**/*.ts"
   ]
 }

@@ -42,11 +42,17 @@
     "ait": {
       "kind": "apps-in-toss",
       "gameApp": ".",
-      "wrapperApp": "${MPGD_KIT_PATH}/apps/target-ait",
+      "wrapperApp": "apps/target-ait",
       "adapter": "ait",
       "authoritativeGameServices": false,
+      "metadata": {
+        "appName": "__GAME_NAME__",
+        "displayName": "__GAME_TITLE__",
+        "primaryColor": "#101820",
+        "sdkMajor": 2
+      },
       "icon": { "profile": "ait" },
-      "webDir": "${MPGD_KIT_PATH}/apps/target-ait/public/game",
+      "webDir": "apps/target-ait/public/game",
       "artifact": ".ait"
     },
     "reddit": {

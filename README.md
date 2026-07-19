@@ -249,11 +249,10 @@ pnpm mpgd target smoke-all --targets-file ./mpgd.targets.json --targets web,micr
 
 Generated Phaser starters own their Reddit Devvit app root in
 `apps/target-devvit`; run `pnpm devvit:init` once after login before live
-playtest/upload. Apps in Toss and Capacitor targets currently use kit reference
-shells for smoke builds, but release artifacts and manifests are copied back
-under the game app's `artifacts/` and `release-output/` directories. Production
-app metadata should still move into game-owned wrappers before store or Toss
-submission.
+playtest/upload. They also own an Apps in Toss wrapper in `apps/target-ait`, so
+app identity, console state, community devtools, icons, and review metadata stay
+with the game. Capacitor targets continue to use kit reference shells for smoke
+builds until a game creates production-owned Android and iOS shells.
 
 Optional Microsoft Store support is modeled as a PWA/web target, not a separate native
 SDK adapter. `pnpm build:microsoft-store` builds the Phaser game with the

@@ -17,7 +17,6 @@ installAitHostBridge({
 });
 
 const app = document.querySelector<HTMLElement>('#app');
-
 if (app !== null) {
   void mountAitGameBundle(app).catch((error: unknown) => {
     console.error('AIT game bundle mount failed unexpectedly.', error);
@@ -25,16 +24,11 @@ if (app !== null) {
 }
 
 function identityBridgeOptions(): Pick<InstallAitHostBridgeOptions, 'dependencies'> {
-  if (import.meta.env.VITE_MPGD_AIT_MOCK_IDENTITY !== '1') {
-    return {};
-  }
-
-  return {
-    dependencies: {
-      identityProvider: async () => ({
-        type: 'HASH',
-        hash: 'ait-local-player',
-      }),
-    },
-  };
+  return import.meta.env.VITE_MPGD_AIT_MOCK_IDENTITY === '1'
+    ? {
+        dependencies: {
+          identityProvider: async () => ({ type: 'HASH', hash: 'ait-local-player' }),
+        },
+      }
+    : {};
 }
