@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use mpgd-kit"
+  short_description: "Route game work through mpgd-kit workflows"
+  default_prompt: "Use the mpgd-kit workflow guide and project manifest to implement and validate this game change."

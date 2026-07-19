@@ -14,6 +14,12 @@ The repository separates four concerns:
   build/smoke matrix orchestration.
 - `@mpgd/create-game` provides the create-package wrapper for
   `npm create @mpgd/game` / `pnpm create @mpgd/game`.
+- Every generated game receives its own `AGENTS.md`, capability manifest,
+  `.agents/skills/use-mpgd-kit` router, and `docs/MPGD_KIT_WORKFLOWS.md` so the
+  game can discover and preserve kit contracts outside this repository.
+- Optional targets may add a generated target skill. Selecting or initializing
+  Microsoft Store adds `.agents/skills/release-microsoft-store` together with
+  its PWA build and evidence workflow.
 - Generated games own their Reddit Devvit app root in `apps/target-devvit`.
   Apps in Toss and Capacitor shells remain kit reference shells for smoke builds
   until a game creates production-owned wrappers and app metadata.
@@ -49,6 +55,11 @@ Repository skills live in `.agents/skills`:
 - `validate-agentic-game-workflow`
 
 These skills are intentionally procedural. They tell an agent which files to touch, which boundaries to preserve, and which checks to run.
+
+Generated-game skills are intentionally smaller. The `use-mpgd-kit` skill
+routes platform, target, content, service, acceptance, and release tasks through
+the generated workflow guide. A target-specific skill is included only when its
+target is configured.
 
 ## Starter Manifest
 
@@ -118,6 +129,9 @@ described as exactly-once. See
 pnpm validate:starter-workflow
 pnpm create @mpgd/game my-game
 pnpm --dir my-game dev
+
+pnpm create @mpgd/game my-store-game --microsoft-store
+pnpm --dir my-game exec mpgd target init microsoft-store --game . --kit-path ../mpgd-kit
 
 pnpm mpgd game create examples/my-game --title "My Game" --workspace --kit-path .
 pnpm --dir examples/phaser-starter check

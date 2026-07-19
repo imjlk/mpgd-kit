@@ -5,6 +5,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -27,6 +28,12 @@ import {
   runMicrosoftStorePackageAcceptance,
 } from './microsoft-store-package-acceptance.js';
 import { runMicrosoftStorePackageGeneration } from './microsoft-store-package-generation.js';
+import {
+  defaultMpgdKitPath,
+  initializeMicrosoftStoreStarter,
+  listMicrosoftStoreInitializerTemplateFiles,
+  prepareBaseGameTemplateFile,
+} from './microsoft-store-starter.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
 
 export {
@@ -150,6 +157,7 @@ const detectedKitRoot = resolveDefaultKitRoot();
 const gameTemplateDir = path.resolve(packageRoot, 'templates/phaser-game');
 const cliVersion = readPackageVersion(packageRoot);
 const recommendedMatrixTargets = 'web,microsoft-store,verse8,ait,reddit';
+const recommendedMatrixTargetsWithoutMicrosoftStore = 'web,verse8,ait,reddit';
 const defaultDependencyVersion = `^${cliVersion}`;
 const standaloneTemplateDependencyVersionFallbacks: Readonly<Record<string, string>> = {
   // Initial-published independently from the CLI release line; package metadata wins once concrete.
@@ -328,6 +336,10 @@ const gameCommand = defineI18n({
             en: 'Print files that would be generated without writing them.',
             ko: '파일을 쓰지 않고 생성 예정 목록만 출력합니다.',
           },
+          'microsoft-store': {
+            en: 'Include the Microsoft Store PWA target and release workflow.',
+            ko: 'Microsoft Store PWA 타깃과 출시 워크플로를 포함합니다.',
+          },
         },
       ),
       args: {
@@ -366,6 +378,11 @@ const gameCommand = defineI18n({
           required: false,
           description: 'Print files that would be generated without writing them.',
         },
+        'microsoft-store': {
+          type: 'boolean',
+          required: false,
+          description: 'Include the Microsoft Store PWA target and release workflow.',
+        },
       },
       run: (ctx) => {
         const positionals = readLocalPositionals(ctx.positionals, ['game', 'create']);
@@ -386,6 +403,7 @@ const gameCommand = defineI18n({
           workspace: ctx.values.workspace === true,
           ...(kitPath === undefined ? {} : { kitPath }),
           dryRun: ctx.values['dry-run'] === true,
+          microsoftStore: ctx.values['microsoft-store'] === true,
         });
       },
     }),
@@ -984,6 +1002,89 @@ const targetCommand = defineI18n({
     ko: '타깃 출시 산출물을 빌드하고 스모크, 패키지 생성, 제출 사전 검증 및 인수 검증을 수행합니다.',
   }),
   subCommands: {
+    init: defineI18n({
+      name: 'init',
+      description: 'Initialize an optional target workflow in an existing game.',
+      resource: commandResource(
+        {
+          en: 'Initialize an optional target workflow in an existing game without overwriting conflicts.',
+          ko: '충돌 파일을 덮어쓰지 않고 기존 게임에 선택적 타깃 워크플로를 초기화합니다.',
+        },
+        {
+          target: {
+            en: 'Target to initialize. Currently supports microsoft-store.',
+            ko: '초기화할 타깃. 현재 microsoft-store를 지원합니다.',
+          },
+          game: {
+            en: 'Existing game root. Defaults to the current directory.',
+            ko: '기존 게임 루트. 기본값은 현재 디렉터리입니다.',
+          },
+          'kit-path': {
+            en: 'Default mpgd-kit path written into generated target scripts.',
+            ko: '생성되는 타깃 스크립트에 기록할 기본 mpgd-kit 경로.',
+          },
+          'dry-run': {
+            en: 'Validate and print planned file changes without writing them.',
+            ko: '파일을 쓰지 않고 예정 변경을 검증하고 출력합니다.',
+          },
+        },
+      ),
+      args: {
+        target: {
+          type: 'positional',
+          required: true,
+          description: 'Target to initialize. Currently supports microsoft-store.',
+        },
+        game: {
+          type: 'string',
+          required: false,
+          default: '.',
+          description: 'Existing game root. Defaults to the current directory.',
+        },
+        'kit-path': {
+          type: 'string',
+          required: false,
+          description: 'Default mpgd-kit path written into generated target scripts.',
+        },
+        'dry-run': {
+          type: 'boolean',
+          required: false,
+          description: 'Validate and print planned file changes without writing them.',
+        },
+      },
+      run: (ctx) => {
+        const positionals = readLocalPositionals(ctx.positionals, ['target', 'init']);
+        const target = normalizeBuildTarget(readRequiredPositional(positionals, 0, 'target'));
+
+        if (target !== 'microsoft-store') {
+          throw new Error(`Target initialization is not available for target: ${target}`);
+        }
+
+        const gameRoot = path.resolve(readOptionalString(ctx.values.game) ?? '.');
+        const configuredKitPath = readOptionalString(ctx.values['kit-path']);
+        const resolvedKitPath = configuredKitPath === undefined
+          ? detectedKitRoot
+          : assertKitRoot(path.resolve(configuredKitPath));
+        const defaultKitPath = resolvedKitPath === undefined
+          ? defaultMpgdKitPath
+          : toTemplatePath(path.relative(gameRoot, resolvedKitPath) || '.');
+        const dryRun = ctx.values['dry-run'] === true;
+        const result = initializeMicrosoftStoreStarter({
+          gameRoot,
+          templateRoot: gameTemplateDir,
+          defaultKitPath,
+          dryRun,
+        });
+
+        console.log(
+          `${dryRun ? 'Would update' : 'Updated'} Microsoft Store starter workflow: ${result.changedFiles.length} file(s).`,
+        );
+
+        for (const file of result.changedFiles) {
+          console.log(`- ${file}`);
+        }
+      },
+    }),
     build: defineI18n({
       name: 'build',
       description: 'Build one target artifact.',
@@ -1583,7 +1684,7 @@ const targetCommand = defineI18n({
   },
   run: () => {
     console.log(
-      'Use "mpgd target build <target>", "mpgd target smoke <target>", "mpgd target generate-package <target>", "mpgd target preflight <target>", or "mpgd target accept-package <target> --packages <paths>".',
+      'Use "mpgd target init <target>", "mpgd target build <target>", "mpgd target smoke <target>", "mpgd target generate-package <target>", "mpgd target preflight <target>", or "mpgd target accept-package <target> --packages <paths>".',
     );
   },
 });
@@ -1870,6 +1971,7 @@ function createGameApp(input: {
   readonly workspace: boolean;
   readonly kitPath?: string;
   readonly dryRun: boolean;
+  readonly microsoftStore: boolean;
 }): void {
   const appDir = resolveAppDirectory(input.directory);
   const gameName = path.basename(appDir);
@@ -1894,23 +1996,64 @@ function createGameApp(input: {
     workspace: input.workspace,
     ...(input.kitPath === undefined ? {} : { kitPath: input.kitPath }),
     ...(input.title === undefined ? {} : { title: input.title }),
+    microsoftStore: input.microsoftStore,
   });
-  const files = collectTemplateFiles(gameTemplateDir);
+  const files = collectTemplateFiles(gameTemplateDir).flatMap((file) => {
+    const content = prepareBaseGameTemplateFile({
+      relativePath: file.relativePath,
+      content: renderTemplate(file.content, context),
+    });
+
+    return content === undefined ? [] : [{ ...file, content }];
+  });
 
   if (input.dryRun) {
     console.log(`Would create ${path.relative(process.cwd(), appDir) || appDir}:`);
 
-    for (const file of files) {
-      console.log(`- ${path.join(path.relative(process.cwd(), appDir), file.relativePath)}`);
+    const plannedFiles = input.microsoftStore
+      ? [...files.map((file) => file.relativePath), ...listMicrosoftStoreInitializerTemplateFiles()]
+      : files.map((file) => file.relativePath);
+
+    for (const relativePath of [...new Set(plannedFiles)].sort()) {
+      console.log(`- ${path.join(path.relative(process.cwd(), appDir), relativePath)}`);
     }
 
     return;
   }
 
-  for (const file of files) {
-    const outputFile = path.join(appDir, file.relativePath);
-    mkdirSync(path.dirname(outputFile), { recursive: true });
-    writeFileSync(outputFile, renderTemplate(file.content, context));
+  let createdAppDirectory = false;
+
+  try {
+    mkdirSync(path.dirname(appDir), { recursive: true });
+    mkdirSync(appDir);
+    createdAppDirectory = true;
+
+    for (const file of files) {
+      const outputFile = path.join(appDir, file.relativePath);
+      mkdirSync(path.dirname(outputFile), { recursive: true });
+      writeFileSync(outputFile, file.content);
+    }
+
+    if (input.microsoftStore) {
+      initializeMicrosoftStoreStarter({
+        gameRoot: appDir,
+        templateRoot: gameTemplateDir,
+        defaultKitPath: context.defaultKitPath,
+        dryRun: false,
+      });
+    }
+  } catch (error) {
+    if (createdAppDirectory) {
+      try {
+        rmSync(appDir, { force: true, recursive: true });
+      } catch (cleanupError) {
+        console.warn(
+          `Failed to clean up incomplete game directory ${appDir}: ${formatError(cleanupError)}`,
+        );
+      }
+    }
+
+    throw error;
   }
 
   console.log(`Created ${appDir}`);
@@ -1923,7 +2066,7 @@ function createGameApp(input: {
     [
       '  mpgd target build-all',
       `--targets-file ${path.join(appDir, 'mpgd.targets.json')}`,
-      `--targets ${recommendedMatrixTargets}`,
+      `--targets ${context.recommendedMatrixTargets}`,
       '--profile staging',
       '--ait-variant wrapper',
       '--kit-path <path-to-mpgd-kit>',
@@ -1976,6 +2119,7 @@ function createTemplateContext(input: {
   readonly workspace: boolean;
   readonly kitPath?: string;
   readonly title?: string;
+  readonly microsoftStore: boolean;
 }) {
   const title =
     input.title === undefined || input.title.length === 0 ? input.gameName : input.title;
@@ -2028,7 +2172,10 @@ function createTemplateContext(input: {
     workspaceI18nBuildPrefix: input.workspace
       ? `pnpm --dir ${workspacePrefix} i18n:build && `
       : '',
-    defaultKitPath: kitPath === undefined ? '../mpgd-kit' : workspacePrefix,
+    defaultKitPath: kitPath === undefined ? defaultMpgdKitPath : workspacePrefix,
+    recommendedMatrixTargets: input.microsoftStore
+      ? recommendedMatrixTargets
+      : recommendedMatrixTargetsWithoutMicrosoftStore,
     pnpmWorkspaceKitPackages: input.workspace
       ? [
           `  - '${workspacePrefix}/packages/*'`,
@@ -2170,6 +2317,7 @@ function renderTemplate(
     .replaceAll('__TSCONFIG_WORKSPACE_EXCLUDES__', context.tsconfigWorkspaceExcludes)
     .replaceAll('__WORKSPACE_I18N_BUILD_PREFIX__', context.workspaceI18nBuildPrefix)
     .replaceAll('__DEFAULT_KIT_PATH__', context.defaultKitPath)
+    .replaceAll('__RECOMMENDED_MATRIX_TARGETS__', context.recommendedMatrixTargets)
     .replaceAll('__PNPM_WORKSPACE_KIT_PACKAGES__', context.pnpmWorkspaceKitPackages)
     .replaceAll('__PASCAL_NAME__', context.pascalName)
     .replaceAll('__CAMEL_NAME__', context.camelName);
