@@ -36,6 +36,11 @@ const microsoftStoreOnlyTemplateFiles = new Set([
   'mpgd.microsoft-store.json',
   'src/platform/microsoftStorePwa.ts',
 ]);
+const microsoftStoreManagedTemplateFiles = new Set([
+  '.agents/skills/release-microsoft-store/SKILL.md',
+  '.agents/skills/release-microsoft-store/agents/openai.yaml',
+  'src/platform/microsoftStorePwa.ts',
+]);
 const microsoftStoreTarget = {
   kind: 'web',
   gameApp: '.',
@@ -206,13 +211,19 @@ export function initializeMicrosoftStoreStarter(
     'src/platform/microsoftStorePwa.ts',
   ] as const) {
     const destination = resolveGameFile(gameRoot, relativePath);
+    const templateContent = readRequiredTemplateFile(templateRoot, relativePath);
 
     if (existsSync(destination)) {
       readRequiredRegularFile(gameRoot, destination, relativePath);
+
+      if (microsoftStoreManagedTemplateFiles.has(relativePath)) {
+        plan(relativePath, templateContent);
+      }
+
       continue;
     }
 
-    plan(relativePath, readRequiredTemplateFile(templateRoot, relativePath));
+    plan(relativePath, templateContent);
   }
 
   if (!input.dryRun) {
@@ -237,7 +248,7 @@ function microsoftStoreScripts(defaultKitPath: string): Readonly<Record<string, 
 function requireSafeShellParameterDefaultPath(value: string): string {
   const normalized = toTemplatePath(value.trim());
 
-  if (!/^[\p{L}\p{N} ._/:@+,%()-]+$/u.test(normalized)) {
+  if (!/^[\p{L}\p{N} ._/:@+(),-]+$/u.test(normalized)) {
     throw new Error(
       'The default kit path contains characters that are unsafe in a shell parameter default.',
     );
@@ -430,19 +441,54 @@ function planManagedDocumentation(
 
     const source = readRequiredRegularFile(gameRoot, file, relativePath);
     const template = readRequiredTemplateFile(templateRoot, relativePath);
-    const block = extractMicrosoftStoreBlock(template);
-    const normalizedBlock = removeMicrosoftStoreBlockMarkers(block).trim();
+    const managedBlock = extractMicrosoftStoreBlock(template).trim();
+    plan(relativePath, upsertManagedDocumentationBlock(source, managedBlock, relativePath));
+  }
+}
 
-    if (normalizedBlock.length === 0 || source.includes(normalizedBlock)) {
-      continue;
+function upsertManagedDocumentationBlock(
+  source: string,
+  managedBlock: string,
+  relativePath: 'README.md' | 'agent/brief.md' | 'agent/acceptance.md',
+): string {
+  const startCount = source.split(microsoftStoreBlockStart).length - 1;
+  const endCount = source.split(microsoftStoreBlockEnd).length - 1;
+  const start = source.indexOf(microsoftStoreBlockStart);
+  const end = source.indexOf(microsoftStoreBlockEnd);
+
+  if (startCount > 0 || endCount > 0) {
+    if (startCount !== 1 || endCount !== 1 || start < 0 || end < start) {
+      throw new Error(`${relativePath} has malformed Microsoft Store managed block markers.`);
     }
 
-    const anchor = managedDocumentationAnchor(relativePath);
-    const content = anchor === undefined || !source.includes(anchor)
-      ? `${source.trimEnd()}\n\n${normalizedBlock}\n`
-      : source.replace(anchor, `${normalizedBlock}\n${anchor}`);
-    plan(relativePath, content);
+    return `${source.slice(0, start)}${managedBlock}${source.slice(end + microsoftStoreBlockEnd.length)}`;
   }
+
+  const legacyBlock = removeMicrosoftStoreBlockMarkers(managedBlock).trim();
+
+  if (legacyBlock.length === 0) {
+    throw new Error(`${relativePath} Microsoft Store managed block must not be empty.`);
+  }
+
+  if (source.includes(legacyBlock)) {
+    return source.replace(legacyBlock, managedBlock);
+  }
+
+  const anchor = managedDocumentationAnchor(relativePath);
+
+  if (anchor === undefined) {
+    return `${source.trimEnd()}\n\n${managedBlock}\n`;
+  }
+
+  const anchorCount = source.split(anchor).length - 1;
+
+  if (anchorCount > 1) {
+    throw new Error(`${relativePath} has more than one Microsoft Store insertion anchor.`);
+  }
+
+  return anchorCount === 0
+    ? `${source.trimEnd()}\n\n${managedBlock}\n`
+    : source.replace(anchor, `${managedBlock}\n${anchor}`);
 }
 
 function managedDocumentationAnchor(

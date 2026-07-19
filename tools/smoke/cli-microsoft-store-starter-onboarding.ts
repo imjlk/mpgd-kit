@@ -22,6 +22,8 @@ const kitRoot = resolve('.');
 const templateRoot = resolve('packages/cli/templates/phaser-game');
 const binaryFixtureFile = /\.(?:avif|gif|ico|jpe?g|otf|png|ttf|wasm|webp|woff2?)$/iu;
 const unresolvedTemplatePlaceholder = /__(?:CAMEL_NAME|DEFAULT_KIT_PATH|DEVVIT_APP_NAME|GAME_NAME|GAME_TITLE(?:_TS_LITERAL)?|LEGAL_LAST_UPDATED|MPGD_DEPENDENCY_VERSION(?:_[A-Z0-9_]+)?|PACKAGE_NAME|PASCAL_NAME|PNPM_WORKSPACE_KIT_PACKAGES|RECOMMENDED_MATRIX_TARGETS|TSCONFIG_(?:EXTENDS_LINE|WORKSPACE_(?:EXCLUDES|INCLUDES))|WORKSPACE_I18N_BUILD_PREFIX)__/u;
+const microsoftStoreBlockStart = '<!-- mpgd:microsoft-store:start -->';
+const microsoftStoreBlockEnd = '<!-- mpgd:microsoft-store:end -->';
 const storeSkill = '.agents/skills/release-microsoft-store/SKILL.md';
 const storeSkillMetadata = '.agents/skills/release-microsoft-store/agents/openai.yaml';
 const genericSkill = '.agents/skills/use-mpgd-kit/SKILL.md';
@@ -31,17 +33,17 @@ try {
   const baseGame = createGame('without-store');
   assertGenericAgentWorkflow(baseGame);
   assertMicrosoftStoreDisabled(baseGame);
-  assertNoTemplateMarkers(baseGame);
+  assertNoUnresolvedTemplatePlaceholders(baseGame);
 
   const selectedGame = createGame('with-store', ['--microsoft-store']);
   assertGenericAgentWorkflow(selectedGame);
   assertMicrosoftStoreEnabled(selectedGame);
-  assertNoTemplateMarkers(selectedGame);
+  assertNoUnresolvedTemplatePlaceholders(selectedGame);
 
   const nestedGame = createGame('nested/with-store', ['--microsoft-store']);
   assertGenericAgentWorkflow(nestedGame);
   assertMicrosoftStoreEnabled(nestedGame);
-  assertNoTemplateMarkers(nestedGame);
+  assertNoUnresolvedTemplatePlaceholders(nestedGame);
 
   const initializedGame = createGame('initialized-later');
   const legacyManifest = readJson(join(initializedGame, 'agent/game-manifest.json'));
@@ -67,13 +69,25 @@ try {
   const firstInit = initializeGame(initializedGame);
   assert.match(firstInit.stdout, /Updated Microsoft Store starter workflow/u);
   assertMicrosoftStoreEnabled(initializedGame);
-  assertNoTemplateMarkers(initializedGame);
+  assertNoUnresolvedTemplatePlaceholders(initializedGame);
   const initializedManifest = readJson(join(initializedGame, 'agent/game-manifest.json'));
   assert.ok(Array.isArray(initializedManifest.targets));
   assert.equal(
     initializedManifest.targets[initializedManifest.targets.length - 1],
     'microsoft-store',
   );
+  const initializedReadmeFile = join(initializedGame, 'README.md');
+  const initializedReadme = readFileSync(initializedReadmeFile, 'utf8');
+  const editedReadme = initializedReadme.replace(
+    'the mutable generator and icon URLs',
+    'the user-edited generator and icon URLs',
+  );
+  assert.notEqual(editedReadme, initializedReadme);
+  writeFileSync(initializedReadmeFile, editedReadme);
+  const documentationRefresh = initializeGame(initializedGame);
+  assert.match(documentationRefresh.stdout, /1 file\(s\)/u);
+  assert.doesNotMatch(readFileSync(initializedReadmeFile, 'utf8'), /user-edited generator/u);
+  assertManagedDocumentationCount(initializedGame, 1);
   const afterFirstInit = snapshotTree(initializedGame);
   const secondInit = initializeGame(initializedGame);
   assert.match(secondInit.stdout, /0 file\(s\)/u);
@@ -141,12 +155,38 @@ try {
     undefined,
   );
 
+  const unsafeShellPathGame = createGame('unsafe-shell-path');
+  const beforeUnsafeShellPath = snapshotTree(unsafeShellPathGame);
+  assert.throws(
+    () => initializeMicrosoftStoreStarter({
+      gameRoot: unsafeShellPathGame,
+      templateRoot,
+      defaultKitPath: '%PATH%',
+      dryRun: false,
+    }),
+    /unsafe in a shell parameter default/u,
+  );
+  assert.deepEqual(snapshotTree(unsafeShellPathGame), beforeUnsafeShellPath);
+
   const customConfig = readJson(join(initializedGame, 'mpgd.microsoft-store.json'));
   customConfig.fixture = 'game-owned-value';
   writeJson(join(initializedGame, 'mpgd.microsoft-store.json'), customConfig);
   const afterCustomization = snapshotTree(initializedGame);
   initializeGame(initializedGame);
   assert.deepEqual(snapshotTree(initializedGame), afterCustomization);
+
+  const managedRuntimeFile = join(initializedGame, 'src/platform/microsoftStorePwa.ts');
+  writeFileSync(managedRuntimeFile, '// stale generated runtime\n');
+  const runtimeRefresh = initializeGame(initializedGame);
+  assert.match(runtimeRefresh.stdout, /1 file\(s\)/u);
+  assert.equal(
+    readFileSync(managedRuntimeFile, 'utf8'),
+    readFileSync(join(templateRoot, 'src/platform/microsoftStorePwa.ts'), 'utf8'),
+  );
+  assert.equal(
+    readJson(join(initializedGame, 'mpgd.microsoft-store.json')).fixture,
+    'game-owned-value',
+  );
 
   assertConflictIsAtomic(
     'script-conflict',
@@ -286,6 +326,7 @@ function assertMicrosoftStoreDisabled(gameRoot: string): void {
   const main = readFileSync(join(gameRoot, 'src/main.ts'), 'utf8');
   assert.doesNotMatch(main, /installMicrosoftStorePwa/u);
   assert.doesNotMatch(readFileSync(join(gameRoot, 'README.md'), 'utf8'), /PWABuilder/u);
+  assertManagedDocumentationCount(gameRoot, 0);
 }
 
 function assertMicrosoftStoreEnabled(gameRoot: string): void {
@@ -328,9 +369,18 @@ function assertMicrosoftStoreEnabled(gameRoot: string): void {
   assert.match(main, /disposeMicrosoftStorePwa\?\.\(\)/u);
   assert.match(readFileSync(join(gameRoot, 'README.md'), 'utf8'), /PWABuilder/u);
   assert.match(readFileSync(join(gameRoot, storeSkill), 'utf8'), /WACK as optional/u);
+  assertManagedDocumentationCount(gameRoot, 1);
   const gitignore = readFileSync(join(gameRoot, '.gitignore'), 'utf8').split(/\r?\n/u);
   assert.ok(gitignore.includes('release-input/'));
   assert.ok(gitignore.includes('release-output/'));
+}
+
+function assertManagedDocumentationCount(gameRoot: string, expected: number): void {
+  for (const relativePath of ['README.md', 'agent/brief.md', 'agent/acceptance.md']) {
+    const content = readFileSync(join(gameRoot, relativePath), 'utf8');
+    assert.equal(content.split(microsoftStoreBlockStart).length - 1, expected, relativePath);
+    assert.equal(content.split(microsoftStoreBlockEnd).length - 1, expected, relativePath);
+  }
 }
 
 function assertConflictIsAtomic(
@@ -346,7 +396,7 @@ function assertConflictIsAtomic(
   assert.deepEqual(snapshotTree(gameRoot), before);
 }
 
-function assertNoTemplateMarkers(gameRoot: string): void {
+function assertNoUnresolvedTemplatePlaceholders(gameRoot: string): void {
   visit(gameRoot);
 
   function visit(directory: string): void {
@@ -364,7 +414,6 @@ function assertNoTemplateMarkers(gameRoot: string): void {
 
       const relativePath = relative(gameRoot, file).split('\\').join('/');
       const content = readFileSync(file, 'utf8');
-      assert.doesNotMatch(content, /<!-- mpgd:microsoft-store:(?:start|end) -->/u, relativePath);
       assert.doesNotMatch(
         content,
         unresolvedTemplatePlaceholder,
