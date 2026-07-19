@@ -1,5 +1,17 @@
 # @mpgd/create-game
 
+## 0.15.0 — 2026-07-20
+
+### Added
+
+- [dede158](https://github.com/imjlk/mpgd-kit/commit/dede158e343b1fa8494e3d28ae52a2f0a0b89a16) Add explicit Microsoft Store starter selection, conflict-safe idempotent target
+  initialization, and generated agent workflow documentation and skills for
+  discovering and validating mpgd-kit capabilities. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: cli@0.15.0
+
 ## 0.14.0 — 2026-07-19
 
 ### Patch changes
