@@ -1,5 +1,13 @@
 # @mpgd/adapter-ait
 
+## 0.5.1 — 2026-07-20
+
+### Fixed
+
+- [dd7513b](https://github.com/imjlk/mpgd-kit/commit/dd7513bfb5f6a04b1d8b835b6a60a472b52db1c4) Treat missing Apps in Toss Ads 2.0 support constants as an unsupported capability instead of
+  failing the game wrapper during startup. Preload and display requests remain fail-closed until
+  both native full-screen ad APIs report support. — Thanks @imjlk!
+
 ## 0.5.0 — 2026-07-20
 
 ### Added

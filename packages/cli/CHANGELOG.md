@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.15.1 — 2026-07-20
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.5.1
+
 ## 0.15.0 — 2026-07-20
 
 ### Added
