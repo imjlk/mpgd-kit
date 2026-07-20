@@ -25,6 +25,19 @@ export interface GamePlatformBridge {
   request(input: BridgeRequest): Promise<BridgeResponse>;
 }
 
+export interface AitSandboxStorage {
+  readonly getItem: (key: string) => string | null;
+  readonly setItem: (key: string, value: string) => void;
+  readonly removeItem?: (key: string) => void;
+}
+
+export interface CreateAitSandboxBridgeOptions {
+  /** Persistent browser storage used by local AIT playtests. Defaults to localStorage when available. */
+  readonly storage?: AitSandboxStorage | null;
+  /** Namespace for persisted sandbox values so they cannot collide with application-owned keys. */
+  readonly storageKeyPrefix?: string;
+}
+
 export function createAitPlatformGateway(input: {
   readonly appVersion: string;
   readonly buildId: string;
@@ -119,8 +132,19 @@ function getBridge(): GamePlatformBridge | undefined {
   return (globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge }).__GAME_PLATFORM_BRIDGE__;
 }
 
-export function createAitSandboxBridge(): GamePlatformBridge {
+export function createAitSandboxBridge(
+  options: CreateAitSandboxBridgeOptions = {},
+): GamePlatformBridge {
   const storage = new Map<string, unknown>();
+  let persistentStorage: AitSandboxStorage | undefined;
+  if (options.storage === undefined) {
+    persistentStorage = resolveAitSandboxBrowserStorage();
+  } else {
+    persistentStorage = options.storage ?? undefined;
+  }
+  // PlatformGateway storage exposes load/save only. Sandbox callers should use stable,
+  // namespaced keys whose values are overwritten instead of creating an unbounded key stream.
+  const storageKeyPrefix = options.storageKeyPrefix ?? 'mpgd:ait-sandbox:';
 
   return {
     async request(input) {
@@ -234,49 +258,194 @@ export function createAitSandboxBridge(): GamePlatformBridge {
 
         case 'storage.load': {
           const payload = input.payload as { readonly key?: string };
-          const found = payload.key !== undefined && storage.has(payload.key);
-          const value = found && payload.key !== undefined
-            ? cloneJsonValue(storage.get(payload.key))
-            : undefined;
-          return ok(
-            input,
-            !found
-              ? ({ __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: false } satisfies BridgeStorageLoadData)
-              : ({ __mpgdBridgeProtocol: bridgeStorageLoadProtocol, found: true, value } satisfies BridgeStorageLoadData),
+          if (payload.key === undefined) {
+            return ok(input, {
+              __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+              found: false,
+            } satisfies BridgeStorageLoadData);
+          }
+          if (storage.has(payload.key)) {
+            return ok(input, {
+              __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+              found: true,
+              value: cloneJsonValue(storage.get(payload.key)),
+            } satisfies BridgeStorageLoadData);
+          }
+          const persistent = loadPersistentSandboxValue(
+            persistentStorage,
+            `${storageKeyPrefix}${payload.key}`,
           );
+          // Browser storage access failures commonly remain blocked for the page lifetime. The
+          // sandbox intentionally degrades once per bridge instead of retrying and logging on every
+          // load. Production AIT storage uses the host bridge and is not affected by this fallback.
+          if (!persistent.storageAvailable && persistentStorage !== undefined) {
+            console.warn(
+              '[mpgd/adapter-ait] AIT sandbox persistent storage is unavailable; subsequent saves are memory-only and will not survive reloads.',
+            );
+            persistentStorage = undefined;
+          }
+          if (persistent.found) {
+            // Keep the hydrated cache detached from the returned parsed value. Callers may mutate
+            // their result, while a later memory load must still model serialized storage.
+            storage.set(payload.key, cloneJsonValue(persistent.value));
+            return ok(input, {
+              __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+              found: true,
+              value: persistent.value,
+            } satisfies BridgeStorageLoadData);
+          }
+          return ok(input, {
+            __mpgdBridgeProtocol: bridgeStorageLoadProtocol,
+            found: false,
+          } satisfies BridgeStorageLoadData);
         }
 
         case 'storage.save': {
           const payload = input.payload as { readonly key?: string; readonly value?: unknown };
 
           if (payload.key !== undefined) {
-            storage.set(payload.key, cloneJsonValue(payload.value));
+            let serialized: string;
+            let value: unknown;
+            try {
+              serialized = serializeJsonValue(payload.value);
+              value = JSON.parse(serialized) as unknown;
+            } catch {
+              return createSandboxBridgeError(
+                input,
+                'STORAGE_SERIALIZATION_FAILED',
+                'AIT sandbox storage values must be JSON-serializable.',
+              );
+            }
+
+            try {
+              savePersistentSandboxValue(
+                persistentStorage,
+                `${storageKeyPrefix}${payload.key}`,
+                serialized,
+              );
+            } catch {
+              // The helper reports the original failure and the loss of reload durability. The
+              // sandbox still honors its memory fallback so local gameplay can continue.
+              persistentStorage = undefined;
+            }
+            storage.set(payload.key, value);
           }
 
           return ok(input, {});
         }
 
         default:
-          return {
-            id: input.id,
-            ok: false,
-            error: {
-              code: 'UNSUPPORTED_METHOD',
-              message: `Unsupported AIT sandbox method: ${input.method}`,
-              retryable: false,
-            },
-          };
+          return createSandboxBridgeError(
+            input,
+            'UNSUPPORTED_METHOD',
+            `Unsupported AIT sandbox method: ${input.method}`,
+          );
       }
     },
   };
 }
 
+function resolveAitSandboxBrowserStorage(): AitSandboxStorage | undefined {
+  try {
+    return (globalThis as { readonly localStorage?: AitSandboxStorage }).localStorage;
+  } catch (error) {
+    reportAitSandboxStorageResolutionFailure(error);
+    return undefined;
+  }
+}
+
+function loadPersistentSandboxValue(
+  storage: AitSandboxStorage | undefined,
+  key: string,
+):
+  | { readonly found: false; readonly storageAvailable: boolean }
+  | { readonly found: true; readonly storageAvailable: true; readonly value: unknown } {
+  if (storage === undefined) {
+    return { found: false, storageAvailable: false };
+  }
+
+  let serialized: string | null;
+  try {
+    serialized = storage.getItem(key);
+  } catch (error) {
+    console.debug(
+      '[mpgd/adapter-ait] AIT sandbox persistent storage load failed; treating the key as missing.',
+      error,
+    );
+    return { found: false, storageAvailable: false };
+  }
+
+  if (serialized === null) {
+    return { found: false, storageAvailable: true };
+  }
+
+  try {
+    return {
+      found: true,
+      storageAvailable: true,
+      value: JSON.parse(serialized) as unknown,
+    };
+  } catch (error) {
+    console.warn(
+      `[mpgd/adapter-ait] Removing corrupt sandbox storage value for key "${key}".`,
+      error,
+    );
+    if (storage.removeItem === undefined) {
+      console.warn(
+        '[mpgd/adapter-ait] Corrupt sandbox storage cannot be removed; disabling persistent storage for this bridge.',
+      );
+      return { found: false, storageAvailable: false };
+    }
+    try {
+      storage.removeItem(key);
+    } catch (cleanupError) {
+      console.warn(
+        '[mpgd/adapter-ait] Corrupt sandbox storage cleanup failed; disabling persistent storage for this bridge.',
+        cleanupError,
+      );
+      return { found: false, storageAvailable: false };
+    }
+    return { found: false, storageAvailable: true };
+  }
+}
+
+function savePersistentSandboxValue(
+  storage: AitSandboxStorage | undefined,
+  key: string,
+  serialized: string,
+): void {
+  if (storage === undefined) {
+    return;
+  }
+
+  try {
+    storage.setItem(key, serialized);
+  } catch (error) {
+    console.warn(
+      '[mpgd/adapter-ait] AIT sandbox persistent storage save failed; subsequent saves are memory-only and will not survive reloads.',
+      error,
+    );
+    throw error;
+  }
+}
+
+function reportAitSandboxStorageResolutionFailure(error: unknown): void {
+  console.debug(
+    '[mpgd/adapter-ait] AIT sandbox browser storage resolution failed; using memory storage.',
+    error,
+  );
+}
+
 function cloneJsonValue(input: unknown): unknown {
+  return JSON.parse(serializeJsonValue(input)) as unknown;
+}
+
+function serializeJsonValue(input: unknown): string {
   const serialized = JSON.stringify(input);
   if (serialized === undefined) {
     throw new Error('AIT sandbox storage values must be JSON-serializable.');
   }
-  return JSON.parse(serialized) as unknown;
+  return serialized;
 }
 
 function ok(input: BridgeRequest, data: unknown): BridgeResponse {
@@ -284,5 +453,18 @@ function ok(input: BridgeRequest, data: unknown): BridgeResponse {
     id: input.id,
     ok: true,
     data,
+  };
+}
+
+function createSandboxBridgeError(
+  input: BridgeRequest,
+  code: string,
+  message: string,
+  retryable = false,
+): BridgeResponse {
+  return {
+    id: input.id,
+    ok: false,
+    error: { code, message, retryable },
   };
 }
