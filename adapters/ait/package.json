@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/adapter-ait",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "Apps in Toss WebView platform adapter for mpgd games.",
   "license": "MIT",
   "repository": {
