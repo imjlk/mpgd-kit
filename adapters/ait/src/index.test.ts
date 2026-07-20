@@ -196,4 +196,146 @@ describe('adapter-ait', () => {
       submitted: true,
     });
   });
+
+  it('persists sandbox storage across bridge recreation when browser storage is available', async () => {
+    const values = new Map<string, string>();
+    let storageUnavailable = false;
+    const storage = {
+      getItem: (key: string) => {
+        if (storageUnavailable) {
+          throw new Error('storage unavailable');
+        }
+        return values.get(key) ?? null;
+      },
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+    };
+    const first = createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'ait-sandbox-first',
+      fallbackBridge: createAitSandboxBridge({ storage }),
+    });
+
+    await first.storage.save({ key: 'tutorial:v1', value: { completed: true } });
+
+    const second = createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'ait-sandbox-second',
+      fallbackBridge: createAitSandboxBridge({ storage }),
+    });
+
+    const restored = await second.storage.load({ key: 'tutorial:v1' });
+    expect(restored).toEqual({
+      value: { completed: true },
+    });
+    if (typeof restored?.value === 'object' && restored.value !== null) {
+      (restored.value as { completed: boolean }).completed = false;
+    }
+    storageUnavailable = true;
+    await expect(second.storage.load({ key: 'tutorial:v1' })).resolves.toEqual({
+      value: { completed: true },
+    });
+    expect(values.has('mpgd:ait-sandbox:tutorial:v1')).toBe(true);
+  });
+
+  it('falls back to session memory after persistent storage rejects a save', async () => {
+    let rejectWrites = false;
+    let writes = 0;
+    const values = new Map<string, string>();
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        writes += 1;
+        if (rejectWrites) {
+          throw new Error('quota exceeded');
+        }
+        values.set(key, value);
+      },
+    };
+    const gateway = createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'ait-sandbox-write-failure',
+      fallbackBridge: createAitSandboxBridge({ storage }),
+    });
+
+    await gateway.storage.save({ key: 'tutorial:v1', value: { completed: false } });
+    rejectWrites = true;
+    await gateway.storage.save({ key: 'tutorial:v1', value: { completed: true } });
+    await expect(gateway.storage.load({ key: 'tutorial:v1' })).resolves.toEqual({
+      value: { completed: true },
+    });
+    await gateway.storage.save({ key: 'tutorial:v1', value: { completed: 'memory-only' } });
+    expect(writes).toBe(2);
+    await expect(gateway.storage.load({ key: 'tutorial:v1' })).resolves.toEqual({
+      value: { completed: 'memory-only' },
+    });
+  });
+
+  it('falls back to a missing value when persistent storage becomes unreadable', async () => {
+    let reads = 0;
+    const gateway = createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'ait-sandbox-read-failure',
+      fallbackBridge: createAitSandboxBridge({
+        storage: {
+          getItem() {
+            reads += 1;
+            throw new Error('storage blocked');
+          },
+          setItem() {},
+        },
+      }),
+    });
+
+    await expect(gateway.storage.load({ key: 'tutorial:v1' })).resolves.toBeNull();
+    await expect(gateway.storage.load({ key: 'tutorial:v1' })).resolves.toBeNull();
+    expect(reads).toBe(1);
+  });
+
+  it('removes corrupt persistent values and lets the sandbox recover', async () => {
+    const values = new Map([['mpgd:ait-sandbox:tutorial:v1', '{not-json']]);
+    const storage = {
+      getItem: (key: string) => values.get(key) ?? null,
+      setItem: (key: string, value: string) => {
+        values.set(key, value);
+      },
+      removeItem: (key: string) => {
+        values.delete(key);
+      },
+    };
+    const gateway = createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'ait-sandbox-corrupt-value',
+      fallbackBridge: createAitSandboxBridge({ storage }),
+    });
+
+    await expect(gateway.storage.load({ key: 'tutorial:v1' })).resolves.toBeNull();
+    expect(values.has('mpgd:ait-sandbox:tutorial:v1')).toBe(false);
+    await gateway.storage.save({ key: 'tutorial:v1', value: { completed: true } });
+    await expect(gateway.storage.load({ key: 'tutorial:v1' })).resolves.toEqual({
+      value: { completed: true },
+    });
+  });
+
+  it('disables persistent reads when a corrupt value cannot be removed', async () => {
+    let reads = 0;
+    const gateway = createAitPlatformGateway({
+      appVersion: '1.0.0',
+      buildId: 'ait-sandbox-corrupt-value-without-cleanup',
+      fallbackBridge: createAitSandboxBridge({
+        storage: {
+          getItem() {
+            reads += 1;
+            return '{not-json';
+          },
+          setItem() {},
+        },
+      }),
+    });
+
+    await expect(gateway.storage.load({ key: 'tutorial:v1' })).resolves.toBeNull();
+    await expect(gateway.storage.load({ key: 'tutorial:v1' })).resolves.toBeNull();
+    expect(reads).toBe(1);
+  });
 });
