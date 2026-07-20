@@ -62,4 +62,4 @@ minimumReleaseAgeExclude:
   - '@devvit/web-view-scripts@0.13.8'
   - '@devvit/web@0.13.8'
   - devvit@0.13.8
-  - '@ait-co/devtools@0.1.139'
+  - '@ait-co/devtools@0.1.140'
