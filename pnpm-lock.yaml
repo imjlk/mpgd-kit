@@ -272,8 +272,8 @@ importers:
         version: link:../../adapters/ait
     devDependencies:
       '@ait-co/devtools':
-        specifier: ^0.1.138
-        version: 0.1.138(ddacffd1360e345338f8069a3f016ad5)
+        specifier: ^0.1.139
+        version: 0.1.139(ddacffd1360e345338f8069a3f016ad5)
       '@apps-in-toss/cli':
         specifier: ^2.10.6
         version: 2.10.6(@babel/core@7.29.7)(@babel/preset-env@7.28.5(@babel/core@7.29.7))(@react-navigation/native@7.2.2(react-native@0.72.6(@babel/core@7.29.7)(@babel/preset-env@7.28.5(@babel/core@7.29.7))(react@18.2.0))(react@18.2.0))(@swc/helpers@0.5.23)(@types/node@24.13.2)(react-native-safe-area-context@5.6.2(react-native@0.72.6(@babel/core@7.29.7)(@babel/preset-env@7.28.5(@babel/core@7.29.7))(react@18.2.0))(react@18.2.0))(react-native-screens@4.23.0(react-native@0.72.6(@babel/core@7.29.7)(@babel/preset-env@7.28.5(@babel/core@7.29.7))(react@18.2.0))(react@18.2.0))(react-native@0.72.6(@babel/core@7.29.7)(@babel/preset-env@7.28.5(@babel/core@7.29.7))(react@18.2.0))(react@18.2.0)(typanion@3.14.0)(typescript@7.0.2)
@@ -858,8 +858,8 @@ importers:
 
 packages:
 
-  '@ait-co/devtools@0.1.138':
-    resolution: {integrity: sha512-JQw8HmS+iY+gWwSffQBunpiL8BQijspKEq34KS4IP9dbiOscHL8/T1ArOTHRcVDeqQ3jdM7WuqCwbdOTQKRf+Q==}
+  '@ait-co/devtools@0.1.139':
+    resolution: {integrity: sha512-8+nkm/mJxXajkRjt/YJqHbMdVm8UkDV1NeTPaUR57Lx1w1Xu9BhguFX3cdzGpdyhRohMajoM59mz13FwaVF2wQ==}
     engines: {node: '>=24'}
     hasBin: true
     peerDependencies:
@@ -9825,7 +9825,7 @@ packages:
 
 snapshots:
 
-  '@ait-co/devtools@0.1.138(ddacffd1360e345338f8069a3f016ad5)':
+  '@ait-co/devtools@0.1.139(ddacffd1360e345338f8069a3f016ad5)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(zod@4.4.3)
       '@vitest/expect': 4.1.9
