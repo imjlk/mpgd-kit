@@ -23,7 +23,7 @@
     "@mpgd/adapter-ait": "workspace:*"
   },
   "devDependencies": {
-    "@ait-co/devtools": "^0.1.138",
+    "@ait-co/devtools": "^0.1.139",
     "@apps-in-toss/cli": "^2.10.6",
     "@ttsc/unplugin": "0.18.4",
     "@types/node": "^24.0.0",

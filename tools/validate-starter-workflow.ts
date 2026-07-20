@@ -989,6 +989,7 @@ function validatePhaserTemplateAITWrapper(): void {
       "from '@ait-co/devtools/unplugin'",
       "from '@mpgd/adapter-ait/ad-config'",
       'aitDevtools.vite({ mcp: true',
+      "'@apps-in-toss/web-framework': '@ait-co/devtools/mock'",
       '__MPGD_AIT_AD_GROUP_IDS__',
       '__MPGD_AIT_AD_PLACEMENT_TYPES__',
     ]) {
