@@ -922,7 +922,11 @@ function toAitDeepLink(input: string, appName: string): string | undefined {
 }
 
 function isGameCenterSupported(dependencies: AitHostDependencies): boolean {
-  return dependencies.isMinVersionSupported({ android: '5.221.0', ios: '5.221.0' });
+  return isCapabilitySupported(() =>
+    dependencies.isMinVersionSupported({
+      android: '5.221.0',
+      ios: '5.221.0',
+    }));
 }
 
 function areFullScreenAdsSupported(dependencies: AitHostDependencies): boolean {
