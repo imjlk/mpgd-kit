@@ -810,6 +810,42 @@ describe('AIT production host bridge', () => {
     expect(showCount).toBe(1);
   });
 
+  it('treats a missing Game Center environment constant as unsupported', async () => {
+    const diagnostic = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const submitScore = vi.fn(async () => ({ statusCode: 'SUCCESS' as const }));
+    const openLeaderboard = vi.fn(async () => {});
+
+    try {
+      const bridge = createAitHostBridge({
+        dependencies: createDependencies({
+          isMinVersionSupported: () => {
+            throw new Error('getOperationalEnvironment is not a constant handler');
+          },
+          submitGameCenterLeaderBoardScore: submitScore,
+          openGameCenterLeaderboard: openLeaderboard,
+        }),
+      });
+
+      await expect(request(bridge, 'runtime.getCapabilities', {})).resolves.toMatchObject({
+        nativeLeaderboard: false,
+      });
+      await expect(request(bridge, 'leaderboard.submitScore', { score: 42 })).resolves.toEqual({
+        submitted: false,
+      });
+      await expect(request(bridge, 'leaderboard.open', {})).resolves.toEqual({});
+      expect(submitScore).not.toHaveBeenCalled();
+      expect(openLeaderboard).not.toHaveBeenCalled();
+      expect(diagnostic).toHaveBeenCalledWith(
+        'AIT capability support check failed; disabling the feature.',
+        expect.objectContaining({
+          message: 'getOperationalEnvironment is not a constant handler',
+        }),
+      );
+    } finally {
+      diagnostic.mockRestore();
+    }
+  });
+
   it('delegates supported Game Center score submission and opening', async () => {
     const submittedScores: string[] = [];
     let openCount = 0;
