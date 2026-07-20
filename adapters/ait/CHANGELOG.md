@@ -1,5 +1,13 @@
 # @mpgd/adapter-ait
 
+## 0.5.2 — 2026-07-20
+
+### Fixed
+
+- [d40bceb](https://github.com/imjlk/mpgd-kit/commit/d40bcebe0834eba7a5b150c7e9f21f321445dd65) Treat a missing Apps in Toss operational-environment support constant as an unsupported Game
+  Center capability instead of failing wrapper startup. Leaderboard submission and opening remain
+  disabled until the host can verify the minimum native version. — Thanks @imjlk!
+
 ## 0.5.1 — 2026-07-20
 
 ### Fixed
