@@ -1,5 +1,11 @@
 # @mpgd/adapter-ait
 
+## 0.6.0 — 2026-07-20
+
+### Added
+
+- [c64f042](https://github.com/imjlk/mpgd-kit/commit/c64f042302af23d676dd49f4168378d053e39b19) Persist AIT sandbox storage through browser reloads while retaining an in-memory fallback when local storage is unavailable. — Thanks @imjlk!
+
 ## 0.5.2 — 2026-07-20
 
 ### Fixed
