@@ -138,6 +138,60 @@ describe('AIT production host bridge', () => {
     }
   });
 
+  it('treats missing Ads 2.0 support constants as unsupported without blocking startup', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const diagnostic = vi.spyOn(console, 'debug').mockImplementation(() => {});
+    const missingSupportConstant = Object.assign(
+      () => () => {},
+      {
+        isSupported: () => {
+          throw new Error('native support constant is unavailable');
+        },
+      },
+    );
+
+    try {
+      const bridge = createAitHostBridge({
+        adGroupIds: {
+          SUDOKU_HINT_REWARDED: 'ait-ad-group-1',
+          SUDOKU_BREAK_INTERSTITIAL: 'ait-ad-group-2',
+        },
+        adPlacementTypes: {
+          SUDOKU_HINT_REWARDED: 'rewarded',
+          SUDOKU_BREAK_INTERSTITIAL: 'interstitial',
+        },
+        dependencies: createDependencies({
+          loadFullScreenAd: missingSupportConstant,
+          showFullScreenAd: missingSupportConstant,
+        }),
+      });
+
+      await expect(request(bridge, 'runtime.getCapabilities', {})).resolves.toMatchObject({
+        nativeAds: false,
+        rewardedAds: false,
+        interstitialAds: false,
+      });
+      await expect(request(bridge, 'ads.preload', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+      })).resolves.toEqual({});
+      await expect(request(bridge, 'ads.showRewarded', {
+        placementId: 'SUDOKU_HINT_REWARDED',
+        idempotencyKey: 'reward-1',
+      })).resolves.toEqual({ status: 'unavailable', rewardGranted: false });
+      await expect(request(bridge, 'ads.showInterstitial', {
+        placementId: 'SUDOKU_BREAK_INTERSTITIAL',
+      })).resolves.toEqual({ status: 'unavailable' });
+      expect(warning).toHaveBeenCalledOnce();
+      expect(diagnostic).toHaveBeenCalledWith(
+        'AIT capability support check failed; disabling the feature.',
+        expect.objectContaining({ message: 'native support constant is unavailable' }),
+      );
+    } finally {
+      diagnostic.mockRestore();
+      warning.mockRestore();
+    }
+  });
+
   it('grants a configured rewarded ad only after userEarnedReward and dismissal', async () => {
     let loadCallbacks: LoadAdCallbacks | undefined;
     let showCallbacks: ShowAdCallbacks | undefined;

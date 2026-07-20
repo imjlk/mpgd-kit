@@ -123,8 +123,7 @@ export function createAitHostBridge(
   async function handleRequest(request: BridgeRequest): Promise<BridgeResponse> {
     switch (request.method) {
       case 'runtime.getCapabilities': {
-        const adsSupported = dependencies.loadFullScreenAd.isSupported()
-          && dependencies.showFullScreenAd.isSupported();
+        const adsSupported = areFullScreenAdsSupported(dependencies);
         const rewardedAds = adsSupported
           && hasConfiguredAdType(adGroupIds, adPlacementTypes, 'rewarded');
         const interstitialAds = adsSupported
@@ -220,7 +219,7 @@ export function createAitHostBridge(
           );
         }
 
-        if (!dependencies.loadFullScreenAd.isSupported()) {
+        if (!isCapabilitySupported(() => dependencies.loadFullScreenAd.isSupported())) {
           if (!warnedUnsupportedAdPreload) {
             warnedUnsupportedAdPreload = true;
             console.warn(
@@ -250,8 +249,7 @@ export function createAitHostBridge(
         if (
           adGroupId === undefined
           || adPlacementTypes.get(placementId) !== 'rewarded'
-          || !dependencies.loadFullScreenAd.isSupported()
-          || !dependencies.showFullScreenAd.isSupported()
+          || !areFullScreenAdsSupported(dependencies)
         ) {
           return ok(request, { status: 'unavailable', rewardGranted: false });
         }
@@ -306,8 +304,7 @@ export function createAitHostBridge(
         if (
           adGroupId === undefined
           || adPlacementTypes.get(placementId) !== 'interstitial'
-          || !dependencies.loadFullScreenAd.isSupported()
-          || !dependencies.showFullScreenAd.isSupported()
+          || !areFullScreenAdsSupported(dependencies)
         ) {
           return ok(request, { status: 'unavailable' });
         }
@@ -926,6 +923,22 @@ function toAitDeepLink(input: string, appName: string): string | undefined {
 
 function isGameCenterSupported(dependencies: AitHostDependencies): boolean {
   return dependencies.isMinVersionSupported({ android: '5.221.0', ios: '5.221.0' });
+}
+
+function areFullScreenAdsSupported(dependencies: AitHostDependencies): boolean {
+  return isCapabilitySupported(() => dependencies.loadFullScreenAd.isSupported())
+    && isCapabilitySupported(() => dependencies.showFullScreenAd.isSupported());
+}
+
+function isCapabilitySupported(check: () => boolean): boolean {
+  try {
+    return check() === true;
+  } catch (error) {
+    // Older hosts and local wrappers may not expose a native support constant yet.
+    // Missing capability metadata must disable the feature instead of blocking startup.
+    console.debug('AIT capability support check failed; disabling the feature.', error);
+    return false;
+  }
 }
 
 function normalizeAdGroupIds(
