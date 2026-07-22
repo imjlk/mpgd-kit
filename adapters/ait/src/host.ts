@@ -1,7 +1,7 @@
 import {
   getTossShareLink,
   getUserKeyForGame,
-  grantPromotionReward,
+  grantPromotionRewardForGame as grantPromotionReward,
   isMinVersionSupported,
   loadFullScreenAd,
   openGameCenterLeaderboard,
@@ -753,6 +753,9 @@ async function resolvePersistedPromotionGrant(
     }
     if (state.status === 'pending') {
       const pendingSince = normalizePendingSince(state.pendingSince);
+      if (pendingSince === undefined) {
+        return { result: { status: 'pending' } };
+      }
       if (input.resolver === undefined) {
         return { result: { status: 'pending' } };
       }
@@ -762,7 +765,7 @@ async function resolvePersistedPromotionGrant(
         resolution = await input.resolver({
           campaignId: input.campaignId,
           idempotencyKey: input.idempotencyKey,
-          ...(pendingSince === undefined ? {} : { pendingSince }),
+          pendingSince,
         });
       } catch (error) {
         console.warn(

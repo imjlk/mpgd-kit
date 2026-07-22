@@ -32,6 +32,23 @@ assertEqual(
   'https://ait-partner.example/api-partner/v1/apps-in-toss/users/anon-key/verify',
   'anonymous-key verification should use the documented route',
 );
+
+const prefixedCalls: string[] = [];
+const prefixedClient = createAppsInTossPartnerApiClient({
+  mtls: {
+    async fetch(url) {
+      prefixedCalls.push(url);
+      return jsonResponse({ resultType: 'SUCCESS', success: 'true' });
+    },
+  },
+  baseUrl: 'https://ait-partner.example/staging/proxy',
+});
+await prefixedClient.verifyAnonymousKey({ anonymousKey: 'prefixed-anon-key' });
+assertEqual(
+  prefixedCalls[0],
+  'https://ait-partner.example/staging/proxy/api-partner/v1/apps-in-toss/users/anon-key/verify',
+  'custom base URL path prefixes should be preserved',
+);
 assertEqual(
   new Headers(calls[0]?.init?.headers).get('x-anon-key'),
   'anon-key-1',

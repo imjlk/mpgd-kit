@@ -420,10 +420,7 @@ describe('AIT production host bridge', () => {
       campaignId: 'SEVEN_DAY_STREAK',
       idempotencyKey: 'legacy-claim',
     })).resolves.toEqual({ status: 'pending' });
-    expect(resolvePendingPromotionGrant).toHaveBeenCalledWith({
-      campaignId: 'SEVEN_DAY_STREAK',
-      idempotencyKey: 'legacy-claim',
-    });
+    expect(resolvePendingPromotionGrant).not.toHaveBeenCalled();
     expect(grantPromotionReward).not.toHaveBeenCalled();
   });
 

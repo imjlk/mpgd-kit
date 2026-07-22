@@ -3,8 +3,8 @@ import type { NotificationTemplateData } from './notification-delivery';
 export const appsInTossPartnerApiBaseUrl = 'https://apps-in-toss-api.toss.im';
 export const defaultAppsInTossPartnerApiTimeoutMs = 10_000;
 
-const verifyAnonymousKeyPath = '/api-partner/v1/apps-in-toss/users/anon-key/verify';
-const sendFunctionalMessagePath = '/api-partner/v1/apps-in-toss/messenger/send-message';
+const verifyAnonymousKeyPath = 'api-partner/v1/apps-in-toss/users/anon-key/verify';
+const sendFunctionalMessagePath = 'api-partner/v1/apps-in-toss/messenger/send-message';
 const maximumResponseBodyBytes = 256 * 1_024;
 
 /** Compatible with a Cloudflare mTLS certificate binding (`env.BINDING.fetch`). */
