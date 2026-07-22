@@ -636,7 +636,12 @@ async function authorizeAndGrantAitPromotionReward(input: {
       campaignId: input.campaignId,
       idempotencyKey: input.idempotencyKey,
     });
-  } catch {
+  } catch (error) {
+    console.warn(
+      'AIT promotion grant authorization failed; keeping the claim pending.',
+      input.campaignId,
+      error,
+    );
     return { status: 'pending' };
   }
   if (authorization.status !== 'authorized') {
@@ -778,7 +783,7 @@ async function resolvePersistedPromotionGrant(
     return removeInvalidPersistedPromotionGrant(input.storage, storageKey);
   } catch (error) {
     console.warn(
-      'AIT persisted promotion state could not be reconciled; keeping the claim closed.',
+      'AIT persisted promotion state could not be reconciled; keeping the claim pending.',
       input.campaignId,
       error,
     );
