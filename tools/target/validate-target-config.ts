@@ -34,6 +34,10 @@ export function validateTargetConfigFile(path?: string) {
       throw new Error(`Target ${targetName} wrapperApp does not exist: ${target.wrapperApp}`);
     }
 
+    if (target.kind === 'apps-in-toss' && target.metadata?.sdkMajor !== 3) {
+      throw new Error(`Target ${targetName} metadata.sdkMajor must be 3.`);
+    }
+
     if (
       target.kind === 'devvit-web'
       && resolvePath(target.webDir) !== resolve(resolvePath(target.wrapperApp), 'dist/client')

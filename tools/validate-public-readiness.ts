@@ -58,7 +58,6 @@ const requiredIgnorePatterns = [
   '*.jks',
   '*.keystore',
   '*.mobileprovision',
-  'apps/target-ait/.granite/',
   'apps/target-ait/public/game/',
   'apps/target-devvit/dist/',
   'apps/mobile-capacitor/www/',

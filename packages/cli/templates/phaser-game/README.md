@@ -275,6 +275,22 @@ files referenced by `aitcc.yaml` under `./assets/`. Use `pnpm build:ait` for the
 game-owned wrapper smoke loop, and run `pnpm build:ait:package` before console
 deploys so `release-output/ait/` contains the `.ait` bundle you pass after `--`.
 
+The generated wrapper uses SDK 3 exclusively. Its configuration is
+`apps/target-ait/apps-in-toss.config.ts`; app display name and icon stay in the
+Apps in Toss console, while the file owns `appName`, `brand.primaryColor`,
+permissions, `webView`, and `webBundleDir`. Do not restore the removed SDK 2
+`granite.config.ts` fields.
+
+Before the first SDK 3 release, allow both of these exact origins on every API
+called by the mini-app:
+
+- `https://__GAME_NAME__.web.tossmini.com`
+- `https://__GAME_NAME__.private-web.tossmini.com`
+
+The first is production and the second is console QR testing. Apps in Toss does
+not allow an app that has released an SDK 3 bundle to roll back to SDK 2, so run
+the QR test and verify both CORS origins before publishing.
+
 The starter also installs `@apps-in-toss/web-framework` and awaits
 `install()` from `@ait-co/polyfill` only when `__APP_TARGET__` is `ait`. In the
 Apps in Toss WebView runtime, standard Web APIs such as `navigator.clipboard`,
@@ -285,7 +301,7 @@ SDK chunk and keep their native browser behavior. `pnpm dev:ait` is useful for
 checking the AIT-gated bundle path, but SDK-backed API behavior should be
 verified in the Apps in Toss sandbox or a game-owned devtools setup. If your
 game uses permission-gated APIs such as clipboard or geolocation, declare the
-matching permissions in the game-owned Apps in Toss `granite.config.ts` before
+matching permissions in the game-owned Apps in Toss `apps-in-toss.config.ts` before
 submission.
 
 The generated AIT target starts with `authoritativeGameServices: false`. Native

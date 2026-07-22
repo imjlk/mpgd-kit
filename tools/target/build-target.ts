@@ -112,9 +112,6 @@ const env: NodeJS.ProcessEnv = {
   MPGD_PLATFORM_TARGETS_FILE: platformTargets.path,
   MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveTargetConfigOutputDir(configBaseDir),
   MPGD_ICON_MANIFEST_PATH: generatedIcons.manifestPath,
-  ...(generatedIcons.aitBrandIcon === undefined
-    ? {}
-    : { MPGD_AIT_BRAND_ICON_URL: generatedIcons.aitBrandIcon }),
 };
 
 if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
@@ -159,7 +156,6 @@ switch (target.kind) {
     const wrapperApp = targetPath(requireString(target.wrapperApp, `${targetName}.wrapperApp`));
     replaceDirectory(`${gameApp}/dist`, webDir);
     mirrorAitRuntimeAssets(gameApp, wrapperApp);
-    stageWrapperIcon(generatedIcons, wrapperApp);
     run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
 
     let releaseArtifact = webDirConfigPath;
@@ -345,7 +341,6 @@ function targetReleaseMetadataEnv(target: PlatformTargetConfig): NodeJS.ProcessE
 
   if (target.kind === 'apps-in-toss') {
     assignEnv(env, 'MPGD_AIT_APP_NAME', metadata.appName);
-    assignEnv(env, 'MPGD_AIT_DISPLAY_NAME', metadata.displayName);
     assignEnv(env, 'MPGD_AIT_PRIMARY_COLOR', metadata.primaryColor);
 
     assignSdkMajorEnv(env, 'MPGD_AIT_SDK_MAJOR', metadata.sdkMajor, 'metadata.sdkMajor');

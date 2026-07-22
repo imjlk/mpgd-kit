@@ -4,7 +4,7 @@ This package owns the Apps in Toss WebView wrapper and bridge.
 
 Current scope:
 
-- SDK 2.x-compatible `granite.config.ts`
+- SDK 3 `apps-in-toss.config.ts`
 - `ait build` script
 - SDK-backed anonymous game identity through `getUserKeyForGame`
 - persistent progress through the native `Storage` API
@@ -27,6 +27,12 @@ provider explicitly with `VITE_MPGD_AIT_MOCK_IDENTITY=1`; release builds never
 use that fixed local player id. Game identity requires Toss app 5.232.0 or newer,
 while Game Center requires Toss app 5.221.0 or newer.
 SDK results must still be verified with a QR test in the Toss app.
+
+SDK 3 bundles require API servers to allow both the production
+`https://<appName>.web.tossmini.com` origin and the QR-test
+`https://<appName>.private-web.tossmini.com` origin. Releasing SDK 3 is
+irreversible for that app: a later release cannot roll back to SDK 2. Complete
+the QR test and CORS verification before publishing.
 
 Purchases remain unavailable in the reference host. Rewarded Ads 2.0 must be
 preloaded and only return completion after the native `userEarnedReward` event

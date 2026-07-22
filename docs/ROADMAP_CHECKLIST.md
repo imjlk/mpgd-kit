@@ -80,9 +80,9 @@ loading compatibility. The root project toolchain remains TypeScript 7 RC.
 ## Phase 4 - Apps In Toss Target
 
 - [x] apps/target-ait created
-- [x] @apps-in-toss/web-framework 2.x installed
-- [x] @apps-in-toss/cli 2.x installed
-- [x] granite.config.ts written
+- [x] @apps-in-toss/web-framework 3.x beta installed
+- [x] @apps-in-toss/cli 3.x beta installed
+- [x] apps-in-toss.config.ts written
 - [x] aitBridge.ts written
 - [x] globalThis.__GAME_PLATFORM_BRIDGE__ injected
 - [x] configured game build output copied to public/game

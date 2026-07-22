@@ -377,7 +377,7 @@ function readSdkMajor(envValue: string | undefined, metadataValue: number | unde
     }
   }
 
-  return metadataValue ?? 2;
+  return metadataValue ?? 3;
 }
 
 function getSourceGitSha(kitGitSha: string): string {
