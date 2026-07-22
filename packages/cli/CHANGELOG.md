@@ -1,5 +1,12 @@
 # @mpgd/cli
 
+## 0.16.1 — 2026-07-20
+
+### Changed
+
+- [f890f96](https://github.com/imjlk/mpgd-kit/commit/f890f963d199a8db1d894dfbc23b123efa099709) Update generated Apps in Toss wrappers to @ait-co/devtools 0.1.140 and preserve its
+  official SDK mock when Vite prebundles the Kit adapter. — Thanks @imjlk!
+
 ## 0.16.0 — 2026-07-20
 
 ### Patch changes
