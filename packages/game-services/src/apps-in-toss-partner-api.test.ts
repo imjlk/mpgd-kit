@@ -37,6 +37,16 @@ assertEqual(
   'anon-key-1',
   'anonymous-key verification should use the documented mTLS header',
 );
+assertEqual(
+  new Headers(calls[0]?.init?.headers).has('content-type'),
+  false,
+  'anonymous-key verification should not advertise a nonexistent JSON body',
+);
+assertEqual(
+  calls[0]?.init?.body,
+  undefined,
+  'anonymous-key verification should omit its request body',
+);
 
 responses.push(
   jsonResponse(
@@ -99,9 +109,49 @@ await assertRejects(
   'invalid anonymous-key verification response',
 );
 
+responses.push(new Response('x'.repeat(256 * 1_024 + 1)));
+await assertRejects(
+  () => client.verifyAnonymousKey({ anonymousKey: 'bounded-key' }),
+  'response exceeded the maximum accepted size',
+);
+
+const prototypeContext = JSON.parse('{"__proto__":"safe"}') as Record<string, string>;
+responses.push(jsonResponse({
+  resultType: 'SUCCESS',
+  success: {
+    msgCount: 0,
+    sentPushCount: 0,
+    sentInboxCount: 0,
+    sentSmsCount: 0,
+    sentAlimtalkCount: 0,
+    sentFriendtalkCount: 0,
+    detail: {},
+  },
+}));
+await client.sendFunctionalMessage({
+  recipient: { type: 'toss-user', key: 'toss-user-key-1' },
+  templateSetCode: 'SAFE_CONTEXT',
+  context: prototypeContext,
+});
+const prototypeCall = calls[5];
+assertDeepEqual(
+  JSON.parse(String(prototypeCall?.init?.body)),
+  { templateSetCode: 'SAFE_CONTEXT', context: prototypeContext },
+  'message context should preserve own prototype-named keys safely',
+);
+assertEqual(
+  new Headers(prototypeCall?.init?.headers).get('x-toss-user-key'),
+  'toss-user-key-1',
+  'Toss user recipients should use x-toss-user-key',
+);
+
 assertThrows(
   () => createAppsInTossPartnerApiClient({ mtls, baseUrl: 'http://ait-partner.example' }),
   'credential-free HTTPS URL',
+);
+await assertRejectsError(
+  () => client.verifyAnonymousKey({ anonymousKey: 'line\nbreak' }),
+  '1 to 2048 characters',
 );
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -145,6 +195,21 @@ async function assertRejects(
     await operation();
   } catch (error) {
     if (error instanceof AppsInTossPartnerApiError && error.message.includes(message)) {
+      return;
+    }
+    throw error;
+  }
+  throw new Error(`Expected operation to reject: ${message}`);
+}
+
+async function assertRejectsError(
+  operation: () => Promise<unknown>,
+  message: string,
+): Promise<void> {
+  try {
+    await operation();
+  } catch (error) {
+    if (error instanceof Error && error.message.includes(message)) {
       return;
     }
     throw error;

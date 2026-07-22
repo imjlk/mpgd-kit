@@ -5,7 +5,7 @@ export const defaultAppsInTossPartnerApiTimeoutMs = 10_000;
 
 const verifyAnonymousKeyPath = '/api-partner/v1/apps-in-toss/users/anon-key/verify';
 const sendFunctionalMessagePath = '/api-partner/v1/apps-in-toss/messenger/send-message';
-const maximumResponseBodyLength = 256 * 1_024;
+const maximumResponseBodyBytes = 256 * 1_024;
 
 /** Compatible with a Cloudflare mTLS certificate binding (`env.BINDING.fetch`). */
 export interface AppsInTossMutualTlsFetcher {
@@ -135,23 +135,21 @@ interface PartnerApiResponse {
 async function postJson(input: PostJsonInput): Promise<PartnerApiResponse> {
   const timeout = createTimeoutSignal(input.signal, input.timeoutMs);
   try {
+    const requestBody = input.body === undefined ? undefined : JSON.stringify(input.body);
+    const headers = new Headers({
+      accept: 'application/json',
+      ...input.headers,
+    });
+    if (requestBody !== undefined) {
+      headers.set('content-type', 'application/json');
+    }
     const response = await input.mtls.fetch(input.url, {
       method: 'POST',
-      headers: {
-        accept: 'application/json',
-        'content-type': 'application/json',
-        ...input.headers,
-      },
-      body: input.body === undefined ? '' : JSON.stringify(input.body),
+      headers,
+      ...(requestBody === undefined ? {} : { body: requestBody }),
       signal: timeout.signal,
     });
-    const text = await response.text();
-    if (text.length > maximumResponseBodyLength) {
-      throw new AppsInTossPartnerApiError(
-        'Apps in Toss response exceeded the maximum accepted size.',
-        response.status,
-      );
-    }
+    const text = await readBoundedResponseText(response);
 
     let body: unknown;
     try {
@@ -166,6 +164,62 @@ async function postJson(input: PostJsonInput): Promise<PartnerApiResponse> {
   } finally {
     timeout.cleanup();
   }
+}
+
+async function readBoundedResponseText(response: Response): Promise<string> {
+  const declaredLength = response.headers.get('content-length');
+  if (
+    declaredLength !== null
+    && /^\d+$/u.test(declaredLength)
+    && Number(declaredLength) > maximumResponseBodyBytes
+  ) {
+    throw responseTooLarge(response.status);
+  }
+  if (response.body === null) {
+    return '';
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let byteLength = 0;
+  try {
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) {
+        break;
+      }
+      byteLength += chunk.value.byteLength;
+      if (byteLength > maximumResponseBodyBytes) {
+        await reader.cancel().catch(() => {});
+        throw responseTooLarge(response.status);
+      }
+      chunks.push(chunk.value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  const bytes = new Uint8Array(byteLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  try {
+    return new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch {
+    throw new AppsInTossPartnerApiError(
+      'Apps in Toss returned a non-UTF-8 response.',
+      response.status,
+    );
+  }
+}
+
+function responseTooLarge(status: number): AppsInTossPartnerApiError {
+  return new AppsInTossPartnerApiError(
+    'Apps in Toss response exceeded the maximum accepted size.',
+    status,
+  );
 }
 
 function requireSuccessEnvelope(
@@ -250,7 +304,7 @@ function normalizeContext(input: NotificationTemplateData): NotificationTemplate
   if (entries.length > 128) {
     throw new TypeError('AIT message context cannot contain more than 128 values.');
   }
-  const output: Record<string, string | number | boolean> = {};
+  const output = Object.create(null) as Record<string, string | number | boolean>;
   for (const [key, value] of entries) {
     const normalizedKey = normalizeIdentifier(key, 'context key');
     if (
@@ -270,7 +324,11 @@ function normalizeContext(input: NotificationTemplateData): NotificationTemplate
 
 function normalizeIdentifier(value: string, field: string): string {
   const normalized = value.trim();
-  if (normalized.length === 0 || normalized.length > 2_048) {
+  if (
+    normalized.length === 0
+    || normalized.length > 2_048
+    || /[\p{Cc}\p{Cf}]/u.test(normalized)
+  ) {
     throw new TypeError(`${field} must contain 1 to 2048 characters.`);
   }
   return normalized;
