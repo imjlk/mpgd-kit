@@ -1,5 +1,15 @@
 # @mpgd/game-services
 
+## 0.11.0 — 2026-07-23
+
+### Added
+
+- [8f71019](https://github.com/imjlk/mpgd-kit/commit/8f710196ec0602181ea83599b390d47cb78a1cf6) Add an Apps in Toss partner API client for mTLS user-key verification and functional-message delivery. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: analytics@0.3.8, catalog@0.5.1, platform@0.8.0
+
 ## 0.10.0 — 2026-07-17
 
 ### Added

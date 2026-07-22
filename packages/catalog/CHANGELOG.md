@@ -1,5 +1,11 @@
 # @mpgd/catalog
 
+## 0.5.1 — 2026-07-23
+
+### Patch changes
+
+- Updated dependencies: platform@0.8.0
+
 ## 0.5.0 — 2026-07-17
 
 ### Added
