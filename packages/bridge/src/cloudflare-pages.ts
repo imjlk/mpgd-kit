@@ -205,6 +205,14 @@ export function createMpgdCloudflarePagesBridgeHandler<
       case 'notifications.requestSubscription':
         return ok(input.bridgeRequest, 'unavailable');
 
+      case 'promotions.getAvailability':
+        return ok(input.bridgeRequest, 'configuration-required');
+
+      case 'promotions.grantReward':
+        return ok(input.bridgeRequest, {
+          status: 'unavailable',
+        });
+
       case 'commerce.getProducts':
       case 'commerce.getEntitlements':
         return ok(input.bridgeRequest, []);

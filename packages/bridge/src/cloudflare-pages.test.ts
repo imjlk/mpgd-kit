@@ -145,6 +145,19 @@ const platformFlowFallbacks = [
     payload: { topic: 'daily-ready' },
     expected: 'unavailable',
   },
+  {
+    method: 'promotions.getAvailability',
+    payload: { campaignId: 'SEVEN_DAY_STREAK' },
+    expected: 'configuration-required',
+  },
+  {
+    method: 'promotions.grantReward',
+    payload: {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-1',
+    },
+    expected: { status: 'unavailable' },
+  },
 ] as const satisfies readonly {
   readonly method: BridgeRequest['method'];
   readonly payload: unknown;

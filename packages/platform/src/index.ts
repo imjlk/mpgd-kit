@@ -87,6 +87,39 @@ export interface AdAdapter {
   }): Promise<InterstitialAdResult>;
 }
 
+export type PromotionRewardAvailability =
+  | 'available'
+  | 'configuration-required'
+  | 'unsupported';
+
+export type PromotionRewardResult =
+  | {
+      readonly status: 'granted';
+      /** Opaque provider receipt used by the game backend to finalize the authorized claim. */
+      readonly receiptKey: string;
+    }
+  | {
+      readonly status: 'pending' | 'unavailable' | 'failed';
+    };
+
+/**
+ * Optional platform-funded promotion surface.
+ *
+ * Games address logical campaign ids only. Platform promotion codes and reward
+ * amounts belong to the target host configuration, while claim authorization
+ * and receipt finalization remain server responsibilities.
+ */
+export interface PromotionRewardAdapter {
+  getAvailability(input: {
+    readonly campaignId: string;
+  }): Promise<PromotionRewardAvailability>;
+  grantReward(input: {
+    readonly campaignId: string;
+    /** Server-issued, single-use claim id. */
+    readonly idempotencyKey: string;
+  }): Promise<PromotionRewardResult>;
+}
+
 export interface LeaderboardScoreInput {
   readonly leaderboardId: string;
   readonly score: number;
@@ -266,6 +299,7 @@ export interface PlatformGateway {
   readonly presentation?: PresentationAdapter;
   readonly sharing?: ShareAdapter;
   readonly notifications?: NotificationSubscriptionAdapter;
+  readonly promotions?: PromotionRewardAdapter;
 }
 
 export function createUnsupportedCapabilities(): PlatformCapabilities {

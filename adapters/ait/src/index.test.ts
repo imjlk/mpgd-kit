@@ -131,6 +131,15 @@ describe('adapter-ait', () => {
     await expect(
       gateway.notifications?.requestSubscription('daily-ready'),
     ).resolves.toBe('unavailable');
+    await expect(
+      gateway.promotions?.getAvailability({ campaignId: 'SEVEN_DAY_STREAK' }),
+    ).resolves.toBe('configuration-required');
+    await expect(
+      gateway.promotions?.grantReward({
+        campaignId: 'SEVEN_DAY_STREAK',
+        idempotencyKey: 'sandbox-streak-1',
+      }),
+    ).resolves.toEqual({ status: 'unavailable' });
     await gateway.storage.save({ key: 'save:v1', value: { coins: 7 } });
     await expect(gateway.storage.load({ key: 'save:v1' })).resolves.toEqual({
       value: {

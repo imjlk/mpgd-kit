@@ -12,6 +12,9 @@ describe('AIT production host bridge', () => {
         identityProvider: async () => ({ type: 'HASH', hash: ' player-1 ' }),
         storage: {
           getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => {
+            values.delete(key);
+          },
           setItem: async (key, value) => {
             values.set(key, value);
           },
@@ -60,6 +63,7 @@ describe('AIT production host bridge', () => {
       dependencies: createDependencies({
         storage: {
           getItem: async () => '{not-valid-json',
+          removeItem: async () => {},
           setItem: async () => {},
         },
       }),
@@ -87,6 +91,456 @@ describe('AIT production host bridge', () => {
       placementId: 'SUDOKU_HINT_REWARDED',
       idempotencyKey: 'reward-1',
     })).resolves.toEqual({ status: 'unavailable', rewardGranted: false });
+  });
+
+  it('requests configured notification agreement and reflects the session result', async () => {
+    let callbacks: NotificationAgreementCallbacks | undefined;
+    let cleanupCount = 0;
+    const requestAgreement = Object.assign(
+      (input: NotificationAgreementCallbacks) => {
+        callbacks = input;
+        return () => {
+          cleanupCount += 1;
+        };
+      },
+      { isSupported: () => true },
+    );
+    const bridge = createAitHostBridge({
+      notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
+      dependencies: createDependencies({ requestNotificationAgreement: requestAgreement }),
+    });
+
+    await expect(request(bridge, 'notifications.getStatus', {
+      topic: 'daily-ready',
+    })).resolves.toBe('configuration-required');
+    await expect(request(bridge, 'notifications.getStatus', {
+      topic: 'streak-at-risk',
+    })).resolves.toBe('not-subscribed');
+
+    const subscription = request(bridge, 'notifications.requestSubscription', {
+      topic: 'streak-at-risk',
+    });
+    callbacks?.onEvent({ type: 'newAgreement' });
+    await expect(subscription).resolves.toBe('subscribed');
+    await expect(request(bridge, 'notifications.getStatus', {
+      topic: 'streak-at-risk',
+    })).resolves.toBe('subscribed');
+    expect(cleanupCount).toBe(1);
+  });
+
+  it('deduplicates promotion grants with the server-issued claim id', async () => {
+    const values = new Map<string, string>();
+    const grantPromotion = vi.fn(async () => ({ key: 'promotion-receipt-1' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({
+        grantPromotionReward: grantPromotion,
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => {
+            values.delete(key);
+          },
+          setItem: async (key, value) => {
+            values.set(key, value);
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.getAvailability', {
+      campaignId: 'SEVEN_DAY_STREAK',
+    })).resolves.toBe('available');
+    await expect(request(bridge, 'promotions.getAvailability', {
+      campaignId: 'UNCONFIGURED',
+    })).resolves.toBe('configuration-required');
+
+    const claim = {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-7d-1',
+    };
+    await expect(request(bridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'granted',
+      receiptKey: 'promotion-receipt-1',
+    });
+    await expect(request(bridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'granted',
+      receiptKey: 'promotion-receipt-1',
+    });
+    expect(grantPromotion).toHaveBeenCalledOnce();
+    expect(grantPromotion).toHaveBeenCalledWith({
+      params: { promotionCode: 'PROMOTION_7D', amount: 100 },
+    });
+  });
+
+  it('keeps an ambiguous promotion attempt pending instead of double granting', async () => {
+    const values = new Map<string, string>();
+    let providerResponseLost = true;
+    const grantPromotion = vi.fn(async () => {
+      if (providerResponseLost) {
+        throw new Error('native response lost');
+      }
+      return { key: 'promotion-receipt-recovered' };
+    });
+    const storage = {
+      getItem: async (key: string) => values.get(key) ?? null,
+      removeItem: async (key: string) => {
+        values.delete(key);
+      },
+      setItem: async (key: string, value: string) => {
+        values.set(key, value);
+      },
+    };
+    const promotionRewards = {
+      SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+    } as const;
+    const bridge = createAitHostBridge({
+      promotionRewards,
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({ grantPromotionReward: grantPromotion, storage }),
+    });
+    const claim = {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-ambiguous-1',
+    };
+
+    await expect(request(bridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'pending',
+    });
+    await expect(request(bridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'pending',
+    });
+    expect(grantPromotion).toHaveBeenCalledOnce();
+
+    providerResponseLost = false;
+    const resolvePendingPromotionGrant = vi.fn(async () => ({ status: 'retry' as const }));
+    const recoveredBridge = createAitHostBridge({
+      promotionRewards,
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      resolvePendingPromotionGrant,
+      dependencies: createDependencies({ grantPromotionReward: grantPromotion, storage }),
+    });
+    await expect(request(recoveredBridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'granted',
+      receiptKey: 'promotion-receipt-recovered',
+    });
+    expect(resolvePendingPromotionGrant).toHaveBeenCalledWith({
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-ambiguous-1',
+      pendingSince: expect.any(String),
+    });
+    expect(grantPromotion).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns failed for documented provider rejections and clears the pending marker', async () => {
+    const values = new Map<string, string>();
+    const providerResponses: unknown[] = [
+      {
+        errorCode: 'PROMOTION_NOT_ELIGIBLE',
+        message: 'The promotion is not available for this user.',
+      },
+      'ERROR',
+    ];
+    const grantPromotionReward = vi.fn(async () => providerResponses.shift());
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({
+        // Exercise provider-declared failure shapes that are intentionally wider
+        // than the optimistic SDK return type.
+        grantPromotionReward: grantPromotionReward as unknown as AitHostDependencies[
+          'grantPromotionReward'
+        ],
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => {
+            values.delete(key);
+          },
+          setItem: async (key, value) => {
+            values.set(key, value);
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-provider-rejected',
+    })).resolves.toEqual({ status: 'failed' });
+    expect(values.size).toBe(0);
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-provider-rejected',
+    })).resolves.toEqual({ status: 'failed' });
+    expect(values.size).toBe(0);
+    expect(grantPromotionReward).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an undocumented promotion response pending for server reconciliation', async () => {
+    const values = new Map<string, string>();
+    const grantPromotionReward = vi.fn(async () => ({ unexpected: true }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({
+        // Native bridges can return undocumented data even when the SDK type is
+        // narrower, so keep this malformed-response test at the dependency edge.
+        grantPromotionReward: grantPromotionReward as unknown as AitHostDependencies[
+          'grantPromotionReward'
+        ],
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => {
+            values.delete(key);
+          },
+          setItem: async (key, value) => {
+            values.set(key, value);
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-undocumented-response',
+    })).resolves.toEqual({ status: 'pending' });
+    expect(values.size).toBe(1);
+  });
+
+  it('keeps a rejected promotion pending when its marker cannot be cleared', async () => {
+    const values = new Map<string, string>();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const bridge = createAitHostBridge({
+        promotionRewards: {
+          SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+        },
+        authorizePromotionGrant: async () => ({ status: 'authorized' }),
+        dependencies: createDependencies({
+          grantPromotionReward: vi.fn(async () => 'ERROR') as unknown as AitHostDependencies[
+            'grantPromotionReward'
+          ],
+          storage: {
+            getItem: async (key) => values.get(key) ?? null,
+            removeItem: async () => {
+              throw new Error('storage unavailable');
+            },
+            setItem: async (key, value) => {
+              values.set(key, value);
+            },
+          },
+        }),
+      });
+
+      await expect(request(bridge, 'promotions.grantReward', {
+        campaignId: 'SEVEN_DAY_STREAK',
+        idempotencyKey: 'server-claim-provider-rejected-storage-error',
+      })).resolves.toEqual({ status: 'pending' });
+      expect(values.size).toBe(1);
+      expect(warning).toHaveBeenCalledWith(
+        'AIT failed promotion marker could not be cleared; keeping the claim pending.',
+        expect.stringContaining('server-claim-provider-rejected-storage-error'),
+        expect.any(Error),
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it('disables an invalid promotion without blocking the remaining bridge', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const bridge = createAitHostBridge({
+        promotionRewards: {
+          INVALID: { promotionCode: 'PROMOTION_INVALID', amount: 0 },
+        },
+        dependencies: createDependencies(),
+      });
+
+      await expect(request(bridge, 'promotions.getAvailability', {
+        campaignId: 'INVALID',
+      })).resolves.toBe('configuration-required');
+      await expect(request(bridge, 'identity.getSession', {})).resolves.toMatchObject({
+        playerId: 'test-player',
+      });
+      expect(warning).toHaveBeenCalledOnce();
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
+  it('keeps configured promotions unavailable without initial server authorization', async () => {
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-run' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      dependencies: createDependencies({ grantPromotionReward }),
+    });
+
+    await expect(request(bridge, 'promotions.getAvailability', {
+      campaignId: 'SEVEN_DAY_STREAK',
+    })).resolves.toBe('configuration-required');
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'invented-client-claim',
+    })).resolves.toEqual({ status: 'unavailable' });
+    expect(grantPromotionReward).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch a provider grant when the game backend rejects the claim', async () => {
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-run' }));
+    const authorizePromotionGrant = vi.fn(async () => ({ status: 'rejected' as const }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant,
+      dependencies: createDependencies({ grantPromotionReward }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'invented-client-claim',
+    })).resolves.toEqual({ status: 'unavailable' });
+    expect(authorizePromotionGrant).toHaveBeenCalledWith({
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'invented-client-claim',
+    });
+    expect(grantPromotionReward).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen a reconciled grant when receipt caching fails', async () => {
+    const storageKey = 'mpgd:ait:promotion-grant:v1:server-claim-cache-failure';
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-run' }));
+    const resolvePendingPromotionGrant = vi.fn(async () => ({
+      status: 'granted' as const,
+      receiptKey: 'server-reconciled-receipt',
+    }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      resolvePendingPromotionGrant,
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: {
+          getItem: async (key) => key === storageKey
+            ? JSON.stringify({ status: 'pending', pendingSince: '2026-07-22T00:00:00.000Z' })
+            : null,
+          removeItem: async () => {},
+          setItem: async () => {
+            throw new Error('storage unavailable');
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-cache-failure',
+    })).resolves.toEqual({ status: 'granted', receiptKey: 'server-reconciled-receipt' });
+    expect(grantPromotionReward).not.toHaveBeenCalled();
+  });
+
+  it('returns a native receipt even when its terminal cache write fails', async () => {
+    let writeCount = 0;
+    const grantPromotionReward = vi.fn(async () => ({ key: 'native-receipt' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: {
+          getItem: async () => null,
+          removeItem: async () => {},
+          setItem: async () => {
+            writeCount += 1;
+            if (writeCount === 2) {
+              throw new Error('terminal cache unavailable');
+            }
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-native-cache-failure',
+    })).resolves.toEqual({ status: 'granted', receiptKey: 'native-receipt' });
+    expect(grantPromotionReward).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when a persisted promotion marker is corrupt', async () => {
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-run' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: {
+          getItem: async () => '{not-json',
+          removeItem: async () => {},
+          setItem: async () => {},
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-corrupt-marker',
+    })).resolves.toEqual({ status: 'pending' });
+    expect(grantPromotionReward).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for legacy pending state and an invalid reconciled receipt', async () => {
+    const values = new Map<string, string>([
+      [
+        'mpgd:ait:promotion-grant:v1:legacy-claim',
+        JSON.stringify({ status: 'pending' }),
+      ],
+    ]);
+    const resolvePendingPromotionGrant = vi.fn(async () => ({
+      status: 'granted' as const,
+      receiptKey: '   ',
+    }));
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-run' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      resolvePendingPromotionGrant,
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => {
+            values.delete(key);
+          },
+          setItem: async (key, value) => {
+            values.set(key, value);
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'legacy-claim',
+    })).resolves.toEqual({ status: 'pending' });
+    expect(resolvePendingPromotionGrant).not.toHaveBeenCalled();
+    expect(grantPromotionReward).not.toHaveBeenCalled();
   });
 
   it('returns a protocol error for a malformed runtime bridge call', async () => {
@@ -922,6 +1376,9 @@ describe('AIT sharing', () => {
 
 type LoadAdCallbacks = Parameters<AitHostDependencies['loadFullScreenAd']>[0];
 type ShowAdCallbacks = Parameters<AitHostDependencies['showFullScreenAd']>[0];
+type NotificationAgreementCallbacks = Parameters<
+  AitHostDependencies['requestNotificationAgreement']
+>[0];
 
 function createDependencies(
   overrides: Partial<AitHostDependencies> = {},
@@ -932,10 +1389,15 @@ function createDependencies(
     identityProvider: async () => ({ type: 'HASH', hash: 'test-player' }),
     storage: {
       getItem: async () => null,
+      removeItem: async () => {},
       setItem: async () => {},
     },
     getTossShareLink: async () => 'https://toss.im/test',
     share: async () => {},
+    grantPromotionReward: async () => ({ key: 'test-promotion-receipt' }),
+    requestNotificationAgreement: Object.assign(() => () => {}, {
+      isSupported: () => false,
+    }),
     isMinVersionSupported: () => true,
     loadFullScreenAd: unsupportedAd,
     showFullScreenAd: unsupportedAd,

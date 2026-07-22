@@ -142,6 +142,13 @@ delivery authority stay on the server. Apps in Toss functional messages also
 require campaign/template configuration and partner-server mTLS. Reddit push
 notifications remain a gated capability until the app is approved.
 
+For Apps in Toss, `@mpgd/adapter-ait` owns client notification agreement while
+`@mpgd/game-services/apps-in-toss-partner-api` owns the reusable server-side
+mTLS transport for anonymous-key verification and functional messages. A
+deployment may inject a Cloudflare mTLS certificate binding because the helper
+depends only on its fetch-compatible interface. Games still own durable
+recipient mapping, template selection, delivery scheduling, and outbox state.
+
 ## Deliberately deferred
 
 This contract layer does not add game-specific mode placement, puzzle

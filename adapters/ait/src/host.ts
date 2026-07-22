@@ -1,9 +1,11 @@
 import {
   getTossShareLink,
   getUserKeyForGame,
+  grantPromotionRewardForGame as grantPromotionReward,
   isMinVersionSupported,
   loadFullScreenAd,
   openGameCenterLeaderboard,
+  requestNotificationAgreement,
   share,
   showFullScreenAd,
   Storage,
@@ -17,7 +19,13 @@ import {
   type BridgeResponse,
   type BridgeStorageLoadData,
 } from '@mpgd/bridge';
-import type { LaunchEntry, LaunchIntent, ShareResult } from '@mpgd/platform';
+import type {
+  LaunchEntry,
+  LaunchIntent,
+  NotificationTopic,
+  PromotionRewardResult,
+  ShareResult,
+} from '@mpgd/platform';
 
 import type { GamePlatformBridge } from './index.js';
 import { dispatchAitLifecycleEvent } from './lifecycle.js';
@@ -28,6 +36,14 @@ const defaultAdDisplayStartTimeoutMs = 60_000;
 const defaultAdMaximumDisplayMs = 30 * 60_000;
 const invalidBridgeRequestId = 'ait-invalid-request';
 const rewardedAdEvidenceSchema = 'apps-in-toss.rewarded-ad.callback.v1';
+const minimumPromotionTossAppVersion = '5.232.0';
+const promotionGrantStoragePrefix = 'mpgd:ait:promotion-grant:v1:';
+const defaultNotificationAgreementTimeoutMs = 120_000;
+const notificationTopics = new Set<NotificationTopic>([
+  'daily-ready',
+  'streak-at-risk',
+  'friend-challenge',
+]);
 const launchEntries = new Set<LaunchEntry>([
   'home',
   'daily',
@@ -42,9 +58,11 @@ export type AitIdentityProvider = () => Promise<unknown>;
 
 export interface AitHostDependencies {
   readonly identityProvider: AitIdentityProvider;
-  readonly storage: Pick<typeof Storage, 'getItem' | 'setItem'>;
+  readonly storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>;
   readonly getTossShareLink: typeof getTossShareLink;
   readonly share: typeof share;
+  readonly grantPromotionReward: typeof grantPromotionReward;
+  readonly requestNotificationAgreement: typeof requestNotificationAgreement;
   readonly isMinVersionSupported: typeof isMinVersionSupported;
   readonly loadFullScreenAd: typeof loadFullScreenAd;
   readonly showFullScreenAd: typeof showFullScreenAd;
@@ -52,10 +70,60 @@ export interface AitHostDependencies {
   readonly submitGameCenterLeaderBoardScore: typeof submitGameCenterLeaderBoardScore;
 }
 
+export interface AitPromotionRewardConfig {
+  readonly promotionCode: string;
+  readonly amount: number;
+}
+
+export interface AitPendingPromotionGrantInput {
+  readonly campaignId: string;
+  readonly idempotencyKey: string;
+  /** Missing for legacy or malformed pending markers; resolvers must fail closed. */
+  readonly pendingSince?: string;
+}
+
+export type AitPendingPromotionGrantResolution =
+  | { readonly status: 'granted'; readonly receiptKey: string }
+  | { readonly status: 'retry' | 'pending' };
+
+/**
+ * Server-backed reconciliation hook for an ambiguous native promotion call.
+ * Returning `retry` must only happen after the game authority decides that a
+ * second provider call is safe for this single-use claim id.
+ */
+export type AitPendingPromotionGrantResolver = (
+  input: AitPendingPromotionGrantInput,
+) => Promise<AitPendingPromotionGrantResolution>;
+
+export interface AitPromotionGrantAuthorizationInput {
+  readonly campaignId: string;
+  /** Single-use claim id issued by the game backend. */
+  readonly idempotencyKey: string;
+}
+
+export type AitPromotionGrantAuthorization =
+  | { readonly status: 'authorized' }
+  | { readonly status: 'pending' | 'rejected' };
+
+/**
+ * Server-backed gate for the first provider call. A configured campaign is not
+ * available until this hook confirms that the idempotency key is a genuine,
+ * single-use game claim.
+ */
+export type AitPromotionGrantAuthorizer = (
+  input: AitPromotionGrantAuthorizationInput,
+) => Promise<AitPromotionGrantAuthorization>;
+
 export interface InstallAitHostBridgeOptions {
   readonly appName?: string;
   readonly adGroupIds?: Readonly<Record<string, string>>;
   readonly adPlacementTypes?: Readonly<Record<string, 'rewarded' | 'interstitial'>>;
+  /** Logical campaign ids mapped to console-issued Apps in Toss promotion configuration. */
+  readonly promotionRewards?: Readonly<Record<string, AitPromotionRewardConfig>>;
+  readonly authorizePromotionGrant?: AitPromotionGrantAuthorizer;
+  readonly resolvePendingPromotionGrant?: AitPendingPromotionGrantResolver;
+  /** Logical notification topics mapped to approved Apps in Toss template codes. */
+  readonly notificationTemplateCodes?: Partial<Readonly<Record<NotificationTopic, string>>>;
   /** Maximum total wait for the native show request before display is observed. */
   readonly adTimeoutMs?: number;
   /** Maximum wait to acquire the process-wide native full-screen load slot. */
@@ -72,6 +140,8 @@ const defaultDependencies: AitHostDependencies = {
   storage: Storage,
   getTossShareLink,
   share,
+  grantPromotionReward,
+  requestNotificationAgreement,
   isMinVersionSupported,
   loadFullScreenAd,
   showFullScreenAd,
@@ -92,6 +162,14 @@ export function createAitHostBridge(
   const appName = normalizeAppName(options.appName ?? 'mpgd-kit');
   const adGroupIds = normalizeAdGroupIds(options.adGroupIds);
   const adPlacementTypes = normalizeAdPlacementTypes(options.adPlacementTypes);
+  const promotionRewards = normalizePromotionRewards(options.promotionRewards);
+  const authorizePromotionGrant = options.authorizePromotionGrant;
+  const resolvePendingPromotionGrant = options.resolvePendingPromotionGrant;
+  const notificationTemplateCodes = normalizeNotificationTemplateCodes(
+    options.notificationTemplateCodes,
+  );
+  const promotionGrantsInFlight = new Map<string, Promise<PromotionRewardResult>>();
+  const notificationSubscriptions = new Set<NotificationTopic>();
   const loadedAdGroupIds = new Set<string>();
   const loadingAdGroups = new Map<string, Promise<void>>();
   const activeAdGroupIds = new Set<string>();
@@ -188,10 +266,93 @@ export function createAitHostBridge(
         return ok(request, readInboundShare());
 
       case 'notifications.getStatus':
-        return ok(request, 'unsupported');
+        return ok(
+          request,
+          getNotificationStatus(
+            readNotificationTopic(request.payload),
+            notificationTemplateCodes,
+            notificationSubscriptions,
+            dependencies,
+          ),
+        );
 
-      case 'notifications.requestSubscription':
-        return ok(request, 'unavailable');
+      case 'notifications.requestSubscription': {
+        const topic = readNotificationTopic(request.payload);
+        const templateCode = notificationTemplateCodes.get(topic);
+        if (
+          templateCode === undefined
+          || !isCapabilitySupported(() => dependencies.requestNotificationAgreement.isSupported())
+        ) {
+          return ok(request, 'unavailable');
+        }
+
+        const result = await requestAitNotificationAgreement(
+          dependencies.requestNotificationAgreement,
+          templateCode,
+        );
+        if (result === 'subscribed') {
+          notificationSubscriptions.add(topic);
+        }
+        return ok(request, result);
+      }
+
+      case 'promotions.getAvailability': {
+        const campaignId = readCampaignId(request.payload);
+        const availability = getPromotionAvailability(
+          campaignId,
+          promotionRewards,
+          authorizePromotionGrant,
+          dependencies,
+        );
+        return ok(request, availability);
+      }
+
+      case 'promotions.grantReward': {
+        const campaignId = readCampaignId(request.payload);
+        const reward = promotionRewards.get(campaignId);
+        const idempotencyKey = readRequiredIdempotencyKey(request.payload);
+        if (
+          reward === undefined
+          || !isPromotionSupported(dependencies)
+        ) {
+          return ok(request, { status: 'unavailable' });
+        }
+
+        const persisted = await resolvePersistedPromotionGrant({
+          campaignId,
+          idempotencyKey,
+          storage: dependencies.storage,
+          ...(resolvePendingPromotionGrant === undefined
+            ? {}
+            : { resolver: resolvePendingPromotionGrant }),
+        });
+        if (persisted.result !== undefined) {
+          return ok(request, persisted.result);
+        }
+
+        const existing = promotionGrantsInFlight.get(idempotencyKey);
+        if (existing !== undefined) {
+          return ok(request, await existing);
+        }
+
+        const pending = authorizeAndGrantAitPromotionReward({
+          campaignId,
+          idempotencyKey,
+          reward,
+          dependencies,
+          ...(authorizePromotionGrant === undefined
+            ? {}
+            : { authorizer: authorizePromotionGrant }),
+        });
+        promotionGrantsInFlight.set(idempotencyKey, pending);
+        try {
+          return ok(request, await pending);
+        } finally {
+          if (promotionGrantsInFlight.get(idempotencyKey) === pending) {
+            promotionGrantsInFlight.delete(idempotencyKey);
+          }
+        }
+      }
 
       // IAP must be installed with game-owned server verification. Never return demo grants.
       case 'commerce.getProducts':
@@ -389,6 +550,323 @@ interface AitShareDependencies {
   readonly appName: string;
   readonly getTossShareLink: typeof getTossShareLink;
   readonly share: typeof share;
+}
+
+type AitNotificationAgreement = AitHostDependencies['requestNotificationAgreement'];
+
+function getNotificationStatus(
+  topic: NotificationTopic,
+  templateCodes: ReadonlyMap<NotificationTopic, string>,
+  subscriptions: ReadonlySet<NotificationTopic>,
+  dependencies: AitHostDependencies,
+): 'subscribed' | 'not-subscribed' | 'configuration-required' | 'unsupported' {
+  if (!templateCodes.has(topic)) {
+    return 'configuration-required';
+  }
+  if (!isCapabilitySupported(() => dependencies.requestNotificationAgreement.isSupported())) {
+    return 'unsupported';
+  }
+  return subscriptions.has(topic) ? 'subscribed' : 'not-subscribed';
+}
+
+function requestAitNotificationAgreement(
+  requestAgreement: AitNotificationAgreement,
+  templateCode: string,
+): Promise<'subscribed' | 'rejected' | 'unavailable'> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let cleanup = (): void => {};
+    const finish = (result: 'subscribed' | 'rejected' | 'unavailable'): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      globalThis.clearTimeout(timer);
+      cleanup();
+      resolve(result);
+    };
+    const timer = globalThis.setTimeout(
+      () => finish('unavailable'),
+      defaultNotificationAgreementTimeoutMs,
+    );
+
+    try {
+      const unregister = requestAgreement({
+        options: { templateCode },
+        onEvent: ({ type }) => {
+          finish(type === 'agreementRejected' ? 'rejected' : 'subscribed');
+        },
+        onError: () => finish('unavailable'),
+      });
+      cleanup = unregister;
+      if (settled) {
+        cleanup();
+      }
+    } catch {
+      finish('unavailable');
+    }
+  });
+}
+
+function getPromotionAvailability(
+  campaignId: string,
+  rewards: ReadonlyMap<string, AitPromotionRewardConfig>,
+  authorizer: AitPromotionGrantAuthorizer | undefined,
+  dependencies: AitHostDependencies,
+): 'available' | 'configuration-required' | 'unsupported' {
+  if (!rewards.has(campaignId) || authorizer === undefined) {
+    return 'configuration-required';
+  }
+  return isPromotionSupported(dependencies) ? 'available' : 'unsupported';
+}
+
+async function authorizeAndGrantAitPromotionReward(input: {
+  readonly campaignId: string;
+  readonly idempotencyKey: string;
+  readonly reward: AitPromotionRewardConfig;
+  readonly dependencies: AitHostDependencies;
+  readonly authorizer?: AitPromotionGrantAuthorizer;
+}): Promise<PromotionRewardResult> {
+  if (input.authorizer === undefined) {
+    return { status: 'unavailable' };
+  }
+  let authorization: AitPromotionGrantAuthorization;
+  try {
+    authorization = await input.authorizer({
+      campaignId: input.campaignId,
+      idempotencyKey: input.idempotencyKey,
+    });
+  } catch (error) {
+    console.warn(
+      'AIT promotion grant authorization failed; keeping the claim pending.',
+      input.campaignId,
+      error,
+    );
+    return { status: 'pending' };
+  }
+  if (authorization.status !== 'authorized') {
+    return {
+      status: authorization.status === 'pending' ? 'pending' : 'unavailable',
+    };
+  }
+  return grantAitPromotionReward(input.dependencies, input.reward, input.idempotencyKey);
+}
+
+function isPromotionSupported(dependencies: AitHostDependencies): boolean {
+  return isCapabilitySupported(
+    () => dependencies.isMinVersionSupported({
+      android: minimumPromotionTossAppVersion,
+      ios: minimumPromotionTossAppVersion,
+    }),
+  );
+}
+
+async function grantAitPromotionReward(
+  dependencies: AitHostDependencies,
+  reward: AitPromotionRewardConfig,
+  idempotencyKey: string,
+): Promise<PromotionRewardResult> {
+  const storageKey = promotionGrantStorageKey(idempotencyKey);
+  await dependencies.storage.setItem(
+    storageKey,
+    JSON.stringify({
+      status: 'pending',
+      pendingSince: new Date().toISOString(),
+    }),
+  );
+
+  try {
+    const response: unknown = await dependencies.grantPromotionReward({
+      params: {
+        promotionCode: reward.promotionCode,
+        amount: reward.amount,
+      },
+    });
+    if (isExplicitPromotionFailure(response)) {
+      return clearFailedPromotionGrant(dependencies.storage, storageKey);
+    }
+    if (
+      !isRecord(response)
+      || typeof response.key !== 'string'
+      || response.key.trim().length === 0
+    ) {
+      // An undocumented shape is ambiguous after native dispatch. Preserve the
+      // marker so a backend resolver can determine whether a grant happened.
+      return { status: 'pending' };
+    }
+
+    const result = { status: 'granted', receiptKey: response.key } as const;
+    try {
+      await dependencies.storage.setItem(storageKey, JSON.stringify(result));
+    } catch (error) {
+      console.warn(
+        'AIT native promotion receipt could not be cached; keeping it terminal.',
+        reward.promotionCode,
+        error,
+      );
+    }
+    return result;
+  } catch {
+    // Keep the pending marker. A provider error after dispatch is ambiguous and
+    // retrying the same promotion blindly can double-grant Toss points.
+    return { status: 'pending' };
+  }
+}
+
+function isExplicitPromotionFailure(value: unknown): boolean {
+  if (value === 'ERROR') {
+    return true;
+  }
+  return isRecord(value)
+    && typeof value.errorCode === 'string'
+    && value.errorCode.trim().length > 0
+    && typeof value.message === 'string';
+}
+
+async function clearFailedPromotionGrant(
+  storage: Pick<typeof Storage, 'removeItem'>,
+  storageKey: string,
+): Promise<PromotionRewardResult> {
+  try {
+    await storage.removeItem(storageKey);
+    return { status: 'failed' };
+  } catch (error) {
+    console.warn(
+      'AIT failed promotion marker could not be cleared; keeping the claim pending.',
+      storageKey,
+      error,
+    );
+    return { status: 'pending' };
+  }
+}
+
+interface ResolvePersistedPromotionGrantInput {
+  readonly campaignId: string;
+  readonly idempotencyKey: string;
+  readonly storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>;
+  readonly resolver?: AitPendingPromotionGrantResolver;
+}
+
+async function resolvePersistedPromotionGrant(
+  input: ResolvePersistedPromotionGrantInput,
+): Promise<{ readonly result?: PromotionRewardResult }> {
+  const storageKey = promotionGrantStorageKey(input.idempotencyKey);
+  const serialized = await input.storage.getItem(storageKey);
+  if (serialized === null) {
+    return {};
+  }
+
+  let state: unknown;
+  try {
+    state = JSON.parse(serialized);
+  } catch (error) {
+    console.warn(
+      'AIT persisted promotion state is unreadable; keeping the claim pending.',
+      input.campaignId,
+      error,
+    );
+    return { result: { status: 'pending' } };
+  }
+  if (!isRecord(state)) {
+    console.warn(
+      'AIT persisted promotion state is malformed; keeping the claim pending.',
+      input.campaignId,
+    );
+    return { result: { status: 'pending' } };
+  }
+  try {
+    if (
+      state.status === 'granted'
+      && typeof state.receiptKey === 'string'
+      && state.receiptKey.trim().length > 0
+    ) {
+      return { result: { status: 'granted', receiptKey: state.receiptKey } };
+    }
+    if (state.status === 'pending') {
+      const pendingSince = normalizePendingSince(state.pendingSince);
+      if (pendingSince === undefined) {
+        return { result: { status: 'pending' } };
+      }
+      if (input.resolver === undefined) {
+        return { result: { status: 'pending' } };
+      }
+
+      let resolution: AitPendingPromotionGrantResolution;
+      try {
+        resolution = await input.resolver({
+          campaignId: input.campaignId,
+          idempotencyKey: input.idempotencyKey,
+          pendingSince,
+        });
+      } catch (error) {
+        console.warn(
+          'AIT pending promotion grant resolver failed; keeping the claim pending.',
+          input.campaignId,
+          error,
+        );
+        return { result: { status: 'pending' } };
+      }
+      if (resolution.status === 'pending') {
+        return { result: { status: 'pending' } };
+      }
+      if (resolution.status === 'granted') {
+        if (
+          typeof resolution.receiptKey !== 'string'
+          || resolution.receiptKey.trim().length === 0
+        ) {
+          return { result: { status: 'pending' } };
+        }
+        const result = { status: 'granted', receiptKey: resolution.receiptKey } as const;
+        try {
+          await input.storage.setItem(storageKey, JSON.stringify(result));
+        } catch (error) {
+          console.warn(
+            'AIT reconciled promotion receipt could not be cached; keeping it terminal.',
+            input.campaignId,
+            error,
+          );
+        }
+        return { result };
+      }
+
+      return removeInvalidPersistedPromotionGrant(input.storage, storageKey);
+    }
+    console.warn(
+      'AIT persisted promotion state has an unknown status; keeping the claim pending.',
+      input.campaignId,
+    );
+    return { result: { status: 'pending' } };
+  } catch (error) {
+    console.warn(
+      'AIT persisted promotion state could not be reconciled; keeping the claim pending.',
+      input.campaignId,
+      error,
+    );
+    return { result: { status: 'pending' } };
+  }
+}
+
+async function removeInvalidPersistedPromotionGrant(
+  storage: Pick<typeof Storage, 'removeItem'>,
+  storageKey: string,
+): Promise<{ readonly result?: PromotionRewardResult }> {
+  try {
+    await storage.removeItem(storageKey);
+    return {};
+  } catch {
+    return { result: { status: 'pending' } };
+  }
+}
+
+function promotionGrantStorageKey(idempotencyKey: string): string {
+  return `${promotionGrantStoragePrefix}${encodeURIComponent(idempotencyKey)}`;
+}
+
+function normalizePendingSince(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) {
+    return undefined;
+  }
+  return Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
 export async function shareIntent(
@@ -1000,6 +1478,40 @@ function normalizeAdPlacementTypes(
   );
 }
 
+function normalizePromotionRewards(
+  input: Readonly<Record<string, AitPromotionRewardConfig>> | undefined,
+): ReadonlyMap<string, AitPromotionRewardConfig> {
+  const rewards = new Map<string, AitPromotionRewardConfig>();
+  for (const [rawCampaignId, rawReward] of Object.entries(input ?? {})) {
+    const campaignId = rawCampaignId.trim();
+    const promotionCode = rawReward.promotionCode.trim();
+    if (campaignId.length === 0 || promotionCode.length === 0) {
+      continue;
+    }
+    if (!Number.isSafeInteger(rawReward.amount) || rawReward.amount <= 0) {
+      console.warn(
+        `AIT promotion amount must be a positive safe integer; disabling campaign: ${campaignId}`,
+      );
+      continue;
+    }
+    rewards.set(campaignId, { promotionCode, amount: rawReward.amount });
+  }
+  return rewards;
+}
+
+function normalizeNotificationTemplateCodes(
+  input: Partial<Readonly<Record<NotificationTopic, string>>> | undefined,
+): ReadonlyMap<NotificationTopic, string> {
+  const templateCodes = new Map<NotificationTopic, string>();
+  for (const topic of notificationTopics) {
+    const templateCode = input?.[topic]?.trim();
+    if (templateCode !== undefined && templateCode.length > 0) {
+      templateCodes.set(topic, templateCode);
+    }
+  }
+  return templateCodes;
+}
+
 function normalizeAppName(value: string): string {
   const normalized = value.trim();
   if (!/^[A-Za-z0-9-]+$/u.test(normalized)) {
@@ -1073,6 +1585,30 @@ function readPlacementId(payload: unknown): string {
 function readIdempotencyKey(payload: unknown, fallback: string): string {
   const value = readPayloadRecord(payload).idempotencyKey;
   return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+function readRequiredIdempotencyKey(payload: unknown): string {
+  const value = readPayloadRecord(payload).idempotencyKey;
+  if (typeof value !== 'string' || value.length === 0 || value.length > 256) {
+    throw new TypeError('AIT promotion idempotencyKey must contain 1 to 256 characters.');
+  }
+  return value;
+}
+
+function readCampaignId(payload: unknown): string {
+  const value = readPayloadRecord(payload).campaignId;
+  if (typeof value !== 'string' || value.length === 0 || value.length > 128) {
+    throw new TypeError('AIT promotion campaignId must contain 1 to 128 characters.');
+  }
+  return value;
+}
+
+function readNotificationTopic(payload: unknown): NotificationTopic {
+  const value = readPayloadRecord(payload).topic;
+  if (typeof value !== 'string' || !notificationTopics.has(value as NotificationTopic)) {
+    throw new TypeError('AIT notification topic is invalid.');
+  }
+  return value as NotificationTopic;
 }
 
 function readFiniteScore(payload: unknown): number {

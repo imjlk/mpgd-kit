@@ -16,6 +16,8 @@ import type {
   PlatformCapabilities,
   PlatformGateway,
   PresentationResult,
+  PromotionRewardAvailability,
+  PromotionRewardResult,
   ShareResult,
 } from '@mpgd/platform';
 
@@ -95,6 +97,12 @@ export function createAitPlatformGateway(input: {
         request<NotificationSubscriptionStatus>('notifications.getStatus', { topic }),
       requestSubscription: (topic) =>
         request<NotificationSubscriptionResult>('notifications.requestSubscription', { topic }),
+    },
+    promotions: {
+      getAvailability: (payload) =>
+        request<PromotionRewardAvailability>('promotions.getAvailability', payload),
+      grantReward: (payload) =>
+        request<PromotionRewardResult>('promotions.grantReward', payload),
     },
     commerce: {
       getProducts: () => request('commerce.getProducts', {}),
@@ -203,6 +211,12 @@ export function createAitSandboxBridge(
 
         case 'notifications.requestSubscription':
           return ok(input, 'unavailable');
+
+        case 'promotions.getAvailability':
+          return ok(input, 'configuration-required');
+
+        case 'promotions.grantReward':
+          return ok(input, { status: 'unavailable' });
 
         case 'commerce.getProducts':
           return ok(input, [

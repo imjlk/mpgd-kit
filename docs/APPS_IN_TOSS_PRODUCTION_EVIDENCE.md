@@ -119,6 +119,53 @@ integration. Keep the mTLS certificate/private key, login tokens, user-key
 mapping, base URL overrides, and transport configuration in the deployment
 runtime. Do not commit them or include them in client bundles.
 
+`@mpgd/game-services/apps-in-toss-partner-api` provides the shared server-only
+transport for the documented anonymous-key verification and functional-message
+endpoints. It accepts a fetch-compatible mTLS binding instead of certificate
+bytes, so a Cloudflare Worker can pass its certificate binding directly:
+
+```ts
+import { createAppsInTossPartnerApiClient } from '@mpgd/game-services/apps-in-toss-partner-api';
+
+interface Env {
+  readonly AIT_MTLS: Fetcher;
+  readonly AIT_VERIFICATION_RATE_LIMIT: RateLimit;
+}
+
+export default {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    // This is an internal route. Authenticate and authorize the calling game
+    // backend before accepting any caller-supplied identity assertion.
+    const caller = await authenticateInternalGameBackend(request);
+    if (caller === null) {
+      return new Response(null, { status: 401 });
+    }
+    const quota = await env.AIT_VERIFICATION_RATE_LIMIT.limit({ key: caller.id });
+    if (!quota.success) {
+      return new Response(null, { status: 429 });
+    }
+
+    const partnerApi = createAppsInTossPartnerApiClient({ mtls: env.AIT_MTLS });
+    const anonymousKey = request.headers.get('x-ait-anonymous-key') ?? '';
+    const verified = await partnerApi.verifyAnonymousKey({ anonymousKey });
+    return Response.json({ verified });
+  },
+};
+```
+
+The authentication and rate-limit checks above are deliberately placed before
+the mTLS client call. Do not expose anonymous-key verification as a public
+validation oracle: unauthorized or throttled requests must never consume
+Partner API traffic. `authenticateInternalGameBackend()` is game-owned and must
+validate a server credential or an equivalently strong authenticated session;
+it is not a client-supplied header equality check.
+
+Bind the certificate in deployment configuration with a Wrangler
+`mtls_certificates` entry. The binding's `certificate_id` is deployment state;
+do not copy a PEM, private key, or certificate id into the browser bundle. Local
+Workers runtimes do not emulate the mTLS handshake, so inject a fake fetcher in
+unit tests and run a staging call with the real binding before release.
+
 The order-status API documents offset-free `statusDeterminedAt` values as KST.
 The verifier parses that exact calendar form as UTC+09:00 and also accepts
 explicit UTC/offset timestamps; malformed dates and calendar overflows fail
@@ -178,6 +225,21 @@ result. Authority adapters, authenticated session exchange, mTLS agent,
 secrets, and endpoints are game/deployment responsibilities. The public
 contract remains deterministic and transport-neutral.
 
+## Functional messages
+
+The target adapter can request notification agreement through the AIT client
+SDK. Delivery remains a server operation. Anonymous keys can be checked with
+`verifyAnonymousKey()`. Toss-user keys, however, are trusted only when they came
+from an authenticated Toss login and the backend's protected anonymous-to-user
+key mapping; `verifyAnonymousKey()` does not validate Toss-user keys, and
+`sendFunctionalMessage()` must never be treated as validation for an arbitrary
+`toss-user` key. After establishing the recipient through the appropriate
+authenticated path, adapt `sendFunctionalMessage()` to a durable
+`NotificationDeliveryProvider`; keep template-set codes and template context on
+the server and retain the delivery ledger's idempotency guarantees. Agreement
+does not prove that an arbitrary recipient key is valid, and a valid key does
+not replace the user's notification agreement.
+
 ## Conformance and sandbox
 
 Run the credential-free contract suite locally and in CI:
@@ -208,3 +270,5 @@ Official references:
 - [Apps in Toss in-app purchase](https://developers-apps-in-toss.toss.im/bedrock/reference/framework/%EC%9D%B8%EC%95%B1%20%EA%B2%B0%EC%A0%9C/IAP.html)
 - [Apps in Toss integrated ads](https://developers-apps-in-toss.toss.im/bedrock/reference/framework/%EA%B4%91%EA%B3%A0/IntegratedAd.html)
 - [Apps in Toss login](https://developers-apps-in-toss.toss.im/login/intro.html)
+- [Apps in Toss user key](https://developers-apps-in-toss.toss.im/user-hash-key/develop.md)
+- [Apps in Toss smart message](https://developers-apps-in-toss.toss.im/smart-message/develop.md)
