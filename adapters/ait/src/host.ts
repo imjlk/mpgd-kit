@@ -692,7 +692,15 @@ async function grantAitPromotionReward(
     }
 
     const result = { status: 'granted', receiptKey: response.key } as const;
-    await dependencies.storage.setItem(storageKey, JSON.stringify(result));
+    try {
+      await dependencies.storage.setItem(storageKey, JSON.stringify(result));
+    } catch (error) {
+      console.warn(
+        'AIT native promotion receipt could not be cached; keeping it terminal.',
+        reward.promotionCode,
+        error,
+      );
+    }
     return result;
   } catch {
     // Keep the pending marker. A provider error after dispatch is ambiguous and
@@ -720,11 +728,20 @@ async function resolvePersistedPromotionGrant(
   let state: unknown;
   try {
     state = JSON.parse(serialized);
-  } catch {
-    return removeInvalidPersistedPromotionGrant(input.storage, storageKey);
+  } catch (error) {
+    console.warn(
+      'AIT persisted promotion state is unreadable; keeping the claim pending.',
+      input.campaignId,
+      error,
+    );
+    return { result: { status: 'pending' } };
   }
   if (!isRecord(state)) {
-    return removeInvalidPersistedPromotionGrant(input.storage, storageKey);
+    console.warn(
+      'AIT persisted promotion state is malformed; keeping the claim pending.',
+      input.campaignId,
+    );
+    return { result: { status: 'pending' } };
   }
   try {
     if (
@@ -780,7 +797,11 @@ async function resolvePersistedPromotionGrant(
 
       return removeInvalidPersistedPromotionGrant(input.storage, storageKey);
     }
-    return removeInvalidPersistedPromotionGrant(input.storage, storageKey);
+    console.warn(
+      'AIT persisted promotion state has an unknown status; keeping the claim pending.',
+      input.campaignId,
+    );
+    return { result: { status: 'pending' } };
   } catch (error) {
     console.warn(
       'AIT persisted promotion state could not be reconciled; keeping the claim pending.',

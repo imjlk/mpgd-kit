@@ -331,6 +331,60 @@ describe('AIT production host bridge', () => {
     expect(grantPromotionReward).not.toHaveBeenCalled();
   });
 
+  it('returns a native receipt even when its terminal cache write fails', async () => {
+    let writeCount = 0;
+    const grantPromotionReward = vi.fn(async () => ({ key: 'native-receipt' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: {
+          getItem: async () => null,
+          removeItem: async () => {},
+          setItem: async () => {
+            writeCount += 1;
+            if (writeCount === 2) {
+              throw new Error('terminal cache unavailable');
+            }
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-native-cache-failure',
+    })).resolves.toEqual({ status: 'granted', receiptKey: 'native-receipt' });
+    expect(grantPromotionReward).toHaveBeenCalledOnce();
+  });
+
+  it('fails closed when a persisted promotion marker is corrupt', async () => {
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-run' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: {
+          getItem: async () => '{not-json',
+          removeItem: async () => {},
+          setItem: async () => {},
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-corrupt-marker',
+    })).resolves.toEqual({ status: 'pending' });
+    expect(grantPromotionReward).not.toHaveBeenCalled();
+  });
+
   it('fails closed for legacy pending state and an invalid reconciled receipt', async () => {
     const values = new Map<string, string>([
       [
