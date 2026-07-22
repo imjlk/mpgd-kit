@@ -253,6 +253,48 @@ describe('AIT production host bridge', () => {
     }
   });
 
+  it('fails closed for legacy pending state and an invalid reconciled receipt', async () => {
+    const values = new Map<string, string>([
+      [
+        'mpgd:ait:promotion-grant:v1:legacy-claim',
+        JSON.stringify({ status: 'pending' }),
+      ],
+    ]);
+    const resolvePendingPromotionGrant = vi.fn(async () => ({
+      status: 'granted' as const,
+      receiptKey: '   ',
+    }));
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-run' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      resolvePendingPromotionGrant,
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => {
+            values.delete(key);
+          },
+          setItem: async (key, value) => {
+            values.set(key, value);
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'legacy-claim',
+    })).resolves.toEqual({ status: 'pending' });
+    expect(resolvePendingPromotionGrant).toHaveBeenCalledWith({
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'legacy-claim',
+    });
+    expect(grantPromotionReward).not.toHaveBeenCalled();
+  });
+
   it('returns a protocol error for a malformed runtime bridge call', async () => {
     const bridge = createAitHostBridge({ dependencies: createDependencies() });
     const response: unknown = await Reflect.apply(bridge.request, bridge, [null]);

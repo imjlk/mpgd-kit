@@ -78,7 +78,8 @@ export interface AitPromotionRewardConfig {
 export interface AitPendingPromotionGrantInput {
   readonly campaignId: string;
   readonly idempotencyKey: string;
-  readonly pendingSince: string;
+  /** Missing for legacy or malformed pending markers; resolvers must fail closed. */
+  readonly pendingSince?: string;
 }
 
 export type AitPendingPromotionGrantResolution =
@@ -613,7 +614,11 @@ async function grantAitPromotionReward(
         amount: reward.amount,
       },
     });
-    if (!isRecord(response) || typeof response.key !== 'string' || response.key.length === 0) {
+    if (
+      !isRecord(response)
+      || typeof response.key !== 'string'
+      || response.key.trim().length === 0
+    ) {
       await dependencies.storage.removeItem(storageKey);
       return { status: 'unavailable' };
     }
@@ -653,14 +658,12 @@ async function resolvePersistedPromotionGrant(
     if (
       state.status === 'granted'
       && typeof state.receiptKey === 'string'
-      && state.receiptKey.length > 0
+      && state.receiptKey.trim().length > 0
     ) {
       return { result: { status: 'granted', receiptKey: state.receiptKey } };
     }
     if (state.status === 'pending') {
-      const pendingSince = typeof state.pendingSince === 'string'
-        ? state.pendingSince
-        : new Date(0).toISOString();
+      const pendingSince = normalizePendingSince(state.pendingSince);
       if (input.resolver === undefined) {
         return { result: { status: 'pending' } };
       }
@@ -670,15 +673,26 @@ async function resolvePersistedPromotionGrant(
         resolution = await input.resolver({
           campaignId: input.campaignId,
           idempotencyKey: input.idempotencyKey,
-          pendingSince,
+          ...(pendingSince === undefined ? {} : { pendingSince }),
         });
-      } catch {
+      } catch (error) {
+        console.warn(
+          'AIT pending promotion grant resolver failed; keeping the claim pending.',
+          input.campaignId,
+          error,
+        );
         return { result: { status: 'pending' } };
       }
       if (resolution.status === 'pending') {
         return { result: { status: 'pending' } };
       }
       if (resolution.status === 'granted') {
+        if (
+          typeof resolution.receiptKey !== 'string'
+          || resolution.receiptKey.trim().length === 0
+        ) {
+          return { result: { status: 'pending' } };
+        }
         const result = { status: 'granted', receiptKey: resolution.receiptKey } as const;
         await input.storage.setItem(storageKey, JSON.stringify(result));
         return { result };
@@ -697,6 +711,13 @@ async function resolvePersistedPromotionGrant(
 
 function promotionGrantStorageKey(idempotencyKey: string): string {
   return `${promotionGrantStoragePrefix}${encodeURIComponent(idempotencyKey)}`;
+}
+
+function normalizePendingSince(value: unknown): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) {
+    return undefined;
+  }
+  return Number.isFinite(Date.parse(value)) ? value : undefined;
 }
 
 export async function shareIntent(
