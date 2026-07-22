@@ -135,18 +135,18 @@ interface PartnerApiResponse {
 async function postJson(input: PostJsonInput): Promise<PartnerApiResponse> {
   const timeout = createTimeoutSignal(input.signal, input.timeoutMs);
   try {
-    const requestBody = input.body === undefined ? undefined : JSON.stringify(input.body);
+    // The documented anonymous-key verification request uses an empty body
+    // while still declaring application/json.
+    const requestBody = input.body === undefined ? '' : JSON.stringify(input.body);
     const headers = new Headers({
       accept: 'application/json',
+      'content-type': 'application/json',
       ...input.headers,
     });
-    if (requestBody !== undefined) {
-      headers.set('content-type', 'application/json');
-    }
     const response = await input.mtls.fetch(input.url, {
       method: 'POST',
       headers,
-      ...(requestBody === undefined ? {} : { body: requestBody }),
+      body: requestBody,
       signal: timeout.signal,
     });
     const text = await readBoundedResponseText(response);
@@ -329,7 +329,9 @@ function normalizeIdentifier(value: string, field: string): string {
     || normalized.length > 2_048
     || /[\p{Cc}\p{Cf}]/u.test(normalized)
   ) {
-    throw new TypeError(`${field} must contain 1 to 2048 characters.`);
+    throw new TypeError(
+      `${field} must contain 1 to 2048 characters without control or format characters.`,
+    );
   }
   return normalized;
 }

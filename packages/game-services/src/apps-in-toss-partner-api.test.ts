@@ -38,14 +38,14 @@ assertEqual(
   'anonymous-key verification should use the documented mTLS header',
 );
 assertEqual(
-  new Headers(calls[0]?.init?.headers).has('content-type'),
-  false,
-  'anonymous-key verification should not advertise a nonexistent JSON body',
+  new Headers(calls[0]?.init?.headers).get('content-type'),
+  'application/json',
+  'anonymous-key verification should use the documented JSON content type',
 );
 assertEqual(
   calls[0]?.init?.body,
-  undefined,
-  'anonymous-key verification should omit its request body',
+  '',
+  'anonymous-key verification should use the documented empty request body',
 );
 
 responses.push(
@@ -151,7 +151,7 @@ assertThrows(
 );
 await assertRejectsError(
   () => client.verifyAnonymousKey({ anonymousKey: 'line\nbreak' }),
-  '1 to 2048 characters',
+  'without control or format characters',
 );
 
 function jsonResponse(body: unknown, status = 200): Response {
