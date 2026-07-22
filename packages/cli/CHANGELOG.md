@@ -1,5 +1,17 @@
 # @mpgd/cli
 
+## 0.17.0 — 2026-07-22
+
+### Changed
+
+- [31655f0](https://github.com/imjlk/mpgd-kit/commit/31655f03b92ec6d59f43cde08f1d5dca5b9b9436) Migrate Apps in Toss adapters and generated game wrappers to the SDK 3 beta
+  contract, including the new configuration file, package-script build flow,
+  SDK 3 target metadata, and release CORS/rollback guidance. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.7.0
+
 ## 0.16.1 — 2026-07-20
 
 ### Changed
