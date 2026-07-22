@@ -11,6 +11,8 @@ export type BridgeMethod =
   | 'share.readInboundShare'
   | 'notifications.getStatus'
   | 'notifications.requestSubscription'
+  | 'promotions.getAvailability'
+  | 'promotions.grantReward'
   | 'commerce.getProducts'
   | 'commerce.purchase'
   | 'commerce.restore'

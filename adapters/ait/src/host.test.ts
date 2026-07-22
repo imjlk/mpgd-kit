@@ -89,6 +89,117 @@ describe('AIT production host bridge', () => {
     })).resolves.toEqual({ status: 'unavailable', rewardGranted: false });
   });
 
+  it('requests configured notification agreement and reflects the session result', async () => {
+    let callbacks: NotificationAgreementCallbacks | undefined;
+    let cleanupCount = 0;
+    const requestAgreement = Object.assign(
+      (input: NotificationAgreementCallbacks) => {
+        callbacks = input;
+        return () => {
+          cleanupCount += 1;
+        };
+      },
+      { isSupported: () => true },
+    );
+    const bridge = createAitHostBridge({
+      notificationTemplateCodes: { 'streak-at-risk': 'TTOKDOKU_STREAK_ALERT' },
+      dependencies: createDependencies({ requestNotificationAgreement: requestAgreement }),
+    });
+
+    await expect(request(bridge, 'notifications.getStatus', {
+      topic: 'daily-ready',
+    })).resolves.toBe('configuration-required');
+    await expect(request(bridge, 'notifications.getStatus', {
+      topic: 'streak-at-risk',
+    })).resolves.toBe('not-subscribed');
+
+    const subscription = request(bridge, 'notifications.requestSubscription', {
+      topic: 'streak-at-risk',
+    });
+    callbacks?.onEvent({ type: 'newAgreement' });
+    await expect(subscription).resolves.toBe('subscribed');
+    await expect(request(bridge, 'notifications.getStatus', {
+      topic: 'streak-at-risk',
+    })).resolves.toBe('subscribed');
+    expect(cleanupCount).toBe(1);
+  });
+
+  it('deduplicates promotion grants with the server-issued claim id', async () => {
+    const values = new Map<string, string>();
+    const grantPromotion = vi.fn(async () => ({ key: 'promotion-receipt-1' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      dependencies: createDependencies({
+        grantPromotionReward: grantPromotion,
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          setItem: async (key, value) => {
+            values.set(key, value);
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.getAvailability', {
+      campaignId: 'SEVEN_DAY_STREAK',
+    })).resolves.toBe('available');
+    await expect(request(bridge, 'promotions.getAvailability', {
+      campaignId: 'UNCONFIGURED',
+    })).resolves.toBe('configuration-required');
+
+    const claim = {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-7d-1',
+    };
+    await expect(request(bridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'granted',
+      receiptKey: 'promotion-receipt-1',
+    });
+    await expect(request(bridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'granted',
+      receiptKey: 'promotion-receipt-1',
+    });
+    expect(grantPromotion).toHaveBeenCalledOnce();
+    expect(grantPromotion).toHaveBeenCalledWith({
+      params: { promotionCode: 'PROMOTION_7D', amount: 100 },
+    });
+  });
+
+  it('keeps an ambiguous promotion attempt pending instead of double granting', async () => {
+    const values = new Map<string, string>();
+    const grantPromotion = vi.fn(async () => {
+      throw new Error('native response lost');
+    });
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      dependencies: createDependencies({
+        grantPromotionReward: grantPromotion,
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          setItem: async (key, value) => {
+            values.set(key, value);
+          },
+        },
+      }),
+    });
+    const claim = {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-ambiguous-1',
+    };
+
+    await expect(request(bridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'pending',
+    });
+    await expect(request(bridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'pending',
+    });
+    expect(grantPromotion).toHaveBeenCalledOnce();
+  });
+
   it('returns a protocol error for a malformed runtime bridge call', async () => {
     const bridge = createAitHostBridge({ dependencies: createDependencies() });
     const response: unknown = await Reflect.apply(bridge.request, bridge, [null]);
@@ -922,6 +1033,9 @@ describe('AIT sharing', () => {
 
 type LoadAdCallbacks = Parameters<AitHostDependencies['loadFullScreenAd']>[0];
 type ShowAdCallbacks = Parameters<AitHostDependencies['showFullScreenAd']>[0];
+type NotificationAgreementCallbacks = Parameters<
+  AitHostDependencies['requestNotificationAgreement']
+>[0];
 
 function createDependencies(
   overrides: Partial<AitHostDependencies> = {},
@@ -936,6 +1050,10 @@ function createDependencies(
     },
     getTossShareLink: async () => 'https://toss.im/test',
     share: async () => {},
+    grantPromotionReward: async () => ({ key: 'test-promotion-receipt' }),
+    requestNotificationAgreement: Object.assign(() => () => {}, {
+      isSupported: () => false,
+    }),
     isMinVersionSupported: () => true,
     loadFullScreenAd: unsupportedAd,
     showFullScreenAd: unsupportedAd,
