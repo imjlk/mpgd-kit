@@ -1,5 +1,15 @@
 # @mpgd/adapter-ait
 
+## 0.8.0 — 2026-07-23
+
+### Added
+
+- [d88309c](https://github.com/imjlk/mpgd-kit/commit/d88309c46dd0df84fc33580eff643fd8c820eab4) Add server-authorized platform promotion rewards and Apps in Toss notification agreement support. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: bridge@0.7.0, platform@0.8.0
+
 ## 0.7.0 — 2026-07-22
 
 ### Changed
