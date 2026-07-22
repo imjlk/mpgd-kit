@@ -1,31 +1,22 @@
-import { defineConfig, type AppsInTossWebConfig } from '@apps-in-toss/web-framework/config';
+import { defineConfig, type AppsInTossConfig } from '@apps-in-toss/web-framework/config';
 
-const config: AppsInTossWebConfig = {
+const config: AppsInTossConfig = {
   appName: readEnvString(process.env.MPGD_AIT_APP_NAME) ?? '__GAME_NAME__',
   brand: {
-    displayName: readEnvString(process.env.MPGD_AIT_DISPLAY_NAME) ?? '__GAME_TITLE__',
     primaryColor: readEnvString(process.env.MPGD_AIT_PRIMARY_COLOR) ?? '#101820',
-    icon: readEnvString(process.env.MPGD_AIT_BRAND_ICON_URL) ?? 'generated/console-icon.png',
   },
   permissions: [],
-  web: {
-    host: 'localhost',
-    port: 5173,
-    commands: {
-      dev: 'pnpm dev',
-      build: 'pnpm build',
-    },
-  },
-  webViewProps: {
+  webView: {
     bounces: false,
     pullToRefreshEnabled: false,
     overScrollMode: 'never',
     allowsBackForwardNavigationGestures: false,
     allowsInlineMediaPlayback: true,
   },
+  webBundleDir: 'dist',
 };
 
-const definedConfig: AppsInTossWebConfig = defineConfig(config);
+const definedConfig: AppsInTossConfig = defineConfig(config);
 
 export default definedConfig;
 

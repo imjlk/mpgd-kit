@@ -45,6 +45,12 @@
       "wrapperApp": "../../apps/target-ait",
       "adapter": "ait",
       "authoritativeGameServices": false,
+      "metadata": {
+        "appName": "mpgd-kit",
+        "displayName": "MPGD Kit",
+        "primaryColor": "#101820",
+        "sdkMajor": 3
+      },
       "icon": { "profile": "ait" },
       "webDir": "../../apps/target-ait/public/game",
       "artifact": ".ait"

@@ -7,7 +7,7 @@
     "dev": "vite --host 0.0.0.0",
     "dev:plain": "MPGD_AIT_DEVTOOLS=0 VITE_MPGD_AIT_MOCK_IDENTITY=1 vite --host 0.0.0.0",
     "dev:phone": "AIT_TUNNEL=1 AIT_TUNNEL_CDP=1 vite --host 0.0.0.0",
-    "build": "vite build",
+    "build": "vite build && ait build",
     "ait:build": "ait build",
     "ait:deploy": "ait deploy --api-key \"$AIT_API_KEY\"",
     "devtools:mcp": "pnpm exec devtools-mcp",
@@ -18,12 +18,12 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@apps-in-toss/web-framework": "^2.10.6",
+    "@apps-in-toss/web-framework": "3.0.0-beta.da14818",
     "@mpgd/adapter-ait": "__MPGD_DEPENDENCY_VERSION_ADAPTER_AIT__"
   },
   "devDependencies": {
     "@ait-co/devtools": "^0.1.140",
-    "@apps-in-toss/cli": "^2.10.6",
+    "@apps-in-toss/cli": "3.0.0-beta.66a479a",
     "@ttsc/unplugin": "0.18.4",
     "@types/node": "^24.0.0",
     "ttsc": "0.18.4",

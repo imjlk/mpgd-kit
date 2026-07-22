@@ -49,7 +49,7 @@
         "appName": "__GAME_NAME__",
         "displayName": "__GAME_TITLE__",
         "primaryColor": "#101820",
-        "sdkMajor": 2
+        "sdkMajor": 3
       },
       "icon": { "profile": "ait" },
       "webDir": "apps/target-ait/public/game",

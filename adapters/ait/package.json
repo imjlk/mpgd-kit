@@ -58,7 +58,7 @@
     "@mpgd/platform": "workspace:*"
   },
   "peerDependencies": {
-    "@apps-in-toss/web-framework": ">=2.10.4 <3"
+    "@apps-in-toss/web-framework": ">=3.0.0-beta <4"
   },
   "peerDependenciesMeta": {
     "@apps-in-toss/web-framework": {
@@ -66,7 +66,7 @@
     }
   },
   "devDependencies": {
-    "@apps-in-toss/web-framework": "^2.10.6",
+    "@apps-in-toss/web-framework": "3.0.0-beta.da14818",
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"

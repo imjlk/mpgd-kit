@@ -3,7 +3,6 @@ dist/
 apps/*/dist/
 apps/target-ait/.ait_relay
 apps/target-ait/.ait_urls
-apps/target-ait/.granite/
 apps/target-ait/generated/
 apps/target-ait/public/assets/
 apps/target-ait/public/game/

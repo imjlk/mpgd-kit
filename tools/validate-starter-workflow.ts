@@ -695,6 +695,11 @@ function validatePhaserTemplateAITPolyfill(): void {
         packageJson.dependencies?.['@apps-in-toss/web-framework'],
         `${packagePath}: dependencies.@apps-in-toss/web-framework`,
       );
+      assertEqual(
+        packageJson.dependencies?.['@apps-in-toss/web-framework'],
+        '3.0.0-beta.da14818',
+        `${packagePath}: dependencies.@apps-in-toss/web-framework`,
+      );
     }
   }
 
@@ -781,7 +786,7 @@ function validatePhaserTemplateAITPolyfill(): void {
         '@apps-in-toss/web-framework',
         '`__APP_TARGET__` is `ait',
         'navigator.clipboard',
-        'granite.config.ts',
+        'apps-in-toss.config.ts',
       ]) {
         if (!readme.includes(requiredText)) {
           failures.push(`${readmePath}: must document ${requiredText} for the AIT polyfill flow.`);
@@ -861,7 +866,8 @@ function validatePhaserTemplateAITWrapper(): void {
   const wrapperPackagePath = `${wrapperRoot}/package.json`;
   const wrapperMainPath = `${wrapperRoot}/src/main.ts`;
   const wrapperVitePath = `${wrapperRoot}/vite.config.ts`;
-  const wrapperGranitePath = `${wrapperRoot}/granite.config.ts`;
+  const wrapperConfigPath = `${wrapperRoot}/apps-in-toss.config.ts`;
+  const legacyWrapperConfigPath = `${wrapperRoot}/granite.config.ts`;
   const targetsPath = `${templateRoot}/mpgd.targets.json`;
   const rootPackagePath = `${templateRoot}/package.json`;
   const gitignorePath = `${templateRoot}/gitignore`;
@@ -872,7 +878,7 @@ function validatePhaserTemplateAITWrapper(): void {
     wrapperPackagePath,
     wrapperMainPath,
     wrapperVitePath,
-    wrapperGranitePath,
+    wrapperConfigPath,
     targetsPath,
     rootPackagePath,
     gitignorePath,
@@ -887,6 +893,8 @@ function validatePhaserTemplateAITWrapper(): void {
   if (existsSync(adapterPackagePath)) {
     const packageJson = readJson(adapterPackagePath) as {
       readonly exports?: Record<string, unknown>;
+      readonly peerDependencies?: Record<string, unknown>;
+      readonly devDependencies?: Record<string, unknown>;
     } | null;
 
     if (packageJson !== null) {
@@ -894,6 +902,16 @@ function validatePhaserTemplateAITWrapper(): void {
         packageJson.exports?.['./package.json'],
         './package.json',
         `${adapterPackagePath}: exports[./package.json]`,
+      );
+      assertEqual(
+        packageJson.peerDependencies?.['@apps-in-toss/web-framework'],
+        '>=3.0.0-beta <4',
+        `${adapterPackagePath}: peerDependencies.@apps-in-toss/web-framework`,
+      );
+      assertEqual(
+        packageJson.devDependencies?.['@apps-in-toss/web-framework'],
+        '3.0.0-beta.da14818',
+        `${adapterPackagePath}: devDependencies.@apps-in-toss/web-framework`,
       );
 
       for (const [subpath, basename] of [
@@ -954,6 +972,21 @@ function validatePhaserTemplateAITWrapper(): void {
         packageJson.dependencies?.['@apps-in-toss/web-framework'],
         `${wrapperPackagePath}: dependencies.@apps-in-toss/web-framework`,
       );
+      assertEqual(
+        packageJson.dependencies?.['@apps-in-toss/web-framework'],
+        '3.0.0-beta.da14818',
+        `${wrapperPackagePath}: dependencies.@apps-in-toss/web-framework`,
+      );
+      assertEqual(
+        packageJson.devDependencies?.['@apps-in-toss/cli'],
+        '3.0.0-beta.66a479a',
+        `${wrapperPackagePath}: devDependencies.@apps-in-toss/cli`,
+      );
+      assertEqual(
+        packageJson.scripts?.build,
+        'vite build && ait build',
+        `${wrapperPackagePath}: build`,
+      );
       assertString(
         packageJson.devDependencies?.['@ait-co/devtools'],
         `${wrapperPackagePath}: devDependencies.@ait-co/devtools`,
@@ -997,10 +1030,26 @@ function validatePhaserTemplateAITWrapper(): void {
     }
   }
 
-  if (existsSync(wrapperGranitePath)) {
-    const content = readText(wrapperGranitePath);
-    for (const requiredText of ['__GAME_NAME__', '__GAME_TITLE__', 'generated/console-icon.png']) {
-      assertIncludesText(content, requiredText, wrapperGranitePath);
+  if (existsSync(legacyWrapperConfigPath)) {
+    failures.push(`${legacyWrapperConfigPath}: SDK 3 wrappers must not retain the SDK 2 config.`);
+  }
+
+  if (existsSync(wrapperConfigPath)) {
+    const content = readText(wrapperConfigPath);
+    for (const requiredText of [
+      '__GAME_NAME__',
+      'type AppsInTossConfig',
+      "primaryColor: readEnvString(process.env.MPGD_AIT_PRIMARY_COLOR) ?? '#101820'",
+      'webView: {',
+      "webBundleDir: 'dist'",
+    ]) {
+      assertIncludesText(content, requiredText, wrapperConfigPath);
+    }
+
+    for (const legacyText of ['displayName:', 'icon:', 'webViewProps:', 'outdir:', 'web: {']) {
+      if (content.includes(legacyText)) {
+        failures.push(`${wrapperConfigPath}: must not contain SDK 2 field ${legacyText}`);
+      }
     }
   }
 
@@ -1046,8 +1095,8 @@ function validatePhaserTemplateAITWrapper(): void {
         '#101820',
         `${targetsPath}: targets.ait.metadata.primaryColor`,
       );
-      if (targets.targets?.ait?.metadata?.sdkMajor !== 2) {
-        failures.push(`${targetsPath}: targets.ait.metadata.sdkMajor must be 2.`);
+      if (targets.targets?.ait?.metadata?.sdkMajor !== 3) {
+        failures.push(`${targetsPath}: targets.ait.metadata.sdkMajor must be 3.`);
       }
     }
   }
@@ -1082,7 +1131,6 @@ function validatePhaserTemplateAITWrapper(): void {
     for (const ignoredPath of [
       'apps/target-ait/.ait_relay',
       'apps/target-ait/.ait_urls',
-      'apps/target-ait/.granite/',
       'apps/target-ait/generated/',
       'apps/target-ait/public/assets/',
       'apps/target-ait/public/game/',
@@ -1090,6 +1138,10 @@ function validatePhaserTemplateAITWrapper(): void {
       if (!ignoredPaths.has(ignoredPath)) {
         failures.push(`${gitignorePath}: must ignore ${ignoredPath}.`);
       }
+    }
+
+    if (ignoredPaths.has('apps/target-ait/.granite/')) {
+      failures.push(`${gitignorePath}: must not retain the SDK 2 .granite cache path.`);
     }
   }
 }

@@ -63,3 +63,4 @@ minimumReleaseAgeExclude:
   - '@devvit/web@0.13.8'
   - devvit@0.13.8
   - '@ait-co/devtools@0.1.140'
+  - '@apps-in-toss/cli@3.0.0-beta.66a479a'
