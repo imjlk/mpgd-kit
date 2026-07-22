@@ -1,3 +1,8 @@
 [tools]
-go = "1.26.4"
+go = "1.26.5"
 node = "24.11.0"
+
+[env]
+# ttsc bundles its own Go toolchain, but source-plugin compilation must use the
+# patched project toolchain so GOROOT and the compiler version stay aligned.
+TTSC_GO_BINARY = { value = "{{ env.GOROOT }}/bin/go", tools = true }

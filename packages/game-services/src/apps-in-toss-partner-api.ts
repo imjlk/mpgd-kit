@@ -56,8 +56,9 @@ export class AppsInTossPartnerApiError extends Error {
     message: string,
     readonly status: number,
     readonly code?: string,
+    options?: ErrorOptions,
   ) {
-    super(message);
+    super(message, options);
   }
 }
 
@@ -143,13 +144,19 @@ async function postJson(input: PostJsonInput): Promise<PartnerApiResponse> {
       'content-type': 'application/json',
       ...input.headers,
     });
-    const response = await input.mtls.fetch(input.url, {
-      method: 'POST',
-      headers,
-      body: requestBody,
-      signal: timeout.signal,
-    });
-    const text = await readBoundedResponseText(response);
+    let response: Response;
+    let text: string;
+    try {
+      response = await input.mtls.fetch(input.url, {
+        method: 'POST',
+        headers,
+        body: requestBody,
+        signal: timeout.signal,
+      });
+      text = await readBoundedResponseText(response);
+    } catch (error) {
+      throw normalizeTransportError(error, input.signal, timeout.signal);
+    }
 
     let body: unknown;
     try {
@@ -164,6 +171,38 @@ async function postJson(input: PostJsonInput): Promise<PartnerApiResponse> {
   } finally {
     timeout.cleanup();
   }
+}
+
+function normalizeTransportError(
+  error: unknown,
+  upstream: AbortSignal | undefined,
+  effective: AbortSignal,
+): AppsInTossPartnerApiError {
+  if (error instanceof AppsInTossPartnerApiError) {
+    return error;
+  }
+  if (effective.aborted && upstream?.aborted !== true) {
+    return new AppsInTossPartnerApiError(
+      'Apps in Toss partner API request timed out.',
+      0,
+      'TIMEOUT',
+      { cause: error },
+    );
+  }
+  if (upstream?.aborted === true) {
+    return new AppsInTossPartnerApiError(
+      'Apps in Toss partner API request was aborted.',
+      0,
+      'ABORTED',
+      { cause: error },
+    );
+  }
+  return new AppsInTossPartnerApiError(
+    'Apps in Toss partner API transport failed.',
+    0,
+    'TRANSPORT_ERROR',
+    { cause: error },
+  );
 }
 
 async function readBoundedResponseText(response: Response): Promise<string> {

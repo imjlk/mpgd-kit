@@ -682,13 +682,17 @@ async function grantAitPromotionReward(
         amount: reward.amount,
       },
     });
+    if (isExplicitPromotionFailure(response)) {
+      return clearFailedPromotionGrant(dependencies.storage, storageKey);
+    }
     if (
       !isRecord(response)
       || typeof response.key !== 'string'
       || response.key.trim().length === 0
     ) {
-      await dependencies.storage.removeItem(storageKey);
-      return { status: 'unavailable' };
+      // An undocumented shape is ambiguous after native dispatch. Preserve the
+      // marker so a backend resolver can determine whether a grant happened.
+      return { status: 'pending' };
     }
 
     const result = { status: 'granted', receiptKey: response.key } as const;
@@ -705,6 +709,33 @@ async function grantAitPromotionReward(
   } catch {
     // Keep the pending marker. A provider error after dispatch is ambiguous and
     // retrying the same promotion blindly can double-grant Toss points.
+    return { status: 'pending' };
+  }
+}
+
+function isExplicitPromotionFailure(value: unknown): boolean {
+  if (value === 'ERROR') {
+    return true;
+  }
+  return isRecord(value)
+    && typeof value.errorCode === 'string'
+    && value.errorCode.trim().length > 0
+    && typeof value.message === 'string';
+}
+
+async function clearFailedPromotionGrant(
+  storage: Pick<typeof Storage, 'removeItem'>,
+  storageKey: string,
+): Promise<PromotionRewardResult> {
+  try {
+    await storage.removeItem(storageKey);
+    return { status: 'failed' };
+  } catch (error) {
+    console.warn(
+      'AIT failed promotion marker could not be cleared; keeping the claim pending.',
+      storageKey,
+      error,
+    );
     return { status: 'pending' };
   }
 }

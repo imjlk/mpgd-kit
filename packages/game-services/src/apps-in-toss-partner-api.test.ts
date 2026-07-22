@@ -130,6 +130,9 @@ responses.push(new Response('x'.repeat(256 * 1_024 + 1)));
 await assertRejects(
   () => client.verifyAnonymousKey({ anonymousKey: 'bounded-key' }),
   'response exceeded the maximum accepted size',
+  undefined,
+  undefined,
+  200,
 );
 
 const prototypeContext = JSON.parse('{"__proto__":"safe"}') as Record<string, string>;
@@ -166,9 +169,96 @@ assertThrows(
   () => createAppsInTossPartnerApiClient({ mtls, baseUrl: 'http://ait-partner.example' }),
   'credential-free HTTPS URL',
 );
+assertThrows(
+  () => createAppsInTossPartnerApiClient({
+    mtls,
+    baseUrl: 'https://ait-partner.example?environment=staging',
+  }),
+  'credential-free HTTPS URL',
+);
+assertThrows(
+  () => createAppsInTossPartnerApiClient({
+    mtls,
+    baseUrl: 'https://ait-partner.example#credentials',
+  }),
+  'credential-free HTTPS URL',
+);
+assertThrows(() => createAppsInTossPartnerApiClient({ mtls, timeoutMs: 0 }), 'between 1 and 60000');
+assertThrows(
+  () => createAppsInTossPartnerApiClient({ mtls, timeoutMs: 60_001 }),
+  'between 1 and 60000',
+);
+createAppsInTossPartnerApiClient({ mtls, timeoutMs: 1 });
+createAppsInTossPartnerApiClient({ mtls, timeoutMs: 60_000 });
 await assertRejectsError(
   () => client.verifyAnonymousKey({ anonymousKey: 'line\nbreak' }),
   'without control or format characters',
+);
+
+const oversizedContext = Object.fromEntries(
+  Array.from({ length: 129 }, (_, index) => [`field${String(index)}`, index]),
+);
+await assertRejectsError(
+  () => client.sendFunctionalMessage({
+    recipient: { type: 'anonymous', key: 'anon-key-1' },
+    templateSetCode: 'TOO_MANY_FIELDS',
+    context: oversizedContext,
+  }),
+  'more than 128 values',
+);
+
+const transportCause = new Error('socket closed');
+const transportClient = createAppsInTossPartnerApiClient({
+  mtls: {
+    async fetch() {
+      throw transportCause;
+    },
+  },
+});
+await assertRejects(
+  () => transportClient.verifyAnonymousKey({ anonymousKey: 'transport-key' }),
+  'transport failed',
+  'TRANSPORT_ERROR',
+  transportCause,
+);
+
+const timeoutClient = createAppsInTossPartnerApiClient({
+  mtls: {
+    async fetch(_url, init) {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(init.signal?.reason), {
+          once: true,
+        });
+      });
+    },
+  },
+  timeoutMs: 1,
+});
+await assertRejects(
+  () => timeoutClient.verifyAnonymousKey({ anonymousKey: 'timeout-key' }),
+  'timed out',
+  'TIMEOUT',
+);
+
+const abortController = new AbortController();
+abortController.abort(new Error('caller cancelled'));
+const abortClient = createAppsInTossPartnerApiClient({
+  mtls: {
+    async fetch(_url, init) {
+      if (init?.signal?.aborted === true) {
+        throw init.signal.reason;
+      }
+      throw new Error('expected an aborted request');
+    },
+  },
+});
+await assertRejects(
+  () => abortClient.verifyAnonymousKey({
+    anonymousKey: 'aborted-key',
+    signal: abortController.signal,
+  }),
+  'was aborted',
+  'ABORTED',
 );
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -207,11 +297,20 @@ function assertThrows(operation: () => unknown, message: string): void {
 async function assertRejects(
   operation: () => Promise<unknown>,
   message: string,
+  code?: string,
+  cause?: unknown,
+  status?: number,
 ): Promise<void> {
   try {
     await operation();
   } catch (error) {
-    if (error instanceof AppsInTossPartnerApiError && error.message.includes(message)) {
+    if (
+      error instanceof AppsInTossPartnerApiError
+      && error.message.includes(message)
+      && (code === undefined || error.code === code)
+      && (cause === undefined || error.cause === cause)
+      && (status === undefined || error.status === status)
+    ) {
       return;
     }
     throw error;

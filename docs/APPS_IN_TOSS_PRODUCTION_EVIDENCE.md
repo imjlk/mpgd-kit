@@ -129,10 +129,22 @@ import { createAppsInTossPartnerApiClient } from '@mpgd/game-services/apps-in-to
 
 interface Env {
   readonly AIT_MTLS: Fetcher;
+  readonly AIT_VERIFICATION_RATE_LIMIT: RateLimit;
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
+    // This is an internal route. Authenticate and authorize the calling game
+    // backend before accepting any caller-supplied identity assertion.
+    const caller = await authenticateInternalGameBackend(request);
+    if (caller === null) {
+      return new Response(null, { status: 401 });
+    }
+    const quota = await env.AIT_VERIFICATION_RATE_LIMIT.limit({ key: caller.id });
+    if (!quota.success) {
+      return new Response(null, { status: 429 });
+    }
+
     const partnerApi = createAppsInTossPartnerApiClient({ mtls: env.AIT_MTLS });
     const anonymousKey = request.headers.get('x-ait-anonymous-key') ?? '';
     const verified = await partnerApi.verifyAnonymousKey({ anonymousKey });
@@ -140,6 +152,13 @@ export default {
   },
 };
 ```
+
+The authentication and rate-limit checks above are deliberately placed before
+the mTLS client call. Do not expose anonymous-key verification as a public
+validation oracle: unauthorized or throttled requests must never consume
+Partner API traffic. `authenticateInternalGameBackend()` is game-owned and must
+validate a server credential or an equivalently strong authenticated session;
+it is not a client-supplied header equality check.
 
 Bind the certificate in deployment configuration with a Wrangler
 `mtls_certificates` entry. The binding's `certificate_id` is deployment state;
@@ -209,8 +228,13 @@ contract remains deterministic and transport-neutral.
 ## Functional messages
 
 The target adapter can request notification agreement through the AIT client
-SDK. Delivery remains a server operation. After verifying the stored anonymous
-or Toss user key, adapt `sendFunctionalMessage()` to a durable
+SDK. Delivery remains a server operation. Anonymous keys can be checked with
+`verifyAnonymousKey()`. Toss-user keys, however, are trusted only when they came
+from an authenticated Toss login and the backend's protected anonymous-to-user
+key mapping; `verifyAnonymousKey()` does not validate Toss-user keys, and
+`sendFunctionalMessage()` must never be treated as validation for an arbitrary
+`toss-user` key. After establishing the recipient through the appropriate
+authenticated path, adapt `sendFunctionalMessage()` to a durable
 `NotificationDeliveryProvider`; keep template-set codes and template context on
 the server and retain the delivery ledger's idempotency guarantees. Agreement
 does not prove that an arbitrary recipient key is valid, and a valid key does

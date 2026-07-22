@@ -234,6 +234,125 @@ describe('AIT production host bridge', () => {
     expect(grantPromotion).toHaveBeenCalledTimes(2);
   });
 
+  it('returns failed for documented provider rejections and clears the pending marker', async () => {
+    const values = new Map<string, string>();
+    const providerResponses: unknown[] = [
+      {
+        errorCode: 'PROMOTION_NOT_ELIGIBLE',
+        message: 'The promotion is not available for this user.',
+      },
+      'ERROR',
+    ];
+    const grantPromotionReward = vi.fn(async () => providerResponses.shift());
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({
+        // Exercise provider-declared failure shapes that are intentionally wider
+        // than the optimistic SDK return type.
+        grantPromotionReward: grantPromotionReward as unknown as AitHostDependencies[
+          'grantPromotionReward'
+        ],
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => {
+            values.delete(key);
+          },
+          setItem: async (key, value) => {
+            values.set(key, value);
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-provider-rejected',
+    })).resolves.toEqual({ status: 'failed' });
+    expect(values.size).toBe(0);
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-provider-rejected',
+    })).resolves.toEqual({ status: 'failed' });
+    expect(values.size).toBe(0);
+    expect(grantPromotionReward).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps an undocumented promotion response pending for server reconciliation', async () => {
+    const values = new Map<string, string>();
+    const grantPromotionReward = vi.fn(async () => ({ unexpected: true }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      dependencies: createDependencies({
+        // Native bridges can return undocumented data even when the SDK type is
+        // narrower, so keep this malformed-response test at the dependency edge.
+        grantPromotionReward: grantPromotionReward as unknown as AitHostDependencies[
+          'grantPromotionReward'
+        ],
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => {
+            values.delete(key);
+          },
+          setItem: async (key, value) => {
+            values.set(key, value);
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-undocumented-response',
+    })).resolves.toEqual({ status: 'pending' });
+    expect(values.size).toBe(1);
+  });
+
+  it('keeps a rejected promotion pending when its marker cannot be cleared', async () => {
+    const values = new Map<string, string>();
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const bridge = createAitHostBridge({
+        promotionRewards: {
+          SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+        },
+        authorizePromotionGrant: async () => ({ status: 'authorized' }),
+        dependencies: createDependencies({
+          grantPromotionReward: vi.fn(async () => 'ERROR') as unknown as AitHostDependencies[
+            'grantPromotionReward'
+          ],
+          storage: {
+            getItem: async (key) => values.get(key) ?? null,
+            removeItem: async () => {
+              throw new Error('storage unavailable');
+            },
+            setItem: async (key, value) => {
+              values.set(key, value);
+            },
+          },
+        }),
+      });
+
+      await expect(request(bridge, 'promotions.grantReward', {
+        campaignId: 'SEVEN_DAY_STREAK',
+        idempotencyKey: 'server-claim-provider-rejected-storage-error',
+      })).resolves.toEqual({ status: 'pending' });
+      expect(values.size).toBe(1);
+      expect(warning).toHaveBeenCalledWith(
+        'AIT failed promotion marker could not be cleared; keeping the claim pending.',
+        expect.stringContaining('server-claim-provider-rejected-storage-error'),
+        expect.any(Error),
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it('disables an invalid promotion without blocking the remaining bridge', async () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     try {
