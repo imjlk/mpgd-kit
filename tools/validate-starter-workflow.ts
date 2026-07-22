@@ -46,6 +46,10 @@ interface McpServerConfig {
   readonly args?: unknown;
 }
 
+const aitWebFrameworkVersion = '3.0.0-beta.da14818';
+const aitCliVersion = '3.0.0-beta.66a479a';
+const aitWebFrameworkPeerRange = '>=3.0.0-beta <4';
+
 const requiredFiles = [
   '.mcp.json',
   '.codex/config.toml',
@@ -691,13 +695,9 @@ function validatePhaserTemplateAITPolyfill(): void {
         packageJson.dependencies?.['@ait-co/polyfill'],
         `${packagePath}: dependencies.@ait-co/polyfill`,
       );
-      assertString(
-        packageJson.dependencies?.['@apps-in-toss/web-framework'],
-        `${packagePath}: dependencies.@apps-in-toss/web-framework`,
-      );
       assertEqual(
         packageJson.dependencies?.['@apps-in-toss/web-framework'],
-        '3.0.0-beta.da14818',
+        aitWebFrameworkVersion,
         `${packagePath}: dependencies.@apps-in-toss/web-framework`,
       );
     }
@@ -905,12 +905,12 @@ function validatePhaserTemplateAITWrapper(): void {
       );
       assertEqual(
         packageJson.peerDependencies?.['@apps-in-toss/web-framework'],
-        '>=3.0.0-beta <4',
+        aitWebFrameworkPeerRange,
         `${adapterPackagePath}: peerDependencies.@apps-in-toss/web-framework`,
       );
       assertEqual(
         packageJson.devDependencies?.['@apps-in-toss/web-framework'],
-        '3.0.0-beta.da14818',
+        aitWebFrameworkVersion,
         `${adapterPackagePath}: devDependencies.@apps-in-toss/web-framework`,
       );
 
@@ -968,18 +968,14 @@ function validatePhaserTemplateAITWrapper(): void {
         packageJson.dependencies?.['@mpgd/adapter-ait'],
         `${wrapperPackagePath}: dependencies.@mpgd/adapter-ait`,
       );
-      assertString(
-        packageJson.dependencies?.['@apps-in-toss/web-framework'],
-        `${wrapperPackagePath}: dependencies.@apps-in-toss/web-framework`,
-      );
       assertEqual(
         packageJson.dependencies?.['@apps-in-toss/web-framework'],
-        '3.0.0-beta.da14818',
+        aitWebFrameworkVersion,
         `${wrapperPackagePath}: dependencies.@apps-in-toss/web-framework`,
       );
       assertEqual(
         packageJson.devDependencies?.['@apps-in-toss/cli'],
-        '3.0.0-beta.66a479a',
+        aitCliVersion,
         `${wrapperPackagePath}: devDependencies.@apps-in-toss/cli`,
       );
       assertEqual(
