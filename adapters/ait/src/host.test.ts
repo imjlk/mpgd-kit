@@ -12,6 +12,9 @@ describe('AIT production host bridge', () => {
         identityProvider: async () => ({ type: 'HASH', hash: ' player-1 ' }),
         storage: {
           getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => {
+            values.delete(key);
+          },
           setItem: async (key, value) => {
             values.set(key, value);
           },
@@ -60,6 +63,7 @@ describe('AIT production host bridge', () => {
       dependencies: createDependencies({
         storage: {
           getItem: async () => '{not-valid-json',
+          removeItem: async () => {},
           setItem: async () => {},
         },
       }),
@@ -135,6 +139,9 @@ describe('AIT production host bridge', () => {
         grantPromotionReward: grantPromotion,
         storage: {
           getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => {
+            values.delete(key);
+          },
           setItem: async (key, value) => {
             values.set(key, value);
           },
@@ -169,22 +176,28 @@ describe('AIT production host bridge', () => {
 
   it('keeps an ambiguous promotion attempt pending instead of double granting', async () => {
     const values = new Map<string, string>();
+    let providerResponseLost = true;
     const grantPromotion = vi.fn(async () => {
-      throw new Error('native response lost');
+      if (providerResponseLost) {
+        throw new Error('native response lost');
+      }
+      return { key: 'promotion-receipt-recovered' };
     });
-    const bridge = createAitHostBridge({
-      promotionRewards: {
-        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+    const storage = {
+      getItem: async (key: string) => values.get(key) ?? null,
+      removeItem: async (key: string) => {
+        values.delete(key);
       },
-      dependencies: createDependencies({
-        grantPromotionReward: grantPromotion,
-        storage: {
-          getItem: async (key) => values.get(key) ?? null,
-          setItem: async (key, value) => {
-            values.set(key, value);
-          },
-        },
-      }),
+      setItem: async (key: string, value: string) => {
+        values.set(key, value);
+      },
+    };
+    const promotionRewards = {
+      SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+    } as const;
+    const bridge = createAitHostBridge({
+      promotionRewards,
+      dependencies: createDependencies({ grantPromotionReward: grantPromotion, storage }),
     });
     const claim = {
       campaignId: 'SEVEN_DAY_STREAK',
@@ -198,6 +211,46 @@ describe('AIT production host bridge', () => {
       status: 'pending',
     });
     expect(grantPromotion).toHaveBeenCalledOnce();
+
+    providerResponseLost = false;
+    const resolvePendingPromotionGrant = vi.fn(async () => ({ status: 'retry' as const }));
+    const recoveredBridge = createAitHostBridge({
+      promotionRewards,
+      resolvePendingPromotionGrant,
+      dependencies: createDependencies({ grantPromotionReward: grantPromotion, storage }),
+    });
+    await expect(request(recoveredBridge, 'promotions.grantReward', claim)).resolves.toEqual({
+      status: 'granted',
+      receiptKey: 'promotion-receipt-recovered',
+    });
+    expect(resolvePendingPromotionGrant).toHaveBeenCalledWith({
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-ambiguous-1',
+      pendingSince: expect.any(String),
+    });
+    expect(grantPromotion).toHaveBeenCalledTimes(2);
+  });
+
+  it('disables an invalid promotion without blocking the remaining bridge', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const bridge = createAitHostBridge({
+        promotionRewards: {
+          INVALID: { promotionCode: 'PROMOTION_INVALID', amount: 0 },
+        },
+        dependencies: createDependencies(),
+      });
+
+      await expect(request(bridge, 'promotions.getAvailability', {
+        campaignId: 'INVALID',
+      })).resolves.toBe('configuration-required');
+      await expect(request(bridge, 'identity.getSession', {})).resolves.toMatchObject({
+        playerId: 'test-player',
+      });
+      expect(warning).toHaveBeenCalledOnce();
+    } finally {
+      warning.mockRestore();
+    }
   });
 
   it('returns a protocol error for a malformed runtime bridge call', async () => {
@@ -1046,6 +1099,7 @@ function createDependencies(
     identityProvider: async () => ({ type: 'HASH', hash: 'test-player' }),
     storage: {
       getItem: async () => null,
+      removeItem: async () => {},
       setItem: async () => {},
     },
     getTossShareLink: async () => 'https://toss.im/test',
