@@ -13,7 +13,7 @@ This repository is `mpgd-kit`: a Multi-Platform Game Distribution / Development 
 - @ttsc/graph
 - typia
 - Capacitor v8
-- Apps in Toss Web Framework 2.x
+- Apps in Toss Web Framework 3.x beta
 
 ## Hard Rules
 
