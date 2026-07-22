@@ -135,6 +135,7 @@ describe('AIT production host bridge', () => {
       promotionRewards: {
         SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
       },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
       dependencies: createDependencies({
         grantPromotionReward: grantPromotion,
         storage: {
@@ -197,6 +198,7 @@ describe('AIT production host bridge', () => {
     } as const;
     const bridge = createAitHostBridge({
       promotionRewards,
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
       dependencies: createDependencies({ grantPromotionReward: grantPromotion, storage }),
     });
     const claim = {
@@ -216,6 +218,7 @@ describe('AIT production host bridge', () => {
     const resolvePendingPromotionGrant = vi.fn(async () => ({ status: 'retry' as const }));
     const recoveredBridge = createAitHostBridge({
       promotionRewards,
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
       resolvePendingPromotionGrant,
       dependencies: createDependencies({ grantPromotionReward: grantPromotion, storage }),
     });
@@ -251,6 +254,81 @@ describe('AIT production host bridge', () => {
     } finally {
       warning.mockRestore();
     }
+  });
+
+  it('keeps configured promotions unavailable without initial server authorization', async () => {
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-run' }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      dependencies: createDependencies({ grantPromotionReward }),
+    });
+
+    await expect(request(bridge, 'promotions.getAvailability', {
+      campaignId: 'SEVEN_DAY_STREAK',
+    })).resolves.toBe('configuration-required');
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'invented-client-claim',
+    })).resolves.toEqual({ status: 'unavailable' });
+    expect(grantPromotionReward).not.toHaveBeenCalled();
+  });
+
+  it('does not dispatch a provider grant when the game backend rejects the claim', async () => {
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-run' }));
+    const authorizePromotionGrant = vi.fn(async () => ({ status: 'rejected' as const }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant,
+      dependencies: createDependencies({ grantPromotionReward }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'invented-client-claim',
+    })).resolves.toEqual({ status: 'unavailable' });
+    expect(authorizePromotionGrant).toHaveBeenCalledWith({
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'invented-client-claim',
+    });
+    expect(grantPromotionReward).not.toHaveBeenCalled();
+  });
+
+  it('does not reopen a reconciled grant when receipt caching fails', async () => {
+    const storageKey = 'mpgd:ait:promotion-grant:v1:server-claim-cache-failure';
+    const grantPromotionReward = vi.fn(async () => ({ key: 'must-not-run' }));
+    const resolvePendingPromotionGrant = vi.fn(async () => ({
+      status: 'granted' as const,
+      receiptKey: 'server-reconciled-receipt',
+    }));
+    const bridge = createAitHostBridge({
+      promotionRewards: {
+        SEVEN_DAY_STREAK: { promotionCode: 'PROMOTION_7D', amount: 100 },
+      },
+      authorizePromotionGrant: async () => ({ status: 'authorized' }),
+      resolvePendingPromotionGrant,
+      dependencies: createDependencies({
+        grantPromotionReward,
+        storage: {
+          getItem: async (key) => key === storageKey
+            ? JSON.stringify({ status: 'pending', pendingSince: '2026-07-22T00:00:00.000Z' })
+            : null,
+          removeItem: async () => {},
+          setItem: async () => {
+            throw new Error('storage unavailable');
+          },
+        },
+      }),
+    });
+
+    await expect(request(bridge, 'promotions.grantReward', {
+      campaignId: 'SEVEN_DAY_STREAK',
+      idempotencyKey: 'server-claim-cache-failure',
+    })).resolves.toEqual({ status: 'granted', receiptKey: 'server-reconciled-receipt' });
+    expect(grantPromotionReward).not.toHaveBeenCalled();
   });
 
   it('fails closed for legacy pending state and an invalid reconciled receipt', async () => {
