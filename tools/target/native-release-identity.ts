@@ -209,7 +209,7 @@ function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): voi
   const releaseBlocks = readAndroidReleaseBlocks(source, file);
   const qualifiedReleaseSuffixes = [
     /\bbuildTypes\s*\.\s*release\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
-    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
+    /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
   ];
 
   if (qualifiedReleaseSuffixes.some((expression) => expression.test(source))) {
@@ -228,8 +228,7 @@ function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): voi
 }
 
 function readIosAppReleaseSettings(source: string, file: string): IosReleaseBuildSettings {
-  const appTarget = findIosAppTargetBlock(source, file);
-  const project = findIosProjectBlock(source, file);
+  const { appTarget, project } = findIosBlocks(source, file);
 
   if (appTarget === undefined) {
     throw new Error(`Native release preflight could not find the App target in ${file}.`);
@@ -260,12 +259,22 @@ function readIosAppReleaseSettings(source: string, file: string): IosReleaseBuil
   };
 }
 
-function findIosAppTargetBlock(source: string, file: string): string | undefined {
+function findIosBlocks(source: string, file: string): {
+  readonly appTarget: string | undefined;
+  readonly project: string | undefined;
+} {
+  let appTarget: string | undefined;
+  let project: string | undefined;
+
   for (const match of source.matchAll(/\b([A-F0-9]+)\s*\/\*\s*[^*]+\s*\*\/\s*=\s*\{/gu)) {
     const id = match[1];
 
     if (id === undefined || match.index === undefined) {
       continue;
+    }
+
+    if (appTarget !== undefined && project !== undefined) {
+      break;
     }
 
     const block = readBracedBlock(
@@ -276,37 +285,17 @@ function findIosAppTargetBlock(source: string, file: string): string | undefined
     );
 
     if (
-      /\bisa\s*=\s*PBXNativeTarget;/u.test(block)
+      appTarget === undefined
+      && /\bisa\s*=\s*PBXNativeTarget;/u.test(block)
       && /\bname\s*=\s*"?App"?\s*;/u.test(block)
     ) {
-      return block;
+      appTarget = block;
+    } else if (project === undefined && /\bisa\s*=\s*PBXProject;/u.test(block)) {
+      project = block;
     }
   }
 
-  return undefined;
-}
-
-function findIosProjectBlock(source: string, file: string): string | undefined {
-  for (const match of source.matchAll(/\b([A-F0-9]+)\s*\/\*\s*[^*]+\s*\*\/\s*=\s*\{/gu)) {
-    const id = match[1];
-
-    if (id === undefined || match.index === undefined) {
-      continue;
-    }
-
-    const block = readBracedBlock(
-      source,
-      source.indexOf('{', match.index),
-      `Xcode object ${id}`,
-      file,
-    );
-
-    if (/\bisa\s*=\s*PBXProject;/u.test(block)) {
-      return block;
-    }
-  }
-
-  return undefined;
+  return { appTarget, project };
 }
 
 function readPbxReleaseBuildSettings(
@@ -338,26 +327,44 @@ function readPbxBuildSettings(source: string, label: string, file: string): stri
 }
 
 function readAndroidReleaseBlocks(source: string, file: string): readonly string[] {
-  const releaseBlockExpressions = [
+  const buildTypesBlocks = readGradleBlocks(
+    source,
+    /\bbuildTypes\s*\{/gu,
+    'Android buildTypes Gradle block',
+    file,
+  );
+  const nestedReleaseBlockExpressions = [
     /\brelease\s*\{/gu,
     /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
+  ];
+  const qualifiedReleaseBlockExpressions = [
     /\bbuildTypes\s*\.\s*release\s*\{/gu,
+    /\bbuildTypes\s*\.\s*(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\{/gu,
   ];
 
-  return releaseBlockExpressions.flatMap((expression) => [...source.matchAll(expression)]
-    .map((match) => {
-      if (match.index === undefined) {
-        return undefined;
-      }
+  return [
+    ...buildTypesBlocks.flatMap((block) => nestedReleaseBlockExpressions.flatMap(
+      (expression) => readGradleBlocks(block, expression, 'Android release Gradle block', file),
+    )),
+    ...qualifiedReleaseBlockExpressions.flatMap(
+      (expression) => readGradleBlocks(source, expression, 'Android release Gradle block', file),
+    ),
+  ];
+}
 
-      return readBracedBlock(
-        source,
-        source.indexOf('{', match.index),
-        'Android release Gradle block',
-        file,
-      );
-    })
-    .filter((block): block is string => block !== undefined));
+function readGradleBlocks(
+  source: string,
+  expression: RegExp,
+  label: string,
+  file: string,
+): readonly string[] {
+  return [...source.matchAll(expression)].flatMap((match) => {
+    if (match.index === undefined) {
+      return [];
+    }
+
+    return [readBracedBlock(source, source.indexOf('{', match.index), label, file)];
+  });
 }
 
 function readPbxObject(source: string, id: string, file: string): string {

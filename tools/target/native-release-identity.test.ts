@@ -162,6 +162,20 @@ try {
   }), /does not support applicationIdSuffix or versionNameSuffix/u);
   writeShellFiles(shellRoot);
 
+  writeAndroidSigningConfigSuffix(shellRoot);
+  assert.doesNotThrow(() => assertNativeReleaseIdentity({
+    environment: {
+      APP_VERSION: '1.4.0',
+      MPGD_TARGET_VERSION_CODE: '42',
+      MPGD_TARGET_VERSION_NAME: '1.4.0',
+    },
+    metadata: { packageId: 'dev.example.game' },
+    platform: 'android',
+    required: false,
+    shellApp: shellRoot,
+  }));
+  writeShellFiles(shellRoot);
+
   assert.throws(() => assertNativeReleaseIdentity({
     environment: {
       APP_VERSION: '1.5.0',
@@ -216,7 +230,14 @@ function writeAndroidQualifiedReleaseSuffix(root: string): void {
 function writeAndroidNamedReleaseSuffix(root: string): void {
   writeFileSync(
     join(root, 'android/app/build.gradle'),
-    `defaultConfig {\n  applicationId "dev.example.game"\n  versionCode 42\n  versionName "1.4.0"\n}\n\ngetByName("release").applicationIdSuffix = ".store"\n`,
+    `defaultConfig {\n  applicationId "dev.example.game"\n  versionCode 42\n  versionName "1.4.0"\n}\n\nbuildTypes.getByName("release").applicationIdSuffix = ".store"\n`,
+  );
+}
+
+function writeAndroidSigningConfigSuffix(root: string): void {
+  writeFileSync(
+    join(root, 'android/app/build.gradle'),
+    `defaultConfig {\n  applicationId "dev.example.game"\n  versionCode 42\n  versionName "1.4.0"\n}\n\nsigningConfigs {\n  release {\n    applicationIdSuffix = ".ignored"\n  }\n}\n`,
   );
 }
 
