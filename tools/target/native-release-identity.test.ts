@@ -22,6 +22,20 @@ try {
     shellApp: shellRoot,
   }));
 
+  writeAndroidWithCommentedIdentity(shellRoot);
+  assert.doesNotThrow(() => assertNativeReleaseIdentity({
+    environment: {
+      APP_VERSION: '1.4.0',
+      MPGD_TARGET_VERSION_CODE: '42',
+      MPGD_TARGET_VERSION_NAME: '1.4.0',
+    },
+    metadata: { packageId: 'dev.example.game' },
+    platform: 'android',
+    required: false,
+    shellApp: shellRoot,
+  }));
+  writeShellFiles(shellRoot);
+
   assert.throws(() => assertNativeReleaseIdentity({
     environment: {
       APP_VERSION: '1.4.0',
@@ -45,6 +59,20 @@ try {
     required: false,
     shellApp: shellRoot,
   }));
+
+  writeIosInheritedReleaseSettings(shellRoot);
+  assert.doesNotThrow(() => assertNativeReleaseIdentity({
+    environment: {
+      APP_VERSION: '1.4.0',
+      MPGD_TARGET_BUILD_NUMBER: '42',
+      MPGD_TARGET_MARKETING_VERSION: '1.4.0',
+    },
+    metadata: { bundleId: 'dev.example.game' },
+    platform: 'ios',
+    required: false,
+    shellApp: shellRoot,
+  }));
+  writeShellFiles(shellRoot);
 
   assert.throws(
     () => assertNativeReleaseIdentity({
@@ -106,6 +134,34 @@ try {
   }), /does not support applicationIdSuffix or versionNameSuffix/u);
   writeShellFiles(shellRoot);
 
+  writeAndroidQualifiedReleaseSuffix(shellRoot);
+  assert.throws(() => assertNativeReleaseIdentity({
+    environment: {
+      APP_VERSION: '1.4.0',
+      MPGD_TARGET_VERSION_CODE: '42',
+      MPGD_TARGET_VERSION_NAME: '1.4.0',
+    },
+    metadata: { packageId: 'dev.example.game' },
+    platform: 'android',
+    required: false,
+    shellApp: shellRoot,
+  }), /does not support applicationIdSuffix or versionNameSuffix/u);
+  writeShellFiles(shellRoot);
+
+  writeAndroidNamedReleaseSuffix(shellRoot);
+  assert.throws(() => assertNativeReleaseIdentity({
+    environment: {
+      APP_VERSION: '1.4.0',
+      MPGD_TARGET_VERSION_CODE: '42',
+      MPGD_TARGET_VERSION_NAME: '1.4.0',
+    },
+    metadata: { packageId: 'dev.example.game' },
+    platform: 'android',
+    required: false,
+    shellApp: shellRoot,
+  }), /does not support applicationIdSuffix or versionNameSuffix/u);
+  writeShellFiles(shellRoot);
+
   assert.throws(() => assertNativeReleaseIdentity({
     environment: {
       APP_VERSION: '1.5.0',
@@ -136,9 +192,37 @@ function writeShellFiles(root: string): void {
   );
 }
 
+function writeIosInheritedReleaseSettings(root: string): void {
+  writeFileSync(
+    join(root, 'ios/App/App.xcodeproj/project.pbxproj'),
+    `001 /* App */ = {\n  isa = PBXNativeTarget;\n  buildConfigurationList = 002 /* Build configuration list for PBXNativeTarget \"App\" */;\n  name = \"App\";\n};\n\n002 /* Build configuration list for PBXNativeTarget \"App\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    003 /* Release */,\n  );\n};\n\n003 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = \"$(inherited)\";\n    MARKETING_VERSION = \"$(inherited)\";\n    CURRENT_PROJECT_VERSION = \"$(inherited)\";\n  };\n};\n\n004 /* Project object */ = {\n  isa = PBXProject;\n  buildConfigurationList = 005 /* Build configuration list for PBXProject \"App\" */;\n};\n\n005 /* Build configuration list for PBXProject \"App\" */ = {\n  isa = XCConfigurationList;\n  buildConfigurations = (\n    006 /* Release */,\n  );\n};\n\n006 /* Release */ = {\n  isa = XCBuildConfiguration;\n  buildSettings = {\n    PRODUCT_BUNDLE_IDENTIFIER = dev.example.game;\n    MARKETING_VERSION = 1.4.0;\n    CURRENT_PROJECT_VERSION = 42;\n  };\n};\n`,
+  );
+}
+
 function writeAndroidReleaseSuffix(root: string): void {
   writeFileSync(
     join(root, 'android/app/build.gradle'),
     `android {\n  defaultConfig {\n    applicationId \"dev.example.game\"\n    versionCode 42\n    versionName \"1.4.0\"\n  }\n  buildTypes {\n    getByName(\"release\") {\n      applicationIdSuffix = \".store\"\n    }\n  }\n}\n`,
+  );
+}
+
+function writeAndroidQualifiedReleaseSuffix(root: string): void {
+  writeFileSync(
+    join(root, 'android/app/build.gradle'),
+    `defaultConfig {\n  applicationId \"dev.example.game\"\n  versionCode 42\n  versionName \"1.4.0\"\n}\n\nbuildTypes.release.applicationIdSuffix = \".store\"\n`,
+  );
+}
+
+function writeAndroidNamedReleaseSuffix(root: string): void {
+  writeFileSync(
+    join(root, 'android/app/build.gradle'),
+    `defaultConfig {\n  applicationId "dev.example.game"\n  versionCode 42\n  versionName "1.4.0"\n}\n\ngetByName("release").applicationIdSuffix = ".store"\n`,
+  );
+}
+
+function writeAndroidWithCommentedIdentity(root: string): void {
+  writeFileSync(
+    join(root, 'android/app/build.gradle'),
+    `defaultConfig {\n  applicationId \"dev.example.game\"\n  versionCode 42\n  // versionName \"1.3.0\"\n  versionName \"1.4.0\"\n}\n`,
   );
 }

@@ -54,6 +54,11 @@ interface IosIdentity {
 
 type NativeIdentity = AndroidIdentity | IosIdentity;
 
+interface IosReleaseBuildSettings {
+  readonly project: string;
+  readonly target: string;
+}
+
 function resolveExpectedNativeIdentity(
   platform: 'android' | 'ios',
   metadata: TargetReleaseMetadata | undefined,
@@ -92,7 +97,7 @@ function resolveExpectedNativeIdentity(
 }
 
 function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
-  const source = readRequiredFile(file, 'Android Gradle configuration');
+  const source = stripComments(readRequiredFile(file, 'Android Gradle configuration'));
 
   assertNoAndroidReleaseIdentitySuffix(source, file);
   assertSetting(source, /\bapplicationId\s*(?:=\s*)?["']([^"']+)["']/u, expected.packageId, file);
@@ -102,22 +107,22 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
 
 function assertIosIdentity(file: string, expected: IosIdentity): void {
   const source = readRequiredFile(file, 'iOS Xcode project configuration');
-  const appReleaseSettings = readIosAppReleaseBuildSettings(source, file);
+  const releaseSettings = readIosAppReleaseSettings(source, file);
 
-  assertSetting(
-    appReleaseSettings,
+  assertIosSetting(
+    releaseSettings,
     /\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/u,
     expected.bundleId,
     file,
   );
-  assertSetting(
-    appReleaseSettings,
+  assertIosSetting(
+    releaseSettings,
     /\bMARKETING_VERSION\s*=\s*([^;]+);/u,
     expected.marketingVersion,
     file,
   );
-  assertSetting(
-    appReleaseSettings,
+  assertIosSetting(
+    releaseSettings,
     /\bCURRENT_PROJECT_VERSION\s*=\s*([^;]+);/u,
     expected.buildNumber,
     file,
@@ -125,11 +130,30 @@ function assertIosIdentity(file: string, expected: IosIdentity): void {
 }
 
 function assertSetting(source: string, expression: RegExp, expected: string, file: string): void {
-  const globalExpression = expression.global
-    ? expression
-    : new RegExp(expression.source, `${expression.flags}g`);
-  const values = [...source.matchAll(globalExpression)].map((match) => match[1]?.trim());
+  assertSettingValues(readSettingValues(source, expression), expression, expected, file);
+}
 
+function assertIosSetting(
+  settings: IosReleaseBuildSettings,
+  expression: RegExp,
+  expected: string,
+  file: string,
+): void {
+  const targetValues = readSettingValues(settings.target, expression)
+    .filter((value) => value !== '$(inherited)');
+  const values = targetValues.length > 0
+    ? targetValues
+    : readSettingValues(settings.project, expression);
+
+  assertSettingValues(values, expression, expected, file);
+}
+
+function assertSettingValues(
+  values: readonly string[],
+  expression: RegExp,
+  expected: string,
+  file: string,
+): void {
   if (values.length === 0) {
     throw new Error(`Native release preflight could not find ${expression.source} in ${file}.`);
   }
@@ -139,6 +163,17 @@ function assertSetting(source: string, expression: RegExp, expected: string, fil
       `Native release identity mismatch in ${file}: expected ${expected}, received ${values.join(', ')}.`,
     );
   }
+}
+
+function readSettingValues(source: string, expression: RegExp): readonly string[] {
+  const globalExpression = expression.global
+    ? expression
+    : new RegExp(expression.source, `${expression.flags}g`);
+
+  return [...source.matchAll(globalExpression)]
+    .map((match) => match[1]?.trim())
+    .filter((value): value is string => value !== undefined)
+    .map(stripOptionalQuotes);
 }
 
 function assertNativeVersionMatchesGameVersion(
@@ -172,6 +207,16 @@ function assertNativeVersionMatchesGameVersion(
 
 function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): void {
   const releaseBlocks = readAndroidReleaseBlocks(source, file);
+  const qualifiedReleaseSuffixes = [
+    /\bbuildTypes\s*\.\s*release\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
+    /\b(?:getByName|named)\s*\(\s*["']release["']\s*\)\s*\.\s*(?:applicationIdSuffix|versionNameSuffix)\b/u,
+  ];
+
+  if (qualifiedReleaseSuffixes.some((expression) => expression.test(source))) {
+    throw new Error(
+      `Native release preflight does not support applicationIdSuffix or versionNameSuffix in Android release builds: ${file}.`,
+    );
+  }
 
   for (const releaseBlock of releaseBlocks) {
     if (/\b(?:applicationIdSuffix|versionNameSuffix)\b/u.test(releaseBlock)) {
@@ -182,41 +227,37 @@ function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): voi
   }
 }
 
-function readIosAppReleaseBuildSettings(source: string, file: string): string {
+function readIosAppReleaseSettings(source: string, file: string): IosReleaseBuildSettings {
   const appTarget = findIosAppTargetBlock(source, file);
+  const project = findIosProjectBlock(source, file);
 
   if (appTarget === undefined) {
     throw new Error(`Native release preflight could not find the App target in ${file}.`);
   }
 
-  const configurationListId = readPbxReference(
+  const targetConfigurationListId = readPbxReference(
     appTarget,
     /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u,
     'the App target build configuration list',
     file,
   );
-  const configurationList = readPbxObject(source, configurationListId, file);
-  const releaseConfigurationId = readPbxReference(
-    configurationList,
-    /\b([A-F0-9]+)\s*\/\*\s*Release\s*\*\//u,
-    'the App Release build configuration',
-    file,
-  );
-  const releaseConfiguration = readPbxObject(source, releaseConfigurationId, file);
-  const buildSettingsIndex = releaseConfiguration.search(/\bbuildSettings\s*=\s*\{/u);
+  let projectConfigurationListId: string | undefined;
 
-  if (buildSettingsIndex === -1) {
-    throw new Error(
-      `Native release preflight could not find App Release build settings in ${file}.`,
+  if (project !== undefined) {
+    projectConfigurationListId = readPbxReference(
+      project,
+      /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u,
+      'the Xcode project build configuration list',
+      file,
     );
   }
 
-  return readBracedBlock(
-    releaseConfiguration,
-    releaseConfiguration.indexOf('{', buildSettingsIndex),
-    'App Release build settings',
-    file,
-  );
+  return {
+    project: projectConfigurationListId === undefined
+      ? ''
+      : readPbxReleaseBuildSettings(source, projectConfigurationListId, 'Xcode project', file),
+    target: readPbxReleaseBuildSettings(source, targetConfigurationListId, 'App target', file),
+  };
 }
 
 function findIosAppTargetBlock(source: string, file: string): string | undefined {
@@ -243,6 +284,57 @@ function findIosAppTargetBlock(source: string, file: string): string | undefined
   }
 
   return undefined;
+}
+
+function findIosProjectBlock(source: string, file: string): string | undefined {
+  for (const match of source.matchAll(/\b([A-F0-9]+)\s*\/\*\s*[^*]+\s*\*\/\s*=\s*\{/gu)) {
+    const id = match[1];
+
+    if (id === undefined || match.index === undefined) {
+      continue;
+    }
+
+    const block = readBracedBlock(
+      source,
+      source.indexOf('{', match.index),
+      `Xcode object ${id}`,
+      file,
+    );
+
+    if (/\bisa\s*=\s*PBXProject;/u.test(block)) {
+      return block;
+    }
+  }
+
+  return undefined;
+}
+
+function readPbxReleaseBuildSettings(
+  source: string,
+  configurationListId: string,
+  label: string,
+  file: string,
+): string {
+  const configurationList = readPbxObject(source, configurationListId, file);
+  const releaseConfigurationId = readPbxReference(
+    configurationList,
+    /\b([A-F0-9]+)\s*\/\*\s*Release\s*\*\//u,
+    `${label} Release build configuration`,
+    file,
+  );
+  const releaseConfiguration = readPbxObject(source, releaseConfigurationId, file);
+
+  return readPbxBuildSettings(releaseConfiguration, `${label} Release build settings`, file);
+}
+
+function readPbxBuildSettings(source: string, label: string, file: string): string {
+  const buildSettingsIndex = source.search(/\bbuildSettings\s*=\s*\{/u);
+
+  if (buildSettingsIndex === -1) {
+    throw new Error(`Native release preflight could not find ${label} in ${file}.`);
+  }
+
+  return readBracedBlock(source, source.indexOf('{', buildSettingsIndex), label, file);
 }
 
 function readAndroidReleaseBlocks(source: string, file: string): readonly string[] {
@@ -295,9 +387,60 @@ function readBracedBlock(source: string, openingBrace: number, label: string, fi
   }
 
   let depth = 0;
+  let quote: '"' | "'" | undefined;
+  let lineComment = false;
+  let blockComment = false;
 
   for (let index = openingBrace; index < source.length; index += 1) {
     const character = source[index];
+    const next = source[index + 1];
+
+    if (lineComment) {
+      if (character === '\n') {
+        lineComment = false;
+      }
+
+      continue;
+    }
+
+    if (blockComment) {
+      if (character === '*' && next === '/') {
+        blockComment = false;
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (quote !== undefined) {
+      if (character === '\\') {
+        index += 1;
+        continue;
+      }
+
+      if (character === quote) {
+        quote = undefined;
+      }
+
+      continue;
+    }
+
+    if (character === '/' && next === '/') {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === '/' && next === '*') {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
 
     if (character === '{') {
       depth += 1;
@@ -314,6 +457,77 @@ function readBracedBlock(source: string, openingBrace: number, label: string, fi
   }
 
   throw new Error(`Native release preflight found an unclosed ${label} in ${file}.`);
+}
+
+function stripComments(source: string): string {
+  let result = '';
+  let quote: '"' | "'" | undefined;
+  let lineComment = false;
+  let blockComment = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const next = source[index + 1];
+
+    if (lineComment) {
+      if (character === '\n') {
+        lineComment = false;
+        result += character;
+      }
+
+      continue;
+    }
+
+    if (blockComment) {
+      if (character === '*' && next === '/') {
+        blockComment = false;
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (quote !== undefined) {
+      result += character;
+
+      if (character === '\\') {
+        result += next ?? '';
+        index += 1;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+
+      continue;
+    }
+
+    if (character === '/' && next === '/') {
+      lineComment = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === '/' && next === '*') {
+      blockComment = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+    }
+
+    result += character;
+  }
+
+  return result;
+}
+
+function stripOptionalQuotes(value: string): string {
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1);
+  }
+
+  return value;
 }
 
 function readRequiredFile(file: string, label: string): string {
