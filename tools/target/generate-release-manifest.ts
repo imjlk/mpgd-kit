@@ -80,6 +80,7 @@ function generateReleaseManifestWithProvenance(
   const buildId = process.env.BUILD_ID ?? createBuildId();
   const gameVersion = process.env.APP_VERSION ?? packageJson.version ?? '0.0.0';
   const iconManifest = readIconManifestEvidence(input.iconManifestArtifactPath);
+  const nativeVersion = readNativeVersionEvidence(platformTargets.config.targets[input.target]);
 
   if (effectiveConfig === undefined) {
     throw new Error(`Failed to generate effective target config for ${input.target}.`);
@@ -112,9 +113,50 @@ function generateReleaseManifestWithProvenance(
               sdkMajor: readSdkMajor(process.env.MPGD_AIT_SDK_MAJOR, targetMetadata.sdkMajor),
             }
           : {}),
+        ...nativeVersion,
       },
     },
   });
+}
+
+function readNativeVersionEvidence(
+  target: unknown,
+): Pick<ReleaseManifest['targets'][string], 'versionName' | 'versionCode' | 'marketingVersion' | 'buildNumber'> {
+  if (typeof target !== 'object' || target === null || Array.isArray(target)) {
+    return {};
+  }
+
+  const kind = (target as { readonly kind?: unknown }).kind;
+
+  if (kind === 'capacitor-android') {
+    const versionName = readOptionalString(process.env.MPGD_TARGET_VERSION_NAME);
+    const versionCode = readOptionalString(process.env.MPGD_TARGET_VERSION_CODE);
+
+    if (versionName === undefined && versionCode === undefined) {
+      return {};
+    }
+
+    return {
+      versionName: requireFinalSemVer(versionName, 'MPGD_TARGET_VERSION_NAME'),
+      versionCode: Number.parseInt(requirePositiveInteger(versionCode, 'MPGD_TARGET_VERSION_CODE'), 10),
+    };
+  }
+
+  if (kind === 'capacitor-ios') {
+    const marketingVersion = readOptionalString(process.env.MPGD_TARGET_MARKETING_VERSION);
+    const buildNumber = readOptionalString(process.env.MPGD_TARGET_BUILD_NUMBER);
+
+    if (marketingVersion === undefined && buildNumber === undefined) {
+      return {};
+    }
+
+    return {
+      marketingVersion: requireFinalSemVer(marketingVersion, 'MPGD_TARGET_MARKETING_VERSION'),
+      buildNumber: requirePositiveInteger(buildNumber, 'MPGD_TARGET_BUILD_NUMBER'),
+    };
+  }
+
+  return {};
 }
 
 function readIconManifestEvidence(
@@ -366,6 +408,26 @@ function readOptionalString(input: unknown): string | undefined {
 
 function readOptionalNumber(input: unknown): number | undefined {
   return typeof input === 'number' && Number.isInteger(input) ? input : undefined;
+}
+
+function requireFinalSemVer(value: string | undefined, label: string): string {
+  const normalized = readOptionalString(value);
+
+  if (normalized === undefined || !/^\d+\.\d+\.\d+$/u.test(normalized)) {
+    throw new Error(`${label} must be a final SemVer.`);
+  }
+
+  return normalized;
+}
+
+function requirePositiveInteger(value: string | undefined, label: string): string {
+  const normalized = readOptionalString(value);
+
+  if (normalized === undefined || !/^[1-9]\d*$/u.test(normalized)) {
+    throw new Error(`${label} must be a positive integer.`);
+  }
+
+  return normalized;
 }
 
 function readSdkMajor(envValue: string | undefined, metadataValue: number | undefined): number {

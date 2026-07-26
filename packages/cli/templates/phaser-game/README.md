@@ -84,6 +84,10 @@ blocks localhost plus literal private or reserved IP addresses.
 this game directory, including non-production builds that use kit reference
 Capacitor shells.
 
+For Sampo private-workspace releases, Devvit RC/final separation, and native
+store-version provenance, see the
+[multi-target release versioning guide](https://github.com/imjlk/mpgd-kit/blob/main/docs/MULTI_TARGET_RELEASE_VERSIONING.md).
+
 Optional targets can add their own config, scripts, runtime wiring, and release
 skill. To enable Microsoft Store after creation, run
 `pnpm exec mpgd target init microsoft-store --game . --kit-path ../mpgd-kit`.

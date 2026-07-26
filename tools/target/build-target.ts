@@ -25,6 +25,7 @@ import {
   writeMicrosoftStorePwaArtifacts,
 } from './microsoft-store-pwa';
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
+import { assertNativeReleaseIdentity } from './native-release-identity';
 import {
   effectiveTargetConfigOutputDir,
   loadPlatformTargetsConfig,
@@ -44,7 +45,11 @@ const releaseManifestEnvKeys = [
   'MPGD_AIT_SDK_MAJOR',
   'MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR',
   'MPGD_ICON_MANIFEST_PATH',
+  'MPGD_TARGET_BUILD_NUMBER',
+  'MPGD_TARGET_MARKETING_VERSION',
   'MPGD_PLATFORM_TARGETS_FILE',
+  'MPGD_TARGET_VERSION_CODE',
+  'MPGD_TARGET_VERSION_NAME',
   'MPGD_PRODUCT_CATALOG_FILE',
   'MPGD_SOURCE_GIT_SHA',
 ] as const;
@@ -195,6 +200,12 @@ switch (target.kind) {
     const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
     replaceDirectory(`${gameApp}/dist`, webDir);
     ensureCapacitorPlatform(shellApp, 'android', env);
+    assertNativeReleaseIdentity({
+      environment: env,
+      metadata: target.metadata,
+      platform: 'android',
+      shellApp,
+    });
     const restoreIcons = await stageNativeIconResources(generatedIcons, shellApp);
 
     try {
@@ -218,6 +229,12 @@ switch (target.kind) {
     const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
     replaceDirectory(`${gameApp}/dist`, webDir);
     ensureCapacitorPlatform(shellApp, 'ios', env);
+    assertNativeReleaseIdentity({
+      environment: env,
+      metadata: target.metadata,
+      platform: 'ios',
+      shellApp,
+    });
     const restoreIcons = await stageNativeIconResources(generatedIcons, shellApp);
 
     try {
