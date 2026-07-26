@@ -1,6 +1,6 @@
 ---
-npm/@mpgd/cli: patch (Fixed)
+npm/@mpgd/cli: minor (Fixed)
 ---
 
-Validate native Android and iOS release identities against the game version and
-the effective release configuration before packaging.
+Require `APP_VERSION` to match native Android and iOS release identities and
+validate the effective release configuration before packaging.

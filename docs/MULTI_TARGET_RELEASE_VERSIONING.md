@@ -45,6 +45,8 @@ For a native release, set all required generic environment variables before
 running the target command:
 
 ```sh
+export APP_VERSION=1.4.0
+
 # Android
 export MPGD_TARGET_VERSION_NAME=1.4.0
 export MPGD_TARGET_VERSION_CODE=42
@@ -53,8 +55,8 @@ export MPGD_TARGET_VERSION_CODE=42
 export MPGD_TARGET_MARKETING_VERSION=1.4.0
 export MPGD_TARGET_BUILD_NUMBER=42
 
-mpgd target build android production \\
-  --targets-file ./mpgd.targets.json \\
+mpgd target build android production \
+  --targets-file ./mpgd.targets.json \
   --kit-path ../mpgd-kit
 ```
 
@@ -63,9 +65,13 @@ before packaging:
 
 - Android `applicationId`, `versionName`, and `versionCode` in
   `android/app/build.gradle` must match target metadata and the release ledger.
+  Release builds using `applicationIdSuffix` or `versionNameSuffix` are
+  rejected because their emitted identity differs from the declared source.
 - iOS `PRODUCT_BUNDLE_IDENTIFIER`, `MARKETING_VERSION`, and
   `CURRENT_PROJECT_VERSION` in `ios/App/App.xcodeproj/project.pbxproj` must
-  match target metadata and the release ledger.
+  match target metadata and the release ledger. Only the Capacitor `App`
+  target's `Release` configuration is inspected, so valid extension and Debug
+  identities do not block the archive.
 
 The values are also captured in the release manifest. A mismatch fails before
 an artifact is produced; the target tool never silently rewrites a store
