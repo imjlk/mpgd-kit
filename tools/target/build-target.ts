@@ -204,6 +204,7 @@ switch (target.kind) {
       environment: env,
       metadata: target.metadata,
       platform: 'android',
+      required: profile === 'production',
       shellApp,
     });
     const restoreIcons = await stageNativeIconResources(generatedIcons, shellApp);
@@ -233,6 +234,7 @@ switch (target.kind) {
       environment: env,
       metadata: target.metadata,
       platform: 'ios',
+      required: profile === 'production',
       shellApp,
     });
     const restoreIcons = await stageNativeIconResources(generatedIcons, shellApp);

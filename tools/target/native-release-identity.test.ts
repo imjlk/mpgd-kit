@@ -17,6 +17,7 @@ try {
     },
     metadata: { packageId: 'dev.example.game' },
     platform: 'android',
+    required: false,
     shellApp: shellRoot,
   }));
 
@@ -27,6 +28,7 @@ try {
     },
     metadata: { packageId: 'dev.example.game' },
     platform: 'android',
+    required: false,
     shellApp: shellRoot,
   }), /Native release identity mismatch/u);
 
@@ -37,8 +39,20 @@ try {
     },
     metadata: { bundleId: 'dev.example.game' },
     platform: 'ios',
+    required: false,
     shellApp: shellRoot,
   }));
+
+  assert.throws(
+    () => assertNativeReleaseIdentity({
+      environment: {},
+      metadata: { packageId: 'dev.example.game' },
+      platform: 'android',
+      required: true,
+      shellApp: shellRoot,
+    }),
+    /MPGD_TARGET_VERSION_CODE is required/u,
+  );
 } finally {
   rmSync(shellRoot, { force: true, recursive: true });
 }

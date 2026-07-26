@@ -8,6 +8,7 @@ export interface NativeReleaseIdentityInput {
   readonly shellApp: string;
   readonly metadata: TargetReleaseMetadata | undefined;
   readonly environment: NodeJS.ProcessEnv;
+  readonly required: boolean;
 }
 
 /**
@@ -16,7 +17,12 @@ export interface NativeReleaseIdentityInput {
  * silently rewrite a product identity during release packaging.
  */
 export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): void {
-  const expected = resolveExpectedNativeIdentity(input.platform, input.metadata, input.environment);
+  const expected = resolveExpectedNativeIdentity(
+    input.platform,
+    input.metadata,
+    input.environment,
+    input.required,
+  );
 
   if (expected === undefined) {
     return;
@@ -50,12 +56,13 @@ function resolveExpectedNativeIdentity(
   platform: 'android' | 'ios',
   metadata: TargetReleaseMetadata | undefined,
   environment: NodeJS.ProcessEnv,
+  required: boolean,
 ): NativeIdentity | undefined {
   if (platform === 'android') {
     const versionName = optional(environment.MPGD_TARGET_VERSION_NAME);
     const versionCode = optional(environment.MPGD_TARGET_VERSION_CODE);
 
-    if (versionName === undefined && versionCode === undefined) {
+    if (versionName === undefined && versionCode === undefined && !required) {
       return undefined;
     }
 
@@ -70,7 +77,7 @@ function resolveExpectedNativeIdentity(
   const marketingVersion = optional(environment.MPGD_TARGET_MARKETING_VERSION);
   const buildNumber = optional(environment.MPGD_TARGET_BUILD_NUMBER);
 
-  if (marketingVersion === undefined && buildNumber === undefined) {
+  if (marketingVersion === undefined && buildNumber === undefined && !required) {
     return undefined;
   }
 
@@ -123,7 +130,7 @@ function readRequiredFile(file: string, label: string): string {
 function requireFinalSemVer(value: string | undefined, label: string): string {
   const normalized = requireValue(value, label);
 
-  if (!/^\d+\.\d+\.\d+$/u.test(normalized)) {
+  if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u.test(normalized)) {
     throw new Error(`${label} must be a final SemVer.`);
   }
 

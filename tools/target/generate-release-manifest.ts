@@ -413,7 +413,10 @@ function readOptionalNumber(input: unknown): number | undefined {
 function requireFinalSemVer(value: string | undefined, label: string): string {
   const normalized = readOptionalString(value);
 
-  if (normalized === undefined || !/^\d+\.\d+\.\d+$/u.test(normalized)) {
+  if (
+    normalized === undefined
+    || !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u.test(normalized)
+  ) {
     throw new Error(`${label} must be a final SemVer.`);
   }
 

@@ -44,12 +44,12 @@ For a native release, set all required generic environment variables before
 
 ```sh
 # Android
-MPGD_TARGET_VERSION_NAME=1.4.0
-MPGD_TARGET_VERSION_CODE=42
+export MPGD_TARGET_VERSION_NAME=1.4.0
+export MPGD_TARGET_VERSION_CODE=42
 
 # iOS
-MPGD_TARGET_MARKETING_VERSION=1.4.0
-MPGD_TARGET_BUILD_NUMBER=42
+export MPGD_TARGET_MARKETING_VERSION=1.4.0
+export MPGD_TARGET_BUILD_NUMBER=42
 ```
 
 When these variables are set, mpgd-kit checks the game-owned native source
