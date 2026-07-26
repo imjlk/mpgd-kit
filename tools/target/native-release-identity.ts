@@ -28,6 +28,8 @@ export function assertNativeReleaseIdentity(input: NativeReleaseIdentityInput): 
     return;
   }
 
+  assertNativeVersionMatchesGameVersion(expected, input.environment);
+
   if (expected.kind === 'android') {
     assertAndroidIdentity(join(input.shellApp, 'android/app/build.gradle'), expected);
     return;
@@ -92,6 +94,7 @@ function resolveExpectedNativeIdentity(
 function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
   const source = readRequiredFile(file, 'Android Gradle configuration');
 
+  assertNoAndroidReleaseIdentitySuffix(source, file);
   assertSetting(source, /\bapplicationId\s*(?:=\s*)?["']([^"']+)["']/u, expected.packageId, file);
   assertSetting(source, /\bversionCode\s*(?:=\s*)?(\d+)/u, expected.versionCode, file);
   assertSetting(source, /\bversionName\s*(?:=\s*)?["']([^"']+)["']/u, expected.versionName, file);
@@ -99,14 +102,33 @@ function assertAndroidIdentity(file: string, expected: AndroidIdentity): void {
 
 function assertIosIdentity(file: string, expected: IosIdentity): void {
   const source = readRequiredFile(file, 'iOS Xcode project configuration');
+  const appReleaseSettings = readIosAppReleaseBuildSettings(source, file);
 
-  assertSetting(source, /\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/u, expected.bundleId, file);
-  assertSetting(source, /\bMARKETING_VERSION\s*=\s*([^;]+);/u, expected.marketingVersion, file);
-  assertSetting(source, /\bCURRENT_PROJECT_VERSION\s*=\s*([^;]+);/u, expected.buildNumber, file);
+  assertSetting(
+    appReleaseSettings,
+    /\bPRODUCT_BUNDLE_IDENTIFIER\s*=\s*([^;]+);/u,
+    expected.bundleId,
+    file,
+  );
+  assertSetting(
+    appReleaseSettings,
+    /\bMARKETING_VERSION\s*=\s*([^;]+);/u,
+    expected.marketingVersion,
+    file,
+  );
+  assertSetting(
+    appReleaseSettings,
+    /\bCURRENT_PROJECT_VERSION\s*=\s*([^;]+);/u,
+    expected.buildNumber,
+    file,
+  );
 }
 
 function assertSetting(source: string, expression: RegExp, expected: string, file: string): void {
-  const values = [...source.matchAll(expression)].map((match) => match[1]?.trim());
+  const globalExpression = expression.global
+    ? expression
+    : new RegExp(expression.source, `${expression.flags}g`);
+  const values = [...source.matchAll(globalExpression)].map((match) => match[1]?.trim());
 
   if (values.length === 0) {
     throw new Error(`Native release preflight could not find ${expression.source} in ${file}.`);
@@ -117,6 +139,160 @@ function assertSetting(source: string, expression: RegExp, expected: string, fil
       `Native release identity mismatch in ${file}: expected ${expected}, received ${values.join(', ')}.`,
     );
   }
+}
+
+function assertNativeVersionMatchesGameVersion(
+  expected: NativeIdentity,
+  environment: NodeJS.ProcessEnv,
+): void {
+  const gameVersion = requireFinalSemVer(optional(environment.APP_VERSION), 'APP_VERSION');
+  const nativeVersion = expected.kind === 'android'
+    ? expected.versionName
+    : expected.marketingVersion;
+
+  if (nativeVersion !== gameVersion) {
+    throw new Error(
+      `Native release version mismatch: APP_VERSION is ${gameVersion}, received ${nativeVersion}.`,
+    );
+  }
+}
+
+function assertNoAndroidReleaseIdentitySuffix(source: string, file: string): void {
+  const releaseBlock = readNamedGradleBlock(source, 'buildTypes', 'release');
+
+  if (
+    releaseBlock !== undefined
+    && /\b(?:applicationIdSuffix|versionNameSuffix)\b/u.test(releaseBlock)
+  ) {
+    throw new Error(
+      `Native release preflight does not support applicationIdSuffix or versionNameSuffix in Android release builds: ${file}.`,
+    );
+  }
+}
+
+function readIosAppReleaseBuildSettings(source: string, file: string): string {
+  const appTarget = [...source.matchAll(/\b([A-F0-9]+)\s*\/\*\s*[^*]+\s*\*\/\s*=\s*\{/gu)]
+    .map((match) => {
+      const id = match[1];
+
+      return id === undefined
+        ? undefined
+        : { id, block: readPbxObject(source, id, file) };
+    })
+    .filter((target): target is { readonly id: string; readonly block: string } => target !== undefined)
+    .find(({ block }) => /\bisa\s*=\s*PBXNativeTarget;/u.test(block) && /\bname\s*=\s*App;/u.test(block));
+
+  if (appTarget === undefined) {
+    throw new Error(`Native release preflight could not find the App target in ${file}.`);
+  }
+
+  const configurationListId = readPbxReference(
+    appTarget.block,
+    /\bbuildConfigurationList\s*=\s*([A-F0-9]+)\b/u,
+    'the App target build configuration list',
+    file,
+  );
+  const configurationList = readPbxObject(source, configurationListId, file);
+  const releaseConfigurationId = readPbxReference(
+    configurationList,
+    /\b([A-F0-9]+)\s*\/\*\s*Release\s*\*\//u,
+    'the App Release build configuration',
+    file,
+  );
+  const releaseConfiguration = readPbxObject(source, releaseConfigurationId, file);
+  const buildSettingsIndex = releaseConfiguration.search(/\bbuildSettings\s*=\s*\{/u);
+
+  if (buildSettingsIndex === -1) {
+    throw new Error(
+      `Native release preflight could not find App Release build settings in ${file}.`,
+    );
+  }
+
+  return readBracedBlock(
+    releaseConfiguration,
+    releaseConfiguration.indexOf('{', buildSettingsIndex),
+    'App Release build settings',
+    file,
+  );
+}
+
+function readNamedGradleBlock(
+  source: string,
+  sectionName: string,
+  blockName: string,
+): string | undefined {
+  const section = source.match(new RegExp(`\\b${sectionName}\\s*\\{`, 'u'));
+
+  if (section?.index === undefined) {
+    return undefined;
+  }
+
+  const sectionBlock = readBracedBlock(
+    source,
+    source.indexOf('{', section.index),
+    `${sectionName} Gradle block`,
+    'Android Gradle configuration',
+  );
+  const namedBlock = sectionBlock.match(new RegExp(`\\b${blockName}\\s*\\{`, 'u'));
+
+  if (namedBlock?.index === undefined) {
+    return undefined;
+  }
+
+  return readBracedBlock(
+    sectionBlock,
+    sectionBlock.indexOf('{', namedBlock.index),
+    `${blockName} Gradle block`,
+    'Android Gradle configuration',
+  );
+}
+
+function readPbxObject(source: string, id: string, file: string): string {
+  const marker = source.match(new RegExp(`\\b${id}\\s*\\/\\*\\s*[^*]+\\s*\\*\\/\\s*=\\s*\\{`, 'u'));
+
+  if (marker?.index === undefined) {
+    throw new Error(`Native release preflight could not find Xcode object ${id} in ${file}.`);
+  }
+
+  return readBracedBlock(source, source.indexOf('{', marker.index), `Xcode object ${id}`, file);
+}
+
+function readPbxReference(source: string, expression: RegExp, label: string, file: string): string {
+  const match = source.match(expression);
+  const value = match?.[1];
+
+  if (value === undefined) {
+    throw new Error(`Native release preflight could not find ${label} in ${file}.`);
+  }
+
+  return value;
+}
+
+function readBracedBlock(source: string, openingBrace: number, label: string, file: string): string {
+  if (openingBrace === -1) {
+    throw new Error(`Native release preflight could not find ${label} in ${file}.`);
+  }
+
+  let depth = 0;
+
+  for (let index = openingBrace; index < source.length; index += 1) {
+    const character = source[index];
+
+    if (character === '{') {
+      depth += 1;
+      continue;
+    }
+
+    if (character === '}') {
+      depth -= 1;
+
+      if (depth === 0) {
+        return source.slice(openingBrace + 1, index);
+      }
+    }
+  }
+
+  throw new Error(`Native release preflight found an unclosed ${label} in ${file}.`);
 }
 
 function readRequiredFile(file: string, label: string): string {

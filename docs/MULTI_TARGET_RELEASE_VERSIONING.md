@@ -16,8 +16,10 @@ ignore = ["npm/@example/game-target-*", "npm/@example/game-services"]
 
 Version game apps and shared game packages independently. A shared package
 change needs its own changeset and one for every directly consuming game.
-Synchronize `package.json.version` with `mpgd.game.json.game.version` before
-every production target build. Use `sampo release` for version/changelog
+Treat `package.json.version` as the game SemVer source and propagate that value
+to every game-owned release ledger and native release environment. If a game
+maintains its own metadata version, validate it against `package.json.version`
+before every production target build. Use `sampo release` for version/changelog
 updates; do not use `sampo publish` when npm publishing is out of scope.
 
 ## Devvit release lifecycle
@@ -40,7 +42,7 @@ for these values:
 | iOS | `MARKETING_VERSION` | `CURRENT_PROJECT_VERSION` |
 
 For a native release, set all required generic environment variables before
-`mpgd build:target`:
+running the target command:
 
 ```sh
 # Android
@@ -50,6 +52,10 @@ export MPGD_TARGET_VERSION_CODE=42
 # iOS
 export MPGD_TARGET_MARKETING_VERSION=1.4.0
 export MPGD_TARGET_BUILD_NUMBER=42
+
+mpgd target build android production \\
+  --targets-file ./mpgd.targets.json \\
+  --kit-path ../mpgd-kit
 ```
 
 When these variables are set, mpgd-kit checks the game-owned native source
