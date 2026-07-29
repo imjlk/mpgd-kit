@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 
 export interface PackageJson {
@@ -84,6 +84,10 @@ function internalDependencyNames(packageJson: PackageJson): string[] {
 }
 
 function discoverPackagesInRoot(root: string): WorkspacePackage[] {
+  if (!existsSync(root)) {
+    return [];
+  }
+
   return readdirSync(root)
     .map((entry) => join(root, entry))
     .filter((dir) => statSync(dir).isDirectory())
