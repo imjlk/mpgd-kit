@@ -17,18 +17,6 @@ importers:
       '@mpgd/analytics':
         specifier: workspace:*
         version: link:packages/analytics
-      '@mpgd/backend-ad-reward-ledger':
-        specifier: workspace:*
-        version: link:backend/ad-reward-ledger
-      '@mpgd/backend-entitlement-ledger':
-        specifier: workspace:*
-        version: link:backend/entitlement-ledger
-      '@mpgd/backend-leaderboard-ledger':
-        specifier: workspace:*
-        version: link:backend/leaderboard-ledger
-      '@mpgd/backend-purchase-verifier':
-        specifier: workspace:*
-        version: link:backend/purchase-verifier
       '@mpgd/bridge':
         specifier: workspace:*
         version: link:packages/bridge
@@ -339,101 +327,6 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
-  backend/ad-reward-ledger:
-    dependencies:
-      '@mpgd/backend-entitlement-ledger':
-        specifier: workspace:*
-        version: link:../entitlement-ledger
-      '@mpgd/catalog':
-        specifier: workspace:*
-        version: link:../../packages/catalog
-      '@mpgd/platform':
-        specifier: workspace:*
-        version: link:../../packages/platform
-    devDependencies:
-      ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-
-  backend/entitlement-ledger:
-    dependencies:
-      '@mpgd/catalog':
-        specifier: workspace:*
-        version: link:../../packages/catalog
-    devDependencies:
-      ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-
-  backend/game-services:
-    dependencies:
-      '@mpgd/backend-ad-reward-ledger':
-        specifier: workspace:*
-        version: link:../ad-reward-ledger
-      '@mpgd/backend-entitlement-ledger':
-        specifier: workspace:*
-        version: link:../entitlement-ledger
-      '@mpgd/backend-leaderboard-ledger':
-        specifier: workspace:*
-        version: link:../leaderboard-ledger
-      '@mpgd/backend-purchase-verifier':
-        specifier: workspace:*
-        version: link:../purchase-verifier
-      '@mpgd/catalog':
-        specifier: workspace:*
-        version: link:../../packages/catalog
-      '@mpgd/game-services':
-        specifier: workspace:*
-        version: link:../../packages/game-services
-      '@orpc/server':
-        specifier: 2.0.0-beta.14
-        version: 2.0.0-beta.14
-    devDependencies:
-      ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-
-  backend/leaderboard-ledger:
-    dependencies:
-      '@mpgd/platform':
-        specifier: workspace:*
-        version: link:../../packages/platform
-    devDependencies:
-      ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-
-  backend/purchase-verifier:
-    dependencies:
-      '@mpgd/backend-entitlement-ledger':
-        specifier: workspace:*
-        version: link:../entitlement-ledger
-      '@mpgd/catalog':
-        specifier: workspace:*
-        version: link:../../packages/catalog
-      '@mpgd/platform':
-        specifier: workspace:*
-        version: link:../../packages/platform
-    devDependencies:
-      ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-
   examples/phaser-starter:
     dependencies:
       '@mpgd/adapter-ait':
@@ -732,28 +625,6 @@ importers:
         specifier: 7.0.2
         version: 7.0.2
 
-  packages/game-services-contract:
-    dependencies:
-      '@mpgd/backend-ad-reward-ledger':
-        specifier: workspace:*
-        version: link:../../backend/ad-reward-ledger
-      '@mpgd/backend-leaderboard-ledger':
-        specifier: workspace:*
-        version: link:../../backend/leaderboard-ledger
-      '@mpgd/backend-purchase-verifier':
-        specifier: workspace:*
-        version: link:../../backend/purchase-verifier
-      '@orpc/contract':
-        specifier: 2.0.0-beta.14
-        version: 2.0.0-beta.14
-    devDependencies:
-      ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-
   packages/i18n:
     dependencies:
       '@mpgd/platform':
@@ -775,24 +646,6 @@ importers:
       typescript:
         specifier: 5.9.3
         version: 5.9.3
-
-  packages/leaderboard-contract:
-    devDependencies:
-      ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-
-  packages/monetization-contract:
-    devDependencies:
-      ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
 
   packages/phaser-assets:
     devDependencies:
