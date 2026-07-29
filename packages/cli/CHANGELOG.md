@@ -1,5 +1,12 @@
 # @mpgd/cli
 
+## 0.19.0 — 2026-07-27
+
+### Fixed
+
+- [fb87690](https://github.com/imjlk/mpgd-kit/commit/fb876906f06d46b7692f9c236b02fb2ff0b2ce8e) Require `APP_VERSION` to match native Android and iOS release identities and
+  validate the effective release configuration before packaging. — Thanks @imjlk!
+
 ## 0.18.0 — 2026-07-23
 
 ### Patch changes
