@@ -56,14 +56,17 @@ async function bootstrap(): Promise<void> {
         ?? runtime.config.localization.fallbackLocale,
     });
     const analyticsSink = createBufferedAnalyticsSink();
+    const analyticsSessionId = createClientId('session');
     const analytics = createAnalyticsReporter({
       target: platform.target,
-      sessionId: createClientId('session'),
+      sessionId: analyticsSessionId,
       sink: analyticsSink,
     });
     const gameServices = createStarterGameServices({
       gateway: platform,
       playerId: identitySession.playerId ?? player.playerId,
+      analytics: analyticsSink,
+      analyticsSessionId,
     });
 
     await analytics.track({

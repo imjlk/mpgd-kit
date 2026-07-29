@@ -8,7 +8,7 @@ import {
   resolveFromPlatformTargetsBase,
 } from './platform-targets';
 
-export function validateTargetConfigFile(path?: string) {
+export function validatePlatformTargetsFile(path?: string) {
   const loadedConfig = path === undefined
     ? loadPlatformTargetsConfig()
     : {
@@ -63,6 +63,6 @@ export function validateTargetConfigFile(path?: string) {
 }
 
 if (isCliEntrypoint(import.meta.url)) {
-  const config = validateTargetConfigFile();
+  const config = validatePlatformTargetsFile();
   console.log(`Platform targets: ${Object.keys(config.targets).join(', ')}`);
 }

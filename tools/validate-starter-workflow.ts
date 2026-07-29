@@ -198,6 +198,7 @@ validatePhaserTemplateBuildGateways();
 validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
 validatePhaserTemplateLocalePolicy();
+validatePhaserTemplateRewardAuthority();
 validatePhaserTemplateAcceptanceCommand();
 validateGeneratedConsumerWorkflow();
 validateGameplayE2EPlan();
@@ -1696,6 +1697,39 @@ function validatePhaserTemplateLocalePolicy(): void {
     'runtime.config.localization.fallbackLocale',
     `${mainPath}: generated games must preserve the base target locale fallback.`,
   );
+}
+
+function validatePhaserTemplateRewardAuthority(): void {
+  const scenePath = 'packages/cli/templates/phaser-game/src/scenes/PlayScene.ts';
+
+  if (!existsSync(scenePath)) {
+    failures.push(`${scenePath}: required for authoritative rewarded-ad validation.`);
+    return;
+  }
+
+  const sceneContent = readText(scenePath);
+
+  assertIncludesText(
+    sceneContent,
+    'this.context.gameServices.client',
+    `${scenePath}: rewarded ads must require the game-services client.`,
+  );
+  assertIncludesText(
+    sceneContent,
+    'gameServicesClient.claimRewardedAd',
+    `${scenePath}: rewarded ads must use the authoritative claim flow.`,
+  );
+  assertIncludesText(
+    sceneContent,
+    'result.claim?.granted === true',
+    `${scenePath}: reward presentation must depend on the authoritative ledger claim.`,
+  );
+
+  if (sceneContent.includes('platform.ads.showRewarded')) {
+    failures.push(
+      `${scenePath}: scenes must not call the rewarded-ad platform SDK without the ledger flow.`,
+    );
+  }
 }
 
 function assertMcpServerCommand(

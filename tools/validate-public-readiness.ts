@@ -43,12 +43,15 @@ const requiredFiles = [
 
 const requiredIgnorePatterns = [
   'node_modules/',
+  '.pnpm-store/',
   'dist/',
   'artifacts/',
   'release-output/',
   'output/',
   '.turbo/',
   '.wrangler/',
+  '.granite/',
+  'worktrees/',
   '.env',
   '.env.*',
   '.devvit/',

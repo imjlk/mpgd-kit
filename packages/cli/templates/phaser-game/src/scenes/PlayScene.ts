@@ -77,7 +77,7 @@ export class PlayScene extends Phaser.Scene {
   private rewardHint(): string {
     const rewardedAds = this.context.runtime.features.rewardedAds;
 
-    if (!rewardedAds.enabled) {
+    if (!rewardedAds.enabled || this.context.gameServices.client === undefined) {
       return t(this.context.locale, 'rewardUnavailable');
     }
 
@@ -86,27 +86,24 @@ export class PlayScene extends Phaser.Scene {
 
   private async requestRewardedAd(): Promise<void> {
     const rewardedAds = this.context.runtime.features.rewardedAds;
+    const gameServicesClient = this.context.gameServices.client;
 
-    if (!rewardedAds.enabled) {
+    if (!rewardedAds.enabled || gameServicesClient === undefined) {
       this.rewardText.setText(t(this.context.locale, 'rewardUnavailable'));
       return;
     }
 
     try {
-      const result = await this.context.platform.ads.showRewarded({
+      const result = await gameServicesClient.claimRewardedAd({
         placementId: rewardedPlacementId,
         idempotencyKey: createClientId('starter-reward'),
       });
 
-      await this.context.analytics.track({
-        name: result.status === 'completed' ? 'rewarded_ad_completed' : 'rewarded_ad_rejected',
-        properties: {
-          status: result.status,
-          granted: result.rewardGranted,
-        },
-      });
-
-      this.rewardText.setText(t(this.context.locale, 'reward', { status: result.status }));
+      this.rewardText.setText(
+        result.claim?.granted === true
+          ? t(this.context.locale, 'reward', { status: result.status })
+          : t(this.context.locale, 'rewardError'),
+      );
     } catch (error) {
       await this.context.analytics.track({
         name: 'rewarded_ad_rejected',

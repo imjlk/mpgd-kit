@@ -1,8 +1,8 @@
 import { validateEffectiveTargetConfigMatrix } from './effective-config';
-import { validateTargetConfigFile } from './validate-target-config';
+import { validatePlatformTargetsFile } from './validate-platform-targets';
 
 const [targetName] = process.argv.slice(2);
-const config = validateTargetConfigFile();
+const config = validatePlatformTargetsFile();
 validateEffectiveTargetConfigMatrix();
 
 if (targetName === undefined) {
