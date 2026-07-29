@@ -5,7 +5,7 @@ This checklist tracks the Codex roadmap from the initial project brief.
 ## Phase 0 - Toolchain Bootstrap
 
 - [x] pnpm workspace created
-- [x] Node >= 22 declared
+- [x] Node >= 24 declared
 - [x] typescript@rc installed at the root toolchain
 - [x] ttsc installed
 - [x] @ttsc/lint installed
@@ -52,7 +52,7 @@ because the current ttsc RC config loader path is more reliable with JS config f
 - [x] tools/validate-product-catalog.ts written
 - [x] tools/validate-ad-placements.ts written
 - [x] tools/validate-target-config.ts written
-- [x] tools/target/validate-target-config.ts written
+- [x] tools/target/validate-platform-targets.ts written
 - [x] all validation scripts execute through ttsx
 
 ## Phase 3 - Capacitor v8 Mobile Shell

@@ -1,4 +1,5 @@
 node_modules/
+.pnpm-store/
 dist/
 artifacts/
 release-output/
@@ -9,6 +10,8 @@ output/
 .env
 .env.*
 .devvit/
+.granite/
+worktrees/
 *.pem
 *.key
 *.p8

@@ -285,6 +285,13 @@ The Worker entry file is intentionally thin: `src/index.ts` extends
 `src/handler.ts` so local smoke tests can run without importing the
 `cloudflare:workers` runtime module in Node.
 
+The starter's public HTTP/oRPC ingress permits cross-origin calls and does not
+authenticate callers or apply request rate limits. Do not expose its grant
+routes as the sole production trust boundary. Put game-owned authenticated
+ingress and abuse controls in front of them, and derive or bind the player
+identity on the server instead of trusting a client-supplied player ID. Internal
+service bindings remain the preferred production integration boundary.
+
 The default `wrangler.toml` uses `MPGD_STORE = "memory"` so local smoke tests
 work without provisioning cloud resources. For production persistence, create a
 D1 database, apply every migration in `apps/game-services-worker/migrations/`
