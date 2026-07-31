@@ -1,3 +1,10 @@
+:root {
+  --mpgd-safe-area-top: env(safe-area-inset-top, 0px);
+  --mpgd-safe-area-right: env(safe-area-inset-right, 0px);
+  --mpgd-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --mpgd-safe-area-left: env(safe-area-inset-left, 0px);
+}
+
 html,
 body {
   width: 100%;
@@ -13,10 +20,10 @@ body {
   min-height: 100dvh;
   overflow: hidden;
   padding:
-    env(safe-area-inset-top)
-    env(safe-area-inset-right)
-    env(safe-area-inset-bottom)
-    env(safe-area-inset-left);
+    var(--mpgd-safe-area-top)
+    var(--mpgd-safe-area-right)
+    var(--mpgd-safe-area-bottom)
+    var(--mpgd-safe-area-left);
   background: #07111f;
   color: #ffffff;
   font-family: Arial, sans-serif;
@@ -24,7 +31,7 @@ body {
 
 #game {
   --mpgd-game-max-height: calc(
-    100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
+    100dvh - var(--mpgd-safe-area-top) - var(--mpgd-safe-area-bottom)
   );
 
   box-sizing: border-box;

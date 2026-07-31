@@ -3,7 +3,7 @@ import './styles.css';
 import { resolveTargetMpgdLocale } from '@mpgd/i18n';
 import type { IdentitySession, LaunchIntent, PlatformGateway } from '@mpgd/platform';
 import {
-  resolveTargetViewportPlan,
+  resolveTargetViewportSnapshot,
   type TargetViewportOrientationPolicy,
 } from '@mpgd/target-config';
 
@@ -25,7 +25,7 @@ async function bootstrapStarter(): Promise<void> {
     const orientationPolicy = {
       mode: 'responsive',
     } as const satisfies TargetViewportOrientationPolicy;
-    const viewport = resolveTargetViewportPlan({
+    const viewport = resolveTargetViewportSnapshot({
       ...measureGameViewport(),
       runtime: runtime.config.runtime,
       orientationPolicy,

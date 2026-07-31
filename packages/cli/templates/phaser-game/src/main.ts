@@ -4,7 +4,7 @@ import { createAnalyticsReporter, createBufferedAnalyticsSink } from '@mpgd/anal
 import { resolveTargetMpgdLocale, type Locale } from '@mpgd/i18n';
 import type { IdentitySession, LaunchIntent, PlatformGateway } from '@mpgd/platform';
 import {
-  resolveTargetViewportPlan,
+  resolveTargetViewportSnapshot,
   type TargetViewportOrientationPolicy,
 } from '@mpgd/target-config';
 
@@ -35,7 +35,7 @@ async function bootstrap(): Promise<void> {
     const orientationPolicy = {
       mode: 'prefer-landscape',
     } as const satisfies TargetViewportOrientationPolicy;
-    const viewport = resolveTargetViewportPlan({
+    const viewport = resolveTargetViewportSnapshot({
       ...measureGameViewport(),
       runtime: runtime.config.runtime,
       orientationPolicy,

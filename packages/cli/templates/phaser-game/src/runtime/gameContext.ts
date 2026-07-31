@@ -4,7 +4,7 @@ import type { IdentitySession, LaunchIntent, PlayerIdentity } from '@mpgd/platfo
 import type {
   TargetConfiguredGateway,
   TargetRuntimeSnapshot,
-  TargetViewportPlan,
+  TargetViewportSnapshot,
 } from '@mpgd/target-config';
 
 import type { StarterGameServices } from '../platform/gameServices';
@@ -14,7 +14,7 @@ export const starterContextKey = 'starterContext';
 export interface StarterContext {
   readonly platform: TargetConfiguredGateway;
   readonly runtime: TargetRuntimeSnapshot;
-  readonly viewport: TargetViewportPlan;
+  readonly viewport: TargetViewportSnapshot;
   readonly player: PlayerIdentity;
   readonly identitySession: IdentitySession;
   readonly launchIntent: LaunchIntent;
