@@ -324,6 +324,14 @@ export function resolveTargetViewportSnapshot(
   };
 }
 
+/**
+ * Resolve safe-area insets and content bounds for a given layout.
+ *
+ * Insets are clamped sequentially (top before bottom, left before right) so
+ * malformed host measurements cannot produce a negative-sized content region.
+ * When opposing insets exceed a viewport dimension, the first-processed side
+ * (top or left) takes priority.
+ */
 export function resolveTargetViewportSafeArea(
   layout: Pick<TargetViewportLayout, 'width' | 'height'>,
   insets?: Partial<TargetViewportSafeAreaInsets>,

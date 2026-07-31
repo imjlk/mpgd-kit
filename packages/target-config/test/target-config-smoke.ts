@@ -1098,6 +1098,18 @@ function assertViewportPlans(): void {
       },
     },
   );
+  assertThrows(() =>
+    resolveTargetViewportSafeArea(
+      { width: 390, height: 844 },
+      { top: -1 },
+    ),
+  );
+  assertThrows(() =>
+    resolveTargetViewportSafeArea(
+      { width: 390, height: 844 },
+      { bottom: Number.NaN },
+    ),
+  );
   assertDeepEqual(
     resolveTargetViewportSafeArea(
       {
@@ -1119,6 +1131,8 @@ function assertViewportPlans(): void {
         left: 16,
       },
       contentBounds: {
+        // Overflow is allowed to collapse the safe content region, but never
+        // to produce negative dimensions for a downstream layout.
         x: 16,
         y: 568,
         width: 0,
@@ -1132,7 +1146,7 @@ function assertViewportPlans(): void {
         return {
           '--mpgd-safe-area-top': '47px',
           '--mpgd-safe-area-right': '0px',
-          '--mpgd-safe-area-bottom': '34.4px',
+          '--mpgd-safe-area-bottom': '34.5px',
           '--mpgd-safe-area-left': 'invalid',
         }[property] ?? '';
       },
@@ -1140,7 +1154,7 @@ function assertViewportPlans(): void {
     {
       top: 47,
       right: 0,
-      bottom: 34,
+      bottom: 35,
       left: 0,
     },
   );
@@ -1170,4 +1184,14 @@ function assertDeepEqual(actual: unknown, expected: unknown): void {
       `Expected ${JSON.stringify(actual)} to deeply equal ${JSON.stringify(expected)}.`,
     );
   }
+}
+
+function assertThrows(callback: () => unknown): void {
+  try {
+    callback();
+  } catch {
+    return;
+  }
+
+  throw new Error('Expected callback to throw.');
 }
