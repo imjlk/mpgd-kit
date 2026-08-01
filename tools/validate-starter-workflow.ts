@@ -1912,14 +1912,18 @@ function assertString(input: unknown, label: string): void {
   }
 }
 
-function assertStringArray(input: unknown, label: string): void {
-  if (
+function assertStringArray(input: unknown, label: string): input is readonly string[] {
+  const isValid = !(
     !Array.isArray(input)
     || input.length === 0
     || input.some((item) => typeof item !== 'string' || item.length === 0)
-  ) {
+  );
+
+  if (!isValid) {
     failures.push(`${label} must be a non-empty string array.`);
   }
+
+  return isValid;
 }
 
 function assertIncludes(input: unknown, expected: string, label: string): void {
@@ -1994,13 +1998,21 @@ function assertStarterAgentBlockContract(
   }
 
   assertEqual(block.entry, expectedEntry, `${label}.${expectedId}.entry`);
-  assertStringArray(block.capabilities, `${label}.${expectedId}.capabilities`);
+  const capabilitiesValid = assertStringArray(
+    block.capabilities,
+    `${label}.${expectedId}.capabilities`,
+  );
+  const gotchasValid = assertStringArray(block.gotchas, `${label}.${expectedId}.gotchas`);
+
+  if (!capabilitiesValid || !gotchasValid) {
+    return;
+  }
+
   for (const capability of expectedCapabilities) {
     assertIncludes(block.capabilities, capability, `${label}.${expectedId}.capabilities`);
   }
 
-  assertStringArray(block.gotchas, `${label}.${expectedId}.gotchas`);
-  const gotchas = Array.isArray(block.gotchas) ? block.gotchas.join('\n') : '';
+  const gotchas = block.gotchas.join('\n');
   for (const requiredText of expectedGotchaTexts) {
     assertIncludesText(gotchas, requiredText, `${label}.${expectedId}.gotchas`);
   }
