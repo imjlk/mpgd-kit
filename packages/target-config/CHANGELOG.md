@@ -1,5 +1,14 @@
 # @mpgd/target-config
 
+## 0.10.0 — 2026-08-01
+
+### Added
+
+- [e15d272](https://github.com/imjlk/mpgd-kit/commit/e15d272332d2c9db0a25ca32777f4f2a4f161157) Add a safe-area viewport snapshot for Phaser HUD layout and make generated game
+  documents opt into `viewport-fit=cover` with reusable safe-area CSS variables.
+  Register the single-reservation contract in generated agent manifests, briefs,
+  and acceptance guidance so downstream games do not apply safe-area insets twice. — Thanks @imjlk!
+
 ## 0.9.1 — 2026-07-23
 
 ### Patch changes

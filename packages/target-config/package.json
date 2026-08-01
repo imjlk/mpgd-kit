@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/target-config",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "description": "Target-specific platform feature availability and effective config helpers for mpgd.",
   "license": "MIT",
   "repository": {
