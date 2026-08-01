@@ -1912,18 +1912,17 @@ function assertString(input: unknown, label: string): void {
   }
 }
 
-function assertStringArray(input: unknown, label: string): input is readonly string[] {
-  const isValid = !(
+function assertStringArray(input: unknown, label: string): readonly string[] | undefined {
+  if (
     !Array.isArray(input)
     || input.length === 0
     || input.some((item) => typeof item !== 'string' || item.length === 0)
-  );
-
-  if (!isValid) {
+  ) {
     failures.push(`${label} must be a non-empty string array.`);
+    return undefined;
   }
 
-  return isValid;
+  return input;
 }
 
 function assertIncludes(input: unknown, expected: string, label: string): void {
@@ -1998,23 +1997,20 @@ function assertStarterAgentBlockContract(
   }
 
   assertEqual(block.entry, expectedEntry, `${label}.${expectedId}.entry`);
-  const capabilitiesValid = assertStringArray(
-    block.capabilities,
-    `${label}.${expectedId}.capabilities`,
-  );
-  const gotchasValid = assertStringArray(block.gotchas, `${label}.${expectedId}.gotchas`);
+  const capabilities = assertStringArray(block.capabilities, `${label}.${expectedId}.capabilities`);
+  const gotchas = assertStringArray(block.gotchas, `${label}.${expectedId}.gotchas`);
 
-  if (!capabilitiesValid || !gotchasValid) {
+  if (capabilities === undefined || gotchas === undefined) {
     return;
   }
 
   for (const capability of expectedCapabilities) {
-    assertIncludes(block.capabilities, capability, `${label}.${expectedId}.capabilities`);
+    assertIncludes(capabilities, capability, `${label}.${expectedId}.capabilities`);
   }
 
-  const gotchas = block.gotchas.join('\n');
+  const gotchaText = gotchas.join('\n');
   for (const requiredText of expectedGotchaTexts) {
-    assertIncludesText(gotchas, requiredText, `${label}.${expectedId}.gotchas`);
+    assertIncludesText(gotchaText, requiredText, `${label}.${expectedId}.gotchas`);
   }
 }
 
