@@ -18,6 +18,7 @@ import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
 await bootstrap();
 
+/** Install target services, analytics, and viewport state before starting the game. */
 async function bootstrap(): Promise<void> {
   let locale: Locale = 'en';
   let disposeMicrosoftStorePwa: (() => void) | undefined;
@@ -101,6 +102,7 @@ async function bootstrap(): Promise<void> {
   }
 }
 
+/** Resolve a verified platform session or fall back to a local guest. */
 async function resolveIdentitySession(
   platform: PlatformGateway,
   fallbackPlayerId: string,
@@ -113,6 +115,7 @@ async function resolveIdentitySession(
   }
 }
 
+/** Resolve the host launch intent while preserving a home-entry fallback. */
 async function resolveLaunchIntent(platform: PlatformGateway): Promise<LaunchIntent> {
   try {
     return (await platform.presentation?.getLaunchIntent()) ?? { entry: 'home' };
@@ -122,6 +125,7 @@ async function resolveLaunchIntent(platform: PlatformGateway): Promise<LaunchInt
   }
 }
 
+/** Create the minimal local identity used when a host session is unavailable. */
 function createGuestSession(playerId: string): IdentitySession {
   return {
     identityLevel: 'guest',
@@ -130,6 +134,7 @@ function createGuestSession(playerId: string): IdentitySession {
   };
 }
 
+/** Render a localized bootstrap failure inside the game mount. */
 function renderBootstrapError(error: unknown, locale: Locale): void {
   const message = error instanceof Error ? error.message : String(error);
   const root = document.querySelector<HTMLDivElement>('#game');
@@ -145,6 +150,7 @@ function renderBootstrapError(error: unknown, locale: Locale): void {
   root.append(panel);
 }
 
+/** Measure the game surface before falling back to browser viewport geometry. */
 function measureGameViewport(): {
   readonly width: number;
   readonly height: number;

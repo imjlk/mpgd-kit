@@ -401,6 +401,7 @@ export function readTargetViewportSafeAreaInsets(
   };
 }
 
+/** Classify a normalized width against normalized breakpoints. */
 function classifyTargetViewportSize(
   width: number,
   breakpoints: TargetViewportBreakpoints,
@@ -416,6 +417,7 @@ function classifyTargetViewportSize(
   return 'expanded';
 }
 
+/** Choose a secondary-panel placement for the resolved layout. */
 function resolveTargetViewportPanelPlacement(
   layout: TargetViewportLayout,
 ): TargetViewportPanelPlacement {
@@ -430,6 +432,7 @@ function resolveTargetViewportPanelPlacement(
   return 'side';
 }
 
+/** Fill the policy mismatch behavior from its orientation mode. */
 function normalizeTargetViewportOrientationPolicy(
   policy: TargetViewportOrientationPolicy,
 ): Required<TargetViewportOrientationPolicy> {
@@ -443,6 +446,7 @@ function normalizeTargetViewportOrientationPolicy(
   };
 }
 
+/** Validate and normalize responsive breakpoint dimensions. */
 function normalizeTargetViewportBreakpoints(
   breakpoints: TargetViewportBreakpoints,
 ): TargetViewportBreakpoints {
@@ -467,6 +471,7 @@ function normalizeTargetViewportBreakpoints(
   };
 }
 
+/** Validate every supplied inset and fill omitted sides with zero. */
 function normalizeTargetViewportSafeAreaInsets(
   insets: Partial<TargetViewportSafeAreaInsets> | undefined,
 ): TargetViewportSafeAreaInsets {
@@ -478,6 +483,7 @@ function normalizeTargetViewportSafeAreaInsets(
   };
 }
 
+/** Normalize a non-negative safe-area inset to whole CSS pixels. */
 function normalizeViewportInset(value: number, name: string): number {
   if (!Number.isFinite(value) || value < 0) {
     throw new Error(`Viewport safe-area inset ${name} must be a non-negative finite number.`);
@@ -486,6 +492,7 @@ function normalizeViewportInset(value: number, name: string): number {
   return Math.round(value);
 }
 
+/** Parse a non-negative CSS pixel custom-property value. */
 function readTargetViewportCssPixels(
   style: TargetViewportComputedStyle,
   property: string,
@@ -496,6 +503,7 @@ function readTargetViewportCssPixels(
   return match === null ? 0 : Math.round(Number(match[1]));
 }
 
+/** Normalize a positive viewport dimension to at least one CSS pixel. */
 function normalizeViewportDimension(value: number, name: string): number {
   if (!Number.isFinite(value) || value <= 0) {
     throw new Error(`Viewport ${name} must be a positive finite number.`);
