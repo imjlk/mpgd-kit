@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { isMpgdFinalSemVer } from '@mpgd/target-config';
+
 import type { TargetReleaseMetadata } from './schemas';
 
 export interface NativeReleaseIdentityInput {
@@ -548,7 +550,7 @@ function readRequiredFile(file: string, label: string): string {
 function requireFinalSemVer(value: string | undefined, label: string): string {
   const normalized = requireValue(value, label);
 
-  if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u.test(normalized)) {
+  if (!isMpgdFinalSemVer(normalized)) {
     throw new Error(`${label} must be a final SemVer.`);
   }
 

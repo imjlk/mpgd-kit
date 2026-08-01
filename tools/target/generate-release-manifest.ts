@@ -6,7 +6,13 @@ import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import typia from 'typia';
 
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
-import type { TargetConfigMatrix } from '@mpgd/target-config';
+import {
+  createMpgdReleaseIdentity,
+  formatMpgdReleaseId,
+  isMpgdFinalSemVer,
+  parseMpgdReleaseRevision,
+  type TargetConfigMatrix,
+} from '@mpgd/target-config';
 
 import {
   assertReleaseManifest,
@@ -79,6 +85,13 @@ function generateReleaseManifestWithProvenance(
   }).artifacts.find((artifact) => artifact.target === input.target);
   const buildId = process.env.BUILD_ID ?? createBuildId();
   const gameVersion = process.env.APP_VERSION ?? packageJson.version ?? '0.0.0';
+  const releaseRevision = parseMpgdReleaseRevision(process.env.MPGD_RELEASE_REVISION);
+  const expectedReleaseLabel = readOptionalString(process.env.MPGD_RELEASE_LABEL);
+  const releaseIdentity = createMpgdReleaseIdentity({
+    gameVersion,
+    ...(releaseRevision === undefined ? {} : { releaseRevision }),
+    ...(expectedReleaseLabel === undefined ? {} : { expectedLabel: expectedReleaseLabel }),
+  });
   const iconManifest = readIconManifestEvidence(input.iconManifestArtifactPath);
   const nativeVersion = readNativeVersionEvidence(platformTargets.config.targets[input.target]);
 
@@ -87,10 +100,11 @@ function generateReleaseManifestWithProvenance(
   }
 
   return assertReleaseManifest({
-    releaseId: `mpgd-${gameVersion}+${buildId}`,
+    releaseId: formatMpgdReleaseId(releaseIdentity.label, buildId),
     gitSha: provenance.sourceGitSha,
     kitGitSha: provenance.kitGitSha,
-    gameVersion,
+    gameVersion: releaseIdentity.gameVersion,
+    releaseIdentity,
     buildId,
     targetConfigVersion: targetConfig.version,
     catalogVersion: catalog.version,
@@ -301,7 +315,24 @@ function hasMatchingReleaseContract(
     && previous.targetConfigVersion === next.targetConfigVersion
     && previous.catalogVersion === next.catalogVersion
     && previous.adPlacementVersion === next.adPlacementVersion
+    && hasMatchingReleaseIdentity(previous.releaseIdentity, next.releaseIdentity)
     && hasMatchingIconContract(previous, next);
+}
+
+function hasMatchingReleaseIdentity(
+  previous: ReleaseManifest['releaseIdentity'],
+  next: ReleaseManifest['releaseIdentity'],
+): boolean {
+  // Legacy manifests did not include this optional contract. It is safe to
+  // merge them with an equivalent new manifest because the releaseId check
+  // above already compares the derived label and buildId exactly.
+  if (previous === undefined || next === undefined) {
+    return true;
+  }
+
+  return previous.gameVersion === next.gameVersion
+    && previous.releaseRevision === next.releaseRevision
+    && previous.label === next.label;
 }
 
 function hasMatchingIconContract(
@@ -415,7 +446,7 @@ function requireFinalSemVer(value: string | undefined, label: string): string {
 
   if (
     normalized === undefined
-    || !/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u.test(normalized)
+    || !isMpgdFinalSemVer(normalized)
   ) {
     throw new Error(`${label} must be a final SemVer.`);
   }

@@ -19,6 +19,16 @@
     "gitSha": { "type": "string", "minLength": 1 },
     "kitGitSha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
     "gameVersion": { "type": "string", "minLength": 1 },
+    "releaseIdentity": {
+      "type": "object",
+      "required": ["gameVersion", "label"],
+      "properties": {
+        "gameVersion": { "type": "string", "minLength": 1 },
+        "releaseRevision": { "type": "integer", "minimum": 1 },
+        "label": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
     "buildId": { "type": "string", "minLength": 1 },
     "targetConfigVersion": { "type": "string", "minLength": 1 },
     "catalogVersion": { "type": "string", "minLength": 1 },

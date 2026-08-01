@@ -40,6 +40,7 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
+    "@mpgd/target-config": "workspace:*",
     "typia": "13.0.2"
   },
   "devDependencies": {

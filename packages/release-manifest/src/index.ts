@@ -1,5 +1,11 @@
 import typia from 'typia';
 
+import {
+  createMpgdReleaseIdentity,
+  formatMpgdReleaseId,
+  type MpgdReleaseIdentity,
+} from '@mpgd/target-config';
+
 export interface ReleaseTargetManifest {
   readonly artifact: string;
   readonly profile?: string;
@@ -33,6 +39,11 @@ export interface ReleaseManifest {
   /** Revision of mpgd-kit that generated the target artifacts. */
   readonly kitGitSha: string;
   readonly gameVersion: string;
+  /**
+   * Optional for backwards compatibility with manifests produced before the
+   * shared release-revision contract existed.
+   */
+  readonly releaseIdentity?: MpgdReleaseIdentity;
   readonly buildId: string;
   readonly targetConfigVersion: string;
   readonly catalogVersion: string;
@@ -48,6 +59,30 @@ export function assertReleaseManifest(input: unknown): ReleaseManifest {
 
   if (!fullGitShaPattern.test(manifest.kitGitSha)) {
     throw new TypeError('Release manifest kitGitSha must be a lowercase 40-character SHA.');
+  }
+
+  if (manifest.releaseIdentity !== undefined) {
+    const releaseIdentity = createMpgdReleaseIdentity({
+      gameVersion: manifest.releaseIdentity.gameVersion,
+      ...(manifest.releaseIdentity.releaseRevision === undefined
+        ? {}
+        : { releaseRevision: manifest.releaseIdentity.releaseRevision }),
+      expectedLabel: manifest.releaseIdentity.label,
+    });
+
+    if (manifest.releaseIdentity.label !== releaseIdentity.label) {
+      throw new TypeError(
+        'Release manifest releaseIdentity.label must be canonical without whitespace.',
+      );
+    }
+
+    if (manifest.gameVersion !== releaseIdentity.gameVersion) {
+      throw new TypeError('Release manifest gameVersion must match releaseIdentity.gameVersion.');
+    }
+
+    if (manifest.releaseId !== formatMpgdReleaseId(releaseIdentity.label, manifest.buildId)) {
+      throw new TypeError('Release manifest releaseId must include the release identity label.');
+    }
   }
 
   return manifest;

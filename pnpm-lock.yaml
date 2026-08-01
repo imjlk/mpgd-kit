@@ -676,6 +676,9 @@ importers:
 
   packages/release-manifest:
     dependencies:
+      '@mpgd/target-config':
+        specifier: workspace:*
+        version: link:../target-config
       typia:
         specifier: 13.0.2
         version: 13.0.2(@types/node@24.13.2)
