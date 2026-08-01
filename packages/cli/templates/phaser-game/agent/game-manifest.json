@@ -41,6 +41,10 @@
       "owner": "src/main.ts"
     },
     {
+      "id": "runtime.viewport.safe-area-contract",
+      "owner": "src/main.ts"
+    },
+    {
       "id": "platform.devvit.app-root",
       "owner": "apps/target-devvit"
     },

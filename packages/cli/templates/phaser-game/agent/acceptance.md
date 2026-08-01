@@ -60,3 +60,6 @@ game server or replace game-owned production evidence.
 
 Verify the first screen reports the viewport orientation policy, and treat
 locked orientation modes as soft prompts instead of unsafe WebView hard locks.
+Verify safe-area geometry is reserved exactly once: CSS-padded containers must
+not also subtract `safeArea.contentBounds`, while full-bleed game surfaces use
+the snapshot bounds for persistent controls.

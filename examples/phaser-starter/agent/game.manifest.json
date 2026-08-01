@@ -101,6 +101,19 @@
       ]
     },
     {
+      "id": "runtime.viewport.safe-area-contract",
+      "kind": "runtime",
+      "entry": "src/main.ts",
+      "capabilities": [
+        "viewport-safe-area-snapshot",
+        "viewport-safe-content-bounds"
+      ],
+      "gotchas": [
+        "Reserve safe area exactly once: use outer CSS padding or snapshot safeArea.contentBounds, never both.",
+        "Read CSS env-derived insets only for a full-bleed game surface; a CSS-padded game container already excludes those insets."
+      ]
+    },
+    {
       "id": "platform.devvit.view-modes",
       "kind": "platform",
       "entry": "src/platform/devvitEntrypoint.ts",
@@ -142,7 +155,8 @@
       "Starter context resolves an identity session and launch intent without scene-level SDK imports.",
       "Pointer or Enter starts the play scene.",
       "The play scene updates from serializable simulation state.",
-      "Viewport orientation policy is visible and does not force unsafe WebView hard locks."
+      "Viewport orientation policy is visible and does not force unsafe WebView hard locks.",
+      "Safe-area geometry is reserved exactly once: CSS-padded containers do not also subtract safeArea.contentBounds, while full-bleed surfaces use the snapshot bounds."
     ]
   }
 }

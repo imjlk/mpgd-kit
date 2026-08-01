@@ -1,27 +1,37 @@
 import type { TargetConfig, TargetRuntimeKind } from './runtime.js';
 
+/** The physical orientation derived from a viewport measurement. */
 export type TargetViewportOrientation = 'portrait' | 'landscape';
+/** How a game prefers or constrains viewport orientation. */
 export type TargetViewportOrientationPolicyMode =
   | 'responsive'
   | 'prefer-landscape'
   | 'prefer-portrait'
   | 'lock-landscape'
   | 'lock-portrait';
+/** Presentation behavior when the measured orientation does not match policy. */
 export type TargetViewportOrientationMismatchBehavior =
   | 'continue'
   | 'letterbox'
   | 'show-rotate-prompt';
+/** Responsive width class used by target-independent game layout. */
 export type TargetViewportSizeClass = 'compact' | 'medium' | 'expanded';
+/** Browser or embedded host shell that owns the game surface. */
 export type TargetViewportShell = 'browser' | 'mobile-webview' | 'embedded-webview';
+/** Browser measurement surface used to construct the viewport snapshot. */
 export type TargetViewportMeasurementSource = 'container' | 'visual-viewport' | 'window' | 'unknown';
+/** Recommended placement for primary game controls. */
 export type TargetViewportControlPlacement = 'bottom' | 'side';
+/** Recommended placement for secondary game panels. */
 export type TargetViewportPanelPlacement = 'below' | 'side' | 'drawer';
 
+/** Width thresholds used to classify target viewports. */
 export interface TargetViewportBreakpoints {
   readonly compactMaxWidth: number;
   readonly expandedMinWidth: number;
 }
 
+/** Raw viewport measurement and optional target context. */
 export interface TargetViewportInput {
   readonly width: number;
   readonly height: number;
@@ -58,6 +68,7 @@ export interface TargetViewportSnapshotInput extends TargetViewportInput {
   readonly safeAreaInsets?: Partial<TargetViewportSafeAreaInsets>;
 }
 
+/** Normalized viewport geometry and responsive classification. */
 export interface TargetViewportLayout {
   readonly width: number;
   readonly height: number;
@@ -70,17 +81,20 @@ export interface TargetViewportLayout {
   readonly source: TargetViewportMeasurementSource;
 }
 
+/** Target-independent control and panel placement recommendations. */
 export interface TargetViewportRecommendation {
   readonly primaryControls: TargetViewportControlPlacement;
   readonly secondaryPanels: TargetViewportPanelPlacement;
   readonly safeAreaAware: boolean;
 }
 
+/** A game's orientation preference and mismatch behavior. */
 export interface TargetViewportOrientationPolicy {
   readonly mode: TargetViewportOrientationPolicyMode;
   readonly mismatchBehavior?: TargetViewportOrientationMismatchBehavior;
 }
 
+/** Resolved orientation state for the current viewport and policy. */
 export interface TargetViewportOrientationPlan {
   readonly mode: TargetViewportOrientationPolicyMode;
   readonly preferredOrientation?: TargetViewportOrientation;
@@ -91,6 +105,7 @@ export interface TargetViewportOrientationPlan {
   readonly shouldShowRotatePrompt: boolean;
 }
 
+/** Complete responsive layout plan without concrete safe-area geometry. */
 export interface TargetViewportPlan {
   readonly layout: TargetViewportLayout;
   readonly recommendation: TargetViewportRecommendation;
@@ -124,6 +139,7 @@ export interface TargetViewportComputedStyle {
   getPropertyValue(property: string): string;
 }
 
+/** CSS custom-property names used to expose host safe-area insets. */
 export interface TargetViewportSafeAreaCssVariables {
   readonly top: string;
   readonly right: string;
@@ -137,16 +153,19 @@ interface TargetViewportOrientationPolicyModeDescriptor {
   readonly isLocked: boolean;
 }
 
+/** Default responsive breakpoints shared by generated game starters. */
 export const defaultTargetViewportBreakpoints = {
   compactMaxWidth: 599,
   expandedMinWidth: 900,
 } as const satisfies TargetViewportBreakpoints;
 
+/** Default policy that keeps games responsive in every orientation. */
 export const defaultTargetViewportOrientationPolicy = {
   mode: 'responsive',
   mismatchBehavior: 'continue',
 } as const satisfies TargetViewportOrientationPolicy;
 
+/** Zero-inset fallback for hosts without safe-area support. */
 export const defaultTargetViewportSafeAreaInsets = {
   top: 0,
   right: 0,
@@ -197,6 +216,7 @@ const targetViewportOrientationPolicyModeDescriptors = {
   TargetViewportOrientationPolicyModeDescriptor
 >;
 
+/** Map a configured target runtime to its viewport host shell. */
 export function targetViewportShellForRuntime(
   runtime: TargetRuntimeKind,
 ): TargetViewportShell {
@@ -217,12 +237,14 @@ export function targetViewportShellForRuntime(
   return exhaustive;
 }
 
+/** Resolve a viewport shell from the runtime field of a target config. */
 export function targetViewportShellForConfig(
   config: Pick<TargetConfig, 'runtime'>,
 ): TargetViewportShell {
   return targetViewportShellForRuntime(config.runtime);
 }
 
+/** Normalize viewport input into responsive layout geometry. */
 export function resolveTargetViewportLayout(
   input: TargetViewportInput,
   breakpoints: TargetViewportBreakpoints = defaultTargetViewportBreakpoints,
@@ -245,6 +267,7 @@ export function resolveTargetViewportLayout(
   };
 }
 
+/** Classify a viewport width against normalized responsive breakpoints. */
 export function resolveTargetViewportSizeClass(
   width: number,
   breakpoints: TargetViewportBreakpoints = defaultTargetViewportBreakpoints,
@@ -255,6 +278,7 @@ export function resolveTargetViewportSizeClass(
   );
 }
 
+/** Recommend primary-control and secondary-panel placement for a layout. */
 export function resolveTargetViewportRecommendation(
   layout: TargetViewportLayout,
 ): TargetViewportRecommendation {
@@ -272,6 +296,7 @@ export function resolveTargetViewportRecommendation(
   };
 }
 
+/** Resolve orientation mismatch behavior for a measured layout. */
 export function resolveTargetViewportOrientationPlan(
   layout: Pick<TargetViewportLayout, 'orientation'>,
   policy: TargetViewportOrientationPolicy = defaultTargetViewportOrientationPolicy,
@@ -295,6 +320,7 @@ export function resolveTargetViewportOrientationPlan(
   };
 }
 
+/** Build a responsive viewport plan from raw input and breakpoints. */
 export function resolveTargetViewportPlan(
   input: TargetViewportInput,
   breakpoints: TargetViewportBreakpoints = defaultTargetViewportBreakpoints,
