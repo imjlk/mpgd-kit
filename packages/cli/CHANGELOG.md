@@ -1,5 +1,22 @@
 # @mpgd/cli
 
+## 0.20.0 — 2026-08-01
+
+### Fixed
+
+- [93221ea](https://github.com/imjlk/mpgd-kit/commit/93221eacd9990903d09ed11e4b63db7766a4b879) Route generated starter rewarded-ad flows through the authoritative game-services claim before presenting a granted reward. — Thanks @imjlk!
+
+### Changed
+
+- [e15d272](https://github.com/imjlk/mpgd-kit/commit/e15d272332d2c9db0a25ca32777f4f2a4f161157) Add a safe-area viewport snapshot for Phaser HUD layout and make generated game
+  documents opt into `viewport-fit=cover` with reusable safe-area CSS variables.
+  Register the single-reservation contract in generated agent manifests, briefs,
+  and acceptance guidance so downstream games do not apply safe-area insets twice. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: target-config@0.10.0
+
 ## 0.19.0 — 2026-07-27
 
 ### Fixed
