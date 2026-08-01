@@ -127,13 +127,15 @@ preview, Apps in Toss, Devvit, Android, and iOS bundles.
 
 ## Viewport And Controls
 
-The starter computes an initial viewport plan with `@mpgd/target-config`.
+The starter computes an initial viewport snapshot with `@mpgd/target-config`.
 Measure the game container first, then fall back to `visualViewport` or
 `window.innerWidth`:
 
 ```ts
+import { resolveTargetViewportSnapshot } from '@mpgd/target-config';
+
 const measured = measureGameViewport();
-const viewport = resolveTargetViewportPlan({
+const viewport = resolveTargetViewportSnapshot({
   width: measured.width,
   height: measured.height,
   source: measured.source,
@@ -146,7 +148,17 @@ const viewport = resolveTargetViewportPlan({
 
 Use this as a starting point for game-specific layout. The returned
 recommendation is not a hard target rule; override it when your playfield or
-input model needs a different UI arrangement.
+input model needs a different UI arrangement. The snapshot also includes
+`safeArea.contentBounds` for a full-bleed game that places its own persistent
+HUD.
+
+The generated HTML uses `viewport-fit=cover`, and the shared stylesheet exposes
+the browser values as `--mpgd-safe-area-*`. The starter's `#game` mount is
+already inside that CSS padding, so its default snapshot has zero local insets.
+If a game instead measures the full browser viewport, pass
+`readTargetViewportSafeAreaInsets(getComputedStyle(document.documentElement))`
+to `resolveTargetViewportSnapshot`. Do not reserve the same inset in both the
+outer CSS and the Phaser layout; that would shrink content twice.
 
 - `compact` is `<= 599px`: phone and narrow Devvit/card layouts. Prefer bottom
   controls and drawers.

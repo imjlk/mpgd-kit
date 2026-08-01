@@ -15,6 +15,8 @@ Boundaries:
 - Platform SDK imports belong in adapters or target wrappers.
 - Orientation policy should be chosen before adding resize behavior; treat
   locked modes as soft prompts unless a platform adapter supports hard locks.
+- Safe-area geometry must be reserved exactly once: use outer CSS safe-area
+  padding or the viewport snapshot `safeArea.contentBounds`, never both.
 
 Useful commands:
 

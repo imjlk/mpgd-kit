@@ -1,3 +1,10 @@
+:root {
+  --mpgd-safe-area-top: env(safe-area-inset-top, 0px);
+  --mpgd-safe-area-right: env(safe-area-inset-right, 0px);
+  --mpgd-safe-area-bottom: env(safe-area-inset-bottom, 0px);
+  --mpgd-safe-area-left: env(safe-area-inset-left, 0px);
+}
+
 html,
 body,
 #app {
@@ -21,15 +28,15 @@ body {
   min-width: 0;
   min-height: 100dvh;
   padding:
-    env(safe-area-inset-top)
-    env(safe-area-inset-right)
-    env(safe-area-inset-bottom)
-    env(safe-area-inset-left);
+    var(--mpgd-safe-area-top)
+    var(--mpgd-safe-area-right)
+    var(--mpgd-safe-area-bottom)
+    var(--mpgd-safe-area-left);
 }
 
 #game {
   --mpgd-game-max-height: calc(
-    100dvh - env(safe-area-inset-top, 0px) - env(safe-area-inset-bottom, 0px)
+    100dvh - var(--mpgd-safe-area-top) - var(--mpgd-safe-area-bottom)
   );
 
   width: min(100%, 960px, calc(var(--mpgd-game-max-height) * 16 / 9));

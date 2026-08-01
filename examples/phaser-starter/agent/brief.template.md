@@ -44,6 +44,7 @@ Do not name blocks after existing games or brands.
 - keep notification subscription behind the gateway and actual delivery on the server
 - effective target config
 - target viewport and orientation policy
+- safe-area snapshot with single-reservation ownership: outer CSS padding or `safeArea.contentBounds`, never both
 - i18n locale resolution
 - optional game-services backend client
 - asset manifest keys
@@ -63,6 +64,7 @@ Manual playtest:
 - Verify the target, player, effective config summary, and backend mode render.
 - Verify bootstrap resolves `identitySession` and `launchIntent` before creating Phaser scenes.
 - Verify the viewport orientation policy renders and does not assume hard locking in WebViews.
+- Verify CSS-padded containers do not also subtract `safeArea.contentBounds`, while full-bleed game surfaces use the snapshot bounds.
 - Verify the Reddit inline mode launch screen does not load Phaser before the player chooses Play here.
 - Verify gameplay can start inside the post and the separate game entry opens in expanded mode.
 - Start the play scene.

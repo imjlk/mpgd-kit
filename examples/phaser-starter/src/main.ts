@@ -3,7 +3,7 @@ import './styles.css';
 import { resolveTargetMpgdLocale } from '@mpgd/i18n';
 import type { IdentitySession, LaunchIntent, PlatformGateway } from '@mpgd/platform';
 import {
-  resolveTargetViewportPlan,
+  resolveTargetViewportSnapshot,
   type TargetViewportOrientationPolicy,
 } from '@mpgd/target-config';
 
@@ -15,6 +15,7 @@ import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
 await bootstrapStarter();
 
+/** Install target services, resolve viewport state, and start the example game. */
 async function bootstrapStarter(): Promise<void> {
   const runtimeConfig = detectRuntime();
   const disposeMicrosoftStorePwa = installMicrosoftStorePwa(runtimeConfig);
@@ -25,7 +26,7 @@ async function bootstrapStarter(): Promise<void> {
     const orientationPolicy = {
       mode: 'responsive',
     } as const satisfies TargetViewportOrientationPolicy;
-    const viewport = resolveTargetViewportPlan({
+    const viewport = resolveTargetViewportSnapshot({
       ...measureGameViewport(),
       runtime: runtime.config.runtime,
       orientationPolicy,
@@ -71,6 +72,7 @@ async function bootstrapStarter(): Promise<void> {
   }
 }
 
+/** Resolve a verified platform session or fall back to a local guest. */
 async function resolveIdentitySession(
   platform: PlatformGateway,
   fallbackPlayerId: string,
@@ -83,6 +85,7 @@ async function resolveIdentitySession(
   }
 }
 
+/** Resolve the host launch intent while preserving a home-entry fallback. */
 async function resolveLaunchIntent(platform: PlatformGateway): Promise<LaunchIntent> {
   try {
     return (await platform.presentation?.getLaunchIntent()) ?? { entry: 'home' };
@@ -92,6 +95,7 @@ async function resolveLaunchIntent(platform: PlatformGateway): Promise<LaunchInt
   }
 }
 
+/** Create the minimal local identity used when a host session is unavailable. */
 function createGuestSession(playerId: string): IdentitySession {
   return {
     identityLevel: 'guest',
@@ -100,6 +104,7 @@ function createGuestSession(playerId: string): IdentitySession {
   };
 }
 
+/** Measure the game surface before falling back to browser viewport geometry. */
 function measureGameViewport(): {
   readonly width: number;
   readonly height: number;

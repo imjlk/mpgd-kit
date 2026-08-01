@@ -19,9 +19,12 @@ import {
   type TargetIntegrationConfig,
 } from '../src/runtime';
 import {
+  readTargetViewportSafeAreaInsets,
   resolveTargetViewportOrientationPlan,
   resolveTargetViewportPlan,
+  resolveTargetViewportSafeArea,
   resolveTargetViewportSizeClass,
+  resolveTargetViewportSnapshot,
   targetViewportShellForConfig,
 } from '../src/viewport';
 
@@ -1046,6 +1049,115 @@ function assertViewportPlans(): void {
   assertEqual(resolveTargetViewportSizeClass(599), 'compact');
   assertEqual(resolveTargetViewportSizeClass(600), 'medium');
   assertEqual(resolveTargetViewportSizeClass(900), 'expanded');
+  const mobileSafeArea = resolveTargetViewportSnapshot({
+    ...phoneWebViewDimensions,
+    runtime: 'apps-in-toss',
+    safeAreaInsets: {
+      top: 24,
+      bottom: 34,
+    },
+  });
+  assertEqual(mobileSafeArea.layout.shell, 'mobile-webview');
+  assertDeepEqual(mobileSafeArea.safeArea, {
+    insets: {
+      top: 24,
+      right: 0,
+      bottom: 34,
+      left: 0,
+    },
+    contentBounds: {
+      x: 0,
+      y: 24,
+      width: 390,
+      height: 786,
+    },
+  });
+  assertDeepEqual(
+    resolveTargetViewportSafeArea(
+      {
+        width: 844,
+        height: 390,
+      },
+      {
+        left: 47,
+        right: 59,
+      },
+    ),
+    {
+      insets: {
+        top: 0,
+        right: 59,
+        bottom: 0,
+        left: 47,
+      },
+      contentBounds: {
+        x: 47,
+        y: 0,
+        width: 738,
+        height: 390,
+      },
+    },
+  );
+  assertThrows(() =>
+    resolveTargetViewportSafeArea(
+      { width: 390, height: 844 },
+      { top: -1 },
+    ),
+  );
+  assertThrows(() =>
+    resolveTargetViewportSafeArea(
+      { width: 390, height: 844 },
+      { bottom: Number.NaN },
+    ),
+  );
+  assertDeepEqual(
+    resolveTargetViewportSafeArea(
+      {
+        width: 320,
+        height: 568,
+      },
+      {
+        top: 800,
+        right: 400,
+        bottom: 34,
+        left: 16,
+      },
+    ),
+    {
+      insets: {
+        top: 568,
+        right: 304,
+        bottom: 0,
+        left: 16,
+      },
+      contentBounds: {
+        // Overflow is allowed to collapse the safe content region, but never
+        // to produce negative dimensions for a downstream layout.
+        x: 16,
+        y: 568,
+        width: 0,
+        height: 0,
+      },
+    },
+  );
+  assertDeepEqual(
+    readTargetViewportSafeAreaInsets({
+      getPropertyValue(property) {
+        return {
+          '--mpgd-safe-area-top': '47px',
+          '--mpgd-safe-area-right': '0px',
+          '--mpgd-safe-area-bottom': '34.5px',
+          '--mpgd-safe-area-left': 'invalid',
+        }[property] ?? '';
+      },
+    }),
+    {
+      top: 47,
+      right: 0,
+      bottom: 35,
+      left: 0,
+    },
+  );
   assertEqual(
     targetViewportShellForConfig(
       createTargetConfig({
@@ -1072,4 +1184,14 @@ function assertDeepEqual(actual: unknown, expected: unknown): void {
       `Expected ${JSON.stringify(actual)} to deeply equal ${JSON.stringify(expected)}.`,
     );
   }
+}
+
+function assertThrows(callback: () => unknown): void {
+  try {
+    callback();
+  } catch {
+    return;
+  }
+
+  throw new Error('Expected callback to throw.');
 }

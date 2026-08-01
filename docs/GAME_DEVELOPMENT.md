@@ -83,10 +83,10 @@ and then choose layout from measured space.
 `@mpgd/target-config` exports target viewport helpers for this first pass:
 
 ```ts
-import { resolveTargetViewportPlan } from '@mpgd/target-config';
+import { resolveTargetViewportSnapshot } from '@mpgd/target-config';
 
 const measured = measureGameViewport();
-const viewport = resolveTargetViewportPlan({
+const viewport = resolveTargetViewportSnapshot({
   width: measured.width,
   height: measured.height,
   source: measured.source,
@@ -123,11 +123,51 @@ function measureGameViewport() {
 }
 ```
 
-`resolveTargetViewportPlan` is intentionally a pure helper. It classifies
-measured dimensions and target shell family, then returns starter
-recommendations such as bottom controls for compact/portrait layouts. Games
-should override those recommendations when their playfield has stronger
-constraints.
+`resolveTargetViewportSnapshot` is intentionally a pure helper. It classifies
+measured dimensions and target shell family, returns starter recommendations
+such as bottom controls for compact/portrait layouts, and exposes a
+`safeArea.contentBounds` rectangle for persistent HUD placement. Games should
+override those recommendations when their playfield has stronger constraints.
+
+### Safe-area coordinate contract
+
+The generated HTML documents declare `viewport-fit=cover`, and the generated
+CSS exposes the browser values through `--mpgd-safe-area-top`, `right`,
+`bottom`, and `left`. The values passed to `safeAreaInsets` must be in the
+**same coordinate space as the measured viewport**.
+
+The starter measures `#game` after its outer CSS has already reserved the safe
+area, so its default snapshot correctly reports a full-content rectangle with
+zero local insets. Do not pass the browser insets again in that case: doing so
+would shrink the game board twice.
+
+For a full-bleed game that measures the browser viewport directly and places
+its own Phaser/DOM HUD, opt in explicitly:
+
+```ts
+import {
+  readTargetViewportSafeAreaInsets,
+  resolveTargetViewportSnapshot,
+} from '@mpgd/target-config';
+
+const viewport = resolveTargetViewportSnapshot({
+  width: window.innerWidth,
+  height: window.innerHeight,
+  runtime: runtime.config.runtime,
+  source: 'window',
+  safeAreaInsets: readTargetViewportSafeAreaInsets(
+    getComputedStyle(document.documentElement),
+  ),
+});
+
+const hudBounds = viewport.safeArea.contentBounds;
+```
+
+This keeps a bottom number pad, pause/menu control, or side rail out of phone
+cutouts, home indicators, and embedded-webview chrome without assuming a
+specific target or device. Keep DOM and Phaser layout on the same choice of
+coordinate space; either reserve insets in the outer CSS **or** consume
+`contentBounds` in the game, not both.
 
 The default width classes are:
 

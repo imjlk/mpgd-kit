@@ -20,6 +20,7 @@ interface StarterAgentManifest {
   readonly blocks?: unknown;
   readonly acceptance?: {
     readonly commands?: unknown;
+    readonly manual?: unknown;
   };
 }
 
@@ -197,6 +198,7 @@ validatePhaserTemplateDevvitVitePlugin();
 validatePhaserTemplateBuildGateways();
 validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
+validatePhaserTemplateSafeAreaContract();
 validatePhaserTemplateLocalePolicy();
 validatePhaserTemplateRewardAuthority();
 validatePhaserTemplateAcceptanceCommand();
@@ -1672,6 +1674,87 @@ function validatePhaserTemplateOrientationPolicy(): void {
   }
 }
 
+function validatePhaserTemplateSafeAreaContract(): void {
+  const templateManifestPath = 'packages/cli/templates/phaser-game/agent/game-manifest.json';
+  const templateBriefPath = 'packages/cli/templates/phaser-game/agent/brief.md';
+  const templateAcceptancePath = 'packages/cli/templates/phaser-game/agent/acceptance.md';
+  const starterManifestPath = 'examples/phaser-starter/agent/game.manifest.json';
+  const starterBriefPath = 'examples/phaser-starter/agent/brief.template.md';
+  const starterAcceptancePath = 'examples/phaser-starter/agent/acceptance.md';
+
+  if (!existsSync(templateManifestPath)) {
+    failures.push(`${templateManifestPath}: required for generated safe-area agent guidance.`);
+  } else {
+    const templateManifest = readJson(templateManifestPath) as { readonly blocks?: unknown } | null;
+
+    if (templateManifest !== null) {
+      assertTemplateAgentBlock(
+        templateManifest.blocks,
+        'runtime.viewport.safe-area-contract',
+        'src/main.ts',
+        `${templateManifestPath}: blocks`,
+      );
+    }
+  }
+
+  const safeAreaDocumentationExpectations = [
+    [templateBriefPath, ['Safe-area geometry', 'safeArea.contentBounds', 'never both']],
+    [
+      templateAcceptancePath,
+      ['safe-area geometry', 'CSS-padded', 'full-bleed', 'safeArea.contentBounds'],
+    ],
+    [
+      starterBriefPath,
+      ['safe-area snapshot', 'safeArea.contentBounds', 'never both', 'CSS-padded', 'full-bleed'],
+    ],
+    [
+      starterAcceptancePath,
+      ['Safe-area geometry', 'CSS-padded', 'full-bleed', 'safeArea.contentBounds'],
+    ],
+  ] as const;
+
+  for (const [path, requiredTexts] of safeAreaDocumentationExpectations) {
+    if (!existsSync(path)) {
+      failures.push(`${path}: required for safe-area agent guidance.`);
+      continue;
+    }
+
+    const content = readText(path);
+    for (const requiredText of requiredTexts) {
+      assertIncludesText(content, requiredText, `${path}: safe-area agent guidance.`);
+    }
+  }
+
+  if (!existsSync(starterManifestPath)) {
+    failures.push(`${starterManifestPath}: required for starter safe-area agent guidance.`);
+    return;
+  }
+
+  const starterManifest = readJson(starterManifestPath) as StarterAgentManifest | null;
+
+  if (starterManifest === null) {
+    return;
+  }
+
+  assertStarterAgentBlockContract(
+    starterManifest.blocks,
+    'runtime.viewport.safe-area-contract',
+    'src/main.ts',
+    ['viewport-safe-area-snapshot', 'viewport-safe-content-bounds'],
+    ['exactly once', 'safeArea.contentBounds', 'full-bleed', 'CSS-padded'],
+    `${starterManifestPath}: blocks`,
+  );
+  assertStringArray(
+    starterManifest.acceptance?.manual,
+    `${starterManifestPath}: acceptance.manual`,
+  );
+  assertIncludes(
+    starterManifest.acceptance?.manual,
+    'Safe-area geometry is reserved exactly once: CSS-padded containers do not also subtract safeArea.contentBounds, while full-bleed surfaces use the snapshot bounds.',
+    `${starterManifestPath}: acceptance.manual`,
+  );
+}
+
 function validatePhaserTemplateLocalePolicy(): void {
   const mainPath = 'packages/cli/templates/phaser-game/src/main.ts';
 
@@ -1829,14 +1912,17 @@ function assertString(input: unknown, label: string): void {
   }
 }
 
-function assertStringArray(input: unknown, label: string): void {
+function assertStringArray(input: unknown, label: string): readonly string[] | undefined {
   if (
     !Array.isArray(input)
     || input.length === 0
     || input.some((item) => typeof item !== 'string' || item.length === 0)
   ) {
     failures.push(`${label} must be a non-empty string array.`);
+    return undefined;
   }
+
+  return input;
 }
 
 function assertIncludes(input: unknown, expected: string, label: string): void {
@@ -1882,6 +1968,50 @@ function assertTemplateAgentBlock(
   }
 
   assertEqual(block.owner, expectedOwner, `${label}.${expectedId}.owner`);
+}
+
+function assertStarterAgentBlockContract(
+  input: unknown,
+  expectedId: string,
+  expectedEntry: string,
+  expectedCapabilities: readonly string[],
+  expectedGotchaTexts: readonly string[],
+  label: string,
+): void {
+  if (!Array.isArray(input)) {
+    failures.push(`${label} must be an array.`);
+    return;
+  }
+
+  const block = input.find((candidate): candidate is StarterBlock => {
+    return (
+      typeof candidate === 'object'
+      && candidate !== null
+      && (candidate as StarterBlock).id === expectedId
+    );
+  });
+
+  if (block === undefined) {
+    failures.push(`${label} must include ${expectedId}.`);
+    return;
+  }
+
+  assertEqual(block.entry, expectedEntry, `${label}.${expectedId}.entry`);
+  const capabilities = assertStringArray(block.capabilities, `${label}.${expectedId}.capabilities`);
+  const gotchas = assertStringArray(block.gotchas, `${label}.${expectedId}.gotchas`);
+
+  if (capabilities === undefined || gotchas === undefined) {
+    return;
+  }
+
+  for (const capability of expectedCapabilities) {
+    assertIncludes(capabilities, capability, `${label}.${expectedId}.capabilities`);
+  }
+
+  const gotchaText = gotchas.join('\n');
+  for (const requiredText of expectedGotchaTexts) {
+    assertIncludesText(gotchaText, requiredText, `${label}.${expectedId}.gotchas`);
+  }
 }
 
 function resolvePwaManifestOrientation(mode: string | undefined): string | undefined {
