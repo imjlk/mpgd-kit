@@ -53,15 +53,19 @@ export function ensureInstallableWebManifestLink(artifactRoot: string): void {
   }
 
   const source = readFileSync(indexFile, 'utf8');
-  const withoutManifestLinks = stripManifestLinkTags(source);
   const link = '<link rel="manifest" href="./manifest.webmanifest">';
+  const existingManifestLinks = manifestLinkTags(source);
+
+  if (existingManifestLinks.length === 1 && existingManifestLinks[0] === link) {
+    return;
+  }
+
+  const withoutManifestLinks = stripManifestLinkTags(source);
   const linked = withoutManifestLinks.includes('</head>')
     ? withoutManifestLinks.replace('</head>', `  ${link}\n</head>`)
     : `${link}\n${withoutManifestLinks}`;
 
-  if (linked !== source) {
-    writeFileSync(indexFile, linked);
-  }
+  writeFileSync(indexFile, linked);
 }
 
 export function assertNonInstallableWebArtifact(artifactRoot: string): void {
@@ -160,12 +164,17 @@ function isManifestLinkTag(tag: string): boolean {
 }
 
 function indexHtmlLinksManifest(indexFile: string): boolean {
-  return [...readFileSync(indexFile, 'utf8').matchAll(linkTagPattern)]
-    .some((match) => isManifestLinkTag(match[0]));
+  return manifestLinkTags(readFileSync(indexFile, 'utf8')).length > 0;
 }
 
 function stripManifestLinkTags(html: string): string {
   return html.replace(linkTagPattern, (tag) => isManifestLinkTag(tag) ? '' : tag);
+}
+
+function manifestLinkTags(html: string): readonly string[] {
+  return [...html.matchAll(linkTagPattern)]
+    .map((match) => match[0])
+    .filter(isManifestLinkTag);
 }
 
 function isPathWithin(root: string, candidate: string): boolean {
