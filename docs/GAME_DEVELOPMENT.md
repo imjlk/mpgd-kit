@@ -211,6 +211,12 @@ pnpm mpgd target build-all --targets-file examples/my-game/mpgd.targets.json --t
 pnpm mpgd target smoke-all --targets-file examples/my-game/mpgd.targets.json --targets web,microsoft-store,verse8,ait,reddit --kit-path .
 ```
 
+Target names are game-owned identifiers. `browser` and an unconfigured `web`
+alias continue to select `web-preview`. A configured `web` target, or any other
+explicitly configured target with `kind: "web"`, is passed to `target build`,
+`target smoke`, and their matrix variants unchanged. This supports independent
+browser deployments without adding deployment-specific names to the kit.
+
 Use `staging` while a Capacitor entry points at a kit reference shell.
 Production AIT, Android, and iOS builds fail closed unless their wrapper or
 shell resolves to a dedicated directory inside the game root. An AIT target

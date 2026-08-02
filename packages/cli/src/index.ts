@@ -17,6 +17,12 @@ import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
 
 import {
+  normalizeConfiguredBuildTargets,
+  normalizeBuildTarget as normalizeConfiguredTargetName,
+  supportedBuildTargets,
+  type ConfiguredBuildTargets,
+} from './build-targets.js';
+import {
   defaultGameAcceptanceCommandTimeoutMs,
   resolveGameAcceptanceReleaseManifestFile,
   runGameAcceptance,
@@ -199,19 +205,6 @@ const allMatrixTargetOrder = [
   'reddit',
 ] as const;
 
-const supportedBuildTargets = [
-  'browser',
-  'web',
-  'web-preview',
-  'microsoft-store',
-  'msstore',
-  'verse8',
-  'android',
-  'ios',
-  'ait',
-  'devvit',
-  'reddit',
-] as const;
 const supportedVariants = ['wrapper', 'sync', 'simulator', 'archive'] as const;
 const acceptanceStepIds = {
   check: 'check',
@@ -2598,7 +2591,7 @@ function runTargetCommand(input: {
   readonly profile?: string;
   readonly variant?: string;
 }): void {
-  const target = normalizeBuildTarget(input.target);
+  const target = normalizeBuildTarget(input.target, input.env);
   const env = withTargetVariantEnv(target, input.variant, input.env);
   const profile = input.profile ?? 'production';
 
@@ -2635,13 +2628,11 @@ function variantForTarget(
   target: string,
   input: Pick<Parameters<typeof runTargetMatrix>[0], 'aitVariant' | 'iosVariant'>,
 ): string | undefined {
-  const normalized = normalizeBuildTarget(target);
-
-  if (normalized === 'ait') {
+  if (target === 'ait') {
     return input.aitVariant;
   }
 
-  if (normalized === 'ios') {
+  if (target === 'ios') {
     return input.iosVariant;
   }
 
@@ -2692,7 +2683,7 @@ function parseTargetList(value: string | undefined, env: NodeJS.ProcessEnv): rea
     .split(',')
     .map((target) => target.trim())
     .filter((target) => target.length > 0)
-    .map((target) => normalizeBuildTarget(target));
+    .map((target) => normalizeBuildTarget(target, env));
 
   if (targets.length === 0) {
     throw new Error('Target list cannot be empty.');
@@ -2709,6 +2700,14 @@ function configuredTargetsForOrder(
   const configuredTargets = readConfiguredBuildTargets(env);
   const targets = order.filter((target) => configuredTargets.has(target));
 
+  if (label === 'all') {
+    for (const target of configuredTargets) {
+      if (!targets.includes(target)) {
+        targets.push(target);
+      }
+    }
+  }
+
   if (targets.length === 0) {
     throw new Error(`No ${label} targets are configured in ${readConfiguredTargetsFile(env)}.`);
   }
@@ -2723,17 +2722,7 @@ function readConfiguredBuildTargets(env: NodeJS.ProcessEnv): ReadonlySet<string>
   assertJsonObject(parsed, `targets file ${file}`);
   assertJsonObject(parsed.targets, `targets in ${file}`);
 
-  const targets = new Set<string>();
-
-  for (const target of Object.keys(parsed.targets)) {
-    const normalized = normalizeConfiguredBuildTarget(target);
-
-    if (normalized !== undefined) {
-      targets.add(normalized);
-    }
-  }
-
-  return targets;
+  return new Set(normalizeConfiguredBuildTargets(parsed.targets));
 }
 
 function readConfiguredTargetsFile(env: NodeJS.ProcessEnv): string {
@@ -2808,30 +2797,29 @@ function resolvePotentiallyMissingPath(input: string): string {
 
 function normalizeConfiguredBuildTarget(target: string): string | undefined {
   try {
-    return normalizeBuildTarget(target);
+    return normalizeConfiguredTargetName(target);
   } catch {
     return undefined;
   }
 }
 
-function normalizeBuildTarget(target: string): string {
-  if (target === 'browser' || target === 'web') {
-    return 'web-preview';
+function normalizeBuildTarget(target: string, env: NodeJS.ProcessEnv = process.env): string {
+  return normalizeConfiguredTargetName(target, readConfiguredTargetMap(env));
+}
+
+function readConfiguredTargetMap(env: NodeJS.ProcessEnv): ConfiguredBuildTargets {
+  const file = env.MPGD_PLATFORM_TARGETS_FILE;
+
+  if (file === undefined || file.length === 0 || !existsSync(file)) {
+    return {};
   }
 
-  if (target === 'msstore') {
-    return 'microsoft-store';
-  }
+  const parsed = readJsonForCli(file);
 
-  if (target === 'devvit') {
-    return 'reddit';
-  }
+  assertJsonObject(parsed, `targets file ${file}`);
+  assertJsonObject(parsed.targets, `targets in ${file}`);
 
-  if (!supportedBuildTargets.includes(target as (typeof supportedBuildTargets)[number])) {
-    throw new Error(`Unsupported target: ${target}`);
-  }
-
-  return target;
+  return parsed.targets;
 }
 
 function assertJsonObject(input: unknown, label: string): asserts input is Record<string, unknown> {
