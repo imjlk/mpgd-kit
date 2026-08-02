@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 
+import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
 import {
   integrationAvailabilityStates,
   presentationModes,
@@ -81,6 +82,7 @@ export function assertPlatformTargetsConfigShape(input: unknown): PlatformTarget
   assertRecord(targets, 'platform targets');
 
   for (const [target, config] of Object.entries(targets)) {
+    assertDeploymentTargetName(target);
     assertPlatformTargetConfigShape(config, target);
   }
 

@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 
+import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
 import {
   createEffectiveTargetConfigMatrix,
   type EffectivePlatformTargetMetadata,
@@ -159,6 +160,7 @@ function writeEffectiveTargetConfig(
   config: EffectiveTargetConfig,
   outputDir: string,
 ): EffectiveTargetConfigArtifact {
+  assertDeploymentTargetName(target);
   const path = join(outputDir, `${target}.json`);
   const content = `${JSON.stringify(config, null, 2)}\n`;
 

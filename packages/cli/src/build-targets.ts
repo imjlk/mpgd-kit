@@ -1,3 +1,5 @@
+import { assertDeploymentTargetName } from './target-name.js';
+
 export type ConfiguredBuildTargets = Readonly<Record<string, unknown>>;
 
 export const supportedBuildTargets = [
@@ -58,11 +60,21 @@ function resolveBuildTarget(
   configuredTargets: ConfiguredBuildTargets,
 ): string | undefined {
   if (target === 'web' && isConfiguredWebTarget(target, configuredTargets)) {
+    assertDeploymentTargetName(target);
     return target;
   }
 
-  return normalizeBuiltInBuildTarget(target)
-    ?? (isConfiguredWebTarget(target, configuredTargets) ? target : undefined);
+  const builtInTarget = normalizeBuiltInBuildTarget(target);
+  if (builtInTarget !== undefined) {
+    return builtInTarget;
+  }
+
+  if (isConfiguredWebTarget(target, configuredTargets)) {
+    assertDeploymentTargetName(target);
+    return target;
+  }
+
+  return undefined;
 }
 
 function normalizeBuiltInBuildTarget(target: string): string | undefined {

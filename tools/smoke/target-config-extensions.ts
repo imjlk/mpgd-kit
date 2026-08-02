@@ -48,6 +48,35 @@ try {
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
     targets: {
+      index: webPreview,
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /Invalid deployment target name: index/u,
+  );
+
+  const microsoftStore = base.targets['microsoft-store'];
+  if (microsoftStore === undefined) {
+    throw new Error('Expected the built-in microsoft-store target config.');
+  }
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
+      storefront: microsoftStore,
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /cannot use the reserved Microsoft Store PWA runtime or release profile/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
       'web-preview': webPreview,
     },
   })}\n`);

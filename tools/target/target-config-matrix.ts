@@ -6,6 +6,7 @@ import typia from 'typia';
 import type { TargetConfig, TargetConfigMatrix } from '@mpgd/target-config';
 
 import { targetConfigExtensionsFileEnv } from '../../packages/cli/src/target-config-env';
+import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
 import { readJsonFile } from '../io';
 
 export const defaultTargetConfigMatrixFile = 'packages/target-config/targets.json';
@@ -44,6 +45,11 @@ export function loadTargetConfigMatrix(
     );
   }
 
+  for (const [target, config] of Object.entries(extensions.targets)) {
+    assertDeploymentTargetName(target);
+    assertCustomTargetPolicy(target, config);
+  }
+
   const digest = createHash('sha256').update(fileContent).digest('hex').slice(0, 16);
 
   return {
@@ -53,4 +59,15 @@ export function loadTargetConfigMatrix(
       ...extensions.targets,
     },
   };
+}
+
+function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
+  if (
+    config.runtime === 'microsoft-store-pwa'
+    || config.release.profile === 'microsoft-store'
+  ) {
+    throw new Error(
+      `Target config extension ${target} cannot use the reserved Microsoft Store PWA runtime or release profile.`,
+    );
+  }
 }

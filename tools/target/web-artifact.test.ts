@@ -62,6 +62,21 @@ try {
     /symbolic-link web staticDir/u,
   );
 
+  const outputLink = join(root, 'output-link');
+  symlinkSync(staticDir, outputLink);
+  assert.throws(
+    () => assertWebStaticDirectory(staticDir, join(outputLink, 'nested'), root),
+    /staticDir and output must not overlap/u,
+  );
+
+  const reservedStaticDir = join(root, 'reserved-static');
+  mkdirSync(reservedStaticDir);
+  writeFileSync(join(reservedStaticDir, 'mpgd-effective-target.json'), '{}\n');
+  assert.throws(
+    () => copyWebStaticDirectoryContents(reservedStaticDir, artifact),
+    /reserved generated evidence: mpgd-effective-target\.json/u,
+  );
+
   const configPath = join(root, 'mpgd.targets.json');
   const staticFile = join(root, 'static-file');
   writeFileSync(staticFile, 'not a directory\n');
@@ -99,6 +114,19 @@ try {
       },
     }),
     /storefront\.staticDir must be a non-empty string/u,
+  );
+  assert.throws(
+    () => assertPlatformTargetsConfigShape({
+      targets: {
+        index: {
+          kind: 'web',
+          gameApp: '.',
+          adapter: 'browser',
+          output: 'artifact',
+        },
+      },
+    }),
+    /Invalid deployment target name: index/u,
   );
 } finally {
   rmSync(root, { force: true, recursive: true });

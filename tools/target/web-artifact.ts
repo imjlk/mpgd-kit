@@ -9,9 +9,14 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
 const installableManifestNames = new Set(['manifest.json', 'manifest.webmanifest']);
+const reservedGeneratedEvidenceNames = new Set([
+  'mpgd-effective-target.json',
+  'mpgd-icon-manifest.json',
+  'mpgd-icon-precache.json',
+]);
 const linkTagPattern = /<link\b[^>]*>/giu;
 const relAttributePattern = /\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/iu;
 
@@ -84,11 +89,10 @@ export function assertWebStaticDirectory(
     throw new Error(`Web staticDir must stay inside its game root: ${source}`);
   }
 
-  const normalizedSource = resolve(source);
-  const normalizedDestination = resolve(destination);
+  const canonicalDestination = canonicalizeThroughExistingAncestor(destination);
   if (
-    isPathWithin(normalizedSource, normalizedDestination)
-    || isPathWithin(normalizedDestination, normalizedSource)
+    isPathWithin(canonicalSource, canonicalDestination)
+    || isPathWithin(canonicalDestination, canonicalSource)
   ) {
     throw new Error(`Web staticDir and output must not overlap: ${source} and ${destination}`);
   }
@@ -96,6 +100,10 @@ export function assertWebStaticDirectory(
 
 function copyDirectoryContents(source: string, destination: string): void {
   for (const entry of readdirSync(source)) {
+    if (reservedGeneratedEvidenceNames.has(entry.toLowerCase())) {
+      throw new Error(`Web staticDir contains reserved generated evidence: ${entry}`);
+    }
+
     const sourcePath = join(source, entry);
     const destinationPath = join(destination, entry);
     const stats = lstatSync(sourcePath);
@@ -130,4 +138,22 @@ function isManifestLinkTag(tag: string): boolean {
 function isPathWithin(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
   return path === '' || (!path.startsWith('..') && !isAbsolute(path));
+}
+
+function canonicalizeThroughExistingAncestor(path: string): string {
+  const normalizedPath = resolve(path);
+  const suffix: string[] = [];
+  let existingAncestor = normalizedPath;
+
+  while (!existsSync(existingAncestor)) {
+    const parent = dirname(existingAncestor);
+    if (parent === existingAncestor) {
+      throw new Error(`Cannot resolve an existing ancestor for web output: ${path}`);
+    }
+
+    suffix.unshift(basename(existingAncestor));
+    existingAncestor = parent;
+  }
+
+  return resolve(realpathSync(existingAncestor), ...suffix);
 }

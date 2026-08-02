@@ -31,5 +31,13 @@ assert.throws(
   () => normalizeBuildTarget('missing', configuredTargets),
   /Unsupported target: missing/u,
 );
+assert.throws(
+  () => normalizeBuildTarget('index', { index: { kind: 'web' } }),
+  /Invalid deployment target name: index/u,
+);
+assert.throws(
+  () => normalizeConfiguredBuildTargets({ '../escape': { kind: 'web' } }),
+  /Invalid deployment target name: \.\.\/escape/u,
+);
 
 console.log('Configured web target CLI smoke passed.');
