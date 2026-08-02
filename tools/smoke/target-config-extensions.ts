@@ -152,6 +152,25 @@ try {
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
     targets: {
+      storefront: {
+        ...webPreview,
+        features: {
+          ...webPreview.features,
+          leaderboard: true,
+        },
+        leaderboard: { native: true },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /cannot enable leaderboard for web-preview runtime/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
       'web-preview': webPreview,
     },
   })}\n`);

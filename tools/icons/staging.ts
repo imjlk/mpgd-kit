@@ -203,9 +203,11 @@ function stageIos(
 }
 
 function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void {
+  const stagedPath = join(gameDist, 'manifest.webmanifest');
   const sourcePath = join(result.gameRoot, 'public/manifest.webmanifest');
-  const manifest = existsSync(sourcePath)
-    ? JSON.parse(readFileSync(sourcePath, 'utf8')) as Record<string, unknown>
+  const manifestPath = existsSync(stagedPath) ? stagedPath : sourcePath;
+  const manifest = existsSync(manifestPath)
+    ? JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>
     : {
         name: basename(result.gameRoot),
         short_name: basename(result.gameRoot),
@@ -224,7 +226,7 @@ function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void 
       type: 'image/png',
       purpose: output.purpose === 'maskable' ? 'maskable' : 'any',
     }));
-  writeFileSync(join(gameDist, 'manifest.webmanifest'), `${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(stagedPath, `${JSON.stringify(manifest, null, 2)}\n`);
   ensureInstallableWebManifestLink(gameDist);
 }
 

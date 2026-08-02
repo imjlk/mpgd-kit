@@ -104,6 +104,23 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
     new Set(['any', 'maskable']),
   );
 
+  writeFileSync(join(dist, 'manifest.webmanifest'), `${JSON.stringify({
+    ...webManifest,
+    id: './storefront-game',
+    scope: './storefront/',
+    start_url: './storefront/index.html',
+    icons: [{ src: './stale.png', sizes: '1x1', type: 'image/png' }],
+  })}\n`);
+  stageWebIconEvidence(repeated, dist);
+  const overlaidManifest = JSON.parse(
+    await readUtf8(join(dist, 'manifest.webmanifest')),
+  ) as Record<string, unknown>;
+
+  assert.equal(overlaidManifest.id, './storefront-game');
+  assert.equal(overlaidManifest.scope, './storefront/');
+  assert.equal(overlaidManifest.start_url, './storefront/index.html');
+  assert.deepEqual(overlaidManifest.icons, webManifest.icons);
+
   const stagedIcon = repeated.manifest.outputs[0];
   assert.ok(stagedIcon);
   writeFileSync(join(dist, stagedIcon.path), 'overlaid icon bytes');

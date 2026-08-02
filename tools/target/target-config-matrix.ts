@@ -93,24 +93,28 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
     );
   }
 
-  const unsupportedWebPreviewAd = getUnsupportedWebPreviewAd(config);
+  const unsupportedWebPreviewFeature = getUnsupportedWebPreviewFeature(config);
 
-  if (config.runtime === 'web-preview' && unsupportedWebPreviewAd !== undefined) {
+  if (config.runtime === 'web-preview' && unsupportedWebPreviewFeature !== undefined) {
     throw new Error(
-      `Target config extension ${target} cannot enable ${unsupportedWebPreviewAd} for web-preview runtime.`,
+      `Target config extension ${target} cannot enable ${unsupportedWebPreviewFeature} for web-preview runtime.`,
     );
   }
 }
 
-function getUnsupportedWebPreviewAd(
+function getUnsupportedWebPreviewFeature(
   config: TargetConfig,
-): 'interstitial ads' | 'rewarded ads' | undefined {
+): 'interstitial ads' | 'leaderboard' | 'rewarded ads' | undefined {
   if (config.features.rewardedAds || config.monetization.rewardedAds) {
     return 'rewarded ads';
   }
 
   if (config.features.interstitialAds || config.monetization.interstitialAds) {
     return 'interstitial ads';
+  }
+
+  if (config.features.leaderboard || config.leaderboard.native) {
+    return 'leaderboard';
   }
 
   return undefined;
