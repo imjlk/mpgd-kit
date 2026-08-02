@@ -6,6 +6,8 @@ import {
 } from '@mpgd/catalog';
 import type { Entitlement, LogicalProductId } from '@mpgd/platform';
 
+import { defaultVerse8CatalogTarget } from './catalog-target.js';
+
 export * from './agent8-services.js';
 
 const defaultStateNamespace = 'mpgdVerse8Commerce';
@@ -83,7 +85,10 @@ export function createVerse8Agent8CommerceService(
 ): Verse8Agent8CommerceService {
   const namespace = normalizeNamespace(options.stateNamespace ?? defaultStateNamespace);
   const now = options.now ?? (() => new Date().toISOString());
-  const products = createPlatformProductMap(options.catalog, options.target ?? 'verse8');
+  const products = createPlatformProductMap(
+    options.catalog,
+    options.target ?? defaultVerse8CatalogTarget,
+  );
 
   return {
     async handleItemPurchased(event, context) {

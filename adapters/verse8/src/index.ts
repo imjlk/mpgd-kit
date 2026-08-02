@@ -20,6 +20,7 @@ import {
 } from '@mpgd/platform';
 
 import { verse8AdsRewardEvidenceSchema } from './ads-contract.js';
+import { defaultVerse8CatalogTarget } from './catalog-target.js';
 
 export { verse8AdsRewardEvidenceSchema } from './ads-contract.js';
 
@@ -109,7 +110,7 @@ export interface Verse8CommerceOptions {
 
 export function createVerse8CommerceProducts(
   catalog: ProductCatalog,
-  target: CatalogTarget = 'verse8',
+  target: CatalogTarget = defaultVerse8CatalogTarget,
 ): readonly Verse8CommerceProduct[] {
   return normalizeCommerceProducts(
     catalog.products.flatMap((product) => {
