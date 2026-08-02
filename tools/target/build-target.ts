@@ -155,7 +155,11 @@ switch (target.kind) {
     const output = targetPath(outputConfigPath);
     replaceDirectory(`${gameApp}/dist`, output);
     if (target.staticDir !== undefined) {
-      copyDirectoryContents(targetPath(target.staticDir), output);
+      const staticDirPath = targetPath(target.staticDir);
+      if (!existsSync(staticDirPath)) {
+        throw new Error(`${targetName}.staticDir does not exist: ${staticDirPath}`);
+      }
+      copyDirectoryContents(staticDirPath, output);
     }
     writeManifest(targetName, profile, outputConfigPath, env);
     break;

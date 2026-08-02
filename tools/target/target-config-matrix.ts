@@ -29,7 +29,10 @@ export function loadTargetConfigMatrix(
   }
 
   const normalizedExtensionsFile = extensionsFile.trim();
-  const extensions = assertTargetConfigExtensions(readJsonFile(normalizedExtensionsFile));
+  const fileContent = readFileSync(normalizedExtensionsFile);
+  const extensions = assertTargetConfigExtensions(
+    JSON.parse(fileContent.toString('utf8')) as unknown,
+  );
   const collisions = Object.keys(extensions.targets).filter(
     (target) => base.targets[target] !== undefined,
   );
@@ -40,10 +43,7 @@ export function loadTargetConfigMatrix(
     );
   }
 
-  const digest = createHash('sha256')
-    .update(readFileSync(normalizedExtensionsFile))
-    .digest('hex')
-    .slice(0, 16);
+  const digest = createHash('sha256').update(fileContent).digest('hex').slice(0, 16);
 
   return {
     version: `${base.version}+extensions.${digest}`,

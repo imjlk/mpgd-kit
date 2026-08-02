@@ -6,15 +6,16 @@ import path from 'node:path';
 import { loadTargetConfigMatrix } from '../target/target-config-matrix';
 
 const root = mkdtempSync(path.join(tmpdir(), 'mpgd-target-config-extensions-'));
-const extensionsFile = path.join(root, 'extensions.json');
-const base = loadTargetConfigMatrix();
-const webPreview = base.targets['web-preview'];
-
-if (webPreview === undefined) {
-  throw new Error('Expected the built-in web-preview target config.');
-}
 
 try {
+  const extensionsFile = path.join(root, 'extensions.json');
+  const base = loadTargetConfigMatrix();
+  const webPreview = base.targets['web-preview'];
+
+  if (webPreview === undefined) {
+    throw new Error('Expected the built-in web-preview target config.');
+  }
+
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
     targets: {
