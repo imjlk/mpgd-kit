@@ -54,6 +54,7 @@ const releaseManifestEnvKeys = [
   'MPGD_TARGET_VERSION_NAME',
   'MPGD_PRODUCT_CATALOG_FILE',
   'MPGD_SOURCE_GIT_SHA',
+  'MPGD_TARGET_CONFIG_EXTENSIONS_FILE',
 ] as const;
 
 const platformTargets = loadPlatformTargetsConfig();
@@ -153,6 +154,9 @@ switch (target.kind) {
     const outputConfigPath = requireString(target.output, `${targetName}.output`);
     const output = targetPath(outputConfigPath);
     replaceDirectory(`${gameApp}/dist`, output);
+    if (target.staticDir !== undefined) {
+      copyDirectoryContents(targetPath(target.staticDir), output);
+    }
     writeManifest(targetName, profile, outputConfigPath, env);
     break;
   }
@@ -322,6 +326,25 @@ function replaceDirectory(source: string, destination: string): void {
   rmSync(destination, { recursive: true, force: true });
   mkdirSync(destination, { recursive: true });
   cpSync(source, destination, { recursive: true });
+}
+
+function copyDirectoryContents(source: string, destination: string): void {
+  for (const entry of readdirSync(source)) {
+    const sourcePath = join(source, entry);
+    const destinationPath = join(destination, entry);
+    const stats = lstatSync(sourcePath);
+
+    if (stats.isSymbolicLink()) {
+      throw new Error(`Refusing to copy a symbolic link from web staticDir: ${sourcePath}`);
+    }
+
+    if (stats.isDirectory()) {
+      mkdirSync(destinationPath, { recursive: true });
+      copyDirectoryContents(sourcePath, destinationPath);
+    } else {
+      cpSync(sourcePath, destinationPath);
+    }
+  }
 }
 
 function mirrorAitRuntimeAssets(gameApp: string, wrapperApp: string): void {

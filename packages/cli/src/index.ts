@@ -1771,6 +1771,11 @@ function targetConfigArgs() {
       required: false,
       description: 'Output path for the resolved target config file.',
     },
+    'target-config-extensions-file': {
+      type: 'string',
+      required: false,
+      description: 'Optional game-owned target config extensions file.',
+    },
   } as const;
 }
 
@@ -2378,6 +2383,7 @@ interface TargetCommandEnvInput {
   readonly 'targets-file'?: unknown;
   readonly 'kit-path'?: unknown;
   readonly 'resolved-targets-file'?: unknown;
+  readonly 'target-config-extensions-file'?: unknown;
 }
 
 interface PackageJson {
@@ -2394,6 +2400,10 @@ function createTargetCommandEnv(values: TargetCommandEnvInput): NodeJS.ProcessEn
   const gameRoot = path.dirname(targetsFile);
   const kitPath = resolveKitPathForTarget(values);
   const resolvedTargetsFile = readOptionalString(values['resolved-targets-file']);
+  const targetConfigExtensionsFile = resolveTargetConfigExtensionsFile(
+    gameRoot,
+    readOptionalString(values['target-config-extensions-file']),
+  );
   const preparedTargetsFile = preparePlatformTargetsFile({
     targetsFile,
     kitPath,
@@ -2407,7 +2417,26 @@ function createTargetCommandEnv(values: TargetCommandEnvInput): NodeJS.ProcessEn
     ...createGameOwnedReleaseEnv(gameRoot, process.env),
     MPGD_KIT_PATH: kitPath,
     MPGD_PLATFORM_TARGETS_FILE: preparedTargetsFile,
+    ...(targetConfigExtensionsFile === undefined
+      ? {}
+      : { MPGD_TARGET_CONFIG_EXTENSIONS_FILE: targetConfigExtensionsFile }),
   };
+}
+
+function resolveTargetConfigExtensionsFile(
+  gameRoot: string,
+  configuredFile: string | undefined,
+): string | undefined {
+  const inheritedFile = readConfiguredPath(process.env.MPGD_TARGET_CONFIG_EXTENSIONS_FILE);
+  const candidate = configuredFile ?? inheritedFile;
+
+  if (candidate !== undefined) {
+    return path.resolve(gameRoot, candidate);
+  }
+
+  const gameOwnedFile = path.join(gameRoot, 'mpgd.target-config.json');
+
+  return existsSync(gameOwnedFile) ? gameOwnedFile : undefined;
 }
 
 function createGameOwnedReleaseEnv(

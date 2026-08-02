@@ -47,6 +47,8 @@ export interface TargetReleaseMetadata {
 export interface WebTargetConfig extends BaseTargetConfig {
   readonly kind: 'web';
   readonly output: string;
+  /** Optional game-owned files copied over the built web artifact. */
+  readonly staticDir?: string;
 }
 
 export interface CapacitorTargetConfig extends BaseTargetConfig {

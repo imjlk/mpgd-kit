@@ -95,6 +95,7 @@ function assertPlatformTargetConfigShape(
   switch (input.kind) {
     case 'web':
       assertString(input.output, `${target}.output`);
+      assertOptionalString(input.staticDir, `${target}.staticDir`);
       break;
     case 'capacitor-android':
     case 'capacitor-ios':
@@ -202,6 +203,12 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 function assertString(input: unknown, label: string): asserts input is string {
   if (typeof input !== 'string' || input.length === 0) {
     throw new Error(`${label} must be a non-empty string.`);
+  }
+}
+
+function assertOptionalString(input: unknown, label: string): void {
+  if (input !== undefined) {
+    assertString(input, label);
   }
 }
 

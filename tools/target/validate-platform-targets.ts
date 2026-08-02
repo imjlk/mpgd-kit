@@ -28,6 +28,14 @@ export function validatePlatformTargetsFile(path?: string) {
     }
 
     if (
+      target.kind === 'web'
+      && target.staticDir !== undefined
+      && !existsSync(resolvePath(target.staticDir))
+    ) {
+      throw new Error(`Target ${targetName} staticDir does not exist: ${target.staticDir}`);
+    }
+
+    if (
       (target.kind === 'apps-in-toss' || target.kind === 'devvit-web') &&
       !existsSync(resolvePath(target.wrapperApp))
     ) {

@@ -1,20 +1,20 @@
-import typia from 'typia';
-
-import type { TargetConfig, TargetConfigMatrix } from '@mpgd/target-config';
+import type { TargetConfig } from '@mpgd/target-config';
 
 import { isCliEntrypoint, readJsonFile } from './io';
 import {
   assertPlatformTargetsConfigShape,
   platformTargetsFilePath,
 } from './target/platform-targets';
-
-const assertTargetConfigMatrix = typia.createAssert<TargetConfigMatrix>();
+import {
+  defaultTargetConfigMatrixFile,
+  loadTargetConfigMatrix,
+} from './target/target-config-matrix';
 
 export function validateTargetConfigMatrixFile(
-  path = 'packages/target-config/targets.json',
+  path = defaultTargetConfigMatrixFile,
   targetsPath = platformTargetsFilePath(),
 ) {
-  const configMatrix = assertTargetConfigMatrix(readJsonFile(path));
+  const configMatrix = loadTargetConfigMatrix(path);
   const platformTargets = assertPlatformTargetsConfigShape(readJsonFile(targetsPath));
   const targets = readTargetFilterFromEnv('MPGD_TARGET_CONFIG_TARGETS');
   const validationTargets = targets ?? Object.keys(platformTargets.targets);

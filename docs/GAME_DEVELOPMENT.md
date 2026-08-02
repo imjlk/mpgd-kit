@@ -217,6 +217,12 @@ explicitly configured target with `kind: "web"`, is passed to `target build`,
 `target smoke`, and their matrix variants unchanged. This supports independent
 browser deployments without adding deployment-specific names to the kit.
 
+When a game needs an additional runtime policy for one of those web targets,
+place a schema-versioned `mpgd.target-config.json` beside `mpgd.targets.json`.
+The CLI loads that file as an additive target-config extension; it cannot
+replace built-in target policies. A web target may also declare `staticDir` to
+copy game-owned hosting metadata or other static files over the Vite artifact.
+
 Use `staging` while a Capacitor entry points at a kit reference shell.
 Production AIT, Android, and iOS builds fail closed unless their wrapper or
 shell resolves to a dedicated directory inside the game root. An AIT target
