@@ -39,5 +39,11 @@ assert.throws(
   () => normalizeConfiguredBuildTargets({ '../escape': { kind: 'web' } }),
   /Invalid deployment target name: \.\.\/escape/u,
 );
+for (const alias of ['browser', 'msstore', 'devvit']) {
+  assert.throws(
+    () => normalizeConfiguredBuildTargets({ [alias]: { kind: 'web' } }),
+    new RegExp(`Invalid deployment target name: ${alias}`, 'u'),
+  );
+}
 
 console.log('Configured web target CLI smoke passed.');

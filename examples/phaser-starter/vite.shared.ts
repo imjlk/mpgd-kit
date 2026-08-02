@@ -5,9 +5,9 @@ import ttsc from '@ttsc/unplugin/vite';
 import type { UserConfig } from 'vite';
 
 import {
-  assertTargetConfigMatrix,
+  assertRuntimeTargetConfigMatrix,
   type TargetConfigMatrix,
-} from '@mpgd/target-config';
+} from './vite.runtime-target-config';
 
 interface RuntimePlatformTargetMetadata {
   readonly kind: string;
@@ -91,7 +91,7 @@ function readRuntimeTargetConfigMatrix(
   }
 
   try {
-    return assertTargetConfigMatrix(JSON.parse(source) as unknown);
+    return assertRuntimeTargetConfigMatrix(JSON.parse(source) as unknown);
   } catch (error) {
     throw new Error(
       `Failed to parse MPGD_TARGET_CONFIG_MATRIX_JSON or validate its shape: ${formatError(error)}`,

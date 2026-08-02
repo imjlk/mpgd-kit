@@ -71,3 +71,22 @@ export interface AdPlacements {
 export const assertProductCatalog = typia.createAssert<ProductCatalog>();
 export const assertAdPlacements = typia.createAssert<AdPlacements>();
 export const assertProductGrant = typia.createAssert<ProductGrant>();
+
+export function resolveProductPlatformId(
+  product: ProductCatalogEntry,
+  target: CatalogTarget,
+): string | undefined {
+  return normalizePlatformIdentifier(product.platformProductIds[target]);
+}
+
+export function resolveAdPlacementPlatformId(
+  placement: AdPlacementEntry,
+  target: AdPlacementTarget,
+): string | undefined {
+  return normalizePlatformIdentifier(placement.platformPlacementIds[target]);
+}
+
+function normalizePlatformIdentifier(identifier: string | undefined): string | undefined {
+  const normalized = identifier?.trim();
+  return normalized === undefined || normalized.length === 0 ? undefined : normalized;
+}

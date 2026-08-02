@@ -1,8 +1,11 @@
 const deploymentTargetNamePattern = /^[a-z0-9]+(?:-[a-z0-9]+)*$/u;
 const reservedDeploymentTargetNames = new Set([
   'aux',
+  'browser',
   'con',
+  'devvit',
   'index',
+  'msstore',
   'nul',
   'prn',
   ...Array.from({ length: 9 }, (_, index) => `com${String(index + 1)}`),

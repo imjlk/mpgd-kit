@@ -148,6 +148,15 @@ try {
     readFileSync(`${artifactRoot}/service-worker.js`, 'utf8').includes(first.revision),
     'PWA service worker must use the release revision',
   );
+
+  writeFileSync(`${artifactRoot}/robots.txt`, 'User-agent: *\nDisallow:\n');
+  const withOverlay = writeMicrosoftStorePwaArtifacts({ artifactRoot, provenance });
+  assert.notEqual(withOverlay.revision, first.revision);
+  assert(withOverlay.precacheUrls.includes('./robots.txt'));
+  assert(
+    readFileSync(`${artifactRoot}/service-worker.js`, 'utf8').includes(withOverlay.revision),
+    'PWA evidence must be regenerated after static files are overlaid',
+  );
 } finally {
   rmSync(artifactRoot, { recursive: true, force: true });
 }

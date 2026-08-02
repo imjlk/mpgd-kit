@@ -59,8 +59,12 @@ function resolveBuildTarget(
   target: string,
   configuredTargets: ConfiguredBuildTargets,
 ): string | undefined {
-  if (target === 'web' && isConfiguredWebTarget(target, configuredTargets)) {
+  const configuredWebTarget = isConfiguredWebTarget(target, configuredTargets);
+  if (configuredWebTarget) {
     assertDeploymentTargetName(target);
+  }
+
+  if (target === 'web' && configuredWebTarget) {
     return target;
   }
 
@@ -69,8 +73,7 @@ function resolveBuildTarget(
     return builtInTarget;
   }
 
-  if (isConfiguredWebTarget(target, configuredTargets)) {
-    assertDeploymentTargetName(target);
+  if (configuredWebTarget) {
     return target;
   }
 

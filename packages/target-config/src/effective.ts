@@ -1,8 +1,10 @@
-import type {
-  AdPlacementEntry,
-  AdPlacements,
-  ProductCatalog,
-  ProductCatalogEntry,
+import {
+  resolveAdPlacementPlatformId,
+  resolveProductPlatformId,
+  type AdPlacementEntry,
+  type AdPlacements,
+  type ProductCatalog,
+  type ProductCatalogEntry,
 } from '@mpgd/catalog';
 
 import {
@@ -267,7 +269,7 @@ function createEffectiveProductConfig(
   config: TargetConfig,
   product: ProductCatalogEntry,
 ): EffectiveProductConfig {
-  const platformProductId = productPlatformId(product, target);
+  const platformProductId = resolveProductPlatformId(product, target);
   const reason = effectiveProductReason(target, config.features.iap, product, platformProductId);
 
   return {
@@ -305,7 +307,7 @@ function createEffectiveAdPlacementConfig(
   const featureEnabled = isRewardedPlacement(placement)
     ? config.features.rewardedAds
     : config.features.interstitialAds;
-  const platformPlacementId = adPlacementPlatformId(placement, target);
+  const platformPlacementId = resolveAdPlacementPlatformId(placement, target);
   const reason = effectiveItemReason(featureEnabled, platformPlacementId);
 
   return {
@@ -336,30 +338,6 @@ function effectiveTargetConfigVersion(input: {
   readonly adPlacements: string;
 }): string {
   return `${input.targetConfig}+catalog.${input.productCatalog}+ads.${input.adPlacements}`;
-}
-
-function productPlatformId(
-  product: ProductCatalogEntry,
-  target: string,
-): string | undefined {
-  return normalizePlatformId(product.platformProductIds[target]);
-}
-
-function adPlacementPlatformId(
-  placement: AdPlacementEntry,
-  target: string,
-): string | undefined {
-  return normalizePlatformId(placement.platformPlacementIds[target]);
-}
-
-function normalizePlatformId(platformId: string | undefined): string | undefined {
-  if (platformId === undefined) {
-    return undefined;
-  }
-
-  const trimmed = platformId.trim();
-
-  return trimmed.length === 0 ? undefined : trimmed;
 }
 
 function isRewardedPlacement(placement: AdPlacementEntry): boolean {

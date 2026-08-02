@@ -154,18 +154,6 @@ if (target.kind !== 'devvit-web') {
   });
 }
 
-if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
-  writeMicrosoftStorePwaArtifacts({
-    artifactRoot: `${gameApp}/dist`,
-    provenance: {
-      appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
-      buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
-      sourceGitSha: releaseProvenance.sourceGitSha,
-      kitGitSha: releaseProvenance.kitGitSha,
-    },
-  });
-}
-
 switch (target.kind) {
   case 'web': {
     const outputConfigPath = requireString(target.output, `${targetName}.output`);
@@ -179,6 +167,17 @@ switch (target.kind) {
     replaceDirectory(`${gameApp}/dist`, output);
     if (staticDirPath !== undefined) {
       copyWebStaticDirectoryContents(staticDirPath, output);
+    }
+    if (targetName === 'microsoft-store' && profile === 'production') {
+      writeMicrosoftStorePwaArtifacts({
+        artifactRoot: output,
+        provenance: {
+          appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
+          buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
+          sourceGitSha: releaseProvenance.sourceGitSha,
+          kitGitSha: releaseProvenance.kitGitSha,
+        },
+      });
     }
     if (target.installable === false) {
       assertNonInstallableWebArtifact(output);
