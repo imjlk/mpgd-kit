@@ -95,6 +95,7 @@ function assertPlatformTargetConfigShape(
   switch (input.kind) {
     case 'web':
       assertString(input.output, `${target}.output`);
+      assertOptionalBoolean(input.installable, `${target}.installable`);
       assertOptionalString(input.staticDir, `${target}.staticDir`);
       break;
     case 'capacitor-android':

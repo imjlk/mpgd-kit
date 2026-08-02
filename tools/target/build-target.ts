@@ -134,7 +134,11 @@ if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'pr
 if (target.kind !== 'devvit-web') {
   run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
   embedEffectiveTargetConfig(targetName, `${gameApp}/dist`, env);
-  stageWebIconEvidence(generatedIcons, `${gameApp}/dist`);
+  stageWebIconEvidence(generatedIcons, `${gameApp}/dist`, {
+    ...(target.kind === 'web' && target.installable !== undefined
+      ? { installable: target.installable }
+      : {}),
+  });
 }
 
 if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {

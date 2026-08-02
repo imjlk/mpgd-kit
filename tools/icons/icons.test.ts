@@ -115,6 +115,15 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   assert.equal(fallbackManifest.description, 'svg-game game.');
   assert.equal(fallbackManifest.id, './svg-game');
   assert.equal(fallbackManifest.scope, './');
+
+  const nonInstallableDist = join(gameRoot, 'non-installable-dist');
+  mkdirSync(nonInstallableDist, { recursive: true });
+  writeFileSync(join(nonInstallableDist, 'index.html'), '<html><head></head><body></body></html>');
+  stageWebIconEvidence(repeated, nonInstallableDist, { installable: false });
+  assert.equal(existsSync(join(nonInstallableDist, 'manifest.webmanifest')), false);
+  assert.equal(existsSync(join(nonInstallableDist, 'mpgd-icon-manifest.json')), true);
+  assert.match(await readUtf8(join(nonInstallableDist, 'index.html')), /rel="icon"/u);
+
   const fallbackPwaRelease = writeMicrosoftStorePwaArtifacts({
     artifactRoot: fallbackDist,
     provenance: {

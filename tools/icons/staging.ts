@@ -13,7 +13,15 @@ import sharp from 'sharp';
 
 import type { GeneratedTargetIcons, IconManifestOutput } from './types';
 
-export function stageWebIconEvidence(result: GeneratedTargetIcons, gameDist: string): void {
+export interface StageWebIconEvidenceOptions {
+  readonly installable?: boolean;
+}
+
+export function stageWebIconEvidence(
+  result: GeneratedTargetIcons,
+  gameDist: string,
+  options: StageWebIconEvidenceOptions = {},
+): void {
   const iconDir = join(gameDist, 'icons');
 
   mkdirSync(iconDir, { recursive: true });
@@ -29,7 +37,9 @@ export function stageWebIconEvidence(result: GeneratedTargetIcons, gameDist: str
   );
 
   if (result.profile.id === 'web-preview' || result.profile.id === 'microsoft-pwa') {
-    stageWebManifest(result, gameDist);
+    if (options.installable !== false) {
+      stageWebManifest(result, gameDist);
+    }
     stageFaviconLink(result, gameDist);
   }
 }
