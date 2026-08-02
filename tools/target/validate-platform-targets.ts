@@ -7,7 +7,7 @@ import {
   loadPlatformTargetsConfig,
   resolveFromPlatformTargetsBase,
 } from './platform-targets';
-import { assertWebStaticDirectory } from './web-artifact';
+import { assertWebArtifactOutputDirectory, assertWebStaticDirectory } from './web-artifact';
 
 export function validatePlatformTargetsFile(path?: string) {
   const loadedConfig = path === undefined
@@ -28,15 +28,18 @@ export function validatePlatformTargetsFile(path?: string) {
       throw new Error(`Target ${targetName} output must not be empty.`);
     }
 
-    if (target.kind === 'web' && target.staticDir !== undefined) {
-      const staticDir = resolvePath(target.staticDir);
+    if (target.kind === 'web') {
+      const gameAppOutput = resolve(resolvePath(target.gameApp), 'dist');
+      const output = resolvePath(target.output);
 
-      assertWebStaticDirectory(staticDir, resolvePath(target.output), loadedConfig.baseDir);
-      assertWebStaticDirectory(
-        staticDir,
-        resolve(resolvePath(target.gameApp), 'dist'),
-        loadedConfig.baseDir,
-      );
+      assertWebArtifactOutputDirectory(output, gameAppOutput);
+
+      if (target.staticDir !== undefined) {
+        const staticDir = resolvePath(target.staticDir);
+
+        assertWebStaticDirectory(staticDir, output, loadedConfig.baseDir);
+        assertWebStaticDirectory(staticDir, gameAppOutput, loadedConfig.baseDir);
+      }
     }
 
     if (

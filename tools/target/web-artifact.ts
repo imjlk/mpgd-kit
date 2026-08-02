@@ -118,11 +118,22 @@ export function assertWebStaticDirectory(
   }
 
   const canonicalDestination = canonicalizeThroughExistingAncestor(destination);
-  if (
-    isPathWithin(canonicalSource, canonicalDestination)
-    || isPathWithin(canonicalDestination, canonicalSource)
-  ) {
+  if (pathsOverlap(canonicalSource, canonicalDestination)) {
     throw new Error(`Web staticDir and output must not overlap: ${source} and ${destination}`);
+  }
+}
+
+export function assertWebArtifactOutputDirectory(
+  output: string,
+  viteOutput: string,
+): void {
+  const canonicalOutput = canonicalizeThroughExistingAncestor(output);
+  const canonicalViteOutput = canonicalizeThroughExistingAncestor(viteOutput);
+
+  if (pathsOverlap(canonicalOutput, canonicalViteOutput)) {
+    throw new Error(
+      `Web artifact output and Vite output must not overlap: ${output} and ${viteOutput}`,
+    );
   }
 }
 
@@ -180,6 +191,10 @@ function manifestLinkTags(html: string): readonly string[] {
 function isPathWithin(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
   return path === '' || (!path.startsWith('..') && !isAbsolute(path));
+}
+
+function pathsOverlap(first: string, second: string): boolean {
+  return isPathWithin(first, second) || isPathWithin(second, first);
 }
 
 function canonicalizeThroughExistingAncestor(path: string): string {

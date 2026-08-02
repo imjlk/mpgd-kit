@@ -16,6 +16,7 @@ import { validatePlatformTargetsFile } from './validate-platform-targets';
 import {
   assertInstallableWebArtifact,
   assertNonInstallableWebArtifact,
+  assertWebArtifactOutputDirectory,
   assertWebStaticDirectory,
   copyWebStaticDirectoryContents,
   sanitizeNonInstallableWebArtifact,
@@ -54,6 +55,10 @@ try {
   assert.throws(
     () => assertWebStaticDirectory(artifact, join(artifact, 'nested'), root),
     /must not overlap/u,
+  );
+  assert.throws(
+    () => assertWebArtifactOutputDirectory(artifact, join(artifact, 'nested')),
+    /artifact output and Vite output must not overlap/u,
   );
 
   const realStaticDir = join(root, 'real-static');
@@ -98,15 +103,45 @@ try {
     /staticDir and output must not overlap/u,
   );
 
+  const gameApp = join(root, 'game-app');
+  const viteOutputStaticDir = join(gameApp, 'dist/static');
+  mkdirSync(viteOutputStaticDir, { recursive: true });
+
+  for (const output of [
+    'game-app/dist',
+    'game-app/dist/release',
+    'game-app',
+    'game-app/../game-app/dist',
+  ]) {
+    writeWebTargetConfig(configPath, {
+      gameApp: 'game-app',
+      output,
+      staticDir: 'static',
+    });
+    assert.throws(
+      () => validatePlatformTargetsFile(configPath),
+      /artifact output and Vite output must not overlap/u,
+    );
+  }
+
+  const linkedGameApp = join(root, 'linked-game-app');
+  symlinkSync(gameApp, linkedGameApp);
+  writeWebTargetConfig(configPath, {
+    gameApp: 'game-app',
+    output: 'linked-game-app/dist',
+    staticDir: 'static',
+  });
+  assert.throws(
+    () => validatePlatformTargetsFile(configPath),
+    /artifact output and Vite output must not overlap/u,
+  );
+
   writeWebTargetConfig(configPath, {
     output: 'validated-artifact',
     staticDir: 'static',
   });
   assert.doesNotThrow(() => validatePlatformTargetsFile(configPath));
 
-  const gameApp = join(root, 'game-app');
-  const viteOutputStaticDir = join(gameApp, 'dist/static');
-  mkdirSync(viteOutputStaticDir, { recursive: true });
   writeWebTargetConfig(configPath, {
     gameApp: 'game-app',
     output: 'validated-artifact',

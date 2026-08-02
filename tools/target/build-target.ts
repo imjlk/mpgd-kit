@@ -48,6 +48,7 @@ import { loadTargetConfigMatrix } from './target-config-matrix';
 import {
   assertInstallableWebArtifact,
   assertNonInstallableWebArtifact,
+  assertWebArtifactOutputDirectory,
   assertWebStaticDirectory,
   copyWebStaticDirectoryContents,
 } from './web-artifact';
@@ -104,6 +105,10 @@ const gameApp = targetPath(target.gameApp);
 const webTargetPaths = target.kind === 'web'
   ? resolveWebTargetPaths(target, targetName)
   : undefined;
+
+if (webTargetPaths !== undefined) {
+  assertWebArtifactOutputDirectory(webTargetPaths.output, `${gameApp}/dist`);
+}
 
 if (webTargetPaths?.staticDirPath !== undefined) {
   const { output, staticDirPath } = webTargetPaths;
