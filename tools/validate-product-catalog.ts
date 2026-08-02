@@ -33,7 +33,7 @@ export function validateProductCatalogFile(path = productCatalogFilePath()) {
     }
 
     for (const [target, platformProductId] of Object.entries(product.platformProductIds)) {
-      if (platformProductId.trim().length === 0) {
+      if (typeof platformProductId !== 'string' || platformProductId.trim().length === 0) {
         throw new Error(`Product ${product.id} has blank platformProductId for ${target}.`);
       }
     }

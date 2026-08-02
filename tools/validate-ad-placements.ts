@@ -33,7 +33,7 @@ export function validateAdPlacementsFile(path = adPlacementsFilePath()) {
     }
 
     for (const [target, platformPlacementId] of Object.entries(placement.platformPlacementIds)) {
-      if (platformPlacementId.trim().length === 0) {
+      if (typeof platformPlacementId !== 'string' || platformPlacementId.trim().length === 0) {
         throw new Error(`Ad placement ${placement.id} has blank platform ID for ${target}.`);
       }
     }

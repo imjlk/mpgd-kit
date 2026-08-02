@@ -45,6 +45,15 @@ assertThrows(
   } as never),
   'catalog validation should enforce resource grant constraints',
 );
+assertProductCatalog({
+  version: 'custom-target',
+  products: [{
+    id: 'HINTS_5',
+    type: 'consumable',
+    grant: resourceGrant,
+    platformProductIds: { 'storefront-web': 'hints_5_web' },
+  }],
+});
 
 console.log('Catalog product grant validation test passed.');
 

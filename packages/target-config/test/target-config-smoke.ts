@@ -676,6 +676,50 @@ const redditProduct = getEffectiveProductConfig(redditEffectiveConfig, 'FINAL_NI
 assertEqual(redditProduct?.enabled, true);
 assertEqual(redditProduct?.platformProductId, 'ttokdoku_final_nine_ember');
 
+const customWebEffectiveConfig = createEffectiveTargetConfig({
+  target: 'storefront-web',
+  targetConfigVersion: targetConfigMatrix.version,
+  config: createTargetConfig({
+    iap: true,
+    rewardedAds: true,
+    interstitialAds: false,
+    leaderboard: false,
+    localization: true,
+  }),
+  catalog: {
+    version: 'custom-web-catalog',
+    products: [
+      {
+        id: 'HINTS_5',
+        type: 'consumable',
+        grant: { type: 'resource', resource: 'hint', amount: 5 },
+        platformProductIds: { 'storefront-web': 'hints_5_web' },
+      },
+    ],
+  },
+  adPlacements: {
+    version: 'custom-web-ads',
+    placements: [
+      {
+        id: 'CONTINUE_AFTER_FAIL',
+        type: 'rewarded',
+        reward: { type: 'continue', amount: 1 },
+        frequencyCap: { cooldownSeconds: 60 },
+        platformPlacementIds: { 'storefront-web': 'continue_web' },
+      },
+    ],
+  },
+});
+assertEqual(
+  getEffectiveProductConfig(customWebEffectiveConfig, 'HINTS_5')?.platformProductId,
+  'hints_5_web',
+);
+assertEqual(
+  getEffectiveAdPlacementConfig(customWebEffectiveConfig, 'CONTINUE_AFTER_FAIL')
+    ?.platformPlacementId,
+  'continue_web',
+);
+
 const verse8ResourceEffectiveConfig = createEffectiveTargetConfig({
   target: 'verse8',
   targetConfigVersion: targetConfigMatrix.version,
