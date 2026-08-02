@@ -57,11 +57,7 @@ export function assertNonInstallableWebArtifact(artifactRoot: string): void {
   }
 
   const indexFile = join(artifactRoot, 'index.html');
-  if (
-    existsSync(indexFile)
-    && [...readFileSync(indexFile, 'utf8').matchAll(linkTagPattern)]
-      .some((match) => isManifestLinkTag(match[0]))
-  ) {
+  if (existsSync(indexFile) && indexHtmlLinksManifest(indexFile)) {
     throw new Error(`Non-installable web artifact links a web app manifest: ${indexFile}`);
   }
 }
@@ -73,11 +69,7 @@ export function assertInstallableWebArtifact(artifactRoot: string): void {
   }
 
   const indexFile = join(artifactRoot, 'index.html');
-  if (
-    !existsSync(indexFile)
-    || ![...readFileSync(indexFile, 'utf8').matchAll(linkTagPattern)]
-      .some((match) => isManifestLinkTag(match[0]))
-  ) {
+  if (!existsSync(indexFile) || !indexHtmlLinksManifest(indexFile)) {
     throw new Error(`Installable web artifact does not link a web app manifest: ${indexFile}`);
   }
 }
@@ -149,6 +141,11 @@ function isManifestLinkTag(tag: string): boolean {
   const match = relAttributePattern.exec(tag);
   const value = match?.[1] ?? match?.[2] ?? match?.[3];
   return value?.split(/\s+/u).some((token) => token.toLowerCase() === 'manifest') ?? false;
+}
+
+function indexHtmlLinksManifest(indexFile: string): boolean {
+  return [...readFileSync(indexFile, 'utf8').matchAll(linkTagPattern)]
+    .some((match) => isManifestLinkTag(match[0]));
 }
 
 function isPathWithin(root: string, candidate: string): boolean {
