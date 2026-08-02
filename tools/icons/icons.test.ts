@@ -533,6 +533,16 @@ async function testInvalidInputs(parent: string): Promise<void> {
     );
   }
 
+  await assert.rejects(
+    generateTargetIcons({
+      gameRoot,
+      targetName: 'web-preview',
+      target: { ...target, icon: { profile: 'android' } },
+      profile: 'production',
+    }),
+    /Icon profile android is incompatible with web-preview target kind web/u,
+  );
+
   writeFileSync(
     join(gameRoot, 'mpgd.game.json'),
     JSON.stringify({

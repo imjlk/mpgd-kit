@@ -42,6 +42,22 @@ describe('adapter-verse8', () => {
     }]);
   });
 
+  it('derives VXShop mappings for a custom Verse8 deployment target', () => {
+    expect(createVerse8CommerceProducts({
+      version: 'custom-target',
+      products: [{
+        id: 'COINS_100',
+        type: 'consumable',
+        grant: { type: 'currency', currency: 'coin', amount: 100 },
+        platformProductIds: { 'verse8-staging': ' coins-100-staging ' },
+      }],
+    }, 'verse8-staging')).toEqual([{
+      id: 'COINS_100',
+      type: 'consumable',
+      platformProductId: 'coins-100-staging',
+    }]);
+  });
+
   it('exposes Verse8 host ads while keeping unimplemented capabilities unavailable', async () => {
     const gateway = createVerse8PlatformGateway({
       authClient: authenticatedClient(),

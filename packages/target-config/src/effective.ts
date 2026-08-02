@@ -270,7 +270,12 @@ function createEffectiveProductConfig(
   product: ProductCatalogEntry,
 ): EffectiveProductConfig {
   const platformProductId = resolveProductPlatformId(product, target);
-  const reason = effectiveProductReason(target, config.features.iap, product, platformProductId);
+  const reason = effectiveProductReason(
+    config.runtime,
+    config.features.iap,
+    product,
+    platformProductId,
+  );
 
   return {
     id: product.id,
@@ -283,7 +288,7 @@ function createEffectiveProductConfig(
 }
 
 function effectiveProductReason(
-  target: string,
+  runtime: TargetRuntimeKind,
   targetEnabled: boolean,
   product: ProductCatalogEntry,
   platformProductId: string | undefined,
@@ -292,7 +297,7 @@ function effectiveProductReason(
     return 'target-disabled';
   }
 
-  if (target === 'verse8' && product.grant.type === 'resource') {
+  if (runtime === 'verse8-web' && product.grant.type === 'resource') {
     return 'capability-unsupported';
   }
 

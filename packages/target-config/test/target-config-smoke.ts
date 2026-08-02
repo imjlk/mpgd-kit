@@ -720,16 +720,21 @@ assertEqual(
   'continue_web',
 );
 
-const verse8ResourceEffectiveConfig = createEffectiveTargetConfig({
-  target: 'verse8',
-  targetConfigVersion: targetConfigMatrix.version,
-  config: createTargetConfig({
+const verse8ResourceTargetConfig = {
+  ...createTargetConfig({
     iap: true,
     rewardedAds: false,
     interstitialAds: false,
     leaderboard: false,
     localization: true,
   }),
+  runtime: 'verse8-web',
+  release: { profile: 'verse8' },
+} as const satisfies TargetConfig;
+const verse8ResourceEffectiveConfig = createEffectiveTargetConfig({
+  target: 'verse8-staging',
+  targetConfigVersion: targetConfigMatrix.version,
+  config: verse8ResourceTargetConfig,
   catalog: {
     version: 'verse8-resource-catalog',
     products: [
@@ -742,7 +747,7 @@ const verse8ResourceEffectiveConfig = createEffectiveTargetConfig({
           amount: 5,
         },
         platformProductIds: {
-          verse8: 'hints_5',
+          'verse8-staging': 'hints_5',
         },
       },
     ],

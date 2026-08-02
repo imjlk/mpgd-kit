@@ -77,6 +77,37 @@ try {
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
     targets: {
+      storefront: {
+        ...webPreview,
+        release: { profile: 'google-play' },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /runtime web-preview requires release profile web-preview; received google-play/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
+      storefront: {
+        ...webPreview,
+        runtime: 'verse8-web',
+        release: { profile: 'app-store' },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /runtime verse8-web requires release profile verse8; received app-store/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
       'web-preview': webPreview,
     },
   })}\n`);

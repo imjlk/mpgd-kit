@@ -5,7 +5,7 @@ import {
 } from '@verse8/ads';
 import { Verse8, VXShop } from '@verse8/platform/vanilla';
 
-import type { ProductCatalog } from '@mpgd/catalog';
+import { resolveProductPlatformId, type CatalogTarget, type ProductCatalog } from '@mpgd/catalog';
 import {
   createUnsupportedCapabilities,
   type CommerceAdapter,
@@ -109,10 +109,11 @@ export interface Verse8CommerceOptions {
 
 export function createVerse8CommerceProducts(
   catalog: ProductCatalog,
+  target: CatalogTarget = 'verse8',
 ): readonly Verse8CommerceProduct[] {
   return normalizeCommerceProducts(
     catalog.products.flatMap((product) => {
-      const platformProductId = product.platformProductIds.verse8;
+      const platformProductId = resolveProductPlatformId(product, target);
 
       return platformProductId === undefined || product.grant.type === 'resource'
         ? []

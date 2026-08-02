@@ -91,6 +91,14 @@ const profiles = {
 
 export type BuiltInIconProfileName = keyof typeof profiles;
 
+const compatibleProfilesByTargetKind = {
+  web: new Set<BuiltInIconProfileName>(['web-preview', 'microsoft-pwa']),
+  'capacitor-android': new Set<BuiltInIconProfileName>(['android']),
+  'capacitor-ios': new Set<BuiltInIconProfileName>(['ios']),
+  'apps-in-toss': new Set<BuiltInIconProfileName>(['ait']),
+  'devvit-web': new Set<BuiltInIconProfileName>(['devvit']),
+} satisfies Record<PlatformTargetConfig['kind'], ReadonlySet<BuiltInIconProfileName>>;
+
 export function resolveTargetIconProfile(
   targetName: string,
   target: PlatformTargetConfig,
@@ -102,6 +110,12 @@ export function resolveTargetIconProfile(
   if (profile === undefined) {
     throw new Error(
       `Unknown icon profile ${profileName} for ${targetName}. Add a versioned profile to tools/icons/profiles.ts before using it.`,
+    );
+  }
+
+  if (!compatibleProfilesByTargetKind[target.kind].has(profileName as BuiltInIconProfileName)) {
+    throw new Error(
+      `Icon profile ${profileName} is incompatible with ${targetName} target kind ${target.kind}.`,
     );
   }
 

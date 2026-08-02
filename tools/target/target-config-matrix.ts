@@ -3,7 +3,12 @@ import { readFileSync } from 'node:fs';
 
 import typia from 'typia';
 
-import type { TargetConfig, TargetConfigMatrix } from '@mpgd/target-config';
+import type {
+  ReleaseProfile,
+  TargetConfig,
+  TargetConfigMatrix,
+  TargetRuntimeKind,
+} from '@mpgd/target-config';
 
 import { targetConfigExtensionsFileEnv } from '../../packages/cli/src/target-config-env';
 import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
@@ -19,6 +24,15 @@ interface TargetConfigExtensions {
 
 const assertTargetConfigMatrix = typia.createAssert<TargetConfigMatrix>();
 const assertTargetConfigExtensions = typia.createAssert<TargetConfigExtensions>();
+const releaseProfileByRuntime = {
+  'web-preview': 'web-preview',
+  'microsoft-store-pwa': 'microsoft-store',
+  'capacitor-android': 'google-play',
+  'capacitor-ios': 'app-store',
+  'apps-in-toss': 'apps-in-toss',
+  'devvit-web': 'devvit',
+  'verse8-web': 'verse8',
+} as const satisfies Record<TargetRuntimeKind, ReleaseProfile>;
 
 export function loadTargetConfigMatrix(
   baseFile = defaultTargetConfigMatrixFile,
@@ -68,6 +82,14 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
   ) {
     throw new Error(
       `Target config extension ${target} cannot use the reserved Microsoft Store PWA runtime or release profile.`,
+    );
+  }
+
+  const expectedReleaseProfile = releaseProfileByRuntime[config.runtime];
+
+  if (config.release.profile !== expectedReleaseProfile) {
+    throw new Error(
+      `Target config extension ${target} runtime ${config.runtime} requires release profile ${expectedReleaseProfile}; received ${config.release.profile}.`,
     );
   }
 }
