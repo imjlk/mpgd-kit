@@ -12,6 +12,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import sharp from 'sharp';
 
 import { sanitizeNonInstallableWebArtifact } from '../target/web-artifact';
+import { sha256 } from './image';
 import type { GeneratedTargetIcons, IconManifestOutput } from './types';
 
 export interface StageWebIconEvidenceOptions {
@@ -44,6 +45,25 @@ export function stageWebIconEvidence(
       sanitizeNonInstallableWebArtifact(gameDist);
     }
     stageFaviconLink(result, gameDist);
+  }
+}
+
+export function assertStagedWebIconEvidence(
+  result: GeneratedTargetIcons,
+  gameDist: string,
+): void {
+  const manifestPath = join(gameDist, 'mpgd-icon-manifest.json');
+
+  if (!existsSync(manifestPath) || sha256(readFileSync(manifestPath)) !== result.manifestSha256) {
+    throw new Error(`Staged icon manifest does not match generated evidence: ${manifestPath}`);
+  }
+
+  for (const output of result.manifest.outputs) {
+    const outputPath = join(gameDist, output.path);
+
+    if (!existsSync(outputPath) || sha256(readFileSync(outputPath)) !== output.sha256) {
+      throw new Error(`Staged icon output does not match generated evidence: ${outputPath}`);
+    }
   }
 }
 

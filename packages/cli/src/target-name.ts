@@ -8,6 +8,8 @@ const reservedDeploymentTargetNames = new Set([
   'msstore',
   'nul',
   'prn',
+  'constructor',
+  'prototype',
   ...Array.from({ length: 9 }, (_, index) => `com${String(index + 1)}`),
   ...Array.from({ length: 9 }, (_, index) => `lpt${String(index + 1)}`),
 ]);

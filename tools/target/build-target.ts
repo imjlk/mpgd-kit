@@ -21,7 +21,12 @@ import {
   targetConfigMatrixJsonEnv,
 } from '../../packages/cli/src/target-config-env';
 import { generateTargetIcons, verifyGeneratedTargetIcons } from '../icons/generator';
-import { stageNativeIconResources, stageWebIconEvidence, stageWrapperIcon } from '../icons/staging';
+import {
+  assertStagedWebIconEvidence,
+  stageNativeIconResources,
+  stageWebIconEvidence,
+  stageWrapperIcon,
+} from '../icons/staging';
 import { requireCanonicalAppVersion } from './app-version';
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 import { createReleaseManifestWriter, resolveReleaseProvenance } from './generate-release-manifest';
@@ -41,6 +46,7 @@ import {
 import type { PlatformTargetConfig } from './schemas';
 import { loadTargetConfigMatrix } from './target-config-matrix';
 import {
+  assertInstallableWebArtifact,
   assertNonInstallableWebArtifact,
   assertWebStaticDirectory,
   copyWebStaticDirectoryContents,
@@ -147,11 +153,9 @@ if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'pr
 if (target.kind !== 'devvit-web') {
   run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
   embedEffectiveTargetConfig(targetName, `${gameApp}/dist`, env);
-  stageWebIconEvidence(generatedIcons, `${gameApp}/dist`, {
-    ...(target.kind === 'web' && target.installable !== undefined
-      ? { installable: target.installable }
-      : {}),
-  });
+  if (target.kind !== 'web') {
+    stageWebIconEvidence(generatedIcons, `${gameApp}/dist`);
+  }
 }
 
 switch (target.kind) {
@@ -168,6 +172,10 @@ switch (target.kind) {
     if (staticDirPath !== undefined) {
       copyWebStaticDirectoryContents(staticDirPath, output);
     }
+    stageWebIconEvidence(generatedIcons, output, {
+      ...(target.installable === undefined ? {} : { installable: target.installable }),
+    });
+    assertStagedWebIconEvidence(generatedIcons, output);
     if (targetName === 'microsoft-store' && profile === 'production') {
       writeMicrosoftStorePwaArtifacts({
         artifactRoot: output,
@@ -181,6 +189,8 @@ switch (target.kind) {
     }
     if (target.installable === false) {
       assertNonInstallableWebArtifact(output);
+    } else {
+      assertInstallableWebArtifact(output);
     }
     writeManifest(targetName, profile, outputConfigPath, env);
     break;

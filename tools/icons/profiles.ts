@@ -113,6 +113,10 @@ export function resolveTargetIconProfile(
     );
   }
 
+  if (targetName === 'microsoft-store' && profileName !== 'microsoft-pwa') {
+    throw new Error('Microsoft Store target must use the microsoft-pwa icon profile.');
+  }
+
   if (!compatibleProfilesByTargetKind[target.kind].has(profileName as BuiltInIconProfileName)) {
     throw new Error(
       `Icon profile ${profileName} is incompatible with ${targetName} target kind ${target.kind}.`,

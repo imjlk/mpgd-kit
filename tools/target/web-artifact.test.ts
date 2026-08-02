@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { assertPlatformTargetsConfigShape } from './platform-targets';
 import { validatePlatformTargetsFile } from './validate-platform-targets';
 import {
+  assertInstallableWebArtifact,
   assertNonInstallableWebArtifact,
   assertWebStaticDirectory,
   copyWebStaticDirectoryContents,
@@ -32,12 +33,14 @@ try {
     join(artifact, 'index.html'),
     '<html><head><link rel="manifest" href="./manifest.webmanifest"><link rel="icon" href="./icon.png"></head></html>',
   );
+  assert.doesNotThrow(() => assertInstallableWebArtifact(artifact));
 
   sanitizeNonInstallableWebArtifact(artifact);
   assert.equal(existsSync(join(artifact, 'manifest.webmanifest')), false);
   assert.doesNotMatch(readFileSync(join(artifact, 'index.html'), 'utf8'), /rel="manifest"/u);
   assert.match(readFileSync(join(artifact, 'index.html'), 'utf8'), /rel="icon"/u);
   assert.doesNotThrow(() => assertNonInstallableWebArtifact(artifact));
+  assert.throws(() => assertInstallableWebArtifact(artifact), /has no web app manifest/u);
 
   writeFileSync(join(staticDir, 'manifest.webmanifest'), '{}\n');
   assertWebStaticDirectory(staticDir, artifact, root);
@@ -127,6 +130,20 @@ try {
       },
     }),
     /Invalid deployment target name: index/u,
+  );
+  assert.throws(
+    () => assertPlatformTargetsConfigShape({
+      targets: {
+        'microsoft-store': {
+          kind: 'web',
+          gameApp: '.',
+          adapter: 'browser',
+          output: 'artifact',
+          installable: false,
+        },
+      },
+    }),
+    /microsoft-store\.installable must not be false/u,
   );
 } finally {
   rmSync(root, { force: true, recursive: true });

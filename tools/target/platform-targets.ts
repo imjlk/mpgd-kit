@@ -106,6 +106,9 @@ function assertPlatformTargetConfigShape(
       assertString(input.output, `${target}.output`);
       assertOptionalBoolean(input.installable, `${target}.installable`);
       assertOptionalString(input.staticDir, `${target}.staticDir`);
+      if (target === 'microsoft-store' && input.installable === false) {
+        throw new Error('microsoft-store.installable must not be false.');
+      }
       break;
     case 'capacitor-android':
     case 'capacitor-ios':

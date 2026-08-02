@@ -23,7 +23,11 @@ import {
   verifyGeneratedTargetIcons,
 } from './generator';
 import { pixelSha256, sha256 } from './image';
-import { stageNativeIconResources, stageWebIconEvidence } from './staging';
+import {
+  assertStagedWebIconEvidence,
+  stageNativeIconResources,
+  stageWebIconEvidence,
+} from './staging';
 
 const root = mkdtempSync(join(tmpdir(), 'mpgd-icons-'));
 
@@ -90,6 +94,7 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   mkdirSync(dist, { recursive: true });
   writeFileSync(join(dist, 'index.html'), '<html><head></head><body></body></html>');
   stageWebIconEvidence(repeated, dist);
+  assert.doesNotThrow(() => assertStagedWebIconEvidence(repeated, dist));
   const webManifest = JSON.parse(
     await readUtf8(join(dist, 'manifest.webmanifest')),
   ) as { readonly icons: readonly { readonly purpose: string; readonly sizes: string }[] };
@@ -98,6 +103,18 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
     new Set(webManifest.icons.map((icon) => icon.purpose)),
     new Set(['any', 'maskable']),
   );
+
+  const stagedIcon = repeated.manifest.outputs[0];
+  assert.ok(stagedIcon);
+  writeFileSync(join(dist, stagedIcon.path), 'overlaid icon bytes');
+  writeFileSync(join(dist, 'index.html'), '<html><head></head><body></body></html>');
+  assert.throws(
+    () => assertStagedWebIconEvidence(repeated, dist),
+    /Staged icon output does not match generated evidence/u,
+  );
+  stageWebIconEvidence(repeated, dist);
+  assert.doesNotThrow(() => assertStagedWebIconEvidence(repeated, dist));
+  assert.match(await readUtf8(join(dist, 'index.html')), /rel="manifest"/u);
   assert.deepEqual(
     new Set(webManifest.icons.map((icon) => icon.sizes)),
     new Set(['192x192', '512x512']),
@@ -541,6 +558,15 @@ async function testInvalidInputs(parent: string): Promise<void> {
       profile: 'production',
     }),
     /Icon profile android is incompatible with web-preview target kind web/u,
+  );
+  await assert.rejects(
+    generateTargetIcons({
+      gameRoot,
+      targetName: 'microsoft-store',
+      target: { ...target, icon: { profile: 'web-preview' } },
+      profile: 'production',
+    }),
+    /Microsoft Store target must use the microsoft-pwa icon profile/u,
   );
 
   writeFileSync(

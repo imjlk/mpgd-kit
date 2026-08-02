@@ -66,6 +66,22 @@ export function assertNonInstallableWebArtifact(artifactRoot: string): void {
   }
 }
 
+export function assertInstallableWebArtifact(artifactRoot: string): void {
+  const manifests = rootInstallableManifests(artifactRoot);
+  if (manifests.length === 0) {
+    throw new Error(`Installable web artifact has no web app manifest: ${artifactRoot}`);
+  }
+
+  const indexFile = join(artifactRoot, 'index.html');
+  if (
+    !existsSync(indexFile)
+    || ![...readFileSync(indexFile, 'utf8').matchAll(linkTagPattern)]
+      .some((match) => isManifestLinkTag(match[0]))
+  ) {
+    throw new Error(`Installable web artifact does not link a web app manifest: ${indexFile}`);
+  }
+}
+
 export function assertWebStaticDirectory(
   source: string,
   destination: string,

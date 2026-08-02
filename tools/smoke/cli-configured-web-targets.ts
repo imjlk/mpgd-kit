@@ -39,7 +39,7 @@ assert.throws(
   () => normalizeConfiguredBuildTargets({ '../escape': { kind: 'web' } }),
   /Invalid deployment target name: \.\.\/escape/u,
 );
-for (const alias of ['browser', 'msstore', 'devvit']) {
+for (const alias of ['browser', 'msstore', 'devvit', 'constructor', 'prototype']) {
   assert.throws(
     () => normalizeConfiguredBuildTargets({ [alias]: { kind: 'web' } }),
     new RegExp(`Invalid deployment target name: ${alias}`, 'u'),

@@ -1,5 +1,6 @@
 ---
 npm/@mpgd/cli: patch (Changed)
+npm/@mpgd/adapter-verse8: patch (Changed)
 npm/@mpgd/catalog: patch (Changed)
 npm/@mpgd/target-config: patch (Changed)
 ---
