@@ -43,7 +43,7 @@ import {
   releaseManifestPath,
   resolveFromPlatformTargetsBase,
 } from './platform-targets';
-import type { PlatformTargetConfig } from './schemas';
+import type { PlatformTargetConfig, WebTargetConfig } from './schemas';
 import { loadTargetConfigMatrix } from './target-config-matrix';
 import {
   assertInstallableWebArtifact,
@@ -101,14 +101,14 @@ if (target === undefined) {
 }
 
 const gameApp = targetPath(target.gameApp);
-if (target.kind === 'web' && target.staticDir !== undefined) {
-  const staticDirPath = targetPath(target.staticDir);
+const webTargetPaths = target.kind === 'web'
+  ? resolveWebTargetPaths(target, targetName)
+  : undefined;
 
-  assertWebStaticDirectory(
-    staticDirPath,
-    targetPath(requireString(target.output, `${targetName}.output`)),
-    configBaseDir,
-  );
+if (webTargetPaths?.staticDirPath !== undefined) {
+  const { output, staticDirPath } = webTargetPaths;
+
+  assertWebStaticDirectory(staticDirPath, output, configBaseDir);
   assertWebStaticDirectory(staticDirPath, `${gameApp}/dist`, configBaseDir);
 }
 
@@ -171,9 +171,11 @@ if (target.kind !== 'devvit-web') {
 
 switch (target.kind) {
   case 'web': {
-    const outputConfigPath = requireString(target.output, `${targetName}.output`);
-    const output = targetPath(outputConfigPath);
-    const staticDirPath = target.staticDir === undefined ? undefined : targetPath(target.staticDir);
+    if (webTargetPaths === undefined) {
+      throw new Error(`Failed to resolve web target paths for ${targetName}.`);
+    }
+
+    const { output, outputConfigPath, staticDirPath } = webTargetPaths;
 
     replaceDirectory(`${gameApp}/dist`, output);
     if (staticDirPath !== undefined) {
@@ -362,6 +364,16 @@ switch (target.kind) {
     }
     break;
   }
+}
+
+function resolveWebTargetPaths(target: WebTargetConfig, name: string) {
+  const outputConfigPath = requireString(target.output, `${name}.output`);
+
+  return {
+    output: targetPath(outputConfigPath),
+    outputConfigPath,
+    staticDirPath: target.staticDir === undefined ? undefined : targetPath(target.staticDir),
+  };
 }
 
 function replaceDirectory(source: string, destination: string): void {
