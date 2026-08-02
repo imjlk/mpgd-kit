@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { assertPlatformTargetsConfigShape } from './platform-targets';
 import { validatePlatformTargetsFile } from './validate-platform-targets';
 import {
+  assertDisjointWebArtifactOutputs,
   assertInstallableWebArtifact,
   assertNonInstallableWebArtifact,
   assertWebArtifactOutputDirectory,
@@ -59,6 +60,13 @@ try {
   assert.throws(
     () => assertWebArtifactOutputDirectory(artifact, join(artifact, 'nested')),
     /artifact output and Vite output must not overlap/u,
+  );
+  assert.throws(
+    () => assertDisjointWebArtifactOutputs([
+      { name: 'storefront', path: artifact },
+      { name: 'archive', path: join(artifact, 'nested') },
+    ]),
+    /artifact outputs must not overlap: storefront .* and archive /u,
   );
 
   const realStaticDir = join(root, 'real-static');
@@ -136,6 +144,29 @@ try {
     /artifact output and Vite output must not overlap/u,
   );
 
+  const artifactRoot = join(root, 'artifact-root');
+  const linkedArtifactRoot = join(root, 'linked-artifact-root');
+  mkdirSync(artifactRoot);
+  symlinkSync(artifactRoot, linkedArtifactRoot);
+
+  for (const [output, additionalOutput] of [
+    ['artifact-root/storefront', 'artifact-root/storefront'],
+    ['artifact-root/storefront', 'artifact-root/storefront/archive'],
+    ['artifact-root/storefront', 'artifact-root/other/../storefront'],
+    ['artifact-root/storefront', 'linked-artifact-root/storefront'],
+  ] as const) {
+    writeWebTargetConfig(configPath, {
+      additionalOutput,
+      gameApp: 'game-app',
+      output,
+      staticDir: 'static',
+    });
+    assert.throws(
+      () => validatePlatformTargetsFile(configPath),
+      /artifact outputs must not overlap: storefront .* and archive /u,
+    );
+  }
+
   writeWebTargetConfig(configPath, {
     output: 'validated-artifact',
     staticDir: 'static',
@@ -202,20 +233,33 @@ console.log('Web artifact policy smoke passed.');
 function writeWebTargetConfig(
   path: string,
   input: {
+    readonly additionalOutput?: string;
     readonly gameApp?: string;
     readonly output: string;
     readonly staticDir: string;
   },
 ): void {
+  const target = {
+    kind: 'web',
+    gameApp: input.gameApp ?? '.',
+    adapter: 'browser',
+    staticDir: input.staticDir,
+  };
+
   writeFileSync(path, `${JSON.stringify({
     targets: {
       storefront: {
-        kind: 'web',
-        gameApp: input.gameApp ?? '.',
-        adapter: 'browser',
+        ...target,
         output: input.output,
-        staticDir: input.staticDir,
       },
+      ...(input.additionalOutput === undefined
+        ? {}
+        : {
+            archive: {
+              ...target,
+              output: input.additionalOutput,
+            },
+          }),
     },
   })}\n`);
 }

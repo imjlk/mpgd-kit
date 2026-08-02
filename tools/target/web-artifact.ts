@@ -20,6 +20,11 @@ const reservedGeneratedEvidenceNames = new Set([
 const linkTagPattern = /<link\b[^>]*>/giu;
 const relAttributePattern = /\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/iu;
 
+export interface NamedWebArtifactOutput {
+  readonly name: string;
+  readonly path: string;
+}
+
 export function copyWebStaticDirectoryContents(
   source: string,
   destination: string,
@@ -134,6 +139,25 @@ export function assertWebArtifactOutputDirectory(
     throw new Error(
       `Web artifact output and Vite output must not overlap: ${output} and ${viteOutput}`,
     );
+  }
+}
+
+export function assertDisjointWebArtifactOutputs(
+  outputs: readonly NamedWebArtifactOutput[],
+): void {
+  const canonicalOutputs = outputs.map((output) => ({
+    ...output,
+    canonicalPath: canonicalizeThroughExistingAncestor(output.path),
+  }));
+
+  for (const [index, output] of canonicalOutputs.entries()) {
+    for (const candidate of canonicalOutputs.slice(index + 1)) {
+      if (pathsOverlap(output.canonicalPath, candidate.canonicalPath)) {
+        throw new Error(
+          `Web artifact outputs must not overlap: ${output.name} (${output.path}) and ${candidate.name} (${candidate.path}).`,
+        );
+      }
+    }
   }
 }
 

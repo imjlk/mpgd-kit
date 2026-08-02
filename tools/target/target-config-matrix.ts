@@ -93,12 +93,15 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
     );
   }
 
-  if (
-    config.runtime === 'web-preview'
-    && (config.features.rewardedAds || config.monetization.rewardedAds)
-  ) {
+  const unsupportedWebPreviewAd = config.features.rewardedAds || config.monetization.rewardedAds
+    ? 'rewarded ads'
+    : config.features.interstitialAds || config.monetization.interstitialAds
+      ? 'interstitial ads'
+      : undefined;
+
+  if (config.runtime === 'web-preview' && unsupportedWebPreviewAd !== undefined) {
     throw new Error(
-      `Target config extension ${target} cannot enable rewarded ads for web-preview runtime.`,
+      `Target config extension ${target} cannot enable ${unsupportedWebPreviewAd} for web-preview runtime.`,
     );
   }
 }

@@ -7,7 +7,11 @@ import {
   loadPlatformTargetsConfig,
   resolveFromPlatformTargetsBase,
 } from './platform-targets';
-import { assertWebArtifactOutputDirectory, assertWebStaticDirectory } from './web-artifact';
+import {
+  assertDisjointWebArtifactOutputs,
+  assertWebArtifactOutputDirectory,
+  assertWebStaticDirectory,
+} from './web-artifact';
 
 export function validatePlatformTargetsFile(path?: string) {
   const loadedConfig = path === undefined
@@ -18,6 +22,11 @@ export function validatePlatformTargetsFile(path?: string) {
         path: resolve(path),
       };
   const config = loadedConfig.config;
+  const webArtifactOutputs = Object.entries(config.targets)
+    .flatMap(([name, target]) => target.kind === 'web'
+      ? [{ name, path: resolvePath(target.output) }]
+      : []);
+  assertDisjointWebArtifactOutputs(webArtifactOutputs);
 
   for (const [targetName, target] of Object.entries(config.targets)) {
     if (!existsSync(resolvePath(target.gameApp))) {

@@ -130,6 +130,28 @@ try {
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
     targets: {
+      storefront: {
+        ...webPreview,
+        features: {
+          ...webPreview.features,
+          interstitialAds: true,
+        },
+        monetization: {
+          ...webPreview.monetization,
+          interstitialAds: true,
+        },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /cannot enable interstitial ads for web-preview runtime/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
       'web-preview': webPreview,
     },
   })}\n`);
