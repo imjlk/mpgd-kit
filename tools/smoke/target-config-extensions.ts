@@ -107,6 +107,16 @@ function assertViteRuntimeMatrix(matrix: ReturnType<typeof loadTargetConfigMatri
     assert.equal(typeof encodedMatrix, 'string');
     assert.deepEqual(JSON.parse(encodedMatrix as string) as unknown, matrix);
 
+    process.env[targetConfigMatrixJsonEnv] = '[]';
+    assert.throws(
+      () => createGameViteSharedConfig({
+        gameRoot: path.resolve('examples/phaser-starter'),
+        mode: 'production',
+        project: path.resolve('examples/phaser-starter/tsconfig.json'),
+      }),
+      /validate its shape/u,
+    );
+
     process.env[targetConfigMatrixJsonEnv] = '{invalid';
     assert.throws(
       () => createGameViteSharedConfig({

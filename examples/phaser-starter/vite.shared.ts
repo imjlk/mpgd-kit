@@ -4,6 +4,11 @@ import { resolve } from 'node:path';
 import ttsc from '@ttsc/unplugin/vite';
 import type { UserConfig } from 'vite';
 
+import {
+  assertTargetConfigMatrix,
+  type TargetConfigMatrix,
+} from '@mpgd/target-config';
+
 interface RuntimePlatformTargetMetadata {
   readonly kind: string;
   readonly adapter: string;
@@ -78,16 +83,18 @@ export function createGameViteSharedConfig(
   };
 }
 
-function readRuntimeTargetConfigMatrix(source: string | undefined): unknown {
+function readRuntimeTargetConfigMatrix(
+  source: string | undefined,
+): TargetConfigMatrix | undefined {
   if (source === undefined || source.trim().length === 0) {
     return undefined;
   }
 
   try {
-    return JSON.parse(source) as unknown;
+    return assertTargetConfigMatrix(JSON.parse(source) as unknown);
   } catch (error) {
     throw new Error(
-      `Failed to parse MPGD_TARGET_CONFIG_MATRIX_JSON: ${formatError(error)}`,
+      `Failed to parse MPGD_TARGET_CONFIG_MATRIX_JSON or validate its shape: ${formatError(error)}`,
     );
   }
 }
