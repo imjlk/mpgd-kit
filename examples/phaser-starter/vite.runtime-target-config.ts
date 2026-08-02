@@ -152,8 +152,16 @@ function assertNonEmptyString(input: unknown, label: string): asserts input is s
 function assertOneOf(input: unknown, values: ReadonlySet<string>, label: string): void {
   if (typeof input !== 'string' || !values.has(input)) {
     throw new Error(
-      `${label} has unsupported value ${JSON.stringify(input)}; expected one of ${[...values].join(', ')}.`,
+      `${label} has unsupported value ${formatValue(input)}; expected one of ${[...values].join(', ')}.`,
     );
+  }
+}
+
+function formatValue(input: unknown): string {
+  try {
+    return JSON.stringify(input) ?? String(input);
+  } catch {
+    return String(input);
   }
 }
 
