@@ -39,9 +39,7 @@ export function sanitizeNonInstallableWebArtifact(artifactRoot: string): void {
   }
 
   const source = readFileSync(indexFile, 'utf8');
-  const sanitized = source.replace(linkTagPattern, (tag) =>
-    isManifestLinkTag(tag) ? '' : tag,
-  );
+  const sanitized = stripManifestLinkTags(source);
 
   if (sanitized !== source) {
     writeFileSync(indexFile, sanitized);
@@ -55,15 +53,15 @@ export function ensureInstallableWebManifestLink(artifactRoot: string): void {
   }
 
   const source = readFileSync(indexFile, 'utf8');
-  const withoutManifestLinks = source.replace(linkTagPattern, (tag) =>
-    isManifestLinkTag(tag) ? '' : tag,
-  );
+  const withoutManifestLinks = stripManifestLinkTags(source);
   const link = '<link rel="manifest" href="./manifest.webmanifest">';
   const linked = withoutManifestLinks.includes('</head>')
     ? withoutManifestLinks.replace('</head>', `  ${link}\n</head>`)
     : `${link}\n${withoutManifestLinks}`;
 
-  writeFileSync(indexFile, linked);
+  if (linked !== source) {
+    writeFileSync(indexFile, linked);
+  }
 }
 
 export function assertNonInstallableWebArtifact(artifactRoot: string): void {
@@ -164,6 +162,10 @@ function isManifestLinkTag(tag: string): boolean {
 function indexHtmlLinksManifest(indexFile: string): boolean {
   return [...readFileSync(indexFile, 'utf8').matchAll(linkTagPattern)]
     .some((match) => isManifestLinkTag(match[0]));
+}
+
+function stripManifestLinkTags(html: string): string {
+  return html.replace(linkTagPattern, (tag) => isManifestLinkTag(tag) ? '' : tag);
 }
 
 function isPathWithin(root: string, candidate: string): boolean {
