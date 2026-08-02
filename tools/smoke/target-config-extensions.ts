@@ -77,6 +77,16 @@ function assertViteRuntimeMatrix(matrix: ReturnType<typeof loadTargetConfigMatri
 
     assert.equal(typeof encodedMatrix, 'string');
     assert.deepEqual(JSON.parse(encodedMatrix as string) as unknown, matrix);
+
+    process.env[targetConfigMatrixJsonEnv] = '{invalid';
+    assert.throws(
+      () => createGameViteSharedConfig({
+        gameRoot: path.resolve('examples/phaser-starter'),
+        mode: 'production',
+        project: path.resolve('examples/phaser-starter/tsconfig.json'),
+      }),
+      /Failed to parse MPGD_TARGET_CONFIG_MATRIX_JSON/u,
+    );
   } finally {
     if (previous === undefined) {
       delete process.env[targetConfigMatrixJsonEnv];

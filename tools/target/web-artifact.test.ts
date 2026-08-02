@@ -44,6 +44,10 @@ try {
   copyWebStaticDirectoryContents(staticDir, artifact);
   assert.throws(() => assertNonInstallableWebArtifact(artifact), /contains a web app manifest/u);
 
+  const newlyCreatedArtifact = join(root, 'new-artifact');
+  copyWebStaticDirectoryContents(staticDir, newlyCreatedArtifact);
+  assert.equal(existsSync(join(newlyCreatedArtifact, 'manifest.webmanifest')), true);
+
   assert.throws(
     () => assertWebStaticDirectory(artifact, join(artifact, 'nested'), root),
     /must not overlap/u,

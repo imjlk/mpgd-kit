@@ -19,6 +19,7 @@ export function copyWebStaticDirectoryContents(
   source: string,
   destination: string,
 ): void {
+  mkdirSync(destination, { recursive: true });
   copyDirectoryContents(source, destination);
 }
 

@@ -83,7 +83,13 @@ function readRuntimeTargetConfigMatrix(source: string | undefined): unknown {
     return undefined;
   }
 
-  return JSON.parse(source) as unknown;
+  try {
+    return JSON.parse(source) as unknown;
+  } catch (error) {
+    throw new Error(
+      `Failed to parse MPGD_TARGET_CONFIG_MATRIX_JSON: ${formatError(error)}`,
+    );
+  }
 }
 
 export function resolveBuildGatewayModule(input: {
