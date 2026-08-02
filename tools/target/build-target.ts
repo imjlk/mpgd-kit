@@ -46,7 +46,7 @@ import {
 import type { PlatformTargetConfig, WebTargetConfig } from './schemas';
 import { loadTargetConfigMatrix } from './target-config-matrix';
 import {
-  assertDisjointWebArtifactOutputs,
+  assertDisjointWebTargetOutputs,
   assertInstallableWebArtifact,
   assertNonInstallableWebArtifact,
   assertWebArtifactOutputDirectory,
@@ -79,11 +79,7 @@ const releaseManifestEnvKeys = [
 const platformTargets = loadPlatformTargetsConfig();
 const configBaseDir = platformTargets.baseDir;
 const config = platformTargets.config;
-const webArtifactOutputs = Object.entries(config.targets)
-  .flatMap(([name, target]) => target.kind === 'web'
-    ? [{ name, path: targetPath(target.output) }]
-    : []);
-assertDisjointWebArtifactOutputs(webArtifactOutputs);
+assertDisjointWebTargetOutputs(config.targets, targetPath);
 const runtimeTargetConfigMatrix = loadTargetConfigMatrix();
 const monetizationCatalogEnv = normalizeMonetizationCatalogEnv(process.env, configBaseDir);
 const targetScopedEnv = {

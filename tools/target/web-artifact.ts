@@ -11,6 +11,8 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
+import type { PlatformTargetConfig } from './schemas';
+
 const installableManifestNames = new Set(['manifest.json', 'manifest.webmanifest']);
 const reservedGeneratedEvidenceNames = new Set([
   'mpgd-effective-target.json',
@@ -159,6 +161,18 @@ export function assertDisjointWebArtifactOutputs(
       }
     }
   }
+}
+
+export function assertDisjointWebTargetOutputs(
+  targets: Readonly<Record<string, PlatformTargetConfig>>,
+  resolvePath: (path: string) => string,
+): void {
+  const outputs = Object.entries(targets)
+    .flatMap(([name, target]) => target.kind === 'web'
+      ? [{ name, path: resolvePath(target.output) }]
+      : []);
+
+  assertDisjointWebArtifactOutputs(outputs);
 }
 
 function copyDirectoryContents(source: string, destination: string): void {
