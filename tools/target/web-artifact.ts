@@ -48,6 +48,24 @@ export function sanitizeNonInstallableWebArtifact(artifactRoot: string): void {
   }
 }
 
+export function ensureInstallableWebManifestLink(artifactRoot: string): void {
+  const indexFile = join(artifactRoot, 'index.html');
+  if (!existsSync(indexFile)) {
+    return;
+  }
+
+  const source = readFileSync(indexFile, 'utf8');
+  const withoutManifestLinks = source.replace(linkTagPattern, (tag) =>
+    isManifestLinkTag(tag) ? '' : tag,
+  );
+  const link = '<link rel="manifest" href="./manifest.webmanifest">';
+  const linked = withoutManifestLinks.includes('</head>')
+    ? withoutManifestLinks.replace('</head>', `  ${link}\n</head>`)
+    : `${link}\n${withoutManifestLinks}`;
+
+  writeFileSync(indexFile, linked);
+}
+
 export function assertNonInstallableWebArtifact(artifactRoot: string): void {
   const manifests = rootInstallableManifests(artifactRoot);
   if (manifests.length > 0) {

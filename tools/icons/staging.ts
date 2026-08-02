@@ -11,7 +11,10 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 import sharp from 'sharp';
 
-import { sanitizeNonInstallableWebArtifact } from '../target/web-artifact';
+import {
+  ensureInstallableWebManifestLink,
+  sanitizeNonInstallableWebArtifact,
+} from '../target/web-artifact';
 import { sha256 } from './image';
 import type { GeneratedTargetIcons, IconManifestOutput } from './types';
 
@@ -222,6 +225,7 @@ function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void 
       purpose: output.purpose === 'maskable' ? 'maskable' : 'any',
     }));
   writeFileSync(join(gameDist, 'manifest.webmanifest'), `${JSON.stringify(manifest, null, 2)}\n`);
+  ensureInstallableWebManifestLink(gameDist);
 }
 
 function stageFaviconLink(result: GeneratedTargetIcons, gameDist: string): void {
