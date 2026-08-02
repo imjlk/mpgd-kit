@@ -7,6 +7,7 @@ import {
   loadPlatformTargetsConfig,
   resolveFromPlatformTargetsBase,
 } from './platform-targets';
+import { assertWebStaticDirectory } from './web-artifact';
 
 export function validatePlatformTargetsFile(path?: string) {
   const loadedConfig = path === undefined
@@ -27,12 +28,12 @@ export function validatePlatformTargetsFile(path?: string) {
       throw new Error(`Target ${targetName} output must not be empty.`);
     }
 
-    if (
-      target.kind === 'web'
-      && target.staticDir !== undefined
-      && !existsSync(resolvePath(target.staticDir))
-    ) {
-      throw new Error(`Target ${targetName} staticDir does not exist: ${target.staticDir}`);
+    if (target.kind === 'web' && target.staticDir !== undefined) {
+      assertWebStaticDirectory(
+        resolvePath(target.staticDir),
+        resolvePath(target.output),
+        loadedConfig.baseDir,
+      );
     }
 
     if (

@@ -16,6 +16,10 @@ import { basename, dirname, join, relative } from 'node:path';
 import { loadEnv } from 'vite';
 
 import { assertProductionTargetReadiness } from '../../packages/cli/src/production-target-readiness';
+import {
+  targetConfigExtensionsFileEnv,
+  targetConfigMatrixJsonEnv,
+} from '../../packages/cli/src/target-config-env';
 import { generateTargetIcons, verifyGeneratedTargetIcons } from '../icons/generator';
 import { stageNativeIconResources, stageWebIconEvidence, stageWrapperIcon } from '../icons/staging';
 import { requireCanonicalAppVersion } from './app-version';
@@ -28,12 +32,19 @@ import {
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
 import { assertNativeReleaseIdentity } from './native-release-identity';
 import {
+  appTargetForPlatformTarget,
   effectiveTargetConfigOutputDir,
   loadPlatformTargetsConfig,
   releaseManifestPath,
   resolveFromPlatformTargetsBase,
 } from './platform-targets';
 import type { PlatformTargetConfig } from './schemas';
+import { loadTargetConfigMatrix } from './target-config-matrix';
+import {
+  assertNonInstallableWebArtifact,
+  assertWebStaticDirectory,
+  copyWebStaticDirectoryContents,
+} from './web-artifact';
 
 const [targetName = 'web-preview', profile = 'production'] = process.argv.slice(2);
 const appVersion = requireCanonicalAppVersion(process.env.APP_VERSION ?? '0.0.0');
@@ -54,12 +65,13 @@ const releaseManifestEnvKeys = [
   'MPGD_TARGET_VERSION_NAME',
   'MPGD_PRODUCT_CATALOG_FILE',
   'MPGD_SOURCE_GIT_SHA',
-  'MPGD_TARGET_CONFIG_EXTENSIONS_FILE',
+  targetConfigExtensionsFileEnv,
 ] as const;
 
 const platformTargets = loadPlatformTargetsConfig();
 const configBaseDir = platformTargets.baseDir;
 const config = platformTargets.config;
+const runtimeTargetConfigMatrix = loadTargetConfigMatrix();
 const monetizationCatalogEnv = normalizeMonetizationCatalogEnv(process.env, configBaseDir);
 const targetScopedEnv = {
   ...process.env,
@@ -94,7 +106,7 @@ const generatedIcons = await generateTargetIcons({
     && process.env.MPGD_AIT_PACKAGE_MODE !== 'skip',
 });
 await verifyGeneratedTargetIcons(generatedIcons);
-const appTarget = appTargetForBuild(target, targetName);
+const appTarget = appTargetForPlatformTarget(target, targetName);
 const gameServicesUrl = profile === 'production'
   ? (process.env.VITE_MPGD_GAME_SERVICES_URL
     ?? loadEnv(profile, gameApp, 'VITE_MPGD_').VITE_MPGD_GAME_SERVICES_URL)
@@ -120,6 +132,7 @@ const env: NodeJS.ProcessEnv = {
   MPGD_PLATFORM_TARGETS_FILE: platformTargets.path,
   MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveTargetConfigOutputDir(configBaseDir),
   MPGD_ICON_MANIFEST_PATH: generatedIcons.manifestPath,
+  [targetConfigMatrixJsonEnv]: JSON.stringify(runtimeTargetConfigMatrix),
 };
 
 if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
@@ -157,13 +170,18 @@ switch (target.kind) {
   case 'web': {
     const outputConfigPath = requireString(target.output, `${targetName}.output`);
     const output = targetPath(outputConfigPath);
+    const staticDirPath = target.staticDir === undefined ? undefined : targetPath(target.staticDir);
+
+    if (staticDirPath !== undefined) {
+      assertWebStaticDirectory(staticDirPath, output, configBaseDir);
+    }
+
     replaceDirectory(`${gameApp}/dist`, output);
-    if (target.staticDir !== undefined) {
-      const staticDirPath = targetPath(target.staticDir);
-      if (!existsSync(staticDirPath)) {
-        throw new Error(`${targetName}.staticDir does not exist: ${staticDirPath}`);
-      }
-      copyDirectoryContents(staticDirPath, output);
+    if (staticDirPath !== undefined) {
+      copyWebStaticDirectoryContents(staticDirPath, output);
+    }
+    if (target.installable === false) {
+      assertNonInstallableWebArtifact(output);
     }
     writeManifest(targetName, profile, outputConfigPath, env);
     break;
@@ -336,25 +354,6 @@ function replaceDirectory(source: string, destination: string): void {
   cpSync(source, destination, { recursive: true });
 }
 
-function copyDirectoryContents(source: string, destination: string): void {
-  for (const entry of readdirSync(source)) {
-    const sourcePath = join(source, entry);
-    const destinationPath = join(destination, entry);
-    const stats = lstatSync(sourcePath);
-
-    if (stats.isSymbolicLink()) {
-      throw new Error(`Refusing to copy a symbolic link from web staticDir: ${sourcePath}`);
-    }
-
-    if (stats.isDirectory()) {
-      mkdirSync(destinationPath, { recursive: true });
-      copyDirectoryContents(sourcePath, destinationPath);
-    } else {
-      cpSync(sourcePath, destinationPath);
-    }
-  }
-}
-
 function mirrorAitRuntimeAssets(gameApp: string, wrapperApp: string): void {
   const sourceAssets = `${gameApp}/dist/assets`;
   const destinationAssets = `${wrapperApp}/public/assets`;
@@ -364,14 +363,6 @@ function mirrorAitRuntimeAssets(gameApp: string, wrapperApp: string): void {
   } else {
     rmSync(destinationAssets, { recursive: true, force: true });
   }
-}
-
-function appTargetForBuild(target: PlatformTargetConfig, name: string): string {
-  if (target.kind !== 'web') {
-    return name;
-  }
-
-  return target.adapter === 'browser' ? 'browser' : name;
 }
 
 function targetReleaseMetadataEnv(target: PlatformTargetConfig): NodeJS.ProcessEnv {

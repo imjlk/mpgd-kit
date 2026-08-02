@@ -11,6 +11,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 import sharp from 'sharp';
 
+import { sanitizeNonInstallableWebArtifact } from '../target/web-artifact';
 import type { GeneratedTargetIcons, IconManifestOutput } from './types';
 
 export interface StageWebIconEvidenceOptions {
@@ -39,6 +40,8 @@ export function stageWebIconEvidence(
   if (result.profile.id === 'web-preview' || result.profile.id === 'microsoft-pwa') {
     if (options.installable !== false) {
       stageWebManifest(result, gameDist);
+    } else {
+      sanitizeNonInstallableWebArtifact(gameDist);
     }
     stageFaviconLink(result, gameDist);
   }

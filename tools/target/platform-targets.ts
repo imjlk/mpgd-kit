@@ -68,6 +68,13 @@ export function effectiveTargetConfigOutputDir(
   );
 }
 
+export function appTargetForPlatformTarget(
+  target: Pick<PlatformTargetConfig, 'adapter' | 'kind'>,
+  targetName: string,
+): string {
+  return target.kind === 'web' ? target.adapter : targetName;
+}
+
 export function assertPlatformTargetsConfigShape(input: unknown): PlatformTargetsConfig {
   assertRecord(input, 'platform targets config');
   const targets = input.targets;
@@ -202,7 +209,7 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 }
 
 function assertString(input: unknown, label: string): asserts input is string {
-  if (typeof input !== 'string' || input.length === 0) {
+  if (typeof input !== 'string' || input.trim().length === 0) {
     throw new Error(`${label} must be a non-empty string.`);
   }
 }

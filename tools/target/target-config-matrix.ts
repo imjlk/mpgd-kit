@@ -5,10 +5,11 @@ import typia from 'typia';
 
 import type { TargetConfig, TargetConfigMatrix } from '@mpgd/target-config';
 
+import { targetConfigExtensionsFileEnv } from '../../packages/cli/src/target-config-env';
 import { readJsonFile } from '../io';
 
 export const defaultTargetConfigMatrixFile = 'packages/target-config/targets.json';
-export const targetConfigExtensionsFileEnv = 'MPGD_TARGET_CONFIG_EXTENSIONS_FILE';
+export { targetConfigExtensionsFileEnv };
 
 interface TargetConfigExtensions {
   readonly schemaVersion: 1;

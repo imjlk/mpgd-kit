@@ -5,6 +5,9 @@ declare const __MPGD_CONFIG_TARGET__: string;
 declare const __MPGD_PLATFORM_TARGET__:
   | import('@mpgd/target-config').EffectivePlatformTargetMetadata
   | undefined;
+declare const __MPGD_TARGET_CONFIG_MATRIX__:
+  | import('@mpgd/target-config').TargetConfigMatrix
+  | undefined;
 declare const __APP_VERSION__: string;
 declare const __BUILD_ID__: string;
 declare const __SOURCE_GIT_SHA__: string;

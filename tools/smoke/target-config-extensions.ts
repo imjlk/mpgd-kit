@@ -3,11 +3,27 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
+import { createGameViteSharedConfig } from '../../examples/phaser-starter/vite.shared';
+import { targetConfigMatrixJsonEnv } from '../../packages/cli/src/target-config-env';
+import { appTargetForPlatformTarget } from '../target/platform-targets';
 import { loadTargetConfigMatrix } from '../target/target-config-matrix';
 
 const root = mkdtempSync(path.join(tmpdir(), 'mpgd-target-config-extensions-'));
 
 try {
+  assert.equal(
+    appTargetForPlatformTarget({ kind: 'web', adapter: 'verse8' }, 'verse8-staging'),
+    'verse8',
+  );
+  assert.equal(
+    appTargetForPlatformTarget({ kind: 'web', adapter: 'browser' }, 'storefront'),
+    'browser',
+  );
+  assert.equal(
+    appTargetForPlatformTarget({ kind: 'devvit-web', adapter: 'devvit' }, 'reddit'),
+    'reddit',
+  );
+
   const extensionsFile = path.join(root, 'extensions.json');
   const base = loadTargetConfigMatrix();
   const webPreview = base.targets['web-preview'];
@@ -27,6 +43,7 @@ try {
 
   assert.deepEqual(extended.targets.storefront, webPreview);
   assert.match(extended.version, /\+extensions\.[a-f0-9]{16}$/u);
+  assertViteRuntimeMatrix(extended);
 
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
@@ -44,3 +61,27 @@ try {
 }
 
 console.log('Target config extensions smoke passed.');
+
+function assertViteRuntimeMatrix(matrix: ReturnType<typeof loadTargetConfigMatrix>): void {
+  const previous = process.env[targetConfigMatrixJsonEnv];
+
+  try {
+    process.env[targetConfigMatrixJsonEnv] = JSON.stringify(matrix);
+    const viteConfig = createGameViteSharedConfig({
+      gameRoot: path.resolve('examples/phaser-starter'),
+      mode: 'production',
+      project: path.resolve('examples/phaser-starter/tsconfig.json'),
+    });
+    const define = viteConfig.define as Record<string, unknown> | undefined;
+    const encodedMatrix = define?.__MPGD_TARGET_CONFIG_MATRIX__;
+
+    assert.equal(typeof encodedMatrix, 'string');
+    assert.deepEqual(JSON.parse(encodedMatrix as string) as unknown, matrix);
+  } finally {
+    if (previous === undefined) {
+      delete process.env[targetConfigMatrixJsonEnv];
+    } else {
+      process.env[targetConfigMatrixJsonEnv] = previous;
+    }
+  }
+}

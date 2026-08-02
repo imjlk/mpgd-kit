@@ -41,6 +41,7 @@ import {
   prepareBaseGameTemplateFile,
 } from './microsoft-store-starter.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
+import { targetConfigExtensionsFileEnv } from './target-config-env.js';
 
 export {
   renderGameAcceptanceMarkdown,
@@ -2419,7 +2420,7 @@ function createTargetCommandEnv(values: TargetCommandEnvInput): NodeJS.ProcessEn
     MPGD_PLATFORM_TARGETS_FILE: preparedTargetsFile,
     ...(targetConfigExtensionsFile === undefined
       ? {}
-      : { MPGD_TARGET_CONFIG_EXTENSIONS_FILE: targetConfigExtensionsFile }),
+      : { [targetConfigExtensionsFileEnv]: targetConfigExtensionsFile }),
   };
 }
 
@@ -2427,7 +2428,7 @@ function resolveTargetConfigExtensionsFile(
   gameRoot: string,
   configuredFile: string | undefined,
 ): string | undefined {
-  const inheritedFile = readConfiguredPath(process.env.MPGD_TARGET_CONFIG_EXTENSIONS_FILE);
+  const inheritedFile = readConfiguredPath(process.env[targetConfigExtensionsFileEnv]);
   const candidate = configuredFile ?? inheritedFile;
 
   if (candidate !== undefined) {

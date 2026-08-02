@@ -118,11 +118,16 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
 
   const nonInstallableDist = join(gameRoot, 'non-installable-dist');
   mkdirSync(nonInstallableDist, { recursive: true });
-  writeFileSync(join(nonInstallableDist, 'index.html'), '<html><head></head><body></body></html>');
+  writeFileSync(join(nonInstallableDist, 'manifest.webmanifest'), '{}\n');
+  writeFileSync(
+    join(nonInstallableDist, 'index.html'),
+    '<html><head><link rel="manifest" href="./manifest.webmanifest"></head><body></body></html>',
+  );
   stageWebIconEvidence(repeated, nonInstallableDist, { installable: false });
   assert.equal(existsSync(join(nonInstallableDist, 'manifest.webmanifest')), false);
   assert.equal(existsSync(join(nonInstallableDist, 'mpgd-icon-manifest.json')), true);
   assert.match(await readUtf8(join(nonInstallableDist, 'index.html')), /rel="icon"/u);
+  assert.doesNotMatch(await readUtf8(join(nonInstallableDist, 'index.html')), /rel="manifest"/u);
 
   const fallbackPwaRelease = writeMicrosoftStorePwaArtifacts({
     artifactRoot: fallbackDist,

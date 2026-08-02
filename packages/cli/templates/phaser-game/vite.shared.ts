@@ -39,6 +39,9 @@ export function createGameViteSharedConfig(
     debug: !isProduction,
     buildId: process.env.BUILD_ID ?? 'local',
   });
+  const runtimeTargetConfigMatrix = readRuntimeTargetConfigMatrix(
+    process.env.MPGD_TARGET_CONFIG_MATRIX_JSON,
+  );
 
   return {
     base: './',
@@ -63,12 +66,24 @@ export function createGameViteSharedConfig(
       __MPGD_CONFIG_TARGET__: JSON.stringify(configTarget),
       __MPGD_PLATFORM_TARGET__:
         platformTarget === undefined ? 'undefined' : JSON.stringify(platformTarget),
+      __MPGD_TARGET_CONFIG_MATRIX__:
+        runtimeTargetConfigMatrix === undefined
+          ? 'undefined'
+          : JSON.stringify(runtimeTargetConfigMatrix),
       __APP_VERSION__: JSON.stringify(process.env.APP_VERSION ?? '0.0.0-dev'),
       __BUILD_ID__: JSON.stringify(process.env.BUILD_ID ?? 'local'),
       __SOURCE_GIT_SHA__: JSON.stringify(process.env.MPGD_SOURCE_GIT_SHA ?? 'uncommitted'),
       __DEBUG_BUILD__: JSON.stringify(!isProduction),
     },
   };
+}
+
+function readRuntimeTargetConfigMatrix(source: string | undefined): unknown {
+  if (source === undefined || source.trim().length === 0) {
+    return undefined;
+  }
+
+  return JSON.parse(source) as unknown;
 }
 
 export function resolveBuildGatewayModule(input: {
