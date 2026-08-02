@@ -1,34 +1,57 @@
-import type { TargetConfig, TargetConfigMatrix } from '@mpgd/target-config';
+import type {
+  IntegrationAvailabilityState,
+  PresentationMode,
+  ReleaseProfile,
+  StorageSupport,
+  TargetConfig,
+  TargetConfigMatrix,
+  TargetIntegration,
+  TargetRuntimeKind,
+} from '@mpgd/target-config';
 
 export type { TargetConfigMatrix } from '@mpgd/target-config';
 
-const runtimeKinds = new Set([
-  'web-preview',
-  'microsoft-store-pwa',
-  'capacitor-android',
-  'capacitor-ios',
-  'apps-in-toss',
-  'devvit-web',
-  'verse8-web',
-]);
-const releaseProfiles = new Set([
-  'web-preview',
-  'microsoft-store',
-  'google-play',
-  'app-store',
-  'apps-in-toss',
-  'devvit',
-  'verse8',
-]);
-const storageSupportValues = new Set(['local', 'native', 'none']);
-const integrationAvailabilityValues = new Set([
-  'available',
-  'disabled',
-  'approval-required',
-  'configuration-required',
-  'unsupported',
-]);
-const presentationModeValues = new Set(['fullscreen', 'inline-expanded']);
+const runtimeKinds = valueSet({
+  'web-preview': true,
+  'microsoft-store-pwa': true,
+  'capacitor-android': true,
+  'capacitor-ios': true,
+  'apps-in-toss': true,
+  'devvit-web': true,
+  'verse8-web': true,
+} satisfies Record<TargetRuntimeKind, true>);
+const releaseProfiles = valueSet({
+  'web-preview': true,
+  'microsoft-store': true,
+  'google-play': true,
+  'app-store': true,
+  'apps-in-toss': true,
+  'devvit': true,
+  'verse8': true,
+} satisfies Record<ReleaseProfile, true>);
+const storageSupportValues = valueSet({
+  local: true,
+  native: true,
+  none: true,
+} satisfies Record<StorageSupport, true>);
+const integrationAvailabilityValues = valueSet({
+  available: true,
+  disabled: true,
+  'approval-required': true,
+  'configuration-required': true,
+  unsupported: true,
+} satisfies Record<IntegrationAvailabilityState, true>);
+const presentationModeValues = valueSet({
+  fullscreen: true,
+  'inline-expanded': true,
+} satisfies Record<PresentationMode, true>);
+const targetIntegrations = Object.keys({
+  identityUpgrade: true,
+  presentation: true,
+  sharing: true,
+  inboundShare: true,
+  notifications: true,
+} satisfies Record<TargetIntegration, true>);
 
 export function assertRuntimeTargetConfigMatrix(input: unknown): TargetConfigMatrix {
   assertRecord(input, 'target config matrix');
@@ -89,13 +112,7 @@ function assertTargetConfig(input: unknown, label: string): asserts input is Tar
 
   if (input.integrations !== undefined) {
     assertRecord(input.integrations, `${label}.integrations`);
-    for (const key of [
-      'identityUpgrade',
-      'presentation',
-      'sharing',
-      'inboundShare',
-      'notifications',
-    ]) {
+    for (const key of targetIntegrations) {
       assertOneOf(
         input.integrations[key],
         integrationAvailabilityValues,
@@ -134,8 +151,14 @@ function assertNonEmptyString(input: unknown, label: string): asserts input is s
 
 function assertOneOf(input: unknown, values: ReadonlySet<string>, label: string): void {
   if (typeof input !== 'string' || !values.has(input)) {
-    throw new Error(`${label} has an unsupported value.`);
+    throw new Error(
+      `${label} has unsupported value ${JSON.stringify(input)}; expected one of ${[...values].join(', ')}.`,
+    );
   }
+}
+
+function valueSet<T extends string>(values: Record<T, true>): ReadonlySet<string> {
+  return new Set(Object.keys(values));
 }
 
 function assertRecord(input: unknown, label: string): asserts input is Record<string, unknown> {
