@@ -101,6 +101,17 @@ if (target === undefined) {
 }
 
 const gameApp = targetPath(target.gameApp);
+if (target.kind === 'web' && target.staticDir !== undefined) {
+  const staticDirPath = targetPath(target.staticDir);
+
+  assertWebStaticDirectory(
+    staticDirPath,
+    targetPath(requireString(target.output, `${targetName}.output`)),
+    configBaseDir,
+  );
+  assertWebStaticDirectory(staticDirPath, `${gameApp}/dist`, configBaseDir);
+}
+
 const generatedIcons = await generateTargetIcons({
   gameRoot: configBaseDir,
   targetName,
@@ -163,10 +174,6 @@ switch (target.kind) {
     const outputConfigPath = requireString(target.output, `${targetName}.output`);
     const output = targetPath(outputConfigPath);
     const staticDirPath = target.staticDir === undefined ? undefined : targetPath(target.staticDir);
-
-    if (staticDirPath !== undefined) {
-      assertWebStaticDirectory(staticDirPath, output, configBaseDir);
-    }
 
     replaceDirectory(`${gameApp}/dist`, output);
     if (staticDirPath !== undefined) {

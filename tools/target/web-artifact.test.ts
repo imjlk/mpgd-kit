@@ -104,6 +104,19 @@ try {
   });
   assert.doesNotThrow(() => validatePlatformTargetsFile(configPath));
 
+  const gameApp = join(root, 'game-app');
+  const viteOutputStaticDir = join(gameApp, 'dist/static');
+  mkdirSync(viteOutputStaticDir, { recursive: true });
+  writeWebTargetConfig(configPath, {
+    gameApp: 'game-app',
+    output: 'validated-artifact',
+    staticDir: 'game-app/dist/static',
+  });
+  assert.throws(
+    () => validatePlatformTargetsFile(configPath),
+    /staticDir and output must not overlap/u,
+  );
+
   assert.throws(
     () => assertPlatformTargetsConfigShape({
       targets: {
@@ -153,13 +166,17 @@ console.log('Web artifact policy smoke passed.');
 
 function writeWebTargetConfig(
   path: string,
-  input: { readonly output: string; readonly staticDir: string },
+  input: {
+    readonly gameApp?: string;
+    readonly output: string;
+    readonly staticDir: string;
+  },
 ): void {
   writeFileSync(path, `${JSON.stringify({
     targets: {
       storefront: {
         kind: 'web',
-        gameApp: '.',
+        gameApp: input.gameApp ?? '.',
         adapter: 'browser',
         output: input.output,
         staticDir: input.staticDir,

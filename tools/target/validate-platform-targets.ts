@@ -29,9 +29,12 @@ export function validatePlatformTargetsFile(path?: string) {
     }
 
     if (target.kind === 'web' && target.staticDir !== undefined) {
+      const staticDir = resolvePath(target.staticDir);
+
+      assertWebStaticDirectory(staticDir, resolvePath(target.output), loadedConfig.baseDir);
       assertWebStaticDirectory(
-        resolvePath(target.staticDir),
-        resolvePath(target.output),
+        staticDir,
+        resolve(resolvePath(target.gameApp), 'dist'),
         loadedConfig.baseDir,
       );
     }

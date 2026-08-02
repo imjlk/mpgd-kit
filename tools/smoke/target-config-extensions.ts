@@ -108,6 +108,28 @@ try {
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
     targets: {
+      storefront: {
+        ...webPreview,
+        features: {
+          ...webPreview.features,
+          rewardedAds: true,
+        },
+        monetization: {
+          ...webPreview.monetization,
+          rewardedAds: true,
+        },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /cannot enable rewarded ads for web-preview runtime/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
       'web-preview': webPreview,
     },
   })}\n`);

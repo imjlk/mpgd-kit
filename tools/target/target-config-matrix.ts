@@ -92,4 +92,13 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
       `Target config extension ${target} runtime ${config.runtime} requires release profile ${expectedReleaseProfile}; received ${config.release.profile}.`,
     );
   }
+
+  if (
+    config.runtime === 'web-preview'
+    && (config.features.rewardedAds || config.monetization.rewardedAds)
+  ) {
+    throw new Error(
+      `Target config extension ${target} cannot enable rewarded ads for web-preview runtime.`,
+    );
+  }
 }
