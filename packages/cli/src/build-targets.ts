@@ -28,18 +28,10 @@ export function normalizeBuildTarget(
   target: string,
   configuredTargets: ConfiguredBuildTargets = {},
 ): string {
-  if (target === 'web' && isConfiguredWebTarget(target, configuredTargets)) {
-    return target;
-  }
+  const normalizedTarget = resolveBuildTarget(target, configuredTargets);
 
-  const builtInTarget = normalizeBuiltInBuildTarget(target);
-
-  if (builtInTarget !== undefined) {
-    return builtInTarget;
-  }
-
-  if (isConfiguredWebTarget(target, configuredTargets)) {
-    return target;
+  if (normalizedTarget !== undefined) {
+    return normalizedTarget;
   }
 
   throw new Error(`Unsupported target: ${target}`);
@@ -48,17 +40,29 @@ export function normalizeBuildTarget(
 export function normalizeConfiguredBuildTargets(
   configuredTargets: ConfiguredBuildTargets,
 ): readonly string[] {
-  const targets: string[] = [];
+  const targets = new Set<string>();
 
   for (const target of Object.keys(configuredTargets)) {
-    try {
-      targets.push(normalizeBuildTarget(target, configuredTargets));
-    } catch {
-      // Unsupported custom platform kinds remain outside the generic target CLI.
+    const normalizedTarget = resolveBuildTarget(target, configuredTargets);
+
+    if (normalizedTarget !== undefined) {
+      targets.add(normalizedTarget);
     }
   }
 
-  return [...new Set(targets)];
+  return [...targets];
+}
+
+function resolveBuildTarget(
+  target: string,
+  configuredTargets: ConfiguredBuildTargets,
+): string | undefined {
+  if (target === 'web' && isConfiguredWebTarget(target, configuredTargets)) {
+    return target;
+  }
+
+  return normalizeBuiltInBuildTarget(target)
+    ?? (isConfiguredWebTarget(target, configuredTargets) ? target : undefined);
 }
 
 function normalizeBuiltInBuildTarget(target: string): string | undefined {
