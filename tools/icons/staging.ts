@@ -205,9 +205,16 @@ function stageIos(
 
 function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void {
   const stagedPath = join(gameDist, 'manifest.webmanifest');
-  const sourcePath = join(result.gameRoot, 'public/manifest.webmanifest');
-  const manifestPath = existsSync(stagedPath) ? stagedPath : sourcePath;
-  const manifest = existsSync(manifestPath)
+  const stagedJsonPath = join(gameDist, 'manifest.json');
+  const publicWebManifestPath = join(result.gameRoot, 'public/manifest.webmanifest');
+  const publicJsonManifestPath = join(result.gameRoot, 'public/manifest.json');
+  const manifestPath = [
+    stagedJsonPath,
+    stagedPath,
+    publicWebManifestPath,
+    publicJsonManifestPath,
+  ].find((path) => existsSync(path));
+  const manifest = manifestPath !== undefined
     ? JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>
     : {
         name: basename(result.gameRoot),
@@ -228,6 +235,9 @@ function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void 
       purpose: output.purpose === 'maskable' ? 'maskable' : 'any',
     }));
   writeFileSync(stagedPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  if (manifestPath === stagedJsonPath) {
+    rmSync(stagedJsonPath);
+  }
   ensureInstallableWebManifestLink(gameDist);
 }
 

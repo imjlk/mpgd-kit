@@ -32,6 +32,8 @@ export type EntitlementLedgerPayload = Record<string, string | number | boolean>
 
 export interface VerifyPurchaseRequest {
   readonly target: GameServicesStoreTarget;
+  /** Deployment config key used to resolve game-owned platform product identifiers. */
+  readonly deploymentTarget?: string;
   readonly playerId: string;
   readonly productId: LogicalProductId;
   readonly platformTransactionId: string;
@@ -130,6 +132,7 @@ export interface LeaderboardScoreTransaction extends RecordLeaderboardScoreReque
 export function assertVerifyPurchaseRequest(input: VerifyPurchaseRequest): VerifyPurchaseRequest {
   assertRecord(input, 'VerifyPurchaseRequest');
   assertStoreTarget(input.target);
+  assertOptionalDeploymentTarget(input.deploymentTarget);
   assertNonEmptyString(input.playerId, 'playerId');
   assertNonEmptyString(input.productId, 'productId');
   assertNonEmptyString(input.platformTransactionId, 'platformTransactionId');

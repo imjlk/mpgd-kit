@@ -33,6 +33,7 @@ const catalog = {
       },
       platformProductIds: {
         android: 'coins_100_android',
+        'android-staging': 'coins_100_android_staging',
       },
     },
     {
@@ -251,6 +252,44 @@ const duplicatePurchase = await backend.purchases.verifyPurchase({
   idempotencyKey: 'purchase-1',
   purchasedAt: '2026-07-04T00:00:00.000Z',
 });
+let androidDeploymentProductId: string | undefined;
+const androidDeploymentStore = createInMemoryGameServicesStore();
+const androidDeploymentBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: androidDeploymentStore,
+  evidenceVerifier: {
+    async verifyPurchase(input) {
+      androidDeploymentProductId = input.platformProductId;
+      return {
+        status: 'verified',
+        verificationId: 'provider:android:purchase:staging',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_USED' } as const;
+    },
+  },
+});
+const androidDeploymentPurchase = await androidDeploymentBackend.purchases.verifyPurchase({
+  target: 'android',
+  deploymentTarget: 'android-staging',
+  playerId: 'player-android-staging',
+  productId: 'COINS_100',
+  platformTransactionId: 'android-staging-transaction',
+  idempotencyKey: 'android-staging-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+const androidDeploymentConflict = await androidDeploymentBackend.purchases.verifyPurchase({
+  target: 'android',
+  deploymentTarget: 'android-production',
+  playerId: 'player-android-staging',
+  productId: 'COINS_100',
+  platformTransactionId: 'android-staging-transaction',
+  idempotencyKey: 'android-staging-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
 const reward = await backend.adRewards.claimAdReward({
   target: 'android',
   playerId: 'player-1',
@@ -326,6 +365,26 @@ const invalidTransportRequest = await handler.handle({
 
 assertEqual(purchase.verified, true, 'purchase should be verified');
 assertEqual(duplicatePurchase.alreadyProcessed, true, 'purchase should dedupe');
+assertEqual(
+  androidDeploymentPurchase.verified,
+  true,
+  'custom Android deployment purchases should be verified',
+);
+assertEqual(
+  androidDeploymentProductId,
+  'coins_100_android_staging',
+  'custom Android deployment purchases should use the deployment product id',
+);
+assertEqual(
+  androidDeploymentConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'purchase retries must preserve the original deployment target dimension',
+);
+assertEqual(
+  (await androidDeploymentStore.listEntitlementTransactions())[0]?.payload.deploymentTarget,
+  'android-staging',
+  'purchase ledger payloads should retain the deployment target for audit',
+);
 assertEqual(reward.granted, true, 'reward should be granted');
 assertEqual(
   verse8DeploymentReward.granted,

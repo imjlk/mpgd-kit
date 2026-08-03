@@ -2,7 +2,7 @@ import { implement } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 
 import { createAnalyticsReporter, type AnalyticsSink } from '@mpgd/analytics';
-import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
+import { resolveProductPlatformId, type AdPlacements, type ProductCatalog } from '@mpgd/catalog';
 
 import {
   gameServicesBackendEndpoints,
@@ -565,6 +565,9 @@ async function verifyPurchaseWithStore(
     idempotencyKey: request.idempotencyKey,
     grantId: request.productId,
     target: request.target,
+    ...(request.deploymentTarget === undefined
+      ? {}
+      : { deploymentTarget: request.deploymentTarget }),
   } as const;
   const completeExistingRetry = async (
     transaction: ProductGrantTransaction,
@@ -602,7 +605,10 @@ async function verifyPurchaseWithStore(
     });
   }
 
-  const platformProductId = product.platformProductIds[request.target];
+  const platformProductId = resolveProductPlatformId(
+    product,
+    request.deploymentTarget ?? request.target,
+  );
 
   if (platformProductId === undefined) {
     return assertVerifyPurchaseResponse({
@@ -655,6 +661,9 @@ async function verifyPurchaseWithStore(
     payload: {
       ...verificationPayload,
       target: request.target,
+      ...(request.deploymentTarget === undefined
+        ? {}
+        : { deploymentTarget: request.deploymentTarget }),
       productId: request.productId,
       productType: product.type,
       platformProductId,

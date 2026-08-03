@@ -101,6 +101,18 @@ try {
   assert.ok(installableHtml.includes(`<template>${embeddedManifestMarkup}</template>`));
   assert.doesNotThrow(() => assertInstallableWebArtifact(scriptedArtifact));
 
+  const implicitHeadArtifact = join(root, 'implicit-head-artifact');
+  mkdirSync(implicitHeadArtifact);
+  writeFileSync(join(implicitHeadArtifact, 'manifest.webmanifest'), '{}\n');
+  writeFileSync(
+    join(implicitHeadArtifact, 'index.html'),
+    '<!doctype html><html><meta charset="utf-8"><body></body></html>',
+  );
+  ensureInstallableWebManifestLink(implicitHeadArtifact);
+  const implicitHeadHtml = readFileSync(join(implicitHeadArtifact, 'index.html'), 'utf8');
+  assert.match(implicitHeadHtml, /<html>\s*<head>[\s\S]*rel="manifest"[\s\S]*<\/head>/u);
+  assert.doesNotThrow(() => assertInstallableWebArtifact(implicitHeadArtifact));
+
   sanitizeNonInstallableWebArtifact(scriptedArtifact);
   const nonInstallableHtml = readFileSync(join(scriptedArtifact, 'index.html'), 'utf8');
   assert.ok(nonInstallableHtml.includes(`<script>const markup = ${JSON.stringify(
@@ -261,6 +273,20 @@ try {
     );
   }
 
+  const archiveStaticDir = join(root, 'archive-static');
+  mkdirSync(archiveStaticDir);
+  writeWebTargetConfig(configPath, {
+    additionalOutput: 'artifact-root/archive',
+    additionalStaticDir: 'archive-static',
+    gameApp: 'game-app',
+    output: 'archive-static/storefront-build',
+    staticDir: 'static',
+  });
+  assert.throws(
+    () => validatePlatformTargetsFile(configPath),
+    /staticDir and output must not overlap across configured web targets/u,
+  );
+
   for (const output of [
     '.mpgd/generated',
     '.mpgd/generated/icons',
@@ -349,6 +375,7 @@ function writeWebTargetConfig(
   path: string,
   input: {
     readonly additionalOutput?: string;
+    readonly additionalStaticDir?: string;
     readonly gameApp?: string;
     readonly output: string;
     readonly staticDir: string;
@@ -373,6 +400,7 @@ function writeWebTargetConfig(
             archive: {
               ...target,
               output: input.additionalOutput,
+              staticDir: input.additionalStaticDir ?? input.staticDir,
             },
           }),
     },

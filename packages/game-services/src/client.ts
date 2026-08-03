@@ -246,6 +246,9 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
 
       const verification = await input.backend.purchases.verifyPurchase({
         target,
+        ...(input.deploymentTarget === undefined || input.deploymentTarget === target
+          ? {}
+          : { deploymentTarget: input.deploymentTarget }),
         playerId: input.playerId,
         productId: purchaseInput.productId,
         platformTransactionId: purchase.transactionId,

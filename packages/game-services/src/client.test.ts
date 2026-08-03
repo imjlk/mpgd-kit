@@ -112,6 +112,40 @@ assertEqual(
   'reward evidence should reach the backend verifier request',
 );
 
+let customPurchaseDeploymentTarget: string | undefined;
+const customPurchaseBackend = {
+  ...backend,
+  purchases: {
+    async verifyPurchase(input) {
+      customPurchaseDeploymentTarget = input.deploymentTarget;
+      return {
+        verified: true,
+        ledgerEntryId: 'custom-purchase-ledger',
+        alreadyProcessed: false,
+      };
+    },
+  },
+} satisfies GameServicesBackendApi;
+const customPurchaseClient = createGameServicesClient({
+  gateway: createMockGateway(),
+  backend: customPurchaseBackend,
+  playerId,
+  target: 'android',
+  deploymentTarget: 'android-staging',
+});
+const customPurchase = await customPurchaseClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'android-staging-purchase',
+});
+
+assertEqual(customPurchase.status, 'granted', 'custom deployment purchases should be granted');
+assertEqual(
+  customPurchaseDeploymentTarget,
+  'android-staging',
+  'purchases should carry the deployment target to backend verification',
+);
+
 const leaderboard = await client.submitLeaderboardScore({
   leaderboardId: 'default',
   score: 1234,

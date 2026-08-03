@@ -121,6 +121,28 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   assert.equal(overlaidManifest.start_url, './storefront/index.html');
   assert.deepEqual(overlaidManifest.icons, webManifest.icons);
 
+  writeFileSync(join(dist, 'manifest.webmanifest'), `${JSON.stringify({
+    id: './game-wide-manifest',
+    scope: './',
+    start_url: './',
+  })}\n`);
+  writeFileSync(join(dist, 'manifest.json'), `${JSON.stringify({
+    id: './target-overlay',
+    scope: './target/',
+    start_url: './target/index.html',
+    icons: [{ src: './stale-target.png', sizes: '1x1', type: 'image/png' }],
+  })}\n`);
+  stageWebIconEvidence(repeated, dist);
+  const jsonOverlayManifest = JSON.parse(
+    await readUtf8(join(dist, 'manifest.webmanifest')),
+  ) as Record<string, unknown>;
+
+  assert.equal(jsonOverlayManifest.id, './target-overlay');
+  assert.equal(jsonOverlayManifest.scope, './target/');
+  assert.equal(jsonOverlayManifest.start_url, './target/index.html');
+  assert.deepEqual(jsonOverlayManifest.icons, webManifest.icons);
+  assert.equal(existsSync(join(dist, 'manifest.json')), false);
+
   const stagedIcon = repeated.manifest.outputs[0];
   assert.ok(stagedIcon);
   writeFileSync(join(dist, stagedIcon.path), 'overlaid icon bytes');

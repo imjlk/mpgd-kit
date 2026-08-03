@@ -34,6 +34,8 @@ interface HtmlTagRange {
 
 interface HtmlHeadScan {
   readonly closingTagStart?: number;
+  readonly headOpeningTagEnd?: number;
+  readonly htmlOpeningTagEnd?: number;
   readonly linkTags: readonly HtmlTagRange[];
 }
 
@@ -202,6 +204,7 @@ export function assertDisjointWebTargetOutputs(
 
   assertWebOutputsStayWithinRoot(outputs, resolvePath('.'));
   assertDisjointWebArtifactOutputs(outputs);
+  assertWebOutputsAvoidStaticDirectories(outputs, targets, resolvePath);
   assertWebOutputsAvoidProtectedPaths(
     outputs,
     [...defaultProtectedBuildOutputs(resolvePath), ...configuredProtectedBuildOutputs(
@@ -369,17 +372,35 @@ function isFaviconLinkTag(tag: string, href: string): boolean {
 }
 
 function insertHtmlHeadTag(html: string, tag: string): string {
-  const closingHeadTag = scanHtmlHead(html).closingTagStart;
+  const scan = scanHtmlHead(html);
 
-  return closingHeadTag === undefined
-    ? `${tag}\n${html}`
-    : html.slice(0, closingHeadTag) + `  ${tag}\n` + html.slice(closingHeadTag);
+  if (scan.closingTagStart !== undefined) {
+    return html.slice(0, scan.closingTagStart) + `  ${tag}\n` + html.slice(scan.closingTagStart);
+  }
+
+  if (scan.headOpeningTagEnd !== undefined) {
+    return html.slice(0, scan.headOpeningTagEnd)
+      + `\n  ${tag}`
+      + html.slice(scan.headOpeningTagEnd);
+  }
+
+  const head = `<head>\n  ${tag}\n</head>`;
+  if (scan.htmlOpeningTagEnd !== undefined) {
+    return html.slice(0, scan.htmlOpeningTagEnd)
+      + `\n${head}`
+      + html.slice(scan.htmlOpeningTagEnd);
+  }
+
+  const doctypeEnd = /^\s*<!doctype[^>]*>/iu.exec(html)?.[0].length ?? 0;
+  return html.slice(0, doctypeEnd) + `\n${head}\n` + html.slice(doctypeEnd);
 }
 
 function scanHtmlHead(html: string): HtmlHeadScan {
   const lowercaseHtml = html.toLowerCase();
   const linkTags: HtmlTagRange[] = [];
   let closingTagStart: number | undefined;
+  let headOpeningTagEnd: number | undefined;
+  let htmlOpeningTagEnd: number | undefined;
   let inHead = false;
   let index = 0;
   let rawTextTag: 'script' | 'style' | undefined;
@@ -437,6 +458,12 @@ function scanHtmlHead(html: string): HtmlHeadScan {
 
     if (name === 'head' && !inHead) {
       inHead = true;
+      headOpeningTagEnd = tagEnd + 1;
+      continue;
+    }
+
+    if (name === 'html' && htmlOpeningTagEnd === undefined) {
+      htmlOpeningTagEnd = tagEnd + 1;
       continue;
     }
 
@@ -471,6 +498,8 @@ function scanHtmlHead(html: string): HtmlHeadScan {
 
   return {
     ...(closingTagStart === undefined ? {} : { closingTagStart }),
+    ...(headOpeningTagEnd === undefined ? {} : { headOpeningTagEnd }),
+    ...(htmlOpeningTagEnd === undefined ? {} : { htmlOpeningTagEnd }),
     linkTags,
   };
 }
@@ -556,6 +585,33 @@ function configuredProtectedBuildOutputs(
         ];
     }
   });
+}
+
+function assertWebOutputsAvoidStaticDirectories(
+  outputs: readonly NamedWebArtifactOutput[],
+  targets: Readonly<Record<string, PlatformTargetConfig>>,
+  resolvePath: (path: string) => string,
+): void {
+  const staticDirectories = Object.entries(targets).flatMap(([name, target]) => {
+    return target.kind === 'web' && target.staticDir !== undefined
+      ? [{ name: `${name} staticDir`, path: resolvePath(target.staticDir) }]
+      : [];
+  });
+  const canonicalStaticDirectories = staticDirectories.map((staticDirectory) => ({
+    ...staticDirectory,
+    canonicalPath: canonicalizeThroughExistingAncestor(staticDirectory.path),
+  }));
+
+  for (const output of outputs) {
+    const canonicalOutput = canonicalizeWebArtifactOutput(output.path);
+    for (const staticDirectory of canonicalStaticDirectories) {
+      if (pathsOverlap(canonicalOutput, staticDirectory.canonicalPath)) {
+        throw new Error(
+          `Web staticDir and output must not overlap across configured web targets: ${output.name} (${output.path}) and ${staticDirectory.name} (${staticDirectory.path}).`,
+        );
+      }
+    }
+  }
 }
 
 function assertWebOutputsAvoidProtectedPaths(
