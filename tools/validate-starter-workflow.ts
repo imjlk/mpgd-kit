@@ -1288,6 +1288,7 @@ function validatePhaserTemplateDevvitViewModes(): void {
     const gameDocumentPath = `${root}/game.html`;
     const entryPath = `${root}/src/entry.ts`;
     const gameEntryPath = `${root}/src/gameEntry.ts`;
+    const entryFailurePath = `${root}/src/runtime/renderEntryFailure.ts`;
     const mainPath = `${root}/src/main.ts`;
     const createGamePath = `${root}/src/runtime/createGame.ts`;
     const devvitEntryPath = `${root}/src/platform/devvitEntrypoint.ts`;
@@ -1299,6 +1300,7 @@ function validatePhaserTemplateDevvitViewModes(): void {
       gameDocumentPath,
       entryPath,
       gameEntryPath,
+      entryFailurePath,
       mainPath,
       createGamePath,
       devvitEntryPath,
@@ -1329,17 +1331,35 @@ function validatePhaserTemplateDevvitViewModes(): void {
 
     if (existsSync(entryPath)) {
       const source = readText(entryPath);
-      for (const requiredText of ["__APP_TARGET__ === 'reddit'", "import('./main')"]) {
+      for (const requiredText of [
+        "__APP_TARGET__ === 'reddit'",
+        "import('./main')",
+        'renderEntryFailure(error)',
+      ]) {
         assertIncludesText(source, requiredText, `${entryPath}: target-aware bootstrap.`);
       }
     }
 
     if (existsSync(gameEntryPath)) {
       const source = readText(gameEntryPath);
-      assertIncludesText(source, "import('./main')", `${gameEntryPath}: Phaser bootstrap.`);
+      for (const requiredText of ["import('./main')", 'renderEntryFailure(error)']) {
+        assertIncludesText(source, requiredText, `${gameEntryPath}: Phaser bootstrap.`);
+      }
 
       if (source.includes('getWebViewMode')) {
         failures.push(`${gameEntryPath}: expanded entry must not inspect Devvit web view mode.`);
+      }
+    }
+
+    if (existsSync(entryFailurePath)) {
+      const source = readText(entryFailurePath);
+
+      for (const requiredText of [
+        "querySelector<HTMLElement>('#game')",
+        "setAttribute('role', 'alert')",
+        'Failed to load the game. Please refresh and try again.',
+      ]) {
+        assertIncludesText(source, requiredText, `${entryFailurePath}: entry failure fallback.`);
       }
     }
 
@@ -1405,6 +1425,21 @@ function validatePhaserTemplateDevvitViewModes(): void {
         assertIncludesText(source, requiredText, `${vitePath}: Devvit multi-page build.`);
       }
     }
+  }
+
+  const templateEntryFailure =
+    'packages/cli/templates/phaser-game/src/runtime/renderEntryFailure.ts';
+  const exampleEntryFailure = 'examples/phaser-starter/src/runtime/renderEntryFailure.ts';
+
+  if (
+    existsSync(templateEntryFailure)
+    && existsSync(exampleEntryFailure)
+    && readText(templateEntryFailure) !== readText(exampleEntryFailure)
+  ) {
+    failures.push(
+      `${templateEntryFailure}: must stay in parity with `
+        + `${exampleEntryFailure}.`,
+    );
   }
 
   assertIncludesText(
@@ -1553,6 +1588,7 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
       }
     }
   }
+
 }
 
 function validatePhaserTemplateOrientationPolicy(): void {
