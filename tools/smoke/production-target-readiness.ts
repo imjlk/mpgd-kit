@@ -60,12 +60,10 @@ try {
     targetsFile: join(gameRoot, 'does-not-exist.json'),
     gameRoot,
   });
-  assertProductionTargetReadiness({
-    target: 'web-preview',
-    profile: 'production',
-    targetsFile: join(gameRoot, 'does-not-exist.json'),
-    gameRoot,
-  });
+  expectReadinessError(
+    { target: 'web-preview', profile: 'production' },
+    'requires a target policy',
+  );
 
   const verse8RewardPolicy = {
     runtime: 'verse8-web',
@@ -79,6 +77,10 @@ try {
       output: 'artifacts/verse8-staging',
     },
   });
+  expectReadinessError(
+    { target: 'verse8-staging', profile: 'production' },
+    'requires a target policy',
+  );
   expectReadinessError(
     {
       target: 'verse8-staging',
@@ -103,13 +105,14 @@ try {
       authoritativeGameServices: false,
     },
   });
-  assertProductionTargetReadiness({
-    target: 'verse8-staging',
-    profile: 'production',
-    targetsFile,
-    gameRoot,
-    targetPolicy: verse8RewardPolicy,
-  });
+  expectReadinessError(
+    {
+      target: 'verse8-staging',
+      profile: 'production',
+      targetPolicy: verse8RewardPolicy,
+    },
+    'cannot enable rewarded ads without authoritative game services',
+  );
 
   expectReadinessError(
     { target: 'ait', profile: ' production ', gameServicesUrl: publicBackend },

@@ -226,7 +226,7 @@ function stageWebManifest(
     publicJsonManifestPath,
   ].find((path) => existsSync(path));
   const manifest = manifestPath !== undefined
-    ? JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>
+    ? readWebManifest(manifestPath)
     : {
         name: basename(result.gameRoot),
         short_name: basename(result.gameRoot),
@@ -250,6 +250,16 @@ function stageWebManifest(
     rmSync(stagedJsonPath);
   }
   ensureInstallableWebManifestLink(gameDist);
+}
+
+function readWebManifest(path: string): Record<string, unknown> {
+  const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Web app manifest must contain a JSON object: ${path}`);
+  }
+
+  return parsed as Record<string, unknown>;
 }
 
 function stageFaviconLink(result: GeneratedTargetIcons, gameDist: string): void {

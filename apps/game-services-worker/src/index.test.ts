@@ -7,6 +7,7 @@ import {
   createWorkerFetchHandler,
   createWorkerService,
   type GameServicesEvidenceVerifierBinding,
+  type GameServicesWorkerEnv,
 } from './handler.js';
 
 const workerEnv = {
@@ -21,7 +22,7 @@ const workerEnv = {
         : undefined;
     },
   },
-} as const;
+} satisfies GameServicesWorkerEnv;
 const workerFetch = createWorkerFetchHandler(workerEnv);
 const workerService = createWorkerService(workerEnv);
 const baseUrl = 'https://game-services-worker.test';
@@ -123,6 +124,79 @@ assertEqual(
   rewardVerifierBindingReceivedSignal,
   false,
   'reward verifier bindings must not receive non-cloneable AbortSignal values',
+);
+
+let configuredDeploymentTarget: string | undefined;
+let configuredPlatformProductId: string | undefined;
+const configuredDeploymentEnv = {
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_ANDROID_DEPLOYMENT_TARGET: 'android-staging',
+  GAME_SERVICES_EVIDENCE_VERIFIER: {
+    async verifyPurchase(input) {
+      configuredDeploymentTarget = input.request.deploymentTarget;
+      configuredPlatformProductId = input.platformProductId;
+      return verifiedDecision(`configured-deployment:${input.request.idempotencyKey}`);
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_USED' } as const;
+    },
+  },
+} satisfies GameServicesWorkerEnv;
+const configuredDeploymentService = createWorkerService(configuredDeploymentEnv);
+const configuredDeploymentPurchase = await configuredDeploymentService.verifyPurchase({
+  target: 'android',
+  playerId: 'configured-deployment-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'configured-deployment-transaction',
+  idempotencyKey: 'configured-deployment-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+}) as { readonly verified: boolean };
+
+assertEqual(
+  configuredDeploymentPurchase.verified,
+  true,
+  'the worker should derive custom deployment targets from trusted environment bindings',
+);
+assertEqual(
+  configuredDeploymentTarget,
+  'android-staging',
+  'the worker should bind an omitted client deployment target before verification',
+);
+assertEqual(
+  configuredPlatformProductId,
+  'coins_100_android_staging',
+  'the worker should resolve the server-bound catalog identifier',
+);
+
+const configuredDeploymentFetch = createWorkerFetchHandler(configuredDeploymentEnv);
+const conflictingDeploymentResponse = await configuredDeploymentFetch(
+  new Request(`${baseUrl}/game-services/purchases/verify`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({
+      target: 'android',
+      deploymentTarget: 'android-production',
+      playerId: 'configured-deployment-player',
+      productId: 'COINS_100',
+      platformTransactionId: 'conflicting-deployment-transaction',
+      idempotencyKey: 'conflicting-deployment-purchase',
+      purchasedAt: '2026-07-04T00:00:00.000Z',
+    }),
+  }),
+);
+const conflictingDeploymentBody = await conflictingDeploymentResponse.json() as {
+  readonly error?: string;
+};
+
+assertEqual(
+  conflictingDeploymentResponse.status,
+  400,
+  'the worker HTTP entry point should reject conflicting client deployment targets',
+);
+assertEqual(
+  conflictingDeploymentBody.error,
+  'deploymentTarget must match the backend binding for android.',
+  'the worker should preserve the backend binding error across HTTP',
 );
 
 const targetVerifierCalls: string[] = [];

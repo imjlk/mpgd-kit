@@ -92,6 +92,10 @@ try {
       + `<script>const lookalike = "</scriptx>"; const markup = ${JSON.stringify(embeddedManifestMarkup)};</script>`
       + scriptedStyle
       + `<title></titlex>${embeddedManifestMarkup}</title>`
+      + `<noscript>${embeddedManifestMarkup}</noscript>`
+      + `<script/>${embeddedManifestMarkup}</script>`
+      + `<style/>${embeddedManifestMarkup}</style>`
+      + `<title/>${embeddedManifestMarkup}</title>`
       + `<!-- ${embeddedManifestMarkup} -->`
       + `<template>${embeddedManifestMarkup}</template>`
       + '</head><body></body></html>',
@@ -107,9 +111,25 @@ try {
   )};</script>`));
   assert.ok(installableHtml.includes(scriptedStyle));
   assert.ok(installableHtml.includes(`<title></titlex>${embeddedManifestMarkup}</title>`));
+  assert.ok(installableHtml.includes(`<noscript>${embeddedManifestMarkup}</noscript>`));
+  assert.ok(installableHtml.includes(`<script/>${embeddedManifestMarkup}</script>`));
+  assert.ok(installableHtml.includes(`<style/>${embeddedManifestMarkup}</style>`));
+  assert.ok(installableHtml.includes(`<title/>${embeddedManifestMarkup}</title>`));
   assert.ok(installableHtml.includes(`<!-- ${embeddedManifestMarkup} -->`));
   assert.ok(installableHtml.includes(`<template>${embeddedManifestMarkup}</template>`));
   assert.doesNotThrow(() => assertInstallableWebArtifact(scriptedArtifact));
+
+  const templateHeadArtifact = join(root, 'template-head-artifact');
+  mkdirSync(templateHeadArtifact);
+  writeFileSync(join(templateHeadArtifact, 'manifest.webmanifest'), '{}\n');
+  writeFileSync(
+    join(templateHeadArtifact, 'index.html'),
+    '<html><head><template><div>inert</div></template>'
+      + '<link rel="manifest" href="./manifest.webmanifest"></head><body></body></html>',
+  );
+  assert.doesNotThrow(() => assertInstallableWebArtifact(templateHeadArtifact));
+  sanitizeNonInstallableWebArtifact(templateHeadArtifact);
+  assert.doesNotThrow(() => assertNonInstallableWebArtifact(templateHeadArtifact));
 
   const implicitHeadArtifact = join(root, 'implicit-head-artifact');
   mkdirSync(implicitHeadArtifact);
@@ -160,6 +180,10 @@ try {
   )};</script>`));
   assert.ok(nonInstallableHtml.includes(scriptedStyle));
   assert.ok(nonInstallableHtml.includes(`<title></titlex>${embeddedManifestMarkup}</title>`));
+  assert.ok(nonInstallableHtml.includes(`<noscript>${embeddedManifestMarkup}</noscript>`));
+  assert.ok(nonInstallableHtml.includes(`<script/>${embeddedManifestMarkup}</script>`));
+  assert.ok(nonInstallableHtml.includes(`<style/>${embeddedManifestMarkup}</style>`));
+  assert.ok(nonInstallableHtml.includes(`<title/>${embeddedManifestMarkup}</title>`));
   assert.ok(nonInstallableHtml.includes(`<!-- ${embeddedManifestMarkup} -->`));
   assert.ok(nonInstallableHtml.includes(`<template>${embeddedManifestMarkup}</template>`));
   assert.doesNotThrow(() => assertNonInstallableWebArtifact(scriptedArtifact));
@@ -259,6 +283,30 @@ try {
   const gameApp = join(root, 'game-app');
   const viteOutputStaticDir = join(gameApp, 'dist/static');
   mkdirSync(viteOutputStaticDir, { recursive: true });
+
+  const sourceOutput = join(gameApp, 'src');
+  mkdirSync(sourceOutput);
+  writeFileSync(join(sourceOutput, 'main.ts'), 'export {};\n');
+  writeWebTargetConfig(configPath, {
+    gameApp: 'game-app',
+    output: 'game-app/src',
+    staticDir: 'static',
+  });
+  assert.throws(
+    () => validatePlatformTargetsFile(configPath),
+    /Existing web artifact output is not a prior generated artifact/u,
+  );
+
+  const priorArtifactOutput = join(root, 'prior-artifact');
+  mkdirSync(priorArtifactOutput);
+  writeFileSync(join(priorArtifactOutput, 'mpgd-effective-target.json'), '{}\n');
+  writeFileSync(join(priorArtifactOutput, 'mpgd-icon-manifest.json'), '{}\n');
+  writeWebTargetConfig(configPath, {
+    gameApp: 'game-app',
+    output: 'prior-artifact',
+    staticDir: 'static',
+  });
+  assert.doesNotThrow(() => validatePlatformTargetsFile(configPath));
 
   for (const output of ['.', '..', join(root, '..', 'absolute-external-output')]) {
     writeWebTargetConfig(configPath, {

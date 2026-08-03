@@ -168,6 +168,12 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   assert.deepEqual(webManifestOverlay.icons, webManifest.icons);
   assert.equal(existsSync(join(dist, 'manifest.json')), false);
 
+  writeFileSync(join(targetStaticDir, 'manifest.webmanifest'), '[]\n');
+  assert.throws(
+    () => stageWebIconEvidence(repeated, dist, { manifestSourceDirectory: targetStaticDir }),
+    /Web app manifest must contain a JSON object/u,
+  );
+
   const stagedIcon = repeated.manifest.outputs[0];
   assert.ok(stagedIcon);
   writeFileSync(join(dist, stagedIcon.path), 'overlaid icon bytes');

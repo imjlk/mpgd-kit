@@ -68,9 +68,33 @@ export interface AdPlacements {
   readonly placements: readonly AdPlacementEntry[];
 }
 
-export const assertProductCatalog = typia.createAssert<ProductCatalog>();
-export const assertAdPlacements = typia.createAssert<AdPlacements>();
+const assertProductCatalogShape = typia.createAssert<ProductCatalog>();
+const assertAdPlacementsShape = typia.createAssert<AdPlacements>();
 export const assertProductGrant = typia.createAssert<ProductGrant>();
+
+export function assertProductCatalog(input: unknown): ProductCatalog {
+  const catalog = assertProductCatalogShape(input);
+  assertUniqueNormalizedPlatformIdentifiers(
+    catalog.products.map((product) => ({
+      logicalId: product.id,
+      identifiers: product.platformProductIds,
+    })),
+    'product',
+  );
+  return catalog;
+}
+
+export function assertAdPlacements(input: unknown): AdPlacements {
+  const placements = assertAdPlacementsShape(input);
+  assertUniqueNormalizedPlatformIdentifiers(
+    placements.placements.map((placement) => ({
+      logicalId: placement.id,
+      identifiers: placement.platformPlacementIds,
+    })),
+    'ad placement',
+  );
+  return placements;
+}
 
 export function resolveProductPlatformId(
   product: ProductCatalogEntry,
@@ -101,4 +125,35 @@ function readOwnPlatformIdentifier(
 function normalizePlatformIdentifier(identifier: string | undefined): string | undefined {
   const normalized = identifier?.trim();
   return normalized === undefined || normalized.length === 0 ? undefined : normalized;
+}
+
+function assertUniqueNormalizedPlatformIdentifiers(
+  entries: readonly {
+    readonly logicalId: string;
+    readonly identifiers: Partial<Record<string, string>>;
+  }[],
+  kind: string,
+): void {
+  const identifiersByTarget = new Map<string, Map<string, string>>();
+
+  for (const entry of entries) {
+    for (const [target, identifier] of Object.entries(entry.identifiers)) {
+      const normalized = normalizePlatformIdentifier(identifier);
+      if (normalized === undefined) {
+        continue;
+      }
+
+      const targetIdentifiers = identifiersByTarget.get(target) ?? new Map<string, string>();
+      const existingLogicalId = targetIdentifiers.get(normalized);
+      if (existingLogicalId !== undefined) {
+        throw new Error(
+          `Duplicate normalized ${kind} platform identifier ${normalized} for target ${target}: `
+            + `${existingLogicalId} and ${entry.logicalId}.`,
+        );
+      }
+
+      targetIdentifiers.set(normalized, entry.logicalId);
+      identifiersByTarget.set(target, targetIdentifiers);
+    }
+  }
 }

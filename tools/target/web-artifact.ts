@@ -15,9 +15,12 @@ import { generatedIconCacheDirectory } from '../icons/types';
 import type { PlatformTargetConfig } from './schemas';
 
 const installableManifestNames = new Set(['manifest.json', 'manifest.webmanifest']);
-const reservedGeneratedEvidenceNames = new Set([
+const generatedWebArtifactEvidenceNames = [
   'mpgd-effective-target.json',
   'mpgd-icon-manifest.json',
+] as const;
+const reservedGeneratedEvidenceNames = new Set([
+  ...generatedWebArtifactEvidenceNames,
   'mpgd-icon-precache.json',
 ]);
 const implicitHeadElementNames = new Set([
@@ -226,6 +229,7 @@ export function assertDisjointWebTargetOutputs(
   ];
   assertWebOutputsAvoidProtectedPaths(outputs, allProtectedOutputs);
   assertWebStaticDirectoriesAvoidProtectedPaths(targets, resolvePath, allProtectedOutputs);
+  assertExistingWebOutputsAreGeneratedArtifacts(outputs);
 }
 
 function copyDirectoryContents(source: string, destination: string): void {
@@ -418,7 +422,7 @@ function scanHtmlHead(html: string): HtmlHeadScan {
   let headClosed = false;
   let inHead = false;
   let index = 0;
-  let rawTextTag: 'script' | 'style' | 'title' | undefined;
+  let rawTextTag: 'noscript' | 'script' | 'style' | 'title' | undefined;
   let templateDepth = 0;
 
   while (index < html.length) {
@@ -459,7 +463,7 @@ function scanHtmlHead(html: string): HtmlHeadScan {
       continue;
     }
 
-    const { closing, name, selfClosing } = parsedTag;
+    const { closing, name } = parsedTag;
     if (closing) {
       const scanningHead = inHead || !headClosed;
       if (name === 'template' && scanningHead && templateDepth > 0) {
@@ -484,7 +488,7 @@ function scanHtmlHead(html: string): HtmlHeadScan {
       continue;
     }
 
-    if (!headClosed && !implicitHeadElementNames.has(name)) {
+    if (!headClosed && templateDepth === 0 && !implicitHeadElementNames.has(name)) {
       inHead = false;
       headClosed = true;
     }
@@ -494,13 +498,16 @@ function scanHtmlHead(html: string): HtmlHeadScan {
     }
 
     if (name === 'template') {
-      if (!selfClosing) {
-        templateDepth += 1;
-      }
+      templateDepth += 1;
       continue;
     }
 
-    if (!selfClosing && (name === 'script' || name === 'style' || name === 'title')) {
+    if (
+      name === 'noscript'
+      || name === 'script'
+      || name === 'style'
+      || name === 'title'
+    ) {
       rawTextTag = name;
       continue;
     }
@@ -528,7 +535,7 @@ function scanHtmlHead(html: string): HtmlHeadScan {
 
 function findRawTextClosingTag(
   lowercaseHtml: string,
-  rawTextTag: 'script' | 'style' | 'title',
+  rawTextTag: 'noscript' | 'script' | 'style' | 'title',
   start: number,
 ): number | undefined {
   const prefix = `</${rawTextTag}`;
@@ -575,7 +582,7 @@ function findHtmlTagEnd(html: string, start: number): number | undefined {
 
 function parseHtmlTag(
   source: string,
-): { readonly closing: boolean; readonly name: string; readonly selfClosing: boolean } | undefined {
+): { readonly closing: boolean; readonly name: string } | undefined {
   const trimmedSource = source.trim();
   const closing = trimmedSource.startsWith('/');
   const tagSource = closing ? trimmedSource.slice(1).trimStart() : trimmedSource;
@@ -586,7 +593,6 @@ function parseHtmlTag(
     : {
         closing,
         name,
-        selfClosing: !closing && tagSource.trimEnd().endsWith('/'),
       };
 }
 
@@ -764,6 +770,27 @@ function assertWebOutputsStayWithinRoot(
     if (canonicalOutput === canonicalRoot || !isPathWithin(canonicalRoot, canonicalOutput)) {
       throw new Error(
         `Web artifact output must stay inside its game root: ${output.name} (${output.path}).`,
+      );
+    }
+  }
+}
+
+function assertExistingWebOutputsAreGeneratedArtifacts(
+  outputs: readonly NamedWebArtifactOutput[],
+): void {
+  for (const output of outputs) {
+    if (!existsSync(output.path)) {
+      continue;
+    }
+
+    const hasGeneratedEvidence = generatedWebArtifactEvidenceNames.every((name) => {
+      return lstatIfPresent(join(output.path, name))?.isFile() === true;
+    });
+
+    if (!hasGeneratedEvidence) {
+      throw new Error(
+        `Existing web artifact output is not a prior generated artifact: `
+          + `${output.name} (${output.path}).`,
       );
     }
   }

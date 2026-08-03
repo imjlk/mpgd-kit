@@ -45,6 +45,10 @@ export function assertProductionTargetReadiness(
   }
 
   const ownerPathKey = ownerPathByTarget[input.target as keyof typeof ownerPathByTarget];
+  if (ownerPathKey === undefined && input.targetPolicy === undefined) {
+    throw new Error(`Production target ${input.target} requires a target policy.`);
+  }
+
   const requiresVerse8RewardAuthority = input.targetPolicy?.runtime === 'verse8-web'
     && (
       input.targetPolicy.features.rewardedAds
@@ -62,7 +66,17 @@ export function assertProductionTargetReadiness(
   }
 
   if (ownerPathKey === undefined) {
-    if (targetConfig.authoritativeGameServices !== false) {
+    if (
+      requiresVerse8RewardAuthority
+      && targetConfig.authoritativeGameServices === false
+    ) {
+      throw new Error(
+        `Production target ${input.target} cannot enable rewarded ads without `
+          + 'authoritative game services.',
+      );
+    }
+
+    if (requiresVerse8RewardAuthority || targetConfig.authoritativeGameServices !== false) {
       assertAuthoritativeGameServicesUrl(input.gameServicesUrl, input.target);
     }
     return;

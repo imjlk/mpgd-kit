@@ -11,6 +11,7 @@ import {
   createVerifiedLeaderboardSnapshotFetchHandler,
   type ClaimAdRewardRequest,
   type GameServicesBackendApi,
+  type GameServicesDeploymentTargetBindings,
   type GameServicesEvidenceVerifier,
   type EvidenceVerificationDecision,
   type GameServicesStore,
@@ -44,6 +45,10 @@ export interface GameServicesWorkerEnv {
   readonly GAME_SERVICES_IOS_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_AIT_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  readonly GAME_SERVICES_ANDROID_DEPLOYMENT_TARGET?: string;
+  readonly GAME_SERVICES_IOS_DEPLOYMENT_TARGET?: string;
+  readonly GAME_SERVICES_AIT_DEPLOYMENT_TARGET?: string;
+  readonly GAME_SERVICES_VERSE8_DEPLOYMENT_TARGET?: string;
   readonly VERSE8_ADS_VERIFIER_AUTHORIZATION?: string;
   readonly VERSE8_ADS_VERIFIER_BASE_URL?: string;
 }
@@ -92,6 +97,7 @@ const productCatalog = {
       },
       platformProductIds: {
         android: 'coins_100',
+        'android-staging': 'coins_100_android_staging',
         ios: 'com.mpgd.game.coins100',
         ait: 'coins_100',
       },
@@ -117,6 +123,7 @@ const adPlacements = {
         ios: 'reward_continue',
         ait: 'reward_continue',
         verse8: 'rewarded_continue',
+        'verse8-staging': 'rewarded_continue_staging',
       },
     },
   ],
@@ -130,6 +137,7 @@ export function createWorkerFetchHandler(
   const backend = createWorkerBackend(env);
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
   const evidenceVerifier = resolveWorkerEvidenceVerifier(env);
+  const deploymentTargetBindings = resolveWorkerDeploymentTargetBindings(env);
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -148,6 +156,7 @@ export function createWorkerFetchHandler(
       catalog: productCatalog,
       placements: adPlacements,
       store: createWorkerStore(env),
+      deploymentTargetBindings,
       ...(evidenceVerifier === undefined
         ? {}
         : { evidenceVerifier }),
@@ -236,11 +245,31 @@ function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi
     catalog: productCatalog,
     placements: adPlacements,
     store: createWorkerStore(env),
+    deploymentTargetBindings: resolveWorkerDeploymentTargetBindings(env),
     ...(evidenceVerifier === undefined
       ? {}
       : { evidenceVerifier }),
     version: productCatalog.version,
   });
+}
+
+function resolveWorkerDeploymentTargetBindings(
+  env: GameServicesWorkerEnv,
+): GameServicesDeploymentTargetBindings {
+  return {
+    ...(env.GAME_SERVICES_ANDROID_DEPLOYMENT_TARGET === undefined
+      ? {}
+      : { android: env.GAME_SERVICES_ANDROID_DEPLOYMENT_TARGET }),
+    ...(env.GAME_SERVICES_IOS_DEPLOYMENT_TARGET === undefined
+      ? {}
+      : { ios: env.GAME_SERVICES_IOS_DEPLOYMENT_TARGET }),
+    ...(env.GAME_SERVICES_AIT_DEPLOYMENT_TARGET === undefined
+      ? {}
+      : { ait: env.GAME_SERVICES_AIT_DEPLOYMENT_TARGET }),
+    ...(env.GAME_SERVICES_VERSE8_DEPLOYMENT_TARGET === undefined
+      ? {}
+      : { verse8: env.GAME_SERVICES_VERSE8_DEPLOYMENT_TARGET }),
+  };
 }
 
 function resolveWorkerEvidenceVerifier(
