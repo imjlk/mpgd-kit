@@ -18,6 +18,7 @@ import { loadEnv } from 'vite';
 import { assertProductionTargetReadiness } from '../../packages/cli/src/production-target-readiness';
 import { generateTargetIcons, verifyGeneratedTargetIcons } from '../icons/generator';
 import { stageNativeIconResources, stageWebIconEvidence, stageWrapperIcon } from '../icons/staging';
+import { requireCanonicalAppVersion } from './app-version';
 import { embeddedTargetConfigFileName, writeEffectiveTargetConfigs } from './effective-config';
 import { createReleaseManifestWriter, resolveReleaseProvenance } from './generate-release-manifest';
 import {
@@ -35,6 +36,7 @@ import {
 import type { PlatformTargetConfig } from './schemas';
 
 const [targetName = 'web-preview', profile = 'production'] = process.argv.slice(2);
+const appVersion = requireCanonicalAppVersion(process.env.APP_VERSION ?? '0.0.0');
 const releaseProvenance = resolveReleaseProvenance();
 const writeCapturedReleaseManifest = createReleaseManifestWriter(releaseProvenance);
 const releaseManifestEnvKeys = [
@@ -111,7 +113,7 @@ const env: NodeJS.ProcessEnv = {
   ...targetReleaseMetadataEnv(target),
   APP_TARGET: appTarget,
   MPGD_CONFIG_TARGET: targetName,
-  APP_VERSION: process.env.APP_VERSION ?? '0.0.0',
+  APP_VERSION: appVersion,
   BUILD_ID: process.env.BUILD_ID ?? 'local',
   MPGD_SOURCE_GIT_SHA: releaseProvenance.sourceGitSha,
   MPGD_PLATFORM_TARGETS_FILE: platformTargets.path,

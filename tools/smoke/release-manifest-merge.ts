@@ -14,6 +14,8 @@ import { delimiter, join } from 'node:path';
 
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
+import { requireCanonicalAppVersion } from '../target/app-version';
+
 const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-release-manifest-'));
 const firstCatalogFile = join(tempDir, 'catalog-v1.json');
 const secondCatalogFile = join(tempDir, 'catalog-v2.json');
@@ -52,7 +54,12 @@ let manifestRunCount = 0;
 
 try {
   writeFakeGit();
-  assertKitGitShaSchema();
+  assertReleaseManifestSchema();
+  assert.equal(requireCanonicalAppVersion('1.0.0'), '1.0.0');
+  assert.throws(
+    () => requireCanonicalAppVersion(' 1.0.0 '),
+    /APP_VERSION must be canonical without leading or trailing whitespace/u,
+  );
   mkdirSync(nestedKitParent);
   writeFileSync(firstCatalogFile, catalogJson('game-v1'));
   writeFileSync(secondCatalogFile, catalogJson('game-v2'));
@@ -558,7 +565,7 @@ function readManifest(path: string): ReleaseManifest {
   return assertReleaseManifest(JSON.parse(readFileSync(path, 'utf8')));
 }
 
-function assertKitGitShaSchema(): void {
+function assertReleaseManifestSchema(): void {
   const schema = JSON.parse(readFileSync('release.manifest.schema.json', 'utf8')) as {
     readonly required?: readonly string[];
     readonly properties?: {
@@ -570,9 +577,19 @@ function assertKitGitShaSchema(): void {
         readonly type?: string;
         readonly minLength?: number;
       };
+      readonly releaseIdentity?: {
+        readonly properties?: {
+          readonly releaseRevision?: {
+            readonly type?: string;
+            readonly minimum?: number;
+            readonly maximum?: number;
+          };
+        };
+      };
     };
   };
   const kitGitShaSchema = schema.properties?.kitGitSha;
+  const releaseRevisionSchema = schema.properties?.releaseIdentity?.properties?.releaseRevision;
 
   assert.equal(schema.required?.includes('kitGitSha'), true);
   assert.equal(schema.required?.includes('targetConfigVersion'), true);
@@ -590,6 +607,11 @@ function assertKitGitShaSchema(): void {
   assert.deepEqual(schema.properties?.targetConfigVersion, {
     type: 'string',
     minLength: 1,
+  });
+  assert.deepEqual(releaseRevisionSchema, {
+    type: 'integer',
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
   });
 }
 
