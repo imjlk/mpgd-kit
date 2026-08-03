@@ -19,7 +19,6 @@ const reservedGeneratedEvidenceNames = new Set([
   'mpgd-icon-manifest.json',
   'mpgd-icon-precache.json',
 ]);
-const relAttributePattern = /\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/iu;
 
 export interface NamedWebArtifactOutput {
   readonly name: string;
@@ -109,8 +108,10 @@ export function assertInstallableWebArtifact(artifactRoot: string): void {
   }
 
   const indexFile = join(artifactRoot, 'index.html');
-  if (!existsSync(indexFile) || !indexHtmlLinksManifest(indexFile)) {
-    throw new Error(`Installable web artifact does not link a web app manifest: ${indexFile}`);
+  if (!existsSync(indexFile) || !indexHtmlLinksExistingManifest(indexFile, manifests)) {
+    throw new Error(
+      `Installable web artifact does not link an existing root web app manifest: ${indexFile}`,
+    );
   }
 }
 
@@ -228,13 +229,108 @@ function rootInstallableManifests(artifactRoot: string): string[] {
 }
 
 function isManifestLinkTag(tag: string): boolean {
-  const match = relAttributePattern.exec(tag);
-  const value = match?.[1] ?? match?.[2] ?? match?.[3];
+  const value = readHtmlAttribute(tag, 'rel');
   return value?.split(/\s+/u).some((token) => token.toLowerCase() === 'manifest') ?? false;
 }
 
 function indexHtmlLinksManifest(indexFile: string): boolean {
   return manifestLinkTags(readFileSync(indexFile, 'utf8')).length > 0;
+}
+
+function indexHtmlLinksExistingManifest(
+  indexFile: string,
+  manifests: readonly string[],
+): boolean {
+  return manifestLinkTags(readFileSync(indexFile, 'utf8')).some((tag) => {
+    const href = readHtmlAttribute(tag, 'href');
+    if (href === undefined) {
+      return false;
+    }
+
+    const linkedManifestName = rootManifestNameFromHref(href);
+    return linkedManifestName !== undefined
+      && manifests.some((manifest) => basename(manifest) === linkedManifestName);
+  });
+}
+
+function rootManifestNameFromHref(href: string): string | undefined {
+  const pathEnd = href.search(/[?#]/u);
+  const path = (pathEnd < 0 ? href : href.slice(0, pathEnd)).trim();
+  const rootRelativePath = path.startsWith('./')
+    ? path.slice(2)
+    : path.startsWith('/')
+      ? path.slice(1)
+      : path;
+
+  return (
+    rootRelativePath.length > 0
+    && !rootRelativePath.includes('/')
+    && !rootRelativePath.includes('\\')
+    && installableManifestNames.has(rootRelativePath.toLowerCase())
+  )
+    ? rootRelativePath
+    : undefined;
+}
+
+function readHtmlAttribute(tag: string, expectedName: string): string | undefined {
+  let index = tag.startsWith('<') ? 1 : 0;
+
+  while (index < tag.length && !/[\s/>]/u.test(tag[index] ?? '')) {
+    index += 1;
+  }
+
+  while (index < tag.length) {
+    while (/\s/u.test(tag[index] ?? '')) {
+      index += 1;
+    }
+
+    if (index >= tag.length || tag[index] === '>' || tag[index] === '/') {
+      return undefined;
+    }
+
+    const nameStart = index;
+    while (index < tag.length && !/[\s=/>]/u.test(tag[index] ?? '')) {
+      index += 1;
+    }
+
+    const name = tag.slice(nameStart, index).toLowerCase();
+    while (/\s/u.test(tag[index] ?? '')) {
+      index += 1;
+    }
+
+    let value = '';
+    if (tag[index] === '=') {
+      index += 1;
+      while (/\s/u.test(tag[index] ?? '')) {
+        index += 1;
+      }
+
+      const quote = tag[index] === '"' || tag[index] === "'" ? tag[index] : undefined;
+      if (quote !== undefined) {
+        index += 1;
+        const valueStart = index;
+        while (index < tag.length && tag[index] !== quote) {
+          index += 1;
+        }
+        value = tag.slice(valueStart, index);
+        if (tag[index] === quote) {
+          index += 1;
+        }
+      } else {
+        const valueStart = index;
+        while (index < tag.length && !/[\s>]/u.test(tag[index] ?? '')) {
+          index += 1;
+        }
+        value = tag.slice(valueStart, index);
+      }
+    }
+
+    if (name === expectedName) {
+      return value;
+    }
+  }
+
+  return undefined;
 }
 
 function stripManifestLinkTags(html: string): string {
@@ -462,11 +558,23 @@ function pathsOverlap(first: string, second: string): boolean {
 }
 
 function canonicalizeWebArtifactOutput(path: string): string {
-  if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
+  if (lstatIfPresent(path)?.isSymbolicLink() === true) {
     throw new Error(`Web artifact output must not be a symbolic link: ${path}`);
   }
 
   return canonicalizeThroughExistingAncestor(path);
+}
+
+function lstatIfPresent(path: string): ReturnType<typeof lstatSync> | undefined {
+  try {
+    return lstatSync(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return undefined;
+    }
+
+    throw error;
+  }
 }
 
 function canonicalizeThroughExistingAncestor(path: string): string {

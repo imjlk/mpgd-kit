@@ -45,6 +45,41 @@ try {
   assert.doesNotThrow(() => assertNonInstallableWebArtifact(artifact));
   assert.throws(() => assertInstallableWebArtifact(artifact), /has no web app manifest/u);
 
+  const misleadingAttributesArtifact = join(root, 'misleading-attributes-artifact');
+  mkdirSync(misleadingAttributesArtifact);
+  writeFileSync(join(misleadingAttributesArtifact, 'manifest.webmanifest'), '{}\n');
+  writeFileSync(
+    join(misleadingAttributesArtifact, 'index.html'),
+    '<html><head>'
+      + '<link data-rel="manifest" href="./manifest.webmanifest">'
+      + '<link title="rel=manifest" href="./manifest.webmanifest">'
+      + '</head></html>',
+  );
+  assert.throws(
+    () => assertInstallableWebArtifact(misleadingAttributesArtifact),
+    /does not link an existing root web app manifest/u,
+  );
+  ensureInstallableWebManifestLink(misleadingAttributesArtifact);
+  const correctedAttributesHtml = readFileSync(
+    join(misleadingAttributesArtifact, 'index.html'),
+    'utf8',
+  );
+  assert.match(correctedAttributesHtml, /data-rel="manifest"/u);
+  assert.match(correctedAttributesHtml, /title="rel=manifest"/u);
+  assert.doesNotThrow(() => assertInstallableWebArtifact(misleadingAttributesArtifact));
+
+  const mismatchedManifestArtifact = join(root, 'mismatched-manifest-artifact');
+  mkdirSync(mismatchedManifestArtifact);
+  writeFileSync(join(mismatchedManifestArtifact, 'manifest.json'), '{}\n');
+  writeFileSync(
+    join(mismatchedManifestArtifact, 'index.html'),
+    '<html><head><link rel="manifest" href="./manifest.webmanifest"></head></html>',
+  );
+  assert.throws(
+    () => assertInstallableWebArtifact(mismatchedManifestArtifact),
+    /does not link an existing root web app manifest/u,
+  );
+
   const scriptedArtifact = join(root, 'scripted-artifact');
   const embeddedManifestMarkup = '<link rel="manifest" href="./embedded.webmanifest">';
   mkdirSync(scriptedArtifact);
@@ -122,6 +157,13 @@ try {
   symlinkSync(externalOutput, linkedOutputInsideStatic);
   assert.throws(
     () => assertWebStaticDirectory(staticDir, linkedOutputInsideStatic, root),
+    /artifact output must not be a symbolic link/u,
+  );
+
+  const danglingOutput = join(root, 'dangling-output');
+  symlinkSync(join(root, 'missing-output-target'), danglingOutput);
+  assert.throws(
+    () => assertWebArtifactOutputDirectory(danglingOutput, join(root, 'vite-output')),
     /artifact output must not be a symbolic link/u,
   );
 

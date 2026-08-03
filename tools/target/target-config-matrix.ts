@@ -24,6 +24,7 @@ interface TargetConfigExtensions {
 
 const assertTargetConfigMatrix = typia.createAssert<TargetConfigMatrix>();
 const assertTargetConfigExtensions = typia.createAssert<TargetConfigExtensions>();
+const supportedCustomTargetRuntimes = new Set<TargetRuntimeKind>(['verse8-web', 'web-preview']);
 const releaseProfileByRuntime = {
   'web-preview': 'web-preview',
   'microsoft-store-pwa': 'microsoft-store',
@@ -85,6 +86,12 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
     );
   }
 
+  if (!supportedCustomTargetRuntimes.has(config.runtime)) {
+    throw new Error(
+      `Target config extension ${target} cannot use non-web runtime ${config.runtime}.`,
+    );
+  }
+
   const expectedReleaseProfile = releaseProfileByRuntime[config.runtime];
 
   if (config.release.profile !== expectedReleaseProfile) {
@@ -93,27 +100,42 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
     );
   }
 
-  const unsupportedWebPreviewFeature = getUnsupportedWebPreviewFeature(config);
-
-  if (config.runtime === 'web-preview' && unsupportedWebPreviewFeature !== undefined) {
+  if (config.capabilities.storage !== 'local') {
     throw new Error(
-      `Target config extension ${target} cannot enable ${unsupportedWebPreviewFeature} for web-preview runtime.`,
+      `Target config extension ${target} runtime ${config.runtime} requires local storage; received ${config.capabilities.storage}.`,
+    );
+  }
+
+  const unsupportedFeature = getUnsupportedCustomWebFeature(config);
+
+  if (unsupportedFeature !== undefined) {
+    throw new Error(
+      `Target config extension ${target} cannot enable ${unsupportedFeature} for ${config.runtime} runtime.`,
     );
   }
 }
 
-function getUnsupportedWebPreviewFeature(
+function getUnsupportedCustomWebFeature(
   config: TargetConfig,
 ): 'in-app purchases' | 'interstitial ads' | 'leaderboard' | 'rewarded ads' | undefined {
-  if (config.features.iap || config.monetization.iap) {
+  if (
+    config.runtime === 'web-preview'
+    && (config.features.iap || config.monetization.iap)
+  ) {
     return 'in-app purchases';
   }
 
-  if (config.features.rewardedAds || config.monetization.rewardedAds) {
+  if (
+    config.runtime === 'web-preview'
+    && (config.features.rewardedAds || config.monetization.rewardedAds)
+  ) {
     return 'rewarded ads';
   }
 
-  if (config.features.interstitialAds || config.monetization.interstitialAds) {
+  if (
+    config.runtime === 'web-preview'
+    && (config.features.interstitialAds || config.monetization.interstitialAds)
+  ) {
     return 'interstitial ads';
   }
 

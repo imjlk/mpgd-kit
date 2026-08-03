@@ -4,6 +4,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -11,6 +12,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
 
 import { loadEnv } from 'vite';
@@ -18,7 +20,7 @@ import { loadEnv } from 'vite';
 import { assertProductionTargetReadiness } from '../../packages/cli/src/production-target-readiness';
 import {
   targetConfigExtensionsFileEnv,
-  targetConfigMatrixJsonEnv,
+  targetConfigMatrixFileEnv,
 } from '../../packages/cli/src/target-config-env';
 import { generateTargetIcons, verifyGeneratedTargetIcons } from '../icons/generator';
 import {
@@ -150,6 +152,9 @@ assertProductionTargetReadiness({
   ...(gameServicesUrl === undefined ? {} : { gameServicesUrl }),
 });
 
+const runtimeTargetConfigMatrixFile = createRuntimeTargetConfigMatrixFile(
+  runtimeTargetConfigMatrix,
+);
 const env: NodeJS.ProcessEnv = {
   ...process.env,
   ...monetizationCatalogEnv,
@@ -162,221 +167,233 @@ const env: NodeJS.ProcessEnv = {
   MPGD_PLATFORM_TARGETS_FILE: platformTargets.path,
   MPGD_EFFECTIVE_TARGET_CONFIG_OUTPUT_DIR: effectiveTargetConfigOutputDir(configBaseDir),
   MPGD_ICON_MANIFEST_PATH: generatedIcons.manifestPath,
-  [targetConfigMatrixJsonEnv]: JSON.stringify(runtimeTargetConfigMatrix),
+  [targetConfigMatrixFileEnv]: runtimeTargetConfigMatrixFile,
 };
 
-if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
-  assertMicrosoftStorePwaProvenance({
-    appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
-    buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
-    sourceGitSha: releaseProvenance.sourceGitSha,
-    kitGitSha: releaseProvenance.kitGitSha,
-  });
-}
-
-if (target.kind !== 'devvit-web') {
-  run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
-  embedEffectiveTargetConfig(targetName, `${gameApp}/dist`, env);
-  if (target.kind !== 'web') {
-    stageWebIconEvidence(generatedIcons, `${gameApp}/dist`);
-  }
-}
-
-switch (target.kind) {
-  case 'web': {
-    if (webTargetPaths === undefined) {
-      throw new Error(`Failed to resolve web target paths for ${targetName}.`);
-    }
-
-    const { output, outputConfigPath, staticDirPath } = webTargetPaths;
-
-    replaceDirectory(`${gameApp}/dist`, output);
-    if (staticDirPath !== undefined) {
-      copyWebStaticDirectoryContents(staticDirPath, output);
-    }
-    stageWebIconEvidence(generatedIcons, output, {
-      ...(target.installable === undefined ? {} : { installable: target.installable }),
+try {
+  if (targetName === 'microsoft-store' && target.kind === 'web' && profile === 'production') {
+    assertMicrosoftStorePwaProvenance({
+      appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
+      buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
+      sourceGitSha: releaseProvenance.sourceGitSha,
+      kitGitSha: releaseProvenance.kitGitSha,
     });
-    assertStagedWebIconEvidence(generatedIcons, output);
-    if (targetName === 'microsoft-store' && profile === 'production') {
-      writeMicrosoftStorePwaArtifacts({
-        artifactRoot: output,
-        provenance: {
-          appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
-          buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
-          sourceGitSha: releaseProvenance.sourceGitSha,
-          kitGitSha: releaseProvenance.kitGitSha,
-        },
+  }
+
+  if (target.kind !== 'devvit-web') {
+    run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
+    embedEffectiveTargetConfig(targetName, `${gameApp}/dist`, env);
+    if (target.kind !== 'web') {
+      stageWebIconEvidence(generatedIcons, `${gameApp}/dist`);
+    }
+  }
+
+  switch (target.kind) {
+    case 'web': {
+      if (webTargetPaths === undefined) {
+        throw new Error(`Failed to resolve web target paths for ${targetName}.`);
+      }
+
+      const { output, outputConfigPath, staticDirPath } = webTargetPaths;
+
+      replaceDirectory(`${gameApp}/dist`, output);
+      if (staticDirPath !== undefined) {
+        copyWebStaticDirectoryContents(staticDirPath, output);
+      }
+      stageWebIconEvidence(generatedIcons, output, {
+        ...(target.installable === undefined ? {} : { installable: target.installable }),
       });
-    }
-    if (target.installable === false) {
-      assertNonInstallableWebArtifact(output);
-    } else {
-      assertInstallableWebArtifact(output);
-    }
-    writeManifest(targetName, profile, outputConfigPath, env);
-    break;
-  }
-
-  case 'apps-in-toss': {
-    const webDirConfigPath = requireString(target.webDir, `${targetName}.webDir`);
-    const webDir = targetPath(webDirConfigPath);
-    const wrapperApp = targetPath(requireString(target.wrapperApp, `${targetName}.wrapperApp`));
-    replaceDirectory(`${gameApp}/dist`, webDir);
-    mirrorAitRuntimeAssets(gameApp, wrapperApp);
-    run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
-
-    let releaseArtifact = webDirConfigPath;
-
-    if (process.env.MPGD_AIT_PACKAGE_MODE !== 'skip') {
-      removeFilesByExtension(wrapperApp, '.ait');
-      run('pnpm', ['--dir', wrapperApp, 'ait:build'], env);
-
-      const aitArtifact = findFileByExtension(wrapperApp, '.ait');
-      releaseArtifact = `release-output/ait/${safeArtifactFileStem(env.MPGD_AIT_APP_NAME ?? 'mpgd-kit')}.ait`;
-      copyFile(aitArtifact, targetPath(releaseArtifact));
-    } else {
-      releaseArtifact = 'release-output/ait/wrapper-web';
-      replaceDirectory(`${wrapperApp}/dist`, targetPath(releaseArtifact));
-      console.warn('ait: package build skipped; release manifest points to copied wrapper dist.');
-    }
-
-    writeManifest(targetName, profile, releaseArtifact, env);
-    break;
-  }
-
-  case 'devvit-web': {
-    const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
-    const wrapperAppConfigPath = requireString(target.wrapperApp, `${targetName}.wrapperApp`);
-    const wrapperApp = targetPath(wrapperAppConfigPath);
-    stageWrapperIcon(generatedIcons, wrapperApp);
-
-    run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
-    embedEffectiveTargetConfig(targetName, webDir, env);
-    stageWebIconEvidence(generatedIcons, webDir);
-    writeManifest(targetName, profile, `${wrapperAppConfigPath}/dist`, env);
-    break;
-  }
-
-  case 'capacitor-android': {
-    const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
-    const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
-    replaceDirectory(`${gameApp}/dist`, webDir);
-    ensureCapacitorPlatform(shellApp, 'android', env);
-    assertNativeReleaseIdentity({
-      environment: env,
-      metadata: target.metadata,
-      platform: 'android',
-      required: profile === 'production',
-      shellApp,
-    });
-    const restoreIcons = await stageNativeIconResources(generatedIcons, shellApp);
-
-    try {
-      run('pnpm', ['--dir', shellApp, 'cap', 'sync', 'android'], env);
-
-      const androidProject = `${shellApp}/android`;
-      run('./gradlew', ['bundleRelease', '--no-daemon'], env, androidProject);
-
-      const aabArtifact = `${androidProject}/app/build/outputs/bundle/release/app-release.aab`;
-      const releaseArtifact = 'release-output/android/app-release.aab';
-      copyFile(aabArtifact, targetPath(releaseArtifact));
-      writeManifest(targetName, profile, releaseArtifact, env);
-    } finally {
-      restoreIcons();
-    }
-    break;
-  }
-
-  case 'capacitor-ios': {
-    const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
-    const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
-    replaceDirectory(`${gameApp}/dist`, webDir);
-    ensureCapacitorPlatform(shellApp, 'ios', env);
-    assertNativeReleaseIdentity({
-      environment: env,
-      metadata: target.metadata,
-      platform: 'ios',
-      required: profile === 'production',
-      shellApp,
-    });
-    const restoreIcons = await stageNativeIconResources(generatedIcons, shellApp);
-
-    try {
-      run('pnpm', ['--dir', shellApp, 'cap', 'sync', 'ios'], env);
-
-      let releaseArtifact = requireString(target.shellApp, `${targetName}.shellApp`) + '/ios';
-
-      if (process.env.MPGD_RUN_IOS_ARCHIVE === '1' && process.env.MPGD_RUN_IOS_SIMULATOR_BUILD === '1') {
-        throw new Error('Set only one of MPGD_RUN_IOS_ARCHIVE or MPGD_RUN_IOS_SIMULATOR_BUILD.');
+      assertStagedWebIconEvidence(generatedIcons, output);
+      if (targetName === 'microsoft-store' && profile === 'production') {
+        writeMicrosoftStorePwaArtifacts({
+          artifactRoot: output,
+          provenance: {
+            appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
+            buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
+            sourceGitSha: releaseProvenance.sourceGitSha,
+            kitGitSha: releaseProvenance.kitGitSha,
+          },
+        });
       }
-
-      if (process.env.MPGD_RUN_IOS_ARCHIVE === '1') {
-        releaseArtifact = 'release-output/ios/MPGDKit.xcarchive';
-        run(
-          'xcodebuild',
-          [
-            'archive',
-            '-project',
-            'App/App.xcodeproj',
-            '-scheme',
-            'App',
-            '-configuration',
-            'Release',
-            '-destination',
-            'generic/platform=iOS',
-            '-archivePath',
-            targetPath(releaseArtifact),
-            'CODE_SIGNING_ALLOWED=NO',
-          ],
-          env,
-          `${shellApp}/ios`,
-        );
-      } else if (process.env.MPGD_RUN_IOS_SIMULATOR_BUILD === '1') {
-        const buildRoot = targetPath('release-output/ios-simulator-build');
-        const builtApp = `${buildRoot}/Release-iphonesimulator/App.app`;
-        releaseArtifact = 'release-output/ios/App.app';
-
-        rmSync(buildRoot, { recursive: true, force: true });
-        run(
-          'xcodebuild',
-          [
-            'build',
-            '-project',
-            'App/App.xcodeproj',
-            '-target',
-            'App',
-            '-configuration',
-            'Release',
-            '-sdk',
-            'iphonesimulator',
-            `SYMROOT=${buildRoot}`,
-            `OBJROOT=${join(buildRoot, 'Intermediates.noindex')}`,
-            'INFOPLIST_FILE=App/Info-Smoke.plist',
-            'EXCLUDED_SOURCE_FILE_NAMES=Main.storyboard LaunchScreen.storyboard Assets.xcassets',
-            'ASSETCATALOG_COMPILER_APPICON_NAME=',
-            'SWIFT_ACTIVE_COMPILATION_CONDITIONS=MPGD_SMOKE_NO_STORYBOARD',
-            'CODE_SIGNING_ALLOWED=NO',
-          ],
-          env,
-          `${shellApp}/ios`,
-        );
-        replaceDirectory(builtApp, targetPath(releaseArtifact));
+      if (target.installable === false) {
+        assertNonInstallableWebArtifact(output);
       } else {
-        console.warn(
-        'ios: cap sync completed; set MPGD_RUN_IOS_SIMULATOR_BUILD=1 for a simulator .app or MPGD_RUN_IOS_ARCHIVE=1 for an xcarchive.',
-      );
-        releaseArtifact = 'release-output/ios/capacitor-sync';
-        replaceDirectory(`${shellApp}/ios`, targetPath(releaseArtifact));
-        copyIosSyncSwiftPackage(shellApp, releaseArtifact, '@mpgd/capacitor-game-services');
+        assertInstallableWebArtifact(output);
+      }
+      writeManifest(targetName, profile, outputConfigPath, env);
+      break;
+    }
+
+    case 'apps-in-toss': {
+      const webDirConfigPath = requireString(target.webDir, `${targetName}.webDir`);
+      const webDir = targetPath(webDirConfigPath);
+      const wrapperApp = targetPath(requireString(target.wrapperApp, `${targetName}.wrapperApp`));
+      replaceDirectory(`${gameApp}/dist`, webDir);
+      mirrorAitRuntimeAssets(gameApp, wrapperApp);
+      run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
+
+      let releaseArtifact = webDirConfigPath;
+
+      if (process.env.MPGD_AIT_PACKAGE_MODE !== 'skip') {
+        removeFilesByExtension(wrapperApp, '.ait');
+        run('pnpm', ['--dir', wrapperApp, 'ait:build'], env);
+
+        const aitArtifact = findFileByExtension(wrapperApp, '.ait');
+        releaseArtifact = `release-output/ait/${safeArtifactFileStem(env.MPGD_AIT_APP_NAME ?? 'mpgd-kit')}.ait`;
+        copyFile(aitArtifact, targetPath(releaseArtifact));
+      } else {
+        releaseArtifact = 'release-output/ait/wrapper-web';
+        replaceDirectory(`${wrapperApp}/dist`, targetPath(releaseArtifact));
+        console.warn('ait: package build skipped; release manifest points to copied wrapper dist.');
       }
 
       writeManifest(targetName, profile, releaseArtifact, env);
-    } finally {
-      restoreIcons();
+      break;
     }
-    break;
+
+    case 'devvit-web': {
+      const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
+      const wrapperAppConfigPath = requireString(target.wrapperApp, `${targetName}.wrapperApp`);
+      const wrapperApp = targetPath(wrapperAppConfigPath);
+      stageWrapperIcon(generatedIcons, wrapperApp);
+
+      run('pnpm', ['--dir', wrapperApp, 'exec', 'vite', 'build', '--mode', profile], env);
+      embedEffectiveTargetConfig(targetName, webDir, env);
+      stageWebIconEvidence(generatedIcons, webDir);
+      writeManifest(targetName, profile, `${wrapperAppConfigPath}/dist`, env);
+      break;
+    }
+
+    case 'capacitor-android': {
+      const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
+      const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
+      replaceDirectory(`${gameApp}/dist`, webDir);
+      ensureCapacitorPlatform(shellApp, 'android', env);
+      assertNativeReleaseIdentity({
+        environment: env,
+        metadata: target.metadata,
+        platform: 'android',
+        required: profile === 'production',
+        shellApp,
+      });
+      const restoreIcons = await stageNativeIconResources(generatedIcons, shellApp);
+
+      try {
+        run('pnpm', ['--dir', shellApp, 'cap', 'sync', 'android'], env);
+
+        const androidProject = `${shellApp}/android`;
+        run('./gradlew', ['bundleRelease', '--no-daemon'], env, androidProject);
+
+        const aabArtifact = `${androidProject}/app/build/outputs/bundle/release/app-release.aab`;
+        const releaseArtifact = 'release-output/android/app-release.aab';
+        copyFile(aabArtifact, targetPath(releaseArtifact));
+        writeManifest(targetName, profile, releaseArtifact, env);
+      } finally {
+        restoreIcons();
+      }
+      break;
+    }
+
+    case 'capacitor-ios': {
+      const webDir = targetPath(requireString(target.webDir, `${targetName}.webDir`));
+      const shellApp = targetPath(requireString(target.shellApp, `${targetName}.shellApp`));
+      replaceDirectory(`${gameApp}/dist`, webDir);
+      ensureCapacitorPlatform(shellApp, 'ios', env);
+      assertNativeReleaseIdentity({
+        environment: env,
+        metadata: target.metadata,
+        platform: 'ios',
+        required: profile === 'production',
+        shellApp,
+      });
+      const restoreIcons = await stageNativeIconResources(generatedIcons, shellApp);
+
+      try {
+        run('pnpm', ['--dir', shellApp, 'cap', 'sync', 'ios'], env);
+
+        let releaseArtifact = requireString(target.shellApp, `${targetName}.shellApp`) + '/ios';
+
+        if (process.env.MPGD_RUN_IOS_ARCHIVE === '1' && process.env.MPGD_RUN_IOS_SIMULATOR_BUILD === '1') {
+          throw new Error('Set only one of MPGD_RUN_IOS_ARCHIVE or MPGD_RUN_IOS_SIMULATOR_BUILD.');
+        }
+
+        if (process.env.MPGD_RUN_IOS_ARCHIVE === '1') {
+          releaseArtifact = 'release-output/ios/MPGDKit.xcarchive';
+          run(
+            'xcodebuild',
+            [
+              'archive',
+              '-project',
+              'App/App.xcodeproj',
+              '-scheme',
+              'App',
+              '-configuration',
+              'Release',
+              '-destination',
+              'generic/platform=iOS',
+              '-archivePath',
+              targetPath(releaseArtifact),
+              'CODE_SIGNING_ALLOWED=NO',
+            ],
+            env,
+            `${shellApp}/ios`,
+          );
+        } else if (process.env.MPGD_RUN_IOS_SIMULATOR_BUILD === '1') {
+          const buildRoot = targetPath('release-output/ios-simulator-build');
+          const builtApp = `${buildRoot}/Release-iphonesimulator/App.app`;
+          releaseArtifact = 'release-output/ios/App.app';
+
+          rmSync(buildRoot, { recursive: true, force: true });
+          run(
+            'xcodebuild',
+            [
+              'build',
+              '-project',
+              'App/App.xcodeproj',
+              '-target',
+              'App',
+              '-configuration',
+              'Release',
+              '-sdk',
+              'iphonesimulator',
+              `SYMROOT=${buildRoot}`,
+              `OBJROOT=${join(buildRoot, 'Intermediates.noindex')}`,
+              'INFOPLIST_FILE=App/Info-Smoke.plist',
+              'EXCLUDED_SOURCE_FILE_NAMES=Main.storyboard LaunchScreen.storyboard Assets.xcassets',
+              'ASSETCATALOG_COMPILER_APPICON_NAME=',
+              'SWIFT_ACTIVE_COMPILATION_CONDITIONS=MPGD_SMOKE_NO_STORYBOARD',
+              'CODE_SIGNING_ALLOWED=NO',
+            ],
+            env,
+            `${shellApp}/ios`,
+          );
+          replaceDirectory(builtApp, targetPath(releaseArtifact));
+        } else {
+          console.warn(
+            'ios: cap sync completed; set MPGD_RUN_IOS_SIMULATOR_BUILD=1 for a simulator .app or MPGD_RUN_IOS_ARCHIVE=1 for an xcarchive.',
+          );
+          releaseArtifact = 'release-output/ios/capacitor-sync';
+          replaceDirectory(`${shellApp}/ios`, targetPath(releaseArtifact));
+          copyIosSyncSwiftPackage(shellApp, releaseArtifact, '@mpgd/capacitor-game-services');
+        }
+
+        writeManifest(targetName, profile, releaseArtifact, env);
+      } finally {
+        restoreIcons();
+      }
+      break;
+    }
   }
+} finally {
+  rmSync(dirname(runtimeTargetConfigMatrixFile), { force: true, recursive: true });
+}
+
+function createRuntimeTargetConfigMatrixFile(matrix: unknown): string {
+  const directory = mkdtempSync(join(tmpdir(), 'mpgd-target-config-matrix-'));
+  const file = join(directory, 'matrix.json');
+
+  writeFileSync(file, `${JSON.stringify(matrix)}\n`);
+  return file;
 }
 
 function resolveWebTargetPaths(target: WebTargetConfig, name: string) {

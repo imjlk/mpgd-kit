@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 
 import { createGameViteSharedConfig } from '../../examples/phaser-starter/vite.shared';
-import { targetConfigMatrixJsonEnv } from '../../packages/cli/src/target-config-env';
+import { targetConfigMatrixFileEnv } from '../../packages/cli/src/target-config-env';
 import { appTargetForPlatformTarget } from '../target/platform-targets';
 import { loadTargetConfigMatrix } from '../target/target-config-matrix';
 
@@ -43,7 +43,7 @@ try {
 
   assert.deepEqual(extended.targets.storefront, webPreview);
   assert.match(extended.version, /\+extensions\.[a-f0-9]{16}$/u);
-  assertViteRuntimeMatrix(extended);
+  assertViteRuntimeMatrix(extended, root);
 
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
@@ -103,6 +103,44 @@ try {
   assert.throws(
     () => loadTargetConfigMatrix(undefined, extensionsFile),
     /runtime verse8-web requires release profile verse8; received app-store/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
+      storefront: {
+        ...webPreview,
+        runtime: 'capacitor-android',
+        capabilities: {
+          ...webPreview.capabilities,
+          storage: 'native',
+        },
+        release: { profile: 'google-play' },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /cannot use non-web runtime capacitor-android/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
+      storefront: {
+        ...webPreview,
+        capabilities: {
+          ...webPreview.capabilities,
+          storage: 'native',
+        },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /runtime web-preview requires local storage; received native/u,
   );
 
   writeFileSync(extensionsFile, `${JSON.stringify({
@@ -193,6 +231,47 @@ try {
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
     targets: {
+      storefront: {
+        ...webPreview,
+        runtime: 'verse8-web',
+        features: {
+          ...webPreview.features,
+          leaderboard: true,
+        },
+        leaderboard: { native: true },
+        release: { profile: 'verse8' },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /cannot enable leaderboard for verse8-web runtime/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
+      storefront: {
+        ...webPreview,
+        runtime: 'verse8-web',
+        capabilities: {
+          ...webPreview.capabilities,
+          storage: 'none',
+        },
+        release: { profile: 'verse8' },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /runtime verse8-web requires local storage; received none/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
       'web-preview': webPreview,
     },
   })}\n`);
@@ -207,11 +286,16 @@ try {
 
 console.log('Target config extensions smoke passed.');
 
-function assertViteRuntimeMatrix(matrix: ReturnType<typeof loadTargetConfigMatrix>): void {
-  const previous = process.env[targetConfigMatrixJsonEnv];
+function assertViteRuntimeMatrix(
+  matrix: ReturnType<typeof loadTargetConfigMatrix>,
+  directory: string,
+): void {
+  const previous = process.env[targetConfigMatrixFileEnv];
+  const matrixFile = path.join(directory, 'runtime-target-config-matrix.json');
 
   try {
-    process.env[targetConfigMatrixJsonEnv] = JSON.stringify(matrix);
+    writeFileSync(matrixFile, JSON.stringify(matrix));
+    process.env[targetConfigMatrixFileEnv] = matrixFile;
     const viteConfig = createGameViteSharedConfig({
       gameRoot: path.resolve('examples/phaser-starter'),
       mode: 'production',
@@ -223,7 +307,7 @@ function assertViteRuntimeMatrix(matrix: ReturnType<typeof loadTargetConfigMatri
     assert.equal(typeof encodedMatrix, 'string');
     assert.deepEqual(JSON.parse(encodedMatrix as string) as unknown, matrix);
 
-    process.env[targetConfigMatrixJsonEnv] = '[]';
+    writeFileSync(matrixFile, '[]');
     assert.throws(
       () => createGameViteSharedConfig({
         gameRoot: path.resolve('examples/phaser-starter'),
@@ -233,20 +317,20 @@ function assertViteRuntimeMatrix(matrix: ReturnType<typeof loadTargetConfigMatri
       /validate its shape/u,
     );
 
-    process.env[targetConfigMatrixJsonEnv] = '{invalid';
+    writeFileSync(matrixFile, '{invalid');
     assert.throws(
       () => createGameViteSharedConfig({
         gameRoot: path.resolve('examples/phaser-starter'),
         mode: 'production',
         project: path.resolve('examples/phaser-starter/tsconfig.json'),
       }),
-      /Failed to parse MPGD_TARGET_CONFIG_MATRIX_JSON/u,
+      /Failed to read or validate MPGD_TARGET_CONFIG_MATRIX_FILE/u,
     );
   } finally {
     if (previous === undefined) {
-      delete process.env[targetConfigMatrixJsonEnv];
+      delete process.env[targetConfigMatrixFileEnv];
     } else {
-      process.env[targetConfigMatrixJsonEnv] = previous;
+      process.env[targetConfigMatrixFileEnv] = previous;
     }
   }
 }

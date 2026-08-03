@@ -1294,7 +1294,9 @@ const targetCommand = defineI18n({
       },
       run: async (ctx) => {
         const positionals = readLocalPositionals(ctx.positionals, ['target', 'generate-package']);
-        const target = normalizeBuildTarget(readRequiredPositional(positionals, 0, 'target'));
+        const target = normalizeConfiguredTargetName(
+          readRequiredPositional(positionals, 0, 'target'),
+        );
 
         if (target !== 'microsoft-store') {
           throw new Error(`Package generation is not available for target: ${target}`);
@@ -1393,7 +1395,9 @@ const targetCommand = defineI18n({
       },
       run: (ctx) => {
         const positionals = readLocalPositionals(ctx.positionals, ['target', 'preflight']);
-        const target = normalizeBuildTarget(readRequiredPositional(positionals, 0, 'target'));
+        const target = normalizeConfiguredTargetName(
+          readRequiredPositional(positionals, 0, 'target'),
+        );
 
         if (target !== 'microsoft-store') {
           throw new Error(`Submission preflight is not available for target: ${target}`);
@@ -1515,7 +1519,9 @@ const targetCommand = defineI18n({
       },
       run: (ctx) => {
         const positionals = readLocalPositionals(ctx.positionals, ['target', 'accept-package']);
-        const target = normalizeBuildTarget(readRequiredPositional(positionals, 0, 'target'));
+        const target = normalizeConfiguredTargetName(
+          readRequiredPositional(positionals, 0, 'target'),
+        );
 
         if (target !== 'microsoft-store') {
           throw new Error(`Package acceptance is not available for target: ${target}`);

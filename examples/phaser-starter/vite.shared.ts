@@ -45,7 +45,7 @@ export function createGameViteSharedConfig(
     buildId: process.env.BUILD_ID ?? 'local',
   });
   const runtimeTargetConfigMatrix = readRuntimeTargetConfigMatrix(
-    process.env.MPGD_TARGET_CONFIG_MATRIX_JSON,
+    process.env.MPGD_TARGET_CONFIG_MATRIX_FILE,
   );
 
   return {
@@ -86,15 +86,20 @@ export function createGameViteSharedConfig(
 function readRuntimeTargetConfigMatrix(
   source: string | undefined,
 ): TargetConfigMatrix | undefined {
-  if (source === undefined || source.trim().length === 0) {
+  const matrixFile = source?.trim();
+  if (matrixFile === undefined || matrixFile.length === 0) {
     return undefined;
   }
 
+  const resolvedMatrixFile = resolve(matrixFile);
+
   try {
-    return assertRuntimeTargetConfigMatrix(JSON.parse(source) as unknown);
+    return assertRuntimeTargetConfigMatrix(
+      JSON.parse(readFileSync(resolvedMatrixFile, 'utf8')) as unknown,
+    );
   } catch (error) {
     throw new Error(
-      `Failed to parse MPGD_TARGET_CONFIG_MATRIX_JSON or validate its shape: ${formatError(error)}`,
+      `Failed to read or validate MPGD_TARGET_CONFIG_MATRIX_FILE at ${resolvedMatrixFile}: ${formatError(error)}`,
     );
   }
 }
