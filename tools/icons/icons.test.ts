@@ -151,17 +151,31 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   assert.equal(fallbackManifest.scope, './');
 
   const scriptedFaviconDist = join(gameRoot, 'scripted-favicon-dist');
+  const favicon = repeated.manifest.outputs.find((output) => output.purpose === 'favicon')
+    ?? repeated.manifest.outputs.find((output) => output.width === 192);
+  if (favicon === undefined) {
+    throw new Error('Expected the web icon profile to provide a favicon candidate.');
+  }
+  const faviconHref = `./${favicon.path}`;
+  const embeddedFaviconMarkup = `<link rel="icon" type="image/png" href="${faviconHref}">`;
   mkdirSync(scriptedFaviconDist, { recursive: true });
   writeFileSync(
     join(scriptedFaviconDist, 'index.html'),
-    '<html><head><script>const closingHead = "</head>";</script></head><body></body></html>',
+    '<html><head>'
+      + `<script>const closingHead = "</head>"; const markup = ${JSON.stringify(
+        embeddedFaviconMarkup,
+      )};</script>`
+      + `<!-- ${embeddedFaviconMarkup} -->`
+      + `<template>${embeddedFaviconMarkup}</template>`
+      + '</head><body></body></html>',
   );
   stageWebIconEvidence(repeated, scriptedFaviconDist);
   const scriptedFaviconHtml = await readUtf8(join(scriptedFaviconDist, 'index.html'));
-  const faviconIndex = scriptedFaviconHtml.indexOf('<link rel="icon"');
+  const faviconIndex = scriptedFaviconHtml.lastIndexOf(embeddedFaviconMarkup);
 
-  assert.ok(scriptedFaviconHtml.includes('<script>const closingHead = "</head>";</script>'));
-  assert.ok(faviconIndex > scriptedFaviconHtml.indexOf('</script>'));
+  assert.ok(scriptedFaviconHtml.includes('<script>const closingHead = "</head>"; const markup ='));
+  assert.equal(scriptedFaviconHtml.split(embeddedFaviconMarkup).length - 1, 4);
+  assert.ok(faviconIndex > scriptedFaviconHtml.indexOf('</template>'));
   assert.ok(faviconIndex < scriptedFaviconHtml.lastIndexOf('</head>'));
 
   const nonInstallableDist = join(gameRoot, 'non-installable-dist');

@@ -893,6 +893,9 @@ async function claimAdRewardWithStore(
     idempotencyKey: request.idempotencyKey,
     grantId: request.placementId,
     target: request.target,
+    ...(request.deploymentTarget === undefined
+      ? {}
+      : { deploymentTarget: request.deploymentTarget }),
   } as const;
   const existing = await findEntitlementTransactionByIdempotency(context.store, retryIdentity);
 
@@ -922,7 +925,9 @@ async function claimAdRewardWithStore(
     });
   }
 
-  const platformPlacementId = placement.platformPlacementIds[request.target];
+  const platformPlacementId = placement.platformPlacementIds[
+    request.deploymentTarget ?? request.target
+  ];
   const verification = await verifyEvidence((signal) => {
     return context.evidenceVerifier.verifyAdReward({
       request,
@@ -946,6 +951,9 @@ async function claimAdRewardWithStore(
   const payload: EntitlementLedgerPayload = {
     ...verification.payload,
     target: request.target,
+    ...(request.deploymentTarget === undefined
+      ? {}
+      : { deploymentTarget: request.deploymentTarget }),
     placementId: request.placementId,
     rewardType: placement.reward.type,
     amount: placement.reward.amount,
@@ -1247,6 +1255,7 @@ interface EntitlementRetryIdentity {
   readonly idempotencyKey: string;
   readonly grantId: string;
   readonly target: string;
+  readonly deploymentTarget?: string;
 }
 
 async function findEntitlementTransactionByIdempotency(
@@ -1349,7 +1358,8 @@ function matchesEntitlementRetry(
     && transaction.playerId === identity.playerId
     && transaction.idempotencyKey === identity.idempotencyKey
     && transaction.grantId === identity.grantId
-    && transaction.payload.target === identity.target;
+    && transaction.payload.target === identity.target
+    && transaction.payload.deploymentTarget === identity.deploymentTarget;
 }
 
 function resolveEvidenceVerificationTimeout(timeoutMs: number | undefined): number {

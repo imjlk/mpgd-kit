@@ -14,6 +14,7 @@ export type StarterGameServices = GameServicesRuntime;
 export function createStarterGameServices(input: {
   readonly gateway: PlatformGateway;
   readonly playerId: string;
+  readonly configTarget: string;
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
 }): StarterGameServices {
@@ -26,6 +27,7 @@ export function createStarterGameServices(input: {
       : { analyticsSessionId: input.analyticsSessionId }),
     authorityMode: resolveGameServicesAuthorityMode(import.meta.env.MODE),
     target: import.meta.env.VITE_MPGD_GAME_SERVICES_TARGET ?? input.gateway.target,
+    deploymentTarget: input.configTarget,
     ...(import.meta.env.VITE_MPGD_GAME_SERVICES_URL === undefined
       ? {}
       : { baseUrl: import.meta.env.VITE_MPGD_GAME_SERVICES_URL }),

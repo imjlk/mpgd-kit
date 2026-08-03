@@ -28,6 +28,7 @@ import {
 } from './image';
 import { resolveTargetIconProfile } from './profiles';
 import {
+  generatedIconCacheDirectory,
   iconGeneratorVersion,
   iconManifestSchemaVersion,
   type BrandAppIconConfig,
@@ -649,7 +650,7 @@ function resolveTargetOutputDir(
 ): string {
   return resolve(
     gameRoot,
-    '.mpgd/generated/icons',
+    generatedIconCacheDirectory,
     canonicalSha256,
     profileId,
     safePathSegment(targetName),

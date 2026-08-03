@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
 
+import { generatedIconCacheDirectory } from '../icons/types';
 import type { PlatformTargetConfig } from './schemas';
 
 const installableManifestNames = new Set(['manifest.json', 'manifest.webmanifest']);
@@ -90,8 +91,11 @@ export function ensureWebFaviconLink(artifactRoot: string, href: string): void {
 
   const source = readFileSync(indexFile, 'utf8');
   const link = `<link rel="icon" type="image/png" href="${href}">`;
+  const hasFaviconLink = scanHtmlHead(source).linkTags.some(({ tag }) => {
+    return isFaviconLinkTag(tag, href);
+  });
 
-  if (!source.includes(link)) {
+  if (!hasFaviconLink) {
     writeFileSync(indexFile, insertHtmlHeadTag(source, link));
   }
 }
@@ -356,6 +360,14 @@ function manifestLinkTags(html: string): readonly string[] {
   return scanHtmlHead(html).linkTags.map(({ tag }) => tag).filter(isManifestLinkTag);
 }
 
+function isFaviconLinkTag(tag: string, href: string): boolean {
+  const rel = readHtmlAttribute(tag, 'rel');
+
+  return rel !== undefined
+    && rel.split(/\s+/u).some((token) => token.toLowerCase() === 'icon')
+    && readHtmlAttribute(tag, 'href') === href;
+}
+
 function insertHtmlHeadTag(html: string, tag: string): string {
   const closingHeadTag = scanHtmlHead(html).closingTagStart;
 
@@ -511,6 +523,7 @@ function defaultProtectedBuildOutputs(
   resolvePath: (path: string) => string,
 ): readonly NamedWebArtifactOutput[] {
   return [
+    { name: 'generated icon cache', path: resolvePath(generatedIconCacheDirectory) },
     { name: 'AIT release output', path: resolvePath('release-output/ait') },
     { name: 'Android release output', path: resolvePath('release-output/android') },
     { name: 'iOS release output', path: resolvePath('release-output/ios') },

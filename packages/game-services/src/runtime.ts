@@ -34,6 +34,7 @@ export interface CreateGameServicesRuntimeInput {
   readonly playerId: string;
   readonly authorityMode: GameServicesAuthorityMode;
   readonly target?: PlatformTarget | string;
+  readonly deploymentTarget?: string;
   readonly baseUrl?: string;
   readonly transport?: 'http' | 'orpc';
   readonly allowLocalBackend?: boolean;
@@ -102,6 +103,9 @@ export function createGameServicesRuntime(
       backend,
       playerId: input.playerId,
       target,
+      ...(input.deploymentTarget === undefined
+        ? {}
+        : { deploymentTarget: input.deploymentTarget }),
       ...(input.analytics === undefined ? {} : { analytics: input.analytics }),
       ...(input.analyticsSessionId === undefined
         ? {}

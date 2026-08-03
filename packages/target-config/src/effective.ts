@@ -8,7 +8,7 @@ import {
 } from '@mpgd/catalog';
 
 import {
-  normalizeTargetIntegrationConfig,
+  assertTargetIntegrationRuntimeBounds,
   type FeatureAvailabilityReason,
   type TargetCapabilityConfig,
   type TargetConfig,
@@ -146,10 +146,14 @@ export function createEffectiveTargetConfig(
     createEffectiveAdPlacementConfig(input.target, config, placement),
   );
   const leaderboardEnabled = config.features.leaderboard;
-  const integrations = normalizeTargetIntegrationConfig({
-    ...config.integrations,
-    ...input.platformTarget?.integrations,
-  });
+  const integrations = assertTargetIntegrationRuntimeBounds(
+    config.runtime,
+    {
+      ...config.integrations,
+      ...input.platformTarget?.integrations,
+    },
+    `Effective target ${input.target}`,
+  );
 
   return {
     version: effectiveTargetConfigVersion({

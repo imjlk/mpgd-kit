@@ -4,13 +4,10 @@ import { readFileSync } from 'node:fs';
 import typia from 'typia';
 
 import {
-  normalizeTargetIntegrationConfig,
-  targetIntegrations,
-  type IntegrationAvailabilityState,
+  assertTargetIntegrationRuntimeBounds,
   type ReleaseProfile,
   type TargetConfig,
   type TargetConfigMatrix,
-  type TargetIntegration,
   type TargetRuntimeKind,
 } from '@mpgd/target-config';
 
@@ -29,26 +26,6 @@ interface TargetConfigExtensions {
 const assertTargetConfigMatrix = typia.createAssert<TargetConfigMatrix>();
 const assertTargetConfigExtensions = typia.createAssert<TargetConfigExtensions>();
 const supportedCustomTargetRuntimes = new Set<TargetRuntimeKind>(['verse8-web', 'web-preview']);
-type IntegrationUpperBound = 'available' | 'disabled' | 'unsupported';
-const integrationUpperBoundsByRuntime = {
-  'verse8-web': {
-    identityUpgrade: 'unsupported',
-    presentation: 'available',
-    sharing: 'unsupported',
-    inboundShare: 'unsupported',
-    notifications: 'unsupported',
-  },
-  'web-preview': {
-    identityUpgrade: 'disabled',
-    presentation: 'available',
-    sharing: 'available',
-    inboundShare: 'available',
-    notifications: 'unsupported',
-  },
-} as const satisfies Record<
-  'verse8-web' | 'web-preview',
-  Record<TargetIntegration, IntegrationUpperBound>
->;
 const releaseProfileByRuntime = {
   'web-preview': 'web-preview',
   'microsoft-store-pwa': 'microsoft-store',
@@ -130,7 +107,11 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
     );
   }
 
-  assertCustomTargetIntegrationPolicy(target, config);
+  assertTargetIntegrationRuntimeBounds(
+    config.runtime,
+    config.integrations,
+    `Target config extension ${target}`,
+  );
 
   const unsupportedFeature = getUnsupportedCustomWebFeature(config);
 
@@ -138,41 +119,6 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
     throw new Error(
       `Target config extension ${target} cannot enable ${unsupportedFeature} for ${config.runtime} runtime.`,
     );
-  }
-}
-
-function assertCustomTargetIntegrationPolicy(target: string, config: TargetConfig): void {
-  const runtime = config.runtime;
-  if (runtime !== 'verse8-web' && runtime !== 'web-preview') {
-    return;
-  }
-
-  const integrations = normalizeTargetIntegrationConfig(config.integrations);
-  const upperBounds = integrationUpperBoundsByRuntime[runtime];
-
-  for (const integration of targetIntegrations) {
-    const state = integrations[integration];
-    const upperBound = upperBounds[integration];
-
-    if (!isIntegrationStateWithinUpperBound(state, upperBound)) {
-      throw new Error(
-        `Target config extension ${target} cannot configure ${integration} as ${state} for ${runtime} runtime; maximum supported state is ${upperBound}.`,
-      );
-    }
-  }
-}
-
-function isIntegrationStateWithinUpperBound(
-  state: IntegrationAvailabilityState,
-  upperBound: IntegrationUpperBound,
-): boolean {
-  switch (upperBound) {
-    case 'available':
-      return true;
-    case 'disabled':
-      return state === 'disabled' || state === 'unsupported';
-    case 'unsupported':
-      return state === 'unsupported';
   }
 }
 

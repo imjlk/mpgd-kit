@@ -262,6 +262,9 @@ try {
   }
 
   for (const output of [
+    '.mpgd/generated',
+    '.mpgd/generated/icons',
+    '.mpgd/generated/icons/custom',
     'release-output',
     'release-output/android',
     'artifacts',

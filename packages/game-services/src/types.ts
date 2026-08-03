@@ -63,6 +63,8 @@ export interface PurchaseGrantFinalization {
 
 export interface ClaimAdRewardRequest {
   readonly target: GameServicesAdRewardTarget;
+  /** Deployment config key used to resolve game-owned platform placement identifiers. */
+  readonly deploymentTarget?: string;
   readonly playerId: string;
   readonly placementId: LogicalAdPlacementId;
   /** Platform evidence identity; AIT uses the game-issued reward correlation identifier. */
@@ -184,6 +186,7 @@ export function assertClaimAdRewardRequest(
 ): ClaimAdRewardRequest {
   assertRecord(input, 'ClaimAdRewardRequest');
   assertAdRewardTarget(input.target);
+  assertOptionalDeploymentTarget(input.deploymentTarget);
   assertNonEmptyString(input.playerId, 'playerId');
   assertNonEmptyString(input.placementId, 'placementId');
   assertOptionalNonEmptyString(input.platformImpressionId, 'platformImpressionId');
@@ -307,6 +310,36 @@ function assertAdRewardTarget(input: unknown): asserts input is GameServicesAdRe
     throw new Error('target must be android, ios, ait, or verse8.');
   }
 }
+
+function assertOptionalDeploymentTarget(input: unknown): asserts input is string | undefined {
+  if (input === undefined) {
+    return;
+  }
+
+  if (
+    typeof input !== 'string'
+    || input.length > 64
+    || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/u.test(input)
+    || reservedDeploymentTargetNames.has(input)
+  ) {
+    throw new Error('deploymentTarget must use lowercase kebab-case and avoid reserved names.');
+  }
+}
+
+const reservedDeploymentTargetNames = new Set([
+  'aux',
+  'browser',
+  'con',
+  'devvit',
+  'index',
+  'msstore',
+  'nul',
+  'prn',
+  'constructor',
+  'prototype',
+  ...Array.from({ length: 9 }, (_, index) => `com${String(index + 1)}`),
+  ...Array.from({ length: 9 }, (_, index) => `lpt${String(index + 1)}`),
+]);
 
 function assertLeaderboardTarget(input: unknown): asserts input is GameServicesLeaderboardTarget {
   if (

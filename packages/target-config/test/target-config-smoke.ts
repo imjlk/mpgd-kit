@@ -45,23 +45,28 @@ const targetConfigMatrix = {
       leaderboard: false,
       localization: true,
     }),
-    android: createTargetConfig(
-      {
-        iap: true,
-        rewardedAds: true,
-        interstitialAds: true,
-        leaderboard: true,
-        localization: true,
-      },
-      {
-        identityUpgrade: 'available',
-        presentation: 'available',
-        sharing: 'available',
-        inboundShare: 'available',
-        notifications: 'configuration-required',
-        presentationMode: 'fullscreen',
-      },
-    ),
+    android: {
+      ...createTargetConfig(
+        {
+          iap: true,
+          rewardedAds: true,
+          interstitialAds: true,
+          leaderboard: true,
+          localization: true,
+        },
+        {
+          identityUpgrade: 'available',
+          presentation: 'available',
+          sharing: 'available',
+          inboundShare: 'available',
+          notifications: 'configuration-required',
+          presentationMode: 'fullscreen',
+        },
+      ),
+      runtime: 'capacitor-android',
+      capabilities: { storage: 'native', localization: true },
+      release: { profile: 'google-play' },
+    },
   },
 } satisfies TargetConfigMatrix;
 
@@ -204,6 +209,21 @@ assertEqual(targetConfigKeyForPlatform('verse8'), 'verse8');
 assertViewportPlans();
 
 const webConfig = getTargetConfig(targetConfigMatrix, targetConfigKeyForPlatform('browser'));
+assertThrows(
+  () => createEffectiveTargetConfig({
+    target: 'web-preview',
+    targetConfigVersion: targetConfigMatrix.version,
+    config: webConfig,
+    catalog: productCatalog,
+    adPlacements,
+    platformTarget: {
+      kind: 'web',
+      adapter: 'browser',
+      integrations: { notifications: 'available' },
+    },
+  }),
+  /Effective target web-preview cannot configure notifications as available for web-preview runtime/u,
+);
 const webEffectiveConfig = createEffectiveTargetConfig({
   target: 'web-preview',
   targetConfigVersion: targetConfigMatrix.version,
@@ -730,7 +750,30 @@ const verse8ResourceTargetConfig = {
   }),
   runtime: 'verse8-web',
   release: { profile: 'verse8' },
+  integrations: {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'unsupported',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+    presentationMode: 'inline-expanded',
+  },
 } as const satisfies TargetConfig;
+assertThrows(
+  () => createEffectiveTargetConfig({
+    target: 'verse8-staging',
+    targetConfigVersion: targetConfigMatrix.version,
+    config: verse8ResourceTargetConfig,
+    catalog: productCatalog,
+    adPlacements,
+    platformTarget: {
+      kind: 'web',
+      adapter: 'verse8',
+      integrations: { sharing: 'available' },
+    },
+  }),
+  /Effective target verse8-staging cannot configure sharing as available for verse8-web runtime/u,
+);
 const verse8ResourceEffectiveConfig = createEffectiveTargetConfig({
   target: 'verse8-staging',
   targetConfigVersion: targetConfigMatrix.version,

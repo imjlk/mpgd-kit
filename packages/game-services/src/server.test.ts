@@ -78,6 +78,7 @@ const placements = {
       },
       platformPlacementIds: {
         android: 'reward_android',
+        'verse8-staging': 'reward_verse8_staging',
       },
     },
     {
@@ -258,6 +259,44 @@ const reward = await backend.adRewards.claimAdReward({
   idempotencyKey: 'reward-1',
   completedAt: '2026-07-04T00:00:01.000Z',
 });
+let verse8PlatformPlacementId: string | undefined;
+const verse8DeploymentStore = createInMemoryGameServicesStore();
+const verse8DeploymentBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: verse8DeploymentStore,
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return { status: 'rejected', reason: 'NOT_USED' } as const;
+    },
+    async verifyAdReward(input) {
+      verse8PlatformPlacementId = input.platformPlacementId;
+      return {
+        status: 'verified',
+        verificationId: 'provider:verse8:reward:staging',
+        verifiedAt: '2026-07-04T00:00:01.000Z',
+      } as const;
+    },
+  },
+});
+const verse8DeploymentReward = await verse8DeploymentBackend.adRewards.claimAdReward({
+  target: 'verse8',
+  deploymentTarget: 'verse8-staging',
+  playerId: 'player-verse8-staging',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'verse8-staging-impression',
+  idempotencyKey: 'verse8-staging-reward',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+const verse8DeploymentConflict = await verse8DeploymentBackend.adRewards.claimAdReward({
+  target: 'verse8',
+  deploymentTarget: 'verse8-production',
+  playerId: 'player-verse8-staging',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'verse8-staging-impression',
+  idempotencyKey: 'verse8-staging-reward',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
 const score = await backend.leaderboard.recordScore({
   target: 'android',
   playerId: 'player-1',
@@ -288,6 +327,26 @@ const invalidTransportRequest = await handler.handle({
 assertEqual(purchase.verified, true, 'purchase should be verified');
 assertEqual(duplicatePurchase.alreadyProcessed, true, 'purchase should dedupe');
 assertEqual(reward.granted, true, 'reward should be granted');
+assertEqual(
+  verse8DeploymentReward.granted,
+  true,
+  'custom Verse8 deployment rewards should be granted',
+);
+assertEqual(
+  verse8PlatformPlacementId,
+  'reward_verse8_staging',
+  'custom Verse8 deployment rewards should use the deployment placement id',
+);
+assertEqual(
+  verse8DeploymentConflict.reason,
+  'IDEMPOTENCY_KEY_CONFLICT',
+  'reward retries must preserve the original deployment target dimension',
+);
+assertEqual(
+  (await verse8DeploymentStore.listEntitlementTransactions())[0]?.payload.deploymentTarget,
+  'verse8-staging',
+  'reward ledger payloads should retain the deployment target for audit',
+);
 assertEqual(score.submitted, true, 'score should be recorded');
 assertEqual(score.rank, 1, 'first leaderboard score should start at rank one');
 assertEqual(redditScore.submitted, true, 'reddit score should be recorded');
