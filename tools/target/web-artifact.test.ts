@@ -15,6 +15,7 @@ import { assertPlatformTargetsConfigShape } from './platform-targets';
 import { validatePlatformTargetsFile } from './validate-platform-targets';
 import {
   assertDisjointWebArtifactOutputs,
+  assertDisjointWebTargetOutputs,
   assertInstallableWebArtifact,
   assertNonInstallableWebArtifact,
   assertWebArtifactOutputDirectory,
@@ -88,15 +89,21 @@ try {
     join(scriptedArtifact, 'index.html'),
     '<html><head>'
       + `<script>const markup = ${JSON.stringify(embeddedManifestMarkup)};</script>`
+      + `<title>${embeddedManifestMarkup}</title>`
       + `<!-- ${embeddedManifestMarkup} -->`
       + `<template>${embeddedManifestMarkup}</template>`
       + '</head><body></body></html>',
+  );
+  assert.throws(
+    () => assertInstallableWebArtifact(scriptedArtifact),
+    /does not link an existing root web app manifest/u,
   );
   ensureInstallableWebManifestLink(scriptedArtifact);
   const installableHtml = readFileSync(join(scriptedArtifact, 'index.html'), 'utf8');
   assert.ok(installableHtml.includes(`<script>const markup = ${JSON.stringify(
     embeddedManifestMarkup,
   )};</script>`));
+  assert.ok(installableHtml.includes(`<title>${embeddedManifestMarkup}</title>`));
   assert.ok(installableHtml.includes(`<!-- ${embeddedManifestMarkup} -->`));
   assert.ok(installableHtml.includes(`<template>${embeddedManifestMarkup}</template>`));
   assert.doesNotThrow(() => assertInstallableWebArtifact(scriptedArtifact));
@@ -131,11 +138,24 @@ try {
   );
   assert.doesNotThrow(() => assertNonInstallableWebArtifact(implicitHeadManifestArtifact));
 
+  const unclosedHeadArtifact = join(root, 'unclosed-head-artifact');
+  mkdirSync(unclosedHeadArtifact);
+  writeFileSync(join(unclosedHeadArtifact, 'manifest.webmanifest'), '{}\n');
+  writeFileSync(
+    join(unclosedHeadArtifact, 'index.html'),
+    `<html><head><meta charset="utf-8"><body>${embeddedManifestMarkup}</body></html>`,
+  );
+  sanitizeNonInstallableWebArtifact(unclosedHeadArtifact);
+  const unclosedHeadHtml = readFileSync(join(unclosedHeadArtifact, 'index.html'), 'utf8');
+  assert.ok(unclosedHeadHtml.includes(embeddedManifestMarkup));
+  assert.doesNotThrow(() => assertNonInstallableWebArtifact(unclosedHeadArtifact));
+
   sanitizeNonInstallableWebArtifact(scriptedArtifact);
   const nonInstallableHtml = readFileSync(join(scriptedArtifact, 'index.html'), 'utf8');
   assert.ok(nonInstallableHtml.includes(`<script>const markup = ${JSON.stringify(
     embeddedManifestMarkup,
   )};</script>`));
+  assert.ok(nonInstallableHtml.includes(`<title>${embeddedManifestMarkup}</title>`));
   assert.ok(nonInstallableHtml.includes(`<!-- ${embeddedManifestMarkup} -->`));
   assert.ok(nonInstallableHtml.includes(`<template>${embeddedManifestMarkup}</template>`));
   assert.doesNotThrow(() => assertNonInstallableWebArtifact(scriptedArtifact));
@@ -213,6 +233,15 @@ try {
     staticDir: 'static-file',
   });
   assert.throws(() => validatePlatformTargetsFile(configPath), /staticDir must be a directory/u);
+
+  writeWebTargetConfig(configPath, {
+    output: 'mpgd.targets.json',
+    staticDir: 'static',
+  });
+  assert.throws(
+    () => validatePlatformTargetsFile(configPath),
+    /artifact output must be a directory when it already exists/u,
+  );
 
   writeWebTargetConfig(configPath, {
     output: 'static/nested-output',
@@ -302,7 +331,7 @@ try {
   });
   assert.throws(
     () => validatePlatformTargetsFile(configPath),
-    /staticDir and output must not overlap across configured web targets/u,
+    /staticDir and output must not overlap across configured targets/u,
   );
 
   const archiveGameApp = join(root, 'archive-game-app');
@@ -316,7 +345,43 @@ try {
   });
   assert.throws(
     () => validatePlatformTargetsFile(configPath),
-    /artifact output and Vite output must not overlap across configured web targets/u,
+    /artifact output and Vite output must not overlap across configured targets/u,
+  );
+
+  const nativeGameApp = join(root, 'native-game-app');
+  mkdirSync(nativeGameApp);
+  const androidTarget = {
+    kind: 'capacitor-android',
+    gameApp: 'native-game-app',
+    adapter: 'capacitor',
+    shellApp: 'apps/mobile',
+    webDir: 'apps/mobile/www',
+    artifact: 'aab',
+  } as const;
+  assert.throws(
+    () => assertDisjointWebTargetOutputs({
+      storefront: {
+        kind: 'web',
+        gameApp: 'game-app',
+        adapter: 'browser',
+        output: 'native-game-app',
+      },
+      android: androidTarget,
+    }, (path) => join(root, path)),
+    /artifact output and Vite output must not overlap across configured targets/u,
+  );
+  assert.throws(
+    () => assertDisjointWebTargetOutputs({
+      storefront: {
+        kind: 'web',
+        gameApp: 'game-app',
+        adapter: 'browser',
+        output: 'artifact-root/storefront',
+        staticDir: 'native-game-app/dist/overlay',
+      },
+      android: androidTarget,
+    }, (path) => join(root, path)),
+    /staticDir and Vite output must not overlap across configured targets/u,
   );
 
   for (const output of [

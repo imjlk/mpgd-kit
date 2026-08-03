@@ -76,14 +76,26 @@ export function resolveProductPlatformId(
   product: ProductCatalogEntry,
   target: CatalogTarget,
 ): string | undefined {
-  return normalizePlatformIdentifier(product.platformProductIds[target]);
+  const identifier = readOwnPlatformIdentifier(product.platformProductIds, target);
+  return normalizePlatformIdentifier(identifier);
 }
 
 export function resolveAdPlacementPlatformId(
   placement: AdPlacementEntry,
   target: AdPlacementTarget,
 ): string | undefined {
-  return normalizePlatformIdentifier(placement.platformPlacementIds[target]);
+  return normalizePlatformIdentifier(
+    readOwnPlatformIdentifier(placement.platformPlacementIds, target),
+  );
+}
+
+function readOwnPlatformIdentifier(
+  identifiers: Partial<Record<string, string>>,
+  target: string,
+): string | undefined {
+  return Object.prototype.hasOwnProperty.call(identifiers, target)
+    ? identifiers[target]
+    : undefined;
 }
 
 function normalizePlatformIdentifier(identifier: string | undefined): string | undefined {

@@ -149,6 +149,9 @@ assertProductionTargetReadiness({
   profile,
   targetsFile: platformTargets.path,
   gameRoot: configBaseDir,
+  ...(runtimeTargetConfigMatrix.targets[targetName] === undefined
+    ? {}
+    : { targetPolicy: runtimeTargetConfigMatrix.targets[targetName] }),
   ...(gameServicesUrl === undefined ? {} : { gameServicesUrl }),
 });
 

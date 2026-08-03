@@ -70,6 +70,11 @@ assertEqual(
   'hints_5_web',
   'custom product identifiers should resolve by deployment target',
 );
+assertEqual(
+  resolveProductPlatformId(customTargetProduct, 'constructor'),
+  undefined,
+  'product identifiers must ignore inherited prototype keys',
+);
 
 const customTargetPlacement = {
   id: 'CUSTOM_REWARDED',
@@ -87,6 +92,11 @@ assertEqual(
   resolveAdPlacementPlatformId(customTargetPlacement, 'verse8'),
   undefined,
   'placement identifiers must not fall back to another deployment target',
+);
+assertEqual(
+  resolveAdPlacementPlatformId(customTargetPlacement, 'constructor'),
+  undefined,
+  'placement identifiers must ignore inherited prototype keys',
 );
 
 console.log('Catalog product grant validation test passed.');

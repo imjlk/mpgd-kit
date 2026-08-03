@@ -415,10 +415,10 @@ function scanHtmlHead(html: string): HtmlHeadScan {
   let closingTagStart: number | undefined;
   let headOpeningTagEnd: number | undefined;
   let htmlOpeningTagEnd: number | undefined;
-  let implicitHeadClosed = false;
+  let headClosed = false;
   let inHead = false;
   let index = 0;
-  let rawTextTag: 'script' | 'style' | undefined;
+  let rawTextTag: 'script' | 'style' | 'title' | undefined;
   let templateDepth = 0;
 
   while (index < html.length) {
@@ -461,21 +461,20 @@ function scanHtmlHead(html: string): HtmlHeadScan {
 
     const { closing, name, selfClosing } = parsedTag;
     if (closing) {
-      const scanningHead = inHead || !implicitHeadClosed;
+      const scanningHead = inHead || !headClosed;
       if (name === 'template' && scanningHead && templateDepth > 0) {
         templateDepth -= 1;
       } else if (name === 'head' && inHead && templateDepth === 0) {
         closingTagStart = tagStart;
         inHead = false;
-        implicitHeadClosed = true;
+        headClosed = true;
       }
 
       continue;
     }
 
-    if (name === 'head' && !inHead) {
+    if (name === 'head' && !inHead && !headClosed) {
       inHead = true;
-      implicitHeadClosed = true;
       headOpeningTagEnd = tagEnd + 1;
       continue;
     }
@@ -485,11 +484,12 @@ function scanHtmlHead(html: string): HtmlHeadScan {
       continue;
     }
 
-    if (!inHead && !implicitHeadClosed && !implicitHeadElementNames.has(name)) {
-      implicitHeadClosed = true;
+    if (!headClosed && !implicitHeadElementNames.has(name)) {
+      inHead = false;
+      headClosed = true;
     }
 
-    if (!inHead && implicitHeadClosed) {
+    if (!inHead && headClosed) {
       continue;
     }
 
@@ -500,7 +500,7 @@ function scanHtmlHead(html: string): HtmlHeadScan {
       continue;
     }
 
-    if (!selfClosing && (name === 'script' || name === 'style')) {
+    if (!selfClosing && (name === 'script' || name === 'style' || name === 'title')) {
       rawTextTag = name;
       continue;
     }
@@ -614,11 +614,7 @@ function assertWebOutputsAvoidStaticDirectories(
   targets: Readonly<Record<string, PlatformTargetConfig>>,
   resolvePath: (path: string) => string,
 ): void {
-  const staticDirectories = Object.entries(targets).flatMap(([name, target]) => {
-    return target.kind === 'web' && target.staticDir !== undefined
-      ? [{ name: `${name} staticDir`, path: resolvePath(target.staticDir) }]
-      : [];
-  });
+  const staticDirectories = configuredWebStaticDirectories(targets, resolvePath);
   const canonicalStaticDirectories = staticDirectories.map((staticDirectory) => ({
     ...staticDirectory,
     canonicalPath: canonicalizeThroughExistingAncestor(staticDirectory.path),
@@ -629,7 +625,7 @@ function assertWebOutputsAvoidStaticDirectories(
     for (const staticDirectory of canonicalStaticDirectories) {
       if (pathsOverlap(canonicalOutput, staticDirectory.canonicalPath)) {
         throw new Error(
-          `Web staticDir and output must not overlap across configured web targets: ${output.name} (${output.path}) and ${staticDirectory.name} (${staticDirectory.path}).`,
+          `Web staticDir and output must not overlap across configured targets: ${output.name} (${output.path}) and ${staticDirectory.name} (${staticDirectory.path}).`,
         );
       }
     }
@@ -662,11 +658,7 @@ function assertWebOutputsAvoidViteOutputs(
   targets: Readonly<Record<string, PlatformTargetConfig>>,
   resolvePath: (path: string) => string,
 ): void {
-  const viteOutputs = Object.entries(targets).flatMap(([name, target]) => {
-    return target.kind === 'web'
-      ? [{ name: `${name} Vite output`, path: resolvePath(join(target.gameApp, 'dist')) }]
-      : [];
-  });
+  const viteOutputs = configuredGameAppViteOutputs(targets, resolvePath);
   const canonicalViteOutputs = viteOutputs.map((output) => ({
     ...output,
     canonicalPath: canonicalizeThroughExistingAncestor(output.path),
@@ -677,11 +669,45 @@ function assertWebOutputsAvoidViteOutputs(
     for (const viteOutput of canonicalViteOutputs) {
       if (pathsOverlap(canonicalOutput, viteOutput.canonicalPath)) {
         throw new Error(
-          `Web artifact output and Vite output must not overlap across configured web targets: ${output.name} (${output.path}) and ${viteOutput.name} (${viteOutput.path}).`,
+          `Web artifact output and Vite output must not overlap across configured targets: ${output.name} (${output.path}) and ${viteOutput.name} (${viteOutput.path}).`,
         );
       }
     }
   }
+
+  const staticDirectories = configuredWebStaticDirectories(targets, resolvePath);
+  for (const staticDirectory of staticDirectories) {
+    const canonicalStaticDirectory = canonicalizeThroughExistingAncestor(staticDirectory.path);
+    for (const viteOutput of canonicalViteOutputs) {
+      if (pathsOverlap(canonicalStaticDirectory, viteOutput.canonicalPath)) {
+        throw new Error(
+          `Web staticDir and Vite output must not overlap across configured targets: ${staticDirectory.name} (${staticDirectory.path}) and ${viteOutput.name} (${viteOutput.path}).`,
+        );
+      }
+    }
+  }
+}
+
+function configuredWebStaticDirectories(
+  targets: Readonly<Record<string, PlatformTargetConfig>>,
+  resolvePath: (path: string) => string,
+): readonly NamedWebArtifactOutput[] {
+  return Object.entries(targets).flatMap(([name, target]) => {
+    return target.kind === 'web' && target.staticDir !== undefined
+      ? [{ name: `${name} staticDir`, path: resolvePath(target.staticDir) }]
+      : [];
+  });
+}
+
+function configuredGameAppViteOutputs(
+  targets: Readonly<Record<string, PlatformTargetConfig>>,
+  resolvePath: (path: string) => string,
+): readonly NamedWebArtifactOutput[] {
+  return Object.entries(targets).flatMap(([name, target]) => {
+    return target.kind === 'devvit-web'
+      ? []
+      : [{ name: `${name} Vite output`, path: resolvePath(join(target.gameApp, 'dist')) }];
+  });
 }
 
 function assertWebOutputsStayWithinRoot(
@@ -710,8 +736,12 @@ function pathsOverlap(first: string, second: string): boolean {
 }
 
 function canonicalizeWebArtifactOutput(path: string): string {
-  if (lstatIfPresent(path)?.isSymbolicLink() === true) {
+  const status = lstatIfPresent(path);
+  if (status?.isSymbolicLink() === true) {
     throw new Error(`Web artifact output must not be a symbolic link: ${path}`);
+  }
+  if (status !== undefined && !status.isDirectory()) {
+    throw new Error(`Web artifact output must be a directory when it already exists: ${path}`);
   }
 
   return canonicalizeThroughExistingAncestor(path);
