@@ -205,6 +205,7 @@ validatePhaserTemplateLocalePolicy();
 validatePhaserTemplateRewardAuthority();
 validatePhaserTemplateAcceptanceCommand();
 validateGeneratedConsumerWorkflow();
+validateGeneratedViteVersionPins();
 validateGameplayE2EPlan();
 validateAppIconPipeline();
 
@@ -301,6 +302,44 @@ function validateGeneratedConsumerWorkflow(): void {
 
   for (const [relativePath, anchor] of Object.entries(microsoftStoreDocumentationAnchors)) {
     assertSingleMicrosoftStoreBlock(`${templateRoot}/${relativePath}`, anchor);
+  }
+}
+
+function validateGeneratedViteVersionPins(): void {
+  const packagePaths = [
+    'examples/phaser-starter/package.json',
+    'packages/cli/templates/phaser-game/package.json',
+    'packages/cli/templates/phaser-game/apps/target-ait/package.json',
+    'packages/cli/templates/phaser-game/apps/target-cloudflare-pages/package.json',
+    'packages/cli/templates/phaser-game/apps/target-devvit/package.json',
+  ] as const;
+  let expectedVersion: string | undefined;
+
+  for (const packagePath of packagePaths) {
+    const packageJson = readJson(packagePath) as {
+      readonly devDependencies?: Record<string, unknown>;
+    } | null;
+    const viteVersion = packageJson?.devDependencies?.vite;
+
+    assertString(viteVersion, `${packagePath}: devDependencies.vite`);
+
+    if (typeof viteVersion !== 'string') {
+      continue;
+    }
+
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(viteVersion)) {
+      failures.push(
+        `${packagePath}: devDependencies.vite must pin the verified Vite version exactly.`,
+      );
+      continue;
+    }
+
+    expectedVersion ??= viteVersion;
+    assertEqual(
+      viteVersion,
+      expectedVersion,
+      `${packagePath}: devDependencies.vite must match the starter baseline`,
+    );
   }
 }
 
