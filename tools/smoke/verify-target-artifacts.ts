@@ -13,6 +13,10 @@ import {
 } from '../target/microsoft-store-pwa';
 import { platformTargetsFilePath } from '../target/platform-targets';
 import {
+  assertInstallableWebArtifact,
+  assertNonInstallableWebArtifact,
+} from '../target/web-artifact';
+import {
   assertEmbeddedTargetConfig,
   embeddedTargetConfigFileName,
   readArtifactTextFromDirectory,
@@ -27,6 +31,7 @@ interface SmokePlatformTargetConfig {
   readonly kind: 'web' | 'capacitor-android' | 'capacitor-ios' | 'apps-in-toss' | 'devvit-web';
   readonly gameApp: string;
   readonly adapter: string;
+  readonly installable?: boolean;
   readonly output?: string;
   readonly shellApp?: string;
   readonly wrapperApp?: string;
@@ -69,6 +74,9 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
 
     assertArtifactPathAllowed(target, targetConfig, artifactPath);
     assertPathExists(artifactPath, `${target} artifact`);
+    if (targetConfig.kind === 'web') {
+      assertWebArtifactInstallability(artifactPath, targetConfig.installable);
+    }
     assertPathInsideTargetBase(effectiveConfigPath, `${target} effective target config`);
     assertPathExists(effectiveConfigPath, `${target} effective target config`);
 
@@ -131,6 +139,17 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
   }
 
   console.log(`Target smoke passed: ${targets.join(', ')}`);
+}
+
+export function assertWebArtifactInstallability(
+  artifactPath: string,
+  installable: boolean | undefined,
+): void {
+  if (installable === false) {
+    assertNonInstallableWebArtifact(artifactPath);
+  } else {
+    assertInstallableWebArtifact(artifactPath);
+  }
 }
 
 const forbiddenMicrosoftStoreJavaScriptMarkers = [
@@ -1045,6 +1064,9 @@ function loadSmokePlatformTargetsConfig(): {
     assertTargetKind(targetConfig.kind, target);
     assertString(targetConfig.gameApp, `${target}.gameApp`);
     assertString(targetConfig.adapter, `${target}.adapter`);
+    if (targetConfig.kind === 'web') {
+      assertOptionalBoolean(targetConfig.installable, `${target}.installable`);
+    }
   }
 
   return {
@@ -1077,6 +1099,12 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 function assertString(input: unknown, label: string): asserts input is string {
   if (typeof input !== 'string' || input.length === 0) {
     throw new Error(`${label} must be a non-empty string.`);
+  }
+}
+
+function assertOptionalBoolean(input: unknown, label: string): void {
+  if (input !== undefined && typeof input !== 'boolean') {
+    throw new Error(`${label} must be a boolean when provided.`);
   }
 }
 

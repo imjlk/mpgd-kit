@@ -4,17 +4,18 @@ import { dirname, join } from 'node:path';
 
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
 
+import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
 import {
   createEffectiveTargetConfigMatrix,
   type EffectivePlatformTargetMetadata,
   type EffectiveTargetConfig,
   type EffectiveTargetConfigMatrix,
 } from '../../packages/target-config/src/effective';
-import type { TargetConfigMatrix } from '../../packages/target-config/src/runtime';
 import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import { readJsonFile } from '../io';
 import { loadPlatformTargetsConfig } from './platform-targets';
 import type { PlatformTargetConfig, PlatformTargetsConfig } from './schemas';
+import { loadTargetConfigMatrix } from './target-config-matrix';
 
 export interface EffectiveTargetConfigArtifact {
   readonly target: string;
@@ -36,7 +37,7 @@ export interface WriteEffectiveTargetConfigsOptions {
 }
 
 export function loadEffectiveTargetConfigMatrix(): EffectiveTargetConfigMatrix {
-  const configMatrix = readJsonFile('packages/target-config/targets.json') as TargetConfigMatrix;
+  const configMatrix = loadTargetConfigMatrix();
   const catalog = readJsonFile(productCatalogFilePath()) as ProductCatalog;
   const adPlacements = readJsonFile(adPlacementsFilePath()) as AdPlacements;
   const platformTargets = loadPlatformTargetsConfig().config as PlatformTargetsConfig;
@@ -159,6 +160,7 @@ function writeEffectiveTargetConfig(
   config: EffectiveTargetConfig,
   outputDir: string,
 ): EffectiveTargetConfigArtifact {
+  assertDeploymentTargetName(target);
   const path = join(outputDir, `${target}.json`);
   const content = `${JSON.stringify(config, null, 2)}\n`;
 

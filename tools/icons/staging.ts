@@ -11,9 +11,24 @@ import { basename, dirname, join, resolve } from 'node:path';
 
 import sharp from 'sharp';
 
+import {
+  ensureInstallableWebManifestLink,
+  ensureWebFaviconLink,
+  sanitizeNonInstallableWebArtifact,
+} from '../target/web-artifact';
+import { sha256 } from './image';
 import type { GeneratedTargetIcons, IconManifestOutput } from './types';
 
-export function stageWebIconEvidence(result: GeneratedTargetIcons, gameDist: string): void {
+export interface StageWebIconEvidenceOptions {
+  readonly installable?: boolean;
+  readonly manifestSourceDirectory?: string;
+}
+
+export function stageWebIconEvidence(
+  result: GeneratedTargetIcons,
+  gameDist: string,
+  options: StageWebIconEvidenceOptions = {},
+): void {
   const iconDir = join(gameDist, 'icons');
 
   mkdirSync(iconDir, { recursive: true });
@@ -29,8 +44,31 @@ export function stageWebIconEvidence(result: GeneratedTargetIcons, gameDist: str
   );
 
   if (result.profile.id === 'web-preview' || result.profile.id === 'microsoft-pwa') {
-    stageWebManifest(result, gameDist);
+    if (options.installable !== false) {
+      stageWebManifest(result, gameDist, options.manifestSourceDirectory);
+    } else {
+      sanitizeNonInstallableWebArtifact(gameDist);
+    }
     stageFaviconLink(result, gameDist);
+  }
+}
+
+export function assertStagedWebIconEvidence(
+  result: GeneratedTargetIcons,
+  gameDist: string,
+): void {
+  const manifestPath = join(gameDist, 'mpgd-icon-manifest.json');
+
+  if (!existsSync(manifestPath) || sha256(readFileSync(manifestPath)) !== result.manifestSha256) {
+    throw new Error(`Staged icon manifest does not match generated evidence: ${manifestPath}`);
+  }
+
+  for (const output of result.manifest.outputs) {
+    const outputPath = join(gameDist, output.path);
+
+    if (!existsSync(outputPath) || sha256(readFileSync(outputPath)) !== output.sha256) {
+      throw new Error(`Staged icon output does not match generated evidence: ${outputPath}`);
+    }
   }
 }
 
@@ -166,10 +204,29 @@ function stageIos(
   }, null, 2)}\n`);
 }
 
-function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void {
-  const sourcePath = join(result.gameRoot, 'public/manifest.webmanifest');
-  const manifest = existsSync(sourcePath)
-    ? JSON.parse(readFileSync(sourcePath, 'utf8')) as Record<string, unknown>
+function stageWebManifest(
+  result: GeneratedTargetIcons,
+  gameDist: string,
+  manifestSourceDirectory?: string,
+): void {
+  const stagedPath = join(gameDist, 'manifest.webmanifest');
+  const stagedJsonPath = join(gameDist, 'manifest.json');
+  const publicWebManifestPath = join(result.gameRoot, 'public/manifest.webmanifest');
+  const publicJsonManifestPath = join(result.gameRoot, 'public/manifest.json');
+  const manifestPath = [
+    ...(manifestSourceDirectory === undefined
+      ? []
+      : [
+          join(manifestSourceDirectory, 'manifest.webmanifest'),
+          join(manifestSourceDirectory, 'manifest.json'),
+        ]),
+    stagedJsonPath,
+    stagedPath,
+    publicWebManifestPath,
+    publicJsonManifestPath,
+  ].find((path) => existsSync(path));
+  const manifest = manifestPath !== undefined
+    ? readWebManifest(manifestPath)
     : {
         name: basename(result.gameRoot),
         short_name: basename(result.gameRoot),
@@ -188,24 +245,32 @@ function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void 
       type: 'image/png',
       purpose: output.purpose === 'maskable' ? 'maskable' : 'any',
     }));
-  writeFileSync(join(gameDist, 'manifest.webmanifest'), `${JSON.stringify(manifest, null, 2)}\n`);
+  writeFileSync(stagedPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  if (existsSync(stagedJsonPath)) {
+    rmSync(stagedJsonPath);
+  }
+  ensureInstallableWebManifestLink(gameDist);
+}
+
+function readWebManifest(path: string): Record<string, unknown> {
+  const parsed = JSON.parse(readFileSync(path, 'utf8')) as unknown;
+
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    throw new Error(`Web app manifest must contain a JSON object: ${path}`);
+  }
+
+  return parsed as Record<string, unknown>;
 }
 
 function stageFaviconLink(result: GeneratedTargetIcons, gameDist: string): void {
   const favicon = result.manifest.outputs.find((output) => output.purpose === 'favicon')
     ?? result.manifest.outputs.find((output) => output.width === 192);
-  const indexPath = join(gameDist, 'index.html');
 
-  if (favicon === undefined || !existsSync(indexPath)) {
+  if (favicon === undefined) {
     return;
   }
 
-  const html = readFileSync(indexPath, 'utf8');
-  const link = `<link rel="icon" type="image/png" href="./${favicon.path}">`;
-
-  if (!html.includes(link)) {
-    writeFileSync(indexPath, html.replace('</head>', `  ${link}\n</head>`));
-  }
+  ensureWebFaviconLink(gameDist, `./${favicon.path}`);
 }
 
 function androidAdaptiveXml(hasMonochrome: boolean): string {

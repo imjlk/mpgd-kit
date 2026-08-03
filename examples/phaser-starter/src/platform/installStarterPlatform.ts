@@ -1,8 +1,8 @@
 import { createBuildGateway } from '#mpgd-platform-gateway';
 
 import type { AdPlacements, ProductCatalog } from '@mpgd/catalog';
-import adPlacementsJson from '@mpgd/catalog/placements.json';
 import productCatalogJson from '@mpgd/catalog/catalog.json';
+import adPlacementsJson from '@mpgd/catalog/placements.json';
 import {
   createEffectiveTargetConfig,
   getTargetConfig,
@@ -15,7 +15,8 @@ import targetConfigMatrixJson from '@mpgd/target-config/targets.json';
 
 import type { RuntimeConfig } from './runtimeDetector';
 
-const targetConfigMatrix = targetConfigMatrixJson as TargetConfigMatrix;
+const targetConfigMatrix = __MPGD_TARGET_CONFIG_MATRIX__
+  ?? targetConfigMatrixJson as TargetConfigMatrix;
 const productCatalog = productCatalogJson as ProductCatalog;
 const adPlacements = adPlacementsJson as AdPlacements;
 const targetAdPlacements = adPlacements.placements.map((placement) => ({

@@ -11,7 +11,6 @@ import {
   formatMpgdReleaseId,
   isMpgdFinalSemVer,
   parseMpgdReleaseRevision,
-  type TargetConfigMatrix,
 } from '@mpgd/target-config';
 
 import {
@@ -26,10 +25,10 @@ import {
   loadPlatformTargetsConfig,
   type LoadedPlatformTargetsConfig,
 } from './platform-targets';
+import { loadTargetConfigMatrix } from './target-config-matrix';
 
 const assertProductCatalog = typia.createAssert<ProductCatalog>();
 const assertAdPlacements = typia.createAssert<AdPlacements>();
-const assertTargetConfigMatrix = typia.createAssert<TargetConfigMatrix>();
 
 export interface GenerateReleaseManifestInput {
   readonly target: string;
@@ -74,9 +73,7 @@ function generateReleaseManifestWithProvenance(
 ): ReleaseManifest {
   const targetMetadata = readTargetReleaseMetadata(platformTargets.config.targets[input.target]);
   const packageJson = readJsonFile('package.json') as { version?: string };
-  const targetConfig = assertTargetConfigMatrix(
-    readJsonFile('packages/target-config/targets.json'),
-  );
+  const targetConfig = loadTargetConfigMatrix();
   const catalog = assertProductCatalog(readJsonFile(productCatalogFilePath()));
   const adPlacements = assertAdPlacements(readJsonFile(adPlacementsFilePath()));
   const effectiveConfig = writeEffectiveTargetConfigs({

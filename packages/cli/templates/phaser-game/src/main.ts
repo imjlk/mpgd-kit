@@ -66,6 +66,7 @@ async function bootstrap(): Promise<void> {
     const gameServices = createStarterGameServices({
       gateway: platform,
       playerId: identitySession.playerId ?? player.playerId,
+      configTarget: runtime.configTarget,
       analytics: analyticsSink,
       analyticsSessionId,
     });

@@ -4,6 +4,11 @@ import { resolve } from 'node:path';
 import ttsc from '@ttsc/unplugin/vite';
 import type { UserConfig } from 'vite';
 
+import {
+  assertRuntimeTargetConfigMatrix,
+  type TargetConfigMatrix,
+} from './vite.runtime-target-config';
+
 interface RuntimePlatformTargetMetadata {
   readonly kind: string;
   readonly adapter: string;
@@ -39,6 +44,9 @@ export function createGameViteSharedConfig(
     debug: !isProduction,
     buildId: process.env.BUILD_ID ?? 'local',
   });
+  const runtimeTargetConfigMatrix = readRuntimeTargetConfigMatrix(
+    process.env.MPGD_TARGET_CONFIG_MATRIX_FILE,
+  );
 
   return {
     base: './',
@@ -63,12 +71,37 @@ export function createGameViteSharedConfig(
       __MPGD_CONFIG_TARGET__: JSON.stringify(configTarget),
       __MPGD_PLATFORM_TARGET__:
         platformTarget === undefined ? 'undefined' : JSON.stringify(platformTarget),
+      __MPGD_TARGET_CONFIG_MATRIX__:
+        runtimeTargetConfigMatrix === undefined
+          ? 'undefined'
+          : JSON.stringify(runtimeTargetConfigMatrix),
       __APP_VERSION__: JSON.stringify(process.env.APP_VERSION ?? '0.0.0-dev'),
       __BUILD_ID__: JSON.stringify(process.env.BUILD_ID ?? 'local'),
       __SOURCE_GIT_SHA__: JSON.stringify(process.env.MPGD_SOURCE_GIT_SHA ?? 'uncommitted'),
       __DEBUG_BUILD__: JSON.stringify(!isProduction),
     },
   };
+}
+
+function readRuntimeTargetConfigMatrix(
+  source: string | undefined,
+): TargetConfigMatrix | undefined {
+  const matrixFile = source?.trim();
+  if (matrixFile === undefined || matrixFile.length === 0) {
+    return undefined;
+  }
+
+  const resolvedMatrixFile = resolve(matrixFile);
+
+  try {
+    return assertRuntimeTargetConfigMatrix(
+      JSON.parse(readFileSync(resolvedMatrixFile, 'utf8')) as unknown,
+    );
+  } catch (error) {
+    throw new Error(
+      `Failed to read or validate MPGD_TARGET_CONFIG_MATRIX_FILE at ${resolvedMatrixFile}: ${formatError(error)}`,
+    );
+  }
 }
 
 export function resolveBuildGatewayModule(input: {

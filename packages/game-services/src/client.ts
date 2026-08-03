@@ -129,6 +129,7 @@ export interface CreateGameServicesClientInput {
   readonly backend: GameServicesBackendApi;
   readonly playerId: string;
   readonly target: GameServicesLedgerTarget;
+  readonly deploymentTarget?: string;
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
   readonly now?: () => string;
@@ -245,6 +246,9 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
 
       const verification = await input.backend.purchases.verifyPurchase({
         target,
+        ...(input.deploymentTarget === undefined || input.deploymentTarget === target
+          ? {}
+          : { deploymentTarget: input.deploymentTarget }),
         playerId: input.playerId,
         productId: purchaseInput.productId,
         platformTransactionId: purchase.transactionId,
@@ -321,6 +325,9 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
 
       const claim = await input.backend.adRewards.claimAdReward({
         target,
+        ...(input.deploymentTarget === undefined || input.deploymentTarget === target
+          ? {}
+          : { deploymentTarget: input.deploymentTarget }),
         playerId: input.playerId,
         placementId: rewardInput.placementId,
         ...(reward.ledgerEntryId === undefined

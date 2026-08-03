@@ -1,12 +1,14 @@
-import type {
-  AdPlacementEntry,
-  AdPlacements,
-  ProductCatalog,
-  ProductCatalogEntry,
+import {
+  resolveAdPlacementPlatformId,
+  resolveProductPlatformId,
+  type AdPlacementEntry,
+  type AdPlacements,
+  type ProductCatalog,
+  type ProductCatalogEntry,
 } from '@mpgd/catalog';
 
 import {
-  normalizeTargetIntegrationConfig,
+  assertTargetIntegrationRuntimeBounds,
   type FeatureAvailabilityReason,
   type TargetCapabilityConfig,
   type TargetConfig,
@@ -144,10 +146,14 @@ export function createEffectiveTargetConfig(
     createEffectiveAdPlacementConfig(input.target, config, placement),
   );
   const leaderboardEnabled = config.features.leaderboard;
-  const integrations = normalizeTargetIntegrationConfig({
-    ...config.integrations,
-    ...input.platformTarget?.integrations,
-  });
+  const integrations = assertTargetIntegrationRuntimeBounds(
+    config.runtime,
+    {
+      ...config.integrations,
+      ...input.platformTarget?.integrations,
+    },
+    `Effective target ${input.target}`,
+  );
 
   return {
     version: effectiveTargetConfigVersion({
@@ -267,8 +273,13 @@ function createEffectiveProductConfig(
   config: TargetConfig,
   product: ProductCatalogEntry,
 ): EffectiveProductConfig {
-  const platformProductId = productPlatformId(product, target);
-  const reason = effectiveProductReason(target, config.features.iap, product, platformProductId);
+  const platformProductId = resolveProductPlatformId(product, target);
+  const reason = effectiveProductReason(
+    config.runtime,
+    config.features.iap,
+    product,
+    platformProductId,
+  );
 
   return {
     id: product.id,
@@ -281,7 +292,7 @@ function createEffectiveProductConfig(
 }
 
 function effectiveProductReason(
-  target: string,
+  runtime: TargetRuntimeKind,
   targetEnabled: boolean,
   product: ProductCatalogEntry,
   platformProductId: string | undefined,
@@ -290,7 +301,7 @@ function effectiveProductReason(
     return 'target-disabled';
   }
 
-  if (target === 'verse8' && product.grant.type === 'resource') {
+  if (runtime === 'verse8-web' && product.grant.type === 'resource') {
     return 'capability-unsupported';
   }
 
@@ -305,7 +316,7 @@ function createEffectiveAdPlacementConfig(
   const featureEnabled = isRewardedPlacement(placement)
     ? config.features.rewardedAds
     : config.features.interstitialAds;
-  const platformPlacementId = adPlacementPlatformId(placement, target);
+  const platformPlacementId = resolveAdPlacementPlatformId(placement, target);
   const reason = effectiveItemReason(featureEnabled, platformPlacementId);
 
   return {
@@ -336,52 +347,6 @@ function effectiveTargetConfigVersion(input: {
   readonly adPlacements: string;
 }): string {
   return `${input.targetConfig}+catalog.${input.productCatalog}+ads.${input.adPlacements}`;
-}
-
-function productPlatformId(
-  product: ProductCatalogEntry,
-  target: string,
-): string | undefined {
-  if (!isProductStoreTarget(target)) {
-    return undefined;
-  }
-
-  return normalizePlatformId(product.platformProductIds[target]);
-}
-
-function adPlacementPlatformId(
-  placement: AdPlacementEntry,
-  target: string,
-): string | undefined {
-  if (!isAdStoreTarget(target)) {
-    return undefined;
-  }
-
-  return normalizePlatformId(placement.platformPlacementIds[target]);
-}
-
-function normalizePlatformId(platformId: string | undefined): string | undefined {
-  if (platformId === undefined) {
-    return undefined;
-  }
-
-  const trimmed = platformId.trim();
-
-  return trimmed.length === 0 ? undefined : trimmed;
-}
-
-function isProductStoreTarget(
-  target: string,
-): target is 'android' | 'ios' | 'ait' | 'reddit' | 'verse8' {
-  return target === 'android'
-    || target === 'ios'
-    || target === 'ait'
-    || target === 'reddit'
-    || target === 'verse8';
-}
-
-function isAdStoreTarget(target: string): target is 'android' | 'ios' | 'ait' | 'verse8' {
-  return target === 'android' || target === 'ios' || target === 'ait' || target === 'verse8';
 }
 
 function isRewardedPlacement(placement: AdPlacementEntry): boolean {

@@ -1,5 +1,12 @@
-import type { ProductCatalog, ProductGrant } from '@mpgd/catalog';
+import {
+  resolveProductPlatformId,
+  type CatalogTarget,
+  type ProductCatalog,
+  type ProductGrant,
+} from '@mpgd/catalog';
 import type { Entitlement, LogicalProductId } from '@mpgd/platform';
+
+import { defaultVerse8CatalogTarget } from './catalog-target.js';
 
 export * from './agent8-services.js';
 
@@ -24,6 +31,7 @@ export interface Verse8Agent8Context {
 
 export interface Verse8Agent8CommerceOptions {
   readonly catalog: ProductCatalog;
+  readonly target?: CatalogTarget;
   readonly stateNamespace?: string;
   readonly now?: () => string;
 }
@@ -77,7 +85,10 @@ export function createVerse8Agent8CommerceService(
 ): Verse8Agent8CommerceService {
   const namespace = normalizeNamespace(options.stateNamespace ?? defaultStateNamespace);
   const now = options.now ?? (() => new Date().toISOString());
-  const products = createPlatformProductMap(options.catalog);
+  const products = createPlatformProductMap(
+    options.catalog,
+    options.target ?? defaultVerse8CatalogTarget,
+  );
 
   return {
     async handleItemPurchased(event, context) {
@@ -166,13 +177,13 @@ async function readSnapshot(
   };
 }
 
-function createPlatformProductMap(catalog: ProductCatalog) {
+function createPlatformProductMap(catalog: ProductCatalog, target: CatalogTarget) {
   const products = new Map<string, ProductCatalog['products'][number]>();
 
   for (const product of catalog.products) {
-    const platformProductId = product.platformProductIds.verse8?.trim();
+    const platformProductId = resolveProductPlatformId(product, target);
 
-    if (platformProductId === undefined || platformProductId.length === 0) {
+    if (platformProductId === undefined) {
       continue;
     }
 

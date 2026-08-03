@@ -1,10 +1,39 @@
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import {
   assertDevvitInternalEndpoint,
   assertDevvitPaymentsReadiness,
   assertMicrosoftStorePwaManifestSourceContract,
+  assertWebArtifactInstallability,
 } from './verify-target-artifacts';
+
+const webArtifactRoot = mkdtempSync(join(tmpdir(), 'mpgd-target-smoke-installability-'));
+
+try {
+  writeFileSync(join(webArtifactRoot, 'manifest.webmanifest'), '{}\n');
+  writeFileSync(
+    join(webArtifactRoot, 'index.html'),
+    '<html><head><link rel="manifest" href="./manifest.webmanifest"></head></html>',
+  );
+  assert.doesNotThrow(() => assertWebArtifactInstallability(webArtifactRoot, undefined));
+  assert.throws(
+    () => assertWebArtifactInstallability(webArtifactRoot, false),
+    /Non-installable web artifact contains a web app manifest/u,
+  );
+
+  rmSync(join(webArtifactRoot, 'manifest.webmanifest'));
+  writeFileSync(join(webArtifactRoot, 'index.html'), '<html><head></head></html>');
+  assert.doesNotThrow(() => assertWebArtifactInstallability(webArtifactRoot, false));
+  assert.throws(
+    () => assertWebArtifactInstallability(webArtifactRoot, true),
+    /Installable web artifact has no web app manifest/u,
+  );
+} finally {
+  rmSync(webArtifactRoot, { force: true, recursive: true });
+}
 
 const enabledConfig = {
   features: { iap: true },

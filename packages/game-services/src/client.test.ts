@@ -14,6 +14,7 @@ let rewardClaims = 0;
 let scoreRecords = 0;
 let purchaseEvidenceSchema: string | undefined;
 let rewardEvidenceSchema: string | undefined;
+let rewardDeploymentTarget: string | undefined;
 const playerId = 'player-game-services';
 const gateway = createMockGateway();
 const backend = {
@@ -33,6 +34,7 @@ const backend = {
     async claimAdReward(input) {
       rewardClaims += 1;
       rewardEvidenceSchema = input.evidence?.schema;
+      rewardDeploymentTarget = input.deploymentTarget;
 
       return {
         granted: true,
@@ -108,6 +110,40 @@ assertEqual(
   rewardEvidenceSchema,
   'test.reward.v1',
   'reward evidence should reach the backend verifier request',
+);
+
+let customPurchaseDeploymentTarget: string | undefined;
+const customPurchaseBackend = {
+  ...backend,
+  purchases: {
+    async verifyPurchase(input) {
+      customPurchaseDeploymentTarget = input.deploymentTarget;
+      return {
+        verified: true,
+        ledgerEntryId: 'custom-purchase-ledger',
+        alreadyProcessed: false,
+      };
+    },
+  },
+} satisfies GameServicesBackendApi;
+const customPurchaseClient = createGameServicesClient({
+  gateway: createMockGateway(),
+  backend: customPurchaseBackend,
+  playerId,
+  target: 'android',
+  deploymentTarget: 'android-staging',
+});
+const customPurchase = await customPurchaseClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'android-staging-purchase',
+});
+
+assertEqual(customPurchase.status, 'granted', 'custom deployment purchases should be granted');
+assertEqual(
+  customPurchaseDeploymentTarget,
+  'android-staging',
+  'purchases should carry the deployment target to backend verification',
 );
 
 const leaderboard = await client.submitLeaderboardScore({
@@ -325,6 +361,7 @@ const verse8Client = createGameServicesClient({
   gateway: verse8Gateway,
   playerId,
   target: 'verse8',
+  deploymentTarget: 'verse8-staging',
   now: () => '2026-07-03T00:00:00.000Z',
   backend,
 });
@@ -355,6 +392,11 @@ assertEqual(
   'Verse8 purchases should not call the external purchase verifier',
 );
 assertEqual(verse8RewardCalls, 1, 'Verse8 rewards should call platform ads');
+assertEqual(
+  rewardDeploymentTarget,
+  'verse8-staging',
+  'Verse8 rewards should carry the deployment target to the backend claim',
+);
 assertEqual(verse8LeaderboardCalls, 0, 'Verse8 should not call the platform leaderboard');
 
 const verse8CompletedGateway = {

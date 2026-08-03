@@ -4,19 +4,34 @@ import { dirname, resolve } from 'node:path';
 import { isCliEntrypoint, readJsonFile } from '../io';
 import {
   assertPlatformTargetsConfigShape,
+  effectiveTargetConfigOutputDir,
   loadPlatformTargetsConfig,
+  releaseManifestPath,
   resolveFromPlatformTargetsBase,
 } from './platform-targets';
+import {
+  assertDisjointWebTargetOutputs,
+  assertWebArtifactOutputDirectory,
+  assertWebStaticDirectory,
+} from './web-artifact';
 
 export function validatePlatformTargetsFile(path?: string) {
-  const loadedConfig = path === undefined
-    ? loadPlatformTargetsConfig()
-    : {
-        baseDir: dirname(resolve(path)),
-        config: assertPlatformTargetsConfigShape(readJsonFile(path)),
-        path: resolve(path),
-      };
+  const loadedConfig =
+    path === undefined
+      ? loadPlatformTargetsConfig()
+      : {
+          baseDir: dirname(resolve(path)),
+          config: assertPlatformTargetsConfigShape(readJsonFile(path)),
+          path: resolve(path),
+        };
   const config = loadedConfig.config;
+  assertDisjointWebTargetOutputs(config.targets, resolvePath, [
+    { name: 'release manifest', path: releaseManifestPath(loadedConfig.baseDir) },
+    {
+      name: 'effective target config output',
+      path: effectiveTargetConfigOutputDir(loadedConfig.baseDir),
+    },
+  ]);
 
   for (const [targetName, target] of Object.entries(config.targets)) {
     if (!existsSync(resolvePath(target.gameApp))) {
@@ -25,6 +40,20 @@ export function validatePlatformTargetsFile(path?: string) {
 
     if (target.kind === 'web' && target.output.length === 0) {
       throw new Error(`Target ${targetName} output must not be empty.`);
+    }
+
+    if (target.kind === 'web') {
+      const gameAppOutput = resolve(resolvePath(target.gameApp), 'dist');
+      const output = resolvePath(target.output);
+
+      assertWebArtifactOutputDirectory(output, gameAppOutput);
+
+      if (target.staticDir !== undefined) {
+        const staticDir = resolvePath(target.staticDir);
+
+        assertWebStaticDirectory(staticDir, output, loadedConfig.baseDir);
+        assertWebStaticDirectory(staticDir, gameAppOutput, loadedConfig.baseDir);
+      }
     }
 
     if (

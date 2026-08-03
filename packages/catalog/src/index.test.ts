@@ -1,4 +1,13 @@
-import { assertProductCatalog, assertProductGrant, type ProductGrant } from './index';
+import {
+  assertAdPlacements,
+  assertProductCatalog,
+  assertProductGrant,
+  resolveAdPlacementPlatformId,
+  resolveProductPlatformId,
+  type AdPlacementEntry,
+  type ProductCatalogEntry,
+  type ProductGrant,
+} from './index';
 
 const resourceGrant = Object.freeze({
   type: 'resource',
@@ -45,6 +54,78 @@ assertThrows(
   } as never),
   'catalog validation should enforce resource grant constraints',
 );
+const customTargetProduct = {
+  id: 'HINTS_5',
+  type: 'consumable',
+  grant: resourceGrant,
+  platformProductIds: { 'storefront-web': ' hints_5_web ' },
+} satisfies ProductCatalogEntry;
+const customTargetCatalog = {
+  version: 'custom-target',
+  products: [customTargetProduct],
+};
+assertProductCatalog(customTargetCatalog);
+assertEqual(
+  resolveProductPlatformId(customTargetProduct, 'storefront-web'),
+  'hints_5_web',
+  'custom product identifiers should resolve by deployment target',
+);
+assertEqual(
+  resolveProductPlatformId(customTargetProduct, 'constructor'),
+  undefined,
+  'product identifiers must ignore inherited prototype keys',
+);
+assertThrows(
+  () => assertProductCatalog({
+    version: 'collision',
+    products: [
+      customTargetProduct,
+      {
+        ...customTargetProduct,
+        id: 'HINTS_10',
+        platformProductIds: { 'storefront-web': 'hints_5_web' },
+      },
+    ],
+  }),
+  'catalog validation should reject normalized product identifier collisions',
+);
+
+const customTargetPlacement = {
+  id: 'CUSTOM_REWARDED',
+  type: 'rewarded',
+  frequencyCap: { cooldownSeconds: 30 },
+  platformPlacementIds: { 'verse8-staging': ' rewarded_staging ' },
+} as const satisfies AdPlacementEntry;
+assertAdPlacements({ version: 'custom-target', placements: [customTargetPlacement] });
+assertEqual(
+  resolveAdPlacementPlatformId(customTargetPlacement, 'verse8-staging'),
+  'rewarded_staging',
+  'custom placement identifiers should resolve by deployment target',
+);
+assertEqual(
+  resolveAdPlacementPlatformId(customTargetPlacement, 'verse8'),
+  undefined,
+  'placement identifiers must not fall back to another deployment target',
+);
+assertEqual(
+  resolveAdPlacementPlatformId(customTargetPlacement, 'constructor'),
+  undefined,
+  'placement identifiers must ignore inherited prototype keys',
+);
+assertThrows(
+  () => assertAdPlacements({
+    version: 'collision',
+    placements: [
+      customTargetPlacement,
+      {
+        ...customTargetPlacement,
+        id: 'CUSTOM_REWARDED_DUPLICATE',
+        platformPlacementIds: { 'verse8-staging': 'rewarded_staging' },
+      },
+    ],
+  }),
+  'ad placement validation should reject normalized platform identifier collisions',
+);
 
 console.log('Catalog product grant validation test passed.');
 
@@ -55,4 +136,10 @@ function assertThrows(callback: () => unknown, message: string): void {
     return;
   }
   throw new Error(message);
+}
+
+function assertEqual(actual: unknown, expected: unknown, message: string): void {
+  if (actual !== expected) {
+    throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}`);
+  }
 }

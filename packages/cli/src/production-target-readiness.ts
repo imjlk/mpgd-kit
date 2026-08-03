@@ -14,6 +14,17 @@ export interface ProductionTargetReadinessInput {
   readonly targetsFile: string;
   readonly gameRoot: string;
   readonly gameServicesUrl?: string;
+  readonly targetPolicy?: ProductionTargetPolicy;
+}
+
+export interface ProductionTargetPolicy {
+  readonly runtime: string;
+  readonly features: {
+    readonly rewardedAds: boolean;
+  };
+  readonly monetization: {
+    readonly rewardedAds: boolean;
+  };
 }
 
 export function assertProductionTargetReadiness(
@@ -34,8 +45,17 @@ export function assertProductionTargetReadiness(
   }
 
   const ownerPathKey = ownerPathByTarget[input.target as keyof typeof ownerPathByTarget];
+  if (ownerPathKey === undefined && input.targetPolicy === undefined) {
+    throw new Error(`Production target ${input.target} requires a target policy.`);
+  }
 
-  if (ownerPathKey === undefined) {
+  const requiresVerse8RewardAuthority = input.targetPolicy?.runtime === 'verse8-web'
+    && (
+      input.targetPolicy.features.rewardedAds
+      || input.targetPolicy.monetization.rewardedAds
+    );
+
+  if (ownerPathKey === undefined && !requiresVerse8RewardAuthority) {
     return;
   }
 
@@ -43,6 +63,23 @@ export function assertProductionTargetReadiness(
 
   if (!isRecord(targetConfig)) {
     throw new Error(`Missing target configuration for ${input.target}.`);
+  }
+
+  if (ownerPathKey === undefined) {
+    if (
+      requiresVerse8RewardAuthority
+      && targetConfig.authoritativeGameServices === false
+    ) {
+      throw new Error(
+        `Production target ${input.target} cannot enable rewarded ads without `
+          + 'authoritative game services.',
+      );
+    }
+
+    if (requiresVerse8RewardAuthority || targetConfig.authoritativeGameServices !== false) {
+      assertAuthoritativeGameServicesUrl(input.gameServicesUrl, input.target);
+    }
+    return;
   }
 
   const ownerPath = targetConfig[ownerPathKey];

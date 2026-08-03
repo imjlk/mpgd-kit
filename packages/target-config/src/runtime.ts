@@ -188,6 +188,27 @@ export const targetIntegrations = [
   'notifications',
 ] as const satisfies readonly TargetIntegration[];
 
+type IntegrationUpperBound = 'available' | 'disabled' | 'unsupported';
+const integrationUpperBoundsByRuntime = {
+  'verse8-web': {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'unsupported',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+  },
+  'web-preview': {
+    identityUpgrade: 'disabled',
+    presentation: 'available',
+    sharing: 'available',
+    inboundShare: 'available',
+    notifications: 'unsupported',
+  },
+} as const satisfies Record<
+  'verse8-web' | 'web-preview',
+  Record<TargetIntegration, IntegrationUpperBound>
+>;
+
 type CompleteValueList<Union, Values extends readonly Union[]> =
   Exclude<Union, Values[number]> extends never ? Values : never;
 
@@ -256,6 +277,47 @@ export function normalizeTargetIntegrationConfig(
     ),
     presentationMode: normalizePresentationMode(config.presentationMode),
   };
+}
+
+export function assertTargetIntegrationRuntimeBounds(
+  runtime: TargetRuntimeKind,
+  config: Partial<TargetIntegrationConfig> | undefined,
+  label: string,
+): TargetIntegrationConfig {
+  const integrations = normalizeTargetIntegrationConfig(config);
+
+  if (runtime !== 'verse8-web' && runtime !== 'web-preview') {
+    return integrations;
+  }
+
+  const upperBounds = integrationUpperBoundsByRuntime[runtime];
+
+  for (const integration of targetIntegrations) {
+    const state = integrations[integration];
+    const upperBound = upperBounds[integration];
+
+    if (!isIntegrationStateWithinUpperBound(state, upperBound)) {
+      throw new Error(
+        `${label} cannot configure ${integration} as ${state} for ${runtime} runtime; maximum supported state is ${upperBound}.`,
+      );
+    }
+  }
+
+  return integrations;
+}
+
+function isIntegrationStateWithinUpperBound(
+  state: IntegrationAvailabilityState,
+  upperBound: IntegrationUpperBound,
+): boolean {
+  switch (upperBound) {
+    case 'available':
+      return true;
+    case 'disabled':
+      return state === 'disabled' || state === 'unsupported';
+    case 'unsupported':
+      return state === 'unsupported';
+  }
 }
 
 export function targetConfigKeyForPlatform(target: PlatformConfigTarget): string {

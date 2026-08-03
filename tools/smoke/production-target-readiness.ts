@@ -60,12 +60,59 @@ try {
     targetsFile: join(gameRoot, 'does-not-exist.json'),
     gameRoot,
   });
-  assertProductionTargetReadiness({
-    target: 'web-preview',
-    profile: 'production',
-    targetsFile: join(gameRoot, 'does-not-exist.json'),
-    gameRoot,
+  expectReadinessError(
+    { target: 'web-preview', profile: 'production' },
+    'requires a target policy',
+  );
+
+  const verse8RewardPolicy = {
+    runtime: 'verse8-web',
+    features: { rewardedAds: true },
+    monetization: { rewardedAds: true },
+  } as const;
+  writeTargets({
+    'verse8-staging': {
+      kind: 'web',
+      gameApp: '.',
+      output: 'artifacts/verse8-staging',
+    },
   });
+  expectReadinessError(
+    { target: 'verse8-staging', profile: 'production' },
+    'requires a target policy',
+  );
+  expectReadinessError(
+    {
+      target: 'verse8-staging',
+      profile: 'production',
+      targetPolicy: verse8RewardPolicy,
+    },
+    'requires VITE_MPGD_GAME_SERVICES_URL',
+  );
+  assertProductionTargetReadiness({
+    target: 'verse8-staging',
+    profile: 'production',
+    targetsFile,
+    gameRoot,
+    gameServicesUrl: publicBackend,
+    targetPolicy: verse8RewardPolicy,
+  });
+  writeTargets({
+    'verse8-staging': {
+      kind: 'web',
+      gameApp: '.',
+      output: 'artifacts/verse8-staging',
+      authoritativeGameServices: false,
+    },
+  });
+  expectReadinessError(
+    {
+      target: 'verse8-staging',
+      profile: 'production',
+      targetPolicy: verse8RewardPolicy,
+    },
+    'cannot enable rewarded ads without authoritative game services',
+  );
 
   expectReadinessError(
     { target: 'ait', profile: ' production ', gameServicesUrl: publicBackend },
@@ -207,6 +254,7 @@ interface ReadinessOverrides {
   readonly target: string;
   readonly profile: string;
   readonly gameServicesUrl?: string;
+  readonly targetPolicy?: Parameters<typeof assertProductionTargetReadiness>[0]['targetPolicy'];
 }
 
 function expectReadinessError(overrides: ReadinessOverrides, message: string): void {
@@ -220,6 +268,9 @@ function expectReadinessError(overrides: ReadinessOverrides, message: string): v
         ...(overrides.gameServicesUrl === undefined
           ? {}
           : { gameServicesUrl: overrides.gameServicesUrl }),
+        ...(overrides.targetPolicy === undefined
+          ? {}
+          : { targetPolicy: overrides.targetPolicy }),
       });
     },
     (error: unknown) => error instanceof Error && error.message.includes(message),

@@ -72,6 +72,7 @@ const requiredFiles = [
   'examples/phaser-starter/agent/game.manifest.schema.json',
   'examples/phaser-starter/agent/game.manifest.json',
   'examples/phaser-starter/mpgd.game.json',
+  'examples/phaser-starter/vite.runtime-target-config.ts',
   'packages/cli/templates/phaser-game/AGENTS.md',
   'packages/cli/templates/phaser-game/.agents/skills/use-mpgd-kit/SKILL.md',
   'packages/cli/templates/phaser-game/.agents/skills/use-mpgd-kit/agents/openai.yaml',
@@ -80,6 +81,7 @@ const requiredFiles = [
   'packages/cli/templates/phaser-game/docs/MPGD_KIT_WORKFLOWS.md',
   'packages/cli/templates/phaser-game/agent/game-manifest.json',
   'packages/cli/templates/phaser-game/mpgd.game.json',
+  'packages/cli/templates/phaser-game/vite.runtime-target-config.ts',
 ] as const;
 
 const requiredAitQueries = [
@@ -479,6 +481,17 @@ function validatePhaserTemplateMicrosoftStorePwa(): void {
 function validatePhaserTemplateBuildGateways(): void {
   const exampleRoot = 'examples/phaser-starter';
   const templateRoot = 'packages/cli/templates/phaser-game';
+  const runtimeValidatorFile = 'vite.runtime-target-config.ts';
+
+  if (
+    readText(`${exampleRoot}/${runtimeValidatorFile}`)
+    !== readText(`${templateRoot}/${runtimeValidatorFile}`)
+  ) {
+    failures.push(
+      `${templateRoot}/${runtimeValidatorFile}: must stay in parity with ${exampleRoot}/${runtimeValidatorFile}.`,
+    );
+  }
+
   const gatewayFiles = [
     'src/platform/buildGatewayModule.ts',
     'src/platform/buildGateways/browser.ts',

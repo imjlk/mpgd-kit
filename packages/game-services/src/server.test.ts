@@ -33,6 +33,7 @@ const catalog = {
       },
       platformProductIds: {
         android: 'coins_100_android',
+        'android-staging': 'coins_100_android_staging',
       },
     },
     {
@@ -78,6 +79,7 @@ const placements = {
       },
       platformPlacementIds: {
         android: 'reward_android',
+        'verse8-staging': ' reward_verse8_staging ',
       },
     },
     {
@@ -250,6 +252,50 @@ const duplicatePurchase = await backend.purchases.verifyPurchase({
   idempotencyKey: 'purchase-1',
   purchasedAt: '2026-07-04T00:00:00.000Z',
 });
+let androidDeploymentProductId: string | undefined;
+const androidDeploymentStore = createInMemoryGameServicesStore();
+const androidDeploymentBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: androidDeploymentStore,
+  deploymentTargetBindings: {
+    android: 'android-staging',
+  },
+  evidenceVerifier: {
+    async verifyPurchase(input) {
+      androidDeploymentProductId = input.platformProductId;
+      return {
+        status: 'verified',
+        verificationId: 'provider:android:purchase:staging',
+        verifiedAt: '2026-07-04T00:00:00.000Z',
+      } as const;
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_USED' } as const;
+    },
+  },
+});
+const androidDeploymentPurchase = await androidDeploymentBackend.purchases.verifyPurchase({
+  target: 'android',
+  playerId: 'player-android-staging',
+  productId: 'COINS_100',
+  platformTransactionId: 'android-staging-transaction',
+  idempotencyKey: 'android-staging-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+});
+await assertRejects(
+  () => androidDeploymentBackend.purchases.verifyPurchase({
+    target: 'android',
+    deploymentTarget: 'android-production',
+    playerId: 'player-android-staging',
+    productId: 'COINS_100',
+    platformTransactionId: 'android-production-transaction',
+    idempotencyKey: 'android-production-purchase',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }),
+  /deploymentTarget must match the backend binding for android/u,
+  'purchase deployment targets must be bound by the backend',
+);
 const reward = await backend.adRewards.claimAdReward({
   target: 'android',
   playerId: 'player-1',
@@ -258,6 +304,50 @@ const reward = await backend.adRewards.claimAdReward({
   idempotencyKey: 'reward-1',
   completedAt: '2026-07-04T00:00:01.000Z',
 });
+let verse8PlatformPlacementId: string | undefined;
+const verse8DeploymentStore = createInMemoryGameServicesStore();
+const verse8DeploymentBackend = createGameServicesBackend({
+  catalog,
+  placements,
+  store: verse8DeploymentStore,
+  deploymentTargetBindings: {
+    verse8: 'verse8-staging',
+  },
+  evidenceVerifier: {
+    async verifyPurchase() {
+      return { status: 'rejected', reason: 'NOT_USED' } as const;
+    },
+    async verifyAdReward(input) {
+      verse8PlatformPlacementId = input.platformPlacementId;
+      return {
+        status: 'verified',
+        verificationId: 'provider:verse8:reward:staging',
+        verifiedAt: '2026-07-04T00:00:01.000Z',
+      } as const;
+    },
+  },
+});
+const verse8DeploymentReward = await verse8DeploymentBackend.adRewards.claimAdReward({
+  target: 'verse8',
+  playerId: 'player-verse8-staging',
+  placementId: 'CONTINUE_AFTER_FAIL',
+  platformImpressionId: 'verse8-staging-impression',
+  idempotencyKey: 'verse8-staging-reward',
+  completedAt: '2026-07-04T00:00:01.000Z',
+});
+await assertRejects(
+  () => verse8DeploymentBackend.adRewards.claimAdReward({
+    target: 'verse8',
+    deploymentTarget: 'verse8-production',
+    playerId: 'player-verse8-staging',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    platformImpressionId: 'verse8-production-impression',
+    idempotencyKey: 'verse8-production-reward',
+    completedAt: '2026-07-04T00:00:01.000Z',
+  }),
+  /deploymentTarget must match the backend binding for verse8/u,
+  'reward deployment targets must be bound by the backend',
+);
 const score = await backend.leaderboard.recordScore({
   target: 'android',
   playerId: 'player-1',
@@ -287,7 +377,37 @@ const invalidTransportRequest = await handler.handle({
 
 assertEqual(purchase.verified, true, 'purchase should be verified');
 assertEqual(duplicatePurchase.alreadyProcessed, true, 'purchase should dedupe');
+assertEqual(
+  androidDeploymentPurchase.verified,
+  true,
+  'custom Android deployment purchases should be verified',
+);
+assertEqual(
+  androidDeploymentProductId,
+  'coins_100_android_staging',
+  'custom Android deployment purchases should use the deployment product id',
+);
+assertEqual(
+  (await androidDeploymentStore.listEntitlementTransactions())[0]?.payload.deploymentTarget,
+  'android-staging',
+  'purchase ledger payloads should retain the deployment target for audit',
+);
 assertEqual(reward.granted, true, 'reward should be granted');
+assertEqual(
+  verse8DeploymentReward.granted,
+  true,
+  'custom Verse8 deployment rewards should be granted',
+);
+assertEqual(
+  verse8PlatformPlacementId,
+  'reward_verse8_staging',
+  'custom Verse8 deployment rewards should use the deployment placement id',
+);
+assertEqual(
+  (await verse8DeploymentStore.listEntitlementTransactions())[0]?.payload.deploymentTarget,
+  'verse8-staging',
+  'reward ledger payloads should retain the deployment target for audit',
+);
 assertEqual(score.submitted, true, 'score should be recorded');
 assertEqual(score.rank, 1, 'first leaderboard score should start at rank one');
 assertEqual(redditScore.submitted, true, 'reddit score should be recorded');
@@ -1820,4 +1940,22 @@ function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}.`);
   }
+}
+
+async function assertRejects(
+  action: () => Promise<unknown>,
+  expected: RegExp,
+  message: string,
+): Promise<void> {
+  try {
+    await action();
+  } catch (error) {
+    if (error instanceof Error && expected.test(error.message)) {
+      return;
+    }
+
+    throw error;
+  }
+
+  throw new Error(`${message}: expected the action to reject.`);
 }

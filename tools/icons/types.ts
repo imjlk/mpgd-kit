@@ -2,6 +2,7 @@ import type { PlatformTargetConfig } from '../target/schemas';
 
 export const iconManifestSchemaVersion = 2 as const;
 export const iconGeneratorVersion = '1.1.0';
+export const generatedIconCacheDirectory = '.mpgd/generated/icons';
 
 export type BrandImageVariant =
   | 'maskable'

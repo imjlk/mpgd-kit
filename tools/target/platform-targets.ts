@@ -1,5 +1,6 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 
+import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
 import {
   integrationAvailabilityStates,
   presentationModes,
@@ -68,12 +69,20 @@ export function effectiveTargetConfigOutputDir(
   );
 }
 
+export function appTargetForPlatformTarget(
+  target: Pick<PlatformTargetConfig, 'adapter' | 'kind'>,
+  targetName: string,
+): string {
+  return target.kind === 'web' ? target.adapter : targetName;
+}
+
 export function assertPlatformTargetsConfigShape(input: unknown): PlatformTargetsConfig {
   assertRecord(input, 'platform targets config');
   const targets = input.targets;
   assertRecord(targets, 'platform targets');
 
   for (const [target, config] of Object.entries(targets)) {
+    assertDeploymentTargetName(target);
     assertPlatformTargetConfigShape(config, target);
   }
 
@@ -95,6 +104,11 @@ function assertPlatformTargetConfigShape(
   switch (input.kind) {
     case 'web':
       assertString(input.output, `${target}.output`);
+      assertOptionalBoolean(input.installable, `${target}.installable`);
+      assertOptionalString(input.staticDir, `${target}.staticDir`);
+      if (target === 'microsoft-store' && input.installable === false) {
+        throw new Error('microsoft-store.installable must not be false.');
+      }
       break;
     case 'capacitor-android':
     case 'capacitor-ios':
@@ -200,8 +214,14 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 }
 
 function assertString(input: unknown, label: string): asserts input is string {
-  if (typeof input !== 'string' || input.length === 0) {
+  if (typeof input !== 'string' || input.trim().length === 0) {
     throw new Error(`${label} must be a non-empty string.`);
+  }
+}
+
+function assertOptionalString(input: unknown, label: string): void {
+  if (input !== undefined) {
+    assertString(input, label);
   }
 }
 

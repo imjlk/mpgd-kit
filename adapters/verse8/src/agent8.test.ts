@@ -123,6 +123,35 @@ describe('Verse8 Agent8 commerce service', () => {
     });
   });
 
+  it('maps authoritative purchases for a custom Verse8 deployment target', async () => {
+    const fixture = createContext();
+    const service = createVerse8Agent8CommerceService({
+      target: 'verse8-staging',
+      catalog: {
+        version: 'custom-target',
+        products: [{
+          id: 'COINS_100',
+          type: 'consumable',
+          grant: { type: 'currency', currency: 'coin', amount: 100 },
+          platformProductIds: { 'verse8-staging': 'coins-100-staging' },
+        }],
+      },
+    });
+
+    await expect(service.handleItemPurchased({
+      account: '0xplayer',
+      purchaseId: 8,
+      productId: 'coins-100-staging',
+      quantity: 1,
+    }, fixture.context)).resolves.toMatchObject({
+      logicalProductId: 'COINS_100',
+      alreadyProcessed: false,
+    });
+    await expect(service.getSnapshot('0xplayer', fixture.context)).resolves.toMatchObject({
+      balances: { coin: 100, gem: 0 },
+    });
+  });
+
   it('rejects unknown products, invalid quantities, and purchase ID collisions', async () => {
     const fixture = createContext();
     const service = createVerse8Agent8CommerceService({ catalog });

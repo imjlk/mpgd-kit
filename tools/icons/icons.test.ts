@@ -17,13 +17,18 @@ import sharp from 'sharp';
 
 import { writeMicrosoftStorePwaArtifacts } from '../target/microsoft-store-pwa';
 import type { PlatformTargetConfig } from '../target/schemas';
+import { copyWebStaticDirectoryContents } from '../target/web-artifact';
 import {
   generateTargetIcons,
   verifyExistingTargetIcons,
   verifyGeneratedTargetIcons,
 } from './generator';
 import { pixelSha256, sha256 } from './image';
-import { stageNativeIconResources, stageWebIconEvidence } from './staging';
+import {
+  assertStagedWebIconEvidence,
+  stageNativeIconResources,
+  stageWebIconEvidence,
+} from './staging';
 
 const root = mkdtempSync(join(tmpdir(), 'mpgd-icons-'));
 
@@ -90,6 +95,7 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   mkdirSync(dist, { recursive: true });
   writeFileSync(join(dist, 'index.html'), '<html><head></head><body></body></html>');
   stageWebIconEvidence(repeated, dist);
+  assert.doesNotThrow(() => assertStagedWebIconEvidence(repeated, dist));
   const webManifest = JSON.parse(
     await readUtf8(join(dist, 'manifest.webmanifest')),
   ) as { readonly icons: readonly { readonly purpose: string; readonly sizes: string }[] };
@@ -98,6 +104,87 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
     new Set(webManifest.icons.map((icon) => icon.purpose)),
     new Set(['any', 'maskable']),
   );
+
+  writeFileSync(join(dist, 'manifest.webmanifest'), `${JSON.stringify({
+    ...webManifest,
+    id: './storefront-game',
+    scope: './storefront/',
+    start_url: './storefront/index.html',
+    icons: [{ src: './stale.png', sizes: '1x1', type: 'image/png' }],
+  })}\n`);
+  stageWebIconEvidence(repeated, dist);
+  const overlaidManifest = JSON.parse(
+    await readUtf8(join(dist, 'manifest.webmanifest')),
+  ) as Record<string, unknown>;
+
+  assert.equal(overlaidManifest.id, './storefront-game');
+  assert.equal(overlaidManifest.scope, './storefront/');
+  assert.equal(overlaidManifest.start_url, './storefront/index.html');
+  assert.deepEqual(overlaidManifest.icons, webManifest.icons);
+
+  writeFileSync(join(dist, 'manifest.webmanifest'), `${JSON.stringify({
+    id: './game-wide-manifest',
+    scope: './',
+    start_url: './',
+  })}\n`);
+  writeFileSync(join(dist, 'manifest.json'), `${JSON.stringify({
+    id: './target-overlay',
+    scope: './target/',
+    start_url: './target/index.html',
+    icons: [{ src: './stale-target.png', sizes: '1x1', type: 'image/png' }],
+  })}\n`);
+  stageWebIconEvidence(repeated, dist);
+  const jsonOverlayManifest = JSON.parse(
+    await readUtf8(join(dist, 'manifest.webmanifest')),
+  ) as Record<string, unknown>;
+
+  assert.equal(jsonOverlayManifest.id, './target-overlay');
+  assert.equal(jsonOverlayManifest.scope, './target/');
+  assert.equal(jsonOverlayManifest.start_url, './target/index.html');
+  assert.deepEqual(jsonOverlayManifest.icons, webManifest.icons);
+  assert.equal(existsSync(join(dist, 'manifest.json')), false);
+
+  const targetStaticDir = join(gameRoot, 'target-static');
+  mkdirSync(targetStaticDir);
+  writeFileSync(join(dist, 'manifest.json'), `${JSON.stringify({
+    id: './game-wide-json-manifest',
+    scope: './',
+    start_url: './',
+  })}\n`);
+  writeFileSync(join(targetStaticDir, 'manifest.webmanifest'), `${JSON.stringify({
+    id: './target-webmanifest-overlay',
+    scope: './target-webmanifest/',
+    start_url: './target-webmanifest/index.html',
+  })}\n`);
+  copyWebStaticDirectoryContents(targetStaticDir, dist);
+  stageWebIconEvidence(repeated, dist, { manifestSourceDirectory: targetStaticDir });
+  const webManifestOverlay = JSON.parse(
+    await readUtf8(join(dist, 'manifest.webmanifest')),
+  ) as Record<string, unknown>;
+
+  assert.equal(webManifestOverlay.id, './target-webmanifest-overlay');
+  assert.equal(webManifestOverlay.scope, './target-webmanifest/');
+  assert.equal(webManifestOverlay.start_url, './target-webmanifest/index.html');
+  assert.deepEqual(webManifestOverlay.icons, webManifest.icons);
+  assert.equal(existsSync(join(dist, 'manifest.json')), false);
+
+  writeFileSync(join(targetStaticDir, 'manifest.webmanifest'), '[]\n');
+  assert.throws(
+    () => stageWebIconEvidence(repeated, dist, { manifestSourceDirectory: targetStaticDir }),
+    /Web app manifest must contain a JSON object/u,
+  );
+
+  const stagedIcon = repeated.manifest.outputs[0];
+  assert.ok(stagedIcon);
+  writeFileSync(join(dist, stagedIcon.path), 'overlaid icon bytes');
+  writeFileSync(join(dist, 'index.html'), '<html><head></head><body></body></html>');
+  assert.throws(
+    () => assertStagedWebIconEvidence(repeated, dist),
+    /Staged icon output does not match generated evidence/u,
+  );
+  stageWebIconEvidence(repeated, dist);
+  assert.doesNotThrow(() => assertStagedWebIconEvidence(repeated, dist));
+  assert.match(await readUtf8(join(dist, 'index.html')), /rel="manifest"/u);
   assert.deepEqual(
     new Set(webManifest.icons.map((icon) => icon.sizes)),
     new Set(['192x192', '512x512']),
@@ -115,6 +202,48 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   assert.equal(fallbackManifest.description, 'svg-game game.');
   assert.equal(fallbackManifest.id, './svg-game');
   assert.equal(fallbackManifest.scope, './');
+
+  const scriptedFaviconDist = join(gameRoot, 'scripted-favicon-dist');
+  const favicon = repeated.manifest.outputs.find((output) => output.purpose === 'favicon')
+    ?? repeated.manifest.outputs.find((output) => output.width === 192);
+  if (favicon === undefined) {
+    throw new Error('Expected the web icon profile to provide a favicon candidate.');
+  }
+  const faviconHref = `./${favicon.path}`;
+  const embeddedFaviconMarkup = `<link rel="icon" type="image/png" href="${faviconHref}">`;
+  mkdirSync(scriptedFaviconDist, { recursive: true });
+  writeFileSync(
+    join(scriptedFaviconDist, 'index.html'),
+    '<html><head>'
+      + `<script>const closingHead = "</head>"; const markup = ${JSON.stringify(
+        embeddedFaviconMarkup,
+      )};</script>`
+      + `<!-- ${embeddedFaviconMarkup} -->`
+      + `<template>${embeddedFaviconMarkup}</template>`
+      + '</head><body></body></html>',
+  );
+  stageWebIconEvidence(repeated, scriptedFaviconDist);
+  const scriptedFaviconHtml = await readUtf8(join(scriptedFaviconDist, 'index.html'));
+  const faviconIndex = scriptedFaviconHtml.lastIndexOf(embeddedFaviconMarkup);
+
+  assert.ok(scriptedFaviconHtml.includes('<script>const closingHead = "</head>"; const markup ='));
+  assert.equal(scriptedFaviconHtml.split(embeddedFaviconMarkup).length - 1, 4);
+  assert.ok(faviconIndex > scriptedFaviconHtml.indexOf('</template>'));
+  assert.ok(faviconIndex < scriptedFaviconHtml.lastIndexOf('</head>'));
+
+  const nonInstallableDist = join(gameRoot, 'non-installable-dist');
+  mkdirSync(nonInstallableDist, { recursive: true });
+  writeFileSync(join(nonInstallableDist, 'manifest.webmanifest'), '{}\n');
+  writeFileSync(
+    join(nonInstallableDist, 'index.html'),
+    '<html><head><link rel="manifest" href="./manifest.webmanifest"></head><body></body></html>',
+  );
+  stageWebIconEvidence(repeated, nonInstallableDist, { installable: false });
+  assert.equal(existsSync(join(nonInstallableDist, 'manifest.webmanifest')), false);
+  assert.equal(existsSync(join(nonInstallableDist, 'mpgd-icon-manifest.json')), true);
+  assert.match(await readUtf8(join(nonInstallableDist, 'index.html')), /rel="icon"/u);
+  assert.doesNotMatch(await readUtf8(join(nonInstallableDist, 'index.html')), /rel="manifest"/u);
+
   const fallbackPwaRelease = writeMicrosoftStorePwaArtifacts({
     artifactRoot: fallbackDist,
     provenance: {
@@ -518,6 +647,25 @@ async function testInvalidInputs(parent: string): Promise<void> {
       expected,
     );
   }
+
+  await assert.rejects(
+    generateTargetIcons({
+      gameRoot,
+      targetName: 'web-preview',
+      target: { ...target, icon: { profile: 'android' } },
+      profile: 'production',
+    }),
+    /Icon profile android is incompatible with web-preview target kind web/u,
+  );
+  await assert.rejects(
+    generateTargetIcons({
+      gameRoot,
+      targetName: 'microsoft-store',
+      target: { ...target, icon: { profile: 'web-preview' } },
+      profile: 'production',
+    }),
+    /Microsoft Store target must use the microsoft-pwa icon profile/u,
+  );
 
   writeFileSync(
     join(gameRoot, 'mpgd.game.json'),
