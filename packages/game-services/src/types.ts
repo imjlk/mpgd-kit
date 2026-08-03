@@ -132,7 +132,7 @@ export interface LeaderboardScoreTransaction extends RecordLeaderboardScoreReque
 export function assertVerifyPurchaseRequest(input: VerifyPurchaseRequest): VerifyPurchaseRequest {
   assertRecord(input, 'VerifyPurchaseRequest');
   assertStoreTarget(input.target);
-  assertOptionalDeploymentTarget(input.deploymentTarget);
+  assertOptionalGameServicesDeploymentTarget(input.deploymentTarget);
   assertNonEmptyString(input.playerId, 'playerId');
   assertNonEmptyString(input.productId, 'productId');
   assertNonEmptyString(input.platformTransactionId, 'platformTransactionId');
@@ -189,7 +189,7 @@ export function assertClaimAdRewardRequest(
 ): ClaimAdRewardRequest {
   assertRecord(input, 'ClaimAdRewardRequest');
   assertAdRewardTarget(input.target);
-  assertOptionalDeploymentTarget(input.deploymentTarget);
+  assertOptionalGameServicesDeploymentTarget(input.deploymentTarget);
   assertNonEmptyString(input.playerId, 'playerId');
   assertNonEmptyString(input.placementId, 'placementId');
   assertOptionalNonEmptyString(input.platformImpressionId, 'platformImpressionId');
@@ -314,11 +314,7 @@ function assertAdRewardTarget(input: unknown): asserts input is GameServicesAdRe
   }
 }
 
-function assertOptionalDeploymentTarget(input: unknown): asserts input is string | undefined {
-  if (input === undefined) {
-    return;
-  }
-
+export function assertGameServicesDeploymentTarget(input: unknown): asserts input is string {
   if (
     typeof input !== 'string'
     || input.length > 64
@@ -327,6 +323,16 @@ function assertOptionalDeploymentTarget(input: unknown): asserts input is string
   ) {
     throw new Error('deploymentTarget must use lowercase kebab-case and avoid reserved names.');
   }
+}
+
+function assertOptionalGameServicesDeploymentTarget(
+  input: unknown,
+): asserts input is string | undefined {
+  if (input === undefined) {
+    return;
+  }
+
+  assertGameServicesDeploymentTarget(input);
 }
 
 const reservedDeploymentTargetNames = new Set([

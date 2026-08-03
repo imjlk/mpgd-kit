@@ -30,6 +30,7 @@ import {
   assertClaimAdRewardResponse,
   assertEntitlementLedgerGrant,
   assertEntitlementLedgerResult,
+  assertGameServicesDeploymentTarget,
   assertLeaderboardScoreTransaction,
   assertProductGrantTransaction,
   assertPurchaseGrantFinalization,
@@ -42,6 +43,7 @@ import {
   type EntitlementLedgerGrant,
   type EntitlementLedgerPayload,
   type EntitlementLedgerResult,
+  type GameServicesAdRewardTarget,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
   type PurchaseGrantFinalization,
@@ -56,6 +58,8 @@ type CorsHeaders = Record<string, string>;
 export interface CreateGameServicesBackendInput {
   readonly catalog: ProductCatalog;
   readonly placements: AdPlacements;
+  /** Trusted deployment-config bindings keyed by the request's platform target. */
+  readonly deploymentTargetBindings?: GameServicesDeploymentTargetBindings;
   readonly store?: GameServicesStore;
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
@@ -66,6 +70,10 @@ export interface CreateGameServicesBackendInput {
   readonly purchaseGrantFinalizationTimeoutMs?: number;
   readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
 }
+
+export type GameServicesDeploymentTargetBindings = Readonly<
+  Partial<Record<GameServicesAdRewardTarget, string>>
+>;
 
 export interface GameServicesBackendApiHandler {
   readonly version?: string;
@@ -317,6 +325,7 @@ export function createGameServicesBackend(
   const purchaseGrantFinalizationTimeoutMs = resolvePurchaseGrantFinalizationTimeout(
     input.purchaseGrantFinalizationTimeoutMs,
   );
+  const deploymentTargetBindings = resolveDeploymentTargetBindings(input.deploymentTargetBindings);
   const analytics = createAnalyticsReporter({
     target: 'server',
     sessionId: input.analyticsSessionId ?? 'game-services',
@@ -335,6 +344,7 @@ export function createGameServicesBackend(
           evidenceVerifier,
           evidenceVerificationTimeoutMs,
           purchaseGrantFinalizationTimeoutMs,
+          deploymentTargetBindings,
           ...(input.purchaseGrantFinalizer === undefined
             ? {}
             : { purchaseGrantFinalizer: input.purchaseGrantFinalizer }),
@@ -367,6 +377,7 @@ export function createGameServicesBackend(
           now,
           evidenceVerifier,
           evidenceVerificationTimeoutMs,
+          deploymentTargetBindings,
         });
 
         await analytics.track({
@@ -551,6 +562,50 @@ export function createGameServicesHttpFetchHandler(
   };
 }
 
+const gameServicesDeploymentTargetPlatforms = new Set<GameServicesAdRewardTarget>([
+  'android',
+  'ios',
+  'ait',
+  'verse8',
+]);
+
+function resolveDeploymentTargetBindings(
+  input: GameServicesDeploymentTargetBindings | undefined,
+): GameServicesDeploymentTargetBindings {
+  const bindings: Partial<Record<GameServicesAdRewardTarget, string>> = {};
+
+  for (const [platformTarget, deploymentTarget] of Object.entries(input ?? {})) {
+    if (!gameServicesDeploymentTargetPlatforms.has(platformTarget as GameServicesAdRewardTarget)) {
+      throw new Error(`Unsupported deployment target binding platform: ${platformTarget}.`);
+    }
+
+    assertGameServicesDeploymentTarget(deploymentTarget);
+    bindings[platformTarget as GameServicesAdRewardTarget] = deploymentTarget;
+  }
+
+  return bindings;
+}
+
+function bindRequestDeploymentTarget<
+  Request extends VerifyPurchaseRequest | ClaimAdRewardRequest,
+>(
+  request: Request,
+  bindings: GameServicesDeploymentTargetBindings,
+): Request {
+  const deploymentTarget = bindings[request.target] ?? request.target;
+
+  if (
+    request.deploymentTarget !== undefined
+    && request.deploymentTarget !== deploymentTarget
+  ) {
+    throw new Error(`deploymentTarget must match the backend binding for ${request.target}.`);
+  }
+
+  return deploymentTarget === request.target || request.deploymentTarget === deploymentTarget
+    ? request
+    : { ...request, deploymentTarget };
+}
+
 async function verifyPurchaseWithStore(
   input: VerifyPurchaseRequest,
   context: {
@@ -561,9 +616,13 @@ async function verifyPurchaseWithStore(
     readonly evidenceVerificationTimeoutMs: number;
     readonly purchaseGrantFinalizationTimeoutMs: number;
     readonly purchaseGrantFinalizer?: GameServicesPurchaseGrantFinalizer;
+    readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
   },
 ): Promise<VerifyPurchaseResponse> {
-  const request = assertVerifyPurchaseRequest(input);
+  const request = bindRequestDeploymentTarget(
+    assertVerifyPurchaseRequest(input),
+    context.deploymentTargetBindings,
+  );
   const retryIdentity = {
     source: 'purchase',
     playerId: request.playerId,
@@ -898,9 +957,13 @@ async function claimAdRewardWithStore(
     readonly now: () => string;
     readonly evidenceVerifier: GameServicesEvidenceVerifier;
     readonly evidenceVerificationTimeoutMs: number;
+    readonly deploymentTargetBindings: GameServicesDeploymentTargetBindings;
   },
 ): Promise<ClaimAdRewardResponse> {
-  const request = assertClaimAdRewardRequest(input);
+  const request = bindRequestDeploymentTarget(
+    assertClaimAdRewardRequest(input),
+    context.deploymentTargetBindings,
+  );
   const retryIdentity = {
     source: 'ad_reward',
     playerId: request.playerId,

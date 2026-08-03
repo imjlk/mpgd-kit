@@ -83,13 +83,15 @@ try {
 
   const scriptedArtifact = join(root, 'scripted-artifact');
   const embeddedManifestMarkup = '<link rel="manifest" href="./embedded.webmanifest">';
+  const scriptedStyle = `<style>.lookalike::before { content: "</stylex>${embeddedManifestMarkup}"; }</style>`;
   mkdirSync(scriptedArtifact);
   writeFileSync(join(scriptedArtifact, 'manifest.webmanifest'), '{}\n');
   writeFileSync(
     join(scriptedArtifact, 'index.html'),
     '<html><head>'
-      + `<script>const markup = ${JSON.stringify(embeddedManifestMarkup)};</script>`
-      + `<title>${embeddedManifestMarkup}</title>`
+      + `<script>const lookalike = "</scriptx>"; const markup = ${JSON.stringify(embeddedManifestMarkup)};</script>`
+      + scriptedStyle
+      + `<title></titlex>${embeddedManifestMarkup}</title>`
       + `<!-- ${embeddedManifestMarkup} -->`
       + `<template>${embeddedManifestMarkup}</template>`
       + '</head><body></body></html>',
@@ -100,10 +102,11 @@ try {
   );
   ensureInstallableWebManifestLink(scriptedArtifact);
   const installableHtml = readFileSync(join(scriptedArtifact, 'index.html'), 'utf8');
-  assert.ok(installableHtml.includes(`<script>const markup = ${JSON.stringify(
+  assert.ok(installableHtml.includes(`<script>const lookalike = "</scriptx>"; const markup = ${JSON.stringify(
     embeddedManifestMarkup,
   )};</script>`));
-  assert.ok(installableHtml.includes(`<title>${embeddedManifestMarkup}</title>`));
+  assert.ok(installableHtml.includes(scriptedStyle));
+  assert.ok(installableHtml.includes(`<title></titlex>${embeddedManifestMarkup}</title>`));
   assert.ok(installableHtml.includes(`<!-- ${embeddedManifestMarkup} -->`));
   assert.ok(installableHtml.includes(`<template>${embeddedManifestMarkup}</template>`));
   assert.doesNotThrow(() => assertInstallableWebArtifact(scriptedArtifact));
@@ -152,10 +155,11 @@ try {
 
   sanitizeNonInstallableWebArtifact(scriptedArtifact);
   const nonInstallableHtml = readFileSync(join(scriptedArtifact, 'index.html'), 'utf8');
-  assert.ok(nonInstallableHtml.includes(`<script>const markup = ${JSON.stringify(
+  assert.ok(nonInstallableHtml.includes(`<script>const lookalike = "</scriptx>"; const markup = ${JSON.stringify(
     embeddedManifestMarkup,
   )};</script>`));
-  assert.ok(nonInstallableHtml.includes(`<title>${embeddedManifestMarkup}</title>`));
+  assert.ok(nonInstallableHtml.includes(scriptedStyle));
+  assert.ok(nonInstallableHtml.includes(`<title></titlex>${embeddedManifestMarkup}</title>`));
   assert.ok(nonInstallableHtml.includes(`<!-- ${embeddedManifestMarkup} -->`));
   assert.ok(nonInstallableHtml.includes(`<template>${embeddedManifestMarkup}</template>`));
   assert.doesNotThrow(() => assertNonInstallableWebArtifact(scriptedArtifact));
@@ -382,6 +386,19 @@ try {
       android: androidTarget,
     }, (path) => join(root, path)),
     /staticDir and Vite output must not overlap across configured targets/u,
+  );
+  assert.throws(
+    () => assertDisjointWebTargetOutputs({
+      storefront: {
+        kind: 'web',
+        gameApp: 'game-app',
+        adapter: 'browser',
+        output: 'artifact-root/storefront',
+        staticDir: 'apps/mobile/www',
+      },
+      android: androidTarget,
+    }, (path) => join(root, path)),
+    /staticDir must not overlap generated output/u,
   );
 
   for (const output of [

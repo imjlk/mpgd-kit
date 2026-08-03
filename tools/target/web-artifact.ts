@@ -219,13 +219,13 @@ export function assertDisjointWebTargetOutputs(
   assertDisjointWebArtifactOutputs(outputs);
   assertWebOutputsAvoidStaticDirectories(outputs, targets, resolvePath);
   assertWebOutputsAvoidViteOutputs(outputs, targets, resolvePath);
-  assertWebOutputsAvoidProtectedPaths(
-    outputs,
-    [...defaultProtectedBuildOutputs(resolvePath), ...configuredProtectedBuildOutputs(
-      targets,
-      resolvePath,
-    ), ...protectedOutputs],
-  );
+  const allProtectedOutputs = [
+    ...defaultProtectedBuildOutputs(resolvePath),
+    ...configuredProtectedBuildOutputs(targets, resolvePath),
+    ...protectedOutputs,
+  ];
+  assertWebOutputsAvoidProtectedPaths(outputs, allProtectedOutputs);
+  assertWebStaticDirectoriesAvoidProtectedPaths(targets, resolvePath, allProtectedOutputs);
 }
 
 function copyDirectoryContents(source: string, destination: string): void {
@@ -423,8 +423,8 @@ function scanHtmlHead(html: string): HtmlHeadScan {
 
   while (index < html.length) {
     if (rawTextTag !== undefined) {
-      const closingRawTextTag = lowercaseHtml.indexOf(`</${rawTextTag}`, index);
-      if (closingRawTextTag < 0) {
+      const closingRawTextTag = findRawTextClosingTag(lowercaseHtml, rawTextTag, index);
+      if (closingRawTextTag === undefined) {
         break;
       }
 
@@ -524,6 +524,26 @@ function scanHtmlHead(html: string): HtmlHeadScan {
     ...(htmlOpeningTagEnd === undefined ? {} : { htmlOpeningTagEnd }),
     linkTags,
   };
+}
+
+function findRawTextClosingTag(
+  lowercaseHtml: string,
+  rawTextTag: 'script' | 'style' | 'title',
+  start: number,
+): number | undefined {
+  const prefix = `</${rawTextTag}`;
+  let candidate = lowercaseHtml.indexOf(prefix, start);
+
+  while (candidate >= 0) {
+    const boundary = lowercaseHtml[candidate + prefix.length] ?? '';
+    if (/^[\t\n\f\r />]$/u.test(boundary)) {
+      return candidate;
+    }
+
+    candidate = lowercaseHtml.indexOf(prefix, candidate + prefix.length);
+  }
+
+  return undefined;
 }
 
 function skipDelimitedSection(html: string, start: number, delimiter: string): number {
@@ -647,6 +667,29 @@ function assertWebOutputsAvoidProtectedPaths(
       if (pathsOverlap(canonicalOutput, protectedOutput.canonicalPath)) {
         throw new Error(
           `Web artifact output must not overlap generated output: ${output.name} (${output.path}) and ${protectedOutput.name} (${protectedOutput.path}).`,
+        );
+      }
+    }
+  }
+}
+
+function assertWebStaticDirectoriesAvoidProtectedPaths(
+  targets: Readonly<Record<string, PlatformTargetConfig>>,
+  resolvePath: (path: string) => string,
+  protectedOutputs: readonly NamedWebArtifactOutput[],
+): void {
+  const staticDirectories = configuredWebStaticDirectories(targets, resolvePath);
+  const canonicalProtectedOutputs = protectedOutputs.map((output) => ({
+    ...output,
+    canonicalPath: canonicalizeThroughExistingAncestor(output.path),
+  }));
+
+  for (const staticDirectory of staticDirectories) {
+    const canonicalStaticDirectory = canonicalizeThroughExistingAncestor(staticDirectory.path);
+    for (const protectedOutput of canonicalProtectedOutputs) {
+      if (pathsOverlap(canonicalStaticDirectory, protectedOutput.canonicalPath)) {
+        throw new Error(
+          `Web staticDir must not overlap generated output: ${staticDirectory.name} (${staticDirectory.path}) and ${protectedOutput.name} (${protectedOutput.path}).`,
         );
       }
     }

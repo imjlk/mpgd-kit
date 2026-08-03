@@ -258,6 +258,9 @@ const androidDeploymentBackend = createGameServicesBackend({
   catalog,
   placements,
   store: androidDeploymentStore,
+  deploymentTargetBindings: {
+    android: 'android-staging',
+  },
   evidenceVerifier: {
     async verifyPurchase(input) {
       androidDeploymentProductId = input.platformProductId;
@@ -274,22 +277,25 @@ const androidDeploymentBackend = createGameServicesBackend({
 });
 const androidDeploymentPurchase = await androidDeploymentBackend.purchases.verifyPurchase({
   target: 'android',
-  deploymentTarget: 'android-staging',
   playerId: 'player-android-staging',
   productId: 'COINS_100',
   platformTransactionId: 'android-staging-transaction',
   idempotencyKey: 'android-staging-purchase',
   purchasedAt: '2026-07-04T00:00:00.000Z',
 });
-const androidDeploymentConflict = await androidDeploymentBackend.purchases.verifyPurchase({
-  target: 'android',
-  deploymentTarget: 'android-production',
-  playerId: 'player-android-staging',
-  productId: 'COINS_100',
-  platformTransactionId: 'android-staging-transaction',
-  idempotencyKey: 'android-staging-purchase',
-  purchasedAt: '2026-07-04T00:00:00.000Z',
-});
+await assertRejects(
+  () => androidDeploymentBackend.purchases.verifyPurchase({
+    target: 'android',
+    deploymentTarget: 'android-production',
+    playerId: 'player-android-staging',
+    productId: 'COINS_100',
+    platformTransactionId: 'android-production-transaction',
+    idempotencyKey: 'android-production-purchase',
+    purchasedAt: '2026-07-04T00:00:00.000Z',
+  }),
+  /deploymentTarget must match the backend binding for android/u,
+  'purchase deployment targets must be bound by the backend',
+);
 const reward = await backend.adRewards.claimAdReward({
   target: 'android',
   playerId: 'player-1',
@@ -304,6 +310,9 @@ const verse8DeploymentBackend = createGameServicesBackend({
   catalog,
   placements,
   store: verse8DeploymentStore,
+  deploymentTargetBindings: {
+    verse8: 'verse8-staging',
+  },
   evidenceVerifier: {
     async verifyPurchase() {
       return { status: 'rejected', reason: 'NOT_USED' } as const;
@@ -320,22 +329,25 @@ const verse8DeploymentBackend = createGameServicesBackend({
 });
 const verse8DeploymentReward = await verse8DeploymentBackend.adRewards.claimAdReward({
   target: 'verse8',
-  deploymentTarget: 'verse8-staging',
   playerId: 'player-verse8-staging',
   placementId: 'CONTINUE_AFTER_FAIL',
   platformImpressionId: 'verse8-staging-impression',
   idempotencyKey: 'verse8-staging-reward',
   completedAt: '2026-07-04T00:00:01.000Z',
 });
-const verse8DeploymentConflict = await verse8DeploymentBackend.adRewards.claimAdReward({
-  target: 'verse8',
-  deploymentTarget: 'verse8-production',
-  playerId: 'player-verse8-staging',
-  placementId: 'CONTINUE_AFTER_FAIL',
-  platformImpressionId: 'verse8-staging-impression',
-  idempotencyKey: 'verse8-staging-reward',
-  completedAt: '2026-07-04T00:00:01.000Z',
-});
+await assertRejects(
+  () => verse8DeploymentBackend.adRewards.claimAdReward({
+    target: 'verse8',
+    deploymentTarget: 'verse8-production',
+    playerId: 'player-verse8-staging',
+    placementId: 'CONTINUE_AFTER_FAIL',
+    platformImpressionId: 'verse8-production-impression',
+    idempotencyKey: 'verse8-production-reward',
+    completedAt: '2026-07-04T00:00:01.000Z',
+  }),
+  /deploymentTarget must match the backend binding for verse8/u,
+  'reward deployment targets must be bound by the backend',
+);
 const score = await backend.leaderboard.recordScore({
   target: 'android',
   playerId: 'player-1',
@@ -376,11 +388,6 @@ assertEqual(
   'custom Android deployment purchases should use the deployment product id',
 );
 assertEqual(
-  androidDeploymentConflict.reason,
-  'IDEMPOTENCY_KEY_CONFLICT',
-  'purchase retries must preserve the original deployment target dimension',
-);
-assertEqual(
   (await androidDeploymentStore.listEntitlementTransactions())[0]?.payload.deploymentTarget,
   'android-staging',
   'purchase ledger payloads should retain the deployment target for audit',
@@ -395,11 +402,6 @@ assertEqual(
   verse8PlatformPlacementId,
   'reward_verse8_staging',
   'custom Verse8 deployment rewards should use the deployment placement id',
-);
-assertEqual(
-  verse8DeploymentConflict.reason,
-  'IDEMPOTENCY_KEY_CONFLICT',
-  'reward retries must preserve the original deployment target dimension',
 );
 assertEqual(
   (await verse8DeploymentStore.listEntitlementTransactions())[0]?.payload.deploymentTarget,
@@ -1938,4 +1940,22 @@ function assertEqual<T>(actual: T, expected: T, message: string): void {
   if (actual !== expected) {
     throw new Error(`${message}: expected ${String(expected)}, received ${String(actual)}.`);
   }
+}
+
+async function assertRejects(
+  action: () => Promise<unknown>,
+  expected: RegExp,
+  message: string,
+): Promise<void> {
+  try {
+    await action();
+  } catch (error) {
+    if (error instanceof Error && expected.test(error.message)) {
+      return;
+    }
+
+    throw error;
+  }
+
+  throw new Error(`${message}: expected the action to reject.`);
 }
