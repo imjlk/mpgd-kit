@@ -21,6 +21,7 @@ import type { GeneratedTargetIcons, IconManifestOutput } from './types';
 
 export interface StageWebIconEvidenceOptions {
   readonly installable?: boolean;
+  readonly manifestSourceDirectory?: string;
 }
 
 export function stageWebIconEvidence(
@@ -44,7 +45,7 @@ export function stageWebIconEvidence(
 
   if (result.profile.id === 'web-preview' || result.profile.id === 'microsoft-pwa') {
     if (options.installable !== false) {
-      stageWebManifest(result, gameDist);
+      stageWebManifest(result, gameDist, options.manifestSourceDirectory);
     } else {
       sanitizeNonInstallableWebArtifact(gameDist);
     }
@@ -203,12 +204,22 @@ function stageIos(
   }, null, 2)}\n`);
 }
 
-function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void {
+function stageWebManifest(
+  result: GeneratedTargetIcons,
+  gameDist: string,
+  manifestSourceDirectory?: string,
+): void {
   const stagedPath = join(gameDist, 'manifest.webmanifest');
   const stagedJsonPath = join(gameDist, 'manifest.json');
   const publicWebManifestPath = join(result.gameRoot, 'public/manifest.webmanifest');
   const publicJsonManifestPath = join(result.gameRoot, 'public/manifest.json');
   const manifestPath = [
+    ...(manifestSourceDirectory === undefined
+      ? []
+      : [
+          join(manifestSourceDirectory, 'manifest.webmanifest'),
+          join(manifestSourceDirectory, 'manifest.json'),
+        ]),
     stagedJsonPath,
     stagedPath,
     publicWebManifestPath,
@@ -235,7 +246,7 @@ function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void 
       purpose: output.purpose === 'maskable' ? 'maskable' : 'any',
     }));
   writeFileSync(stagedPath, `${JSON.stringify(manifest, null, 2)}\n`);
-  if (manifestPath === stagedJsonPath) {
+  if (existsSync(stagedJsonPath)) {
     rmSync(stagedJsonPath);
   }
   ensureInstallableWebManifestLink(gameDist);

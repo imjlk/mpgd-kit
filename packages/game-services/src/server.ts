@@ -2,7 +2,12 @@ import { implement } from '@orpc/server';
 import { RPCHandler } from '@orpc/server/fetch';
 
 import { createAnalyticsReporter, type AnalyticsSink } from '@mpgd/analytics';
-import { resolveProductPlatformId, type AdPlacements, type ProductCatalog } from '@mpgd/catalog';
+import {
+  resolveAdPlacementPlatformId,
+  resolveProductPlatformId,
+  type AdPlacements,
+  type ProductCatalog,
+} from '@mpgd/catalog';
 
 import {
   gameServicesBackendEndpoints,
@@ -934,9 +939,10 @@ async function claimAdRewardWithStore(
     });
   }
 
-  const platformPlacementId = placement.platformPlacementIds[
-    request.deploymentTarget ?? request.target
-  ];
+  const platformPlacementId = resolveAdPlacementPlatformId(
+    placement,
+    request.deploymentTarget ?? request.target,
+  );
   const verification = await verifyEvidence((signal) => {
     return context.evidenceVerifier.verifyAdReward({
       request,

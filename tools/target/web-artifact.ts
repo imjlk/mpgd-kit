@@ -20,6 +20,19 @@ const reservedGeneratedEvidenceNames = new Set([
   'mpgd-icon-manifest.json',
   'mpgd-icon-precache.json',
 ]);
+const implicitHeadElementNames = new Set([
+  'base',
+  'basefont',
+  'bgsound',
+  'link',
+  'meta',
+  'noframes',
+  'noscript',
+  'script',
+  'style',
+  'template',
+  'title',
+]);
 
 export interface NamedWebArtifactOutput {
   readonly name: string;
@@ -205,6 +218,7 @@ export function assertDisjointWebTargetOutputs(
   assertWebOutputsStayWithinRoot(outputs, resolvePath('.'));
   assertDisjointWebArtifactOutputs(outputs);
   assertWebOutputsAvoidStaticDirectories(outputs, targets, resolvePath);
+  assertWebOutputsAvoidViteOutputs(outputs, targets, resolvePath);
   assertWebOutputsAvoidProtectedPaths(
     outputs,
     [...defaultProtectedBuildOutputs(resolvePath), ...configuredProtectedBuildOutputs(
@@ -401,6 +415,7 @@ function scanHtmlHead(html: string): HtmlHeadScan {
   let closingTagStart: number | undefined;
   let headOpeningTagEnd: number | undefined;
   let htmlOpeningTagEnd: number | undefined;
+  let implicitHeadClosed = false;
   let inHead = false;
   let index = 0;
   let rawTextTag: 'script' | 'style' | undefined;
@@ -446,11 +461,13 @@ function scanHtmlHead(html: string): HtmlHeadScan {
 
     const { closing, name, selfClosing } = parsedTag;
     if (closing) {
-      if (name === 'template' && inHead && templateDepth > 0) {
+      const scanningHead = inHead || !implicitHeadClosed;
+      if (name === 'template' && scanningHead && templateDepth > 0) {
         templateDepth -= 1;
       } else if (name === 'head' && inHead && templateDepth === 0) {
         closingTagStart = tagStart;
         inHead = false;
+        implicitHeadClosed = true;
       }
 
       continue;
@@ -458,6 +475,7 @@ function scanHtmlHead(html: string): HtmlHeadScan {
 
     if (name === 'head' && !inHead) {
       inHead = true;
+      implicitHeadClosed = true;
       headOpeningTagEnd = tagEnd + 1;
       continue;
     }
@@ -467,7 +485,11 @@ function scanHtmlHead(html: string): HtmlHeadScan {
       continue;
     }
 
-    if (!inHead) {
+    if (!inHead && !implicitHeadClosed && !implicitHeadElementNames.has(name)) {
+      implicitHeadClosed = true;
+    }
+
+    if (!inHead && implicitHeadClosed) {
       continue;
     }
 
@@ -629,6 +651,33 @@ function assertWebOutputsAvoidProtectedPaths(
       if (pathsOverlap(canonicalOutput, protectedOutput.canonicalPath)) {
         throw new Error(
           `Web artifact output must not overlap generated output: ${output.name} (${output.path}) and ${protectedOutput.name} (${protectedOutput.path}).`,
+        );
+      }
+    }
+  }
+}
+
+function assertWebOutputsAvoidViteOutputs(
+  outputs: readonly NamedWebArtifactOutput[],
+  targets: Readonly<Record<string, PlatformTargetConfig>>,
+  resolvePath: (path: string) => string,
+): void {
+  const viteOutputs = Object.entries(targets).flatMap(([name, target]) => {
+    return target.kind === 'web'
+      ? [{ name: `${name} Vite output`, path: resolvePath(join(target.gameApp, 'dist')) }]
+      : [];
+  });
+  const canonicalViteOutputs = viteOutputs.map((output) => ({
+    ...output,
+    canonicalPath: canonicalizeThroughExistingAncestor(output.path),
+  }));
+
+  for (const output of outputs) {
+    const canonicalOutput = canonicalizeWebArtifactOutput(output.path);
+    for (const viteOutput of canonicalViteOutputs) {
+      if (pathsOverlap(canonicalOutput, viteOutput.canonicalPath)) {
+        throw new Error(
+          `Web artifact output and Vite output must not overlap across configured web targets: ${output.name} (${output.path}) and ${viteOutput.name} (${viteOutput.path}).`,
         );
       }
     }

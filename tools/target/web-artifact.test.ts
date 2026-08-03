@@ -113,6 +113,24 @@ try {
   assert.match(implicitHeadHtml, /<html>\s*<head>[\s\S]*rel="manifest"[\s\S]*<\/head>/u);
   assert.doesNotThrow(() => assertInstallableWebArtifact(implicitHeadArtifact));
 
+  const implicitHeadManifestArtifact = join(root, 'implicit-head-manifest-artifact');
+  mkdirSync(implicitHeadManifestArtifact);
+  writeFileSync(join(implicitHeadManifestArtifact, 'manifest.webmanifest'), '{}\n');
+  writeFileSync(
+    join(implicitHeadManifestArtifact, 'index.html'),
+    '<!doctype html><html><link rel="manifest" href="./manifest.webmanifest"><body></body></html>',
+  );
+  assert.throws(
+    () => assertNonInstallableWebArtifact(implicitHeadManifestArtifact),
+    /links a web app manifest/u,
+  );
+  sanitizeNonInstallableWebArtifact(implicitHeadManifestArtifact);
+  assert.doesNotMatch(
+    readFileSync(join(implicitHeadManifestArtifact, 'index.html'), 'utf8'),
+    /rel="manifest"/u,
+  );
+  assert.doesNotThrow(() => assertNonInstallableWebArtifact(implicitHeadManifestArtifact));
+
   sanitizeNonInstallableWebArtifact(scriptedArtifact);
   const nonInstallableHtml = readFileSync(join(scriptedArtifact, 'index.html'), 'utf8');
   assert.ok(nonInstallableHtml.includes(`<script>const markup = ${JSON.stringify(
@@ -287,6 +305,20 @@ try {
     /staticDir and output must not overlap across configured web targets/u,
   );
 
+  const archiveGameApp = join(root, 'archive-game-app');
+  mkdirSync(archiveGameApp);
+  writeWebTargetConfig(configPath, {
+    additionalGameApp: 'archive-game-app',
+    additionalOutput: 'game-app/dist',
+    gameApp: 'game-app',
+    output: 'artifact-root/storefront',
+    staticDir: 'static',
+  });
+  assert.throws(
+    () => validatePlatformTargetsFile(configPath),
+    /artifact output and Vite output must not overlap across configured web targets/u,
+  );
+
   for (const output of [
     '.mpgd/generated',
     '.mpgd/generated/icons',
@@ -374,6 +406,7 @@ console.log('Web artifact policy smoke passed.');
 function writeWebTargetConfig(
   path: string,
   input: {
+    readonly additionalGameApp?: string;
     readonly additionalOutput?: string;
     readonly additionalStaticDir?: string;
     readonly gameApp?: string;
@@ -399,6 +432,7 @@ function writeWebTargetConfig(
         : {
             archive: {
               ...target,
+              gameApp: input.additionalGameApp ?? target.gameApp,
               output: input.additionalOutput,
               staticDir: input.additionalStaticDir ?? input.staticDir,
             },

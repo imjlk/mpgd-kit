@@ -17,6 +17,7 @@ import sharp from 'sharp';
 
 import { writeMicrosoftStorePwaArtifacts } from '../target/microsoft-store-pwa';
 import type { PlatformTargetConfig } from '../target/schemas';
+import { copyWebStaticDirectoryContents } from '../target/web-artifact';
 import {
   generateTargetIcons,
   verifyExistingTargetIcons,
@@ -141,6 +142,30 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   assert.equal(jsonOverlayManifest.scope, './target/');
   assert.equal(jsonOverlayManifest.start_url, './target/index.html');
   assert.deepEqual(jsonOverlayManifest.icons, webManifest.icons);
+  assert.equal(existsSync(join(dist, 'manifest.json')), false);
+
+  const targetStaticDir = join(gameRoot, 'target-static');
+  mkdirSync(targetStaticDir);
+  writeFileSync(join(dist, 'manifest.json'), `${JSON.stringify({
+    id: './game-wide-json-manifest',
+    scope: './',
+    start_url: './',
+  })}\n`);
+  writeFileSync(join(targetStaticDir, 'manifest.webmanifest'), `${JSON.stringify({
+    id: './target-webmanifest-overlay',
+    scope: './target-webmanifest/',
+    start_url: './target-webmanifest/index.html',
+  })}\n`);
+  copyWebStaticDirectoryContents(targetStaticDir, dist);
+  stageWebIconEvidence(repeated, dist, { manifestSourceDirectory: targetStaticDir });
+  const webManifestOverlay = JSON.parse(
+    await readUtf8(join(dist, 'manifest.webmanifest')),
+  ) as Record<string, unknown>;
+
+  assert.equal(webManifestOverlay.id, './target-webmanifest-overlay');
+  assert.equal(webManifestOverlay.scope, './target-webmanifest/');
+  assert.equal(webManifestOverlay.start_url, './target-webmanifest/index.html');
+  assert.deepEqual(webManifestOverlay.icons, webManifest.icons);
   assert.equal(existsSync(join(dist, 'manifest.json')), false);
 
   const stagedIcon = repeated.manifest.outputs[0];

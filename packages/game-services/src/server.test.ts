@@ -79,7 +79,7 @@ const placements = {
       },
       platformPlacementIds: {
         android: 'reward_android',
-        'verse8-staging': 'reward_verse8_staging',
+        'verse8-staging': ' reward_verse8_staging ',
       },
     },
     {

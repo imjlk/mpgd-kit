@@ -202,6 +202,9 @@ try {
       }
       stageWebIconEvidence(generatedIcons, output, {
         ...(target.installable === undefined ? {} : { installable: target.installable }),
+        ...(staticDirPath === undefined
+          ? {}
+          : { manifestSourceDirectory: staticDirPath }),
       });
       assertStagedWebIconEvidence(generatedIcons, output);
       if (targetName === 'microsoft-store' && profile === 'production') {
