@@ -19,12 +19,22 @@ const reservedGeneratedEvidenceNames = new Set([
   'mpgd-icon-manifest.json',
   'mpgd-icon-precache.json',
 ]);
-const linkTagPattern = /<link\b[^>]*>/giu;
 const relAttributePattern = /\brel\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+))/iu;
 
 export interface NamedWebArtifactOutput {
   readonly name: string;
   readonly path: string;
+}
+
+interface HtmlTagRange {
+  readonly end: number;
+  readonly start: number;
+  readonly tag: string;
+}
+
+interface HtmlHeadScan {
+  readonly closingTagStart?: number;
+  readonly linkTags: readonly HtmlTagRange[];
 }
 
 export function copyWebStaticDirectoryContents(
@@ -68,9 +78,12 @@ export function ensureInstallableWebManifestLink(artifactRoot: string): void {
   }
 
   const withoutManifestLinks = stripManifestLinkTags(source);
-  const linked = withoutManifestLinks.includes('</head>')
-    ? withoutManifestLinks.replace('</head>', `  ${link}\n</head>`)
-    : `${link}\n${withoutManifestLinks}`;
+  const closingHeadTag = scanHtmlHead(withoutManifestLinks).closingTagStart;
+  const linked = closingHeadTag === undefined
+    ? `${link}\n${withoutManifestLinks}`
+    : withoutManifestLinks.slice(0, closingHeadTag)
+      + `  ${link}\n`
+      + withoutManifestLinks.slice(closingHeadTag);
 
   writeFileSync(indexFile, linked);
 }
@@ -124,7 +137,7 @@ export function assertWebStaticDirectory(
     throw new Error(`Web staticDir must stay inside its game root: ${source}`);
   }
 
-  const canonicalDestination = canonicalizeThroughExistingAncestor(destination);
+  const canonicalDestination = canonicalizeWebArtifactOutput(destination);
   if (pathsOverlap(canonicalSource, canonicalDestination)) {
     throw new Error(`Web staticDir and output must not overlap: ${source} and ${destination}`);
   }
@@ -134,7 +147,7 @@ export function assertWebArtifactOutputDirectory(
   output: string,
   viteOutput: string,
 ): void {
-  const canonicalOutput = canonicalizeThroughExistingAncestor(output);
+  const canonicalOutput = canonicalizeWebArtifactOutput(output);
   const canonicalViteOutput = canonicalizeThroughExistingAncestor(viteOutput);
 
   if (pathsOverlap(canonicalOutput, canonicalViteOutput)) {
@@ -149,7 +162,7 @@ export function assertDisjointWebArtifactOutputs(
 ): void {
   const canonicalOutputs = outputs.map((output) => ({
     ...output,
-    canonicalPath: canonicalizeThroughExistingAncestor(output.path),
+    canonicalPath: canonicalizeWebArtifactOutput(output.path),
   }));
 
   for (const [index, output] of canonicalOutputs.entries()) {
@@ -166,6 +179,7 @@ export function assertDisjointWebArtifactOutputs(
 export function assertDisjointWebTargetOutputs(
   targets: Readonly<Record<string, PlatformTargetConfig>>,
   resolvePath: (path: string) => string,
+  protectedOutputs: readonly NamedWebArtifactOutput[] = [],
 ): void {
   const outputs = Object.entries(targets)
     .flatMap(([name, target]) => target.kind === 'web'
@@ -173,6 +187,13 @@ export function assertDisjointWebTargetOutputs(
       : []);
 
   assertDisjointWebArtifactOutputs(outputs);
+  assertWebOutputsAvoidProtectedPaths(
+    outputs,
+    [...defaultProtectedBuildOutputs(resolvePath), ...configuredProtectedBuildOutputs(
+      targets,
+      resolvePath,
+    ), ...protectedOutputs],
+  );
 }
 
 function copyDirectoryContents(source: string, destination: string): void {
@@ -217,13 +238,218 @@ function indexHtmlLinksManifest(indexFile: string): boolean {
 }
 
 function stripManifestLinkTags(html: string): string {
-  return html.replace(linkTagPattern, (tag) => isManifestLinkTag(tag) ? '' : tag);
+  const manifestLinks = scanHtmlHead(html).linkTags.filter(({ tag }) => isManifestLinkTag(tag));
+
+  return manifestLinks.reduceRight(
+    (result, link) => result.slice(0, link.start) + result.slice(link.end),
+    html,
+  );
 }
 
 function manifestLinkTags(html: string): readonly string[] {
-  return [...html.matchAll(linkTagPattern)]
-    .map((match) => match[0])
-    .filter(isManifestLinkTag);
+  return scanHtmlHead(html).linkTags.map(({ tag }) => tag).filter(isManifestLinkTag);
+}
+
+function scanHtmlHead(html: string): HtmlHeadScan {
+  const lowercaseHtml = html.toLowerCase();
+  const linkTags: HtmlTagRange[] = [];
+  let closingTagStart: number | undefined;
+  let inHead = false;
+  let index = 0;
+  let rawTextTag: 'script' | 'style' | undefined;
+  let templateDepth = 0;
+
+  while (index < html.length) {
+    if (rawTextTag !== undefined) {
+      const closingRawTextTag = lowercaseHtml.indexOf(`</${rawTextTag}`, index);
+      if (closingRawTextTag < 0) {
+        break;
+      }
+
+      index = closingRawTextTag;
+      rawTextTag = undefined;
+    }
+
+    const tagStart = html.indexOf('<', index);
+    if (tagStart < 0) {
+      break;
+    }
+
+    if (lowercaseHtml.startsWith('<!--', tagStart)) {
+      index = skipDelimitedSection(lowercaseHtml, tagStart + 4, '-->');
+      continue;
+    }
+
+    if (lowercaseHtml.startsWith('<![cdata[', tagStart)) {
+      index = skipDelimitedSection(lowercaseHtml, tagStart + 9, ']]>');
+      continue;
+    }
+
+    const tagEnd = findHtmlTagEnd(html, tagStart);
+    if (tagEnd === undefined) {
+      break;
+    }
+
+    const parsedTag = parseHtmlTag(html.slice(tagStart + 1, tagEnd));
+    index = tagEnd + 1;
+
+    if (parsedTag === undefined) {
+      continue;
+    }
+
+    const { closing, name, selfClosing } = parsedTag;
+    if (closing) {
+      if (name === 'template' && inHead && templateDepth > 0) {
+        templateDepth -= 1;
+      } else if (name === 'head' && inHead && templateDepth === 0) {
+        closingTagStart = tagStart;
+        inHead = false;
+      }
+
+      continue;
+    }
+
+    if (name === 'head' && !inHead) {
+      inHead = true;
+      continue;
+    }
+
+    if (!inHead) {
+      continue;
+    }
+
+    if (name === 'template') {
+      if (!selfClosing) {
+        templateDepth += 1;
+      }
+      continue;
+    }
+
+    if (!selfClosing && (name === 'script' || name === 'style')) {
+      rawTextTag = name;
+      continue;
+    }
+
+    if (templateDepth > 0) {
+      continue;
+    }
+
+    if (name === 'link') {
+      linkTags.push({
+        end: tagEnd + 1,
+        start: tagStart,
+        tag: html.slice(tagStart, tagEnd + 1),
+      });
+    }
+  }
+
+  return {
+    ...(closingTagStart === undefined ? {} : { closingTagStart }),
+    linkTags,
+  };
+}
+
+function skipDelimitedSection(html: string, start: number, delimiter: string): number {
+  const end = html.indexOf(delimiter, start);
+  return end < 0 ? html.length : end + delimiter.length;
+}
+
+function findHtmlTagEnd(html: string, start: number): number | undefined {
+  let quote: '"' | "'" | undefined;
+
+  for (let index = start + 1; index < html.length; index += 1) {
+    const character = html[index];
+    if (quote !== undefined) {
+      if (character === quote) {
+        quote = undefined;
+      }
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '>') {
+      return index;
+    }
+  }
+
+  return undefined;
+}
+
+function parseHtmlTag(
+  source: string,
+): { readonly closing: boolean; readonly name: string; readonly selfClosing: boolean } | undefined {
+  const trimmedSource = source.trim();
+  const closing = trimmedSource.startsWith('/');
+  const tagSource = closing ? trimmedSource.slice(1).trimStart() : trimmedSource;
+  const name = /^[a-z][a-z0-9:-]*/iu.exec(tagSource)?.[0]?.toLowerCase();
+
+  return name === undefined
+    ? undefined
+    : {
+        closing,
+        name,
+        selfClosing: !closing && tagSource.trimEnd().endsWith('/'),
+      };
+}
+
+function defaultProtectedBuildOutputs(
+  resolvePath: (path: string) => string,
+): readonly NamedWebArtifactOutput[] {
+  return [
+    { name: 'AIT release output', path: resolvePath('release-output/ait') },
+    { name: 'Android release output', path: resolvePath('release-output/android') },
+    { name: 'iOS release output', path: resolvePath('release-output/ios') },
+    {
+      name: 'iOS simulator build output',
+      path: resolvePath('release-output/ios-simulator-build'),
+    },
+  ];
+}
+
+function configuredProtectedBuildOutputs(
+  targets: Readonly<Record<string, PlatformTargetConfig>>,
+  resolvePath: (path: string) => string,
+): readonly NamedWebArtifactOutput[] {
+  return Object.entries(targets).flatMap(([name, target]) => {
+    switch (target.kind) {
+      case 'web':
+        return [];
+      case 'capacitor-android':
+      case 'capacitor-ios':
+        return [{ name: `${name} web staging output`, path: resolvePath(target.webDir) }];
+      case 'apps-in-toss':
+      case 'devvit-web':
+        return [
+          { name: `${name} web staging output`, path: resolvePath(target.webDir) },
+          {
+            name: `${name} wrapper build output`,
+            path: resolvePath(join(target.wrapperApp, 'dist')),
+          },
+        ];
+    }
+  });
+}
+
+function assertWebOutputsAvoidProtectedPaths(
+  outputs: readonly NamedWebArtifactOutput[],
+  protectedOutputs: readonly NamedWebArtifactOutput[],
+): void {
+  const canonicalProtectedOutputs = protectedOutputs.map((output) => ({
+    ...output,
+    canonicalPath: canonicalizeThroughExistingAncestor(output.path),
+  }));
+
+  for (const output of outputs) {
+    const canonicalOutput = canonicalizeWebArtifactOutput(output.path);
+    for (const protectedOutput of canonicalProtectedOutputs) {
+      if (pathsOverlap(canonicalOutput, protectedOutput.canonicalPath)) {
+        throw new Error(
+          `Web artifact output must not overlap generated output: ${output.name} (${output.path}) and ${protectedOutput.name} (${protectedOutput.path}).`,
+        );
+      }
+    }
+  }
 }
 
 function isPathWithin(root: string, candidate: string): boolean {
@@ -233,6 +459,14 @@ function isPathWithin(root: string, candidate: string): boolean {
 
 function pathsOverlap(first: string, second: string): boolean {
   return isPathWithin(first, second) || isPathWithin(second, first);
+}
+
+function canonicalizeWebArtifactOutput(path: string): string {
+  if (existsSync(path) && lstatSync(path).isSymbolicLink()) {
+    throw new Error(`Web artifact output must not be a symbolic link: ${path}`);
+  }
+
+  return canonicalizeThroughExistingAncestor(path);
 }
 
 function canonicalizeThroughExistingAncestor(path: string): string {

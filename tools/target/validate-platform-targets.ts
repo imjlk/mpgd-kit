@@ -4,7 +4,9 @@ import { dirname, resolve } from 'node:path';
 import { isCliEntrypoint, readJsonFile } from '../io';
 import {
   assertPlatformTargetsConfigShape,
+  effectiveTargetConfigOutputDir,
   loadPlatformTargetsConfig,
+  releaseManifestPath,
   resolveFromPlatformTargetsBase,
 } from './platform-targets';
 import {
@@ -14,15 +16,22 @@ import {
 } from './web-artifact';
 
 export function validatePlatformTargetsFile(path?: string) {
-  const loadedConfig = path === undefined
-    ? loadPlatformTargetsConfig()
-    : {
-        baseDir: dirname(resolve(path)),
-        config: assertPlatformTargetsConfigShape(readJsonFile(path)),
-        path: resolve(path),
-      };
+  const loadedConfig =
+    path === undefined
+      ? loadPlatformTargetsConfig()
+      : {
+          baseDir: dirname(resolve(path)),
+          config: assertPlatformTargetsConfigShape(readJsonFile(path)),
+          path: resolve(path),
+        };
   const config = loadedConfig.config;
-  assertDisjointWebTargetOutputs(config.targets, resolvePath);
+  assertDisjointWebTargetOutputs(config.targets, resolvePath, [
+    { name: 'release manifest', path: releaseManifestPath(loadedConfig.baseDir) },
+    {
+      name: 'effective target config output',
+      path: effectiveTargetConfigOutputDir(loadedConfig.baseDir),
+    },
+  ]);
 
   for (const [targetName, target] of Object.entries(config.targets)) {
     if (!existsSync(resolvePath(target.gameApp))) {

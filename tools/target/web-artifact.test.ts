@@ -20,6 +20,7 @@ import {
   assertWebArtifactOutputDirectory,
   assertWebStaticDirectory,
   copyWebStaticDirectoryContents,
+  ensureInstallableWebManifestLink,
   sanitizeNonInstallableWebArtifact,
 } from './web-artifact';
 
@@ -43,6 +44,36 @@ try {
   assert.match(readFileSync(join(artifact, 'index.html'), 'utf8'), /rel="icon"/u);
   assert.doesNotThrow(() => assertNonInstallableWebArtifact(artifact));
   assert.throws(() => assertInstallableWebArtifact(artifact), /has no web app manifest/u);
+
+  const scriptedArtifact = join(root, 'scripted-artifact');
+  const embeddedManifestMarkup = '<link rel="manifest" href="./embedded.webmanifest">';
+  mkdirSync(scriptedArtifact);
+  writeFileSync(join(scriptedArtifact, 'manifest.webmanifest'), '{}\n');
+  writeFileSync(
+    join(scriptedArtifact, 'index.html'),
+    '<html><head>'
+      + `<script>const markup = ${JSON.stringify(embeddedManifestMarkup)};</script>`
+      + `<!-- ${embeddedManifestMarkup} -->`
+      + `<template>${embeddedManifestMarkup}</template>`
+      + '</head><body></body></html>',
+  );
+  ensureInstallableWebManifestLink(scriptedArtifact);
+  const installableHtml = readFileSync(join(scriptedArtifact, 'index.html'), 'utf8');
+  assert.ok(installableHtml.includes(`<script>const markup = ${JSON.stringify(
+    embeddedManifestMarkup,
+  )};</script>`));
+  assert.ok(installableHtml.includes(`<!-- ${embeddedManifestMarkup} -->`));
+  assert.ok(installableHtml.includes(`<template>${embeddedManifestMarkup}</template>`));
+  assert.doesNotThrow(() => assertInstallableWebArtifact(scriptedArtifact));
+
+  sanitizeNonInstallableWebArtifact(scriptedArtifact);
+  const nonInstallableHtml = readFileSync(join(scriptedArtifact, 'index.html'), 'utf8');
+  assert.ok(nonInstallableHtml.includes(`<script>const markup = ${JSON.stringify(
+    embeddedManifestMarkup,
+  )};</script>`));
+  assert.ok(nonInstallableHtml.includes(`<!-- ${embeddedManifestMarkup} -->`));
+  assert.ok(nonInstallableHtml.includes(`<template>${embeddedManifestMarkup}</template>`));
+  assert.doesNotThrow(() => assertNonInstallableWebArtifact(scriptedArtifact));
 
   writeFileSync(join(staticDir, 'manifest.webmanifest'), '{}\n');
   assertWebStaticDirectory(staticDir, artifact, root);
@@ -83,6 +114,15 @@ try {
   assert.throws(
     () => assertWebStaticDirectory(staticDir, join(outputLink, 'nested'), root),
     /staticDir and output must not overlap/u,
+  );
+
+  const externalOutput = join(root, 'external-output');
+  const linkedOutputInsideStatic = join(staticDir, 'linked-output');
+  mkdirSync(externalOutput);
+  symlinkSync(externalOutput, linkedOutputInsideStatic);
+  assert.throws(
+    () => assertWebStaticDirectory(staticDir, linkedOutputInsideStatic, root),
+    /artifact output must not be a symbolic link/u,
   );
 
   const reservedStaticDir = join(root, 'reserved-static');
@@ -164,6 +204,24 @@ try {
     assert.throws(
       () => validatePlatformTargetsFile(configPath),
       /artifact outputs must not overlap: storefront .* and archive /u,
+    );
+  }
+
+  for (const output of [
+    'release-output',
+    'release-output/android',
+    'artifacts',
+    'artifacts/target-config',
+    'artifacts/release-manifest.json',
+  ]) {
+    writeWebTargetConfig(configPath, {
+      gameApp: 'game-app',
+      output,
+      staticDir: 'static',
+    });
+    assert.throws(
+      () => validatePlatformTargetsFile(configPath),
+      /artifact output must not overlap generated output/u,
     );
   }
 

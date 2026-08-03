@@ -104,7 +104,11 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
 
 function getUnsupportedWebPreviewFeature(
   config: TargetConfig,
-): 'interstitial ads' | 'leaderboard' | 'rewarded ads' | undefined {
+): 'in-app purchases' | 'interstitial ads' | 'leaderboard' | 'rewarded ads' | undefined {
+  if (config.features.iap || config.monetization.iap) {
+    return 'in-app purchases';
+  }
+
   if (config.features.rewardedAds || config.monetization.rewardedAds) {
     return 'rewarded ads';
   }

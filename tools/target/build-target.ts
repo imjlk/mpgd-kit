@@ -79,7 +79,13 @@ const releaseManifestEnvKeys = [
 const platformTargets = loadPlatformTargetsConfig();
 const configBaseDir = platformTargets.baseDir;
 const config = platformTargets.config;
-assertDisjointWebTargetOutputs(config.targets, targetPath);
+assertDisjointWebTargetOutputs(config.targets, targetPath, [
+  { name: 'release manifest', path: releaseManifestPath(configBaseDir) },
+  {
+    name: 'effective target config output',
+    path: effectiveTargetConfigOutputDir(configBaseDir),
+  },
+]);
 const runtimeTargetConfigMatrix = loadTargetConfigMatrix();
 const monetizationCatalogEnv = normalizeMonetizationCatalogEnv(process.env, configBaseDir);
 const targetScopedEnv = {

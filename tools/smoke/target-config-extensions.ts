@@ -112,6 +112,28 @@ try {
         ...webPreview,
         features: {
           ...webPreview.features,
+          iap: true,
+        },
+        monetization: {
+          ...webPreview.monetization,
+          iap: true,
+        },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /cannot enable in-app purchases for web-preview runtime/u,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
+      storefront: {
+        ...webPreview,
+        features: {
+          ...webPreview.features,
           rewardedAds: true,
         },
         monetization: {
