@@ -8,6 +8,13 @@ import {
 } from '../src/effective';
 import { assertTargetConfigMatrix } from '../src/index';
 import {
+  createMpgdReleaseIdentity,
+  formatMpgdReleaseId,
+  formatMpgdReleaseLabel,
+  isMpgdFinalSemVer,
+  parseMpgdReleaseRevision,
+} from '../src/releaseIdentity';
+import {
   applyTargetConfigToCapabilities,
   createTargetRuntimeSnapshot,
   getTargetConfig,
@@ -78,6 +85,69 @@ try {
 }
 
 assertEqual(invalidFallbackRejected, true);
+assertDeepEqual(
+  createMpgdReleaseIdentity({
+    gameVersion: '0.3.30',
+    releaseRevision: 42,
+    expectedLabel: '0.3.30-v42',
+  }),
+  {
+    gameVersion: '0.3.30',
+    releaseRevision: 42,
+    label: '0.3.30-v42',
+  },
+);
+assertDeepEqual(createMpgdReleaseIdentity({ gameVersion: '0.3.30-rc.1' }), {
+  gameVersion: '0.3.30-rc.1',
+  label: '0.3.30-rc.1',
+});
+assertDeepEqual(
+  createMpgdReleaseIdentity({
+    gameVersion: '0.3.30',
+    releaseRevision: 42,
+    expectedLabel: ' 0.3.30-v42 ',
+  }),
+  {
+    gameVersion: '0.3.30',
+    releaseRevision: 42,
+    label: '0.3.30-v42',
+  },
+);
+assertEqual(formatMpgdReleaseLabel('0.3.31', 43), '0.3.31-v43');
+assertEqual(isMpgdFinalSemVer('0.3.31'), true);
+assertEqual(isMpgdFinalSemVer('0.3.31-rc.1'), false);
+assertEqual(
+  formatMpgdReleaseId('0.3.31-v43', 'ttokdoku-0.3.31-v43-sha'),
+  'mpgd-0.3.31-v43+ttokdoku-0.3.31-v43-sha',
+);
+assertEqual(parseMpgdReleaseRevision('42'), 42);
+assertEqual(parseMpgdReleaseRevision('  '), undefined);
+assertThrows(() => createMpgdReleaseIdentity({ gameVersion: '0.3.30-rc.1', releaseRevision: 1 }));
+assertThrows(() => createMpgdReleaseIdentity({ gameVersion: '0.3.30', releaseRevision: 0 }));
+assertThrows(
+  () => createMpgdReleaseIdentity({
+    gameVersion: '0.3.30',
+    releaseRevision: 1,
+    expectedLabel: '0.3.30-v2',
+  }),
+);
+assertThrows(() => parseMpgdReleaseRevision('0'));
+assertThrows(() => parseMpgdReleaseRevision('1.5'));
+assertThrows(() => parseMpgdReleaseRevision('9007199254740993'));
+assertThrows(() => createMpgdReleaseIdentity({ gameVersion: '0.3.30-01' }));
+assertThrows(() => createMpgdReleaseIdentity({ gameVersion: '0.3.30-rc.01' }));
+assertThrows(
+  () => createMpgdReleaseIdentity({ gameVersion: '0.3.30+build.1' }),
+  /must not contain SemVer build metadata/u,
+);
+assertThrows(() => formatMpgdReleaseId('', 'ttokdoku-build'));
+assertThrows(() => formatMpgdReleaseId('0.3.31-v43', ''));
+assertThrows(() => formatMpgdReleaseId('0.3.31 v43', 'ttokdoku-build'));
+assertThrows(() => formatMpgdReleaseId('0.3.31-v43', 'ttokdoku\tbuild'));
+assertThrows(() => formatMpgdReleaseId('0.3.31+metadata', 'ttokdoku-build'));
+assertThrows(() => formatMpgdReleaseId('0.3.31-v43', 'ttokdoku+build'));
+assertThrows(() => formatMpgdReleaseLabel('not-a-version', 1));
+assertThrows(() => formatMpgdReleaseLabel('0.3.31-rc.1', 1));
 const productCatalog = {
   version: 'test-catalog',
   products: [
@@ -1186,10 +1256,19 @@ function assertDeepEqual(actual: unknown, expected: unknown): void {
   }
 }
 
-function assertThrows(callback: () => unknown): void {
+function assertThrows(callback: () => unknown, expectedMessage?: RegExp): void {
   try {
     callback();
-  } catch {
+  } catch (error) {
+    if (
+      expectedMessage !== undefined
+      && (!(error instanceof Error) || !expectedMessage.test(error.message))
+    ) {
+      throw new Error(
+        `Expected error message to match ${String(expectedMessage)}, received ${String(error)}.`,
+      );
+    }
+
     return;
   }
 

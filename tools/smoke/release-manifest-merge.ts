@@ -14,6 +14,8 @@ import { delimiter, join } from 'node:path';
 
 import { assertReleaseManifest, type ReleaseManifest } from '@mpgd/release-manifest';
 
+import { requireCanonicalAppVersion } from '../target/app-version';
+
 const tempDir = mkdtempSync(join(tmpdir(), 'mpgd-release-manifest-'));
 const firstCatalogFile = join(tempDir, 'catalog-v1.json');
 const secondCatalogFile = join(tempDir, 'catalog-v2.json');
@@ -21,6 +23,8 @@ const placementsFile = join(tempDir, 'placements.json');
 const iconManifestFile = join(tempDir, 'icon-manifest.json');
 const manifestFile = join(tempDir, 'release-manifest.json');
 const matchingManifestFile = join(tempDir, 'matching-release-manifest.json');
+const legacyManifestFile = join(tempDir, 'legacy-release-manifest.json');
+const legacyPrereleaseManifestFile = join(tempDir, 'legacy-prerelease-release-manifest.json');
 const kitMismatchManifestFile = join(tempDir, 'kit-mismatch-release-manifest.json');
 const iconMismatchManifestFile = join(tempDir, 'icon-mismatch-release-manifest.json');
 const iconConfigMismatchManifestFile = join(tempDir, 'icon-config-mismatch-release-manifest.json');
@@ -28,6 +32,7 @@ const targetRenderOverrideManifestFile = join(
   tempDir,
   'target-render-override-release-manifest.json',
 );
+const releaseIdentityManifestFile = join(tempDir, 'release-identity-manifest.json');
 const snapshotManifestFile = join(tempDir, 'snapshot-release-manifest.json');
 const failedGitManifestFile = join(tempDir, 'failed-git-release-manifest.json');
 const emptyGitManifestFile = join(tempDir, 'empty-git-release-manifest.json');
@@ -49,7 +54,12 @@ let manifestRunCount = 0;
 
 try {
   writeFakeGit();
-  assertKitGitShaSchema();
+  assertReleaseManifestSchema();
+  assert.equal(requireCanonicalAppVersion('1.0.0'), '1.0.0');
+  assert.throws(
+    () => requireCanonicalAppVersion(' 1.0.0 '),
+    /APP_VERSION must be canonical without leading or trailing whitespace/u,
+  );
   mkdirSync(nestedKitParent);
   writeFileSync(firstCatalogFile, catalogJson('game-v1'));
   writeFileSync(secondCatalogFile, catalogJson('game-v2'));
@@ -88,6 +98,95 @@ try {
     'microsoft-store',
     'web-preview',
   ]);
+  assert.throws(
+    () => assertReleaseManifest({
+      ...matchingManifest,
+      releaseIdentity: {
+        gameVersion: ' 1.0.0 ',
+        label: '1.0.0',
+      },
+    }),
+    /releaseIdentity\.gameVersion must be canonical without whitespace/u,
+  );
+
+  const legacyManifest = { ...matchingManifest };
+  Reflect.deleteProperty(legacyManifest, 'releaseIdentity');
+  writeFileSync(legacyManifestFile, `${JSON.stringify(legacyManifest, null, 2)}\n`);
+  runManifest('web-preview', firstCatalogFile, legacyManifestFile, {
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  const mergedLegacyManifest = readManifest(legacyManifestFile);
+  assert.deepEqual(mergedLegacyManifest.releaseIdentity, {
+    gameVersion: '1.0.0',
+    label: '1.0.0',
+  });
+  assert.deepEqual(Object.keys(mergedLegacyManifest.targets).sort(), [
+    'microsoft-store',
+    'web-preview',
+  ]);
+
+  runManifest('web-preview', firstCatalogFile, legacyPrereleaseManifestFile, {
+    appVersion: '1.0.0-v42',
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  const legacyPrereleaseManifest = { ...readManifest(legacyPrereleaseManifestFile) };
+  Reflect.deleteProperty(legacyPrereleaseManifest, 'releaseIdentity');
+  writeFileSync(
+    legacyPrereleaseManifestFile,
+    `${JSON.stringify(legacyPrereleaseManifest, null, 2)}\n`,
+  );
+  runManifest('microsoft-store', firstCatalogFile, legacyPrereleaseManifestFile, {
+    appVersion: '1.0.0',
+    kitGitShas: [firstKitGitSha],
+    releaseRevision: 42,
+    sourceGitSha: 'game-source-sha',
+  });
+  assert.deepEqual(Object.keys(readManifest(legacyPrereleaseManifestFile).targets), [
+    'microsoft-store',
+  ]);
+
+  runManifest('web-preview', firstCatalogFile, releaseIdentityManifestFile, {
+    kitGitShas: [firstKitGitSha],
+    releaseRevision: 42,
+    sourceGitSha: 'game-source-sha',
+  });
+  runManifest('microsoft-store', firstCatalogFile, releaseIdentityManifestFile, {
+    kitGitShas: [firstKitGitSha],
+    releaseRevision: 42,
+    sourceGitSha: 'game-source-sha',
+  });
+  const releaseIdentityManifest = readManifest(releaseIdentityManifestFile);
+  assert.deepEqual(releaseIdentityManifest.releaseIdentity, {
+    gameVersion: '1.0.0',
+    releaseRevision: 42,
+    label: '1.0.0-v42',
+  });
+  assert.equal(releaseIdentityManifest.releaseId, 'mpgd-1.0.0-v42+manifest-merge-smoke');
+  assert.deepEqual(Object.keys(releaseIdentityManifest.targets).sort(), [
+    'microsoft-store',
+    'web-preview',
+  ]);
+  runManifest('web-preview', firstCatalogFile, releaseIdentityManifestFile, {
+    kitGitShas: [firstKitGitSha],
+    releaseRevision: 43,
+    sourceGitSha: 'game-source-sha',
+  });
+  assert.deepEqual(Object.keys(readManifest(releaseIdentityManifestFile).targets), ['web-preview']);
+
+  const invalidReleaseLabelOutput = runManifestExpectFailure(
+    'web-preview',
+    firstCatalogFile,
+    releaseIdentityManifestFile,
+    {
+      expectedReleaseLabel: '1.0.0-v99',
+      kitGitShas: [firstKitGitSha],
+      releaseRevision: 43,
+      sourceGitSha: 'game-source-sha',
+    },
+  );
+  assert.match(invalidReleaseLabelOutput, /Release identity label must equal 1\.0\.0-v43/u);
 
   runManifest('web-preview', firstCatalogFile, manifestFile, {
     kitGitShas: [firstKitGitSha],
@@ -285,6 +384,7 @@ try {
 console.log('Release manifest merge preserves matching targets and resets on contract changes.');
 
 interface RunManifestOptions {
+  readonly appVersion?: string;
   readonly dirtyWhenPathExists?: string;
   readonly effectiveConfigDir?: string;
   readonly expectedGitReadCount?: number;
@@ -296,6 +396,8 @@ interface RunManifestOptions {
   readonly iconSourceSha?: string;
   readonly kitGitShas: readonly [string, string?];
   readonly kitPath?: string;
+  readonly expectedReleaseLabel?: string;
+  readonly releaseRevision?: number;
   readonly sourceGitSha?: string;
 }
 
@@ -351,7 +453,7 @@ function spawnManifest(
   const gitCounterFile = join(tempDir, `git-read-count-${manifestRunCount}.txt`);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    APP_VERSION: '1.0.0',
+    APP_VERSION: options.appVersion ?? '1.0.0',
     BUILD_ID: 'manifest-merge-smoke',
     MPGD_PRODUCT_CATALOG_FILE: catalogFile,
     MPGD_AD_PLACEMENTS_FILE: placementsFile,
@@ -367,6 +469,18 @@ function spawnManifest(
     MPGD_TEST_GIT_SHA_LATER: options.kitGitShas[1] ?? options.kitGitShas[0],
     PATH: [fakeGitDir, process.env.PATH].filter(Boolean).join(delimiter),
   };
+
+  if (options.releaseRevision === undefined) {
+    delete env.MPGD_RELEASE_REVISION;
+  } else {
+    env.MPGD_RELEASE_REVISION = String(options.releaseRevision);
+  }
+
+  if (options.expectedReleaseLabel === undefined) {
+    delete env.MPGD_RELEASE_LABEL;
+  } else {
+    env.MPGD_RELEASE_LABEL = options.expectedReleaseLabel;
+  }
 
   if (options.sourceGitSha === undefined) {
     delete env.MPGD_SOURCE_GIT_SHA;
@@ -451,7 +565,7 @@ function readManifest(path: string): ReleaseManifest {
   return assertReleaseManifest(JSON.parse(readFileSync(path, 'utf8')));
 }
 
-function assertKitGitShaSchema(): void {
+function assertReleaseManifestSchema(): void {
   const schema = JSON.parse(readFileSync('release.manifest.schema.json', 'utf8')) as {
     readonly required?: readonly string[];
     readonly properties?: {
@@ -463,9 +577,19 @@ function assertKitGitShaSchema(): void {
         readonly type?: string;
         readonly minLength?: number;
       };
+      readonly releaseIdentity?: {
+        readonly properties?: {
+          readonly releaseRevision?: {
+            readonly type?: string;
+            readonly minimum?: number;
+            readonly maximum?: number;
+          };
+        };
+      };
     };
   };
   const kitGitShaSchema = schema.properties?.kitGitSha;
+  const releaseRevisionSchema = schema.properties?.releaseIdentity?.properties?.releaseRevision;
 
   assert.equal(schema.required?.includes('kitGitSha'), true);
   assert.equal(schema.required?.includes('targetConfigVersion'), true);
@@ -483,6 +607,11 @@ function assertKitGitShaSchema(): void {
   assert.deepEqual(schema.properties?.targetConfigVersion, {
     type: 'string',
     minLength: 1,
+  });
+  assert.deepEqual(releaseRevisionSchema, {
+    type: 'integer',
+    minimum: 1,
+    maximum: Number.MAX_SAFE_INTEGER,
   });
 }
 
