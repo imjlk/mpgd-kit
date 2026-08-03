@@ -206,6 +206,7 @@ validatePhaserTemplateRewardAuthority();
 validatePhaserTemplateAcceptanceCommand();
 validateGeneratedConsumerWorkflow();
 validateGeneratedViteVersionPins();
+validateGeneratedViteConfigTyping();
 validateGameplayE2EPlan();
 validateAppIconPipeline();
 
@@ -339,6 +340,23 @@ function validateGeneratedViteVersionPins(): void {
       viteVersion,
       expectedVersion,
       `${packagePath}: devDependencies.vite must match the starter baseline`,
+    );
+  }
+}
+
+function validateGeneratedViteConfigTyping(): void {
+  const configPaths = [
+    'examples/phaser-starter/vite.shared.ts',
+    'packages/cli/templates/phaser-game/vite.shared.ts',
+  ] as const;
+
+  for (const configPath of configPaths) {
+    const content = readText(configPath);
+
+    assertIncludesText(
+      content,
+      'as unknown as PluginOption',
+      `${configPath}: bounded unplugin type`,
     );
   }
 }
