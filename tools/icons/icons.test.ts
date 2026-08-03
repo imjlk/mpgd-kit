@@ -150,6 +150,20 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   assert.equal(fallbackManifest.id, './svg-game');
   assert.equal(fallbackManifest.scope, './');
 
+  const scriptedFaviconDist = join(gameRoot, 'scripted-favicon-dist');
+  mkdirSync(scriptedFaviconDist, { recursive: true });
+  writeFileSync(
+    join(scriptedFaviconDist, 'index.html'),
+    '<html><head><script>const closingHead = "</head>";</script></head><body></body></html>',
+  );
+  stageWebIconEvidence(repeated, scriptedFaviconDist);
+  const scriptedFaviconHtml = await readUtf8(join(scriptedFaviconDist, 'index.html'));
+  const faviconIndex = scriptedFaviconHtml.indexOf('<link rel="icon"');
+
+  assert.ok(scriptedFaviconHtml.includes('<script>const closingHead = "</head>";</script>'));
+  assert.ok(faviconIndex > scriptedFaviconHtml.indexOf('</script>'));
+  assert.ok(faviconIndex < scriptedFaviconHtml.lastIndexOf('</head>'));
+
   const nonInstallableDist = join(gameRoot, 'non-installable-dist');
   mkdirSync(nonInstallableDist, { recursive: true });
   writeFileSync(join(nonInstallableDist, 'manifest.webmanifest'), '{}\n');

@@ -197,6 +197,18 @@ try {
   const viteOutputStaticDir = join(gameApp, 'dist/static');
   mkdirSync(viteOutputStaticDir, { recursive: true });
 
+  for (const output of ['.', '..', join(root, '..', 'absolute-external-output')]) {
+    writeWebTargetConfig(configPath, {
+      gameApp: 'game-app',
+      output,
+      staticDir: 'static',
+    });
+    assert.throws(
+      () => validatePlatformTargetsFile(configPath),
+      /artifact output must stay inside its game root/u,
+    );
+  }
+
   for (const output of [
     'game-app/dist',
     'game-app/dist/release',

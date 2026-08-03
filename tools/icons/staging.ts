@@ -13,6 +13,7 @@ import sharp from 'sharp';
 
 import {
   ensureInstallableWebManifestLink,
+  ensureWebFaviconLink,
   sanitizeNonInstallableWebArtifact,
 } from '../target/web-artifact';
 import { sha256 } from './image';
@@ -233,18 +234,12 @@ function stageWebManifest(result: GeneratedTargetIcons, gameDist: string): void 
 function stageFaviconLink(result: GeneratedTargetIcons, gameDist: string): void {
   const favicon = result.manifest.outputs.find((output) => output.purpose === 'favicon')
     ?? result.manifest.outputs.find((output) => output.width === 192);
-  const indexPath = join(gameDist, 'index.html');
 
-  if (favicon === undefined || !existsSync(indexPath)) {
+  if (favicon === undefined) {
     return;
   }
 
-  const html = readFileSync(indexPath, 'utf8');
-  const link = `<link rel="icon" type="image/png" href="./${favicon.path}">`;
-
-  if (!html.includes(link)) {
-    writeFileSync(indexPath, html.replace('</head>', `  ${link}\n</head>`));
-  }
+  ensureWebFaviconLink(gameDist, `./${favicon.path}`);
 }
 
 function androidAdaptiveXml(hasMonochrome: boolean): string {

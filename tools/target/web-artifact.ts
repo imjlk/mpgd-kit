@@ -77,14 +77,23 @@ export function ensureInstallableWebManifestLink(artifactRoot: string): void {
   }
 
   const withoutManifestLinks = stripManifestLinkTags(source);
-  const closingHeadTag = scanHtmlHead(withoutManifestLinks).closingTagStart;
-  const linked = closingHeadTag === undefined
-    ? `${link}\n${withoutManifestLinks}`
-    : withoutManifestLinks.slice(0, closingHeadTag)
-      + `  ${link}\n`
-      + withoutManifestLinks.slice(closingHeadTag);
+  const linked = insertHtmlHeadTag(withoutManifestLinks, link);
 
   writeFileSync(indexFile, linked);
+}
+
+export function ensureWebFaviconLink(artifactRoot: string, href: string): void {
+  const indexFile = join(artifactRoot, 'index.html');
+  if (!existsSync(indexFile)) {
+    return;
+  }
+
+  const source = readFileSync(indexFile, 'utf8');
+  const link = `<link rel="icon" type="image/png" href="${href}">`;
+
+  if (!source.includes(link)) {
+    writeFileSync(indexFile, insertHtmlHeadTag(source, link));
+  }
 }
 
 export function assertNonInstallableWebArtifact(artifactRoot: string): void {
@@ -187,6 +196,7 @@ export function assertDisjointWebTargetOutputs(
       ? [{ name, path: resolvePath(target.output) }]
       : []);
 
+  assertWebOutputsStayWithinRoot(outputs, resolvePath('.'));
   assertDisjointWebArtifactOutputs(outputs);
   assertWebOutputsAvoidProtectedPaths(
     outputs,
@@ -344,6 +354,14 @@ function stripManifestLinkTags(html: string): string {
 
 function manifestLinkTags(html: string): readonly string[] {
   return scanHtmlHead(html).linkTags.map(({ tag }) => tag).filter(isManifestLinkTag);
+}
+
+function insertHtmlHeadTag(html: string, tag: string): string {
+  const closingHeadTag = scanHtmlHead(html).closingTagStart;
+
+  return closingHeadTag === undefined
+    ? `${tag}\n${html}`
+    : html.slice(0, closingHeadTag) + `  ${tag}\n` + html.slice(closingHeadTag);
 }
 
 function scanHtmlHead(html: string): HtmlHeadScan {
@@ -544,6 +562,22 @@ function assertWebOutputsAvoidProtectedPaths(
           `Web artifact output must not overlap generated output: ${output.name} (${output.path}) and ${protectedOutput.name} (${protectedOutput.path}).`,
         );
       }
+    }
+  }
+}
+
+function assertWebOutputsStayWithinRoot(
+  outputs: readonly NamedWebArtifactOutput[],
+  owningRoot: string,
+): void {
+  const canonicalRoot = canonicalizeThroughExistingAncestor(owningRoot);
+
+  for (const output of outputs) {
+    const canonicalOutput = canonicalizeWebArtifactOutput(output.path);
+    if (canonicalOutput === canonicalRoot || !isPathWithin(canonicalRoot, canonicalOutput)) {
+      throw new Error(
+        `Web artifact output must stay inside its game root: ${output.name} (${output.path}).`,
+      );
     }
   }
 }

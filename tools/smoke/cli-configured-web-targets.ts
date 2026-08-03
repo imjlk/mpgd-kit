@@ -55,7 +55,18 @@ const staleTargetsFile = join(staleTargetsRoot, 'mpgd.targets.json');
 const previousTargetsFile = process.env.MPGD_PLATFORM_TARGETS_FILE;
 
 try {
-  writeFileSync(staleTargetsFile, '{invalid');
+  writeFileSync(staleTargetsFile, `${JSON.stringify({
+    targets: {
+      android: {
+        kind: 'capacitor-android',
+        gameApp: '.',
+        shellApp: 'apps/mobile-capacitor',
+        adapter: 'capacitor',
+        webDir: 'apps/mobile-capacitor/www',
+        artifact: 'aab',
+      },
+    },
+  })}\n`);
   process.env.MPGD_PLATFORM_TARGETS_FILE = staleTargetsFile;
 
   await assert.rejects(

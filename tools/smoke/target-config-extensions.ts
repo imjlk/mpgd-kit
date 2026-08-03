@@ -27,9 +27,10 @@ try {
   const extensionsFile = path.join(root, 'extensions.json');
   const base = loadTargetConfigMatrix();
   const webPreview = base.targets['web-preview'];
+  const verse8 = base.targets.verse8;
 
-  if (webPreview === undefined) {
-    throw new Error('Expected the built-in web-preview target config.');
+  if (webPreview === undefined || verse8 === undefined) {
+    throw new Error('Expected the built-in web-preview and verse8 target configs.');
   }
 
   writeFileSync(extensionsFile, `${JSON.stringify({
@@ -95,6 +96,7 @@ try {
       storefront: {
         ...webPreview,
         runtime: 'verse8-web',
+        integrations: verse8.integrations,
         release: { profile: 'app-store' },
       },
     },
@@ -234,6 +236,7 @@ try {
       storefront: {
         ...webPreview,
         runtime: 'verse8-web',
+        integrations: verse8.integrations,
         features: {
           ...webPreview.features,
           leaderboard: true,
@@ -255,6 +258,7 @@ try {
       storefront: {
         ...webPreview,
         runtime: 'verse8-web',
+        integrations: verse8.integrations,
         capabilities: {
           ...webPreview.capabilities,
           storage: 'none',
@@ -267,6 +271,50 @@ try {
   assert.throws(
     () => loadTargetConfigMatrix(undefined, extensionsFile),
     /runtime verse8-web requires local storage; received none/u,
+  );
+
+  for (const integration of [
+    'identityUpgrade',
+    'sharing',
+    'inboundShare',
+    'notifications',
+  ] as const) {
+    writeFileSync(extensionsFile, `${JSON.stringify({
+      schemaVersion: 1,
+      targets: {
+        storefront: {
+          ...verse8,
+          integrations: {
+            ...verse8.integrations,
+            [integration]: 'available',
+          },
+        },
+      },
+    })}\n`);
+
+    const expected = new RegExp(
+      `cannot configure ${integration} as available for verse8-web runtime`,
+      'u',
+    );
+
+    assert.throws(() => loadTargetConfigMatrix(undefined, extensionsFile), expected);
+  }
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
+      storefront: {
+        ...verse8,
+        integrations: {
+          ...verse8.integrations,
+          presentation: 'disabled',
+        },
+      },
+    },
+  })}\n`);
+  assert.equal(
+    loadTargetConfigMatrix(undefined, extensionsFile).targets.storefront?.integrations?.presentation,
+    'disabled',
   );
 
   writeFileSync(extensionsFile, `${JSON.stringify({
