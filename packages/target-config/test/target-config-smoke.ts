@@ -136,6 +136,10 @@ assertThrows(() => parseMpgdReleaseRevision('1.5'));
 assertThrows(() => parseMpgdReleaseRevision('9007199254740993'));
 assertThrows(() => createMpgdReleaseIdentity({ gameVersion: '0.3.30-01' }));
 assertThrows(() => createMpgdReleaseIdentity({ gameVersion: '0.3.30-rc.01' }));
+assertThrows(
+  () => createMpgdReleaseIdentity({ gameVersion: '0.3.30+build.1' }),
+  /must not contain SemVer build metadata/u,
+);
 assertThrows(() => formatMpgdReleaseId('', 'ttokdoku-build'));
 assertThrows(() => formatMpgdReleaseId('0.3.31-v43', ''));
 assertThrows(() => formatMpgdReleaseId('0.3.31 v43', 'ttokdoku-build'));
@@ -1252,10 +1256,19 @@ function assertDeepEqual(actual: unknown, expected: unknown): void {
   }
 }
 
-function assertThrows(callback: () => unknown): void {
+function assertThrows(callback: () => unknown, expectedMessage?: RegExp): void {
   try {
     callback();
-  } catch {
+  } catch (error) {
+    if (
+      expectedMessage !== undefined
+      && (!(error instanceof Error) || !expectedMessage.test(error.message))
+    ) {
+      throw new Error(
+        `Expected error message to match ${String(expectedMessage)}, received ${String(error)}.`,
+      );
+    }
+
     return;
   }
 

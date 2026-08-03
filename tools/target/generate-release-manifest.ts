@@ -315,24 +315,24 @@ function hasMatchingReleaseContract(
     && previous.targetConfigVersion === next.targetConfigVersion
     && previous.catalogVersion === next.catalogVersion
     && previous.adPlacementVersion === next.adPlacementVersion
-    && hasMatchingReleaseIdentity(previous.releaseIdentity, next.releaseIdentity)
+    && hasMatchingReleaseIdentity(previous, next)
     && hasMatchingIconContract(previous, next);
 }
 
 function hasMatchingReleaseIdentity(
-  previous: ReleaseManifest['releaseIdentity'],
-  next: ReleaseManifest['releaseIdentity'],
+  previous: ReleaseManifest,
+  next: ReleaseManifest,
 ): boolean {
   // Legacy manifests did not include this optional contract. It is safe to
-  // merge them with an equivalent new manifest because the releaseId check
-  // above already compares the derived label and buildId exactly.
-  if (previous === undefined || next === undefined) {
-    return true;
+  // merge them only when their top-level game version also matches. A legacy
+  // prerelease such as 1.0.0-v42 otherwise collides with revision label v42.
+  if (previous.releaseIdentity === undefined || next.releaseIdentity === undefined) {
+    return previous.gameVersion === next.gameVersion;
   }
 
-  return previous.gameVersion === next.gameVersion
-    && previous.releaseRevision === next.releaseRevision
-    && previous.label === next.label;
+  return previous.releaseIdentity.gameVersion === next.releaseIdentity.gameVersion
+    && previous.releaseIdentity.releaseRevision === next.releaseIdentity.releaseRevision
+    && previous.releaseIdentity.label === next.releaseIdentity.label;
 }
 
 function hasMatchingIconContract(

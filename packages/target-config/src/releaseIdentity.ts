@@ -28,7 +28,7 @@ const preReleaseAlphanumericIdentifier = '(?:\\d*[A-Za-z-][0-9A-Za-z-]*)';
 const preReleaseIdentifier = `(?:${preReleaseNumericIdentifier}|${preReleaseAlphanumericIdentifier})`;
 const finalSemVerPattern = new RegExp(`^${semVerCore}$`, 'u');
 const semVerPattern = new RegExp(
-  `^${semVerCore}(?:-${preReleaseIdentifier}(?:\\.${preReleaseIdentifier})*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$`,
+  `^${semVerCore}(?:-${preReleaseIdentifier}(?:\\.${preReleaseIdentifier})*)?$`,
   'u',
 );
 
@@ -117,6 +117,12 @@ export function parseMpgdReleaseRevision(value: string | undefined): number | un
 
 function normalizeMpgdSemVer(value: string): string {
   const normalized = value.trim();
+
+  if (normalized.includes('+')) {
+    throw new TypeError(
+      'Release identity gameVersion must not contain SemVer build metadata because "+" is reserved for release IDs.',
+    );
+  }
 
   if (!semVerPattern.test(normalized)) {
     throw new TypeError('Release identity gameVersion must be a SemVer value.');

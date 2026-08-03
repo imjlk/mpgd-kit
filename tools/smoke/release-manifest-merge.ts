@@ -22,6 +22,7 @@ const iconManifestFile = join(tempDir, 'icon-manifest.json');
 const manifestFile = join(tempDir, 'release-manifest.json');
 const matchingManifestFile = join(tempDir, 'matching-release-manifest.json');
 const legacyManifestFile = join(tempDir, 'legacy-release-manifest.json');
+const legacyPrereleaseManifestFile = join(tempDir, 'legacy-prerelease-release-manifest.json');
 const kitMismatchManifestFile = join(tempDir, 'kit-mismatch-release-manifest.json');
 const iconMismatchManifestFile = join(tempDir, 'icon-mismatch-release-manifest.json');
 const iconConfigMismatchManifestFile = join(tempDir, 'icon-config-mismatch-release-manifest.json');
@@ -90,6 +91,16 @@ try {
     'microsoft-store',
     'web-preview',
   ]);
+  assert.throws(
+    () => assertReleaseManifest({
+      ...matchingManifest,
+      releaseIdentity: {
+        gameVersion: ' 1.0.0 ',
+        label: '1.0.0',
+      },
+    }),
+    /releaseIdentity\.gameVersion must be canonical without whitespace/u,
+  );
 
   const legacyManifest = { ...matchingManifest };
   Reflect.deleteProperty(legacyManifest, 'releaseIdentity');
@@ -106,6 +117,27 @@ try {
   assert.deepEqual(Object.keys(mergedLegacyManifest.targets).sort(), [
     'microsoft-store',
     'web-preview',
+  ]);
+
+  runManifest('web-preview', firstCatalogFile, legacyPrereleaseManifestFile, {
+    appVersion: '1.0.0-v42',
+    kitGitShas: [firstKitGitSha],
+    sourceGitSha: 'game-source-sha',
+  });
+  const legacyPrereleaseManifest = { ...readManifest(legacyPrereleaseManifestFile) };
+  Reflect.deleteProperty(legacyPrereleaseManifest, 'releaseIdentity');
+  writeFileSync(
+    legacyPrereleaseManifestFile,
+    `${JSON.stringify(legacyPrereleaseManifest, null, 2)}\n`,
+  );
+  runManifest('microsoft-store', firstCatalogFile, legacyPrereleaseManifestFile, {
+    appVersion: '1.0.0',
+    kitGitShas: [firstKitGitSha],
+    releaseRevision: 42,
+    sourceGitSha: 'game-source-sha',
+  });
+  assert.deepEqual(Object.keys(readManifest(legacyPrereleaseManifestFile).targets), [
+    'microsoft-store',
   ]);
 
   runManifest('web-preview', firstCatalogFile, releaseIdentityManifestFile, {
@@ -345,6 +377,7 @@ try {
 console.log('Release manifest merge preserves matching targets and resets on contract changes.');
 
 interface RunManifestOptions {
+  readonly appVersion?: string;
   readonly dirtyWhenPathExists?: string;
   readonly effectiveConfigDir?: string;
   readonly expectedGitReadCount?: number;
@@ -413,7 +446,7 @@ function spawnManifest(
   const gitCounterFile = join(tempDir, `git-read-count-${manifestRunCount}.txt`);
   const env: NodeJS.ProcessEnv = {
     ...process.env,
-    APP_VERSION: '1.0.0',
+    APP_VERSION: options.appVersion ?? '1.0.0',
     BUILD_ID: 'manifest-merge-smoke',
     MPGD_PRODUCT_CATALOG_FILE: catalogFile,
     MPGD_AD_PLACEMENTS_FILE: placementsFile,

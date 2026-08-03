@@ -76,6 +76,12 @@ export function assertReleaseManifest(input: unknown): ReleaseManifest {
       );
     }
 
+    if (manifest.releaseIdentity.gameVersion !== releaseIdentity.gameVersion) {
+      throw new TypeError(
+        'Release manifest releaseIdentity.gameVersion must be canonical without whitespace.',
+      );
+    }
+
     if (manifest.gameVersion !== releaseIdentity.gameVersion) {
       throw new TypeError('Release manifest gameVersion must match releaseIdentity.gameVersion.');
     }
