@@ -1,5 +1,19 @@
 # @mpgd/target-config
 
+## 0.10.1 — 2026-08-04
+
+### Changed
+
+- [6ae2720](https://github.com/imjlk/mpgd-kit/commit/6ae27206b4aaae601c7feaa4ca7946b7cad5c654) Allow safe game-owned `kind: "web"` target names in build, smoke, and matrix CLI workflows while preserving the existing browser and web aliases. Support additive game-owned target-config policies at build time and runtime, monetization identifiers, authoritative purchase and reward verification for custom deployments, verified non-installable browser artifacts, and bounded static web artifact overlays for custom browser deployments while reserving platform-specific PWA policy for its canonical target. — Thanks @imjlk!
+
+### Added
+
+- [74839cd](https://github.com/imjlk/mpgd-kit/commit/74839cd0c59f7724792dee4ee5be35413038c982) Add a shared game release identity and non-resetting release label contract for target artifacts. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.5.2
+
 ## 0.10.0 — 2026-08-01
 
 ### Added
