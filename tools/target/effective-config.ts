@@ -273,6 +273,7 @@ function toEffectivePlatformTargetMetadata(
 
 function platformKindForRuntime(runtime: EffectiveTargetConfig['runtime']): string {
   switch (runtime) {
+    case 'web':
     case 'web-preview':
     case 'microsoft-store-pwa':
       return 'web';
@@ -291,6 +292,7 @@ function platformKindForRuntime(runtime: EffectiveTargetConfig['runtime']): stri
 
 function platformAdapterForRuntime(runtime: EffectiveTargetConfig['runtime']): string {
   switch (runtime) {
+    case 'web':
     case 'web-preview':
     case 'microsoft-store-pwa':
       return 'browser';

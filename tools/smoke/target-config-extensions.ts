@@ -46,6 +46,53 @@ try {
   assert.match(extended.version, /\+extensions\.[a-f0-9]{16}$/u);
   assertViteRuntimeMatrix(extended, root);
 
+  const deployedWeb = {
+    ...webPreview,
+    runtime: 'web',
+    features: {
+      ...webPreview.features,
+      iap: true,
+      leaderboard: true,
+    },
+    monetization: {
+      ...webPreview.monetization,
+      iap: true,
+    },
+    leaderboard: { native: true },
+    release: { profile: 'web' },
+    integrations: {
+      ...webPreview.integrations,
+      identityUpgrade: 'available',
+    },
+  } as const;
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
+      storefront: deployedWeb,
+    },
+  })}\n`);
+
+  assert.deepEqual(
+    loadTargetConfigMatrix(undefined, extensionsFile).targets.storefront,
+    deployedWeb,
+  );
+
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
+      storefront: {
+        ...deployedWeb,
+        release: { profile: 'web-preview' },
+      },
+    },
+  })}\n`);
+
+  assert.throws(
+    () => loadTargetConfigMatrix(undefined, extensionsFile),
+    /runtime web requires release profile web; received web-preview/u,
+  );
+
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
     targets: {

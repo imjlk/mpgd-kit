@@ -25,8 +25,13 @@ interface TargetConfigExtensions {
 
 const assertTargetConfigMatrix = typia.createAssert<TargetConfigMatrix>();
 const assertTargetConfigExtensions = typia.createAssert<TargetConfigExtensions>();
-const supportedCustomTargetRuntimes = new Set<TargetRuntimeKind>(['verse8-web', 'web-preview']);
+const supportedCustomTargetRuntimes = new Set<TargetRuntimeKind>([
+  'web',
+  'verse8-web',
+  'web-preview',
+]);
 const releaseProfileByRuntime = {
+  web: 'web',
   'web-preview': 'web-preview',
   'microsoft-store-pwa': 'microsoft-store',
   'capacitor-android': 'google-play',
@@ -146,7 +151,10 @@ function getUnsupportedCustomWebFeature(
     return 'interstitial ads';
   }
 
-  if (config.features.leaderboard || config.leaderboard.native) {
+  if (
+    config.runtime !== 'web'
+    && (config.features.leaderboard || config.leaderboard.native)
+  ) {
     return 'leaderboard';
   }
 

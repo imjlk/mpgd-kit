@@ -1104,7 +1104,7 @@ function assertViewportPlans(): void {
   });
   const desktopBrowser = resolveTargetViewportPlan({
     ...desktopBrowserDimensions,
-    runtime: 'web-preview',
+    runtime: 'web',
   });
   const verse8Iframe = resolveTargetViewportPlan({
     ...desktopBrowserDimensions,

@@ -220,9 +220,12 @@ browser deployments without adding deployment-specific names to the kit.
 When a game needs an additional runtime policy for one of those web targets,
 place a schema-versioned `mpgd.target-config.json` beside `mpgd.targets.json`.
 The CLI loads that file as an additive target-config extension; it cannot
-replace built-in target policies. A web target may declare `installable: false`
-to omit its web app manifest while retaining icon evidence and a favicon. It may
-also declare `staticDir` to
+replace built-in target policies. Use runtime and release profile `web` for a
+deployed, game-owned browser target whose adapter supplies server-backed
+commerce, identity, ads, or leaderboard capabilities. Keep `web-preview` for a
+local browser target without those production integrations. A web target may
+declare `installable: false` to omit its web app manifest while retaining icon
+evidence and a favicon. It may also declare `staticDir` to
 copy game-owned hosting metadata or other static files over the Vite artifact.
 
 Use `staging` while a Capacitor entry points at a kit reference shell.

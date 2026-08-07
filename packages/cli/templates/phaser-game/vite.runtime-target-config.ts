@@ -12,6 +12,7 @@ import type {
 export type { TargetConfigMatrix } from '@mpgd/target-config';
 
 const runtimeKinds = valueSet({
+  web: true,
   'web-preview': true,
   'microsoft-store-pwa': true,
   'capacitor-android': true,
@@ -21,6 +22,7 @@ const runtimeKinds = valueSet({
   'verse8-web': true,
 } satisfies Record<TargetRuntimeKind, true>);
 const releaseProfiles = valueSet({
+  web: true,
   'web-preview': true,
   'microsoft-store': true,
   'google-play': true,

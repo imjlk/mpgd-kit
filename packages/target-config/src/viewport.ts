@@ -228,6 +228,7 @@ export function targetViewportShellForRuntime(
     case 'devvit-web':
     case 'verse8-web':
       return 'embedded-webview';
+    case 'web':
     case 'web-preview':
     case 'microsoft-store-pwa':
       return 'browser';
