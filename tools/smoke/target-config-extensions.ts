@@ -78,6 +78,30 @@ try {
     deployedWeb,
   );
 
+  for (const feature of ['iap', 'rewardedAds', 'interstitialAds'] as const) {
+    writeFileSync(extensionsFile, `${JSON.stringify({
+      schemaVersion: 1,
+      targets: {
+        storefront: {
+          ...deployedWeb,
+          features: {
+            ...deployedWeb.features,
+            [feature]: true,
+          },
+          monetization: {
+            ...deployedWeb.monetization,
+            [feature]: false,
+          },
+        },
+      },
+    })}\n`);
+
+    assert.throws(
+      () => loadTargetConfigMatrix(undefined, extensionsFile),
+      new RegExp(`must configure matching features\\.${feature} and monetization\\.${feature}`, 'u'),
+    );
+  }
+
   writeFileSync(extensionsFile, `${JSON.stringify({
     schemaVersion: 1,
     targets: {

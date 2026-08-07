@@ -30,6 +30,7 @@ const supportedCustomTargetRuntimes = new Set<TargetRuntimeKind>([
   'verse8-web',
   'web-preview',
 ]);
+const webMonetizationFeatures = ['iap', 'rewardedAds', 'interstitialAds'] as const;
 const releaseProfileByRuntime = {
   web: 'web',
   'web-preview': 'web-preview',
@@ -110,6 +111,16 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
     throw new Error(
       `Target config extension ${target} runtime ${config.runtime} requires local storage; received ${config.capabilities.storage}.`,
     );
+  }
+
+  if (config.runtime === 'web') {
+    for (const feature of webMonetizationFeatures) {
+      if (config.features[feature] !== config.monetization[feature]) {
+        throw new Error(
+          `Target config extension ${target} must configure matching features.${feature} and monetization.${feature} values for web runtime.`,
+        );
+      }
+    }
   }
 
   assertTargetIntegrationRuntimeBounds(
