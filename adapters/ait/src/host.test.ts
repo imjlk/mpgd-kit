@@ -240,6 +240,42 @@ describe('AIT production host bridge', () => {
     await expect(purchase).resolves.toEqual({ status: 'failed', entitlementIds: [] });
   });
 
+  it('hides subscription products until a subscription authority is configured', async () => {
+    const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const bridge = createAitHostBridge({
+        iapProducts: [{ productId: 'PREMIUM_MONTHLY', sku: 'ait.ttokdoku.premium.monthly' }],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+        dependencies: createDependencies({
+          iap: createSupportedIap({
+            products: [{
+              sku: 'ait.ttokdoku.premium.monthly',
+              displayAmount: '₩3,900',
+              displayName: 'Premium',
+              description: 'Monthly premium access.',
+              iconUrl: 'https://images.example/premium.png',
+              type: 'SUBSCRIPTION',
+              renewalCycle: 'MONTHLY',
+            }],
+          }),
+        }),
+      });
+
+      await expect(request(bridge, 'commerce.getProducts', {})).resolves.toEqual([]);
+      expect(warning).toHaveBeenCalledWith(
+        'AIT subscription IAP is unavailable through the one-time order bridge.',
+        expect.objectContaining({
+          productId: 'PREMIUM_MONTHLY',
+          sku: 'ait.ttokdoku.premium.monthly',
+        }),
+      );
+    } finally {
+      warning.mockRestore();
+    }
+  });
+
   it('fails the purchase when success arrives before the server grant callback', async () => {
     let callbacks: IapPurchaseCallbacks | undefined;
     const verifyIapProductGrant = vi.fn(async () => true);

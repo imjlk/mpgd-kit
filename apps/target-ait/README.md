@@ -36,7 +36,10 @@ irreversible for that app: a later release cannot roll back to SDK 2. Complete
 the QR test and CORS verification before publishing.
 
 Purchases remain unavailable until a game configures the authoritative IAP
-contract. Rewarded Ads 2.0 must be preloaded and only return completion after
+contract. The generic bridge intentionally supports only one-time consumable
+and non-consumable products; subscription purchase, renewal, and expiry require
+their own server-authoritative lifecycle and remain hidden until that contract
+exists. Rewarded Ads 2.0 must be preloaded and only return completion after
 the native `userEarnedReward` event and dismissal; dismissal by itself never
 grants. The returned callback envelope remains evidence only. Use the public
 `@mpgd/game-services/apps-in-toss-evidence-verification` boundary with a

@@ -1951,13 +1951,22 @@ function toAitIapProductInfo(
   if (title === undefined || description === undefined || formattedPrice === undefined) {
     return undefined;
   }
+
+  if (nativeProduct.type === 'SUBSCRIPTION') {
+    // Subscription creation, renewal, and expiry need a different native and
+    // server-authority lifecycle. This bridge only owns one-time orders.
+    console.warn('AIT subscription IAP is unavailable through the one-time order bridge.', {
+      productId: configured.productId,
+      sku: nativeProduct.sku,
+    });
+    return undefined;
+  }
+
   const type = nativeProduct.type === 'CONSUMABLE'
     ? 'consumable'
     : nativeProduct.type === 'NON_CONSUMABLE'
       ? 'non_consumable'
-      : nativeProduct.type === 'SUBSCRIPTION'
-        ? 'subscription'
-        : undefined;
+      : undefined;
   if (type === undefined) {
     console.warn('AIT native IAP product has an unsupported type; hiding product.', {
       productId: configured.productId,
