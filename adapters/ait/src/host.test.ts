@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { BridgeRequest } from '@mpgd/bridge';
+import type { Entitlement } from '@mpgd/platform';
 
 import { createAitHostBridge, shareIntent, type AitHostDependencies } from './host';
 
@@ -753,6 +754,30 @@ describe('AIT production host bridge', () => {
     expect(completeProductGrant).toHaveBeenCalledTimes(1);
   });
 
+  it('returns configured authoritative purchase entitlements when no native order remains', async () => {
+    const bridge = createAitHostBridge({
+      iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [{
+        id: 'HINT_PACK_5',
+        source: 'purchase',
+        grantedAt: '2026-08-08T10:00:00.000Z',
+      }],
+      dependencies: createDependencies({
+        iap: createSupportedIap({ pendingOrders: { orders: [] } }),
+      }),
+    });
+
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toEqual({
+      restoredEntitlements: [{
+        id: 'HINT_PACK_5',
+        source: 'purchase',
+        grantedAt: '2026-08-08T10:00:00.000Z',
+      }],
+    });
+  });
+
   it('does not let ineligible pending orders consume the restore work limit', async () => {
     const completeProductGrant = vi.fn(async () => true);
     const verifyIapProductGrant = vi.fn(async () => true);
@@ -957,6 +982,66 @@ describe('AIT production host bridge', () => {
       const completionRestore = request(hungCompletion, 'commerce.restore', {});
       await vi.advanceTimersByTimeAsync(10);
       await expect(completionRestore).resolves.toEqual({ restoredEntitlements: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('uses one deadline for all pending-order restore work', async () => {
+    vi.useFakeTimers();
+    try {
+      const verifyIapProductGrant = vi.fn(async () => await new Promise<boolean>(() => {}));
+      const completeProductGrant = vi.fn(async () => true);
+      const bridge = createAitHostBridge({
+        iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+        prepareIap: async () => true,
+        verifyIapProductGrant,
+        readIapEntitlements: async () => [],
+        iapProductGrantTimeoutMs: 10,
+        dependencies: createDependencies({
+          iap: createSupportedIap({
+            pendingOrders: {
+              orders: [
+                {
+                  orderId: 'restore-budget-order-1',
+                  sku: 'ait.ttokdoku.hints.5',
+                  paymentCompletedDate: '2026-08-08T10:00:00.000Z',
+                },
+                {
+                  orderId: 'restore-budget-order-2',
+                  sku: 'ait.ttokdoku.hints.5',
+                  paymentCompletedDate: '2026-08-08T10:00:00.000Z',
+                },
+              ],
+            },
+            completeProductGrant,
+          }),
+        }),
+      });
+
+      const restore = request(bridge, 'commerce.restore', {});
+      await vi.advanceTimersByTimeAsync(10);
+
+      await expect(restore).resolves.toEqual({ restoredEntitlements: [] });
+      expect(verifyIapProductGrant).toHaveBeenCalledTimes(1);
+      expect(completeProductGrant).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds a hung authoritative entitlement read', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = createAitHostBridge({
+        iapProductGrantTimeoutMs: 10,
+        readIapEntitlements: async () => await new Promise<readonly Entitlement[]>(() => {}),
+      });
+
+      const entitlements = request(bridge, 'commerce.getEntitlements', {});
+      await vi.advanceTimersByTimeAsync(10);
+
+      await expect(entitlements).resolves.toEqual([]);
     } finally {
       vi.useRealTimers();
     }

@@ -582,7 +582,10 @@ export function createAitHostBridge(
         }));
 
       case 'commerce.getEntitlements':
-        return ok(request, await readAitIapEntitlements(options.readIapEntitlements));
+        return ok(request, await readAitIapEntitlements(
+          options.readIapEntitlements,
+          iapProductGrantTimeoutMs,
+        ));
 
       case 'ads.preload': {
         const placementId = readPlacementId(request.payload);
@@ -1749,16 +1752,22 @@ async function listAitIapProducts(
 
 async function readAitIapEntitlements(
   reader: AitIapEntitlementReader | undefined,
+  timeoutMs: number,
 ): Promise<readonly Entitlement[]> {
-  if (reader === undefined) {
+  if (reader === undefined || timeoutMs <= 0) {
     return [];
   }
 
   try {
-    return [...await reader()];
-  } catch {
+    const entitlements = await waitForAitIapNativeCall(reader, timeoutMs);
+    return entitlements === undefined ? [] : [...entitlements];
+  } catch (error) {
     // The game authority owns durable purchase state. A read failure must not
     // turn stale local data into a visible entitlement.
+    console.warn(
+      'AIT IAP entitlement read failed; reporting no entitlements.',
+      errorMessage(error),
+    );
     return [];
   }
 }
@@ -2227,28 +2236,43 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
 
 async function restoreAitIapProducts(
   input: AitIapRestoreInput,
-): Promise<{ readonly restoredEntitlements: readonly { readonly id: string; readonly source: 'purchase'; readonly grantedAt: string }[] }> {
+): Promise<{ readonly restoredEntitlements: readonly Entitlement[] }> {
   const prepare = input.prepare;
   const verifier = input.verifier;
   if (!isAitIapSupported(input) || prepare === undefined || verifier === undefined) {
     return { restoredEntitlements: [] };
   }
-  const prepared = await prepareAitIap(prepare, { intent: 'restore' }, input.timeoutMs);
+  const restoreStartedAt = Date.now();
+  const getRemainingRestoreTimeout = (): number => {
+    return remainingAitIapOperationTimeout(restoreStartedAt, input.timeoutMs);
+  };
+  const readAuthoritativeEntitlements = async (): Promise<readonly Entitlement[]> => {
+    return await readAitIapEntitlements(input.entitlementReader, getRemainingRestoreTimeout());
+  };
+  const prepared = await prepareAitIap(
+    prepare,
+    { intent: 'restore' },
+    getRemainingRestoreTimeout(),
+  );
   if (!prepared) {
     return { restoredEntitlements: [] };
   }
 
   let pendingOrders: Awaited<ReturnType<AitHostDependencies['iap']['getPendingOrders']>> | undefined;
   try {
+    const pendingOrderTimeoutMs = getRemainingRestoreTimeout();
+    if (pendingOrderTimeoutMs === 0) {
+      return { restoredEntitlements: await readAuthoritativeEntitlements() };
+    }
     pendingOrders = await waitForAitIapNativeCall(
       () => input.dependencies.iap.getPendingOrders(),
-      input.timeoutMs,
+      pendingOrderTimeoutMs,
     );
   } catch {
-    return { restoredEntitlements: [] };
+    return { restoredEntitlements: await readAuthoritativeEntitlements() };
   }
   if (pendingOrders === undefined) {
-    return { restoredEntitlements: [] };
+    return { restoredEntitlements: await readAuthoritativeEntitlements() };
   }
 
   const eligibleOrders: Array<{
@@ -2269,12 +2293,11 @@ async function restoreAitIapProducts(
     eligibleOrders.push({ order, product });
   }
 
-  const restoredEntitlements: Array<{
-    readonly id: string;
-    readonly source: 'purchase';
-    readonly grantedAt: string;
-  }> = [];
-  const cursor = await readAitIapPendingOrderCursor(input.dependencies.storage, input.timeoutMs);
+  const restoredEntitlements: Entitlement[] = [];
+  const cursorTimeoutMs = getRemainingRestoreTimeout();
+  const cursor = cursorTimeoutMs === 0
+    ? undefined
+    : await readAitIapPendingOrderCursor(input.dependencies.storage, cursorTimeoutMs);
   const orders = rotateAitIapPendingOrders(eligibleOrders, cursor, maximumPendingIapOrders);
   if (eligibleOrders.length > orders.length) {
     console.warn('AIT IAP pending-order restore reached its per-launch limit.', {
@@ -2283,25 +2306,36 @@ async function restoreAitIapProducts(
     });
   }
 
-  for (const { order, product } of orders) {
+  let lastProcessedOrder: (typeof orders)[number] | undefined;
+  for (const selectedOrder of orders) {
+    const { order, product } = selectedOrder;
+    const verificationTimeoutMs = getRemainingRestoreTimeout();
+    if (verificationTimeoutMs === 0) {
+      break;
+    }
+    lastProcessedOrder = selectedOrder;
     const granted = await verifyAitIapProductGrant({
       verifier,
       orderId: order.orderId,
       product,
       idempotencyKey: createAitIapOrderIdempotencyKey(order.orderId),
       source: 'pending-order-restore',
-      timeoutMs: input.timeoutMs,
+      timeoutMs: verificationTimeoutMs,
     });
     if (!granted) {
       continue;
     }
 
     try {
+      const completionTimeoutMs = getRemainingRestoreTimeout();
+      if (completionTimeoutMs === 0) {
+        break;
+      }
       const completed = await waitForAitIapNativeCall(
         () => input.dependencies.iap.completeProductGrant({
           params: { orderId: order.orderId },
         }),
-        input.timeoutMs,
+        completionTimeoutMs,
       );
       if (completed === true) {
         restoredEntitlements.push({
@@ -2315,16 +2349,52 @@ async function restoreAitIapProducts(
     }
   }
 
-  const lastSelectedOrder = orders[orders.length - 1];
-  if (lastSelectedOrder !== undefined) {
+  if (lastProcessedOrder !== undefined) {
+    const cursorWriteTimeoutMs = getRemainingRestoreTimeout();
+    if (cursorWriteTimeoutMs === 0) {
+      return {
+        restoredEntitlements: mergeAitIapRestoredEntitlements(
+          restoredEntitlements,
+          await readAuthoritativeEntitlements(),
+          input.products,
+        ),
+      };
+    }
     await writeAitIapPendingOrderCursor(
       input.dependencies.storage,
-      lastSelectedOrder.order.orderId,
-      input.timeoutMs,
+      lastProcessedOrder.order.orderId,
+      cursorWriteTimeoutMs,
     );
   }
 
-  return { restoredEntitlements };
+  return {
+    restoredEntitlements: mergeAitIapRestoredEntitlements(
+      restoredEntitlements,
+      await readAuthoritativeEntitlements(),
+      input.products,
+    ),
+  };
+}
+
+function mergeAitIapRestoredEntitlements(
+  restoredEntitlements: readonly Entitlement[],
+  authoritativeEntitlements: readonly Entitlement[],
+  products: NormalizedAitIapProducts,
+): readonly Entitlement[] {
+  const entitlementsById = new Map<string, Entitlement>();
+  for (const entitlement of restoredEntitlements) {
+    entitlementsById.set(entitlement.id, entitlement);
+  }
+  for (const entitlement of authoritativeEntitlements) {
+    if (
+      entitlement.source !== 'purchase'
+      || !products.byProductId.has(entitlement.id as LogicalProductId)
+    ) {
+      continue;
+    }
+    entitlementsById.set(entitlement.id, entitlement);
+  }
+  return [...entitlementsById.values()];
 }
 
 async function prepareAitIap(
