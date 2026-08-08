@@ -1,5 +1,6 @@
 ---
 npm/@mpgd/adapter-ait: minor (Added)
+npm/@mpgd/cli: patch (Added)
 npm/@mpgd/game-services: minor (Added)
 ---
 

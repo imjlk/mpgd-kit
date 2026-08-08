@@ -22,11 +22,12 @@ local wrapper-browser sessions without iframe embedding.
 
 The production bridge maps the stable game-scoped `getUserKeyForGame()` hash
 to `PlatformGateway.identity.getPlayer()` and serializes gateway storage values
-through the native `Storage` API. The `dev:plain` script enables a local identity
-provider and local SDK mock explicitly; release builds never use that fixed local
-player id. Game identity requires Toss app 5.232.0 or newer, while Game Center
-requires Toss app 5.221.0 or newer.
-SDK results must still be verified with a QR test in the Toss app.
+through the native `Storage` API. `dev:plain` installs a deliberately limited
+local SDK mock for browser layout work only; it does not validate native identity,
+IAP, promotion, or ad behavior. Release builds never use its fixed local player
+id. Game identity requires Toss app 5.232.0 or newer, while Game Center requires
+Toss app 5.221.0 or newer. Verify every native flow with a QR test in the Toss
+app before publishing.
 
 SDK 3 bundles require API servers to allow both the production
 `https://<appName>.web.tossmini.com` origin and the QR-test
@@ -34,10 +35,10 @@ SDK 3 bundles require API servers to allow both the production
 irreversible for that app: a later release cannot roll back to SDK 2. Complete
 the QR test and CORS verification before publishing.
 
-Purchases remain unavailable in the reference host. Rewarded Ads 2.0 must be
-preloaded and only return completion after the native `userEarnedReward` event
-and dismissal; dismissal by itself never grants. The returned callback envelope
-remains evidence only. Use the public
+Purchases remain unavailable until a game configures the authoritative IAP
+contract. Rewarded Ads 2.0 must be preloaded and only return completion after
+the native `userEarnedReward` event and dismissal; dismissal by itself never
+grants. The returned callback envelope remains evidence only. Use the public
 `@mpgd/game-services/apps-in-toss-evidence-verification` boundary with a
 partner-server authority before granting catalog products or rewards. The
 generic `createGameServicesClient().purchase()` path runs too late for the SDK

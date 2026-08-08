@@ -989,6 +989,7 @@ function validatePhaserTemplateAITWrapper(): void {
       for (const [subpath, basename] of [
         ['./ad-config', 'ad-config'],
         ['./host', 'host'],
+        ['./local-mock', 'local-mock'],
         ['./wrapper', 'wrapper'],
       ] as const) {
         const exported = packageJson.exports?.[subpath];

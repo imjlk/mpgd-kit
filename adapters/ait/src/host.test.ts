@@ -99,6 +99,11 @@ describe('AIT production host bridge', () => {
     let callbacks: IapPurchaseCallbacks | undefined;
     let cleanupCalls = 0;
     const verifyIapProductGrant = vi.fn(async () => true);
+    const readIapEntitlements = vi.fn(async () => [{
+      id: 'HINT_PACK_5',
+      source: 'purchase' as const,
+      grantedAt: '2026-08-08T10:00:00.000Z',
+    }]);
     const bridge = createAitHostBridge({
       iapProducts: [{
         productId: 'HINT_PACK_5',
@@ -106,6 +111,7 @@ describe('AIT production host bridge', () => {
       }],
       prepareIap: async () => true,
       verifyIapProductGrant,
+      readIapEntitlements,
       dependencies: createDependencies({
         iap: createSupportedIap({
           products: [{
@@ -136,6 +142,12 @@ describe('AIT production host bridge', () => {
       description: 'Adds five hints.',
       price: { formatted: '₩1,100', currencyCode: 'KRW' },
     }]);
+    await expect(request(bridge, 'commerce.getEntitlements', {})).resolves.toEqual([{
+      id: 'HINT_PACK_5',
+      source: 'purchase',
+      grantedAt: '2026-08-08T10:00:00.000Z',
+    }]);
+    expect(readIapEntitlements).toHaveBeenCalledOnce();
 
     const purchase = request(bridge, 'commerce.purchase', {
       productId: 'HINT_PACK_5',
@@ -178,7 +190,7 @@ describe('AIT production host bridge', () => {
       orderId: 'order-hints-5',
       productId: 'HINT_PACK_5',
       platformSku: 'ait.ttokdoku.hints.5',
-      idempotencyKey: 'hint-pack-5-attempt',
+      idempotencyKey: 'apps-in-toss:purchase:order-hints-5',
       source: 'process-product-grant',
       timeoutMs: 25_000,
       signal: expect.any(AbortSignal),
@@ -192,6 +204,7 @@ describe('AIT production host bridge', () => {
       iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
       prepareIap: async () => true,
       verifyIapProductGrant: async () => false,
+      readIapEntitlements: async () => [],
       dependencies: createDependencies({
         iap: createSupportedIap({
           onPurchase: (input) => {
@@ -227,6 +240,168 @@ describe('AIT production host bridge', () => {
     await expect(purchase).resolves.toEqual({ status: 'failed', entitlementIds: [] });
   });
 
+  it('fails the purchase when success arrives before the server grant callback', async () => {
+    let callbacks: IapPurchaseCallbacks | undefined;
+    const verifyIapProductGrant = vi.fn(async () => true);
+    const bridge = createAitHostBridge({
+      iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        iap: createSupportedIap({
+          onPurchase: (input) => {
+            callbacks = input;
+          },
+        }),
+      }),
+    });
+
+    const purchase = request(bridge, 'commerce.purchase', {
+      productId: 'HINT_PACK_5',
+      source: 'shop',
+      idempotencyKey: 'hint-pack-5-early-success',
+    });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    if (callbacks === undefined) {
+      throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+    }
+    await callbacks.onEvent({
+      type: 'success',
+      data: {
+        orderId: 'order-early-success',
+        displayName: 'Hint Pack',
+        displayAmount: '₩1,100',
+        amount: 1100,
+        currency: 'KRW',
+        fraction: 0,
+        miniAppIconUrl: null,
+      },
+    });
+
+    await expect(purchase).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+    expect(verifyIapProductGrant).not.toHaveBeenCalled();
+  });
+
+  it('does not coalesce concurrent purchases for different products', async () => {
+    const callbacksBySku = new Map<string, IapPurchaseCallbacks>();
+    const verifyIapProductGrant = vi.fn(async () => true);
+    const bridge = createAitHostBridge({
+      iapProducts: [
+        { productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' },
+        { productId: 'HINT_PACK_20', sku: 'ait.ttokdoku.hints.20' },
+      ],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        iap: createSupportedIap({
+          onPurchase: (input) => {
+            const sku = input.options.sku;
+            if (typeof sku === 'string') {
+              callbacksBySku.set(sku, input);
+            }
+          },
+        }),
+      }),
+    });
+
+    const sharedIdempotencyKey = 'shop-attempt-1';
+    const firstPurchase = request(bridge, 'commerce.purchase', {
+      productId: 'HINT_PACK_5',
+      source: 'shop',
+      idempotencyKey: sharedIdempotencyKey,
+    });
+    const secondPurchase = request(bridge, 'commerce.purchase', {
+      productId: 'HINT_PACK_20',
+      source: 'shop',
+      idempotencyKey: sharedIdempotencyKey,
+    });
+    await vi.waitFor(() => expect(callbacksBySku.size).toBe(2));
+    const firstCallbacks = callbacksBySku.get('ait.ttokdoku.hints.5');
+    const secondCallbacks = callbacksBySku.get('ait.ttokdoku.hints.20');
+    if (firstCallbacks === undefined || secondCallbacks === undefined) {
+      throw new Error('Expected Apps in Toss purchase callbacks for both products.');
+    }
+
+    await expect(firstCallbacks.options.processProductGrant({ orderId: 'order-hints-5' }))
+      .resolves.toBe(true);
+    await expect(secondCallbacks.options.processProductGrant({ orderId: 'order-hints-20' }))
+      .resolves.toBe(true);
+    await firstCallbacks.onEvent({
+      type: 'success',
+      data: createIapSuccessEvent('order-hints-5'),
+    });
+    await secondCallbacks.onEvent({
+      type: 'success',
+      data: createIapSuccessEvent('order-hints-20'),
+    });
+
+    await expect(firstPurchase).resolves.toMatchObject({
+      status: 'completed',
+      transactionId: 'order-hints-5',
+    });
+    await expect(secondPurchase).resolves.toMatchObject({
+      status: 'completed',
+      transactionId: 'order-hints-20',
+    });
+    expect(verifyIapProductGrant).toHaveBeenCalledTimes(2);
+  });
+
+  it('times out a verifier that ignores its abort signal', async () => {
+    vi.useFakeTimers();
+    try {
+      let callbacks: IapPurchaseCallbacks | undefined;
+      let verifierSignal: AbortSignal | undefined;
+      const bridge = createAitHostBridge({
+        iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async ({ signal }) => {
+          verifierSignal = signal;
+          return await new Promise<boolean>(() => {});
+        },
+        readIapEntitlements: async () => [],
+        iapProductGrantTimeoutMs: 10,
+        dependencies: createDependencies({
+          iap: createSupportedIap({
+            onPurchase: (input) => {
+              callbacks = input;
+            },
+          }),
+        }),
+      });
+
+      const purchase = request(bridge, 'commerce.purchase', {
+        productId: 'HINT_PACK_5',
+        source: 'shop',
+        idempotencyKey: 'hint-pack-5-timeout',
+      });
+      await vi.waitFor(() => expect(callbacks).toBeDefined());
+      if (callbacks === undefined) {
+        throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+      }
+      const processGrant = callbacks.options.processProductGrant({ orderId: 'order-timeout' });
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(processGrant).resolves.toBe(false);
+      expect(verifierSignal?.aborted).toBe(true);
+      await callbacks.onEvent({
+        type: 'success',
+        data: {
+          orderId: 'order-timeout',
+          displayName: 'Hint Pack',
+          displayAmount: '₩1,100',
+          amount: 1100,
+          currency: 'KRW',
+          fraction: 0,
+          miniAppIconUrl: null,
+        },
+      });
+      await expect(purchase).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('recovers only verified pending IAP orders before completing the native grant', async () => {
     const completeProductGrant = vi.fn(async () => true);
     const verifyIapProductGrant = vi.fn(async () => true);
@@ -234,6 +409,7 @@ describe('AIT production host bridge', () => {
       iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
       prepareIap: async () => true,
       verifyIapProductGrant,
+      readIapEntitlements: async () => [],
       dependencies: createDependencies({
         iap: createSupportedIap({
           pendingOrders: {
@@ -241,12 +417,12 @@ describe('AIT production host bridge', () => {
               {
                 orderId: 'pending-order-1',
                 sku: 'ait.ttokdoku.hints.5',
-                paymentCompletedDate: '2026-08-08T10:00:00',
+                paymentCompletedDate: '2026-08-08T10:00:00.000Z',
               },
               {
                 orderId: 'unmapped-order',
                 sku: 'ait.unknown',
-                paymentCompletedDate: '2026-08-08T10:00:00',
+                paymentCompletedDate: '2026-08-08T10:00:00.000Z',
               },
             ],
           },
@@ -259,7 +435,7 @@ describe('AIT production host bridge', () => {
       restoredEntitlements: [{
         id: 'HINT_PACK_5',
         source: 'purchase',
-        grantedAt: '2026-08-08T10:00:00',
+        grantedAt: '2026-08-08T10:00:00.000Z',
       }],
     });
     expect(verifyIapProductGrant).toHaveBeenCalledWith(expect.objectContaining({
@@ -270,6 +446,8 @@ describe('AIT production host bridge', () => {
     expect(completeProductGrant).toHaveBeenCalledWith({
       params: { orderId: 'pending-order-1' },
     });
+    expect(verifyIapProductGrant).toHaveBeenCalledTimes(1);
+    expect(completeProductGrant).toHaveBeenCalledTimes(1);
   });
 
   it('requests configured notification agreement and reflects the session result', async () => {
@@ -1609,7 +1787,7 @@ function createSupportedIap(input: {
   readonly onCleanup?: () => void;
   readonly completeProductGrant?: (input: { readonly params: { readonly orderId: string } }) => Promise<boolean>;
 } = {}): AitHostDependencies['iap'] {
-  return {
+  const iap = {
     createOneTimePurchaseOrder: Object.assign((callbacks: IapPurchaseCallbacks) => {
       input.onPurchase?.(callbacks);
       return () => {
@@ -1626,7 +1804,20 @@ function createSupportedIap(input: {
       input.completeProductGrant ?? (async () => true),
       { isSupported: () => true },
     ),
-  } as AitHostDependencies['iap'];
+  } satisfies AitHostDependencies['iap'];
+  return iap;
+}
+
+function createIapSuccessEvent(orderId: string) {
+  return {
+    orderId,
+    displayName: 'Hint Pack',
+    displayAmount: '₩1,100',
+    amount: 1100,
+    currency: 'KRW',
+    fraction: 0,
+    miniAppIconUrl: null,
+  };
 }
 
 async function request(

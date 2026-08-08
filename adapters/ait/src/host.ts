@@ -22,6 +22,7 @@ import {
   type BridgeStorageLoadData,
 } from '@mpgd/bridge';
 import type {
+  Entitlement,
   LaunchEntry,
   LaunchIntent,
   LogicalProductId,
@@ -42,6 +43,10 @@ const defaultAdDisplayStartTimeoutMs = 60_000;
 const defaultAdMaximumDisplayMs = 30 * 60_000;
 /** Leaves five seconds of headroom inside the native IAP 30-second grant callback. */
 const defaultIapProductGrantTimeoutMs = 25_000;
+/** Never leave a game UI blocked when an SDK purchase session omits terminal callbacks. */
+const defaultIapPurchaseSessionTimeoutMs = defaultAdMaximumDisplayMs;
+/** A provider response is untrusted input; keep restore work bounded per launch. */
+const maximumPendingIapOrders = 20;
 const invalidBridgeRequestId = 'ait-invalid-request';
 const rewardedAdEvidenceSchema = 'apps-in-toss.rewarded-ad.callback.v1';
 const iapEvidenceSchema = 'apps-in-toss.iap.callback.v1';
@@ -145,6 +150,12 @@ export type AitIapProductGrantVerifier = (
   input: AitIapProductGrantVerificationInput,
 ) => Promise<boolean>;
 
+/**
+ * Reads durable purchase entitlements from the game authority. Native product
+ * callbacks are intentionally not treated as a source of ownership state.
+ */
+export type AitIapEntitlementReader = () => Promise<readonly Entitlement[]>;
+
 export interface AitPromotionRewardConfig {
   readonly promotionCode: string;
   readonly amount: number;
@@ -201,6 +212,8 @@ export interface InstallAitHostBridgeOptions {
   readonly iapProducts?: readonly AitIapProductConfig[];
   readonly prepareIap?: AitIapPreparer;
   readonly verifyIapProductGrant?: AitIapProductGrantVerifier;
+  /** Required to expose native IAP so ownership survives a wrapper restart. */
+  readonly readIapEntitlements?: AitIapEntitlementReader;
   /** May be shortened, but never extended beyond the native callback-safe default. */
   readonly iapProductGrantTimeoutMs?: number;
   /** Logical notification topics mapped to approved Apps in Toss template codes. */
@@ -298,6 +311,7 @@ export function createAitHostBridge(
           products: iapProducts,
           prepare: options.prepareIap,
           verifier: options.verifyIapProductGrant,
+          entitlementReader: options.readIapEntitlements,
         });
 
         return ok(request, {
@@ -454,6 +468,7 @@ export function createAitHostBridge(
           products: iapProducts,
           prepare: options.prepareIap,
           verifier: options.verifyIapProductGrant,
+          entitlementReader: options.readIapEntitlements,
         }));
 
       case 'commerce.purchase': {
@@ -461,21 +476,27 @@ export function createAitHostBridge(
         const product = iapProducts.byProductId.get(purchase.productId);
         const prepareIap = options.prepareIap;
         const verifyIapProductGrant = options.verifyIapProductGrant;
+        const iapSupported = isAitIapSupported({
+          dependencies,
+          products: iapProducts,
+          prepare: prepareIap,
+          verifier: verifyIapProductGrant,
+          entitlementReader: options.readIapEntitlements,
+        });
         if (
           product === undefined
-          || !isAitIapSupported({
-            dependencies,
-            products: iapProducts,
-            prepare: prepareIap,
-            verifier: verifyIapProductGrant,
-          })
+          || !iapSupported
           || prepareIap === undefined
           || verifyIapProductGrant === undefined
         ) {
           return ok(request, failedPurchase());
         }
 
-        const existing = iapPurchasesInFlight.get(purchase.idempotencyKey);
+        const purchaseRequestKey = createAitIapPurchaseRequestKey(
+          purchase.productId,
+          purchase.idempotencyKey,
+        );
+        const existing = iapPurchasesInFlight.get(purchaseRequestKey);
         if (existing !== undefined) {
           return ok(request, await existing);
         }
@@ -487,12 +508,12 @@ export function createAitHostBridge(
           verifier: verifyIapProductGrant,
           timeoutMs: iapProductGrantTimeoutMs,
         });
-        iapPurchasesInFlight.set(purchase.idempotencyKey, pending);
+        iapPurchasesInFlight.set(purchaseRequestKey, pending);
         try {
           return ok(request, await pending);
         } finally {
-          if (iapPurchasesInFlight.get(purchase.idempotencyKey) === pending) {
-            iapPurchasesInFlight.delete(purchase.idempotencyKey);
+          if (iapPurchasesInFlight.get(purchaseRequestKey) === pending) {
+            iapPurchasesInFlight.delete(purchaseRequestKey);
           }
         }
       }
@@ -503,11 +524,12 @@ export function createAitHostBridge(
           products: iapProducts,
           prepare: options.prepareIap,
           verifier: options.verifyIapProductGrant,
+          entitlementReader: options.readIapEntitlements,
           timeoutMs: iapProductGrantTimeoutMs,
         }));
 
       case 'commerce.getEntitlements':
-        return ok(request, []);
+        return ok(request, await readAitIapEntitlements(options.readIapEntitlements));
 
       case 'ads.preload': {
         const placementId = readPlacementId(request.payload);
@@ -1565,6 +1587,7 @@ interface AitIapSupportInput {
   readonly products: NormalizedAitIapProducts;
   readonly prepare: AitIapPreparer | undefined;
   readonly verifier: AitIapProductGrantVerifier | undefined;
+  readonly entitlementReader: AitIapEntitlementReader | undefined;
 }
 
 interface AitIapPurchaseInput {
@@ -1585,6 +1608,7 @@ function isAitIapSupported(input: AitIapSupportInput): boolean {
     input.products.byProductId.size === 0
     || input.prepare === undefined
     || input.verifier === undefined
+    || input.entitlementReader === undefined
   ) {
     return false;
   }
@@ -1623,6 +1647,22 @@ async function listAitIapProducts(
   }
 }
 
+async function readAitIapEntitlements(
+  reader: AitIapEntitlementReader | undefined,
+): Promise<readonly Entitlement[]> {
+  if (reader === undefined) {
+    return [];
+  }
+
+  try {
+    return [...await reader()];
+  } catch {
+    // The game authority owns durable purchase state. A read failure must not
+    // turn stale local data into a visible entitlement.
+    return [];
+  }
+}
+
 async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<PurchaseResult> {
   const prepared = await prepareAitIap(input.prepare, {
     intent: 'purchase',
@@ -1638,12 +1678,17 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
     let settled = false;
     let cleanup: (() => void) | undefined;
     let cleanupRequested = false;
+    let sessionTimeout: ReturnType<typeof globalThis.setTimeout> | undefined;
 
     const finish = (result: PurchaseResult): void => {
       if (settled) {
         return;
       }
       settled = true;
+      if (sessionTimeout !== undefined) {
+        globalThis.clearTimeout(sessionTimeout);
+        sessionTimeout = undefined;
+      }
       if (cleanup === undefined) {
         cleanupRequested = true;
       } else {
@@ -1664,13 +1709,17 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
         verifier: input.verifier,
         orderId,
         product: input.product,
-        idempotencyKey: input.idempotencyKey,
+        idempotencyKey: createAitIapOrderIdempotencyKey(orderId),
         source: 'process-product-grant',
         timeoutMs: input.timeoutMs,
       });
       grantAttempts.set(orderId, attempt);
       return attempt;
     };
+
+    sessionTimeout = globalThis.setTimeout(() => {
+      finish(failedPurchase());
+    }, defaultIapPurchaseSessionTimeoutMs);
 
     try {
       cleanup = input.dependencies.iap.createOneTimePurchaseOrder({
@@ -1722,7 +1771,15 @@ async function restoreAitIapProducts(
     readonly source: 'purchase';
     readonly grantedAt: string;
   }> = [];
-  for (const order of pendingOrders.orders) {
+  const orders = pendingOrders.orders.slice(0, maximumPendingIapOrders);
+  if (pendingOrders.orders.length > orders.length) {
+    console.warn('AIT IAP pending-order restore reached its per-launch limit.', {
+      limit: maximumPendingIapOrders,
+      ignoredOrderCount: pendingOrders.orders.length - orders.length,
+    });
+  }
+
+  for (const order of orders) {
     const product = input.products.bySku.get(order.sku);
     if (product === undefined || !isAitIapOrderId(order.orderId)) {
       continue;
@@ -1781,9 +1838,15 @@ async function verifyAitIapProductGrant(input: {
   readonly timeoutMs: number;
 }): Promise<boolean> {
   const controller = new AbortController();
-  const timeout = globalThis.setTimeout(() => controller.abort(), input.timeoutMs);
-  try {
-    return await input.verifier({
+  let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const timeoutResult = new Promise<false>((resolve) => {
+    timeout = globalThis.setTimeout(() => {
+      controller.abort();
+      resolve(false);
+    }, input.timeoutMs);
+  });
+  const verifierResult = Promise.resolve()
+    .then(async () => input.verifier({
       orderId: input.orderId,
       productId: input.product.productId,
       platformSku: input.product.sku,
@@ -1792,11 +1855,14 @@ async function verifyAitIapProductGrant(input: {
       purchasedAt: new Date().toISOString(),
       signal: controller.signal,
       timeoutMs: input.timeoutMs,
-    }) === true;
-  } catch {
-    return false;
+    }))
+    .then((result) => result === true, () => false);
+  try {
+    return await Promise.race([verifierResult, timeoutResult]);
   } finally {
-    globalThis.clearTimeout(timeout);
+    if (timeout !== undefined) {
+      globalThis.clearTimeout(timeout);
+    }
   }
 }
 
@@ -1835,6 +1901,13 @@ function createAitIapOrderIdempotencyKey(orderId: string): string {
   return `apps-in-toss:purchase:${encodeURIComponent(orderId)}`;
 }
 
+function createAitIapPurchaseRequestKey(
+  productId: LogicalProductId,
+  idempotencyKey: string,
+): string {
+  return `${encodeURIComponent(productId)}:${encodeURIComponent(idempotencyKey)}`;
+}
+
 function safelyCleanupAitIapPurchase(cleanup: () => void): void {
   try {
     cleanup();
@@ -1860,9 +1933,12 @@ function isAitIapCancellation(error: unknown): boolean {
 }
 
 function normalizeAitIapGrantTime(value: string): string {
-  return value.length > 0 && value.length <= 2_048 && !/[\p{Cc}\p{Cf}]/u.test(value)
-    ? value
-    : new Date().toISOString();
+  if (value.length === 0 || value.length > 2_048 || /[\p{Cc}\p{Cf}]/u.test(value)) {
+    return new Date().toISOString();
+  }
+
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : new Date().toISOString();
 }
 
 function toAitIapProductInfo(
@@ -1879,7 +1955,17 @@ function toAitIapProductInfo(
     ? 'consumable'
     : nativeProduct.type === 'NON_CONSUMABLE'
       ? 'non_consumable'
-      : 'subscription';
+      : nativeProduct.type === 'SUBSCRIPTION'
+        ? 'subscription'
+        : undefined;
+  if (type === undefined) {
+    console.warn('AIT native IAP product has an unsupported type; hiding product.', {
+      productId: configured.productId,
+      sku: nativeProduct.sku,
+      nativeType: nativeProduct.type,
+    });
+    return undefined;
+  }
   return {
     id: configured.productId,
     type,
@@ -1913,12 +1999,16 @@ function normalizeIapProducts(
       : undefined;
     const currencyCode = normalizeAitIapCurrencyCode(rawProduct.currencyCode);
     if (productId === undefined || sku === undefined || currencyCode === undefined) {
-      console.warn('AIT IAP product configuration is invalid; disabling one product.');
+      console.warn('AIT IAP product configuration is invalid; disabling one product.', {
+        productId: rawProduct.productId,
+        sku: rawProduct.sku,
+      });
       continue;
     }
     if (byProductId.has(productId) || bySku.has(sku)) {
       console.warn(
         'AIT IAP product configuration has a duplicate product id or SKU; disabling one product.',
+        { productId, sku },
       );
       continue;
     }

@@ -305,6 +305,38 @@ try {
     'ait',
     'remote runtimes should forward configured target headers',
   );
+
+  observedRuntimeHeaders = undefined;
+  const orpcHeaderRuntime = createGameServicesRuntime({
+    gateway: createGateway(),
+    playerId,
+    authorityMode: 'production',
+    baseUrl: 'https://services.example.com/rpc',
+    transport: 'orpc',
+    headers: {
+      'x-ttokdoku-player-key': 'ait-player-key',
+      'x-ttokdoku-target': 'ait',
+    },
+  });
+  const orpcHeaderClient = requireValue(orpcHeaderRuntime.client, 'oRPC header runtime client');
+  await orpcHeaderClient.purchase({
+    productId: 'COINS_100',
+    source: 'shop',
+    idempotencyKey: 'runtime-orpc-header-purchase',
+  }).catch(() => {
+    // The test transport returns the HTTP backend response shape. The request
+    // still proves that the oRPC link forwards authoritative headers.
+  });
+  assertEqual(
+    readObservedRuntimeHeader(observedRuntimeHeaders, 'x-ttokdoku-player-key'),
+    'ait-player-key',
+    'oRPC runtimes should forward configured authoritative identity headers',
+  );
+  assertEqual(
+    readObservedRuntimeHeader(observedRuntimeHeaders, 'x-ttokdoku-target'),
+    'ait',
+    'oRPC runtimes should forward configured target headers',
+  );
 } finally {
   if (originalFetchDescriptor === undefined) {
     Reflect.deleteProperty(globalThis, 'fetch');
@@ -423,6 +455,13 @@ function assertNotEqual<T>(actual: T, expected: T, message: string): void {
   if (actual === expected) {
     throw new Error(`${message}: did not expect ${String(expected)}.`);
   }
+}
+
+function readObservedRuntimeHeader(
+  headers: Headers | undefined,
+  name: string,
+): string | null | undefined {
+  return headers?.get(name);
 }
 
 function assertThrows(
