@@ -584,6 +584,89 @@ describe('AIT production host bridge', () => {
     }
   });
 
+  it('bounds a hung native IAP catalog before listing or purchasing', async () => {
+    vi.useFakeTimers();
+    try {
+      let nativePurchaseStarted = false;
+      const bridge = createAitHostBridge({
+        iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+        iapProductGrantTimeoutMs: 10,
+        dependencies: createDependencies({
+          iap: createSupportedIap({
+            getProductItemList: async () => await new Promise<IapProductListResult>(() => {}),
+            onPurchase: () => {
+              nativePurchaseStarted = true;
+            },
+          }),
+        }),
+      });
+
+      const products = request(bridge, 'commerce.getProducts', {});
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(products).resolves.toEqual([]);
+
+      const purchase = request(bridge, 'commerce.purchase', {
+        productId: 'HINT_PACK_5',
+        idempotencyKey: 'hung-iap-catalog',
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(purchase).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+      expect(nativePurchaseStarted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('bounds pending-order and completion calls during restore', async () => {
+    vi.useFakeTimers();
+    try {
+      const commonOptions = {
+        iapProducts: [{ productId: 'HINT_PACK_5' as const, sku: 'ait.ttokdoku.hints.5' }],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+        iapProductGrantTimeoutMs: 10,
+      };
+      const hungPendingOrders = createAitHostBridge({
+        ...commonOptions,
+        dependencies: createDependencies({
+          iap: createSupportedIap({
+            getPendingOrders: async () => await new Promise<IapPendingOrdersResult>(() => {}),
+          }),
+        }),
+      });
+
+      const pendingRestore = request(hungPendingOrders, 'commerce.restore', {});
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(pendingRestore).resolves.toEqual({ restoredEntitlements: [] });
+
+      const hungCompletion = createAitHostBridge({
+        ...commonOptions,
+        dependencies: createDependencies({
+          iap: createSupportedIap({
+            pendingOrders: {
+              orders: [{
+                orderId: 'pending-completion-order',
+                sku: 'ait.ttokdoku.hints.5',
+                paymentCompletedDate: '2026-08-08T10:00:00.000Z',
+              }],
+            },
+            completeProductGrant: async () => await new Promise<boolean>(() => {}),
+          }),
+        }),
+      });
+
+      const completionRestore = request(hungCompletion, 'commerce.restore', {});
+      await vi.advanceTimersByTimeAsync(10);
+      await expect(completionRestore).resolves.toEqual({ restoredEntitlements: [] });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('requests configured notification agreement and reflects the session result', async () => {
     let callbacks: NotificationAgreementCallbacks | undefined;
     let cleanupCount = 0;
@@ -1917,6 +2000,8 @@ function createDependencies(
 function createSupportedIap(input: {
   readonly products?: IapProductListResult['products'];
   readonly pendingOrders?: IapPendingOrdersResult;
+  readonly getProductItemList?: () => Promise<IapProductListResult>;
+  readonly getPendingOrders?: () => Promise<IapPendingOrdersResult>;
   readonly onPurchase?: (callbacks: IapPurchaseCallbacks) => void;
   readonly onCleanup?: () => void;
   readonly completeProductGrant?: (input: { readonly params: { readonly orderId: string } }) => Promise<boolean>;
@@ -1928,10 +2013,14 @@ function createSupportedIap(input: {
         input.onCleanup?.();
       };
     }, { isSupported: () => true }),
-    getProductItemList: Object.assign(async () => ({ products: input.products ?? [] }), {
+    getProductItemList: Object.assign(input.getProductItemList ?? (async () => ({
+      products: input.products ?? [],
+    })), {
       isSupported: () => true,
     }),
-    getPendingOrders: Object.assign(async () => input.pendingOrders ?? ({ orders: [] }), {
+    getPendingOrders: Object.assign(input.getPendingOrders ?? (async () => (
+      input.pendingOrders ?? ({ orders: [] })
+    )), {
       isSupported: () => true,
     }),
     completeProductGrant: Object.assign(

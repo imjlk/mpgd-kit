@@ -312,6 +312,7 @@ export function createAitHostBridge(
           prepare: options.prepareIap,
           verifier: options.verifyIapProductGrant,
           entitlementReader: options.readIapEntitlements,
+          timeoutMs: iapProductGrantTimeoutMs,
         });
 
         return ok(request, {
@@ -469,6 +470,7 @@ export function createAitHostBridge(
           prepare: options.prepareIap,
           verifier: options.verifyIapProductGrant,
           entitlementReader: options.readIapEntitlements,
+          timeoutMs: iapProductGrantTimeoutMs,
         }));
 
       case 'commerce.purchase': {
@@ -482,6 +484,7 @@ export function createAitHostBridge(
           prepare: prepareIap,
           verifier: verifyIapProductGrant,
           entitlementReader: options.readIapEntitlements,
+          timeoutMs: iapProductGrantTimeoutMs,
         });
         if (
           product === undefined
@@ -491,7 +494,12 @@ export function createAitHostBridge(
         ) {
           return ok(request, failedPurchase());
         }
-        if (!(await isAitOneTimeIapProduct(dependencies, product))) {
+        const isOneTimeProduct = await isAitOneTimeIapProduct(
+          dependencies,
+          product,
+          iapProductGrantTimeoutMs,
+        );
+        if (!isOneTimeProduct) {
           return ok(request, failedPurchase());
         }
 
@@ -1591,6 +1599,7 @@ interface AitIapSupportInput {
   readonly prepare: AitIapPreparer | undefined;
   readonly verifier: AitIapProductGrantVerifier | undefined;
   readonly entitlementReader: AitIapEntitlementReader | undefined;
+  readonly timeoutMs: number;
 }
 
 interface AitIapPurchaseInput {
@@ -1630,7 +1639,13 @@ async function listAitIapProducts(
   }
 
   try {
-    const result = await input.dependencies.iap.getProductItemList();
+    const result = await waitForAitIapNativeCall(
+      () => input.dependencies.iap.getProductItemList(),
+      input.timeoutMs,
+    );
+    if (result === undefined) {
+      return [];
+    }
     const products: ProductInfo[] = [];
     for (const nativeProduct of result.products) {
       const configured = input.products.bySku.get(nativeProduct.sku);
@@ -1766,10 +1781,16 @@ async function restoreAitIapProducts(
     return { restoredEntitlements: [] };
   }
 
-  let pendingOrders: Awaited<ReturnType<AitHostDependencies['iap']['getPendingOrders']>>;
+  let pendingOrders: Awaited<ReturnType<AitHostDependencies['iap']['getPendingOrders']>> | undefined;
   try {
-    pendingOrders = await input.dependencies.iap.getPendingOrders();
+    pendingOrders = await waitForAitIapNativeCall(
+      () => input.dependencies.iap.getPendingOrders(),
+      input.timeoutMs,
+    );
   } catch {
+    return { restoredEntitlements: [] };
+  }
+  if (pendingOrders === undefined) {
     return { restoredEntitlements: [] };
   }
 
@@ -1818,10 +1839,13 @@ async function restoreAitIapProducts(
     }
 
     try {
-      const completed = await input.dependencies.iap.completeProductGrant({
-        params: { orderId: order.orderId },
-      });
-      if (completed) {
+      const completed = await waitForAitIapNativeCall(
+        () => input.dependencies.iap.completeProductGrant({
+          params: { orderId: order.orderId },
+        }),
+        input.timeoutMs,
+      );
+      if (completed === true) {
         restoredEntitlements.push({
           id: product.productId,
           source: 'purchase',
@@ -1863,9 +1887,16 @@ async function prepareAitIap(
 async function isAitOneTimeIapProduct(
   dependencies: AitHostDependencies,
   configured: NormalizedAitIapProduct,
+  timeoutMs: number,
 ): Promise<boolean> {
   try {
-    const result = await dependencies.iap.getProductItemList();
+    const result = await waitForAitIapNativeCall(
+      () => dependencies.iap.getProductItemList(),
+      timeoutMs,
+    );
+    if (result === undefined) {
+      return false;
+    }
     const nativeProduct = result.products.find(({ sku }) => sku === configured.sku);
     if (nativeProduct === undefined) {
       return false;
@@ -1875,6 +1906,24 @@ async function isAitOneTimeIapProduct(
     // The provider catalog is the authoritative source for the purchase flow.
     // Do not route an unknown or unavailable SKU into a one-time order.
     return false;
+  }
+}
+
+async function waitForAitIapNativeCall<T>(
+  operation: () => Promise<T>,
+  timeoutMs: number,
+): Promise<T | undefined> {
+  let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const timeoutResult = new Promise<undefined>((resolve) => {
+    timeout = globalThis.setTimeout(() => resolve(undefined), timeoutMs);
+  });
+  const operationResult = operation();
+  try {
+    return await Promise.race([operationResult, timeoutResult]);
+  } finally {
+    if (timeout !== undefined) {
+      globalThis.clearTimeout(timeout);
+    }
   }
 }
 
