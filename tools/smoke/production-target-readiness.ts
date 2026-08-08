@@ -67,8 +67,8 @@ try {
 
   const verse8RewardPolicy = {
     runtime: 'verse8-web',
-    features: { rewardedAds: true },
-    monetization: { rewardedAds: true },
+    features: { iap: false, rewardedAds: true, interstitialAds: false },
+    monetization: { iap: false, rewardedAds: true, interstitialAds: false },
   } as const;
   writeTargets({
     'verse8-staging': {
@@ -111,7 +111,53 @@ try {
       profile: 'production',
       targetPolicy: verse8RewardPolicy,
     },
-    'cannot enable rewarded ads without authoritative game services',
+    'cannot enable monetization without authoritative game services',
+  );
+
+  const webCommercePolicy = {
+    runtime: 'web',
+    features: { iap: true, rewardedAds: false, interstitialAds: false },
+    monetization: { iap: true, rewardedAds: false, interstitialAds: false },
+  } as const;
+  writeTargets({
+    storefront: {
+      kind: 'web',
+      gameApp: '.',
+      output: 'artifacts/storefront',
+      authoritativeGameServices: true,
+    },
+  });
+  expectReadinessError(
+    {
+      target: 'storefront',
+      profile: 'production',
+      targetPolicy: webCommercePolicy,
+    },
+    'requires VITE_MPGD_GAME_SERVICES_URL',
+  );
+  assertProductionTargetReadiness({
+    target: 'storefront',
+    profile: 'production',
+    targetsFile,
+    gameRoot,
+    gameServicesUrl: publicBackend,
+    targetPolicy: webCommercePolicy,
+  });
+  writeTargets({
+    storefront: {
+      kind: 'web',
+      gameApp: '.',
+      output: 'artifacts/storefront',
+      authoritativeGameServices: false,
+    },
+  });
+  expectReadinessError(
+    {
+      target: 'storefront',
+      profile: 'production',
+      targetPolicy: webCommercePolicy,
+    },
+    'cannot enable monetization without authoritative game services',
   );
 
   expectReadinessError(

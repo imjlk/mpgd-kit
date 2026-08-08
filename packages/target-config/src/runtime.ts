@@ -14,6 +14,7 @@ export type AdPlacementType = 'rewarded' | 'interstitial';
 type PlatformConfigTarget = PlatformGateway['target'];
 
 export type TargetRuntimeKind =
+  | 'web'
   | 'web-preview'
   | 'microsoft-store-pwa'
   | 'capacitor-android'
@@ -23,6 +24,7 @@ export type TargetRuntimeKind =
   | 'verse8-web';
 
 export type ReleaseProfile =
+  | 'web'
   | 'web-preview'
   | 'microsoft-store'
   | 'google-play'

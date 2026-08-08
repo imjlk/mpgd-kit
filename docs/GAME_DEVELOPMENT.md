@@ -220,9 +220,12 @@ browser deployments without adding deployment-specific names to the kit.
 When a game needs an additional runtime policy for one of those web targets,
 place a schema-versioned `mpgd.target-config.json` beside `mpgd.targets.json`.
 The CLI loads that file as an additive target-config extension; it cannot
-replace built-in target policies. A web target may declare `installable: false`
-to omit its web app manifest while retaining icon evidence and a favicon. It may
-also declare `staticDir` to
+replace built-in target policies. Use runtime and release profile `web` for a
+deployed, game-owned browser target whose adapter supplies server-backed
+commerce, identity, ads, or leaderboard capabilities. Keep `web-preview` for a
+local browser target without those production integrations. A web target may
+declare `installable: false` to omit its web app manifest while retaining icon
+evidence and a favicon. It may also declare `staticDir` to
 copy game-owned hosting metadata or other static files over the Vite artifact.
 
 Use `staging` while a Capacitor entry points at a kit reference shell.
@@ -230,10 +233,11 @@ Production AIT, Android, and iOS builds fail closed unless their wrapper or
 shell resolves to a dedicated directory inside the game root. An AIT target
 with `authoritativeGameServices: false` keeps native identity, storage, sharing,
 and Game Center while disabling IAP and ads, so it does not require a backend
-URL. Enabling authoritative AIT grants, or producing Android and iOS releases,
-requires `VITE_MPGD_GAME_SERVICES_URL` to be a public HTTPS URL without
-credentials. Canonical path validation blocks symbolic-link escapes; localhost
-and literal private or reserved IP addresses are also rejected.
+URL. Enabling authoritative AIT grants, monetization on a deployed `web`
+runtime, or producing Android and iOS releases requires
+`VITE_MPGD_GAME_SERVICES_URL` to be a public HTTPS URL without credentials.
+Canonical path validation blocks symbolic-link escapes; localhost and literal
+private or reserved IP addresses are also rejected.
 
 For a private sibling game repo, run the same commands from the game repo or kit
 checkout and pass an absolute or relative `--targets-file` plus `--kit-path`.

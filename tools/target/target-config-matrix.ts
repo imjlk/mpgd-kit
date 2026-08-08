@@ -25,8 +25,14 @@ interface TargetConfigExtensions {
 
 const assertTargetConfigMatrix = typia.createAssert<TargetConfigMatrix>();
 const assertTargetConfigExtensions = typia.createAssert<TargetConfigExtensions>();
-const supportedCustomTargetRuntimes = new Set<TargetRuntimeKind>(['verse8-web', 'web-preview']);
+const supportedCustomTargetRuntimes = new Set<TargetRuntimeKind>([
+  'web',
+  'verse8-web',
+  'web-preview',
+]);
+const webMonetizationFeatures = ['iap', 'rewardedAds', 'interstitialAds'] as const;
 const releaseProfileByRuntime = {
+  web: 'web',
   'web-preview': 'web-preview',
   'microsoft-store-pwa': 'microsoft-store',
   'capacitor-android': 'google-play',
@@ -107,6 +113,16 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
     );
   }
 
+  if (config.runtime === 'web') {
+    for (const feature of webMonetizationFeatures) {
+      if (config.features[feature] !== config.monetization[feature]) {
+        throw new Error(
+          `Target config extension ${target} must configure matching features.${feature} and monetization.${feature} values for web runtime.`,
+        );
+      }
+    }
+  }
+
   assertTargetIntegrationRuntimeBounds(
     config.runtime,
     config.integrations,
@@ -146,7 +162,10 @@ function getUnsupportedCustomWebFeature(
     return 'interstitial ads';
   }
 
-  if (config.features.leaderboard || config.leaderboard.native) {
+  if (
+    config.runtime !== 'web'
+    && (config.features.leaderboard || config.leaderboard.native)
+  ) {
     return 'leaderboard';
   }
 

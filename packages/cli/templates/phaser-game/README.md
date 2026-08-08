@@ -73,6 +73,10 @@ set the authority flag to `true`, add app-owned product or ad IDs, and configure
 `VITE_MPGD_GAME_SERVICES_URL` to a public HTTPS verifier without embedded
 credentials.
 
+The same verifier URL is required when a deployed custom `web` runtime enables
+IAP or ads. This production gate prevents client-only grants even when the
+browser adapter itself is game-owned.
+
 The Capacitor entries still intentionally point at kit reference shells, so
 their reusable validation builds use the `staging` profile. Before an Android
 or iOS production build, copy or create the shell under this game directory and
