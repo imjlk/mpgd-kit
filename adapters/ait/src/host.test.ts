@@ -252,6 +252,12 @@ describe('AIT production host bridge', () => {
     await expect(request(createAitHostBridge(options), 'commerce.purchase', payload))
       .resolves.toEqual(completed);
     expect(nativePurchaseStarts).toBe(1);
+    await vi.waitFor(() => expect(values.get(
+      'mpgd:ait:iap-completed-purchase-index:v1',
+    )).toBeDefined());
+    expect(JSON.parse(values.get('mpgd:ait:iap-completed-purchase-index:v1') ?? '[]')).toEqual([
+      'mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:completed-attempt',
+    ]);
   });
 
   it('fails closed when the native IAP callback cannot verify the product grant', async () => {
@@ -568,6 +574,85 @@ describe('AIT production host bridge', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('retries a stale pre-checkout marker only after provider recovery finds no order', async () => {
+    const values = new Map<string, string>();
+    const storageKey = 'mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:stale-attempt';
+    values.set(storageKey, JSON.stringify({
+      status: 'pending',
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'stale-attempt',
+      pendingSince: new Date(Date.now() - (30 * 60_000) - 1).toISOString(),
+    }));
+    let callbacks: IapPurchaseCallbacks | undefined;
+    const getPendingOrders = vi.fn(async () => ({ orders: [] }));
+    const bridge = createAitHostBridge({
+      iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          products: [createIapProduct()],
+          getPendingOrders,
+          onPurchase: (input) => {
+            callbacks = input;
+          },
+        }),
+      }),
+    });
+
+    const purchase = request(bridge, 'commerce.purchase', {
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'stale-attempt',
+    });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    if (callbacks === undefined) {
+      throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+    }
+    await callbacks.onError({ name: 'AbortError' });
+
+    await expect(purchase).resolves.toEqual({ status: 'cancelled', entitlementIds: [] });
+    expect(getPendingOrders).toHaveBeenCalledOnce();
+    expect(values.has(storageKey)).toBe(false);
+  });
+
+  it('keeps a stale pre-checkout marker pending while the provider still has its SKU', async () => {
+    const values = new Map<string, string>();
+    values.set('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:stale-pending-order', JSON.stringify({
+      status: 'pending',
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'stale-pending-order',
+      pendingSince: new Date(Date.now() - (30 * 60_000) - 1).toISOString(),
+    }));
+    const startPurchase = vi.fn();
+    const bridge = createAitHostBridge({
+      iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          pendingOrders: {
+            orders: [{
+              orderId: 'provider-pending-order',
+              sku: 'ait.ttokdoku.hints.5',
+              paymentCompletedDate: '2026-08-08T10:00:00.000Z',
+            }],
+          },
+          onPurchase: startPurchase,
+        }),
+      }),
+    });
+
+    await expect(request(bridge, 'commerce.purchase', {
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'stale-pending-order',
+    })).resolves.toEqual({ status: 'pending', entitlementIds: [] });
+    expect(startPurchase).not.toHaveBeenCalled();
   });
 
   it('recovers only verified pending IAP orders before completing the native grant', async () => {

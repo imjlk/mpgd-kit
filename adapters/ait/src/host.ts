@@ -58,6 +58,10 @@ const promotionGrantStoragePrefix = 'mpgd:ait:promotion-grant:v1:';
  * checkout while the first checkout is known to be terminal or ambiguous.
  */
 const iapPurchaseAttemptStoragePrefix = 'mpgd:ait:iap-purchase-attempt:v1:';
+const iapCompletedPurchaseAttemptIndexStorageKey = 'mpgd:ait:iap-completed-purchase-index:v1';
+const maximumPersistedCompletedIapPurchaseAttempts = 64;
+/** A crashed pre-checkout attempt can be retried only after provider recovery finds no order. */
+const pendingIapPurchaseAttemptRecoveryAgeMs = defaultIapPurchaseSessionTimeoutMs;
 /** Rotates bounded pending-order recovery so an early rejected order cannot starve later work. */
 const iapPendingOrderCursorStorageKey = 'mpgd:ait:pending-order-cursor:v1';
 const defaultNotificationAgreementTimeoutMs = 120_000;
@@ -277,6 +281,7 @@ export function createAitHostBridge(
   );
   const promotionGrantsInFlight = new Map<string, Promise<PromotionRewardResult>>();
   const iapPurchasesInFlight = new Map<string, Promise<PurchaseResult>>();
+  let completedIapAttemptRetention = Promise.resolve();
   const notificationSubscriptions = new Set<NotificationTopic>();
   const loadedAdGroupIds = new Set<string>();
   const loadingAdGroups = new Map<string, Promise<void>>();
@@ -289,6 +294,22 @@ export function createAitHostBridge(
   const adLoadCoordinator: AitAdLoadCoordinator = {
     active: undefined,
     waitTimeoutMs: adLoadQueueTimeoutMs,
+  };
+
+  const enqueueCompletedIapAttemptRetention = (
+    storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+    storageKey: string,
+  ): Promise<void> => {
+    const scheduled = completedIapAttemptRetention.then(async () => {
+      await retainCompletedAitIapPurchaseAttempt(storage, storageKey, iapProductGrantTimeoutMs);
+    });
+    const next = scheduled.then(
+      () => undefined,
+      () => undefined,
+    );
+    void next;
+    void (completedIapAttemptRetention = next);
+    return next;
   };
 
   return {
@@ -504,6 +525,7 @@ export function createAitHostBridge(
         }
 
         const persisted = await resolvePersistedAitIapPurchaseAttempt({
+          dependencies,
           storage: dependencies.storage,
           product,
           idempotencyKey: purchase.idempotencyKey,
@@ -536,6 +558,7 @@ export function createAitHostBridge(
           idempotencyKey: purchase.idempotencyKey,
           prepare: prepareIap,
           verifier: verifyIapProductGrant,
+          retainCompletedAttempt: enqueueCompletedIapAttemptRetention,
           timeoutMs: iapProductGrantTimeoutMs,
         });
         iapPurchasesInFlight.set(purchaseRequestKey, pending);
@@ -1627,6 +1650,10 @@ interface AitIapPurchaseInput {
   readonly idempotencyKey: string;
   readonly prepare: AitIapPreparer;
   readonly verifier: AitIapProductGrantVerifier;
+  readonly retainCompletedAttempt: (
+    storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+    storageKey: string,
+  ) => Promise<void>;
   readonly timeoutMs: number;
 }
 
@@ -1643,6 +1670,25 @@ interface AitIapPurchaseAttemptStorageInput {
 
 interface PersistAitIapServerGrantInput extends AitIapPurchaseAttemptStorageInput {
   readonly orderId: string;
+}
+
+const aitIapPurchaseAttemptStatus = {
+  pending: 'pending',
+  serverGranted: 'server-granted',
+  completed: 'completed',
+} as const;
+
+type AitIapPurchaseAttemptStatus = typeof aitIapPurchaseAttemptStatus[
+  keyof typeof aitIapPurchaseAttemptStatus
+];
+
+interface PersistAitIapPurchaseAttemptInput extends AitIapPurchaseAttemptStorageInput {
+  readonly status: AitIapPurchaseAttemptStatus;
+  readonly orderId?: string;
+}
+
+interface ResolvePersistedAitIapPurchaseAttemptInput extends AitIapPurchaseAttemptStorageInput {
+  readonly dependencies: Pick<AitHostDependencies, 'iap'>;
 }
 
 interface VerifyAndPersistAitIapProductGrantInput extends PersistAitIapServerGrantInput {
@@ -1723,7 +1769,7 @@ async function readAitIapEntitlements(
  * coalescing map has been cleared.
  */
 async function resolvePersistedAitIapPurchaseAttempt(
-  input: AitIapPurchaseAttemptStorageInput,
+  input: ResolvePersistedAitIapPurchaseAttemptInput,
 ): Promise<PurchaseResult | undefined> {
   const storageKey = aitIapPurchaseAttemptStorageKey(input.product.productId, input.idempotencyKey);
   let serialized: string | null | undefined;
@@ -1755,18 +1801,34 @@ async function resolvePersistedAitIapPurchaseAttempt(
   ) {
     return pendingPurchase();
   }
-  if (state.status === 'pending') {
-    return pendingPurchase();
+  if (state.status === aitIapPurchaseAttemptStatus.pending) {
+    const pendingSince = normalizePendingSince(state.pendingSince);
+    if (
+      pendingSince === undefined
+      || !isAitIapPendingAttemptPastRecoveryWindow(pendingSince)
+    ) {
+      return pendingPurchase();
+    }
+    const hasPendingProviderOrder = await hasAitIapPendingOrderForSku(
+      input.dependencies,
+      input.product.sku,
+      input.timeoutMs,
+    );
+    if (hasPendingProviderOrder !== false) {
+      return pendingPurchase();
+    }
+    const cleared = await clearAitIapPurchaseAttempt(input);
+    return cleared ? undefined : pendingPurchase();
   }
   if (
-    state.status === 'server-granted'
+    state.status === aitIapPurchaseAttemptStatus.serverGranted
     && typeof state.orderId === 'string'
     && isAitIapOrderId(state.orderId)
   ) {
     return pendingPurchase(state.orderId);
   }
   if (
-    state.status === 'completed'
+    state.status === aitIapPurchaseAttemptStatus.completed
     && typeof state.orderId === 'string'
     && isAitIapOrderId(state.orderId)
   ) {
@@ -1775,48 +1837,20 @@ async function resolvePersistedAitIapPurchaseAttempt(
   return pendingPurchase();
 }
 
-async function persistPendingAitIapPurchaseAttempt(
-  input: AitIapPurchaseAttemptStorageInput,
+async function persistAitIapPurchaseAttempt(
+  input: PersistAitIapPurchaseAttemptInput,
 ): Promise<boolean> {
   return await writeAitIapStorage(
     input.storage,
     aitIapPurchaseAttemptStorageKey(input.product.productId, input.idempotencyKey),
     JSON.stringify({
-      status: 'pending',
+      status: input.status,
       productId: input.product.productId,
       idempotencyKey: input.idempotencyKey,
-    }),
-    input.timeoutMs,
-  );
-}
-
-async function persistServerGrantedAitIapPurchaseAttempt(
-  input: PersistAitIapServerGrantInput,
-): Promise<boolean> {
-  return await writeAitIapStorage(
-    input.storage,
-    aitIapPurchaseAttemptStorageKey(input.product.productId, input.idempotencyKey),
-    JSON.stringify({
-      status: 'server-granted',
-      productId: input.product.productId,
-      idempotencyKey: input.idempotencyKey,
-      orderId: input.orderId,
-    }),
-    input.timeoutMs,
-  );
-}
-
-async function persistCompletedAitIapPurchaseAttempt(
-  input: PersistAitIapServerGrantInput,
-): Promise<boolean> {
-  return await writeAitIapStorage(
-    input.storage,
-    aitIapPurchaseAttemptStorageKey(input.product.productId, input.idempotencyKey),
-    JSON.stringify({
-      status: 'completed',
-      productId: input.product.productId,
-      idempotencyKey: input.idempotencyKey,
-      orderId: input.orderId,
+      ...(input.status === aitIapPurchaseAttemptStatus.pending
+        ? { pendingSince: new Date().toISOString() }
+        : {}),
+      ...(input.orderId === undefined ? {} : { orderId: input.orderId }),
     }),
     input.timeoutMs,
   );
@@ -1851,11 +1885,12 @@ async function verifyAndPersistAitIapProductGrant(
   if (remainingTimeoutMs === 0) {
     return false;
   }
-  return await persistServerGrantedAitIapPurchaseAttempt({
+  return await persistAitIapPurchaseAttempt({
     storage: input.storage,
     product: input.product,
     idempotencyKey: input.idempotencyKey,
     orderId: input.orderId,
+    status: aitIapPurchaseAttemptStatus.serverGranted,
     timeoutMs: remainingTimeoutMs,
   });
 }
@@ -1906,6 +1941,89 @@ function aitIapPurchaseAttemptStorageKey(
   idempotencyKey: string,
 ): string {
   return `${iapPurchaseAttemptStoragePrefix}${encodeURIComponent(productId)}:${encodeURIComponent(idempotencyKey)}`;
+}
+
+function isAitIapPendingAttemptPastRecoveryWindow(pendingSince: string): boolean {
+  const startedAt = Date.parse(pendingSince);
+  return Number.isFinite(startedAt)
+    && Date.now() - startedAt >= pendingIapPurchaseAttemptRecoveryAgeMs;
+}
+
+async function hasAitIapPendingOrderForSku(
+  dependencies: Pick<AitHostDependencies, 'iap'>,
+  sku: string,
+  timeoutMs: number,
+): Promise<boolean | undefined> {
+  try {
+    const result = await waitForAitIapNativeCall(
+      () => dependencies.iap.getPendingOrders(),
+      timeoutMs,
+    );
+    if (result === undefined) {
+      return undefined;
+    }
+    return result.orders.some((order) => order.sku === sku && isAitIapOrderId(order.orderId));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Keep terminal retry markers bounded without evicting ambiguous pending or
+ * server-granted states. The index only tracks entries written by this build;
+ * all storage failures leave the completed result valid and skip cleanup.
+ */
+async function retainCompletedAitIapPurchaseAttempt(
+  storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+  storageKey: string,
+  timeoutMs: number,
+): Promise<void> {
+  try {
+    const serialized = await waitForAitIapNativeCall(
+      () => storage.getItem(iapCompletedPurchaseAttemptIndexStorageKey),
+      timeoutMs,
+    );
+    const knownKeys = parseAitIapCompletedPurchaseAttemptIndex(serialized);
+    const keys = [...knownKeys.filter((knownKey) => knownKey !== storageKey), storageKey];
+    const evictedKey = keys.length > maximumPersistedCompletedIapPurchaseAttempts
+      ? keys[0]
+      : undefined;
+    const retainedKeys = evictedKey === undefined ? keys : keys.slice(1);
+    const retained = await writeAitIapStorage(
+      storage,
+      iapCompletedPurchaseAttemptIndexStorageKey,
+      JSON.stringify(retainedKeys),
+      timeoutMs,
+    );
+    if (retained && evictedKey !== undefined) {
+      await removeAitIapStorage(storage, evictedKey, timeoutMs);
+    }
+  } catch {
+    // Cleanup is best effort. A persisted terminal marker is safer than a
+    // repeated checkout, even when the local index cannot be maintained.
+  }
+}
+
+function parseAitIapCompletedPurchaseAttemptIndex(
+  serialized: string | null | undefined,
+): readonly string[] {
+  if (serialized === null || serialized === undefined) {
+    return [];
+  }
+  try {
+    const value: unknown = JSON.parse(serialized);
+    if (!Array.isArray(value)) {
+      return [];
+    }
+    const keys = value.filter((key): key is string => (
+      typeof key === 'string'
+      && key.startsWith(iapPurchaseAttemptStoragePrefix)
+      && key.length <= 4_096
+    ));
+    return [...new Set(keys)].slice(-maximumPersistedCompletedIapPurchaseAttempts);
+  } catch {
+    return [];
+  }
 }
 
 async function readAitIapPendingOrderCursor(
@@ -1968,10 +2086,11 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
     return failedPurchase();
   }
 
-  const started = await persistPendingAitIapPurchaseAttempt({
+  const started = await persistAitIapPurchaseAttempt({
     storage: input.dependencies.storage,
     product: input.product,
     idempotencyKey: input.idempotencyKey,
+    status: aitIapPurchaseAttemptStatus.pending,
     timeoutMs: input.timeoutMs,
   });
   if (!started) {
@@ -2057,13 +2176,20 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
             return;
           }
           const result = completedAitIapPurchase(input.product, data.orderId);
-          const persisted = await persistCompletedAitIapPurchaseAttempt({
+          const persisted = await persistAitIapPurchaseAttempt({
             storage: input.dependencies.storage,
             product: input.product,
             idempotencyKey: input.idempotencyKey,
             orderId: data.orderId,
+            status: aitIapPurchaseAttemptStatus.completed,
             timeoutMs: input.timeoutMs,
           });
+          if (persisted) {
+            void input.retainCompletedAttempt(
+              input.dependencies.storage,
+              aitIapPurchaseAttemptStorageKey(input.product.productId, input.idempotencyKey),
+            );
+          }
           finish(persisted ? result : pendingPurchase(data.orderId));
         },
         onError: (error) => {
