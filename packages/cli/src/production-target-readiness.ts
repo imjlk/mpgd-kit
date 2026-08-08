@@ -20,10 +20,14 @@ export interface ProductionTargetReadinessInput {
 export interface ProductionTargetPolicy {
   readonly runtime: string;
   readonly features: {
+    readonly iap: boolean;
     readonly rewardedAds: boolean;
+    readonly interstitialAds: boolean;
   };
   readonly monetization: {
+    readonly iap: boolean;
     readonly rewardedAds: boolean;
+    readonly interstitialAds: boolean;
   };
 }
 
@@ -54,8 +58,19 @@ export function assertProductionTargetReadiness(
       input.targetPolicy.features.rewardedAds
       || input.targetPolicy.monetization.rewardedAds
     );
+  const requiresWebMonetizationAuthority = input.targetPolicy?.runtime === 'web'
+    && (
+      input.targetPolicy.features.iap
+      || input.targetPolicy.features.rewardedAds
+      || input.targetPolicy.features.interstitialAds
+      || input.targetPolicy.monetization.iap
+      || input.targetPolicy.monetization.rewardedAds
+      || input.targetPolicy.monetization.interstitialAds
+    );
+  const requiresMonetizationAuthority = requiresVerse8RewardAuthority
+    || requiresWebMonetizationAuthority;
 
-  if (ownerPathKey === undefined && !requiresVerse8RewardAuthority) {
+  if (ownerPathKey === undefined && !requiresMonetizationAuthority) {
     return;
   }
 
@@ -67,16 +82,16 @@ export function assertProductionTargetReadiness(
 
   if (ownerPathKey === undefined) {
     if (
-      requiresVerse8RewardAuthority
+      requiresMonetizationAuthority
       && targetConfig.authoritativeGameServices === false
     ) {
       throw new Error(
-        `Production target ${input.target} cannot enable rewarded ads without `
+        `Production target ${input.target} cannot enable monetization without `
           + 'authoritative game services.',
       );
     }
 
-    if (requiresVerse8RewardAuthority || targetConfig.authoritativeGameServices !== false) {
+    if (requiresMonetizationAuthority || targetConfig.authoritativeGameServices !== false) {
       assertAuthoritativeGameServicesUrl(input.gameServicesUrl, input.target);
     }
     return;

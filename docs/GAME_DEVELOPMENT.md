@@ -233,10 +233,11 @@ Production AIT, Android, and iOS builds fail closed unless their wrapper or
 shell resolves to a dedicated directory inside the game root. An AIT target
 with `authoritativeGameServices: false` keeps native identity, storage, sharing,
 and Game Center while disabling IAP and ads, so it does not require a backend
-URL. Enabling authoritative AIT grants, or producing Android and iOS releases,
-requires `VITE_MPGD_GAME_SERVICES_URL` to be a public HTTPS URL without
-credentials. Canonical path validation blocks symbolic-link escapes; localhost
-and literal private or reserved IP addresses are also rejected.
+URL. Enabling authoritative AIT grants, monetization on a deployed `web`
+runtime, or producing Android and iOS releases requires
+`VITE_MPGD_GAME_SERVICES_URL` to be a public HTTPS URL without credentials.
+Canonical path validation blocks symbolic-link escapes; localhost and literal
+private or reserved IP addresses are also rejected.
 
 For a private sibling game repo, run the same commands from the game repo or kit
 checkout and pass an absolute or relative `--targets-file` plus `--kit-path`.
