@@ -1,5 +1,15 @@
 # @mpgd/cli
 
+## 0.21.0 — 2026-08-08
+
+### Added
+
+- [c6f1ad2](https://github.com/imjlk/mpgd-kit/commit/c6f1ad2d293c4d75091c4a414a3df0433837d16d) Support deployed generic web runtimes with game-owned platform integrations — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: target-config@0.11.0
+
 ## 0.20.1 — 2026-08-04
 
 ### Changed
