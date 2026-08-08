@@ -2,6 +2,7 @@ import {
   getTossShareLink,
   getUserKeyForGame,
   grantPromotionRewardForGame as grantPromotionReward,
+  IAP,
   isMinVersionSupported,
   loadFullScreenAd,
   openGameCenterLeaderboard,
@@ -10,6 +11,7 @@ import {
   showFullScreenAd,
   Storage,
   submitGameCenterLeaderBoardScore,
+  type IapProductListItem,
 } from '@apps-in-toss/web-framework';
 
 import {
@@ -22,8 +24,12 @@ import {
 import type {
   LaunchEntry,
   LaunchIntent,
+  LogicalProductId,
   NotificationTopic,
+  PlatformEvidenceEnvelope,
+  ProductInfo,
   PromotionRewardResult,
+  PurchaseResult,
   ShareResult,
 } from '@mpgd/platform';
 
@@ -34,8 +40,11 @@ const defaultAdTimeoutMs = 60_000;
 const defaultAdLoadQueueTimeoutMs = 5_000;
 const defaultAdDisplayStartTimeoutMs = 60_000;
 const defaultAdMaximumDisplayMs = 30 * 60_000;
+/** Leaves five seconds of headroom inside the native IAP 30-second grant callback. */
+const defaultIapProductGrantTimeoutMs = 25_000;
 const invalidBridgeRequestId = 'ait-invalid-request';
 const rewardedAdEvidenceSchema = 'apps-in-toss.rewarded-ad.callback.v1';
+const iapEvidenceSchema = 'apps-in-toss.iap.callback.v1';
 const minimumPromotionTossAppVersion = '5.232.0';
 const promotionGrantStoragePrefix = 'mpgd:ait:promotion-grant:v1:';
 const defaultNotificationAgreementTimeoutMs = 120_000;
@@ -56,19 +65,85 @@ const launchEntries = new Set<LaunchEntry>([
 
 export type AitIdentityProvider = () => Promise<unknown>;
 
+/**
+ * The AIT SDK adds support-version metadata to native functions over time.
+ * The host only depends on the callable surface and an optional support probe
+ * so adapter tests remain compatible with older wrappers and newer SDKs.
+ */
+type AitOptionalCapabilityMethod<T extends (...args: never[]) => unknown> = (
+  ...args: Parameters<T>
+) => ReturnType<T>;
+
+interface AitCapabilityProbe {
+  readonly isSupported?: () => boolean;
+}
+
+type AitNativeMethod<T extends (...args: never[]) => unknown> =
+  AitOptionalCapabilityMethod<T> & AitCapabilityProbe;
+
+interface AitIapDependencies {
+  readonly createOneTimePurchaseOrder: AitNativeMethod<typeof IAP.createOneTimePurchaseOrder>;
+  readonly getProductItemList: AitNativeMethod<typeof IAP.getProductItemList>;
+  readonly getPendingOrders: AitNativeMethod<typeof IAP.getPendingOrders>;
+  readonly completeProductGrant: AitNativeMethod<typeof IAP.completeProductGrant>;
+}
+
 export interface AitHostDependencies {
   readonly identityProvider: AitIdentityProvider;
   readonly storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>;
   readonly getTossShareLink: typeof getTossShareLink;
   readonly share: typeof share;
-  readonly grantPromotionReward: typeof grantPromotionReward;
-  readonly requestNotificationAgreement: typeof requestNotificationAgreement;
+  readonly grantPromotionReward: AitNativeMethod<typeof grantPromotionReward>;
+  readonly requestNotificationAgreement: AitNativeMethod<typeof requestNotificationAgreement>;
   readonly isMinVersionSupported: typeof isMinVersionSupported;
-  readonly loadFullScreenAd: typeof loadFullScreenAd;
-  readonly showFullScreenAd: typeof showFullScreenAd;
-  readonly openGameCenterLeaderboard: typeof openGameCenterLeaderboard;
-  readonly submitGameCenterLeaderBoardScore: typeof submitGameCenterLeaderBoardScore;
+  readonly loadFullScreenAd: AitNativeMethod<typeof loadFullScreenAd>;
+  readonly showFullScreenAd: AitNativeMethod<typeof showFullScreenAd>;
+  readonly openGameCenterLeaderboard: AitNativeMethod<typeof openGameCenterLeaderboard>;
+  readonly submitGameCenterLeaderBoardScore: AitNativeMethod<
+    typeof submitGameCenterLeaderBoardScore
+  >;
+  readonly iap: AitIapDependencies;
 }
+
+/** Game-owned logical product mapped to a console-issued Apps in Toss SKU. */
+export interface AitIapProductConfig {
+  readonly productId: LogicalProductId;
+  readonly sku: string;
+  /** Apps in Toss currently displays KRW prices; override only for a supported future catalog. */
+  readonly currencyCode?: string;
+}
+
+export interface AitIapPreparationInput {
+  readonly intent: 'purchase' | 'restore';
+  readonly productId?: LogicalProductId;
+  readonly platformSku?: string;
+}
+
+/**
+ * Game-owned server gate that ensures the anonymous game key is linked to a
+ * Toss login user before a purchase or pending-order recovery can proceed.
+ */
+export type AitIapPreparer = (input: AitIapPreparationInput) => Promise<boolean>;
+
+export interface AitIapProductGrantVerificationInput {
+  readonly orderId: string;
+  readonly productId: LogicalProductId;
+  readonly platformSku: string;
+  readonly idempotencyKey: string;
+  readonly source: 'process-product-grant' | 'pending-order-restore';
+  /** Client callback time only; the game authority must use the order status time. */
+  readonly purchasedAt: string;
+  readonly signal: AbortSignal;
+  readonly timeoutMs: number;
+}
+
+/**
+ * A server-backed verifier. Returning false keeps the provider-side grant
+ * pending; the bridge never manufactures a client-side entitlement.
+ */
+export type AitIapProductGrantVerifier = (
+  input: AitIapProductGrantVerificationInput,
+) => Promise<boolean>;
 
 export interface AitPromotionRewardConfig {
   readonly promotionCode: string;
@@ -122,6 +197,12 @@ export interface InstallAitHostBridgeOptions {
   readonly promotionRewards?: Readonly<Record<string, AitPromotionRewardConfig>>;
   readonly authorizePromotionGrant?: AitPromotionGrantAuthorizer;
   readonly resolvePendingPromotionGrant?: AitPendingPromotionGrantResolver;
+  /** Enable IAP only with logical-to-native SKU mappings and both server hooks. */
+  readonly iapProducts?: readonly AitIapProductConfig[];
+  readonly prepareIap?: AitIapPreparer;
+  readonly verifyIapProductGrant?: AitIapProductGrantVerifier;
+  /** May be shortened, but never extended beyond the native callback-safe default. */
+  readonly iapProductGrantTimeoutMs?: number;
   /** Logical notification topics mapped to approved Apps in Toss template codes. */
   readonly notificationTemplateCodes?: Partial<Readonly<Record<NotificationTopic, string>>>;
   /** Maximum total wait for the native show request before display is observed. */
@@ -147,6 +228,7 @@ const defaultDependencies: AitHostDependencies = {
   showFullScreenAd,
   openGameCenterLeaderboard,
   submitGameCenterLeaderBoardScore,
+  iap: IAP,
 };
 
 export function installAitHostBridge(options: InstallAitHostBridgeOptions = {}): GamePlatformBridge {
@@ -168,7 +250,12 @@ export function createAitHostBridge(
   const notificationTemplateCodes = normalizeNotificationTemplateCodes(
     options.notificationTemplateCodes,
   );
+  const iapProducts = normalizeIapProducts(options.iapProducts);
+  const iapProductGrantTimeoutMs = normalizeIapProductGrantTimeout(
+    options.iapProductGrantTimeoutMs,
+  );
   const promotionGrantsInFlight = new Map<string, Promise<PromotionRewardResult>>();
+  const iapPurchasesInFlight = new Map<string, Promise<PurchaseResult>>();
   const notificationSubscriptions = new Set<NotificationTopic>();
   const loadedAdGroupIds = new Set<string>();
   const loadingAdGroups = new Map<string, Promise<void>>();
@@ -206,9 +293,15 @@ export function createAitHostBridge(
           && hasConfiguredAdType(adGroupIds, adPlacementTypes, 'rewarded');
         const interstitialAds = adsSupported
           && hasConfiguredAdType(adGroupIds, adPlacementTypes, 'interstitial');
+        const nativeIap = isAitIapSupported({
+          dependencies,
+          products: iapProducts,
+          prepare: options.prepareIap,
+          verifier: options.verifyIapProductGrant,
+        });
 
         return ok(request, {
-          nativeIap: false,
+          nativeIap,
           nativeAds: rewardedAds || interstitialAds,
           rewardedAds,
           interstitialAds,
@@ -281,7 +374,7 @@ export function createAitHostBridge(
         const templateCode = notificationTemplateCodes.get(topic);
         if (
           templateCode === undefined
-          || !isCapabilitySupported(() => dependencies.requestNotificationAgreement.isSupported())
+          || !isAitNativeMethodSupported(dependencies.requestNotificationAgreement)
         ) {
           return ok(request, 'unavailable');
         }
@@ -354,15 +447,64 @@ export function createAitHostBridge(
         }
       }
 
-      // IAP must be installed with game-owned server verification. Never return demo grants.
+      // IAP is opt-in and server-authoritative. Never return demo grants.
       case 'commerce.getProducts':
-        return ok(request, []);
+        return ok(request, await listAitIapProducts({
+          dependencies,
+          products: iapProducts,
+          prepare: options.prepareIap,
+          verifier: options.verifyIapProductGrant,
+        }));
 
-      case 'commerce.purchase':
-        return ok(request, { status: 'failed', entitlementIds: [] });
+      case 'commerce.purchase': {
+        const purchase = readCommercePurchase(request.payload);
+        const product = iapProducts.byProductId.get(purchase.productId);
+        const prepareIap = options.prepareIap;
+        const verifyIapProductGrant = options.verifyIapProductGrant;
+        if (
+          product === undefined
+          || !isAitIapSupported({
+            dependencies,
+            products: iapProducts,
+            prepare: prepareIap,
+            verifier: verifyIapProductGrant,
+          })
+          || prepareIap === undefined
+          || verifyIapProductGrant === undefined
+        ) {
+          return ok(request, failedPurchase());
+        }
+
+        const existing = iapPurchasesInFlight.get(purchase.idempotencyKey);
+        if (existing !== undefined) {
+          return ok(request, await existing);
+        }
+        const pending = purchaseAitIapProduct({
+          dependencies,
+          product,
+          idempotencyKey: purchase.idempotencyKey,
+          prepare: prepareIap,
+          verifier: verifyIapProductGrant,
+          timeoutMs: iapProductGrantTimeoutMs,
+        });
+        iapPurchasesInFlight.set(purchase.idempotencyKey, pending);
+        try {
+          return ok(request, await pending);
+        } finally {
+          if (iapPurchasesInFlight.get(purchase.idempotencyKey) === pending) {
+            iapPurchasesInFlight.delete(purchase.idempotencyKey);
+          }
+        }
+      }
 
       case 'commerce.restore':
-        return ok(request, { restoredEntitlements: [] });
+        return ok(request, await restoreAitIapProducts({
+          dependencies,
+          products: iapProducts,
+          prepare: options.prepareIap,
+          verifier: options.verifyIapProductGrant,
+          timeoutMs: iapProductGrantTimeoutMs,
+        }));
 
       case 'commerce.getEntitlements':
         return ok(request, []);
@@ -380,7 +522,7 @@ export function createAitHostBridge(
           );
         }
 
-        if (!isCapabilitySupported(() => dependencies.loadFullScreenAd.isSupported())) {
+        if (!isAitNativeMethodSupported(dependencies.loadFullScreenAd)) {
           if (!warnedUnsupportedAdPreload) {
             warnedUnsupportedAdPreload = true;
             console.warn(
@@ -563,7 +705,7 @@ function getNotificationStatus(
   if (!templateCodes.has(topic)) {
     return 'configuration-required';
   }
-  if (!isCapabilitySupported(() => dependencies.requestNotificationAgreement.isSupported())) {
+  if (!isAitNativeMethodSupported(dependencies.requestNotificationAgreement)) {
     return 'unsupported';
   }
   return subscriptions.has(topic) ? 'subscribed' : 'not-subscribed';
@@ -1407,9 +1549,418 @@ function isGameCenterSupported(dependencies: AitHostDependencies): boolean {
     }));
 }
 
+interface NormalizedAitIapProduct {
+  readonly productId: LogicalProductId;
+  readonly sku: string;
+  readonly currencyCode: string;
+}
+
+interface NormalizedAitIapProducts {
+  readonly byProductId: ReadonlyMap<LogicalProductId, NormalizedAitIapProduct>;
+  readonly bySku: ReadonlyMap<string, NormalizedAitIapProduct>;
+}
+
+interface AitIapSupportInput {
+  readonly dependencies: AitHostDependencies;
+  readonly products: NormalizedAitIapProducts;
+  readonly prepare: AitIapPreparer | undefined;
+  readonly verifier: AitIapProductGrantVerifier | undefined;
+}
+
+interface AitIapPurchaseInput {
+  readonly dependencies: AitHostDependencies;
+  readonly product: NormalizedAitIapProduct;
+  readonly idempotencyKey: string;
+  readonly prepare: AitIapPreparer;
+  readonly verifier: AitIapProductGrantVerifier;
+  readonly timeoutMs: number;
+}
+
+interface AitIapRestoreInput extends AitIapSupportInput {
+  readonly timeoutMs: number;
+}
+
+function isAitIapSupported(input: AitIapSupportInput): boolean {
+  if (
+    input.products.byProductId.size === 0
+    || input.prepare === undefined
+    || input.verifier === undefined
+  ) {
+    return false;
+  }
+
+  return isAitNativeMethodSupported(input.dependencies.iap.createOneTimePurchaseOrder)
+    && isAitNativeMethodSupported(input.dependencies.iap.getProductItemList)
+    && isAitNativeMethodSupported(input.dependencies.iap.getPendingOrders)
+    && isAitNativeMethodSupported(input.dependencies.iap.completeProductGrant);
+}
+
+async function listAitIapProducts(
+  input: AitIapSupportInput,
+): Promise<readonly ProductInfo[]> {
+  if (!isAitIapSupported(input)) {
+    return [];
+  }
+
+  try {
+    const result = await input.dependencies.iap.getProductItemList();
+    const products: ProductInfo[] = [];
+    for (const nativeProduct of result.products) {
+      const configured = input.products.bySku.get(nativeProduct.sku);
+      if (configured === undefined) {
+        continue;
+      }
+      const product = toAitIapProductInfo(nativeProduct, configured);
+      if (product !== undefined) {
+        products.push(product);
+      }
+    }
+    return products;
+  } catch {
+    // Product metadata is not authoritative. If the native catalog cannot be
+    // read, hide it instead of rendering stale game-owned prices.
+    return [];
+  }
+}
+
+async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<PurchaseResult> {
+  const prepared = await prepareAitIap(input.prepare, {
+    intent: 'purchase',
+    productId: input.product.productId,
+    platformSku: input.product.sku,
+  });
+  if (!prepared) {
+    return failedPurchase();
+  }
+
+  return new Promise<PurchaseResult>((resolve) => {
+    const grantAttempts = new Map<string, Promise<boolean>>();
+    let settled = false;
+    let cleanup: (() => void) | undefined;
+    let cleanupRequested = false;
+
+    const finish = (result: PurchaseResult): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      if (cleanup === undefined) {
+        cleanupRequested = true;
+      } else {
+        safelyCleanupAitIapPurchase(cleanup);
+      }
+      resolve(result);
+    };
+
+    const processProductGrant = (orderId: string): Promise<boolean> => {
+      const existing = grantAttempts.get(orderId);
+      if (existing !== undefined) {
+        return existing;
+      }
+      if (!isAitIapOrderId(orderId)) {
+        return Promise.resolve(false);
+      }
+      const attempt = verifyAitIapProductGrant({
+        verifier: input.verifier,
+        orderId,
+        product: input.product,
+        idempotencyKey: input.idempotencyKey,
+        source: 'process-product-grant',
+        timeoutMs: input.timeoutMs,
+      });
+      grantAttempts.set(orderId, attempt);
+      return attempt;
+    };
+
+    try {
+      cleanup = input.dependencies.iap.createOneTimePurchaseOrder({
+        options: {
+          sku: input.product.sku,
+          processProductGrant: ({ orderId }) => processProductGrant(orderId),
+        },
+        onEvent: async ({ data }) => {
+          const granted = await (grantAttempts.get(data.orderId) ?? Promise.resolve(false));
+          finish(granted
+            ? completedAitIapPurchase(input.product, data.orderId)
+            : failedPurchase());
+        },
+        onError: (error) => {
+          finish(isAitIapCancellation(error) ? cancelledPurchase() : failedPurchase());
+        },
+      });
+      if (cleanupRequested) {
+        safelyCleanupAitIapPurchase(cleanup);
+      }
+    } catch {
+      finish(failedPurchase());
+    }
+  });
+}
+
+async function restoreAitIapProducts(
+  input: AitIapRestoreInput,
+): Promise<{ readonly restoredEntitlements: readonly { readonly id: string; readonly source: 'purchase'; readonly grantedAt: string }[] }> {
+  const prepare = input.prepare;
+  const verifier = input.verifier;
+  if (!isAitIapSupported(input) || prepare === undefined || verifier === undefined) {
+    return { restoredEntitlements: [] };
+  }
+  const prepared = await prepareAitIap(prepare, { intent: 'restore' });
+  if (!prepared) {
+    return { restoredEntitlements: [] };
+  }
+
+  let pendingOrders: Awaited<ReturnType<AitHostDependencies['iap']['getPendingOrders']>>;
+  try {
+    pendingOrders = await input.dependencies.iap.getPendingOrders();
+  } catch {
+    return { restoredEntitlements: [] };
+  }
+
+  const restoredEntitlements: Array<{
+    readonly id: string;
+    readonly source: 'purchase';
+    readonly grantedAt: string;
+  }> = [];
+  for (const order of pendingOrders.orders) {
+    const product = input.products.bySku.get(order.sku);
+    if (product === undefined || !isAitIapOrderId(order.orderId)) {
+      continue;
+    }
+    const granted = await verifyAitIapProductGrant({
+      verifier,
+      orderId: order.orderId,
+      product,
+      idempotencyKey: createAitIapOrderIdempotencyKey(order.orderId),
+      source: 'pending-order-restore',
+      timeoutMs: input.timeoutMs,
+    });
+    if (!granted) {
+      continue;
+    }
+
+    try {
+      const completed = await input.dependencies.iap.completeProductGrant({
+        params: { orderId: order.orderId },
+      });
+      if (completed) {
+        restoredEntitlements.push({
+          id: product.productId,
+          source: 'purchase',
+          grantedAt: normalizeAitIapGrantTime(order.paymentCompletedDate),
+        });
+      }
+    } catch {
+      // Keep provider state pending when its completion acknowledgement fails.
+    }
+  }
+
+  return { restoredEntitlements };
+}
+
+async function prepareAitIap(
+  prepare: AitIapPreparer | undefined,
+  input: AitIapPreparationInput,
+): Promise<boolean> {
+  if (prepare === undefined) {
+    return false;
+  }
+  try {
+    return await prepare(input) === true;
+  } catch {
+    return false;
+  }
+}
+
+async function verifyAitIapProductGrant(input: {
+  readonly verifier: AitIapProductGrantVerifier;
+  readonly orderId: string;
+  readonly product: NormalizedAitIapProduct;
+  readonly idempotencyKey: string;
+  readonly source: 'process-product-grant' | 'pending-order-restore';
+  readonly timeoutMs: number;
+}): Promise<boolean> {
+  const controller = new AbortController();
+  const timeout = globalThis.setTimeout(() => controller.abort(), input.timeoutMs);
+  try {
+    return await input.verifier({
+      orderId: input.orderId,
+      productId: input.product.productId,
+      platformSku: input.product.sku,
+      idempotencyKey: input.idempotencyKey,
+      source: input.source,
+      purchasedAt: new Date().toISOString(),
+      signal: controller.signal,
+      timeoutMs: input.timeoutMs,
+    }) === true;
+  } catch {
+    return false;
+  } finally {
+    globalThis.clearTimeout(timeout);
+  }
+}
+
+function completedAitIapPurchase(
+  product: NormalizedAitIapProduct,
+  orderId: string,
+): PurchaseResult {
+  return {
+    status: 'completed',
+    transactionId: orderId,
+    entitlementIds: [product.productId],
+    evidence: createAitIapEvidence(orderId, product.sku, 'process-product-grant'),
+  };
+}
+
+function failedPurchase(): PurchaseResult {
+  return { status: 'failed', entitlementIds: [] };
+}
+
+function cancelledPurchase(): PurchaseResult {
+  return { status: 'cancelled', entitlementIds: [] };
+}
+
+function createAitIapEvidence(
+  orderId: string,
+  sku: string,
+  source: 'process-product-grant' | 'pending-order-restore',
+): PlatformEvidenceEnvelope {
+  return {
+    schema: iapEvidenceSchema,
+    payload: { orderId, sku, source },
+  };
+}
+
+function createAitIapOrderIdempotencyKey(orderId: string): string {
+  return `apps-in-toss:purchase:${encodeURIComponent(orderId)}`;
+}
+
+function safelyCleanupAitIapPurchase(cleanup: () => void): void {
+  try {
+    cleanup();
+  } catch {
+    // The bridge has already reached a terminal result; cleanup failures must
+    // not turn a completed server grant into a client-visible failure.
+  }
+}
+
+function isAitIapOrderId(value: string): boolean {
+  return value.length > 0 && value.length <= 2_048 && !/[\p{Cc}\p{Cf}]/u.test(value);
+}
+
+function isAitIapCancellation(error: unknown): boolean {
+  if (isAbortError(error)) {
+    return true;
+  }
+  if (!isRecord(error)) {
+    return false;
+  }
+  const code = typeof error.code === 'string' ? error.code : '';
+  return /CANCEL|ABORT/u.test(code);
+}
+
+function normalizeAitIapGrantTime(value: string): string {
+  return value.length > 0 && value.length <= 2_048 && !/[\p{Cc}\p{Cf}]/u.test(value)
+    ? value
+    : new Date().toISOString();
+}
+
+function toAitIapProductInfo(
+  nativeProduct: IapProductListItem,
+  configured: NormalizedAitIapProduct,
+): ProductInfo | undefined {
+  const title = normalizeAitIapDisplayText(nativeProduct.displayName);
+  const description = normalizeAitIapDisplayText(nativeProduct.description);
+  const formattedPrice = normalizeAitIapDisplayText(nativeProduct.displayAmount);
+  if (title === undefined || description === undefined || formattedPrice === undefined) {
+    return undefined;
+  }
+  const type = nativeProduct.type === 'CONSUMABLE'
+    ? 'consumable'
+    : nativeProduct.type === 'NON_CONSUMABLE'
+      ? 'non_consumable'
+      : 'subscription';
+  return {
+    id: configured.productId,
+    type,
+    title,
+    description,
+    price: {
+      formatted: formattedPrice,
+      currencyCode: configured.currencyCode,
+    },
+  };
+}
+
+function normalizeAitIapDisplayText(value: string): string | undefined {
+  const normalized = value.trim();
+  return normalized.length > 0 && normalized.length <= 2_048 && !/[\p{Cc}\p{Cf}]/u.test(normalized)
+    ? normalized
+    : undefined;
+}
+
+function normalizeIapProducts(
+  input: readonly AitIapProductConfig[] | undefined,
+): NormalizedAitIapProducts {
+  const byProductId = new Map<LogicalProductId, NormalizedAitIapProduct>();
+  const bySku = new Map<string, NormalizedAitIapProduct>();
+  for (const rawProduct of input ?? []) {
+    const productId = typeof rawProduct.productId === 'string'
+      ? normalizeAitIapConfigIdentifier(rawProduct.productId, 'productId', 128)
+      : undefined;
+    const sku = typeof rawProduct.sku === 'string'
+      ? normalizeAitIapConfigIdentifier(rawProduct.sku, 'sku', 2_048)
+      : undefined;
+    const currencyCode = normalizeAitIapCurrencyCode(rawProduct.currencyCode);
+    if (productId === undefined || sku === undefined || currencyCode === undefined) {
+      console.warn('AIT IAP product configuration is invalid; disabling one product.');
+      continue;
+    }
+    if (byProductId.has(productId) || bySku.has(sku)) {
+      console.warn(
+        'AIT IAP product configuration has a duplicate product id or SKU; disabling one product.',
+      );
+      continue;
+    }
+    const product: NormalizedAitIapProduct = {
+      productId: productId as LogicalProductId,
+      sku,
+      currencyCode,
+    };
+    byProductId.set(product.productId, product);
+    bySku.set(product.sku, product);
+  }
+  return { byProductId, bySku };
+}
+
+function normalizeAitIapConfigIdentifier(
+  value: string,
+  field: string,
+  maximumLength: number,
+): string | undefined {
+  const normalized = value.trim();
+  if (
+    normalized.length === 0
+    || normalized.length > maximumLength
+    || /[\p{Cc}\p{Cf}]/u.test(normalized)
+  ) {
+    return undefined;
+  }
+  return normalized;
+}
+
+function normalizeAitIapCurrencyCode(value: string | undefined): string | undefined {
+  const normalized = value?.trim().toUpperCase() ?? 'KRW';
+  return /^[A-Z]{3}$/u.test(normalized) ? normalized : undefined;
+}
+
 function areFullScreenAdsSupported(dependencies: AitHostDependencies): boolean {
-  return isCapabilitySupported(() => dependencies.loadFullScreenAd.isSupported())
-    && isCapabilitySupported(() => dependencies.showFullScreenAd.isSupported());
+  return isAitNativeMethodSupported(dependencies.loadFullScreenAd)
+    && isAitNativeMethodSupported(dependencies.showFullScreenAd);
+}
+
+function isAitNativeMethodSupported(method: AitCapabilityProbe): boolean {
+  return isCapabilitySupported(() => method.isSupported?.() === true);
 }
 
 function isCapabilitySupported(check: () => boolean): boolean {
@@ -1552,6 +2103,20 @@ function normalizeMaximumDisplayTimeout(value: number | undefined): number {
   );
 }
 
+function normalizeIapProductGrantTimeout(value: number | undefined): number {
+  const timeout = normalizePositiveTimeout(
+    value,
+    defaultIapProductGrantTimeoutMs,
+    'AIT IAP product-grant timeout must be a positive finite number.',
+  );
+  if (timeout > defaultIapProductGrantTimeoutMs) {
+    throw new Error(
+      `AIT IAP product-grant timeout cannot exceed ${defaultIapProductGrantTimeoutMs}ms.`,
+    );
+  }
+  return timeout;
+}
+
 function normalizePositiveTimeout(
   value: number | undefined,
   defaultValue: number,
@@ -1585,6 +2150,32 @@ function readPlacementId(payload: unknown): string {
 function readIdempotencyKey(payload: unknown, fallback: string): string {
   const value = readPayloadRecord(payload).idempotencyKey;
   return typeof value === 'string' && value.length > 0 ? value : fallback;
+}
+
+function readCommercePurchase(payload: unknown): {
+  readonly productId: LogicalProductId;
+  readonly idempotencyKey: string;
+} {
+  const value = readPayloadRecord(payload);
+  const productId = value.productId;
+  const idempotencyKey = value.idempotencyKey;
+  if (
+    typeof productId !== 'string'
+    || productId.length === 0
+    || productId.length > 128
+    || /[\p{Cc}\p{Cf}]/u.test(productId)
+  ) {
+    throw new TypeError('AIT IAP productId must contain 1 to 128 visible characters.');
+  }
+  if (
+    typeof idempotencyKey !== 'string'
+    || idempotencyKey.length === 0
+    || idempotencyKey.length > 256
+    || /[\p{Cc}\p{Cf}]/u.test(idempotencyKey)
+  ) {
+    throw new TypeError('AIT IAP idempotencyKey must contain 1 to 256 visible characters.');
+  }
+  return { productId: productId as LogicalProductId, idempotencyKey };
 }
 
 function readRequiredIdempotencyKey(payload: unknown): string {

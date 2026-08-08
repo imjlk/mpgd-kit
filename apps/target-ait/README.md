@@ -18,14 +18,14 @@ loads that bundle into the same document after installing the Apps in Toss
 bridge, and rewrites entry HTML `/assets/*` references to `/game/assets/*`.
 The target build also mirrors the copied game's `assets` directory to
 `public/assets` so root-absolute runtime asset requests still resolve during
-local devtools, phone tunnel, and wrapper-web sessions without iframe embedding.
+local wrapper-browser sessions without iframe embedding.
 
 The production bridge maps the stable game-scoped `getUserKeyForGame()` hash
 to `PlatformGateway.identity.getPlayer()` and serializes gateway storage values
 through the native `Storage` API. The `dev:plain` script enables a local identity
-provider explicitly with `VITE_MPGD_AIT_MOCK_IDENTITY=1`; release builds never
-use that fixed local player id. Game identity requires Toss app 5.232.0 or newer,
-while Game Center requires Toss app 5.221.0 or newer.
+provider and local SDK mock explicitly; release builds never use that fixed local
+player id. Game identity requires Toss app 5.232.0 or newer, while Game Center
+requires Toss app 5.221.0 or newer.
 SDK results must still be verified with a QR test in the Toss app.
 
 SDK 3 bundles require API servers to allow both the production

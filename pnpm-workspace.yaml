@@ -8,8 +8,6 @@ packages:
 allowBuilds:
   '@sentry/cli': true
   '@swc/core': true
-  # @ait-co/devtools lazily installs cloudflared when the phone tunnel starts;
-  # keep default workspace installs free of external binary downloads.
   cloudflared: false
   esbuild: true
   protobufjs: true
@@ -64,5 +62,3 @@ minimumReleaseAgeExclude:
   - '@devvit/web-view-scripts@0.13.8'
   - '@devvit/web@0.13.8'
   - devvit@0.13.8
-  - '@ait-co/devtools@0.1.140'
-  - '@apps-in-toss/cli@3.0.0-beta.66a479a'

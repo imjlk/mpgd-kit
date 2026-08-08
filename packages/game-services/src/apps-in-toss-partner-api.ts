@@ -5,6 +5,10 @@ export const defaultAppsInTossPartnerApiTimeoutMs = 10_000;
 
 const verifyAnonymousKeyPath = 'api-partner/v1/apps-in-toss/users/anon-key/verify';
 const sendFunctionalMessagePath = 'api-partner/v1/apps-in-toss/messenger/send-message';
+const exchangeLoginAuthorizationCodePath =
+  'api-partner/v1/apps-in-toss/user/oauth2/generate-token';
+const getLoginUserPath = 'api-partner/v1/apps-in-toss/user/oauth2/login-me';
+const getIapOrderStatusPath = 'api-partner/v1/apps-in-toss/order/get-order-status';
 const maximumResponseBodyBytes = 256 * 1_024;
 
 /** Compatible with a Cloudflare mTLS certificate binding (`env.BINDING.fetch`). */
@@ -33,6 +37,50 @@ export interface AppsInTossFunctionalMessageResult {
   readonly contentIds: readonly string[];
 }
 
+/** The source environment returned by the Apps in Toss login SDK. */
+export type AppsInTossLoginReferrer = 'DEFAULT' | 'SANDBOX';
+
+/**
+ * Short-lived OAuth token material returned by the partner API.
+ *
+ * Callers should use this only to immediately resolve a login identity or
+ * securely persist it in a dedicated credential store. It must never be sent
+ * back to a game client.
+ */
+export interface AppsInTossLoginToken {
+  readonly tokenType: 'bearer';
+  readonly accessToken: string;
+  readonly refreshToken: string;
+  readonly expiresInSeconds: number;
+  readonly scope: string;
+}
+
+/** App-scoped user identity returned by the Apps in Toss login API. */
+export interface AppsInTossLoginUser {
+  /** Serialized because the documented API returns a numeric user key. */
+  readonly userKey: string;
+  readonly scope: string;
+}
+
+export type AppsInTossIapOrderStatus =
+  | 'PURCHASED'
+  | 'PAYMENT_COMPLETED'
+  | 'FAILED'
+  | 'REFUNDED'
+  | 'ORDER_IN_PROGRESS'
+  | 'NOT_FOUND'
+  | 'MINIAPP_MISMATCH'
+  | 'ERROR';
+
+/** Authoritative order status returned from the mTLS Apps in Toss partner API. */
+export interface AppsInTossIapOrderStatusResult {
+  readonly orderId: string;
+  readonly sku: string;
+  readonly statusDeterminedAt: string;
+  readonly status: AppsInTossIapOrderStatus;
+  readonly reason?: string;
+}
+
 export interface AppsInTossPartnerApiClient {
   verifyAnonymousKey(input: {
     readonly anonymousKey: string;
@@ -41,6 +89,24 @@ export interface AppsInTossPartnerApiClient {
   sendFunctionalMessage(
     input: SendAppsInTossFunctionalMessageInput,
   ): Promise<AppsInTossFunctionalMessageResult>;
+  exchangeLoginAuthorizationCode(input: {
+    readonly authorizationCode: string;
+    readonly referrer: AppsInTossLoginReferrer;
+    readonly signal?: AbortSignal;
+  }): Promise<AppsInTossLoginToken>;
+  getLoginUser(input: {
+    readonly accessToken: string;
+    readonly signal?: AbortSignal;
+  }): Promise<AppsInTossLoginUser>;
+  getIapOrderStatus(input: {
+    readonly orderId: string;
+    /**
+     * A user key resolved through Apps in Toss login. Supplying it binds the
+     * lookup to the same authenticated user that initiated the purchase.
+     */
+    readonly tossUserKey: string;
+    readonly signal?: AbortSignal;
+  }): Promise<AppsInTossIapOrderStatusResult>;
 }
 
 export interface CreateAppsInTossPartnerApiClientInput {
@@ -71,8 +137,9 @@ export function createAppsInTossPartnerApiClient(
   return {
     async verifyAnonymousKey(request) {
       const anonymousKey = normalizeIdentifier(request.anonymousKey, 'anonymousKey');
-      const response = await postJson({
+      const response = await requestJson({
         mtls: input.mtls,
+        method: 'POST',
         url: new URL(verifyAnonymousKeyPath, baseUrl).href,
         headers: { 'x-anon-key': anonymousKey },
         body: undefined,
@@ -99,8 +166,9 @@ export function createAppsInTossPartnerApiClient(
         request.templateSetCode,
         'templateSetCode',
       );
-      const response = await postJson({
+      const response = await requestJson({
         mtls: input.mtls,
+        method: 'POST',
         url: new URL(sendFunctionalMessagePath, baseUrl).href,
         headers: recipient.type === 'anonymous'
           ? { 'x-anon-key': recipient.key }
@@ -115,11 +183,66 @@ export function createAppsInTossPartnerApiClient(
       const envelope = requireSuccessEnvelope(response);
       return parseFunctionalMessageResult(envelope.success, response.status);
     },
+
+    async exchangeLoginAuthorizationCode(request) {
+      const authorizationCode = normalizeIdentifier(
+        request.authorizationCode,
+        'authorizationCode',
+      );
+      const referrer = normalizeLoginReferrer(request.referrer);
+      const response = await requestJson({
+        mtls: input.mtls,
+        method: 'POST',
+        url: new URL(exchangeLoginAuthorizationCodePath, baseUrl).href,
+        headers: {},
+        body: { authorizationCode, referrer },
+        timeoutMs,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+      const envelope = requireSuccessEnvelope(response);
+      return parseLoginToken(envelope.success, response.status);
+    },
+
+    async getLoginUser(request) {
+      const accessToken = normalizeOpaqueValue(
+        request.accessToken,
+        'accessToken',
+        16_384,
+      );
+      const response = await requestJson({
+        mtls: input.mtls,
+        method: 'GET',
+        url: new URL(getLoginUserPath, baseUrl).href,
+        headers: { authorization: `Bearer ${accessToken}` },
+        body: undefined,
+        timeoutMs,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+      const envelope = requireSuccessEnvelope(response);
+      return parseLoginUser(envelope.success, response.status);
+    },
+
+    async getIapOrderStatus(request) {
+      const orderId = normalizeIdentifier(request.orderId, 'orderId');
+      const tossUserKey = normalizeTossUserKey(request.tossUserKey, 'tossUserKey');
+      const response = await requestJson({
+        mtls: input.mtls,
+        method: 'POST',
+        url: new URL(getIapOrderStatusPath, baseUrl).href,
+        headers: { 'x-toss-user-key': tossUserKey },
+        body: { orderId },
+        timeoutMs,
+        ...(request.signal === undefined ? {} : { signal: request.signal }),
+      });
+      const envelope = requireSuccessEnvelope(response);
+      return parseIapOrderStatus(envelope.success, response.status);
+    },
   };
 }
 
-interface PostJsonInput {
+interface JsonRequestInput {
   readonly mtls: AppsInTossMutualTlsFetcher;
+  readonly method: 'GET' | 'POST';
   readonly url: string;
   readonly headers: Readonly<Record<string, string>>;
   readonly body: Readonly<Record<string, unknown>> | undefined;
@@ -133,12 +256,16 @@ interface PartnerApiResponse {
   readonly body: unknown;
 }
 
-async function postJson(input: PostJsonInput): Promise<PartnerApiResponse> {
+async function requestJson(input: JsonRequestInput): Promise<PartnerApiResponse> {
   const timeout = createTimeoutSignal(input.signal, input.timeoutMs);
   try {
     // The documented anonymous-key verification request uses an empty body
-    // while still declaring application/json.
-    const requestBody = input.body === undefined ? '' : JSON.stringify(input.body);
+    // while still declaring application/json. GET requests must omit a body.
+    const requestBody = input.method === 'GET'
+      ? undefined
+      : input.body === undefined
+        ? ''
+        : JSON.stringify(input.body);
     const headers = new Headers({
       accept: 'application/json',
       'content-type': 'application/json',
@@ -148,9 +275,9 @@ async function postJson(input: PostJsonInput): Promise<PartnerApiResponse> {
     let text: string;
     try {
       response = await input.mtls.fetch(input.url, {
-        method: 'POST',
+        method: input.method,
         headers,
-        body: requestBody,
+        ...(requestBody === undefined ? {} : { body: requestBody }),
         signal: timeout.signal,
       });
       text = await readBoundedResponseText(response);
@@ -305,6 +432,80 @@ function parseFunctionalMessageResult(
   };
 }
 
+function parseLoginToken(input: unknown, status: number): AppsInTossLoginToken {
+  if (!isRecord(input)) {
+    throw new AppsInTossPartnerApiError('Apps in Toss returned an invalid login token.', status);
+  }
+  const tokenType = requireOpaqueValue(input.tokenType, 'tokenType', status, 64).toLowerCase();
+  if (tokenType !== 'bearer') {
+    throw new AppsInTossPartnerApiError('Apps in Toss returned an unsupported token type.', status);
+  }
+
+  return {
+    tokenType,
+    accessToken: requireOpaqueValue(input.accessToken, 'accessToken', status, 16_384),
+    refreshToken: requireOpaqueValue(input.refreshToken, 'refreshToken', status, 16_384),
+    expiresInSeconds: requirePositiveInteger(input.expiresIn, 'expiresIn', status),
+    scope: requireOpaqueValue(input.scope, 'scope', status, 4_096),
+  };
+}
+
+function parseLoginUser(input: unknown, status: number): AppsInTossLoginUser {
+  if (!isRecord(input)) {
+    throw new AppsInTossPartnerApiError('Apps in Toss returned an invalid login user.', status);
+  }
+
+  return {
+    userKey: normalizeTossUserKey(input.userKey, 'userKey', status),
+    scope: requireOpaqueValue(input.scope, 'scope', status, 4_096),
+  };
+}
+
+function parseIapOrderStatus(
+  input: unknown,
+  status: number,
+): AppsInTossIapOrderStatusResult {
+  if (!isRecord(input)) {
+    throw new AppsInTossPartnerApiError(
+      'Apps in Toss returned an invalid IAP order status.',
+      status,
+    );
+  }
+  const orderStatus = requireOpaqueValue(input.status, 'status', status, 64);
+  if (!appsInTossIapOrderStatuses.has(orderStatus as AppsInTossIapOrderStatus)) {
+    throw new AppsInTossPartnerApiError(
+      'Apps in Toss returned an unknown IAP order status.',
+      status,
+    );
+  }
+  const reason = input.reason;
+  return {
+    orderId: requireOpaqueValue(input.orderId, 'orderId', status, 2_048),
+    sku: requireOpaqueValue(input.sku, 'sku', status, 2_048),
+    statusDeterminedAt: requireOpaqueValue(
+      input.statusDeterminedAt,
+      'statusDeterminedAt',
+      status,
+      2_048,
+    ),
+    status: orderStatus as AppsInTossIapOrderStatus,
+    ...(reason === undefined
+      ? {}
+      : { reason: requireOpaqueValue(reason, 'reason', status, 4_096) }),
+  };
+}
+
+const appsInTossIapOrderStatuses = new Set<AppsInTossIapOrderStatus>([
+  'PURCHASED',
+  'PAYMENT_COMPLETED',
+  'FAILED',
+  'REFUNDED',
+  'ORDER_IN_PROGRESS',
+  'NOT_FOUND',
+  'MINIAPP_MISMATCH',
+  'ERROR',
+]);
+
 function readContentIds(detail: unknown): readonly string[] {
   if (!isRecord(detail)) {
     return [];
@@ -373,6 +574,72 @@ function normalizeIdentifier(value: string, field: string): string {
     );
   }
   return normalized;
+}
+
+function normalizeLoginReferrer(value: AppsInTossLoginReferrer): AppsInTossLoginReferrer {
+  if (value !== 'DEFAULT' && value !== 'SANDBOX') {
+    throw new TypeError('referrer must be DEFAULT or SANDBOX.');
+  }
+  return value;
+}
+
+function normalizeOpaqueValue(value: string, field: string, maximumLength: number): string {
+  if (
+    value.length === 0
+    || value.length > maximumLength
+    || value.trim() !== value
+    || /[\p{Cc}\p{Cf}]/u.test(value)
+  ) {
+    throw new TypeError(
+      `${field} must contain 1 to ${maximumLength} characters without surrounding whitespace, control, or format characters.`,
+    );
+  }
+  return value;
+}
+
+function requireOpaqueValue(
+  value: unknown,
+  field: string,
+  status: number,
+  maximumLength: number,
+): string {
+  if (typeof value !== 'string') {
+    throw new AppsInTossPartnerApiError(`Apps in Toss returned an invalid ${field}.`, status);
+  }
+  try {
+    return normalizeOpaqueValue(value, field, maximumLength);
+  } catch {
+    throw new AppsInTossPartnerApiError(`Apps in Toss returned an invalid ${field}.`, status);
+  }
+}
+
+function requirePositiveInteger(value: unknown, field: string, status: number): number {
+  const parsed = typeof value === 'number'
+    ? value
+    : typeof value === 'string' && /^\d+$/u.test(value)
+      ? Number(value)
+      : Number.NaN;
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new AppsInTossPartnerApiError(`Apps in Toss returned an invalid ${field}.`, status);
+  }
+  return parsed;
+}
+
+function normalizeTossUserKey(value: unknown, field: string, status?: number): string {
+  const normalized = typeof value === 'number'
+    ? Number.isSafeInteger(value) && value > 0
+      ? String(value)
+      : undefined
+    : typeof value === 'string' && /^[1-9]\d*$/u.test(value)
+      ? value
+      : undefined;
+  if (normalized !== undefined) {
+    return normalized;
+  }
+  if (status === undefined) {
+    throw new TypeError(`${field} must be a positive Apps in Toss user key.`);
+  }
+  throw new AppsInTossPartnerApiError(`Apps in Toss returned an invalid ${field}.`, status);
 }
 
 function normalizeBaseUrl(input: string): URL {

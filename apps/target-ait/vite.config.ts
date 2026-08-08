@@ -1,23 +1,16 @@
 import { readFileSync } from 'node:fs';
 
-import aitDevtools from '@ait-co/devtools/unplugin';
 import { extractAitAdBridgeConfig } from '@mpgd/adapter-ait/ad-config';
 import ttsc from '@ttsc/unplugin/vite';
 import { defineConfig } from 'vite';
 
-const isTruthyEnv = (value: string | undefined): boolean =>
-  value !== undefined && value !== '' && value !== '0' && value.toLowerCase() !== 'false';
-
-const aitDevtoolsTunnel = isTruthyEnv(process.env.AIT_TUNNEL)
-  ? { cdp: isTruthyEnv(process.env.AIT_TUNNEL_CDP) }
-  : false;
 const aitAppName = process.env.MPGD_AIT_APP_NAME?.trim() || 'mpgd-kit';
 const aitAdConfig = readAitAdConfig(process.env.MPGD_AD_PLACEMENTS_FILE);
 
 export default defineConfig(({ command, isPreview }) => {
-  const enableAitDevtools = command === 'serve'
+  const enableLocalAitMock = command === 'serve'
     && !isPreview
-    && process.env.MPGD_AIT_DEVTOOLS !== '0';
+    && process.env.MPGD_AIT_LOCAL_MOCK !== '0';
 
   return {
     define: {
@@ -25,21 +18,18 @@ export default defineConfig(({ command, isPreview }) => {
       __MPGD_AIT_AD_GROUP_IDS__: JSON.stringify(aitAdConfig.adGroupIds),
       __MPGD_AIT_AD_PLACEMENT_TYPES__: JSON.stringify(aitAdConfig.adPlacementTypes),
     },
-    // Vite prebundles the Kit host before plugin resolve hooks run. An explicit development
-    // alias keeps that optimized host while replacing its transitive native SDK import.
-    ...(enableAitDevtools
+    // Browser-only local development must not pretend that native rewards or
+    // purchases are available. Production and console builds use the real SDK.
+    ...(enableLocalAitMock
       ? {
           resolve: {
             alias: {
-              '@apps-in-toss/web-framework': '@ait-co/devtools/mock',
+              '@apps-in-toss/web-framework': '@mpgd/adapter-ait/local-mock',
             },
           },
         }
       : {}),
     plugins: [
-      ...(enableAitDevtools
-        ? [aitDevtools.vite({ mcp: true, tunnel: aitDevtoolsTunnel })]
-        : []),
       ttsc({
         project: 'tsconfig.bundle.json',
         plugins: false,

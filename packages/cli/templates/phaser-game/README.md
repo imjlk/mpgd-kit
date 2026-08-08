@@ -250,29 +250,19 @@ pnpm build:ait
 pnpm smoke:ait
 ```
 
-The game-owned wrapper includes the Apps in Toss community devtools package for
-SDK mocks and device debugging:
+The game-owned wrapper provides an explicit local SDK mock for browser layout
+and non-native flow checks:
 
 ```sh
 pnpm ait:wrapper:dev
 pnpm ait:wrapper:dev:plain
-pnpm ait:wrapper:dev:phone
-pnpm ait:devtools:mcp
-pnpm ait:devtools:mcp:mobile
 ```
 
-`ait:wrapper:dev` runs `apps/target-ait` with the community Vite plugin enabled.
-It loads the last game bundle copied by `pnpm build:ait` from the wrapper's
-`public/game` directory, so run `pnpm build:ait` again after game changes before
-opening a wrapper devtools session. Use `ait:wrapper:dev:plain` to disable the
-devtools plugin. `ait:wrapper:dev:phone` uses the devtools tunnel and CDP relay
-for phone sandbox checks, and `ait:devtools:mcp:mobile` starts the community MCP
-bridge in the phone tunnel mode after the wrapper prints the tunnel URLs. Use
-`ait:devtools:mcp` for the default local or relay debugging mode. The kit
-intentionally leaves
-`cloudflared` postinstall disabled; the first phone tunnel session downloads the
-binary lazily through the community devtools package instead of during ordinary
-workspace install.
+`ait:wrapper:dev` loads the last game bundle copied by `pnpm build:ait` from the
+wrapper's `public/game` directory, so run `pnpm build:ait` again after game
+changes before opening it. The local mock deliberately keeps ads, promotions,
+and IAP unavailable; test those flows from the Apps in Toss console QR sandbox
+or a real device after uploading the `.ait` bundle.
 
 The starter includes `@ait-co/console-cli`, the Apps in Toss community console
 CLI, as a dev dependency for project-local console automation:
@@ -405,9 +395,9 @@ HTTPS game-services backend that verifies purchase or reward evidence.
   bridge fails closed on identity, provider, serialization, and quota errors;
   it never switches progress to browser `localStorage`.
 - Apps in Toss is game-owned in `apps/target-ait`. The wrapper keeps the app
-  name, console state, review metadata, and `@ait-co/devtools` development
-  integration local to the game while reusing `@mpgd/adapter-ait` for the
-  production bridge and game-bundle loader.
+  name, console state, review metadata, and local SDK mock configuration in the
+  game while reusing `@mpgd/adapter-ait` for the production bridge and
+  game-bundle loader.
 - Android and iOS currently use the kit reference Capacitor shell at
   `${MPGD_KIT_PATH}/apps/mobile-capacitor`. That is useful for local artifact
   checks, and final artifacts are copied back to this game's `release-output/`
