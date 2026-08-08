@@ -207,6 +207,7 @@ describe('AIT production host bridge', () => {
       readIapEntitlements: async () => [],
       dependencies: createDependencies({
         iap: createSupportedIap({
+          products: [createIapProduct()],
           onPurchase: (input) => {
             callbacks = input;
           },
@@ -242,6 +243,7 @@ describe('AIT production host bridge', () => {
 
   it('hides subscription products until a subscription authority is configured', async () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const startPurchase = vi.fn();
     try {
       const bridge = createAitHostBridge({
         iapProducts: [{ productId: 'PREMIUM_MONTHLY', sku: 'ait.ttokdoku.premium.monthly' }],
@@ -259,11 +261,17 @@ describe('AIT production host bridge', () => {
               type: 'SUBSCRIPTION',
               renewalCycle: 'MONTHLY',
             }],
+            onPurchase: startPurchase,
           }),
         }),
       });
 
       await expect(request(bridge, 'commerce.getProducts', {})).resolves.toEqual([]);
+      await expect(request(bridge, 'commerce.purchase', {
+        productId: 'PREMIUM_MONTHLY',
+        idempotencyKey: 'subscription-direct-purchase',
+      })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+      expect(startPurchase).not.toHaveBeenCalled();
       expect(warning).toHaveBeenCalledWith(
         'AIT subscription IAP is unavailable through the one-time order bridge.',
         expect.objectContaining({
@@ -286,6 +294,7 @@ describe('AIT production host bridge', () => {
       readIapEntitlements: async () => [],
       dependencies: createDependencies({
         iap: createSupportedIap({
+          products: [createIapProduct()],
           onPurchase: (input) => {
             callbacks = input;
           },
@@ -332,6 +341,15 @@ describe('AIT production host bridge', () => {
       readIapEntitlements: async () => [],
       dependencies: createDependencies({
         iap: createSupportedIap({
+          products: [
+            createIapProduct(),
+            createIapProduct({
+              sku: 'ait.ttokdoku.hints.20',
+              displayName: 'Hint Pack 20',
+              description: 'Adds twenty hints.',
+              displayAmount: '₩3,900',
+            }),
+          ],
           onPurchase: (input) => {
             const sku = input.options.sku;
             if (typeof sku === 'string') {
@@ -400,6 +418,7 @@ describe('AIT production host bridge', () => {
         iapProductGrantTimeoutMs: 10,
         dependencies: createDependencies({
           iap: createSupportedIap({
+            products: [createIapProduct()],
             onPurchase: (input) => {
               callbacks = input;
             },
@@ -484,6 +503,85 @@ describe('AIT production host bridge', () => {
     });
     expect(verifyIapProductGrant).toHaveBeenCalledTimes(1);
     expect(completeProductGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not let ineligible pending orders consume the restore work limit', async () => {
+    const completeProductGrant = vi.fn(async () => true);
+    const verifyIapProductGrant = vi.fn(async () => true);
+    const ignoredOrders = Array.from({ length: 20 }, (_, index) => ({
+      orderId: `unmapped-order-${index}`,
+      sku: 'ait.unknown',
+      paymentCompletedDate: '2026-08-08T10:00:00.000Z',
+    }));
+    const bridge = createAitHostBridge({
+      iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        iap: createSupportedIap({
+          pendingOrders: {
+            orders: [
+              ...ignoredOrders,
+              {
+                orderId: 'eligible-order',
+                sku: 'ait.ttokdoku.hints.5',
+                paymentCompletedDate: '2026-08-08T10:00:00.000Z',
+              },
+              {
+                orderId: 'eligible-order',
+                sku: 'ait.ttokdoku.hints.5',
+                paymentCompletedDate: '2026-08-08T10:00:00.000Z',
+              },
+            ],
+          },
+          completeProductGrant,
+        }),
+      }),
+    });
+
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toEqual({
+      restoredEntitlements: [{
+        id: 'HINT_PACK_5',
+        source: 'purchase',
+        grantedAt: '2026-08-08T10:00:00.000Z',
+      }],
+    });
+    expect(verifyIapProductGrant).toHaveBeenCalledTimes(1);
+    expect(completeProductGrant).toHaveBeenCalledTimes(1);
+  });
+
+  it('fails closed when IAP preparation does not settle before its deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      let nativePurchaseStarted = false;
+      const bridge = createAitHostBridge({
+        iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+        prepareIap: async () => await new Promise<boolean>(() => {}),
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+        iapProductGrantTimeoutMs: 10,
+        dependencies: createDependencies({
+          iap: createSupportedIap({
+            products: [createIapProduct()],
+            onPurchase: () => {
+              nativePurchaseStarted = true;
+            },
+          }),
+        }),
+      });
+
+      const purchase = request(bridge, 'commerce.purchase', {
+        productId: 'HINT_PACK_5',
+        idempotencyKey: 'hung-iap-preparation',
+      });
+      await vi.advanceTimersByTimeAsync(10);
+
+      await expect(purchase).resolves.toEqual({ status: 'failed', entitlementIds: [] });
+      expect(nativePurchaseStarted).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('requests configured notification agreement and reflects the session result', async () => {
@@ -1842,6 +1940,22 @@ function createSupportedIap(input: {
     ),
   } satisfies AitHostDependencies['iap'];
   return iap;
+}
+
+function createIapProduct(input: {
+  readonly sku?: string;
+  readonly displayName?: string;
+  readonly description?: string;
+  readonly displayAmount?: string;
+} = {}): IapProductListResult['products'][number] {
+  return {
+    sku: input.sku ?? 'ait.ttokdoku.hints.5',
+    displayAmount: input.displayAmount ?? '₩1,100',
+    displayName: input.displayName ?? 'Hint Pack',
+    description: input.description ?? 'Adds five hints.',
+    iconUrl: 'https://images.example/hints.png',
+    type: 'CONSUMABLE',
+  };
 }
 
 function createIapSuccessEvent(orderId: string) {

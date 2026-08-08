@@ -491,6 +491,9 @@ export function createAitHostBridge(
         ) {
           return ok(request, failedPurchase());
         }
+        if (!(await isAitOneTimeIapProduct(dependencies, product))) {
+          return ok(request, failedPurchase());
+        }
 
         const purchaseRequestKey = createAitIapPurchaseRequestKey(
           purchase.productId,
@@ -1664,11 +1667,15 @@ async function readAitIapEntitlements(
 }
 
 async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<PurchaseResult> {
-  const prepared = await prepareAitIap(input.prepare, {
-    intent: 'purchase',
-    productId: input.product.productId,
-    platformSku: input.product.sku,
-  });
+  const prepared = await prepareAitIap(
+    input.prepare,
+    {
+      intent: 'purchase',
+      productId: input.product.productId,
+      platformSku: input.product.sku,
+    },
+    input.timeoutMs,
+  );
   if (!prepared) {
     return failedPurchase();
   }
@@ -1754,7 +1761,7 @@ async function restoreAitIapProducts(
   if (!isAitIapSupported(input) || prepare === undefined || verifier === undefined) {
     return { restoredEntitlements: [] };
   }
-  const prepared = await prepareAitIap(prepare, { intent: 'restore' });
+  const prepared = await prepareAitIap(prepare, { intent: 'restore' }, input.timeoutMs);
   if (!prepared) {
     return { restoredEntitlements: [] };
   }
@@ -1766,24 +1773,38 @@ async function restoreAitIapProducts(
     return { restoredEntitlements: [] };
   }
 
+  const eligibleOrders: Array<{
+    readonly order: (typeof pendingOrders.orders)[number];
+    readonly product: NormalizedAitIapProduct;
+  }> = [];
+  const seenOrderIds = new Set<string>();
+  for (const order of pendingOrders.orders) {
+    const product = input.products.bySku.get(order.sku);
+    if (
+      product === undefined
+      || !isAitIapOrderId(order.orderId)
+      || seenOrderIds.has(order.orderId)
+    ) {
+      continue;
+    }
+    seenOrderIds.add(order.orderId);
+    eligibleOrders.push({ order, product });
+  }
+
   const restoredEntitlements: Array<{
     readonly id: string;
     readonly source: 'purchase';
     readonly grantedAt: string;
   }> = [];
-  const orders = pendingOrders.orders.slice(0, maximumPendingIapOrders);
-  if (pendingOrders.orders.length > orders.length) {
+  const orders = eligibleOrders.slice(0, maximumPendingIapOrders);
+  if (eligibleOrders.length > orders.length) {
     console.warn('AIT IAP pending-order restore reached its per-launch limit.', {
       limit: maximumPendingIapOrders,
-      ignoredOrderCount: pendingOrders.orders.length - orders.length,
+      ignoredOrderCount: eligibleOrders.length - orders.length,
     });
   }
 
-  for (const order of orders) {
-    const product = input.products.bySku.get(order.sku);
-    if (product === undefined || !isAitIapOrderId(order.orderId)) {
-      continue;
-    }
+  for (const { order, product } of orders) {
     const granted = await verifyAitIapProductGrant({
       verifier,
       orderId: order.orderId,
@@ -1818,13 +1839,41 @@ async function restoreAitIapProducts(
 async function prepareAitIap(
   prepare: AitIapPreparer | undefined,
   input: AitIapPreparationInput,
+  timeoutMs: number,
 ): Promise<boolean> {
   if (prepare === undefined) {
     return false;
   }
+  let timeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const timeoutResult = new Promise<false>((resolve) => {
+    timeout = globalThis.setTimeout(() => resolve(false), timeoutMs);
+  });
+  const preparationResult = Promise.resolve()
+    .then(async () => prepare(input))
+    .then((result) => result === true, () => false);
   try {
-    return await prepare(input) === true;
+    return await Promise.race([preparationResult, timeoutResult]);
+  } finally {
+    if (timeout !== undefined) {
+      globalThis.clearTimeout(timeout);
+    }
+  }
+}
+
+async function isAitOneTimeIapProduct(
+  dependencies: AitHostDependencies,
+  configured: NormalizedAitIapProduct,
+): Promise<boolean> {
+  try {
+    const result = await dependencies.iap.getProductItemList();
+    const nativeProduct = result.products.find(({ sku }) => sku === configured.sku);
+    if (nativeProduct === undefined) {
+      return false;
+    }
+    return nativeProduct.type === 'CONSUMABLE' || nativeProduct.type === 'NON_CONSUMABLE';
   } catch {
+    // The provider catalog is the authoritative source for the purchase flow.
+    // Do not route an unknown or unavailable SKU into a one-time order.
     return false;
   }
 }

@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 import { extractAitAdBridgeConfig } from '@mpgd/adapter-ait/ad-config';
 import ttsc from '@ttsc/unplugin/vite';
@@ -6,6 +7,9 @@ import { defineConfig } from 'vite';
 
 const aitAppName = process.env.MPGD_AIT_APP_NAME?.trim() || 'mpgd-kit';
 const aitAdConfig = readAitAdConfig(process.env.MPGD_AD_PLACEMENTS_FILE);
+const aitLocalMockPath = fileURLToPath(
+  new URL('../../adapters/ait/src/local-mock.ts', import.meta.url),
+);
 
 export default defineConfig(({ command, isPreview }) => {
   const enableLocalAitMock = command === 'serve'
@@ -24,7 +28,9 @@ export default defineConfig(({ command, isPreview }) => {
       ? {
           resolve: {
             alias: {
-              '@apps-in-toss/web-framework': '@mpgd/adapter-ait/local-mock',
+              // Resolve source directly: the local wrapper must work in a
+              // fresh workspace before package build artifacts exist.
+              '@apps-in-toss/web-framework': aitLocalMockPath,
             },
           },
         }
