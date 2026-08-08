@@ -260,6 +260,56 @@ describe('AIT production host bridge', () => {
     ]);
   });
 
+  it('bounds completed client-attempt markers while preserving the newest results', async () => {
+    const values = new Map<string, string>();
+    const callbacks: IapPurchaseCallbacks[] = [];
+    const bridge = createAitHostBridge({
+      iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => true,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          products: [createIapProduct()],
+          onPurchase: (input) => {
+            callbacks.push(input);
+          },
+        }),
+      }),
+    });
+
+    for (let index = 0; index < 65; index += 1) {
+      const idempotencyKey = `retained-attempt-${index}`;
+      const orderId = `order-retention-${index}`;
+      const purchase = request(bridge, 'commerce.purchase', {
+        productId: 'HINT_PACK_5',
+        idempotencyKey,
+      });
+      await vi.waitFor(() => expect(callbacks).toHaveLength(index + 1));
+      const callback = callbacks[index];
+      if (callback === undefined) {
+        throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+      }
+      await expect(callback.options.processProductGrant({ orderId })).resolves.toBe(true);
+      await callback.onEvent({ type: 'success', data: createIapSuccessEvent(orderId) });
+      await expect(purchase).resolves.toMatchObject({
+        status: 'completed',
+        transactionId: orderId,
+      });
+    }
+
+    const indexKey = 'mpgd:ait:iap-completed-purchase-index:v1';
+    await vi.waitFor(() => expect(
+      JSON.parse(values.get(indexKey) ?? '[]'),
+    ).toHaveLength(64));
+    await vi.waitFor(() => expect(
+      values.has('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:retained-attempt-0'),
+    ).toBe(false));
+    expect(values.has('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:retained-attempt-64'))
+      .toBe(true);
+  });
+
   it('fails closed when the native IAP callback cannot verify the product grant', async () => {
     let callbacks: IapPurchaseCallbacks | undefined;
     const bridge = createAitHostBridge({
