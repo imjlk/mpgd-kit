@@ -102,6 +102,22 @@ try {
     () => runOfflinePlaytestPackaging({ gameRoot: oversizedAssetGame, maximumBytes: 100 }),
     /Offline asset assets\/large\.bin is 101 bytes, exceeding the 100-byte limit/u,
   );
+  const cumulativeAssetsGame = createPreviewFixture('cumulative-assets', {
+    indexHtml: '<!doctype html><html><head></head><body><img src="/assets/first.bin"><img src="/assets/second.bin"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    mainJs: 'document.body.dataset.ready = "true";',
+  });
+  fs.writeFileSync(
+    path.join(cumulativeAssetsGame, 'artifacts/web-preview/assets/first.bin'),
+    Buffer.alloc(400),
+  );
+  fs.writeFileSync(
+    path.join(cumulativeAssetsGame, 'artifacts/web-preview/assets/second.bin'),
+    Buffer.alloc(400),
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: cumulativeAssetsGame, maximumBytes: 1_000 }),
+    /asset data URLs total .* exceeding the 1000-byte limit/u,
+  );
   assert.equal(defaultOfflinePlaytestMaximumBytes, 25 * 1024 * 1024);
 
   const tamperedOutputGame = createPreviewFixture('tampered-output');
@@ -197,6 +213,14 @@ try {
     /does not support script-driven navigation/u,
   );
 
+  const openNavigationGame = createPreviewFixture('open-navigation', {
+    mainJs: 'window.open("https://example.com/escape");',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: openNavigationGame }),
+    /does not support script-driven navigation/u,
+  );
+
   const objectLocationHtml = await packageAndReadFixture('object-location-property', {
     mainJs: 'const frame = { location: "local" }; frame.location = "updated"; document.body.dataset.location = frame.location;',
   });
@@ -223,6 +247,15 @@ try {
     /<!--\s*<script type="module" src="\/old\.js"><\/script>\s*-->/u,
   );
   assert.doesNotMatch(commentedEntryHtml, /MPGD_OFFLINE_PLAYTEST_ENTRY/u);
+
+  const attributedEntryHtml = await packageAndReadFixture('attributed-module-entry', {
+    indexHtml: '<!doctype html><html><head></head><body><main id="game"></main><script id="game-entry" class="boot" data-note=">" type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(
+    attributedEntryHtml,
+    /<script id="game-entry" class="boot" data-note=">" type="module">/u,
+  );
+  assert.doesNotMatch(attributedEntryHtml, /<script[^>]*\bsrc=/u);
 
   const inlineScriptHtml = await packageAndReadFixture('inline-script-assets', {
     indexHtml: '<!doctype html><html><head><script>window.icon=\'/assets/icon.png\';window.markup=\'<style>body{background:url("/assets/missing.png")}</style><img src="/assets/missing.png">\';</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -436,6 +469,12 @@ try {
   assert.doesNotMatch(encodedPathHtml, /space%20icon/u);
   assert.match(encodedPathHtml, /data:image\/png;base64,/u);
 
+  const whitespaceUrlHtml = await packageAndReadFixture('url-whitespace', {
+    indexHtml: '<!doctype html><html><head></head><body><img src=" \t/assets/pixel.png \n"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.doesNotMatch(whitespaceUrlHtml, /[\t ]\/assets\/pixel\.png/u);
+  assert.match(whitespaceUrlHtml, /src="data:image\/png;base64,/u);
+
   const htmlEntityAssetHtml = await packageAndReadFixture(
     'html-entity-asset',
     {
@@ -537,6 +576,17 @@ try {
   const escapedCssAssetHtml = await packageAndReadFixture('escaped-css-asset', {}, escapedCssFiles);
   assert.doesNotMatch(escapedCssAssetHtml, /player\\ icon\.png/u);
   assert.match(escapedCssAssetHtml, /data:image\/png;base64,/u);
+
+  const imageSetFiles: readonly PreviewFixtureFile[] = [
+    [
+      'artifacts/web-preview/assets/main.css',
+      'body { background-image: image-set("/assets/icon.png" 1x, "/assets/icon@2x.png" 2x); }',
+    ],
+    ['artifacts/web-preview/assets/icon@2x.png', onePixelPng],
+  ];
+  const imageSetHtml = await packageAndReadFixture('css-image-set', {}, imageSetFiles);
+  assert.doesNotMatch(imageSetHtml, /\/assets\/icon(?:@2x)?\.png/u);
+  assert.equal(imageSetHtml.match(/data:image\/png;base64,/gu)?.length, 2);
 
   const parenthesizedAssetDirectoryHtml = await packageAndReadFixture(
     'parenthesized-asset-directory',
@@ -641,6 +691,18 @@ try {
   assert.match(objectAssetHtml, /object-src data:/u);
   assert.match(objectAssetHtml, /data:image\/svg\+xml;base64,/u);
 
+  const nestedSvgGame = createPreviewFixture('nested-svg', {
+    indexHtml: '<!doctype html><html><head></head><body><img src="/assets/nested.svg"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(nestedSvgGame, 'artifacts/web-preview/assets/nested.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"><image href="texture.png"/></svg>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: nestedSvgGame }),
+    /requires self-contained SVG data URIs and fragment references/u,
+  );
+
   const charsetHtml = await packageAndReadFixture('charset-first', {
     indexHtml: '<!doctype html><html><head><meta charset="shift_jis"><script>window.label="한글";</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -653,6 +715,12 @@ try {
   });
   assert.doesNotMatch(metaRefreshHtml, /http-equiv=["']?refresh/iu);
   assert.doesNotMatch(metaRefreshHtml, /offline-escape/u);
+
+  const quotedGreaterMetaHtml = await packageAndReadFixture('quoted-greater-meta-refresh', {
+    indexHtml: '<!doctype html><html><head><meta content="0;url=https://example.com/?q=>x" http-equiv="refresh"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.doesNotMatch(quotedGreaterMetaHtml, /http-equiv=["']?refresh/iu);
+  assert.doesNotMatch(quotedGreaterMetaHtml, /example\.com/u);
 
   const inertHtmlComment = '<!-- <base href="./ignored/"><meta http-equiv="refresh"><link rel="manifest" href="ignored.webmanifest"> -->';
   const inertHtmlCommentOutput = await packageAndReadFixture('inert-html-comment', {

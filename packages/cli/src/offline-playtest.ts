@@ -59,8 +59,10 @@ interface EffectivePreviewIdentity {
 interface InliningContext {
   readonly artifactRoot: string;
   readonly assetDirectories: readonly string[];
+  readonly assetDataUrls: Map<string, string>;
   readonly inlinedAssets: Set<string>;
   readonly maximumBytes: number;
+  inlinedAssetBytes: number;
 }
 
 interface BundledEntry {
@@ -79,6 +81,8 @@ const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
 const htmlAttributeNameTerminators = new Set(['"', "'", '=', '<', '>', '/']);
+const inlineEntryExcludedAttributeNames = new Set(['src']);
+const svgResourceAttributeNames = new Set(['href', 'src', 'xlink:href']);
 const javascriptScriptTypes = new Set([
   'application/ecmascript',
   'application/javascript',
@@ -216,16 +220,21 @@ export async function runOfflinePlaytestPackaging(
   const context: InliningContext = {
     artifactRoot,
     assetDirectories: readArtifactAssetDirectories(artifactRoot),
+    assetDataUrls: new Map<string, string>(),
     inlinedAssets: new Set<string>(),
+    inlinedAssetBytes: 0,
     maximumBytes,
   };
-  const { html: htmlWithoutEntry, entryFile } = extractModuleEntry(sourceHtml, context);
+  const { entryAttributes, html: htmlWithoutEntry, entryFile } = extractModuleEntry(
+    sourceHtml,
+    context,
+  );
   const bundledEntry = await bundleEntry(entryFile, context);
   const htmlWithInlineScripts = inlineScriptElements(htmlWithoutEntry, sourceIndexFile, context);
   const htmlWithLinkedStyles = inlineStylesheets(htmlWithInlineScripts, sourceIndexFile, context);
   const htmlWithStyles = inlineStyleElements(htmlWithLinkedStyles, sourceIndexFile, context);
   const htmlWithAssets = inlineHtmlAssets(htmlWithStyles, sourceIndexFile, context);
-  const finalHtml = assembleOfflineHtml(htmlWithAssets, bundledEntry);
+  const finalHtml = assembleOfflineHtml(htmlWithAssets, bundledEntry, entryAttributes);
   const htmlBytes = Buffer.byteLength(finalHtml);
 
   if (htmlBytes > maximumBytes) {
@@ -341,7 +350,11 @@ function readEffectivePreviewIdentity(artifactRoot: string): EffectivePreviewIde
 function extractModuleEntry(
   html: string,
   context: InliningContext,
-): { readonly html: string; readonly entryFile: string } {
+): {
+  readonly entryAttributes: readonly HtmlAttributeToken[];
+  readonly html: string;
+  readonly entryFile: string;
+} {
   if (html.includes(offlineEntryPlaceholder)) {
     throw new Error('Offline playtest source index.html contains the reserved entry marker.');
   }
@@ -393,7 +406,7 @@ function extractModuleEntry(
     match,
   );
 
-  return { html: output, entryFile };
+  return { entryAttributes: entry.attributes, html: output, entryFile };
 }
 
 function findHtmlScriptElements(html: string): readonly RegExpMatchArray[] {
@@ -741,6 +754,18 @@ function renderInlinedStylesheetAttributes(attributes: readonly HtmlAttributeTok
   return rendered.length === 0 ? '' : ` ${rendered.join(' ')}`;
 }
 
+function renderHtmlAttributes(
+  attributes: readonly HtmlAttributeToken[],
+  excludedNames: ReadonlySet<string>,
+): string {
+  const rendered = attributes
+    .filter((attribute) => !excludedNames.has(attribute.name))
+    .map((attribute) => attribute.value === undefined
+      ? attribute.name
+      : `${attribute.name}="${escapeHtmlAttribute(decodeHtmlCharacterReferences(attribute.value))}"`);
+  return rendered.length === 0 ? '' : ` ${rendered.join(' ')}`;
+}
+
 function readHtmlRelTokens(attributes: string): ReadonlySet<string> {
   return readHtmlRelTokenSet(tokenizeHtmlAttributes(attributes));
 }
@@ -764,9 +789,10 @@ function inlineCssAssetReferences(
     throw new Error(`Offline playtest does not support CSS @import rules: ${sourceFile}`);
   }
 
+  const output = inlineCssImageSetStringReferences(source, sourceFile, context);
   const cssUrlPattern = /url\(\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([^)]*?))\s*\)/giu;
-  const codePositions = createCodePositionMap(source, false);
-  return source.replace(cssUrlPattern, (match, doubleQuoted: string | undefined, singleQuoted: string | undefined, unquoted: string | undefined, offset: number) => {
+  const codePositions = createCodePositionMap(output, false);
+  return output.replace(cssUrlPattern, (match, doubleQuoted: string | undefined, singleQuoted: string | undefined, unquoted: string | undefined, offset: number) => {
     if (codePositions[offset] !== 1) {
       return match;
     }
@@ -779,6 +805,177 @@ function inlineCssAssetReferences(
 
     return `url(${JSON.stringify(readAssetDataUrl(sourceFile, reference, context))})`;
   });
+}
+
+function inlineCssImageSetStringReferences(
+  source: string,
+  sourceFile: string,
+  context: InliningContext,
+): string {
+  const pattern = /(?:-webkit-)?image-set\s*\(/giu;
+  const codePositions = createCodePositionMap(source, false);
+  let cursor = 0;
+  let output = '';
+
+  let match = pattern.exec(source);
+
+  while (match !== null) {
+    if (codePositions[match.index] !== 1) {
+      match = pattern.exec(source);
+      continue;
+    }
+
+    const openingParenthesis = source.indexOf('(', match.index);
+    const closingParenthesis = findCssFunctionEnd(source, openingParenthesis);
+
+    if (closingParenthesis === undefined) {
+      match = pattern.exec(source);
+      continue;
+    }
+
+    output += source.slice(cursor, openingParenthesis + 1);
+    output += inlineCssImageSetOptions(
+      source.slice(openingParenthesis + 1, closingParenthesis),
+      sourceFile,
+      context,
+    );
+    cursor = closingParenthesis;
+    pattern.lastIndex = closingParenthesis + 1;
+    match = pattern.exec(source);
+  }
+
+  return output + source.slice(cursor);
+}
+
+function findCssFunctionEnd(source: string, openingParenthesis: number): number | undefined {
+  let depth = 1;
+  let inComment = false;
+  let quote: '"' | "'" | undefined;
+
+  for (let index = openingParenthesis + 1; index < source.length; index += 1) {
+    const character = source[index];
+    const nextCharacter = source[index + 1];
+
+    if (inComment) {
+      if (character === '*' && nextCharacter === '/') {
+        inComment = false;
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (quote !== undefined) {
+      if (character === '\\') {
+        index += 1;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+
+      continue;
+    }
+
+    if (character === '/' && nextCharacter === '*') {
+      inComment = true;
+      index += 1;
+    } else if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '(') {
+      depth += 1;
+    } else if (character === ')') {
+      depth -= 1;
+
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function inlineCssImageSetOptions(
+  source: string,
+  sourceFile: string,
+  context: InliningContext,
+): string {
+  let cursor = 0;
+  let depth = 0;
+  let output = '';
+  let quote: '"' | "'" | undefined;
+
+  for (let index = 0; index <= source.length; index += 1) {
+    const character = source[index];
+
+    if (quote !== undefined) {
+      if (character === '\\') {
+        index += 1;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+
+    if (character === '(') {
+      depth += 1;
+      continue;
+    }
+
+    if (character === ')') {
+      depth -= 1;
+      continue;
+    }
+
+    if (index === source.length || (character === ',' && depth === 0)) {
+      output += inlineCssImageSetOption(source.slice(cursor, index), sourceFile, context);
+
+      if (character === ',') {
+        output += ',';
+      }
+
+      cursor = index + 1;
+    }
+  }
+
+  return output;
+}
+
+function inlineCssImageSetOption(
+  source: string,
+  sourceFile: string,
+  context: InliningContext,
+): string {
+  const valueStart = source.search(/\S/u);
+
+  if (valueStart === -1 || (source[valueStart] !== '"' && source[valueStart] !== "'")) {
+    return source;
+  }
+
+  const quote = source[valueStart];
+  let valueEnd = valueStart + 1;
+
+  while (valueEnd < source.length && source[valueEnd] !== quote) {
+    valueEnd += source[valueEnd] === '\\' ? 2 : 1;
+  }
+
+  if (valueEnd >= source.length) {
+    return source;
+  }
+
+  const reference = decodeCssEscapes(source.slice(valueStart + 1, valueEnd));
+
+  if (reference.startsWith('data:') || reference.startsWith('blob:') || reference.startsWith('#')) {
+    return source;
+  }
+
+  const dataUrl = readAssetDataUrl(sourceFile, reference, context);
+  return `${source.slice(0, valueStart)}${JSON.stringify(dataUrl)}${source.slice(valueEnd + 1)}`;
 }
 
 function decodeCssEscapes(value: string): string {
@@ -999,7 +1196,7 @@ function transformOutsideHtmlRawText(
 }
 
 function createHtmlRawTextPattern(): RegExp {
-  return /<!--[\s\S]*?-->|<(script|style|textarea|title)\b([^>]*)>([\s\S]*?)<\/\1\s*>/giu;
+  return /<!--[\s\S]*?-->|<(script|style|textarea|title)\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/\1\s*>/giu;
 }
 
 function inlineHtmlSrcset(
@@ -1080,7 +1277,11 @@ function parseHtmlSrcset(
   return candidates;
 }
 
-function assembleOfflineHtml(html: string, bundledEntry: BundledEntry): string {
+function assembleOfflineHtml(
+  html: string,
+  bundledEntry: BundledEntry,
+  entryAttributes: readonly HtmlAttributeToken[],
+): string {
   const csp = "default-src 'none'; img-src data: blob:; media-src data: blob:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; connect-src data: blob:; object-src data:; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'";
   const banner = '<!-- MPGD offline playtest: test-play-only, not a release target or store submission artifact. -->';
   const runtimeGuard = renderOfflineRuntimeGuard();
@@ -1088,14 +1289,16 @@ function assembleOfflineHtml(html: string, bundledEntry: BundledEntry): string {
   const bundledStyle = bundledEntry.stylesheet === undefined
     ? ''
     : `\n<style>${escapeClosingTag(bundledEntry.stylesheet, 'style')}</style>`;
-  const inlineScript = `<script type="module">${escapeClosingTag(bundledEntry.script, 'script')}</script>`;
+  const inlineScript = `<script${renderHtmlAttributes(entryAttributes, inlineEntryExcludedAttributeNames)}>${escapeClosingTag(bundledEntry.script, 'script')}</script>`;
   let output = removeExistingCharsetDeclaration(
     removeUnsafeMetaDirectives(removeManifestLinks(html)),
   );
 
-  if (/<head\b[^>]*>/iu.test(output)) {
+  const headPattern = /<head\b((?:"[^"]*"|'[^']*'|[^'">])*)>/iu;
+
+  if (headPattern.test(output)) {
     output = output.replace(
-      /<head\b([^>]*)>/iu,
+      headPattern,
       `<head$1>\n<meta charset="utf-8">\n${banner}\n<meta name="mpgd-purpose" content="test-play-only">\n<meta http-equiv="Content-Security-Policy" content="${csp}">\n${guardScript}${bundledStyle}`,
     );
   } else {
@@ -1127,7 +1330,7 @@ function assertSupportedHtmlDocument(html: string): void {
   }
 
   transformOutsideHtmlRawText(html, (fragment) => {
-    if (/<base\b[^>]*>/iu.test(fragment)) {
+    if (/<base\b(?:"[^"]*"|'[^']*'|[^'">])*>/iu.test(fragment)) {
       throw new Error('Offline playtest does not support HTML base elements.');
     }
 
@@ -1145,7 +1348,7 @@ function removeManifestLinks(html: string): string {
 
 function removeUnsafeMetaDirectives(html: string): string {
   return transformOutsideHtmlRawText(html, (fragment) =>
-    fragment.replace(/<meta\b[^>]*>/giu, (tag) => {
+    fragment.replace(/<meta\b(?:"[^"]*"|'[^']*'|[^'">])*>/giu, (tag) => {
       const httpEquiv = readHtmlAttribute(tag, 'http-equiv')?.trim().toLowerCase();
       return httpEquiv === 'content-security-policy' || httpEquiv === 'refresh' ? '' : tag;
     }),
@@ -1154,7 +1357,7 @@ function removeUnsafeMetaDirectives(html: string): string {
 
 function removeExistingCharsetDeclaration(html: string): string {
   return transformOutsideHtmlRawText(html, (fragment) =>
-    fragment.replace(/<meta\b[^>]*>/giu, (tag) =>
+    fragment.replace(/<meta\b(?:"[^"]*"|'[^']*'|[^'">])*>/giu, (tag) =>
       readHtmlAttribute(tag, 'charset') === undefined ? tag : '',
     ),
   );
@@ -1174,6 +1377,10 @@ function assertSupportedBundledRuntime(source: string): void {
     { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/gu, label: 'WebAssembly streaming' },
     { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
     { pattern: /\bimport\s*\(/gu, label: 'dynamic import' },
+    {
+      pattern: /\b(?:globalThis|parent|self|top|window)\s*\.\s*open\s*\(/gu,
+      label: 'script-driven navigation',
+    },
     {
       pattern: /(?:\b(?:document|globalThis|parent|self|top|window)\s*\.\s*|(?<![$.\w]))location\s*\.\s*(?:assign|replace)\s*\(/gu,
       label: 'script-driven navigation',
@@ -1558,12 +1765,13 @@ function readAssetDataUrl(
   reference: string,
   context: InliningContext,
 ): string {
-  const fragmentIndex = reference.indexOf('#');
-  const fragment = fragmentIndex === -1 ? '' : reference.slice(fragmentIndex);
+  const normalizedReference = normalizeUrlReference(reference);
+  const fragmentIndex = normalizedReference.indexOf('#');
+  const fragment = fragmentIndex === -1 ? '' : normalizedReference.slice(fragmentIndex);
   const assetFile = resolveLocalReference(
     context.artifactRoot,
     path.dirname(sourceFile),
-    reference,
+    normalizedReference,
   );
   const extension = path.extname(assetFile).toLowerCase();
   const mimeType = mimeTypes.get(extension);
@@ -1574,6 +1782,7 @@ function readAssetDataUrl(
     );
   }
 
+  let dataUrl = context.assetDataUrls.get(assetFile);
   const assetBytes = statSync(assetFile).size;
 
   if (assetBytes > context.maximumBytes) {
@@ -1582,14 +1791,104 @@ function readAssetDataUrl(
     );
   }
 
-  const asset = readFileSync(assetFile);
+  const dataUrlBytes = dataUrl === undefined
+    ? Buffer.byteLength(`data:${mimeType};base64,`) + Math.ceil(assetBytes / 3) * 4
+    : Buffer.byteLength(dataUrl);
+  const nextInlinedAssetBytes = context.inlinedAssetBytes
+    + dataUrlBytes
+    + Buffer.byteLength(fragment);
 
-  if (extension === '.gltf') {
-    assertSelfContainedGltf(assetFile, asset.toString('utf8'));
+  if (nextInlinedAssetBytes > context.maximumBytes) {
+    throw new Error(
+      `Offline asset data URLs total ${nextInlinedAssetBytes} bytes while inlining ${path.relative(context.artifactRoot, assetFile)}, exceeding the ${context.maximumBytes}-byte limit.`,
+    );
   }
 
+  if (dataUrl === undefined) {
+    const asset = readFileSync(assetFile);
+
+    if (extension === '.gltf') {
+      assertSelfContainedGltf(assetFile, asset.toString('utf8'));
+    } else if (extension === '.svg') {
+      assertSelfContainedSvg(assetFile, asset.toString('utf8'));
+    }
+
+    dataUrl = `data:${mimeType};base64,${asset.toString('base64')}`;
+    context.assetDataUrls.set(assetFile, dataUrl);
+  }
+
+  context.inlinedAssetBytes = nextInlinedAssetBytes;
   context.inlinedAssets.add(assetFile);
-  return `data:${mimeType};base64,${asset.toString('base64')}${fragment}`;
+  return `${dataUrl}${fragment}`;
+}
+
+function assertSelfContainedSvg(svgFile: string, source: string): void {
+  const externalReference = findExternalSvgReference(source);
+
+  if (externalReference !== undefined) {
+    throw new Error(
+      `Offline playtest requires self-contained SVG data URIs and fragment references: ${svgFile} references ${externalReference}`,
+    );
+  }
+}
+
+function findExternalSvgReference(source: string): string | undefined {
+  const tagPattern = /<[a-z][\w:-]*(?=[\s>"'\/])(?:"[^"]*"|'[^']*'|[^'">])*>/giu;
+
+  for (const match of source.matchAll(tagPattern)) {
+    const attributes = tokenizeHtmlAttributes(match[0]);
+
+    for (const attribute of attributes) {
+      if (!svgResourceAttributeNames.has(attribute.name) || attribute.value === undefined) {
+        continue;
+      }
+
+      const reference = normalizeUrlReference(decodeHtmlCharacterReferences(attribute.value));
+
+      if (!reference.startsWith('data:') && !reference.startsWith('#')) {
+        return reference;
+      }
+    }
+
+    const inlineStyle = readHtmlAttributeToken(attributes, 'style');
+    const styleReference = inlineStyle === undefined
+      ? undefined
+      : findExternalCssReference(inlineStyle);
+
+    if (styleReference !== undefined) {
+      return styleReference;
+    }
+  }
+
+  for (const style of findHtmlRawTextElements(source, 'style')) {
+    const reference = findExternalCssReference(style[3] ?? '');
+
+    if (reference !== undefined) {
+      return reference;
+    }
+  }
+
+  return undefined;
+}
+
+function findExternalCssReference(source: string): string | undefined {
+  if (containsCssImportRule(source)) {
+    return '@import';
+  }
+
+  const pattern = /url\(\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([^)]*?))\s*\)/giu;
+
+  for (const match of source.matchAll(pattern)) {
+    const reference = normalizeUrlReference(
+      decodeCssEscapes(match[1] ?? match[2] ?? match[3] ?? ''),
+    );
+
+    if (!reference.startsWith('data:') && !reference.startsWith('#')) {
+      return reference;
+    }
+  }
+
+  return undefined;
 }
 
 function assertSelfContainedGltf(gltfFile: string, source: string): void {
@@ -1661,12 +1960,18 @@ function resolveExistingAssetReference(
   reference: string,
   artifactRoot: string,
 ): string | undefined {
-  if (isNonLocalReference(reference) || reference.includes('${')) {
+  const normalizedReference = normalizeUrlReference(reference);
+
+  if (isNonLocalReference(normalizedReference) || normalizedReference.includes('${')) {
     return undefined;
   }
 
   try {
-    const candidate = resolveReferencePath(artifactRoot, path.dirname(sourceFile), reference);
+    const candidate = resolveReferencePath(
+      artifactRoot,
+      path.dirname(sourceFile),
+      normalizedReference,
+    );
     return existsSync(candidate) && lstatSync(candidate).isFile()
       ? resolveArtifactFile(artifactRoot, candidate)
       : undefined;
@@ -1682,16 +1987,18 @@ function readArtifactAssetDirectories(artifactRoot: string): readonly string[] {
 }
 
 function resolveLocalReference(artifactRoot: string, baseDir: string, reference: string): string {
-  if (isNonLocalReference(reference)) {
-    throw new Error(`Offline playtest cannot inline external URL: ${reference}`);
+  const normalizedReference = normalizeUrlReference(reference);
+
+  if (isNonLocalReference(normalizedReference)) {
+    throw new Error(`Offline playtest cannot inline external URL: ${normalizedReference}`);
   }
 
-  const candidate = resolveReferencePath(artifactRoot, baseDir, reference);
+  const candidate = resolveReferencePath(artifactRoot, baseDir, normalizedReference);
   return resolveArtifactFile(artifactRoot, candidate);
 }
 
 function resolveReferencePath(artifactRoot: string, baseDir: string, reference: string): string {
-  const cleanReference = reference.split(/[?#]/u, 1)[0] ?? '';
+  const cleanReference = normalizeUrlReference(reference).split(/[?#]/u, 1)[0] ?? '';
 
   if (cleanReference.length === 0) {
     throw new Error(`Invalid empty local asset reference in ${baseDir}.`);
@@ -1895,8 +2202,12 @@ function isPathWithin(root: string, candidate: string): boolean {
 }
 
 function isNonLocalReference(reference: string): boolean {
-  const value = reference.trim();
+  const value = normalizeUrlReference(reference);
   return value.startsWith('//') || /^[a-z][a-z\d+.-]*:/iu.test(value);
+}
+
+function normalizeUrlReference(reference: string): string {
+  return reference.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/gu, '');
 }
 
 function isCodeAsset(file: string): boolean {
