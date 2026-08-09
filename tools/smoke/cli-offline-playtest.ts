@@ -418,6 +418,14 @@ try {
   assert.doesNotMatch(rootAssetHtml, /["']\/theme\.mp3["']/u);
   assert.match(rootAssetHtml, /data:audio\/mpeg;base64,/u);
 
+  const documentRelativeFetchHtml = await packageAndReadFixture(
+    'document-relative-fetch-asset',
+    { mainJs: 'void fetch("./level.json");' },
+    [['artifacts/web-preview/level.json', '{"level":1}\n']],
+  );
+  assert.doesNotMatch(documentRelativeFetchHtml, /fetch\(["']\.\/level\.json/u);
+  assert.match(documentRelativeFetchHtml, /fetch\(["']data:application\/json;base64,/u);
+
   const encodedPathHtml = await packageAndReadFixture(
     'encoded-path',
     {
@@ -489,6 +497,24 @@ try {
     /document\.currentScript\.previousElementSibling\.disabled=true/u,
   );
   assert.doesNotMatch(statefulStylesheetHtml, /<link\b[^>]*night-theme/u);
+
+  const quotedGreaterThanStylesheetHtml = await packageAndReadFixture(
+    'quoted-greater-than-stylesheet',
+    {
+      indexHtml: '<!doctype html><html><head><link rel="stylesheet" media="(width > 600px)" href="/assets/main.css"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    },
+  );
+  assert.match(quotedGreaterThanStylesheetHtml, /<style media="\(width &gt; 600px\)">/u);
+
+  const webVttHtml = await packageAndReadFixture(
+    'webvtt-track',
+    {
+      indexHtml: '<!doctype html><html><head></head><body><video><track src="/assets/captions.vtt"></video><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    },
+    [['artifacts/web-preview/assets/captions.vtt', 'WEBVTT\n\n00:00.000 --> 00:01.000\nHello\n']],
+  );
+  assert.doesNotMatch(webVttHtml, /\/assets\/captions\.vtt/u);
+  assert.match(webVttHtml, /src="data:text\/vtt;base64,/u);
 
   const parenthesizedCssHtml = await packageAndReadFixture(
     'parenthesized-css-asset',

@@ -163,6 +163,7 @@ const mimeTypes = new Map<string, string>([
   ['.svg', 'image/svg+xml'],
   ['.ttf', 'font/ttf'],
   ['.txt', 'text/plain'],
+  ['.vtt', 'text/vtt'],
   ['.wav', 'audio/wav'],
   ['.wasm', 'application/wasm'],
   ['.webm', 'video/webm'],
@@ -563,6 +564,26 @@ function inlineJavaScriptAssetReferences(
         : JSON.stringify(dataUrl);
     },
   );
+  const documentFile = path.join(context.artifactRoot, 'index.html');
+  const documentRelativeFetchPattern = /(\bfetch\s*\(\s*)(["'`])((?:\.\.\/|\.\/)[^"'`\r\n]+)\2/gu;
+  const fetchCodePositions = createCodePositionMap(output, true);
+  output = output.replace(
+    documentRelativeFetchPattern,
+    (match, prefix: string, quote: string, reference: string, offset: number) => {
+      if (fetchCodePositions[offset] !== 1 || (quote === '`' && reference.includes('${'))) {
+        return match;
+      }
+
+      const assetFile = resolveExistingAssetReference(documentFile, reference, context.artifactRoot);
+
+      if (assetFile === undefined || isCodeAsset(assetFile)) {
+        return match;
+      }
+
+      const dataUrl = escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote);
+      return `${prefix}${quote}${dataUrl}${quote}`;
+    },
+  );
   const assetDirectoryAlternative = context.assetDirectories.length === 0
     ? ''
     : `|(?:\\./)?(?:${context.assetDirectories.map(escapeRegExp).join('|')})/[^"'\`\\r\\n]+`;
@@ -570,7 +591,6 @@ function inlineJavaScriptAssetReferences(
     `(["'\`])(/(?!/)[^"'\`\\r\\n]+${assetDirectoryAlternative})\\1`,
     'gu',
   );
-  const documentFile = path.join(context.artifactRoot, 'index.html');
   const outputCodePositions = createCodePositionMap(output, true);
   output = output.replace(literalPattern, (match, quote: string, reference: string, offset: number) => {
     if (outputCodePositions[offset] !== 1) {
@@ -661,7 +681,7 @@ function inlineStylesheets(
   context: InliningContext,
 ): string {
   return transformOutsideHtmlRawText(html, (fragment) =>
-    fragment.replace(/<link\b([^>]*)>/giu, (match, attributes: string) => {
+    fragment.replace(/<link\b((?:"[^"]*"|'[^']*'|[^'">])*)>/giu, (match, attributes: string) => {
       const rel = readHtmlRelTokens(attributes);
       const href = readHtmlAttribute(attributes, 'href');
 
@@ -890,7 +910,7 @@ function inlineHtmlAssetFragment(
     return replaceHtmlAttribute(tag, 'style', inlineCssAssetReferences(style, htmlFile, context));
   });
 
-  return htmlWithInlineStyles.replace(/<(link|audio|embed|feimage|image|img|input|object|source|track|use|video)\b([^>]*)>/giu, (tag, name: string, attributes: string) => {
+  return htmlWithInlineStyles.replace(/<(link|audio|embed|feimage|image|img|input|object|source|track|use|video)\b((?:"[^"]*"|'[^']*'|[^'">])*)>/giu, (tag, name: string, attributes: string) => {
     const lowerName = name.toLowerCase();
     const rel = readHtmlRelTokens(attributes);
     const allowedAttributes = [...(htmlAssetAttributesByTag[lowerName] ?? ['src'])];
@@ -1088,7 +1108,7 @@ function assertSupportedHtmlDocument(html: string): void {
 
 function removeManifestLinks(html: string): string {
   return transformOutsideHtmlRawText(html, (fragment) =>
-    fragment.replace(/<link\b([^>]*)>/giu, (tag, attributes: string) =>
+    fragment.replace(/<link\b((?:"[^"]*"|'[^']*'|[^'">])*)>/giu, (tag, attributes: string) =>
       readHtmlRelTokens(attributes).has('manifest') ? '' : tag,
     ),
   );
