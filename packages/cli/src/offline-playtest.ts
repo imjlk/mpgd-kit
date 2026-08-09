@@ -65,6 +65,7 @@ interface BundledEntry {
 }
 
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
+const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
 const noModuleAttributePattern = /(?:^|\s)nomodule(?=\s|=|$)/iu;
 const javascriptScriptTypes = new Set([
@@ -127,6 +128,7 @@ const offlinePlaytestLimitations = [
   'Workers, service workers, WebAssembly streaming, and runtime-computed asset URLs are unsupported. Non-streaming embedded WebAssembly is allowed.',
   'glTF files must be self-contained with data URIs; otherwise use a GLB file.',
   'CSS @import rules are unsupported; include those rules in the built stylesheet before packaging.',
+  'Dynamic imports and HTML base elements are unsupported.',
 ] as const;
 
 const mimeTypes = new Map<string, string>([
@@ -197,6 +199,7 @@ export async function runOfflinePlaytestPackaging(
   const identity = readEffectivePreviewIdentity(artifactRoot);
   const sourceIndexFile = resolveArtifactFile(artifactRoot, 'index.html');
   const sourceHtml = readFileSync(sourceIndexFile, 'utf8');
+  assertSupportedHtmlDocument(sourceHtml);
   const context: InliningContext = {
     artifactRoot,
     assetDirectories: readArtifactAssetDirectories(artifactRoot),
@@ -272,6 +275,10 @@ function extractModuleEntry(
   html: string,
   context: InliningContext,
 ): { readonly html: string; readonly entryFile: string } {
+  if (html.includes(offlineEntryPlaceholder)) {
+    throw new Error('Offline playtest source index.html contains the reserved entry marker.');
+  }
+
   const scriptPattern = /<script\b([^>]*)>[\s\S]*?<\/script\s*>/giu;
   const matches = [...html.matchAll(scriptPattern)];
   const externalScripts = matches.filter(
@@ -295,7 +302,6 @@ function extractModuleEntry(
   }
 
   const entryFile = resolveLocalReference(context.artifactRoot, context.artifactRoot, source);
-  const removableScripts = new Set<RegExpMatchArray>([match]);
 
   for (const externalScript of externalScripts) {
     if (externalScript === match) {
@@ -308,24 +314,28 @@ function extractModuleEntry(
       );
     }
 
-    removableScripts.add(externalScript);
   }
 
-  const output = removeHtmlMatches(html, removableScripts);
+  const output = rewriteExternalScripts(html, externalScripts, match);
 
   return { html: output, entryFile };
 }
 
-function removeHtmlMatches(html: string, matches: ReadonlySet<RegExpMatchArray>): string {
+function rewriteExternalScripts(
+  html: string,
+  matches: readonly RegExpMatchArray[],
+  entry: RegExpMatchArray,
+): string {
   let cursor = 0;
   let output = '';
 
   for (const match of [...matches].sort((left, right) => (left.index ?? 0) - (right.index ?? 0))) {
     if (match.index === undefined || match[0] === undefined) {
-      throw new Error('Unable to remove an external script from the offline playtest document.');
+      throw new Error('Unable to rewrite an external script in the offline playtest document.');
     }
 
     output += html.slice(cursor, match.index);
+    output += match === entry ? offlineEntryPlaceholder : '';
     cursor = match.index + match[0].length;
   }
 
@@ -342,6 +352,7 @@ async function bundleEntry(entryFile: string, context: InliningContext): Promise
     format: 'esm',
     platform: 'browser',
     target: 'es2022',
+    keepNames: true,
     minify: true,
     sourcemap: false,
     legalComments: 'none',
@@ -478,30 +489,32 @@ function inlineStylesheets(
   htmlFile: string,
   context: InliningContext,
 ): string {
-  return html.replace(/<link\b([^>]*)>/giu, (match, attributes: string) => {
-    const rel = readHtmlAttribute(attributes, 'rel')?.toLowerCase();
-    const href = readHtmlAttribute(attributes, 'href');
+  return transformOutsideHtmlRawText(html, (fragment) =>
+    fragment.replace(/<link\b([^>]*)>/giu, (match, attributes: string) => {
+      const rel = readHtmlAttribute(attributes, 'rel')?.toLowerCase();
+      const href = readHtmlAttribute(attributes, 'href');
 
-    if (rel === 'modulepreload') {
-      return '';
-    }
+      if (rel === 'modulepreload') {
+        return '';
+      }
 
-    if (rel !== 'stylesheet') {
-      return match;
-    }
+      if (rel !== 'stylesheet') {
+        return match;
+      }
 
-    if (href === undefined) {
-      throw new Error('Stylesheet link is missing href.');
-    }
+      if (href === undefined) {
+        throw new Error('Stylesheet link is missing href.');
+      }
 
-    const stylesheetFile = resolveLocalReference(context.artifactRoot, path.dirname(htmlFile), href);
-    const stylesheet = readFileSync(stylesheetFile, 'utf8');
-    const inlined = inlineCssAssetReferences(stylesheet, stylesheetFile, context);
-    const media = readHtmlAttribute(attributes, 'media');
-    const mediaAttribute = media === undefined ? '' : ` media="${escapeHtmlAttribute(media)}"`;
-    context.inlinedAssets.add(stylesheetFile);
-    return `<style${mediaAttribute}>${escapeClosingTag(inlined, 'style')}</style>`;
-  });
+      const stylesheetFile = resolveLocalReference(context.artifactRoot, path.dirname(htmlFile), href);
+      const stylesheet = readFileSync(stylesheetFile, 'utf8');
+      const inlined = inlineCssAssetReferences(stylesheet, stylesheetFile, context);
+      const media = readHtmlAttribute(attributes, 'media');
+      const mediaAttribute = media === undefined ? '' : ` media="${escapeHtmlAttribute(media)}"`;
+      context.inlinedAssets.add(stylesheetFile);
+      return `<style${mediaAttribute}>${escapeClosingTag(inlined, 'style')}</style>`;
+    }),
+  );
 }
 
 function inlineCssAssetReferences(
@@ -653,7 +666,7 @@ function transformOutsideHtmlRawText(
   html: string,
   transform: (fragment: string) => string,
 ): string {
-  const rawTextPattern = /<(script|style|textarea|title)\b[^>]*>[\s\S]*?<\/\1\s*>/giu;
+  const rawTextPattern = /<!--[\s\S]*?-->|<(script|style|textarea|title)\b[^>]*>[\s\S]*?<\/\1\s*>/giu;
   let cursor = 0;
   let output = '';
 
@@ -758,9 +771,7 @@ function assembleOfflineHtml(html: string, bundledEntry: BundledEntry): string {
     : `\n<style>${escapeClosingTag(bundledEntry.stylesheet, 'style')}</style>`;
   const inlineScript = `<script type="module">${escapeClosingTag(bundledEntry.script, 'script')}</script>`;
   let output = removeExistingCharsetDeclaration(
-    removeExistingContentSecurityPolicy(
-      html.replace(/<link\b[^>]*\brel=["']manifest["'][^>]*>/giu, ''),
-    ),
+    removeUnsafeMetaDirectives(removeManifestLinks(html)),
   );
 
   if (/<head\b[^>]*>/iu.test(output)) {
@@ -772,22 +783,53 @@ function assembleOfflineHtml(html: string, bundledEntry: BundledEntry): string {
     throw new Error('Offline playtest source index.html must contain a head element.');
   }
 
+  if (
+    !output.includes(offlineEntryPlaceholder)
+    || output.indexOf(offlineEntryPlaceholder) !== output.lastIndexOf(offlineEntryPlaceholder)
+  ) {
+    throw new Error('Offline playtest could not preserve the module entry position.');
+  }
+  output = output.replace(offlineEntryPlaceholder, inlineScript);
+
   if (/<\/body>/iu.test(output)) {
-    return `${output.replace(/<\/body>/iu, `${inlineScript}\n</body>`).trim()}\n`;
+    return `${output.trim()}\n`;
   }
 
   throw new Error('Offline playtest source index.html must contain a body element.');
 }
 
-function removeExistingContentSecurityPolicy(html: string): string {
-  return html.replace(/<meta\b[^>]*>/giu, (tag) =>
-    readHtmlAttribute(tag, 'http-equiv')?.toLowerCase() === 'content-security-policy' ? '' : tag,
+function assertSupportedHtmlDocument(html: string): void {
+  transformOutsideHtmlRawText(html, (fragment) => {
+    if (/<base\b[^>]*>/iu.test(fragment)) {
+      throw new Error('Offline playtest does not support HTML base elements.');
+    }
+
+    return fragment;
+  });
+}
+
+function removeManifestLinks(html: string): string {
+  return transformOutsideHtmlRawText(html, (fragment) =>
+    fragment.replace(/<link\b([^>]*)>/giu, (tag, attributes: string) =>
+      readHtmlAttribute(attributes, 'rel')?.toLowerCase() === 'manifest' ? '' : tag,
+    ),
+  );
+}
+
+function removeUnsafeMetaDirectives(html: string): string {
+  return transformOutsideHtmlRawText(html, (fragment) =>
+    fragment.replace(/<meta\b[^>]*>/giu, (tag) => {
+      const httpEquiv = readHtmlAttribute(tag, 'http-equiv')?.trim().toLowerCase();
+      return httpEquiv === 'content-security-policy' || httpEquiv === 'refresh' ? '' : tag;
+    }),
   );
 }
 
 function removeExistingCharsetDeclaration(html: string): string {
-  return html.replace(/<meta\b[^>]*>/giu, (tag) =>
-    readHtmlAttribute(tag, 'charset') === undefined ? tag : '',
+  return transformOutsideHtmlRawText(html, (fragment) =>
+    fragment.replace(/<meta\b[^>]*>/giu, (tag) =>
+      readHtmlAttribute(tag, 'charset') === undefined ? tag : '',
+    ),
   );
 }
 
@@ -797,20 +839,46 @@ function renderOfflineRuntimeGuard(): string {
 
 function assertSupportedBundledRuntime(source: string): void {
   const unsupported = [
-    { pattern: /\bnew\s+(?:Shared)?Worker\s*\(/gu, label: 'Worker' },
+    {
+      pattern: /\bnew\s+(?:(?:globalThis|self|window)\s*\.\s*)?(?:Shared)?Worker\s*\(/gu,
+      label: 'Worker',
+    },
     { pattern: /\bserviceWorker\s*\.\s*register\s*\(/gu, label: 'service worker registration' },
     { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/gu, label: 'WebAssembly streaming' },
     { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
+    { pattern: /\bimport\s*\(/gu, label: 'dynamic import' },
   ];
   const codePositions = createCodePositionMap(source, true);
+  const codeOnlySource = maskNonCode(source, codePositions);
 
   for (const candidate of unsupported) {
-    for (const match of source.matchAll(candidate.pattern)) {
-      if (match.index !== undefined && codePositions[match.index] === 1) {
-        throw new Error(`Offline playtest does not support ${candidate.label}.`);
-      }
+    if (candidate.pattern.test(codeOnlySource)) {
+      candidate.pattern.lastIndex = 0;
+      throw new Error(`Offline playtest does not support ${candidate.label}.`);
+    }
+
+    candidate.pattern.lastIndex = 0;
+  }
+}
+
+function maskNonCode(source: string, codePositions: Uint8Array): string {
+  const chunks: string[] = [];
+  let codeStart: number | undefined;
+
+  for (let index = 0; index < source.length; index += 1) {
+    if (codePositions[index] === 1) {
+      codeStart ??= index;
+    } else if (codeStart !== undefined) {
+      chunks.push(source.slice(codeStart, index), ' ');
+      codeStart = undefined;
     }
   }
+
+  if (codeStart !== undefined) {
+    chunks.push(source.slice(codeStart));
+  }
+
+  return chunks.join('');
 }
 
 function createCodePositionMap(source: string, allowLineComments: boolean): Uint8Array {

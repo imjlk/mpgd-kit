@@ -153,6 +153,14 @@ try {
     indexHtml: '<!doctype html><html><head><script type="text/javascript;charset=utf-8">new Worker("worker.js");</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
 
+  await assertWorkerRejected('qualified-window-worker', {
+    mainJs: 'new /* preserved trivia */ window.Worker("./worker.js");',
+  });
+
+  await assertWorkerRejected('qualified-global-shared-worker', {
+    mainJs: 'new globalThis.SharedWorker("./worker.js");',
+  });
+
   const externalFallbackGame = createPreviewFixture('external-fallback', {
     indexHtml: '<!doctype html><html><head></head><body><script src="/assets/side.js">fallback()</script><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -406,6 +414,21 @@ try {
   });
   assert.match(topLevelAwaitHtml, /<script type="module">.*await/su);
 
+  const preservedModuleOrderHtml = await packageAndReadFixture('preserved-module-order', {
+    indexHtml: '<!doctype html><html><head></head><body><script type="module">console.info("mpgd-before-order-marker")</script><script type="module" src="/assets/main.js"></script><script type="module">console.info("mpgd-after-order-marker")</script></body></html>',
+    mainJs: 'console.info("mpgd-entry-order-marker");',
+  });
+  const beforeModuleIndex = preservedModuleOrderHtml.indexOf('mpgd-before-order-marker');
+  const entryModuleIndex = preservedModuleOrderHtml.indexOf('mpgd-entry-order-marker');
+  const afterModuleIndex = preservedModuleOrderHtml.indexOf('mpgd-after-order-marker');
+  assert.ok(beforeModuleIndex >= 0 && beforeModuleIndex < entryModuleIndex);
+  assert.ok(entryModuleIndex < afterModuleIndex);
+
+  const preservedNameHtml = await packageAndReadFixture('preserved-runtime-name', {
+    mainJs: 'class NamedScene {}; document.body.dataset.sceneName = NamedScene.name;',
+  });
+  assert.match(preservedNameHtml, /NamedScene/u);
+
   const wasmHtml = await packageAndReadFixture('non-streaming-wasm', {
     mainJs: 'void WebAssembly.instantiate(new Uint8Array([0]));',
   });
@@ -451,6 +474,36 @@ try {
   assert.match(charsetHtml, /<head>\s*<meta charset="utf-8">/u);
   assert.equal(charsetHtml.match(/<meta\b[^>]*charset=/giu)?.length, 1);
   assert.match(charsetHtml, /한글/u);
+
+  const metaRefreshHtml = await packageAndReadFixture('meta-refresh', {
+    indexHtml: '<!doctype html><html><head><meta http-equiv="refresh" content="0; url=https://example.com/offline-escape"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.doesNotMatch(metaRefreshHtml, /http-equiv=["']?refresh/iu);
+  assert.doesNotMatch(metaRefreshHtml, /offline-escape/u);
+
+  const inertHtmlComment = '<!-- <base href="./ignored/"><meta http-equiv="refresh"><link rel="manifest" href="ignored.webmanifest"> -->';
+  const inertHtmlCommentOutput = await packageAndReadFixture('inert-html-comment', {
+    indexHtml: `<!doctype html><html><head>${inertHtmlComment}</head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>`,
+  });
+  assert.match(inertHtmlCommentOutput, /<base href="\.\/ignored\/">/u);
+  assert.match(inertHtmlCommentOutput, /http-equiv="refresh"/u);
+  assert.match(inertHtmlCommentOutput, /rel="manifest"/u);
+
+  const baseElementGame = createPreviewFixture('base-element', {
+    indexHtml: '<!doctype html><html><head><base href="./app/"></head><body><main id="game"></main><script type="module" src="assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: baseElementGame }),
+    /does not support HTML base elements/u,
+  );
+
+  const dynamicImportGame = createPreviewFixture('dynamic-import', {
+    mainJs: 'const selectLevelModule = () => "./level.js"; void import(selectLevelModule());',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dynamicImportGame }),
+    /does not support dynamic import/u,
+  );
 
   const dynamicAssetGame = createPreviewFixture('dynamic-asset', {
     mainJs: 'const getPath = () => "pixel.png"; document.body.dataset.asset = new URL(getPath(), import.meta.url).href;',
