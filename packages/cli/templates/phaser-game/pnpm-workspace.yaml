@@ -10,3 +10,6 @@ allowBuilds:
   protobufjs: true
   sharp: true
   workerd: true
+peerDependencyRules:
+  allowedVersions:
+    '@ait-co/devtools>@apps-in-toss/web-framework': '3.0.2'

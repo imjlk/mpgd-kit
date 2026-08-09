@@ -842,6 +842,16 @@ function validatePhaserTemplateAITPolyfill(): void {
           failures.push(`${workspacePath}: allowBuilds must include ${requiredText}.`);
         }
       }
+
+      const expectedAitDevtoolsPeerRule =
+        `'@ait-co/devtools>@apps-in-toss/web-framework': '${aitWebFrameworkVersion}'`;
+
+      if (!workspace.includes(expectedAitDevtoolsPeerRule)) {
+        failures.push(
+          `${workspacePath}: peerDependencyRules.allowedVersions must include `
+            + `${expectedAitDevtoolsPeerRule}.`,
+        );
+      }
     }
   }
 

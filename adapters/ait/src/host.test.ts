@@ -1,3 +1,9 @@
+import {
+  grantPromotionRewardForGame as sdkGrantPromotionReward,
+  openGameCenterLeaderboard as sdkOpenGameCenterLeaderboard,
+  requestNotificationAgreement as sdkRequestNotificationAgreement,
+  submitGameCenterLeaderBoardScore as sdkSubmitGameCenterLeaderBoardScore,
+} from '@apps-in-toss/web-framework';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { BridgeRequest } from '@mpgd/bridge';
@@ -2642,8 +2648,32 @@ type IapPendingOrdersResult = Awaited<
   ReturnType<AitHostDependencies['iap']['getPendingOrders']>
 >;
 
+type AitSdkDependencyKey =
+  | 'grantPromotionReward'
+  | 'openGameCenterLeaderboard'
+  | 'requestNotificationAgreement'
+  | 'submitGameCenterLeaderBoardScore';
+
+type CallableOnly<TFunction extends (...args: never[]) => unknown> = (
+  ...args: Parameters<TFunction>
+) => ReturnType<TFunction>;
+
+type AitSdkTestHandler<TKey extends AitSdkDependencyKey> =
+  CallableOnly<AitHostDependencies[TKey]>
+  & Partial<Pick<AitHostDependencies[TKey], 'isSupported'>>;
+
+type AitHostDependencyOverrides = Omit<Partial<AitHostDependencies>, AitSdkDependencyKey>
+  & {
+    grantPromotionReward?: AitSdkTestHandler<'grantPromotionReward'>;
+    openGameCenterLeaderboard?: AitSdkTestHandler<'openGameCenterLeaderboard'>;
+    requestNotificationAgreement?: AitSdkTestHandler<'requestNotificationAgreement'>;
+    submitGameCenterLeaderBoardScore?: AitSdkTestHandler<
+      'submitGameCenterLeaderBoardScore'
+    >;
+  };
+
 function createDependencies(
-  overrides: Partial<AitHostDependencies> = {},
+  overrides: AitHostDependencyOverrides = {},
 ): AitHostDependencies {
   const unsupportedAd = Object.assign(() => () => {}, { isSupported: () => false });
   const unsupportedIap = {
@@ -2652,6 +2682,13 @@ function createDependencies(
     getPendingOrders: Object.assign(async () => ({ orders: [] }), { isSupported: () => false }),
     completeProductGrant: Object.assign(async () => false, { isSupported: () => false }),
   };
+  const {
+    grantPromotionReward = async () => ({ key: 'test-promotion-receipt' }),
+    openGameCenterLeaderboard = async () => {},
+    requestNotificationAgreement = () => () => {},
+    submitGameCenterLeaderBoardScore = async () => ({ statusCode: 'SUCCESS' as const }),
+    ...otherOverrides
+  } = overrides;
 
   return {
     identityProvider: async () => ({ type: 'HASH', hash: 'test-player' }),
@@ -2662,18 +2699,38 @@ function createDependencies(
     },
     getTossShareLink: async () => 'https://toss.im/test',
     share: async () => {},
-    grantPromotionReward: async () => ({ key: 'test-promotion-receipt' }),
-    requestNotificationAgreement: Object.assign(() => () => {}, {
-      isSupported: () => false,
-    }),
+    grantPromotionReward: withSdkMetadata(grantPromotionReward, sdkGrantPromotionReward),
+    requestNotificationAgreement: withSdkMetadata(
+      requestNotificationAgreement,
+      sdkRequestNotificationAgreement,
+      false,
+    ),
     isMinVersionSupported: () => true,
     loadFullScreenAd: unsupportedAd,
     showFullScreenAd: unsupportedAd,
-    openGameCenterLeaderboard: async () => {},
-    submitGameCenterLeaderBoardScore: async () => ({ statusCode: 'SUCCESS' }),
+    openGameCenterLeaderboard: withSdkMetadata(
+      openGameCenterLeaderboard,
+      sdkOpenGameCenterLeaderboard,
+    ),
+    submitGameCenterLeaderBoardScore: withSdkMetadata(
+      submitGameCenterLeaderBoardScore,
+      sdkSubmitGameCenterLeaderBoardScore,
+    ),
     iap: unsupportedIap,
-    ...overrides,
+    ...otherOverrides,
   } as AitHostDependencies;
+}
+
+function withSdkMetadata<TKey extends AitSdkDependencyKey>(
+  handler: AitSdkTestHandler<TKey>,
+  sdkHandler: AitHostDependencies[TKey],
+  supportedByDefault = true,
+): CallableOnly<AitHostDependencies[TKey]>
+  & Pick<AitHostDependencies[TKey], 'MIN_TOSS_APP_VERSION' | 'isSupported'> {
+  return Object.assign(handler, {
+    MIN_TOSS_APP_VERSION: sdkHandler.MIN_TOSS_APP_VERSION,
+    isSupported: handler.isSupported ?? (() => supportedByDefault),
+  });
 }
 
 function createMemoryStorage(values: Map<string, string>): AitHostDependencies['storage'] {
