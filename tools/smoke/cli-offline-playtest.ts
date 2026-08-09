@@ -129,25 +129,13 @@ try {
     /does not support CSS @import rules/u,
   );
 
-  const workerGame = createPreviewFixture('worker', {
+  await assertWorkerRejected('worker', {
     mainJs: 'new Worker("./worker.js");',
   });
-  fs.writeFileSync(
-    path.join(workerGame, 'artifacts/web-preview/assets/worker.js'),
-    'self.close();',
-  );
-  await assert.rejects(
-    () => runOfflinePlaytestPackaging({ gameRoot: workerGame }),
-    /does not support Worker/u,
-  );
 
-  const inlineWorkerGame = createPreviewFixture('inline-worker', {
+  await assertWorkerRejected('inline-worker', {
     indexHtml: '<!doctype html><html><head><script>new Worker("worker.js");</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
-  await assert.rejects(
-    () => runOfflinePlaytestPackaging({ gameRoot: inlineWorkerGame }),
-    /does not support Worker/u,
-  );
 
   const externalFallbackGame = createPreviewFixture('external-fallback', {
     indexHtml: '<!doctype html><html><head></head><body><script src="/assets/side.js">fallback()</script><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -181,41 +169,17 @@ try {
   assert.match(regexThenAssetHtml, /data:image\/png;base64,/u);
   assert.doesNotMatch(regexThenAssetHtml, /["']\/assets\/icon\.png["']/u);
 
-  const regexThenWorkerGame = createPreviewFixture('regex-then-worker', {
+  await assertWorkerRejected('regex-then-worker', {
     mainJs: 'const slashPattern = /\\/\\//g; new Worker("./worker.js"); void slashPattern;',
   });
-  fs.writeFileSync(
-    path.join(regexThenWorkerGame, 'artifacts/web-preview/assets/worker.js'),
-    'self.close();',
-  );
-  await assert.rejects(
-    () => runOfflinePlaytestPackaging({ gameRoot: regexThenWorkerGame }),
-    /does not support Worker/u,
-  );
 
-  const controlRegexThenWorkerGame = createPreviewFixture('control-regex-then-worker', {
+  await assertWorkerRejected('control-regex-then-worker', {
     mainJs: 'if (true) /\\/\\//g.test("//"); new Worker("./worker.js");',
   });
-  fs.writeFileSync(
-    path.join(controlRegexThenWorkerGame, 'artifacts/web-preview/assets/worker.js'),
-    'self.close();',
-  );
-  await assert.rejects(
-    () => runOfflinePlaytestPackaging({ gameRoot: controlRegexThenWorkerGame }),
-    /does not support Worker/u,
-  );
 
-  const templateWorkerGame = createPreviewFixture('template-worker', {
+  await assertWorkerRejected('template-worker', {
     mainJs: 'const value = `${new Worker("./worker.js")}`; void value;',
   });
-  fs.writeFileSync(
-    path.join(templateWorkerGame, 'artifacts/web-preview/assets/worker.js'),
-    'self.close();',
-  );
-  await assert.rejects(
-    () => runOfflinePlaytestPackaging({ gameRoot: templateWorkerGame }),
-    /does not support Worker/u,
-  );
 
   const rawTemplateTextHtml = await packageAndReadFixture('raw-template-text', {
     mainJs: 'document.body.dataset.label = `new Worker("./not-code.js")`;',
@@ -228,41 +192,17 @@ try {
   assert.match(templateAssetHtml, /data:image\/png;base64,/u);
   assert.doesNotMatch(templateAssetHtml, /\.\/icon\.png/u);
 
-  const blockRegexThenWorkerGame = createPreviewFixture('block-regex-then-worker', {
+  await assertWorkerRejected('block-regex-then-worker', {
     mainJs: 'function noop() {} /\\/\\//g.test("//"); new Worker("./worker.js");',
   });
-  fs.writeFileSync(
-    path.join(blockRegexThenWorkerGame, 'artifacts/web-preview/assets/worker.js'),
-    'self.close();',
-  );
-  await assert.rejects(
-    () => runOfflinePlaytestPackaging({ gameRoot: blockRegexThenWorkerGame }),
-    /does not support Worker/u,
-  );
 
-  const classRegexThenWorkerGame = createPreviewFixture('class-regex-then-worker', {
+  await assertWorkerRejected('class-regex-then-worker', {
     mainJs: 'class Fixture {} /\\/\\//g.test("//"); new Worker("./worker.js"); void Fixture;',
   });
-  fs.writeFileSync(
-    path.join(classRegexThenWorkerGame, 'artifacts/web-preview/assets/worker.js'),
-    'self.close();',
-  );
-  await assert.rejects(
-    () => runOfflinePlaytestPackaging({ gameRoot: classRegexThenWorkerGame }),
-    /does not support Worker/u,
-  );
 
-  const objectDivisionWorkerGame = createPreviewFixture('object-division-worker', {
+  await assertWorkerRejected('object-division-worker', {
     mainJs: 'const ratio = {} / new Worker("./worker.js") / 1; void ratio;',
   });
-  fs.writeFileSync(
-    path.join(objectDivisionWorkerGame, 'artifacts/web-preview/assets/worker.js'),
-    'self.close();',
-  );
-  await assert.rejects(
-    () => runOfflinePlaytestPackaging({ gameRoot: objectDivisionWorkerGame }),
-    /does not support Worker/u,
-  );
 
   const nonJavaScriptTypeHtml = await packageAndReadFixture('non-javascript-script-type', {
     indexHtml: '<!doctype html><html><head><script type="text/template-javascript">window.icon="/assets/icon.png";</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -551,6 +491,15 @@ interface PreviewFixtureOptions {
 }
 
 type PreviewFixtureFile = readonly [relativePath: string, content: string | Buffer];
+
+async function assertWorkerRejected(
+  name: string,
+  options: PreviewFixtureOptions,
+): Promise<void> {
+  const gameRoot = createPreviewFixture(name, options);
+  fs.writeFileSync(path.join(gameRoot, 'artifacts/web-preview/assets/worker.js'), 'self.close();');
+  await assert.rejects(() => runOfflinePlaytestPackaging({ gameRoot }), /does not support Worker/u);
+}
 
 async function packageAndReadFixture(
   name: string,
