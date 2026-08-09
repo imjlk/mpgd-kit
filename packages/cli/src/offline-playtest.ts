@@ -128,7 +128,7 @@ const offlinePlaytestLimitations = [
   'Workers, service workers, WebAssembly streaming, and runtime-computed asset URLs are unsupported. Non-streaming embedded WebAssembly is allowed.',
   'glTF files must be self-contained with data URIs; otherwise use a GLB file.',
   'CSS @import rules are unsupported; include those rules in the built stylesheet before packaging.',
-  'Dynamic imports and HTML base elements are unsupported.',
+  'Dynamic imports, import maps, and HTML base elements are unsupported.',
 ] as const;
 
 const mimeTypes = new Map<string, string>([
@@ -279,15 +279,14 @@ function extractModuleEntry(
     throw new Error('Offline playtest source index.html contains the reserved entry marker.');
   }
 
-  const scriptPattern = /<script\b([^>]*)>[\s\S]*?<\/script\s*>/giu;
-  const matches = [...html.matchAll(scriptPattern)];
+  const matches = findHtmlScriptElements(html);
   const externalScripts = matches.filter(
-    (match) => readHtmlAttribute(match[1] ?? '', 'src') !== undefined,
+    (match) => readHtmlAttribute(match[2] ?? '', 'src') !== undefined,
   );
   const moduleEntries = externalScripts.filter(
     (match) =>
-      readHtmlAttribute(match[1] ?? '', 'type')?.toLowerCase() === 'module'
-      && !hasNoModuleAttribute(match[1] ?? ''),
+      readHtmlAttribute(match[2] ?? '', 'type')?.trim().toLowerCase() === 'module'
+      && !hasNoModuleAttribute(match[2] ?? ''),
   );
 
   if (moduleEntries.length !== 1) {
@@ -295,7 +294,7 @@ function extractModuleEntry(
   }
 
   const match = moduleEntries[0];
-  const source = readHtmlAttribute(match?.[1] ?? '', 'src');
+  const source = readHtmlAttribute(match?.[2] ?? '', 'src');
 
   if (match?.[0] === undefined || source === undefined || match.index === undefined) {
     throw new Error('Unable to resolve the module entry script.');
@@ -308,7 +307,7 @@ function extractModuleEntry(
       continue;
     }
 
-    if (!hasNoModuleAttribute(externalScript[1] ?? '')) {
+    if (!hasNoModuleAttribute(externalScript[2] ?? '')) {
       throw new Error(
         'Offline playtest does not support additional external scripts beyond the module entry.',
       );
@@ -319,6 +318,19 @@ function extractModuleEntry(
   const output = rewriteExternalScripts(html, externalScripts, match);
 
   return { html: output, entryFile };
+}
+
+function findHtmlScriptElements(html: string): readonly RegExpMatchArray[] {
+  return findHtmlRawTextElements(html, 'script');
+}
+
+function findHtmlRawTextElements(
+  html: string,
+  elementName: 'script' | 'style',
+): readonly RegExpMatchArray[] {
+  return [...html.matchAll(createHtmlRawTextPattern())].filter(
+    (match) => match[1]?.toLowerCase() === elementName,
+  );
 }
 
 function rewriteExternalScripts(
@@ -393,6 +405,16 @@ function offlineAssetInliningPlugin(context: InliningContext): Plugin {
           resolveDir: path.dirname(args.path),
         };
       });
+      pluginBuild.onLoad({ filter: /\.json$/ }, (args) => {
+        const jsonFile = resolveArtifactFile(context.artifactRoot, args.path);
+        const source = readFileSync(jsonFile, 'utf8');
+        context.inlinedAssets.add(jsonFile);
+        return {
+          contents: inlineJsonAssetReferences(source, jsonFile, context),
+          loader: 'json',
+          resolveDir: path.dirname(args.path),
+        };
+      });
       pluginBuild.onLoad({ filter: /\.css$/ }, (args) => {
         const cssFile = resolveArtifactFile(context.artifactRoot, args.path);
         const source = readFileSync(cssFile, 'utf8');
@@ -407,6 +429,57 @@ function offlineAssetInliningPlugin(context: InliningContext): Plugin {
   };
 }
 
+function inlineJsonAssetReferences(
+  source: string,
+  sourceFile: string,
+  context: InliningContext,
+): string {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(source) as unknown;
+  } catch (error) {
+    throw new Error(`Invalid JSON module ${sourceFile}: ${errorMessage(error)}`);
+  }
+
+  return JSON.stringify(transformJsonAssetReferences(parsed, sourceFile, context, 0));
+}
+
+function transformJsonAssetReferences(
+  value: unknown,
+  sourceFile: string,
+  context: InliningContext,
+  depth: number,
+): unknown {
+  if (depth > 64) {
+    throw new Error(
+      `Offline playtest JSON module exceeds the supported nesting depth: ${sourceFile}`,
+    );
+  }
+
+  if (typeof value === 'string') {
+    const assetFile = resolveExistingAssetReference(sourceFile, value, context.artifactRoot);
+    return assetFile === undefined || isCodeAsset(assetFile)
+      ? value
+      : readAssetDataUrl(sourceFile, value, context);
+  }
+
+  if (Array.isArray(value)) {
+    return value.map((item) => transformJsonAssetReferences(item, sourceFile, context, depth + 1));
+  }
+
+  if (isRecord(value)) {
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [
+        key,
+        transformJsonAssetReferences(item, sourceFile, context, depth + 1),
+      ]),
+    );
+  }
+
+  return value;
+}
+
 function inlineJavaScriptAssetReferences(
   source: string,
   sourceFile: string,
@@ -416,8 +489,12 @@ function inlineJavaScriptAssetReferences(
   const sourceCodePositions = createCodePositionMap(source, true);
   let output = source.replace(
     staticUrlPattern,
-    (match, _quote: string, reference: string, hrefAccess: string | undefined, offset: number) => {
+    (match, quote: string, reference: string, hrefAccess: string | undefined, offset: number) => {
       if (sourceCodePositions[offset] !== 1) {
+        return match;
+      }
+
+      if (quote === '`' && reference.includes('${')) {
         return match;
       }
 
@@ -458,21 +535,34 @@ function inlineScriptElements(
   htmlFile: string,
   context: InliningContext,
 ): string {
-  return html.replace(
-    /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/giu,
-    (_tag, attributes: string, script: string) => {
-      if (readHtmlAttribute(attributes, 'src') !== undefined) {
-        throw new Error('Offline playtest cannot retain an external script after entry extraction.');
-      }
+  let cursor = 0;
+  let output = '';
 
-      if (!isJavaScriptScriptType(readHtmlAttribute(attributes, 'type'))) {
-        return `<script${attributes}>${script}</script>`;
-      }
+  for (const match of findHtmlScriptElements(html)) {
+    const attributes = match[2] ?? '';
+    const script = match[3] ?? '';
 
+    if (match.index === undefined || match[0] === undefined) {
+      throw new Error('Unable to rewrite an inline script in the offline playtest document.');
+    }
+
+    output += html.slice(cursor, match.index);
+
+    if (readHtmlAttribute(attributes, 'src') !== undefined) {
+      throw new Error('Offline playtest cannot retain an external script after entry extraction.');
+    }
+
+    if (!isJavaScriptScriptType(readHtmlAttribute(attributes, 'type'))) {
+      output += match[0];
+    } else {
       const inlined = inlineJavaScriptAssetReferences(script, htmlFile, context);
-      return `<script${attributes}>${escapeClosingTag(inlined, 'script')}</script>`;
-    },
-  );
+      output += `<script${attributes}>${escapeClosingTag(inlined, 'script')}</script>`;
+    }
+
+    cursor = match.index + match[0].length;
+  }
+
+  return output + html.slice(cursor);
 }
 
 function isJavaScriptScriptType(type: string | undefined): boolean {
@@ -548,13 +638,23 @@ function inlineStyleElements(
   htmlFile: string,
   context: InliningContext,
 ): string {
-  return html.replace(
-    /<style\b([^>]*)>([\s\S]*?)<\/style>/giu,
-    (_tag, attributes: string, stylesheet: string) => {
-      const inlined = inlineCssAssetReferences(stylesheet, htmlFile, context);
-      return `<style${attributes}>${escapeClosingTag(inlined, 'style')}</style>`;
-    },
-  );
+  let cursor = 0;
+  let output = '';
+
+  for (const match of findHtmlRawTextElements(html, 'style')) {
+    if (match.index === undefined || match[0] === undefined) {
+      throw new Error('Unable to rewrite a style element in the offline playtest document.');
+    }
+
+    const attributes = match[2] ?? '';
+    const stylesheet = match[3] ?? '';
+    const inlined = inlineCssAssetReferences(stylesheet, htmlFile, context);
+    output += html.slice(cursor, match.index);
+    output += `<style${attributes}>${escapeClosingTag(inlined, 'style')}</style>`;
+    cursor = match.index + match[0].length;
+  }
+
+  return output + html.slice(cursor);
 }
 
 function containsCssImportRule(source: string): boolean {
@@ -623,7 +723,17 @@ function inlineHtmlAssetFragment(
   htmlFile: string,
   context: InliningContext,
 ): string {
-  return html.replace(/<(link|audio|embed|feimage|image|img|input|object|source|track|use|video)\b([^>]*)>/giu, (tag, name: string, attributes: string) => {
+  const htmlWithInlineStyles = html.replace(/<[a-z][^>]*>/giu, (tag) => {
+    const style = readHtmlAttribute(tag, 'style');
+
+    if (style === undefined) {
+      return tag;
+    }
+
+    return replaceHtmlAttribute(tag, 'style', inlineCssAssetReferences(style, htmlFile, context));
+  });
+
+  return htmlWithInlineStyles.replace(/<(link|audio|embed|feimage|image|img|input|object|source|track|use|video)\b([^>]*)>/giu, (tag, name: string, attributes: string) => {
     const lowerName = name.toLowerCase();
     const rel = readHtmlAttribute(attributes, 'rel')?.toLowerCase();
     const allowedAttributes = [...(htmlAssetAttributesByTag[lowerName] ?? ['src'])];
@@ -666,11 +776,10 @@ function transformOutsideHtmlRawText(
   html: string,
   transform: (fragment: string) => string,
 ): string {
-  const rawTextPattern = /<!--[\s\S]*?-->|<(script|style|textarea|title)\b[^>]*>[\s\S]*?<\/\1\s*>/giu;
   let cursor = 0;
   let output = '';
 
-  for (const match of html.matchAll(rawTextPattern)) {
+  for (const match of html.matchAll(createHtmlRawTextPattern())) {
     if (match.index === undefined || match[0] === undefined) {
       continue;
     }
@@ -681,6 +790,10 @@ function transformOutsideHtmlRawText(
   }
 
   return output + transform(html.slice(cursor));
+}
+
+function createHtmlRawTextPattern(): RegExp {
+  return /<!--[\s\S]*?-->|<(script|style|textarea|title)\b([^>]*)>([\s\S]*?)<\/\1\s*>/giu;
 }
 
 function inlineHtmlSrcset(
@@ -799,6 +912,14 @@ function assembleOfflineHtml(html: string, bundledEntry: BundledEntry): string {
 }
 
 function assertSupportedHtmlDocument(html: string): void {
+  const containsImportMap = findHtmlScriptElements(html).some(
+    (match) => readHtmlAttribute(match[2] ?? '', 'type')?.trim().toLowerCase() === 'importmap',
+  );
+
+  if (containsImportMap) {
+    throw new Error('Offline playtest does not support HTML import maps.');
+  }
+
   transformOutsideHtmlRawText(html, (fragment) => {
     if (/<base\b[^>]*>/iu.test(fragment)) {
       throw new Error('Offline playtest does not support HTML base elements.');
@@ -1343,7 +1464,7 @@ function resolveExistingAssetReference(
 function readArtifactAssetDirectories(artifactRoot: string): readonly string[] {
   return readdirSync(artifactRoot, { withFileTypes: true })
     .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
-    .map((entry) => escapeRegExp(entry.name));
+    .map((entry) => entry.name);
 }
 
 function resolveLocalReference(artifactRoot: string, baseDir: string, reference: string): string {

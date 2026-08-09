@@ -174,10 +174,23 @@ try {
   });
   assert.doesNotMatch(legacyFallbackHtml, /legacy(?:\.js|Fallback)/u);
 
+  const commentedEntryHtml = await packageAndReadFixture('commented-module-entry', {
+    indexHtml: '<!doctype html><html><head><!-- <script type="module" src="/old.js"></script> --></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(
+    commentedEntryHtml,
+    /<!--\s*<script type="module" src="\/old\.js"><\/script>\s*-->/u,
+  );
+  assert.doesNotMatch(commentedEntryHtml, /MPGD_OFFLINE_PLAYTEST_ENTRY/u);
+
   const inlineScriptHtml = await packageAndReadFixture('inline-script-assets', {
-    indexHtml: '<!doctype html><html><head><script>window.icon=\'/assets/icon.png\';window.markup=\'<img src="/assets/missing.png">\';</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    indexHtml: '<!doctype html><html><head><script>window.icon=\'/assets/icon.png\';window.markup=\'<style>body{background:url("/assets/missing.png")}</style><img src="/assets/missing.png">\';</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
   assert.match(inlineScriptHtml, /window\.icon='data:image\/png;base64,/u);
+  assert.match(
+    inlineScriptHtml,
+    /<style>body\{background:url\("\/assets\/missing\.png"\)\}<\/style>/u,
+  );
   assert.match(inlineScriptHtml, /<img src="\/assets\/missing\.png">/u);
 
   const codeLikeTextHtml = await packageAndReadFixture('code-like-text', {
@@ -274,6 +287,20 @@ try {
   assert.match(commonAssetHtml, /data:audio\/opus;base64,/u);
   assert.match(commonAssetHtml, /data:model\/gltf\+json;base64,/u);
   assert.match(commonAssetHtml, /data:model\/gltf-binary;base64,/u);
+
+  const jsonModuleAssetGame = createPreviewFixture('json-module-asset', {
+    mainJs: 'import config from "./asset-config.json"; document.body.dataset.texture = config.texture;',
+  });
+  fs.writeFileSync(
+    path.join(jsonModuleAssetGame, 'artifacts/web-preview/assets/asset-config.json'),
+    '{"texture":"/assets/pixel.png","label":"fixture"}',
+  );
+  const jsonModuleAssetResult = await runOfflinePlaytestPackaging({
+    gameRoot: jsonModuleAssetGame,
+  });
+  const jsonModuleAssetHtml = fs.readFileSync(jsonModuleAssetResult.entryFile, 'utf8');
+  assert.doesNotMatch(jsonModuleAssetHtml, /["']\/assets\/pixel\.png["']/u);
+  assert.match(jsonModuleAssetHtml, /data:image\/png;base64,/u);
 
   const externalGltfGame = createPreviewFixture('external-gltf', {
     mainJs: 'document.body.dataset.scene = new URL("./scene.gltf", import.meta.url).href;',
@@ -387,11 +414,11 @@ try {
   const parenthesizedAssetDirectoryHtml = await packageAndReadFixture(
     'parenthesized-asset-directory',
     {
-      mainJs: 'document.body.dataset.icon = "/assets(2x)/pixel.png";',
+      mainJs: 'document.body.dataset.icon = "assets(2x)/pixel.png";',
     },
     [['artifacts/web-preview/assets(2x)/pixel.png', onePixelPng]],
   );
-  assert.doesNotMatch(parenthesizedAssetDirectoryHtml, /\/assets\(2x\)\/pixel\.png/u);
+  assert.doesNotMatch(parenthesizedAssetDirectoryHtml, /assets\(2x\)\/pixel\.png/u);
   assert.match(parenthesizedAssetDirectoryHtml, /data:image\/png;base64,/u);
 
   const unquotedHtmlAssetHtml = await packageAndReadFixture('unquoted-html-asset', {
@@ -458,6 +485,12 @@ try {
   );
   assert.equal(embeddedPngAssets.length, 2);
 
+  const styleAttributeHtml = await packageAndReadFixture('style-attribute-asset', {
+    indexHtml: '<!doctype html><html><head></head><body><main id="game" style="background-image:url(\'/assets/pixel.png\')"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.doesNotMatch(styleAttributeHtml, /\/assets\/pixel\.png/u);
+  assert.match(styleAttributeHtml, /style="background-image:url\(&quot;data:image\/png;base64,/u);
+
   const objectAssetHtml = await packageAndReadFixture(
     'object-asset',
     {
@@ -497,12 +530,33 @@ try {
     /does not support HTML base elements/u,
   );
 
+  const importMapGame = createPreviewFixture('import-map', {
+    indexHtml: '<!doctype html><html><head><script type="importmap">{"imports":{"game-lib":"./assets/lib.js"}}</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    mainJs: 'import "game-lib";',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: importMapGame }),
+    /does not support HTML import maps/u,
+  );
+
   const dynamicImportGame = createPreviewFixture('dynamic-import', {
     mainJs: 'const selectLevelModule = () => "./level.js"; void import(selectLevelModule());',
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: dynamicImportGame }),
     /does not support dynamic import/u,
+  );
+
+  const interpolatedTemplateAssetGame = createPreviewFixture('interpolated-template-asset', {
+    mainJs: 'const mask = "mask"; document.body.dataset.asset = new URL(`./icons.svg#${mask}`, import.meta.url).href;',
+  });
+  fs.writeFileSync(
+    path.join(interpolatedTemplateAssetGame, 'artifacts/web-preview/assets/icons.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"><mask id="mask"/></svg>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: interpolatedTemplateAssetGame }),
+    /runtime-computed import.meta asset URL/u,
   );
 
   const dynamicAssetGame = createPreviewFixture('dynamic-asset', {
