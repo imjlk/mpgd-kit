@@ -230,7 +230,8 @@ pnpm exec mpgd target build web-preview staging \
 pnpm exec mpgd game offline-playtest .
 ```
 
-The output defaults to `artifacts/offline-playtest`. Its `index.html` contains
+The output defaults to `artifacts/offline-playtest`; custom outputs must also
+stay below the game-owned `artifacts` directory. Its `index.html` contains
 the bundled JavaScript, styles, and statically discoverable local assets, while
 a content security policy and runtime guards deny network APIs. The adjacent
 `README.txt` and `offline-playtest.json` label the artifact `test-play-only`,

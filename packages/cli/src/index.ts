@@ -604,8 +604,8 @@ const gameCommand = defineI18n({
             ko: '게임 루트 기준 기존 web-preview 산출물 디렉터리.',
           },
           'output-dir': {
-            en: 'Test-only output directory, relative to the game root.',
-            ko: '게임 루트 기준 테스트 전용 출력 디렉터리.',
+            en: 'Test-only output directory under the game artifacts directory.',
+            ko: '게임 artifacts 디렉터리 아래의 테스트 전용 출력 디렉터리.',
           },
           'maximum-bytes': {
             en: 'Maximum size of the generated single index.html file.',
@@ -629,7 +629,7 @@ const gameCommand = defineI18n({
           type: 'string',
           required: false,
           default: defaultOfflinePlaytestOutputDir,
-          description: 'Test-only output directory.',
+          description: 'Test-only output directory under game artifacts.',
         },
         'maximum-bytes': {
           type: 'string',

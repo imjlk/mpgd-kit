@@ -3,9 +3,9 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   realpathSync,
-  rmSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -62,6 +62,12 @@ interface BundledEntry {
 }
 
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
+const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
+const htmlAssetAttributesByTag: Readonly<Record<string, readonly string[]>> = {
+  img: ['src', 'srcset'],
+  source: ['src', 'srcset'],
+  video: ['src', 'poster'],
+};
 const offlinePlaytestLimitations = [
   'Server-backed identity, purchases, ads, rewards, leaderboards, and cloud saves are unavailable.',
   'Browser storage opened from file:// is browser-dependent and best-effort only.',
@@ -124,6 +130,7 @@ export async function runOfflinePlaytestPackaging(
 
   assertSeparateDirectories(artifactRoot, outputDir);
   assertSafeOutputDirectory(gameRoot, outputDir);
+  assertReusableOutputDirectory(outputDir);
   const identity = readEffectivePreviewIdentity(artifactRoot);
   const sourceIndexFile = resolveArtifactFile(artifactRoot, 'index.html');
   const sourceHtml = readFileSync(sourceIndexFile, 'utf8');
@@ -158,7 +165,6 @@ export async function runOfflinePlaytestPackaging(
     limitations: offlinePlaytestLimitations,
   };
 
-  rmSync(outputDir, { recursive: true, force: true });
   mkdirSync(outputDir, { recursive: true });
   const entryFileOutput = path.join(outputDir, 'index.html');
   const readmeFile = path.join(outputDir, 'README.txt');
@@ -291,7 +297,20 @@ function inlineJavaScriptAssetReferences(
   let output = source.replace(staticUrlPattern, (_match, _quote: string, reference: string) =>
     JSON.stringify(readAssetDataUrl(sourceFile, reference, context)),
   );
-  const literalPattern = /(["'`])([^"'`\r\n]+)\1/gu;
+  const [assetDirectory] = path.relative(
+    context.artifactRoot,
+    path.dirname(sourceFile),
+  ).split(path.sep);
+
+  if (assetDirectory === undefined || assetDirectory.length === 0) {
+    assertSupportedBundledRuntime(output);
+    return output;
+  }
+
+  const literalPattern = new RegExp(
+    `(["'\`])((?:/|\\./)?${escapeRegExp(assetDirectory)}/[^"'\`\\r\\n]+)\\1`,
+    'gu',
+  );
   output = output.replace(literalPattern, (match, quote: string, reference: string) => {
     const assetFile = resolveExistingAssetReference(sourceFile, reference, context.artifactRoot);
 
@@ -358,11 +377,7 @@ function inlineHtmlAssets(
   return html.replace(/<(link|img|source|audio|video)\b([^>]*)>/giu, (tag, name: string, attributes: string) => {
     const lowerName = name.toLowerCase();
     const rel = readHtmlAttribute(attributes, 'rel')?.toLowerCase();
-    const allowedAttributes = lowerName === 'video'
-      ? ['src', 'poster']
-      : lowerName === 'img' || lowerName === 'source'
-        ? ['src', 'srcset']
-        : ['src'];
+    const allowedAttributes = [...(htmlAssetAttributesByTag[lowerName] ?? ['src'])];
 
     if (lowerName === 'link') {
       if (rel !== 'icon' && rel !== 'apple-touch-icon' && rel !== 'mask-icon') {
@@ -377,7 +392,12 @@ function inlineHtmlAssets(
     for (const attribute of allowedAttributes) {
       const reference = readHtmlAttribute(attributes, attribute);
 
-      if (reference === undefined || reference.startsWith('data:') || reference.startsWith('blob:')) {
+      if (
+        reference === undefined
+        || reference.startsWith('data:')
+        || reference.startsWith('blob:')
+        || reference.startsWith('#')
+      ) {
         continue;
       }
 
@@ -444,7 +464,7 @@ function assertSupportedBundledRuntime(source: string): void {
     { pattern: /\bnew\s+(?:Shared)?Worker\s*\(/u, label: 'Worker' },
     { pattern: /\bserviceWorker\s*\.\s*register\s*\(/u, label: 'service worker registration' },
     { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/u, label: 'WebAssembly streaming' },
-    { pattern: /\bnew\s+URL\([^)]*import\.meta/u, label: 'runtime-computed import.meta asset URL' },
+    { pattern: /\bnew\s+URL\([^;]*import\.meta/u, label: 'runtime-computed import.meta asset URL' },
   ];
 
   for (const candidate of unsupported) {
@@ -564,6 +584,14 @@ function assertSeparateDirectories(artifactRoot: string, outputDir: string): voi
 }
 
 function assertSafeOutputDirectory(gameRoot: string, outputDir: string): void {
+  const artifactsRoot = path.join(gameRoot, 'artifacts');
+
+  if (!isPathWithin(artifactsRoot, outputDir)) {
+    throw new Error(
+      `Offline playtest output directory must stay under ${artifactsRoot}: ${outputDir}`,
+    );
+  }
+
   assertNoSymbolicLinkAncestors(gameRoot, outputDir, 'output directory');
 
   if (!existsSync(outputDir)) {
@@ -578,6 +606,59 @@ function assertSafeOutputDirectory(gameRoot: string, outputDir: string): void {
 
   if (!isPathWithin(gameRoot, canonical) || canonical === gameRoot) {
     throw new Error(`Offline playtest output directory escapes the game root: ${outputDir}`);
+  }
+}
+
+function assertReusableOutputDirectory(outputDir: string): void {
+  if (!existsSync(outputDir)) {
+    return;
+  }
+
+  const entries = readdirSync(outputDir);
+
+  if (entries.length === 0) {
+    return;
+  }
+
+  for (const entry of entries) {
+    const entryFile = path.join(outputDir, entry);
+    const entryStats = lstatSync(entryFile);
+
+    if (
+      !offlinePlaytestOutputFiles.has(entry)
+      || entryStats.isSymbolicLink()
+      || !entryStats.isFile()
+    ) {
+      throw new Error(
+        `Offline playtest refuses to overwrite a directory containing non-generated content: ${entryFile}`,
+      );
+    }
+  }
+
+  const evidenceFile = path.join(outputDir, 'offline-playtest.json');
+
+  if (!existsSync(evidenceFile)) {
+    throw new Error(
+      `Offline playtest output is missing prior generation evidence: ${evidenceFile}`,
+    );
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(readFileSync(evidenceFile, 'utf8'));
+  } catch (error) {
+    throw new Error(`Invalid prior offline playtest evidence: ${errorMessage(error)}`);
+  }
+
+  if (
+    !isRecord(parsed)
+    || parsed.schemaVersion !== offlinePlaytestSchemaVersion
+    || parsed.purpose !== 'test-play-only'
+    || parsed.releaseTarget !== false
+    || parsed.entryFile !== 'index.html'
+  ) {
+    throw new Error(`Invalid prior offline playtest evidence: ${evidenceFile}`);
   }
 }
 
@@ -615,19 +696,23 @@ function isCodeAsset(file: string): boolean {
 }
 
 function readHtmlAttribute(attributes: string, name: string): string | undefined {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const escapedName = escapeRegExp(name);
   const match = new RegExp(`(?:^|\\s)${escapedName}\\s*=\\s*(["'])(.*?)\\1`, 'iu').exec(attributes);
   return match?.[2];
 }
 
 function replaceHtmlAttribute(tag: string, name: string, value: string): string {
-  const escapedName = name.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  const escapedName = escapeRegExp(name);
   const pattern = new RegExp(`((?:^|\\s)${escapedName}\\s*=\\s*)(["'])(.*?)\\2`, 'iu');
   return tag.replace(pattern, `$1"${escapeHtmlAttribute(value)}"`);
 }
 
 function escapeHtmlAttribute(value: string): string {
   return value.replace(/&/gu, '&amp;').replace(/"/gu, '&quot;');
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
 function escapeForQuote(value: string, quote: string): string {

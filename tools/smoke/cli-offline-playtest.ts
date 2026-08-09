@@ -32,6 +32,7 @@ try {
   assert.match(html, /<style>/u);
   assert.match(html, /color:red/u);
   assert.doesNotMatch(html, /srcset="\/assets\//u);
+  assert.doesNotMatch(html, /\/assets\/pixel\.png/u);
   assert.doesNotMatch(html, /<script\b[^>]*\bsrc=/u);
   assert.doesNotMatch(html, /<link\b[^>]*\brel=["']stylesheet/u);
   assert.doesNotMatch(html, /type=["']module/u);
@@ -42,8 +43,10 @@ try {
   assert.equal(evidence.sourceTarget, 'web-preview');
   assert.equal(evidence.networkPolicy, 'deny-network');
   assert.match(String(evidence.sha256), /^[a-f\d]{64}$/u);
-  assert.ok(Number(evidence.inlinedAssetCount) >= 4);
+  assert.equal(Number(evidence.inlinedAssetCount), 5);
   assert.equal(result.evidence.bytes, Buffer.byteLength(html));
+  const repeatedResult = await runOfflinePlaytestPackaging({ gameRoot });
+  assert.equal(repeatedResult.evidence.sha256, result.evidence.sha256);
 
   await assert.rejects(
     () => runOfflinePlaytestPackaging({
@@ -65,6 +68,21 @@ try {
     () => runOfflinePlaytestPackaging({ gameRoot, outputDir: '../outside' }),
     /must be a child of the game root/u,
   );
+  fs.mkdirSync(path.join(gameRoot, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(gameRoot, 'src/keep.txt'), 'keep\n');
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot, outputDir: 'src' }),
+    /must stay under/u,
+  );
+  assert.equal(fs.readFileSync(path.join(gameRoot, 'src/keep.txt'), 'utf8'), 'keep\n');
+  const occupiedOutput = path.join(gameRoot, 'artifacts/occupied-output');
+  fs.mkdirSync(occupiedOutput, { recursive: true });
+  fs.writeFileSync(path.join(occupiedOutput, 'keep.txt'), 'keep\n');
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot, outputDir: 'artifacts/occupied-output' }),
+    /containing non-generated content/u,
+  );
+  assert.equal(fs.readFileSync(path.join(occupiedOutput, 'keep.txt'), 'utf8'), 'keep\n');
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot, maximumBytes: 100 }),
     /exceeding the 100-byte limit/u,
@@ -100,12 +118,24 @@ try {
   );
 
   const dynamicAssetGame = createPreviewFixture('dynamic-asset', {
-    mainJs: 'const name = "pixel.png"; document.body.dataset.asset = new URL(name, import.meta.url).href;',
+    mainJs: 'const getPath = () => "pixel.png"; document.body.dataset.asset = new URL(getPath(), import.meta.url).href;',
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: dynamicAssetGame }),
     /runtime-computed import.meta asset URL/u,
   );
+
+  const coincidentalLiteralGame = createPreviewFixture('coincidental-literal', {
+    mainJs: 'const part = "player.png"; document.body.dataset.part = part;',
+  });
+  fs.writeFileSync(
+    path.join(coincidentalLiteralGame, 'artifacts/web-preview/assets/player.png'),
+    onePixelPng,
+  );
+  const coincidentalResult = await runOfflinePlaytestPackaging({
+    gameRoot: coincidentalLiteralGame,
+  });
+  assert.match(fs.readFileSync(coincidentalResult.entryFile, 'utf8'), /player\.png/u);
 
   const symlinkOutputGame = createPreviewFixture('symlink-output');
   fs.symlinkSync(outsideRoot, path.join(symlinkOutputGame, 'artifacts/offline-playtest'), 'dir');
@@ -158,7 +188,7 @@ function createPreviewFixture(name: string, options: PreviewFixtureOptions = {})
   fs.writeFileSync(
     path.join(artifactRoot, 'index.html'),
     options.indexHtml
-      ?? '<!doctype html><html><head><link rel="icon" href="/assets/icon.png"><link rel="stylesheet" href="/assets/main.css"><link rel="modulepreload" href="/assets/chunk.js"></head><body><img alt="fixture" src="/assets/pixel.png" srcset="/assets/pixel.png 2x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+      ?? '<!doctype html><html><head><link rel="icon" href="/assets/icon.png"><link rel="stylesheet" href="/assets/main.css"><link rel="modulepreload" href="/assets/chunk.js"></head><body><img alt="fragment" src="#"><img alt="fixture" src="/assets/pixel.png" srcset="/assets/pixel.png 2x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   );
   fs.writeFileSync(
     path.join(assetsDir, 'main.js'),

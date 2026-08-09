@@ -80,6 +80,7 @@ pnpm exec mpgd game offline-playtest .
 Open `artifacts/offline-playtest/index.html` directly. This is a
 network-blocked, test-play-only copy—not a target in `mpgd.targets.json`, PWA,
 deployment artifact, release-manifest entry, or store-submission package.
+Custom output directories must remain below this game's `artifacts` directory.
 `README.txt` and `offline-playtest.json` preserve that boundary and record the
 result hash. Server-backed login, purchases, ads, rewards, leaderboards, and
 cloud saves do not work in this copy. Workers, service workers, WebAssembly
