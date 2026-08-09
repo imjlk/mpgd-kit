@@ -221,6 +221,27 @@ try {
     /does not support script-driven navigation/u,
   );
 
+  const inlineEventHandlerGame = createPreviewFixture('inline-event-handler', {
+    indexHtml: '<!doctype html><html><head></head><body><button onclick="fetch(\'/assets/config.json\')">load</button><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: inlineEventHandlerGame }),
+    /does not support inline HTML event handlers/u,
+  );
+
+  const rdfaOntologyHtml = await packageAndReadFixture('rdfa-ontology', {
+    indexHtml: '<!doctype html><html ontology="https://example.com/schema"><head></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(rdfaOntologyHtml, /ontology="https:\/\/example\.com\/schema"/u);
+
+  const externalHyperlinkGame = createPreviewFixture('external-hyperlink', {
+    indexHtml: '<!doctype html><html><head></head><body><a href="https://example.com/escape">escape</a><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: externalHyperlinkGame }),
+    /does not support external hyperlink navigation/u,
+  );
+
   const objectLocationHtml = await packageAndReadFixture('object-location-property', {
     mainJs: 'const frame = { location: "local" }; frame.location = "updated"; document.body.dataset.location = frame.location;',
   });
@@ -258,9 +279,9 @@ try {
   assert.doesNotMatch(attributedEntryHtml, /<script[^>]*\bsrc=/u);
 
   const inlineScriptHtml = await packageAndReadFixture('inline-script-assets', {
-    indexHtml: '<!doctype html><html><head><script>window.icon=\'/assets/icon.png\';window.markup=\'<style>body{background:url("/assets/missing.png")}</style><img src="/assets/missing.png">\';</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    indexHtml: '<!doctype html><html><head><script>void fetch(\'/assets/icon.png\');window.markup=\'<style>body{background:url("/assets/missing.png")}</style><img src="/assets/missing.png">\';</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
-  assert.match(inlineScriptHtml, /window\.icon='data:image\/png;base64,/u);
+  assert.match(inlineScriptHtml, /fetch\('data:image\/png;base64,/u);
   assert.match(
     inlineScriptHtml,
     /<style>body\{background:url\("\/assets\/missing\.png"\)\}<\/style>/u,
@@ -304,7 +325,7 @@ try {
   assert.match(codeLikeTextHtml, /new URL\(['"]\.\/missing\.png['"], import\.meta\.url\)/u);
 
   const regexThenAssetHtml = await packageAndReadFixture('regex-then-asset', {
-    mainJs: 'const slashPattern = /\\/\\//g; document.body.dataset.icon = "/assets/icon.png"; void slashPattern;',
+    mainJs: 'const slashPattern = /\\/\\//g; void fetch("/assets/icon.png"); void slashPattern;',
   });
   assert.match(regexThenAssetHtml, /data:image\/png;base64,/u);
   assert.doesNotMatch(regexThenAssetHtml, /["']\/assets\/icon\.png["']/u);
@@ -377,10 +398,15 @@ try {
   ];
 
   for (const asset of commonAssets) {
-    fs.writeFileSync(
-      path.join(commonAssetGame, 'artifacts/web-preview/assets', asset),
-      asset === 'scene.gltf' ? '{"asset":{"version":"2.0"}}\n' : `fixture:${asset}\n`,
-    );
+    let content: string | Buffer = `fixture:${asset}\n`;
+
+    if (asset === 'scene.gltf') {
+      content = '{"asset":{"version":"2.0"}}\n';
+    } else if (asset === 'model.glb') {
+      content = createGlb({ asset: { version: '2.0' } });
+    }
+
+    fs.writeFileSync(path.join(commonAssetGame, 'artifacts/web-preview/assets', asset), content);
   }
 
   const commonAssetResult = await runOfflinePlaytestPackaging({ gameRoot: commonAssetGame });
@@ -429,8 +455,39 @@ try {
     /glTF JSON exceeds the maximum nesting depth/u,
   );
 
+  const externalGlbGame = createPreviewFixture('external-glb', {
+    mainJs: 'document.body.dataset.model = new URL("./external.glb", import.meta.url).href;',
+  });
+  fs.writeFileSync(
+    path.join(externalGlbGame, 'artifacts/web-preview/assets/external.glb'),
+    createGlb({
+      asset: { version: '2.0' },
+      buffers: [{ byteLength: 4, uri: 'external.bin' }],
+    }),
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: externalGlbGame }),
+    /requires self-contained glTF data URIs or GLB/u,
+  );
+
+  const duplicateGlbGame = createPreviewFixture('duplicate-glb-json', {
+    mainJs: 'document.body.dataset.model = new URL("./duplicate.glb", import.meta.url).href;',
+  });
+  const duplicateGlb = createGlb({ asset: { version: '2.0' } });
+  const duplicateJsonChunk = duplicateGlb.subarray(12);
+  const malformedDuplicateGlb = Buffer.concat([duplicateGlb, duplicateJsonChunk]);
+  malformedDuplicateGlb.writeUInt32LE(malformedDuplicateGlb.length, 8);
+  fs.writeFileSync(
+    path.join(duplicateGlbGame, 'artifacts/web-preview/assets/duplicate.glb'),
+    malformedDuplicateGlb,
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: duplicateGlbGame }),
+    /duplicate JSON chunk/u,
+  );
+
   const documentAssetGame = createPreviewFixture('document-relative-assets', {
-    mainJs: 'document.body.dataset.assets = ["./assets/pixel.png", "assets/pixel.png", "/audio/theme.mp3"].join(",");',
+    mainJs: 'void fetch("./assets/pixel.png"); void fetch("assets/pixel.png"); void fetch("/audio/theme.mp3");',
   });
   fs.mkdirSync(path.join(documentAssetGame, 'artifacts/web-preview/audio'), { recursive: true });
   fs.writeFileSync(
@@ -445,7 +502,7 @@ try {
 
   const rootAssetHtml = await packageAndReadFixture(
     'root-level-asset',
-    { mainJs: 'document.body.dataset.theme = "/theme.mp3";' },
+    { mainJs: 'void fetch("/theme.mp3");' },
     [['artifacts/web-preview/theme.mp3', 'fixture:root-theme\n']],
   );
   assert.doesNotMatch(rootAssetHtml, /["']\/theme\.mp3["']/u);
@@ -458,6 +515,14 @@ try {
   );
   assert.doesNotMatch(documentRelativeFetchHtml, /fetch\(["']\.\/level\.json/u);
   assert.match(documentRelativeFetchHtml, /fetch\(["']data:application\/json;base64,/u);
+
+  const networkFetchGame = createPreviewFixture('network-fetch', {
+    mainJs: 'void fetch("https://example.com/level.json");',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: networkFetchGame }),
+    /does not support network fetch URL/u,
+  );
 
   const encodedPathHtml = await packageAndReadFixture(
     'encoded-path',
@@ -591,7 +656,7 @@ try {
   const parenthesizedAssetDirectoryHtml = await packageAndReadFixture(
     'parenthesized-asset-directory',
     {
-      mainJs: 'document.body.dataset.icon = "assets(2x)/pixel.png";',
+      mainJs: 'void fetch("assets(2x)/pixel.png");',
     },
     [['artifacts/web-preview/assets(2x)/pixel.png', onePixelPng]],
   );
@@ -662,6 +727,11 @@ try {
     mainJs: 'const asset = new URL("./config.json", import.meta.url); document.body.dataset.asset = asset.href;',
   });
   assert.match(urlObjectHtml, /new URL\("data:application\/json;base64,/u);
+
+  const preEmbeddedUrlHtml = await packageAndReadFixture('pre-embedded-url', {
+    mainJs: 'const asset = new URL("data:image/png;base64,AAAA", import.meta.url); document.body.dataset.asset = asset.href;',
+  });
+  assert.match(preEmbeddedUrlHtml, /new URL\(["']data:image\/png;base64,AAAA["']\)/u);
 
   const extendedHtmlAssetHtml = await packageAndReadFixture('extended-html-assets', {
     indexHtml: '<!doctype html><html><head></head><body><input type=image src=/assets/pixel.png><svg><image href="/assets/icon.png"></image></svg><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -776,16 +846,17 @@ try {
   );
 
   const coincidentalLiteralGame = createPreviewFixture('coincidental-literal', {
-    mainJs: 'const part = "player.png"; document.body.dataset.part = part;',
+    mainJs: 'const key = "/assets/pixel.png"; document.body.dataset.key = key;',
   });
-  fs.writeFileSync(
-    path.join(coincidentalLiteralGame, 'artifacts/web-preview/assets/player.png'),
-    onePixelPng,
-  );
   const coincidentalResult = await runOfflinePlaytestPackaging({
     gameRoot: coincidentalLiteralGame,
   });
-  assert.match(fs.readFileSync(coincidentalResult.entryFile, 'utf8'), /player\.png/u);
+  assert.match(fs.readFileSync(coincidentalResult.entryFile, 'utf8'), /\/assets\/pixel\.png/u);
+
+  const objectFetchHtml = await packageAndReadFixture('object-fetch-method', {
+    mainJs: 'const client = { fetch: (value) => value }; document.body.dataset.value = client.fetch("/assets/pixel.png");',
+  });
+  assert.match(objectFetchHtml, /client\.fetch\(["']\/assets\/pixel\.png["']\)/u);
 
   const outsideJsonGame = createPreviewFixture('outside-json', {
     mainJs: 'import data from "../../../outside.json"; document.body.dataset.data = data.value;',
@@ -837,6 +908,21 @@ interface PreviewFixtureOptions {
 
 type PreviewFixtureFile = readonly [relativePath: string, content: string | Buffer];
 
+function createGlb(json: unknown): Buffer {
+  const glbMagic = 0x4654_6C67;
+  const jsonChunkType = 0x4E4F_534A;
+  const source = Buffer.from(JSON.stringify(json), 'utf8');
+  const padding = Buffer.alloc((4 - (source.length % 4)) % 4, 0x20);
+  const jsonChunk = Buffer.concat([source, padding]);
+  const header = Buffer.alloc(20);
+  header.writeUInt32LE(glbMagic, 0);
+  header.writeUInt32LE(2, 4);
+  header.writeUInt32LE(header.length + jsonChunk.length, 8);
+  header.writeUInt32LE(jsonChunk.length, 12);
+  header.writeUInt32LE(jsonChunkType, 16);
+  return Buffer.concat([header, jsonChunk]);
+}
+
 async function assertWorkerRejected(
   name: string,
   options: PreviewFixtureOptions,
@@ -880,7 +966,7 @@ function createPreviewFixture(name: string, options: PreviewFixtureOptions = {})
   fs.writeFileSync(
     path.join(assetsDir, 'main.js'),
     options.mainJs
-      ?? 'import "./extra.css"; import { value } from "./chunk.js"; const image = "/assets/pixel.png"; const config = new URL("./config.json", import.meta.url).href; document.querySelector("#game").dataset.result = `${value}:${image}:${config}`;',
+      ?? 'import "./extra.css"; import { value } from "./chunk.js"; void fetch("/assets/pixel.png"); const config = new URL("./config.json", import.meta.url).href; document.querySelector("#game").dataset.result = `${value}:${config}`;',
   );
   fs.writeFileSync(path.join(assetsDir, 'chunk.js'), 'export const value = "ready";');
   fs.writeFileSync(

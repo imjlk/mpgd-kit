@@ -58,7 +58,6 @@ interface EffectivePreviewIdentity {
 
 interface InliningContext {
   readonly artifactRoot: string;
-  readonly assetDirectories: readonly string[];
   readonly assetDataUrls: Map<string, string>;
   readonly inlinedAssets: Set<string>;
   readonly maximumBytes: number;
@@ -81,6 +80,7 @@ const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
 const htmlAttributeNameTerminators = new Set(['"', "'", '=', '<', '>', '/']);
+const nonEventHtmlAttributeNamesStartingWithOn = new Set(['ontology']);
 const inlineEntryExcludedAttributeNames = new Set(['src']);
 const svgResourceAttributeNames = new Set(['href', 'src', 'xlink:href']);
 const javascriptScriptTypes = new Set([
@@ -219,7 +219,6 @@ export async function runOfflinePlaytestPackaging(
   assertSupportedHtmlDocument(sourceHtml);
   const context: InliningContext = {
     artifactRoot,
-    assetDirectories: readArtifactAssetDirectories(artifactRoot),
     assetDataUrls: new Map<string, string>(),
     inlinedAssets: new Set<string>(),
     inlinedAssetBytes: 0,
@@ -587,6 +586,12 @@ function inlineJavaScriptAssetReferences(
         return match;
       }
 
+      if (reference.startsWith('data:') || reference.startsWith('blob:')) {
+        return hrefAccess === undefined
+          ? `new URL(${JSON.stringify(reference)})`
+          : JSON.stringify(reference);
+      }
+
       const dataUrl = readAssetDataUrl(sourceFile, reference, context);
       return hrefAccess === undefined
         ? `new URL(${JSON.stringify(dataUrl)})`
@@ -594,46 +599,28 @@ function inlineJavaScriptAssetReferences(
     },
   );
   const documentFile = path.join(context.artifactRoot, 'index.html');
-  const documentRelativeFetchPattern = /(\bfetch\s*\(\s*)(["'`])((?:\.\.\/|\.\/)[^"'`\r\n]+)\2/gu;
+  const staticFetchPattern = /((?<![$.\w])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*\(\s*)(["'`])([^"'`\r\n]+)\2/gu;
   const fetchCodePositions = createCodePositionMap(output, true);
   output = output.replace(
-    documentRelativeFetchPattern,
+    staticFetchPattern,
     (match, prefix: string, quote: string, reference: string, offset: number) => {
       if (fetchCodePositions[offset] !== 1 || (quote === '`' && reference.includes('${'))) {
         return match;
       }
 
-      const assetFile = resolveExistingAssetReference(documentFile, reference, context.artifactRoot);
-
-      if (assetFile === undefined || isCodeAsset(assetFile)) {
+      if (reference.startsWith('data:') || reference.startsWith('blob:')) {
+        // These schemes are already self-contained or point at runtime-created in-memory data.
         return match;
+      }
+
+      if (isNonLocalReference(reference)) {
+        throw new Error(`Offline playtest does not support network fetch URL: ${reference}`);
       }
 
       const dataUrl = escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote);
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
-  const assetDirectoryAlternative = context.assetDirectories.length === 0
-    ? ''
-    : `|(?:\\./)?(?:${context.assetDirectories.map(escapeRegExp).join('|')})/[^"'\`\\r\\n]+`;
-  const literalPattern = new RegExp(
-    `(["'\`])(/(?!/)[^"'\`\\r\\n]+${assetDirectoryAlternative})\\1`,
-    'gu',
-  );
-  const outputCodePositions = createCodePositionMap(output, true);
-  output = output.replace(literalPattern, (match, quote: string, reference: string, offset: number) => {
-    if (outputCodePositions[offset] !== 1) {
-      return match;
-    }
-
-    const assetFile = resolveExistingAssetReference(documentFile, reference, context.artifactRoot);
-
-    if (assetFile === undefined || isCodeAsset(assetFile)) {
-      return match;
-    }
-
-    return `${quote}${escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote)}${quote}`;
-  });
   assertSupportedBundledRuntime(output);
   return output;
 }
@@ -1329,13 +1316,54 @@ function assertSupportedHtmlDocument(html: string): void {
     throw new Error('Offline playtest does not support HTML import maps.');
   }
 
+  for (const match of html.matchAll(createHtmlRawTextPattern())) {
+    if (match[1] !== undefined) {
+      assertSupportedHtmlAttributes(match[1], tokenizeHtmlAttributes(match[2] ?? ''));
+    }
+  }
+
   transformOutsideHtmlRawText(html, (fragment) => {
     if (/<base\b(?:"[^"]*"|'[^']*'|[^'">])*>/iu.test(fragment)) {
       throw new Error('Offline playtest does not support HTML base elements.');
     }
 
+    const tagPattern = /<([a-z][\w:-]*)(?=[\s>"'\/])((?:"[^"]*"|'[^']*'|[^'">])*)>/giu;
+
+    for (const match of fragment.matchAll(tagPattern)) {
+      assertSupportedHtmlAttributes(match[1] ?? '', tokenizeHtmlAttributes(match[2] ?? ''));
+    }
+
     return fragment;
   });
+}
+
+function assertSupportedHtmlAttributes(
+  tagName: string,
+  attributes: readonly HtmlAttributeToken[],
+): void {
+  const eventHandler = attributes.find(
+    (attribute) => attribute.name.length > 2
+      && attribute.name.startsWith('on')
+      && !nonEventHtmlAttributeNamesStartingWithOn.has(attribute.name),
+  );
+
+  if (eventHandler !== undefined) {
+    throw new Error(
+      `Offline playtest does not support inline HTML event handlers: ${eventHandler.name}.`,
+    );
+  }
+
+  const lowerTagName = tagName.toLowerCase();
+
+  if (lowerTagName !== 'a' && lowerTagName !== 'area') {
+    return;
+  }
+
+  const href = readHtmlAttributeToken(attributes, 'href');
+
+  if (href !== undefined && isNonLocalReference(href)) {
+    throw new Error(`Offline playtest does not support external hyperlink navigation: ${href}`);
+  }
 }
 
 function removeManifestLinks(html: string): string {
@@ -1809,6 +1837,8 @@ function readAssetDataUrl(
 
     if (extension === '.gltf') {
       assertSelfContainedGltf(assetFile, asset.toString('utf8'));
+    } else if (extension === '.glb') {
+      assertSelfContainedGlb(assetFile, asset);
     } else if (extension === '.svg') {
       assertSelfContainedSvg(assetFile, asset.toString('utf8'));
     }
@@ -1900,6 +1930,79 @@ function assertSelfContainedGltf(gltfFile: string, source: string): void {
     throw new Error(`Invalid glTF JSON in ${gltfFile}: ${errorMessage(error)}`);
   }
 
+  assertNoExternalGltfUri(gltfFile, parsed);
+}
+
+function assertSelfContainedGlb(glbFile: string, source: Buffer): void {
+  const glbMagic = 0x4654_6C67;
+  const jsonChunkType = 0x4E4F_534A;
+  const binaryChunkType = 0x004E_4942;
+
+  if (
+    source.length < 24
+    || source.length % 4 !== 0
+    || source.readUInt32LE(0) !== glbMagic
+    || source.readUInt32LE(4) !== 2
+    || source.readUInt32LE(8) !== source.length
+  ) {
+    throw new Error(`Invalid GLB container: ${glbFile}`);
+  }
+
+  let jsonSource: string | undefined;
+  let binaryChunkSeen = false;
+  let chunkIndex = 0;
+  let offset = 12;
+
+  while (offset + 8 <= source.length) {
+    const chunkLength = source.readUInt32LE(offset);
+    const chunkType = source.readUInt32LE(offset + 4);
+    const chunkEnd = offset + 8 + chunkLength;
+
+    if (chunkLength % 4 !== 0 || chunkEnd > source.length) {
+      throw new Error(`Invalid GLB chunk length in ${glbFile}`);
+    }
+
+    if (chunkIndex === 0 && chunkType !== jsonChunkType) {
+      throw new Error(`Invalid GLB first chunk in ${glbFile}`);
+    }
+
+    if (chunkType === jsonChunkType) {
+      if (jsonSource !== undefined) {
+        throw new Error(`Invalid GLB duplicate JSON chunk in ${glbFile}`);
+      }
+
+      jsonSource = source
+        .subarray(offset + 8, chunkEnd)
+        .toString('utf8')
+        .replace(/[\x00\t\n\r ]+$/gu, '');
+    } else if (chunkType === binaryChunkType) {
+      if (binaryChunkSeen) {
+        throw new Error(`Invalid GLB duplicate binary chunk in ${glbFile}`);
+      }
+
+      binaryChunkSeen = true;
+    }
+
+    offset = chunkEnd;
+    chunkIndex += 1;
+  }
+
+  if (jsonSource === undefined || offset !== source.length) {
+    throw new Error(`Invalid GLB JSON chunk in ${glbFile}`);
+  }
+
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(jsonSource) as unknown;
+  } catch (error) {
+    throw new Error(`Invalid GLB JSON in ${glbFile}: ${errorMessage(error)}`);
+  }
+
+  assertNoExternalGltfUri(glbFile, parsed);
+}
+
+function assertNoExternalGltfUri(gltfFile: string, parsed: unknown): void {
   const externalUri = findExternalGltfUri(parsed);
 
   if (externalUri !== undefined) {
@@ -1978,12 +2081,6 @@ function resolveExistingAssetReference(
   } catch {
     return undefined;
   }
-}
-
-function readArtifactAssetDirectories(artifactRoot: string): readonly string[] {
-  return readdirSync(artifactRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
-    .map((entry) => entry.name);
 }
 
 function resolveLocalReference(artifactRoot: string, baseDir: string, reference: string): string {
