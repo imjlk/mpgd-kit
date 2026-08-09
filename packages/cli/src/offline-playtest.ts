@@ -105,6 +105,7 @@ const javascriptControlParenthesisKeywords = new Set([
   'while',
   'with',
 ]);
+const javascriptBlockKeywords = new Set(['do', 'else', 'finally', 'try']);
 const htmlAssetAttributesByTag: Readonly<Record<string, readonly string[]>> = {
   audio: ['src'],
   embed: ['src'],
@@ -849,11 +850,10 @@ function scanJavaScriptCodePositions(
 
   let regexAllowed = true;
   let pendingControlParenthesis = false;
-  let pendingFunctionParameters = false;
   let pendingClassBody = false;
   let nextBraceIsBlock = false;
   let previousToken: string | undefined;
-  const parenthesisKinds: Array<'control' | 'function' | 'normal'> = [];
+  const parenthesisKinds: Array<'control' | 'normal'> = [];
   const braceKinds: boolean[] = [];
 
   for (let index = start; index < source.length; index += 1) {
@@ -894,6 +894,7 @@ function scanJavaScriptCodePositions(
     }
 
     if (isJavaScriptIdentifierStart(character)) {
+      const identifierCanStartExpression = regexAllowed;
       const identifierStart = index;
 
       while (isJavaScriptIdentifierPart(source[index + 1])) {
@@ -902,12 +903,8 @@ function scanJavaScriptCodePositions(
 
       const identifier = source.slice(identifierStart, index + 1);
       pendingControlParenthesis = javascriptControlParenthesisKeywords.has(identifier);
-      pendingFunctionParameters ||= identifier === 'function';
-      pendingClassBody ||= identifier === 'class';
-      nextBraceIsBlock = identifier === 'do'
-        || identifier === 'else'
-        || identifier === 'finally'
-        || identifier === 'try';
+      pendingClassBody ||= identifier === 'class' && identifierCanStartExpression;
+      nextBraceIsBlock = javascriptBlockKeywords.has(identifier);
       regexAllowed = javascriptRegexPrefixKeywords.has(identifier);
       previousToken = identifier;
       continue;
@@ -949,14 +946,9 @@ function scanJavaScriptCodePositions(
     }
 
     if (character === '(') {
-      const parenthesisKind = pendingControlParenthesis
-        ? 'control'
-        : pendingFunctionParameters
-          ? 'function'
-          : 'normal';
+      const parenthesisKind = pendingControlParenthesis ? 'control' : 'normal';
       parenthesisKinds.push(parenthesisKind);
       pendingControlParenthesis = false;
-      pendingFunctionParameters = false;
       regexAllowed = true;
       previousToken = '(';
       continue;
@@ -1016,6 +1008,9 @@ function scanJavaScriptCodePositions(
     }
 
     pendingControlParenthesis = false;
+    if (character === ';' || character === ':') {
+      pendingClassBody = false;
+    }
     regexAllowed = true;
     previousToken = character;
   }
@@ -1237,16 +1232,10 @@ function findExternalGltfUri(value: unknown): string | undefined {
       continue;
     }
 
-    const entries = Object.entries(current.value);
+    const entries = Object.entries(current.value).reverse();
 
-    for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-
-      if (entry === undefined) {
-        continue;
-      }
-
-      pending.push({ key: entry[0], value: entry[1], depth: current.depth + 1 });
+    for (const [key, child] of entries) {
+      pending.push({ key, value: child, depth: current.depth + 1 });
     }
   }
 

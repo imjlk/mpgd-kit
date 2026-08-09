@@ -204,6 +204,10 @@ try {
     mainJs: 'const ratio = {} / new Worker("./worker.js") / 1; void ratio;',
   });
 
+  await assertWorkerRejected('keyword-property-then-worker', {
+    mainJs: 'const descriptor = { class: 1, function: 2 }; const ratio = {} / new Worker("./worker.js") / 1; void descriptor; void ratio;',
+  });
+
   const nonJavaScriptTypeHtml = await packageAndReadFixture('non-javascript-script-type', {
     indexHtml: '<!doctype html><html><head><script type="text/template-javascript">window.icon="/assets/icon.png";</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
