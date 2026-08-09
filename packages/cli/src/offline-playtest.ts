@@ -81,6 +81,7 @@ const offlinePlaytestLimitations = [
   'Server-backed identity, purchases, ads, rewards, leaderboards, and cloud saves are unavailable.',
   'Browser storage opened from file:// is browser-dependent and best-effort only.',
   'Workers, service workers, WebAssembly streaming, and runtime-computed asset URLs are unsupported. Non-streaming embedded WebAssembly is allowed.',
+  'glTF files must be self-contained with data URIs; otherwise use a GLB file.',
   'CSS @import rules are unsupported; include those rules in the built stylesheet before packaging.',
 ] as const;
 
@@ -112,6 +113,7 @@ const mimeTypes = new Map<string, string>([
   ['.ttf', 'font/ttf'],
   ['.txt', 'text/plain'],
   ['.wav', 'audio/wav'],
+  ['.wasm', 'application/wasm'],
   ['.webm', 'video/webm'],
   ['.webp', 'image/webp'],
   ['.woff', 'font/woff'],
@@ -158,7 +160,8 @@ export async function runOfflinePlaytestPackaging(
   };
   const { html: htmlWithoutEntry, entryFile } = extractModuleEntry(sourceHtml, context);
   const bundledEntry = await bundleEntry(entryFile, context);
-  const htmlWithLinkedStyles = inlineStylesheets(htmlWithoutEntry, sourceIndexFile, context);
+  const htmlWithInlineScripts = inlineScriptElements(htmlWithoutEntry, sourceIndexFile, context);
+  const htmlWithLinkedStyles = inlineStylesheets(htmlWithInlineScripts, sourceIndexFile, context);
   const htmlWithStyles = inlineStyleElements(htmlWithLinkedStyles, sourceIndexFile, context);
   const htmlWithAssets = inlineHtmlAssets(htmlWithStyles, sourceIndexFile, context);
   const finalHtml = assembleOfflineHtml(htmlWithAssets, bundledEntry);
@@ -224,16 +227,18 @@ function extractModuleEntry(
   html: string,
   context: InliningContext,
 ): { readonly html: string; readonly entryFile: string } {
-  const scriptPattern = /<script\b([^>]*)>\s*<\/script>/giu;
+  const scriptPattern = /<script\b([^>]*)>[\s\S]*?<\/script\s*>/giu;
   const matches = [...html.matchAll(scriptPattern)];
   const externalScripts = matches.filter(
     (match) => readHtmlAttribute(match[1] ?? '', 'src') !== undefined,
   );
   const moduleEntries = externalScripts.filter(
-    (match) => readHtmlAttribute(match[1] ?? '', 'type')?.toLowerCase() === 'module',
+    (match) =>
+      readHtmlAttribute(match[1] ?? '', 'type')?.toLowerCase() === 'module'
+      && !hasHtmlAttribute(match[1] ?? '', 'nomodule'),
   );
 
-  if (externalScripts.length !== 1 || moduleEntries.length !== 1) {
+  if (moduleEntries.length !== 1) {
     throw new Error('Offline playtest requires exactly one external module entry script.');
   }
 
@@ -245,10 +250,41 @@ function extractModuleEntry(
   }
 
   const entryFile = resolveLocalReference(context.artifactRoot, context.artifactRoot, source);
-  const output = `${html.slice(0, match.index)}${html.slice(match.index + match[0].length)}`;
-  assertSupportedBundledRuntime(output);
+  const removableScripts = new Set<RegExpMatchArray>([match]);
+
+  for (const externalScript of externalScripts) {
+    if (externalScript === match) {
+      continue;
+    }
+
+    if (!hasHtmlAttribute(externalScript[1] ?? '', 'nomodule')) {
+      throw new Error(
+        'Offline playtest does not support additional external scripts beyond the module entry.',
+      );
+    }
+
+    removableScripts.add(externalScript);
+  }
+
+  const output = removeHtmlMatches(html, removableScripts);
 
   return { html: output, entryFile };
+}
+
+function removeHtmlMatches(html: string, matches: ReadonlySet<RegExpMatchArray>): string {
+  let cursor = 0;
+  let output = '';
+
+  for (const match of [...matches].sort((left, right) => (left.index ?? 0) - (right.index ?? 0))) {
+    if (match.index === undefined || match[0] === undefined) {
+      throw new Error('Unable to remove an external script from the offline playtest document.');
+    }
+
+    output += html.slice(cursor, match.index);
+    cursor = match.index + match[0].length;
+  }
+
+  return output + html.slice(cursor);
 }
 
 async function bundleEntry(entryFile: string, context: InliningContext): Promise<BundledEntry> {
@@ -286,6 +322,13 @@ function offlineAssetInliningPlugin(context: InliningContext): Plugin {
   return {
     name: 'mpgd-offline-playtest-assets',
     setup: (pluginBuild) => {
+      pluginBuild.onLoad({ filter: /.*/ }, (args) => {
+        if (args.namespace === 'file') {
+          resolveArtifactFile(context.artifactRoot, args.path);
+        }
+
+        return undefined;
+      });
       pluginBuild.onLoad({ filter: /\.(?:c|m)?js$/ }, (args) => {
         const source = readFileSync(resolveArtifactFile(context.artifactRoot, args.path), 'utf8');
         return {
@@ -314,9 +357,14 @@ function inlineJavaScriptAssetReferences(
   context: InliningContext,
 ): string {
   const staticUrlPattern = /new\s+URL\(\s*(["'`])([^"'`]+)\1\s*,\s*import\.meta\.url\s*\)(\s*\.\s*href)?/gu;
+  const sourceCodePositions = createCodePositionMap(source, true);
   let output = source.replace(
     staticUrlPattern,
-    (_match, _quote: string, reference: string, hrefAccess: string | undefined) => {
+    (match, _quote: string, reference: string, hrefAccess: string | undefined, offset: number) => {
+      if (sourceCodePositions[offset] !== 1) {
+        return match;
+      }
+
       const dataUrl = readAssetDataUrl(sourceFile, reference, context);
       return hrefAccess === undefined
         ? `new URL(${JSON.stringify(dataUrl)})`
@@ -331,7 +379,12 @@ function inlineJavaScriptAssetReferences(
     'gu',
   );
   const documentFile = path.join(context.artifactRoot, 'index.html');
-  output = output.replace(literalPattern, (match, quote: string, reference: string) => {
+  const outputCodePositions = createCodePositionMap(output, true);
+  output = output.replace(literalPattern, (match, quote: string, reference: string, offset: number) => {
+    if (outputCodePositions[offset] !== 1) {
+      return match;
+    }
+
     const assetFile = resolveExistingAssetReference(documentFile, reference, context.artifactRoot);
 
     if (assetFile === undefined || isCodeAsset(assetFile)) {
@@ -342,6 +395,37 @@ function inlineJavaScriptAssetReferences(
   });
   assertSupportedBundledRuntime(output);
   return output;
+}
+
+function inlineScriptElements(
+  html: string,
+  htmlFile: string,
+  context: InliningContext,
+): string {
+  return html.replace(
+    /<script\b([^>]*)>([\s\S]*?)<\/script\s*>/giu,
+    (_tag, attributes: string, script: string) => {
+      if (readHtmlAttribute(attributes, 'src') !== undefined) {
+        throw new Error('Offline playtest cannot retain an external script after entry extraction.');
+      }
+
+      if (!isJavaScriptScriptType(readHtmlAttribute(attributes, 'type'))) {
+        return `<script${attributes}>${script}</script>`;
+      }
+
+      const inlined = inlineJavaScriptAssetReferences(script, htmlFile, context);
+      return `<script${attributes}>${escapeClosingTag(inlined, 'script')}</script>`;
+    },
+  );
+}
+
+function isJavaScriptScriptType(type: string | undefined): boolean {
+  if (type === undefined || type.trim().length === 0) {
+    return true;
+  }
+
+  const normalized = type.trim().toLowerCase();
+  return normalized === 'module' || /(?:java|ecma)script/u.test(normalized);
 }
 
 function inlineStylesheets(
@@ -385,7 +469,12 @@ function inlineCssAssetReferences(
   }
 
   const cssUrlPattern = /url\(\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([^)]*?))\s*\)/giu;
-  return source.replace(cssUrlPattern, (match, doubleQuoted: string | undefined, singleQuoted: string | undefined, unquoted: string | undefined) => {
+  const codePositions = createCodePositionMap(source, false);
+  return source.replace(cssUrlPattern, (match, doubleQuoted: string | undefined, singleQuoted: string | undefined, unquoted: string | undefined, offset: number) => {
+    if (codePositions[offset] !== 1) {
+      return match;
+    }
+
     const reference = (doubleQuoted ?? singleQuoted ?? unquoted ?? '').trim();
 
     if (reference.startsWith('data:') || reference.startsWith('blob:') || reference.startsWith('#')) {
@@ -465,6 +554,17 @@ function inlineHtmlAssets(
   htmlFile: string,
   context: InliningContext,
 ): string {
+  return transformOutsideHtmlRawText(
+    html,
+    (fragment) => inlineHtmlAssetFragment(fragment, htmlFile, context),
+  );
+}
+
+function inlineHtmlAssetFragment(
+  html: string,
+  htmlFile: string,
+  context: InliningContext,
+): string {
   return html.replace(/<(link|audio|embed|feimage|image|img|input|object|source|track|use|video)\b([^>]*)>/giu, (tag, name: string, attributes: string) => {
     const lowerName = name.toLowerCase();
     const rel = readHtmlAttribute(attributes, 'rel')?.toLowerCase();
@@ -502,6 +602,27 @@ function inlineHtmlAssets(
 
     return output;
   });
+}
+
+function transformOutsideHtmlRawText(
+  html: string,
+  transform: (fragment: string) => string,
+): string {
+  const rawTextPattern = /<(script|style|textarea|title)\b[^>]*>[\s\S]*?<\/\1\s*>/giu;
+  let cursor = 0;
+  let output = '';
+
+  for (const match of html.matchAll(rawTextPattern)) {
+    if (match.index === undefined || match[0] === undefined) {
+      continue;
+    }
+
+    output += transform(html.slice(cursor, match.index));
+    output += match[0];
+    cursor = match.index + match[0].length;
+  }
+
+  return output + transform(html.slice(cursor));
 }
 
 function inlineHtmlSrcset(
@@ -583,7 +704,7 @@ function parseHtmlSrcset(
 }
 
 function assembleOfflineHtml(html: string, bundledEntry: BundledEntry): string {
-  const csp = "default-src 'none'; img-src data: blob:; media-src data: blob:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; connect-src data: blob:; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'";
+  const csp = "default-src 'none'; img-src data: blob:; media-src data: blob:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; connect-src data: blob:; object-src data:; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'";
   const banner = '<!-- MPGD offline playtest: test-play-only, not a release target or store submission artifact. -->';
   const runtimeGuard = renderOfflineRuntimeGuard();
   const guardScript = `<script>${escapeClosingTag(runtimeGuard, 'script')}</script>`;
@@ -591,14 +712,16 @@ function assembleOfflineHtml(html: string, bundledEntry: BundledEntry): string {
     ? ''
     : `\n<style>${escapeClosingTag(bundledEntry.stylesheet, 'style')}</style>`;
   const inlineScript = `<script type="module">${escapeClosingTag(bundledEntry.script, 'script')}</script>`;
-  let output = removeExistingContentSecurityPolicy(
-    html.replace(/<link\b[^>]*\brel=["']manifest["'][^>]*>/giu, ''),
+  let output = removeExistingCharsetDeclaration(
+    removeExistingContentSecurityPolicy(
+      html.replace(/<link\b[^>]*\brel=["']manifest["'][^>]*>/giu, ''),
+    ),
   );
 
   if (/<head\b[^>]*>/iu.test(output)) {
     output = output.replace(
       /<head\b([^>]*)>/iu,
-      `<head$1>\n${banner}\n<meta name="mpgd-purpose" content="test-play-only">\n<meta http-equiv="Content-Security-Policy" content="${csp}">\n${guardScript}${bundledStyle}`,
+      `<head$1>\n<meta charset="utf-8">\n${banner}\n<meta name="mpgd-purpose" content="test-play-only">\n<meta http-equiv="Content-Security-Policy" content="${csp}">\n${guardScript}${bundledStyle}`,
     );
   } else {
     throw new Error('Offline playtest source index.html must contain a head element.');
@@ -617,23 +740,100 @@ function removeExistingContentSecurityPolicy(html: string): string {
   );
 }
 
+function removeExistingCharsetDeclaration(html: string): string {
+  return html.replace(/<meta\b[^>]*>/giu, (tag) =>
+    readHtmlAttribute(tag, 'charset') === undefined ? tag : '',
+  );
+}
+
 function renderOfflineRuntimeGuard(): string {
   return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);return raw.startsWith('data:')||raw.startsWith('blob:')};const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
   const unsupported = [
-    { pattern: /\bnew\s+(?:Shared)?Worker\s*\(/u, label: 'Worker' },
-    { pattern: /\bserviceWorker\s*\.\s*register\s*\(/u, label: 'service worker registration' },
-    { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/u, label: 'WebAssembly streaming' },
-    { pattern: /\bnew\s+URL\([^;]*import\.meta/u, label: 'runtime-computed import.meta asset URL' },
+    { pattern: /\bnew\s+(?:Shared)?Worker\s*\(/gu, label: 'Worker' },
+    { pattern: /\bserviceWorker\s*\.\s*register\s*\(/gu, label: 'service worker registration' },
+    { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/gu, label: 'WebAssembly streaming' },
+    { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
   ];
+  const codePositions = createCodePositionMap(source, true);
 
   for (const candidate of unsupported) {
-    if (candidate.pattern.test(source)) {
-      throw new Error(`Offline playtest does not support ${candidate.label}.`);
+    for (const match of source.matchAll(candidate.pattern)) {
+      if (match.index !== undefined && codePositions[match.index] === 1) {
+        throw new Error(`Offline playtest does not support ${candidate.label}.`);
+      }
     }
   }
+}
+
+function createCodePositionMap(source: string, allowLineComments: boolean): Uint8Array {
+  const positions = new Uint8Array(source.length);
+  positions.fill(1);
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const nextCharacter = source[index + 1];
+
+    if (character === '/' && nextCharacter === '*') {
+      positions[index] = 0;
+      positions[index + 1] = 0;
+      index += 2;
+
+      while (index < source.length) {
+        positions[index] = 0;
+
+        if (source[index] === '*' && source[index + 1] === '/') {
+          positions[index + 1] = 0;
+          index += 1;
+          break;
+        }
+
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (allowLineComments && character === '/' && nextCharacter === '/') {
+      positions[index] = 0;
+      positions[index + 1] = 0;
+      index += 2;
+
+      while (index < source.length && source[index] !== '\n' && source[index] !== '\r') {
+        positions[index] = 0;
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (character !== '"' && character !== "'" && character !== '`') {
+      continue;
+    }
+
+    const quote = character;
+    index += 1;
+
+    while (index < source.length) {
+      positions[index] = 0;
+
+      if (source[index] === '\\') {
+        if (index + 1 < source.length) {
+          positions[index + 1] = 0;
+          index += 2;
+          continue;
+        }
+      } else if (source[index] === quote) {
+        break;
+      }
+
+      index += 1;
+    }
+  }
+
+  return positions;
 }
 
 function readAssetDataUrl(
@@ -657,8 +857,64 @@ function readAssetDataUrl(
     );
   }
 
+  const asset = readFileSync(assetFile);
+
+  if (extension === '.gltf') {
+    assertSelfContainedGltf(assetFile, asset.toString('utf8'));
+  }
+
   context.inlinedAssets.add(assetFile);
-  return `data:${mimeType};base64,${readFileSync(assetFile).toString('base64')}${fragment}`;
+  return `data:${mimeType};base64,${asset.toString('base64')}${fragment}`;
+}
+
+function assertSelfContainedGltf(gltfFile: string, source: string): void {
+  let parsed: unknown;
+
+  try {
+    parsed = JSON.parse(source) as unknown;
+  } catch (error) {
+    throw new Error(`Invalid glTF JSON in ${gltfFile}: ${errorMessage(error)}`);
+  }
+
+  const externalUri = findExternalGltfUri(parsed);
+
+  if (externalUri !== undefined) {
+    throw new Error(
+      `Offline playtest requires self-contained glTF data URIs or GLB: ${gltfFile} references ${externalUri}`,
+    );
+  }
+}
+
+function findExternalGltfUri(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const externalUri = findExternalGltfUri(item);
+
+      if (externalUri !== undefined) {
+        return externalUri;
+      }
+    }
+
+    return undefined;
+  }
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  for (const [key, child] of Object.entries(value)) {
+    if (key === 'uri' && typeof child === 'string' && !child.startsWith('data:')) {
+      return child;
+    }
+
+    const externalUri = findExternalGltfUri(child);
+
+    if (externalUri !== undefined) {
+      return externalUri;
+    }
+  }
+
+  return undefined;
 }
 
 function resolveExistingAssetReference(
@@ -702,9 +958,34 @@ function resolveReferencePath(artifactRoot: string, baseDir: string, reference: 
     throw new Error(`Invalid empty local asset reference in ${baseDir}.`);
   }
 
-  return cleanReference.startsWith('/')
-    ? path.resolve(artifactRoot, `.${cleanReference}`)
-    : path.resolve(baseDir, cleanReference);
+  const decodedReference = decodeLocalReferencePath(cleanReference, baseDir);
+
+  return decodedReference.startsWith('/')
+    ? path.resolve(artifactRoot, `.${decodedReference}`)
+    : path.resolve(baseDir, decodedReference);
+}
+
+function decodeLocalReferencePath(reference: string, baseDir: string): string {
+  return reference.split('/').map((segment) => {
+    let decoded: string;
+
+    try {
+      decoded = decodeURIComponent(segment);
+    } catch {
+      throw new Error(`Invalid URL-escaped local asset reference in ${baseDir}: ${reference}`);
+    }
+
+    if (
+      decoded.includes('/')
+      || decoded.includes('\\')
+      || decoded.includes('\0')
+      || (segment.includes('%') && (decoded === '.' || decoded === '..'))
+    ) {
+      throw new Error(`Unsafe URL-escaped local asset reference in ${baseDir}: ${reference}`);
+    }
+
+    return decoded;
+  }).join('/');
 }
 
 function resolveArtifactFile(artifactRoot: string, file: string): string {
@@ -830,6 +1111,24 @@ function assertReusableOutputDirectory(outputDir: string): void {
   ) {
     throw new Error(`Invalid prior offline playtest evidence: ${evidenceFile}`);
   }
+
+  const entryFile = path.join(outputDir, 'index.html');
+
+  if (!existsSync(entryFile) || !lstatSync(entryFile).isFile()) {
+    throw new Error(`Offline playtest output is missing its prior generated entry: ${entryFile}`);
+  }
+
+  if (typeof parsed.sha256 !== 'string' || !/^[a-f\d]{64}$/u.test(parsed.sha256)) {
+    throw new Error(`Invalid prior offline playtest evidence hash: ${evidenceFile}`);
+  }
+
+  const currentHash = createHash('sha256').update(readFileSync(entryFile)).digest('hex');
+
+  if (currentHash !== parsed.sha256) {
+    throw new Error(
+      `Offline playtest refuses to overwrite a modified prior generated entry: ${entryFile}`,
+    );
+  }
 }
 
 function assertNoSymbolicLinkAncestors(root: string, candidate: string, label: string): void {
@@ -872,6 +1171,11 @@ function readHtmlAttribute(attributes: string, name: string): string | undefined
     'iu',
   ).exec(attributes);
   return match?.[1] ?? match?.[2] ?? match?.[3];
+}
+
+function hasHtmlAttribute(attributes: string, name: string): boolean {
+  const escapedName = escapeRegExp(name);
+  return new RegExp(`(?:^|\\s)${escapedName}(?=\\s|=|$)`, 'iu').test(attributes);
 }
 
 function replaceHtmlAttribute(tag: string, name: string, value: string): string {

@@ -85,9 +85,10 @@ Custom output directories must remain below this game's `artifacts` directory.
 result hash. Server-backed login, purchases, ads, rewards, leaderboards, and
 cloud saves do not work in this copy. Workers, service workers, WebAssembly
 streaming, CSS `@import`, runtime-computed asset URLs, and browser-dependent
-`file://` storage are outside this helper's contract. A successful package does
-not prove that every game path works offline; keep unavailable capability
-fallbacks in the game.
+`file://` storage are outside this helper's contract. glTF files must embed
+their dependencies as data URIs; use GLB for models with external buffers or
+textures. A successful package does not prove that every game path works
+offline; keep unavailable capability fallbacks in the game.
 
 The starter owns its Apps in Toss wrapper under `apps/target-ait`. With
 `authoritativeGameServices: false`, production keeps native identity, storage,

@@ -27,6 +27,7 @@ try {
   assert.match(html, /mpgd-purpose" content="test-play-only/u);
   assert.match(html, /Content-Security-Policy/u);
   assert.match(html, /wasm-unsafe-eval/u);
+  assert.match(html, /object-src data:/u);
   assert.match(html, /blocked network access/u);
   assert.match(html, /data:image\/png;base64,/u);
   assert.match(html, /data:application\/json;base64,/u);
@@ -90,6 +91,14 @@ try {
   );
   assert.equal(defaultOfflinePlaytestMaximumBytes, 25 * 1024 * 1024);
 
+  const tamperedOutputGame = createPreviewFixture('tampered-output');
+  const tamperedOutput = await runOfflinePlaytestPackaging({ gameRoot: tamperedOutputGame });
+  fs.appendFileSync(tamperedOutput.entryFile, '<!-- manually changed -->\n');
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: tamperedOutputGame }),
+    /refuses to overwrite a modified prior generated entry/u,
+  );
+
   const releaseArtifactGame = createPreviewFixture('release-artifact', {
     effectiveTarget: { target: 'web', runtime: 'web' },
   });
@@ -140,6 +149,42 @@ try {
     /does not support Worker/u,
   );
 
+  const externalFallbackGame = createPreviewFixture('external-fallback', {
+    indexHtml: '<!doctype html><html><head></head><body><script src="/assets/side.js">fallback()</script><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: externalFallbackGame }),
+    /does not support additional external scripts/u,
+  );
+
+  const legacyFallbackHtml = await packageAndReadFixture('legacy-fallback', {
+    indexHtml: '<!doctype html><html><head></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script><script nomodule src="/assets/legacy.js">legacyFallback()</script></body></html>',
+  });
+  assert.doesNotMatch(legacyFallbackHtml, /legacy(?:\.js|Fallback)/u);
+
+  const inlineScriptHtml = await packageAndReadFixture('inline-script-assets', {
+    indexHtml: '<!doctype html><html><head><script>window.icon=\'/assets/icon.png\';window.markup=\'<img src="/assets/missing.png">\';</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(inlineScriptHtml, /window\.icon='data:image\/png;base64,/u);
+  assert.match(inlineScriptHtml, /<img src="\/assets\/missing\.png">/u);
+
+  const codeLikeTextHtml = await packageAndReadFixture('code-like-text', {
+    mainJs: `const example = "new URL('./missing.png', import.meta.url)";
+      // const commented = "/assets/missing-comment.png";
+      document.body.dataset.example = example;`,
+  });
+  assert.match(codeLikeTextHtml, /new URL\(['"]\.\/missing\.png['"], import\.meta\.url\)/u);
+
+  const cssTextHtml = await packageAndReadFixture('css-code-like-text', {}, [
+    [
+      'artifacts/web-preview/assets/main.css',
+      '/* url("./missing-comment.png") */ .sample::after { content: "url(./missing-string.png)"; background: url("./pixel.png"); }',
+    ],
+  ]);
+  assert.match(cssTextHtml, /missing-comment\.png/u);
+  assert.match(cssTextHtml, /missing-string\.png/u);
+  assert.match(cssTextHtml, /data:image\/png;base64,/u);
+
   const commonAssetGame = createPreviewFixture('common-phaser-assets', {
     mainJs: 'document.body.dataset.assets = [new URL("./sound.m4a", import.meta.url).href, new URL("./voice.opus", import.meta.url).href, new URL("./font.fnt", import.meta.url).href, new URL("./sprites.atlas", import.meta.url).href, new URL("./shader.glsl", import.meta.url).href, new URL("./scene.gltf", import.meta.url).href, new URL("./model.glb", import.meta.url).href].join(",");',
   });
@@ -156,7 +201,7 @@ try {
   for (const asset of commonAssets) {
     fs.writeFileSync(
       path.join(commonAssetGame, 'artifacts/web-preview/assets', asset),
-      `fixture:${asset}\n`,
+      asset === 'scene.gltf' ? '{"asset":{"version":"2.0"}}\n' : `fixture:${asset}\n`,
     );
   }
 
@@ -167,6 +212,18 @@ try {
   assert.match(commonAssetHtml, /data:audio\/opus;base64,/u);
   assert.match(commonAssetHtml, /data:model\/gltf\+json;base64,/u);
   assert.match(commonAssetHtml, /data:model\/gltf-binary;base64,/u);
+
+  const externalGltfGame = createPreviewFixture('external-gltf', {
+    mainJs: 'document.body.dataset.scene = new URL("./scene.gltf", import.meta.url).href;',
+  });
+  fs.writeFileSync(
+    path.join(externalGltfGame, 'artifacts/web-preview/assets/scene.gltf'),
+    '{"asset":{"version":"2.0"},"buffers":[{"uri":"scene.bin"}]}\n',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: externalGltfGame }),
+    /requires self-contained glTF data URIs or GLB/u,
+  );
 
   const documentAssetGame = createPreviewFixture('document-relative-assets', {
     mainJs: 'document.body.dataset.assets = ["./assets/pixel.png", "assets/pixel.png", "/audio/theme.mp3"].join(",");',
@@ -189,6 +246,32 @@ try {
   );
   assert.doesNotMatch(rootAssetHtml, /["']\/theme\.mp3["']/u);
   assert.match(rootAssetHtml, /data:audio\/mpeg;base64,/u);
+
+  const encodedPathHtml = await packageAndReadFixture(
+    'encoded-path',
+    {
+      indexHtml: '<!doctype html><html><head></head><body><img src="/assets/space%20icon.png"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    },
+    [['artifacts/web-preview/assets/space icon.png', onePixelPng]],
+  );
+  assert.doesNotMatch(encodedPathHtml, /space%20icon/u);
+  assert.match(encodedPathHtml, /data:image\/png;base64,/u);
+
+  const encodedSeparatorGame = createPreviewFixture('encoded-separator', {
+    indexHtml: '<!doctype html><html><head></head><body><img src="/assets%2Fpixel.png"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: encodedSeparatorGame }),
+    /Unsafe URL-escaped local asset reference/u,
+  );
+
+  const encodedTraversalGame = createPreviewFixture('encoded-traversal', {
+    indexHtml: '<!doctype html><html><head></head><body><img src="/assets/%2e%2e/pixel.png"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: encodedTraversalGame }),
+    /Unsafe URL-escaped local asset reference/u,
+  );
 
   const existingCspHtml = await packageAndReadFixture('existing-csp', {
     indexHtml: '<!doctype html><html><head><meta content="default-src \'self\'" http-equiv=Content-Security-Policy><link rel="stylesheet" href="/assets/main.css"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -252,6 +335,13 @@ try {
   });
   assert.match(wasmHtml, /wasm-unsafe-eval/u);
 
+  const embeddedWasmHtml = await packageAndReadFixture(
+    'embedded-wasm',
+    { mainJs: 'void fetch(new URL("./module.wasm", import.meta.url));' },
+    [['artifacts/web-preview/assets/module.wasm', Buffer.from([0, 97, 115, 109])]],
+  );
+  assert.match(embeddedWasmHtml, /data:application\/wasm;base64,/u);
+
   const urlObjectHtml = await packageAndReadFixture('url-object', {
     mainJs: 'const asset = new URL("./config.json", import.meta.url); document.body.dataset.asset = asset.href;',
   });
@@ -268,6 +358,23 @@ try {
     `Expected embedded PNG assets. HTML: ${extendedHtmlAssetHtml.slice(0, 500)}`,
   );
   assert.equal(embeddedPngAssets.length, 2);
+
+  const objectAssetHtml = await packageAndReadFixture(
+    'object-asset',
+    {
+      indexHtml: '<!doctype html><html><head></head><body><object data="/assets/icon.svg"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    },
+    [['artifacts/web-preview/assets/icon.svg', '<svg xmlns="http://www.w3.org/2000/svg"/>']],
+  );
+  assert.match(objectAssetHtml, /object-src data:/u);
+  assert.match(objectAssetHtml, /data:image\/svg\+xml;base64,/u);
+
+  const charsetHtml = await packageAndReadFixture('charset-first', {
+    indexHtml: '<!doctype html><html><head><meta charset="shift_jis"><script>window.label="한글";</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(charsetHtml, /<head>\s*<meta charset="utf-8">/u);
+  assert.equal(charsetHtml.match(/<meta\b[^>]*charset=/giu)?.length, 1);
+  assert.match(charsetHtml, /한글/u);
 
   const dynamicAssetGame = createPreviewFixture('dynamic-asset', {
     mainJs: 'const getPath = () => "pixel.png"; document.body.dataset.asset = new URL(getPath(), import.meta.url).href;',
@@ -288,6 +395,15 @@ try {
     gameRoot: coincidentalLiteralGame,
   });
   assert.match(fs.readFileSync(coincidentalResult.entryFile, 'utf8'), /player\.png/u);
+
+  const outsideJsonGame = createPreviewFixture('outside-json', {
+    mainJs: 'import data from "../../../outside.json"; document.body.dataset.data = data.value;',
+  });
+  fs.writeFileSync(path.join(outsideJsonGame, 'outside.json'), '{"value":"outside"}\n');
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: outsideJsonGame }),
+    /artifact escapes its root/u,
+  );
 
   const symlinkOutputGame = createPreviewFixture('symlink-output');
   fs.symlinkSync(outsideRoot, path.join(symlinkOutputGame, 'artifacts/offline-playtest'), 'dir');

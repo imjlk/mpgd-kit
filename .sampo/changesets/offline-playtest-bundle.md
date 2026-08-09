@@ -1,5 +1,6 @@
 ---
 npm/@mpgd/cli: minor (Added)
+npm/@mpgd/adapter-ait: patch (Changed)
 ---
 
 Add a test-only, direct-file offline playtest packager for existing web-preview artifacts.

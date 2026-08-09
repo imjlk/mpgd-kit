@@ -244,9 +244,10 @@ Server-backed login, purchases, ads, reward grants, leaderboards, and cloud
 saves are unavailable, and `file://` storage varies by browser. The packager
 rejects unsupported external styles, Workers, service-worker registration,
 WebAssembly streaming, CSS `@import`, and runtime-computed `import.meta` asset
-URLs. Wrap server calls behind game-service or platform helpers and render a
-disabled or local fallback when those helpers report that the capability is
-unavailable.
+URLs. glTF files must embed their dependencies as data URIs; use GLB for models
+with external buffers or textures. Wrap server calls behind game-service or
+platform helpers and render a disabled or local fallback when those helpers
+report that the capability is unavailable.
 
 When a game needs an additional runtime policy for one of those web targets,
 place a schema-versioned `mpgd.target-config.json` beside `mpgd.targets.json`.

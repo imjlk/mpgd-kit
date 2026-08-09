@@ -131,6 +131,7 @@ const requiredMcpRequirements = [
 ] as const;
 
 const failures: string[] = [];
+validatePeerDependencyRuleParser();
 
 for (const file of requiredFiles) {
   if (!existsSync(file)) {
@@ -843,13 +844,16 @@ function validatePhaserTemplateAITPolyfill(): void {
         }
       }
 
-      const expectedAitDevtoolsPeerRule =
-        `'@ait-co/devtools>@apps-in-toss/web-framework': '${aitWebFrameworkVersion}'`;
+      const aitDevtoolsPeerSelector = '@ait-co/devtools>@apps-in-toss/web-framework';
+      const actualAitDevtoolsPeerVersion = readAllowedPeerVersion(
+        workspace,
+        aitDevtoolsPeerSelector,
+      );
 
-      if (!workspace.includes(expectedAitDevtoolsPeerRule)) {
+      if (actualAitDevtoolsPeerVersion !== aitWebFrameworkVersion) {
         failures.push(
           `${workspacePath}: peerDependencyRules.allowedVersions must include `
-            + `${expectedAitDevtoolsPeerRule}.`,
+            + `'${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'.`,
         );
       }
     }
@@ -2180,6 +2184,134 @@ function findMatchingBraceIndex(content: string, openBraceIndex: number): number
   }
 
   return -1;
+}
+
+function validatePeerDependencyRuleParser(): void {
+  const selector = '@ait-co/devtools>@apps-in-toss/web-framework';
+  const positive = `peerDependencyRules:\n  allowedVersions:\n    '${selector}': '3.0.2'\n`;
+  const invalid = [
+    `# peerDependencyRules:\n#   allowedVersions:\n#     '${selector}': '3.0.2'\n`,
+    `allowedVersions:\n  '${selector}': '3.0.2'\n`,
+    `peerDependencyRules:\n  ignored:\n    '${selector}': '3.0.2'\n`,
+  ];
+
+  if (
+    readAllowedPeerVersion(positive, selector) !== '3.0.2'
+    || invalid.some((source) => readAllowedPeerVersion(source, selector) !== undefined)
+  ) {
+    failures.push('Internal peerDependencyRules.allowedVersions parser self-check failed.');
+  }
+}
+
+function readAllowedPeerVersion(source: string, selector: string): string | undefined {
+  let inPeerDependencyRules = false;
+  let inAllowedVersions = false;
+
+  for (const rawLine of source.split(/\r?\n/u)) {
+    const line = stripYamlComment(rawLine);
+
+    if (line.trim().length === 0) {
+      continue;
+    }
+
+    const indentation = /^ */u.exec(line)?.[0].length ?? 0;
+    const mapping = parseYamlMapping(line.trim());
+
+    if (mapping === undefined) {
+      continue;
+    }
+
+    if (indentation === 0) {
+      inPeerDependencyRules = mapping.key === 'peerDependencyRules';
+      inAllowedVersions = false;
+      continue;
+    }
+
+    if (!inPeerDependencyRules) {
+      continue;
+    }
+
+    if (indentation === 2) {
+      inAllowedVersions = mapping.key === 'allowedVersions';
+      continue;
+    }
+
+    if (inAllowedVersions && indentation === 4 && mapping.key === selector) {
+      return mapping.value;
+    }
+  }
+
+  return undefined;
+}
+
+function stripYamlComment(line: string): string {
+  let quote: '"' | "'" | undefined;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+
+    if (quote !== undefined) {
+      if (character === quote) {
+        quote = undefined;
+      } else if (character === '\\' && quote === '"') {
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+    } else if (character === '#') {
+      return line.slice(0, index);
+    }
+  }
+
+  return line;
+}
+
+function parseYamlMapping(line: string): { readonly key: string; readonly value: string } | undefined {
+  let quote: '"' | "'" | undefined;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+
+    if (quote !== undefined) {
+      if (character === quote) {
+        quote = undefined;
+      } else if (character === '\\' && quote === '"') {
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+
+    if (character === ':') {
+      return {
+        key: unquoteYamlScalar(line.slice(0, index).trim()),
+        value: unquoteYamlScalar(line.slice(index + 1).trim()),
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function unquoteYamlScalar(value: string): string {
+  if (
+    value.length >= 2
+    && ((value.startsWith("'") && value.endsWith("'"))
+      || (value.startsWith('"') && value.endsWith('"')))
+  ) {
+    return value.slice(1, -1);
+  }
+
+  return value;
 }
 
 function readText(path: string): string {
