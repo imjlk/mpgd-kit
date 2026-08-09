@@ -53,6 +53,7 @@ interface EffectivePreviewIdentity {
 
 interface InliningContext {
   readonly artifactRoot: string;
+  readonly assetDirectories: readonly string[];
   readonly inlinedAssets: Set<string>;
 }
 
@@ -144,6 +145,7 @@ export async function runOfflinePlaytestPackaging(
   const sourceHtml = readFileSync(sourceIndexFile, 'utf8');
   const context: InliningContext = {
     artifactRoot,
+    assetDirectories: readArtifactAssetDirectories(artifactRoot),
     inlinedAssets: new Set<string>(),
   };
   const { html: htmlWithoutEntry, entryFile } = extractModuleEntry(sourceHtml, context);
@@ -307,17 +309,13 @@ function inlineJavaScriptAssetReferences(
   let output = source.replace(staticUrlPattern, (_match, _quote: string, reference: string) =>
     JSON.stringify(readAssetDataUrl(sourceFile, reference, context)),
   );
-  const assetDirectories = readdirSync(context.artifactRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
-    .map((entry) => escapeRegExp(entry.name));
-
-  if (assetDirectories.length === 0) {
+  if (context.assetDirectories.length === 0) {
     assertSupportedBundledRuntime(output);
     return output;
   }
 
   const literalPattern = new RegExp(
-    `(["'\`])((?:/|\\./)?(?:${assetDirectories.join('|')})/[^"'\`\\r\\n]+)\\1`,
+    `(["'\`])((?:/|\\./)?(?:${context.assetDirectories.join('|')})/[^"'\`\\r\\n]+)\\1`,
     'gu',
   );
   const documentFile = path.join(context.artifactRoot, 'index.html');
@@ -368,7 +366,7 @@ function inlineCssAssetReferences(
   sourceFile: string,
   context: InliningContext,
 ): string {
-  if (/@import\b/iu.test(source)) {
+  if (containsCssImportRule(source)) {
     throw new Error(`Offline playtest does not support CSS @import rules: ${sourceFile}`);
   }
 
@@ -395,6 +393,56 @@ function inlineStyleElements(
       return `<style${attributes}>${escapeClosingTag(inlined, 'style')}</style>`;
     },
   );
+}
+
+function containsCssImportRule(source: string): boolean {
+  let quote: '"' | "'" | undefined;
+  let inComment = false;
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    const nextCharacter = source[index + 1];
+
+    if (inComment) {
+      if (character === '*' && nextCharacter === '/') {
+        inComment = false;
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (quote !== undefined) {
+      if (character === '\\') {
+        index += 1;
+      } else if (character === quote) {
+        quote = undefined;
+      }
+
+      continue;
+    }
+
+    if (character === '/' && nextCharacter === '*') {
+      inComment = true;
+      index += 1;
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+
+    if (
+      character === '@'
+      && source.slice(index, index + 7).toLowerCase() === '@import'
+      && !/[\w-]/u.test(source[index + 7] ?? '')
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function inlineHtmlAssets(
@@ -542,6 +590,12 @@ function resolveExistingAssetReference(
   } catch {
     return undefined;
   }
+}
+
+function readArtifactAssetDirectories(artifactRoot: string): readonly string[] {
+  return readdirSync(artifactRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+    .map((entry) => escapeRegExp(entry.name));
 }
 
 function resolveLocalReference(artifactRoot: string, baseDir: string, reference: string): string {

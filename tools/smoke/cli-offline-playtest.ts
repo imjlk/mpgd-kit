@@ -252,7 +252,7 @@ function createPreviewFixture(name: string, options: PreviewFixtureOptions = {})
   fs.writeFileSync(
     path.join(artifactRoot, 'index.html'),
     options.indexHtml
-      ?? '<!doctype html><html><head><style>.inline { background: url("./assets/pixel.png"); }</style><link rel="icon" href="/assets/icon.png"><link rel="stylesheet" href="/assets/main.css"><link rel="modulepreload" href="/assets/chunk.js"></head><body><img alt="fragment" src="#"><img alt="fixture" src="/assets/pixel.png" srcset="/assets/pixel.png 2x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+      ?? '<!doctype html><html><head><style>/* @import is ignored here */ .inline::after { content: "@import is text"; } .inline { background: url("./assets/pixel.png"); }</style><link rel="icon" href="/assets/icon.png"><link rel="stylesheet" href="/assets/main.css"><link rel="modulepreload" href="/assets/chunk.js"></head><body><img alt="fragment" src="#"><img alt="fixture" src="/assets/pixel.png" srcset="/assets/pixel.png 2x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   );
   fs.writeFileSync(
     path.join(assetsDir, 'main.js'),
