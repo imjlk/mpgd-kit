@@ -217,6 +217,35 @@ explicitly configured target with `kind: "web"`, is passed to `target build`,
 `target smoke`, and their matrix variants unchanged. This supports independent
 browser deployments without adding deployment-specific names to the kit.
 
+### Direct-file offline test play
+
+Use `offline-playtest` only when a tester needs to double-click one local HTML
+file without running a server. It packages an already-built `web-preview` and
+does not add an offline target to `mpgd.targets.json`:
+
+```sh
+pnpm exec mpgd target build web-preview staging \
+  --targets-file ./mpgd.targets.json \
+  --kit-path ../mpgd-kit
+pnpm exec mpgd game offline-playtest .
+```
+
+The output defaults to `artifacts/offline-playtest`. Its `index.html` contains
+the bundled JavaScript, styles, and statically discoverable local assets, while
+a content security policy and runtime guards deny network APIs. The adjacent
+`README.txt` and `offline-playtest.json` label the artifact `test-play-only`,
+record its hash, and state that it is not a release target, deployable PWA, or
+store-submission package. It is intentionally excluded from target release
+manifests and acceptance evidence.
+
+Packaging success is not proof that every game flow supports offline play.
+Server-backed login, purchases, ads, reward grants, leaderboards, and cloud
+saves are unavailable, and `file://` storage varies by browser. The packager
+rejects unsupported external styles, Workers, service-worker registration,
+WebAssembly streaming, and runtime-computed `import.meta` asset URLs. Wrap
+server calls behind game-service or platform helpers and render a disabled or
+local fallback when those helpers report that the capability is unavailable.
+
 When a game needs an additional runtime policy for one of those web targets,
 place a schema-versioned `mpgd.target-config.json` beside `mpgd.targets.json`.
 The CLI loads that file as an additive target-config extension; it cannot

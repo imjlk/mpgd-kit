@@ -74,6 +74,15 @@ Use the browser adapter for local and hosted web behavior. Verify installed-PWA
 updates without forcing service-worker activation while old windows remain
 open.
 
+For direct-file test play, build `web-preview` and run
+`pnpm exec mpgd game offline-playtest .`. Open
+`artifacts/offline-playtest/index.html`. This output is deliberately a
+network-blocked test copy, not another release target, deployable PWA,
+release-manifest entry, or store package. Its README and JSON evidence describe
+server-feature, Worker, dynamic-asset, and `file://` storage limitations. Keep
+server calls behind platform or game-service helpers and expose a disabled or
+local fallback when those capabilities are unavailable.
+
 ### Microsoft Store
 
 This target is optional. Enable it in an existing generated game with:

@@ -476,6 +476,9 @@ importers:
       '@gunshi/resources':
         specifier: ^0.35.1
         version: 0.35.1
+      esbuild:
+        specifier: ^0.28.1
+        version: 0.28.1
       gunshi:
         specifier: ^0.35.1
         version: 0.35.1

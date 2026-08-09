@@ -1,0 +1,178 @@
+import assert from 'node:assert/strict';
+import * as fs from 'node:fs';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+
+import {
+  defaultOfflinePlaytestMaximumBytes,
+  runOfflinePlaytestPackaging,
+} from '../../packages/cli/src/index';
+
+const fixtureRoot = fs.mkdtempSync(path.join(tmpdir(), 'mpgd-offline-playtest-'));
+const outsideRoot = fs.mkdtempSync(path.join(tmpdir(), 'mpgd-offline-playtest-outside-'));
+const onePixelPng = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+);
+
+try {
+  const gameRoot = createPreviewFixture('happy');
+  const result = await runOfflinePlaytestPackaging({ gameRoot });
+  const html = fs.readFileSync(result.entryFile, 'utf8');
+  const readme = fs.readFileSync(result.readmeFile, 'utf8');
+  const evidence = JSON.parse(
+    fs.readFileSync(result.evidenceFile, 'utf8'),
+  ) as Record<string, unknown>;
+
+  assert.match(html, /mpgd-purpose" content="test-play-only/u);
+  assert.match(html, /Content-Security-Policy/u);
+  assert.match(html, /blocked network access/u);
+  assert.match(html, /data:image\/png;base64,/u);
+  assert.match(html, /data:application\/json;base64,/u);
+  assert.match(html, /<style>/u);
+  assert.match(html, /color:red/u);
+  assert.doesNotMatch(html, /srcset="\/assets\//u);
+  assert.doesNotMatch(html, /<script\b[^>]*\bsrc=/u);
+  assert.doesNotMatch(html, /<link\b[^>]*\brel=["']stylesheet/u);
+  assert.doesNotMatch(html, /type=["']module/u);
+  assert.match(readme, /TEST PLAY ONLY/u);
+  assert.match(readme, /not a release target/u);
+  assert.equal(evidence.purpose, 'test-play-only');
+  assert.equal(evidence.releaseTarget, false);
+  assert.equal(evidence.sourceTarget, 'web-preview');
+  assert.equal(evidence.networkPolicy, 'deny-network');
+  assert.match(String(evidence.sha256), /^[a-f\d]{64}$/u);
+  assert.ok(Number(evidence.inlinedAssetCount) >= 4);
+  assert.equal(result.evidence.bytes, Buffer.byteLength(html));
+
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({
+      gameRoot,
+      artifactDir: 'artifacts/web-preview',
+      outputDir: 'artifacts/web-preview/offline',
+    }),
+    /must not overlap/u,
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({
+      gameRoot,
+      artifactDir: 'artifacts/web-preview',
+      outputDir: 'artifacts/web-preview',
+    }),
+    /must not overlap/u,
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot, outputDir: '../outside' }),
+    /must be a child of the game root/u,
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot, maximumBytes: 100 }),
+    /exceeding the 100-byte limit/u,
+  );
+  assert.equal(defaultOfflinePlaytestMaximumBytes, 25 * 1024 * 1024);
+
+  const releaseArtifactGame = createPreviewFixture('release-artifact', {
+    effectiveTarget: { target: 'web', runtime: 'web' },
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: releaseArtifactGame }),
+    /accepts only a web-preview artifact/u,
+  );
+
+  const remoteStylesheetGame = createPreviewFixture('remote-stylesheet', {
+    indexHtml: '<!doctype html><html><head><link rel="stylesheet" href="https://example.com/app.css"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: remoteStylesheetGame }),
+    /cannot inline external URL/u,
+  );
+
+  const workerGame = createPreviewFixture('worker', {
+    mainJs: 'new Worker("./worker.js");',
+  });
+  fs.writeFileSync(
+    path.join(workerGame, 'artifacts/web-preview/assets/worker.js'),
+    'self.close();',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: workerGame }),
+    /does not support Worker/u,
+  );
+
+  const dynamicAssetGame = createPreviewFixture('dynamic-asset', {
+    mainJs: 'const name = "pixel.png"; document.body.dataset.asset = new URL(name, import.meta.url).href;',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dynamicAssetGame }),
+    /runtime-computed import.meta asset URL/u,
+  );
+
+  const symlinkOutputGame = createPreviewFixture('symlink-output');
+  fs.symlinkSync(outsideRoot, path.join(symlinkOutputGame, 'artifacts/offline-playtest'), 'dir');
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: symlinkOutputGame }),
+    /cannot cross a symbolic link/u,
+  );
+
+  const symlinkParentGame = createPreviewFixture('symlink-output-parent');
+  fs.symlinkSync(outsideRoot, path.join(symlinkParentGame, 'artifacts/linked-output'), 'dir');
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({
+      gameRoot: symlinkParentGame,
+      outputDir: 'artifacts/linked-output/offline-playtest',
+    }),
+    /cannot cross a symbolic link/u,
+  );
+
+  const symlinkArtifactGame = createPreviewFixture('symlink-artifact');
+  const artifactDir = path.join(symlinkArtifactGame, 'artifacts/web-preview');
+  const realArtifactDir = path.join(symlinkArtifactGame, 'artifacts/web-preview-real');
+  fs.renameSync(artifactDir, realArtifactDir);
+  fs.symlinkSync(realArtifactDir, artifactDir, 'dir');
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: symlinkArtifactGame }),
+    /artifact directory cannot cross a symbolic link/u,
+  );
+
+  console.log('CLI offline playtest smoke tests passed.');
+} finally {
+  fs.rmSync(fixtureRoot, { recursive: true, force: true });
+  fs.rmSync(outsideRoot, { recursive: true, force: true });
+}
+
+interface PreviewFixtureOptions {
+  readonly effectiveTarget?: Readonly<Record<string, unknown>>;
+  readonly indexHtml?: string;
+  readonly mainJs?: string;
+}
+
+function createPreviewFixture(name: string, options: PreviewFixtureOptions = {}): string {
+  const gameRoot = path.join(fixtureRoot, name);
+  const artifactRoot = path.join(gameRoot, 'artifacts/web-preview');
+  const assetsDir = path.join(artifactRoot, 'assets');
+  fs.mkdirSync(assetsDir, { recursive: true });
+  fs.writeFileSync(
+    path.join(artifactRoot, 'mpgd-effective-target.json'),
+    `${JSON.stringify(options.effectiveTarget ?? { target: 'web-preview', runtime: 'web-preview' })}\n`,
+  );
+  fs.writeFileSync(
+    path.join(artifactRoot, 'index.html'),
+    options.indexHtml
+      ?? '<!doctype html><html><head><link rel="icon" href="/assets/icon.png"><link rel="stylesheet" href="/assets/main.css"><link rel="modulepreload" href="/assets/chunk.js"></head><body><img alt="fixture" src="/assets/pixel.png" srcset="/assets/pixel.png 2x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  );
+  fs.writeFileSync(
+    path.join(assetsDir, 'main.js'),
+    options.mainJs
+      ?? 'import "./extra.css"; import { value } from "./chunk.js"; const image = "/assets/pixel.png"; const config = new URL("./config.json", import.meta.url).href; document.querySelector("#game").dataset.result = `${value}:${image}:${config}`;',
+  );
+  fs.writeFileSync(path.join(assetsDir, 'chunk.js'), 'export const value = "ready";');
+  fs.writeFileSync(
+    path.join(assetsDir, 'main.css'),
+    'body { background-image: url("./pixel.png"); font-family: sans-serif; }',
+  );
+  fs.writeFileSync(path.join(assetsDir, 'extra.css'), '#game { color: red; }');
+  fs.writeFileSync(path.join(assetsDir, 'config.json'), '{"offline":true}\n');
+  fs.writeFileSync(path.join(assetsDir, 'icon.png'), onePixelPng);
+  fs.writeFileSync(path.join(assetsDir, 'pixel.png'), onePixelPng);
+  return gameRoot;
+}
