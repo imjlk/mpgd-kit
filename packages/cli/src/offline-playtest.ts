@@ -487,11 +487,16 @@ function inlineHtmlAssets(
         continue;
       }
 
-      const inlined = attribute === 'srcset'
-        ? inlineHtmlSrcset(htmlFile, reference, context)
-        : reference.startsWith('data:') || reference.startsWith('blob:')
-        ? reference
-        : readAssetDataUrl(htmlFile, reference, context);
+      let inlined: string;
+
+      if (attribute === 'srcset') {
+        inlined = inlineHtmlSrcset(htmlFile, reference, context);
+      } else if (reference.startsWith('data:') || reference.startsWith('blob:')) {
+        inlined = reference;
+      } else {
+        inlined = readAssetDataUrl(htmlFile, reference, context);
+      }
+
       output = replaceHtmlAttribute(output, attribute, inlined);
     }
 
@@ -883,7 +888,7 @@ function isHtmlSpace(value: string | undefined): boolean {
 }
 
 function escapeHtmlAttribute(value: string): string {
-  return value.replace(/&/gu, '&amp;').replace(/"/gu, '&quot;');
+  return value.replace(/&/gu, '&amp;').replace(/"/gu, '&quot;').replace(/'/gu, '&#x27;');
 }
 
 function escapeRegExp(value: string): string {
