@@ -6,6 +6,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  statSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
@@ -55,6 +56,7 @@ interface InliningContext {
   readonly artifactRoot: string;
   readonly assetDirectories: readonly string[];
   readonly inlinedAssets: Set<string>;
+  readonly maximumBytes: number;
 }
 
 interface BundledEntry {
@@ -199,6 +201,7 @@ export async function runOfflinePlaytestPackaging(
     artifactRoot,
     assetDirectories: readArtifactAssetDirectories(artifactRoot),
     inlinedAssets: new Set<string>(),
+    maximumBytes,
   };
   const { html: htmlWithoutEntry, entryFile } = extractModuleEntry(sourceHtml, context);
   const bundledEntry = await bundleEntry(entryFile, context);
@@ -415,7 +418,7 @@ function inlineJavaScriptAssetReferences(
   );
   const assetDirectoryAlternative = context.assetDirectories.length === 0
     ? ''
-    : `|(?:\\./)?(?:${context.assetDirectories.join('|')})/[^"'\`\\r\\n]+`;
+    : `|(?:\\./)?(?:${context.assetDirectories.map(escapeRegExp).join('|')})/[^"'\`\\r\\n]+`;
   const literalPattern = new RegExp(
     `(["'\`])(/(?!/)[^"'\`\\r\\n]+${assetDirectoryAlternative})\\1`,
     'gu',
@@ -466,7 +469,7 @@ function isJavaScriptScriptType(type: string | undefined): boolean {
     return true;
   }
 
-  const normalized = type.trim().toLowerCase();
+  const normalized = (type.split(';', 1)[0] ?? '').trim().toLowerCase();
   return javascriptScriptTypes.has(normalized);
 }
 
@@ -1165,6 +1168,14 @@ function readAssetDataUrl(
   if (mimeType === undefined) {
     throw new Error(
       `Unsupported offline asset type: ${path.relative(context.artifactRoot, assetFile)}`,
+    );
+  }
+
+  const assetBytes = statSync(assetFile).size;
+
+  if (assetBytes > context.maximumBytes) {
+    throw new Error(
+      `Offline asset ${path.relative(context.artifactRoot, assetFile)} is ${assetBytes} bytes, exceeding the ${context.maximumBytes}-byte limit.`,
     );
   }
 

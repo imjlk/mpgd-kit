@@ -89,6 +89,18 @@ try {
     () => runOfflinePlaytestPackaging({ gameRoot, maximumBytes: 100 }),
     /exceeding the 100-byte limit/u,
   );
+  const oversizedAssetGame = createPreviewFixture('oversized-asset', {
+    indexHtml: '<!doctype html><html><head></head><body><img src="/assets/large.bin"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    mainJs: 'document.body.dataset.ready = "true";',
+  });
+  fs.writeFileSync(
+    path.join(oversizedAssetGame, 'artifacts/web-preview/assets/large.bin'),
+    Buffer.alloc(101),
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: oversizedAssetGame, maximumBytes: 100 }),
+    /Offline asset assets\/large\.bin is 101 bytes, exceeding the 100-byte limit/u,
+  );
   assert.equal(defaultOfflinePlaytestMaximumBytes, 25 * 1024 * 1024);
 
   const tamperedOutputGame = createPreviewFixture('tampered-output');
@@ -135,6 +147,10 @@ try {
 
   await assertWorkerRejected('inline-worker', {
     indexHtml: '<!doctype html><html><head><script>new Worker("worker.js");</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+
+  await assertWorkerRejected('parameterized-script-type-worker', {
+    indexHtml: '<!doctype html><html><head><script type="text/javascript;charset=utf-8">new Worker("worker.js");</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
 
   const externalFallbackGame = createPreviewFixture('external-fallback', {
@@ -359,6 +375,16 @@ try {
   );
   assert.doesNotMatch(parenthesizedCssHtml, /sprite\(2x\)\.png/u);
   assert.match(parenthesizedCssHtml, /data:image\/png;base64,/u);
+
+  const parenthesizedAssetDirectoryHtml = await packageAndReadFixture(
+    'parenthesized-asset-directory',
+    {
+      mainJs: 'document.body.dataset.icon = "/assets(2x)/pixel.png";',
+    },
+    [['artifacts/web-preview/assets(2x)/pixel.png', onePixelPng]],
+  );
+  assert.doesNotMatch(parenthesizedAssetDirectoryHtml, /\/assets\(2x\)\/pixel\.png/u);
+  assert.match(parenthesizedAssetDirectoryHtml, /data:image\/png;base64,/u);
 
   const unquotedHtmlAssetHtml = await packageAndReadFixture('unquoted-html-asset', {
     indexHtml: '<!doctype html><html><head><link rel=stylesheet href=/assets/main.css></head><body><img src=/assets/pixel.png><main id=game></main><script type=module src=/assets/main.js></script></body></html>',
