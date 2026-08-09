@@ -105,6 +105,20 @@ try {
     /cannot inline external URL/u,
   );
 
+  const cssImportGame = createPreviewFixture('css-import');
+  fs.writeFileSync(
+    path.join(cssImportGame, 'artifacts/web-preview/assets/main.css'),
+    '@import "./theme.css"; body { color: white; }',
+  );
+  fs.writeFileSync(
+    path.join(cssImportGame, 'artifacts/web-preview/assets/theme.css'),
+    'body { background: black; }',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: cssImportGame }),
+    /does not support CSS @import rules/u,
+  );
+
   const workerGame = createPreviewFixture('worker', {
     mainJs: 'new Worker("./worker.js");',
   });
@@ -152,6 +166,20 @@ try {
   assert.match(commonAssetHtml, /data:audio\/opus;base64,/u);
   assert.match(commonAssetHtml, /data:model\/gltf\+json;base64,/u);
   assert.match(commonAssetHtml, /data:model\/gltf-binary;base64,/u);
+
+  const documentAssetGame = createPreviewFixture('document-relative-assets', {
+    mainJs: 'document.body.dataset.assets = ["./assets/pixel.png", "assets/pixel.png", "/audio/theme.mp3"].join(",");',
+  });
+  fs.mkdirSync(path.join(documentAssetGame, 'artifacts/web-preview/audio'), { recursive: true });
+  fs.writeFileSync(
+    path.join(documentAssetGame, 'artifacts/web-preview/audio/theme.mp3'),
+    'fixture:theme\n',
+  );
+  const documentAssetResult = await runOfflinePlaytestPackaging({ gameRoot: documentAssetGame });
+  const documentAssetHtml = fs.readFileSync(documentAssetResult.entryFile, 'utf8');
+  assert.doesNotMatch(documentAssetHtml, /(?:\.\/)?assets\/pixel\.png/u);
+  assert.doesNotMatch(documentAssetHtml, /\/audio\/theme\.mp3/u);
+  assert.match(documentAssetHtml, /data:audio\/mpeg;base64,/u);
 
   const dynamicAssetGame = createPreviewFixture('dynamic-asset', {
     mainJs: 'const getPath = () => "pixel.png"; document.body.dataset.asset = new URL(getPath(), import.meta.url).href;',
@@ -224,7 +252,7 @@ function createPreviewFixture(name: string, options: PreviewFixtureOptions = {})
   fs.writeFileSync(
     path.join(artifactRoot, 'index.html'),
     options.indexHtml
-      ?? '<!doctype html><html><head><link rel="icon" href="/assets/icon.png"><link rel="stylesheet" href="/assets/main.css"><link rel="modulepreload" href="/assets/chunk.js"></head><body><img alt="fragment" src="#"><img alt="fixture" src="/assets/pixel.png" srcset="/assets/pixel.png 2x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+      ?? '<!doctype html><html><head><style>.inline { background: url("./assets/pixel.png"); }</style><link rel="icon" href="/assets/icon.png"><link rel="stylesheet" href="/assets/main.css"><link rel="modulepreload" href="/assets/chunk.js"></head><body><img alt="fragment" src="#"><img alt="fixture" src="/assets/pixel.png" srcset="/assets/pixel.png 2x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   );
   fs.writeFileSync(
     path.join(assetsDir, 'main.js'),

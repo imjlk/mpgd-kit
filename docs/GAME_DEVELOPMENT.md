@@ -243,9 +243,10 @@ Packaging success is not proof that every game flow supports offline play.
 Server-backed login, purchases, ads, reward grants, leaderboards, and cloud
 saves are unavailable, and `file://` storage varies by browser. The packager
 rejects unsupported external styles, Workers, service-worker registration,
-WebAssembly streaming, and runtime-computed `import.meta` asset URLs. Wrap
-server calls behind game-service or platform helpers and render a disabled or
-local fallback when those helpers report that the capability is unavailable.
+WebAssembly streaming, CSS `@import`, and runtime-computed `import.meta` asset
+URLs. Wrap server calls behind game-service or platform helpers and render a
+disabled or local fallback when those helpers report that the capability is
+unavailable.
 
 When a game needs an additional runtime policy for one of those web targets,
 place a schema-versioned `mpgd.target-config.json` beside `mpgd.targets.json`.

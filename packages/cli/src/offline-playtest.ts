@@ -72,6 +72,7 @@ const offlinePlaytestLimitations = [
   'Server-backed identity, purchases, ads, rewards, leaderboards, and cloud saves are unavailable.',
   'Browser storage opened from file:// is browser-dependent and best-effort only.',
   'Workers, service workers, WebAssembly streaming, and runtime-computed asset URLs are unsupported.',
+  'CSS @import rules are unsupported; include those rules in the built stylesheet before packaging.',
 ] as const;
 
 const mimeTypes = new Map<string, string>([
@@ -147,7 +148,8 @@ export async function runOfflinePlaytestPackaging(
   };
   const { html: htmlWithoutEntry, entryFile } = extractModuleEntry(sourceHtml, context);
   const bundledEntry = await bundleEntry(entryFile, context);
-  const htmlWithStyles = inlineStylesheets(htmlWithoutEntry, sourceIndexFile, context);
+  const htmlWithLinkedStyles = inlineStylesheets(htmlWithoutEntry, sourceIndexFile, context);
+  const htmlWithStyles = inlineStyleElements(htmlWithLinkedStyles, sourceIndexFile, context);
   const htmlWithAssets = inlineHtmlAssets(htmlWithStyles, sourceIndexFile, context);
   const finalHtml = assembleOfflineHtml(htmlWithAssets, bundledEntry);
   const htmlBytes = Buffer.byteLength(finalHtml);
@@ -305,28 +307,28 @@ function inlineJavaScriptAssetReferences(
   let output = source.replace(staticUrlPattern, (_match, _quote: string, reference: string) =>
     JSON.stringify(readAssetDataUrl(sourceFile, reference, context)),
   );
-  const [assetDirectory] = path.relative(
-    context.artifactRoot,
-    path.dirname(sourceFile),
-  ).split(path.sep);
+  const assetDirectories = readdirSync(context.artifactRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && !entry.isSymbolicLink())
+    .map((entry) => escapeRegExp(entry.name));
 
-  if (assetDirectory === undefined || assetDirectory.length === 0) {
+  if (assetDirectories.length === 0) {
     assertSupportedBundledRuntime(output);
     return output;
   }
 
   const literalPattern = new RegExp(
-    `(["'\`])((?:/|\\./)?${escapeRegExp(assetDirectory)}/[^"'\`\\r\\n]+)\\1`,
+    `(["'\`])((?:/|\\./)?(?:${assetDirectories.join('|')})/[^"'\`\\r\\n]+)\\1`,
     'gu',
   );
+  const documentFile = path.join(context.artifactRoot, 'index.html');
   output = output.replace(literalPattern, (match, quote: string, reference: string) => {
-    const assetFile = resolveExistingAssetReference(sourceFile, reference, context.artifactRoot);
+    const assetFile = resolveExistingAssetReference(documentFile, reference, context.artifactRoot);
 
     if (assetFile === undefined || isCodeAsset(assetFile)) {
       return match;
     }
 
-    return `${quote}${escapeForQuote(readAssetDataUrl(sourceFile, reference, context), quote)}${quote}`;
+    return `${quote}${escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote)}${quote}`;
   });
   assertSupportedBundledRuntime(output);
   return output;
@@ -366,6 +368,10 @@ function inlineCssAssetReferences(
   sourceFile: string,
   context: InliningContext,
 ): string {
+  if (/@import\b/iu.test(source)) {
+    throw new Error(`Offline playtest does not support CSS @import rules: ${sourceFile}`);
+  }
+
   return source.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/giu, (match, _quote: string, value: string) => {
     const reference = value.trim();
 
@@ -375,6 +381,20 @@ function inlineCssAssetReferences(
 
     return `url(${JSON.stringify(readAssetDataUrl(sourceFile, reference, context))})`;
   });
+}
+
+function inlineStyleElements(
+  html: string,
+  htmlFile: string,
+  context: InliningContext,
+): string {
+  return html.replace(
+    /<style\b([^>]*)>([\s\S]*?)<\/style>/giu,
+    (_tag, attributes: string, stylesheet: string) => {
+      const inlined = inlineCssAssetReferences(stylesheet, htmlFile, context);
+      return `<style${attributes}>${escapeClosingTag(inlined, 'style')}</style>`;
+    },
+  );
 }
 
 function inlineHtmlAssets(

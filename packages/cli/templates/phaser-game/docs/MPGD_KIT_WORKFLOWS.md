@@ -79,9 +79,9 @@ For direct-file test play, build `web-preview` and run
 `artifacts/offline-playtest/index.html`. This output is deliberately a
 network-blocked test copy, not another release target, deployable PWA,
 release-manifest entry, or store package. Its README and JSON evidence describe
-server-feature, Worker, dynamic-asset, and `file://` storage limitations. Keep
-server calls behind platform or game-service helpers and expose a disabled or
-local fallback when those capabilities are unavailable.
+server-feature, Worker, CSS `@import`, dynamic-asset, and `file://` storage
+limitations. Keep server calls behind platform or game-service helpers and
+expose a disabled or local fallback when those capabilities are unavailable.
 
 ### Microsoft Store
 

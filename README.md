@@ -103,8 +103,8 @@ the result records its test-only purpose and hash in `offline-playtest.json`.
 Server-backed identity,
 purchases, ads, rewards, leaderboards, and cloud saves remain unavailable;
 games must handle those disabled paths themselves. Workers, service workers,
-WebAssembly streaming, runtime-computed asset URLs, and browser-dependent
-`file://` storage are not generalized by this helper.
+WebAssembly streaming, CSS `@import`, runtime-computed asset URLs, and
+browser-dependent `file://` storage are not generalized by this helper.
 
 For a minimum repo confidence check:
 
