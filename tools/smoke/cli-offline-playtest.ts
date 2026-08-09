@@ -554,6 +554,19 @@ try {
   assert.doesNotMatch(unquotedHtmlAssetHtml, /src=\/assets\/pixel\.png/u);
   assert.match(unquotedHtmlAssetHtml, /src="data:image\/png;base64,/u);
 
+  const quotedAttributeTextHtml = await packageAndReadFixture('quoted-attribute-text', {
+    indexHtml: '<!doctype html><html><head><link rel="stylesheet" title="not disabled theme" href="/assets/main.css"></head><body><img alt="label src=/assets/missing.png" src="/assets/pixel.png"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(quotedAttributeTextHtml, /alt="label src=\/assets\/missing\.png"/u);
+  assert.match(quotedAttributeTextHtml, /src="data:image\/png;base64,/u);
+  assert.doesNotMatch(quotedAttributeTextHtml, /previousElementSibling\.disabled=true/u);
+
+  const trailingPunctuationTagHtml = await packageAndReadFixture('tag-name-punctuation', {
+    indexHtml: '<!doctype html><html><head></head><body><foo- style="background-image:url(/assets/pixel.png)"></foo-><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.doesNotMatch(trailingPunctuationTagHtml, /url\(\/assets\/pixel\.png\)/u);
+  assert.match(trailingPunctuationTagHtml, /url\(&quot;data:image\/png;base64,[^&]+&quot;\)/u);
+
   const fragmentedAssetHtml = await packageAndReadFixture('fragmented-asset', {}, [
     ['artifacts/web-preview/assets/main.css', 'body { mask-image: url("./icons.svg#mask"); }'],
     [

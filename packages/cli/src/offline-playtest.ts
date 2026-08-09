@@ -68,10 +68,17 @@ interface BundledEntry {
   readonly stylesheet?: string;
 }
 
+interface HtmlAttributeToken {
+  readonly name: string;
+  readonly value?: string;
+  readonly rawValueStart?: number;
+  readonly rawValueEnd?: number;
+}
+
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
-const noModuleAttributePattern = /(?:^|\s)nomodule(?=\s|=|$)/iu;
+const htmlAttributeNameTerminators = new Set(['"', "'", '=', '<', '>', '/']);
 const javascriptScriptTypes = new Set([
   'application/ecmascript',
   'application/javascript',
@@ -340,21 +347,27 @@ function extractModuleEntry(
   }
 
   const matches = findHtmlScriptElements(html);
-  const externalScripts = matches.filter(
-    (match) => readHtmlAttribute(match[2] ?? '', 'src') !== undefined,
+  const scripts = matches.map((match) => ({
+    attributes: tokenizeHtmlAttributes(match[2] ?? ''),
+    match,
+  }));
+  const externalScripts = scripts.filter(
+    (script) => readHtmlAttributeToken(script.attributes, 'src') !== undefined,
   );
   const moduleEntries = externalScripts.filter(
-    (match) =>
-      readHtmlAttribute(match[2] ?? '', 'type')?.trim().toLowerCase() === 'module'
-      && !hasNoModuleAttribute(match[2] ?? ''),
+    (script) =>
+      readHtmlAttributeToken(script.attributes, 'type')?.trim().toLowerCase() === 'module'
+      && !hasHtmlAttributeToken(script.attributes, 'nomodule'),
   );
 
-  if (moduleEntries.length !== 1) {
+  const entry = moduleEntries[0];
+
+  if (entry === undefined || moduleEntries.length !== 1) {
     throw new Error('Offline playtest requires exactly one external module entry script.');
   }
 
-  const match = moduleEntries[0];
-  const source = readHtmlAttribute(match?.[2] ?? '', 'src');
+  const match = entry.match;
+  const source = readHtmlAttributeToken(entry.attributes, 'src');
 
   if (match?.[0] === undefined || source === undefined || match.index === undefined) {
     throw new Error('Unable to resolve the module entry script.');
@@ -363,19 +376,22 @@ function extractModuleEntry(
   const entryFile = resolveLocalReference(context.artifactRoot, context.artifactRoot, source);
 
   for (const externalScript of externalScripts) {
-    if (externalScript === match) {
+    if (externalScript === entry) {
       continue;
     }
 
-    if (!hasNoModuleAttribute(externalScript[2] ?? '')) {
+    if (!hasHtmlAttributeToken(externalScript.attributes, 'nomodule')) {
       throw new Error(
         'Offline playtest does not support additional external scripts beyond the module entry.',
       );
     }
-
   }
 
-  const output = rewriteExternalScripts(html, externalScripts, match);
+  const output = rewriteExternalScripts(
+    html,
+    externalScripts.map((script) => script.match),
+    match,
+  );
 
   return { html: output, entryFile };
 }
@@ -619,6 +635,7 @@ function inlineScriptElements(
 
   for (const match of findHtmlScriptElements(html)) {
     const attributes = match[2] ?? '';
+    const attributeTokens = tokenizeHtmlAttributes(attributes);
     const script = match[3] ?? '';
 
     if (match.index === undefined || match[0] === undefined) {
@@ -627,11 +644,11 @@ function inlineScriptElements(
 
     output += html.slice(cursor, match.index);
 
-    if (readHtmlAttribute(attributes, 'src') !== undefined) {
+    if (readHtmlAttributeToken(attributeTokens, 'src') !== undefined) {
       throw new Error('Offline playtest cannot retain an external script after entry extraction.');
     }
 
-    const scriptType = readHtmlAttribute(attributes, 'type');
+    const scriptType = readHtmlAttributeToken(attributeTokens, 'type');
 
     if (!isJavaScriptScriptType(scriptType)) {
       output += match[0];
@@ -682,8 +699,9 @@ function inlineStylesheets(
 ): string {
   return transformOutsideHtmlRawText(html, (fragment) =>
     fragment.replace(/<link\b((?:"[^"]*"|'[^']*'|[^'">])*)>/giu, (match, attributes: string) => {
-      const rel = readHtmlRelTokens(attributes);
-      const href = readHtmlAttribute(attributes, 'href');
+      const attributeTokens = tokenizeHtmlAttributes(attributes);
+      const rel = readHtmlRelTokenSet(attributeTokens);
+      const href = readHtmlAttributeToken(attributeTokens, 'href');
 
       if (!rel.has('stylesheet')) {
         return rel.has('modulepreload') ? '' : match;
@@ -697,26 +715,26 @@ function inlineStylesheets(
       const stylesheet = readFileSync(stylesheetFile, 'utf8');
       const inlined = inlineCssAssetReferences(stylesheet, stylesheetFile, context);
       context.inlinedAssets.add(stylesheetFile);
-      const style = `<style${renderInlinedStylesheetAttributes(attributes)}>${escapeClosingTag(inlined, 'style')}</style>`;
-      return hasHtmlAttribute(attributes, 'disabled')
+      const style = `<style${renderInlinedStylesheetAttributes(attributeTokens)}>${escapeClosingTag(inlined, 'style')}</style>`;
+      return hasHtmlAttributeToken(attributeTokens, 'disabled')
         ? `${style}<script>document.currentScript.previousElementSibling.disabled=true</script>`
         : style;
     }),
   );
 }
 
-function renderInlinedStylesheetAttributes(attributes: string): string {
+function renderInlinedStylesheetAttributes(attributes: readonly HtmlAttributeToken[]): string {
   const rendered: string[] = [];
 
   for (const name of ['id', 'class', 'media', 'title', 'nonce', 'type']) {
-    const value = readHtmlAttribute(attributes, name);
+    const value = readHtmlAttributeToken(attributes, name);
 
     if (value !== undefined) {
       rendered.push(`${name}="${escapeHtmlAttribute(value)}"`);
     }
   }
 
-  if (hasHtmlAttribute(attributes, 'disabled')) {
+  if (hasHtmlAttributeToken(attributes, 'disabled')) {
     rendered.push('disabled');
   }
 
@@ -724,7 +742,11 @@ function renderInlinedStylesheetAttributes(attributes: string): string {
 }
 
 function readHtmlRelTokens(attributes: string): ReadonlySet<string> {
-  const rel = readHtmlAttribute(attributes, 'rel');
+  return readHtmlRelTokenSet(tokenizeHtmlAttributes(attributes));
+}
+
+function readHtmlRelTokenSet(attributes: readonly HtmlAttributeToken[]): ReadonlySet<string> {
+  const rel = readHtmlAttributeToken(attributes, 'rel');
 
   if (rel === undefined) {
     return new Set<string>();
@@ -900,19 +922,26 @@ function inlineHtmlAssetFragment(
   htmlFile: string,
   context: InliningContext,
 ): string {
-  const htmlWithInlineStyles = html.replace(/<[a-z][^>]*>/giu, (tag) => {
-    const style = readHtmlAttribute(tag, 'style');
+  const htmlWithInlineStyles = html.replace(/<[a-z][\w:-]*(?=[\s>"'\/])(?:"[^"]*"|'[^']*'|[^'">])*>/giu, (tag) => {
+    const attributeTokens = tokenizeHtmlAttributes(tag);
+    const style = readHtmlAttributeToken(attributeTokens, 'style');
 
     if (style === undefined) {
       return tag;
     }
 
-    return replaceHtmlAttribute(tag, 'style', inlineCssAssetReferences(style, htmlFile, context));
+    return replaceHtmlAttribute(
+      tag,
+      'style',
+      inlineCssAssetReferences(style, htmlFile, context),
+      attributeTokens,
+    );
   });
 
   return htmlWithInlineStyles.replace(/<(link|audio|embed|feimage|image|img|input|object|source|track|use|video)\b((?:"[^"]*"|'[^']*'|[^'">])*)>/giu, (tag, name: string, attributes: string) => {
     const lowerName = name.toLowerCase();
-    const rel = readHtmlRelTokens(attributes);
+    const attributeTokens = tokenizeHtmlAttributes(attributes);
+    const rel = readHtmlRelTokenSet(attributeTokens);
     const allowedAttributes = [...(htmlAssetAttributesByTag[lowerName] ?? ['src'])];
 
     if (lowerName === 'link') {
@@ -926,7 +955,7 @@ function inlineHtmlAssetFragment(
     let output = tag;
 
     for (const attribute of allowedAttributes) {
-      const reference = readHtmlAttribute(attributes, attribute);
+      const reference = readHtmlAttributeToken(attributeTokens, attribute);
 
       if (reference === undefined || reference.startsWith('#')) {
         continue;
@@ -1875,22 +1904,122 @@ function isCodeAsset(file: string): boolean {
 }
 
 function readHtmlAttribute(attributes: string, name: string): string | undefined {
-  const escapedName = escapeRegExp(name);
-  const match = new RegExp(
-    `(?:^|\\s)${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\\x60]+))`,
-    'iu',
-  ).exec(attributes);
-  const value = match?.[1] ?? match?.[2] ?? match?.[3];
-  return value === undefined ? undefined : decodeHtmlCharacterReferences(value);
+  return readHtmlAttributeToken(tokenizeHtmlAttributes(attributes), name);
 }
 
-function hasNoModuleAttribute(attributes: string): boolean {
-  return noModuleAttributePattern.test(attributes);
+function readHtmlAttributeToken(
+  attributes: readonly HtmlAttributeToken[],
+  name: string,
+): string | undefined {
+  const token = attributes.find((attribute) => attribute.name === name.toLowerCase());
+  return token?.value === undefined ? undefined : decodeHtmlCharacterReferences(token.value);
 }
 
-function hasHtmlAttribute(attributes: string, name: string): boolean {
-  const escapedName = escapeRegExp(name);
-  return new RegExp(`(?:^|\\s)${escapedName}(?=\\s|=|/|$)`, 'iu').test(attributes);
+function hasHtmlAttributeToken(
+  attributes: readonly HtmlAttributeToken[],
+  name: string,
+): boolean {
+  return attributes.some((attribute) => attribute.name === name.toLowerCase());
+}
+
+function tokenizeHtmlAttributes(source: string): readonly HtmlAttributeToken[] {
+  const attributes: HtmlAttributeToken[] = [];
+  let index = 0;
+
+  if (source[index] === '<') {
+    index += 1;
+
+    if (source[index] === '/') {
+      index += 1;
+    }
+
+    while (
+      index < source.length
+      && !isHtmlSpace(source[index])
+      && source[index] !== '>'
+      && source[index] !== '/'
+    ) {
+      index += 1;
+    }
+  }
+
+  while (index < source.length) {
+    while (isHtmlSpace(source[index])) {
+      index += 1;
+    }
+
+    if (index >= source.length || source[index] === '>') {
+      break;
+    }
+
+    if (source[index] === '/' || source[index] === '<') {
+      index += 1;
+      continue;
+    }
+
+    const nameStart = index;
+
+    while (
+      index < source.length
+      && !isHtmlSpace(source[index])
+      && !htmlAttributeNameTerminators.has(source[index] ?? '')
+    ) {
+      index += 1;
+    }
+
+    if (index === nameStart) {
+      index += 1;
+      continue;
+    }
+
+    const name = source.slice(nameStart, index).toLowerCase();
+
+    while (isHtmlSpace(source[index])) {
+      index += 1;
+    }
+
+    if (source[index] !== '=') {
+      attributes.push({ name });
+      continue;
+    }
+
+    index += 1;
+
+    while (isHtmlSpace(source[index])) {
+      index += 1;
+    }
+
+    const rawValueStart = index;
+    const quote = source[index];
+    let value: string;
+
+    if (quote === '"' || quote === "'") {
+      index += 1;
+      const valueStart = index;
+
+      while (index < source.length && source[index] !== quote) {
+        index += 1;
+      }
+
+      value = source.slice(valueStart, index);
+
+      if (source[index] === quote) {
+        index += 1;
+      }
+    } else {
+      const valueStart = index;
+
+      while (index < source.length && !isHtmlSpace(source[index]) && source[index] !== '>') {
+        index += 1;
+      }
+
+      value = source.slice(valueStart, index);
+    }
+
+    attributes.push({ name, value, rawValueStart, rawValueEnd: index });
+  }
+
+  return attributes;
 }
 
 function decodeHtmlCharacterReferences(value: string): string {
@@ -1906,13 +2035,19 @@ function safeCodePoint(value: number): string {
     : String.fromCodePoint(value);
 }
 
-function replaceHtmlAttribute(tag: string, name: string, value: string): string {
-  const escapedName = escapeRegExp(name);
-  const pattern = new RegExp(
-    `((?:^|\\s)${escapedName}\\s*=\\s*)(?:"[^"]*"|'[^']*'|[^\\s"'=<>\\x60]+)`,
-    'iu',
-  );
-  return tag.replace(pattern, `$1"${escapeHtmlAttribute(value)}"`);
+function replaceHtmlAttribute(
+  tag: string,
+  name: string,
+  value: string,
+  attributes: readonly HtmlAttributeToken[] = tokenizeHtmlAttributes(tag),
+): string {
+  const attribute = attributes.find((token) => token.name === name.toLowerCase());
+
+  if (attribute?.rawValueStart === undefined || attribute.rawValueEnd === undefined) {
+    return tag;
+  }
+
+  return `${tag.slice(0, attribute.rawValueStart)}"${escapeHtmlAttribute(value)}"${tag.slice(attribute.rawValueEnd)}`;
 }
 
 function isHtmlSpace(value: string | undefined): boolean {
