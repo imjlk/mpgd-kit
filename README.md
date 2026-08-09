@@ -95,11 +95,12 @@ pnpm mpgd target build web-preview staging \
 pnpm mpgd game offline-playtest examples/phaser-starter
 ```
 
-Open `artifacts/offline-playtest/index.html` directly. This command creates a
-single-file, network-blocked **test-play bundle**. It is deliberately not a new
-target, PWA, deployment artifact, release-manifest entry, or store-submission
-package. The source must be a `web-preview` artifact, and the result records its
-test-only purpose and hash in `offline-playtest.json`. Server-backed identity,
+Open `examples/phaser-starter/artifacts/offline-playtest/index.html` directly.
+This command creates a single-file, network-blocked **test-play bundle**. It is
+deliberately not a new target, PWA, deployment artifact, release-manifest entry,
+or store-submission package. The source must be a `web-preview` artifact, and
+the result records its test-only purpose and hash in `offline-playtest.json`.
+Server-backed identity,
 purchases, ads, rewards, leaderboards, and cloud saves remain unavailable;
 games must handle those disabled paths themselves. Workers, service workers,
 WebAssembly streaming, runtime-computed asset URLs, and browser-dependent

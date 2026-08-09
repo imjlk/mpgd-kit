@@ -117,6 +117,42 @@ try {
     /does not support Worker/u,
   );
 
+  const inlineWorkerGame = createPreviewFixture('inline-worker', {
+    indexHtml: '<!doctype html><html><head><script>new Worker("worker.js");</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: inlineWorkerGame }),
+    /does not support Worker/u,
+  );
+
+  const commonAssetGame = createPreviewFixture('common-phaser-assets', {
+    mainJs: 'document.body.dataset.assets = [new URL("./sound.m4a", import.meta.url).href, new URL("./voice.opus", import.meta.url).href, new URL("./font.fnt", import.meta.url).href, new URL("./sprites.atlas", import.meta.url).href, new URL("./shader.glsl", import.meta.url).href, new URL("./scene.gltf", import.meta.url).href, new URL("./model.glb", import.meta.url).href].join(",");',
+  });
+  const commonAssets = [
+    'sound.m4a',
+    'voice.opus',
+    'font.fnt',
+    'sprites.atlas',
+    'shader.glsl',
+    'scene.gltf',
+    'model.glb',
+  ];
+
+  for (const asset of commonAssets) {
+    fs.writeFileSync(
+      path.join(commonAssetGame, 'artifacts/web-preview/assets', asset),
+      `fixture:${asset}\n`,
+    );
+  }
+
+  const commonAssetResult = await runOfflinePlaytestPackaging({ gameRoot: commonAssetGame });
+  const commonAssetHtml = fs.readFileSync(commonAssetResult.entryFile, 'utf8');
+  assert.equal(commonAssetResult.evidence.inlinedAssetCount, 10);
+  assert.match(commonAssetHtml, /data:audio\/mp4;base64,/u);
+  assert.match(commonAssetHtml, /data:audio\/opus;base64,/u);
+  assert.match(commonAssetHtml, /data:model\/gltf\+json;base64,/u);
+  assert.match(commonAssetHtml, /data:model\/gltf-binary;base64,/u);
+
   const dynamicAssetGame = createPreviewFixture('dynamic-asset', {
     mainJs: 'const getPath = () => "pixel.png"; document.body.dataset.asset = new URL(getPath(), import.meta.url).href;',
   });

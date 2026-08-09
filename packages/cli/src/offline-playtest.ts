@@ -76,20 +76,27 @@ const offlinePlaytestLimitations = [
 
 const mimeTypes = new Map<string, string>([
   ['.aac', 'audio/aac'],
+  ['.atlas', 'text/plain'],
   ['.avif', 'image/avif'],
   ['.bin', 'application/octet-stream'],
   ['.csv', 'text/csv'],
   ['.eot', 'application/vnd.ms-fontobject'],
+  ['.fnt', 'text/plain'],
   ['.gif', 'image/gif'],
+  ['.glb', 'model/gltf-binary'],
+  ['.glsl', 'text/plain'],
+  ['.gltf', 'model/gltf+json'],
   ['.ico', 'image/x-icon'],
   ['.jpeg', 'image/jpeg'],
   ['.jpg', 'image/jpeg'],
   ['.json', 'application/json'],
+  ['.m4a', 'audio/mp4'],
   ['.mp3', 'audio/mpeg'],
   ['.mp4', 'video/mp4'],
   ['.ogg', 'audio/ogg'],
   ['.ogv', 'video/ogg'],
   ['.otf', 'font/otf'],
+  ['.opus', 'audio/opus'],
   ['.png', 'image/png'],
   ['.svg', 'image/svg+xml'],
   ['.ttf', 'font/ttf'],
@@ -227,6 +234,7 @@ function extractModuleEntry(
 
   const entryFile = resolveLocalReference(context.artifactRoot, context.artifactRoot, source);
   const output = `${html.slice(0, match.index)}${html.slice(match.index + match[0].length)}`;
+  assertSupportedBundledRuntime(output);
 
   return { html: output, entryFile };
 }
@@ -716,7 +724,7 @@ function escapeRegExp(value: string): string {
 }
 
 function escapeForQuote(value: string, quote: string): string {
-  return value.replace(/\\/gu, '\\\\').replace(new RegExp(quote, 'gu'), `\\${quote}`);
+  return value.replace(/\\/gu, '\\\\').replace(new RegExp(escapeRegExp(quote), 'gu'), `\\${quote}`);
 }
 
 function escapeClosingTag(value: string, tag: 'script' | 'style'): string {
