@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -111,6 +112,25 @@ try {
     /refuses to overwrite a modified prior generated entry/u,
   );
 
+  const atomicOutputGame = createPreviewFixture('atomic-output');
+  const atomicFirstResult = await runOfflinePlaytestPackaging({ gameRoot: atomicOutputGame });
+  const atomicFirstHash = atomicFirstResult.evidence.sha256;
+  fs.writeFileSync(
+    path.join(atomicOutputGame, 'artifacts/web-preview/assets/main.js'),
+    'document.body.dataset.version = "second";',
+  );
+  const atomicSecondResult = await runOfflinePlaytestPackaging({ gameRoot: atomicOutputGame });
+  assert.notEqual(atomicSecondResult.evidence.sha256, atomicFirstHash);
+  assert.equal(
+    atomicSecondResult.evidence.sha256,
+    createHash('sha256').update(fs.readFileSync(atomicSecondResult.entryFile)).digest('hex'),
+  );
+  assert.deepEqual(
+    fs.readdirSync(path.join(atomicOutputGame, 'artifacts'))
+      .filter((name) => name.includes('.offline-playtest.')),
+    [],
+  );
+
   const releaseArtifactGame = createPreviewFixture('release-artifact', {
     effectiveTarget: { target: 'web', runtime: 'web' },
   });
@@ -161,6 +181,27 @@ try {
     mainJs: 'new globalThis.SharedWorker("./worker.js");',
   });
 
+  const assignedNavigationGame = createPreviewFixture('assigned-navigation', {
+    mainJs: 'window.location.href = "https://example.com/escape";',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: assignedNavigationGame }),
+    /does not support script-driven navigation/u,
+  );
+
+  const methodNavigationGame = createPreviewFixture('method-navigation', {
+    mainJs: 'document.location.replace("https://example.com/escape");',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: methodNavigationGame }),
+    /does not support script-driven navigation/u,
+  );
+
+  const objectLocationHtml = await packageAndReadFixture('object-location-property', {
+    mainJs: 'const frame = { location: "local" }; frame.location = "updated"; document.body.dataset.location = frame.location;',
+  });
+  assert.match(objectLocationHtml, /updated/u);
+
   const externalFallbackGame = createPreviewFixture('external-fallback', {
     indexHtml: '<!doctype html><html><head></head><body><script src="/assets/side.js">fallback()</script><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -192,6 +233,35 @@ try {
     /<style>body\{background:url\("\/assets\/missing\.png"\)\}<\/style>/u,
   );
   assert.match(inlineScriptHtml, /<img src="\/assets\/missing\.png">/u);
+
+  const retainedInlineImportGame = createPreviewFixture('retained-inline-import', {
+    indexHtml: '<!doctype html><html><head><script type="module">import"./assets/inline-extra.js";</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(retainedInlineImportGame, 'artifacts/web-preview/assets/inline-extra.js'),
+    'document.body.dataset.extra = "loaded";',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: retainedInlineImportGame }),
+    /does not support imports in retained inline modules/u,
+  );
+
+  const retainedInlineReExportGame = createPreviewFixture('retained-inline-re-export', {
+    indexHtml: '<!doctype html><html><head><script type="module">export{value}from"./assets/inline-extra.js";</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(retainedInlineReExportGame, 'artifacts/web-preview/assets/inline-extra.js'),
+    'export const value = "loaded";',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: retainedInlineReExportGame }),
+    /does not support imports in retained inline modules/u,
+  );
+
+  const retainedImportMetaHtml = await packageAndReadFixture('retained-import-meta', {
+    indexHtml: '<!doctype html><html><head><script type="module">document.body.dataset.moduleUrl = import.meta.url;</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(retainedImportMetaHtml, /import\.meta\.url/u);
 
   const codeLikeTextHtml = await packageAndReadFixture('code-like-text', {
     mainJs: `const example = "new URL('./missing.png', import.meta.url)";
@@ -358,6 +428,16 @@ try {
   assert.doesNotMatch(encodedPathHtml, /space%20icon/u);
   assert.match(encodedPathHtml, /data:image\/png;base64,/u);
 
+  const htmlEntityAssetHtml = await packageAndReadFixture(
+    'html-entity-asset',
+    {
+      indexHtml: '<!doctype html><html><head></head><body><img src="/assets/player&amp;enemy&copy;.png"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    },
+    [['artifacts/web-preview/assets/player&enemy©.png', onePixelPng]],
+  );
+  assert.doesNotMatch(htmlEntityAssetHtml, /player&amp;enemy&copy;/u);
+  assert.match(htmlEntityAssetHtml, /data:image\/png;base64,/u);
+
   const encodedSeparatorGame = createPreviewFixture('encoded-separator', {
     indexHtml: '<!doctype html><html><head></head><body><img src="/assets%2Fpixel.png"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -397,6 +477,19 @@ try {
   });
   assert.match(mediaStylesheetHtml, /<style media="\(prefers-color-scheme: dark\)">/u);
 
+  const statefulStylesheetHtml = await packageAndReadFixture('stateful-stylesheet', {
+    indexHtml: '<!doctype html><html><head><link id="night-theme" class="theme" rel="preload stylesheet" href="/assets/main.css" media="screen" disabled/></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(
+    statefulStylesheetHtml,
+    /<style id="night-theme" class="theme" media="screen" disabled>/u,
+  );
+  assert.match(
+    statefulStylesheetHtml,
+    /document\.currentScript\.previousElementSibling\.disabled=true/u,
+  );
+  assert.doesNotMatch(statefulStylesheetHtml, /<link\b[^>]*night-theme/u);
+
   const parenthesizedCssHtml = await packageAndReadFixture(
     'parenthesized-css-asset',
     {},
@@ -410,6 +503,14 @@ try {
   );
   assert.doesNotMatch(parenthesizedCssHtml, /sprite\(2x\)\.png/u);
   assert.match(parenthesizedCssHtml, /data:image\/png;base64,/u);
+
+  const escapedCssFiles: readonly PreviewFixtureFile[] = [
+    ['artifacts/web-preview/assets/main.css', 'body { background: url(./player\\ icon.png); }'],
+    ['artifacts/web-preview/assets/player icon.png', onePixelPng],
+  ];
+  const escapedCssAssetHtml = await packageAndReadFixture('escaped-css-asset', {}, escapedCssFiles);
+  assert.doesNotMatch(escapedCssAssetHtml, /player\\ icon\.png/u);
+  assert.match(escapedCssAssetHtml, /data:image\/png;base64,/u);
 
   const parenthesizedAssetDirectoryHtml = await packageAndReadFixture(
     'parenthesized-asset-directory',

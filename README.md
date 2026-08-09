@@ -104,9 +104,9 @@ Server-backed identity,
 purchases, ads, rewards, leaderboards, and cloud saves remain unavailable;
 games must handle those disabled paths themselves. Workers, service workers,
 WebAssembly streaming, dynamic imports, import maps, HTML base elements, CSS
-`@import`, runtime-computed asset URLs, and browser-dependent `file://` storage
-are not generalized by this helper. Meta-refresh navigation is removed from the
-copy.
+`@import`, runtime-computed asset URLs, retained inline-module imports,
+script-driven navigation, and browser-dependent `file://` storage are not
+generalized by this helper. Meta-refresh navigation is removed from the copy.
 
 For a minimum repo confidence check:
 

@@ -80,9 +80,10 @@ For direct-file test play, build `web-preview` and run
 network-blocked test copy, not another release target, deployable PWA,
 release-manifest entry, or store package. Its README and JSON evidence describe
 server-feature, Worker, dynamic-import, import-map, HTML-base, CSS `@import`,
-dynamic-asset, and `file://` storage limitations. Meta-refresh navigation is
-removed. Keep server calls behind platform or game-service helpers and expose a
-disabled or local fallback when those capabilities are unavailable.
+dynamic-asset, inline-module-import, script-navigation, and `file://` storage
+limitations. Meta-refresh navigation is removed. Keep server calls behind
+platform or game-service helpers and expose a disabled or local fallback when
+those capabilities are unavailable.
 
 ### Microsoft Store
 

@@ -3,14 +3,18 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
+  rmSync,
   statSync,
   writeFileSync,
 } from 'node:fs';
 import path from 'node:path';
 
+import { decodeHTMLAttribute } from 'entities';
 import { build, type Plugin } from 'esbuild';
 
 export const defaultOfflinePlaytestArtifactDir = 'artifacts/web-preview';
@@ -129,6 +133,7 @@ const offlinePlaytestLimitations = [
   'glTF files must be self-contained with data URIs; otherwise use a GLB file.',
   'CSS @import rules are unsupported; include those rules in the built stylesheet before packaging.',
   'Dynamic imports, import maps, and HTML base elements are unsupported.',
+  'Retained inline modules cannot import other modules, and script-driven navigation is unsupported.',
 ] as const;
 
 const mimeTypes = new Map<string, string>([
@@ -235,13 +240,14 @@ export async function runOfflinePlaytestPackaging(
     limitations: offlinePlaytestLimitations,
   };
 
-  mkdirSync(outputDir, { recursive: true });
   const entryFileOutput = path.join(outputDir, 'index.html');
   const readmeFile = path.join(outputDir, 'README.txt');
   const evidenceFile = path.join(outputDir, 'offline-playtest.json');
-  writeFileSync(entryFileOutput, finalHtml);
-  writeFileSync(readmeFile, renderOfflinePlaytestReadme(evidence));
-  writeFileSync(evidenceFile, `${JSON.stringify(evidence, undefined, 2)}\n`);
+  writeOfflinePlaytestOutput(outputDir, {
+    'README.txt': renderOfflinePlaytestReadme(evidence),
+    'index.html': finalHtml,
+    'offline-playtest.json': `${JSON.stringify(evidence, undefined, 2)}\n`,
+  });
 
   return {
     outputDir,
@@ -250,6 +256,59 @@ export async function runOfflinePlaytestPackaging(
     evidenceFile,
     evidence,
   };
+}
+
+function writeOfflinePlaytestOutput(
+  outputDir: string,
+  files: Readonly<Record<'README.txt' | 'index.html' | 'offline-playtest.json', string>>,
+): void {
+  const parentDir = path.dirname(outputDir);
+  const outputName = path.basename(outputDir);
+  mkdirSync(parentDir, { recursive: true });
+  const stagingDir = mkdtempSync(path.join(parentDir, `.${outputName}.staging-`));
+
+  try {
+    for (const [name, content] of Object.entries(files)) {
+      writeFileSync(path.join(stagingDir, name), content);
+    }
+
+    replaceGeneratedOutputDirectory(outputDir, stagingDir);
+  } catch (error) {
+    if (existsSync(stagingDir)) {
+      rmSync(stagingDir, { force: true, recursive: true });
+    }
+
+    throw error;
+  }
+}
+
+function replaceGeneratedOutputDirectory(outputDir: string, stagingDir: string): void {
+  if (!existsSync(outputDir)) {
+    renameSync(stagingDir, outputDir);
+    return;
+  }
+
+  const parentDir = path.dirname(outputDir);
+  const outputName = path.basename(outputDir);
+  const backupDir = mkdtempSync(path.join(parentDir, `.${outputName}.backup-`));
+  rmSync(backupDir, { recursive: true });
+  renameSync(outputDir, backupDir);
+
+  try {
+    renameSync(stagingDir, outputDir);
+  } catch (error) {
+    try {
+      renameSync(backupDir, outputDir);
+    } catch (restoreError) {
+      throw new Error(
+        `Offline playtest failed to replace ${outputDir}; the previous output remains recoverable at ${backupDir}. Replacement error: ${errorMessage(error)}. Restore error: ${errorMessage(restoreError)}.`,
+      );
+    }
+
+    throw error;
+  }
+
+  rmSync(backupDir, { recursive: true });
 }
 
 function readEffectivePreviewIdentity(artifactRoot: string): EffectivePreviewIdentity {
@@ -552,10 +611,17 @@ function inlineScriptElements(
       throw new Error('Offline playtest cannot retain an external script after entry extraction.');
     }
 
-    if (!isJavaScriptScriptType(readHtmlAttribute(attributes, 'type'))) {
+    const scriptType = readHtmlAttribute(attributes, 'type');
+
+    if (!isJavaScriptScriptType(scriptType)) {
       output += match[0];
     } else {
       const inlined = inlineJavaScriptAssetReferences(script, htmlFile, context);
+
+      if (isModuleScriptType(scriptType)) {
+        assertNoRetainedModuleDependencies(inlined);
+      }
+
       output += `<script${attributes}>${escapeClosingTag(inlined, 'script')}</script>`;
     }
 
@@ -574,6 +640,21 @@ function isJavaScriptScriptType(type: string | undefined): boolean {
   return javascriptScriptTypes.has(normalized);
 }
 
+function isModuleScriptType(type: string | undefined): boolean {
+  return type?.trim().toLowerCase() === 'module';
+}
+
+function assertNoRetainedModuleDependencies(source: string): void {
+  const codeOnlySource = maskNonCode(source, createCodePositionMap(source, true));
+
+  if (
+    /\bimport(?![$\w])\s*(?![.(])/gu.test(codeOnlySource)
+    || /\bexport(?![$\w])\s*(?:\*|\{)[^;]*\bfrom\s*/gu.test(codeOnlySource)
+  ) {
+    throw new Error('Offline playtest does not support imports in retained inline modules.');
+  }
+}
+
 function inlineStylesheets(
   html: string,
   htmlFile: string,
@@ -581,15 +662,11 @@ function inlineStylesheets(
 ): string {
   return transformOutsideHtmlRawText(html, (fragment) =>
     fragment.replace(/<link\b([^>]*)>/giu, (match, attributes: string) => {
-      const rel = readHtmlAttribute(attributes, 'rel')?.toLowerCase();
+      const rel = readHtmlRelTokens(attributes);
       const href = readHtmlAttribute(attributes, 'href');
 
-      if (rel === 'modulepreload') {
-        return '';
-      }
-
-      if (rel !== 'stylesheet') {
-        return match;
+      if (!rel.has('stylesheet')) {
+        return rel.has('modulepreload') ? '' : match;
       }
 
       if (href === undefined) {
@@ -599,12 +676,41 @@ function inlineStylesheets(
       const stylesheetFile = resolveLocalReference(context.artifactRoot, path.dirname(htmlFile), href);
       const stylesheet = readFileSync(stylesheetFile, 'utf8');
       const inlined = inlineCssAssetReferences(stylesheet, stylesheetFile, context);
-      const media = readHtmlAttribute(attributes, 'media');
-      const mediaAttribute = media === undefined ? '' : ` media="${escapeHtmlAttribute(media)}"`;
       context.inlinedAssets.add(stylesheetFile);
-      return `<style${mediaAttribute}>${escapeClosingTag(inlined, 'style')}</style>`;
+      const style = `<style${renderInlinedStylesheetAttributes(attributes)}>${escapeClosingTag(inlined, 'style')}</style>`;
+      return hasHtmlAttribute(attributes, 'disabled')
+        ? `${style}<script>document.currentScript.previousElementSibling.disabled=true</script>`
+        : style;
     }),
   );
+}
+
+function renderInlinedStylesheetAttributes(attributes: string): string {
+  const rendered: string[] = [];
+
+  for (const name of ['id', 'class', 'media', 'title', 'nonce', 'type']) {
+    const value = readHtmlAttribute(attributes, name);
+
+    if (value !== undefined) {
+      rendered.push(`${name}="${escapeHtmlAttribute(value)}"`);
+    }
+  }
+
+  if (hasHtmlAttribute(attributes, 'disabled')) {
+    rendered.push('disabled');
+  }
+
+  return rendered.length === 0 ? '' : ` ${rendered.join(' ')}`;
+}
+
+function readHtmlRelTokens(attributes: string): ReadonlySet<string> {
+  const rel = readHtmlAttribute(attributes, 'rel');
+
+  if (rel === undefined) {
+    return new Set<string>();
+  }
+
+  return new Set(rel.toLowerCase().split(/[\t\n\f\r ]+/u).filter((token) => token.length > 0));
 }
 
 function inlineCssAssetReferences(
@@ -623,7 +729,7 @@ function inlineCssAssetReferences(
       return match;
     }
 
-    const reference = (doubleQuoted ?? singleQuoted ?? unquoted ?? '').trim();
+    const reference = decodeCssEscapes((doubleQuoted ?? singleQuoted ?? unquoted ?? '').trim());
 
     if (reference.startsWith('data:') || reference.startsWith('blob:') || reference.startsWith('#')) {
       return match;
@@ -631,6 +737,57 @@ function inlineCssAssetReferences(
 
     return `url(${JSON.stringify(readAssetDataUrl(sourceFile, reference, context))})`;
   });
+}
+
+function decodeCssEscapes(value: string): string {
+  let output = '';
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+
+    if (character !== '\\') {
+      output += character;
+      continue;
+    }
+
+    const nextCharacter = value[index + 1];
+
+    if (nextCharacter === undefined) {
+      break;
+    }
+
+    if (nextCharacter === '\r' || nextCharacter === '\n' || nextCharacter === '\f') {
+      if (nextCharacter === '\r' && value[index + 2] === '\n') {
+        index += 1;
+      }
+
+      index += 1;
+      continue;
+    }
+
+    if (/[\dA-Fa-f]/u.test(nextCharacter)) {
+      let hexadecimal = '';
+
+      while (hexadecimal.length < 6 && /[\dA-Fa-f]/u.test(value[index + 1] ?? '')) {
+        hexadecimal += value[index + 1];
+        index += 1;
+      }
+
+      const whitespace = value[index + 1];
+
+      if (whitespace !== undefined && /[\t\n\f\r ]/u.test(whitespace)) {
+        index += whitespace === '\r' && value[index + 2] === '\n' ? 2 : 1;
+      }
+
+      output += safeCodePoint(Number.parseInt(hexadecimal, 16));
+      continue;
+    }
+
+    output += nextCharacter === '\0' ? '\uFFFD' : nextCharacter;
+    index += 1;
+  }
+
+  return output;
 }
 
 function inlineStyleElements(
@@ -735,11 +892,11 @@ function inlineHtmlAssetFragment(
 
   return htmlWithInlineStyles.replace(/<(link|audio|embed|feimage|image|img|input|object|source|track|use|video)\b([^>]*)>/giu, (tag, name: string, attributes: string) => {
     const lowerName = name.toLowerCase();
-    const rel = readHtmlAttribute(attributes, 'rel')?.toLowerCase();
+    const rel = readHtmlRelTokens(attributes);
     const allowedAttributes = [...(htmlAssetAttributesByTag[lowerName] ?? ['src'])];
 
     if (lowerName === 'link') {
-      if (rel !== 'icon' && rel !== 'apple-touch-icon' && rel !== 'mask-icon') {
+      if (!['icon', 'apple-touch-icon', 'mask-icon'].some((token) => rel.has(token))) {
         return tag;
       }
 
@@ -932,7 +1089,7 @@ function assertSupportedHtmlDocument(html: string): void {
 function removeManifestLinks(html: string): string {
   return transformOutsideHtmlRawText(html, (fragment) =>
     fragment.replace(/<link\b([^>]*)>/giu, (tag, attributes: string) =>
-      readHtmlAttribute(attributes, 'rel')?.toLowerCase() === 'manifest' ? '' : tag,
+      readHtmlRelTokens(attributes).has('manifest') ? '' : tag,
     ),
   );
 }
@@ -968,6 +1125,14 @@ function assertSupportedBundledRuntime(source: string): void {
     { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/gu, label: 'WebAssembly streaming' },
     { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
     { pattern: /\bimport\s*\(/gu, label: 'dynamic import' },
+    {
+      pattern: /(?:\b(?:document|globalThis|parent|self|top|window)\s*\.\s*|(?<![$.\w]))location\s*\.\s*(?:assign|replace)\s*\(/gu,
+      label: 'script-driven navigation',
+    },
+    {
+      pattern: /(?:\b(?:document|globalThis|parent|self|top|window)\s*\.\s*|(?<![$.\w]))location(?:\s*\.\s*href)?\s*(?:(?:&&|\?\?|\|\|)|[+\-*/%&|^])?=(?!=)/gu,
+      label: 'script-driven navigation',
+    },
   ];
   const codePositions = createCodePositionMap(source, true);
   const codeOnlySource = maskNonCode(source, codePositions);
@@ -1695,11 +1860,30 @@ function readHtmlAttribute(attributes: string, name: string): string | undefined
     `(?:^|\\s)${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\\x60]+))`,
     'iu',
   ).exec(attributes);
-  return match?.[1] ?? match?.[2] ?? match?.[3];
+  const value = match?.[1] ?? match?.[2] ?? match?.[3];
+  return value === undefined ? undefined : decodeHtmlCharacterReferences(value);
 }
 
 function hasNoModuleAttribute(attributes: string): boolean {
   return noModuleAttributePattern.test(attributes);
+}
+
+function hasHtmlAttribute(attributes: string, name: string): boolean {
+  const escapedName = escapeRegExp(name);
+  return new RegExp(`(?:^|\\s)${escapedName}(?=\\s|=|/|$)`, 'iu').test(attributes);
+}
+
+function decodeHtmlCharacterReferences(value: string): string {
+  return decodeHTMLAttribute(value);
+}
+
+function safeCodePoint(value: number): string {
+  return !Number.isInteger(value)
+    || value <= 0
+    || value > 0x10_FFFF
+    || (value >= 0xD800 && value <= 0xDFFF)
+    ? '\uFFFD'
+    : String.fromCodePoint(value);
 }
 
 function replaceHtmlAttribute(tag: string, name: string, value: string): string {
