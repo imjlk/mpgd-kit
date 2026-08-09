@@ -175,6 +175,41 @@ try {
   });
   assert.match(codeLikeTextHtml, /new URL\(['"]\.\/missing\.png['"], import\.meta\.url\)/u);
 
+  const regexThenAssetHtml = await packageAndReadFixture('regex-then-asset', {
+    mainJs: 'const slashPattern = /\\/\\//g; document.body.dataset.icon = "/assets/icon.png"; void slashPattern;',
+  });
+  assert.match(regexThenAssetHtml, /data:image\/png;base64,/u);
+  assert.doesNotMatch(regexThenAssetHtml, /["']\/assets\/icon\.png["']/u);
+
+  const regexThenWorkerGame = createPreviewFixture('regex-then-worker', {
+    mainJs: 'const slashPattern = /\\/\\//g; new Worker("./worker.js"); void slashPattern;',
+  });
+  fs.writeFileSync(
+    path.join(regexThenWorkerGame, 'artifacts/web-preview/assets/worker.js'),
+    'self.close();',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: regexThenWorkerGame }),
+    /does not support Worker/u,
+  );
+
+  const controlRegexThenWorkerGame = createPreviewFixture('control-regex-then-worker', {
+    mainJs: 'if (true) /\\/\\//g.test("//"); new Worker("./worker.js");',
+  });
+  fs.writeFileSync(
+    path.join(controlRegexThenWorkerGame, 'artifacts/web-preview/assets/worker.js'),
+    'self.close();',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: controlRegexThenWorkerGame }),
+    /does not support Worker/u,
+  );
+
+  const nonJavaScriptTypeHtml = await packageAndReadFixture('non-javascript-script-type', {
+    indexHtml: '<!doctype html><html><head><script type="text/template-javascript">window.icon="/assets/icon.png";</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(nonJavaScriptTypeHtml, /window\.icon="\/assets\/icon\.png"/u);
+
   const cssTextHtml = await packageAndReadFixture('css-code-like-text', {}, [
     [
       'artifacts/web-preview/assets/main.css',
@@ -223,6 +258,18 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: externalGltfGame }),
     /requires self-contained glTF data URIs or GLB/u,
+  );
+
+  const deeplyNestedGltfGame = createPreviewFixture('deeply-nested-gltf', {
+    mainJs: 'document.body.dataset.scene = new URL("./scene.gltf", import.meta.url).href;',
+  });
+  fs.writeFileSync(
+    path.join(deeplyNestedGltfGame, 'artifacts/web-preview/assets/scene.gltf'),
+    `{"asset":{"version":"2.0"},"extras":${'['.repeat(65)}0${']'.repeat(65)}}\n`,
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: deeplyNestedGltfGame }),
+    /glTF JSON exceeds the maximum nesting depth/u,
   );
 
   const documentAssetGame = createPreviewFixture('document-relative-assets', {

@@ -64,6 +64,47 @@ interface BundledEntry {
 
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
+const noModuleAttributePattern = /(?:^|\s)nomodule(?=\s|=|$)/iu;
+const javascriptScriptTypes = new Set([
+  'application/ecmascript',
+  'application/javascript',
+  'application/x-javascript',
+  'module',
+  'text/ecmascript',
+  'text/javascript',
+  'text/javascript1.0',
+  'text/javascript1.1',
+  'text/javascript1.2',
+  'text/javascript1.3',
+  'text/javascript1.4',
+  'text/javascript1.5',
+  'text/jscript',
+  'text/livescript',
+  'text/x-javascript',
+]);
+const javascriptRegexPrefixKeywords = new Set([
+  'await',
+  'case',
+  'delete',
+  'do',
+  'else',
+  'in',
+  'instanceof',
+  'of',
+  'return',
+  'throw',
+  'typeof',
+  'void',
+  'yield',
+]);
+const javascriptControlParenthesisKeywords = new Set([
+  'catch',
+  'for',
+  'if',
+  'switch',
+  'while',
+  'with',
+]);
 const htmlAssetAttributesByTag: Readonly<Record<string, readonly string[]>> = {
   audio: ['src'],
   embed: ['src'],
@@ -235,7 +276,7 @@ function extractModuleEntry(
   const moduleEntries = externalScripts.filter(
     (match) =>
       readHtmlAttribute(match[1] ?? '', 'type')?.toLowerCase() === 'module'
-      && !hasHtmlAttribute(match[1] ?? '', 'nomodule'),
+      && !hasNoModuleAttribute(match[1] ?? ''),
   );
 
   if (moduleEntries.length !== 1) {
@@ -257,7 +298,7 @@ function extractModuleEntry(
       continue;
     }
 
-    if (!hasHtmlAttribute(externalScript[1] ?? '', 'nomodule')) {
+    if (!hasNoModuleAttribute(externalScript[1] ?? '')) {
       throw new Error(
         'Offline playtest does not support additional external scripts beyond the module entry.',
       );
@@ -425,7 +466,7 @@ function isJavaScriptScriptType(type: string | undefined): boolean {
   }
 
   const normalized = type.trim().toLowerCase();
-  return normalized === 'module' || /(?:java|ecma)script/u.test(normalized);
+  return javascriptScriptTypes.has(normalized);
 }
 
 function inlineStylesheets(
@@ -771,10 +812,17 @@ function assertSupportedBundledRuntime(source: string): void {
 function createCodePositionMap(source: string, allowLineComments: boolean): Uint8Array {
   const positions = new Uint8Array(source.length);
   positions.fill(1);
+  let regexAllowed = allowLineComments;
+  let pendingControlParenthesis = false;
+  const parenthesisAllowsRegexAfter: boolean[] = [];
 
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index];
     const nextCharacter = source[index + 1];
+
+    if (character === undefined || /\s/u.test(character)) {
+      continue;
+    }
 
     if (character === '/' && nextCharacter === '*') {
       positions[index] = 0;
@@ -809,31 +857,146 @@ function createCodePositionMap(source: string, allowLineComments: boolean): Uint
       continue;
     }
 
-    if (character !== '"' && character !== "'" && character !== '`') {
+    if (character === '"' || character === "'" || character === '`') {
+      const quote = character;
+      index += 1;
+
+      while (index < source.length) {
+        positions[index] = 0;
+
+        if (source[index] === '\\') {
+          if (index + 1 < source.length) {
+            positions[index + 1] = 0;
+            index += 2;
+            continue;
+          }
+        } else if (source[index] === quote) {
+          break;
+        }
+
+        index += 1;
+      }
+
+      regexAllowed = false;
       continue;
     }
 
-    const quote = character;
-    index += 1;
+    if (!allowLineComments) {
+      continue;
+    }
 
-    while (index < source.length) {
-      positions[index] = 0;
+    if (isJavaScriptIdentifierStart(character)) {
+      const identifierStart = index;
 
-      if (source[index] === '\\') {
-        if (index + 1 < source.length) {
-          positions[index + 1] = 0;
-          index += 2;
-          continue;
-        }
-      } else if (source[index] === quote) {
-        break;
+      while (isJavaScriptIdentifierPart(source[index + 1])) {
+        index += 1;
       }
 
-      index += 1;
+      const identifier = source.slice(identifierStart, index + 1);
+      pendingControlParenthesis = javascriptControlParenthesisKeywords.has(identifier);
+      regexAllowed = javascriptRegexPrefixKeywords.has(identifier);
+      continue;
     }
+
+    if (/\d/u.test(character)) {
+      while (/[_\w.]/u.test(source[index + 1] ?? '')) {
+        index += 1;
+      }
+
+      regexAllowed = false;
+      continue;
+    }
+
+    if (character === '/' && regexAllowed) {
+      const regexEnd = findJavaScriptRegexEnd(source, index);
+
+      if (regexEnd !== undefined) {
+        positions.fill(0, index + 1, regexEnd + 1);
+        index = regexEnd;
+        regexAllowed = false;
+        continue;
+      }
+    }
+
+    if (
+      (character === '+' && nextCharacter === '+')
+      || (character === '-' && nextCharacter === '-')
+    ) {
+      index += 1;
+      regexAllowed = false;
+      pendingControlParenthesis = false;
+      continue;
+    }
+
+    if (character === '(') {
+      parenthesisAllowsRegexAfter.push(pendingControlParenthesis);
+      pendingControlParenthesis = false;
+      regexAllowed = true;
+      continue;
+    }
+
+    if (character === ')') {
+      regexAllowed = parenthesisAllowsRegexAfter.pop() ?? false;
+      pendingControlParenthesis = false;
+      continue;
+    }
+
+    if (character === ']' || character === '}' || character === '.') {
+      regexAllowed = false;
+      pendingControlParenthesis = false;
+      continue;
+    }
+
+    pendingControlParenthesis = false;
+    regexAllowed = true;
   }
 
   return positions;
+}
+
+function findJavaScriptRegexEnd(source: string, start: number): number | undefined {
+  let inCharacterClass = false;
+
+  for (let index = start + 1; index < source.length; index += 1) {
+    const character = source[index];
+
+    if (character === '\n' || character === '\r') {
+      return undefined;
+    }
+
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+
+    if (character === '[') {
+      inCharacterClass = true;
+      continue;
+    }
+
+    if (character === ']') {
+      inCharacterClass = false;
+      continue;
+    }
+
+    if (character === '/' && !inCharacterClass) {
+      while (isJavaScriptIdentifierPart(source[index + 1])) {
+        index += 1;
+      }
+
+      return index;
+    }
+  }
+
+  return undefined;
+}
+
+function isJavaScriptIdentifierStart(value: string | undefined): boolean {
+  return value !== undefined && /[$A-Z_a-z]/u.test(value);
+}
+
+function isJavaScriptIdentifierPart(value: string | undefined): boolean {
+  return value !== undefined && /[$\dA-Z_a-z]/u.test(value);
 }
 
 function readAssetDataUrl(
@@ -886,31 +1049,37 @@ function assertSelfContainedGltf(gltfFile: string, source: string): void {
 }
 
 function findExternalGltfUri(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    for (const item of value) {
-      const externalUri = findExternalGltfUri(item);
+  const pending: Array<Readonly<{ value: unknown; depth: number }>> = [{ value, depth: 0 }];
 
-      if (externalUri !== undefined) {
-        return externalUri;
+  while (pending.length > 0) {
+    const current = pending.pop();
+
+    if (current === undefined) {
+      break;
+    }
+
+    if (current.depth > 64) {
+      throw new Error('Offline playtest glTF JSON exceeds the maximum nesting depth.');
+    }
+
+    if (Array.isArray(current.value)) {
+      for (const child of current.value) {
+        pending.push({ value: child, depth: current.depth + 1 });
       }
+
+      continue;
     }
 
-    return undefined;
-  }
-
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  for (const [key, child] of Object.entries(value)) {
-    if (key === 'uri' && typeof child === 'string' && !child.startsWith('data:')) {
-      return child;
+    if (!isRecord(current.value)) {
+      continue;
     }
 
-    const externalUri = findExternalGltfUri(child);
+    for (const [key, child] of Object.entries(current.value)) {
+      if (key === 'uri' && typeof child === 'string' && !child.startsWith('data:')) {
+        return child;
+      }
 
-    if (externalUri !== undefined) {
-      return externalUri;
+      pending.push({ value: child, depth: current.depth + 1 });
     }
   }
 
@@ -1173,9 +1342,8 @@ function readHtmlAttribute(attributes: string, name: string): string | undefined
   return match?.[1] ?? match?.[2] ?? match?.[3];
 }
 
-function hasHtmlAttribute(attributes: string, name: string): boolean {
-  const escapedName = escapeRegExp(name);
-  return new RegExp(`(?:^|\\s)${escapedName}(?=\\s|=|$)`, 'iu').test(attributes);
+function hasNoModuleAttribute(attributes: string): boolean {
+  return noModuleAttributePattern.test(attributes);
 }
 
 function replaceHtmlAttribute(tag: string, name: string, value: string): string {
