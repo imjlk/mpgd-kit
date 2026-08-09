@@ -205,6 +205,65 @@ try {
     /does not support Worker/u,
   );
 
+  const templateWorkerGame = createPreviewFixture('template-worker', {
+    mainJs: 'const value = `${new Worker("./worker.js")}`; void value;',
+  });
+  fs.writeFileSync(
+    path.join(templateWorkerGame, 'artifacts/web-preview/assets/worker.js'),
+    'self.close();',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: templateWorkerGame }),
+    /does not support Worker/u,
+  );
+
+  const rawTemplateTextHtml = await packageAndReadFixture('raw-template-text', {
+    mainJs: 'document.body.dataset.label = `new Worker("./not-code.js")`;',
+  });
+  assert.match(rawTemplateTextHtml, /new Worker\(["']\.\/not-code\.js["']\)/u);
+
+  const templateAssetHtml = await packageAndReadFixture('template-asset', {
+    mainJs: 'document.body.dataset.icon = `${new URL("./icon.png", import.meta.url).href}`;',
+  });
+  assert.match(templateAssetHtml, /data:image\/png;base64,/u);
+  assert.doesNotMatch(templateAssetHtml, /\.\/icon\.png/u);
+
+  const blockRegexThenWorkerGame = createPreviewFixture('block-regex-then-worker', {
+    mainJs: 'function noop() {} /\\/\\//g.test("//"); new Worker("./worker.js");',
+  });
+  fs.writeFileSync(
+    path.join(blockRegexThenWorkerGame, 'artifacts/web-preview/assets/worker.js'),
+    'self.close();',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: blockRegexThenWorkerGame }),
+    /does not support Worker/u,
+  );
+
+  const classRegexThenWorkerGame = createPreviewFixture('class-regex-then-worker', {
+    mainJs: 'class Fixture {} /\\/\\//g.test("//"); new Worker("./worker.js"); void Fixture;',
+  });
+  fs.writeFileSync(
+    path.join(classRegexThenWorkerGame, 'artifacts/web-preview/assets/worker.js'),
+    'self.close();',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: classRegexThenWorkerGame }),
+    /does not support Worker/u,
+  );
+
+  const objectDivisionWorkerGame = createPreviewFixture('object-division-worker', {
+    mainJs: 'const ratio = {} / new Worker("./worker.js") / 1; void ratio;',
+  });
+  fs.writeFileSync(
+    path.join(objectDivisionWorkerGame, 'artifacts/web-preview/assets/worker.js'),
+    'self.close();',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: objectDivisionWorkerGame }),
+    /does not support Worker/u,
+  );
+
   const nonJavaScriptTypeHtml = await packageAndReadFixture('non-javascript-script-type', {
     indexHtml: '<!doctype html><html><head><script type="text/template-javascript">window.icon="/assets/icon.png";</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });

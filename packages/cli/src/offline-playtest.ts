@@ -812,76 +812,84 @@ function assertSupportedBundledRuntime(source: string): void {
 function createCodePositionMap(source: string, allowLineComments: boolean): Uint8Array {
   const positions = new Uint8Array(source.length);
   positions.fill(1);
-  let regexAllowed = allowLineComments;
-  let pendingControlParenthesis = false;
-  const parenthesisAllowsRegexAfter: boolean[] = [];
 
+  if (allowLineComments) {
+    scanJavaScriptCodePositions(source, positions, 0, false, false, 0);
+  } else {
+    scanCssCodePositions(source, positions);
+  }
+
+  return positions;
+}
+
+function scanCssCodePositions(source: string, positions: Uint8Array): void {
   for (let index = 0; index < source.length; index += 1) {
     const character = source[index];
     const nextCharacter = source[index + 1];
 
-    if (character === undefined || /\s/u.test(character)) {
+    if (character === '/' && nextCharacter === '*') {
+      index = markBlockComment(source, positions, index);
+    } else if (character === '"' || character === "'") {
+      index = markQuotedText(source, positions, index, character);
+    }
+  }
+}
+
+function scanJavaScriptCodePositions(
+  source: string,
+  positions: Uint8Array,
+  start: number,
+  stopAtClosingBrace: boolean,
+  startsAsExpression: boolean,
+  depth: number,
+): number {
+  if (depth > 64) {
+    throw new Error('Offline playtest JavaScript exceeds the supported template nesting depth.');
+  }
+
+  let regexAllowed = true;
+  let pendingControlParenthesis = false;
+  let pendingFunctionParameters = false;
+  let pendingClassBody = false;
+  let nextBraceIsBlock = false;
+  let previousToken: string | undefined;
+  const parenthesisKinds: Array<'control' | 'function' | 'normal'> = [];
+  const braceKinds: boolean[] = [];
+
+  for (let index = start; index < source.length; index += 1) {
+    const character = source.charAt(index);
+    const nextCharacter = source[index + 1];
+
+    if (/\s/u.test(character)) {
       continue;
     }
 
     if (character === '/' && nextCharacter === '*') {
-      positions[index] = 0;
-      positions[index + 1] = 0;
-      index += 2;
-
-      while (index < source.length) {
-        positions[index] = 0;
-
-        if (source[index] === '*' && source[index + 1] === '/') {
-          positions[index + 1] = 0;
-          index += 1;
-          break;
-        }
-
-        index += 1;
-      }
-
+      index = markBlockComment(source, positions, index);
       continue;
     }
 
-    if (allowLineComments && character === '/' && nextCharacter === '/') {
-      positions[index] = 0;
-      positions[index + 1] = 0;
-      index += 2;
-
-      while (index < source.length && source[index] !== '\n' && source[index] !== '\r') {
-        positions[index] = 0;
-        index += 1;
-      }
-
+    if (character === '/' && nextCharacter === '/') {
+      index = markLineComment(source, positions, index);
       continue;
     }
 
-    if (character === '"' || character === "'" || character === '`') {
-      const quote = character;
-      index += 1;
+    const inheritedBraceIsBlock = nextBraceIsBlock;
+    nextBraceIsBlock = false;
 
-      while (index < source.length) {
-        positions[index] = 0;
-
-        if (source[index] === '\\') {
-          if (index + 1 < source.length) {
-            positions[index + 1] = 0;
-            index += 2;
-            continue;
-          }
-        } else if (source[index] === quote) {
-          break;
-        }
-
-        index += 1;
-      }
-
+    if (character === '"' || character === "'") {
+      index = markQuotedText(source, positions, index, character);
       regexAllowed = false;
+      pendingControlParenthesis = false;
+      previousToken = 'value';
       continue;
     }
 
-    if (!allowLineComments) {
+    if (character === '`') {
+      index = markTemplateLiteral(source, positions, index, depth + 1);
+      regexAllowed = false;
+      pendingControlParenthesis = false;
+      previousToken = 'value';
       continue;
     }
 
@@ -894,7 +902,14 @@ function createCodePositionMap(source: string, allowLineComments: boolean): Uint
 
       const identifier = source.slice(identifierStart, index + 1);
       pendingControlParenthesis = javascriptControlParenthesisKeywords.has(identifier);
+      pendingFunctionParameters ||= identifier === 'function';
+      pendingClassBody ||= identifier === 'class';
+      nextBraceIsBlock = identifier === 'do'
+        || identifier === 'else'
+        || identifier === 'finally'
+        || identifier === 'try';
       regexAllowed = javascriptRegexPrefixKeywords.has(identifier);
+      previousToken = identifier;
       continue;
     }
 
@@ -904,6 +919,8 @@ function createCodePositionMap(source: string, allowLineComments: boolean): Uint
       }
 
       regexAllowed = false;
+      pendingControlParenthesis = false;
+      previousToken = 'value';
       continue;
     }
 
@@ -914,6 +931,8 @@ function createCodePositionMap(source: string, allowLineComments: boolean): Uint
         positions.fill(0, index + 1, regexEnd + 1);
         index = regexEnd;
         regexAllowed = false;
+        pendingControlParenthesis = false;
+        previousToken = 'value';
         continue;
       }
     }
@@ -925,33 +944,167 @@ function createCodePositionMap(source: string, allowLineComments: boolean): Uint
       index += 1;
       regexAllowed = false;
       pendingControlParenthesis = false;
+      previousToken = 'value';
       continue;
     }
 
     if (character === '(') {
-      parenthesisAllowsRegexAfter.push(pendingControlParenthesis);
+      const parenthesisKind = pendingControlParenthesis
+        ? 'control'
+        : pendingFunctionParameters
+          ? 'function'
+          : 'normal';
+      parenthesisKinds.push(parenthesisKind);
       pendingControlParenthesis = false;
+      pendingFunctionParameters = false;
       regexAllowed = true;
+      previousToken = '(';
       continue;
     }
 
     if (character === ')') {
-      regexAllowed = parenthesisAllowsRegexAfter.pop() ?? false;
+      const parenthesisKind = parenthesisKinds.pop() ?? 'normal';
+      regexAllowed = parenthesisKind === 'control';
+      nextBraceIsBlock = true;
       pendingControlParenthesis = false;
+      previousToken = ')';
       continue;
     }
 
-    if (character === ']' || character === '}' || character === '.') {
+    if (character === '=' && nextCharacter === '>') {
+      index += 1;
+      regexAllowed = true;
+      nextBraceIsBlock = true;
+      pendingControlParenthesis = false;
+      previousToken = '=>';
+      continue;
+    }
+
+    if (character === '{') {
+      const isClassBody: boolean = pendingClassBody && parenthesisKinds.length === 0;
+      const isBlock = inheritedBraceIsBlock
+        || isClassBody
+        || (!startsAsExpression && previousToken === undefined)
+        || previousToken === ';'
+        || previousToken === 'block-open'
+        || previousToken === 'block-close';
+      braceKinds.push(isBlock);
+      pendingClassBody &&= !isClassBody;
+      regexAllowed = true;
+      pendingControlParenthesis = false;
+      previousToken = isBlock ? 'block-open' : 'object-open';
+      continue;
+    }
+
+    if (character === '}') {
+      if (braceKinds.length === 0 && stopAtClosingBrace) {
+        return index;
+      }
+
+      const isBlock = braceKinds.pop() ?? true;
+      regexAllowed = isBlock;
+      pendingControlParenthesis = false;
+      previousToken = isBlock ? 'block-close' : 'object-close';
+      continue;
+    }
+
+    if (character === ']' || character === '.') {
       regexAllowed = false;
       pendingControlParenthesis = false;
+      previousToken = 'value';
       continue;
     }
 
     pendingControlParenthesis = false;
     regexAllowed = true;
+    previousToken = character;
   }
 
-  return positions;
+  return source.length - 1;
+}
+
+function markBlockComment(source: string, positions: Uint8Array, start: number): number {
+  positions[start] = 0;
+  positions[start + 1] = 0;
+
+  for (let index = start + 2; index < source.length; index += 1) {
+    positions[index] = 0;
+
+    if (source[index] === '*' && source[index + 1] === '/') {
+      positions[index + 1] = 0;
+      return index + 1;
+    }
+  }
+
+  return source.length - 1;
+}
+
+function markLineComment(source: string, positions: Uint8Array, start: number): number {
+  let index = start;
+
+  while (index < source.length && source[index] !== '\n' && source[index] !== '\r') {
+    positions[index] = 0;
+    index += 1;
+  }
+
+  return index - 1;
+}
+
+function markQuotedText(
+  source: string,
+  positions: Uint8Array,
+  start: number,
+  quote: '"' | "'",
+): number {
+  for (let index = start + 1; index < source.length; index += 1) {
+    positions[index] = 0;
+
+    if (source[index] === '\\' && index + 1 < source.length) {
+      positions[index + 1] = 0;
+      index += 1;
+    } else if (source[index] === quote) {
+      return index;
+    }
+  }
+
+  return source.length - 1;
+}
+
+function markTemplateLiteral(
+  source: string,
+  positions: Uint8Array,
+  start: number,
+  depth: number,
+): number {
+  for (let index = start + 1; index < source.length; index += 1) {
+    positions[index] = 0;
+
+    if (source[index] === '\\' && index + 1 < source.length) {
+      positions[index + 1] = 0;
+      index += 1;
+      continue;
+    }
+
+    if (source[index] === '`') {
+      return index;
+    }
+
+    if (source[index] === '$' && source[index + 1] === '{') {
+      positions[index + 1] = 0;
+      const closingBrace = scanJavaScriptCodePositions(
+        source,
+        positions,
+        index + 2,
+        true,
+        true,
+        depth,
+      );
+      positions[closingBrace] = 0;
+      index = closingBrace;
+    }
+  }
+
+  return source.length - 1;
 }
 
 function findJavaScriptRegexEnd(source: string, start: number): number | undefined {
@@ -1049,7 +1202,9 @@ function assertSelfContainedGltf(gltfFile: string, source: string): void {
 }
 
 function findExternalGltfUri(value: unknown): string | undefined {
-  const pending: Array<Readonly<{ value: unknown; depth: number }>> = [{ value, depth: 0 }];
+  const pending: Array<Readonly<{ value: unknown; depth: number; key?: string }>> = [
+    { value, depth: 0 },
+  ];
 
   while (pending.length > 0) {
     const current = pending.pop();
@@ -1062,9 +1217,17 @@ function findExternalGltfUri(value: unknown): string | undefined {
       throw new Error('Offline playtest glTF JSON exceeds the maximum nesting depth.');
     }
 
+    if (
+      current.key === 'uri'
+      && typeof current.value === 'string'
+      && !current.value.startsWith('data:')
+    ) {
+      return current.value;
+    }
+
     if (Array.isArray(current.value)) {
-      for (const child of current.value) {
-        pending.push({ value: child, depth: current.depth + 1 });
+      for (let index = current.value.length - 1; index >= 0; index -= 1) {
+        pending.push({ value: current.value[index], depth: current.depth + 1 });
       }
 
       continue;
@@ -1074,12 +1237,16 @@ function findExternalGltfUri(value: unknown): string | undefined {
       continue;
     }
 
-    for (const [key, child] of Object.entries(current.value)) {
-      if (key === 'uri' && typeof child === 'string' && !child.startsWith('data:')) {
-        return child;
+    const entries = Object.entries(current.value);
+
+    for (let index = entries.length - 1; index >= 0; index -= 1) {
+      const entry = entries[index];
+
+      if (entry === undefined) {
+        continue;
       }
 
-      pending.push({ value: child, depth: current.depth + 1 });
+      pending.push({ key: entry[0], value: entry[1], depth: current.depth + 1 });
     }
   }
 
