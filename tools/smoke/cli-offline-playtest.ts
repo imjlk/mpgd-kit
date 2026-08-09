@@ -26,6 +26,7 @@ try {
 
   assert.match(html, /mpgd-purpose" content="test-play-only/u);
   assert.match(html, /Content-Security-Policy/u);
+  assert.match(html, /wasm-unsafe-eval/u);
   assert.match(html, /blocked network access/u);
   assert.match(html, /data:image\/png;base64,/u);
   assert.match(html, /data:application\/json;base64,/u);
@@ -35,7 +36,7 @@ try {
   assert.doesNotMatch(html, /\/assets\/pixel\.png/u);
   assert.doesNotMatch(html, /<script\b[^>]*\bsrc=/u);
   assert.doesNotMatch(html, /<link\b[^>]*\brel=["']stylesheet/u);
-  assert.doesNotMatch(html, /type=["']module/u);
+  assert.match(html, /<script type="module">/u);
   assert.match(readme, /TEST PLAY ONLY/u);
   assert.match(readme, /not a release target/u);
   assert.equal(evidence.purpose, 'test-play-only');
@@ -180,6 +181,124 @@ try {
   assert.doesNotMatch(documentAssetHtml, /(?:\.\/)?assets\/pixel\.png/u);
   assert.doesNotMatch(documentAssetHtml, /\/audio\/theme\.mp3/u);
   assert.match(documentAssetHtml, /data:audio\/mpeg;base64,/u);
+
+  const rootAssetGame = createPreviewFixture('root-level-asset', {
+    mainJs: 'document.body.dataset.theme = "/theme.mp3";',
+  });
+  fs.writeFileSync(
+    path.join(rootAssetGame, 'artifacts/web-preview/theme.mp3'),
+    'fixture:root-theme\n',
+  );
+  const rootAssetResult = await runOfflinePlaytestPackaging({ gameRoot: rootAssetGame });
+  const rootAssetHtml = fs.readFileSync(rootAssetResult.entryFile, 'utf8');
+  assert.doesNotMatch(rootAssetHtml, /["']\/theme\.mp3["']/u);
+  assert.match(rootAssetHtml, /data:audio\/mpeg;base64,/u);
+
+  const existingCspGame = createPreviewFixture('existing-csp', {
+    indexHtml: '<!doctype html><html><head><meta content="default-src \'self\'" http-equiv=Content-Security-Policy><link rel="stylesheet" href="/assets/main.css"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  const existingCspResult = await runOfflinePlaytestPackaging({ gameRoot: existingCspGame });
+  const existingCspHtml = fs.readFileSync(existingCspResult.entryFile, 'utf8');
+  assert.doesNotMatch(existingCspHtml, /default-src 'self'/u);
+  assert.equal(existingCspHtml.match(/http-equiv="Content-Security-Policy"/gu)?.length, 1);
+
+  const mixedSrcsetGame = createPreviewFixture('mixed-srcset', {
+    indexHtml: '<!doctype html><html><head></head><body><img srcset="data:image/png;base64,AAAA, /assets/pixel.png 2x, blob:fixture 3x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  const mixedSrcsetResult = await runOfflinePlaytestPackaging({ gameRoot: mixedSrcsetGame });
+  const mixedSrcsetHtml = fs.readFileSync(mixedSrcsetResult.entryFile, 'utf8');
+  assert.match(mixedSrcsetHtml, /data:image\/png;base64,AAAA/u);
+  assert.match(mixedSrcsetHtml, /blob:fixture 3x/u);
+  assert.doesNotMatch(mixedSrcsetHtml, /\/assets\/pixel\.png/u);
+
+  const mediaStylesheetGame = createPreviewFixture('media-stylesheet', {
+    indexHtml: '<!doctype html><html><head><link rel="stylesheet" href="/assets/main.css" media="(prefers-color-scheme: dark)"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  const mediaStylesheetResult = await runOfflinePlaytestPackaging({
+    gameRoot: mediaStylesheetGame,
+  });
+  assert.match(
+    fs.readFileSync(mediaStylesheetResult.entryFile, 'utf8'),
+    /<style media="\(prefers-color-scheme: dark\)">/u,
+  );
+
+  const parenthesizedCssAssetGame = createPreviewFixture('parenthesized-css-asset');
+  fs.writeFileSync(
+    path.join(parenthesizedCssAssetGame, 'artifacts/web-preview/assets/main.css'),
+    'body { background-image: url("./sprite(2x).png"); }',
+  );
+  fs.writeFileSync(
+    path.join(parenthesizedCssAssetGame, 'artifacts/web-preview/assets/sprite(2x).png'),
+    onePixelPng,
+  );
+  const parenthesizedCssResult = await runOfflinePlaytestPackaging({
+    gameRoot: parenthesizedCssAssetGame,
+  });
+  const parenthesizedCssHtml = fs.readFileSync(parenthesizedCssResult.entryFile, 'utf8');
+  assert.doesNotMatch(parenthesizedCssHtml, /sprite\(2x\)\.png/u);
+  assert.match(parenthesizedCssHtml, /data:image\/png;base64,/u);
+
+  const unquotedHtmlAssetGame = createPreviewFixture('unquoted-html-asset', {
+    indexHtml: '<!doctype html><html><head><link rel=stylesheet href=/assets/main.css></head><body><img src=/assets/pixel.png><main id=game></main><script type=module src=/assets/main.js></script></body></html>',
+  });
+  const unquotedHtmlAssetResult = await runOfflinePlaytestPackaging({
+    gameRoot: unquotedHtmlAssetGame,
+  });
+  const unquotedHtmlAssetHtml = fs.readFileSync(unquotedHtmlAssetResult.entryFile, 'utf8');
+  assert.doesNotMatch(unquotedHtmlAssetHtml, /src=\/assets\/pixel\.png/u);
+  assert.match(unquotedHtmlAssetHtml, /src="data:image\/png;base64,/u);
+
+  const fragmentedAssetGame = createPreviewFixture('fragmented-asset');
+  fs.writeFileSync(
+    path.join(fragmentedAssetGame, 'artifacts/web-preview/assets/main.css'),
+    'body { mask-image: url("./icons.svg#mask"); }',
+  );
+  fs.writeFileSync(
+    path.join(fragmentedAssetGame, 'artifacts/web-preview/assets/icons.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"><mask id="mask"/></svg>',
+  );
+  const fragmentedAssetResult = await runOfflinePlaytestPackaging({
+    gameRoot: fragmentedAssetGame,
+  });
+  assert.match(
+    fs.readFileSync(fragmentedAssetResult.entryFile, 'utf8'),
+    /data:image\/svg\+xml;base64,[^"')]+#mask/u,
+  );
+
+  const topLevelAwaitGame = createPreviewFixture('top-level-await', {
+    mainJs: 'await Promise.resolve(); document.body.dataset.ready = "true";',
+  });
+  const topLevelAwaitResult = await runOfflinePlaytestPackaging({ gameRoot: topLevelAwaitGame });
+  assert.match(
+    fs.readFileSync(topLevelAwaitResult.entryFile, 'utf8'),
+    /<script type="module">[^]*await/u,
+  );
+
+  const wasmGame = createPreviewFixture('non-streaming-wasm', {
+    mainJs: 'void WebAssembly.instantiate(new Uint8Array([0]));',
+  });
+  const wasmResult = await runOfflinePlaytestPackaging({ gameRoot: wasmGame });
+  assert.match(fs.readFileSync(wasmResult.entryFile, 'utf8'), /wasm-unsafe-eval/u);
+
+  const urlObjectGame = createPreviewFixture('url-object', {
+    mainJs: 'const asset = new URL("./config.json", import.meta.url); document.body.dataset.asset = asset.href;',
+  });
+  const urlObjectResult = await runOfflinePlaytestPackaging({ gameRoot: urlObjectGame });
+  assert.match(
+    fs.readFileSync(urlObjectResult.entryFile, 'utf8'),
+    /new URL\("data:application\/json;base64,/u,
+  );
+
+  const extendedHtmlAssetGame = createPreviewFixture('extended-html-assets', {
+    indexHtml: '<!doctype html><html><head></head><body><input type=image src=/assets/pixel.png><svg><image href="/assets/icon.png"></image></svg><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    mainJs: 'document.body.dataset.ready = "true";',
+  });
+  const extendedHtmlAssetResult = await runOfflinePlaytestPackaging({
+    gameRoot: extendedHtmlAssetGame,
+  });
+  const extendedHtmlAssetHtml = fs.readFileSync(extendedHtmlAssetResult.entryFile, 'utf8');
+  assert.doesNotMatch(extendedHtmlAssetHtml, /\/assets\/(?:pixel|icon)\.png/u);
+  assert.equal(extendedHtmlAssetHtml.match(/data:image\/png;base64,/gu)?.length, 2);
 
   const dynamicAssetGame = createPreviewFixture('dynamic-asset', {
     mainJs: 'const getPath = () => "pixel.png"; document.body.dataset.asset = new URL(getPath(), import.meta.url).href;',

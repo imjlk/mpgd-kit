@@ -65,14 +65,22 @@ interface BundledEntry {
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
 const htmlAssetAttributesByTag: Readonly<Record<string, readonly string[]>> = {
+  audio: ['src'],
+  embed: ['src'],
+  feimage: ['href', 'xlink:href'],
+  image: ['href', 'xlink:href'],
   img: ['src', 'srcset'],
+  input: ['src'],
+  object: ['data'],
   source: ['src', 'srcset'],
+  track: ['src'],
+  use: ['href', 'xlink:href'],
   video: ['src', 'poster'],
 };
 const offlinePlaytestLimitations = [
   'Server-backed identity, purchases, ads, rewards, leaderboards, and cloud saves are unavailable.',
   'Browser storage opened from file:// is browser-dependent and best-effort only.',
-  'Workers, service workers, WebAssembly streaming, and runtime-computed asset URLs are unsupported.',
+  'Workers, service workers, WebAssembly streaming, and runtime-computed asset URLs are unsupported. Non-streaming embedded WebAssembly is allowed.',
   'CSS @import rules are unsupported; include those rules in the built stylesheet before packaging.',
 ] as const;
 
@@ -250,7 +258,7 @@ async function bundleEntry(entryFile: string, context: InliningContext): Promise
     bundle: true,
     write: false,
     outfile: 'offline-playtest.js',
-    format: 'iife',
+    format: 'esm',
     platform: 'browser',
     target: 'es2022',
     minify: true,
@@ -305,17 +313,21 @@ function inlineJavaScriptAssetReferences(
   sourceFile: string,
   context: InliningContext,
 ): string {
-  const staticUrlPattern = /new\s+URL\(\s*(["'`])([^"'`]+)\1\s*,\s*import\.meta\.url\s*\)(?:\.href)?/gu;
-  let output = source.replace(staticUrlPattern, (_match, _quote: string, reference: string) =>
-    JSON.stringify(readAssetDataUrl(sourceFile, reference, context)),
+  const staticUrlPattern = /new\s+URL\(\s*(["'`])([^"'`]+)\1\s*,\s*import\.meta\.url\s*\)(\s*\.\s*href)?/gu;
+  let output = source.replace(
+    staticUrlPattern,
+    (_match, _quote: string, reference: string, hrefAccess: string | undefined) => {
+      const dataUrl = readAssetDataUrl(sourceFile, reference, context);
+      return hrefAccess === undefined
+        ? `new URL(${JSON.stringify(dataUrl)})`
+        : JSON.stringify(dataUrl);
+    },
   );
-  if (context.assetDirectories.length === 0) {
-    assertSupportedBundledRuntime(output);
-    return output;
-  }
-
+  const assetDirectoryAlternative = context.assetDirectories.length === 0
+    ? ''
+    : `|(?:\\./)?(?:${context.assetDirectories.join('|')})/[^"'\`\\r\\n]+`;
   const literalPattern = new RegExp(
-    `(["'\`])((?:/|\\./)?(?:${context.assetDirectories.join('|')})/[^"'\`\\r\\n]+)\\1`,
+    `(["'\`])(/(?!/)[^"'\`\\r\\n]+${assetDirectoryAlternative})\\1`,
     'gu',
   );
   const documentFile = path.join(context.artifactRoot, 'index.html');
@@ -356,8 +368,10 @@ function inlineStylesheets(
     const stylesheetFile = resolveLocalReference(context.artifactRoot, path.dirname(htmlFile), href);
     const stylesheet = readFileSync(stylesheetFile, 'utf8');
     const inlined = inlineCssAssetReferences(stylesheet, stylesheetFile, context);
+    const media = readHtmlAttribute(attributes, 'media');
+    const mediaAttribute = media === undefined ? '' : ` media="${escapeHtmlAttribute(media)}"`;
     context.inlinedAssets.add(stylesheetFile);
-    return `<style>${escapeClosingTag(inlined, 'style')}</style>`;
+    return `<style${mediaAttribute}>${escapeClosingTag(inlined, 'style')}</style>`;
   });
 }
 
@@ -370,8 +384,9 @@ function inlineCssAssetReferences(
     throw new Error(`Offline playtest does not support CSS @import rules: ${sourceFile}`);
   }
 
-  return source.replace(/url\(\s*(["']?)([^"')]+)\1\s*\)/giu, (match, _quote: string, value: string) => {
-    const reference = value.trim();
+  const cssUrlPattern = /url\(\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([^)]*?))\s*\)/giu;
+  return source.replace(cssUrlPattern, (match, doubleQuoted: string | undefined, singleQuoted: string | undefined, unquoted: string | undefined) => {
+    const reference = (doubleQuoted ?? singleQuoted ?? unquoted ?? '').trim();
 
     if (reference.startsWith('data:') || reference.startsWith('blob:') || reference.startsWith('#')) {
       return match;
@@ -450,7 +465,7 @@ function inlineHtmlAssets(
   htmlFile: string,
   context: InliningContext,
 ): string {
-  return html.replace(/<(link|img|source|audio|video)\b([^>]*)>/giu, (tag, name: string, attributes: string) => {
+  return html.replace(/<(link|audio|embed|feimage|image|img|input|object|source|track|use|video)\b([^>]*)>/giu, (tag, name: string, attributes: string) => {
     const lowerName = name.toLowerCase();
     const rel = readHtmlAttribute(attributes, 'rel')?.toLowerCase();
     const allowedAttributes = [...(htmlAssetAttributesByTag[lowerName] ?? ['src'])];
@@ -468,17 +483,14 @@ function inlineHtmlAssets(
     for (const attribute of allowedAttributes) {
       const reference = readHtmlAttribute(attributes, attribute);
 
-      if (
-        reference === undefined
-        || reference.startsWith('data:')
-        || reference.startsWith('blob:')
-        || reference.startsWith('#')
-      ) {
+      if (reference === undefined || reference.startsWith('#')) {
         continue;
       }
 
       const inlined = attribute === 'srcset'
         ? inlineHtmlSrcset(htmlFile, reference, context)
+        : reference.startsWith('data:') || reference.startsWith('blob:')
+        ? reference
         : readAssetDataUrl(htmlFile, reference, context);
       output = replaceHtmlAttribute(output, attribute, inlined);
     }
@@ -492,28 +504,91 @@ function inlineHtmlSrcset(
   source: string,
   context: InliningContext,
 ): string {
-  return source.split(',').map((candidate) => {
-    const [reference, ...descriptors] = candidate.trim().split(/\s+/u);
-
-    if (reference === undefined || reference.length === 0) {
-      throw new Error(`Invalid empty srcset candidate in ${htmlFile}.`);
-    }
-
-    const dataUrl = readAssetDataUrl(htmlFile, reference, context);
-    return [dataUrl, ...descriptors].join(' ');
+  return parseHtmlSrcset(source, htmlFile).map(({ reference, descriptor }) => {
+    const inlined = reference.startsWith('data:') || reference.startsWith('blob:')
+      ? reference
+      : readAssetDataUrl(htmlFile, reference, context);
+    return descriptor.length === 0 ? inlined : `${inlined} ${descriptor}`;
   }).join(', ');
 }
 
+function parseHtmlSrcset(
+  source: string,
+  htmlFile: string,
+): readonly Readonly<{ reference: string; descriptor: string }>[] {
+  const candidates: Array<Readonly<{ reference: string; descriptor: string }>> = [];
+  let index = 0;
+
+  while (index < source.length) {
+    while (index < source.length && (isHtmlSpace(source[index]) || source[index] === ',')) {
+      index += 1;
+    }
+
+    if (index >= source.length) {
+      break;
+    }
+
+    const referenceStart = index;
+
+    while (index < source.length && !isHtmlSpace(source[index])) {
+      index += 1;
+    }
+
+    let reference = source.slice(referenceStart, index);
+    let endedByComma = false;
+
+    while (reference.endsWith(',')) {
+      reference = reference.slice(0, -1);
+      endedByComma = true;
+    }
+
+    if (reference.length === 0) {
+      throw new Error(`Invalid empty srcset candidate in ${htmlFile}.`);
+    }
+
+    if (endedByComma) {
+      candidates.push({ reference, descriptor: '' });
+      continue;
+    }
+
+    while (index < source.length && isHtmlSpace(source[index])) {
+      index += 1;
+    }
+
+    const descriptorStart = index;
+
+    while (index < source.length && source[index] !== ',') {
+      index += 1;
+    }
+
+    const descriptor = source.slice(descriptorStart, index).trim();
+
+    if (index < source.length) {
+      index += 1;
+    }
+
+    candidates.push({ reference, descriptor });
+  }
+
+  if (candidates.length === 0) {
+    throw new Error(`Invalid empty srcset in ${htmlFile}.`);
+  }
+
+  return candidates;
+}
+
 function assembleOfflineHtml(html: string, bundledEntry: BundledEntry): string {
-  const csp = "default-src 'none'; img-src data: blob:; media-src data: blob:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src data: blob:; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'";
+  const csp = "default-src 'none'; img-src data: blob:; media-src data: blob:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; connect-src data: blob:; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'";
   const banner = '<!-- MPGD offline playtest: test-play-only, not a release target or store submission artifact. -->';
   const runtimeGuard = renderOfflineRuntimeGuard();
   const guardScript = `<script>${escapeClosingTag(runtimeGuard, 'script')}</script>`;
   const bundledStyle = bundledEntry.stylesheet === undefined
     ? ''
     : `\n<style>${escapeClosingTag(bundledEntry.stylesheet, 'style')}</style>`;
-  const inlineScript = `<script>${escapeClosingTag(bundledEntry.script, 'script')}</script>`;
-  let output = html.replace(/<link\b[^>]*\brel=["']manifest["'][^>]*>/giu, '');
+  const inlineScript = `<script type="module">${escapeClosingTag(bundledEntry.script, 'script')}</script>`;
+  let output = removeExistingContentSecurityPolicy(
+    html.replace(/<link\b[^>]*\brel=["']manifest["'][^>]*>/giu, ''),
+  );
 
   if (/<head\b[^>]*>/iu.test(output)) {
     output = output.replace(
@@ -529,6 +604,12 @@ function assembleOfflineHtml(html: string, bundledEntry: BundledEntry): string {
   }
 
   throw new Error('Offline playtest source index.html must contain a body element.');
+}
+
+function removeExistingContentSecurityPolicy(html: string): string {
+  return html.replace(/<meta\b[^>]*>/giu, (tag) =>
+    readHtmlAttribute(tag, 'http-equiv')?.toLowerCase() === 'content-security-policy' ? '' : tag,
+  );
 }
 
 function renderOfflineRuntimeGuard(): string {
@@ -555,6 +636,8 @@ function readAssetDataUrl(
   reference: string,
   context: InliningContext,
 ): string {
+  const fragmentIndex = reference.indexOf('#');
+  const fragment = fragmentIndex === -1 ? '' : reference.slice(fragmentIndex);
   const assetFile = resolveLocalReference(
     context.artifactRoot,
     path.dirname(sourceFile),
@@ -570,7 +653,7 @@ function readAssetDataUrl(
   }
 
   context.inlinedAssets.add(assetFile);
-  return `data:${mimeType};base64,${readFileSync(assetFile).toString('base64')}`;
+  return `data:${mimeType};base64,${readFileSync(assetFile).toString('base64')}${fragment}`;
 }
 
 function resolveExistingAssetReference(
@@ -779,14 +862,24 @@ function isCodeAsset(file: string): boolean {
 
 function readHtmlAttribute(attributes: string, name: string): string | undefined {
   const escapedName = escapeRegExp(name);
-  const match = new RegExp(`(?:^|\\s)${escapedName}\\s*=\\s*(["'])(.*?)\\1`, 'iu').exec(attributes);
-  return match?.[2];
+  const match = new RegExp(
+    `(?:^|\\s)${escapedName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'=<>\\x60]+))`,
+    'iu',
+  ).exec(attributes);
+  return match?.[1] ?? match?.[2] ?? match?.[3];
 }
 
 function replaceHtmlAttribute(tag: string, name: string, value: string): string {
   const escapedName = escapeRegExp(name);
-  const pattern = new RegExp(`((?:^|\\s)${escapedName}\\s*=\\s*)(["'])(.*?)\\2`, 'iu');
+  const pattern = new RegExp(
+    `((?:^|\\s)${escapedName}\\s*=\\s*)(?:"[^"]*"|'[^']*'|[^\\s"'=<>\\x60]+)`,
+    'iu',
+  );
   return tag.replace(pattern, `$1"${escapeHtmlAttribute(value)}"`);
+}
+
+function isHtmlSpace(value: string | undefined): boolean {
+  return value === ' ' || value === '\t' || value === '\n' || value === '\f' || value === '\r';
 }
 
 function escapeHtmlAttribute(value: string): string {
