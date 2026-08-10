@@ -301,6 +301,21 @@ try {
     'expected assignment-derived location aliases to be rejected',
   );
 
+  for (const [name, initialValue, operator] of [
+    ['and-assigned-location-navigation', 'true', '&&='],
+    ['or-assigned-location-navigation', 'false', '||='],
+    ['nullish-assigned-location-navigation', 'null', '??='],
+  ] as const) {
+    const logicalAssignedLocationGame = createPreviewFixture(name, {
+      mainJs: `let target = ${initialValue}; target ${operator} window.location; target.href = "https://example.com/escape";`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: logicalAssignedLocationGame }),
+      /does not support script-driven navigation/u,
+      `expected ${operator} location aliases to be rejected`,
+    );
+  }
+
   const parameterAliasedLocationGame = createPreviewFixture('parameter-aliased-location-navigation', {
     mainJs: 'function escape(target = window.location) { target.href = "https://example.com/escape"; } escape();',
   });

@@ -3758,8 +3758,10 @@ function findLocationAliasAssignments(
   source: string,
   codePositions: Uint8Array,
 ): readonly LocationAliasAssignment[] {
+  // A logical assignment may conditionally replace its receiver with Location. Treating the
+  // right-hand side as a possible alias keeps later navigation checks conservative.
   const assignmentPattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*=\\s*(?!=|>)`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*(?:&&=|\\|\\|=|\\?\\?=|=)\\s*(?!=|>)`,
     'gu',
   );
   const assignments: LocationAliasAssignment[] = [];
