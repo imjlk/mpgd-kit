@@ -43,8 +43,8 @@ const defaultAdDisplayStartTimeoutMs = 60_000;
 const defaultAdMaximumDisplayMs = 30 * 60_000;
 /** Leaves five seconds of headroom inside the native IAP 30-second grant callback. */
 const defaultIapProductGrantTimeoutMs = 25_000;
-/** Never leave a game UI blocked when an SDK purchase session omits terminal callbacks. */
-const defaultIapPurchaseSessionTimeoutMs = defaultAdMaximumDisplayMs;
+/** Bounds abandoned checkout UI while still allowing the user to finish an interactive purchase. */
+const defaultIapPurchaseSessionTimeoutMs = 30 * 60_000;
 /** A provider response is untrusted input; keep restore work bounded per launch. */
 const maximumPendingIapOrders = 20;
 const invalidBridgeRequestId = 'ait-invalid-request';
@@ -1787,7 +1787,11 @@ async function resolvePersistedAitIapPurchaseAttempt(
       () => input.storage.getItem(storageKey),
       input.timeoutMs,
     );
-  } catch {
+  } catch (error) {
+    console.warn(
+      'AIT IAP purchase attempt storage read failed; treating the attempt as pending.',
+      errorMessage(error),
+    );
     return pendingPurchase();
   }
   if (serialized === undefined) {
@@ -1800,7 +1804,11 @@ async function resolvePersistedAitIapPurchaseAttempt(
   let state: unknown;
   try {
     state = JSON.parse(serialized);
-  } catch {
+  } catch (error) {
+    console.warn(
+      'AIT IAP purchase attempt marker is invalid; treating the attempt as pending.',
+      errorMessage(error),
+    );
     return pendingPurchase();
   }
   if (
@@ -1811,6 +1819,9 @@ async function resolvePersistedAitIapPurchaseAttempt(
     return pendingPurchase();
   }
   if (state.status === aitIapPurchaseAttemptStatus.pending) {
+    if (typeof state.orderId === 'string' && isAitIapOrderId(state.orderId)) {
+      return pendingPurchase(state.orderId);
+    }
     const pendingSince = normalizePendingSince(state.pendingSince);
     if (
       pendingSince === undefined
@@ -1879,13 +1890,31 @@ async function verifyAndPersistAitIapProductGrant(
   input: VerifyAndPersistAitIapProductGrantInput,
 ): Promise<boolean> {
   const startedAt = Date.now();
+  const correlated = await persistAitIapPurchaseAttempt({
+    storage: input.storage,
+    product: input.product,
+    idempotencyKey: input.idempotencyKey,
+    orderId: input.orderId,
+    status: aitIapPurchaseAttemptStatus.pending,
+    timeoutMs: input.timeoutMs,
+  });
+  if (!correlated) {
+    // Never let the backend commit a grant unless the provider order is first
+    // durably tied to the client attempt. Otherwise a lost response could let
+    // the same client idempotency key open a second checkout after restore.
+    return false;
+  }
+  const verificationTimeoutMs = remainingAitIapOperationTimeout(startedAt, input.timeoutMs);
+  if (verificationTimeoutMs === 0) {
+    return false;
+  }
   const granted = await verifyAitIapProductGrant({
     verifier: input.verifier,
     orderId: input.orderId,
     product: input.product,
     idempotencyKey: input.orderIdempotencyKey,
     source: input.source,
-    timeoutMs: input.timeoutMs,
+    timeoutMs: verificationTimeoutMs,
   });
   if (!granted) {
     return false;
@@ -1972,7 +2001,11 @@ async function hasAitIapPendingOrderForSku(
       return undefined;
     }
     return result.orders.some((order) => order.sku === sku && isAitIapOrderId(order.orderId));
-  } catch {
+  } catch (error) {
+    console.warn(
+      'AIT IAP pending-order lookup failed; preserving the client retry barrier.',
+      errorMessage(error),
+    );
     return undefined;
   }
 }
@@ -1987,6 +2020,7 @@ async function retainCompletedAitIapPurchaseAttempt(
   storageKey: string,
   timeoutMs: number,
 ): Promise<void> {
+  const startedAt = Date.now();
   try {
     const serialized = await waitForAitIapNativeCall(
       () => storage.getItem(iapCompletedPurchaseAttemptIndexStorageKey),
@@ -1998,14 +2032,21 @@ async function retainCompletedAitIapPurchaseAttempt(
       ? keys[0]
       : undefined;
     const retainedKeys = evictedKey === undefined ? keys : keys.slice(1);
+    const retentionTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
+    if (retentionTimeoutMs === 0) {
+      return;
+    }
     const retained = await writeAitIapStorage(
       storage,
       iapCompletedPurchaseAttemptIndexStorageKey,
       JSON.stringify(retainedKeys),
-      timeoutMs,
+      retentionTimeoutMs,
     );
     if (retained && evictedKey !== undefined) {
-      await removeAitIapStorage(storage, evictedKey, timeoutMs);
+      const evictionTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
+      if (evictionTimeoutMs > 0) {
+        await removeAitIapStorage(storage, evictedKey, evictionTimeoutMs);
+      }
     }
   } catch {
     // Cleanup is best effort. A persisted terminal marker is safer than a
@@ -2045,7 +2086,11 @@ async function readAitIapPendingOrderCursor(
       timeoutMs,
     );
     return typeof cursor === 'string' && isAitIapOrderId(cursor) ? cursor : undefined;
-  } catch {
+  } catch (error) {
+    console.warn(
+      'AIT IAP pending-order cursor read failed; starting from the first eligible order.',
+      errorMessage(error),
+    );
     return undefined;
   }
 }
@@ -2054,8 +2099,8 @@ async function writeAitIapPendingOrderCursor(
   storage: Pick<typeof Storage, 'setItem'>,
   orderId: string,
   timeoutMs: number,
-): Promise<void> {
-  await writeAitIapStorage(storage, iapPendingOrderCursorStorageKey, orderId, timeoutMs);
+): Promise<boolean> {
+  return await writeAitIapStorage(storage, iapPendingOrderCursorStorageKey, orderId, timeoutMs);
 }
 
 function rotateAitIapPendingOrders<T extends { readonly order: { readonly orderId: string } }>(
@@ -2179,7 +2224,9 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
           processProductGrant: ({ orderId }) => processProductGrant(orderId),
         },
         onEvent: async ({ data }) => {
-          const granted = await (grantAttempts.get(data.orderId) ?? Promise.resolve(false));
+          const granted = await (
+            grantAttempts.get(data.orderId) ?? processProductGrant(data.orderId)
+          );
           if (!granted) {
             finish(pendingPurchase(providerOrderId));
             return;
@@ -2306,14 +2353,24 @@ async function restoreAitIapProducts(
     });
   }
 
-  let lastProcessedOrder: (typeof orders)[number] | undefined;
   for (const selectedOrder of orders) {
     const { order, product } = selectedOrder;
+    const cursorWriteTimeoutMs = getRemainingRestoreTimeout();
+    if (cursorWriteTimeoutMs === 0) {
+      break;
+    }
+    const cursorAdvanced = await writeAitIapPendingOrderCursor(
+      input.dependencies.storage,
+      order.orderId,
+      cursorWriteTimeoutMs,
+    );
+    if (!cursorAdvanced) {
+      break;
+    }
     const verificationTimeoutMs = getRemainingRestoreTimeout();
     if (verificationTimeoutMs === 0) {
       break;
     }
-    lastProcessedOrder = selectedOrder;
     const granted = await verifyAitIapProductGrant({
       verifier,
       orderId: order.orderId,
@@ -2347,24 +2404,6 @@ async function restoreAitIapProducts(
     } catch {
       // Keep provider state pending when its completion acknowledgement fails.
     }
-  }
-
-  if (lastProcessedOrder !== undefined) {
-    const cursorWriteTimeoutMs = getRemainingRestoreTimeout();
-    if (cursorWriteTimeoutMs === 0) {
-      return {
-        restoredEntitlements: mergeAitIapRestoredEntitlements(
-          restoredEntitlements,
-          await readAuthoritativeEntitlements(),
-          input.products,
-        ),
-      };
-    }
-    await writeAitIapPendingOrderCursor(
-      input.dependencies.storage,
-      lastProcessedOrder.order.orderId,
-      cursorWriteTimeoutMs,
-    );
   }
 
   return {
@@ -2605,11 +2644,12 @@ function toAitIapProductInfo(
     return undefined;
   }
 
-  const type = nativeProduct.type === 'CONSUMABLE'
-    ? 'consumable'
-    : nativeProduct.type === 'NON_CONSUMABLE'
-      ? 'non_consumable'
-      : undefined;
+  let type: ProductInfo['type'] | undefined;
+  if (nativeProduct.type === 'CONSUMABLE') {
+    type = 'consumable';
+  } else if (nativeProduct.type === 'NON_CONSUMABLE') {
+    type = 'non_consumable';
+  }
   if (type === undefined) {
     console.warn('AIT native IAP product has an unsupported type; hiding product.', {
       productId: configured.productId,

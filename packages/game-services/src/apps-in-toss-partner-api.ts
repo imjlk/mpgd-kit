@@ -235,7 +235,14 @@ export function createAppsInTossPartnerApiClient(
         ...(request.signal === undefined ? {} : { signal: request.signal }),
       });
       const envelope = requireSuccessEnvelope(response);
-      return parseIapOrderStatus(envelope.success, response.status);
+      const orderStatus = parseIapOrderStatus(envelope.success, response.status);
+      if (orderStatus.orderId !== orderId) {
+        throw new AppsInTossPartnerApiError(
+          'Apps in Toss returned a mismatched order id.',
+          response.status,
+        );
+      }
+      return orderStatus;
     },
   };
 }
@@ -261,11 +268,14 @@ async function requestJson(input: JsonRequestInput): Promise<PartnerApiResponse>
   try {
     // The documented anonymous-key verification request uses an empty body
     // while still declaring application/json. GET requests must omit a body.
-    const requestBody = input.method === 'GET'
-      ? undefined
-      : input.body === undefined
-        ? ''
-        : JSON.stringify(input.body);
+    let requestBody: string | undefined;
+    if (input.method === 'GET') {
+      requestBody = undefined;
+    } else if (input.body === undefined) {
+      requestBody = '';
+    } else {
+      requestBody = JSON.stringify(input.body);
+    }
     const headers = new Headers({
       accept: 'application/json',
       'content-type': 'application/json',
@@ -456,7 +466,7 @@ function parseLoginUser(input: unknown, status: number): AppsInTossLoginUser {
   }
 
   return {
-    userKey: normalizeTossUserKey(input.userKey, 'userKey', status),
+    userKey: requireTossUserKey(input.userKey, 'userKey', status),
     scope: requireOpaqueValue(input.scope, 'scope', status, 4_096),
   };
 }
@@ -614,32 +624,44 @@ function requireOpaqueValue(
 }
 
 function requirePositiveInteger(value: unknown, field: string, status: number): number {
-  const parsed = typeof value === 'number'
-    ? value
-    : typeof value === 'string' && /^\d+$/u.test(value)
-      ? Number(value)
-      : Number.NaN;
+  let parsed: number;
+  if (typeof value === 'number') {
+    parsed = value;
+  } else if (typeof value === 'string' && /^\d+$/u.test(value)) {
+    parsed = Number(value);
+  } else {
+    parsed = Number.NaN;
+  }
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
     throw new AppsInTossPartnerApiError(`Apps in Toss returned an invalid ${field}.`, status);
   }
   return parsed;
 }
 
-function normalizeTossUserKey(value: unknown, field: string, status?: number): string {
-  const normalized = typeof value === 'number'
-    ? Number.isSafeInteger(value) && value > 0
-      ? String(value)
-      : undefined
-    : typeof value === 'string' && /^[1-9]\d*$/u.test(value)
-      ? value
-      : undefined;
-  if (normalized !== undefined) {
-    return normalized;
+function parseTossUserKey(value: unknown): string | undefined {
+  let normalized: string | undefined;
+  if (typeof value === 'number') {
+    normalized = Number.isSafeInteger(value) && value > 0 ? String(value) : undefined;
+  } else if (typeof value === 'string' && /^[1-9]\d*$/u.test(value)) {
+    normalized = value;
   }
-  if (status === undefined) {
+  return normalized;
+}
+
+function normalizeTossUserKey(value: unknown, field: string): string {
+  const normalized = parseTossUserKey(value);
+  if (normalized === undefined) {
     throw new TypeError(`${field} must be a positive Apps in Toss user key.`);
   }
-  throw new AppsInTossPartnerApiError(`Apps in Toss returned an invalid ${field}.`, status);
+  return normalized;
+}
+
+function requireTossUserKey(value: unknown, field: string, status: number): string {
+  const normalized = parseTossUserKey(value);
+  if (normalized === undefined) {
+    throw new AppsInTossPartnerApiError(`Apps in Toss returned an invalid ${field}.`, status);
+  }
+  return normalized;
 }
 
 function normalizeBaseUrl(input: string): URL {

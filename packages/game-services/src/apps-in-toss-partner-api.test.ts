@@ -367,6 +367,23 @@ assertDeepEqual(
 responses.push(jsonResponse({
   resultType: 'SUCCESS',
   success: {
+    orderId: 'different-order',
+    sku: 'ait.hint-pack-5',
+    statusDeterminedAt: '2026-08-08T10:00:00',
+    status: 'PAYMENT_COMPLETED',
+  },
+}));
+await assertRejects(
+  () => client.getIapOrderStatus({
+    orderId: 'expected-order',
+    tossUserKey: '443731104',
+  }),
+  'mismatched order id',
+);
+
+responses.push(jsonResponse({
+  resultType: 'SUCCESS',
+  success: {
     orderId: 'order-unknown',
     sku: 'ait.hint-pack-5',
     statusDeterminedAt: '2026-08-08T10:00:00',
