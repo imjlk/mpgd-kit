@@ -82,6 +82,19 @@ interface CssUrlToken {
   readonly reference: string;
 }
 
+interface SourceRange {
+  readonly start: number;
+  readonly end: number;
+}
+
+interface SourceReplacement extends SourceRange {
+  readonly value: string;
+}
+
+interface PhaserManifestUrlRange extends SourceRange {
+  readonly traceIdentifiers: boolean;
+}
+
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
@@ -89,6 +102,49 @@ const htmlAttributeNameTerminators = new Set(['"', "'", '=', '<', '>', '/']);
 const nonEventHtmlAttributeNamesStartingWithOn = new Set(['ontology']);
 const inlineEntryExcludedAttributeNames = new Set(['src']);
 const svgResourceAttributeNames = new Set(['href', 'src', 'xlink:href']);
+const phaserManifestUrlPropertyNames = new Set([
+  'atlasURL',
+  'atlasUrl',
+  'path',
+  'textureURL',
+  'textureUrl',
+  'url',
+  'urls',
+]);
+const phaserLoaderUrlArgumentIndexes: Readonly<Record<string, readonly number[]>> = {
+  animation: [1],
+  aseprite: [1, 2],
+  atlas: [1, 2],
+  atlasPCT: [1],
+  atlasXML: [1, 2],
+  audio: [1],
+  audioSprite: [1, 2],
+  binary: [1],
+  bitmapFont: [1, 2],
+  css: [1],
+  font: [1],
+  glsl: [1],
+  html: [1],
+  htmlTexture: [1],
+  image: [1],
+  json: [1],
+  multiatlas: [1],
+  pack: [1],
+  plugin: [1],
+  sceneFile: [1],
+  scenePlugin: [1],
+  script: [1],
+  scripts: [1],
+  spritesheet: [1],
+  svg: [1],
+  text: [1],
+  tilemapCSV: [1],
+  tilemapImpact: [1],
+  tilemapTiledJSON: [1],
+  unityAtlas: [1, 2],
+  video: [1],
+  xml: [1],
+};
 const javascriptScriptTypes = new Set([
   'application/ecmascript',
   'application/javascript',
@@ -151,6 +207,7 @@ const offlinePlaytestLimitations = [
   'CSS @import rules are unsupported; include those rules in the built stylesheet before packaging.',
   'Dynamic imports, import maps, and HTML base elements are unsupported.',
   'Retained inline modules cannot import other modules, and script-driven navigation is unsupported.',
+  'Iframe documents are unsupported.',
 ] as const;
 
 const mimeTypes = new Map<string, string>([
@@ -422,9 +479,62 @@ function findHtmlRawTextElements(
   html: string,
   elementName: 'script' | 'style',
 ): readonly RegExpMatchArray[] {
-  return [...html.matchAll(createHtmlRawTextPattern())].filter(
+  const activeHtml = maskInertHtmlTemplateContents(html);
+  return [...activeHtml.matchAll(createHtmlRawTextPattern())].filter(
     (match) => match[1]?.toLowerCase() === elementName,
   );
+}
+
+function maskInertHtmlTemplateContents(html: string): string {
+  const structure = html.replace(
+    createHtmlRawTextPattern(),
+    (match) => maskTextPreservingLines(match),
+  );
+  const templatePattern = /<(\/?)template\b(?:(?:"[^"]*"|'[^']*'|[^'">])*)>/giu;
+  const ranges: SourceRange[] = [];
+  let depth = 0;
+  let start: number | undefined;
+
+  for (const match of structure.matchAll(templatePattern)) {
+    if (match.index === undefined) {
+      continue;
+    }
+
+    if (match[1] === '/') {
+      if (depth === 0) {
+        continue;
+      }
+
+      depth -= 1;
+
+      if (depth === 0 && start !== undefined) {
+        ranges.push({ start, end: match.index + match[0].length });
+        start = undefined;
+      }
+    } else {
+      start ??= match.index;
+      depth += 1;
+    }
+  }
+
+  if (start !== undefined) {
+    ranges.push({ start, end: html.length });
+  }
+
+  let cursor = 0;
+  let output = '';
+
+  for (const range of ranges) {
+    output += html.slice(cursor, range.start);
+    output += maskTextPreservingLines(html.slice(range.start, range.end));
+    cursor = range.end;
+  }
+
+  return output + html.slice(cursor);
+}
+
+function maskTextPreservingLines(value: string): string {
+  return value.replace(/[^\r\n]/gu, ' ');
 }
 
 function rewriteExternalScripts(
@@ -576,8 +686,402 @@ function inlineJavaScriptAssetReferences(
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
+  output = inlinePhaserAssetReferences(output, documentFile, context);
   assertSupportedBundledRuntime(output);
   return output;
+}
+
+function inlinePhaserAssetReferences(
+  source: string,
+  documentFile: string,
+  context: InliningContext,
+): string {
+  const codePositions = createCodePositionMap(source, true);
+  const manifestRanges = findPhaserManifestUrlRanges(source, codePositions);
+  const loaderRanges = findPhaserLoaderUrlRanges(source, codePositions);
+  const ranges: SourceRange[] = [...manifestRanges, ...loaderRanges];
+  const identifierRanges = [
+    ...manifestRanges.filter((range) => range.traceIdentifiers),
+    ...loaderRanges,
+  ];
+  const identifiers = collectJavaScriptIdentifiers(source, identifierRanges, codePositions);
+
+  for (let pass = 0; pass < 4; pass += 1) {
+    const initializerRanges = findIdentifierInitializerRanges(source, identifiers, codePositions)
+      .filter((range) => !ranges.some((candidate) => rangesOverlap(candidate, range)));
+
+    if (initializerRanges.length === 0) {
+      break;
+    }
+
+    ranges.push(...initializerRanges);
+    const nextIdentifiers = collectJavaScriptIdentifiers(source, initializerRanges, codePositions);
+    const previousSize = identifiers.size;
+
+    for (const identifier of nextIdentifiers) {
+      identifiers.add(identifier);
+    }
+
+    if (identifiers.size === previousSize) {
+      break;
+    }
+  }
+
+  const literalPattern = /"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`([^`\\\r\n]*)`/gu;
+  const replacements: SourceReplacement[] = [];
+
+  for (const range of ranges) {
+    literalPattern.lastIndex = range.start;
+    let match = literalPattern.exec(source);
+
+    while (match !== null && match.index < range.end) {
+      const previousIndex = match.index - 1;
+
+      if (
+        match.index + match[0].length <= range.end
+        && (previousIndex < range.start || codePositions[previousIndex] === 1)
+      ) {
+        const rawReference = match[1] ?? match[2] ?? match[3] ?? '';
+
+        if (!rawReference.includes('\\') && !rawReference.includes('${')) {
+          const reference = normalizeUrlReference(rawReference);
+
+          if (!reference.startsWith('data:') && !reference.startsWith('blob:')) {
+            replacements.push({
+              start: match.index,
+              end: match.index + match[0].length,
+              value: JSON.stringify(readAssetDataUrl(documentFile, reference, context)),
+            });
+          }
+        }
+      }
+
+      match = literalPattern.exec(source);
+    }
+  }
+
+  const uniqueReplacements = new Map<string, SourceReplacement>();
+
+  for (const replacement of replacements) {
+    uniqueReplacements.set(`${replacement.start}:${replacement.end}`, replacement);
+  }
+  let output = source;
+
+  for (const replacement of [...uniqueReplacements.values()].sort(
+    (left, right) => right.start - left.start,
+  )) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
+  return output;
+}
+
+function findPhaserManifestUrlRanges(
+  source: string,
+  codePositions: Uint8Array,
+): PhaserManifestUrlRange[] {
+  const propertyPattern = new RegExp(
+    `\\b(${[...phaserManifestUrlPropertyNames].map(escapeRegExp).join('|')})\\s*:`,
+    'gu',
+  );
+  const ranges: PhaserManifestUrlRange[] = [];
+
+  for (const match of source.matchAll(propertyPattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const propertyName = match[1] ?? '';
+
+    if (!phaserManifestUrlPropertyNames.has(propertyName)) {
+      continue;
+    }
+
+    const objectRange = findContainingJavaScriptObject(source, match.index, codePositions);
+
+    if (objectRange === undefined) {
+      continue;
+    }
+
+    const objectCode = maskNonCode(
+      source.slice(objectRange.start, objectRange.end),
+      codePositions.slice(objectRange.start, objectRange.end),
+    );
+
+    if (!/\bkey\s*:/u.test(objectCode)) {
+      continue;
+    }
+
+    const colon = source.indexOf(':', match.index);
+    const valueRange = findJavaScriptExpressionRange(
+      source,
+      colon + 1,
+      objectRange.end - 1,
+      codePositions,
+    );
+    const hasKitManifestKind = /\bkind\s*:/u.test(objectCode);
+    const value = source.slice(valueRange.start, valueRange.end).trimStart();
+    const hasDirectStaticUrl = /^(?:["'`]|\[\s*["'`])/u.test(value);
+
+    if (hasKitManifestKind || hasDirectStaticUrl) {
+      ranges.push({
+        ...valueRange,
+        traceIdentifiers: hasKitManifestKind,
+      });
+    }
+  }
+
+  return ranges;
+}
+
+function findPhaserLoaderUrlRanges(
+  source: string,
+  codePositions: Uint8Array,
+): SourceRange[] {
+  const loaderMethods = Object.keys(phaserLoaderUrlArgumentIndexes)
+    .sort((left, right) => right.length - left.length)
+    .map(escapeRegExp)
+    .join('|');
+  const loaderPattern = new RegExp(`\\.\\s*load\\s*\\.\\s*(${loaderMethods})\\s*\\(`, 'gu');
+  const ranges: SourceRange[] = [];
+
+  for (const match of source.matchAll(loaderPattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const method = match[1] ?? '';
+    const openingParenthesis = source.indexOf('(', match.index);
+    const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
+
+    for (const argumentIndex of phaserLoaderUrlArgumentIndexes[method] ?? []) {
+      const argument = arguments_[argumentIndex];
+
+      if (argument !== undefined) {
+        ranges.push(argument);
+      }
+    }
+  }
+
+  return ranges;
+}
+
+function findContainingJavaScriptObject(
+  source: string,
+  position: number,
+  codePositions: Uint8Array,
+): SourceRange | undefined {
+  let depth = 0;
+  let start: number | undefined;
+
+  for (let index = position - 1; index >= 0; index -= 1) {
+    if (codePositions[index] !== 1) {
+      continue;
+    }
+
+    if (source[index] === '}') {
+      depth += 1;
+    } else if (source[index] === '{') {
+      if (depth === 0) {
+        start = index;
+        break;
+      }
+
+      depth -= 1;
+    }
+  }
+
+  if (start === undefined) {
+    return undefined;
+  }
+
+  depth = 0;
+
+  for (let index = start; index < source.length; index += 1) {
+    if (codePositions[index] !== 1) {
+      continue;
+    }
+
+    if (source[index] === '{') {
+      depth += 1;
+    } else if (source[index] === '}') {
+      depth -= 1;
+
+      if (depth === 0) {
+        return { start, end: index + 1 };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function splitJavaScriptArguments(
+  source: string,
+  openingParenthesis: number,
+  codePositions: Uint8Array,
+): readonly SourceRange[] {
+  const ranges: SourceRange[] = [];
+  let start = openingParenthesis + 1;
+  let roundDepth = 0;
+  let squareDepth = 0;
+  let curlyDepth = 0;
+
+  for (let index = start; index < source.length; index += 1) {
+    if (codePositions[index] !== 1) {
+      continue;
+    }
+
+    const character = source[index];
+
+    if (character === '(') {
+      roundDepth += 1;
+    } else if (character === '[') {
+      squareDepth += 1;
+    } else if (character === '{') {
+      curlyDepth += 1;
+    } else if (character === ')' && roundDepth > 0) {
+      roundDepth -= 1;
+    } else if (character === ']' && squareDepth > 0) {
+      squareDepth -= 1;
+    } else if (character === '}' && curlyDepth > 0) {
+      curlyDepth -= 1;
+    } else if (
+      (character === ',' || character === ')')
+      && roundDepth === 0
+      && squareDepth === 0
+      && curlyDepth === 0
+    ) {
+      ranges.push(trimSourceRange(source, { start, end: index }));
+
+      if (character === ')') {
+        break;
+      }
+
+      start = index + 1;
+    }
+  }
+
+  return ranges;
+}
+
+function findJavaScriptExpressionRange(
+  source: string,
+  start: number,
+  limit: number,
+  codePositions: Uint8Array,
+): SourceRange {
+  let roundDepth = 0;
+  let squareDepth = 0;
+  let curlyDepth = 0;
+
+  for (let index = start; index < limit; index += 1) {
+    if (codePositions[index] !== 1) {
+      continue;
+    }
+
+    const character = source[index];
+
+    if (character === '(') {
+      roundDepth += 1;
+    } else if (character === '[') {
+      squareDepth += 1;
+    } else if (character === '{') {
+      curlyDepth += 1;
+    } else if (character === ')' && roundDepth > 0) {
+      roundDepth -= 1;
+    } else if (character === ']' && squareDepth > 0) {
+      squareDepth -= 1;
+    } else if (character === '}' && curlyDepth > 0) {
+      curlyDepth -= 1;
+    } else if (
+      (character === ',' || character === ';')
+      && roundDepth === 0
+      && squareDepth === 0
+      && curlyDepth === 0
+    ) {
+      return trimSourceRange(source, { start, end: index });
+    }
+  }
+
+  return trimSourceRange(source, { start, end: limit });
+}
+
+function collectJavaScriptIdentifiers(
+  source: string,
+  ranges: readonly SourceRange[],
+  codePositions: Uint8Array,
+): Set<string> {
+  const identifiers = new Set<string>();
+  const pattern = /[$A-Z_a-z][$\w]*/gu;
+
+  for (const range of ranges) {
+    const sourceSlice = source.slice(range.start, range.end);
+    const code = maskNonCode(sourceSlice, codePositions.slice(range.start, range.end));
+    const nonIdentifierSyntax = code.replace(pattern, '').replace(/[\s,\[\]]/gu, '');
+
+    if (nonIdentifierSyntax.length > 0) {
+      continue;
+    }
+
+    pattern.lastIndex = range.start;
+    let match = pattern.exec(source);
+
+    while (match !== null && match.index < range.end) {
+      if (codePositions[match.index] === 1) {
+        const previous = source.slice(range.start, match.index).trimEnd().at(-1);
+        const next = source.slice(match.index + match[0].length, range.end).trimStart()[0];
+
+        if (previous !== '.' && next !== ':') {
+          identifiers.add(match[0]);
+        }
+      }
+
+      match = pattern.exec(source);
+    }
+  }
+
+  return identifiers;
+}
+
+function findIdentifierInitializerRanges(
+  source: string,
+  identifiers: ReadonlySet<string>,
+  codePositions: Uint8Array,
+): SourceRange[] {
+  const declarationPattern = /\b(?:const|let|var)\s+([$A-Z_a-z][$\w]*)\s*=\s*/gu;
+  const ranges: SourceRange[] = [];
+
+  for (const match of source.matchAll(declarationPattern)) {
+    if (
+      match.index !== undefined
+      && codePositions[match.index] === 1
+      && identifiers.has(match[1] ?? '')
+    ) {
+      const start = match.index + match[0].length;
+      ranges.push(findJavaScriptExpressionRange(source, start, source.length, codePositions));
+    }
+  }
+
+  return ranges;
+}
+
+function trimSourceRange(source: string, range: SourceRange): SourceRange {
+  let { start, end } = range;
+
+  while (start < end && /\s/u.test(source[start] ?? '')) {
+    start += 1;
+  }
+
+  while (end > start && /\s/u.test(source[end - 1] ?? '')) {
+    end -= 1;
+  }
+
+  return { start, end };
+}
+
+function rangesOverlap(left: SourceRange, right: SourceRange): boolean {
+  return left.start < right.end && right.start < left.end;
 }
 
 function inlineScriptElements(
@@ -1332,6 +1836,10 @@ function assertSupportedHtmlAttributes(
 
   const lowerTagName = tagName.toLowerCase();
 
+  if (lowerTagName === 'iframe') {
+    throw new Error('Offline playtest does not support iframe documents.');
+  }
+
   if (lowerTagName !== 'a' && lowerTagName !== 'area') {
     return;
   }
@@ -1924,7 +2432,7 @@ function findCssUrlTokens(source: string): readonly CssUrlToken[] {
       rawReference = value.at(-1) === quote ? value.slice(1, -1) : undefined;
     }
 
-    if (rawReference !== undefined) {
+    if (rawReference !== undefined && !isCssNamespaceUrl(source, match.index)) {
       tokens.push({
         start: match.index,
         end: closingParenthesis + 1,
@@ -1937,6 +2445,16 @@ function findCssUrlTokens(source: string): readonly CssUrlToken[] {
   }
 
   return tokens;
+}
+
+function isCssNamespaceUrl(source: string, urlStart: number): boolean {
+  const statementStart = Math.max(
+    source.lastIndexOf(';', urlStart - 1),
+    source.lastIndexOf('{', urlStart - 1),
+    source.lastIndexOf('}', urlStart - 1),
+  ) + 1;
+  const prelude = source.slice(statementStart, urlStart).replace(/\/\*[\s\S]*?\*\//gu, ' ');
+  return /@namespace(?:\s+[-_A-Z_a-z][-\w]*)?\s*$/iu.test(prelude);
 }
 
 function assertSelfContainedGltf(gltfFile: string, source: string): void {

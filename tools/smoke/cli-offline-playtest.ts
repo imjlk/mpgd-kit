@@ -399,6 +399,14 @@ try {
   assert.match(escapedCssUrlHtml, /data:image\/png;base64,/u);
   assert.doesNotMatch(escapedCssUrlHtml, /sprite\\\)\.png/u);
 
+  const cssNamespaceHtml = await packageAndReadFixture('css-namespace-url', {}, [
+    [
+      'artifacts/web-preview/assets/main.css',
+      '@namespace svg url(http://www.w3.org/2000/svg); svg|a { fill: red; }',
+    ],
+  ]);
+  assert.match(cssNamespaceHtml, /http:\/\/www\.w3\.org\/2000\/svg/u);
+
   const commonAssetGame = createPreviewFixture('common-phaser-assets', {
     mainJs: 'document.body.dataset.assets = [new URL("./sound.m4a", import.meta.url).href, new URL("./voice.opus", import.meta.url).href, new URL("./font.fnt", import.meta.url).href, new URL("./sprites.atlas", import.meta.url).href, new URL("./shader.glsl", import.meta.url).href, new URL("./scene.gltf", import.meta.url).href, new URL("./model.glb", import.meta.url).href].join(",");',
   });
@@ -444,6 +452,11 @@ try {
   });
   const jsonModuleAssetHtml = fs.readFileSync(jsonModuleAssetResult.entryFile, 'utf8');
   assert.match(jsonModuleAssetHtml, /\/assets\/pixel\.png/u);
+
+  const phaserManifestHtml = await packageAndReadFixture('phaser-manifest-assets', {
+    mainJs: 'const texture = "/assets/pixel.png"; const assets = [{ kind: "image", key: "hero", url: texture }, { key: "logo", path: "/assets/icon.png" }, { key: "atlas", textureURL: "/assets/pixel.png", atlasURL: "/assets/config.json" }]; const scene = { load: { bitmapFont() {}, image() {} } }; for (const asset of assets) scene.load.image(asset.key, asset.url ?? asset.path ?? asset.textureURL); scene.load.bitmapFont("font", "/assets/pixel.png", "/assets/config.json");',
+  });
+  assert.doesNotMatch(phaserManifestHtml, /["'`]\/assets\/(?:config\.json|icon\.png|pixel\.png)/u);
 
   const externalGltfGame = createPreviewFixture('external-gltf', {
     mainJs: 'document.body.dataset.scene = new URL("./scene.gltf", import.meta.url).href;',
@@ -840,6 +853,22 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: preHeadScriptGame }),
     /does not support content before the head element/u,
+  );
+
+  const iframeGame = createPreviewFixture('iframe-document', {
+    indexHtml: '<!doctype html><html><head></head><body><iframe src="./help.html"></iframe><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: iframeGame }),
+    /does not support iframe documents/u,
+  );
+
+  const inertTemplateScriptHtml = await packageAndReadFixture('inert-template-script', {
+    indexHtml: '<!doctype html><html><head><template><script type="module" src="/assets/template.js"></script></template></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(
+    inertTemplateScriptHtml,
+    /<template><script type="module" src="\/assets\/template\.js"><\/script><\/template>/u,
   );
 
   const importMapGame = createPreviewFixture('import-map', {
