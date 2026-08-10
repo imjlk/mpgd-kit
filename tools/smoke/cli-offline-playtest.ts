@@ -32,6 +32,7 @@ try {
   assert.match(html, /blocked network access/u);
   assert.match(html, /globalThis\.navigation/u);
   assert.match(html, /globalThis\.history/u);
+  assert.match(html, /globalThis\.History\?\.prototype/u);
   assert.match(html, /data:image\/png;base64,/u);
   assert.match(html, /data:application\/json;base64,/u);
   assert.match(html, /<style>/u);
@@ -306,6 +307,22 @@ try {
     },
   );
   assert.match(shadowedQualifiedHistoryApiHtml, /forward/u);
+
+  for (const [name, mainJs] of [
+    ['history-prototype-api', 'History.prototype.back.call(history);'],
+    ['qualified-history-prototype-api', 'window.History.prototype.go.call(window.history, -1);'],
+  ] as const) {
+    const historyPrototypeGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: historyPrototypeGame }),
+      /does not support script-driven navigation/u,
+    );
+  }
+
+  const shadowedHistoryPrototypeHtml = await packageAndReadFixture('shadowed-history-prototype', {
+    mainJs: 'function route(History, history) { History.prototype.back.call(history); } route({ prototype: { back() {} } }, {});',
+  });
+  assert.match(shadowedHistoryPrototypeHtml, /\.back\.call/u);
 
   const documentOpenHtml = await packageAndReadFixture('document-open-writer', {
     mainJs: 'document.open(/* local writer */); document.write("<main>offline</main>"); document.close();',
