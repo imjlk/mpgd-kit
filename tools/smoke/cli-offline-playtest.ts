@@ -621,6 +621,11 @@ try {
   });
   assert.doesNotMatch(phaserManifestHtml, /["'`]\/assets\/(?:config\.json|icon\.png|pixel\.png)/u);
 
+  const phaserConfigObjectHtml = await packageAndReadFixture('phaser-config-object', {
+    mainJs: 'const scene = { load: { image() {} } }; scene.load.image({ key: "hero", url: "/assets/pixel.png" }); scene.load.image([{ key: "logo", url: "/assets/icon.png" }]);',
+  });
+  assert.doesNotMatch(phaserConfigObjectHtml, /\/assets\/(?:icon|pixel)\.png/u);
+
   const unrelatedKeyedObjectHtml = await packageAndReadFixture(
     'unrelated-keyed-object',
     {
@@ -635,6 +640,12 @@ try {
   });
   assert.doesNotMatch(provenLegacyManifestHtml, /\/assets\/icon\.png/u);
   assert.match(provenLegacyManifestHtml, /\/assets\/route\.png/u);
+
+  const nestedLegacyManifestHtml = await packageAndReadFixture('nested-legacy-manifest', {
+    mainJs: 'const outer = [{ key: "route", path: "/assets/route.png" }]; const inner = [{ key: "logo", path: "/assets/icon.png" }]; const scene = { load: { image() {} } }; for (const asset of outer) { for (const asset of inner) scene.load.image(asset.key, asset.path); } document.body.dataset.route = outer[0].path;',
+  });
+  assert.doesNotMatch(nestedLegacyManifestHtml, /\/assets\/icon\.png/u);
+  assert.match(nestedLegacyManifestHtml, /\/assets\/route\.png/u);
 
   const phaserHtmlAsset = '<section>offline panel fixture</section>';
   const phaserHtml = await packageAndReadFixture(
@@ -1024,6 +1035,21 @@ try {
   assert.doesNotMatch(imageSetHtml, /\/assets\/icon(?:@2x)?\.png/u);
   assert.equal(imageSetHtml.match(/data:image\/png;base64,/gu)?.length, 2);
 
+  const commentedImageSetFiles: readonly PreviewFixtureFile[] = [
+    [
+      'artifacts/web-preview/assets/main.css',
+      'body { background-image: image-set(/* theme */ "/assets/icon.png" 1x, /* retina */ "/assets/icon@2x.png" 2x); }',
+    ],
+    ['artifacts/web-preview/assets/icon@2x.png', onePixelPng],
+  ];
+  const commentedImageSetHtml = await packageAndReadFixture(
+    'commented-css-image-set',
+    {},
+    commentedImageSetFiles,
+  );
+  assert.doesNotMatch(commentedImageSetHtml, /\/assets\/icon(?:@2x)?\.png/u);
+  assert.equal(commentedImageSetHtml.match(/data:image\/png;base64,/gu)?.length, 2);
+
   const parenthesizedAssetDirectoryHtml = await packageAndReadFixture(
     'parenthesized-asset-directory',
     {
@@ -1188,6 +1214,14 @@ try {
   });
   assert.match(commentedHeadHtml, /<!-- <head> is generated below -->/u);
   assert.match(commentedHeadHtml, /<head>\s*<meta charset="utf-8">/u);
+
+  const lateCharsetGame = createPreviewFixture('late-charset', {
+    indexHtml: `<!doctype html><!--${'x'.repeat(1_100)}--><html><head></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>`,
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: lateCharsetGame }),
+    /requires the generated UTF-8 charset declaration within the first 1024 bytes/u,
+  );
 
   const metaRefreshHtml = await packageAndReadFixture('meta-refresh', {
     indexHtml: '<!doctype html><html><head><meta http-equiv="refresh" content="0; url=https://example.com/offline-escape"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',

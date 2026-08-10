@@ -109,6 +109,7 @@ interface PhaserManifestProof {
 }
 
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
+const offlineCharsetDeclaration = '<meta charset="utf-8">';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
 const htmlAttributeNameTerminators = new Set(['"', "'", '=', '<', '>', '/']);
@@ -126,6 +127,12 @@ const htmlResourceHintRelNames = new Set([
 const phaserManifestUrlPropertyNames = new Set([
   'atlasURL',
   'atlasUrl',
+  'audioURL',
+  'audioUrl',
+  'fontDataURL',
+  'fontDataUrl',
+  'jsonURL',
+  'jsonUrl',
   'path',
   'textureURL',
   'textureUrl',
@@ -1034,6 +1041,10 @@ function findProvenPhaserManifestProperties(
       continue;
     }
 
+    let nearestLoop:
+      | { readonly bodyRange: SourceRange; readonly iterableIdentifier: string; readonly start: number }
+      | undefined;
+
     for (const loop of source.matchAll(loopPattern)) {
       if (
         loop.index === undefined
@@ -1058,32 +1069,44 @@ function findProvenPhaserManifestProperties(
         continue;
       }
 
-      const iterableIdentifier = loop[2];
-      let initializerRanges = initializerRangesByIdentifier.get(iterableIdentifier);
-
-      if (initializerRanges === undefined) {
-        initializerRanges = findIdentifierInitializerRanges(
-          source,
-          new Set([iterableIdentifier]),
-          codePositions,
-        );
-        initializerRangesByIdentifier.set(iterableIdentifier, initializerRanges);
+      if (nearestLoop === undefined || bodyRange.start > nearestLoop.bodyRange.start) {
+        nearestLoop = {
+          bodyRange,
+          iterableIdentifier: loop[2],
+          start: loop.index,
+        };
       }
+    }
 
-      const initializerRange = [...initializerRanges]
-        .filter(
-          (range) =>
-            range.end <= loop.index
-            && source.slice(range.start, range.end).trimStart().startsWith('['),
-        )
-        .sort((left, right) => right.end - left.end)[0];
+    if (nearestLoop === undefined) {
+      continue;
+    }
 
-      if (initializerRange !== undefined) {
-        proofs.set(`${propertyName}:${initializerRange.start}:${initializerRange.end}`, {
-          initializerRange,
-          propertyName,
-        });
-      }
+    const { iterableIdentifier } = nearestLoop;
+    let initializerRanges = initializerRangesByIdentifier.get(iterableIdentifier);
+
+    if (initializerRanges === undefined) {
+      initializerRanges = findIdentifierInitializerRanges(
+        source,
+        new Set([iterableIdentifier]),
+        codePositions,
+      );
+      initializerRangesByIdentifier.set(iterableIdentifier, initializerRanges);
+    }
+
+    const initializerRange = [...initializerRanges]
+      .filter(
+        (range) =>
+          range.end <= nearestLoop.start
+          && source.slice(range.start, range.end).trimStart().startsWith('['),
+      )
+      .sort((left, right) => right.end - left.end)[0];
+
+    if (initializerRange !== undefined) {
+      proofs.set(`${propertyName}:${initializerRange.start}:${initializerRange.end}`, {
+        initializerRange,
+        propertyName,
+      });
     }
   }
 
@@ -1145,6 +1168,11 @@ function findPhaserLoaderUrlRanges(
     const method = match[1] ?? '';
     const openingParenthesis = source.indexOf('(', match.index);
     const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
+    const configArgument = arguments_[0];
+
+    if (configArgument !== undefined) {
+      ranges.push(...findPhaserLoaderConfigUrlRanges(source, configArgument, codePositions));
+    }
 
     for (const argumentIndex of phaserLoaderUrlArgumentIndexes[method] ?? []) {
       const argument = arguments_[argumentIndex];
@@ -1153,6 +1181,59 @@ function findPhaserLoaderUrlRanges(
         ranges.push(argument);
       }
     }
+  }
+
+  return ranges;
+}
+
+function findPhaserLoaderConfigUrlRanges(
+  source: string,
+  argumentRange: SourceRange,
+  codePositions: Uint8Array,
+): SourceRange[] {
+  const argument = trimSourceRange(source, argumentRange);
+  const firstCharacter = source[argument.start];
+
+  if (firstCharacter !== '{' && firstCharacter !== '[') {
+    return [];
+  }
+
+  const propertyPattern = new RegExp(
+    `\\b(${[...phaserManifestUrlPropertyNames].map(escapeRegExp).join('|')})\\s*:`,
+    'gu',
+  );
+  propertyPattern.lastIndex = argument.start;
+  const ranges: SourceRange[] = [];
+  let match = propertyPattern.exec(source);
+
+  while (match !== null && match.index < argument.end) {
+    if (codePositions[match.index] === 1) {
+      const objectRange = findContainingJavaScriptObject(source, match.index, codePositions);
+
+      if (
+        objectRange !== undefined
+        && objectRange.start >= argument.start
+        && objectRange.end <= argument.end
+      ) {
+        const objectCode = maskNonCode(
+          source.slice(objectRange.start, objectRange.end),
+          codePositions.slice(objectRange.start, objectRange.end),
+        );
+
+        if (/\bkey\s*:/u.test(objectCode)) {
+          const colon = source.indexOf(':', match.index);
+          const valueRange = findJavaScriptExpressionRange(
+            source,
+            colon + 1,
+            objectRange.end - 1,
+            codePositions,
+          );
+          ranges.push(valueRange);
+        }
+      }
+    }
+
+    match = propertyPattern.exec(source);
   }
 
   return ranges;
@@ -1767,9 +1848,17 @@ function inlineCssImageSetOption(
   sourceFile: string,
   context: InliningContext,
 ): string {
-  const valueStart = source.search(/\S/u);
+  const codePositions = createCodePositionMap(source, false);
+  let valueStart = 0;
 
-  if (valueStart === -1 || (source[valueStart] !== '"' && source[valueStart] !== "'")) {
+  while (
+    valueStart < source.length
+    && (/\s/u.test(source[valueStart] ?? '') || codePositions[valueStart] === 0)
+  ) {
+    valueStart += 1;
+  }
+
+  if (valueStart === source.length || (source[valueStart] !== '"' && source[valueStart] !== "'")) {
     return source;
   }
 
@@ -2135,7 +2224,7 @@ function assembleOfflineHtml(
   if (headTag === undefined) {
     throw new Error('Offline playtest source index.html must contain a head element.');
   }
-  output = `${output.slice(0, headTag.end)}\n<meta charset="utf-8">\n${banner}\n<meta name="mpgd-purpose" content="test-play-only">\n<meta http-equiv="Content-Security-Policy" content="${csp}">\n${guardScript}${bundledStyle}${output.slice(headTag.end)}`;
+  output = `${output.slice(0, headTag.end)}\n${offlineCharsetDeclaration}\n${banner}\n<meta name="mpgd-purpose" content="test-play-only">\n<meta http-equiv="Content-Security-Policy" content="${csp}">\n${guardScript}${bundledStyle}${output.slice(headTag.end)}`;
 
   if (
     !output.includes(offlineEntryPlaceholder)
@@ -2164,6 +2253,16 @@ function assertSupportedHtmlDocument(html: string): void {
 
   if (supportedPreHeadPattern.exec(preHeadContent)?.[0].length !== preHeadContent.length) {
     throw new Error('Offline playtest does not support content before the head element.');
+  }
+
+  const charsetEndBytes = Buffer.byteLength(
+    `${html.slice(0, headTag.end)}\n${offlineCharsetDeclaration}`,
+  );
+
+  if (charsetEndBytes > 1_024) {
+    throw new Error(
+      'Offline playtest requires the generated UTF-8 charset declaration within the first 1024 bytes.',
+    );
   }
 
   const activeHtml = maskInertHtmlTemplateContents(html);
