@@ -754,6 +754,64 @@ describe('AIT production host bridge', () => {
     expect(values.has(storageKey)).toBe(false);
   });
 
+  it('preserves the retry barrier when cancellation races grant verification', async () => {
+    const values = new Map<string, string>();
+    const storageKey = 'mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:racing-cancellation';
+    let callbacks: IapPurchaseCallbacks | undefined;
+    let resolveVerification: ((granted: boolean) => void) | undefined;
+    let nativePurchaseStarts = 0;
+    const options = {
+      iapProducts: [{ productId: 'HINT_PACK_5' as const, sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant: async () => await new Promise<boolean>((resolve) => {
+        resolveVerification = resolve;
+      }),
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: createMemoryStorage(values),
+        iap: createSupportedIap({
+          products: [createIapProduct()],
+          onPurchase: (input) => {
+            callbacks = input;
+            nativePurchaseStarts += 1;
+          },
+        }),
+      }),
+    };
+    const payload = {
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'racing-cancellation',
+    };
+    const purchase = request(createAitHostBridge(options), 'commerce.purchase', payload);
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    if (callbacks === undefined) {
+      throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+    }
+    const grant = callbacks.options.processProductGrant({ orderId: 'racing-order' });
+    await vi.waitFor(() => expect(resolveVerification).toBeDefined());
+    await callbacks.onError({ name: 'AbortError' });
+
+    await expect(purchase).resolves.toEqual({
+      status: 'pending',
+      transactionId: 'racing-order',
+      entitlementIds: [],
+    });
+    expect(values.has(storageKey)).toBe(true);
+    resolveVerification?.(true);
+    await expect(grant).resolves.toBe(true);
+    await vi.waitFor(() => expect(JSON.parse(values.get(storageKey) ?? '{}')).toMatchObject({
+      status: 'server-granted',
+      orderId: 'racing-order',
+    }));
+    await expect(request(createAitHostBridge(options), 'commerce.purchase', payload))
+      .resolves.toEqual({
+        status: 'pending',
+        transactionId: 'racing-order',
+        entitlementIds: [],
+      });
+    expect(nativePurchaseStarts).toBe(1);
+  });
+
   it('keeps a stale pre-checkout marker pending while the provider still has its SKU', async () => {
     const values = new Map<string, string>();
     values.set('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:stale-pending-order', JSON.stringify({

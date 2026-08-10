@@ -2241,8 +2241,16 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
           finish(persisted ? result : pendingPurchase(data.orderId));
         },
         onError: (error) => {
-          if (grantedOrderId !== undefined || !isAitIapCancellation(error)) {
-            finish(pendingPurchase(grantedOrderId));
+          if (
+            grantedOrderId !== undefined
+            || providerOrderId !== undefined
+            || grantAttempts.size > 0
+            || !isAitIapCancellation(error)
+          ) {
+            // A cancellation racing an authoritative grant is ambiguous. Keep
+            // the durable client retry barrier until retry/restore observes
+            // the verifier's eventual result.
+            finish(pendingPurchase(grantedOrderId ?? providerOrderId));
             return;
           }
           void clearAitIapPurchaseAttempt({
