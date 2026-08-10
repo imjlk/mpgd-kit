@@ -148,7 +148,16 @@ const htmlVoidElementNames = new Set([
 ]);
 const nonEventHtmlAttributeNamesStartingWithOn = new Set(['ontology']);
 const inlineEntryExcludedAttributeNames = new Set(['src']);
-const svgResourceAttributeNames = new Set(['href', 'src', 'xlink:href']);
+const svgResourceAttributeNames = new Set([
+  'action',
+  'background',
+  'data',
+  'formaction',
+  'href',
+  'poster',
+  'src',
+  'xlink:href',
+]);
 const svgFunctionalUrlAttributeNames = new Set([
   'clip-path',
   'color-profile',
@@ -869,7 +878,7 @@ function inlineJavaScriptAssetReferences(
   sourceFile: string,
   context: InliningContext,
 ): string {
-  const staticUrlPattern = /(?<![$\u200C\u200D\p{ID_Continue}])new\s+(?:(globalThis|self|window)\s*\.\s*)?URL\(\s*(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)\s*,\s*import\.meta\.url\s*\)(\s*\.\s*href)?/gu;
+  const staticUrlPattern = /(?<![$\u200C\u200D\p{ID_Continue}])new\s+(?:(globalThis|self|window)\s*\.\s*)?URL\(\s*(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`)\s*,\s*import\.meta\.url\s*\)(\s*\.\s*href)?/gu;
   const sourceCodePositions = createCodePositionMap(source, true);
   let output = source.replace(
     staticUrlPattern,
@@ -918,7 +927,7 @@ function inlineJavaScriptAssetReferences(
     },
   );
   const documentFile = path.join(context.artifactRoot, 'index.html');
-  const staticFetchPattern = /((?<![$.\u200C\u200D\p{ID_Continue}])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*(?:\?\.\s*)?\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
+  const staticFetchPattern = /((?<![$.\u200C\u200D\p{ID_Continue}])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*(?:\?\.\s*)?\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`)/gu;
   const fetchCodePositions = createCodePositionMap(output, true);
   output = output.replace(
     staticFetchPattern,
@@ -987,7 +996,7 @@ function inlineJavaScriptAssetReferences(
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
-  const staticAudioPattern = /((?<![$.\u200C\u200D\p{ID_Continue}])new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Audio\s*\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
+  const staticAudioPattern = /((?<![$.\u200C\u200D\p{ID_Continue}])new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Audio\s*\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`)/gu;
   const audioCodePositions = createCodePositionMap(output, true);
   output = output.replace(
     staticAudioPattern,
@@ -1060,7 +1069,7 @@ function inlineStaticFontFaceSources(
   documentFile: string,
   context: InliningContext,
 ): string {
-  const fontFacePattern = /((?<![$.\u200C\u200D\p{ID_Continue}])new\s+(?:(globalThis|self|window)\s*\.\s*)?FontFace\s*\(\s*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|`(?:\\.|[^`\\\r\n])*`)\s*,\s*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
+  const fontFacePattern = /((?<![$.\u200C\u200D\p{ID_Continue}])new\s+(?:(globalThis|self|window)\s*\.\s*)?FontFace\s*\(\s*(?:"(?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*"|'(?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*'|`(?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*`)\s*,\s*)(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`)/gu;
   const codePositions = createCodePositionMap(source, true);
 
   return source.replace(
@@ -1408,7 +1417,7 @@ function isXmlHttpRequestBinding(
 
 function readStaticJavaScriptString(source: string, range: SourceRange): string | undefined {
   const value = source.slice(range.start, range.end).trim();
-  const match = /^(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)$/u.exec(
+  const match = /^(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`)$/u.exec(
     value,
   );
   const rawReference = match?.[1] ?? match?.[2] ?? match?.[3];
@@ -1499,7 +1508,7 @@ function inlinePhaserAssetReferences(
     }
   }
 
-  const literalPattern = /"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`([^`\\\r\n]*)`/gu;
+  const literalPattern = /"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`/gu;
   const replacements: SourceReplacement[] = [];
 
   for (const range of ranges) {
@@ -1516,7 +1525,7 @@ function inlinePhaserAssetReferences(
         const rawReference = match[1] ?? match[2] ?? match[3] ?? '';
         const isTemplateLiteral = match[3] !== undefined;
 
-        if (!isTemplateLiteral || !rawReference.includes('${')) {
+        if (!isTemplateLiteral || !containsUnescapedTemplateInterpolation(rawReference)) {
           const reference = normalizeUrlReference(decodeJavaScriptStringLiteral(rawReference));
 
           if (!isDataUrlReference(reference)) {
@@ -3935,7 +3944,7 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const blockConstructor=(api,Native)=>new Proxy(Native,{construct(_target,args){throw denied(api,args[0])}});const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}for(const [object,names] of [[globalThis.navigation,['back','forward','navigate','reload','traverseTo']],[globalThis.history,['back','forward','go']],[globalThis.History?.prototype,['back','forward','go']]]){if(object){for(const name of names){if(typeof object[name]==='function'){try{Object.defineProperty(object,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}}if(globalThis.Location){for(const name of ['assign','replace']){const method=Location.prototype[name];if(typeof method==='function'){try{Object.defineProperty(Location.prototype,name,{configurable:true,writable:true,value:function(value){if(!fragmentOnly(value))throw denied('navigation',value);return method.call(this,value)}})}catch{}}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=blockConstructor('WebSocket',globalThis.WebSocket)}if(globalThis.EventSource){globalThis.EventSource=blockConstructor('EventSource',globalThis.EventSource)}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const blockConstructor=(api,Native)=>new Proxy(Native,{construct(_target,args){throw denied(api,args[0])}});const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}for(const [object,names] of [[globalThis.navigation,['back','forward','navigate','reload','traverseTo']],[globalThis.history,['back','forward','go']],[globalThis.History?.prototype,['back','forward','go']]]){if(object){for(const name of names){if(typeof object[name]==='function'){try{Object.defineProperty(object,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}}if(globalThis.Location){for(const name of ['assign','replace']){const method=Location.prototype[name];if(typeof method==='function'){try{Object.defineProperty(Location.prototype,name,{configurable:true,writable:true,value:function(value){if(!fragmentOnly(value))throw denied('navigation',value);return method.call(this,value)}})}catch{}}}}if(globalThis.Document){for(const name of ['write','writeln']){if(typeof Document.prototype[name]==='function'){try{Object.defineProperty(Document.prototype,name,{configurable:true,writable:true,value:(...args)=>{throw denied('document.'+name,args[0])}})}catch{}}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=blockConstructor('WebSocket',globalThis.WebSocket)}if(globalThis.EventSource){globalThis.EventSource=blockConstructor('EventSource',globalThis.EventSource)}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
@@ -3944,7 +3953,7 @@ function assertSupportedBundledRuntime(source: string): void {
     { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
   ];
   const normalizedSource = normalizeRuntimeGlobalAliases(
-    normalizeStaticJavaScriptPropertyAccess(source),
+    normalizeStaticJavaScriptPropertyAccess(normalizeJavaScriptIdentifierEscapes(source)),
   );
   const braceKinds = new Uint8Array(normalizedSource.length);
   const codePositions = createCodePositionMap(normalizedSource, true, braceKinds);
@@ -4161,6 +4170,23 @@ function assertNoScriptDrivenNavigation(
   codePositions: Uint8Array,
 ): void {
   const globalObject = '(document|globalThis|parent|self|top|window)';
+  const documentWriterPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|parent|self|top|window)\s*\.\s*)?document\s*\.\s*(?:write|writeln)\b/gu;
+
+  for (const match of source.matchAll(documentWriterPattern)) {
+    if (
+      match.index !== undefined
+      && codePositions[match.index] === 1
+      && findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1] ?? 'document',
+        match.index,
+        codePositions,
+      ) === undefined
+    ) {
+      throw new Error('Offline playtest does not support document.write or document.writeln.');
+    }
+  }
+
   const navigationPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?navigation\s*\.\s*(?:back|forward|navigate|reload|traverseTo)\s*\(/gu;
 
   for (const match of source.matchAll(navigationPattern)) {
@@ -4817,6 +4843,38 @@ function normalizeRuntimeGlobalAliases(source: string): string {
         start: match.index,
         end: match.index + match[0].length,
         value: 'window',
+      });
+    }
+  }
+
+  let output = source;
+
+  for (const replacement of replacements.reverse()) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
+  return output;
+}
+
+function normalizeJavaScriptIdentifierEscapes(source: string): string {
+  const codePositions = createCodePositionMap(source, true);
+  const pattern = /\\u(?:\{([\dA-Fa-f]{1,6})\}|([\dA-Fa-f]{4}))/gu;
+  const replacements: SourceReplacement[] = [];
+
+  for (const match of source.matchAll(pattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const hexadecimal = match[1] ?? match[2] ?? '';
+    const codePoint = Number.parseInt(hexadecimal, 16);
+    const identifierPart = codePoint <= 0x10FFFF ? String.fromCodePoint(codePoint) : undefined;
+
+    if (identifierPart !== undefined && isJavaScriptIdentifierPart(identifierPart)) {
+      replacements.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        value: identifierPart,
       });
     }
   }

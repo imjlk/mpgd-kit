@@ -2192,6 +2192,8 @@ function validatePeerDependencyRuleParser(): void {
   const invalid = [
     `# peerDependencyRules:\n#   allowedVersions:\n#     '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
     `allowedVersions:\n  '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `peerDependencyRules: |\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `peerDependencyRules: >\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
     `peerDependencyRules:\n  ignored:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
     `peerDependencyRules:\n  allowedVersions: |\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
     `peerDependencyRules:\n  allowedVersions: >\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
@@ -2229,7 +2231,7 @@ function readAllowedPeerVersion(source: string, selector: string): string | unde
     }
 
     if (indentation === 0) {
-      inPeerDependencyRules = mapping.key === 'peerDependencyRules';
+      inPeerDependencyRules = mapping.key === 'peerDependencyRules' && mapping.value.length === 0;
       inAllowedVersions = false;
       continue;
     }

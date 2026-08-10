@@ -342,10 +342,26 @@ try {
   });
   assert.match(shadowedHistoryPrototypeHtml, /\.back\.call/u);
 
-  const documentOpenHtml = await packageAndReadFixture('document-open-writer', {
+  const documentWriterGame = createPreviewFixture('document-open-writer', {
     mainJs: 'document.open(/* local writer */); document.write("<main>offline</main>"); document.close();',
   });
-  assert.match(documentOpenHtml, /document\.open\(\)/u);
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: documentWriterGame }),
+    /does not support document\.write or document\.writeln/u,
+  );
+
+  const writtenScriptGame = createPreviewFixture('document-written-script', {
+    mainJs: 'document.writeln("\\x3cscript>location.href=\\\"https://example.com/escape\\\"\\x3c/script>");',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: writtenScriptGame }),
+    /does not support document\.write or document\.writeln/u,
+  );
+
+  const shadowedDocumentWriterHtml = await packageAndReadFixture('shadowed-document-writer', {
+    mainJs: 'function render(document) { document.write("local"); } render({ write() {} });',
+  });
+  assert.match(shadowedDocumentWriterHtml, /local/u);
 
   const documentOpenNavigationGame = createPreviewFixture('document-open-navigation', {
     mainJs: 'document.open("https://example.com/escape", "_blank", "noopener");',
@@ -369,9 +385,38 @@ try {
     );
   }
 
+  const escapedIdentifierFixtures = [
+    ['escaped-location-identifier', 'loc\\u0061tion.href = "https://example.com/escape";'],
+    ['escaped-window-identifier', 'w\\u0069ndow.location.href = "https://example.com/escape";'],
+    ['braced-escaped-location-identifier', 'loc\\u{61}tion.href = "https://example.com/escape";'],
+    [
+      'braced-escaped-window-identifier',
+      'w\\u{69}ndow.location.href = "https://example.com/escape";',
+    ],
+  ] as const;
+
+  for (const [name, inlineScript] of escapedIdentifierFixtures) {
+    const escapedIdentifierGame = createPreviewFixture(name, {
+      indexHtml: `<!doctype html><html><head><script>${inlineScript}</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: escapedIdentifierGame }),
+      /does not support script-driven navigation/u,
+    );
+  }
+
+  const shadowedEscapedLocationHtml = await packageAndReadFixture(
+    'shadowed-escaped-location-identifier',
+    {
+      indexHtml: '<!doctype html><html><head><script>function route(loc\\u0061tion) { loc\\u0061tion.href = "local"; } route({});</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    },
+  );
+  assert.match(shadowedEscapedLocationHtml, /local/u);
+
   for (const [lineEndingName, lineEnding] of [
     ['lf', '\n'],
     ['crlf', '\r\n'],
+    ['cr', '\r'],
   ] as const) {
     for (const [literalName, delimiter] of [
       ['quoted', '"'],
@@ -1311,6 +1356,26 @@ try {
   assert.doesNotMatch(documentAssetHtml, /\/audio\/theme\.mp3/u);
   assert.match(documentAssetHtml, /data:audio\/mpeg;base64,/u);
 
+  for (const [lineEndingName, lineEnding] of [
+    ['lf', '\n'],
+    ['crlf', '\r\n'],
+    ['cr', '\r'],
+  ] as const) {
+    for (const [literalName, delimiter] of [
+      ['double-quoted', '"'],
+      ['single-quoted', "'"],
+      ['template', '`'],
+    ] as const) {
+      const continuedReference = `${delimiter}/assets/pi\\${lineEnding}xel.png${delimiter}`;
+      const continuedFetchHtml = await packageAndReadFixture(
+        `${literalName}-${lineEndingName}-continued-fetch`,
+        { mainJs: `void fetch(${continuedReference});` },
+      );
+      assert.doesNotMatch(continuedFetchHtml, /\/assets\/pixel\.png/u);
+      assert.match(continuedFetchHtml, /data:image\/png;base64,/u);
+    }
+  }
+
   const rootAssetHtml = await packageAndReadFixture(
     'root-level-asset',
     { mainJs: 'void fetch("/theme.mp3");' },
@@ -2083,6 +2148,18 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: svgSrcsetGame }),
     /requires self-contained SVG data URIs and fragment references.*references \/assets\/pixel\.png/u,
+  );
+
+  const foreignHtmlResourceSvgGame = createPreviewFixture('foreign-html-resource-svg', {
+    indexHtml: '<!doctype html><html><head></head><body><object data="/assets/foreign.svg"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(foreignHtmlResourceSvgGame, 'artifacts/web-preview/assets/foreign.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><video xmlns="http://www.w3.org/1999/xhtml" poster="https://example.com/poster.png"/></foreignObject></svg>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: foreignHtmlResourceSvgGame }),
+    /requires self-contained SVG data URIs and fragment references.*poster\.png/u,
   );
 
   const charsetHtml = await packageAndReadFixture('charset-first', {
