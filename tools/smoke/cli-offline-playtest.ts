@@ -31,6 +31,7 @@ try {
   assert.match(html, /object-src data:/u);
   assert.match(html, /blocked network access/u);
   assert.match(html, /globalThis\.navigation/u);
+  assert.match(html, /globalThis\.history/u);
   assert.match(html, /data:image\/png;base64,/u);
   assert.match(html, /data:application\/json;base64,/u);
   assert.match(html, /<style>/u);
@@ -281,6 +282,30 @@ try {
     },
   );
   assert.match(shadowedQualifiedNavigationApiHtml, /navigate/u);
+
+  for (const [name, mainJs] of [
+    ['history-api', 'history.back();'],
+    ['qualified-history-api', 'window.history.go(-1);'],
+  ] as const) {
+    const historyApiGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: historyApiGame }),
+      /does not support script-driven navigation/u,
+    );
+  }
+
+  const shadowedHistoryApiHtml = await packageAndReadFixture('shadowed-history-api', {
+    mainJs: 'function route(history) { history.back(); } route({ back() {} });',
+  });
+  assert.match(shadowedHistoryApiHtml, /back/u);
+
+  const shadowedQualifiedHistoryApiHtml = await packageAndReadFixture(
+    'shadowed-qualified-history-api',
+    {
+      mainJs: 'function route(window) { window.history.forward(); } route({ history: { forward() {} } });',
+    },
+  );
+  assert.match(shadowedQualifiedHistoryApiHtml, /forward/u);
 
   const documentOpenHtml = await packageAndReadFixture('document-open-writer', {
     mainJs: 'document.open(/* local writer */); document.write("<main>offline</main>"); document.close();',
@@ -839,6 +864,17 @@ try {
   const jsonModuleAssetHtml = fs.readFileSync(jsonModuleAssetResult.entryFile, 'utf8');
   assert.match(jsonModuleAssetHtml, /\/assets\/pixel\.png/u);
 
+  const unusedJsonModuleGame = createPreviewFixture('unused-json-module', {
+    indexHtml: '<!doctype html><html><head></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    mainJs: 'import unused from "./config.json"; document.body.dataset.ready = "true";',
+  });
+  const unusedJsonModuleResult = await runOfflinePlaytestPackaging({
+    gameRoot: unusedJsonModuleGame,
+  });
+  const unusedJsonModuleHtml = fs.readFileSync(unusedJsonModuleResult.entryFile, 'utf8');
+  assert.doesNotMatch(unusedJsonModuleHtml, /data:application\/json;base64,/u);
+  assert.equal(unusedJsonModuleResult.evidence.inlinedAssetCount, 0);
+
   const phaserManifestHtml = await packageAndReadFixture('phaser-manifest-assets', {
     mainJs: 'const texture = "/assets/pixel.png"; const assets = [{ kind: "image", key: "hero", url: texture }, { kind: "image", key: "logo", url: "/assets/icon.png" }, { kind: "atlas", key: "atlas", textureUrl: "/assets/pixel.png", atlasUrl: "/assets/config.json" }]; const scene = new Phaser.Scene(); for (const asset of assets) scene.load.image(asset.key, asset.url ?? asset.textureUrl); scene.load.bitmapFont("font", "/assets/pixel.png", "/assets/config.json");',
   });
@@ -1293,6 +1329,15 @@ try {
   assert.doesNotMatch(createdBrowserImageHtml, /\/assets\/pixel\.png/u);
   assert.match(createdBrowserImageHtml, /data:image\/png;base64,/u);
 
+  const commentedCreatedBrowserImageHtml = await packageAndReadFixture(
+    'commented-created-browser-image-asset',
+    {
+      mainJs: 'const splash = document.createElement(/* fallback */ "img"); splash.src = "/assets/pixel.png"; document.body.append(splash);',
+    },
+  );
+  assert.doesNotMatch(commentedCreatedBrowserImageHtml, /\/assets\/pixel\.png/u);
+  assert.match(commentedCreatedBrowserImageHtml, /data:image\/png;base64,/u);
+
   const shadowedDocumentImageHtml = await packageAndReadFixture('shadowed-document-image', {
     mainJs: 'function render(document) { const image = document.createElement("img"); image.src = "/assets/custom-image.png"; return image.src; } document.body.dataset.src = render({ createElement() { return {}; } });',
   });
@@ -1345,6 +1390,16 @@ try {
   assert.match(shadowedQualifiedBrowserApiHtml, /\/assets\/custom-audio\.mp3/u);
   assert.match(shadowedQualifiedBrowserApiHtml, /\/assets\/custom-image\.png/u);
   assert.match(shadowedQualifiedBrowserApiHtml, /\/assets\/custom-level\.json/u);
+
+  const staticNetworkConstructorHtml = await packageAndReadFixture(
+    'network-constructor-static-properties',
+    {
+      mainJs: 'document.body.dataset.states = [WebSocket.OPEN, EventSource.CLOSED].join(",");',
+    },
+  );
+  assert.match(staticNetworkConstructorHtml, /new Proxy/u);
+  assert.match(staticNetworkConstructorHtml, /WebSocket\.OPEN/u);
+  assert.match(staticNetworkConstructorHtml, /EventSource\.CLOSED/u);
 
   const shadowedDefaultViewHtml = await packageAndReadFixture('shadowed-default-view', {
     mainJs: 'function route(document) { document.defaultView.location.href = "/assets/helper.html"; return document.defaultView.location.href; } document.body.dataset.route = route({ defaultView: { location: {} } });',

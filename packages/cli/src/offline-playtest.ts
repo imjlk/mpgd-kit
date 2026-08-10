@@ -15,7 +15,7 @@ import {
 import path from 'node:path';
 
 import { decodeHTMLAttribute } from 'entities';
-import { build, type Plugin } from 'esbuild';
+import { build, type Metafile, type Plugin } from 'esbuild';
 
 export const defaultOfflinePlaytestArtifactDir = 'artifacts/web-preview';
 export const defaultOfflinePlaytestOutputDir = 'artifacts/offline-playtest';
@@ -59,6 +59,7 @@ interface EffectivePreviewIdentity {
 interface InliningContext {
   readonly artifactRoot: string;
   readonly assetDataUrls: Map<string, string>;
+  readonly bundledAssetCandidates: Set<string>;
   readonly inlinedAssets: Set<string>;
   readonly maximumBytes: number;
   inlinedAssetBytes: number;
@@ -358,6 +359,7 @@ export async function runOfflinePlaytestPackaging(
   const context: InliningContext = {
     artifactRoot,
     assetDataUrls: new Map<string, string>(),
+    bundledAssetCandidates: new Set<string>(),
     inlinedAssets: new Set<string>(),
     inlinedAssetBytes: 0,
     maximumBytes,
@@ -678,6 +680,7 @@ async function bundleEntry(entryFile: string, context: InliningContext): Promise
     target: 'es2022',
     keepNames: true,
     minify: true,
+    metafile: true,
     sourcemap: false,
     legalComments: 'none',
     plugins: [offlineAssetInliningPlugin(context)],
@@ -689,6 +692,7 @@ async function bundleEntry(entryFile: string, context: InliningContext): Promise
     throw new Error('The offline playtest bundler did not produce JavaScript.');
   }
 
+  recordRetainedBundledAssets(result.metafile, context);
   const script = scriptOutput.text;
   const stylesheetOutput = result.outputFiles.find((file) => file.path.endsWith('.css'));
   assertNoEntryImportMetaUrl(script);
@@ -697,6 +701,30 @@ async function bundleEntry(entryFile: string, context: InliningContext): Promise
     script,
     ...(stylesheetOutput === undefined ? {} : { stylesheet: stylesheetOutput.text }),
   };
+}
+
+function recordRetainedBundledAssets(
+  metafile: Metafile,
+  context: InliningContext,
+): void {
+  const retainedInputs = new Set<string>();
+
+  for (const output of Object.values(metafile.outputs)) {
+    for (const [input, metadata] of Object.entries(output.inputs)) {
+      if (metadata.bytesInOutput <= 0) {
+        continue;
+      }
+
+      const inputFile = path.resolve(context.artifactRoot, input);
+      retainedInputs.add(existsSync(inputFile) ? realpathSync(inputFile) : inputFile);
+    }
+  }
+
+  for (const candidate of context.bundledAssetCandidates) {
+    if (retainedInputs.has(candidate)) {
+      context.inlinedAssets.add(candidate);
+    }
+  }
 }
 
 function offlineAssetInliningPlugin(context: InliningContext): Plugin {
@@ -721,7 +749,7 @@ function offlineAssetInliningPlugin(context: InliningContext): Plugin {
       pluginBuild.onLoad({ filter: /\.json$/ }, (args) => {
         const jsonFile = resolveArtifactFile(context.artifactRoot, args.path);
         const source = readFileSync(jsonFile, 'utf8');
-        context.inlinedAssets.add(jsonFile);
+        context.bundledAssetCandidates.add(jsonFile);
         return {
           contents: source,
           loader: 'json',
@@ -731,7 +759,7 @@ function offlineAssetInliningPlugin(context: InliningContext): Plugin {
       pluginBuild.onLoad({ filter: /\.css$/ }, (args) => {
         const cssFile = resolveArtifactFile(context.artifactRoot, args.path);
         const source = readFileSync(cssFile, 'utf8');
-        context.inlinedAssets.add(cssFile);
+        context.bundledAssetCandidates.add(cssFile);
         return {
           contents: inlineCssAssetReferences(source, cssFile, context),
           loader: 'css',
@@ -1109,17 +1137,39 @@ function parseStaticElementConstructor(
   );
 
   if (constructor?.[2] === undefined) {
-    const createdElement = /^(?:(globalThis|self|window)\s*\.\s*)?document\s*\.\s*createElement\s*\(\s*(?:"(audio|img|source|track|video)"|'(audio|img|source|track|video)'|`(audio|img|source|track|video)`)\s*\)\s*$/iu.exec(
+    const initializerCodePositions = createCodePositionMap(rawInitializer, true);
+    const normalizedInitializer = maskNonCode(
       rawInitializer,
+      initializerCodePositions,
+    ).trim();
+    const createdElement = /^(?:(globalThis|self|window)\s*\.\s*)?document\s*\.\s*createElement\s*\(\s*\)\s*$/u.exec(
+      normalizedInitializer,
     );
-    const tagName = (createdElement?.[2] ?? createdElement?.[3] ?? createdElement?.[4])
-      ?.toLowerCase();
+    let openingParenthesis = -1;
 
-    return tagName === undefined
+    for (let index = 0; index < rawInitializer.length; index += 1) {
+      if (rawInitializer[index] === '(' && initializerCodePositions[index] === 1) {
+        openingParenthesis = index;
+        break;
+      }
+    }
+    const arguments_ = openingParenthesis === -1
+      ? []
+      : splitJavaScriptArguments(rawInitializer, openingParenthesis, initializerCodePositions);
+    const tagName = arguments_[0] === undefined || arguments_.length !== 1
+      ? undefined
+      : readStaticJavaScriptStringWithTrivia(
+          rawInitializer,
+          arguments_[0],
+          initializerCodePositions,
+        )?.toLowerCase();
+    const supportedTagNames = new Set(['audio', 'img', 'source', 'track', 'video']);
+
+    return createdElement === null || tagName === undefined || !supportedTagNames.has(tagName)
       ? undefined
       : {
           constructorName: `HTML ${tagName} element`,
-          qualifier: createdElement?.[1] ?? 'document',
+          qualifier: createdElement[1] ?? 'document',
         };
   }
 
@@ -1276,6 +1326,50 @@ function readStaticJavaScriptString(source: string, range: SourceRange): string 
   }
 
   return normalizeUrlReference(decodeJavaScriptStringLiteral(rawReference));
+}
+
+function readStaticJavaScriptStringWithTrivia(
+  source: string,
+  range: SourceRange,
+  codePositions: Uint8Array,
+): string | undefined {
+  let start = range.start;
+
+  while (
+    start < range.end
+    && (/\s/u.test(source[start] ?? '') || codePositions[start] === 0)
+  ) {
+    start += 1;
+  }
+
+  const quote = source[start];
+
+  if (quote !== '"' && quote !== "'" && quote !== '`') {
+    return undefined;
+  }
+
+  let end: number | undefined;
+
+  for (let index = start + 1; index < range.end; index += 1) {
+    if (source[index] === '\\') {
+      index += 1;
+    } else if (source[index] === quote) {
+      end = index + 1;
+      break;
+    }
+  }
+
+  if (end === undefined) {
+    return undefined;
+  }
+
+  for (let index = end; index < range.end; index += 1) {
+    if (codePositions[index] === 1 && !/\s/u.test(source[index] ?? '')) {
+      return undefined;
+    }
+  }
+
+  return readStaticJavaScriptString(source, { start, end });
 }
 
 function inlinePhaserAssetReferences(
@@ -3747,7 +3841,7 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}if(globalThis.navigation){for(const name of ['back','forward','navigate','reload','traverseTo']){if(typeof globalThis.navigation[name]==='function'){try{Object.defineProperty(globalThis.navigation,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const blockConstructor=(api,Native)=>new Proxy(Native,{construct(_target,args){throw denied(api,args[0])}});const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}for(const [object,names] of [[globalThis.navigation,['back','forward','navigate','reload','traverseTo']],[globalThis.history,['back','forward','go']]]){if(object){for(const name of names){if(typeof object[name]==='function'){try{Object.defineProperty(object,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=blockConstructor('WebSocket',globalThis.WebSocket)}if(globalThis.EventSource){globalThis.EventSource=blockConstructor('EventSource',globalThis.EventSource)}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
@@ -3934,6 +4028,23 @@ function assertNoScriptDrivenNavigation(
       && findVisibleJavaScriptIdentifierBinding(
         source,
         match[1] ?? 'navigation',
+        match.index,
+        codePositions,
+      ) === undefined
+    ) {
+      throw new Error('Offline playtest does not support script-driven navigation.');
+    }
+  }
+
+  const historyPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?history\s*\.\s*(?:back|forward|go)\s*\(/gu;
+
+  for (const match of source.matchAll(historyPattern)) {
+    if (
+      match.index !== undefined
+      && codePositions[match.index] === 1
+      && findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1] ?? 'history',
         match.index,
         codePositions,
       ) === undefined
