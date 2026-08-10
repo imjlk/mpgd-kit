@@ -1123,7 +1123,7 @@ function inlineStaticElementSourceAssignments(
   context: InliningContext,
 ): string {
   const assignmentPattern = new RegExp(
-    `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*src\\s*=\\s*(?:"((?:\\\\.|[^"\\\\\\r\\n])*)"|'((?:\\\\.|[^'\\\\\\r\\n])*)'|\`((?:\\\\.|[^\`\\\\\\r\\n])*)\`)`,
+    `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*src\\s*=\\s*(?:"((?:\\\\(?:\\r\\n|[\\s\\S])|[^"\\\\\\r\\n])*)"|'((?:\\\\(?:\\r\\n|[\\s\\S])|[^'\\\\\\r\\n])*)'|\`((?:\\\\(?:\\r\\n|[\\s\\S])|[^\`\\\\\\r\\n])*)\`)`,
     'gu',
   );
   const codePositions = createCodePositionMap(source, true);

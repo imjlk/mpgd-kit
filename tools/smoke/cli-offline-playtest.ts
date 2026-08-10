@@ -1475,6 +1475,30 @@ try {
   assert.doesNotMatch(createdBrowserImageHtml, /\/assets\/pixel\.png/u);
   assert.match(createdBrowserImageHtml, /data:image\/png;base64,/u);
 
+  for (const [lineEndingName, lineEnding] of [
+    ['lf', '\n'],
+    ['crlf', '\r\n'],
+    ['cr', '\r'],
+  ] as const) {
+    for (const [constructorName, initializer, prefix, suffix] of [
+      ['image', 'new Image()', '/assets/pi', 'xel.png'],
+      ['audio', 'new Audio()', '/assets/cl', 'ick.mp3'],
+      ['created-image', 'document.createElement("img")', '/assets/pi', 'xel.png'],
+    ] as const) {
+      const continuedReference = `"${prefix}\\${lineEnding}${suffix}"`;
+      const files: readonly PreviewFixtureFile[] = constructorName === 'audio'
+        ? [['artifacts/web-preview/assets/click.mp3', Buffer.from('continued-audio')]]
+        : [];
+      const continuedElementSourceHtml = await packageAndReadFixture(
+        `${constructorName}-${lineEndingName}-continued-source`,
+        { mainJs: `const media = ${initializer}; media.src = ${continuedReference}; void media;` },
+        files,
+      );
+      assert.doesNotMatch(continuedElementSourceHtml, /\/assets\/(?:click\.mp3|pixel\.png)/u);
+      assert.match(continuedElementSourceHtml, /data:(?:audio\/mpeg|image\/png);base64,/u);
+    }
+  }
+
   const commentedCreatedBrowserImageHtml = await packageAndReadFixture(
     'commented-created-browser-image-asset',
     {
