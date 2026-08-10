@@ -177,6 +177,16 @@ try {
     /does not support CSS @import rules/u,
   );
 
+  const escapedCssImportGame = createPreviewFixture('escaped-css-import');
+  fs.writeFileSync(
+    path.join(escapedCssImportGame, 'artifacts/web-preview/assets/main.css'),
+    '@\\69mport "/assets/theme.css"; body { color: white; }',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: escapedCssImportGame }),
+    /does not support CSS @import rules/u,
+  );
+
   await assertWorkerRejected('worker', {
     mainJs: 'new Worker("./worker.js");',
   });
@@ -228,6 +238,11 @@ try {
     () => runOfflinePlaytestPackaging({ gameRoot: openNavigationGame }),
     /does not support script-driven navigation/u,
   );
+
+  const unqualifiedOpenHtml = await packageAndReadFixture('unqualified-open-guard', {
+    mainJs: 'button.addEventListener("click", () => open("https://example.com"));',
+  });
+  assert.match(unqualifiedOpenHtml, /globalThis\.open=\(url\)=>\{throw denied\('open',url\)\}/u);
 
   const inlineEventHandlerGame = createPreviewFixture('inline-event-handler', {
     indexHtml: '<!doctype html><html><head></head><body><button onclick="fetch(\'/assets/config.json\')">load</button><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -283,6 +298,28 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: activeTemplateHandlerGame }),
     /does not support inline HTML event handlers/u,
+  );
+
+  const templateStyleAsset = Buffer.from('template-style-asset');
+  const templateStyleHtml = await packageAndReadFixture(
+    'template-style-asset',
+    {
+      indexHtml: '<!doctype html><html><head></head><body><template><style>.icon{background:url("/assets/template.png")}</style></template><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    },
+    [['artifacts/web-preview/assets/template.png', templateStyleAsset]],
+  );
+  assert.doesNotMatch(templateStyleHtml, /\/assets\/template\.png/u);
+  assert.match(
+    templateStyleHtml,
+    new RegExp(`data:image/png;base64,${templateStyleAsset.toString('base64')}`, 'u'),
+  );
+
+  const templateLookalikeGame = createPreviewFixture('template-lookalike', {
+    indexHtml: '<!doctype html><html><head></head><body><!-- <template> --><template-bar><iframe srcdoc="fixture"></iframe></template><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: templateLookalikeGame }),
+    /does not support iframe documents/u,
   );
 
   const objectLocationHtml = await packageAndReadFixture('object-location-property', {
@@ -412,6 +449,34 @@ try {
     mainJs: 'const π = 1; void (π / new Worker("worker.js") / 1);',
   });
 
+  const unicodePhaserAsset = Buffer.from('unicode-phaser-asset');
+  const unicodePhaserHtml = await packageAndReadFixture(
+    'unicode-phaser-identifier',
+    {
+      mainJs: 'const εικόνα = "/assets/unicode.png"; const scene = { load: { image() {} } }; scene.load.image("hero", εικόνα);',
+    },
+    [['artifacts/web-preview/assets/unicode.png', unicodePhaserAsset]],
+  );
+  assert.doesNotMatch(unicodePhaserHtml, /\/assets\/unicode\.png/u);
+  assert.match(
+    unicodePhaserHtml,
+    new RegExp(`data:image/png;base64,${unicodePhaserAsset.toString('base64')}`, 'u'),
+  );
+
+  const asiPhaserAsset = Buffer.from('asi-phaser-asset');
+  const asiPhaserHtml = await packageAndReadFixture(
+    'asi-phaser-identifier',
+    {
+      mainJs: 'const scene = { load: { image() {} } }; const assetUrl = "/assets/asi.png"\nscene.load.image("hero", assetUrl)',
+    },
+    [['artifacts/web-preview/assets/asi.png', asiPhaserAsset]],
+  );
+  assert.doesNotMatch(asiPhaserHtml, /\/assets\/asi\.png/u);
+  assert.match(
+    asiPhaserHtml,
+    new RegExp(`data:image/png;base64,${asiPhaserAsset.toString('base64')}`, 'u'),
+  );
+
   await assertWorkerRejected('keyword-property-then-worker', {
     mainJs: 'const descriptor = { class: 1, function: 2 }; const ratio = {} / new Worker("./worker.js") / 1; void descriptor; void ratio;',
   });
@@ -445,6 +510,28 @@ try {
     ],
   ]);
   assert.match(cssNamespaceHtml, /http:\/\/www\.w3\.org\/2000\/svg/u);
+
+  const commentedCssNamespaceSource = '@namespace svg /* ignored ; { } */ url(http://www.w3.org/2000/svg); svg|a { fill: red; }';
+  const commentedCssNamespaceFiles: readonly PreviewFixtureFile[] = [
+    ['artifacts/web-preview/assets/main.css', commentedCssNamespaceSource],
+  ];
+  const commentedCssNamespaceHtml = await packageAndReadFixture(
+    'commented-css-namespace-url',
+    {},
+    commentedCssNamespaceFiles,
+  );
+  assert.match(commentedCssNamespaceHtml, /http:\/\/www\.w3\.org\/2000\/svg/u);
+
+  const escapedCssNamespaceSource = '@\\6e amespace svg url(http://www.w3.org/2000/svg); svg|a { fill: red; }';
+  const escapedCssNamespaceFiles: readonly PreviewFixtureFile[] = [
+    ['artifacts/web-preview/assets/main.css', escapedCssNamespaceSource],
+  ];
+  const escapedCssNamespaceHtml = await packageAndReadFixture(
+    'escaped-css-namespace-url',
+    {},
+    escapedCssNamespaceFiles,
+  );
+  assert.match(escapedCssNamespaceHtml, /http:\/\/www\.w3\.org\/2000\/svg/u);
 
   const commonAssetGame = createPreviewFixture('common-phaser-assets', {
     mainJs: 'document.body.dataset.assets = [new URL("./sound.m4a", import.meta.url).href, new URL("./voice.opus", import.meta.url).href, new URL("./font.fnt", import.meta.url).href, new URL("./sprites.atlas", import.meta.url).href, new URL("./shader.glsl", import.meta.url).href, new URL("./scene.gltf", import.meta.url).href, new URL("./model.glb", import.meta.url).href].join(",");',
@@ -497,6 +584,42 @@ try {
   });
   assert.doesNotMatch(phaserManifestHtml, /["'`]\/assets\/(?:config\.json|icon\.png|pixel\.png)/u);
 
+  const phaserHtmlAsset = '<section>offline panel fixture</section>';
+  const phaserHtml = await packageAndReadFixture(
+    'phaser-html-asset',
+    {
+      mainJs: 'const scene = { load: { html() {} } }; scene.load.html("panel", "/assets/panel.html");',
+    },
+    [['artifacts/web-preview/assets/panel.html', phaserHtmlAsset]],
+  );
+  assert.doesNotMatch(phaserHtml, /\/assets\/panel\.html/u);
+  assert.match(
+    phaserHtml,
+    new RegExp(`data:text/html;base64,${Buffer.from(phaserHtmlAsset).toString('base64')}`, 'u'),
+  );
+
+  const externalPhaserHtmlGame = createPreviewFixture('external-phaser-html', {
+    mainJs: 'const scene = { load: { html() {} } }; scene.load.html("panel", "/assets/panel.html");',
+  });
+  fs.writeFileSync(
+    path.join(externalPhaserHtmlGame, 'artifacts/web-preview/assets/panel.html'),
+    '<section onclick="open(\'https://example.com\')"><img src="./panel.png"></section>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: externalPhaserHtmlGame }),
+    /requires inert self-contained HTML assets/u,
+  );
+
+  for (const method of ['setPath', 'setBaseURL']) {
+    const prefixedPhaserGame = createPreviewFixture(`phaser-loader-${method.toLowerCase()}`, {
+      mainJs: `const scene = { load: { ${method}() {}, image() {} } }; scene.load.${method}("/assets"); scene.load.image("hero", "hero.png");`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: prefixedPhaserGame }),
+      /does not support Phaser loader base URL or path prefixes/u,
+    );
+  }
+
   const externalGltfGame = createPreviewFixture('external-gltf', {
     mainJs: 'document.body.dataset.scene = new URL("./scene.gltf", import.meta.url).href;',
   });
@@ -507,6 +630,19 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: externalGltfGame }),
     /requires self-contained glTF data URIs or GLB/u,
+  );
+
+  const gltfExtrasUriGame = createPreviewFixture('gltf-extras-uri', {
+    mainJs: 'document.body.dataset.scene = new URL("./extras.gltf", import.meta.url).href;',
+  });
+  fs.writeFileSync(
+    path.join(gltfExtrasUriGame, 'artifacts/web-preview/assets/extras.gltf'),
+    '{"asset":{"version":"2.0"},"extras":{"uri":"level-one"}}\n',
+  );
+  const gltfExtrasResult = await runOfflinePlaytestPackaging({ gameRoot: gltfExtrasUriGame });
+  assert.match(
+    fs.readFileSync(gltfExtrasResult.entryFile, 'utf8'),
+    /data:model\/gltf\+json;base64,/u,
   );
 
   const deeplyNestedGltfGame = createPreviewFixture('deeply-nested-gltf', {
@@ -582,33 +718,54 @@ try {
   assert.doesNotMatch(documentRelativeFetchHtml, /fetch\(["']\.\/level\.json/u);
   assert.match(documentRelativeFetchHtml, /fetch\(["']data:application\/json;base64,/u);
 
+  const escapedLevelJson = '{"fixture":"escaped-level"}\n';
+  const escapedIconPng = Buffer.from('escaped-icon-fixture');
   const escapedJavaScriptAssetHtml = await packageAndReadFixture(
     'escaped-javascript-asset',
     {
       mainJs: 'const level = new URL("./level\\u002ejson", import.meta.url); void fetch("./icon\\x2epng"); document.body.dataset.level = level.href;',
     },
     [
-      ['artifacts/web-preview/assets/level.json', '{"level":1}\n'],
-      ['artifacts/web-preview/icon.png', onePixelPng],
+      ['artifacts/web-preview/assets/level.json', escapedLevelJson],
+      ['artifacts/web-preview/icon.png', escapedIconPng],
     ],
   );
-  assert.doesNotMatch(escapedJavaScriptAssetHtml, /level\\u002ejson|icon\\x2epng/u);
-  assert.match(escapedJavaScriptAssetHtml, /data:application\/json;base64,/u);
-  assert.match(escapedJavaScriptAssetHtml, /data:image\/png;base64,/u);
+  assert.doesNotMatch(
+    escapedJavaScriptAssetHtml,
+    /(?:level\\u002ejson|level\.json|icon\\x2epng|icon\.png)/u,
+  );
+  const escapedLevelData = Buffer.from(escapedLevelJson).toString('base64');
+  assert.match(
+    escapedJavaScriptAssetHtml,
+    new RegExp(`data:application/json;base64,${escapedLevelData}`, 'u'),
+  );
+  assert.match(
+    escapedJavaScriptAssetHtml,
+    new RegExp(`data:image/png;base64,${escapedIconPng.toString('base64')}`, 'u'),
+  );
 
+  const quotedPlayerJson = '{"fixture":"quoted-player"}\n';
+  const quotedPlayerPng = Buffer.from('quoted-player-fixture');
   const quotedJavaScriptAssetHtml = await packageAndReadFixture(
     'quoted-javascript-asset',
     {
       mainJs: "const portrait = new URL(\"./player's.png\", import.meta.url); void fetch('./player\\'s.json'); document.body.dataset.portrait = portrait.href;",
     },
     [
-      ["artifacts/web-preview/assets/player's.png", onePixelPng],
-      ["artifacts/web-preview/player's.json", '{"player":1}\n'],
+      ["artifacts/web-preview/assets/player's.png", quotedPlayerPng],
+      ["artifacts/web-preview/player's.json", quotedPlayerJson],
     ],
   );
   assert.doesNotMatch(quotedJavaScriptAssetHtml, /player(?:\\'|')s\.(?:json|png)/u);
-  assert.match(quotedJavaScriptAssetHtml, /data:application\/json;base64,/u);
-  assert.match(quotedJavaScriptAssetHtml, /data:image\/png;base64,/u);
+  const quotedPlayerData = Buffer.from(quotedPlayerJson).toString('base64');
+  assert.match(
+    quotedJavaScriptAssetHtml,
+    new RegExp(`data:application/json;base64,${quotedPlayerData}`, 'u'),
+  );
+  assert.match(
+    quotedJavaScriptAssetHtml,
+    new RegExp(`data:image/png;base64,${quotedPlayerPng.toString('base64')}`, 'u'),
+  );
 
   const networkFetchGame = createPreviewFixture('network-fetch', {
     mainJs: 'void fetch("https://example.com/level.json");',
@@ -670,6 +827,11 @@ try {
     `Expected the generated CSP meta tag. HTML: ${existingCspHtml.slice(0, 500)}`,
   );
   assert.equal(cspMetaTags.length, 1);
+
+  const preloadHtml = await packageAndReadFixture('resource-preload', {
+    indexHtml: '<!doctype html><html><head><link rel="preload" as="image" href="/assets/splash.png"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.doesNotMatch(preloadHtml, /(?:rel="preload"|\/assets\/splash\.png)/u);
 
   const mixedSrcsetHtml = await packageAndReadFixture('mixed-srcset', {
     indexHtml: '<!doctype html><html><head></head><body><img srcset="data:image/png;base64,AAAA, /assets/pixel.png 2x, blob:fixture 3x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -867,6 +1029,18 @@ try {
     /requires self-contained SVG data URIs and fragment references/u,
   );
 
+  const activeSvgGame = createPreviewFixture('active-svg', {
+    indexHtml: '<!doctype html><html><head></head><body><object data="/assets/active.svg"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(activeSvgGame, 'artifacts/web-preview/assets/active.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg" onload="location.href=\'https://example.com\'"><script>open("https://example.com")</script></svg>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: activeSvgGame }),
+    /does not support active SVG content/u,
+  );
+
   const svgPresentationUrlGame = createPreviewFixture('svg-presentation-url', {
     indexHtml: '<!doctype html><html><head></head><body><img src="/assets/presentation.svg"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -885,6 +1059,12 @@ try {
   assert.match(charsetHtml, /<head>\s*<meta charset="utf-8">/u);
   assert.equal(charsetHtml.match(/<meta\b[^>]*charset=/giu)?.length, 1);
   assert.match(charsetHtml, /한글/u);
+
+  const commentedHeadHtml = await packageAndReadFixture('commented-head', {
+    indexHtml: '<!doctype html><!-- <head> is generated below --><html><head></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(commentedHeadHtml, /<!-- <head> is generated below -->/u);
+  assert.match(commentedHeadHtml, /<head>\s*<meta charset="utf-8">/u);
 
   const metaRefreshHtml = await packageAndReadFixture('meta-refresh', {
     indexHtml: '<!doctype html><html><head><meta http-equiv="refresh" content="0; url=https://example.com/offline-escape"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',

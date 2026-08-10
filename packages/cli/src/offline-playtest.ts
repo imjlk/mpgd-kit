@@ -76,6 +76,14 @@ interface HtmlAttributeToken {
   readonly rawValueEnd?: number;
 }
 
+interface HtmlTagToken {
+  readonly attributes: readonly HtmlAttributeToken[];
+  readonly closing: boolean;
+  readonly end: number;
+  readonly name: string;
+  readonly start: number;
+}
+
 interface CssUrlToken {
   readonly start: number;
   readonly end: number;
@@ -102,6 +110,14 @@ const htmlAttributeNameTerminators = new Set(['"', "'", '=', '<', '>', '/']);
 const nonEventHtmlAttributeNamesStartingWithOn = new Set(['ontology']);
 const inlineEntryExcludedAttributeNames = new Set(['src']);
 const svgResourceAttributeNames = new Set(['href', 'src', 'xlink:href']);
+const htmlResourceHintRelNames = new Set([
+  'dns-prefetch',
+  'modulepreload',
+  'preconnect',
+  'prefetch',
+  'preload',
+  'prerender',
+]);
 const phaserManifestUrlPropertyNames = new Set([
   'atlasURL',
   'atlasUrl',
@@ -186,6 +202,7 @@ const javascriptControlParenthesisKeywords = new Set([
   'with',
 ]);
 const javascriptBlockKeywords = new Set(['do', 'else', 'finally', 'try']);
+const javascriptIdentifierPatternSource = '[$_\\p{ID_Start}][$\\u200C\\u200D\\p{ID_Continue}]*';
 const htmlAssetAttributesByTag: Readonly<Record<string, readonly string[]>> = {
   audio: ['src'],
   embed: ['src'],
@@ -208,6 +225,7 @@ const offlinePlaytestLimitations = [
   'Dynamic imports, import maps, and HTML base elements are unsupported.',
   'Retained inline modules cannot import other modules, and script-driven navigation is unsupported.',
   'Iframe documents and non-fragment hyperlinks are unsupported.',
+  'Phaser loader base URL and path prefixes are unsupported; pass complete artifact-relative URLs.',
 ] as const;
 
 const mimeTypes = new Map<string, string>([
@@ -222,6 +240,8 @@ const mimeTypes = new Map<string, string>([
   ['.glb', 'model/gltf-binary'],
   ['.glsl', 'text/plain'],
   ['.gltf', 'model/gltf+json'],
+  ['.htm', 'text/html'],
+  ['.html', 'text/html'],
   ['.ico', 'image/x-icon'],
   ['.jpeg', 'image/jpeg'],
   ['.jpg', 'image/jpeg'],
@@ -490,17 +510,16 @@ function maskInertHtmlTemplateContents(html: string): string {
     createHtmlRawTextPattern(),
     (match) => maskTextPreservingLines(match),
   );
-  const templatePattern = /<(\/?)template\b(?:(?:"[^"]*"|'[^']*'|[^'">])*)>/giu;
   const ranges: SourceRange[] = [];
   let depth = 0;
   let start: number | undefined;
 
-  for (const match of structure.matchAll(templatePattern)) {
-    if (match.index === undefined) {
+  for (const tag of findHtmlTagTokens(structure)) {
+    if (tag.name !== 'template') {
       continue;
     }
 
-    if (match[1] === '/') {
+    if (tag.closing) {
       if (depth === 0) {
         continue;
       }
@@ -508,11 +527,11 @@ function maskInertHtmlTemplateContents(html: string): string {
       depth -= 1;
 
       if (depth === 0 && start !== undefined) {
-        ranges.push({ start, end: match.index });
+        ranges.push({ start, end: tag.start });
         start = undefined;
       }
     } else {
-      start ??= match.index + match[0].length;
+      start ??= tag.end;
       depth += 1;
     }
   }
@@ -531,6 +550,36 @@ function maskInertHtmlTemplateContents(html: string): string {
   }
 
   return output + html.slice(cursor);
+}
+
+function findHtmlTagTokens(source: string): readonly HtmlTagToken[] {
+  const pattern = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>|<(\/?)(([a-z][\w:-]*))(?=[\t\n\f\r \/>])((?:"[^"]*"|'[^']*'|[^'">])*)>/giu;
+  const tokens: HtmlTagToken[] = [];
+
+  for (const match of source.matchAll(pattern)) {
+    if (match.index === undefined || match[3] === undefined) {
+      continue;
+    }
+
+    tokens.push({
+      attributes: tokenizeHtmlAttributes(match[0]),
+      closing: match[1] === '/',
+      end: match.index + match[0].length,
+      name: match[3].toLowerCase(),
+      start: match.index,
+    });
+  }
+
+  return tokens;
+}
+
+function findActiveHtmlStartTag(html: string, name: string): HtmlTagToken | undefined {
+  const activeHtml = maskInertHtmlTemplateContents(html);
+  const structure = activeHtml.replace(
+    createHtmlRawTextPattern(),
+    (match) => maskTextPreservingLines(match),
+  );
+  return findHtmlTagTokens(structure).find((tag) => !tag.closing && tag.name === name);
 }
 
 function maskTextPreservingLines(value: string): string {
@@ -733,6 +782,7 @@ function inlinePhaserAssetReferences(
   context: InliningContext,
 ): string {
   const codePositions = createCodePositionMap(source, true);
+  assertNoPhaserLoaderUrlPrefixes(source, codePositions);
   const manifestRanges = findPhaserManifestUrlRanges(source, codePositions);
   const loaderRanges = findPhaserLoaderUrlRanges(source, codePositions);
   const ranges: SourceRange[] = [...manifestRanges, ...loaderRanges];
@@ -811,6 +861,16 @@ function inlinePhaserAssetReferences(
   }
 
   return output;
+}
+
+function assertNoPhaserLoaderUrlPrefixes(source: string, codePositions: Uint8Array): void {
+  const pattern = /\.\s*load\s*\.\s*(?:setBaseURL|setPath)\s*\(/gu;
+
+  for (const match of source.matchAll(pattern)) {
+    if (match.index !== undefined && codePositions[match.index] === 1) {
+      throw new Error('Offline playtest does not support Phaser loader base URL or path prefixes.');
+    }
+  }
 }
 
 function findPhaserManifestUrlRanges(
@@ -969,7 +1029,7 @@ function splitJavaScriptArguments(
       continue;
     }
 
-    const character = source[index];
+    const character = source[index] ?? '';
 
     if (character === '(') {
       roundDepth += 1;
@@ -1007,17 +1067,31 @@ function findJavaScriptExpressionRange(
   start: number,
   limit: number,
   codePositions: Uint8Array,
+  stopAtAutomaticSemicolon = false,
 ): SourceRange {
   let roundDepth = 0;
   let squareDepth = 0;
   let curlyDepth = 0;
+  let hasTopLevelToken = false;
 
   for (let index = start; index < limit; index += 1) {
     if (codePositions[index] !== 1) {
       continue;
     }
 
-    const character = source[index];
+    const character = source[index] ?? '';
+
+    if (
+      stopAtAutomaticSemicolon
+      && (character === '\n' || character === '\r')
+      && roundDepth === 0
+      && squareDepth === 0
+      && curlyDepth === 0
+      && hasTopLevelToken
+      && isJavaScriptAutomaticSemicolonBoundary(source, index, limit, codePositions)
+    ) {
+      return trimSourceRange(source, { start, end: index });
+    }
 
     if (character === '(') {
       roundDepth += 1;
@@ -1038,10 +1112,55 @@ function findJavaScriptExpressionRange(
       && curlyDepth === 0
     ) {
       return trimSourceRange(source, { start, end: index });
+    } else if (stopAtAutomaticSemicolon && character === '}' && curlyDepth === 0) {
+      return trimSourceRange(source, { start, end: index });
+    }
+
+    if (!/\s/u.test(character)) {
+      hasTopLevelToken = true;
     }
   }
 
   return trimSourceRange(source, { start, end: limit });
+}
+
+function isJavaScriptAutomaticSemicolonBoundary(
+  source: string,
+  lineBreak: number,
+  limit: number,
+  codePositions: Uint8Array,
+): boolean {
+  let previous = lineBreak - 1;
+
+  while (previous >= 0 && (codePositions[previous] !== 1 || /\s/u.test(source[previous] ?? ''))) {
+    previous -= 1;
+  }
+
+  let next = lineBreak + 1;
+
+  while (next < limit && (codePositions[next] !== 1 || /\s/u.test(source[next] ?? ''))) {
+    next += 1;
+  }
+
+  const previousCharacter = source[previous] ?? '';
+  const nextCharacter = source[next] ?? '';
+
+  const previousIsRegexLiteral = previousCharacter === '/' && codePositions[previous + 1] === 0;
+
+  if (
+    !previousIsRegexLiteral
+    && previousCharacter.length > 0
+    && '!%&(*+,-./:<=>?[\\^|~'.includes(previousCharacter)
+  ) {
+    return false;
+  }
+
+  if (nextCharacter.length > 0 && '!%&(*+,-./:<=>?[\\^|`~'.includes(nextCharacter)) {
+    return false;
+  }
+
+  const previousCode = maskNonCode(source.slice(0, lineBreak), codePositions.slice(0, lineBreak));
+  return !/(?:\bin|\binstanceof)\s*$/u.test(previousCode);
 }
 
 function collectJavaScriptIdentifiers(
@@ -1050,7 +1169,7 @@ function collectJavaScriptIdentifiers(
   codePositions: Uint8Array,
 ): Set<string> {
   const identifiers = new Set<string>();
-  const pattern = /[$A-Z_a-z][$\w]*/gu;
+  const pattern = new RegExp(javascriptIdentifierPatternSource, 'gu');
 
   for (const range of ranges) {
     const sourceSlice = source.slice(range.start, range.end);
@@ -1086,7 +1205,10 @@ function findIdentifierInitializerRanges(
   identifiers: ReadonlySet<string>,
   codePositions: Uint8Array,
 ): SourceRange[] {
-  const declarationPattern = /\b(?:const|let|var)\s+([$A-Z_a-z][$\w]*)\s*=\s*/gu;
+  const declarationPattern = new RegExp(
+    `\\b(?:const|let|var)\\s+(${javascriptIdentifierPatternSource})\\s*=\\s*`,
+    'gu',
+  );
   const ranges: SourceRange[] = [];
 
   for (const match of source.matchAll(declarationPattern)) {
@@ -1096,7 +1218,7 @@ function findIdentifierInitializerRanges(
       && identifiers.has(match[1] ?? '')
     ) {
       const start = match.index + match[0].length;
-      ranges.push(findJavaScriptExpressionRange(source, start, source.length, codePositions));
+      ranges.push(findJavaScriptExpressionRange(source, start, source.length, codePositions, true));
     }
   }
 
@@ -1200,7 +1322,7 @@ function inlineStylesheets(
       const href = readHtmlAttributeToken(attributeTokens, 'href');
 
       if (!rel.has('stylesheet')) {
-        return rel.has('modulepreload') ? '' : match;
+        return [...rel].some((name) => htmlResourceHintRelNames.has(name)) ? '' : match;
       }
 
       if (href === undefined) {
@@ -1528,7 +1650,11 @@ function inlineStyleElements(
   let cursor = 0;
   let output = '';
 
-  for (const match of findHtmlRawTextElements(html, 'style')) {
+  for (const match of html.matchAll(createHtmlRawTextPattern())) {
+    if (match[1]?.toLowerCase() !== 'style') {
+      continue;
+    }
+
     if (match.index === undefined || match[0] === undefined) {
       throw new Error('Unable to rewrite a style element in the offline playtest document.');
     }
@@ -1545,53 +1671,65 @@ function inlineStyleElements(
 }
 
 function containsCssImportRule(source: string): boolean {
-  let quote: '"' | "'" | undefined;
-  let inComment = false;
+  const codePositions = createCodePositionMap(source, false);
 
   for (let index = 0; index < source.length; index += 1) {
-    const character = source[index];
-    const nextCharacter = source[index + 1];
-
-    if (inComment) {
-      if (character === '*' && nextCharacter === '/') {
-        inComment = false;
-        index += 1;
-      }
-
+    if (source[index] !== '@' || codePositions[index] !== 1) {
       continue;
     }
 
-    if (quote !== undefined) {
-      if (character === '\\') {
-        index += 1;
-      } else if (character === quote) {
-        quote = undefined;
-      }
+    const identifier = readCssIdentifier(source, index + 1);
 
-      continue;
-    }
-
-    if (character === '/' && nextCharacter === '*') {
-      inComment = true;
-      index += 1;
-      continue;
-    }
-
-    if (character === '"' || character === "'") {
-      quote = character;
-      continue;
-    }
-
-    if (
-      character === '@'
-      && source.slice(index, index + 7).toLowerCase() === '@import'
-      && !/[\w-]/u.test(source[index + 7] ?? '')
-    ) {
+    if (identifier?.value.toLowerCase() === 'import') {
       return true;
     }
   }
 
   return false;
+}
+
+function readCssIdentifier(
+  source: string,
+  start: number,
+): Readonly<{ end: number; value: string }> | undefined {
+  let end = start;
+
+  while (end < source.length) {
+    const character = source[end] ?? '';
+
+    if (/[-_\dA-Z_a-z\u0080-\uFFFF]/u.test(character)) {
+      end += 1;
+      continue;
+    }
+
+    if (character !== '\\' || source[end + 1] === undefined) {
+      break;
+    }
+
+    end += 1;
+    let hexadecimalDigits = 0;
+
+    while (hexadecimalDigits < 6 && /[\dA-Fa-f]/u.test(source[end] ?? '')) {
+      hexadecimalDigits += 1;
+      end += 1;
+    }
+
+    if (hexadecimalDigits === 0) {
+      end += 1;
+    } else if (/[\t\n\f\r ]/u.test(source[end] ?? '')) {
+      if (source[end] === '\r' && source[end + 1] === '\n') {
+        end += 1;
+      }
+
+      end += 1;
+    }
+  }
+
+  if (end === start) {
+    return undefined;
+  }
+
+  return { end, value: decodeCssEscapes(source.slice(start, end)) };
 }
 
 function inlineHtmlAssets(
@@ -1785,16 +1923,12 @@ function assembleOfflineHtml(
     removeUnsafeMetaDirectives(removeManifestLinks(html)),
   );
 
-  const headPattern = /<head\b((?:"[^"]*"|'[^']*'|[^'">])*)>/iu;
+  const headTag = findActiveHtmlStartTag(output, 'head');
 
-  if (headPattern.test(output)) {
-    output = output.replace(
-      headPattern,
-      `<head$1>\n<meta charset="utf-8">\n${banner}\n<meta name="mpgd-purpose" content="test-play-only">\n<meta http-equiv="Content-Security-Policy" content="${csp}">\n${guardScript}${bundledStyle}`,
-    );
-  } else {
+  if (headTag === undefined) {
     throw new Error('Offline playtest source index.html must contain a head element.');
   }
+  output = `${output.slice(0, headTag.end)}\n<meta charset="utf-8">\n${banner}\n<meta name="mpgd-purpose" content="test-play-only">\n<meta http-equiv="Content-Security-Policy" content="${csp}">\n${guardScript}${bundledStyle}${output.slice(headTag.end)}`;
 
   if (
     !output.includes(offlineEntryPlaceholder)
@@ -1812,14 +1946,13 @@ function assembleOfflineHtml(
 }
 
 function assertSupportedHtmlDocument(html: string): void {
-  const headPattern = /<head\b((?:"[^"]*"|'[^']*'|[^'">])*)>/iu;
-  const headMatch = headPattern.exec(html);
+  const headTag = findActiveHtmlStartTag(html, 'head');
 
-  if (headMatch?.index === undefined) {
+  if (headTag === undefined) {
     throw new Error('Offline playtest source index.html must contain a head element.');
   }
 
-  const preHeadContent = html.slice(0, headMatch.index);
+  const preHeadContent = html.slice(0, headTag.start);
   const supportedPreHeadPattern = /^(?:[\t\n\f\r \uFEFF]+|<!--[\s\S]*?-->|<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>|<html\b(?:"[^"]*"|'[^']*'|[^'">])*>)*/iu;
 
   if (supportedPreHeadPattern.exec(preHeadContent)?.[0].length !== preHeadContent.length) {
@@ -1929,7 +2062,7 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);return raw.startsWith('data:')||raw.startsWith('blob:')};const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);return raw.startsWith('data:')||raw.startsWith('blob:')};const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
@@ -2511,6 +2644,8 @@ function readAssetDataUrl(
       assertSelfContainedGltf(assetFile, asset.toString('utf8'));
     } else if (extension === '.glb') {
       assertSelfContainedGlb(assetFile, asset);
+    } else if (extension === '.htm' || extension === '.html') {
+      assertSelfContainedHtmlAsset(assetFile, asset.toString('utf8'));
     } else if (extension === '.svg') {
       assertSelfContainedSvg(assetFile, asset.toString('utf8'));
     }
@@ -2524,7 +2659,96 @@ function readAssetDataUrl(
   return `${dataUrl}${fragment}`;
 }
 
+function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
+  for (const tag of findHtmlTagTokens(source)) {
+    if (tag.closing) {
+      continue;
+    }
+
+    if (tag.name === 'script' || tag.name === 'iframe') {
+      throw new Error(
+        `Offline playtest requires inert self-contained HTML assets: ${htmlFile} contains <${tag.name}>`,
+      );
+    }
+
+    for (const attribute of tag.attributes) {
+      if (attribute.name.length > 2 && attribute.name.startsWith('on')) {
+        throw new Error(
+          `Offline playtest requires inert self-contained HTML assets: ${htmlFile} contains ${attribute.name}`,
+        );
+      }
+
+      if (attribute.value === undefined) {
+        continue;
+      }
+
+      const value = decodeHtmlCharacterReferences(attribute.value);
+
+      if (attribute.name === 'style') {
+        const reference = findExternalCssReference(value);
+
+        if (reference !== undefined) {
+          throw new Error(
+            `Offline playtest requires self-contained HTML assets: ${htmlFile} references ${reference}`,
+          );
+        }
+      }
+
+      if (attribute.name === 'srcset') {
+        const external = parseHtmlSrcset(value, htmlFile).find(
+          (candidate) => !isEmbeddedOrFragmentReference(candidate.reference),
+        );
+
+        if (external !== undefined) {
+          throw new Error(
+            `Offline playtest requires self-contained HTML assets: ${htmlFile} references ${external.reference}`,
+          );
+        }
+      } else if (
+        ['action', 'data', 'formaction', 'href', 'poster', 'src', 'xlink:href'].includes(
+          attribute.name,
+        )
+        && value.trim().length > 0
+        && !isEmbeddedOrFragmentReference(value)
+      ) {
+        throw new Error(
+          `Offline playtest requires self-contained HTML assets: ${htmlFile} references ${value}`,
+        );
+      }
+    }
+  }
+
+  for (const match of source.matchAll(createHtmlRawTextPattern())) {
+    if (match[1]?.toLowerCase() !== 'style') {
+      continue;
+    }
+
+    const reference = findExternalCssReference(match[3] ?? '');
+
+    if (reference !== undefined) {
+      throw new Error(
+        `Offline playtest requires self-contained HTML assets: ${htmlFile} references ${reference}`,
+      );
+    }
+  }
+}
+
+function isEmbeddedOrFragmentReference(reference: string): boolean {
+  const normalized = normalizeUrlReference(reference);
+  return normalized.startsWith('data:')
+    || normalized.startsWith('blob:')
+    || normalized.startsWith('#');
+}
+
 function assertSelfContainedSvg(svgFile: string, source: string): void {
+  const activeContent = findActiveSvgContent(source);
+
+  if (activeContent !== undefined) {
+    throw new Error(
+      `Offline playtest does not support active SVG content: ${svgFile} contains ${activeContent}`,
+    );
+  }
+
   const externalReference = findExternalSvgReference(source);
 
   if (externalReference !== undefined) {
@@ -2532,6 +2756,24 @@ function assertSelfContainedSvg(svgFile: string, source: string): void {
       `Offline playtest requires self-contained SVG data URIs and fragment references: ${svgFile} references ${externalReference}`,
     );
   }
+}
+
+function findActiveSvgContent(source: string): string | undefined {
+  for (const tag of findHtmlTagTokens(source)) {
+    if (!tag.closing && tag.name === 'script') {
+      return '<script>';
+    }
+
+    const eventHandler = tag.attributes.find(
+      (attribute) => attribute.name.length > 2 && attribute.name.startsWith('on'),
+    );
+
+    if (eventHandler !== undefined) {
+      return eventHandler.name;
+    }
+  }
+
+  return undefined;
 }
 
 function findExternalSvgReference(source: string): string | undefined {
@@ -2618,7 +2860,10 @@ function findCssUrlTokens(source: string): readonly CssUrlToken[] {
       rawReference = value.at(-1) === quote ? value.slice(1, -1) : undefined;
     }
 
-    if (rawReference !== undefined && !isCssNamespaceUrl(source, match.index)) {
+    if (
+      rawReference !== undefined
+      && !isCssNamespaceUrl(source, match.index, codePositions)
+    ) {
       tokens.push({
         start: match.index,
         end: closingParenthesis + 1,
@@ -2633,14 +2878,43 @@ function findCssUrlTokens(source: string): readonly CssUrlToken[] {
   return tokens;
 }
 
-function isCssNamespaceUrl(source: string, urlStart: number): boolean {
-  const statementStart = Math.max(
-    source.lastIndexOf(';', urlStart - 1),
-    source.lastIndexOf('{', urlStart - 1),
-    source.lastIndexOf('}', urlStart - 1),
-  ) + 1;
-  const prelude = source.slice(statementStart, urlStart).replace(/\/\*[\s\S]*?\*\//gu, ' ');
-  return /@namespace(?:\s+[-_A-Z_a-z][-\w]*)?\s*$/iu.test(prelude);
+function isCssNamespaceUrl(
+  source: string,
+  urlStart: number,
+  codePositions: Uint8Array,
+): boolean {
+  let statementStart = 0;
+
+  for (let index = urlStart - 1; index >= 0; index -= 1) {
+    if (codePositions[index] === 1 && /[;{}]/u.test(source[index] ?? '')) {
+      statementStart = index + 1;
+      break;
+    }
+  }
+
+  const prelude = source
+    .slice(statementStart, urlStart)
+    .replace(/\/\*[\s\S]*?\*\//gu, ' ')
+    .trim();
+
+  if (prelude[0] !== '@') {
+    return false;
+  }
+
+  const atKeyword = readCssIdentifier(prelude, 1);
+
+  if (atKeyword?.value.toLowerCase() !== 'namespace') {
+    return false;
+  }
+
+  const prefix = prelude.slice(atKeyword.end).trim();
+
+  if (prefix.length === 0) {
+    return true;
+  }
+
+  const prefixIdentifier = readCssIdentifier(prefix, 0);
+  return prefixIdentifier?.end === prefix.length;
 }
 
 function assertSelfContainedGltf(gltfFile: string, source: string): void {
@@ -2735,9 +3009,35 @@ function assertNoExternalGltfUri(gltfFile: string, parsed: unknown): void {
 }
 
 function findExternalGltfUri(value: unknown): string | undefined {
-  const pending: Array<Readonly<{ value: unknown; depth: number; key?: string }>> = [
-    { value, depth: 0 },
-  ];
+  assertGltfNestingDepth(value);
+
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  for (const collectionName of ['buffers', 'images']) {
+    const collection = value[collectionName];
+
+    if (!Array.isArray(collection)) {
+      continue;
+    }
+
+    for (const resource of collection) {
+      if (
+        isRecord(resource)
+        && typeof resource.uri === 'string'
+        && !resource.uri.startsWith('data:')
+      ) {
+        return resource.uri;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function assertGltfNestingDepth(value: unknown): void {
+  const pending: Array<Readonly<{ value: unknown; depth: number }>> = [{ value, depth: 0 }];
 
   while (pending.length > 0) {
     const current = pending.pop();
@@ -2750,34 +3050,16 @@ function findExternalGltfUri(value: unknown): string | undefined {
       throw new Error('Offline playtest glTF JSON exceeds the maximum nesting depth.');
     }
 
-    if (
-      current.key === 'uri'
-      && typeof current.value === 'string'
-      && !current.value.startsWith('data:')
-    ) {
-      return current.value;
-    }
-
     if (Array.isArray(current.value)) {
-      for (let index = current.value.length - 1; index >= 0; index -= 1) {
-        pending.push({ value: current.value[index], depth: current.depth + 1 });
+      for (const child of current.value) {
+        pending.push({ value: child, depth: current.depth + 1 });
       }
-
-      continue;
-    }
-
-    if (!isRecord(current.value)) {
-      continue;
-    }
-
-    const entries = Object.entries(current.value).reverse();
-
-    for (const [key, child] of entries) {
-      pending.push({ key, value: child, depth: current.depth + 1 });
+    } else if (isRecord(current.value)) {
+      for (const child of Object.values(current.value)) {
+        pending.push({ value: child, depth: current.depth + 1 });
+      }
     }
   }
-
-  return undefined;
 }
 
 function resolveLocalReference(artifactRoot: string, baseDir: string, reference: string): string {
