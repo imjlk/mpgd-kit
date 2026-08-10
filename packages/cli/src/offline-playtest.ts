@@ -3671,10 +3671,6 @@ function renderOfflineRuntimeGuard(): string {
 
 function assertSupportedBundledRuntime(source: string): void {
   const unsupported = [
-    {
-      pattern: /\bnew\s+(?:(?:globalThis|self|window)\s*\.\s*)?(?:Shared)?Worker\s*\(/gu,
-      label: 'Worker',
-    },
     { pattern: /\bserviceWorker\s*\.\s*register\s*\(/gu, label: 'service worker registration' },
     { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/gu, label: 'WebAssembly streaming' },
     { pattern: /\b(?:webkit)?RTCPeerConnection\b/gu, label: 'WebRTC' },
@@ -3686,6 +3682,7 @@ function assertSupportedBundledRuntime(source: string): void {
   );
   const codePositions = createCodePositionMap(normalizedSource, true);
   const codeOnlySource = maskNonCode(normalizedSource, codePositions);
+  assertNoUnsupportedWorkerConstruction(normalizedSource, codePositions);
   assertNoScriptDrivenNavigation(normalizedSource, codePositions);
 
   for (const candidate of unsupported) {
@@ -3695,6 +3692,39 @@ function assertSupportedBundledRuntime(source: string): void {
     }
 
     candidate.pattern.lastIndex = 0;
+  }
+}
+
+function assertNoUnsupportedWorkerConstruction(
+  source: string,
+  codePositions: Uint8Array,
+): void {
+  const pattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])new\\s+(?:(globalThis|self|window)\\s*\\.\\s*)?((?:Shared)?Worker)\\s*\\(`,
+    'gu',
+  );
+
+  for (const match of source.matchAll(pattern)) {
+    if (
+      match.index === undefined
+      || match[2] === undefined
+      || codePositions[match.index] !== 1
+    ) {
+      continue;
+    }
+
+    const bindingIdentifier = match[1] ?? match[2];
+
+    if (
+      findVisibleJavaScriptIdentifierBinding(
+        source,
+        bindingIdentifier,
+        match.index,
+        codePositions,
+      ) === undefined
+    ) {
+      throw new Error('Offline playtest does not support Worker.');
+    }
   }
 }
 
@@ -3870,28 +3900,55 @@ function findLocationAliasAssignments(
 function findPotentialLocationAliasIdentifiers(
   assignments: readonly LocationAliasAssignment[],
 ): ReadonlySet<string> {
-  const aliases = new Set(
-    assignments
-      .filter(({ expression }) =>
-        /^(?:(?:document|globalThis|parent|self|top|window)\s*\.\s*)?location$/u.test(
-          expression,
-        ),
-      )
-      .map(({ identifier }) => identifier),
-  );
+  const aliases = new Set<string>();
   let previousSize = -1;
 
   while (aliases.size !== previousSize) {
     previousSize = aliases.size;
 
     for (const assignment of assignments) {
-      if (aliases.has(assignment.expression)) {
+      if (isPotentialLocationAliasExpression(assignment.expression, aliases)) {
         aliases.add(assignment.identifier);
       }
     }
   }
 
   return aliases;
+}
+
+function isPotentialLocationAliasExpression(
+  expression: string,
+  aliases: ReadonlySet<string>,
+): boolean {
+  const isDirectLocation =
+    /^(?:(?:document|globalThis|parent|self|top|window)\s*\.\s*)?location$/u.test(expression);
+
+  if (isDirectLocation || aliases.has(expression)) {
+    return true;
+  }
+
+  const assignmentResult = findAssignmentResultRightHandSide(expression);
+  return assignmentResult !== undefined
+    && isPotentialLocationAliasExpression(assignmentResult.expression, aliases);
+}
+
+function findAssignmentResultRightHandSide(
+  expression: string,
+): Readonly<{ expression: string; offset: number }> | undefined {
+  const pattern = new RegExp(
+    `^(?:${javascriptIdentifierPatternSource})\\s*(?:&&=|\\|\\|=|\\?\\?=|=)\\s*(?!=|>)([\\s\\S]+)$`,
+    'u',
+  );
+  const match = pattern.exec(expression);
+
+  if (match?.[1] === undefined) {
+    return undefined;
+  }
+
+  return {
+    expression: match[1],
+    offset: match[0].length - match[1].length,
+  };
 }
 
 function isLocationAliasIdentifierAtPosition(
@@ -4046,6 +4103,19 @@ function isLocationAliasExpression(
       position,
       codePositions,
     ) === undefined;
+  }
+
+  const assignmentResult = findAssignmentResultRightHandSide(expression);
+
+  if (assignmentResult !== undefined) {
+    return isLocationAliasExpression(
+      source,
+      assignmentResult.expression,
+      position + assignmentResult.offset,
+      codePositions,
+      assignments,
+      visitedAliases,
+    );
   }
 
   if (!new RegExp(`^${javascriptIdentifierPatternSource}$`, 'u').test(expression)) {

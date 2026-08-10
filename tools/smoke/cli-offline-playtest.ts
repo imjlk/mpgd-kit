@@ -207,6 +207,12 @@ try {
     mainJs: 'new globalThis.SharedWorker("./worker.js");',
   });
 
+  const shadowedInlineWorkerHtml = await packageAndReadFixture('shadowed-inline-workers', {
+    indexHtml: '<!doctype html><html><head><script>class Worker {} class SharedWorker {} new Worker(); new SharedWorker();</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(shadowedInlineWorkerHtml, /class Worker/u);
+  assert.match(shadowedInlineWorkerHtml, /class SharedWorker/u);
+
   const treeShakenWorkerGame = createPreviewFixture('tree-shaken-worker', {
     mainJs: 'import { used } from "./shared.js"; document.body.dataset.state = used;',
   });
@@ -315,6 +321,30 @@ try {
       `expected ${operator} location aliases to be rejected`,
     );
   }
+
+  for (const [name, initialValue, operator] of [
+    ['and-assignment-result-navigation', 'true', '&&='],
+    ['or-assignment-result-navigation', 'false', '||='],
+    ['nullish-assignment-result-navigation', 'null', '??='],
+  ] as const) {
+    const logicalAssignmentResultGame = createPreviewFixture(name, {
+      mainJs: `function escape(target) { const alias = target ${operator} window.location; alias.href = "https://example.com/escape"; } escape(${initialValue});`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: logicalAssignmentResultGame }),
+      /does not support script-driven navigation/u,
+      `expected the ${operator} result alias to be rejected`,
+    );
+  }
+
+  const simpleAssignmentResultGame = createPreviewFixture('simple-assignment-result-navigation', {
+    mainJs: 'let target; const alias = target = window.location; alias.href = "https://example.com/escape";',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: simpleAssignmentResultGame }),
+    /does not support script-driven navigation/u,
+    'expected a nested simple-assignment result alias to be rejected',
+  );
 
   const parameterAliasedLocationGame = createPreviewFixture('parameter-aliased-location-navigation', {
     mainJs: 'function escape(target = window.location) { target.href = "https://example.com/escape"; } escape();',
