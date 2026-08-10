@@ -1465,6 +1465,12 @@ try {
   assert.match(mixedSrcsetHtml, /data:image\/png;base64,AAAA/u);
   assert.doesNotMatch(mixedSrcsetHtml, /\/assets\/pixel\.png/u);
 
+  const abruptCommentEndHtml = await packageAndReadFixture('abrupt-comment-end', {
+    indexHtml: '<!doctype html><html><head></head><body><!-- first --!><img src="/assets/pixel.png"><!-- tail --><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.doesNotMatch(abruptCommentEndHtml, /\/assets\/pixel\.png/u);
+  assert.match(abruptCommentEndHtml, /src="data:image\/png;base64,/u);
+
   const serializedBlobHtmlGame = createPreviewFixture('serialized-blob-html', {
     indexHtml: '<!doctype html><html><head></head><body><img src="blob:https://example.com/image"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -1823,6 +1829,18 @@ try {
     /does not support active SVG content/u,
   );
 
+  const iframeSvgGame = createPreviewFixture('iframe-svg', {
+    indexHtml: '<!doctype html><html><head></head><body><object data="/assets/active.svg"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(iframeSvgGame, 'artifacts/web-preview/assets/active.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><iframe xmlns="http://www.w3.org/1999/xhtml" srcdoc="&lt;script>open(\'https://example.com\')&lt;/script>"></iframe></foreignObject></svg>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: iframeSvgGame }),
+    /does not support active SVG content/u,
+  );
+
   const svgPresentationUrlGame = createPreviewFixture('svg-presentation-url', {
     indexHtml: '<!doctype html><html><head></head><body><img src="/assets/presentation.svg"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -1962,8 +1980,16 @@ try {
     );
   }
 
+  const dynamicImportBeforeBlockGame = createPreviewFixture('dynamic-import-before-block', {
+    indexHtml: '<!doctype html><html><head><script>import("/assets/lazy.js")\n{ document.body.dataset.lazy = "attempted"; }</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dynamicImportBeforeBlockGame }),
+    /does not support dynamic import/u,
+  );
+
   const importMethodHtml = await packageAndReadFixture('ordinary-import-methods', {
-    mainJs: 'const loader = { import() { return "local"; } }; document.body.dataset.value = [loader.import(), loader["import"](), loader. /* retained */ import()].join("|");',
+    mainJs: 'const loader = { import() { return "local"; } }; class ClassLoader { import() { return "class-local"; } } const classLoader = new ClassLoader(); document.body.dataset.value = [loader.import(), loader["import"](), loader. /* retained */ import(), classLoader.import()].join("|");',
   });
   assert.match(importMethodHtml, /loader\.import\(\)/u);
 

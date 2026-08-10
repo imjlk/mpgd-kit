@@ -611,7 +611,7 @@ function maskInertHtmlTemplateContents(html: string): string {
 }
 
 function findHtmlTagTokens(source: string): readonly HtmlTagToken[] {
-  const pattern = /<!--[\s\S]*?-->|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>|<(\/?)(([a-z][\w:-]*))(?=[\t\n\f\r \/>])((?:"[^"]*"|'[^']*'|[^'">])*)>/giu;
+  const pattern = /<!--[\s\S]*?--!?>|<!\[CDATA\[[\s\S]*?\]\]>|<![^>]*>|<(\/?)(([a-z][\w:-]*))(?=[\t\n\f\r \/>])((?:"[^"]*"|'[^']*'|[^'">])*)>/giu;
   const tokens: HtmlTagToken[] = [];
 
   for (const match of source.matchAll(pattern)) {
@@ -3437,7 +3437,7 @@ function transformOutsideHtmlRawText(
 }
 
 function createHtmlRawTextPattern(): RegExp {
-  return /<!--[\s\S]*?-->|<(script|style|textarea|title)\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/\1\s*>/giu;
+  return /<!--[\s\S]*?--!?>|<(script|style|textarea|title)\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/\1\s*>/giu;
 }
 
 function maskHtmlRawTextBodies(html: string): string {
@@ -3584,7 +3584,7 @@ function assertSupportedHtmlDocument(html: string): void {
   }
 
   const preHeadContent = html.slice(0, headTag.start);
-  const supportedPreHeadPattern = /^(?:[\t\n\f\r \uFEFF]+|<!--[\s\S]*?-->|<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>|<html\b(?:"[^"]*"|'[^']*'|[^'">])*>)*/iu;
+  const supportedPreHeadPattern = /^(?:[\t\n\f\r \uFEFF]+|<!--[\s\S]*?--!?>|<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>|<html\b(?:"[^"]*"|'[^']*'|[^'">])*>)*/iu;
 
   if (supportedPreHeadPattern.exec(preHeadContent)?.[0].length !== preHeadContent.length) {
     throw new Error('Offline playtest does not support content before the head element.');
@@ -3742,10 +3742,11 @@ function assertSupportedBundledRuntime(source: string): void {
   const normalizedSource = normalizeRuntimeGlobalAliases(
     normalizeStaticJavaScriptPropertyAccess(source),
   );
-  const codePositions = createCodePositionMap(normalizedSource, true);
+  const braceKinds = new Uint8Array(normalizedSource.length);
+  const codePositions = createCodePositionMap(normalizedSource, true, braceKinds);
   const codeOnlySource = maskNonCode(normalizedSource, codePositions);
   assertNoUnsupportedWorkerConstruction(normalizedSource, codePositions);
-  assertNoDynamicImport(normalizedSource, codePositions);
+  assertNoDynamicImport(normalizedSource, codePositions, braceKinds);
   assertNoScriptDrivenNavigation(normalizedSource, codePositions);
 
   for (const candidate of unsupported) {
@@ -3758,7 +3759,11 @@ function assertSupportedBundledRuntime(source: string): void {
   }
 }
 
-function assertNoDynamicImport(source: string, codePositions: Uint8Array): void {
+function assertNoDynamicImport(
+  source: string,
+  codePositions: Uint8Array,
+  braceKinds: Uint8Array,
+): void {
   const pattern = /(?<![$\u200C\u200D\p{ID_Continue}])import(?![$\u200C\u200D\p{ID_Continue}])/gu;
 
   for (const match of source.matchAll(pattern)) {
@@ -3821,14 +3826,47 @@ function assertNoDynamicImport(source: string, codePositions: Uint8Array): void 
         nextCode += 1;
       }
 
-      if (source[nextCode] === '{') {
-        // Object and class methods may legally be named `import`.
+      if (
+        source[nextCode] === '{'
+        && isJavaScriptImportMethodDeclaration(
+          source,
+          match.index,
+          previousCode,
+          codePositions,
+          braceKinds,
+        )
+      ) {
         continue;
       }
     }
 
     throw new Error('Offline playtest does not support dynamic import.');
   }
+}
+
+function isJavaScriptImportMethodDeclaration(
+  source: string,
+  importStart: number,
+  previousCode: number | undefined,
+  codePositions: Uint8Array,
+  braceKinds: Uint8Array,
+): boolean {
+  const containerStart = findJavaScriptScopePath(source, importStart, codePositions).at(-1);
+  const containerKind = containerStart === undefined ? 0 : braceKinds[containerStart];
+
+  if (containerKind !== 2 && containerKind !== 3) {
+    return false;
+  }
+
+  if (
+    previousCode !== undefined
+    && ['{', '}', ',', ';', '*'].includes(source[previousCode] ?? '')
+  ) {
+    return true;
+  }
+
+  const modifier = readPreviousJavaScriptIdentifier(source, importStart - 1, codePositions);
+  return modifier !== undefined && ['async', 'get', 'set', 'static'].includes(modifier);
 }
 
 function assertNoUnsupportedWorkerConstruction(
@@ -4537,12 +4575,16 @@ function maskNonCode(source: string, codePositions: Uint8Array): string {
   return chunks.join('');
 }
 
-function createCodePositionMap(source: string, allowLineComments: boolean): Uint8Array {
+function createCodePositionMap(
+  source: string,
+  allowLineComments: boolean,
+  braceKindPositions?: Uint8Array,
+): Uint8Array {
   const positions = new Uint8Array(source.length);
   positions.fill(1);
 
   if (allowLineComments) {
-    scanJavaScriptCodePositions(source, positions, 0, false, false, 0);
+    scanJavaScriptCodePositions(source, positions, 0, false, false, 0, braceKindPositions);
   } else {
     scanCssCodePositions(source, positions);
   }
@@ -4570,6 +4612,7 @@ function scanJavaScriptCodePositions(
   stopAtClosingBrace: boolean,
   startsAsExpression: boolean,
   depth: number,
+  braceKindPositions?: Uint8Array,
 ): number {
   if (depth > 64) {
     throw new Error('Offline playtest JavaScript exceeds the supported template nesting depth.');
@@ -4613,7 +4656,7 @@ function scanJavaScriptCodePositions(
     }
 
     if (character === '`') {
-      index = markTemplateLiteral(source, positions, index, depth + 1);
+      index = markTemplateLiteral(source, positions, index, depth + 1, braceKindPositions);
       regexAllowed = false;
       pendingControlParenthesis = false;
       previousToken = 'value';
@@ -4721,6 +4764,11 @@ function scanJavaScriptCodePositions(
         || previousToken === 'block-open'
         || previousToken === 'block-close';
       braceKinds.push(isBlock);
+
+      if (braceKindPositions !== undefined) {
+        braceKindPositions[index] = isClassBody ? 3 : isBlock ? 1 : 2;
+      }
+
       pendingClassBody &&= !isClassBody;
       regexAllowed = true;
       pendingControlParenthesis = false;
@@ -4810,6 +4858,7 @@ function markTemplateLiteral(
   positions: Uint8Array,
   start: number,
   depth: number,
+  braceKindPositions?: Uint8Array,
 ): number {
   for (let index = start + 1; index < source.length; index += 1) {
     positions[index] = 0;
@@ -4833,6 +4882,7 @@ function markTemplateLiteral(
         true,
         true,
         depth,
+        braceKindPositions,
       );
       positions[closingBrace] = 0;
       index = closingBrace;
@@ -5217,6 +5267,10 @@ function findActiveSvgContent(source: string): string | undefined {
   for (const tag of findHtmlTagTokens(source)) {
     if (!tag.closing && (tag.name === 'script' || tag.name.endsWith(':script'))) {
       return '<script>';
+    }
+
+    if (!tag.closing && (tag.name === 'iframe' || tag.name.endsWith(':iframe'))) {
+      return '<iframe>';
     }
 
     const eventHandler = tag.attributes.find(
