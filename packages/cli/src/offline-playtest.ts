@@ -85,6 +85,8 @@ interface HtmlTagToken {
   readonly start: number;
 }
 
+type HtmlNamespace = 'html' | 'mathml' | 'svg';
+
 interface CssUrlToken {
   readonly start: number;
   readonly end: number;
@@ -128,6 +130,22 @@ const offlineCharsetDeclaration = '<meta charset="utf-8">';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
 const htmlAttributeNameTerminators = new Set(['"', "'", '=', '<', '>', '/']);
+const htmlVoidElementNames = new Set([
+  'area',
+  'base',
+  'br',
+  'col',
+  'embed',
+  'hr',
+  'img',
+  'input',
+  'link',
+  'meta',
+  'param',
+  'source',
+  'track',
+  'wbr',
+]);
 const nonEventHtmlAttributeNamesStartingWithOn = new Set(['ontology']);
 const inlineEntryExcludedAttributeNames = new Set(['src']);
 const svgResourceAttributeNames = new Set(['href', 'src', 'xlink:href']);
@@ -572,28 +590,64 @@ function maskInertHtmlTemplateContents(html: string): string {
     (match) => maskTextPreservingLines(match),
   );
   const ranges: SourceRange[] = [];
+  const stack: Array<{
+    readonly childNamespace: HtmlNamespace;
+    readonly name: string;
+    readonly namespace: HtmlNamespace;
+  }> = [];
   let depth = 0;
   let start: number | undefined;
 
   for (const tag of findHtmlTagTokens(structure)) {
-    if (tag.name !== 'template') {
-      continue;
-    }
-
     if (tag.closing) {
-      if (depth === 0) {
+      let matchingIndex = -1;
+
+      for (let index = stack.length - 1; index >= 0; index -= 1) {
+        if (stack[index]?.name === tag.name) {
+          matchingIndex = index;
+          break;
+        }
+      }
+
+      if (matchingIndex === -1) {
         continue;
       }
 
-      depth -= 1;
+      const removed = stack.splice(matchingIndex);
+      const closedHtmlTemplates = removed.filter(
+        (entry) => entry.name === 'template' && entry.namespace === 'html',
+      ).length;
+
+      if (closedHtmlTemplates === 0 || depth === 0) {
+        continue;
+      }
+
+      depth = Math.max(0, depth - closedHtmlTemplates);
 
       if (depth === 0 && start !== undefined) {
         ranges.push({ start, end: tag.start });
         start = undefined;
       }
-    } else {
+
+      continue;
+    }
+
+    const parentNamespace = stack.at(-1)?.childNamespace ?? 'html';
+    const namespace = resolveHtmlTagNamespace(parentNamespace, tag.name);
+    const childNamespace = resolveHtmlChildNamespace(namespace, tag);
+
+    if (tag.name === 'template' && namespace === 'html') {
       start ??= tag.end;
       depth += 1;
+    }
+
+    const rawTag = structure.slice(tag.start, tag.end);
+
+    if (
+      !/\/\s*>$/u.test(rawTag)
+      && !(namespace === 'html' && htmlVoidElementNames.has(tag.name))
+    ) {
+      stack.push({ childNamespace, name: tag.name, namespace });
     }
   }
 
@@ -611,6 +665,46 @@ function maskInertHtmlTemplateContents(html: string): string {
   }
 
   return output + html.slice(cursor);
+}
+
+function resolveHtmlTagNamespace(
+  parentNamespace: HtmlNamespace,
+  tagName: string,
+): HtmlNamespace {
+  if (parentNamespace !== 'html') {
+    return parentNamespace;
+  }
+
+  if (tagName === 'svg') {
+    return 'svg';
+  }
+
+  if (tagName === 'math') {
+    return 'mathml';
+  }
+
+  return 'html';
+}
+
+function resolveHtmlChildNamespace(
+  namespace: HtmlNamespace,
+  tag: HtmlTagToken,
+): HtmlNamespace {
+  if (namespace === 'svg' && ['desc', 'foreignobject', 'title'].includes(tag.name)) {
+    return 'html';
+  }
+
+  if (
+    namespace === 'mathml'
+    && tag.name === 'annotation-xml'
+    && ['application/xhtml+xml', 'text/html'].includes(
+      readHtmlAttributeToken(tag.attributes, 'encoding')?.trim().toLowerCase() ?? '',
+    )
+  ) {
+    return 'html';
+  }
+
+  return namespace;
 }
 
 function findHtmlTagTokens(source: string): readonly HtmlTagToken[] {
@@ -3759,8 +3853,8 @@ function assertNoEntryImportMetaUrl(source: string): void {
     createCodePositionMap(normalizedSource, true),
   );
 
-  if (/\bimport\s*\.\s*meta\s*\.\s*url\b/u.test(codeOnlySource)) {
-    throw new Error('Offline playtest does not support bare import.meta.url in the bundled entry.');
+  if (/\bimport\s*\.\s*meta\b/u.test(codeOnlySource)) {
+    throw new Error('Offline playtest does not support bare import.meta in the bundled entry.');
   }
 }
 
@@ -3841,14 +3935,12 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const blockConstructor=(api,Native)=>new Proxy(Native,{construct(_target,args){throw denied(api,args[0])}});const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}for(const [object,names] of [[globalThis.navigation,['back','forward','navigate','reload','traverseTo']],[globalThis.history,['back','forward','go']],[globalThis.History?.prototype,['back','forward','go']]]){if(object){for(const name of names){if(typeof object[name]==='function'){try{Object.defineProperty(object,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=blockConstructor('WebSocket',globalThis.WebSocket)}if(globalThis.EventSource){globalThis.EventSource=blockConstructor('EventSource',globalThis.EventSource)}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const blockConstructor=(api,Native)=>new Proxy(Native,{construct(_target,args){throw denied(api,args[0])}});const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}for(const [object,names] of [[globalThis.navigation,['back','forward','navigate','reload','traverseTo']],[globalThis.history,['back','forward','go']],[globalThis.History?.prototype,['back','forward','go']]]){if(object){for(const name of names){if(typeof object[name]==='function'){try{Object.defineProperty(object,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}}if(globalThis.Location){for(const name of ['assign','replace']){const method=Location.prototype[name];if(typeof method==='function'){try{Object.defineProperty(Location.prototype,name,{configurable:true,writable:true,value:function(value){if(!fragmentOnly(value))throw denied('navigation',value);return method.call(this,value)}})}catch{}}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=blockConstructor('WebSocket',globalThis.WebSocket)}if(globalThis.EventSource){globalThis.EventSource=blockConstructor('EventSource',globalThis.EventSource)}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
   const unsupported = [
-    { pattern: /\bserviceWorker\s*\.\s*register\s*\(/gu, label: 'service worker registration' },
     { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/gu, label: 'WebAssembly streaming' },
-    { pattern: /\b(?:webkit)?RTCPeerConnection\b/gu, label: 'WebRTC' },
     { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
   ];
   const normalizedSource = normalizeRuntimeGlobalAliases(
@@ -3858,6 +3950,7 @@ function assertSupportedBundledRuntime(source: string): void {
   const codePositions = createCodePositionMap(normalizedSource, true, braceKinds);
   const codeOnlySource = maskNonCode(normalizedSource, codePositions);
   assertNoUnsupportedWorkerConstruction(normalizedSource, codePositions);
+  assertNoUnsupportedBrowserApi(normalizedSource, codePositions);
   assertNoDynamicImport(normalizedSource, codePositions, braceKinds);
   assertNoScriptDrivenNavigation(normalizedSource, codePositions);
 
@@ -3868,6 +3961,55 @@ function assertSupportedBundledRuntime(source: string): void {
     }
 
     candidate.pattern.lastIndex = 0;
+  }
+}
+
+function assertNoUnsupportedBrowserApi(
+  source: string,
+  codePositions: Uint8Array,
+): void {
+  const candidates = [
+    {
+      pattern: /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(navigator)\s*\.\s*serviceWorker\s*\.\s*register\s*\(/gu,
+      label: 'service worker registration',
+      bindingIndex: 1,
+      fallbackBindingIndex: 2,
+    },
+    {
+      pattern: /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(serviceWorker)\s*\.\s*register\s*\(/gu,
+      label: 'service worker registration',
+      bindingIndex: 1,
+      fallbackBindingIndex: 2,
+    },
+    {
+      pattern: /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?((?:webkit)?RTCPeerConnection)\b/gu,
+      label: 'WebRTC',
+      bindingIndex: 1,
+      fallbackBindingIndex: 2,
+    },
+  ] as const;
+
+  for (const candidate of candidates) {
+    for (const match of source.matchAll(candidate.pattern)) {
+      if (match.index === undefined || codePositions[match.index] !== 1) {
+        continue;
+      }
+
+      const bindingIdentifier = match[candidate.bindingIndex]
+        ?? match[candidate.fallbackBindingIndex];
+
+      if (
+        bindingIdentifier !== undefined
+        && findVisibleJavaScriptIdentifierBinding(
+          source,
+          bindingIdentifier,
+          match.index,
+          codePositions,
+        ) === undefined
+      ) {
+        throw new Error(`Offline playtest does not support ${candidate.label}.`);
+      }
+    }
   }
 }
 
@@ -4109,7 +4251,7 @@ function assertNoScriptDrivenNavigation(
     }
   }
 
-  const locationOperation = '(?:\\s*\\.\\s*(?:assign|replace)\\s*\\(|(?:\\s*\\.\\s*href)?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
+  const locationOperation = '(?:\\s*\\.\\s*(?:assign|replace)\\b|(?:\\s*\\.\\s*href)?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
   const qualifiedLocationPattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${globalObject}\\s*\\.\\s*location${locationOperation}`,
     'gu',
@@ -5290,7 +5432,7 @@ function readAssetDataUrl(
 }
 
 function assertSelfContainedXml(xmlFile: string, source: string): void {
-  const unsafeMarkup = /<!DOCTYPE\b|<\?(?!xml(?:\s|\?>))/iu.exec(source)?.[0];
+  const unsafeMarkup = findUnsafeXmlMarkup(source);
 
   if (unsafeMarkup !== undefined) {
     throw new Error(
@@ -5306,6 +5448,10 @@ function assertSelfContainedXml(xmlFile: string, source: string): void {
       `Offline playtest requires inert self-contained XML assets: ${xmlFile}. ${errorMessage(error)}`,
     );
   }
+}
+
+function findUnsafeXmlMarkup(source: string): string | undefined {
+  return /<!DOCTYPE\b|<\?(?!xml(?:\s|\?>))/iu.exec(source)?.[0];
 }
 
 function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
@@ -5409,6 +5555,14 @@ function isEmbeddedOrFragmentReference(reference: string): boolean {
 }
 
 function assertSelfContainedSvg(svgFile: string, source: string): void {
+  const unsafeMarkup = findUnsafeXmlMarkup(source);
+
+  if (unsafeMarkup !== undefined) {
+    throw new Error(
+      `Offline playtest requires inert self-contained SVG assets: ${svgFile} contains ${unsafeMarkup}`,
+    );
+  }
+
   const activeContent = findActiveSvgContent(source);
 
   if (activeContent !== undefined) {

@@ -236,6 +236,16 @@ try {
     /does not support WebRTC/u,
   );
 
+  const shadowedServiceWorkerHtml = await packageAndReadFixture('shadowed-service-worker', {
+    mainJs: 'const serviceWorker = { register() { return "local"; } }; document.body.dataset.state = serviceWorker.register();',
+  });
+  assert.match(shadowedServiceWorkerHtml, /local/u);
+
+  const shadowedWebRtcHtml = await packageAndReadFixture('shadowed-webrtc', {
+    mainJs: 'class RTCPeerConnection { close() { return "local"; } } const peer = new RTCPeerConnection(); document.body.dataset.state = peer.close();',
+  });
+  assert.match(shadowedWebRtcHtml, /local/u);
+
   const assignedNavigationGame = createPreviewFixture('assigned-navigation', {
     mainJs: 'window.location.href = "https://example.com/escape";',
   });
@@ -249,6 +259,14 @@ try {
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: methodNavigationGame }),
+    /does not support script-driven navigation/u,
+  );
+
+  const indirectMethodNavigationGame = createPreviewFixture('indirect-method-navigation', {
+    mainJs: 'Reflect.apply(location.assign, location, ["https://example.com/escape"]);',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: indirectMethodNavigationGame }),
     /does not support script-driven navigation/u,
   );
 
@@ -569,6 +587,14 @@ try {
     /does not support SVG external script references/u,
   );
 
+  const foreignSvgTemplateScriptGame = createPreviewFixture('foreign-svg-template-script', {
+    indexHtml: '<!doctype html><html><head></head><body><svg><template><script>location.href="https://example.com/escape";</script></template></svg><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: foreignSvgTemplateScriptGame }),
+    /does not support script-driven navigation/u,
+  );
+
   const activeTemplateHandlerGame = createPreviewFixture('active-template-handler', {
     indexHtml: '<!doctype html><html><head></head><body><template><button onclick="alert(1)">activate</button></template><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -687,7 +713,15 @@ try {
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: bareEntryImportMetaGame }),
-    /does not support bare import\.meta\.url in the bundled entry/u,
+    /does not support bare import\.meta in the bundled entry/u,
+  );
+
+  const aliasedEntryImportMetaGame = createPreviewFixture('aliased-entry-import-meta', {
+    mainJs: 'const meta = import.meta; document.body.dataset.asset = new URL("./pixel.png", meta.url).href;',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: aliasedEntryImportMetaGame }),
+    /does not support bare import\.meta in the bundled entry/u,
   );
 
   const codeLikeTextHtml = await packageAndReadFixture('code-like-text', {
@@ -1429,7 +1463,7 @@ try {
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: shadowedUrlGame }),
-    /does not support bare import\.meta\.url in the bundled entry/u,
+    /does not support bare import\.meta in the bundled entry/u,
   );
 
   for (const qualifier of ['globalThis', 'self', 'window'] as const) {
@@ -1451,7 +1485,7 @@ try {
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: shadowedQualifiedUrlGame }),
-    /does not support bare import\.meta\.url in the bundled entry/u,
+    /does not support bare import\.meta in the bundled entry/u,
   );
 
   const escapedLevelJson = '{"fixture":"escaped-level"}\n';
@@ -1962,6 +1996,18 @@ try {
     /does not support active SVG content/u,
   );
 
+  const styledSvgGame = createPreviewFixture('styled-svg', {
+    indexHtml: '<!doctype html><html><head></head><body><object data="/assets/styled.svg"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(styledSvgGame, 'artifacts/web-preview/assets/styled.svg'),
+    '<?xml version="1.0"?><?xml-stylesheet href="https://example.com/theme.css"?><svg xmlns="http://www.w3.org/2000/svg"/>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: styledSvgGame }),
+    /requires inert self-contained SVG assets/u,
+  );
+
   const namespacedScriptSvgGame = createPreviewFixture('namespaced-script-svg', {
     indexHtml: '<!doctype html><html><head></head><body><object data="/assets/active.svg"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -2147,7 +2193,7 @@ try {
   );
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: interpolatedTemplateAssetGame }),
-    /bare import\.meta\.url in the bundled entry/u,
+    /bare import\.meta in the bundled entry/u,
   );
 
   const dynamicAssetGame = createPreviewFixture('dynamic-asset', {
@@ -2155,7 +2201,7 @@ try {
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: dynamicAssetGame }),
-    /bare import\.meta\.url in the bundled entry/u,
+    /bare import\.meta in the bundled entry/u,
   );
 
   const coincidentalLiteralGame = createPreviewFixture('coincidental-literal', {
