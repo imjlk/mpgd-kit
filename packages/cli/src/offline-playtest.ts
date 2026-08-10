@@ -160,6 +160,7 @@ const phaserManifestUrlPropertyNames = new Set([
   'fontDataUrl',
   'jsonURL',
   'jsonUrl',
+  'normalMap',
   'path',
   'textureURL',
   'textureUrl',
@@ -746,12 +747,13 @@ function inlineJavaScriptAssetReferences(
   sourceFile: string,
   context: InliningContext,
 ): string {
-  const staticUrlPattern = /new\s+URL\(\s*(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)\s*,\s*import\.meta\.url\s*\)(\s*\.\s*href)?/gu;
+  const staticUrlPattern = /(?<![$\u200C\u200D\p{ID_Continue}])new\s+(?:(globalThis|self|window)\s*\.\s*)?URL\(\s*(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)\s*,\s*import\.meta\.url\s*\)(\s*\.\s*href)?/gu;
   const sourceCodePositions = createCodePositionMap(source, true);
   let output = source.replace(
     staticUrlPattern,
     (
       match,
+      qualifier: string | undefined,
       doubleQuotedReference: string | undefined,
       singleQuotedReference: string | undefined,
       templateReference: string | undefined,
@@ -760,9 +762,10 @@ function inlineJavaScriptAssetReferences(
     ) => {
       if (
         sourceCodePositions[offset] !== 1
+        || hasEscapedJavaScriptIdentifierContinuationBefore(source, offset, sourceCodePositions)
         || findVisibleJavaScriptIdentifierBinding(
           source,
-          'URL',
+          qualifier ?? 'URL',
           offset,
           sourceCodePositions,
         ) !== undefined
@@ -782,13 +785,13 @@ function inlineJavaScriptAssetReferences(
 
       if (isDataUrlReference(reference)) {
         return hrefAccess === undefined
-          ? `new URL(${JSON.stringify(reference)})`
+          ? `new ${qualifier === undefined ? '' : `${qualifier}.`}URL(${JSON.stringify(reference)})`
           : JSON.stringify(reference);
       }
 
       const dataUrl = readAssetDataUrl(sourceFile, reference, context);
       return hrefAccess === undefined
-        ? `new URL(${JSON.stringify(dataUrl)})`
+        ? `new ${qualifier === undefined ? '' : `${qualifier}.`}URL(${JSON.stringify(dataUrl)})`
         : JSON.stringify(dataUrl);
     },
   );
@@ -1025,6 +1028,9 @@ function inlineStaticElementSourceAssignments(
         offset,
         codePositions,
       );
+      const rawInitializer = binding?.initializerRange === undefined
+        ? undefined
+        : source.slice(binding.initializerRange.start, binding.initializerRange.end).trim();
       const initializer = binding?.initializerRange === undefined
         ? undefined
         : maskNonCode(
@@ -1033,7 +1039,7 @@ function inlineStaticElementSourceAssignments(
         ).trim();
       const constructor = initializer === undefined
         ? undefined
-        : parseStaticElementConstructor(initializer);
+        : parseStaticElementConstructor(initializer, rawInitializer ?? initializer);
       const qualifier = constructor?.qualifier;
       const constructorName = constructor?.constructorName;
 
@@ -1096,13 +1102,25 @@ function inlineStaticElementSourceAssignments(
 
 function parseStaticElementConstructor(
   initializer: string,
+  rawInitializer: string,
 ): Readonly<{ constructorName: string; qualifier: string | undefined }> | undefined {
   const constructor = /^new\s+(?:(globalThis|self|window)\s*\.\s*)?(Audio|Image)(?=\s|\(|$)/u.exec(
     initializer,
   );
 
   if (constructor?.[2] === undefined) {
-    return undefined;
+    const createdElement = /^(?:(globalThis|self|window)\s*\.\s*)?document\s*\.\s*createElement\s*\(\s*(?:"(audio|img|source|track|video)"|'(audio|img|source|track|video)'|`(audio|img|source|track|video)`)\s*\)\s*$/iu.exec(
+      rawInitializer,
+    );
+    const tagName = (createdElement?.[2] ?? createdElement?.[3] ?? createdElement?.[4])
+      ?.toLowerCase();
+
+    return tagName === undefined
+      ? undefined
+      : {
+          constructorName: `HTML ${tagName} element`,
+          qualifier: createdElement?.[1] ?? 'document',
+        };
   }
 
   const result = { constructorName: constructor[2], qualifier: constructor[1] };
@@ -3729,7 +3747,7 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}if(globalThis.navigation){for(const name of ['back','forward','navigate','reload','traverseTo']){if(typeof globalThis.navigation[name]==='function'){try{Object.defineProperty(globalThis.navigation,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
@@ -3907,6 +3925,23 @@ function assertNoScriptDrivenNavigation(
   codePositions: Uint8Array,
 ): void {
   const globalObject = '(document|globalThis|parent|self|top|window)';
+  const navigationPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?navigation\s*\.\s*(?:back|forward|navigate|reload|traverseTo)\s*\(/gu;
+
+  for (const match of source.matchAll(navigationPattern)) {
+    if (
+      match.index !== undefined
+      && codePositions[match.index] === 1
+      && findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1] ?? 'navigation',
+        match.index,
+        codePositions,
+      ) === undefined
+    ) {
+      throw new Error('Offline playtest does not support script-driven navigation.');
+    }
+  }
+
   const qualifiedOpenPattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${globalObject}\\s*\\.\\s*open\\s*\\(`,
     'gu',
@@ -5394,17 +5429,7 @@ function findCssUrlTokens(source: string): readonly CssUrlToken[] {
     }
 
     const rawValue = source.slice(openingParenthesis + 1, closingParenthesis);
-    const valueCodePositions = createCodePositionMap(rawValue, false);
-    let valueStart = 0;
-
-    while (
-      valueStart < rawValue.length
-      && (/\s/u.test(rawValue[valueStart] ?? '') || valueCodePositions[valueStart] === 0)
-    ) {
-      valueStart += 1;
-    }
-
-    const value = rawValue.slice(valueStart).trimEnd();
+    const value = removeCssCommentsOutsideStrings(rawValue).trim();
     const quote = value[0];
     let rawReference: string | undefined = value;
 
@@ -5428,6 +5453,35 @@ function findCssUrlTokens(source: string): readonly CssUrlToken[] {
   }
 
   return tokens;
+}
+
+function removeCssCommentsOutsideStrings(source: string): string {
+  let output = '';
+
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index] ?? '';
+
+    if (character === '"' || character === "'") {
+      const start = index;
+
+      for (index += 1; index < source.length; index += 1) {
+        if (source[index] === '\\') {
+          index += 1;
+        } else if (source[index] === character) {
+          break;
+        }
+      }
+
+      output += source.slice(start, Math.min(index + 1, source.length));
+    } else if (character === '/' && source[index + 1] === '*') {
+      const commentEnd = source.indexOf('*/', index + 2);
+      index = commentEnd === -1 ? source.length : commentEnd + 1;
+    } else {
+      output += character;
+    }
+  }
+
+  return output;
 }
 
 function isCssNamespaceUrl(

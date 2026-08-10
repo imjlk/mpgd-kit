@@ -30,6 +30,7 @@ try {
   assert.match(html, /wasm-unsafe-eval/u);
   assert.match(html, /object-src data:/u);
   assert.match(html, /blocked network access/u);
+  assert.match(html, /globalThis\.navigation/u);
   assert.match(html, /data:image\/png;base64,/u);
   assert.match(html, /data:application\/json;base64,/u);
   assert.match(html, /<style>/u);
@@ -256,6 +257,30 @@ try {
     () => runOfflinePlaytestPackaging({ gameRoot: openNavigationGame }),
     /does not support script-driven navigation/u,
   );
+
+  for (const [name, mainJs] of [
+    ['navigation-api', 'navigation.navigate("https://example.com/escape");'],
+    ['qualified-navigation-api', 'globalThis.navigation.navigate("https://example.com/escape");'],
+  ] as const) {
+    const navigationApiGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: navigationApiGame }),
+      /does not support script-driven navigation/u,
+    );
+  }
+
+  const shadowedNavigationApiHtml = await packageAndReadFixture('shadowed-navigation-api', {
+    mainJs: 'function route(navigation) { navigation.navigate("/local"); } route({ navigate() {} });',
+  });
+  assert.match(shadowedNavigationApiHtml, /navigate/u);
+
+  const shadowedQualifiedNavigationApiHtml = await packageAndReadFixture(
+    'shadowed-qualified-navigation-api',
+    {
+      mainJs: 'function route(window) { window.navigation.navigate("/local"); } route({ navigation: { navigate() {} } });',
+    },
+  );
+  assert.match(shadowedQualifiedNavigationApiHtml, /navigate/u);
 
   const documentOpenHtml = await packageAndReadFixture('document-open-writer', {
     mainJs: 'document.open(/* local writer */); document.write("<main>offline</main>"); document.close();',
@@ -722,6 +747,15 @@ try {
   assert.match(cssTextHtml, /missing-string\.png/u);
   assert.match(cssTextHtml, /data:image\/png;base64,/u);
 
+  const commentedCssUrlHtml = await packageAndReadFixture('commented-css-url', {}, [
+    [
+      'artifacts/web-preview/assets/main.css',
+      'body { background: url(/* preload */ "/assets/pixel.png" /* cache */); }',
+    ],
+  ]);
+  assert.doesNotMatch(commentedCssUrlHtml, /\/assets\/pixel\.png/u);
+  assert.match(commentedCssUrlHtml, /data:image\/png;base64,/u);
+
   const escapedCssUrlHtml = await packageAndReadFixture('escaped-css-url', {}, [
     ['artifacts/web-preview/assets/main.css', 'body { background: url(./sprite\\).png); }'],
     ['artifacts/web-preview/assets/sprite).png', onePixelPng],
@@ -814,6 +848,11 @@ try {
     mainJs: 'const scene = new Phaser.Scene(); scene.load.image({ key: "hero", url: "/assets/pixel.png" }); scene.load.image([{ key: "logo", url: "/assets/icon.png" }]);',
   });
   assert.doesNotMatch(phaserConfigObjectHtml, /\/assets\/(?:icon|pixel)\.png/u);
+
+  const phaserNormalMapHtml = await packageAndReadFixture('phaser-normal-map', {
+    mainJs: 'const scene = new Phaser.Scene(); scene.load.image({ key: "hero", url: "/assets/pixel.png", normalMap: "/assets/icon.png" });',
+  });
+  assert.doesNotMatch(phaserNormalMapHtml, /\/assets\/(?:icon|pixel)\.png/u);
 
   const phaserSceneSubclassHtml = await packageAndReadFixture('phaser-scene-subclass', {
     mainJs: 'class BootScene extends Phaser.Scene { preload() { this.load.image("hero", "/assets/pixel.png"); } } document.body.dataset.scene = BootScene.name;',
@@ -1248,6 +1287,17 @@ try {
   assert.doesNotMatch(browserImageHtml, /\/assets\/pixel\.png/u);
   assert.match(browserImageHtml, /data:image\/png;base64,/u);
 
+  const createdBrowserImageHtml = await packageAndReadFixture('created-browser-image-asset', {
+    mainJs: 'const splash = document.createElement("img"); splash.src = "/assets/pixel.png"; document.body.append(splash);',
+  });
+  assert.doesNotMatch(createdBrowserImageHtml, /\/assets\/pixel\.png/u);
+  assert.match(createdBrowserImageHtml, /data:image\/png;base64,/u);
+
+  const shadowedDocumentImageHtml = await packageAndReadFixture('shadowed-document-image', {
+    mainJs: 'function render(document) { const image = document.createElement("img"); image.src = "/assets/custom-image.png"; return image.src; } document.body.dataset.src = render({ createElement() { return {}; } });',
+  });
+  assert.match(shadowedDocumentImageHtml, /\/assets\/custom-image\.png/u);
+
   const sizedBrowserImageHtml = await packageAndReadFixture('sized-browser-image-asset', {
     mainJs: 'const splash = new Image(64, 64); splash.src = "/assets/pixel.png"; document.body.append(splash);',
   });
@@ -1306,6 +1356,28 @@ try {
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: shadowedUrlGame }),
+    /does not support bare import\.meta\.url in the bundled entry/u,
+  );
+
+  for (const qualifier of ['globalThis', 'self', 'window'] as const) {
+    const qualifiedUrlHtml = await packageAndReadFixture(`qualified-${qualifier}-url`, {
+      mainJs: `const asset = new ${qualifier}.URL("./config.json", import.meta.url); document.body.dataset.asset = asset.href;`,
+    });
+    assert.doesNotMatch(qualifiedUrlHtml, /\.\/config\.json/u);
+    assert.match(qualifiedUrlHtml, /data:application\/json;base64,/u);
+  }
+
+  const locallyShadowedUrlHtml = await packageAndReadFixture('locally-shadowed-qualified-url', {
+    mainJs: 'class URL {} const asset = new globalThis.URL("./config.json", import.meta.url); document.body.dataset.asset = asset.href;',
+  });
+  assert.doesNotMatch(locallyShadowedUrlHtml, /\.\/config\.json/u);
+  assert.match(locallyShadowedUrlHtml, /data:application\/json;base64,/u);
+
+  const shadowedQualifiedUrlGame = createPreviewFixture('shadowed-qualified-url-constructor', {
+    mainJs: 'function resolve(globalThis) { return new globalThis.URL("./config.json", import.meta.url).href; } document.body.dataset.value = resolve({ URL });',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: shadowedQualifiedUrlGame }),
     /does not support bare import\.meta\.url in the bundled entry/u,
   );
 
