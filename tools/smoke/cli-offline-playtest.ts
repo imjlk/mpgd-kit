@@ -641,17 +641,44 @@ try {
   );
   assert.match(unrelatedKeyedObjectHtml, /\/assets\/route\.png/u);
 
-  const provenLegacyManifestHtml = await packageAndReadFixture('proven-legacy-manifest', {
-    mainJs: 'const routes = [{ key: "route", path: "/assets/route.png" }]; const assets = [{ key: "logo", path: "/assets/icon.png" }]; const scene = { load: { image() {} } }; for (const asset of assets) scene.load.image(asset.key, asset.path); document.body.dataset.route = routes[0].path;',
-  });
+  const provenLegacyManifestHtml = await packageAndReadFixture(
+    'proven-legacy-manifest',
+    {
+      mainJs: 'const routes = [{ key: "route", path: "/assets/route.png" }]; const assets = [{ key: "logo", path: "/assets/icon.png" }]; const scene = { load: { image() {} } }; for (const asset of assets) scene.load.image(asset.key, asset.path); document.body.dataset.route = routes[0].path;',
+    },
+    [['artifacts/web-preview/assets/route.png', Buffer.from('legacy-route')]],
+  );
   assert.doesNotMatch(provenLegacyManifestHtml, /\/assets\/icon\.png/u);
   assert.match(provenLegacyManifestHtml, /\/assets\/route\.png/u);
 
-  const nestedLegacyManifestHtml = await packageAndReadFixture('nested-legacy-manifest', {
-    mainJs: 'const outer = [{ key: "route", path: "/assets/route.png" }]; const inner = [{ key: "logo", path: "/assets/icon.png" }]; const scene = { load: { image() {} } }; for (const asset of outer) { for (const asset of inner) scene.load.image(asset.key, asset.path); } document.body.dataset.route = outer[0].path;',
-  });
+  const nestedLegacyManifestHtml = await packageAndReadFixture(
+    'nested-legacy-manifest',
+    {
+      mainJs: 'const outer = [{ key: "route", path: "/assets/route.png" }]; const inner = [{ key: "logo", path: "/assets/icon.png" }]; const scene = { load: { image() {} } }; for (const asset of outer) { for (const asset of inner) scene.load.image(asset.key, asset.path); } document.body.dataset.route = outer[0].path;',
+    },
+    [['artifacts/web-preview/assets/route.png', Buffer.from('nested-legacy-route')]],
+  );
   assert.doesNotMatch(nestedLegacyManifestHtml, /\/assets\/icon\.png/u);
   assert.match(nestedLegacyManifestHtml, /\/assets\/route\.png/u);
+
+  const blockShadowManifestHtml = await packageAndReadFixture(
+    'block-shadow-manifest',
+    {
+      mainJs: 'const manifests = [{ key: "route", path: "/assets/route.png" }]; const scene = { load: { image() {} } }; { const manifests = [{ key: "logo", path: "/assets/icon.png" }]; for (const asset of manifests) scene.load.image(asset.key, asset.path); } document.body.dataset.route = manifests[0].path;',
+    },
+    [['artifacts/web-preview/assets/route.png', Buffer.from('block-shadow-route')]],
+  );
+  assert.doesNotMatch(blockShadowManifestHtml, /\/assets\/icon\.png/u);
+  assert.match(blockShadowManifestHtml, /\/assets\/route\.png/u);
+
+  const parameterShadowManifestHtml = await packageAndReadFixture(
+    'parameter-shadow-manifest',
+    {
+      mainJs: 'const manifests = [{ key: "route", path: "/assets/route.png" }]; const scene = { load: { image() {} } }; function load(manifests) { for (const asset of manifests) scene.load.image(asset.key, asset.path); } void load; document.body.dataset.route = manifests[0].path;',
+    },
+    [['artifacts/web-preview/assets/route.png', Buffer.from('parameter-shadow-route')]],
+  );
+  assert.match(parameterShadowManifestHtml, /\/assets\/route\.png/u);
 
   const phaserHtmlAsset = '<section>offline panel fixture</section>';
   const phaserHtml = await packageAndReadFixture(
@@ -835,6 +862,10 @@ try {
   });
   assert.doesNotMatch(commentedFetchHtml, /\/assets\/config\.json/u);
   assert.match(commentedFetchHtml, /data:application\/json;base64,/u);
+
+  await packageAndReadFixture('unicode-fetch-boundary', {
+    mainJs: 'const πfetch = (value) => value; document.body.dataset.value = πfetch("/assets/not-an-asset.json");',
+  });
 
   const browserAudioHtml = await packageAndReadFixture(
     'browser-audio-asset',

@@ -758,7 +758,7 @@ function inlineJavaScriptAssetReferences(
     },
   );
   const documentFile = path.join(context.artifactRoot, 'index.html');
-  const staticFetchPattern = /((?<![$.\w])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
+  const staticFetchPattern = /((?<![$.\u200C\u200D\p{ID_Continue}])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
   const fetchCodePositions = createCodePositionMap(output, true);
   output = output.replace(
     staticFetchPattern,
@@ -803,7 +803,7 @@ function inlineJavaScriptAssetReferences(
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
-  const staticAudioPattern = /((?<![$.\w])new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Audio\s*\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
+  const staticAudioPattern = /((?<![$.\u200C\u200D\p{ID_Continue}])new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Audio\s*\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
   const audioCodePositions = createCodePositionMap(output, true);
   output = output.replace(
     staticAudioPattern,
@@ -1067,7 +1067,6 @@ function findProvenPhaserManifestProperties(
     `\\bfor\\s*\\(\\s*(?:const|let|var)\\s+(${javascriptIdentifierPatternSource})\\s+of\\s+(${javascriptIdentifierPatternSource})\\s*\\)`,
     'gu',
   );
-  const initializerRangesByIdentifier = new Map<string, readonly SourceRange[]>();
   const proofs = new Map<string, PhaserManifestProof>();
 
   for (const loaderRange of loaderRanges) {
@@ -1127,25 +1126,12 @@ function findProvenPhaserManifestProperties(
       continue;
     }
 
-    const { iterableIdentifier } = nearestLoop;
-    let initializerRanges = initializerRangesByIdentifier.get(iterableIdentifier);
-
-    if (initializerRanges === undefined) {
-      initializerRanges = findIdentifierInitializerRanges(
-        source,
-        new Set([iterableIdentifier]),
-        codePositions,
-      );
-      initializerRangesByIdentifier.set(iterableIdentifier, initializerRanges);
-    }
-
-    const initializerRange = [...initializerRanges]
-      .filter(
-        (range) =>
-          range.end <= nearestLoop.start
-          && source.slice(range.start, range.end).trimStart().startsWith('['),
-      )
-      .sort((left, right) => right.end - left.end)[0];
+    const initializerRange = findLexicallyVisibleArrayInitializerRange(
+      source,
+      nearestLoop.iterableIdentifier,
+      nearestLoop.start,
+      codePositions,
+    );
 
     if (initializerRange !== undefined) {
       proofs.set(`${propertyName}:${initializerRange.start}:${initializerRange.end}`, {
@@ -1156,6 +1142,322 @@ function findProvenPhaserManifestProperties(
   }
 
   return [...proofs.values()];
+}
+
+function findLexicallyVisibleArrayInitializerRange(
+  source: string,
+  identifier: string,
+  position: number,
+  codePositions: Uint8Array,
+): SourceRange | undefined {
+  // Legacy manifests are rewritten only when one concrete binding is visible at the loop.
+  // A nearer block declaration or parameter must win over a same-named outer array.
+  const loopScopePath = findJavaScriptScopePath(source, position, codePositions);
+  const declarationPattern = new RegExp(
+    `\\b(const|let|var)\\s+(${javascriptIdentifierPatternSource})\\s*=\\s*`,
+    'gu',
+  );
+  const declarations: Array<Readonly<{
+    bindingPath: readonly number[];
+    initializerRange: SourceRange;
+    kind: string;
+    start: number;
+  }>> = [];
+
+  for (const match of source.matchAll(declarationPattern)) {
+    if (
+      match.index === undefined
+      || codePositions[match.index] !== 1
+      || match[2] !== identifier
+    ) {
+      continue;
+    }
+
+    const declarationScopePath = findJavaScriptScopePath(source, match.index, codePositions);
+    const bindingPath = match[1] === 'var'
+      ? declarationScopePath.slice(
+          0,
+          findJavaScriptFunctionScopeDepth(source, declarationScopePath, codePositions),
+        )
+      : declarationScopePath;
+
+    if (!isJavaScriptScopePathPrefix(bindingPath, loopScopePath)) {
+      continue;
+    }
+
+    const initializerStart = match.index + match[0].length;
+    declarations.push({
+      bindingPath,
+      initializerRange: findJavaScriptExpressionRange(
+        source,
+        initializerStart,
+        source.length,
+        codePositions,
+        true,
+      ),
+      kind: match[1] ?? '',
+      start: match.index,
+    });
+  }
+
+  const declarationDepth = declarations.reduce(
+    (depth, declaration) => Math.max(depth, declaration.bindingPath.length),
+    -1,
+  );
+  const parameterDepth = findJavaScriptParameterBindingDepth(
+    source,
+    loopScopePath,
+    identifier,
+    codePositions,
+  );
+
+  if (declarationDepth < 0 || parameterDepth >= declarationDepth) {
+    return undefined;
+  }
+
+  const nearestDeclarations = declarations.filter(
+    (declaration) => declaration.bindingPath.length === declarationDepth,
+  );
+  const lexicalDeclarations = nearestDeclarations.filter(
+    (declaration) => declaration.kind !== 'var',
+  );
+  let declaration: typeof nearestDeclarations[number] | undefined;
+
+  if (lexicalDeclarations.length === 1) {
+    [declaration] = lexicalDeclarations;
+  } else if (lexicalDeclarations.length === 0) {
+    declaration = nearestDeclarations
+      .filter((candidate) => candidate.start < position)
+      .sort((left, right) => right.start - left.start)[0];
+  }
+
+  if (
+    declaration === undefined
+    || declaration.start >= position
+    || !source.slice(
+      declaration.initializerRange.start,
+      declaration.initializerRange.end,
+    ).trimStart().startsWith('[')
+  ) {
+    return undefined;
+  }
+
+  return declaration.initializerRange;
+}
+
+function findJavaScriptScopePath(
+  source: string,
+  position: number,
+  codePositions: Uint8Array,
+): readonly number[] {
+  const scopes: number[] = [];
+
+  for (let index = 0; index < position; index += 1) {
+    if (codePositions[index] !== 1) {
+      continue;
+    }
+
+    if (source[index] === '{') {
+      scopes.push(index);
+    } else if (source[index] === '}') {
+      scopes.pop();
+    }
+  }
+
+  return scopes;
+}
+
+function isJavaScriptScopePathPrefix(
+  candidate: readonly number[],
+  target: readonly number[],
+): boolean {
+  return candidate.length <= target.length
+    && candidate.every((scope, index) => target[index] === scope);
+}
+
+function findJavaScriptFunctionScopeDepth(
+  source: string,
+  scopePath: readonly number[],
+  codePositions: Uint8Array,
+): number {
+  for (let index = scopePath.length - 1; index >= 0; index -= 1) {
+    if (findJavaScriptBlockBindingHeader(
+      source,
+      scopePath[index] ?? 0,
+      codePositions,
+    )?.kind === 'function') {
+      return index + 1;
+    }
+  }
+
+  return 0;
+}
+
+function findJavaScriptParameterBindingDepth(
+  source: string,
+  scopePath: readonly number[],
+  identifier: string,
+  codePositions: Uint8Array,
+): number {
+  const identifierPattern = new RegExp(javascriptIdentifierPatternSource, 'gu');
+
+  for (let index = scopePath.length - 1; index >= 0; index -= 1) {
+    const header = findJavaScriptBlockBindingHeader(source, scopePath[index] ?? 0, codePositions);
+
+    if (
+      header !== undefined
+      && [...maskNonCode(
+        source.slice(header.parameters.start, header.parameters.end),
+        codePositions.slice(header.parameters.start, header.parameters.end),
+      ).matchAll(identifierPattern)].some((match) => match[0] === identifier)
+    ) {
+      return index + 1;
+    }
+  }
+
+  return -1;
+}
+
+function findJavaScriptBlockBindingHeader(
+  source: string,
+  blockStart: number,
+  codePositions: Uint8Array,
+): Readonly<{ kind: 'catch' | 'function'; parameters: SourceRange }> | undefined {
+  const headerEnd = findPreviousJavaScriptCodeIndex(source, blockStart - 1, codePositions);
+
+  if (headerEnd === undefined) {
+    return undefined;
+  }
+
+  if (source[headerEnd] === '>') {
+    const equals = findPreviousJavaScriptCodeIndex(source, headerEnd - 1, codePositions);
+
+    if (equals === undefined || source[equals] !== '=') {
+      return undefined;
+    }
+
+    const parameterEnd = findPreviousJavaScriptCodeIndex(source, equals - 1, codePositions);
+
+    if (parameterEnd === undefined) {
+      return undefined;
+    }
+
+    if (source[parameterEnd] === ')') {
+      const parameterStart = findMatchingJavaScriptOpeningParenthesis(
+        source,
+        parameterEnd,
+        codePositions,
+      );
+      return parameterStart === undefined
+        ? undefined
+        : { kind: 'function', parameters: { start: parameterStart + 1, end: parameterEnd } };
+    }
+
+    const parameterStart = findJavaScriptIdentifierStart(source, parameterEnd, codePositions);
+    return { kind: 'function', parameters: { start: parameterStart, end: parameterEnd + 1 } };
+  }
+
+  if (source[headerEnd] !== ')') {
+    return undefined;
+  }
+
+  const parameterStart = findMatchingJavaScriptOpeningParenthesis(source, headerEnd, codePositions);
+
+  if (parameterStart === undefined) {
+    return undefined;
+  }
+
+  const precedingToken = readPreviousJavaScriptIdentifier(
+    source,
+    parameterStart - 1,
+    codePositions,
+  );
+
+  if (precedingToken === 'catch') {
+    return { kind: 'catch', parameters: { start: parameterStart + 1, end: headerEnd } };
+  }
+
+  if (
+    precedingToken !== undefined
+    && (javascriptControlParenthesisKeywords.has(precedingToken) || precedingToken === 'await')
+  ) {
+    return undefined;
+  }
+
+  return { kind: 'function', parameters: { start: parameterStart + 1, end: headerEnd } };
+}
+
+function findPreviousJavaScriptCodeIndex(
+  source: string,
+  start: number,
+  codePositions: Uint8Array,
+): number | undefined {
+  for (let index = start; index >= 0; index -= 1) {
+    if (codePositions[index] === 1 && !/\s/u.test(source[index] ?? '')) {
+      return index;
+    }
+  }
+
+  return undefined;
+}
+
+function findMatchingJavaScriptOpeningParenthesis(
+  source: string,
+  closingParenthesis: number,
+  codePositions: Uint8Array,
+): number | undefined {
+  let depth = 0;
+
+  for (let index = closingParenthesis; index >= 0; index -= 1) {
+    if (codePositions[index] !== 1) {
+      continue;
+    }
+
+    if (source[index] === ')') {
+      depth += 1;
+    } else if (source[index] === '(') {
+      depth -= 1;
+
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function findJavaScriptIdentifierStart(
+  source: string,
+  end: number,
+  codePositions: Uint8Array,
+): number {
+  let start = end;
+
+  while (
+    start > 0
+    && codePositions[start - 1] === 1
+    && /[$\u200C\u200D\p{ID_Continue}]/u.test(source[start - 1] ?? '')
+  ) {
+    start -= 1;
+  }
+
+  return start;
+}
+
+function readPreviousJavaScriptIdentifier(
+  source: string,
+  start: number,
+  codePositions: Uint8Array,
+): string | undefined {
+  const end = findPreviousJavaScriptCodeIndex(source, start, codePositions);
+
+  if (end === undefined || !/[$\u200C\u200D\p{ID_Continue}]/u.test(source[end] ?? '')) {
+    return undefined;
+  }
+
+  const identifierStart = findJavaScriptIdentifierStart(source, end, codePositions);
+  return source.slice(identifierStart, end + 1);
 }
 
 function findJavaScriptLoopBodyRange(
@@ -2534,11 +2836,11 @@ function assertSupportedBundledRuntime(source: string): void {
       label: 'script-driven navigation',
     },
     {
-      pattern: /(?:\b(?:document|globalThis|parent|self|top|window)\s*\.\s*|(?<![$.\w]))location\s*\.\s*(?:assign|replace)\s*\(/gu,
+      pattern: /(?:\b(?:document|globalThis|parent|self|top|window)\s*\.\s*|(?<![$.\u200C\u200D\p{ID_Continue}]))location\s*\.\s*(?:assign|replace)\s*\(/gu,
       label: 'script-driven navigation',
     },
     {
-      pattern: /(?:\b(?:document|globalThis|parent|self|top|window)\s*\.\s*|(?<![$.\w]))location(?:\s*\.\s*href)?\s*(?:(?:&&|\?\?|\|\|)|[+\-*/%&|^])?=(?!=)/gu,
+      pattern: /(?:\b(?:document|globalThis|parent|self|top|window)\s*\.\s*|(?<![$.\u200C\u200D\p{ID_Continue}]))location(?:\s*\.\s*href)?\s*(?:(?:&&|\?\?|\|\|)|[+\-*/%&|^])?=(?!=)/gu,
       label: 'script-driven navigation',
     },
   ];
