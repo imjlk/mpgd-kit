@@ -115,6 +115,13 @@ interface JavaScriptIdentifierBinding {
   readonly start: number;
 }
 
+interface LocationAliasAssignment {
+  readonly expression: string;
+  readonly expressionRange: SourceRange;
+  readonly identifier: string;
+  readonly start: number;
+}
+
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlineCharsetDeclaration = '<meta charset="utf-8">';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
@@ -970,13 +977,13 @@ function inlineStaticImageSourceAssignments(
         ).trim();
       const imageQualifier = initializer === undefined
         ? undefined
-        : /^new\s+(globalThis|self|window)\s*\.\s*Image\s*\(/u.exec(initializer)?.[1];
+        : /^new\s+(globalThis|self|window)\s*\.\s*Image(?:\s*\(|$)/u.exec(initializer)?.[1];
 
       if (
         binding === undefined
         || initializer === undefined
         || binding.start >= offset
-        || !/^new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Image\s*\(\s*\)$/u.test(initializer)
+        || !/^new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Image(?:\s*\(\s*\))?$/u.test(initializer)
         || (
           imageQualifier === undefined
             ? findVisibleJavaScriptIdentifierBinding(
@@ -2165,11 +2172,22 @@ function isProvenPhaserLoaderReceiver(
     source.slice(binding.initializerRange.start, binding.initializerRange.end),
     codePositions.slice(binding.initializerRange.start, binding.initializerRange.end),
   ).trim();
-  const identifier = javascriptIdentifierPatternSource;
-  return new RegExp(
-    `^new\\s+(?:(?:${identifier})\\s*\\.\\s*)?Scene\\s*(?:\\(|$)`,
+  const phaserScene = new RegExp(
+    `^new\\s+(${javascriptIdentifierPatternSource})\\s*\\.\\s*Scene\\s*(?:\\(|$)`,
     'u',
-  ).test(initializer);
+  ).exec(initializer);
+
+  if (phaserScene?.[1] === undefined) {
+    return false;
+  }
+
+  const namespace = phaserScene[1];
+  return isProvenPhaserNamespace(
+    source,
+    namespace,
+    binding.initializerRange.start + initializer.indexOf(namespace),
+    codePositions,
+  );
 }
 
 function isInsidePhaserSceneSubclass(
@@ -2177,9 +2195,8 @@ function isInsidePhaserSceneSubclass(
   position: number,
   codePositions: Uint8Array,
 ): boolean {
-  const identifier = javascriptIdentifierPatternSource;
   const classPattern = new RegExp(
-    `\\bclass(?:\\s+${identifier})?\\s+extends\\s+(?:(?:${identifier})\\s*\\.\\s*)?Scene\\s*$`,
+    `\\bclass(?:\\s+${javascriptIdentifierPatternSource})?\\s+extends\\s+(${javascriptIdentifierPatternSource})\\s*\\.\\s*Scene\\s*$`,
     'u',
   );
 
@@ -2190,7 +2207,68 @@ function isInsidePhaserSceneSubclass(
       codePositions.slice(headerStart, blockStart),
     ).trimEnd();
 
-    if (classPattern.test(header)) {
+    const match = classPattern.exec(header);
+
+    if (
+      match?.[1] !== undefined
+      && isProvenPhaserNamespace(
+        source,
+        match[1],
+        headerStart + match.index + match[0].lastIndexOf(match[1]),
+        codePositions,
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isProvenPhaserNamespace(
+  source: string,
+  namespace: string,
+  position: number,
+  codePositions: Uint8Array,
+): boolean {
+  const namespaceBinding = findVisibleJavaScriptIdentifierBinding(
+    source,
+    namespace,
+    position,
+    codePositions,
+  );
+
+  if (namespace === 'Phaser' && namespaceBinding === undefined) {
+    return true;
+  }
+
+  // Production minifiers rename the imported Phaser namespace. Require the same
+  // lexical binding to construct both Game and Scene before applying loader rules.
+  const gameConstructorPattern = new RegExp(
+    `\\bnew\\s+${escapeRegExp(namespace)}\\s*\\.\\s*Game\\s*\\(`,
+    'gu',
+  );
+
+  for (const match of source.matchAll(gameConstructorPattern)) {
+    if (
+      match.index === undefined
+      || codePositions[match.index] !== 1
+    ) {
+      continue;
+    }
+
+    const candidateBinding = findVisibleJavaScriptIdentifierBinding(
+      source,
+      namespace,
+      match.index + match[0].indexOf(namespace),
+      codePositions,
+    );
+
+    if (
+      namespaceBinding !== undefined
+      && namespaceBinding.start >= 0
+      && candidateBinding?.start === namespaceBinding.start
+    ) {
       return true;
     }
   }
@@ -2405,6 +2483,7 @@ function findJavaScriptExpressionRange(
   limit: number,
   codePositions: Uint8Array,
   stopAtAutomaticSemicolon = false,
+  stopAtUnmatchedClosingDelimiter = false,
 ): SourceRange {
   let roundDepth = 0;
   let squareDepth = 0;
@@ -2436,20 +2515,30 @@ function findJavaScriptExpressionRange(
       squareDepth += 1;
     } else if (character === '{') {
       curlyDepth += 1;
-    } else if (character === ')' && roundDepth > 0) {
-      roundDepth -= 1;
-    } else if (character === ']' && squareDepth > 0) {
-      squareDepth -= 1;
-    } else if (character === '}' && curlyDepth > 0) {
-      curlyDepth -= 1;
+    } else if (character === ')') {
+      if (roundDepth > 0) {
+        roundDepth -= 1;
+      } else if (stopAtUnmatchedClosingDelimiter) {
+        return trimSourceRange(source, { start, end: index });
+      }
+    } else if (character === ']') {
+      if (squareDepth > 0) {
+        squareDepth -= 1;
+      } else if (stopAtUnmatchedClosingDelimiter) {
+        return trimSourceRange(source, { start, end: index });
+      }
+    } else if (character === '}') {
+      if (curlyDepth > 0) {
+        curlyDepth -= 1;
+      } else if (stopAtUnmatchedClosingDelimiter || stopAtAutomaticSemicolon) {
+        return trimSourceRange(source, { start, end: index });
+      }
     } else if (
       (character === ',' || character === ';')
       && roundDepth === 0
       && squareDepth === 0
       && curlyDepth === 0
     ) {
-      return trimSourceRange(source, { start, end: index });
-    } else if (stopAtAutomaticSemicolon && character === '}' && curlyDepth === 0) {
       return trimSourceRange(source, { start, end: index });
     }
 
@@ -3613,7 +3702,8 @@ function assertNoScriptDrivenNavigation(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${locationOperation}`,
     'gu',
   );
-  const potentialAliases = findPotentialLocationAliasIdentifiers(source, codePositions);
+  const aliasAssignments = findLocationAliasAssignments(source, codePositions);
+  const potentialAliases = findPotentialLocationAliasIdentifiers(aliasAssignments);
 
   for (const match of source.matchAll(aliasPattern)) {
     if (
@@ -3625,34 +3715,32 @@ function assertNoScriptDrivenNavigation(
       continue;
     }
 
-    const binding = findVisibleJavaScriptIdentifierBinding(
-      source,
-      match[1],
-      match.index,
-      codePositions,
-    );
-
     if (
-      binding !== undefined
-      && binding.start < match.index
-      && isLocationAliasBinding(source, binding, codePositions, new Set<number>())
+      isLocationAliasIdentifierAtPosition(
+        source,
+        match[1],
+        match.index,
+        codePositions,
+        aliasAssignments,
+        new Set<string>(),
+      )
     ) {
       throw new Error('Offline playtest does not support script-driven navigation.');
     }
   }
 }
 
-function findPotentialLocationAliasIdentifiers(
+function findLocationAliasAssignments(
   source: string,
   codePositions: Uint8Array,
-): ReadonlySet<string> {
-  const declarationPattern = new RegExp(
-    `\\b(?:const|let|var)\\s+(${javascriptIdentifierPatternSource})\\s*=\\s*`,
+): readonly LocationAliasAssignment[] {
+  const assignmentPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*=\\s*(?!=|>)`,
     'gu',
   );
-  const declarations: Array<Readonly<{ expression: string; identifier: string }>> = [];
+  const assignments: LocationAliasAssignment[] = [];
 
-  for (const match of source.matchAll(declarationPattern)) {
+  for (const match of source.matchAll(assignmentPattern)) {
     if (
       match.index === undefined
       || match[1] === undefined
@@ -3661,23 +3749,41 @@ function findPotentialLocationAliasIdentifiers(
       continue;
     }
 
-    const initializerStart = match.index + match[0].length;
-    const initializerRange = findJavaScriptExpressionRange(
+    const previous = findPreviousJavaScriptCodeIndex(source, match.index - 1, codePositions);
+
+    if (previous !== undefined && (source[previous] === '.' || source[previous] === '?')) {
+      continue;
+    }
+
+    const expressionStart = match.index + match[0].length;
+    const expressionRange = findJavaScriptExpressionRange(
       source,
-      initializerStart,
+      expressionStart,
       source.length,
       codePositions,
       true,
+      true,
     );
     const expression = maskNonCode(
-      source.slice(initializerRange.start, initializerRange.end),
-      codePositions.slice(initializerRange.start, initializerRange.end),
+      source.slice(expressionRange.start, expressionRange.end),
+      codePositions.slice(expressionRange.start, expressionRange.end),
     ).trim();
-    declarations.push({ identifier: match[1], expression });
+    assignments.push({
+      expression,
+      expressionRange,
+      identifier: match[1],
+      start: match.index,
+    });
   }
 
+  return assignments;
+}
+
+function findPotentialLocationAliasIdentifiers(
+  assignments: readonly LocationAliasAssignment[],
+): ReadonlySet<string> {
   const aliases = new Set(
-    declarations
+    assignments
       .filter(({ expression }) =>
         /^(?:(?:document|globalThis|parent|self|top|window)\s*\.\s*)?location$/u.test(
           expression,
@@ -3690,9 +3796,9 @@ function findPotentialLocationAliasIdentifiers(
   while (aliases.size !== previousSize) {
     previousSize = aliases.size;
 
-    for (const declaration of declarations) {
-      if (aliases.has(declaration.expression)) {
-        aliases.add(declaration.identifier);
+    for (const assignment of assignments) {
+      if (aliases.has(assignment.expression)) {
+        aliases.add(assignment.identifier);
       }
     }
   }
@@ -3700,61 +3806,172 @@ function findPotentialLocationAliasIdentifiers(
   return aliases;
 }
 
-function isLocationAliasBinding(
+function isLocationAliasIdentifierAtPosition(
   source: string,
-  binding: JavaScriptIdentifierBinding,
+  identifier: string,
+  position: number,
   codePositions: Uint8Array,
-  visitedBindings: Set<number>,
+  assignments: readonly LocationAliasAssignment[],
+  visitedAliases: Set<string>,
 ): boolean {
+  const binding = findVisibleJavaScriptIdentifierBinding(
+    source,
+    identifier,
+    position,
+    codePositions,
+  );
+  let aliasKey = `unbound:${identifier}`;
+
+  if (binding?.kind === 'parameter') {
+    aliasKey = `parameter:${identifier}:${binding.bindingPath.join(',')}`;
+  } else if (binding !== undefined) {
+    aliasKey = `binding:${binding.start}`;
+  }
+
   if (
-    binding.initializerRange === undefined
-    || binding.start < 0
-    || visitedBindings.has(binding.start)
+    (
+      binding !== undefined
+      && (
+        binding.start >= position
+        || (binding.start < 0 && binding.kind !== 'parameter')
+      )
+    )
+    || visitedAliases.has(aliasKey)
   ) {
     return false;
   }
 
-  visitedBindings.add(binding.start);
-  const initializerRange = trimSourceRange(source, binding.initializerRange);
-  const initializer = maskNonCode(
-    source.slice(initializerRange.start, initializerRange.end),
-    codePositions.slice(initializerRange.start, initializerRange.end),
-  ).trim();
+  visitedAliases.add(aliasKey);
+  const initializerRange = binding?.initializerRange === undefined
+    ? undefined
+    : trimSourceRange(source, binding.initializerRange);
+
+  if (
+    initializerRange !== undefined
+    && initializerRange.end <= position
+    && isLocationAliasExpression(
+      source,
+      maskNonCode(
+        source.slice(initializerRange.start, initializerRange.end),
+        codePositions.slice(initializerRange.start, initializerRange.end),
+      ).trim(),
+      initializerRange.start,
+      codePositions,
+      assignments,
+      new Set(visitedAliases),
+    )
+  ) {
+    return true;
+  }
+
+  for (const assignment of assignments) {
+    if (
+      assignment.identifier !== identifier
+      || (binding !== undefined && assignment.start <= binding.start)
+      || assignment.expressionRange.end > position
+    ) {
+      continue;
+    }
+
+    const assignmentBinding = findVisibleJavaScriptIdentifierBinding(
+      source,
+      identifier,
+      assignment.start,
+      codePositions,
+    );
+    let matchesParameterDefault = false;
+
+    if (binding?.kind === 'parameter') {
+      matchesParameterDefault = isInsideJavaScriptParameterBinding(
+        source,
+        assignment.start,
+        binding,
+        codePositions,
+      );
+    }
+
+    if (
+      (
+        binding === undefined
+        || assignmentBinding?.start === binding.start
+        || matchesParameterDefault
+      )
+      && isLocationAliasExpression(
+        source,
+        assignment.expression,
+        assignment.expressionRange.start,
+        codePositions,
+        assignments,
+        new Set(visitedAliases),
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+function isInsideJavaScriptParameterBinding(
+  source: string,
+  position: number,
+  binding: JavaScriptIdentifierBinding,
+  codePositions: Uint8Array,
+): boolean {
+  const blockStart = binding.bindingPath.at(-1);
+
+  if (blockStart === undefined) {
+    return false;
+  }
+
+  const header = findJavaScriptBlockBindingHeader(source, blockStart, codePositions);
+  return header?.kind === 'function'
+    && header.parameters.start <= position
+    && position < header.parameters.end;
+}
+
+function isLocationAliasExpression(
+  source: string,
+  expression: string,
+  position: number,
+  codePositions: Uint8Array,
+  assignments: readonly LocationAliasAssignment[],
+  visitedAliases: Set<string>,
+): boolean {
   const qualified = /^(document|globalThis|parent|self|top|window)\s*\.\s*location$/u.exec(
-    initializer,
+    expression,
   );
 
   if (qualified?.[1] !== undefined) {
     return findVisibleJavaScriptIdentifierBinding(
       source,
       qualified[1],
-      initializerRange.start,
+      position,
       codePositions,
     ) === undefined;
   }
 
-  if (initializer === 'location') {
+  if (expression === 'location') {
     return findVisibleJavaScriptIdentifierBinding(
       source,
       'location',
-      initializerRange.start,
+      position,
       codePositions,
     ) === undefined;
   }
 
-  if (!new RegExp(`^${javascriptIdentifierPatternSource}$`, 'u').test(initializer)) {
+  if (!new RegExp(`^${javascriptIdentifierPatternSource}$`, 'u').test(expression)) {
     return false;
   }
 
-  const nestedBinding = findVisibleJavaScriptIdentifierBinding(
+  return isLocationAliasIdentifierAtPosition(
     source,
-    initializer,
-    initializerRange.start,
+    expression,
+    position,
     codePositions,
+    assignments,
+    visitedAliases,
   );
-  return nestedBinding !== undefined
-    && nestedBinding.start < initializerRange.start
-    && isLocationAliasBinding(source, nestedBinding, codePositions, visitedBindings);
 }
 
 function normalizeRuntimeGlobalAliases(source: string): string {

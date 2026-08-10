@@ -279,6 +279,23 @@ try {
     /does not support script-driven navigation/u,
   );
 
+  const assignedAliasedLocationGame = createPreviewFixture('assigned-aliased-location-navigation', {
+    mainJs: 'let first; let target; first = window.location; target = first; target.href = "https://example.com/escape";',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: assignedAliasedLocationGame }),
+    /does not support script-driven navigation/u,
+    'expected assignment-derived location aliases to be rejected',
+  );
+
+  const parameterAliasedLocationGame = createPreviewFixture('parameter-aliased-location-navigation', {
+    mainJs: 'function escape(target = window.location) { target.href = "https://example.com/escape"; } escape();',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: parameterAliasedLocationGame }),
+    /does not support script-driven navigation/u,
+  );
+
   const unqualifiedOpenHtml = await packageAndReadFixture('unqualified-open-guard', {
     mainJs: 'button.addEventListener("click", () => open("https://example.com"));',
   });
@@ -671,6 +688,24 @@ try {
   });
   assert.match(unrelatedLoaderHtml, /\/assets\/config\.json/u);
 
+  const unrelatedSceneHtml = await packageAndReadFixture('unrelated-scene-loader-api', {
+    mainJs: 'const Router = { Scene: class { load = { image() {} } } }; const scene = new Router.Scene(); scene.load.image("route", "/assets/not-a-phaser-asset.png");',
+  });
+  assert.match(unrelatedSceneHtml, /\/assets\/not-a-phaser-asset\.png/u);
+
+  const unrelatedSceneSubclassHtml = await packageAndReadFixture(
+    'unrelated-scene-subclass-loader-api',
+    {
+      mainJs: 'const Router = { Scene: class {} }; class RouteScene extends Router.Scene { load = { image() {} }; preload() { this.load.image("route", "/assets/not-a-phaser-asset.png"); } } document.body.dataset.scene = RouteScene.name;',
+    },
+  );
+  assert.match(unrelatedSceneSubclassHtml, /\/assets\/not-a-phaser-asset\.png/u);
+
+  const shadowedPhaserSceneHtml = await packageAndReadFixture('shadowed-phaser-scene-loader-api', {
+    mainJs: 'const Phaser = { Scene: class { load = { image() {} } } }; const scene = new Phaser.Scene(); scene.load.image("route", "/assets/not-a-phaser-asset.png");',
+  });
+  assert.match(shadowedPhaserSceneHtml, /\/assets\/not-a-phaser-asset\.png/u);
+
   const phaserVariableConfigHtml = await packageAndReadFixture('phaser-variable-config', {
     mainJs: 'const config = { key: "hero", url: "/assets/pixel.png" }; const scene = new Phaser.Scene(); scene.load.image(config);',
   });
@@ -986,6 +1021,24 @@ try {
   });
   assert.doesNotMatch(browserImageHtml, /\/assets\/pixel\.png/u);
   assert.match(browserImageHtml, /data:image\/png;base64,/u);
+
+  const browserImageWithoutParenthesesHtml = await packageAndReadFixture(
+    'browser-image-without-parentheses-asset',
+    {
+      mainJs: 'const splash = new Image; splash.src = "/assets/pixel.png"; document.body.append(splash);',
+    },
+  );
+  assert.doesNotMatch(browserImageWithoutParenthesesHtml, /\/assets\/pixel\.png/u);
+  assert.match(browserImageWithoutParenthesesHtml, /data:image\/png;base64,/u);
+
+  const qualifiedBrowserImageWithoutParenthesesHtml = await packageAndReadFixture(
+    'qualified-browser-image-without-parentheses-asset',
+    {
+      mainJs: 'const splash = new window.Image; splash.src = "/assets/pixel.png"; document.body.append(splash);',
+    },
+  );
+  assert.doesNotMatch(qualifiedBrowserImageWithoutParenthesesHtml, /\/assets\/pixel\.png/u);
+  assert.match(qualifiedBrowserImageWithoutParenthesesHtml, /data:image\/png;base64,/u);
 
   const shadowedBrowserApiHtml = await packageAndReadFixture('shadowed-browser-apis', {
     mainJs: 'const Audio = class {}; const Image = class {}; const sound = new Audio("/assets/custom-audio.mp3"); const image = new Image(); image.src = "/assets/custom-image.png"; document.body.dataset.value = [sound, image.src].join("|");',
