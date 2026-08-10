@@ -787,6 +787,11 @@ function inlineJavaScriptAssetReferences(
     ) => {
       if (
         fetchCodePositions[offset] !== 1
+        || hasEscapedJavaScriptIdentifierContinuationBefore(
+          output,
+          offset,
+          fetchCodePositions,
+        )
         || (
           templateReference !== undefined
           && containsUnescapedTemplateInterpolation(templateReference)
@@ -909,6 +914,11 @@ function inlineStaticImageSourceAssignments(
     ) => {
       if (
         codePositions[offset] !== 1
+        || hasEscapedJavaScriptIdentifierContinuationBefore(
+          source,
+          offset,
+          codePositions,
+        )
         || (
           templateReference !== undefined
           && containsUnescapedTemplateInterpolation(templateReference)
@@ -1527,23 +1537,190 @@ function findJavaScriptParameterBindingDepth(
   identifier: string,
   codePositions: Uint8Array,
 ): number {
-  const identifierPattern = new RegExp(javascriptIdentifierPatternSource, 'gu');
-
   for (let index = scopePath.length - 1; index >= 0; index -= 1) {
     const header = findJavaScriptBlockBindingHeader(source, scopePath[index] ?? 0, codePositions);
+    const parameterRanges = header === undefined
+      ? []
+      : splitJavaScriptTopLevelRanges(source, header.parameters, ',', codePositions);
 
     if (
-      header !== undefined
-      && [...maskNonCode(
-        source.slice(header.parameters.start, header.parameters.end),
-        codePositions.slice(header.parameters.start, header.parameters.end),
-      ).matchAll(identifierPattern)].some((match) => match[0] === identifier)
+      parameterRanges.some((range) =>
+        collectJavaScriptBindingIdentifiers(source, range, codePositions).has(identifier),
+      )
     ) {
       return index + 1;
     }
   }
 
   return -1;
+}
+
+function collectJavaScriptBindingIdentifiers(
+  source: string,
+  range: SourceRange,
+  codePositions: Uint8Array,
+): ReadonlySet<string> {
+  // Defaults are expressions, not bindings; recursively inspect only the pattern to
+  // distinguish `options = manifests` from `{ manifests }` and `{ key: manifests }`.
+  let binding = trimSourceRange(source, range);
+
+  if (source.slice(binding.start, binding.start + 3) === '...') {
+    binding = trimSourceRange(source, { start: binding.start + 3, end: binding.end });
+  }
+
+  const equals = findJavaScriptTopLevelCharacter(source, binding, '=', codePositions);
+
+  if (equals !== undefined) {
+    binding = trimSourceRange(source, { start: binding.start, end: equals });
+  }
+
+  const firstCharacter = source[binding.start];
+  const closingCharacter = source[binding.end - 1];
+  const identifiers = new Set<string>();
+
+  if (
+    (firstCharacter === '{' && closingCharacter === '}')
+    || (firstCharacter === '[' && closingCharacter === ']')
+  ) {
+    const entries = splitJavaScriptTopLevelRanges(
+      source,
+      { start: binding.start + 1, end: binding.end - 1 },
+      ',',
+      codePositions,
+    );
+
+    for (const entry of entries) {
+      let nestedBinding = entry;
+
+      if (firstCharacter === '{') {
+        const colon = findJavaScriptTopLevelCharacter(source, entry, ':', codePositions);
+
+        if (colon !== undefined) {
+          nestedBinding = { start: colon + 1, end: entry.end };
+        }
+      }
+
+      for (const identifier of collectJavaScriptBindingIdentifiers(
+        source,
+        nestedBinding,
+        codePositions,
+      )) {
+        identifiers.add(identifier);
+      }
+    }
+
+    return identifiers;
+  }
+
+  const identifierPattern = new RegExp(`^${javascriptIdentifierPatternSource}$`, 'u');
+  const identifier = source.slice(binding.start, binding.end).trim();
+
+  if (identifierPattern.test(identifier)) {
+    identifiers.add(identifier);
+  }
+
+  return identifiers;
+}
+
+function splitJavaScriptTopLevelRanges(
+  source: string,
+  range: SourceRange,
+  delimiter: string,
+  codePositions: Uint8Array,
+  terminator?: string,
+): readonly SourceRange[] {
+  const ranges: SourceRange[] = [];
+  let start = range.start;
+  let roundDepth = 0;
+  let squareDepth = 0;
+  let curlyDepth = 0;
+
+  for (let index = range.start; index <= range.end; index += 1) {
+    if (index < range.end && codePositions[index] !== 1) {
+      continue;
+    }
+
+    const character = source[index] ?? '';
+    const atTopLevel = roundDepth === 0 && squareDepth === 0 && curlyDepth === 0;
+
+    if (
+      index === range.end
+      || (atTopLevel && (character === delimiter || character === terminator))
+    ) {
+      const candidate = trimSourceRange(source, { start, end: index });
+
+      if (candidate.start < candidate.end) {
+        ranges.push(candidate);
+      }
+
+      if (character === terminator) {
+        break;
+      }
+
+      start = index + 1;
+      continue;
+    }
+
+    if (character === '(') {
+      roundDepth += 1;
+    } else if (character === ')') {
+      roundDepth -= 1;
+    } else if (character === '[') {
+      squareDepth += 1;
+    } else if (character === ']') {
+      squareDepth -= 1;
+    } else if (character === '{') {
+      curlyDepth += 1;
+    } else if (character === '}') {
+      curlyDepth -= 1;
+    }
+  }
+
+  return ranges;
+}
+
+function findJavaScriptTopLevelCharacter(
+  source: string,
+  range: SourceRange,
+  target: string,
+  codePositions: Uint8Array,
+): number | undefined {
+  let roundDepth = 0;
+  let squareDepth = 0;
+  let curlyDepth = 0;
+
+  for (let index = range.start; index < range.end; index += 1) {
+    if (codePositions[index] !== 1) {
+      continue;
+    }
+
+    const character = source[index] ?? '';
+
+    if (
+      character === target
+      && roundDepth === 0
+      && squareDepth === 0
+      && curlyDepth === 0
+    ) {
+      return index;
+    }
+
+    if (character === '(') {
+      roundDepth += 1;
+    } else if (character === ')') {
+      roundDepth -= 1;
+    } else if (character === '[') {
+      squareDepth += 1;
+    } else if (character === ']') {
+      squareDepth -= 1;
+    } else if (character === '{') {
+      curlyDepth += 1;
+    } else if (character === '}') {
+      curlyDepth -= 1;
+    }
+  }
+
+  return undefined;
 }
 
 function findJavaScriptBlockBindingHeader(
@@ -1686,6 +1863,28 @@ function readPreviousJavaScriptIdentifier(
 
   const identifierStart = findJavaScriptIdentifierStart(source, end, codePositions);
   return source.slice(identifierStart, end + 1);
+}
+
+function hasEscapedJavaScriptIdentifierContinuationBefore(
+  source: string,
+  position: number,
+  codePositions: Uint8Array,
+): boolean {
+  const prefixStart = Math.max(0, position - 12);
+  const match = /\\u\{([\dA-Fa-f]{1,6})\}$/u.exec(source.slice(prefixStart, position));
+
+  if (match?.index === undefined) {
+    return false;
+  }
+
+  const escapeStart = prefixStart + match.index;
+  const codePoint = Number.parseInt(match[1] ?? '', 16);
+
+  if (codePositions[escapeStart] !== 1 || codePoint > 0x10FFFF) {
+    return false;
+  }
+
+  return /[$\u200C\u200D\p{ID_Continue}]/u.test(String.fromCodePoint(codePoint));
 }
 
 function findJavaScriptLoopBodyRange(
@@ -1953,48 +2152,13 @@ function splitJavaScriptArguments(
   openingParenthesis: number,
   codePositions: Uint8Array,
 ): readonly SourceRange[] {
-  const ranges: SourceRange[] = [];
-  let start = openingParenthesis + 1;
-  let roundDepth = 0;
-  let squareDepth = 0;
-  let curlyDepth = 0;
-
-  for (let index = start; index < source.length; index += 1) {
-    if (codePositions[index] !== 1) {
-      continue;
-    }
-
-    const character = source[index] ?? '';
-
-    if (character === '(') {
-      roundDepth += 1;
-    } else if (character === '[') {
-      squareDepth += 1;
-    } else if (character === '{') {
-      curlyDepth += 1;
-    } else if (character === ')' && roundDepth > 0) {
-      roundDepth -= 1;
-    } else if (character === ']' && squareDepth > 0) {
-      squareDepth -= 1;
-    } else if (character === '}' && curlyDepth > 0) {
-      curlyDepth -= 1;
-    } else if (
-      (character === ',' || character === ')')
-      && roundDepth === 0
-      && squareDepth === 0
-      && curlyDepth === 0
-    ) {
-      ranges.push(trimSourceRange(source, { start, end: index }));
-
-      if (character === ')') {
-        break;
-      }
-
-      start = index + 1;
-    }
-  }
-
-  return ranges;
+  return splitJavaScriptTopLevelRanges(
+    source,
+    { start: openingParenthesis + 1, end: source.length },
+    ',',
+    codePositions,
+    ')',
+  );
 }
 
 function findJavaScriptExpressionRange(
@@ -3880,13 +4044,17 @@ function findExternalCssReference(source: string): string | undefined {
 }
 
 function findCssUrlTokens(source: string): readonly CssUrlToken[] {
-  const pattern = /(?<![-\w])url\s*\(/giu;
+  const cssIdentifierCharacter = String.raw`(?:[a-z]|\\(?:[\dA-Fa-f]{1,6}[\t\n\f\r ]?|[^\n\f\r]))`;
+  const pattern = new RegExp(`(?<![-\\w])((?:${cssIdentifierCharacter}){3})\\s*\\(`, 'giu');
   const codePositions = createCodePositionMap(source, false);
   const tokens: CssUrlToken[] = [];
   let match = pattern.exec(source);
 
   while (match !== null) {
-    if (codePositions[match.index] !== 1) {
+    if (
+      codePositions[match.index] !== 1
+      || decodeCssEscapes(match[1] ?? '').toLowerCase() !== 'url'
+    ) {
       match = pattern.exec(source);
       continue;
     }

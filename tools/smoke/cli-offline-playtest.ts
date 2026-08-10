@@ -685,6 +685,20 @@ try {
   );
   assert.match(parameterShadowManifestHtml, /\/assets\/route\.png/u);
 
+  const destructuredShadowManifestHtml = await packageAndReadFixture(
+    'destructured-shadow-manifest',
+    {
+      mainJs: 'const manifests = [{ key: "route", path: "/assets/route.png" }]; const config = { manifests: [] }; const scene = { load: { image() {} } }; { const { manifests } = config; for (const asset of manifests) scene.load.image(asset.key, asset.path); } document.body.dataset.route = manifests[0].path;',
+    },
+    [['artifacts/web-preview/assets/route.png', Buffer.from('destructured-shadow-route')]],
+  );
+  assert.match(destructuredShadowManifestHtml, /\/assets\/route\.png/u);
+
+  const defaultParameterManifestHtml = await packageAndReadFixture('default-parameter-manifest', {
+    mainJs: 'const manifests = [{ key: "logo", path: "/assets/icon.png" }]; const scene = { load: { image() {} } }; function load(options = manifests) { for (const asset of manifests) scene.load.image(asset.key, asset.path); } load();',
+  });
+  assert.doesNotMatch(defaultParameterManifestHtml, /\/assets\/icon\.png/u);
+
   const phaserHtmlAsset = '<section>offline panel fixture</section>';
   const phaserHtml = await packageAndReadFixture(
     'phaser-html-asset',
@@ -883,6 +897,11 @@ try {
   await packageAndReadFixture('unicode-fetch-boundary', {
     mainJs: 'const πfetch = (value) => value; document.body.dataset.value = πfetch("/assets/not-an-asset.json");',
   });
+
+  const escapedUnicodeFetchHtml = await packageAndReadFixture('escaped-unicode-fetch-boundary', {
+    mainJs: 'const \\u{3c0}fetch = (value) => value; document.body.dataset.value = \\u{3c0}fetch("/assets/not-an-asset.json");',
+  });
+  assert.match(escapedUnicodeFetchHtml, /\/assets\/not-an-asset\.json/u);
 
   const shadowedFetchHtml = await packageAndReadFixture('shadowed-fetch-binding', {
     mainJs: 'const fetch = (value) => value; document.body.dataset.value = fetch("/assets/not-an-asset.json");',
@@ -1130,6 +1149,15 @@ try {
   const escapedCssAssetHtml = await packageAndReadFixture('escaped-css-asset', {}, escapedCssFiles);
   assert.doesNotMatch(escapedCssAssetHtml, /player\\ icon\.png/u);
   assert.match(escapedCssAssetHtml, /data:image\/png;base64,/u);
+
+  const escapedUrlFunctionHtml = await packageAndReadFixture('escaped-css-url-function', {}, [
+    [
+      'artifacts/web-preview/assets/main.css',
+      'body { background-image: \\75rl("/assets/pixel.png"); }',
+    ],
+  ]);
+  assert.doesNotMatch(escapedUrlFunctionHtml, /\/assets\/pixel\.png/u);
+  assert.match(escapedUrlFunctionHtml, /data:image\/png;base64,/u);
 
   const imageSetFiles: readonly PreviewFixtureFile[] = [
     [
