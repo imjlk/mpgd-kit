@@ -508,11 +508,11 @@ function maskInertHtmlTemplateContents(html: string): string {
       depth -= 1;
 
       if (depth === 0 && start !== undefined) {
-        ranges.push({ start, end: match.index + match[0].length });
+        ranges.push({ start, end: match.index });
         start = undefined;
       }
     } else {
-      start ??= match.index;
+      start ??= match.index + match[0].length;
       depth += 1;
     }
   }
@@ -638,19 +638,30 @@ function inlineJavaScriptAssetReferences(
   sourceFile: string,
   context: InliningContext,
 ): string {
-  const staticUrlPattern = /new\s+URL\(\s*(["'`])([^"'`]+)\1\s*,\s*import\.meta\.url\s*\)(\s*\.\s*href)?/gu;
+  const staticUrlPattern = /new\s+URL\(\s*(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)\s*,\s*import\.meta\.url\s*\)(\s*\.\s*href)?/gu;
   const sourceCodePositions = createCodePositionMap(source, true);
   let output = source.replace(
     staticUrlPattern,
-    (match, quote: string, rawReference: string, hrefAccess: string | undefined, offset: number) => {
+    (
+      match,
+      doubleQuotedReference: string | undefined,
+      singleQuotedReference: string | undefined,
+      templateReference: string | undefined,
+      hrefAccess: string | undefined,
+      offset: number,
+    ) => {
       if (sourceCodePositions[offset] !== 1) {
         return match;
       }
 
-      if (quote === '`' && rawReference.includes('${')) {
+      if (
+        templateReference !== undefined
+        && containsUnescapedTemplateInterpolation(templateReference)
+      ) {
         return match;
       }
 
+      const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
       const reference = decodeJavaScriptStringLiteral(rawReference);
 
       if (reference.startsWith('data:') || reference.startsWith('blob:')) {
@@ -666,15 +677,36 @@ function inlineJavaScriptAssetReferences(
     },
   );
   const documentFile = path.join(context.artifactRoot, 'index.html');
-  const staticFetchPattern = /((?<![$.\w])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*\(\s*)(["'`])([^"'`\r\n]+)\2/gu;
+  const staticFetchPattern = /((?<![$.\w])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*\(\s*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
   const fetchCodePositions = createCodePositionMap(output, true);
   output = output.replace(
     staticFetchPattern,
-    (match, prefix: string, quote: string, rawReference: string, offset: number) => {
-      if (fetchCodePositions[offset] !== 1 || (quote === '`' && rawReference.includes('${'))) {
+    (
+      match,
+      prefix: string,
+      doubleQuotedReference: string | undefined,
+      singleQuotedReference: string | undefined,
+      templateReference: string | undefined,
+      offset: number,
+    ) => {
+      if (
+        fetchCodePositions[offset] !== 1
+        || (
+          templateReference !== undefined
+          && containsUnescapedTemplateInterpolation(templateReference)
+        )
+      ) {
         return match;
       }
 
+      let quote = '`';
+
+      if (doubleQuotedReference !== undefined) {
+        quote = '"';
+      } else if (singleQuotedReference !== undefined) {
+        quote = "'";
+      }
+      const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
       const reference = decodeJavaScriptStringLiteral(rawReference);
 
       if (reference.startsWith('data:') || reference.startsWith('blob:')) {
@@ -1794,7 +1826,8 @@ function assertSupportedHtmlDocument(html: string): void {
     throw new Error('Offline playtest does not support content before the head element.');
   }
 
-  const containsImportMap = findHtmlScriptElements(html).some(
+  const activeHtml = maskInertHtmlTemplateContents(html);
+  const containsImportMap = findHtmlScriptElements(activeHtml).some(
     (match) => readHtmlAttribute(match[2] ?? '', 'type')?.trim().toLowerCase() === 'importmap',
   );
 
@@ -1802,13 +1835,13 @@ function assertSupportedHtmlDocument(html: string): void {
     throw new Error('Offline playtest does not support HTML import maps.');
   }
 
-  for (const match of html.matchAll(createHtmlRawTextPattern())) {
+  for (const match of activeHtml.matchAll(createHtmlRawTextPattern())) {
     if (match[1] !== undefined) {
       assertSupportedHtmlAttributes(match[1], tokenizeHtmlAttributes(match[2] ?? ''));
     }
   }
 
-  transformOutsideHtmlRawText(html, (fragment) => {
+  transformOutsideHtmlRawText(activeHtml, (fragment) => {
     if (/<base\b(?:"[^"]*"|'[^']*'|[^'">])*>/iu.test(fragment)) {
       throw new Error('Offline playtest does not support HTML base elements.');
     }
@@ -2404,6 +2437,27 @@ function decodeJavaScriptStringLiteral(value: string): string {
   }
 
   return output;
+}
+
+function containsUnescapedTemplateInterpolation(value: string): boolean {
+  let backslashes = 0;
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+
+    if (character === '\\') {
+      backslashes += 1;
+      continue;
+    }
+
+    if (character === '$' && value[index + 1] === '{' && backslashes % 2 === 0) {
+      return true;
+    }
+
+    backslashes = 0;
+  }
+
+  return false;
 }
 
 function readAssetDataUrl(

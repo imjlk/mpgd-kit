@@ -271,6 +271,20 @@ try {
     /does not support SVG external script references/u,
   );
 
+  const inertTemplateHtml = await packageAndReadFixture('inert-template-navigation', {
+    indexHtml: '<!doctype html><html><head></head><body><template><a href="./credits.html">credits</a><svg><script href="/assets/side.js"></script></svg></template><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(inertTemplateHtml, /<a href="\.\/credits\.html">credits<\/a>/u);
+  assert.match(inertTemplateHtml, /<script href="\/assets\/side\.js"><\/script>/u);
+
+  const activeTemplateHandlerGame = createPreviewFixture('active-template-handler', {
+    indexHtml: '<!doctype html><html><head></head><body><template onclick="alert(1)"><span>inert</span></template><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: activeTemplateHandlerGame }),
+    /does not support inline HTML event handlers/u,
+  );
+
   const objectLocationHtml = await packageAndReadFixture('object-location-property', {
     mainJs: 'const frame = { location: "local" }; frame.location = "updated"; document.body.dataset.location = frame.location;',
   });
@@ -581,6 +595,20 @@ try {
   assert.doesNotMatch(escapedJavaScriptAssetHtml, /level\\u002ejson|icon\\x2epng/u);
   assert.match(escapedJavaScriptAssetHtml, /data:application\/json;base64,/u);
   assert.match(escapedJavaScriptAssetHtml, /data:image\/png;base64,/u);
+
+  const quotedJavaScriptAssetHtml = await packageAndReadFixture(
+    'quoted-javascript-asset',
+    {
+      mainJs: "const portrait = new URL(\"./player's.png\", import.meta.url); void fetch('./player\\'s.json'); document.body.dataset.portrait = portrait.href;",
+    },
+    [
+      ["artifacts/web-preview/assets/player's.png", onePixelPng],
+      ["artifacts/web-preview/player's.json", '{"player":1}\n'],
+    ],
+  );
+  assert.doesNotMatch(quotedJavaScriptAssetHtml, /player(?:\\'|')s\.(?:json|png)/u);
+  assert.match(quotedJavaScriptAssetHtml, /data:application\/json;base64,/u);
+  assert.match(quotedJavaScriptAssetHtml, /data:image\/png;base64,/u);
 
   const networkFetchGame = createPreviewFixture('network-fetch', {
     mainJs: 'void fetch("https://example.com/level.json");',
