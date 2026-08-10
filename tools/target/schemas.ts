@@ -65,6 +65,16 @@ export interface AppsInTossTargetConfig extends BaseTargetConfig {
   readonly wrapperApp: string;
   readonly webDir: string;
   readonly artifact: '.ait';
+  /** Build-time Apps in Toss navigation chrome for this deployment target. */
+  readonly navigationBar?: AppsInTossNavigationBarConfig;
+}
+
+export interface AppsInTossNavigationBarConfig {
+  readonly withBackButton?: boolean;
+  readonly withHomeButton?: boolean;
+  readonly withTitle?: boolean;
+  readonly transparentBackground?: boolean;
+  readonly theme?: 'light' | 'dark';
 }
 
 export interface DevvitTargetConfig extends BaseTargetConfig {

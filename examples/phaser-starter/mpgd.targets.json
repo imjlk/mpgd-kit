@@ -51,6 +51,13 @@
         "primaryColor": "#101820",
         "sdkMajor": 3
       },
+      "navigationBar": {
+        "withBackButton": false,
+        "withHomeButton": false,
+        "withTitle": false,
+        "transparentBackground": true,
+        "theme": "dark"
+      },
       "icon": { "profile": "ait" },
       "webDir": "../../apps/target-ait/public/game",
       "artifact": ".ait"

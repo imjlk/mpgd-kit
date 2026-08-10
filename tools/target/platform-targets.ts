@@ -117,11 +117,50 @@ function assertPlatformTargetConfigShape(
       assertString(input.artifact, `${target}.artifact`);
       break;
     case 'apps-in-toss':
+      assertAppsInTossNavigationBar(input.navigationBar, target);
+      assertString(input.wrapperApp, `${target}.wrapperApp`);
+      assertString(input.webDir, `${target}.webDir`);
+      assertString(input.artifact, `${target}.artifact`);
+      break;
     case 'devvit-web':
       assertString(input.wrapperApp, `${target}.wrapperApp`);
       assertString(input.webDir, `${target}.webDir`);
       assertString(input.artifact, `${target}.artifact`);
       break;
+  }
+}
+
+function assertAppsInTossNavigationBar(input: unknown, target: string): void {
+  if (input === undefined) {
+    return;
+  }
+
+  assertRecord(input, `${target}.navigationBar`);
+  const supportedKeys = new Set([
+    'withBackButton',
+    'withHomeButton',
+    'withTitle',
+    'transparentBackground',
+    'theme',
+  ]);
+
+  for (const key of Object.keys(input)) {
+    if (!supportedKeys.has(key)) {
+      throw new Error(`${target}.navigationBar.${key} is not a recognized navigation option.`);
+    }
+  }
+
+  for (const key of [
+    'withBackButton',
+    'withHomeButton',
+    'withTitle',
+    'transparentBackground',
+  ] as const) {
+    assertOptionalBoolean(input[key], `${target}.navigationBar.${key}`);
+  }
+
+  if (input.theme !== undefined && input.theme !== 'light' && input.theme !== 'dark') {
+    throw new Error(`${target}.navigationBar.theme must be light or dark.`);
   }
 }
 

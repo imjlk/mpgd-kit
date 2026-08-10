@@ -1108,6 +1108,8 @@ function validatePhaserTemplateAITWrapper(): void {
       '__GAME_NAME__',
       'type AppsInTossConfig',
       "primaryColor: readEnvString(process.env.MPGD_AIT_PRIMARY_COLOR) ?? '#101820'",
+      'readNavigationBar(process.env.MPGD_AIT_NAVIGATION_BAR)',
+      'navigationBar === undefined ? {} : { navigationBar }',
       'webView: {',
       "webBundleDir: 'dist'",
     ]) {
@@ -1127,6 +1129,13 @@ function validatePhaserTemplateAITWrapper(): void {
         readonly ait?: {
           readonly wrapperApp?: unknown;
           readonly webDir?: unknown;
+          readonly navigationBar?: {
+            readonly withBackButton?: unknown;
+            readonly withHomeButton?: unknown;
+            readonly withTitle?: unknown;
+            readonly transparentBackground?: unknown;
+            readonly theme?: unknown;
+          };
           readonly metadata?: {
             readonly appName?: unknown;
             readonly displayName?: unknown;
@@ -1162,6 +1171,31 @@ function validatePhaserTemplateAITWrapper(): void {
         targets.targets?.ait?.metadata?.primaryColor,
         '#101820',
         `${targetsPath}: targets.ait.metadata.primaryColor`,
+      );
+      assertEqual(
+        targets.targets?.ait?.navigationBar?.withBackButton,
+        false,
+        `${targetsPath}: targets.ait.navigationBar.withBackButton`,
+      );
+      assertEqual(
+        targets.targets?.ait?.navigationBar?.withHomeButton,
+        false,
+        `${targetsPath}: targets.ait.navigationBar.withHomeButton`,
+      );
+      assertEqual(
+        targets.targets?.ait?.navigationBar?.withTitle,
+        false,
+        `${targetsPath}: targets.ait.navigationBar.withTitle`,
+      );
+      assertEqual(
+        targets.targets?.ait?.navigationBar?.transparentBackground,
+        true,
+        `${targetsPath}: targets.ait.navigationBar.transparentBackground`,
+      );
+      assertEqual(
+        targets.targets?.ait?.navigationBar?.theme,
+        'dark',
+        `${targetsPath}: targets.ait.navigationBar.theme`,
       );
       if (targets.targets?.ait?.metadata?.sdkMajor !== 3) {
         failures.push(`${targetsPath}: targets.ait.metadata.sdkMajor must be 3.`);
@@ -2033,7 +2067,7 @@ function assertIncludes(input: unknown, expected: string, label: string): void {
   }
 }
 
-function assertEqual(input: unknown, expected: string, label: string): void {
+function assertEqual(input: unknown, expected: string | boolean, label: string): void {
   if (input !== expected) {
     failures.push(`${label} must be ${expected}.`);
   }

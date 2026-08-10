@@ -161,7 +161,7 @@ const runtimeTargetConfigMatrixFile = createRuntimeTargetConfigMatrixFile(
 const env: NodeJS.ProcessEnv = {
   ...process.env,
   ...monetizationCatalogEnv,
-  ...targetReleaseMetadataEnv(target),
+  ...targetBuildConfigEnv(target),
   APP_TARGET: appTarget,
   MPGD_CONFIG_TARGET: targetName,
   APP_VERSION: appVersion,
@@ -429,28 +429,31 @@ function mirrorAitRuntimeAssets(gameApp: string, wrapperApp: string): void {
   }
 }
 
-function targetReleaseMetadataEnv(target: PlatformTargetConfig): NodeJS.ProcessEnv {
+function targetBuildConfigEnv(target: PlatformTargetConfig): NodeJS.ProcessEnv {
   const metadata = target.metadata;
-
-  if (metadata === undefined) {
-    return {};
-  }
-
   const env: NodeJS.ProcessEnv = {};
 
-  assignEnv(env, 'MPGD_TARGET_APP_NAME', metadata.appName);
-  assignEnv(env, 'MPGD_TARGET_DISPLAY_NAME', metadata.displayName);
-  assignEnv(env, 'MPGD_TARGET_PRIMARY_COLOR', metadata.primaryColor);
-  assignEnv(env, 'MPGD_TARGET_PACKAGE_ID', metadata.packageId);
-  assignEnv(env, 'MPGD_TARGET_BUNDLE_ID', metadata.bundleId);
+  if (metadata !== undefined) {
+    assignEnv(env, 'MPGD_TARGET_APP_NAME', metadata.appName);
+    assignEnv(env, 'MPGD_TARGET_DISPLAY_NAME', metadata.displayName);
+    assignEnv(env, 'MPGD_TARGET_PRIMARY_COLOR', metadata.primaryColor);
+    assignEnv(env, 'MPGD_TARGET_PACKAGE_ID', metadata.packageId);
+    assignEnv(env, 'MPGD_TARGET_BUNDLE_ID', metadata.bundleId);
 
-  assignSdkMajorEnv(env, 'MPGD_TARGET_SDK_MAJOR', metadata.sdkMajor, 'metadata.sdkMajor');
+    assignSdkMajorEnv(env, 'MPGD_TARGET_SDK_MAJOR', metadata.sdkMajor, 'metadata.sdkMajor');
+  }
 
   if (target.kind === 'apps-in-toss') {
-    assignEnv(env, 'MPGD_AIT_APP_NAME', metadata.appName);
-    assignEnv(env, 'MPGD_AIT_PRIMARY_COLOR', metadata.primaryColor);
+    if (metadata !== undefined) {
+      assignEnv(env, 'MPGD_AIT_APP_NAME', metadata.appName);
+      assignEnv(env, 'MPGD_AIT_PRIMARY_COLOR', metadata.primaryColor);
 
-    assignSdkMajorEnv(env, 'MPGD_AIT_SDK_MAJOR', metadata.sdkMajor, 'metadata.sdkMajor');
+      assignSdkMajorEnv(env, 'MPGD_AIT_SDK_MAJOR', metadata.sdkMajor, 'metadata.sdkMajor');
+    }
+
+    if (target.navigationBar !== undefined) {
+      env.MPGD_AIT_NAVIGATION_BAR = JSON.stringify(target.navigationBar);
+    }
   }
 
   return env;
