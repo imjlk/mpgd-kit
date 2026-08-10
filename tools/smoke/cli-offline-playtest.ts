@@ -239,6 +239,17 @@ try {
     /does not support script-driven navigation/u,
   );
 
+  for (const [name, mainJs] of [
+    ['computed-location-assignment', 'window["location"]["href"] = "https://example.com";'],
+    ['computed-location-method', 'location["assign"]("https://example.com");'],
+  ] as const) {
+    const computedNavigationGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: computedNavigationGame }),
+      /does not support script-driven navigation/u,
+    );
+  }
+
   const unqualifiedOpenHtml = await packageAndReadFixture('unqualified-open-guard', {
     mainJs: 'button.addEventListener("click", () => open("https://example.com"));',
   });
@@ -333,6 +344,14 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: externalFallbackGame }),
     /does not support additional external scripts/u,
+  );
+
+  const integrityEntryGame = createPreviewFixture('integrity-entry', {
+    indexHtml: '<!doctype html><html><head></head><body><main id="game"></main><script type="module" src="/assets/main.js" integrity="sha256-invalid"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: integrityEntryGame }),
+    /does not support integrity-protected entry scripts/u,
   );
 
   const legacyFallbackHtml = await packageAndReadFixture('legacy-fallback', {
@@ -620,6 +639,24 @@ try {
     );
   }
 
+  for (const method of ['css', 'multiatlas', 'pack', 'tilemapTiledJSON']) {
+    const unsupportedLoaderGame = createPreviewFixture(`phaser-loader-${method.toLowerCase()}`, {
+      mainJs: `const scene = { load: { ${method}() {} } }; scene.load.${method}("asset", "/assets/fixture.json");`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: unsupportedLoaderGame }),
+      new RegExp(`does not support Phaser ${method} loader assets`, 'u'),
+    );
+  }
+
+  const computedUnsupportedLoaderGame = createPreviewFixture('phaser-loader-computed-css', {
+    mainJs: 'const scene = { load: { css() {} } }; scene["load"]["css"]("asset", "/assets/main.css");',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: computedUnsupportedLoaderGame }),
+    /does not support Phaser css loader assets/u,
+  );
+
   const externalGltfGame = createPreviewFixture('external-gltf', {
     mainJs: 'document.body.dataset.scene = new URL("./scene.gltf", import.meta.url).href;',
   });
@@ -833,6 +870,14 @@ try {
   });
   assert.doesNotMatch(preloadHtml, /(?:rel="preload"|\/assets\/splash\.png)/u);
 
+  const integrityStylesheetGame = createPreviewFixture('integrity-stylesheet', {
+    indexHtml: '<!doctype html><html><head><link rel="stylesheet" href="/assets/main.css" integrity="sha256-invalid"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: integrityStylesheetGame }),
+    /does not support integrity-protected stylesheets/u,
+  );
+
   const mixedSrcsetHtml = await packageAndReadFixture('mixed-srcset', {
     indexHtml: '<!doctype html><html><head></head><body><img srcset="data:image/png;base64,AAAA, /assets/pixel.png 2x, blob:fixture 3x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -1016,6 +1061,14 @@ try {
   );
   assert.match(objectAssetHtml, /object-src data:/u);
   assert.match(objectAssetHtml, /data:image\/svg\+xml;base64,/u);
+
+  const activeDataObjectGame = createPreviewFixture('active-data-object', {
+    indexHtml: '<!doctype html><html><head></head><body><object data="data:text/html;base64,PHNjcmlwdD5vcGVuKCJodHRwczovL2V4YW1wbGUuY29tIik8L3NjcmlwdD4="></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: activeDataObjectGame }),
+    /does not support embedded active data documents/u,
+  );
 
   const nestedSvgGame = createPreviewFixture('nested-svg', {
     indexHtml: '<!doctype html><html><head></head><body><img src="/assets/nested.svg"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',

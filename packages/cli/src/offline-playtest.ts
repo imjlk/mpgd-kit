@@ -137,15 +137,12 @@ const phaserLoaderUrlArgumentIndexes: Readonly<Record<string, readonly number[]>
   audioSprite: [1, 2],
   binary: [1],
   bitmapFont: [1, 2],
-  css: [1],
   font: [1],
   glsl: [1],
   html: [1],
   htmlTexture: [1],
   image: [1],
   json: [1],
-  multiatlas: [1],
-  pack: [1],
   plugin: [1],
   sceneFile: [1],
   scenePlugin: [1],
@@ -156,11 +153,11 @@ const phaserLoaderUrlArgumentIndexes: Readonly<Record<string, readonly number[]>
   text: [1],
   tilemapCSV: [1],
   tilemapImpact: [1],
-  tilemapTiledJSON: [1],
   unityAtlas: [1, 2],
   video: [1],
   xml: [1],
 };
+const unsupportedPhaserLoaderMethods = new Set(['css', 'multiatlas', 'pack', 'tilemapTiledJSON']);
 const javascriptScriptTypes = new Set([
   'application/ecmascript',
   'application/javascript',
@@ -226,6 +223,8 @@ const offlinePlaytestLimitations = [
   'Retained inline modules cannot import other modules, and script-driven navigation is unsupported.',
   'Iframe documents and non-fragment hyperlinks are unsupported.',
   'Phaser loader base URL and path prefixes are unsupported; pass complete artifact-relative URLs.',
+  'Phaser CSS and composite manifest loaders are unsupported.',
+  'Subresource-integrity-protected entry scripts and stylesheets are unsupported.',
 ] as const;
 
 const mimeTypes = new Map<string, string>([
@@ -469,6 +468,10 @@ function extractModuleEntry(
   }
 
   const entryFile = resolveLocalReference(context.artifactRoot, context.artifactRoot, source);
+
+  if (hasHtmlAttributeToken(entry.attributes, 'integrity')) {
+    throw new Error('Offline playtest does not support integrity-protected entry scripts.');
+  }
 
   for (const externalScript of externalScripts) {
     if (externalScript === entry) {
@@ -782,7 +785,7 @@ function inlinePhaserAssetReferences(
   context: InliningContext,
 ): string {
   const codePositions = createCodePositionMap(source, true);
-  assertNoPhaserLoaderUrlPrefixes(source, codePositions);
+  assertSupportedPhaserLoaderConfiguration(source);
   const manifestRanges = findPhaserManifestUrlRanges(source, codePositions);
   const loaderRanges = findPhaserLoaderUrlRanges(source, codePositions);
   const ranges: SourceRange[] = [...manifestRanges, ...loaderRanges];
@@ -863,12 +866,28 @@ function inlinePhaserAssetReferences(
   return output;
 }
 
-function assertNoPhaserLoaderUrlPrefixes(source: string, codePositions: Uint8Array): void {
+function assertSupportedPhaserLoaderConfiguration(source: string): void {
+  const normalizedSource = normalizeStaticJavaScriptPropertyAccess(source);
+  const codePositions = createCodePositionMap(normalizedSource, true);
   const pattern = /\.\s*load\s*\.\s*(?:setBaseURL|setPath)\s*\(/gu;
 
-  for (const match of source.matchAll(pattern)) {
+  for (const match of normalizedSource.matchAll(pattern)) {
     if (match.index !== undefined && codePositions[match.index] === 1) {
       throw new Error('Offline playtest does not support Phaser loader base URL or path prefixes.');
+    }
+  }
+
+  const unsupportedMethods = [...unsupportedPhaserLoaderMethods]
+    .map(escapeRegExp)
+    .join('|');
+  const unsupportedPattern = new RegExp(
+    `\\.\\s*load\\s*\\.\\s*(${unsupportedMethods})\\s*\\(`,
+    'gu',
+  );
+
+  for (const match of normalizedSource.matchAll(unsupportedPattern)) {
+    if (match.index !== undefined && codePositions[match.index] === 1) {
+      throw new Error(`Offline playtest does not support Phaser ${match[1]} loader assets.`);
     }
   }
 }
@@ -1327,6 +1346,10 @@ function inlineStylesheets(
 
       if (href === undefined) {
         throw new Error('Stylesheet link is missing href.');
+      }
+
+      if (hasHtmlAttributeToken(attributeTokens, 'integrity')) {
+        throw new Error('Offline playtest does not support integrity-protected stylesheets.');
       }
 
       const stylesheetFile = resolveLocalReference(context.artifactRoot, path.dirname(htmlFile), href);
@@ -1792,6 +1815,10 @@ function inlineHtmlAssetFragment(
       if (attribute === 'srcset') {
         inlined = inlineHtmlSrcset(htmlFile, reference, context);
       } else if (reference.startsWith('data:') || reference.startsWith('blob:')) {
+        if (lowerName === 'embed' || lowerName === 'object') {
+          throw new Error('Offline playtest does not support embedded active data documents.');
+        }
+
         inlined = reference;
       } else {
         inlined = readAssetDataUrl(htmlFile, reference, context);
@@ -2089,8 +2116,9 @@ function assertSupportedBundledRuntime(source: string): void {
       label: 'script-driven navigation',
     },
   ];
-  const codePositions = createCodePositionMap(source, true);
-  const codeOnlySource = maskNonCode(source, codePositions);
+  const normalizedSource = normalizeStaticJavaScriptPropertyAccess(source);
+  const codePositions = createCodePositionMap(normalizedSource, true);
+  const codeOnlySource = maskNonCode(normalizedSource, codePositions);
 
   for (const candidate of unsupported) {
     if (candidate.pattern.test(codeOnlySource)) {
@@ -2100,6 +2128,36 @@ function assertSupportedBundledRuntime(source: string): void {
 
     candidate.pattern.lastIndex = 0;
   }
+}
+
+function normalizeStaticJavaScriptPropertyAccess(source: string): string {
+  const codePositions = createCodePositionMap(source, true);
+  const pattern = /\[\s*(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)')\s*\]/gu;
+  const replacements: SourceReplacement[] = [];
+
+  for (const match of source.matchAll(pattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const property = decodeJavaScriptStringLiteral(match[1] ?? match[2] ?? '');
+
+    if (/^[$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*$/u.test(property)) {
+      replacements.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        value: `.${property}`,
+      });
+    }
+  }
+
+  let output = source;
+
+  for (const replacement of replacements.reverse()) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
+  return output.replace(/\?\./gu, '.');
 }
 
 function maskNonCode(source: string, codePositions: Uint8Array): string {
