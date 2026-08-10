@@ -1331,6 +1331,7 @@ function inlineStaticXmlHttpRequestOpenCalls(
 
     if (
       binding === undefined
+      || binding.kind !== 'const'
       || binding.start >= match.index
       || !isXmlHttpRequestBinding(source, binding, codePositions)
     ) {
@@ -3652,7 +3653,7 @@ function transformOutsideHtmlRawText(
 }
 
 function createHtmlRawTextPattern(): RegExp {
-  return /<!--[\s\S]*?--!?>|<(script|style|textarea|title)\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/\1\s*>/giu;
+  return /<!--[\s\S]*?--!?>|<(script|style|textarea|title)\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/\1\s*\/?\s*>/giu;
 }
 
 function maskHtmlRawTextBodies(html: string): string {
@@ -4277,6 +4278,9 @@ function assertNoScriptDrivenNavigation(
     }
   }
 
+  const aliasAssignments = findLocationAliasAssignments(source, codePositions);
+  assertNoIndirectLocationMutation(source, codePositions, aliasAssignments);
+
   const locationOperation = '(?:\\s*\\.\\s*(?:assign|replace)\\b|(?:\\s*\\.\\s*href)?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
   const qualifiedLocationPattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${globalObject}\\s*\\.\\s*location${locationOperation}`,
@@ -4323,7 +4327,6 @@ function assertNoScriptDrivenNavigation(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${locationOperation}`,
     'gu',
   );
-  const aliasAssignments = findLocationAliasAssignments(source, codePositions);
   const potentialAliases = findPotentialLocationAliasIdentifiers(aliasAssignments);
 
   for (const match of source.matchAll(aliasPattern)) {
@@ -4341,6 +4344,61 @@ function assertNoScriptDrivenNavigation(
         source,
         match[1],
         match.index,
+        codePositions,
+        aliasAssignments,
+        new Set<string>(),
+      )
+    ) {
+      throw new Error('Offline playtest does not support script-driven navigation.');
+    }
+  }
+}
+
+function assertNoIndirectLocationMutation(
+  source: string,
+  codePositions: Uint8Array,
+  aliasAssignments: readonly LocationAliasAssignment[],
+): void {
+  const pattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(Object|Reflect)\s*\.\s*(assign|defineProperties|defineProperty|set)\s*\(/gu;
+
+  for (const match of source.matchAll(pattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || match[2] === undefined
+      || codePositions[match.index] !== 1
+      || findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1],
+        match.index,
+        codePositions,
+      ) !== undefined
+      || (
+        match[1] === 'Object'
+          ? !['assign', 'defineProperties', 'defineProperty'].includes(match[2])
+          : !['defineProperty', 'set'].includes(match[2])
+      )
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = source.indexOf('(', match.index);
+    const target = splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+
+    if (target === undefined) {
+      continue;
+    }
+
+    const targetExpression = maskNonCode(
+      source.slice(target.start, target.end),
+      codePositions.slice(target.start, target.end),
+    ).trim();
+
+    if (
+      isLocationAliasExpression(
+        source,
+        targetExpression,
+        target.start,
         codePositions,
         aliasAssignments,
         new Set<string>(),
@@ -5533,6 +5591,8 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
       );
     }
 
+    const rel = tag.name === 'link' ? readHtmlRelTokenSet(tag.attributes) : undefined;
+
     for (const attribute of tag.attributes) {
       if (attribute.name.length > 2 && attribute.name.startsWith('on')) {
         throw new Error(
@@ -5545,6 +5605,17 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
       }
 
       const value = decodeHtmlCharacterReferences(attribute.value);
+
+      if (
+        tag.name === 'link'
+        && attribute.name === 'href'
+        && rel?.has('stylesheet') === true
+        && isDataUrlReference(value)
+      ) {
+        throw new Error(
+          `Offline playtest requires inert self-contained HTML assets: ${htmlFile} contains a data-backed stylesheet`,
+        );
+      }
 
       if (
         (
@@ -5640,6 +5711,15 @@ function assertSelfContainedSvg(svgFile: string, source: string): void {
 
 function findActiveSvgContent(source: string): string | undefined {
   for (const tag of findHtmlTagTokens(source)) {
+    const localName = tag.name.split(':').at(-1) ?? tag.name;
+
+    if (
+      !tag.closing
+      && ['animate', 'animatemotion', 'animatetransform', 'set'].includes(localName)
+    ) {
+      return `<${tag.name}>`;
+    }
+
     if (!tag.closing && (tag.name === 'script' || tag.name.endsWith(':script'))) {
       return '<script>';
     }

@@ -374,6 +374,11 @@ try {
   for (const [name, mainJs] of [
     ['computed-location-assignment', 'window["location"]["href"] = "https://example.com";'],
     ['computed-location-method', 'location["assign"]("https://example.com");'],
+    ['reflected-location-assignment', 'Reflect.set(location, "href", "https://example.com");'],
+    [
+      'object-location-assignment',
+      'Object.assign(window.location, { href: "https://example.com" });',
+    ],
     ['template-location-assignment', 'location[`href`] = "https://example.com";'],
     ['qualified-template-location-assignment', 'window.location[`href`] = "https://example.com";'],
     ['default-view-location', 'document.defaultView.location.href = "https://example.com";'],
@@ -412,6 +417,14 @@ try {
     },
   );
   assert.match(shadowedEscapedLocationHtml, /local/u);
+
+  const shadowedReflectLocationHtml = await packageAndReadFixture(
+    'shadowed-reflect-location-assignment',
+    {
+      mainJs: 'function mutate(Reflect, location) { Reflect.set(location, "href", "local"); } mutate({ set() {} }, {});',
+    },
+  );
+  assert.match(shadowedReflectLocationHtml, /local/u);
 
   for (const [lineEndingName, lineEnding] of [
     ['lf', '\n'],
@@ -698,6 +711,13 @@ try {
     () => runOfflinePlaytestPackaging({ gameRoot: templateLookalikeGame }),
     /does not support iframe documents/u,
   );
+
+  const selfClosingScriptEndHtml = await packageAndReadFixture('self-closing-script-end', {
+    indexHtml: '<!doctype html><html><head><script>window.fixture = "ready";</script/><img src="/assets/pixel.png"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(selfClosingScriptEndHtml, /window\.fixture\s*=\s*["']ready["']/u);
+  assert.doesNotMatch(selfClosingScriptEndHtml, /\/assets\/pixel\.png/u);
+  assert.match(selfClosingScriptEndHtml, /data:image\/png;base64,/u);
 
   const objectLocationHtml = await packageAndReadFixture('object-location-property', {
     mainJs: 'const frame = { location: "local" }; frame.location = "updated"; document.body.dataset.location = frame.location;',
@@ -1184,6 +1204,18 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: externalImageSetPhaserHtmlGame }),
     /requires self-contained HTML assets.*references \/assets\/pixel\.png/u,
+  );
+
+  const dataStylesheetPhaserHtmlGame = createPreviewFixture('data-stylesheet-phaser-html', {
+    mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
+  });
+  fs.writeFileSync(
+    path.join(dataStylesheetPhaserHtmlGame, 'artifacts/web-preview/assets/panel.html'),
+    '<link rel="stylesheet" href="data:text/css,body%7Bbackground:url(https://example.com/x.png)%7D"><section>panel</section>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dataStylesheetPhaserHtmlGame }),
+    /contains a data-backed stylesheet/u,
   );
 
   const refreshingPhaserHtmlGame = createPreviewFixture('refreshing-phaser-html', {
@@ -1677,6 +1709,18 @@ try {
   assert.doesNotMatch(xmlHttpRequestHtml, /\/assets\/level\.json/u);
   assert.match(xmlHttpRequestHtml, /data:application\/json;base64,/u);
 
+  const reassignedXmlHttpRequestHtml = await packageAndReadFixture(
+    'reassigned-xml-http-request',
+    {
+      mainJs: [
+        'const client = { open(method, url) { document.body.dataset.url = url; } };',
+        'let request = new XMLHttpRequest(); request = client;',
+        'request.open("GET", "/api/route");',
+      ].join(' '),
+    },
+  );
+  assert.match(reassignedXmlHttpRequestHtml, /\/api\/route/u);
+
   const shadowedXmlHttpRequestHtml = await packageAndReadFixture('shadowed-xml-http-request', {
     mainJs: 'class XMLHttpRequest { open(method, url) { document.body.dataset.url = url; } send() {} } const request = new XMLHttpRequest(); request.open("GET", "/assets/level.json"); request.send();',
   }, [['artifacts/web-preview/assets/level.json', '{"level":1}\n']]);
@@ -2112,6 +2156,18 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: activeSvgGame }),
     /does not support active SVG content/u,
+  );
+
+  const animatedSvgGame = createPreviewFixture('animated-svg-url', {
+    indexHtml: '<!doctype html><html><head></head><body><object data="/assets/animated.svg"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(animatedSvgGame, 'artifacts/web-preview/assets/animated.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"><image id="target"/><set href="#target" attributeName="href" to="https://example.com/p.png"/></svg>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: animatedSvgGame }),
+    /does not support active SVG content.*contains <set>/u,
   );
 
   const styledSvgGame = createPreviewFixture('styled-svg', {
