@@ -251,6 +251,19 @@ try {
     /does not support script-driven navigation/u,
   );
 
+  const documentOpenHtml = await packageAndReadFixture('document-open-writer', {
+    mainJs: 'document.open(/* local writer */); document.write("<main>offline</main>"); document.close();',
+  });
+  assert.match(documentOpenHtml, /document\.open\(\)/u);
+
+  const documentOpenNavigationGame = createPreviewFixture('document-open-navigation', {
+    mainJs: 'document.open("https://example.com/escape", "_blank", "noopener");',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: documentOpenNavigationGame }),
+    /does not support script-driven navigation/u,
+  );
+
   for (const [name, mainJs] of [
     ['computed-location-assignment', 'window["location"]["href"] = "https://example.com";'],
     ['computed-location-method', 'location["assign"]("https://example.com");'],
@@ -828,6 +841,29 @@ try {
     /contains meta refresh/u,
   );
 
+  for (const [name, embeddedDocument] of [
+    [
+      'data-html-document-phaser-html',
+      '<object data="data:text/html;base64,PHNjcmlwdD5vcGVuKCJodHRwczovL2V4YW1wbGUuY29tIik8L3NjcmlwdD4="></object>',
+    ],
+    [
+      'data-svg-document-phaser-html',
+      '<embed src="data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9Im9wZW4oJ2h0dHBzOi8vZXhhbXBsZS5jb20nKSIvPg==">',
+    ],
+  ] as const) {
+    const activeNestedDocumentGame = createPreviewFixture(name, {
+      mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
+    });
+    fs.writeFileSync(
+      path.join(activeNestedDocumentGame, 'artifacts/web-preview/assets/panel.html'),
+      embeddedDocument,
+    );
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: activeNestedDocumentGame }),
+      /contains an embedded active data document/u,
+    );
+  }
+
   for (const method of ['setPath', 'setBaseURL']) {
     const prefixedPhaserGame = createPreviewFixture(`phaser-loader-${method.toLowerCase()}`, {
       mainJs: `const scene = new Phaser.Scene(); scene.load.${method}("/assets"); scene.load.image("hero", "hero.png");`,
@@ -1015,6 +1051,14 @@ try {
   );
   assert.doesNotMatch(browserAudioHtml, /\/assets\/click\.mp3/u);
   assert.match(browserAudioHtml, /data:audio\/mpeg;base64,/u);
+
+  const assignedBrowserAudioHtml = await packageAndReadFixture(
+    'assigned-browser-audio-asset',
+    { mainJs: 'const click = new Audio(); click.src = "/assets/click.mp3"; void click;' },
+    [['artifacts/web-preview/assets/click.mp3', Buffer.from('assigned-browser-audio')]],
+  );
+  assert.doesNotMatch(assignedBrowserAudioHtml, /\/assets\/click\.mp3/u);
+  assert.match(assignedBrowserAudioHtml, /data:audio\/mpeg;base64,/u);
 
   const browserImageHtml = await packageAndReadFixture('browser-image-asset', {
     mainJs: 'const splash = new Image(); splash.src = "/assets/pixel.png"; document.body.append(splash);',

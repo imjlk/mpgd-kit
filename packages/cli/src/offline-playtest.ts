@@ -921,13 +921,13 @@ function inlineJavaScriptAssetReferences(
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
-  output = inlineStaticImageSourceAssignments(output, documentFile, context);
+  output = inlineStaticElementSourceAssignments(output, documentFile, context);
   output = inlineStaticXmlHttpRequestOpenCalls(output, documentFile, context);
   output = inlinePhaserAssetReferences(output, documentFile, context);
   return output;
 }
 
-function inlineStaticImageSourceAssignments(
+function inlineStaticElementSourceAssignments(
   source: string,
   documentFile: string,
   context: InliningContext,
@@ -975,26 +975,30 @@ function inlineStaticImageSourceAssignments(
           source.slice(binding.initializerRange.start, binding.initializerRange.end),
           codePositions.slice(binding.initializerRange.start, binding.initializerRange.end),
         ).trim();
-      const imageQualifier = initializer === undefined
+      const constructor = initializer === undefined
         ? undefined
-        : /^new\s+(globalThis|self|window)\s*\.\s*Image(?:\s*\(|$)/u.exec(initializer)?.[1];
+        : /^new\s+(?:(globalThis|self|window)\s*\.\s*)?(Audio|Image)(?:\s*\(\s*\))?$/u.exec(
+          initializer,
+        );
+      const qualifier = constructor?.[1];
+      const constructorName = constructor?.[2];
 
       if (
         binding === undefined
         || initializer === undefined
         || binding.start >= offset
-        || !/^new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Image(?:\s*\(\s*\))?$/u.test(initializer)
+        || constructorName === undefined
         || (
-          imageQualifier === undefined
+          qualifier === undefined
             ? findVisibleJavaScriptIdentifierBinding(
               source,
-              'Image',
+              constructorName,
               binding.initializerRange?.start ?? offset,
               codePositions,
             ) !== undefined
             : findVisibleJavaScriptIdentifierBinding(
               source,
-              imageQualifier,
+              qualifier,
               binding.initializerRange?.start ?? offset,
               codePositions,
             ) !== undefined
@@ -1018,7 +1022,9 @@ function inlineStaticImageSourceAssignments(
       }
 
       if (isNonLocalReference(reference)) {
-        throw new Error(`Offline playtest does not support network Image URL: ${reference}`);
+        throw new Error(
+          `Offline playtest does not support network ${constructorName} URL: ${reference}`,
+        );
       }
 
       const dataUrl = escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote);
@@ -3652,6 +3658,24 @@ function assertNoScriptDrivenNavigation(
         codePositions,
       ) === undefined
     ) {
+      if (match[1] === 'document') {
+        const openingParenthesis = source.indexOf('(', match.index);
+        const hasArguments = splitJavaScriptArguments(
+          source,
+          openingParenthesis,
+          codePositions,
+        ).some((argument) =>
+          maskNonCode(
+            source.slice(argument.start, argument.end),
+            codePositions.slice(argument.start, argument.end),
+          ).trim().length > 0,
+        );
+
+        if (!hasArguments) {
+          continue;
+        }
+      }
+
       throw new Error('Offline playtest does not support script-driven navigation.');
     }
   }
@@ -4648,6 +4672,18 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
       }
 
       const value = decodeHtmlCharacterReferences(attribute.value);
+
+      if (
+        (
+          (tag.name === 'object' && attribute.name === 'data')
+          || (tag.name === 'embed' && attribute.name === 'src')
+        )
+        && isInMemoryUrlReference(value)
+      ) {
+        throw new Error(
+          `Offline playtest requires inert self-contained HTML assets: ${htmlFile} contains an embedded active data document`,
+        );
+      }
 
       if (attribute.name === 'style') {
         const reference = findExternalCssReference(value);
