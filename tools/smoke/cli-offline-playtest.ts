@@ -358,6 +358,8 @@ try {
   for (const [name, mainJs] of [
     ['computed-location-assignment', 'window["location"]["href"] = "https://example.com";'],
     ['computed-location-method', 'location["assign"]("https://example.com");'],
+    ['template-location-assignment', 'location[`href`] = "https://example.com";'],
+    ['qualified-template-location-assignment', 'window.location[`href`] = "https://example.com";'],
     ['default-view-location', 'document.defaultView.location.href = "https://example.com";'],
   ] as const) {
     const computedNavigationGame = createPreviewFixture(name, { mainJs });

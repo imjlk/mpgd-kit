@@ -4832,7 +4832,7 @@ function normalizeRuntimeGlobalAliases(source: string): string {
 
 function normalizeStaticJavaScriptPropertyAccess(source: string): string {
   const codePositions = createCodePositionMap(source, true);
-  const pattern = /\[\s*(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)')\s*\]/gu;
+  const pattern = /\[\s*(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\$\r\n]|\$(?!\{))*)`)\s*\]/gu;
   const replacements: SourceReplacement[] = [];
 
   for (const match of source.matchAll(pattern)) {
@@ -4840,7 +4840,7 @@ function normalizeStaticJavaScriptPropertyAccess(source: string): string {
       continue;
     }
 
-    const property = decodeJavaScriptStringLiteral(match[1] ?? match[2] ?? '');
+    const property = decodeJavaScriptStringLiteral(match[1] ?? match[2] ?? match[3] ?? '');
 
     if (/^[$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*$/u.test(property)) {
       replacements.push({
