@@ -314,7 +314,7 @@ function validateGeneratedViteVersionPins(): void {
     'packages/cli/templates/phaser-game/apps/target-cloudflare-pages/package.json',
     'packages/cli/templates/phaser-game/apps/target-devvit/package.json',
   ] as const;
-  let expectedVersion: string | undefined;
+  const expectedVersion = '8.1.3';
 
   for (const packagePath of packagePaths) {
     const packageJson = readJson(packagePath) as {
@@ -335,11 +335,10 @@ function validateGeneratedViteVersionPins(): void {
       continue;
     }
 
-    expectedVersion ??= viteVersion;
     assertEqual(
       viteVersion,
       expectedVersion,
-      `${packagePath}: devDependencies.vite must match the starter baseline`,
+      `${packagePath}: devDependencies.vite must match the verified Vite baseline`,
     );
   }
 }
