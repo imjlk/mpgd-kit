@@ -630,6 +630,12 @@ try {
   );
   assert.match(unrelatedKeyedObjectHtml, /\/assets\/route\.png/u);
 
+  const provenLegacyManifestHtml = await packageAndReadFixture('proven-legacy-manifest', {
+    mainJs: 'const routes = [{ key: "route", path: "/assets/route.png" }]; const assets = [{ key: "logo", path: "/assets/icon.png" }]; const scene = { load: { image() {} } }; for (const asset of assets) scene.load.image(asset.key, asset.path); document.body.dataset.route = routes[0].path;',
+  });
+  assert.doesNotMatch(provenLegacyManifestHtml, /\/assets\/icon\.png/u);
+  assert.match(provenLegacyManifestHtml, /\/assets\/route\.png/u);
+
   const phaserHtmlAsset = '<section>offline panel fixture</section>';
   const phaserHtml = await packageAndReadFixture(
     'phaser-html-asset',

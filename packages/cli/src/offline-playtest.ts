@@ -103,6 +103,11 @@ interface PhaserManifestUrlRange extends SourceRange {
   readonly traceIdentifiers: boolean;
 }
 
+interface PhaserManifestProof {
+  readonly initializerRange: SourceRange;
+  readonly propertyName: string;
+}
+
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
@@ -802,8 +807,9 @@ function inlinePhaserAssetReferences(
 ): string {
   const codePositions = createCodePositionMap(source, true);
   assertSupportedPhaserLoaderConfiguration(source);
-  const manifestRanges = findPhaserManifestUrlRanges(source, codePositions);
   const loaderRanges = findPhaserLoaderUrlRanges(source, codePositions);
+  const manifestProofs = findProvenPhaserManifestProperties(source, loaderRanges, codePositions);
+  const manifestRanges = findPhaserManifestUrlRanges(source, codePositions, manifestProofs);
   const ranges: SourceRange[] = [...manifestRanges, ...loaderRanges];
   const identifierRanges = [
     ...manifestRanges.filter((range) => range.traceIdentifiers),
@@ -911,6 +917,7 @@ function assertSupportedPhaserLoaderConfiguration(source: string): void {
 function findPhaserManifestUrlRanges(
   source: string,
   codePositions: Uint8Array,
+  proofs: readonly PhaserManifestProof[],
 ): PhaserManifestUrlRange[] {
   const propertyPattern = new RegExp(
     `\\b(${[...phaserManifestUrlPropertyNames].map(escapeRegExp).join('|')})\\s*:`,
@@ -940,11 +947,15 @@ function findPhaserManifestUrlRanges(
       codePositions.slice(objectRange.start, objectRange.end),
     );
 
-    if (!/\bkey\s*:/u.test(objectCode) || !hasSupportedPhaserManifestKind(
-      source,
-      objectRange,
-      codePositions,
-    )) {
+    const hasSupportedKind = hasSupportedPhaserManifestKind(source, objectRange, codePositions);
+    const hasLoaderProof = proofs.some(
+      (proof) =>
+        proof.propertyName === propertyName
+        && objectRange.start >= proof.initializerRange.start
+        && objectRange.end <= proof.initializerRange.end,
+    );
+
+    if (!/\bkey\s*:/u.test(objectCode) || (!hasSupportedKind && !hasLoaderProof)) {
       continue;
     }
 
@@ -987,6 +998,132 @@ function hasSupportedPhaserManifestKind(
   }
 
   return false;
+}
+
+function findProvenPhaserManifestProperties(
+  source: string,
+  loaderRanges: readonly SourceRange[],
+  codePositions: Uint8Array,
+): readonly PhaserManifestProof[] {
+  // Legacy manifests omit `kind`, so constrain them to the nearest array binding whose
+  // for-of element property is passed directly to a recognized Phaser loader URL argument.
+  const memberPattern = new RegExp(
+    `^\\s*(${javascriptIdentifierPatternSource})\\s*\\.\\s*(${javascriptIdentifierPatternSource})\\s*$`,
+    'u',
+  );
+  const loopPattern = new RegExp(
+    `\\bfor\\s*\\(\\s*(?:const|let|var)\\s+(${javascriptIdentifierPatternSource})\\s+of\\s+(${javascriptIdentifierPatternSource})\\s*\\)`,
+    'gu',
+  );
+  const initializerRangesByIdentifier = new Map<string, readonly SourceRange[]>();
+  const proofs = new Map<string, PhaserManifestProof>();
+
+  for (const loaderRange of loaderRanges) {
+    const member = memberPattern.exec(
+      normalizeStaticJavaScriptPropertyAccess(source.slice(loaderRange.start, loaderRange.end)),
+    );
+    memberPattern.lastIndex = 0;
+    const loopVariable = member?.[1];
+    const propertyName = member?.[2];
+
+    if (
+      loopVariable === undefined
+      || propertyName === undefined
+      || !phaserManifestUrlPropertyNames.has(propertyName)
+    ) {
+      continue;
+    }
+
+    for (const loop of source.matchAll(loopPattern)) {
+      if (
+        loop.index === undefined
+        || codePositions[loop.index] !== 1
+        || loop[1] !== loopVariable
+        || loop[2] === undefined
+      ) {
+        continue;
+      }
+
+      const bodyRange = findJavaScriptLoopBodyRange(
+        source,
+        loop.index + loop[0].length,
+        codePositions,
+      );
+
+      if (
+        bodyRange === undefined
+        || loaderRange.start < bodyRange.start
+        || loaderRange.end > bodyRange.end
+      ) {
+        continue;
+      }
+
+      const iterableIdentifier = loop[2];
+      let initializerRanges = initializerRangesByIdentifier.get(iterableIdentifier);
+
+      if (initializerRanges === undefined) {
+        initializerRanges = findIdentifierInitializerRanges(
+          source,
+          new Set([iterableIdentifier]),
+          codePositions,
+        );
+        initializerRangesByIdentifier.set(iterableIdentifier, initializerRanges);
+      }
+
+      const initializerRange = [...initializerRanges]
+        .filter(
+          (range) =>
+            range.end <= loop.index
+            && source.slice(range.start, range.end).trimStart().startsWith('['),
+        )
+        .sort((left, right) => right.end - left.end)[0];
+
+      if (initializerRange !== undefined) {
+        proofs.set(`${propertyName}:${initializerRange.start}:${initializerRange.end}`, {
+          initializerRange,
+          propertyName,
+        });
+      }
+    }
+  }
+
+  return [...proofs.values()];
+}
+
+function findJavaScriptLoopBodyRange(
+  source: string,
+  start: number,
+  codePositions: Uint8Array,
+): SourceRange | undefined {
+  let bodyStart = start;
+
+  while (bodyStart < source.length && /\s/u.test(source[bodyStart] ?? '')) {
+    bodyStart += 1;
+  }
+
+  if (source[bodyStart] !== '{') {
+    return findJavaScriptExpressionRange(source, bodyStart, source.length, codePositions, true);
+  }
+
+  let depth = 0;
+
+  for (let index = bodyStart; index < source.length; index += 1) {
+    if (codePositions[index] !== 1) {
+      continue;
+    }
+
+    if (source[index] === '{') {
+      depth += 1;
+    } else if (source[index] === '}') {
+      depth -= 1;
+
+      if (depth === 0) {
+        return { start: bodyStart, end: index + 1 };
+      }
+    }
+  }
+
+  return undefined;
 }
 
 function findPhaserLoaderUrlRanges(
