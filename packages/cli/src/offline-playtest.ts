@@ -76,6 +76,12 @@ interface HtmlAttributeToken {
   readonly rawValueEnd?: number;
 }
 
+interface CssUrlToken {
+  readonly start: number;
+  readonly end: number;
+  readonly reference: string;
+}
+
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
 const offlinePlaytestOutputFiles = new Set(['README.txt', 'index.html', 'offline-playtest.json']);
@@ -498,7 +504,7 @@ function offlineAssetInliningPlugin(context: InliningContext): Plugin {
         const source = readFileSync(jsonFile, 'utf8');
         context.inlinedAssets.add(jsonFile);
         return {
-          contents: inlineJsonAssetReferences(source, jsonFile, context),
+          contents: source,
           loader: 'json',
           resolveDir: path.dirname(args.path),
         };
@@ -515,57 +521,6 @@ function offlineAssetInliningPlugin(context: InliningContext): Plugin {
       });
     },
   };
-}
-
-function inlineJsonAssetReferences(
-  source: string,
-  sourceFile: string,
-  context: InliningContext,
-): string {
-  let parsed: unknown;
-
-  try {
-    parsed = JSON.parse(source) as unknown;
-  } catch (error) {
-    throw new Error(`Invalid JSON module ${sourceFile}: ${errorMessage(error)}`);
-  }
-
-  return JSON.stringify(transformJsonAssetReferences(parsed, sourceFile, context, 0));
-}
-
-function transformJsonAssetReferences(
-  value: unknown,
-  sourceFile: string,
-  context: InliningContext,
-  depth: number,
-): unknown {
-  if (depth > 64) {
-    throw new Error(
-      `Offline playtest JSON module exceeds the supported nesting depth: ${sourceFile}`,
-    );
-  }
-
-  if (typeof value === 'string') {
-    const assetFile = resolveExistingAssetReference(sourceFile, value, context.artifactRoot);
-    return assetFile === undefined || isCodeAsset(assetFile)
-      ? value
-      : readAssetDataUrl(sourceFile, value, context);
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((item) => transformJsonAssetReferences(item, sourceFile, context, depth + 1));
-  }
-
-  if (isRecord(value)) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [
-        key,
-        transformJsonAssetReferences(item, sourceFile, context, depth + 1),
-      ]),
-    );
-  }
-
-  return value;
 }
 
 function inlineJavaScriptAssetReferences(
@@ -777,21 +732,27 @@ function inlineCssAssetReferences(
   }
 
   const output = inlineCssImageSetStringReferences(source, sourceFile, context);
-  const cssUrlPattern = /url\(\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([^)]*?))\s*\)/giu;
-  const codePositions = createCodePositionMap(output, false);
-  return output.replace(cssUrlPattern, (match, doubleQuoted: string | undefined, singleQuoted: string | undefined, unquoted: string | undefined, offset: number) => {
-    if (codePositions[offset] !== 1) {
-      return match;
+  let cursor = 0;
+  let inlined = '';
+
+  for (const token of findCssUrlTokens(output)) {
+    inlined += output.slice(cursor, token.start);
+
+    const reference = token.reference;
+    if (
+      reference.startsWith('data:')
+      || reference.startsWith('blob:')
+      || reference.startsWith('#')
+    ) {
+      inlined += output.slice(token.start, token.end);
+    } else {
+      inlined += `url(${JSON.stringify(readAssetDataUrl(sourceFile, reference, context))})`;
     }
 
-    const reference = decodeCssEscapes((doubleQuoted ?? singleQuoted ?? unquoted ?? '').trim());
+    cursor = token.end;
+  }
 
-    if (reference.startsWith('data:') || reference.startsWith('blob:') || reference.startsWith('#')) {
-      return match;
-    }
-
-    return `url(${JSON.stringify(readAssetDataUrl(sourceFile, reference, context))})`;
-  });
+  return inlined + output.slice(cursor);
 }
 
 function inlineCssImageSetStringReferences(
@@ -862,7 +823,9 @@ function findCssFunctionEnd(source: string, openingParenthesis: number): number 
       continue;
     }
 
-    if (character === '/' && nextCharacter === '*') {
+    if (character === '\\') {
+      index += 1;
+    } else if (character === '/' && nextCharacter === '*') {
       inComment = true;
       index += 1;
     } else if (character === '"' || character === "'") {
@@ -1308,6 +1271,20 @@ function assembleOfflineHtml(
 }
 
 function assertSupportedHtmlDocument(html: string): void {
+  const headPattern = /<head\b((?:"[^"]*"|'[^']*'|[^'">])*)>/iu;
+  const headMatch = headPattern.exec(html);
+
+  if (headMatch?.index === undefined) {
+    throw new Error('Offline playtest source index.html must contain a head element.');
+  }
+
+  const preHeadContent = html.slice(0, headMatch.index);
+  const supportedPreHeadPattern = /^(?:[\t\n\f\r \uFEFF]+|<!--[\s\S]*?-->|<!doctype\b(?:"[^"]*"|'[^']*'|[^'">])*>|<html\b(?:"[^"]*"|'[^']*'|[^'">])*>)*/iu;
+
+  if (supportedPreHeadPattern.exec(preHeadContent)?.[0].length !== preHeadContent.length) {
+    throw new Error('Offline playtest does not support content before the head element.');
+  }
+
   const containsImportMap = findHtmlScriptElements(html).some(
     (match) => readHtmlAttribute(match[2] ?? '', 'type')?.trim().toLowerCase() === 'importmap',
   );
@@ -1392,7 +1369,7 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);return raw.startsWith('data:')||raw.startsWith('blob:')};const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);return raw.startsWith('data:')||raw.startsWith('blob:')};const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
@@ -1403,6 +1380,7 @@ function assertSupportedBundledRuntime(source: string): void {
     },
     { pattern: /\bserviceWorker\s*\.\s*register\s*\(/gu, label: 'service worker registration' },
     { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/gu, label: 'WebAssembly streaming' },
+    { pattern: /\b(?:webkit)?RTCPeerConnection\b/gu, label: 'WebRTC' },
     { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
     { pattern: /\bimport\s*\(/gu, label: 'dynamic import' },
     {
@@ -1869,25 +1847,28 @@ function findExternalSvgReference(source: string): string | undefined {
     const attributes = tokenizeHtmlAttributes(match[0]);
 
     for (const attribute of attributes) {
-      if (!svgResourceAttributeNames.has(attribute.name) || attribute.value === undefined) {
+      if (attribute.value === undefined) {
         continue;
       }
 
-      const reference = normalizeUrlReference(decodeHtmlCharacterReferences(attribute.value));
+      const decodedValue = decodeHtmlCharacterReferences(attribute.value);
+      const functionalReference = findExternalCssReference(decodedValue);
+
+      if (functionalReference !== undefined) {
+        return functionalReference;
+      }
+
+      if (!svgResourceAttributeNames.has(attribute.name)) {
+        continue;
+      }
+
+      const reference = normalizeUrlReference(decodedValue);
 
       if (!reference.startsWith('data:') && !reference.startsWith('#')) {
         return reference;
       }
     }
 
-    const inlineStyle = readHtmlAttributeToken(attributes, 'style');
-    const styleReference = inlineStyle === undefined
-      ? undefined
-      : findExternalCssReference(inlineStyle);
-
-    if (styleReference !== undefined) {
-      return styleReference;
-    }
   }
 
   for (const style of findHtmlRawTextElements(source, 'style')) {
@@ -1906,19 +1887,56 @@ function findExternalCssReference(source: string): string | undefined {
     return '@import';
   }
 
-  const pattern = /url\(\s*(?:"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'|([^)]*?))\s*\)/giu;
-
-  for (const match of source.matchAll(pattern)) {
-    const reference = normalizeUrlReference(
-      decodeCssEscapes(match[1] ?? match[2] ?? match[3] ?? ''),
-    );
-
-    if (!reference.startsWith('data:') && !reference.startsWith('#')) {
-      return reference;
+  for (const token of findCssUrlTokens(source)) {
+    if (!token.reference.startsWith('data:') && !token.reference.startsWith('#')) {
+      return token.reference;
     }
   }
 
   return undefined;
+}
+
+function findCssUrlTokens(source: string): readonly CssUrlToken[] {
+  const pattern = /(?<![-\w])url\s*\(/giu;
+  const codePositions = createCodePositionMap(source, false);
+  const tokens: CssUrlToken[] = [];
+  let match = pattern.exec(source);
+
+  while (match !== null) {
+    if (codePositions[match.index] !== 1) {
+      match = pattern.exec(source);
+      continue;
+    }
+
+    const openingParenthesis = source.indexOf('(', match.index);
+    const closingParenthesis = findCssFunctionEnd(source, openingParenthesis);
+
+    if (closingParenthesis === undefined) {
+      match = pattern.exec(source);
+      continue;
+    }
+
+    const value = source.slice(openingParenthesis + 1, closingParenthesis).trim();
+    const quote = value[0];
+    let rawReference: string | undefined = value;
+
+    if (quote === '"' || quote === "'") {
+      rawReference = value.at(-1) === quote ? value.slice(1, -1) : undefined;
+    }
+
+    if (rawReference !== undefined) {
+      tokens.push({
+        start: match.index,
+        end: closingParenthesis + 1,
+        reference: normalizeUrlReference(decodeCssEscapes(rawReference)),
+      });
+    }
+
+    pattern.lastIndex = closingParenthesis + 1;
+    match = pattern.exec(source);
+  }
+
+  return tokens;
 }
 
 function assertSelfContainedGltf(gltfFile: string, source: string): void {
@@ -2056,31 +2074,6 @@ function findExternalGltfUri(value: unknown): string | undefined {
   }
 
   return undefined;
-}
-
-function resolveExistingAssetReference(
-  sourceFile: string,
-  reference: string,
-  artifactRoot: string,
-): string | undefined {
-  const normalizedReference = normalizeUrlReference(reference);
-
-  if (isNonLocalReference(normalizedReference) || normalizedReference.includes('${')) {
-    return undefined;
-  }
-
-  try {
-    const candidate = resolveReferencePath(
-      artifactRoot,
-      path.dirname(sourceFile),
-      normalizedReference,
-    );
-    return existsSync(candidate) && lstatSync(candidate).isFile()
-      ? resolveArtifactFile(artifactRoot, candidate)
-      : undefined;
-  } catch {
-    return undefined;
-  }
 }
 
 function resolveLocalReference(artifactRoot: string, baseDir: string, reference: string): string {
@@ -2305,10 +2298,6 @@ function isNonLocalReference(reference: string): boolean {
 
 function normalizeUrlReference(reference: string): string {
   return reference.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/gu, '');
-}
-
-function isCodeAsset(file: string): boolean {
-  return /\.(?:c|m)?js$/iu.test(file) || /\.css$/iu.test(file) || /\.html?$/iu.test(file);
 }
 
 function readHtmlAttribute(attributes: string, name: string): string | undefined {

@@ -197,6 +197,14 @@ try {
     mainJs: 'new globalThis.SharedWorker("./worker.js");',
   });
 
+  const webRtcGame = createPreviewFixture('webrtc', {
+    mainJs: 'const peer = new RTCPeerConnection(); peer.close();',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: webRtcGame }),
+    /does not support WebRTC/u,
+  );
+
   const assignedNavigationGame = createPreviewFixture('assigned-navigation', {
     mainJs: 'window.location.href = "https://example.com/escape";',
   });
@@ -384,6 +392,13 @@ try {
   assert.match(cssTextHtml, /missing-string\.png/u);
   assert.match(cssTextHtml, /data:image\/png;base64,/u);
 
+  const escapedCssUrlHtml = await packageAndReadFixture('escaped-css-url', {}, [
+    ['artifacts/web-preview/assets/main.css', 'body { background: url(./sprite\\).png); }'],
+    ['artifacts/web-preview/assets/sprite).png', onePixelPng],
+  ]);
+  assert.match(escapedCssUrlHtml, /data:image\/png;base64,/u);
+  assert.doesNotMatch(escapedCssUrlHtml, /sprite\\\)\.png/u);
+
   const commonAssetGame = createPreviewFixture('common-phaser-assets', {
     mainJs: 'document.body.dataset.assets = [new URL("./sound.m4a", import.meta.url).href, new URL("./voice.opus", import.meta.url).href, new URL("./font.fnt", import.meta.url).href, new URL("./sprites.atlas", import.meta.url).href, new URL("./shader.glsl", import.meta.url).href, new URL("./scene.gltf", import.meta.url).href, new URL("./model.glb", import.meta.url).href].join(",");',
   });
@@ -417,19 +432,18 @@ try {
   assert.match(commonAssetHtml, /data:model\/gltf\+json;base64,/u);
   assert.match(commonAssetHtml, /data:model\/gltf-binary;base64,/u);
 
-  const jsonModuleAssetGame = createPreviewFixture('json-module-asset', {
-    mainJs: 'import config from "./asset-config.json"; document.body.dataset.texture = config.texture;',
+  const jsonModuleAssetGame = createPreviewFixture('json-module-semantics', {
+    mainJs: 'import config from "./asset-config.json"; document.body.dataset.expectedKey = config.expectedKey;',
   });
   fs.writeFileSync(
     path.join(jsonModuleAssetGame, 'artifacts/web-preview/assets/asset-config.json'),
-    '{"texture":"/assets/pixel.png","label":"fixture"}',
+    '{"expectedKey":"/assets/pixel.png","label":"fixture"}',
   );
   const jsonModuleAssetResult = await runOfflinePlaytestPackaging({
     gameRoot: jsonModuleAssetGame,
   });
   const jsonModuleAssetHtml = fs.readFileSync(jsonModuleAssetResult.entryFile, 'utf8');
-  assert.doesNotMatch(jsonModuleAssetHtml, /["']\/assets\/pixel\.png["']/u);
-  assert.match(jsonModuleAssetHtml, /data:image\/png;base64,/u);
+  assert.match(jsonModuleAssetHtml, /\/assets\/pixel\.png/u);
 
   const externalGltfGame = createPreviewFixture('external-gltf', {
     mainJs: 'document.body.dataset.scene = new URL("./scene.gltf", import.meta.url).href;',
@@ -773,6 +787,18 @@ try {
     /requires self-contained SVG data URIs and fragment references/u,
   );
 
+  const svgPresentationUrlGame = createPreviewFixture('svg-presentation-url', {
+    indexHtml: '<!doctype html><html><head></head><body><img src="/assets/presentation.svg"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(svgPresentationUrlGame, 'artifacts/web-preview/assets/presentation.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"><rect fill="url(theme.svg#gradient)"/></svg>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: svgPresentationUrlGame }),
+    /requires self-contained SVG data URIs and fragment references/u,
+  );
+
   const charsetHtml = await packageAndReadFixture('charset-first', {
     indexHtml: '<!doctype html><html><head><meta charset="shift_jis"><script>window.label="한글";</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -806,6 +832,14 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: baseElementGame }),
     /does not support HTML base elements/u,
+  );
+
+  const preHeadScriptGame = createPreviewFixture('pre-head-script', {
+    indexHtml: '<!doctype html><html><script>fetch("https://example.com/escape")</script><head></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: preHeadScriptGame }),
+    /does not support content before the head element/u,
   );
 
   const importMapGame = createPreviewFixture('import-map', {
