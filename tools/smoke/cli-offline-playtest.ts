@@ -333,7 +333,8 @@ try {
     mainJs: 'const anchor = document.createElement("a"); anchor.href = "https://example.com/escape"; document.body.append(anchor); anchor.click();',
   });
   assert.match(dynamicAnchorHtml, /HTMLAnchorElement\.prototype\.click/u);
-  assert.match(dynamicAnchorHtml, /a\[href\],area\[href\]/u);
+  assert.match(dynamicAnchorHtml, /closest\('a,area'\)/u);
+  assert.match(dynamicAnchorHtml, /getAttribute\('xlink:href'\)/u);
 
   const inlineEventHandlerGame = createPreviewFixture('inline-event-handler', {
     indexHtml: '<!doctype html><html><head></head><body><button onclick="fetch(\'/assets/config.json\')">load</button><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -356,6 +357,14 @@ try {
     /does not support external hyperlink navigation/u,
   );
 
+  const externalSvgHyperlinkGame = createPreviewFixture('external-svg-hyperlink', {
+    indexHtml: '<!doctype html><html><head></head><body><svg><a xlink:href="https://example.com/escape">escape</a></svg><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: externalSvgHyperlinkGame }),
+    /does not support external hyperlink navigation/u,
+  );
+
   const localHyperlinkGame = createPreviewFixture('local-hyperlink', {
     indexHtml: '<!doctype html><html><head></head><body><a href="./credits.html">credits</a><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -368,6 +377,11 @@ try {
     indexHtml: '<!doctype html><html><head></head><body><a href="#game">game</a><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
   assert.match(fragmentHyperlinkHtml, /href="#game"/u);
+
+  const fragmentSvgHyperlinkHtml = await packageAndReadFixture('fragment-svg-hyperlink', {
+    indexHtml: '<!doctype html><html><head></head><body><svg><a xlink:href="#game">game</a></svg><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(fragmentSvgHyperlinkHtml, /xlink:href="#game"/u);
 
   const svgScriptGame = createPreviewFixture('svg-script-href', {
     indexHtml: '<!doctype html><html><head></head><body><svg><script href="/assets/side.js"></script></svg><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -820,6 +834,33 @@ try {
     'expected the Phaser HTML asset to be inlined as an exact data URL',
   );
 
+  const rawTextPhaserHtmlAsset = '<textarea><script>example</script></textarea><title><img src="/assets/not-an-asset.png"></title><style>.label::before { content: "<script>example</script>"; }</style>';
+  const rawTextPhaserHtml = await packageAndReadFixture(
+    'raw-text-phaser-html-asset',
+    {
+      mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
+    },
+    [['artifacts/web-preview/assets/panel.html', rawTextPhaserHtmlAsset]],
+  );
+  assert.ok(
+    rawTextPhaserHtml.includes(
+      `data:text/html;base64,${Buffer.from(rawTextPhaserHtmlAsset).toString('base64')}`,
+    ),
+    'expected markup-like raw text to remain inert and be preserved',
+  );
+
+  const scriptedPhaserHtmlGame = createPreviewFixture('scripted-phaser-html', {
+    mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
+  });
+  fs.writeFileSync(
+    path.join(scriptedPhaserHtmlGame, 'artifacts/web-preview/assets/panel.html'),
+    '<script>open("https://example.com")</script>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: scriptedPhaserHtmlGame }),
+    /requires inert self-contained HTML assets.*contains <script>/u,
+  );
+
   const externalPhaserHtmlGame = createPreviewFixture('external-phaser-html', {
     mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
   });
@@ -1036,6 +1077,12 @@ try {
   assert.doesNotMatch(commentedFetchHtml, /\/assets\/config\.json/u);
   assert.match(commentedFetchHtml, /data:application\/json;base64,/u);
 
+  const optionalFetchHtml = await packageAndReadFixture('optional-fetch-assets', {
+    mainJs: 'void fetch?.("/assets/config.json"); void window.fetch?.("/assets/config.json");',
+  });
+  assert.doesNotMatch(optionalFetchHtml, /\/assets\/config\.json/u);
+  assert.match(optionalFetchHtml, /data:application\/json;base64,/u);
+
   await packageAndReadFixture('unicode-fetch-boundary', {
     mainJs: 'const πfetch = (value) => value; document.body.dataset.value = πfetch("/assets/not-an-asset.json");',
   });
@@ -1046,7 +1093,7 @@ try {
   assert.match(escapedUnicodeFetchHtml, /\/assets\/not-an-asset\.json/u);
 
   const shadowedFetchHtml = await packageAndReadFixture('shadowed-fetch-binding', {
-    mainJs: 'const fetch = (value) => value; document.body.dataset.value = fetch("/assets/not-an-asset.json");',
+    mainJs: 'const fetch = (value) => value; document.body.dataset.value = [fetch("/assets/not-an-asset.json"), fetch?.("/assets/not-an-asset.json")].join("|");',
   });
   assert.match(shadowedFetchHtml, /\/assets\/not-an-asset\.json/u);
 
@@ -1080,6 +1127,12 @@ try {
   });
   assert.doesNotMatch(browserImageHtml, /\/assets\/pixel\.png/u);
   assert.match(browserImageHtml, /data:image\/png;base64,/u);
+
+  const sizedBrowserImageHtml = await packageAndReadFixture('sized-browser-image-asset', {
+    mainJs: 'const splash = new Image(64, 64); splash.src = "/assets/pixel.png"; document.body.append(splash);',
+  });
+  assert.doesNotMatch(sizedBrowserImageHtml, /\/assets\/pixel\.png/u);
+  assert.match(sizedBrowserImageHtml, /data:image\/png;base64,/u);
 
   const browserImageWithoutParenthesesHtml = await packageAndReadFixture(
     'browser-image-without-parentheses-asset',

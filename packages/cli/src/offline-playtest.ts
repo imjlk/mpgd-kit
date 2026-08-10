@@ -793,7 +793,7 @@ function inlineJavaScriptAssetReferences(
     },
   );
   const documentFile = path.join(context.artifactRoot, 'index.html');
-  const staticFetchPattern = /((?<![$.\u200C\u200D\p{ID_Continue}])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
+  const staticFetchPattern = /((?<![$.\u200C\u200D\p{ID_Continue}])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*(?:\?\.\s*)?\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
   const fetchCodePositions = createCodePositionMap(output, true);
   output = output.replace(
     staticFetchPattern,
@@ -805,7 +805,9 @@ function inlineJavaScriptAssetReferences(
       templateReference: string | undefined,
       offset: number,
     ) => {
-      const qualifier = /\b(globalThis|self|window)\s*\.\s*fetch\s*\(/u.exec(prefix)?.[1];
+      const qualifier = /\b(globalThis|self|window)\s*\.\s*fetch\s*(?:\?\.\s*)?\(/u.exec(
+        prefix,
+      )?.[1];
 
       if (
         fetchCodePositions[offset] !== 1
@@ -977,11 +979,9 @@ function inlineStaticElementSourceAssignments(
         ).trim();
       const constructor = initializer === undefined
         ? undefined
-        : /^new\s+(?:(globalThis|self|window)\s*\.\s*)?(Audio|Image)(?:\s*\(\s*\))?$/u.exec(
-          initializer,
-        );
-      const qualifier = constructor?.[1];
-      const constructorName = constructor?.[2];
+        : parseStaticElementConstructor(initializer);
+      const qualifier = constructor?.qualifier;
+      const constructorName = constructor?.constructorName;
 
       if (
         binding === undefined
@@ -1032,6 +1032,45 @@ function inlineStaticElementSourceAssignments(
       return `${assignmentPrefix}${quote}${dataUrl}${quote}`;
     },
   );
+}
+
+function parseStaticElementConstructor(
+  initializer: string,
+): Readonly<{ constructorName: string; qualifier: string | undefined }> | undefined {
+  const constructor = /^new\s+(?:(globalThis|self|window)\s*\.\s*)?(Audio|Image)(?=\s|\(|$)/u.exec(
+    initializer,
+  );
+
+  if (constructor?.[2] === undefined) {
+    return undefined;
+  }
+
+  const result = { constructorName: constructor[2], qualifier: constructor[1] };
+  const suffix = initializer.slice(constructor[0].length).trim();
+
+  if (suffix.length === 0) {
+    return result;
+  }
+
+  if (suffix[0] !== '(') {
+    return undefined;
+  }
+
+  let depth = 0;
+
+  for (let index = 0; index < suffix.length; index += 1) {
+    if (suffix[index] === '(') {
+      depth += 1;
+    } else if (suffix[index] === ')') {
+      depth -= 1;
+
+      if (depth === 0) {
+        return suffix.slice(index + 1).trim().length === 0 ? result : undefined;
+      }
+    }
+  }
+
+  return undefined;
 }
 
 function inlineStaticXmlHttpRequestOpenCalls(
@@ -3338,6 +3377,25 @@ function createHtmlRawTextPattern(): RegExp {
   return /<!--[\s\S]*?-->|<(script|style|textarea|title)\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/\1\s*>/giu;
 }
 
+function maskHtmlRawTextBodies(html: string): string {
+  return html.replace(
+    createHtmlRawTextPattern(),
+    (
+      match,
+      tagName: string | undefined,
+      attributes: string | undefined,
+      content: string | undefined,
+    ) => {
+      if (tagName === undefined || attributes === undefined || content === undefined) {
+        return maskTextPreservingLines(match);
+      }
+
+      const contentStart = tagName.length + attributes.length + 2;
+      return `${match.slice(0, contentStart)}${maskTextPreservingLines(content)}${match.slice(contentStart + content.length)}`;
+    },
+  );
+}
+
 function inlineHtmlSrcset(
   htmlFile: string,
   source: string,
@@ -3567,14 +3625,18 @@ function assertSupportedHtmlAttributes(
     return;
   }
 
-  const href = readHtmlAttributeToken(attributes, 'href');
+  for (const attributeName of ['href', 'xlink:href']) {
+    const href = readHtmlAttributeToken(attributes, attributeName);
 
-  if (href !== undefined && isNonLocalReference(href)) {
-    throw new Error(`Offline playtest does not support external hyperlink navigation: ${href}`);
-  }
+    if (href !== undefined && isNonLocalReference(href)) {
+      throw new Error(`Offline playtest does not support external hyperlink navigation: ${href}`);
+    }
 
-  if (href !== undefined && href.trim().length > 0 && !href.trim().startsWith('#')) {
-    throw new Error(`Offline playtest does not support non-fragment hyperlink navigation: ${href}`);
+    if (href !== undefined && href.trim().length > 0 && !href.trim().startsWith('#')) {
+      throw new Error(
+        `Offline playtest does not support non-fragment hyperlink navigation: ${href}`,
+      );
+    }
   }
 }
 
@@ -3604,7 +3666,7 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a[href],area[href]'):null;const href=anchor?.getAttribute('href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
@@ -4642,7 +4704,7 @@ function assertSelfContainedXml(xmlFile: string, source: string): void {
 }
 
 function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
-  for (const tag of findHtmlTagTokens(source)) {
+  for (const tag of findHtmlTagTokens(maskHtmlRawTextBodies(source))) {
     if (tag.closing) {
       continue;
     }
