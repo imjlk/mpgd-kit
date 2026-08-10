@@ -205,6 +205,8 @@ validatePhaserTemplateLocalePolicy();
 validatePhaserTemplateRewardAuthority();
 validatePhaserTemplateAcceptanceCommand();
 validateGeneratedConsumerWorkflow();
+validateGeneratedViteVersionPins();
+validateGeneratedViteConfigTyping();
 validateGameplayE2EPlan();
 validateAppIconPipeline();
 
@@ -301,6 +303,60 @@ function validateGeneratedConsumerWorkflow(): void {
 
   for (const [relativePath, anchor] of Object.entries(microsoftStoreDocumentationAnchors)) {
     assertSingleMicrosoftStoreBlock(`${templateRoot}/${relativePath}`, anchor);
+  }
+}
+
+function validateGeneratedViteVersionPins(): void {
+  const packagePaths = [
+    'examples/phaser-starter/package.json',
+    'packages/cli/templates/phaser-game/package.json',
+    'packages/cli/templates/phaser-game/apps/target-ait/package.json',
+    'packages/cli/templates/phaser-game/apps/target-cloudflare-pages/package.json',
+    'packages/cli/templates/phaser-game/apps/target-devvit/package.json',
+  ] as const;
+  const expectedVersion = '8.1.3';
+
+  for (const packagePath of packagePaths) {
+    const packageJson = readJson(packagePath) as {
+      readonly devDependencies?: Record<string, unknown>;
+    } | null;
+    const viteVersion = packageJson?.devDependencies?.vite;
+
+    assertString(viteVersion, `${packagePath}: devDependencies.vite`);
+
+    if (typeof viteVersion !== 'string') {
+      continue;
+    }
+
+    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/u.test(viteVersion)) {
+      failures.push(
+        `${packagePath}: devDependencies.vite must pin the verified Vite version exactly.`,
+      );
+      continue;
+    }
+
+    assertEqual(
+      viteVersion,
+      expectedVersion,
+      `${packagePath}: devDependencies.vite must match the verified Vite baseline`,
+    );
+  }
+}
+
+function validateGeneratedViteConfigTyping(): void {
+  const configPaths = [
+    'examples/phaser-starter/vite.shared.ts',
+    'packages/cli/templates/phaser-game/vite.shared.ts',
+  ] as const;
+
+  for (const configPath of configPaths) {
+    const content = readText(configPath);
+
+    assertIncludesText(
+      content,
+      'as unknown as PluginOption',
+      `${configPath}: bounded unplugin type`,
+    );
   }
 }
 
@@ -1249,6 +1305,7 @@ function validatePhaserTemplateDevvitViewModes(): void {
     const gameDocumentPath = `${root}/game.html`;
     const entryPath = `${root}/src/entry.ts`;
     const gameEntryPath = `${root}/src/gameEntry.ts`;
+    const entryFailurePath = `${root}/src/runtime/renderEntryFailure.ts`;
     const mainPath = `${root}/src/main.ts`;
     const createGamePath = `${root}/src/runtime/createGame.ts`;
     const devvitEntryPath = `${root}/src/platform/devvitEntrypoint.ts`;
@@ -1260,6 +1317,7 @@ function validatePhaserTemplateDevvitViewModes(): void {
       gameDocumentPath,
       entryPath,
       gameEntryPath,
+      entryFailurePath,
       mainPath,
       createGamePath,
       devvitEntryPath,
@@ -1290,17 +1348,35 @@ function validatePhaserTemplateDevvitViewModes(): void {
 
     if (existsSync(entryPath)) {
       const source = readText(entryPath);
-      for (const requiredText of ["__APP_TARGET__ === 'reddit'", "import('./main')"]) {
+      for (const requiredText of [
+        "__APP_TARGET__ === 'reddit'",
+        "import('./main')",
+        'renderEntryFailure(error)',
+      ]) {
         assertIncludesText(source, requiredText, `${entryPath}: target-aware bootstrap.`);
       }
     }
 
     if (existsSync(gameEntryPath)) {
       const source = readText(gameEntryPath);
-      assertIncludesText(source, "import('./main')", `${gameEntryPath}: Phaser bootstrap.`);
+      for (const requiredText of ["import('./main')", 'renderEntryFailure(error)']) {
+        assertIncludesText(source, requiredText, `${gameEntryPath}: Phaser bootstrap.`);
+      }
 
       if (source.includes('getWebViewMode')) {
         failures.push(`${gameEntryPath}: expanded entry must not inspect Devvit web view mode.`);
+      }
+    }
+
+    if (existsSync(entryFailurePath)) {
+      const source = readText(entryFailurePath);
+
+      for (const requiredText of [
+        "querySelector<HTMLElement>('#game')",
+        "setAttribute('role', 'alert')",
+        'Failed to load the game. Please refresh and try again.',
+      ]) {
+        assertIncludesText(source, requiredText, `${entryFailurePath}: entry failure fallback.`);
       }
     }
 
@@ -1366,6 +1442,21 @@ function validatePhaserTemplateDevvitViewModes(): void {
         assertIncludesText(source, requiredText, `${vitePath}: Devvit multi-page build.`);
       }
     }
+  }
+
+  const templateEntryFailure =
+    'packages/cli/templates/phaser-game/src/runtime/renderEntryFailure.ts';
+  const exampleEntryFailure = 'examples/phaser-starter/src/runtime/renderEntryFailure.ts';
+
+  if (
+    existsSync(templateEntryFailure)
+    && existsSync(exampleEntryFailure)
+    && readText(templateEntryFailure) !== readText(exampleEntryFailure)
+  ) {
+    failures.push(
+      `${templateEntryFailure}: must stay in parity with `
+        + `${exampleEntryFailure}.`,
+    );
   }
 
   assertIncludesText(
@@ -1514,6 +1605,7 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
       }
     }
   }
+
 }
 
 function validatePhaserTemplateOrientationPolicy(): void {

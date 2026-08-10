@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import ttsc from '@ttsc/unplugin/vite';
-import type { UserConfig } from 'vite';
+import type { PluginOption, UserConfig } from 'vite';
 
 import {
   assertRuntimeTargetConfigMatrix,
@@ -51,10 +51,12 @@ export function createGameViteSharedConfig(
   return {
     base: './',
     plugins: [
+      // The unplugin runtime is Vite-compatible, but its recursive generic
+      // plugin type can exceed TypeScript's comparison depth in a monorepo.
       ttsc({
         project: input.project,
         plugins: false,
-      }),
+      }) as unknown as PluginOption,
     ],
     resolve: {
       alias: {
