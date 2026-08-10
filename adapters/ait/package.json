@@ -41,6 +41,10 @@
       "types": "./dist/ad-config.d.ts",
       "default": "./dist/ad-config.js"
     },
+    "./local-mock": {
+      "types": "./dist/local-mock.d.ts",
+      "default": "./dist/local-mock.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -58,7 +62,7 @@
     "@mpgd/platform": "workspace:*"
   },
   "peerDependencies": {
-    "@apps-in-toss/web-framework": ">=3.0.0-beta <4"
+    "@apps-in-toss/web-framework": ">=3.0.0 <4"
   },
   "peerDependenciesMeta": {
     "@apps-in-toss/web-framework": {
@@ -66,7 +70,7 @@
     }
   },
   "devDependencies": {
-    "@apps-in-toss/web-framework": "3.0.0-beta.da14818",
+    "@apps-in-toss/web-framework": "3.0.2",
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"

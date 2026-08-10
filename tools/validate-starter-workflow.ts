@@ -47,9 +47,9 @@ interface McpServerConfig {
   readonly args?: unknown;
 }
 
-const aitWebFrameworkVersion = '3.0.0-beta.da14818';
-const aitCliVersion = '3.0.0-beta.66a479a';
-const aitWebFrameworkPeerRange = '>=3.0.0-beta <4';
+const aitWebFrameworkVersion = '3.0.2';
+const aitCliVersion = '3.0.2';
+const aitWebFrameworkPeerRange = '>=3.0.0 <4';
 
 const requiredFiles = [
   '.mcp.json',
@@ -989,6 +989,7 @@ function validatePhaserTemplateAITWrapper(): void {
       for (const [subpath, basename] of [
         ['./ad-config', 'ad-config'],
         ['./host', 'host'],
+        ['./local-mock', 'local-mock'],
         ['./wrapper', 'wrapper'],
       ] as const) {
         const exported = packageJson.exports?.[subpath];
@@ -1055,20 +1056,6 @@ function validatePhaserTemplateAITWrapper(): void {
         'vite build && ait build',
         `${wrapperPackagePath}: build`,
       );
-      assertString(
-        packageJson.devDependencies?.['@ait-co/devtools'],
-        `${wrapperPackagePath}: devDependencies.@ait-co/devtools`,
-      );
-      assertEqual(
-        packageJson.scripts?.['devtools:mcp'],
-        'pnpm exec devtools-mcp',
-        `${wrapperPackagePath}: devtools:mcp`,
-      );
-      assertEqual(
-        packageJson.scripts?.['devtools:mcp:mobile'],
-        'pnpm exec devtools-mcp --target=mobile',
-        `${wrapperPackagePath}: devtools:mcp:mobile`,
-      );
     }
   }
 
@@ -1087,10 +1074,9 @@ function validatePhaserTemplateAITWrapper(): void {
   if (existsSync(wrapperVitePath)) {
     const content = readText(wrapperVitePath);
     for (const requiredText of [
-      "from '@ait-co/devtools/unplugin'",
       "from '@mpgd/adapter-ait/ad-config'",
-      'aitDevtools.vite({ mcp: true',
-      "'@apps-in-toss/web-framework': '@ait-co/devtools/mock'",
+      "'@apps-in-toss/web-framework': '@mpgd/adapter-ait/local-mock'",
+      'MPGD_AIT_LOCAL_MOCK',
       '__MPGD_AIT_AD_GROUP_IDS__',
       '__MPGD_AIT_AD_PLACEMENT_TYPES__',
     ]) {
@@ -1180,9 +1166,6 @@ function validatePhaserTemplateAITWrapper(): void {
           "APP_TARGET=ait MPGD_CONFIG_TARGET=ait MPGD_PLATFORM_TARGETS_FILE=./mpgd.targets.json APP_VERSION=0.0.0-dev BUILD_ID=ait-sandbox sh -c '__WORKSPACE_I18N_BUILD_PREFIX__vite --host 0.0.0.0'",
         'ait:wrapper:dev': 'pnpm --dir apps/target-ait run dev',
         'ait:wrapper:dev:plain': 'pnpm --dir apps/target-ait run dev:plain',
-        'ait:wrapper:dev:phone': 'pnpm --dir apps/target-ait run dev:phone',
-        'ait:devtools:mcp': 'pnpm --dir apps/target-ait run devtools:mcp',
-        'ait:devtools:mcp:mobile': 'pnpm --dir apps/target-ait run devtools:mcp:mobile',
       })) {
         assertEqual(
           packageJson.scripts?.[scriptName],

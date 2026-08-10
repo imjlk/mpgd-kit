@@ -37,6 +37,8 @@ export interface CreateGameServicesRuntimeInput {
   readonly deploymentTarget?: string;
   readonly baseUrl?: string;
   readonly transport?: 'http' | 'orpc';
+  /** Static headers sent with every authoritative game-services request. */
+  readonly headers?: Record<string, string>;
   readonly allowLocalBackend?: boolean;
   readonly localBackend?: GameServicesBackendApi;
   readonly analytics?: AnalyticsSink;
@@ -73,9 +75,15 @@ export function createGameServicesRuntime(
 
     mode = input.transport === 'orpc' ? 'orpc' : 'http';
     backend = mode === 'orpc'
-      ? createGameServicesOrpcBackendApi(createGameServicesOrpcClient({ url: baseUrl }))
+      ? createGameServicesOrpcBackendApi(createGameServicesOrpcClient({
+          url: baseUrl,
+          ...(input.headers === undefined ? {} : { headers: input.headers }),
+        }))
       : createGameServicesHttpBackendApi({
-          transport: createGameServicesFetchBackendTransport({ baseUrl }),
+          transport: createGameServicesFetchBackendTransport({
+            baseUrl,
+            ...(input.headers === undefined ? {} : { headers: input.headers }),
+          }),
         });
   } else {
     if (input.authorityMode === 'production') {

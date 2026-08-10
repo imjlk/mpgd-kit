@@ -261,6 +261,148 @@ await assertRejects(
   'ABORTED',
 );
 
+responses.push(jsonResponse({
+  resultType: 'SUCCESS',
+  success: {
+    tokenType: 'bearer',
+    accessToken: 'access-token-1',
+    refreshToken: 'refresh-token-1',
+    expiresIn: '3600',
+    scope: 'user_key',
+  },
+}));
+const loginToken = await client.exchangeLoginAuthorizationCode({
+  authorizationCode: 'authorization-code-1',
+  referrer: 'SANDBOX',
+});
+assertDeepEqual(
+  loginToken,
+  {
+    tokenType: 'bearer',
+    accessToken: 'access-token-1',
+    refreshToken: 'refresh-token-1',
+    expiresInSeconds: 3600,
+    scope: 'user_key',
+  },
+  'login authorization-code exchanges should parse the documented token response',
+);
+const loginTokenCall = calls[calls.length - 1];
+assertEqual(
+  loginTokenCall?.url,
+  'https://ait-partner.example/api-partner/v1/apps-in-toss/user/oauth2/generate-token',
+  'login exchanges should use the documented mTLS route',
+);
+assertDeepEqual(
+  JSON.parse(String(loginTokenCall?.init?.body)),
+  { authorizationCode: 'authorization-code-1', referrer: 'SANDBOX' },
+  'login exchanges should forward only the one-time authorization code and referrer',
+);
+
+responses.push(
+  jsonResponse({
+    resultType: 'SUCCESS',
+    success: { userKey: 443731104, scope: 'user_key,user_name' },
+  }),
+);
+const loginUser = await client.getLoginUser({ accessToken: 'access-token-1' });
+assertDeepEqual(
+  loginUser,
+  {
+    userKey: '443731104',
+    scope: 'user_key,user_name',
+  },
+  'login user lookups should serialize the documented numeric user key',
+);
+const loginUserCall = calls[calls.length - 1];
+assertEqual(loginUserCall?.init?.method, 'GET', 'login user lookups should use GET');
+assertEqual(loginUserCall?.init?.body, undefined, 'login user lookups must not send a body');
+assertEqual(
+  new Headers(loginUserCall?.init?.headers).has('content-type'),
+  false,
+  'login user lookups without a body must not declare a content type',
+);
+assertEqual(
+  new Headers(loginUserCall?.init?.headers).get('authorization'),
+  'Bearer access-token-1',
+  'login user lookups should keep the access token on the server-side Authorization header',
+);
+
+responses.push(jsonResponse({
+  resultType: 'SUCCESS',
+  success: {
+    orderId: 'order-1',
+    sku: 'ait.hint-pack-5',
+    statusDeterminedAt: '2026-08-08T10:00:00',
+    status: 'PAYMENT_COMPLETED',
+    reason: 'Payment completed; product grant is pending.',
+  },
+}));
+const order = await client.getIapOrderStatus({
+  orderId: 'order-1',
+  tossUserKey: '443731104',
+});
+assertDeepEqual(
+  order,
+  {
+    orderId: 'order-1',
+    sku: 'ait.hint-pack-5',
+    statusDeterminedAt: '2026-08-08T10:00:00',
+    status: 'PAYMENT_COMPLETED',
+    reason: 'Payment completed; product grant is pending.',
+  },
+  'IAP lookups should expose the authoritative order status without granting anything locally',
+);
+const orderCall = calls[calls.length - 1];
+assertEqual(
+  orderCall?.url,
+  'https://ait-partner.example/api-partner/v1/apps-in-toss/order/get-order-status',
+  'IAP lookups should use the documented mTLS route',
+);
+assertEqual(
+  new Headers(orderCall?.init?.headers).get('x-toss-user-key'),
+  '443731104',
+  'IAP lookups should bind the order query to the authenticated Toss user',
+);
+assertDeepEqual(
+  JSON.parse(String(orderCall?.init?.body)),
+  { orderId: 'order-1' },
+  'IAP lookups should query only the requested order id',
+);
+
+responses.push(jsonResponse({
+  resultType: 'SUCCESS',
+  success: {
+    orderId: 'different-order',
+    sku: 'ait.hint-pack-5',
+    statusDeterminedAt: '2026-08-08T10:00:00',
+    status: 'PAYMENT_COMPLETED',
+  },
+}));
+await assertRejects(
+  () => client.getIapOrderStatus({
+    orderId: 'expected-order',
+    tossUserKey: '443731104',
+  }),
+  'mismatched order id',
+);
+
+responses.push(jsonResponse({
+  resultType: 'SUCCESS',
+  success: {
+    orderId: 'order-unknown',
+    sku: 'ait.hint-pack-5',
+    statusDeterminedAt: '2026-08-08T10:00:00',
+    status: 'UNEXPECTED_STATUS',
+  },
+}));
+await assertRejects(
+  () => client.getIapOrderStatus({
+    orderId: 'order-unknown',
+    tossUserKey: '443731104',
+  }),
+  'unknown IAP order status',
+);
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
