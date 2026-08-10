@@ -317,6 +317,11 @@ const loginUserCall = calls[calls.length - 1];
 assertEqual(loginUserCall?.init?.method, 'GET', 'login user lookups should use GET');
 assertEqual(loginUserCall?.init?.body, undefined, 'login user lookups must not send a body');
 assertEqual(
+  new Headers(loginUserCall?.init?.headers).has('content-type'),
+  false,
+  'login user lookups without a body must not declare a content type',
+);
+assertEqual(
   new Headers(loginUserCall?.init?.headers).get('authorization'),
   'Bearer access-token-1',
   'login user lookups should keep the access token on the server-side Authorization header',

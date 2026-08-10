@@ -2293,9 +2293,6 @@ async function restoreAitIapProducts(
   const getRemainingRestoreTimeout = (): number => {
     return remainingAitIapOperationTimeout(restoreStartedAt, input.timeoutMs);
   };
-  const readAuthoritativeEntitlements = async (): Promise<readonly Entitlement[]> => {
-    return await readAitIapEntitlements(input.entitlementReader, getRemainingRestoreTimeout());
-  };
   const prepared = await prepareAitIap(
     prepare,
     { intent: 'restore' },
@@ -2304,22 +2301,30 @@ async function restoreAitIapProducts(
   if (!prepared) {
     return { restoredEntitlements: [] };
   }
+  const entitlementTimeoutMs = getRemainingRestoreTimeout();
+  if (entitlementTimeoutMs === 0) {
+    return { restoredEntitlements: [] };
+  }
+  const authoritativeEntitlements = await readAitIapEntitlements(
+    input.entitlementReader,
+    entitlementTimeoutMs,
+  );
 
   let pendingOrders: Awaited<ReturnType<AitHostDependencies['iap']['getPendingOrders']>> | undefined;
   try {
     const pendingOrderTimeoutMs = getRemainingRestoreTimeout();
     if (pendingOrderTimeoutMs === 0) {
-      return { restoredEntitlements: await readAuthoritativeEntitlements() };
+      return { restoredEntitlements: authoritativeEntitlements };
     }
     pendingOrders = await waitForAitIapNativeCall(
       () => input.dependencies.iap.getPendingOrders(),
       pendingOrderTimeoutMs,
     );
   } catch {
-    return { restoredEntitlements: await readAuthoritativeEntitlements() };
+    return { restoredEntitlements: authoritativeEntitlements };
   }
   if (pendingOrders === undefined) {
-    return { restoredEntitlements: await readAuthoritativeEntitlements() };
+    return { restoredEntitlements: authoritativeEntitlements };
   }
 
   const eligibleOrders: Array<{
@@ -2409,7 +2414,7 @@ async function restoreAitIapProducts(
   return {
     restoredEntitlements: mergeAitIapRestoredEntitlements(
       restoredEntitlements,
-      await readAuthoritativeEntitlements(),
+      authoritativeEntitlements,
       input.products,
     ),
   };
@@ -2493,8 +2498,8 @@ async function waitForAitIapNativeCall<T>(
   const timeoutResult = new Promise<undefined>((resolve) => {
     timeout = globalThis.setTimeout(() => resolve(undefined), timeoutMs);
   });
-  const operationResult = operation();
   try {
+    const operationResult = operation();
     return await Promise.race([operationResult, timeoutResult]);
   } finally {
     if (timeout !== undefined) {

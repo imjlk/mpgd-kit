@@ -278,7 +278,7 @@ async function requestJson(input: JsonRequestInput): Promise<PartnerApiResponse>
     }
     const headers = new Headers({
       accept: 'application/json',
-      'content-type': 'application/json',
+      ...(input.method === 'GET' ? {} : { 'content-type': 'application/json' }),
       ...input.headers,
     });
     let response: Response;

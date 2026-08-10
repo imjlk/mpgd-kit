@@ -1017,6 +1017,31 @@ describe('AIT production host bridge', () => {
     }
   });
 
+  it('clears the native-call deadline when an SDK method throws synchronously', async () => {
+    vi.useFakeTimers();
+    try {
+      const bridge = createAitHostBridge({
+        iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+        prepareIap: async () => true,
+        verifyIapProductGrant: async () => true,
+        readIapEntitlements: async () => [],
+        iapProductGrantTimeoutMs: 10,
+        dependencies: createDependencies({
+          iap: createSupportedIap({
+            getProductItemList: () => {
+              throw new Error('native catalog unavailable');
+            },
+          }),
+        }),
+      });
+
+      await expect(request(bridge, 'commerce.getProducts', {})).resolves.toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('bounds pending-order and completion calls during restore', async () => {
     vi.useFakeTimers();
     try {
@@ -1081,7 +1106,11 @@ describe('AIT production host bridge', () => {
         iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
         prepareIap: async () => true,
         verifyIapProductGrant,
-        readIapEntitlements: async () => [],
+        readIapEntitlements: async () => [{
+          id: 'HINT_PACK_5',
+          source: 'purchase',
+          grantedAt: '2026-08-08T10:00:00.000Z',
+        }],
         iapProductGrantTimeoutMs: 10,
         dependencies: createDependencies({
           storage: createMemoryStorage(values),
@@ -1108,7 +1137,13 @@ describe('AIT production host bridge', () => {
       const restore = request(bridge, 'commerce.restore', {});
       await vi.advanceTimersByTimeAsync(10);
 
-      await expect(restore).resolves.toEqual({ restoredEntitlements: [] });
+      await expect(restore).resolves.toEqual({
+        restoredEntitlements: [{
+          id: 'HINT_PACK_5',
+          source: 'purchase',
+          grantedAt: '2026-08-08T10:00:00.000Z',
+        }],
+      });
       expect(verifyIapProductGrant).toHaveBeenCalledTimes(1);
       expect(completeProductGrant).not.toHaveBeenCalled();
       expect(values.get('mpgd:ait:pending-order-cursor:v1')).toBe('restore-budget-order-1');
