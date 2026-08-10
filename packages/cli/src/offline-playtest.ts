@@ -2618,10 +2618,16 @@ function inlineCssImageSetOptions(
   sourceFile: string,
   context: InliningContext,
 ): string {
+  return splitCssImageSetOptions(source)
+    .map((option) => inlineCssImageSetOption(option, sourceFile, context))
+    .join(',');
+}
+
+function splitCssImageSetOptions(source: string): readonly string[] {
   let cursor = 0;
   let depth = 0;
   let inComment = false;
-  let output = '';
+  const options: string[] = [];
   let quote: '"' | "'" | undefined;
 
   for (let index = 0; index <= source.length; index += 1) {
@@ -2669,17 +2675,12 @@ function inlineCssImageSetOptions(
     }
 
     if (index === source.length || (character === ',' && depth === 0)) {
-      output += inlineCssImageSetOption(source.slice(cursor, index), sourceFile, context);
-
-      if (character === ',') {
-        output += ',';
-      }
-
+      options.push(source.slice(cursor, index));
       cursor = index + 1;
     }
   }
 
-  return output;
+  return options;
 }
 
 function inlineCssImageSetOption(
@@ -2687,6 +2688,23 @@ function inlineCssImageSetOption(
   sourceFile: string,
   context: InliningContext,
 ): string {
+  const token = findCssImageSetStringToken(source);
+
+  if (
+    token === undefined
+    || isInMemoryUrlReference(token.reference)
+    || token.reference.startsWith('#')
+  ) {
+    return source;
+  }
+
+  const dataUrl = readAssetDataUrl(sourceFile, token.reference, context);
+  return `${source.slice(0, token.start)}${JSON.stringify(dataUrl)}${source.slice(token.end)}`;
+}
+
+function findCssImageSetStringToken(
+  source: string,
+): Readonly<{ end: number; reference: string; start: number }> | undefined {
   const codePositions = createCodePositionMap(source, false);
   let valueStart = 0;
 
@@ -2698,7 +2716,7 @@ function inlineCssImageSetOption(
   }
 
   if (valueStart === source.length || (source[valueStart] !== '"' && source[valueStart] !== "'")) {
-    return source;
+    return undefined;
   }
 
   const quote = source[valueStart];
@@ -2709,17 +2727,11 @@ function inlineCssImageSetOption(
   }
 
   if (valueEnd >= source.length) {
-    return source;
+    return undefined;
   }
 
   const reference = decodeCssEscapes(source.slice(valueStart + 1, valueEnd));
-
-  if (isInMemoryUrlReference(reference) || reference.startsWith('#')) {
-    return source;
-  }
-
-  const dataUrl = readAssetDataUrl(sourceFile, reference, context);
-  return `${source.slice(0, valueStart)}${JSON.stringify(dataUrl)}${source.slice(valueEnd + 1)}`;
+  return { start: valueStart, end: valueEnd + 1, reference };
 }
 
 function decodeCssEscapes(value: string): string {
@@ -3073,7 +3085,7 @@ function assembleOfflineHtml(
   }
   output = output.replace(offlineEntryPlaceholder, inlineScript);
 
-  if (/<\/body>/iu.test(output)) {
+  if (findActiveHtmlStartTag(output, 'body') !== undefined) {
     return `${output.trim()}\n`;
   }
 
@@ -4005,6 +4017,18 @@ function findExternalSvgReference(source: string): string | undefined {
         return functionalReference;
       }
 
+      if (attribute.name === 'srcset') {
+        const external = parseHtmlSrcset(decodedValue, 'embedded SVG asset').find(
+          (candidate) => !isEmbeddedOrFragmentReference(candidate.reference),
+        );
+
+        if (external !== undefined) {
+          return external.reference;
+        }
+
+        continue;
+      }
+
       if (!svgResourceAttributeNames.has(attribute.name)) {
         continue;
       }
@@ -4040,6 +4064,42 @@ function findExternalCssReference(source: string): string | undefined {
     }
   }
 
+  return findExternalCssImageSetStringReference(source);
+}
+
+function findExternalCssImageSetStringReference(source: string): string | undefined {
+  const pattern = /(?:-webkit-)?image-set\s*\(/giu;
+  const codePositions = createCodePositionMap(source, false);
+  let match = pattern.exec(source);
+
+  while (match !== null) {
+    if (codePositions[match.index] !== 1) {
+      match = pattern.exec(source);
+      continue;
+    }
+
+    const openingParenthesis = source.indexOf('(', match.index);
+    const closingParenthesis = findCssFunctionEnd(source, openingParenthesis);
+
+    if (closingParenthesis === undefined) {
+      match = pattern.exec(source);
+      continue;
+    }
+
+    for (const option of splitCssImageSetOptions(
+      source.slice(openingParenthesis + 1, closingParenthesis),
+    )) {
+      const reference = findCssImageSetStringToken(option)?.reference;
+
+      if (reference !== undefined && !isEmbeddedOrFragmentReference(reference)) {
+        return reference;
+      }
+    }
+
+    pattern.lastIndex = closingParenthesis + 1;
+    match = pattern.exec(source);
+  }
+
   return undefined;
 }
 
@@ -4067,7 +4127,18 @@ function findCssUrlTokens(source: string): readonly CssUrlToken[] {
       continue;
     }
 
-    const value = source.slice(openingParenthesis + 1, closingParenthesis).trim();
+    const rawValue = source.slice(openingParenthesis + 1, closingParenthesis);
+    const valueCodePositions = createCodePositionMap(rawValue, false);
+    let valueStart = 0;
+
+    while (
+      valueStart < rawValue.length
+      && (/\s/u.test(rawValue[valueStart] ?? '') || valueCodePositions[valueStart] === 0)
+    ) {
+      valueStart += 1;
+    }
+
+    const value = rawValue.slice(valueStart).trimEnd();
     const quote = value[0];
     let rawReference: string | undefined = value;
 

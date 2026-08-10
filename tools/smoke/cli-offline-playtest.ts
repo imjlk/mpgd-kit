@@ -725,6 +725,18 @@ try {
     /requires inert self-contained HTML assets/u,
   );
 
+  const externalImageSetPhaserHtmlGame = createPreviewFixture('external-image-set-phaser-html', {
+    mainJs: 'const scene = { load: { html() {} } }; scene.load.html("panel", "/assets/panel.html");',
+  });
+  fs.writeFileSync(
+    path.join(externalImageSetPhaserHtmlGame, 'artifacts/web-preview/assets/panel.html'),
+    '<style>.panel { background-image: image-set("/assets/pixel.png" 1x); }</style><section class="panel">offline panel</section>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: externalImageSetPhaserHtmlGame }),
+    /requires self-contained HTML assets.*references \/assets\/pixel\.png/u,
+  );
+
   const refreshingPhaserHtmlGame = createPreviewFixture('refreshing-phaser-html', {
     mainJs: 'const scene = { load: { html() {} } }; scene.load.html("panel", "/assets/panel.html");',
   });
@@ -1159,6 +1171,15 @@ try {
   assert.doesNotMatch(escapedUrlFunctionHtml, /\/assets\/pixel\.png/u);
   assert.match(escapedUrlFunctionHtml, /data:image\/png;base64,/u);
 
+  const commentedUrlFunctionHtml = await packageAndReadFixture('commented-css-url-function', {}, [
+    [
+      'artifacts/web-preview/assets/main.css',
+      'body { background-image: url(/* preload */ "/assets/pixel.png"); }',
+    ],
+  ]);
+  assert.doesNotMatch(commentedUrlFunctionHtml, /\/assets\/pixel\.png/u);
+  assert.match(commentedUrlFunctionHtml, /data:image\/png;base64,/u);
+
   const imageSetFiles: readonly PreviewFixtureFile[] = [
     [
       'artifacts/web-preview/assets/main.css',
@@ -1343,12 +1364,30 @@ try {
     /requires self-contained SVG data URIs and fragment references/u,
   );
 
+  const svgSrcsetGame = createPreviewFixture('svg-srcset', {
+    indexHtml: '<!doctype html><html><head></head><body><img src="/assets/srcset.svg"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(svgSrcsetGame, 'artifacts/web-preview/assets/srcset.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"><foreignObject><img xmlns="http://www.w3.org/1999/xhtml" srcset="/assets/pixel.png 1x"/></foreignObject></svg>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: svgSrcsetGame }),
+    /requires self-contained SVG data URIs and fragment references.*references \/assets\/pixel\.png/u,
+  );
+
   const charsetHtml = await packageAndReadFixture('charset-first', {
     indexHtml: '<!doctype html><html><head><meta charset="shift_jis"><script>window.label="한글";</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
   assert.match(charsetHtml, /<head>\s*<meta charset="utf-8">/u);
   assert.equal(charsetHtml.match(/<meta\b[^>]*charset=/giu)?.length, 1);
   assert.match(charsetHtml, /한글/u);
+
+  const omittedBodyEndHtml = await packageAndReadFixture('omitted-body-end', {
+    indexHtml: '<!doctype html><html><head></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></html>',
+  });
+  assert.match(omittedBodyEndHtml, /<body><main id="game"><\/main>/u);
+  assert.doesNotMatch(omittedBodyEndHtml, /<\/body>/u);
 
   const commentedHeadHtml = await packageAndReadFixture('commented-head', {
     indexHtml: '<!doctype html><!-- <head> is generated below --><html><head></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
