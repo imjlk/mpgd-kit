@@ -1,9 +1,3 @@
-import {
-  grantPromotionRewardForGame as sdkGrantPromotionReward,
-  openGameCenterLeaderboard as sdkOpenGameCenterLeaderboard,
-  requestNotificationAgreement as sdkRequestNotificationAgreement,
-  submitGameCenterLeaderBoardScore as sdkSubmitGameCenterLeaderBoardScore,
-} from '@apps-in-toss/web-framework';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { BridgeRequest } from '@mpgd/bridge';
@@ -2699,36 +2693,27 @@ function createDependencies(
     },
     getTossShareLink: async () => 'https://toss.im/test',
     share: async () => {},
-    grantPromotionReward: withSdkMetadata(grantPromotionReward, sdkGrantPromotionReward),
-    requestNotificationAgreement: withSdkMetadata(
+    grantPromotionReward: withSupportProbe(grantPromotionReward),
+    requestNotificationAgreement: withSupportProbe(
       requestNotificationAgreement,
-      sdkRequestNotificationAgreement,
       false,
     ),
     isMinVersionSupported: () => true,
     loadFullScreenAd: unsupportedAd,
     showFullScreenAd: unsupportedAd,
-    openGameCenterLeaderboard: withSdkMetadata(
-      openGameCenterLeaderboard,
-      sdkOpenGameCenterLeaderboard,
-    ),
-    submitGameCenterLeaderBoardScore: withSdkMetadata(
-      submitGameCenterLeaderBoardScore,
-      sdkSubmitGameCenterLeaderBoardScore,
-    ),
+    openGameCenterLeaderboard: withSupportProbe(openGameCenterLeaderboard),
+    submitGameCenterLeaderBoardScore: withSupportProbe(submitGameCenterLeaderBoardScore),
     iap: unsupportedIap,
     ...otherOverrides,
   } as AitHostDependencies;
 }
 
-function withSdkMetadata<TKey extends AitSdkDependencyKey>(
+function withSupportProbe<TKey extends AitSdkDependencyKey>(
   handler: AitSdkTestHandler<TKey>,
-  sdkHandler: AitHostDependencies[TKey],
   supportedByDefault = true,
 ): CallableOnly<AitHostDependencies[TKey]>
-  & Pick<AitHostDependencies[TKey], 'MIN_TOSS_APP_VERSION' | 'isSupported'> {
+  & Pick<AitHostDependencies[TKey], 'isSupported'> {
   return Object.assign(handler, {
-    MIN_TOSS_APP_VERSION: sdkHandler.MIN_TOSS_APP_VERSION,
     isSupported: handler.isSupported ?? (() => supportedByDefault),
   });
 }
