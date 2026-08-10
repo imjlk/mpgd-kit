@@ -4832,7 +4832,7 @@ function normalizeRuntimeGlobalAliases(source: string): string {
 
 function normalizeStaticJavaScriptPropertyAccess(source: string): string {
   const codePositions = createCodePositionMap(source, true);
-  const pattern = /\[\s*(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\$\r\n]|\$(?!\{))*)`)\s*\]/gu;
+  const pattern = /\[\s*(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\$\r\n]|\$(?!\{))*)`)\s*\]/gu;
   const replacements: SourceReplacement[] = [];
 
   for (const match of source.matchAll(pattern)) {

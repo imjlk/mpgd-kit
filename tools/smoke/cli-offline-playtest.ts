@@ -369,6 +369,33 @@ try {
     );
   }
 
+  for (const [lineEndingName, lineEnding] of [
+    ['lf', '\n'],
+    ['crlf', '\r\n'],
+  ] as const) {
+    for (const [literalName, delimiter] of [
+      ['quoted', '"'],
+      ['template', '`'],
+    ] as const) {
+      for (const [receiverName, receiver] of [
+        ['direct', 'location'],
+        ['qualified', 'window.location'],
+      ] as const) {
+        const continuedProperty = `${delimiter}hr\\${lineEnding}ef${delimiter}`;
+        const continuedNavigationGame = createPreviewFixture(
+          `${receiverName}-${literalName}-${lineEndingName}-location-assignment`,
+          {
+            mainJs: `${receiver}[${continuedProperty}] = "https://example.com/escape";`,
+          },
+        );
+        await assert.rejects(
+          () => runOfflinePlaytestPackaging({ gameRoot: continuedNavigationGame }),
+          /does not support script-driven navigation/u,
+        );
+      }
+    }
+  }
+
   const aliasedLocationGame = createPreviewFixture('aliased-location-navigation', {
     mainJs: 'const target = window.location; target.href = "https://example.com/escape";',
   });
