@@ -2153,6 +2153,7 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
     let sessionTimeout: ReturnType<typeof globalThis.setTimeout> | undefined;
     let providerOrderId: string | undefined;
     let grantedOrderId: string | undefined;
+    let markerDeletionStarted = false;
 
     const finish = (result: PurchaseResult): void => {
       if (settled) {
@@ -2171,7 +2172,24 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
       resolve(result);
     };
 
+    const startMarkerDeletion = (clearedResult: PurchaseResult): void => {
+      markerDeletionStarted = true;
+      void clearAitIapPurchaseAttempt({
+        storage: input.dependencies.storage,
+        product: input.product,
+        idempotencyKey: input.idempotencyKey,
+        timeoutMs: input.timeoutMs,
+      }).then((cleared) => {
+        finish(cleared ? clearedResult : pendingPurchase());
+      });
+    };
+
     const processProductGrant = (orderId: string): Promise<boolean> => {
+      if (markerDeletionStarted) {
+        // Cancellation won the serialization race. Do not let a later queued
+        // grant callback commit after its retry barrier starts disappearing.
+        return Promise.resolve(false);
+      }
       const existing = grantAttempts.get(orderId);
       if (existing !== undefined) {
         return existing;
@@ -2253,30 +2271,21 @@ async function purchaseAitIapProduct(input: AitIapPurchaseInput): Promise<Purcha
             finish(pendingPurchase(grantedOrderId ?? providerOrderId));
             return;
           }
-          void clearAitIapPurchaseAttempt({
-            storage: input.dependencies.storage,
-            product: input.product,
-            idempotencyKey: input.idempotencyKey,
-            timeoutMs: input.timeoutMs,
-          }).then((cleared) => {
-            finish(cleared ? cancelledPurchase() : pendingPurchase());
-          });
+          startMarkerDeletion(cancelledPurchase());
         },
       });
       if (cleanupRequested) {
         safelyCleanupAitIapPurchase(cleanup);
       }
     } catch {
-      // A synchronous callback-registration error means the native checkout
-      // never opened, so it is safe to clear the marker and surface failure.
-      void clearAitIapPurchaseAttempt({
-        storage: input.dependencies.storage,
-        product: input.product,
-        idempotencyKey: input.idempotencyKey,
-        timeoutMs: input.timeoutMs,
-      }).then((cleared) => {
-        finish(cleared ? failedPurchase() : pendingPurchase());
-      });
+      // A malformed SDK can invoke a grant callback and then throw during
+      // registration. Preserve that active order; only a throw with no grant
+      // startup proves there is no authoritative commit racing deletion.
+      if (providerOrderId !== undefined || grantAttempts.size > 0) {
+        finish(pendingPurchase(providerOrderId));
+        return;
+      }
+      startMarkerDeletion(failedPurchase());
     }
   });
 }

@@ -812,6 +812,59 @@ describe('AIT production host bridge', () => {
     expect(nativePurchaseStarts).toBe(1);
   });
 
+  it('blocks queued grant startup after cancellation begins deleting its marker', async () => {
+    const values = new Map<string, string>();
+    const storageKey = 'mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:queued-after-cancel';
+    let callbacks: IapPurchaseCallbacks | undefined;
+    let completeRemoval: (() => void) | undefined;
+    const verifyIapProductGrant = vi.fn(async () => true);
+    const bridge = createAitHostBridge({
+      iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements: async () => [],
+      dependencies: createDependencies({
+        storage: {
+          getItem: async (key) => values.get(key) ?? null,
+          removeItem: async (key) => await new Promise<void>((resolve) => {
+            completeRemoval = () => {
+              values.delete(key);
+              resolve();
+            };
+          }),
+          setItem: async (key, value) => {
+            values.set(key, value);
+          },
+        },
+        iap: createSupportedIap({
+          products: [createIapProduct()],
+          onPurchase: (input) => {
+            callbacks = input;
+          },
+        }),
+      }),
+    });
+    const purchase = request(bridge, 'commerce.purchase', {
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'queued-after-cancel',
+    });
+    await vi.waitFor(() => expect(callbacks).toBeDefined());
+    if (callbacks === undefined) {
+      throw new Error('Expected Apps in Toss purchase callbacks to be registered.');
+    }
+
+    await callbacks.onError({ name: 'AbortError' });
+    await vi.waitFor(() => expect(completeRemoval).toBeDefined());
+    expect(values.has(storageKey)).toBe(true);
+    await expect(callbacks.options.processProductGrant({ orderId: 'late-queued-order' }))
+      .resolves.toBe(false);
+    expect(verifyIapProductGrant).not.toHaveBeenCalled();
+    completeRemoval?.();
+
+    await expect(purchase).resolves.toEqual({ status: 'cancelled', entitlementIds: [] });
+    expect(values.has(storageKey)).toBe(false);
+  });
+
   it('keeps a stale pre-checkout marker pending while the provider still has its SKU', async () => {
     const values = new Map<string, string>();
     values.set('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:stale-pending-order', JSON.stringify({
