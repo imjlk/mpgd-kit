@@ -3759,7 +3759,7 @@ function assertSupportedBundledRuntime(source: string): void {
 }
 
 function assertNoDynamicImport(source: string, codePositions: Uint8Array): void {
-  const pattern = /(?<![$.#\u200C\u200D\p{ID_Continue}])import\s*\(/gu;
+  const pattern = /(?<![$\u200C\u200D\p{ID_Continue}])import(?![$\u200C\u200D\p{ID_Continue}])/gu;
 
   for (const match of source.matchAll(pattern)) {
     if (match.index === undefined || codePositions[match.index] !== 1) {
@@ -3772,7 +3772,22 @@ function assertNoDynamicImport(source: string, codePositions: Uint8Array): void 
       continue;
     }
 
-    const openingParenthesis = source.indexOf('(', match.index + 'import'.length);
+    let openingParenthesis = match.index + match[0].length;
+
+    while (
+      openingParenthesis < source.length
+      && (
+        codePositions[openingParenthesis] !== 1
+        || /\s/u.test(source[openingParenthesis] ?? '')
+      )
+    ) {
+      openingParenthesis += 1;
+    }
+
+    if (source[openingParenthesis] !== '(') {
+      continue;
+    }
+
     let depth = 0;
     let closingParenthesis: number | undefined;
 

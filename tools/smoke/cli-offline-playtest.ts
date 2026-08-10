@@ -1943,6 +1943,25 @@ try {
     /does not support dynamic import/u,
   );
 
+  for (const [name, inlineScript] of [
+    [
+      'block-comment-dynamic-import',
+      'void import /* retained block comment */ ("https://example.com/module.js");',
+    ],
+    [
+      'line-comment-dynamic-import',
+      'void import // retained line comment\n("https://example.com/module.js");',
+    ],
+  ] as const) {
+    const commentedDynamicImportGame = createPreviewFixture(name, {
+      indexHtml: `<!doctype html><html><head><script>${inlineScript}</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: commentedDynamicImportGame }),
+      /does not support dynamic import/u,
+    );
+  }
+
   const importMethodHtml = await packageAndReadFixture('ordinary-import-methods', {
     mainJs: 'const loader = { import() { return "local"; } }; document.body.dataset.value = [loader.import(), loader["import"](), loader. /* retained */ import()].join("|");',
   });
