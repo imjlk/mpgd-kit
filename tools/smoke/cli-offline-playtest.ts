@@ -207,6 +207,18 @@ try {
     mainJs: 'new globalThis.SharedWorker("./worker.js");',
   });
 
+  const treeShakenWorkerGame = createPreviewFixture('tree-shaken-worker', {
+    mainJs: 'import { used } from "./shared.js"; document.body.dataset.state = used;',
+  });
+  fs.writeFileSync(
+    path.join(treeShakenWorkerGame, 'artifacts/web-preview/assets/shared.js'),
+    'export const used = "ready"; export function makeWorker() { return new Worker("./worker.js"); }',
+  );
+  const treeShakenWorkerResult = await runOfflinePlaytestPackaging({
+    gameRoot: treeShakenWorkerGame,
+  });
+  assert.doesNotMatch(fs.readFileSync(treeShakenWorkerResult.entryFile, 'utf8'), /new\s+Worker/u);
+
   const webRtcGame = createPreviewFixture('webrtc', {
     mainJs: 'const peer = new RTCPeerConnection(); peer.close();',
   });
@@ -255,6 +267,12 @@ try {
     mainJs: 'button.addEventListener("click", () => open("https://example.com"));',
   });
   assert.match(unqualifiedOpenHtml, /globalThis\.open=\(url\)=>\{throw denied\('open',url\)\}/u);
+
+  const dynamicAnchorHtml = await packageAndReadFixture('dynamic-anchor-guard', {
+    mainJs: 'const anchor = document.createElement("a"); anchor.href = "https://example.com/escape"; document.body.append(anchor); anchor.click();',
+  });
+  assert.match(dynamicAnchorHtml, /HTMLAnchorElement\.prototype\.click/u);
+  assert.match(dynamicAnchorHtml, /a\[href\],area\[href\]/u);
 
   const inlineEventHandlerGame = createPreviewFixture('inline-event-handler', {
     indexHtml: '<!doctype html><html><head></head><body><button onclick="fetch(\'/assets/config.json\')">load</button><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -491,7 +509,7 @@ try {
   const unicodePhaserHtml = await packageAndReadFixture(
     'unicode-phaser-identifier',
     {
-      mainJs: 'const εικόνα = "/assets/unicode.png"; const scene = { load: { image() {} } }; scene.load.image("hero", εικόνα);',
+      mainJs: 'const εικόνα = "/assets/unicode.png"; const scene = new Phaser.Scene(); scene.load.image("hero", εικόνα);',
     },
     [['artifacts/web-preview/assets/unicode.png', unicodePhaserAsset]],
   );
@@ -505,7 +523,7 @@ try {
   const asiPhaserHtml = await packageAndReadFixture(
     'asi-phaser-identifier',
     {
-      mainJs: 'const scene = { load: { image() {} } }; const assetUrl = "/assets/asi.png"\nscene.load.image("hero", assetUrl)',
+      mainJs: 'const scene = new Phaser.Scene(); const assetUrl = "/assets/asi.png"\nscene.load.image("hero", assetUrl)',
     },
     [['artifacts/web-preview/assets/asi.png', asiPhaserAsset]],
   );
@@ -618,22 +636,32 @@ try {
   assert.match(jsonModuleAssetHtml, /\/assets\/pixel\.png/u);
 
   const phaserManifestHtml = await packageAndReadFixture('phaser-manifest-assets', {
-    mainJs: 'const texture = "/assets/pixel.png"; const assets = [{ kind: "image", key: "hero", url: texture }, { kind: "image", key: "logo", url: "/assets/icon.png" }, { kind: "atlas", key: "atlas", textureUrl: "/assets/pixel.png", atlasUrl: "/assets/config.json" }]; const scene = { load: { bitmapFont() {}, image() {} } }; for (const asset of assets) scene.load.image(asset.key, asset.url ?? asset.textureUrl); scene.load.bitmapFont("font", "/assets/pixel.png", "/assets/config.json");',
+    mainJs: 'const texture = "/assets/pixel.png"; const assets = [{ kind: "image", key: "hero", url: texture }, { kind: "image", key: "logo", url: "/assets/icon.png" }, { kind: "atlas", key: "atlas", textureUrl: "/assets/pixel.png", atlasUrl: "/assets/config.json" }]; const scene = new Phaser.Scene(); for (const asset of assets) scene.load.image(asset.key, asset.url ?? asset.textureUrl); scene.load.bitmapFont("font", "/assets/pixel.png", "/assets/config.json");',
   });
   assert.doesNotMatch(phaserManifestHtml, /["'`]\/assets\/(?:config\.json|icon\.png|pixel\.png)/u);
 
   const phaserConfigObjectHtml = await packageAndReadFixture('phaser-config-object', {
-    mainJs: 'const scene = { load: { image() {} } }; scene.load.image({ key: "hero", url: "/assets/pixel.png" }); scene.load.image([{ key: "logo", url: "/assets/icon.png" }]);',
+    mainJs: 'const scene = new Phaser.Scene(); scene.load.image({ key: "hero", url: "/assets/pixel.png" }); scene.load.image([{ key: "logo", url: "/assets/icon.png" }]);',
   });
   assert.doesNotMatch(phaserConfigObjectHtml, /\/assets\/(?:icon|pixel)\.png/u);
 
+  const phaserSceneSubclassHtml = await packageAndReadFixture('phaser-scene-subclass', {
+    mainJs: 'class BootScene extends Phaser.Scene { preload() { this.load.image("hero", "/assets/pixel.png"); } } document.body.dataset.scene = BootScene.name;',
+  });
+  assert.doesNotMatch(phaserSceneSubclassHtml, /\/assets\/pixel\.png/u);
+
+  const unrelatedLoaderHtml = await packageAndReadFixture('unrelated-loader-api', {
+    mainJs: 'const router = { load: { json(key, url) { document.body.dataset[key] = url; } } }; router.load.json("route", "/assets/config.json");',
+  });
+  assert.match(unrelatedLoaderHtml, /\/assets\/config\.json/u);
+
   const phaserVariableConfigHtml = await packageAndReadFixture('phaser-variable-config', {
-    mainJs: 'const config = { key: "hero", url: "/assets/pixel.png" }; const scene = { load: { image() {} } }; scene.load.image(config);',
+    mainJs: 'const config = { key: "hero", url: "/assets/pixel.png" }; const scene = new Phaser.Scene(); scene.load.image(config);',
   });
   assert.doesNotMatch(phaserVariableConfigHtml, /\/assets\/pixel\.png/u);
 
   const phaserShorthandConfigHtml = await packageAndReadFixture('phaser-shorthand-config', {
-    mainJs: 'const key = "hero"; const url = "/assets/pixel.png"; const scene = { load: { image() {} } }; scene.load.image({ key, url });',
+    mainJs: 'const key = "hero"; const url = "/assets/pixel.png"; const scene = new Phaser.Scene(); scene.load.image({ key, url });',
   });
   assert.doesNotMatch(phaserShorthandConfigHtml, /\/assets\/pixel\.png/u);
 
@@ -649,7 +677,7 @@ try {
   const provenLegacyManifestHtml = await packageAndReadFixture(
     'proven-legacy-manifest',
     {
-      mainJs: 'const routes = [{ key: "route", path: "/assets/route.png" }]; const assets = [{ key: "logo", path: "/assets/icon.png" }]; const scene = { load: { image() {} } }; for (const asset of assets) scene.load.image(asset.key, asset.path); document.body.dataset.route = routes[0].path;',
+      mainJs: 'const routes = [{ key: "route", path: "/assets/route.png" }]; const assets = [{ key: "logo", path: "/assets/icon.png" }]; const scene = new Phaser.Scene(); for (const asset of assets) scene.load.image(asset.key, asset.path); document.body.dataset.route = routes[0].path;',
     },
     [['artifacts/web-preview/assets/route.png', Buffer.from('legacy-route')]],
   );
@@ -659,7 +687,7 @@ try {
   const nestedLegacyManifestHtml = await packageAndReadFixture(
     'nested-legacy-manifest',
     {
-      mainJs: 'const outer = [{ key: "route", path: "/assets/route.png" }]; const inner = [{ key: "logo", path: "/assets/icon.png" }]; const scene = { load: { image() {} } }; for (const asset of outer) { for (const asset of inner) scene.load.image(asset.key, asset.path); } document.body.dataset.route = outer[0].path;',
+      mainJs: 'const outer = [{ key: "route", path: "/assets/route.png" }]; const inner = [{ key: "logo", path: "/assets/icon.png" }]; const scene = new Phaser.Scene(); for (const asset of outer) { for (const asset of inner) scene.load.image(asset.key, asset.path); } document.body.dataset.route = outer[0].path;',
     },
     [['artifacts/web-preview/assets/route.png', Buffer.from('nested-legacy-route')]],
   );
@@ -669,7 +697,7 @@ try {
   const blockShadowManifestHtml = await packageAndReadFixture(
     'block-shadow-manifest',
     {
-      mainJs: 'const manifests = [{ key: "route", path: "/assets/route.png" }]; const scene = { load: { image() {} } }; { const manifests = [{ key: "logo", path: "/assets/icon.png" }]; for (const asset of manifests) scene.load.image(asset.key, asset.path); } document.body.dataset.route = manifests[0].path;',
+      mainJs: 'const manifests = [{ key: "route", path: "/assets/route.png" }]; const scene = new Phaser.Scene(); { const manifests = [{ key: "logo", path: "/assets/icon.png" }]; for (const asset of manifests) scene.load.image(asset.key, asset.path); } document.body.dataset.route = manifests[0].path;',
     },
     [['artifacts/web-preview/assets/route.png', Buffer.from('block-shadow-route')]],
   );
@@ -679,7 +707,7 @@ try {
   const parameterShadowManifestHtml = await packageAndReadFixture(
     'parameter-shadow-manifest',
     {
-      mainJs: 'const manifests = [{ key: "route", path: "/assets/route.png" }]; const scene = { load: { image() {} } }; function load(manifests) { for (const asset of manifests) scene.load.image(asset.key, asset.path); } void load; document.body.dataset.route = manifests[0].path;',
+      mainJs: 'const manifests = [{ key: "route", path: "/assets/route.png" }]; const scene = new Phaser.Scene(); function load(manifests) { for (const asset of manifests) scene.load.image(asset.key, asset.path); } void load; document.body.dataset.route = manifests[0].path;',
     },
     [['artifacts/web-preview/assets/route.png', Buffer.from('parameter-shadow-route')]],
   );
@@ -688,14 +716,14 @@ try {
   const destructuredShadowManifestHtml = await packageAndReadFixture(
     'destructured-shadow-manifest',
     {
-      mainJs: 'const manifests = [{ key: "route", path: "/assets/route.png" }]; const config = { manifests: [] }; const scene = { load: { image() {} } }; { const { manifests } = config; for (const asset of manifests) scene.load.image(asset.key, asset.path); } document.body.dataset.route = manifests[0].path;',
+      mainJs: 'const manifests = [{ key: "route", path: "/assets/route.png" }]; const config = { manifests: [] }; const scene = new Phaser.Scene(); { const { manifests } = config; for (const asset of manifests) scene.load.image(asset.key, asset.path); } document.body.dataset.route = manifests[0].path;',
     },
     [['artifacts/web-preview/assets/route.png', Buffer.from('destructured-shadow-route')]],
   );
   assert.match(destructuredShadowManifestHtml, /\/assets\/route\.png/u);
 
   const defaultParameterManifestHtml = await packageAndReadFixture('default-parameter-manifest', {
-    mainJs: 'const manifests = [{ key: "logo", path: "/assets/icon.png" }]; const scene = { load: { image() {} } }; function load(options = manifests) { for (const asset of manifests) scene.load.image(asset.key, asset.path); } load();',
+    mainJs: 'const manifests = [{ key: "logo", path: "/assets/icon.png" }]; const scene = new Phaser.Scene(); function load(options = manifests) { for (const asset of manifests) scene.load.image(asset.key, asset.path); } load();',
   });
   assert.doesNotMatch(defaultParameterManifestHtml, /\/assets\/icon\.png/u);
 
@@ -703,7 +731,7 @@ try {
   const phaserHtml = await packageAndReadFixture(
     'phaser-html-asset',
     {
-      mainJs: 'const scene = { load: { html() {} } }; scene.load.html("panel", "/assets/panel.html");',
+      mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
     },
     [['artifacts/web-preview/assets/panel.html', phaserHtmlAsset]],
   );
@@ -714,7 +742,7 @@ try {
   );
 
   const externalPhaserHtmlGame = createPreviewFixture('external-phaser-html', {
-    mainJs: 'const scene = { load: { html() {} } }; scene.load.html("panel", "/assets/panel.html");',
+    mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
   });
   fs.writeFileSync(
     path.join(externalPhaserHtmlGame, 'artifacts/web-preview/assets/panel.html'),
@@ -726,7 +754,7 @@ try {
   );
 
   const externalImageSetPhaserHtmlGame = createPreviewFixture('external-image-set-phaser-html', {
-    mainJs: 'const scene = { load: { html() {} } }; scene.load.html("panel", "/assets/panel.html");',
+    mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
   });
   fs.writeFileSync(
     path.join(externalImageSetPhaserHtmlGame, 'artifacts/web-preview/assets/panel.html'),
@@ -738,7 +766,7 @@ try {
   );
 
   const refreshingPhaserHtmlGame = createPreviewFixture('refreshing-phaser-html', {
-    mainJs: 'const scene = { load: { html() {} } }; scene.load.html("panel", "/assets/panel.html");',
+    mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
   });
   fs.writeFileSync(
     path.join(refreshingPhaserHtmlGame, 'artifacts/web-preview/assets/panel.html'),
@@ -751,7 +779,7 @@ try {
 
   for (const method of ['setPath', 'setBaseURL']) {
     const prefixedPhaserGame = createPreviewFixture(`phaser-loader-${method.toLowerCase()}`, {
-      mainJs: `const scene = { load: { ${method}() {}, image() {} } }; scene.load.${method}("/assets"); scene.load.image("hero", "hero.png");`,
+      mainJs: `const scene = new Phaser.Scene(); scene.load.${method}("/assets"); scene.load.image("hero", "hero.png");`,
     });
     await assert.rejects(
       () => runOfflinePlaytestPackaging({ gameRoot: prefixedPhaserGame }),
@@ -771,7 +799,7 @@ try {
     'tilemapTiledJSON',
   ]) {
     const unsupportedLoaderGame = createPreviewFixture(`phaser-loader-${method.toLowerCase()}`, {
-      mainJs: `const scene = { load: { ${method}() {} } }; scene.load.${method}("asset", "/assets/fixture.json");`,
+      mainJs: `const scene = new Phaser.Scene(); scene.load.${method}("asset", "/assets/fixture.json");`,
     });
     await assert.rejects(
       () => runOfflinePlaytestPackaging({ gameRoot: unsupportedLoaderGame }),
@@ -780,7 +808,7 @@ try {
   }
 
   const computedUnsupportedLoaderGame = createPreviewFixture('phaser-loader-computed-css', {
-    mainJs: 'const scene = { load: { css() {} } }; scene["load"]["css"]("asset", "/assets/main.css");',
+    mainJs: 'const scene = new Phaser.Scene(); scene["load"]["css"]("asset", "/assets/main.css");',
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: computedUnsupportedLoaderGame }),
@@ -791,7 +819,7 @@ try {
   const binaryDatHtml = await packageAndReadFixture(
     'phaser-binary-dat',
     {
-      mainJs: 'const scene = { load: { binary() {} } }; scene.load.binary("level", "/assets/level.dat");',
+      mainJs: 'const scene = new Phaser.Scene(); scene.load.binary("level", "/assets/level.dat");',
     },
     [['artifacts/web-preview/assets/level.dat', binaryDatAsset]],
   );
@@ -954,7 +982,7 @@ try {
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: shadowedUrlGame }),
-    /does not support runtime-computed import\.meta asset URL/u,
+    /does not support bare import\.meta\.url in the bundled entry/u,
   );
 
   const escapedLevelJson = '{"fixture":"escaped-level"}\n';
@@ -1017,6 +1045,21 @@ try {
     () => runOfflinePlaytestPackaging({ gameRoot: networkFetchGame }),
     /does not support network fetch URL/u,
   );
+
+  const xmlHttpRequestHtml = await packageAndReadFixture(
+    'xml-http-request-asset',
+    {
+      mainJs: 'const request = new XMLHttpRequest(); request.open("GET", "/assets/level.json"); request.send();',
+    },
+    [['artifacts/web-preview/assets/level.json', '{"level":1}\n']],
+  );
+  assert.doesNotMatch(xmlHttpRequestHtml, /\/assets\/level\.json/u);
+  assert.match(xmlHttpRequestHtml, /data:application\/json;base64,/u);
+
+  const shadowedXmlHttpRequestHtml = await packageAndReadFixture('shadowed-xml-http-request', {
+    mainJs: 'class XMLHttpRequest { open(method, url) { document.body.dataset.url = url; } send() {} } const request = new XMLHttpRequest(); request.open("GET", "/assets/level.json"); request.send();',
+  }, [['artifacts/web-preview/assets/level.json', '{"level":1}\n']]);
+  assert.match(shadowedXmlHttpRequestHtml, /\/assets\/level\.json/u);
 
   const encodedPathHtml = await packageAndReadFixture(
     'encoded-path',
@@ -1170,6 +1213,19 @@ try {
   ]);
   assert.doesNotMatch(escapedUrlFunctionHtml, /\/assets\/pixel\.png/u);
   assert.match(escapedUrlFunctionHtml, /data:image\/png;base64,/u);
+
+  const escapedImageSetFunctionHtml = await packageAndReadFixture(
+    'escaped-css-image-set-function',
+    {},
+    [
+      [
+        'artifacts/web-preview/assets/main.css',
+        'body { background-image: image-\\73 et("/assets/icon.png" 1x); }',
+      ],
+    ],
+  );
+  assert.doesNotMatch(escapedImageSetFunctionHtml, /\/assets\/icon\.png/u);
+  assert.match(escapedImageSetFunctionHtml, /data:image\/png;base64,/u);
 
   const commentedUrlFunctionHtml = await packageAndReadFixture('commented-css-url-function', {}, [
     [
@@ -1481,7 +1537,7 @@ try {
   );
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: interpolatedTemplateAssetGame }),
-    /runtime-computed import.meta asset URL/u,
+    /bare import\.meta\.url in the bundled entry/u,
   );
 
   const dynamicAssetGame = createPreviewFixture('dynamic-asset', {
@@ -1489,7 +1545,7 @@ try {
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: dynamicAssetGame }),
-    /runtime-computed import.meta asset URL/u,
+    /bare import\.meta\.url in the bundled entry/u,
   );
 
   const coincidentalLiteralGame = createPreviewFixture('coincidental-literal', {

@@ -886,8 +886,8 @@ function inlineJavaScriptAssetReferences(
     },
   );
   output = inlineStaticImageSourceAssignments(output, documentFile, context);
+  output = inlineStaticXmlHttpRequestOpenCalls(output, documentFile, context);
   output = inlinePhaserAssetReferences(output, documentFile, context);
-  assertSupportedBundledRuntime(output);
   return output;
 }
 
@@ -985,6 +985,128 @@ function inlineStaticImageSourceAssignments(
   );
 }
 
+function inlineStaticXmlHttpRequestOpenCalls(
+  source: string,
+  documentFile: string,
+  context: InliningContext,
+): string {
+  const pattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*open\\s*\\(`,
+    'gu',
+  );
+  const codePositions = createCodePositionMap(source, true);
+  const replacements: SourceReplacement[] = [];
+
+  for (const match of source.matchAll(pattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1 || match[1] === undefined) {
+      continue;
+    }
+
+    const receiver = match[1];
+    const binding = findVisibleJavaScriptIdentifierBinding(
+      source,
+      receiver,
+      match.index,
+      codePositions,
+    );
+
+    if (
+      binding === undefined
+      || binding.start >= match.index
+      || !isXmlHttpRequestBinding(source, binding, codePositions)
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = source.indexOf('(', match.index);
+    const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
+    const urlArgument = arguments_[1];
+
+    if (urlArgument === undefined) {
+      continue;
+    }
+
+    const reference = readStaticJavaScriptString(source, urlArgument);
+
+    if (reference === undefined || isInMemoryUrlReference(reference)) {
+      continue;
+    }
+
+    if (isNonLocalReference(reference)) {
+      throw new Error(`Offline playtest does not support network XMLHttpRequest URL: ${reference}`);
+    }
+
+    replacements.push({
+      start: urlArgument.start,
+      end: urlArgument.end,
+      value: JSON.stringify(readAssetDataUrl(documentFile, reference, context)),
+    });
+  }
+
+  let output = source;
+
+  for (const replacement of replacements.reverse()) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
+  return output;
+}
+
+function isXmlHttpRequestBinding(
+  source: string,
+  binding: JavaScriptIdentifierBinding | undefined,
+  codePositions: Uint8Array,
+): boolean {
+  if (
+    binding?.initializerRange === undefined
+    || binding.start < 0
+  ) {
+    return false;
+  }
+
+  const initializer = maskNonCode(
+    source.slice(binding.initializerRange.start, binding.initializerRange.end),
+    codePositions.slice(binding.initializerRange.start, binding.initializerRange.end),
+  ).trim();
+  const match = /^new\s+((?:(?:globalThis|self|window)\s*\.\s*)?XMLHttpRequest)\s*(?:\(\s*\))?$/u.exec(
+    initializer,
+  );
+
+  if (match === null) {
+    return false;
+  }
+
+  if (/(?:globalThis|self|window)\s*\./u.test(match[1] ?? '')) {
+    return true;
+  }
+
+  const constructorOffset = source.indexOf('XMLHttpRequest', binding.initializerRange.start);
+  return constructorOffset >= binding.initializerRange.start
+    && constructorOffset < binding.initializerRange.end
+    && findVisibleJavaScriptIdentifierBinding(
+      source,
+      'XMLHttpRequest',
+      constructorOffset,
+      codePositions,
+    ) === undefined;
+}
+
+function readStaticJavaScriptString(source: string, range: SourceRange): string | undefined {
+  const value = source.slice(range.start, range.end).trim();
+  const match = /^(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)$/u.exec(
+    value,
+  );
+  const rawReference = match?.[1] ?? match?.[2] ?? match?.[3];
+
+  if (rawReference === undefined || (match?.[3] !== undefined && containsUnescapedTemplateInterpolation(
+    rawReference,
+  ))) {
+    return undefined;
+  }
+
+  return normalizeUrlReference(decodeJavaScriptStringLiteral(rawReference));
+}
+
 function inlinePhaserAssetReferences(
   source: string,
   documentFile: string,
@@ -1076,10 +1198,19 @@ function inlinePhaserAssetReferences(
 function assertSupportedPhaserLoaderConfiguration(source: string): void {
   const normalizedSource = normalizeStaticJavaScriptPropertyAccess(source);
   const codePositions = createCodePositionMap(normalizedSource, true);
-  const pattern = /\.\s*load\s*\.\s*(?:setBaseURL|setPath)\s*\(/gu;
+  const receiverPattern = `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})`;
+  const pattern = new RegExp(
+    `${receiverPattern}\\s*\\.\\s*load\\s*\\.\\s*(?:setBaseURL|setPath)\\s*\\(`,
+    'gu',
+  );
 
   for (const match of normalizedSource.matchAll(pattern)) {
-    if (match.index !== undefined && codePositions[match.index] === 1) {
+    if (
+      match.index !== undefined
+      && match[1] !== undefined
+      && codePositions[match.index] === 1
+      && isProvenPhaserLoaderReceiver(normalizedSource, match[1], match.index, codePositions)
+    ) {
       throw new Error('Offline playtest does not support Phaser loader base URL or path prefixes.');
     }
   }
@@ -1088,13 +1219,18 @@ function assertSupportedPhaserLoaderConfiguration(source: string): void {
     .map(escapeRegExp)
     .join('|');
   const unsupportedPattern = new RegExp(
-    `\\.\\s*load\\s*\\.\\s*(${unsupportedMethods})\\s*\\(`,
+    `${receiverPattern}\\s*\\.\\s*load\\s*\\.\\s*(${unsupportedMethods})\\s*\\(`,
     'gu',
   );
 
   for (const match of normalizedSource.matchAll(unsupportedPattern)) {
-    if (match.index !== undefined && codePositions[match.index] === 1) {
-      throw new Error(`Offline playtest does not support Phaser ${match[1]} loader assets.`);
+    if (
+      match.index !== undefined
+      && match[1] !== undefined
+      && codePositions[match.index] === 1
+      && isProvenPhaserLoaderReceiver(normalizedSource, match[1], match.index, codePositions)
+    ) {
+      throw new Error(`Offline playtest does not support Phaser ${match[2]} loader assets.`);
     }
   }
 }
@@ -1931,15 +2067,23 @@ function findPhaserLoaderUrlRanges(
     .sort((left, right) => right.length - left.length)
     .map(escapeRegExp)
     .join('|');
-  const loaderPattern = new RegExp(`\\.\\s*load\\s*\\.\\s*(${loaderMethods})\\s*\\(`, 'gu');
+  const loaderPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*load\\s*\\.\\s*(${loaderMethods})\\s*\\(`,
+    'gu',
+  );
   const ranges: SourceRange[] = [];
 
   for (const match of source.matchAll(loaderPattern)) {
-    if (match.index === undefined || codePositions[match.index] !== 1) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+      || !isProvenPhaserLoaderReceiver(source, match[1], match.index, codePositions)
+    ) {
       continue;
     }
 
-    const method = match[1] ?? '';
+    const method = match[2] ?? '';
     const openingParenthesis = source.indexOf('(', match.index);
     const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
     const configArgument = arguments_[0];
@@ -1958,6 +2102,59 @@ function findPhaserLoaderUrlRanges(
   }
 
   return ranges;
+}
+
+function isProvenPhaserLoaderReceiver(
+  source: string,
+  receiver: string,
+  position: number,
+  codePositions: Uint8Array,
+): boolean {
+  if (receiver === 'this') {
+    return isInsidePhaserSceneSubclass(source, position, codePositions);
+  }
+
+  const binding = findVisibleJavaScriptIdentifierBinding(source, receiver, position, codePositions);
+
+  if (binding?.initializerRange === undefined || binding.start >= position) {
+    return false;
+  }
+
+  const initializer = maskNonCode(
+    source.slice(binding.initializerRange.start, binding.initializerRange.end),
+    codePositions.slice(binding.initializerRange.start, binding.initializerRange.end),
+  ).trim();
+  const identifier = javascriptIdentifierPatternSource;
+  return new RegExp(
+    `^new\\s+(?:(?:${identifier})\\s*\\.\\s*)?Scene\\s*(?:\\(|$)`,
+    'u',
+  ).test(initializer);
+}
+
+function isInsidePhaserSceneSubclass(
+  source: string,
+  position: number,
+  codePositions: Uint8Array,
+): boolean {
+  const identifier = javascriptIdentifierPatternSource;
+  const classPattern = new RegExp(
+    `\\bclass(?:\\s+${identifier})?\\s+extends\\s+(?:(?:${identifier})\\s*\\.\\s*)?Scene\\s*$`,
+    'u',
+  );
+
+  for (const blockStart of [...findJavaScriptScopePath(source, position, codePositions)].reverse()) {
+    const headerStart = Math.max(0, blockStart - 512);
+    const header = maskNonCode(
+      source.slice(headerStart, blockStart),
+      codePositions.slice(headerStart, blockStart),
+    ).trimEnd();
+
+    if (classPattern.test(header)) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 function findPhaserLoaderConfigUrlRanges(
@@ -2371,6 +2568,7 @@ function inlineScriptElements(
       output += match[0];
     } else {
       const inlined = inlineJavaScriptAssetReferences(script, htmlFile, context);
+      assertSupportedBundledRuntime(inlined);
 
       if (isModuleScriptType(scriptType)) {
         assertNoRetainedModuleDependencies(inlined);
@@ -2529,15 +2727,44 @@ function inlineCssImageSetStringReferences(
   sourceFile: string,
   context: InliningContext,
 ): string {
-  const pattern = /(?:-webkit-)?image-set\s*\(/giu;
-  const codePositions = createCodePositionMap(source, false);
   let cursor = 0;
   let output = '';
 
+  for (const token of findCssImageSetFunctionTokens(source)) {
+    output += source.slice(cursor, token.openingParenthesis + 1);
+    output += inlineCssImageSetOptions(
+      source.slice(token.openingParenthesis + 1, token.closingParenthesis),
+      sourceFile,
+      context,
+    );
+    cursor = token.closingParenthesis;
+  }
+
+  return output + source.slice(cursor);
+}
+
+function findCssImageSetFunctionTokens(
+  source: string,
+): readonly Readonly<{
+  closingParenthesis: number;
+  openingParenthesis: number;
+}>[] {
+  const cssIdentifierCharacter = String.raw`(?:[a-z]|\\(?:[\dA-Fa-f]{1,6}[\t\n\f\r ]?|[^\n\f\r]))`;
+  const pattern = new RegExp(`(?<![-\\w])((?:-|${cssIdentifierCharacter})+)\\s*\\(`, 'giu');
+  const codePositions = createCodePositionMap(source, false);
+  const tokens: Array<Readonly<{
+    closingParenthesis: number;
+    openingParenthesis: number;
+  }>> = [];
   let match = pattern.exec(source);
 
   while (match !== null) {
-    if (codePositions[match.index] !== 1) {
+    if (
+      codePositions[match.index] !== 1
+      || !['image-set', '-webkit-image-set'].includes(
+        decodeCssEscapes(match[1] ?? '').toLowerCase(),
+      )
+    ) {
       match = pattern.exec(source);
       continue;
     }
@@ -2550,18 +2777,12 @@ function inlineCssImageSetStringReferences(
       continue;
     }
 
-    output += source.slice(cursor, openingParenthesis + 1);
-    output += inlineCssImageSetOptions(
-      source.slice(openingParenthesis + 1, closingParenthesis),
-      sourceFile,
-      context,
-    );
-    cursor = closingParenthesis;
+    tokens.push({ openingParenthesis, closingParenthesis });
     pattern.lastIndex = closingParenthesis + 1;
     match = pattern.exec(source);
   }
 
-  return output + source.slice(cursor);
+  return tokens;
 }
 
 function findCssFunctionEnd(source: string, openingParenthesis: number): number | undefined {
@@ -3241,7 +3462,7 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a[href],area[href]'):null;const href=anchor?.getAttribute('href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
@@ -4068,26 +4289,9 @@ function findExternalCssReference(source: string): string | undefined {
 }
 
 function findExternalCssImageSetStringReference(source: string): string | undefined {
-  const pattern = /(?:-webkit-)?image-set\s*\(/giu;
-  const codePositions = createCodePositionMap(source, false);
-  let match = pattern.exec(source);
-
-  while (match !== null) {
-    if (codePositions[match.index] !== 1) {
-      match = pattern.exec(source);
-      continue;
-    }
-
-    const openingParenthesis = source.indexOf('(', match.index);
-    const closingParenthesis = findCssFunctionEnd(source, openingParenthesis);
-
-    if (closingParenthesis === undefined) {
-      match = pattern.exec(source);
-      continue;
-    }
-
+  for (const token of findCssImageSetFunctionTokens(source)) {
     for (const option of splitCssImageSetOptions(
-      source.slice(openingParenthesis + 1, closingParenthesis),
+      source.slice(token.openingParenthesis + 1, token.closingParenthesis),
     )) {
       const reference = findCssImageSetStringToken(option)?.reference;
 
@@ -4095,9 +4299,6 @@ function findExternalCssImageSetStringReference(source: string): string | undefi
         return reference;
       }
     }
-
-    pattern.lastIndex = closingParenthesis + 1;
-    match = pattern.exec(source);
   }
 
   return undefined;
