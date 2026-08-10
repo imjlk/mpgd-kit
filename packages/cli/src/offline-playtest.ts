@@ -127,6 +127,7 @@ const phaserManifestUrlPropertyNames = new Set([
   'url',
   'urls',
 ]);
+const phaserManifestKinds = new Set(['atlas', 'audio', 'binary', 'image', 'json', 'spritesheet']);
 const phaserLoaderUrlArgumentIndexes: Readonly<Record<string, readonly number[]>> = {
   animation: [1],
   aseprite: [1, 2],
@@ -157,7 +158,17 @@ const phaserLoaderUrlArgumentIndexes: Readonly<Record<string, readonly number[]>
   video: [1],
   xml: [1],
 };
-const unsupportedPhaserLoaderMethods = new Set(['css', 'multiatlas', 'pack', 'tilemapTiledJSON']);
+const unsupportedPhaserLoaderMethods = new Set([
+  'css',
+  'multiatlas',
+  'pack',
+  'plugin',
+  'sceneFile',
+  'scenePlugin',
+  'script',
+  'scripts',
+  'tilemapTiledJSON',
+]);
 const javascriptScriptTypes = new Set([
   'application/ecmascript',
   'application/javascript',
@@ -223,8 +234,9 @@ const offlinePlaytestLimitations = [
   'Retained inline modules cannot import other modules, and script-driven navigation is unsupported.',
   'Iframe documents and non-fragment hyperlinks are unsupported.',
   'Phaser loader base URL and path prefixes are unsupported; pass complete artifact-relative URLs.',
-  'Phaser CSS and composite manifest loaders are unsupported.',
+  'Phaser CSS, executable script, and composite manifest loaders are unsupported.',
   'Subresource-integrity-protected entry scripts and stylesheets are unsupported.',
+  'Alternate stylesheets are unsupported.',
 ] as const;
 
 const mimeTypes = new Map<string, string>([
@@ -233,8 +245,10 @@ const mimeTypes = new Map<string, string>([
   ['.avif', 'image/avif'],
   ['.bin', 'application/octet-stream'],
   ['.csv', 'text/csv'],
+  ['.dat', 'application/octet-stream'],
   ['.eot', 'application/vnd.ms-fontobject'],
   ['.fnt', 'text/plain'],
+  ['.frag', 'text/plain'],
   ['.gif', 'image/gif'],
   ['.glb', 'model/gltf-binary'],
   ['.glsl', 'text/plain'],
@@ -256,6 +270,7 @@ const mimeTypes = new Map<string, string>([
   ['.svg', 'image/svg+xml'],
   ['.ttf', 'font/ttf'],
   ['.txt', 'text/plain'],
+  ['.vert', 'text/plain'],
   ['.vtt', 'text/vtt'],
   ['.wav', 'audio/wav'],
   ['.wasm', 'application/wasm'],
@@ -635,6 +650,7 @@ async function bundleEntry(entryFile: string, context: InliningContext): Promise
 
   const script = scriptOutput.text;
   const stylesheetOutput = result.outputFiles.find((file) => file.path.endsWith('.css'));
+  assertNoEntryImportMetaUrl(script);
   assertSupportedBundledRuntime(script);
   return {
     script,
@@ -924,7 +940,11 @@ function findPhaserManifestUrlRanges(
       codePositions.slice(objectRange.start, objectRange.end),
     );
 
-    if (!/\bkey\s*:/u.test(objectCode)) {
+    if (!/\bkey\s*:/u.test(objectCode) || !hasSupportedPhaserManifestKind(
+      source,
+      objectRange,
+      codePositions,
+    )) {
       continue;
     }
 
@@ -935,19 +955,38 @@ function findPhaserManifestUrlRanges(
       objectRange.end - 1,
       codePositions,
     );
-    const hasKitManifestKind = /\bkind\s*:/u.test(objectCode);
-    const value = source.slice(valueRange.start, valueRange.end).trimStart();
-    const hasDirectStaticUrl = /^(?:["'`]|\[\s*["'`])/u.test(value);
-
-    if (hasKitManifestKind || hasDirectStaticUrl) {
-      ranges.push({
-        ...valueRange,
-        traceIdentifiers: hasKitManifestKind,
-      });
-    }
+    ranges.push({ ...valueRange, traceIdentifiers: true });
   }
 
   return ranges;
+}
+
+function hasSupportedPhaserManifestKind(
+  source: string,
+  objectRange: SourceRange,
+  codePositions: Uint8Array,
+): boolean {
+  const kindPattern = /\bkind\s*:\s*(?:"([^"\r\n]+)"|'([^'\r\n]+)')/gu;
+  kindPattern.lastIndex = objectRange.start;
+  let match = kindPattern.exec(source);
+
+  while (match !== null && match.index < objectRange.end) {
+    if (codePositions[match.index] === 1) {
+      const containingObject = findContainingJavaScriptObject(source, match.index, codePositions);
+
+      if (
+        containingObject?.start === objectRange.start
+        && containingObject.end === objectRange.end
+        && phaserManifestKinds.has(match[1] ?? match[2] ?? '')
+      ) {
+        return true;
+      }
+    }
+
+    match = kindPattern.exec(source);
+  }
+
+  return false;
 }
 
 function findPhaserLoaderUrlRanges(
@@ -1342,6 +1381,10 @@ function inlineStylesheets(
 
       if (!rel.has('stylesheet')) {
         return [...rel].some((name) => htmlResourceHintRelNames.has(name)) ? '' : match;
+      }
+
+      if (rel.has('alternate')) {
+        throw new Error('Offline playtest does not support alternate stylesheets.');
       }
 
       if (href === undefined) {
@@ -1995,13 +2038,23 @@ function assertSupportedHtmlDocument(html: string): void {
     throw new Error('Offline playtest does not support HTML import maps.');
   }
 
-  for (const match of activeHtml.matchAll(createHtmlRawTextPattern())) {
+  for (const match of html.matchAll(createHtmlRawTextPattern())) {
     if (match[1] !== undefined) {
-      assertSupportedHtmlAttributes(match[1], tokenizeHtmlAttributes(match[2] ?? ''));
+      const attributes = tokenizeHtmlAttributes(match[2] ?? '');
+      assertSupportedHtmlAttributes(match[1], attributes);
+
+      if (
+        match.index !== undefined
+        && match[1].toLowerCase() === 'script'
+        && activeHtml.slice(match.index, match.index + match[0].length).trim().length === 0
+        && isJavaScriptScriptType(readHtmlAttributeToken(attributes, 'type'))
+      ) {
+        throw new Error('Offline playtest does not support executable scripts inside templates.');
+      }
     }
   }
 
-  transformOutsideHtmlRawText(activeHtml, (fragment) => {
+  transformOutsideHtmlRawText(html, (fragment) => {
     if (/<base\b(?:"[^"]*"|'[^']*'|[^'">])*>/iu.test(fragment)) {
       throw new Error('Offline playtest does not support HTML base elements.');
     }
@@ -2014,6 +2067,18 @@ function assertSupportedHtmlDocument(html: string): void {
 
     return fragment;
   });
+}
+
+function assertNoEntryImportMetaUrl(source: string): void {
+  const normalizedSource = normalizeStaticJavaScriptPropertyAccess(source);
+  const codeOnlySource = maskNonCode(
+    normalizedSource,
+    createCodePositionMap(normalizedSource, true),
+  );
+
+  if (/\bimport\s*\.\s*meta\s*\.\s*url\b/u.test(codeOnlySource)) {
+    throw new Error('Offline playtest does not support bare import.meta.url in the bundled entry.');
+  }
 }
 
 function assertSupportedHtmlAttributes(

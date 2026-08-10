@@ -297,14 +297,24 @@ try {
     /does not support SVG external script references/u,
   );
 
-  const inertTemplateHtml = await packageAndReadFixture('inert-template-navigation', {
-    indexHtml: '<!doctype html><html><head></head><body><template><a href="./credits.html">credits</a><svg><script href="/assets/side.js"></script></svg></template><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  const templateNavigationGame = createPreviewFixture('template-navigation', {
+    indexHtml: '<!doctype html><html><head></head><body><template><a href="./credits.html">credits</a></template><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
-  assert.match(inertTemplateHtml, /<a href="\.\/credits\.html">credits<\/a>/u);
-  assert.match(inertTemplateHtml, /<script href="\/assets\/side\.js"><\/script>/u);
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: templateNavigationGame }),
+    /does not support non-fragment hyperlink navigation/u,
+  );
+
+  const templateSvgScriptGame = createPreviewFixture('template-svg-script', {
+    indexHtml: '<!doctype html><html><head></head><body><template><svg><script href="/assets/side.js"></script></svg></template><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: templateSvgScriptGame }),
+    /does not support SVG external script references/u,
+  );
 
   const activeTemplateHandlerGame = createPreviewFixture('active-template-handler', {
-    indexHtml: '<!doctype html><html><head></head><body><template onclick="alert(1)"><span>inert</span></template><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    indexHtml: '<!doctype html><html><head></head><body><template><button onclick="alert(1)">activate</button></template><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: activeTemplateHandlerGame }),
@@ -320,9 +330,9 @@ try {
     [['artifacts/web-preview/assets/template.png', templateStyleAsset]],
   );
   assert.doesNotMatch(templateStyleHtml, /\/assets\/template\.png/u);
-  assert.match(
-    templateStyleHtml,
-    new RegExp(`data:image/png;base64,${templateStyleAsset.toString('base64')}`, 'u'),
+  assert.ok(
+    templateStyleHtml.includes(`data:image/png;base64,${templateStyleAsset.toString('base64')}`),
+    'expected the template style asset to be inlined as an exact data URL',
   );
 
   const templateLookalikeGame = createPreviewFixture('template-lookalike', {
@@ -416,6 +426,14 @@ try {
   });
   assert.match(retainedImportMetaHtml, /import\.meta\.url/u);
 
+  const bareEntryImportMetaGame = createPreviewFixture('bare-entry-import-meta', {
+    mainJs: 'const resolveAsset = (base) => new URL("asset.png", base).href; document.body.dataset.asset = resolveAsset(import.meta.url);',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: bareEntryImportMetaGame }),
+    /does not support bare import\.meta\.url in the bundled entry/u,
+  );
+
   const codeLikeTextHtml = await packageAndReadFixture('code-like-text', {
     mainJs: `const example = "new URL('./missing.png', import.meta.url)";
       // const commented = "/assets/missing-comment.png";
@@ -477,9 +495,9 @@ try {
     [['artifacts/web-preview/assets/unicode.png', unicodePhaserAsset]],
   );
   assert.doesNotMatch(unicodePhaserHtml, /\/assets\/unicode\.png/u);
-  assert.match(
-    unicodePhaserHtml,
-    new RegExp(`data:image/png;base64,${unicodePhaserAsset.toString('base64')}`, 'u'),
+  assert.ok(
+    unicodePhaserHtml.includes(`data:image/png;base64,${unicodePhaserAsset.toString('base64')}`),
+    'expected the Unicode Phaser asset to be inlined as an exact data URL',
   );
 
   const asiPhaserAsset = Buffer.from('asi-phaser-asset');
@@ -491,9 +509,9 @@ try {
     [['artifacts/web-preview/assets/asi.png', asiPhaserAsset]],
   );
   assert.doesNotMatch(asiPhaserHtml, /\/assets\/asi\.png/u);
-  assert.match(
-    asiPhaserHtml,
-    new RegExp(`data:image/png;base64,${asiPhaserAsset.toString('base64')}`, 'u'),
+  assert.ok(
+    asiPhaserHtml.includes(`data:image/png;base64,${asiPhaserAsset.toString('base64')}`),
+    'expected the ASI Phaser asset to be inlined as an exact data URL',
   );
 
   await assertWorkerRejected('keyword-property-then-worker', {
@@ -599,9 +617,18 @@ try {
   assert.match(jsonModuleAssetHtml, /\/assets\/pixel\.png/u);
 
   const phaserManifestHtml = await packageAndReadFixture('phaser-manifest-assets', {
-    mainJs: 'const texture = "/assets/pixel.png"; const assets = [{ kind: "image", key: "hero", url: texture }, { key: "logo", path: "/assets/icon.png" }, { key: "atlas", textureURL: "/assets/pixel.png", atlasURL: "/assets/config.json" }]; const scene = { load: { bitmapFont() {}, image() {} } }; for (const asset of assets) scene.load.image(asset.key, asset.url ?? asset.path ?? asset.textureURL); scene.load.bitmapFont("font", "/assets/pixel.png", "/assets/config.json");',
+    mainJs: 'const texture = "/assets/pixel.png"; const assets = [{ kind: "image", key: "hero", url: texture }, { kind: "image", key: "logo", url: "/assets/icon.png" }, { kind: "atlas", key: "atlas", textureUrl: "/assets/pixel.png", atlasUrl: "/assets/config.json" }]; const scene = { load: { bitmapFont() {}, image() {} } }; for (const asset of assets) scene.load.image(asset.key, asset.url ?? asset.textureUrl); scene.load.bitmapFont("font", "/assets/pixel.png", "/assets/config.json");',
   });
   assert.doesNotMatch(phaserManifestHtml, /["'`]\/assets\/(?:config\.json|icon\.png|pixel\.png)/u);
+
+  const unrelatedKeyedObjectHtml = await packageAndReadFixture(
+    'unrelated-keyed-object',
+    {
+      mainJs: 'const route = { key: "route", url: "/assets/route.png" }; document.body.dataset.route = JSON.stringify(route);',
+    },
+    [['artifacts/web-preview/assets/route.png', Buffer.from('unrelated-route')]],
+  );
+  assert.match(unrelatedKeyedObjectHtml, /\/assets\/route\.png/u);
 
   const phaserHtmlAsset = '<section>offline panel fixture</section>';
   const phaserHtml = await packageAndReadFixture(
@@ -612,9 +639,9 @@ try {
     [['artifacts/web-preview/assets/panel.html', phaserHtmlAsset]],
   );
   assert.doesNotMatch(phaserHtml, /\/assets\/panel\.html/u);
-  assert.match(
-    phaserHtml,
-    new RegExp(`data:text/html;base64,${Buffer.from(phaserHtmlAsset).toString('base64')}`, 'u'),
+  assert.ok(
+    phaserHtml.includes(`data:text/html;base64,${Buffer.from(phaserHtmlAsset).toString('base64')}`),
+    'expected the Phaser HTML asset to be inlined as an exact data URL',
   );
 
   const externalPhaserHtmlGame = createPreviewFixture('external-phaser-html', {
@@ -639,7 +666,17 @@ try {
     );
   }
 
-  for (const method of ['css', 'multiatlas', 'pack', 'tilemapTiledJSON']) {
+  for (const method of [
+    'css',
+    'multiatlas',
+    'pack',
+    'plugin',
+    'sceneFile',
+    'scenePlugin',
+    'script',
+    'scripts',
+    'tilemapTiledJSON',
+  ]) {
     const unsupportedLoaderGame = createPreviewFixture(`phaser-loader-${method.toLowerCase()}`, {
       mainJs: `const scene = { load: { ${method}() {} } }; scene.load.${method}("asset", "/assets/fixture.json");`,
     });
@@ -655,6 +692,21 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: computedUnsupportedLoaderGame }),
     /does not support Phaser css loader assets/u,
+  );
+
+  const binaryDatAsset = Buffer.from('phaser-binary-dat');
+  const binaryDatHtml = await packageAndReadFixture(
+    'phaser-binary-dat',
+    {
+      mainJs: 'const scene = { load: { binary() {} } }; scene.load.binary("level", "/assets/level.dat");',
+    },
+    [['artifacts/web-preview/assets/level.dat', binaryDatAsset]],
+  );
+  assert.ok(
+    binaryDatHtml.includes(
+      `data:application/octet-stream;base64,${binaryDatAsset.toString('base64')}`,
+    ),
+    'expected the Phaser .dat binary to be inlined as an exact data URL',
   );
 
   const externalGltfGame = createPreviewFixture('external-gltf', {
@@ -772,13 +824,15 @@ try {
     /(?:level\\u002ejson|level\.json|icon\\x2epng|icon\.png)/u,
   );
   const escapedLevelData = Buffer.from(escapedLevelJson).toString('base64');
-  assert.match(
-    escapedJavaScriptAssetHtml,
-    new RegExp(`data:application/json;base64,${escapedLevelData}`, 'u'),
+  assert.ok(
+    escapedJavaScriptAssetHtml.includes(`data:application/json;base64,${escapedLevelData}`),
+    'expected the escaped JSON asset to be inlined as an exact data URL',
   );
-  assert.match(
-    escapedJavaScriptAssetHtml,
-    new RegExp(`data:image/png;base64,${escapedIconPng.toString('base64')}`, 'u'),
+  assert.ok(
+    escapedJavaScriptAssetHtml.includes(
+      `data:image/png;base64,${escapedIconPng.toString('base64')}`,
+    ),
+    'expected the escaped image asset to be inlined as an exact data URL',
   );
 
   const quotedPlayerJson = '{"fixture":"quoted-player"}\n';
@@ -795,13 +849,15 @@ try {
   );
   assert.doesNotMatch(quotedJavaScriptAssetHtml, /player(?:\\'|')s\.(?:json|png)/u);
   const quotedPlayerData = Buffer.from(quotedPlayerJson).toString('base64');
-  assert.match(
-    quotedJavaScriptAssetHtml,
-    new RegExp(`data:application/json;base64,${quotedPlayerData}`, 'u'),
+  assert.ok(
+    quotedJavaScriptAssetHtml.includes(`data:application/json;base64,${quotedPlayerData}`),
+    'expected the quoted JSON asset to be inlined as an exact data URL',
   );
-  assert.match(
-    quotedJavaScriptAssetHtml,
-    new RegExp(`data:image/png;base64,${quotedPlayerPng.toString('base64')}`, 'u'),
+  assert.ok(
+    quotedJavaScriptAssetHtml.includes(
+      `data:image/png;base64,${quotedPlayerPng.toString('base64')}`,
+    ),
+    'expected the quoted image asset to be inlined as an exact data URL',
   );
 
   const networkFetchGame = createPreviewFixture('network-fetch', {
@@ -876,6 +932,14 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: integrityStylesheetGame }),
     /does not support integrity-protected stylesheets/u,
+  );
+
+  const alternateStylesheetGame = createPreviewFixture('alternate-stylesheet', {
+    indexHtml: '<!doctype html><html><head><link rel="alternate stylesheet" title="dark" href="/assets/main.css"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: alternateStylesheetGame }),
+    /does not support alternate stylesheets/u,
   );
 
   const mixedSrcsetHtml = await packageAndReadFixture('mixed-srcset', {
@@ -1163,12 +1227,12 @@ try {
     /does not support iframe documents/u,
   );
 
-  const inertTemplateScriptHtml = await packageAndReadFixture('inert-template-script', {
+  const executableTemplateScriptGame = createPreviewFixture('executable-template-script', {
     indexHtml: '<!doctype html><html><head><template><script type="module" src="/assets/template.js"></script></template></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
-  assert.match(
-    inertTemplateScriptHtml,
-    /<template><script type="module" src="\/assets\/template\.js"><\/script><\/template>/u,
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: executableTemplateScriptGame }),
+    /does not support executable scripts inside templates/u,
   );
 
   const importMapGame = createPreviewFixture('import-map', {
