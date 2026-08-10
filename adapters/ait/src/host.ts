@@ -59,7 +59,7 @@ const promotionGrantStoragePrefix = 'mpgd:ait:promotion-grant:v1:';
  */
 const iapPurchaseAttemptStoragePrefix = 'mpgd:ait:iap-purchase-attempt:v1:';
 const iapCompletedPurchaseAttemptIndexStorageKey = 'mpgd:ait:iap-completed-purchase-index:v1';
-const maximumPersistedCompletedIapPurchaseAttempts = 64;
+const maximumIndexedCompletedIapPurchaseAttempts = 64;
 /** A crashed pre-checkout attempt can be retried only after provider recovery finds no order. */
 const pendingIapPurchaseAttemptRecoveryAgeMs = defaultIapPurchaseSessionTimeoutMs;
 /** Rotates bounded pending-order recovery so an early rejected order cannot starve later work. */
@@ -297,7 +297,7 @@ export function createAitHostBridge(
   };
 
   const enqueueCompletedIapAttemptRetention = (
-    storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+    storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
     storageKey: string,
   ): Promise<void> => {
     const scheduled = completedIapAttemptRetention.then(async () => {
@@ -1654,7 +1654,7 @@ interface AitIapPurchaseInput {
   readonly prepare: AitIapPreparer;
   readonly verifier: AitIapProductGrantVerifier;
   readonly retainCompletedAttempt: (
-    storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+    storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
     storageKey: string,
   ) => Promise<void>;
   readonly timeoutMs: number;
@@ -2011,12 +2011,13 @@ async function hasAitIapPendingOrderForSku(
 }
 
 /**
- * Keep terminal retry markers bounded without evicting ambiguous pending or
- * server-granted states. The index only tracks entries written by this build;
- * all storage failures leave the completed result valid and skip cleanup.
+ * Keep the completed-attempt index bounded without deleting terminal retry
+ * markers. A client idempotency key may be replayed indefinitely, so removing
+ * its durable result could open a second native checkout. The index is only
+ * bookkeeping for recent entries; all storage failures leave markers intact.
  */
 async function retainCompletedAitIapPurchaseAttempt(
-  storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>,
+  storage: Pick<typeof Storage, 'getItem' | 'setItem'>,
   storageKey: string,
   timeoutMs: number,
 ): Promise<void> {
@@ -2028,29 +2029,20 @@ async function retainCompletedAitIapPurchaseAttempt(
     );
     const knownKeys = parseAitIapCompletedPurchaseAttemptIndex(serialized);
     const keys = [...knownKeys.filter((knownKey) => knownKey !== storageKey), storageKey];
-    const evictedKey = keys.length > maximumPersistedCompletedIapPurchaseAttempts
-      ? keys[0]
-      : undefined;
-    const retainedKeys = evictedKey === undefined ? keys : keys.slice(1);
+    const retainedKeys = keys.slice(-maximumIndexedCompletedIapPurchaseAttempts);
     const retentionTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
     if (retentionTimeoutMs === 0) {
       return;
     }
-    const retained = await writeAitIapStorage(
+    await writeAitIapStorage(
       storage,
       iapCompletedPurchaseAttemptIndexStorageKey,
       JSON.stringify(retainedKeys),
       retentionTimeoutMs,
     );
-    if (retained && evictedKey !== undefined) {
-      const evictionTimeoutMs = remainingAitIapOperationTimeout(startedAt, timeoutMs);
-      if (evictionTimeoutMs > 0) {
-        await removeAitIapStorage(storage, evictedKey, evictionTimeoutMs);
-      }
-    }
   } catch {
-    // Cleanup is best effort. A persisted terminal marker is safer than a
-    // repeated checkout, even when the local index cannot be maintained.
+    // Index maintenance is best effort. The terminal marker remains the
+    // durable retry barrier even when its recent-entry index cannot be written.
   }
 }
 
@@ -2070,7 +2062,7 @@ function parseAitIapCompletedPurchaseAttemptIndex(
       && key.startsWith(iapPurchaseAttemptStoragePrefix)
       && key.length <= 4_096
     ));
-    return [...new Set(keys)].slice(-maximumPersistedCompletedIapPurchaseAttempts);
+    return [...new Set(keys)].slice(-maximumIndexedCompletedIapPurchaseAttempts);
   } catch {
     return [];
   }
@@ -2301,30 +2293,54 @@ async function restoreAitIapProducts(
   if (!prepared) {
     return { restoredEntitlements: [] };
   }
-  const entitlementTimeoutMs = getRemainingRestoreTimeout();
-  if (entitlementTimeoutMs === 0) {
-    return { restoredEntitlements: [] };
-  }
-  const authoritativeEntitlements = await readAitIapEntitlements(
-    input.entitlementReader,
-    entitlementTimeoutMs,
+  const postPrepareTimeoutMs = getRemainingRestoreTimeout();
+  const reservedEntitlementReadTimeoutMs = Math.max(1, Math.ceil(postPrepareTimeoutMs / 3));
+  const reconciliationTimeoutMs = Math.max(
+    0,
+    postPrepareTimeoutMs - reservedEntitlementReadTimeoutMs,
   );
+  const reconciliationStartedAt = Date.now();
+  const getRemainingReconciliationTimeout = (): number => {
+    return Math.min(
+      getRemainingRestoreTimeout(),
+      remainingAitIapOperationTimeout(reconciliationStartedAt, reconciliationTimeoutMs),
+    );
+  };
+  const finishRestore = async (
+    locallyRestoredEntitlements: readonly Entitlement[] = [],
+  ): Promise<{ readonly restoredEntitlements: readonly Entitlement[] }> => {
+    const entitlementTimeoutMs = getRemainingRestoreTimeout();
+    const authoritativeEntitlements = await readAitIapEntitlements(
+      input.entitlementReader,
+      entitlementTimeoutMs,
+    );
+    return {
+      restoredEntitlements: mergeAitIapRestoredEntitlements(
+        locallyRestoredEntitlements,
+        authoritativeEntitlements,
+        input.products,
+      ),
+    };
+  };
+  if (reconciliationTimeoutMs === 0) {
+    return await finishRestore();
+  }
 
   let pendingOrders: Awaited<ReturnType<AitHostDependencies['iap']['getPendingOrders']>> | undefined;
   try {
-    const pendingOrderTimeoutMs = getRemainingRestoreTimeout();
+    const pendingOrderTimeoutMs = getRemainingReconciliationTimeout();
     if (pendingOrderTimeoutMs === 0) {
-      return { restoredEntitlements: authoritativeEntitlements };
+      return await finishRestore();
     }
     pendingOrders = await waitForAitIapNativeCall(
       () => input.dependencies.iap.getPendingOrders(),
       pendingOrderTimeoutMs,
     );
   } catch {
-    return { restoredEntitlements: authoritativeEntitlements };
+    return await finishRestore();
   }
   if (pendingOrders === undefined) {
-    return { restoredEntitlements: authoritativeEntitlements };
+    return await finishRestore();
   }
 
   const eligibleOrders: Array<{
@@ -2346,7 +2362,7 @@ async function restoreAitIapProducts(
   }
 
   const restoredEntitlements: Entitlement[] = [];
-  const cursorTimeoutMs = getRemainingRestoreTimeout();
+  const cursorTimeoutMs = getRemainingReconciliationTimeout();
   const cursor = cursorTimeoutMs === 0
     ? undefined
     : await readAitIapPendingOrderCursor(input.dependencies.storage, cursorTimeoutMs);
@@ -2360,7 +2376,7 @@ async function restoreAitIapProducts(
 
   for (const selectedOrder of orders) {
     const { order, product } = selectedOrder;
-    const cursorWriteTimeoutMs = getRemainingRestoreTimeout();
+    const cursorWriteTimeoutMs = getRemainingReconciliationTimeout();
     if (cursorWriteTimeoutMs === 0) {
       break;
     }
@@ -2372,7 +2388,7 @@ async function restoreAitIapProducts(
     if (!cursorAdvanced) {
       break;
     }
-    const verificationTimeoutMs = getRemainingRestoreTimeout();
+    const verificationTimeoutMs = getRemainingReconciliationTimeout();
     if (verificationTimeoutMs === 0) {
       break;
     }
@@ -2389,7 +2405,7 @@ async function restoreAitIapProducts(
     }
 
     try {
-      const completionTimeoutMs = getRemainingRestoreTimeout();
+      const completionTimeoutMs = getRemainingReconciliationTimeout();
       if (completionTimeoutMs === 0) {
         break;
       }
@@ -2411,13 +2427,7 @@ async function restoreAitIapProducts(
     }
   }
 
-  return {
-    restoredEntitlements: mergeAitIapRestoredEntitlements(
-      restoredEntitlements,
-      authoritativeEntitlements,
-      input.products,
-    ),
-  };
+  return await finishRestore(restoredEntitlements);
 }
 
 function mergeAitIapRestoredEntitlements(

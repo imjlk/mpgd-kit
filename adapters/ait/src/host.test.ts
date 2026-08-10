@@ -261,7 +261,7 @@ describe('AIT production host bridge', () => {
     ]);
   });
 
-  it('bounds completed client-attempt markers while preserving the newest results', async () => {
+  it('bounds the completed-attempt index without evicting durable retry barriers', async () => {
     const values = new Map<string, string>();
     const callbacks: IapPurchaseCallbacks[] = [];
     const bridge = createAitHostBridge({
@@ -304,11 +304,18 @@ describe('AIT production host bridge', () => {
     await vi.waitFor(() => expect(
       JSON.parse(values.get(indexKey) ?? '[]'),
     ).toHaveLength(64));
-    await vi.waitFor(() => expect(
-      values.has('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:retained-attempt-0'),
-    ).toBe(false));
+    expect(values.has('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:retained-attempt-0'))
+      .toBe(true);
     expect(values.has('mpgd:ait:iap-purchase-attempt:v1:HINT_PACK_5:retained-attempt-64'))
       .toBe(true);
+    await expect(request(bridge, 'commerce.purchase', {
+      productId: 'HINT_PACK_5',
+      idempotencyKey: 'retained-attempt-0',
+    })).resolves.toMatchObject({
+      status: 'completed',
+      transactionId: 'order-retention-0',
+    });
+    expect(callbacks).toHaveLength(65);
   });
 
   it('fails closed when the native IAP callback cannot verify the product grant', async () => {
@@ -853,6 +860,51 @@ describe('AIT production host bridge', () => {
         grantedAt: '2026-08-08T10:00:00.000Z',
       }],
     });
+  });
+
+  it('refreshes authoritative entitlements after pending-order verification', async () => {
+    let grantCommitted = false;
+    const readIapEntitlements = vi.fn(async () => grantCommitted
+      ? [{
+          id: 'HINT_PACK_5',
+          source: 'purchase' as const,
+          grantedAt: '2026-08-08T10:00:00.000Z',
+        }]
+      : []);
+    const verifyIapProductGrant = vi.fn(async () => {
+      grantCommitted = true;
+      return true;
+    });
+    const completeProductGrant = vi.fn(async () => false);
+    const bridge = createAitHostBridge({
+      iapProducts: [{ productId: 'HINT_PACK_5', sku: 'ait.ttokdoku.hints.5' }],
+      prepareIap: async () => true,
+      verifyIapProductGrant,
+      readIapEntitlements,
+      dependencies: createDependencies({
+        iap: createSupportedIap({
+          pendingOrders: {
+            orders: [{
+              orderId: 'pending-authoritative-order',
+              sku: 'ait.ttokdoku.hints.5',
+              paymentCompletedDate: '2026-08-08T10:00:00.000Z',
+            }],
+          },
+          completeProductGrant,
+        }),
+      }),
+    });
+
+    await expect(request(bridge, 'commerce.restore', {})).resolves.toEqual({
+      restoredEntitlements: [{
+        id: 'HINT_PACK_5',
+        source: 'purchase',
+        grantedAt: '2026-08-08T10:00:00.000Z',
+      }],
+    });
+    expect(verifyIapProductGrant).toHaveBeenCalledOnce();
+    expect(completeProductGrant).toHaveBeenCalledOnce();
+    expect(readIapEntitlements).toHaveBeenCalledOnce();
   });
 
   it('does not let ineligible pending orders consume the restore work limit', async () => {
