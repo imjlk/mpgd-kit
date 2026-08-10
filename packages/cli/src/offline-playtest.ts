@@ -923,10 +923,64 @@ function inlineJavaScriptAssetReferences(
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
+  output = inlineStaticFontFaceSources(output, documentFile, context);
   output = inlineStaticElementSourceAssignments(output, documentFile, context);
   output = inlineStaticXmlHttpRequestOpenCalls(output, documentFile, context);
   output = inlinePhaserAssetReferences(output, documentFile, context);
   return output;
+}
+
+function inlineStaticFontFaceSources(
+  source: string,
+  documentFile: string,
+  context: InliningContext,
+): string {
+  const fontFacePattern = /((?<![$.\u200C\u200D\p{ID_Continue}])new\s+(?:(globalThis|self|window)\s*\.\s*)?FontFace\s*\(\s*(?:"(?:\\.|[^"\\\r\n])*"|'(?:\\.|[^'\\\r\n])*'|`(?:\\.|[^`\\\r\n])*`)\s*,\s*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
+  const codePositions = createCodePositionMap(source, true);
+
+  return source.replace(
+    fontFacePattern,
+    (
+      match,
+      prefix: string,
+      qualifier: string | undefined,
+      doubleQuotedSource: string | undefined,
+      singleQuotedSource: string | undefined,
+      templateSource: string | undefined,
+      offset: number,
+    ) => {
+      if (
+        codePositions[offset] !== 1
+        || hasEscapedJavaScriptIdentifierContinuationBefore(source, offset, codePositions)
+        || (
+          templateSource !== undefined
+          && containsUnescapedTemplateInterpolation(templateSource)
+        )
+        || (
+          qualifier === undefined
+            ? findVisibleJavaScriptIdentifierBinding(
+              source,
+              'FontFace',
+              offset,
+              codePositions,
+            ) !== undefined
+            : findVisibleJavaScriptIdentifierBinding(
+              source,
+              qualifier,
+              offset,
+              codePositions,
+            ) !== undefined
+        )
+      ) {
+        return match;
+      }
+
+      const rawSource = doubleQuotedSource ?? singleQuotedSource ?? templateSource ?? '';
+      const descriptor = decodeJavaScriptStringLiteral(rawSource);
+      const inlinedDescriptor = inlineCssAssetReferences(descriptor, documentFile, context);
+      return `${prefix}${JSON.stringify(inlinedDescriptor)}`;
+    },
+  );
 }
 
 function inlineStaticElementSourceAssignments(
@@ -3684,7 +3738,6 @@ function assertSupportedBundledRuntime(source: string): void {
     { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/gu, label: 'WebAssembly streaming' },
     { pattern: /\b(?:webkit)?RTCPeerConnection\b/gu, label: 'WebRTC' },
     { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
-    { pattern: /\bimport\s*\(/gu, label: 'dynamic import' },
   ];
   const normalizedSource = normalizeRuntimeGlobalAliases(
     normalizeStaticJavaScriptPropertyAccess(source),
@@ -3692,6 +3745,7 @@ function assertSupportedBundledRuntime(source: string): void {
   const codePositions = createCodePositionMap(normalizedSource, true);
   const codeOnlySource = maskNonCode(normalizedSource, codePositions);
   assertNoUnsupportedWorkerConstruction(normalizedSource, codePositions);
+  assertNoDynamicImport(normalizedSource, codePositions);
   assertNoScriptDrivenNavigation(normalizedSource, codePositions);
 
   for (const candidate of unsupported) {
@@ -3701,6 +3755,64 @@ function assertSupportedBundledRuntime(source: string): void {
     }
 
     candidate.pattern.lastIndex = 0;
+  }
+}
+
+function assertNoDynamicImport(source: string, codePositions: Uint8Array): void {
+  const pattern = /(?<![$.#\u200C\u200D\p{ID_Continue}])import\s*\(/gu;
+
+  for (const match of source.matchAll(pattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const previousCode = findPreviousJavaScriptCodeIndex(source, match.index - 1, codePositions);
+
+    if (previousCode !== undefined && (source[previousCode] === '.' || source[previousCode] === '#')) {
+      continue;
+    }
+
+    const openingParenthesis = source.indexOf('(', match.index + 'import'.length);
+    let depth = 0;
+    let closingParenthesis: number | undefined;
+
+    for (let index = openingParenthesis; index < source.length; index += 1) {
+      if (codePositions[index] !== 1) {
+        continue;
+      }
+
+      if (source[index] === '(') {
+        depth += 1;
+      } else if (source[index] === ')') {
+        depth -= 1;
+
+        if (depth === 0) {
+          closingParenthesis = index;
+          break;
+        }
+      }
+    }
+
+    if (closingParenthesis !== undefined) {
+      let nextCode = closingParenthesis + 1;
+
+      while (
+        nextCode < source.length
+        && (
+          codePositions[nextCode] !== 1
+          || /\s/u.test(source[nextCode] ?? '')
+        )
+      ) {
+        nextCode += 1;
+      }
+
+      if (source[nextCode] === '{') {
+        // Object and class methods may legally be named `import`.
+        continue;
+      }
+    }
+
+    throw new Error('Offline playtest does not support dynamic import.');
   }
 }
 
@@ -3978,6 +4090,12 @@ function isPotentialLocationAliasExpression(
     return isPotentialLocationAliasExpression(unwrapped.expression, aliases);
   }
 
+  const sequenceResult = findSequenceExpressionLastValue(expression);
+
+  if (sequenceResult !== undefined) {
+    return isPotentialLocationAliasExpression(sequenceResult.expression, aliases);
+  }
+
   const isDirectLocation =
     /^(?:(?:document|globalThis|parent|self|top|window)\s*\.\s*)?location$/u.test(expression);
 
@@ -4057,6 +4175,61 @@ function unwrapBalancedOuterParentheses(
   }
 
   return { expression: expression.slice(start, end), offset: start };
+}
+
+function findSequenceExpressionLastValue(
+  expression: string,
+): Readonly<{ expression: string; offset: number }> | undefined {
+  let parenthesisDepth = 0;
+  let bracketDepth = 0;
+  let braceDepth = 0;
+  let lastComma: number | undefined;
+
+  for (let index = 0; index < expression.length; index += 1) {
+    const character = expression[index];
+
+    if (character === '(') {
+      parenthesisDepth += 1;
+    } else if (character === ')') {
+      parenthesisDepth -= 1;
+    } else if (character === '[') {
+      bracketDepth += 1;
+    } else if (character === ']') {
+      bracketDepth -= 1;
+    } else if (character === '{') {
+      braceDepth += 1;
+    } else if (character === '}') {
+      braceDepth -= 1;
+    } else if (
+      character === ','
+      && parenthesisDepth === 0
+      && bracketDepth === 0
+      && braceDepth === 0
+    ) {
+      lastComma = index;
+    }
+
+    if (parenthesisDepth < 0 || bracketDepth < 0 || braceDepth < 0) {
+      return undefined;
+    }
+  }
+
+  if (
+    lastComma === undefined
+    || parenthesisDepth !== 0
+    || bracketDepth !== 0
+    || braceDepth !== 0
+  ) {
+    return undefined;
+  }
+
+  let offset = lastComma + 1;
+
+  while (offset < expression.length && /\s/u.test(expression[offset] ?? '')) {
+    offset += 1;
+  }
+
+  return { expression: expression.slice(offset).trimEnd(), offset };
 }
 
 function isLocationAliasIdentifierAtPosition(
@@ -4198,6 +4371,19 @@ function isLocationAliasExpression(
       source,
       unwrapped.expression,
       position + unwrapped.offset,
+      codePositions,
+      assignments,
+      visitedAliases,
+    );
+  }
+
+  const sequenceResult = findSequenceExpressionLastValue(expression);
+
+  if (sequenceResult !== undefined) {
+    return isLocationAliasExpression(
+      source,
+      sequenceResult.expression,
+      position + sequenceResult.offset,
       codePositions,
       assignments,
       visitedAliases,

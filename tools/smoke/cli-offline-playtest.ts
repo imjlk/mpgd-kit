@@ -389,6 +389,19 @@ try {
     /does not support script-driven navigation/u,
   );
 
+  const sequenceLocationGame = createPreviewFixture('sequence-location-navigation', {
+    mainJs: 'const alias = (0, window.location); alias.href = "https://example.com/escape";',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: sequenceLocationGame }),
+    /does not support script-driven navigation/u,
+  );
+
+  const nonLocationSequenceHtml = await packageAndReadFixture('non-location-sequence', {
+    mainJs: 'const alias = (window.location, { href: "local" }); document.body.dataset.href = alias.href;',
+  });
+  assert.match(nonLocationSequenceHtml, /href:\s*"local"/u);
+
   const simpleAssignmentResultGame = createPreviewFixture('simple-assignment-result-navigation', {
     mainJs: 'let target; const alias = target = window.location; alias.href = "https://example.com/escape";',
   });
@@ -1202,6 +1215,25 @@ try {
   assert.doesNotMatch(browserAudioHtml, /\/assets\/click\.mp3/u);
   assert.match(browserAudioHtml, /data:audio\/mpeg;base64,/u);
 
+  const fontFaceAsset = Buffer.from('font-face-asset');
+  const browserFontFaceHtml = await packageAndReadFixture(
+    'browser-font-face-asset',
+    {
+      mainJs: 'const face = new FontFace("Game", "local(\\"Game\\"), url(\\"/assets/game.woff2\\") format(\\"woff2\\")"); void face.load();',
+    },
+    [['artifacts/web-preview/assets/game.woff2', fontFaceAsset]],
+  );
+  assert.doesNotMatch(browserFontFaceHtml, /\/assets\/game\.woff2/u);
+  assert.ok(
+    browserFontFaceHtml.includes(`data:font/woff2;base64,${fontFaceAsset.toString('base64')}`),
+    'expected the FontFace asset to be inlined as an exact data URL',
+  );
+
+  const shadowedFontFaceHtml = await packageAndReadFixture('shadowed-font-face', {
+    mainJs: 'class FontFace { constructor(family, source) { this.source = source; } } const face = new FontFace("Game", "url(\\"/assets/not-a-font.woff2\\")"); document.body.dataset.source = face.source;',
+  });
+  assert.match(shadowedFontFaceHtml, /\/assets\/not-a-font\.woff2/u);
+
   const assignedBrowserAudioHtml = await packageAndReadFixture(
     'assigned-browser-audio-asset',
     { mainJs: 'const click = new Audio(); click.src = "/assets/click.mp3"; void click;' },
@@ -1910,6 +1942,11 @@ try {
     () => runOfflinePlaytestPackaging({ gameRoot: dynamicImportGame }),
     /does not support dynamic import/u,
   );
+
+  const importMethodHtml = await packageAndReadFixture('ordinary-import-methods', {
+    mainJs: 'const loader = { import() { return "local"; } }; document.body.dataset.value = [loader.import(), loader["import"](), loader. /* retained */ import()].join("|");',
+  });
+  assert.match(importMethodHtml, /loader\.import\(\)/u);
 
   const interpolatedTemplateAssetGame = createPreviewFixture('interpolated-template-asset', {
     mainJs: 'const mask = "mask"; document.body.dataset.asset = new URL(`./icons.svg#${mask}`, import.meta.url).href;',
