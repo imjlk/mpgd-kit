@@ -376,8 +376,32 @@ try {
     ['computed-location-method', 'location["assign"]("https://example.com");'],
     ['reflected-location-assignment', 'Reflect.set(location, "href", "https://example.com");'],
     [
+      'qualified-reflected-location-assignment',
+      'globalThis.Reflect.set(location, "href", "https://example.com");',
+    ],
+    [
       'object-location-assignment',
       'Object.assign(window.location, { href: "https://example.com" });',
+    ],
+    [
+      'qualified-object-location-assignment',
+      'window.Object.assign(location, { href: "https://example.com" });',
+    ],
+    [
+      'optional-reflect-call-location-assignment',
+      'Reflect.set?.(location, "href", "https://example.com");',
+    ],
+    [
+      'optional-reflect-property-location-assignment',
+      'Reflect?.set(location, "href", "https://example.com");',
+    ],
+    [
+      'optional-object-call-location-assignment',
+      'Object.assign?.(location, { href: "https://example.com" });',
+    ],
+    [
+      'optional-object-property-location-assignment',
+      'Object?.assign(location, { href: "https://example.com" });',
     ],
     ['template-location-assignment', 'location[`href`] = "https://example.com";'],
     ['qualified-template-location-assignment', 'window.location[`href`] = "https://example.com";'],
@@ -425,6 +449,14 @@ try {
     },
   );
   assert.match(shadowedReflectLocationHtml, /local/u);
+
+  const shadowedQualifiedReflectLocationHtml = await packageAndReadFixture(
+    'shadowed-qualified-reflect-location-assignment',
+    {
+      mainJs: 'function mutate(window, location) { window.Reflect.set(location, "href", "local"); } mutate({ Reflect: { set() {} } }, {});',
+    },
+  );
+  assert.match(shadowedQualifiedReflectLocationHtml, /local/u);
 
   for (const [lineEndingName, lineEnding] of [
     ['lf', '\n'],
@@ -1709,17 +1741,26 @@ try {
   assert.doesNotMatch(xmlHttpRequestHtml, /\/assets\/level\.json/u);
   assert.match(xmlHttpRequestHtml, /data:application\/json;base64,/u);
 
-  const reassignedXmlHttpRequestHtml = await packageAndReadFixture(
-    'reassigned-xml-http-request',
-    {
-      mainJs: [
+  for (const [name, mainJs] of [
+    [
+      'mutable-xml-http-request',
+      'let request = new XMLHttpRequest(); request.open("GET", "/assets/level.json");',
+    ],
+    [
+      'reassigned-xml-http-request',
+      [
         'const client = { open(method, url) { document.body.dataset.url = url; } };',
         'let request = new XMLHttpRequest(); request = client;',
         'request.open("GET", "/api/route");',
       ].join(' '),
-    },
-  );
-  assert.match(reassignedXmlHttpRequestHtml, /\/api\/route/u);
+    ],
+  ] as const) {
+    const xmlHttpRequestGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: xmlHttpRequestGame }),
+      /requires an immutable XMLHttpRequest binding/u,
+    );
+  }
 
   const shadowedXmlHttpRequestHtml = await packageAndReadFixture('shadowed-xml-http-request', {
     mainJs: 'class XMLHttpRequest { open(method, url) { document.body.dataset.url = url; } send() {} } const request = new XMLHttpRequest(); request.open("GET", "/assets/level.json"); request.send();',

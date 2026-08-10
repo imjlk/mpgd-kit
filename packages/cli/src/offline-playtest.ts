@@ -1331,11 +1331,16 @@ function inlineStaticXmlHttpRequestOpenCalls(
 
     if (
       binding === undefined
-      || binding.kind !== 'const'
       || binding.start >= match.index
       || !isXmlHttpRequestBinding(source, binding, codePositions)
     ) {
       continue;
+    }
+
+    if (binding.kind !== 'const') {
+      throw new Error(
+        'Offline playtest requires an immutable XMLHttpRequest binding before rewriting open.',
+      );
     }
 
     const openingParenthesis = source.indexOf('(', match.index);
@@ -4359,24 +4364,24 @@ function assertNoIndirectLocationMutation(
   codePositions: Uint8Array,
   aliasAssignments: readonly LocationAliasAssignment[],
 ): void {
-  const pattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(Object|Reflect)\s*\.\s*(assign|defineProperties|defineProperty|set)\s*\(/gu;
+  const pattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(Object|Reflect)\s*\.\s*(assign|defineProperties|defineProperty|set)\s*\(/gu;
 
   for (const match of source.matchAll(pattern)) {
     if (
       match.index === undefined
-      || match[1] === undefined
       || match[2] === undefined
+      || match[3] === undefined
       || codePositions[match.index] !== 1
       || findVisibleJavaScriptIdentifierBinding(
         source,
-        match[1],
+        match[1] ?? match[2],
         match.index,
         codePositions,
       ) !== undefined
       || (
-        match[1] === 'Object'
-          ? !['assign', 'defineProperties', 'defineProperty'].includes(match[2])
-          : !['defineProperty', 'set'].includes(match[2])
+        match[2] === 'Object'
+          ? !['assign', 'defineProperties', 'defineProperty'].includes(match[3])
+          : !['defineProperty', 'set'].includes(match[3])
       )
     ) {
       continue;
@@ -4973,7 +4978,7 @@ function normalizeStaticJavaScriptPropertyAccess(source: string): string {
     output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
   }
 
-  return output.replace(/\?\./gu, '.');
+  return output.replace(/\?\.\s*(?=\()/gu, '').replace(/\?\./gu, '.');
 }
 
 function maskNonCode(source: string, codePositions: Uint8Array): string {
