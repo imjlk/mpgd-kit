@@ -123,6 +123,19 @@ const htmlAttributeNameTerminators = new Set(['"', "'", '=', '<', '>', '/']);
 const nonEventHtmlAttributeNamesStartingWithOn = new Set(['ontology']);
 const inlineEntryExcludedAttributeNames = new Set(['src']);
 const svgResourceAttributeNames = new Set(['href', 'src', 'xlink:href']);
+const svgFunctionalUrlAttributeNames = new Set([
+  'clip-path',
+  'color-profile',
+  'cursor',
+  'fill',
+  'filter',
+  'marker',
+  'marker-end',
+  'marker-mid',
+  'marker-start',
+  'mask',
+  'stroke',
+]);
 const htmlResourceHintRelNames = new Set([
   'dns-prefetch',
   'modulepreload',
@@ -785,6 +798,8 @@ function inlineJavaScriptAssetReferences(
       templateReference: string | undefined,
       offset: number,
     ) => {
+      const qualifier = /\b(globalThis|self|window)\s*\.\s*fetch\s*\(/u.exec(prefix)?.[1];
+
       if (
         fetchCodePositions[offset] !== 1
         || hasEscapedJavaScriptIdentifierContinuationBefore(
@@ -797,13 +812,19 @@ function inlineJavaScriptAssetReferences(
           && containsUnescapedTemplateInterpolation(templateReference)
         )
         || (
-          !/(?:globalThis|self|window)\s*\.\s*fetch\s*\(/u.test(prefix)
-          && findVisibleJavaScriptIdentifierBinding(
-            output,
-            'fetch',
-            offset,
-            fetchCodePositions,
-          ) !== undefined
+          qualifier === undefined
+            ? findVisibleJavaScriptIdentifierBinding(
+              output,
+              'fetch',
+              offset,
+              fetchCodePositions,
+            ) !== undefined
+            : findVisibleJavaScriptIdentifierBinding(
+              output,
+              qualifier,
+              offset,
+              fetchCodePositions,
+            ) !== undefined
         )
       ) {
         return match;
@@ -844,6 +865,8 @@ function inlineJavaScriptAssetReferences(
       templateReference: string | undefined,
       offset: number,
     ) => {
+      const qualifier = /\bnew\s+(globalThis|self|window)\s*\.\s*Audio\s*\(/u.exec(prefix)?.[1];
+
       if (
         audioCodePositions[offset] !== 1
         || (
@@ -851,13 +874,19 @@ function inlineJavaScriptAssetReferences(
           && containsUnescapedTemplateInterpolation(templateReference)
         )
         || (
-          !/new\s+(?:globalThis|self|window)\s*\.\s*Audio\s*\(/u.test(prefix)
-          && findVisibleJavaScriptIdentifierBinding(
-            output,
-            'Audio',
-            offset,
-            audioCodePositions,
-          ) !== undefined
+          qualifier === undefined
+            ? findVisibleJavaScriptIdentifierBinding(
+              output,
+              'Audio',
+              offset,
+              audioCodePositions,
+            ) !== undefined
+            : findVisibleJavaScriptIdentifierBinding(
+              output,
+              qualifier,
+              offset,
+              audioCodePositions,
+            ) !== undefined
         )
       ) {
         return match;
@@ -939,8 +968,9 @@ function inlineStaticImageSourceAssignments(
           source.slice(binding.initializerRange.start, binding.initializerRange.end),
           codePositions.slice(binding.initializerRange.start, binding.initializerRange.end),
         ).trim();
-      const hasQualifiedImageConstructor = initializer !== undefined
-        && /^new\s+(?:globalThis|self|window)\s*\.\s*Image\s*\(/u.test(initializer);
+      const imageQualifier = initializer === undefined
+        ? undefined
+        : /^new\s+(globalThis|self|window)\s*\.\s*Image\s*\(/u.exec(initializer)?.[1];
 
       if (
         binding === undefined
@@ -948,13 +978,19 @@ function inlineStaticImageSourceAssignments(
         || binding.start >= offset
         || !/^new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Image\s*\(\s*\)$/u.test(initializer)
         || (
-          !hasQualifiedImageConstructor
-          && findVisibleJavaScriptIdentifierBinding(
-            source,
-            'Image',
-            binding.initializerRange?.start ?? offset,
-            codePositions,
-          ) !== undefined
+          imageQualifier === undefined
+            ? findVisibleJavaScriptIdentifierBinding(
+              source,
+              'Image',
+              binding.initializerRange?.start ?? offset,
+              codePositions,
+            ) !== undefined
+            : findVisibleJavaScriptIdentifierBinding(
+              source,
+              imageQualifier,
+              binding.initializerRange?.start ?? offset,
+              codePositions,
+            ) !== undefined
         )
       ) {
         return match;
@@ -1068,7 +1104,7 @@ function isXmlHttpRequestBinding(
     source.slice(binding.initializerRange.start, binding.initializerRange.end),
     codePositions.slice(binding.initializerRange.start, binding.initializerRange.end),
   ).trim();
-  const match = /^new\s+((?:(?:globalThis|self|window)\s*\.\s*)?XMLHttpRequest)\s*(?:\(\s*\))?$/u.exec(
+  const match = /^new\s+(?:(globalThis|self|window)\s*\.\s*)?XMLHttpRequest\s*(?:\(\s*\))?$/u.exec(
     initializer,
   );
 
@@ -1076,8 +1112,13 @@ function isXmlHttpRequestBinding(
     return false;
   }
 
-  if (/(?:globalThis|self|window)\s*\./u.test(match[1] ?? '')) {
-    return true;
+  if (match[1] !== undefined) {
+    return findVisibleJavaScriptIdentifierBinding(
+      source,
+      match[1],
+      binding.initializerRange.start,
+      codePositions,
+    ) === undefined;
   }
 
   const constructorOffset = source.indexOf('XMLHttpRequest', binding.initializerRange.start);
@@ -3113,19 +3154,25 @@ function inlineHtmlAssetFragment(
   context: InliningContext,
 ): string {
   const htmlWithInlineStyles = html.replace(/<[a-z][\w:-]*(?=[\s>"'\/])(?:"[^"]*"|'[^']*'|[^'">])*>/giu, (tag) => {
-    const attributeTokens = tokenizeHtmlAttributes(tag);
-    const style = readHtmlAttributeToken(attributeTokens, 'style');
+    let output = tag;
 
-    if (style === undefined) {
-      return tag;
+    for (const attributeName of ['style', ...svgFunctionalUrlAttributeNames]) {
+      const attributeTokens = tokenizeHtmlAttributes(output);
+      const value = readHtmlAttributeToken(attributeTokens, attributeName);
+
+      if (value === undefined) {
+        continue;
+      }
+
+      output = replaceHtmlAttribute(
+        output,
+        attributeName,
+        inlineCssAssetReferences(value, htmlFile, context),
+        attributeTokens,
+      );
     }
 
-    return replaceHtmlAttribute(
-      tag,
-      'style',
-      inlineCssAssetReferences(style, htmlFile, context),
-      attributeTokens,
-    );
+    return output;
   });
 
   return htmlWithInlineStyles.replace(/<(link|audio|body|embed|feimage|image|img|input|object|source|track|use|video)\b((?:"[^"]*"|'[^']*'|[^'">])*)>/giu, (tag, name: string, attributes: string) => {
@@ -3476,24 +3523,13 @@ function assertSupportedBundledRuntime(source: string): void {
     { pattern: /\b(?:webkit)?RTCPeerConnection\b/gu, label: 'WebRTC' },
     { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
     { pattern: /\bimport\s*\(/gu, label: 'dynamic import' },
-    {
-      pattern: /\b(?:globalThis|parent|self|top|window)\s*\.\s*open\s*\(/gu,
-      label: 'script-driven navigation',
-    },
-    {
-      pattern: /(?:\b(?:document|globalThis|parent|self|top|window)\s*\.\s*|(?<![$.\u200C\u200D\p{ID_Continue}]))location\s*\.\s*(?:assign|replace)\s*\(/gu,
-      label: 'script-driven navigation',
-    },
-    {
-      pattern: /(?:\b(?:document|globalThis|parent|self|top|window)\s*\.\s*|(?<![$.\u200C\u200D\p{ID_Continue}]))location(?:\s*\.\s*href)?\s*(?:(?:&&|\?\?|\|\|)|[+\-*/%&|^])?=(?!=)/gu,
-      label: 'script-driven navigation',
-    },
   ];
   const normalizedSource = normalizeRuntimeGlobalAliases(
     normalizeStaticJavaScriptPropertyAccess(source),
   );
   const codePositions = createCodePositionMap(normalizedSource, true);
   const codeOnlySource = maskNonCode(normalizedSource, codePositions);
+  assertNoScriptDrivenNavigation(normalizedSource, codePositions);
 
   for (const candidate of unsupported) {
     if (candidate.pattern.test(codeOnlySource)) {
@@ -3505,8 +3541,253 @@ function assertSupportedBundledRuntime(source: string): void {
   }
 }
 
+function assertNoScriptDrivenNavigation(
+  source: string,
+  codePositions: Uint8Array,
+): void {
+  const globalObject = '(document|globalThis|parent|self|top|window)';
+  const qualifiedOpenPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${globalObject}\\s*\\.\\s*open\\s*\\(`,
+    'gu',
+  );
+
+  for (const match of source.matchAll(qualifiedOpenPattern)) {
+    if (
+      match.index !== undefined
+      && match[1] !== undefined
+      && codePositions[match.index] === 1
+      && findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1],
+        match.index,
+        codePositions,
+      ) === undefined
+    ) {
+      throw new Error('Offline playtest does not support script-driven navigation.');
+    }
+  }
+
+  const locationOperation = '(?:\\s*\\.\\s*(?:assign|replace)\\s*\\(|(?:\\s*\\.\\s*href)?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
+  const qualifiedLocationPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${globalObject}\\s*\\.\\s*location${locationOperation}`,
+    'gu',
+  );
+
+  for (const match of source.matchAll(qualifiedLocationPattern)) {
+    if (
+      match.index !== undefined
+      && match[1] !== undefined
+      && codePositions[match.index] === 1
+      && findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1],
+        match.index,
+        codePositions,
+      ) === undefined
+    ) {
+      throw new Error('Offline playtest does not support script-driven navigation.');
+    }
+  }
+
+  const unqualifiedLocationPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])location${locationOperation}`,
+    'gu',
+  );
+
+  for (const match of source.matchAll(unqualifiedLocationPattern)) {
+    if (
+      match.index !== undefined
+      && codePositions[match.index] === 1
+      && findVisibleJavaScriptIdentifierBinding(
+        source,
+        'location',
+        match.index,
+        codePositions,
+      ) === undefined
+    ) {
+      throw new Error('Offline playtest does not support script-driven navigation.');
+    }
+  }
+
+  const aliasPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${locationOperation}`,
+    'gu',
+  );
+  const potentialAliases = findPotentialLocationAliasIdentifiers(source, codePositions);
+
+  for (const match of source.matchAll(aliasPattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+      || !potentialAliases.has(match[1])
+    ) {
+      continue;
+    }
+
+    const binding = findVisibleJavaScriptIdentifierBinding(
+      source,
+      match[1],
+      match.index,
+      codePositions,
+    );
+
+    if (
+      binding !== undefined
+      && binding.start < match.index
+      && isLocationAliasBinding(source, binding, codePositions, new Set<number>())
+    ) {
+      throw new Error('Offline playtest does not support script-driven navigation.');
+    }
+  }
+}
+
+function findPotentialLocationAliasIdentifiers(
+  source: string,
+  codePositions: Uint8Array,
+): ReadonlySet<string> {
+  const declarationPattern = new RegExp(
+    `\\b(?:const|let|var)\\s+(${javascriptIdentifierPatternSource})\\s*=\\s*`,
+    'gu',
+  );
+  const declarations: Array<Readonly<{ expression: string; identifier: string }>> = [];
+
+  for (const match of source.matchAll(declarationPattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+    ) {
+      continue;
+    }
+
+    const initializerStart = match.index + match[0].length;
+    const initializerRange = findJavaScriptExpressionRange(
+      source,
+      initializerStart,
+      source.length,
+      codePositions,
+      true,
+    );
+    const expression = maskNonCode(
+      source.slice(initializerRange.start, initializerRange.end),
+      codePositions.slice(initializerRange.start, initializerRange.end),
+    ).trim();
+    declarations.push({ identifier: match[1], expression });
+  }
+
+  const aliases = new Set(
+    declarations
+      .filter(({ expression }) =>
+        /^(?:(?:document|globalThis|parent|self|top|window)\s*\.\s*)?location$/u.test(
+          expression,
+        ),
+      )
+      .map(({ identifier }) => identifier),
+  );
+  let previousSize = -1;
+
+  while (aliases.size !== previousSize) {
+    previousSize = aliases.size;
+
+    for (const declaration of declarations) {
+      if (aliases.has(declaration.expression)) {
+        aliases.add(declaration.identifier);
+      }
+    }
+  }
+
+  return aliases;
+}
+
+function isLocationAliasBinding(
+  source: string,
+  binding: JavaScriptIdentifierBinding,
+  codePositions: Uint8Array,
+  visitedBindings: Set<number>,
+): boolean {
+  if (
+    binding.initializerRange === undefined
+    || binding.start < 0
+    || visitedBindings.has(binding.start)
+  ) {
+    return false;
+  }
+
+  visitedBindings.add(binding.start);
+  const initializerRange = trimSourceRange(source, binding.initializerRange);
+  const initializer = maskNonCode(
+    source.slice(initializerRange.start, initializerRange.end),
+    codePositions.slice(initializerRange.start, initializerRange.end),
+  ).trim();
+  const qualified = /^(document|globalThis|parent|self|top|window)\s*\.\s*location$/u.exec(
+    initializer,
+  );
+
+  if (qualified?.[1] !== undefined) {
+    return findVisibleJavaScriptIdentifierBinding(
+      source,
+      qualified[1],
+      initializerRange.start,
+      codePositions,
+    ) === undefined;
+  }
+
+  if (initializer === 'location') {
+    return findVisibleJavaScriptIdentifierBinding(
+      source,
+      'location',
+      initializerRange.start,
+      codePositions,
+    ) === undefined;
+  }
+
+  if (!new RegExp(`^${javascriptIdentifierPatternSource}$`, 'u').test(initializer)) {
+    return false;
+  }
+
+  const nestedBinding = findVisibleJavaScriptIdentifierBinding(
+    source,
+    initializer,
+    initializerRange.start,
+    codePositions,
+  );
+  return nestedBinding !== undefined
+    && nestedBinding.start < initializerRange.start
+    && isLocationAliasBinding(source, nestedBinding, codePositions, visitedBindings);
+}
+
 function normalizeRuntimeGlobalAliases(source: string): string {
-  return source.replace(/\bdocument\s*\.\s*defaultView\b/gu, 'window');
+  const codePositions = createCodePositionMap(source, true);
+  const pattern = /(?<![$.\u200C\u200D\p{ID_Continue}])document\s*\.\s*defaultView\b/gu;
+  const replacements: SourceReplacement[] = [];
+
+  for (const match of source.matchAll(pattern)) {
+    if (
+      match.index !== undefined
+      && codePositions[match.index] === 1
+      && findVisibleJavaScriptIdentifierBinding(
+        source,
+        'document',
+        match.index,
+        codePositions,
+      ) === undefined
+    ) {
+      replacements.push({
+        start: match.index,
+        end: match.index + match[0].length,
+        value: 'window',
+      });
+    }
+  }
+
+  let output = source;
+
+  for (const replacement of replacements.reverse()) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
+  return output;
 }
 
 function normalizeStaticJavaScriptPropertyAccess(source: string): string {
@@ -4085,6 +4366,8 @@ function readAssetDataUrl(
       assertSelfContainedHtmlAsset(assetFile, asset.toString('utf8'));
     } else if (extension === '.svg') {
       assertSelfContainedSvg(assetFile, asset.toString('utf8'));
+    } else if (extension === '.xml') {
+      assertSelfContainedXml(assetFile, asset.toString('utf8'));
     }
 
     dataUrl = `data:${mimeType};base64,${asset.toString('base64')}`;
@@ -4094,6 +4377,25 @@ function readAssetDataUrl(
   context.inlinedAssetBytes = nextInlinedAssetBytes;
   context.inlinedAssets.add(assetFile);
   return `${dataUrl}${fragment}`;
+}
+
+function assertSelfContainedXml(xmlFile: string, source: string): void {
+  const unsafeMarkup = /<!DOCTYPE\b|<\?(?!xml(?:\s|\?>))/iu.exec(source)?.[0];
+
+  if (unsafeMarkup !== undefined) {
+    throw new Error(
+      `Offline playtest requires inert self-contained XML assets: ${xmlFile} contains ${unsafeMarkup}`,
+    );
+  }
+
+  try {
+    assertSelfContainedHtmlAsset(xmlFile, source);
+    assertSelfContainedSvg(xmlFile, source);
+  } catch (error) {
+    throw new Error(
+      `Offline playtest requires inert self-contained XML assets: ${xmlFile}. ${errorMessage(error)}`,
+    );
+  }
 }
 
 function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {

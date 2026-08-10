@@ -263,6 +263,22 @@ try {
     );
   }
 
+  const aliasedLocationGame = createPreviewFixture('aliased-location-navigation', {
+    mainJs: 'const target = window.location; target.href = "https://example.com/escape";',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: aliasedLocationGame }),
+    /does not support script-driven navigation/u,
+  );
+
+  const nestedAliasedLocationGame = createPreviewFixture('nested-aliased-location-navigation', {
+    mainJs: 'const first = document.location; const target = first; target.replace("https://example.com/escape");',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: nestedAliasedLocationGame }),
+    /does not support script-driven navigation/u,
+  );
+
   const unqualifiedOpenHtml = await packageAndReadFixture('unqualified-open-guard', {
     mainJs: 'button.addEventListener("click", () => open("https://example.com"));',
   });
@@ -977,6 +993,21 @@ try {
   assert.match(shadowedBrowserApiHtml, /\/assets\/custom-audio\.mp3/u);
   assert.match(shadowedBrowserApiHtml, /\/assets\/custom-image\.png/u);
 
+  const shadowedQualifiedBrowserApiHtml = await packageAndReadFixture(
+    'shadowed-qualified-browser-apis',
+    {
+      mainJs: 'function route(window) { const sound = new window.Audio("/assets/custom-audio.mp3"); const image = new window.Image(); image.src = "/assets/custom-image.png"; const request = new window.XMLHttpRequest(); request.open("GET", "/assets/custom-level.json"); return [sound.src, image.src]; } const browser = { Audio: class { constructor(src) { this.src = src; } }, Image: class {}, XMLHttpRequest: class { open() {} } }; document.body.dataset.value = route(browser).join("|");',
+    },
+  );
+  assert.match(shadowedQualifiedBrowserApiHtml, /\/assets\/custom-audio\.mp3/u);
+  assert.match(shadowedQualifiedBrowserApiHtml, /\/assets\/custom-image\.png/u);
+  assert.match(shadowedQualifiedBrowserApiHtml, /\/assets\/custom-level\.json/u);
+
+  const shadowedDefaultViewHtml = await packageAndReadFixture('shadowed-default-view', {
+    mainJs: 'function route(document) { document.defaultView.location.href = "/assets/helper.html"; return document.defaultView.location.href; } document.body.dataset.route = route({ defaultView: { location: {} } });',
+  });
+  assert.match(shadowedDefaultViewHtml, /\/assets\/helper\.html/u);
+
   const shadowedUrlGame = createPreviewFixture('shadowed-url-constructor', {
     mainJs: 'class URL { constructor(value) { this.href = value; } } const localUrl = new URL("/assets/custom-url.txt", import.meta.url); document.body.dataset.value = localUrl.href;',
   });
@@ -1366,6 +1397,21 @@ try {
   assert.doesNotMatch(styleAttributeHtml, /\/assets\/pixel\.png/u);
   assert.match(styleAttributeHtml, /style="background-image:url\(&quot;data:image\/png;base64,/u);
 
+  const svgPresentationAssetHtml = await packageAndReadFixture(
+    'inline-svg-presentation-asset',
+    {
+      indexHtml: '<!doctype html><html><head></head><body><svg><rect fill="url(/assets/paint.svg#gradient)"></rect></svg><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    },
+    [
+      [
+        'artifacts/web-preview/assets/paint.svg',
+        '<svg xmlns="http://www.w3.org/2000/svg"><linearGradient id="gradient"/></svg>',
+      ],
+    ],
+  );
+  assert.doesNotMatch(svgPresentationAssetHtml, /\/assets\/paint\.svg/u);
+  assert.match(svgPresentationAssetHtml, /data:image\/svg\+xml;base64,[^&]+#gradient/u);
+
   const objectAssetHtml = await packageAndReadFixture(
     'object-asset',
     {
@@ -1382,6 +1428,45 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: activeDataObjectGame }),
     /does not support embedded active data documents/u,
+  );
+
+  const safeXmlObjectHtml = await packageAndReadFixture(
+    'safe-xml-object',
+    {
+      indexHtml: '<!doctype html><html><head></head><body><object data="/assets/level.xml"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    },
+    [
+      [
+        'artifacts/web-preview/assets/level.xml',
+        '<?xml version="1.0"?><level><name>one</name></level>',
+      ],
+    ],
+  );
+  assert.doesNotMatch(safeXmlObjectHtml, /\/assets\/level\.xml/u);
+  assert.match(safeXmlObjectHtml, /data:application\/xml;base64,/u);
+
+  const styledXmlObjectGame = createPreviewFixture('styled-xml-object', {
+    indexHtml: '<!doctype html><html><head></head><body><object data="/assets/active.xml"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(styledXmlObjectGame, 'artifacts/web-preview/assets/active.xml'),
+    '<?xml version="1.0"?><?xml-stylesheet href="https://example.com/theme.xsl"?><level/>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: styledXmlObjectGame }),
+    /requires inert self-contained XML assets/u,
+  );
+
+  const scriptedXmlObjectGame = createPreviewFixture('scripted-xml-object', {
+    indexHtml: '<!doctype html><html><head></head><body><object data="/assets/active.xml"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(scriptedXmlObjectGame, 'artifacts/web-preview/assets/active.xml'),
+    '<html xmlns="http://www.w3.org/1999/xhtml"><script>open("https://example.com")</script></html>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: scriptedXmlObjectGame }),
+    /requires inert self-contained XML assets/u,
   );
 
   const nestedSvgGame = createPreviewFixture('nested-svg', {
@@ -1560,6 +1645,11 @@ try {
     mainJs: 'const client = { fetch: (value) => value }; document.body.dataset.value = client.fetch("/assets/pixel.png");',
   });
   assert.match(objectFetchHtml, /client\.fetch\(["']\/assets\/pixel\.png["']\)/u);
+
+  const shadowedQualifiedFetchHtml = await packageAndReadFixture('shadowed-qualified-fetch', {
+    mainJs: 'function route(window) { return window.fetch("/assets/helper.json"); } document.body.dataset.route = route({ fetch: (value) => value });',
+  });
+  assert.match(shadowedQualifiedFetchHtml, /\/assets\/helper\.json/u);
 
   const outsideJsonGame = createPreviewFixture('outside-json', {
     mainJs: 'import data from "../../../outside.json"; document.body.dataset.data = data.value;',
