@@ -194,6 +194,7 @@ if (manifest !== null) {
 }
 
 validatePhaserTemplateAITPolyfill();
+validateCheckedInAITWrapperNavigation();
 validatePhaserTemplateAITWrapper();
 validatePhaserTemplateAITConsoleCli();
 validatePhaserTemplateDevvitPostOperations();
@@ -943,6 +944,25 @@ function validatePhaserTemplateAITConsoleCli(): void {
         }
       }
     }
+  }
+}
+
+function validateCheckedInAITWrapperNavigation(): void {
+  const wrapperConfigPath = 'apps/target-ait/apps-in-toss.config.ts';
+
+  if (!existsSync(wrapperConfigPath)) {
+    failures.push(`${wrapperConfigPath}: required for the checked-in AIT wrapper flow.`);
+    return;
+  }
+
+  const content = readText(wrapperConfigPath);
+  for (const requiredText of [
+    'readNavigationBar(process.env.MPGD_AIT_NAVIGATION_BAR)',
+    'navigationBar === undefined ? {} : { navigationBar }',
+    "AppsInTossConfig['navigationBar']",
+    'JSON.parse(encoded)',
+  ]) {
+    assertIncludesText(content, requiredText, wrapperConfigPath);
   }
 }
 
