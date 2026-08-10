@@ -627,6 +627,11 @@ try {
   });
   assert.doesNotMatch(phaserConfigObjectHtml, /\/assets\/(?:icon|pixel)\.png/u);
 
+  const phaserVariableConfigHtml = await packageAndReadFixture('phaser-variable-config', {
+    mainJs: 'const config = { key: "hero", url: "/assets/pixel.png" }; const scene = { load: { image() {} } }; scene.load.image(config);',
+  });
+  assert.doesNotMatch(phaserVariableConfigHtml, /\/assets\/pixel\.png/u);
+
   const phaserShorthandConfigHtml = await packageAndReadFixture('phaser-shorthand-config', {
     mainJs: 'const key = "hero"; const url = "/assets/pixel.png"; const scene = { load: { image() {} } }; scene.load.image({ key, url });',
   });
@@ -704,6 +709,18 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: externalPhaserHtmlGame }),
     /requires inert self-contained HTML assets/u,
+  );
+
+  const refreshingPhaserHtmlGame = createPreviewFixture('refreshing-phaser-html', {
+    mainJs: 'const scene = { load: { html() {} } }; scene.load.html("panel", "/assets/panel.html");',
+  });
+  fs.writeFileSync(
+    path.join(refreshingPhaserHtmlGame, 'artifacts/web-preview/assets/panel.html'),
+    '<meta http-equiv="refresh" content="0;url=https://example.com/escape">',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: refreshingPhaserHtmlGame }),
+    /contains meta refresh/u,
   );
 
   for (const method of ['setPath', 'setBaseURL']) {
@@ -867,6 +884,20 @@ try {
     mainJs: 'const πfetch = (value) => value; document.body.dataset.value = πfetch("/assets/not-an-asset.json");',
   });
 
+  const shadowedFetchHtml = await packageAndReadFixture('shadowed-fetch-binding', {
+    mainJs: 'const fetch = (value) => value; document.body.dataset.value = fetch("/assets/not-an-asset.json");',
+  });
+  assert.match(shadowedFetchHtml, /\/assets\/not-an-asset\.json/u);
+
+  const importedFetchHtml = await packageAndReadFixture(
+    'imported-fetch-binding',
+    {
+      mainJs: 'import { fetch } from "./fetch-helper.js"; document.body.dataset.value = fetch("/assets/not-an-asset.json");',
+    },
+    [['artifacts/web-preview/assets/fetch-helper.js', 'export const fetch = (value) => value;']],
+  );
+  assert.match(importedFetchHtml, /\/assets\/not-an-asset\.json/u);
+
   const browserAudioHtml = await packageAndReadFixture(
     'browser-audio-asset',
     { mainJs: 'const click = new Audio("/assets/click.mp3"); void click;' },
@@ -874,6 +905,26 @@ try {
   );
   assert.doesNotMatch(browserAudioHtml, /\/assets\/click\.mp3/u);
   assert.match(browserAudioHtml, /data:audio\/mpeg;base64,/u);
+
+  const browserImageHtml = await packageAndReadFixture('browser-image-asset', {
+    mainJs: 'const splash = new Image(); splash.src = "/assets/pixel.png"; document.body.append(splash);',
+  });
+  assert.doesNotMatch(browserImageHtml, /\/assets\/pixel\.png/u);
+  assert.match(browserImageHtml, /data:image\/png;base64,/u);
+
+  const shadowedBrowserApiHtml = await packageAndReadFixture('shadowed-browser-apis', {
+    mainJs: 'const Audio = class {}; const Image = class {}; const sound = new Audio("/assets/custom-audio.mp3"); const image = new Image(); image.src = "/assets/custom-image.png"; document.body.dataset.value = [sound, image.src].join("|");',
+  });
+  assert.match(shadowedBrowserApiHtml, /\/assets\/custom-audio\.mp3/u);
+  assert.match(shadowedBrowserApiHtml, /\/assets\/custom-image\.png/u);
+
+  const shadowedUrlGame = createPreviewFixture('shadowed-url-constructor', {
+    mainJs: 'class URL { constructor(value) { this.href = value; } } const localUrl = new URL("/assets/custom-url.txt", import.meta.url); document.body.dataset.value = localUrl.href;',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: shadowedUrlGame }),
+    /does not support runtime-computed import\.meta asset URL/u,
+  );
 
   const escapedLevelJson = '{"fixture":"escaped-level"}\n';
   const escapedIconPng = Buffer.from('escaped-icon-fixture');

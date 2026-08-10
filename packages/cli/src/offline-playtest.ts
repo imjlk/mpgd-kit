@@ -108,6 +108,13 @@ interface PhaserManifestProof {
   readonly propertyName: string;
 }
 
+interface JavaScriptIdentifierBinding {
+  readonly bindingPath: readonly number[];
+  readonly initializerRange?: SourceRange;
+  readonly kind: 'class' | 'const' | 'function' | 'let' | 'parameter' | 'unknown' | 'var';
+  readonly start: number;
+}
+
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlineCharsetDeclaration = '<meta charset="utf-8">';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
@@ -731,7 +738,15 @@ function inlineJavaScriptAssetReferences(
       hrefAccess: string | undefined,
       offset: number,
     ) => {
-      if (sourceCodePositions[offset] !== 1) {
+      if (
+        sourceCodePositions[offset] !== 1
+        || findVisibleJavaScriptIdentifierBinding(
+          source,
+          'URL',
+          offset,
+          sourceCodePositions,
+        ) !== undefined
+      ) {
         return match;
       }
 
@@ -775,6 +790,15 @@ function inlineJavaScriptAssetReferences(
         || (
           templateReference !== undefined
           && containsUnescapedTemplateInterpolation(templateReference)
+        )
+        || (
+          !/(?:globalThis|self|window)\s*\.\s*fetch\s*\(/u.test(prefix)
+          && findVisibleJavaScriptIdentifierBinding(
+            output,
+            'fetch',
+            offset,
+            fetchCodePositions,
+          ) !== undefined
         )
       ) {
         return match;
@@ -821,6 +845,15 @@ function inlineJavaScriptAssetReferences(
           templateReference !== undefined
           && containsUnescapedTemplateInterpolation(templateReference)
         )
+        || (
+          !/new\s+(?:globalThis|self|window)\s*\.\s*Audio\s*\(/u.test(prefix)
+          && findVisibleJavaScriptIdentifierBinding(
+            output,
+            'Audio',
+            offset,
+            audioCodePositions,
+          ) !== undefined
+        )
       ) {
         return match;
       }
@@ -847,9 +880,99 @@ function inlineJavaScriptAssetReferences(
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
+  output = inlineStaticImageSourceAssignments(output, documentFile, context);
   output = inlinePhaserAssetReferences(output, documentFile, context);
   assertSupportedBundledRuntime(output);
   return output;
+}
+
+function inlineStaticImageSourceAssignments(
+  source: string,
+  documentFile: string,
+  context: InliningContext,
+): string {
+  const assignmentPattern = new RegExp(
+    `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*src\\s*=\\s*(?:"((?:\\\\.|[^"\\\\\\r\\n])*)"|'((?:\\\\.|[^'\\\\\\r\\n])*)'|\`((?:\\\\.|[^\`\\\\\\r\\n])*)\`)`,
+    'gu',
+  );
+  const codePositions = createCodePositionMap(source, true);
+
+  return source.replace(
+    assignmentPattern,
+    (
+      match,
+      identifier: string,
+      doubleQuotedReference: string | undefined,
+      singleQuotedReference: string | undefined,
+      templateReference: string | undefined,
+      offset: number,
+    ) => {
+      if (
+        codePositions[offset] !== 1
+        || (
+          templateReference !== undefined
+          && containsUnescapedTemplateInterpolation(templateReference)
+        )
+      ) {
+        return match;
+      }
+
+      const binding = findVisibleJavaScriptIdentifierBinding(
+        source,
+        identifier,
+        offset,
+        codePositions,
+      );
+      const initializer = binding?.initializerRange === undefined
+        ? undefined
+        : maskNonCode(
+          source.slice(binding.initializerRange.start, binding.initializerRange.end),
+          codePositions.slice(binding.initializerRange.start, binding.initializerRange.end),
+        ).trim();
+      const hasQualifiedImageConstructor = initializer !== undefined
+        && /^new\s+(?:globalThis|self|window)\s*\.\s*Image\s*\(/u.test(initializer);
+
+      if (
+        binding === undefined
+        || initializer === undefined
+        || binding.start >= offset
+        || !/^new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Image\s*\(\s*\)$/u.test(initializer)
+        || (
+          !hasQualifiedImageConstructor
+          && findVisibleJavaScriptIdentifierBinding(
+            source,
+            'Image',
+            binding.initializerRange?.start ?? offset,
+            codePositions,
+          ) !== undefined
+        )
+      ) {
+        return match;
+      }
+
+      let quote = '`';
+
+      if (doubleQuotedReference !== undefined) {
+        quote = '"';
+      } else if (singleQuotedReference !== undefined) {
+        quote = "'";
+      }
+      const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
+      const reference = decodeJavaScriptStringLiteral(rawReference);
+
+      if (isInMemoryUrlReference(reference)) {
+        return match;
+      }
+
+      if (isNonLocalReference(reference)) {
+        throw new Error(`Offline playtest does not support network Image URL: ${reference}`);
+      }
+
+      const dataUrl = escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote);
+      const assignmentPrefix = match.slice(0, match.length - rawReference.length - 2);
+      return `${assignmentPrefix}${quote}${dataUrl}${quote}`;
+    },
+  );
 }
 
 function inlinePhaserAssetReferences(
@@ -1152,24 +1275,127 @@ function findLexicallyVisibleArrayInitializerRange(
 ): SourceRange | undefined {
   // Legacy manifests are rewritten only when one concrete binding is visible at the loop.
   // A nearer block declaration or parameter must win over a same-named outer array.
-  const loopScopePath = findJavaScriptScopePath(source, position, codePositions);
-  const declarationPattern = new RegExp(
-    `\\b(const|let|var)\\s+(${javascriptIdentifierPatternSource})\\s*=\\s*`,
+  const declaration = findVisibleJavaScriptIdentifierBinding(
+    source,
+    identifier,
+    position,
+    codePositions,
+  );
+
+  if (
+    declaration === undefined
+    || declaration.initializerRange === undefined
+    || declaration.kind === 'parameter'
+    || declaration.start >= position
+    || !source.slice(
+      declaration.initializerRange.start,
+      declaration.initializerRange.end,
+    ).trimStart().startsWith('[')
+  ) {
+    return undefined;
+  }
+
+  return declaration.initializerRange;
+}
+
+function findVisibleJavaScriptIdentifierBinding(
+  source: string,
+  identifier: string,
+  position: number,
+  codePositions: Uint8Array,
+): JavaScriptIdentifierBinding | undefined {
+  // Resolve only bindings that are lexically visible at the use site. Ambiguous or
+  // destructured bindings intentionally return an opaque result so callers do not rewrite.
+  const targetScopePath = findJavaScriptScopePath(source, position, codePositions);
+  const variablePattern = new RegExp(
+    `\\b(const|let|var)\\s+(${javascriptIdentifierPatternSource})(\\s*=\\s*)?`,
     'gu',
   );
-  const declarations: Array<Readonly<{
-    bindingPath: readonly number[];
-    initializerRange: SourceRange;
-    kind: string;
-    start: number;
-  }>> = [];
+  const namedDeclarationPattern = new RegExp(
+    `\\b(class|function)\\s*\\*?\\s+(${javascriptIdentifierPatternSource})`,
+    'gu',
+  );
+  const destructuringPattern = /\b(const|let|var)\s+(\{[^;=\r\n]*\}|\[[^;=\r\n]*\])\s*=/gu;
+  const importPattern = /\bimport\s+(?:(?:type\s+)?([$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*)|\*\s*as\s+([$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*)|\{([^}]*)\})/gu;
+  const identifierPattern = new RegExp(javascriptIdentifierPatternSource, 'gu');
+  const declarations: JavaScriptIdentifierBinding[] = [];
 
-  for (const match of source.matchAll(declarationPattern)) {
+  for (const match of source.matchAll(variablePattern)) {
     if (
       match.index === undefined
       || codePositions[match.index] !== 1
       || match[2] !== identifier
     ) {
+      continue;
+    }
+
+    const declarationScopePath = findJavaScriptScopePath(source, match.index, codePositions);
+    const kind = match[1] as 'const' | 'let' | 'var';
+    const bindingPath = kind === 'var'
+      ? declarationScopePath.slice(
+          0,
+          findJavaScriptFunctionScopeDepth(source, declarationScopePath, codePositions),
+        )
+      : declarationScopePath;
+
+    if (!isJavaScriptScopePathPrefix(bindingPath, targetScopePath)) {
+      continue;
+    }
+
+    const initializerStart = match[3] === undefined ? undefined : match.index + match[0].length;
+    const declaration: JavaScriptIdentifierBinding = {
+      bindingPath,
+      kind,
+      start: match.index,
+    };
+
+    declarations.push(initializerStart === undefined
+      ? declaration
+      : {
+        ...declaration,
+        initializerRange: findJavaScriptExpressionRange(
+          source,
+          initializerStart,
+          source.length,
+          codePositions,
+          true,
+        ),
+      });
+  }
+
+  for (const match of source.matchAll(namedDeclarationPattern)) {
+    if (
+      match.index === undefined
+      || codePositions[match.index] !== 1
+      || match[2] !== identifier
+    ) {
+      continue;
+    }
+
+    const bindingPath = findJavaScriptScopePath(source, match.index, codePositions);
+
+    if (isJavaScriptScopePathPrefix(bindingPath, targetScopePath)) {
+      declarations.push({
+        bindingPath,
+        kind: match[1] as 'class' | 'function',
+        start: match.index,
+      });
+    }
+  }
+
+  for (const match of source.matchAll(destructuringPattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const bindingSource = match[2] ?? '';
+    const bindingStart = match.index + match[0].indexOf(bindingSource);
+    const bindingNames = [...maskNonCode(
+      bindingSource,
+      codePositions.slice(bindingStart, bindingStart + bindingSource.length),
+    ).matchAll(identifierPattern)].map((candidate) => candidate[0]);
+
+    if (!bindingNames.includes(identifier)) {
       continue;
     }
 
@@ -1181,23 +1407,22 @@ function findLexicallyVisibleArrayInitializerRange(
         )
       : declarationScopePath;
 
-    if (!isJavaScriptScopePathPrefix(bindingPath, loopScopePath)) {
+    if (isJavaScriptScopePathPrefix(bindingPath, targetScopePath)) {
+      declarations.push({ bindingPath, kind: 'unknown', start: match.index });
+    }
+  }
+
+  for (const match of source.matchAll(importPattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
       continue;
     }
 
-    const initializerStart = match.index + match[0].length;
-    declarations.push({
-      bindingPath,
-      initializerRange: findJavaScriptExpressionRange(
-        source,
-        initializerStart,
-        source.length,
-        codePositions,
-        true,
-      ),
-      kind: match[1] ?? '',
-      start: match.index,
-    });
+    const importedNames = [match[1] ?? '', match[2] ?? '', match[3] ?? '']
+      .flatMap((value) => [...value.matchAll(identifierPattern)].map((candidate) => candidate[0]));
+
+    if (importedNames.includes(identifier)) {
+      declarations.push({ bindingPath: [], kind: 'unknown', start: match.index });
+    }
   }
 
   const declarationDepth = declarations.reduce(
@@ -1206,12 +1431,20 @@ function findLexicallyVisibleArrayInitializerRange(
   );
   const parameterDepth = findJavaScriptParameterBindingDepth(
     source,
-    loopScopePath,
+    targetScopePath,
     identifier,
     codePositions,
   );
 
-  if (declarationDepth < 0 || parameterDepth >= declarationDepth) {
+  if (parameterDepth >= declarationDepth && parameterDepth >= 0) {
+    return {
+      bindingPath: targetScopePath.slice(0, parameterDepth),
+      kind: 'parameter',
+      start: -1,
+    };
+  }
+
+  if (declarationDepth < 0) {
     return undefined;
   }
 
@@ -1221,28 +1454,23 @@ function findLexicallyVisibleArrayInitializerRange(
   const lexicalDeclarations = nearestDeclarations.filter(
     (declaration) => declaration.kind !== 'var',
   );
-  let declaration: typeof nearestDeclarations[number] | undefined;
 
   if (lexicalDeclarations.length === 1) {
-    [declaration] = lexicalDeclarations;
-  } else if (lexicalDeclarations.length === 0) {
-    declaration = nearestDeclarations
-      .filter((candidate) => candidate.start < position)
-      .sort((left, right) => right.start - left.start)[0];
+    return lexicalDeclarations[0];
   }
 
-  if (
-    declaration === undefined
-    || declaration.start >= position
-    || !source.slice(
-      declaration.initializerRange.start,
-      declaration.initializerRange.end,
-    ).trimStart().startsWith('[')
-  ) {
-    return undefined;
+  if (lexicalDeclarations.length > 1) {
+    return {
+      bindingPath: targetScopePath.slice(0, declarationDepth),
+      kind: 'unknown',
+      start: -1,
+    };
   }
 
-  return declaration.initializerRange;
+  return nearestDeclarations
+    .filter((candidate) => candidate.start < position)
+    .sort((left, right) => right.start - left.start)[0]
+    ?? nearestDeclarations[0];
 }
 
 function findJavaScriptScopePath(
@@ -1542,6 +1770,26 @@ function findPhaserLoaderConfigUrlRanges(
   const firstCharacter = source[argument.start];
 
   if (firstCharacter !== '{' && firstCharacter !== '[') {
+    const identifier = source.slice(argument.start, argument.end);
+
+    if (new RegExp(`^${javascriptIdentifierPatternSource}$`, 'u').test(identifier)) {
+      const binding = findVisibleJavaScriptIdentifierBinding(
+        source,
+        identifier,
+        argument.start,
+        codePositions,
+      );
+
+      if (binding?.initializerRange !== undefined && binding.start < argument.start) {
+        const initializer = trimSourceRange(source, binding.initializerRange);
+        const initializerStart = source[initializer.start];
+
+        if (initializerStart === '{' || initializerStart === '[') {
+          return findPhaserLoaderConfigUrlRanges(source, initializer, codePositions);
+        }
+      }
+    }
+
     return [];
   }
 
@@ -3460,6 +3708,15 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
     if (tag.name === 'script' || tag.name === 'iframe') {
       throw new Error(
         `Offline playtest requires inert self-contained HTML assets: ${htmlFile} contains <${tag.name}>`,
+      );
+    }
+
+    if (
+      tag.name === 'meta'
+      && readHtmlAttributeToken(tag.attributes, 'http-equiv')?.trim().toLowerCase() === 'refresh'
+    ) {
+      throw new Error(
+        `Offline playtest requires inert self-contained HTML assets: ${htmlFile} contains meta refresh`,
       );
     }
 
