@@ -207,7 +207,7 @@ const offlinePlaytestLimitations = [
   'CSS @import rules are unsupported; include those rules in the built stylesheet before packaging.',
   'Dynamic imports, import maps, and HTML base elements are unsupported.',
   'Retained inline modules cannot import other modules, and script-driven navigation is unsupported.',
-  'Iframe documents are unsupported.',
+  'Iframe documents and non-fragment hyperlinks are unsupported.',
 ] as const;
 
 const mimeTypes = new Map<string, string>([
@@ -642,14 +642,16 @@ function inlineJavaScriptAssetReferences(
   const sourceCodePositions = createCodePositionMap(source, true);
   let output = source.replace(
     staticUrlPattern,
-    (match, quote: string, reference: string, hrefAccess: string | undefined, offset: number) => {
+    (match, quote: string, rawReference: string, hrefAccess: string | undefined, offset: number) => {
       if (sourceCodePositions[offset] !== 1) {
         return match;
       }
 
-      if (quote === '`' && reference.includes('${')) {
+      if (quote === '`' && rawReference.includes('${')) {
         return match;
       }
+
+      const reference = decodeJavaScriptStringLiteral(rawReference);
 
       if (reference.startsWith('data:') || reference.startsWith('blob:')) {
         return hrefAccess === undefined
@@ -668,10 +670,12 @@ function inlineJavaScriptAssetReferences(
   const fetchCodePositions = createCodePositionMap(output, true);
   output = output.replace(
     staticFetchPattern,
-    (match, prefix: string, quote: string, reference: string, offset: number) => {
-      if (fetchCodePositions[offset] !== 1 || (quote === '`' && reference.includes('${'))) {
+    (match, prefix: string, quote: string, rawReference: string, offset: number) => {
+      if (fetchCodePositions[offset] !== 1 || (quote === '`' && rawReference.includes('${'))) {
         return match;
       }
+
+      const reference = decodeJavaScriptStringLiteral(rawReference);
 
       if (reference.startsWith('data:') || reference.startsWith('blob:')) {
         // These schemes are already self-contained or point at runtime-created in-memory data.
@@ -742,9 +746,10 @@ function inlinePhaserAssetReferences(
         && (previousIndex < range.start || codePositions[previousIndex] === 1)
       ) {
         const rawReference = match[1] ?? match[2] ?? match[3] ?? '';
+        const isTemplateLiteral = match[3] !== undefined;
 
-        if (!rawReference.includes('\\') && !rawReference.includes('${')) {
-          const reference = normalizeUrlReference(rawReference);
+        if (!isTemplateLiteral || !rawReference.includes('${')) {
+          const reference = normalizeUrlReference(decodeJavaScriptStringLiteral(rawReference));
 
           if (!reference.startsWith('data:') && !reference.startsWith('blob:')) {
             replacements.push({
@@ -1836,6 +1841,16 @@ function assertSupportedHtmlAttributes(
 
   const lowerTagName = tagName.toLowerCase();
 
+  if (
+    lowerTagName === 'script'
+    && (
+      readHtmlAttributeToken(attributes, 'href') !== undefined
+      || readHtmlAttributeToken(attributes, 'xlink:href') !== undefined
+    )
+  ) {
+    throw new Error('Offline playtest does not support SVG external script references.');
+  }
+
   if (lowerTagName === 'iframe') {
     throw new Error('Offline playtest does not support iframe documents.');
   }
@@ -1848,6 +1863,10 @@ function assertSupportedHtmlAttributes(
 
   if (href !== undefined && isNonLocalReference(href)) {
     throw new Error(`Offline playtest does not support external hyperlink navigation: ${href}`);
+  }
+
+  if (href !== undefined && href.trim().length > 0 && !href.trim().startsWith('#')) {
+    throw new Error(`Offline playtest does not support non-fragment hyperlink navigation: ${href}`);
   }
 }
 
@@ -2020,15 +2039,28 @@ function scanJavaScriptCodePositions(
       continue;
     }
 
-    if (isJavaScriptIdentifierStart(character)) {
+    const identifierStartCharacter = readCodePointAt(source, index);
+
+    if (
+      identifierStartCharacter !== undefined
+      && isJavaScriptIdentifierStart(identifierStartCharacter)
+    ) {
       const identifierCanStartExpression = regexAllowed;
       const identifierStart = index;
+      index += identifierStartCharacter.length;
 
-      while (isJavaScriptIdentifierPart(source[index + 1])) {
-        index += 1;
+      while (true) {
+        const identifierPart = readCodePointAt(source, index);
+
+        if (identifierPart === undefined || !isJavaScriptIdentifierPart(identifierPart)) {
+          break;
+        }
+
+        index += identifierPart.length;
       }
 
-      const identifier = source.slice(identifierStart, index + 1);
+      const identifier = source.slice(identifierStart, index);
+      index -= 1;
       pendingControlParenthesis = javascriptControlParenthesisKeywords.has(identifier);
       pendingClassBody ||= identifier === 'class' && identifierCanStartExpression;
       nextBraceIsBlock = javascriptBlockKeywords.has(identifier);
@@ -2267,11 +2299,111 @@ function findJavaScriptRegexEnd(source: string, start: number): number | undefin
 }
 
 function isJavaScriptIdentifierStart(value: string | undefined): boolean {
-  return value !== undefined && /[$A-Z_a-z]/u.test(value);
+  return value !== undefined && /^[$_\p{ID_Start}]$/u.test(value);
 }
 
 function isJavaScriptIdentifierPart(value: string | undefined): boolean {
-  return value !== undefined && /[$\dA-Z_a-z]/u.test(value);
+  return value !== undefined && /^[$\u200C\u200D\p{ID_Continue}]$/u.test(value);
+}
+
+function readCodePointAt(source: string, index: number): string | undefined {
+  const codePoint = source.codePointAt(index);
+  return codePoint === undefined ? undefined : String.fromCodePoint(codePoint);
+}
+
+function decodeJavaScriptStringLiteral(value: string): string {
+  let output = '';
+
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index] ?? '';
+
+    if (character !== '\\') {
+      output += character;
+      continue;
+    }
+
+    const escape = value[index + 1];
+
+    if (escape === undefined) {
+      throw new Error('Invalid trailing escape in an offline playtest JavaScript asset URL.');
+    }
+
+    index += 1;
+
+    const simpleEscape = ({
+      b: '\b',
+      f: '\f',
+      n: '\n',
+      r: '\r',
+      t: '\t',
+      v: '\v',
+    } as Readonly<Record<string, string>>)[escape];
+
+    if (simpleEscape !== undefined) {
+      output += simpleEscape;
+      continue;
+    }
+
+    if (escape === '0') {
+      if (/\d/u.test(value[index + 1] ?? '')) {
+        throw new Error('Legacy octal escapes are unsupported in offline playtest asset URLs.');
+      }
+
+      output += '\0';
+      continue;
+    }
+
+    if (escape === 'x') {
+      const hexadecimal = value.slice(index + 1, index + 3);
+
+      if (!/^[\dA-Fa-f]{2}$/u.test(hexadecimal)) {
+        throw new Error('Invalid hexadecimal escape in an offline playtest JavaScript asset URL.');
+      }
+
+      output += String.fromCharCode(Number.parseInt(hexadecimal, 16));
+      index += 2;
+      continue;
+    }
+
+    if (escape === 'u') {
+      const braced = value[index + 1] === '{';
+      const close = braced ? value.indexOf('}', index + 2) : index + 5;
+      const hexadecimal = braced ? value.slice(index + 2, close) : value.slice(index + 1, close);
+
+      if (
+        close === -1
+        || !(braced ? /^[\dA-Fa-f]{1,6}$/u : /^[\dA-Fa-f]{4}$/u).test(hexadecimal)
+      ) {
+        throw new Error('Invalid Unicode escape in an offline playtest JavaScript asset URL.');
+      }
+
+      const codePoint = Number.parseInt(hexadecimal, 16);
+
+      if (codePoint > 0x10FFFF) {
+        throw new Error('Out-of-range Unicode escape in an offline playtest JavaScript asset URL.');
+      }
+
+      output += braced ? String.fromCodePoint(codePoint) : String.fromCharCode(codePoint);
+      index = braced ? close : close - 1;
+      continue;
+    }
+
+    if (escape === '\r' || escape === '\n' || escape === '\u2028' || escape === '\u2029') {
+      if (escape === '\r' && value[index + 1] === '\n') {
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (/[1-9]/u.test(escape)) {
+      throw new Error('Legacy octal escapes are unsupported in offline playtest asset URLs.');
+    }
+
+    output += escape;
+  }
+
+  return output;
 }
 
 function readAssetDataUrl(

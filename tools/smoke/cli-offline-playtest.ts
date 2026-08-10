@@ -250,6 +250,27 @@ try {
     /does not support external hyperlink navigation/u,
   );
 
+  const localHyperlinkGame = createPreviewFixture('local-hyperlink', {
+    indexHtml: '<!doctype html><html><head></head><body><a href="./credits.html">credits</a><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: localHyperlinkGame }),
+    /does not support non-fragment hyperlink navigation/u,
+  );
+
+  const fragmentHyperlinkHtml = await packageAndReadFixture('fragment-hyperlink', {
+    indexHtml: '<!doctype html><html><head></head><body><a href="#game">game</a><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(fragmentHyperlinkHtml, /href="#game"/u);
+
+  const svgScriptGame = createPreviewFixture('svg-script-href', {
+    indexHtml: '<!doctype html><html><head></head><body><svg><script href="/assets/side.js"></script></svg><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: svgScriptGame }),
+    /does not support SVG external script references/u,
+  );
+
   const objectLocationHtml = await packageAndReadFixture('object-location-property', {
     mainJs: 'const frame = { location: "local" }; frame.location = "updated"; document.body.dataset.location = frame.location;',
   });
@@ -371,6 +392,10 @@ try {
 
   await assertWorkerRejected('object-division-worker', {
     mainJs: 'const ratio = {} / new Worker("./worker.js") / 1; void ratio;',
+  });
+
+  await assertWorkerRejected('unicode-identifier-division-worker', {
+    mainJs: 'const π = 1; void (π / new Worker("worker.js") / 1);',
   });
 
   await assertWorkerRejected('keyword-property-then-worker', {
@@ -542,6 +567,20 @@ try {
   );
   assert.doesNotMatch(documentRelativeFetchHtml, /fetch\(["']\.\/level\.json/u);
   assert.match(documentRelativeFetchHtml, /fetch\(["']data:application\/json;base64,/u);
+
+  const escapedJavaScriptAssetHtml = await packageAndReadFixture(
+    'escaped-javascript-asset',
+    {
+      mainJs: 'const level = new URL("./level\\u002ejson", import.meta.url); void fetch("./icon\\x2epng"); document.body.dataset.level = level.href;',
+    },
+    [
+      ['artifacts/web-preview/assets/level.json', '{"level":1}\n'],
+      ['artifacts/web-preview/icon.png', onePixelPng],
+    ],
+  );
+  assert.doesNotMatch(escapedJavaScriptAssetHtml, /level\\u002ejson|icon\\x2epng/u);
+  assert.match(escapedJavaScriptAssetHtml, /data:application\/json;base64,/u);
+  assert.match(escapedJavaScriptAssetHtml, /data:image\/png;base64,/u);
 
   const networkFetchGame = createPreviewFixture('network-fetch', {
     mainJs: 'void fetch("https://example.com/level.json");',
