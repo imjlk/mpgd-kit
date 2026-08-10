@@ -2187,8 +2187,8 @@ function findMatchingBraceIndex(content: string, openBraceIndex: number): number
 }
 
 function validatePeerDependencyRuleParser(): void {
-  const positive = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`;
-  const hashValue = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': 3.0.2+build#1\n`;
+  const positive = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`;
+  const hashValue = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': ${aitWebFrameworkVersion}+build#1\n`;
   const invalid = [
     `# peerDependencyRules:\n#   allowedVersions:\n#     '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
     `allowedVersions:\n  '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
@@ -2199,8 +2199,9 @@ function validatePeerDependencyRuleParser(): void {
   ];
 
   if (
-    readAllowedPeerVersion(positive, aitDevtoolsPeerSelector) !== '3.0.2'
-    || readAllowedPeerVersion(hashValue, aitDevtoolsPeerSelector) !== '3.0.2+build#1'
+    readAllowedPeerVersion(positive, aitDevtoolsPeerSelector) !== aitWebFrameworkVersion
+    || readAllowedPeerVersion(hashValue, aitDevtoolsPeerSelector)
+      !== `${aitWebFrameworkVersion}+build#1`
     || invalid.some(
       (source) => readAllowedPeerVersion(source, aitDevtoolsPeerSelector) !== undefined,
     )

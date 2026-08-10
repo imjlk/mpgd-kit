@@ -1276,9 +1276,10 @@ try {
   assert.doesNotMatch(optionalFetchHtml, /\/assets\/config\.json/u);
   assert.match(optionalFetchHtml, /data:application\/json;base64,/u);
 
-  await packageAndReadFixture('unicode-fetch-boundary', {
+  const unicodeFetchBoundaryHtml = await packageAndReadFixture('unicode-fetch-boundary', {
     mainJs: 'const πfetch = (value) => value; document.body.dataset.value = πfetch("/assets/not-an-asset.json");',
   });
+  assert.match(unicodeFetchBoundaryHtml, /\/assets\/not-an-asset\.json/u);
 
   const escapedUnicodeFetchHtml = await packageAndReadFixture('escaped-unicode-fetch-boundary', {
     mainJs: 'const \\u{3c0}fetch = (value) => value; document.body.dataset.value = \\u{3c0}fetch("/assets/not-an-asset.json");',
