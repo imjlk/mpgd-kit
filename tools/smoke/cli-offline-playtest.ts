@@ -1245,7 +1245,7 @@ try {
   );
   assert.match(
     statefulStylesheetHtml,
-    /document\.currentScript\.previousElementSibling\.disabled=true/u,
+    /document\.currentScript\.previousElementSibling\.sheet\.disabled=true/u,
   );
   assert.doesNotMatch(statefulStylesheetHtml, /<link\b[^>]*night-theme/u);
 

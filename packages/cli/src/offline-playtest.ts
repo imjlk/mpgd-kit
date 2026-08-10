@@ -2770,7 +2770,7 @@ function inlineStylesheets(
       context.inlinedAssets.add(stylesheetFile);
       const style = `<style${renderInlinedStylesheetAttributes(attributeTokens)}>${escapeClosingTag(inlined, 'style')}</style>`;
       return hasHtmlAttributeToken(attributeTokens, 'disabled')
-        ? `${style}<script>document.currentScript.previousElementSibling.disabled=true</script>`
+        ? `${style}<script>document.currentScript.previousElementSibling.sheet.disabled=true</script>`
         : style;
     }),
   );
