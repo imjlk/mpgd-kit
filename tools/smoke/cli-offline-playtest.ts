@@ -242,6 +242,7 @@ try {
   for (const [name, mainJs] of [
     ['computed-location-assignment', 'window["location"]["href"] = "https://example.com";'],
     ['computed-location-method', 'location["assign"]("https://example.com");'],
+    ['default-view-location', 'document.defaultView.location.href = "https://example.com";'],
   ] as const) {
     const computedNavigationGame = createPreviewFixture(name, { mainJs });
     await assert.rejects(
@@ -626,6 +627,11 @@ try {
   });
   assert.doesNotMatch(phaserConfigObjectHtml, /\/assets\/(?:icon|pixel)\.png/u);
 
+  const phaserShorthandConfigHtml = await packageAndReadFixture('phaser-shorthand-config', {
+    mainJs: 'const key = "hero"; const url = "/assets/pixel.png"; const scene = { load: { image() {} } }; scene.load.image({ key, url });',
+  });
+  assert.doesNotMatch(phaserShorthandConfigHtml, /\/assets\/pixel\.png/u);
+
   const unrelatedKeyedObjectHtml = await packageAndReadFixture(
     'unrelated-keyed-object',
     {
@@ -824,6 +830,20 @@ try {
   assert.doesNotMatch(documentRelativeFetchHtml, /fetch\(["']\.\/level\.json/u);
   assert.match(documentRelativeFetchHtml, /fetch\(["']data:application\/json;base64,/u);
 
+  const commentedFetchHtml = await packageAndReadFixture('commented-fetch-asset', {
+    mainJs: 'void fetch(/* preload */ "/assets/config.json");',
+  });
+  assert.doesNotMatch(commentedFetchHtml, /\/assets\/config\.json/u);
+  assert.match(commentedFetchHtml, /data:application\/json;base64,/u);
+
+  const browserAudioHtml = await packageAndReadFixture(
+    'browser-audio-asset',
+    { mainJs: 'const click = new Audio("/assets/click.mp3"); void click;' },
+    [['artifacts/web-preview/assets/click.mp3', Buffer.from('browser-audio')]],
+  );
+  assert.doesNotMatch(browserAudioHtml, /\/assets\/click\.mp3/u);
+  assert.match(browserAudioHtml, /data:audio\/mpeg;base64,/u);
+
   const escapedLevelJson = '{"fixture":"escaped-level"}\n';
   const escapedIconPng = Buffer.from('escaped-icon-fixture');
   const escapedJavaScriptAssetHtml = await packageAndReadFixture(
@@ -966,6 +986,11 @@ try {
   assert.match(mixedSrcsetHtml, /blob:fixture 3x/u);
   assert.doesNotMatch(mixedSrcsetHtml, /\/assets\/pixel\.png/u);
 
+  const uppercaseDataHtml = await packageAndReadFixture('uppercase-data-scheme', {
+    indexHtml: '<!doctype html><html><head></head><body><img src="DATA:image/png;base64,AAAA"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(uppercaseDataHtml, /src="DATA:image\/png;base64,AAAA"/u);
+
   const mediaStylesheetHtml = await packageAndReadFixture('media-stylesheet', {
     indexHtml: '<!doctype html><html><head><link rel="stylesheet" href="/assets/main.css" media="(prefers-color-scheme: dark)"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -1038,7 +1063,7 @@ try {
   const commentedImageSetFiles: readonly PreviewFixtureFile[] = [
     [
       'artifacts/web-preview/assets/main.css',
-      'body { background-image: image-set(/* theme */ "/assets/icon.png" 1x, /* retina */ "/assets/icon@2x.png" 2x); }',
+      'body { background-image: image-set(/* theme, local */ "/assets/icon.png" 1x, /* retina */ "/assets/icon@2x.png" 2x); }',
     ],
     ['artifacts/web-preview/assets/icon@2x.png', onePixelPng],
   ];
@@ -1065,6 +1090,12 @@ try {
   });
   assert.doesNotMatch(unquotedHtmlAssetHtml, /src=\/assets\/pixel\.png/u);
   assert.match(unquotedHtmlAssetHtml, /src="data:image\/png;base64,/u);
+
+  const legacyBodyBackgroundHtml = await packageAndReadFixture('legacy-body-background', {
+    indexHtml: '<!doctype html><html><head></head><body background="/assets/pixel.png"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.doesNotMatch(legacyBodyBackgroundHtml, /background="\/assets\/pixel\.png"/u);
+  assert.match(legacyBodyBackgroundHtml, /background="data:image\/png;base64,/u);
 
   const quotedAttributeTextHtml = await packageAndReadFixture('quoted-attribute-text', {
     indexHtml: '<!doctype html><html><head><link rel="stylesheet" title="not disabled theme" href="/assets/main.css"></head><body><img alt="label src=/assets/missing.png" src="/assets/pixel.png"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',

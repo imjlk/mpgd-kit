@@ -225,6 +225,7 @@ const javascriptBlockKeywords = new Set(['do', 'else', 'finally', 'try']);
 const javascriptIdentifierPatternSource = '[$_\\p{ID_Start}][$\\u200C\\u200D\\p{ID_Continue}]*';
 const htmlAssetAttributesByTag: Readonly<Record<string, readonly string[]>> = {
   audio: ['src'],
+  body: ['background'],
   embed: ['src'],
   feimage: ['href', 'xlink:href'],
   image: ['href', 'xlink:href'],
@@ -744,7 +745,7 @@ function inlineJavaScriptAssetReferences(
       const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
       const reference = decodeJavaScriptStringLiteral(rawReference);
 
-      if (reference.startsWith('data:') || reference.startsWith('blob:')) {
+      if (isInMemoryUrlReference(reference)) {
         return hrefAccess === undefined
           ? `new URL(${JSON.stringify(reference)})`
           : JSON.stringify(reference);
@@ -757,7 +758,7 @@ function inlineJavaScriptAssetReferences(
     },
   );
   const documentFile = path.join(context.artifactRoot, 'index.html');
-  const staticFetchPattern = /((?<![$.\w])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*\(\s*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
+  const staticFetchPattern = /((?<![$.\w])(?:(?:globalThis|self|window)\s*\.\s*)?fetch\s*\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
   const fetchCodePositions = createCodePositionMap(output, true);
   output = output.replace(
     staticFetchPattern,
@@ -789,13 +790,57 @@ function inlineJavaScriptAssetReferences(
       const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
       const reference = decodeJavaScriptStringLiteral(rawReference);
 
-      if (reference.startsWith('data:') || reference.startsWith('blob:')) {
+      if (isInMemoryUrlReference(reference)) {
         // These schemes are already self-contained or point at runtime-created in-memory data.
         return match;
       }
 
       if (isNonLocalReference(reference)) {
         throw new Error(`Offline playtest does not support network fetch URL: ${reference}`);
+      }
+
+      const dataUrl = escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote);
+      return `${prefix}${quote}${dataUrl}${quote}`;
+    },
+  );
+  const staticAudioPattern = /((?<![$.\w])new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Audio\s*\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\.|[^"\\\r\n])*)"|'((?:\\.|[^'\\\r\n])*)'|`((?:\\.|[^`\\\r\n])*)`)/gu;
+  const audioCodePositions = createCodePositionMap(output, true);
+  output = output.replace(
+    staticAudioPattern,
+    (
+      match,
+      prefix: string,
+      doubleQuotedReference: string | undefined,
+      singleQuotedReference: string | undefined,
+      templateReference: string | undefined,
+      offset: number,
+    ) => {
+      if (
+        audioCodePositions[offset] !== 1
+        || (
+          templateReference !== undefined
+          && containsUnescapedTemplateInterpolation(templateReference)
+        )
+      ) {
+        return match;
+      }
+
+      let quote = '`';
+
+      if (doubleQuotedReference !== undefined) {
+        quote = '"';
+      } else if (singleQuotedReference !== undefined) {
+        quote = "'";
+      }
+      const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
+      const reference = decodeJavaScriptStringLiteral(rawReference);
+
+      if (isInMemoryUrlReference(reference)) {
+        return match;
+      }
+
+      if (isNonLocalReference(reference)) {
+        throw new Error(`Offline playtest does not support network Audio URL: ${reference}`);
       }
 
       const dataUrl = escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote);
@@ -865,7 +910,7 @@ function inlinePhaserAssetReferences(
         if (!isTemplateLiteral || !rawReference.includes('${')) {
           const reference = normalizeUrlReference(decodeJavaScriptStringLiteral(rawReference));
 
-          if (!reference.startsWith('data:') && !reference.startsWith('blob:')) {
+          if (!isInMemoryUrlReference(reference)) {
             replacements.push({
               start: match.index,
               end: match.index + match[0].length,
@@ -1236,7 +1281,71 @@ function findPhaserLoaderConfigUrlRanges(
     match = propertyPattern.exec(source);
   }
 
+  const shorthandPattern = new RegExp(
+    `\\b(${[...phaserManifestUrlPropertyNames].map(escapeRegExp).join('|')})\\b`,
+    'gu',
+  );
+  shorthandPattern.lastIndex = argument.start;
+  match = shorthandPattern.exec(source);
+
+  while (match !== null && match.index < argument.end) {
+    const propertyName = match[1];
+    const previous = findAdjacentJavaScriptCodeCharacter(
+      source,
+      match.index - 1,
+      -1,
+      codePositions,
+    );
+    const next = findAdjacentJavaScriptCodeCharacter(
+      source,
+      match.index + match[0].length,
+      1,
+      codePositions,
+    );
+
+    if (
+      propertyName !== undefined
+      && (previous === '{' || previous === ',')
+      && (next === ',' || next === '}')
+      && codePositions[match.index] === 1
+    ) {
+      const objectRange = findContainingJavaScriptObject(source, match.index, codePositions);
+
+      if (
+        objectRange !== undefined
+        && objectRange.start >= argument.start
+        && objectRange.end <= argument.end
+      ) {
+        const objectCode = maskNonCode(
+          source.slice(objectRange.start, objectRange.end),
+          codePositions.slice(objectRange.start, objectRange.end),
+        );
+
+        if (/\bkey(?:\s*:|\s*(?=[,}]))/u.test(objectCode)) {
+          ranges.push({ start: match.index, end: match.index + propertyName.length });
+        }
+      }
+    }
+
+    match = shorthandPattern.exec(source);
+  }
+
   return ranges;
+}
+
+function findAdjacentJavaScriptCodeCharacter(
+  source: string,
+  start: number,
+  direction: -1 | 1,
+  codePositions: Uint8Array,
+): string | undefined {
+  for (let index = start; index >= 0 && index < source.length; index += direction) {
+    if (codePositions[index] === 1 && !/\s/u.test(source[index] ?? '')) {
+      return source[index];
+    }
+  }
+
+  return undefined;
 }
 
 function findContainingJavaScriptObject(
@@ -1687,8 +1796,7 @@ function inlineCssAssetReferences(
 
     const reference = token.reference;
     if (
-      reference.startsWith('data:')
-      || reference.startsWith('blob:')
+      isInMemoryUrlReference(reference)
       || reference.startsWith('#')
     ) {
       inlined += output.slice(token.start, token.end);
@@ -1798,11 +1906,22 @@ function inlineCssImageSetOptions(
 ): string {
   let cursor = 0;
   let depth = 0;
+  let inComment = false;
   let output = '';
   let quote: '"' | "'" | undefined;
 
   for (let index = 0; index <= source.length; index += 1) {
     const character = source[index];
+    const nextCharacter = source[index + 1];
+
+    if (inComment) {
+      if (character === '*' && nextCharacter === '/') {
+        inComment = false;
+        index += 1;
+      }
+
+      continue;
+    }
 
     if (quote !== undefined) {
       if (character === '\\') {
@@ -1811,6 +1930,12 @@ function inlineCssImageSetOptions(
         quote = undefined;
       }
 
+      continue;
+    }
+
+    if (character === '/' && nextCharacter === '*') {
+      inComment = true;
+      index += 1;
       continue;
     }
 
@@ -1875,7 +2000,7 @@ function inlineCssImageSetOption(
 
   const reference = decodeCssEscapes(source.slice(valueStart + 1, valueEnd));
 
-  if (reference.startsWith('data:') || reference.startsWith('blob:') || reference.startsWith('#')) {
+  if (isInMemoryUrlReference(reference) || reference.startsWith('#')) {
     return source;
   }
 
@@ -2056,7 +2181,7 @@ function inlineHtmlAssetFragment(
     );
   });
 
-  return htmlWithInlineStyles.replace(/<(link|audio|embed|feimage|image|img|input|object|source|track|use|video)\b((?:"[^"]*"|'[^']*'|[^'">])*)>/giu, (tag, name: string, attributes: string) => {
+  return htmlWithInlineStyles.replace(/<(link|audio|body|embed|feimage|image|img|input|object|source|track|use|video)\b((?:"[^"]*"|'[^']*'|[^'">])*)>/giu, (tag, name: string, attributes: string) => {
     const lowerName = name.toLowerCase();
     const attributeTokens = tokenizeHtmlAttributes(attributes);
     const rel = readHtmlRelTokenSet(attributeTokens);
@@ -2083,7 +2208,7 @@ function inlineHtmlAssetFragment(
 
       if (attribute === 'srcset') {
         inlined = inlineHtmlSrcset(htmlFile, reference, context);
-      } else if (reference.startsWith('data:') || reference.startsWith('blob:')) {
+      } else if (isInMemoryUrlReference(reference)) {
         if (lowerName === 'embed' || lowerName === 'object') {
           throw new Error('Offline playtest does not support embedded active data documents.');
         }
@@ -2130,7 +2255,7 @@ function inlineHtmlSrcset(
   context: InliningContext,
 ): string {
   return parseHtmlSrcset(source, htmlFile).map(({ reference, descriptor }) => {
-    const inlined = reference.startsWith('data:') || reference.startsWith('blob:')
+    const inlined = isInMemoryUrlReference(reference)
       ? reference
       : readAssetDataUrl(htmlFile, reference, context);
     return descriptor.length === 0 ? inlined : `${inlined} ${descriptor}`;
@@ -2390,7 +2515,7 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);return raw.startsWith('data:')||raw.startsWith('blob:')};const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=class{constructor(url){throw denied('WebSocket',url)}}}if(globalThis.EventSource){globalThis.EventSource=class{constructor(url){throw denied('EventSource',url)}}}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
@@ -2417,7 +2542,9 @@ function assertSupportedBundledRuntime(source: string): void {
       label: 'script-driven navigation',
     },
   ];
-  const normalizedSource = normalizeStaticJavaScriptPropertyAccess(source);
+  const normalizedSource = normalizeRuntimeGlobalAliases(
+    normalizeStaticJavaScriptPropertyAccess(source),
+  );
   const codePositions = createCodePositionMap(normalizedSource, true);
   const codeOnlySource = maskNonCode(normalizedSource, codePositions);
 
@@ -2429,6 +2556,10 @@ function assertSupportedBundledRuntime(source: string): void {
 
     candidate.pattern.lastIndex = 0;
   }
+}
+
+function normalizeRuntimeGlobalAliases(source: string): string {
+  return source.replace(/\bdocument\s*\.\s*defaultView\b/gu, 'window');
 }
 
 function normalizeStaticJavaScriptPropertyAccess(source: string): string {
@@ -3094,9 +3225,7 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
 
 function isEmbeddedOrFragmentReference(reference: string): boolean {
   const normalized = normalizeUrlReference(reference);
-  return normalized.startsWith('data:')
-    || normalized.startsWith('blob:')
-    || normalized.startsWith('#');
+  return isInMemoryUrlReference(normalized) || normalized.startsWith('#');
 }
 
 function assertSelfContainedSvg(svgFile: string, source: string): void {
@@ -3159,7 +3288,7 @@ function findExternalSvgReference(source: string): string | undefined {
 
       const reference = normalizeUrlReference(decodedValue);
 
-      if (!reference.startsWith('data:') && !reference.startsWith('#')) {
+      if (!isDataUrlReference(reference) && !reference.startsWith('#')) {
         return reference;
       }
     }
@@ -3183,7 +3312,7 @@ function findExternalCssReference(source: string): string | undefined {
   }
 
   for (const token of findCssUrlTokens(source)) {
-    if (!token.reference.startsWith('data:') && !token.reference.startsWith('#')) {
+    if (!isDataUrlReference(token.reference) && !token.reference.startsWith('#')) {
       return token.reference;
     }
   }
@@ -3385,7 +3514,7 @@ function findExternalGltfUri(value: unknown): string | undefined {
       if (
         isRecord(resource)
         && typeof resource.uri === 'string'
-        && !resource.uri.startsWith('data:')
+        && !isDataUrlReference(resource.uri)
       ) {
         return resource.uri;
       }
@@ -3639,6 +3768,14 @@ function isPathWithin(root: string, candidate: string): boolean {
 function isNonLocalReference(reference: string): boolean {
   const value = normalizeUrlReference(reference);
   return value.startsWith('//') || /^[a-z][a-z\d+.-]*:/iu.test(value);
+}
+
+function isDataUrlReference(reference: string): boolean {
+  return /^data:/iu.test(normalizeUrlReference(reference));
+}
+
+function isInMemoryUrlReference(reference: string): boolean {
+  return /^(?:blob|data):/iu.test(normalizeUrlReference(reference));
 }
 
 function normalizeUrlReference(reference: string): string {
