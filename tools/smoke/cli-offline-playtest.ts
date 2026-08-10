@@ -290,6 +290,31 @@ try {
     /does not support script-driven navigation/u,
   );
 
+  for (const [name, mainJs] of [
+    [
+      'destructured-aliased-location-navigation',
+      'const { location: destination } = window; destination.href = "https://example.com/escape";',
+    ],
+    [
+      'destructured-shorthand-location-navigation',
+      'const { location } = window; location.replace("https://example.com/escape");',
+    ],
+  ] as const) {
+    const destructuredLocationGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: destructuredLocationGame }),
+      /does not support script-driven navigation/u,
+    );
+  }
+
+  const shadowedDestructuredLocationHtml = await packageAndReadFixture(
+    'shadowed-destructured-location',
+    {
+      mainJs: 'function route(window) { const { location: destination } = window; destination.href = "/assets/local"; return destination.href; } document.body.dataset.route = route({ location: {} });',
+    },
+  );
+  assert.match(shadowedDestructuredLocationHtml, /\/assets\/local/u);
+
   const nestedAliasedLocationGame = createPreviewFixture('nested-aliased-location-navigation', {
     mainJs: 'const first = document.location; const target = first; target.replace("https://example.com/escape");',
   });
@@ -788,6 +813,12 @@ try {
   });
   assert.doesNotMatch(phaserShorthandConfigHtml, /\/assets\/pixel\.png/u);
 
+  const scopedPhaserIdentifierHtml = await packageAndReadFixture('scoped-phaser-identifier', {
+    mainJs: 'function unrelated() { const url = "/api/route"; return url; } function preload() { const url = "/assets/pixel.png"; const scene = new Phaser.Scene(); scene.load.image({ key: "hero", url }); } document.body.dataset.route = unrelated(); preload();',
+  });
+  assert.match(scopedPhaserIdentifierHtml, /\/api\/route/u);
+  assert.doesNotMatch(scopedPhaserIdentifierHtml, /\/assets\/pixel\.png/u);
+
   const unrelatedKeyedObjectHtml = await packageAndReadFixture(
     'unrelated-keyed-object',
     {
@@ -1164,6 +1195,14 @@ try {
   assert.doesNotMatch(sizedBrowserImageHtml, /\/assets\/pixel\.png/u);
   assert.match(sizedBrowserImageHtml, /data:image\/png;base64,/u);
 
+  const reassignedBrowserImageGame = createPreviewFixture('reassigned-browser-image-asset', {
+    mainJs: 'let splash = new Image(); splash = { src: "" }; splash.src = "/assets/pixel.png"; document.body.dataset.src = splash.src;',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: reassignedBrowserImageGame }),
+    /requires an immutable Image binding/u,
+  );
+
   const browserImageWithoutParenthesesHtml = await packageAndReadFixture(
     'browser-image-without-parentheses-asset',
     {
@@ -1362,11 +1401,36 @@ try {
   );
 
   const mixedSrcsetHtml = await packageAndReadFixture('mixed-srcset', {
-    indexHtml: '<!doctype html><html><head></head><body><img srcset="data:image/png;base64,AAAA, /assets/pixel.png 2x, blob:fixture 3x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+    indexHtml: '<!doctype html><html><head></head><body><img srcset="data:image/png;base64,AAAA, /assets/pixel.png 2x"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
   assert.match(mixedSrcsetHtml, /data:image\/png;base64,AAAA/u);
-  assert.match(mixedSrcsetHtml, /blob:fixture 3x/u);
   assert.doesNotMatch(mixedSrcsetHtml, /\/assets\/pixel\.png/u);
+
+  const serializedBlobHtmlGame = createPreviewFixture('serialized-blob-html', {
+    indexHtml: '<!doctype html><html><head></head><body><img src="blob:https://example.com/image"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: serializedBlobHtmlGame }),
+    /cannot inline external URL.*blob:/u,
+  );
+
+  const serializedBlobJavaScriptGame = createPreviewFixture('serialized-blob-javascript', {
+    mainJs: 'void fetch("blob:https://example.com/data");',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: serializedBlobJavaScriptGame }),
+    /does not support network fetch URL: blob:/u,
+  );
+
+  const serializedBlobCssGame = createPreviewFixture('serialized-blob-css');
+  fs.writeFileSync(
+    path.join(serializedBlobCssGame, 'artifacts/web-preview/assets/main.css'),
+    'body { background-image: url("blob:https://example.com/image"); }',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: serializedBlobCssGame }),
+    /cannot inline external URL.*blob:/u,
+  );
 
   const uppercaseDataHtml = await packageAndReadFixture('uppercase-data-scheme', {
     indexHtml: '<!doctype html><html><head></head><body><img src="DATA:image/png;base64,AAAA"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -1685,6 +1749,18 @@ try {
   );
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: activeSvgGame }),
+    /does not support active SVG content/u,
+  );
+
+  const namespacedScriptSvgGame = createPreviewFixture('namespaced-script-svg', {
+    indexHtml: '<!doctype html><html><head></head><body><object data="/assets/active.svg"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(namespacedScriptSvgGame, 'artifacts/web-preview/assets/active.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg" xmlns:svg="http://www.w3.org/2000/svg"><svg:script>open("https://example.com")</svg:script></svg>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: namespacedScriptSvgGame }),
     /does not support active SVG content/u,
   );
 

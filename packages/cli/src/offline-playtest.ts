@@ -780,7 +780,7 @@ function inlineJavaScriptAssetReferences(
       const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
       const reference = decodeJavaScriptStringLiteral(rawReference);
 
-      if (isInMemoryUrlReference(reference)) {
+      if (isDataUrlReference(reference)) {
         return hrefAccess === undefined
           ? `new URL(${JSON.stringify(reference)})`
           : JSON.stringify(reference);
@@ -849,8 +849,8 @@ function inlineJavaScriptAssetReferences(
       const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
       const reference = decodeJavaScriptStringLiteral(rawReference);
 
-      if (isInMemoryUrlReference(reference)) {
-        // These schemes are already self-contained or point at runtime-created in-memory data.
+      if (isDataUrlReference(reference)) {
+        // Data URLs are portable; serialized blob URLs belong to another document's URL store.
         return match;
       }
 
@@ -911,7 +911,7 @@ function inlineJavaScriptAssetReferences(
       const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
       const reference = decodeJavaScriptStringLiteral(rawReference);
 
-      if (isInMemoryUrlReference(reference)) {
+      if (isDataUrlReference(reference)) {
         return match;
       }
 
@@ -1007,6 +1007,12 @@ function inlineStaticElementSourceAssignments(
         return match;
       }
 
+      if (binding.kind !== 'const') {
+        throw new Error(
+          `Offline playtest requires an immutable ${constructorName} binding before rewriting src.`,
+        );
+      }
+
       let quote = '`';
 
       if (doubleQuotedReference !== undefined) {
@@ -1017,7 +1023,7 @@ function inlineStaticElementSourceAssignments(
       const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
       const reference = decodeJavaScriptStringLiteral(rawReference);
 
-      if (isInMemoryUrlReference(reference)) {
+      if (isDataUrlReference(reference)) {
         return match;
       }
 
@@ -1116,7 +1122,7 @@ function inlineStaticXmlHttpRequestOpenCalls(
 
     const reference = readStaticJavaScriptString(source, urlArgument);
 
-    if (reference === undefined || isInMemoryUrlReference(reference)) {
+    if (reference === undefined || isDataUrlReference(reference)) {
       continue;
     }
 
@@ -1215,10 +1221,10 @@ function inlinePhaserAssetReferences(
     ...manifestRanges.filter((range) => range.traceIdentifiers),
     ...loaderRanges,
   ];
-  const identifiers = collectJavaScriptIdentifiers(source, identifierRanges, codePositions);
+  let identifierUses = collectJavaScriptIdentifierUses(source, identifierRanges, codePositions);
 
   for (let pass = 0; pass < 4; pass += 1) {
-    const initializerRanges = findIdentifierInitializerRanges(source, identifiers, codePositions)
+    const initializerRanges = findIdentifierInitializerRanges(source, identifierUses, codePositions)
       .filter((range) => !ranges.some((candidate) => rangesOverlap(candidate, range)));
 
     if (initializerRanges.length === 0) {
@@ -1226,14 +1232,9 @@ function inlinePhaserAssetReferences(
     }
 
     ranges.push(...initializerRanges);
-    const nextIdentifiers = collectJavaScriptIdentifiers(source, initializerRanges, codePositions);
-    const previousSize = identifiers.size;
+    identifierUses = collectJavaScriptIdentifierUses(source, initializerRanges, codePositions);
 
-    for (const identifier of nextIdentifiers) {
-      identifiers.add(identifier);
-    }
-
-    if (identifiers.size === previousSize) {
+    if (identifierUses.length === 0) {
       break;
     }
   }
@@ -1258,7 +1259,7 @@ function inlinePhaserAssetReferences(
         if (!isTemplateLiteral || !rawReference.includes('${')) {
           const reference = normalizeUrlReference(decodeJavaScriptStringLiteral(rawReference));
 
-          if (!isInMemoryUrlReference(reference)) {
+          if (!isDataUrlReference(reference)) {
             replacements.push({
               start: match.index,
               end: match.index + match[0].length,
@@ -2634,12 +2635,12 @@ function isJavaScriptAutomaticSemicolonBoundary(
   return !/(?:\bin|\binstanceof)\s*$/u.test(previousCode);
 }
 
-function collectJavaScriptIdentifiers(
+function collectJavaScriptIdentifierUses(
   source: string,
   ranges: readonly SourceRange[],
   codePositions: Uint8Array,
-): Set<string> {
-  const identifiers = new Set<string>();
+): readonly Readonly<{ identifier: string; position: number }>[] {
+  const uses = new Map<string, Readonly<{ identifier: string; position: number }>>();
   const pattern = new RegExp(javascriptIdentifierPatternSource, 'gu');
 
   for (const range of ranges) {
@@ -2660,7 +2661,10 @@ function collectJavaScriptIdentifiers(
         const next = source.slice(match.index + match[0].length, range.end).trimStart()[0];
 
         if (previous !== '.' && next !== ':') {
-          identifiers.add(match[0]);
+          uses.set(`${match[0]}:${match.index}`, {
+            identifier: match[0],
+            position: match.index,
+          });
         }
       }
 
@@ -2668,32 +2672,37 @@ function collectJavaScriptIdentifiers(
     }
   }
 
-  return identifiers;
+  return [...uses.values()];
 }
 
 function findIdentifierInitializerRanges(
   source: string,
-  identifiers: ReadonlySet<string>,
+  uses: readonly Readonly<{ identifier: string; position: number }>[],
   codePositions: Uint8Array,
 ): SourceRange[] {
-  const declarationPattern = new RegExp(
-    `\\b(?:const|let|var)\\s+(${javascriptIdentifierPatternSource})\\s*=\\s*`,
-    'gu',
-  );
-  const ranges: SourceRange[] = [];
+  const ranges = new Map<string, SourceRange>();
 
-  for (const match of source.matchAll(declarationPattern)) {
+  for (const use of uses) {
+    const binding = findVisibleJavaScriptIdentifierBinding(
+      source,
+      use.identifier,
+      use.position,
+      codePositions,
+    );
+
     if (
-      match.index !== undefined
-      && codePositions[match.index] === 1
-      && identifiers.has(match[1] ?? '')
+      binding?.initializerRange !== undefined
+      && binding.start < use.position
+      && binding.kind !== 'parameter'
     ) {
-      const start = match.index + match[0].length;
-      ranges.push(findJavaScriptExpressionRange(source, start, source.length, codePositions, true));
+      ranges.set(
+        `${binding.initializerRange.start}:${binding.initializerRange.end}`,
+        binding.initializerRange,
+      );
     }
   }
 
-  return ranges;
+  return [...ranges.values()];
 }
 
 function trimSourceRange(source: string, range: SourceRange): SourceRange {
@@ -2883,7 +2892,7 @@ function inlineCssAssetReferences(
 
     const reference = token.reference;
     if (
-      isInMemoryUrlReference(reference)
+      isDataUrlReference(reference)
       || reference.startsWith('#')
     ) {
       inlined += output.slice(token.start, token.end);
@@ -3088,7 +3097,7 @@ function inlineCssImageSetOption(
 
   if (
     token === undefined
-    || isInMemoryUrlReference(token.reference)
+    || isDataUrlReference(token.reference)
     || token.reference.startsWith('#')
   ) {
     return source;
@@ -3336,7 +3345,7 @@ function inlineHtmlAssetFragment(
 
       if (attribute === 'srcset') {
         inlined = inlineHtmlSrcset(htmlFile, reference, context);
-      } else if (isInMemoryUrlReference(reference)) {
+      } else if (isDataUrlReference(reference)) {
         if (lowerName === 'embed' || lowerName === 'object') {
           throw new Error('Offline playtest does not support embedded active data documents.');
         }
@@ -3402,7 +3411,7 @@ function inlineHtmlSrcset(
   context: InliningContext,
 ): string {
   return parseHtmlSrcset(source, htmlFile).map(({ reference, descriptor }) => {
-    const inlined = isInMemoryUrlReference(reference)
+    const inlined = isDataUrlReference(reference)
       ? reference
       : readAssetDataUrl(htmlFile, reference, context);
     return descriptor.length === 0 ? inlined : `${inlined} ${descriptor}`;
@@ -3892,6 +3901,49 @@ function findLocationAliasAssignments(
       identifier: match[1],
       start: match.index,
     });
+  }
+
+  const destructuringPattern = /\b(?:const|let|var)\s*\{([^;=\r\n]*)\}\s*=\s*/gu;
+
+  for (const match of source.matchAll(destructuringPattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+    ) {
+      continue;
+    }
+
+    const expressionStart = match.index + match[0].length;
+    const expressionRange = findJavaScriptExpressionRange(
+      source,
+      expressionStart,
+      source.length,
+      codePositions,
+      true,
+      true,
+    );
+    const objectExpression = maskNonCode(
+      source.slice(expressionRange.start, expressionRange.end),
+      codePositions.slice(expressionRange.start, expressionRange.end),
+    ).trim();
+    const bindingSource = match[1];
+    const bindingStart = match.index + match[0].indexOf(bindingSource);
+    const locationPropertyPattern = new RegExp(
+      `(?:^|,)\\s*location\\s*(?::\\s*(${javascriptIdentifierPatternSource})|(?=\\s*(?:,|$)))`,
+      'gu',
+    );
+
+    for (const property of bindingSource.matchAll(locationPropertyPattern)) {
+      const identifier = property[1] ?? 'location';
+      const propertyOffset = property.index ?? 0;
+      assignments.push({
+        expression: `${objectExpression}.location`,
+        expressionRange,
+        identifier,
+        start: bindingStart + propertyOffset + property[0].lastIndexOf(identifier),
+      });
+    }
   }
 
   return assignments;
@@ -4812,7 +4864,7 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
           (tag.name === 'object' && attribute.name === 'data')
           || (tag.name === 'embed' && attribute.name === 'src')
         )
-        && isInMemoryUrlReference(value)
+        && isDataUrlReference(value)
       ) {
         throw new Error(
           `Offline playtest requires inert self-contained HTML assets: ${htmlFile} contains an embedded active data document`,
@@ -4870,7 +4922,7 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
 
 function isEmbeddedOrFragmentReference(reference: string): boolean {
   const normalized = normalizeUrlReference(reference);
-  return isInMemoryUrlReference(normalized) || normalized.startsWith('#');
+  return isDataUrlReference(normalized) || normalized.startsWith('#');
 }
 
 function assertSelfContainedSvg(svgFile: string, source: string): void {
@@ -4893,7 +4945,7 @@ function assertSelfContainedSvg(svgFile: string, source: string): void {
 
 function findActiveSvgContent(source: string): string | undefined {
   for (const tag of findHtmlTagTokens(source)) {
-    if (!tag.closing && tag.name === 'script') {
+    if (!tag.closing && (tag.name === 'script' || tag.name.endsWith(':script'))) {
       return '<script>';
     }
 
@@ -5460,10 +5512,6 @@ function isNonLocalReference(reference: string): boolean {
 
 function isDataUrlReference(reference: string): boolean {
   return /^data:/iu.test(normalizeUrlReference(reference));
-}
-
-function isInMemoryUrlReference(reference: string): boolean {
-  return /^(?:blob|data):/iu.test(normalizeUrlReference(reference));
 }
 
 function normalizeUrlReference(reference: string): string {
