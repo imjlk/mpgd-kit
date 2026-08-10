@@ -3972,6 +3972,12 @@ function isPotentialLocationAliasExpression(
   expression: string,
   aliases: ReadonlySet<string>,
 ): boolean {
+  const unwrapped = unwrapBalancedOuterParentheses(expression);
+
+  if (unwrapped.offset > 0 || unwrapped.expression.length !== expression.length) {
+    return isPotentialLocationAliasExpression(unwrapped.expression, aliases);
+  }
+
   const isDirectLocation =
     /^(?:(?:document|globalThis|parent|self|top|window)\s*\.\s*)?location$/u.test(expression);
 
@@ -4001,6 +4007,56 @@ function findAssignmentResultRightHandSide(
     expression: match[1],
     offset: match[0].length - match[1].length,
   };
+}
+
+function unwrapBalancedOuterParentheses(
+  expression: string,
+): Readonly<{ expression: string; offset: number }> {
+  let start = 0;
+  let end = expression.length;
+
+  while (start < end && /\s/u.test(expression[start] ?? '')) {
+    start += 1;
+  }
+
+  while (start < end && /\s/u.test(expression[end - 1] ?? '')) {
+    end -= 1;
+  }
+
+  while (expression[start] === '(' && expression[end - 1] === ')') {
+    let depth = 0;
+    let matchingClose: number | undefined;
+
+    for (let index = start; index < end; index += 1) {
+      if (expression[index] === '(') {
+        depth += 1;
+      } else if (expression[index] === ')') {
+        depth -= 1;
+
+        if (depth === 0) {
+          matchingClose = index;
+          break;
+        }
+      }
+    }
+
+    if (matchingClose !== end - 1) {
+      break;
+    }
+
+    start += 1;
+    end -= 1;
+
+    while (start < end && /\s/u.test(expression[start] ?? '')) {
+      start += 1;
+    }
+
+    while (start < end && /\s/u.test(expression[end - 1] ?? '')) {
+      end -= 1;
+    }
+  }
+
+  return { expression: expression.slice(start, end), offset: start };
 }
 
 function isLocationAliasIdentifierAtPosition(
@@ -4135,6 +4191,19 @@ function isLocationAliasExpression(
   assignments: readonly LocationAliasAssignment[],
   visitedAliases: Set<string>,
 ): boolean {
+  const unwrapped = unwrapBalancedOuterParentheses(expression);
+
+  if (unwrapped.offset > 0 || unwrapped.expression.length !== expression.length) {
+    return isLocationAliasExpression(
+      source,
+      unwrapped.expression,
+      position + unwrapped.offset,
+      codePositions,
+      assignments,
+      visitedAliases,
+    );
+  }
+
   const qualified = /^(document|globalThis|parent|self|top|window)\s*\.\s*location$/u.exec(
     expression,
   );

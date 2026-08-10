@@ -362,6 +362,33 @@ try {
     );
   }
 
+  for (const [name, initialValue, operator] of [
+    ['parenthesized-simple-assignment-result-navigation', 'undefined', '='],
+    ['parenthesized-and-assignment-result-navigation', 'true', '&&='],
+    ['parenthesized-or-assignment-result-navigation', 'false', '||='],
+    ['parenthesized-nullish-assignment-result-navigation', 'null', '??='],
+  ] as const) {
+    const parenthesizedAssignmentResultGame = createPreviewFixture(name, {
+      mainJs: `let target = ${initialValue}; const alias = (target ${operator} window.location); alias.href = "https://example.com/escape";`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: parenthesizedAssignmentResultGame }),
+      /does not support script-driven navigation/u,
+      `expected the parenthesized ${operator} result alias to be rejected`,
+    );
+  }
+
+  const parenthesizedDirectLocationGame = createPreviewFixture(
+    'parenthesized-direct-location-navigation',
+    {
+      mainJs: 'const alias = (((window.location))); alias.href = "https://example.com/escape";',
+    },
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: parenthesizedDirectLocationGame }),
+    /does not support script-driven navigation/u,
+  );
+
   const simpleAssignmentResultGame = createPreviewFixture('simple-assignment-result-navigation', {
     mainJs: 'let target; const alias = target = window.location; alias.href = "https://example.com/escape";',
   });
