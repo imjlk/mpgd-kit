@@ -2,6 +2,8 @@ import { createMicrosoftStoreCommerceAdapter, withMicrosoftStoreCommerceAdapter 
 import { createBrowserPlatformGateway } from '@mpgd/adapter-browser';
 import type { PlatformGateway } from '@mpgd/platform';
 
+import type { RuntimeConfig } from '../runtimeDetector';
+
 const browser = createBrowserPlatformGateway();
 const base: PlatformGateway = { ...browser, target: 'microsoft-store' };
 const commerce = createMicrosoftStoreCommerceAdapter({
@@ -20,6 +22,6 @@ const commerce = createMicrosoftStoreCommerceAdapter({
 });
 
 /** Configure Store products and a game-owned authority before enabling checkout. */
-export function createPlatformGateway(): PlatformGateway {
+export async function createBuildGateway(_runtime: RuntimeConfig): Promise<PlatformGateway> {
   return withMicrosoftStoreCommerceAdapter(base, commerce);
 }

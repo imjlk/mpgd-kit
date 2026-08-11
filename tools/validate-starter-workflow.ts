@@ -561,6 +561,7 @@ function validatePhaserTemplateBuildGateways(): void {
     'src/platform/buildGateways/reddit.ts',
     'src/platform/buildGateways/redditSandbox.ts',
     'src/platform/buildGateways/verse8.ts',
+    'src/platform/buildGateways/microsoftStore.ts',
   ] as const;
 
   for (const relativePath of gatewayFiles) {
@@ -580,6 +581,13 @@ function validatePhaserTemplateBuildGateways(): void {
     if (readText(examplePath) !== readText(templatePath)) {
       failures.push(`${templatePath}: must stay in parity with ${examplePath}.`);
     }
+
+    if (
+      relativePath.startsWith('src/platform/buildGateways/')
+      && !readText(examplePath).includes('export async function createBuildGateway')
+    ) {
+      failures.push(`${examplePath}: must export the build gateway contract.`);
+    }
   }
 
   for (const root of [exampleRoot, templateRoot]) {
@@ -595,6 +603,7 @@ function validatePhaserTemplateBuildGateways(): void {
       "'src/platform/buildGateways/aitSandbox.ts'",
       "'src/platform/buildGateways/redditSandbox.ts'",
       "'src/platform/buildGateways/verse8.ts'",
+      "'src/platform/buildGateways/microsoftStore.ts'",
     ]) {
       assertIncludesText(readText(vitePath), requiredText, `${vitePath}: build gateway isolation.`);
     }
