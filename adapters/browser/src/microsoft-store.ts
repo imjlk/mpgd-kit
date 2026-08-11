@@ -137,7 +137,7 @@ export function createMicrosoftStoreCommerceAdapter(
       return storedId;
     }
 
-    const recoveryId = nonEmptyString(preferredId) ?? nonEmptyString(createRecoveryId());
+    const recoveryId = nonEmptyValue(preferredId) ?? nonEmptyValue(createRecoveryId());
     if (recoveryId === undefined) {
       throw new TypeError('Microsoft Store recovery ID must be a non-empty string.');
     }
@@ -508,7 +508,7 @@ function readRecoveryId(
   key: string,
 ): string | undefined {
   try {
-    return storage === undefined ? undefined : nonEmptyString(storage.getItem(key));
+    return storage === undefined ? undefined : nonEmptyValue(storage.getItem(key));
   } catch {
     return undefined;
   }
@@ -639,6 +639,10 @@ function paymentCompletionStatus(result: PurchaseResult): 'success' | 'fail' | '
 
 function nonEmptyString(input: unknown): string | undefined {
   return typeof input === 'string' && input.trim().length > 0 ? input.trim() : undefined;
+}
+
+function nonEmptyValue(input: unknown): string | undefined {
+  return typeof input === 'string' && input.length > 0 ? input : undefined;
 }
 
 function requireIdentifier(input: unknown, label: string): string {
