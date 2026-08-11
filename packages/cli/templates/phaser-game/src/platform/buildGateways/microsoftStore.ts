@@ -1,5 +1,8 @@
-import { createMicrosoftStoreCommerceAdapter, withMicrosoftStoreCommerceAdapter } from '@mpgd/adapter-microsoft-store';
 import { createBrowserPlatformGateway } from '@mpgd/adapter-browser';
+import {
+  createMicrosoftStoreCommerceAdapter,
+  withMicrosoftStoreCommerceAdapter,
+} from '@mpgd/adapter-browser/microsoft-store';
 import type { PlatformGateway } from '@mpgd/platform';
 
 import type { RuntimeConfig } from '../runtimeDetector';

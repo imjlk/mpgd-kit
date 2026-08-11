@@ -190,7 +190,6 @@ const recommendedMatrixTargetsWithoutMicrosoftStore = recommendedMatrixTargets
 const defaultDependencyVersion = `^${cliVersion}`;
 const standaloneTemplateDependencyVersionFallbacks: Readonly<Record<string, string>> = {
   // Initial-published independently from the CLI release line; package metadata wins once concrete.
-  '@mpgd/adapter-microsoft-store': '^0.1.0',
   '@mpgd/adapter-verse8': '^0.1.0',
 };
 const mpgdTemplateDependencyPackages = [
@@ -198,7 +197,6 @@ const mpgdTemplateDependencyPackages = [
   { name: '@mpgd/adapter-browser', packageDir: 'adapters/browser' },
   { name: '@mpgd/adapter-capacitor', packageDir: 'adapters/capacitor' },
   { name: '@mpgd/adapter-devvit', packageDir: 'adapters/devvit' },
-  { name: '@mpgd/adapter-microsoft-store', packageDir: 'adapters/microsoft-store' },
   { name: '@mpgd/adapter-verse8', packageDir: 'adapters/verse8' },
   { name: '@mpgd/analytics', packageDir: 'packages/analytics' },
   { name: '@mpgd/bridge', packageDir: 'packages/bridge' },
@@ -1171,7 +1169,7 @@ const targetCommand = defineI18n({
             workspace: false,
             ...(resolvedKitPath === undefined ? {} : { kitPath: resolvedKitPath }),
           }),
-          '@mpgd/adapter-microsoft-store',
+          '@mpgd/adapter-browser',
         );
         const result = initializeMicrosoftStoreStarter({
           gameRoot,
@@ -2273,7 +2271,7 @@ function createTemplateContext(input: {
     mpgdDependencyVersionReplacements,
     microsoftStoreAdapterDependencyVersion: requireMpgdDependencyVersion(
       mpgdDependencyVersionReplacements,
-      '@mpgd/adapter-microsoft-store',
+      '@mpgd/adapter-browser',
     ),
     tsconfigExtendsLine: input.workspace
       ? `  "extends": "${workspacePrefix}/tsconfig.base.json",`

@@ -256,16 +256,18 @@ export function createMicrosoftStoreCommerceAdapter(
       try {
         const service = await getService();
         const purchases = await service.listPurchases();
-        for (const purchase of purchases) {
+        await Promise.all(purchases.flatMap((purchase) => {
           const product = productsByStoreId.get(purchase.itemId);
           if (product === undefined) {
-            continue;
+            return [];
           }
-          await fulfill(product, purchase, {
-            idempotencyKey: createRecoveryId(),
-            source: 'recovery',
-          });
-        }
+          return [
+            fulfill(product, purchase, {
+              idempotencyKey: createRecoveryId(),
+              source: 'recovery',
+            }),
+          ];
+        }));
         return { restoredEntitlements: await input.authority.getEntitlements() };
       } catch (error) {
         input.onError?.(error);

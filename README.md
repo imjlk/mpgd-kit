@@ -477,7 +477,7 @@ Reddit response enters reconciliation and does not authorize a blind repost.
 
 The Microsoft Store target is a PWA distribution path. The repo treats
 `microsoft-store` as a store-reviewed web artifact with a dedicated
-`@mpgd/adapter-microsoft-store` commerce boundary. Checkout uses Digital Goods
+`@mpgd/adapter-browser/microsoft-store` commerce boundary. Checkout uses Digital Goods
 and Payment Request, while grants and developer-managed consumption use
 authoritative Game Services and Microsoft Collections APIs. The artifact includes
 a linked `manifest.webmanifest`; game projects should replace the starter icon

@@ -121,7 +121,7 @@ try {
     legacyPackageJson.dependencies,
     'legacy package dependencies',
   );
-  legacyDependencies['@mpgd/adapter-microsoft-store'] = 'link:../local-microsoft-store-adapter';
+  legacyDependencies['@mpgd/adapter-browser'] = 'link:../local-browser-adapter';
   for (const name of [
     'build:microsoft-store',
     'smoke:microsoft-store',
@@ -146,8 +146,8 @@ try {
     requireRecord(
       migratedPackageJson.dependencies,
       'migrated package dependencies',
-    )['@mpgd/adapter-microsoft-store'],
-    'link:../local-microsoft-store-adapter',
+    )['@mpgd/adapter-browser'],
+    'link:../local-browser-adapter',
   );
   for (const name of [
     'build:microsoft-store',
@@ -444,8 +444,6 @@ function assertMicrosoftStoreDisabled(gameRoot: string): void {
 
   const packageJson = readJson(join(gameRoot, 'package.json'));
   const scripts = requireRecord(packageJson.scripts, 'package scripts');
-  const dependencies = requireRecord(packageJson.dependencies, 'package dependencies');
-  assert.equal(dependencies['@mpgd/adapter-microsoft-store'], undefined);
   assert.equal(scripts['build:microsoft-store'], undefined);
   assert.equal(scripts['smoke:microsoft-store'], undefined);
   assert.equal(scripts['preflight:microsoft-store'], undefined);
@@ -484,7 +482,7 @@ function assertMicrosoftStoreEnabled(gameRoot: string): void {
   const packageJson = readJson(join(gameRoot, 'package.json'));
   const scripts = requireRecord(packageJson.scripts, 'package scripts');
   const dependencies = requireRecord(packageJson.dependencies, 'package dependencies');
-  assert.equal(typeof dependencies['@mpgd/adapter-microsoft-store'], 'string');
+  assert.equal(typeof dependencies['@mpgd/adapter-browser'], 'string');
   for (const name of [
     'build:microsoft-store',
     'smoke:microsoft-store',

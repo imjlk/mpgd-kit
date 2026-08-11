@@ -40,8 +40,6 @@ Use this before making the repository public or announcing a package release.
 - [x] `@mpgd/adapter-devvit` npm Trusted Publishing/OIDC is configured for `.github/workflows/release.yml` before adding it to the Sampo fixed release group.
 - [x] `@mpgd/adapter-verse8` has been initial-published as `0.1.0` and verified with `npm view @mpgd/adapter-verse8 version` before its first automated release.
 - [x] `@mpgd/adapter-verse8` npm Trusted Publishing/OIDC is configured for `.github/workflows/release.yml` before adding its independent singleton Sampo linked group.
-- [ ] `@mpgd/adapter-microsoft-store` has been initial-published as `0.1.0` and verified with `npm view @mpgd/adapter-microsoft-store version` before its first automated release.
-- [ ] `@mpgd/adapter-microsoft-store` npm Trusted Publishing/OIDC is configured for `.github/workflows/release.yml` before adding an independent singleton Sampo linked group.
 - [x] `@mpgd/cli` has been initial-published locally and verified with `npm view @mpgd/cli version` before the first automated CLI release.
 - [x] `@mpgd/create-game` has been initial-published locally and verified with `npm view @mpgd/create-game version` before the first automated create-package release.
 - [ ] `@mpgd/cli` and `@mpgd/create-game` npm Trusted Publishing/OIDC are configured for `.github/workflows/release.yml`.

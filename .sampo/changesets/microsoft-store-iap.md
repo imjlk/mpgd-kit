@@ -1,5 +1,7 @@
 ---
 npm/@mpgd/catalog: minor (Added)
+npm/@mpgd/adapter-browser: minor (Added)
+npm/@mpgd/cli: minor (Added)
 npm/@mpgd/game-services: minor (Added)
 npm/@mpgd/platform: minor (Added)
 npm/@mpgd/target-config: minor (Added)

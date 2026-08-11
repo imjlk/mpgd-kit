@@ -60,7 +60,6 @@
     "@mpgd/adapter-browser": "__MPGD_DEPENDENCY_VERSION_ADAPTER_BROWSER__",
     "@mpgd/adapter-capacitor": "__MPGD_DEPENDENCY_VERSION_ADAPTER_CAPACITOR__",
     "@mpgd/adapter-devvit": "__MPGD_DEPENDENCY_VERSION_ADAPTER_DEVVIT__",
-    "@mpgd/adapter-microsoft-store": "__MPGD_DEPENDENCY_VERSION_ADAPTER_MICROSOFT_STORE__",
     "@mpgd/adapter-verse8": "__MPGD_DEPENDENCY_VERSION_ADAPTER_VERSE8__",
     "@mpgd/analytics": "__MPGD_DEPENDENCY_VERSION_ANALYTICS__",
     "@mpgd/bridge": "__MPGD_DEPENDENCY_VERSION_BRIDGE__",

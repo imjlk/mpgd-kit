@@ -28,6 +28,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./microsoft-store": {
+      "types": "./dist/microsoft-store.d.ts",
+      "default": "./dist/microsoft-store.js"
     }
   },
   "files": [

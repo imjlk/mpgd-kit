@@ -51,7 +51,7 @@ const microsoftStoreTarget = {
   icon: { profile: 'microsoft-pwa' },
   output: 'artifacts/microsoft-store',
 } as const;
-const microsoftStoreAdapterPackage = '@mpgd/adapter-microsoft-store';
+const microsoftStoreAdapterPackage = '@mpgd/adapter-browser';
 const microsoftStoreGatewayResolver = {
   anchor: "    default:\n      return 'src/platform/buildGateways/browser.ts';",
   block: "    case 'microsoft-store':\n      return 'src/platform/buildGateways/microsoftStore.ts';",
@@ -122,7 +122,6 @@ export function prepareBaseGameTemplateFile(input: {
         for (const script of Object.keys(microsoftStoreScripts(defaultMpgdKitPath))) {
           delete scripts[script];
         }
-        delete dependencies[microsoftStoreAdapterPackage];
       });
     case 'mpgd.targets.json':
       return updateJson(withoutBlocks, (value) => {

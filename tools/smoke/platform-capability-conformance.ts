@@ -15,12 +15,12 @@ import {
 
 import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
-import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
-import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
 import {
   createMicrosoftStoreCommerceAdapter,
   withMicrosoftStoreCommerceAdapter,
-} from '../../adapters/microsoft-store/src/index';
+} from '../../adapters/browser/src/microsoft-store';
+import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
+import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
 import { readJsonFile } from '../io';
 

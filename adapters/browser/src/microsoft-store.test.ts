@@ -7,7 +7,7 @@ import {
   microsoftStoreBillingMethod,
   microsoftStoreDigitalGoodsEvidenceSchema,
   withMicrosoftStoreCommerceAdapter,
-} from './index';
+} from './microsoft-store';
 
 const product = Object.freeze({
   id: 'HINT_PACK_20',
@@ -202,6 +202,68 @@ describe('Microsoft Store Digital Goods commerce', () => {
       idempotencyKey: 'recovery-1',
       source: 'recovery',
     }));
+  });
+
+  it('reconciles independent unconsumed products concurrently', async () => {
+    const secondProduct = Object.freeze({
+      ...product,
+      id: 'HINT_PACK_120',
+      title: '120 hints',
+    }) satisfies ProductInfo;
+    let releaseAuthority: (() => void) | undefined;
+    const authorityGate = new Promise<void>((resolve) => {
+      releaseAuthority = resolve;
+    });
+    const verifyAndGrant = vi.fn(async (input: { readonly productId: string }) => {
+      await authorityGate;
+      return {
+        status: 'completed' as const,
+        transactionId: `ledger-${input.productId}`,
+      };
+    });
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      products: [
+        { info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' },
+        { info: secondProduct, inAppOfferToken: 'ttokdoku_hint_pack_120' },
+      ],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        verifyAndGrant,
+        async getEntitlements() {
+          return [entitlement];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [];
+          },
+          async listPurchases() {
+            return [
+              {
+                itemId: 'ttokdoku_hint_pack_20',
+                purchaseToken: 'ttokdoku_hint_pack_20',
+              },
+              {
+                itemId: 'ttokdoku_hint_pack_120',
+                purchaseToken: 'ttokdoku_hint_pack_120',
+              },
+            ];
+          },
+        };
+      },
+      createRecoveryId: () => crypto.randomUUID(),
+    });
+
+    const restoration = adapter.restore?.();
+    expect(restoration).toBeDefined();
+    await vi.waitFor(() => {
+      expect(verifyAndGrant).toHaveBeenCalledTimes(2);
+    });
+    releaseAuthority?.();
+    await expect(restoration).resolves.toEqual({ restoredEntitlements: [entitlement] });
   });
 
   it('maps user cancellation without calling the authority', async () => {

@@ -1,6 +1,6 @@
 # Microsoft Store Commerce
 
-`@mpgd/adapter-microsoft-store` is the client boundary for Store-installed
+`@mpgd/adapter-browser/microsoft-store` is the client boundary for Store-installed
 Windows PWAs. It uses the billing provider
 `https://store.microsoft.com/billing`, loads localized product details, opens
 Payment Request checkout, and recovers unconsumed purchases with

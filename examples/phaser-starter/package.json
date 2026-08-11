@@ -17,7 +17,6 @@
     "@mpgd/adapter-browser": "workspace:*",
     "@mpgd/adapter-capacitor": "workspace:*",
     "@mpgd/adapter-devvit": "workspace:*",
-    "@mpgd/adapter-microsoft-store": "workspace:*",
     "@mpgd/adapter-verse8": "workspace:*",
     "@mpgd/catalog": "workspace:*",
     "@mpgd/game-services": "workspace:*",
