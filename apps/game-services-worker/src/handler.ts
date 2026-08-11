@@ -283,8 +283,12 @@ function assertMicrosoftStorePurchaseBindings(env: GameServicesWorkerEnv): void 
   const hasFinalizer = env.GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER !== undefined;
 
   if (hasVerifier !== hasFinalizer) {
+    const missingBinding = hasVerifier
+      ? 'GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER'
+      : 'GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER';
     throw new Error(
-      'Microsoft Store evidence verifier and purchase finalizer bindings must be configured together.',
+      'Microsoft Store evidence verifier and purchase finalizer bindings must be configured '
+        + `together. Missing: ${missingBinding}.`,
     );
   }
 }

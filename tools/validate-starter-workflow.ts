@@ -578,13 +578,16 @@ function validatePhaserTemplateBuildGateways(): void {
       continue;
     }
 
-    if (readText(examplePath) !== readText(templatePath)) {
+    const exampleText = readText(examplePath);
+    const templateText = readText(templatePath);
+
+    if (exampleText !== templateText) {
       failures.push(`${templatePath}: must stay in parity with ${examplePath}.`);
     }
 
     if (
       relativePath.startsWith('src/platform/buildGateways/')
-      && !readText(examplePath).includes('export async function createBuildGateway')
+      && !exampleText.includes('export async function createBuildGateway')
     ) {
       failures.push(`${examplePath}: must export the build gateway contract.`);
     }

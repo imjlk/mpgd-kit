@@ -376,7 +376,12 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
       (product) => product.type === 'consumable',
     );
     assertEqual(
-      consumables.length > 0 && consumables.every((product) => product.enabled),
+      consumables.length > 0,
+      true,
+      'microsoft-store should have at least one consumable product',
+    );
+    assertEqual(
+      consumables.every((product) => product.enabled),
       true,
       'microsoft-store consumables should be enabled',
     );

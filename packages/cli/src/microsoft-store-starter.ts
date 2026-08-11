@@ -114,10 +114,6 @@ export function prepareBaseGameTemplateFile(input: {
     case 'package.json':
       return updateJson(withoutBlocks, (value) => {
         const scripts = requireJsonObject(value.scripts, 'template package.json scripts');
-        const dependencies = requireJsonObject(
-          value.dependencies,
-          'template package.json dependencies',
-        );
 
         for (const script of Object.keys(microsoftStoreScripts(defaultMpgdKitPath))) {
           delete scripts[script];

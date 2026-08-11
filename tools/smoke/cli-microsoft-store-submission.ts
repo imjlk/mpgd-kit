@@ -201,6 +201,11 @@ try {
     'developer-managed-consumable',
   );
 
+  const validCommerceProduct = Object.freeze({
+    logicalProductId: 'HINT_PACK_20',
+    inAppOfferToken: 'ttokdoku_hint_pack_20',
+    storeId: '9N0000000001',
+  });
   const commerceConfig = parseMicrosoftStoreSubmissionConfig({
     ...base,
     commerce: {
@@ -208,13 +213,7 @@ try {
       productType: 'developer-managed-consumable',
       fulfillment: 'authoritative-server',
       authoritativeGameServices: true,
-      products: [
-        {
-          logicalProductId: 'HINT_PACK_20',
-          inAppOfferToken: 'ttokdoku_hint_pack_20',
-          storeId: '9N0000000001',
-        },
-      ],
+      products: [validCommerceProduct],
     },
   });
   assert.deepEqual(commerceConfig.commerce, {
@@ -222,13 +221,7 @@ try {
     productType: 'developer-managed-consumable',
     fulfillment: 'authoritative-server',
     authoritativeGameServices: true,
-    products: [
-      {
-        logicalProductId: 'HINT_PACK_20',
-        inAppOfferToken: 'ttokdoku_hint_pack_20',
-        storeId: '9N0000000001',
-      },
-    ],
+    products: [validCommerceProduct],
   });
   expectConfigError(
     {
@@ -246,11 +239,7 @@ try {
       commerce: {
         ...commerceConfig.commerce,
         products: [
-          {
-            logicalProductId: 'HINT_PACK_20',
-            inAppOfferToken: 'ttokdoku_hint_pack_20',
-            storeId: '9N0000000001',
-          },
+          validCommerceProduct,
           {
             logicalProductId: 'HINT_PACK_120',
             inAppOfferToken: 'ttokdoku_hint_pack_120',
@@ -267,11 +256,7 @@ try {
       commerce: {
         ...commerceConfig.commerce,
         products: [
-          {
-            logicalProductId: 'HINT_PACK_20',
-            inAppOfferToken: 'ttokdoku_hint_pack_20',
-            storeId: '9N0000000001',
-          },
+          validCommerceProduct,
           {
             logicalProductId: 'HINT_PACK_20',
             inAppOfferToken: 'ttokdoku_hint_pack_120',
@@ -288,11 +273,7 @@ try {
       commerce: {
         ...commerceConfig.commerce,
         products: [
-          {
-            logicalProductId: 'HINT_PACK_20',
-            inAppOfferToken: 'ttokdoku_hint_pack_20',
-            storeId: '9N0000000001',
-          },
+          validCommerceProduct,
           {
             logicalProductId: 'HINT_PACK_120',
             inAppOfferToken: 'ttokdoku_hint_pack_20',
@@ -308,11 +289,7 @@ try {
       ...base,
       commerce: {
         ...commerceConfig.commerce,
-        products: [{
-          logicalProductId: 'HINT_PACK_20',
-          inAppOfferToken: 'ttokdoku_hint_pack_20',
-          storeId: 'contoso-product',
-        }],
+        products: [{ ...validCommerceProduct, storeId: 'contoso-product' }],
       },
     },
     'placeholder content',

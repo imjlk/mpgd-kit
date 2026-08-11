@@ -768,6 +768,9 @@ async function verifyPurchaseWithStore(
       })
     ) {
       const finalization = await finalizeExistingPurchaseGrant(request, existingEvidence, context);
+      // A different idempotency key is evidence replay unless a configured finalizer can resume
+      // the provider operation. Keep generic stores fail-closed while allowing Store consume
+      // recovery to report the already-recorded grant.
       if (finalization !== undefined) {
         return assertVerifyPurchaseResponse({
           verified: true,

@@ -95,61 +95,65 @@ async function verifyBrowserAdapter(): Promise<void> {
 async function verifyMicrosoftStoreAdapter(): Promise<void> {
   const browser = createBrowserPlatformGateway();
   const storeBase: PlatformGateway = { ...browser, target: 'microsoft-store' };
-  let authorityShouldFail = false;
-  const commerce = createMicrosoftStoreCommerceAdapter({
-    products: [
-      {
-        info: {
-          id: 'COINS_100',
-          type: 'consumable',
-          title: '100 Coins',
-          description: 'Adds 100 coins.',
-          price: { formatted: '$0.99', currencyCode: 'USD' },
+  const createCommerce = (authorityResult: 'completed' | 'failed') => {
+    return createMicrosoftStoreCommerceAdapter({
+      products: [
+        {
+          info: {
+            id: 'COINS_100',
+            type: 'consumable',
+            title: '100 Coins',
+            description: 'Adds 100 coins.',
+            price: { formatted: '$0.99', currencyCode: 'USD' },
+          },
+          inAppOfferToken: 'coins_100',
         },
-        inAppOfferToken: 'coins_100',
-      },
-    ],
-    authority: {
-      async getAvailability() {
-        return 'available';
-      },
-      async verifyAndGrant() {
-        return authorityShouldFail
-          ? { status: 'failed' }
-          : { status: 'completed', transactionId: 'microsoft-store-ledger' };
-      },
-      async getEntitlements() {
-        return [];
-      },
-    },
-    async getDigitalGoodsService() {
-      return {
-        async getDetails() {
-          return [
-            {
-              itemId: 'coins_100',
-              title: '100 Coins',
-              description: 'Adds 100 coins.',
-              price: { value: '0.99', currency: 'USD' },
-            },
-          ];
+      ],
+      authority: {
+        async getAvailability() {
+          return 'available';
         },
-        async listPurchases() {
-          return [{ itemId: 'coins_100', purchaseToken: 'coins_100' }];
+        async verifyAndGrant() {
+          return authorityResult === 'failed'
+            ? { status: 'failed' as const }
+            : {
+                status: 'completed' as const,
+                transactionId: 'microsoft-store-ledger',
+              };
         },
-      };
-    },
-    createPaymentRequest() {
-      return {
-        async show() {
-          return { details: { purchaseToken: 'coins_100' } };
+        async getEntitlements() {
+          return [];
         },
-      };
-    },
-  });
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [
+              {
+                itemId: 'coins_100',
+                title: '100 Coins',
+                description: 'Adds 100 coins.',
+                price: { value: '0.99', currency: 'USD' },
+              },
+            ];
+          },
+          async listPurchases() {
+            return [{ itemId: 'coins_100', purchaseToken: 'coins_100' }];
+          },
+        };
+      },
+      createPaymentRequest() {
+        return {
+          async show() {
+            return { details: { purchaseToken: 'coins_100' } };
+          },
+        };
+      },
+    });
+  };
   const gateway = wrapGateway(
     'microsoft-store',
-    withMicrosoftStoreCommerceAdapter(storeBase, commerce),
+    withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('completed')),
   );
   const runtime = await gateway.getTargetRuntime();
   const effectiveConfig = requireEffectiveConfig(runtime.effectiveConfig, 'microsoft-store');
@@ -182,9 +186,15 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
     },
     'microsoft-store purchase should require authoritative completion',
   );
-  authorityShouldFail = true;
+  const rejectedGateway = wrapGateway(
+    'microsoft-store',
+    withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('failed')),
+  );
+  // Microsoft currently returns the add-on product ID as purchaseToken, so both independent
+  // authority scenarios intentionally exercise the same token without treating it as a
+  // transaction identity.
   assertDeepEqual(
-    await gateway.commerce.purchase({
+    await rejectedGateway.commerce.purchase({
       productId: 'COINS_100',
       source: 'shop',
       idempotencyKey: 'microsoft-store-rejected-purchase',
