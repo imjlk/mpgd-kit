@@ -1154,6 +1154,10 @@ function inlineStaticElementSourceAssignments(
   );
   const codePositions = createCodePositionMap(source, true);
   const replacements: SourceReplacement[] = [];
+  const hasMemberReceiverPrefix = (offset: number): boolean => {
+    const previousCode = findPreviousJavaScriptCodeIndex(source, offset - 1, codePositions);
+    return previousCode !== undefined && source[previousCode] === '.';
+  };
 
   const addReplacement = (
     identifier: string,
@@ -1205,6 +1209,7 @@ function inlineStaticElementSourceAssignments(
       || match[1] === undefined
       || codePositions[match.index] !== 1
       || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
+      || hasMemberReceiverPrefix(match.index)
     ) {
       continue;
     }
@@ -1225,6 +1230,7 @@ function inlineStaticElementSourceAssignments(
       || match[1] === undefined
       || codePositions[match.index] !== 1
       || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
+      || hasMemberReceiverPrefix(match.index)
     ) {
       continue;
     }
@@ -1294,6 +1300,7 @@ function inlineStaticElementSourceAssignments(
       || match[1] === undefined
       || codePositions[match.index] !== 1
       || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
+      || hasMemberReceiverPrefix(match.index)
     ) {
       continue;
     }

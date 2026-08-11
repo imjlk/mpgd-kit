@@ -1718,12 +1718,13 @@ try {
   const memberElementReceiverHtml = await packageAndReadFixture(
     'member-element-receiver-boundary',
     {
-      mainJs: 'const image = new Image(); const wrapper = { image: { setAttribute() {} } }; wrapper.image["src"] = "/api/computed"; wrapper.image.src = "/api/direct"; wrapper.image.setAttribute("src", "/api/attribute"); void image; document.body.dataset.src = wrapper.image.src;',
+      mainJs: 'const image = new Image(); const wrapper = { image: { setAttribute() {} } }; wrapper . image["src"] = "/api/computed-spaced"; wrapper./* computed receiver */image["src"] = "/api/computed-commented"; wrapper . image.src = "/api/direct-spaced"; wrapper./* direct receiver */image.src = "/api/direct-commented"; wrapper . image.setAttribute("src", "/api/attribute-spaced"); wrapper./* attribute receiver */image.setAttribute("src", "/api/attribute-commented"); void image; document.body.dataset.src = wrapper.image.src;',
     },
   );
-  assert.match(memberElementReceiverHtml, /\/api\/computed/u);
-  assert.match(memberElementReceiverHtml, /\/api\/direct/u);
-  assert.match(memberElementReceiverHtml, /\/api\/attribute/u);
+  for (const sourceKind of ['computed', 'direct', 'attribute']) {
+    assert.match(memberElementReceiverHtml, new RegExp(`/api/${sourceKind}-spaced`, 'u'));
+    assert.match(memberElementReceiverHtml, new RegExp(`/api/${sourceKind}-commented`, 'u'));
+  }
 
   const createdBrowserImageHtml = await packageAndReadFixture('created-browser-image-asset', {
     mainJs: 'const splash = document.createElement("img"); splash.src = "/assets/pixel.png"; document.body.append(splash);',
