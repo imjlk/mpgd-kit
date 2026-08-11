@@ -354,7 +354,7 @@ function readMicrosoftStoreEffectiveTarget(
     }
     if (effectiveProduct.platformProductId !== product.inAppOfferToken) {
       throw new Error(
-        `commerce product ${product.logicalProductId} InAppOfferToken does not match built artifact platformProductId ${effectiveProduct.platformProductId}.`,
+        `commerce product ${product.logicalProductId} InAppOfferToken ${product.inAppOfferToken} does not match built artifact platformProductId ${effectiveProduct.platformProductId}.`,
       );
     }
   }

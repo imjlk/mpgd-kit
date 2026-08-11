@@ -477,6 +477,9 @@ function readFinalizationContext(
   );
   const modifiedDate = optionalIdentifier(input.evidencePayload?.microsoftStoreModifiedDate);
   const userBindingId = optionalIdentifier(input.evidencePayload?.microsoftStoreUserBindingId);
+  // The binding and this verifier ship together in the first Store release. Missing bindings are
+  // therefore malformed evidence, not legacy evidence, and must fail closed to prevent an account
+  // switch between verification and consumption.
   if (
     storeId === undefined
     || payloadStoreId !== storeId
