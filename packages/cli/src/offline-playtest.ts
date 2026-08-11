@@ -4601,7 +4601,7 @@ function assertNoDynamicMetaElementCreation(
     if (
       match.index === undefined
       || codePositions[match.index] !== 1
-      || (previousCode !== undefined && ['.', '?'].includes(source[previousCode] ?? ''))
+      || (previousCode !== undefined && source[previousCode] === '.')
       || findVisibleJavaScriptIdentifierBinding(
         source,
         match[1] ?? match[2] ?? 'document',

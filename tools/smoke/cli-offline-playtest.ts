@@ -705,6 +705,14 @@ try {
     );
   }
 
+  const ternaryDynamicRefreshMetaGame = createPreviewFixture('ternary-dynamic-refresh-meta', {
+    mainJs: 'const enabled = true; const meta = enabled ? document.createElement("meta") : document.createElement("div"); meta.httpEquiv = "refresh"; meta.content = "0;url=https://example.com/escape"; document.head.append(meta);',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: ternaryDynamicRefreshMetaGame }),
+    /does not support dynamically created meta elements/u,
+  );
+
   const shadowedDynamicMetaHtml = await packageAndReadFixture('shadowed-dynamic-meta', {
     mainJs: 'function make(document) { return document.createElement("meta"); } document.body.dataset.value = String(make({ createElement: (tag) => tag }));',
   });
