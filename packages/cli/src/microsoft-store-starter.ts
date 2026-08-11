@@ -202,14 +202,14 @@ export function initializeMicrosoftStoreStarter(
   }
 
   const existingAdapterDependency = dependencies[microsoftStoreAdapterPackage];
-  if (existingAdapterDependency === undefined) {
-    dependencies[microsoftStoreAdapterPackage] = dependencyVersion(input.adapterDependencyVersion);
-  } else if (
-    typeof existingAdapterDependency !== 'string'
-    || existingAdapterDependency.trim().length === 0
-  ) {
+  const adapterDependency = existingAdapterDependency === undefined
+    ? dependencyVersion(input.adapterDependencyVersion)
+    : existingAdapterDependency;
+  if (typeof adapterDependency !== 'string' || adapterDependency.trim().length === 0) {
     throw new Error(`package.json dependency ${microsoftStoreAdapterPackage} must be a string.`);
   }
+  // Preserve a game-owned non-empty npm spec such as workspace:, link:, file:, or a registry tag.
+  dependencies[microsoftStoreAdapterPackage] = adapterDependency;
 
   plan('package.json', formatJson(packageJson));
 
@@ -300,7 +300,14 @@ function addMicrosoftStoreGatewayResolver(source: string): string {
 }
 
 function removeMicrosoftStoreGatewayResolver(source: string): string {
-  return source.replace(`${microsoftStoreGatewayResolver.block}\n`, '');
+  const managedBlock = `${microsoftStoreGatewayResolver.block}\n`;
+  const occurrences = source.split(managedBlock).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(
+      'Template vite.shared.ts must contain exactly one Microsoft Store gateway resolver block.',
+    );
+  }
+  return source.replace(managedBlock, '');
 }
 
 function microsoftStoreScripts(defaultKitPath: string): Readonly<Record<string, string>> {

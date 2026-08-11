@@ -117,6 +117,11 @@ try {
   const legacyScriptsGame = createGame('legacy-store-scripts', ['--microsoft-store']);
   const legacyPackageJson = readJson(join(legacyScriptsGame, 'package.json'));
   const legacyScripts = requireRecord(legacyPackageJson.scripts, 'legacy package scripts');
+  const legacyDependencies = requireRecord(
+    legacyPackageJson.dependencies,
+    'legacy package dependencies',
+  );
+  legacyDependencies['@mpgd/adapter-microsoft-store'] = 'link:../local-microsoft-store-adapter';
   for (const name of [
     'build:microsoft-store',
     'smoke:microsoft-store',
@@ -138,6 +143,13 @@ try {
   const migratedScripts = requireRecord(
     readJson(join(legacyScriptsGame, 'package.json')).scripts,
     'migrated package scripts',
+  );
+  assert.equal(
+    requireRecord(
+      readJson(join(legacyScriptsGame, 'package.json')).dependencies,
+      'migrated package dependencies',
+    )['@mpgd/adapter-microsoft-store'],
+    'link:../local-microsoft-store-adapter',
   );
   for (const name of [
     'build:microsoft-store',

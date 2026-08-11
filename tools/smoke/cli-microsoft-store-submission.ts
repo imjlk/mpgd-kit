@@ -234,10 +234,7 @@ try {
     {
       ...base,
       commerce: {
-        mode: 'microsoft-store',
-        productType: 'developer-managed-consumable',
-        fulfillment: 'authoritative-server',
-        authoritativeGameServices: true,
+        ...commerceConfig.commerce,
         products: [],
       },
     },
