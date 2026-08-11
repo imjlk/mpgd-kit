@@ -5,8 +5,6 @@
 ### Added
 
 - [8d8e36a](https://github.com/imjlk/mpgd-kit/commit/8d8e36ae790d2dfa1971a10ce5c3aab64f1a31fe) Add fail-closed Microsoft Store PWA Digital Goods checkout with player-scoped retry storage, provider-purchase- and generation-bound server recovery ownership, explicit historical product mappings, first-class target configuration, opt-in remote leaderboard capability discovery, submission product mappings with effective-target revalidation, and authoritative Collections query and consume fulfillment. — Thanks @imjlk!
-- Add a `@mpgd/adapter-browser/microsoft-store` entrypoint with fail-closed
-
 ### Patch changes
 
 - Updated dependencies: platform@0.9.0
