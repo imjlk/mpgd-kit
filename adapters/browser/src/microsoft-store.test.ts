@@ -1339,6 +1339,67 @@ describe('Microsoft Store Digital Goods commerce', () => {
     expect(complete).toHaveBeenCalledWith('unknown');
   });
 
+  it('rejects a changed checkout generation while Store ownership is still propagating', async () => {
+    const complete = vi.fn(async () => {});
+    const onError = vi.fn();
+    const recovery = memoryRecoveryStorage();
+    const verifyAndGrant = vi.fn();
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      getRecoveryScope,
+      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      authority: {
+        ...allowRecoveryOwnership,
+        async getAvailability() {
+          return 'available';
+        },
+        async claimRecoveryOwnership() {
+          return { status: 'granted', idempotencyKey: 'authority-replaced-generation' };
+        },
+        verifyAndGrant,
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [{
+              itemId: 'ttokdoku_hint_pack_20',
+              title: '20 hints',
+              price: { currency: 'USD', value: '0.99' },
+            }];
+          },
+          async listPurchases() {
+            return [];
+          },
+        };
+      },
+      createPaymentRequest() {
+        return {
+          async show() {
+            return { details: { purchaseToken: 'ttokdoku_hint_pack_20' }, complete };
+          },
+        };
+      },
+      recoveryIdStorage: recovery.storage,
+      onError,
+    });
+
+    await adapter.getProducts();
+    await expect(adapter.purchase({
+      productId: product.id,
+      source: 'shop',
+      idempotencyKey: 'original-checkout-generation',
+    })).resolves.toMatchObject({ status: 'pending' });
+
+    expect(verifyAndGrant).not.toHaveBeenCalled();
+    expect([...recovery.values.keys()]).toEqual([]);
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Microsoft Store authority changed the checkout idempotency identity.',
+    }));
+    expect(complete).toHaveBeenCalledWith('unknown');
+  });
+
   it('dismisses the paid response even when the error reporter throws', async () => {
     const complete = vi.fn(async () => {});
     const adapter = createMicrosoftStoreCommerceAdapter({

@@ -519,9 +519,18 @@ export function createMicrosoftStoreCommerceAdapter(
           if (resolveRecoveryScope(input.getRecoveryScope) !== recoveryScope) {
             throw new Error('Microsoft Store player scope changed during recovery authorization.');
           }
+          const changedCheckoutIdentity = authorization.status === 'granted'
+            && authorization.idempotencyKey !== request.idempotencyKey;
           if (authorization.status === 'denied') {
             input.onError?.(new Error(
               'Microsoft Store purchase is reserved for another authenticated player.',
+            ));
+            result = purchaseToken === undefined
+              ? pendingUnidentifiedPurchase()
+              : pendingPurchase(product.inAppOfferToken, purchaseToken);
+          } else if (changedCheckoutIdentity) {
+            input.onError?.(new Error(
+              'Microsoft Store authority changed the checkout idempotency identity.',
             ));
             result = purchaseToken === undefined
               ? pendingUnidentifiedPurchase()
