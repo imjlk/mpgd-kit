@@ -282,7 +282,7 @@ export function createMicrosoftStorePurchaseBoundary(
     },
 
     async finalizePurchaseGrant(finalizationInput) {
-      const context = readFinalizationContext(finalizationInput, storeIds);
+      const context = readFinalizationContext(finalizationInput);
       if (context.status === 'pending') {
         return context.result;
       }
@@ -478,7 +478,6 @@ function readDigitalGoodsEvidence(input: VerifyPurchaseEvidenceInput): {
 
 function readFinalizationContext(
   input: FinalizePurchaseGrantInput,
-  storeIds: ReadonlyMap<string, string>,
 ):
   | {
       readonly status: 'verified';
@@ -490,7 +489,6 @@ function readFinalizationContext(
   if (input.request.target !== 'microsoft-store' || input.product.type !== 'consumable') {
     return { status: 'pending', result: finalizationPending('MICROSOFT_STORE_TARGET_REQUIRED') };
   }
-  const storeId = storeIds.get(input.product.id);
   const payloadStoreId = optionalIdentifier(input.evidencePayload?.microsoftStoreProductId);
   const collectionItemId = optionalIdentifier(
     input.evidencePayload?.microsoftStoreCollectionItemId,
@@ -503,15 +501,14 @@ function readFinalizationContext(
   // therefore malformed evidence, not legacy evidence, and must fail closed to prevent an account
   // switch between verification and consumption.
   if (
-    storeId === undefined
-    || payloadStoreId !== storeId
+    payloadStoreId === undefined
     || collectionItemId === undefined
     || modifiedDate === undefined
     || accountBindingHash === undefined
     || input.evidenceVerificationId !== createVerificationId({
       id: collectionItemId,
       modifiedDate,
-      productId: storeId,
+      productId: payloadStoreId,
     })
   ) {
     return {
@@ -519,7 +516,14 @@ function readFinalizationContext(
       result: finalizationPending('MICROSOFT_STORE_FINALIZATION_EVIDENCE_MISMATCH'),
     };
   }
-  return { status: 'verified', collectionItemId, storeId, accountBindingHash };
+  // The provider identity is bound into the durable verification ID. Reuse it for retries so a
+  // later catalog migration cannot strand an already-granted, still-unconsumed purchase.
+  return {
+    status: 'verified',
+    collectionItemId,
+    storeId: payloadStoreId,
+    accountBindingHash,
+  };
 }
 
 function createVerificationId(

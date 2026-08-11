@@ -139,14 +139,16 @@ function createRequest(overrides: Partial<VerifyPurchaseRequest> = {}): VerifyPu
 }
 
 function createHarness(input: {
+  readonly events?: string[];
   readonly sandbox?: string;
+  readonly store?: TrackingStore;
   readonly storeIds?: Readonly<Record<string, string>>;
   readonly resolveCredentials?: (
     playerId: string,
     signal: AbortSignal,
   ) => Promise<MicrosoftStoreCollectionsCredentials> | MicrosoftStoreCollectionsCredentials;
 } = {}) {
-  const events: string[] = [];
+  const events = input.events ?? [];
   const client = new FixtureCollectionsClient(events);
   const boundary = createMicrosoftStorePurchaseBoundary({
     client,
@@ -158,10 +160,11 @@ function createHarness(input: {
     now: () => '2030-01-02T03:04:06.000Z',
   });
   const developmentVerifier = createDevelopmentGameServicesEvidenceVerifier();
+  const store = input.store ?? new TrackingStore(events);
   const backend = createGameServicesBackend({
     catalog,
     placements,
-    store: new TrackingStore(events),
+    store,
     evidenceVerifier: {
       verifyPurchase: (verificationInput) => boundary.verifyPurchase(verificationInput),
       verifyAdReward: (verificationInput) => (
@@ -171,7 +174,7 @@ function createHarness(input: {
     purchaseGrantFinalizer: boundary,
     now: () => '2030-01-02T03:04:07.000Z',
   });
-  return { backend, client, events };
+  return { backend, client, events, store };
 }
 
 const completed = createHarness();
@@ -394,6 +397,31 @@ assert.equal(
   consumeRecovery.client.consumeTrackingIds[0],
   consumeRecovery.client.consumeTrackingIds[1],
 );
+
+const migratedStoreEvents: string[] = [];
+const beforeStoreIdMigration = createHarness({ events: migratedStoreEvents });
+beforeStoreIdMigration.client.nextConsumeResponse = { malformed: true };
+const beforeStoreIdMigrationResult = await beforeStoreIdMigration.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'store-id-migration' }),
+);
+const afterStoreIdMigration = createHarness({
+  events: migratedStoreEvents,
+  store: beforeStoreIdMigration.store,
+  storeIds: { HINT_PACK_20: '9N0000000009' },
+});
+const afterStoreIdMigrationResult = await afterStoreIdMigration.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'store-id-migration' }),
+);
+assert.equal(beforeStoreIdMigrationResult.finalization?.status, 'pending');
+assert.equal(afterStoreIdMigrationResult.verified, true);
+assert.equal(afterStoreIdMigrationResult.alreadyProcessed, true);
+assert.equal(afterStoreIdMigrationResult.finalization?.status, 'completed');
+assert.deepEqual(migratedStoreEvents, [
+  `provider:query:${storeId}`,
+  'ledger:store-id-migration',
+  `provider:consume:${storeId}`,
+  `provider:consume:${storeId}`,
+]);
 
 let duplicateStoreIdRejected = false;
 try {
