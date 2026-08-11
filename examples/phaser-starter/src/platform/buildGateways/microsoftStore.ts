@@ -16,6 +16,12 @@ const commerce = createMicrosoftStoreCommerceAdapter({
     async getAvailability() {
       return 'configuration-required';
     },
+    async claimRecoveryOwnership() {
+      return false;
+    },
+    async hasRecoveryOwnership() {
+      return false;
+    },
     async verifyAndGrant() {
       return { status: 'failed' };
     },

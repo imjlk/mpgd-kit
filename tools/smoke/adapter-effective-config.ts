@@ -127,6 +127,12 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
         async getAvailability() {
           return 'available';
         },
+        async claimRecoveryOwnership() {
+          return true;
+        },
+        async hasRecoveryOwnership() {
+          return true;
+        },
         async verifyAndGrant() {
           return authorityResult === 'failed'
             ? { status: 'failed' as const }

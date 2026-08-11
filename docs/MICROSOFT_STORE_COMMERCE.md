@@ -41,7 +41,8 @@ verification/finalization contract for developer-managed consumables:
 2. Resolve an Entra service access token, renewable User Store ID, and stable
    opaque account-link ID from trusted server identity. None may come from
    client purchase evidence. The account-link ID must survive User Store ID
-   renewal and change only when the player links a different Store account.
+   renewal, be identical for the same Store account across attempted game-player
+   links, and change only when the player links a different Store account.
 3. Query Collections v9 for the configured `storeId` and require an active
    `UnmanagedConsumable` with remaining quantity.
 4. Record the product grant in the Game Services idempotency ledger.
@@ -59,31 +60,46 @@ so a PWA restart or later `restore()` resumes the same verification identity and
 does not fabricate evidence from a newer catalog mapping. The required
 `getRecoveryScope()` callback must return a stable, non-secret identifier for the
 currently authenticated player. Recovery storage is partitioned by that scope
-and the stable logical product ID, so another player using the same browser
-profile cannot reuse or delete the first player's pending record. Refresh
+and the stable logical product ID to avoid accidental cross-account retries;
+the partition is not an authorization boundary. Refresh
 `getProducts()` after the authenticated player changes; checkout fails before
 opening Payment Request if the scope changed after catalog preparation. The
 scope is checked again after the payment UI returns and after the asynchronous
 ownership lookup; if it changed in either window, no authority call is made and
-the purchase remains recoverable only under the original player scope.
+no new browser recovery record is trusted or created.
 
-Each pending Store purchase also has a separate owner record keyed by its exact
-Digital Goods item and purchase token. `listPurchases()` reconciliation only
-uses a listed item when that owner record names the current recovery scope; an
-item reserved by another player, or an unowned listing, is ignored. Existing
-player-scoped records from an earlier adapter version recreate the owner record
-when they resume. If all local ownership metadata is cleared before the first
-authoritative grant, automatic recovery intentionally fails closed because the
-globally listed Store item no longer contains enough information to attribute it
-to a game player safely.
+Browser recovery records are retry metadata, never player-ownership evidence.
+Implement the required `claimRecoveryOwnership()` and `hasRecoveryOwnership()`
+methods on the purchase authority with an authenticated, durable backend
+binding keyed by the stable Store-account binding and Collections Store product
+ID. A successful checkout claims that binding before verification; `restore()`
+calls `hasRecoveryOwnership()` before
+it submits either a scoped pending record or a global `listPurchases()` item to
+the grant authority. Recovery fails closed when the ownership method returns
+false or reports another player. Legacy `pending-owner` localStorage
+records are deliberately ignored, so rewriting or copying browser storage
+cannot authorize a grant.
 
-The record is removed only after the authority reports a completed or failed
-result; a transient exception or pending consume keeps it. Because a checkout
-can complete before `listPurchases()` reflects the item, game services must keep
-historical `inAppOfferToken` mappings recognizable until every pending record for
-that mapping is verified. Recovery metadata is not proof of purchase: the
-authority must still validate the authenticated player, Store account binding,
-and historical product mapping.
+The claim endpoint must derive the player from its authenticated server session,
+not from `getRecoveryScope()` or another browser-supplied player ID. Make claims
+idempotent for the same player and reject an exact Store identity already bound
+to a different player. Pass a durable, atomically implemented
+`recoveryOwnershipStore` to `createMicrosoftStorePurchaseBoundary()`; the
+in-memory implementation is for tests and single-process development only. The
+credential resolver must return the same stable `accountBindingId` for the same
+Store account even if a different game player attempts to use it. If checkout
+ends before the durable claim succeeds,
+automatic recovery intentionally fails closed because a globally listed Store
+item does not contain enough information to attribute it to a game player
+safely.
+
+The scoped pending record is removed only after the authority reports a
+completed or failed result; a transient exception or pending consume keeps it.
+Because a checkout can complete before `listPurchases()` reflects the item, game
+services must keep historical `inAppOfferToken` mappings recognizable until
+every pending record for that mapping is verified. The durable recovery-owner
+binding is only player attribution; the authority must still validate Store
+ownership, account binding, and the historical product mapping before granting.
 
 Configure those aliases with `historicalProductMappings` on
 `createMicrosoftStorePurchaseBoundary()`. Each logical product entry pairs the
@@ -95,8 +111,8 @@ catalog plus `storeIds`, and unknown old tokens remain rejected.
 
 Pass the same old Digital Goods tokens as `historicalInAppOfferTokens` on the
 browser adapter product. That client-side alias lets `listPurchases()` associate
-an old unconsumed item with its logical product when its exact player-owner
-record survives but its scoped pending-grant record does not; the server-side
+an old unconsumed item with its logical product when its exact durable authority
+binding survives but its scoped pending-grant record does not; the server-side
 alias remains the authority that permits the corresponding old Collections
 product ID. Historical tokens are recovery aliases only and are never offered
 by `getProducts()` or used for new checkout.
@@ -123,7 +139,8 @@ Before enabling commerce, the game must provide:
   non-secret account-link ID separate from the renewable User Store ID;
 - a stable, non-secret player identifier wired to the browser adapter's
   `getRecoveryScope()` callback, plus a catalog refresh on account changes;
-- a public HTTPS Game Services endpoint and durable entitlement ledger;
+- a public HTTPS Game Services endpoint, durable entitlement ledger, and an
+  atomic shared implementation of `MicrosoftStoreRecoveryOwnershipStore`;
 - retry and alerting for pending consume finalizations.
 
 Until all of these exist, return `configuration-required` from the adapter

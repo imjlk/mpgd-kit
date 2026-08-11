@@ -8,6 +8,7 @@ import {
   type VerifyPurchaseRequest,
 } from './index';
 import {
+  createInMemoryMicrosoftStoreRecoveryOwnershipStore,
   createMicrosoftStoreCollectionsClient,
   createMicrosoftStorePurchaseBoundary,
   microsoftStoreCollectionsConsumeUrl,
@@ -15,6 +16,7 @@ import {
   microsoftStoreDigitalGoodsEvidenceSchema,
   type MicrosoftStoreCollectionsClient,
   type MicrosoftStoreCollectionsCredentials,
+  type MicrosoftStoreRecoveryOwnershipStore,
 } from './microsoft-store-purchase';
 
 const assert = {
@@ -152,6 +154,7 @@ function createHarness(input: {
     playerId: string,
     signal: AbortSignal,
   ) => Promise<MicrosoftStoreCollectionsCredentials> | MicrosoftStoreCollectionsCredentials;
+  readonly recoveryOwnershipStore?: MicrosoftStoreRecoveryOwnershipStore;
 } = {}) {
   const events = input.events ?? [];
   const client = new FixtureCollectionsClient(events);
@@ -165,6 +168,15 @@ function createHarness(input: {
       ...credentials,
       ...(input.sandbox === undefined ? {} : { sandbox: input.sandbox }),
     })),
+    recoveryOwnershipStore: input.recoveryOwnershipStore ?? {
+      async claim() {
+        return true;
+      },
+      async has() {
+        return true;
+      },
+      async release() {},
+    },
     now: () => '2030-01-02T03:04:06.000Z',
   });
   const developmentVerifier = createDevelopmentGameServicesEvidenceVerifier();
@@ -182,8 +194,101 @@ function createHarness(input: {
     purchaseGrantFinalizer: boundary,
     now: () => '2030-01-02T03:04:07.000Z',
   });
-  return { backend, client, events, store };
+  return { backend, boundary, client, events, store };
 }
+
+function createRecoveryOwnershipInput(
+  playerId: string,
+  purchasedInAppOfferToken = inAppOfferToken,
+) {
+  return {
+    playerId,
+    productId: 'HINT_PACK_20',
+    inAppOfferToken,
+    purchaseToken: purchasedInAppOfferToken,
+    evidence: {
+      schema: microsoftStoreDigitalGoodsEvidenceSchema,
+      payload: {
+        itemId: purchasedInAppOfferToken,
+        purchaseToken: purchasedInAppOfferToken,
+      },
+    },
+    signal: new AbortController().signal,
+  } as const;
+}
+
+const durableRecoveryOwnership = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+const ownershipHarness = createHarness({ recoveryOwnershipStore: durableRecoveryOwnership });
+assert.equal(
+  await ownershipHarness.boundary.hasRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store'),
+  ),
+  false,
+);
+
+const historicalOwnershipStore = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+const historicalOwnershipHarness = createHarness({
+  recoveryOwnershipStore: historicalOwnershipStore,
+  historicalProductMappings: {
+    HINT_PACK_20: [{
+      inAppOfferToken: 'ttokdoku_hint_pack_20_legacy',
+      storeId: '9N0000000000',
+    }],
+  },
+});
+assert.equal(
+  await historicalOwnershipHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput(
+      'player-microsoft-store',
+      'ttokdoku_hint_pack_20_legacy',
+    ),
+  ),
+  true,
+);
+assert.equal(
+  await historicalOwnershipHarness.boundary.hasRecoveryOwnership(
+    createRecoveryOwnershipInput(
+      'player-microsoft-store',
+      'ttokdoku_hint_pack_20_legacy',
+    ),
+  ),
+  true,
+);
+assert.equal(
+  await historicalOwnershipHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', 'unknown-token'),
+  ),
+  false,
+);
+const unclaimedRecoveryResult = await ownershipHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'unclaimed-recovery' }),
+);
+assert.equal(unclaimedRecoveryResult.verified, false);
+assert.equal(unclaimedRecoveryResult.reason, 'MICROSOFT_STORE_RECOVERY_OWNERSHIP_REQUIRED');
+assert.deepEqual(ownershipHarness.events, []);
+assert.equal(
+  await ownershipHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store'),
+  ),
+  true,
+);
+assert.equal(
+  await ownershipHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-other'),
+  ),
+  false,
+);
+const claimedRecoveryResult = await ownershipHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'claimed-recovery' }),
+);
+assert.equal(claimedRecoveryResult.verified, true);
+assert.equal(claimedRecoveryResult.finalization?.status, 'completed');
+assert.equal(
+  await ownershipHarness.boundary.hasRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store'),
+  ),
+  false,
+);
 
 const completed = createHarness();
 const completedResult = await completed.backend.purchases.verifyPurchase(createRequest());
@@ -575,6 +680,7 @@ try {
       HINT_PACK_120: storeId,
     },
     resolveCredentials: () => credentials,
+    recoveryOwnershipStore: createInMemoryMicrosoftStoreRecoveryOwnershipStore(),
   });
 } catch (error) {
   duplicateStoreIdRejected = error instanceof TypeError

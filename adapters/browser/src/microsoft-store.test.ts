@@ -22,14 +22,14 @@ const entitlement = Object.freeze({
   grantedAt: '2026-08-11T00:00:00.000Z',
 }) satisfies Entitlement;
 const getRecoveryScope = () => 'player-1';
-
-function recoveryOwnerKey(itemId: string, purchaseToken = itemId): string {
-  return `mpgd:microsoft-store:pending-owner:v1:${encodeURIComponent(itemId)}:${encodeURIComponent(purchaseToken)}`;
-}
-
-function recoveryOwnerValue(recoveryScope: string): string {
-  return JSON.stringify({ version: 1, recoveryScope });
-}
+const allowRecoveryOwnership = Object.freeze({
+  async claimRecoveryOwnership() {
+    return true;
+  },
+  async hasRecoveryOwnership() {
+    return true;
+  },
+});
 
 function memoryRecoveryStorage(seed: readonly (readonly [string, string])[] = []) {
   const values = new Map(seed);
@@ -63,6 +63,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
         alreadyProcessed: true,
       };
     });
+    const claimRecoveryOwnership = vi.fn(async () => true);
     const createPaymentRequest = vi.fn(() => ({
       async show() {
         return { details: { purchaseToken: 'ttokdoku_hint_pack_20' }, complete };
@@ -72,9 +73,11 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
+        claimRecoveryOwnership,
         verifyAndGrant,
         async getEntitlements() {
           return [entitlement];
@@ -138,6 +141,11 @@ describe('Microsoft Store Digital Goods commerce', () => {
       purchaseToken: 'ttokdoku_hint_pack_20',
       idempotencyKey: 'checkout-1',
     }));
+    expect(claimRecoveryOwnership).toHaveBeenCalledWith(expect.objectContaining({
+      productId: 'HINT_PACK_20',
+      inAppOfferToken: 'ttokdoku_hint_pack_20',
+      purchaseToken: 'ttokdoku_hint_pack_20',
+    }));
     expect(events).toEqual(['authority', 'complete:success']);
   });
 
@@ -146,6 +154,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'configuration-required';
         },
@@ -175,6 +184,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -214,16 +224,17 @@ describe('Microsoft Store Digital Goods commerce', () => {
       status: 'completed' as const,
       transactionId: 'ledger-recovered',
     }));
-    const recovery = memoryRecoveryStorage([[
-      recoveryOwnerKey('ttokdoku_hint_pack_20'),
-      recoveryOwnerValue('player-1'),
-    ]]);
+    const recovery = memoryRecoveryStorage();
     const adapter = createMicrosoftStoreCommerceAdapter({
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
+        },
+        async hasRecoveryOwnership() {
+          return true;
         },
         verifyAndGrant,
         async getEntitlements() {
@@ -296,6 +307,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: legacyInAppOfferToken }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -327,7 +339,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
       idempotencyKey: exactCheckoutIdempotencyKey,
     }));
     expect([...storedRecoveryIds.entries()]).toEqual([
-      [recoveryOwnerKey(legacyInAppOfferToken), recoveryOwnerValue('player-1')],
       [
         'mpgd:microsoft-store:pending-grant:v3:player-1:HINT_PACK_20',
         JSON.stringify([{
@@ -349,8 +360,12 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: currentInAppOfferToken }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
+        },
+        async hasRecoveryOwnership() {
+          return true;
         },
         verifyAndGrant: resumedAuthority,
         async getEntitlements() {
@@ -409,6 +424,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope: () => 'player-a',
       products: [{ info: product, inAppOfferToken: legacyInAppOfferToken }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -449,7 +465,6 @@ describe('Microsoft Store Digital Goods commerce', () => {
     })).resolves.toMatchObject({ status: 'pending' });
     expect(firstAuthority).not.toHaveBeenCalled();
     expect([...storedRecoveries.entries()]).toEqual([
-      [recoveryOwnerKey(legacyInAppOfferToken), recoveryOwnerValue('player-a')],
       [
         'mpgd:microsoft-store:pending-grant:v3:player-a:HINT_PACK_20',
         JSON.stringify([{
@@ -470,8 +485,12 @@ describe('Microsoft Store Digital Goods commerce', () => {
         historicalInAppOfferTokens: [legacyInAppOfferToken],
       }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
+        },
+        async hasRecoveryOwnership() {
+          return false;
         },
         verifyAndGrant: otherPlayerAuthority,
         async getEntitlements() {
@@ -496,7 +515,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
 
     await expect(otherPlayerAdapter.restore?.()).resolves.toEqual({ restoredEntitlements: [] });
     expect(otherPlayerAuthority).not.toHaveBeenCalled();
-    expect(storedRecoveries.size).toBe(2);
+    expect(storedRecoveries.size).toBe(1);
 
     const resumedAuthority = vi.fn(async () => ({
       status: 'completed' as const,
@@ -506,8 +525,12 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope: () => 'player-a',
       products: [{ info: product, inAppOfferToken: currentInAppOfferToken }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
+        },
+        async hasRecoveryOwnership() {
+          return true;
         },
         verifyAndGrant: resumedAuthority,
         async getEntitlements() {
@@ -570,8 +593,12 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope: () => 'player-a',
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
+        },
+        async hasRecoveryOwnership() {
+          return true;
         },
         verifyAndGrant,
         async getEntitlements() {
@@ -610,15 +637,12 @@ describe('Microsoft Store Digital Goods commerce', () => {
     expect(storedRecoveries.size).toBe(0);
   });
 
-  it('restores a listed historical Store identity from its player owner record', async () => {
+  it('restores a listed historical Store identity from its authority owner binding', async () => {
     const verifyAndGrant = vi.fn(async () => ({
       status: 'completed' as const,
       transactionId: 'ledger-historical-listing',
     }));
-    const recovery = memoryRecoveryStorage([[
-      recoveryOwnerKey('ttokdoku_hint_pack_20_legacy'),
-      recoveryOwnerValue('player-a'),
-    ]]);
+    const recovery = memoryRecoveryStorage();
     const adapter = createMicrosoftStoreCommerceAdapter({
       getRecoveryScope: () => 'player-a',
       products: [{
@@ -627,8 +651,12 @@ describe('Microsoft Store Digital Goods commerce', () => {
         historicalInAppOfferTokens: ['ttokdoku_hint_pack_20_legacy'],
       }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
+        },
+        async hasRecoveryOwnership() {
+          return true;
         },
         verifyAndGrant,
         async getEntitlements() {
@@ -668,8 +696,12 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope: () => 'player-b',
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
+        },
+        async hasRecoveryOwnership() {
+          return false;
         },
         verifyAndGrant,
         async getEntitlements() {
@@ -696,6 +728,121 @@ describe('Microsoft Store Digital Goods commerce', () => {
     expect(verifyAndGrant).not.toHaveBeenCalled();
   });
 
+  it('ignores forged browser recovery records without an authority owner binding', async () => {
+    const storeIdentity = 'ttokdoku_hint_pack_20';
+    const storage = memoryRecoveryStorage([
+      [
+        'mpgd:microsoft-store:pending-owner:v1:ttokdoku_hint_pack_20:ttokdoku_hint_pack_20',
+        JSON.stringify({ version: 1, recoveryScope: 'player-b' }),
+      ],
+      [
+        'mpgd:microsoft-store:pending-grant:v3:player-b:HINT_PACK_20',
+        JSON.stringify([{
+          version: 1,
+          idempotencyKey: 'forged-recovery',
+          inAppOfferToken: storeIdentity,
+          purchaseToken: storeIdentity,
+        }]),
+      ],
+    ]);
+    const verifyAndGrant = vi.fn();
+    const hasRecoveryOwnership = vi.fn(async () => false);
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      getRecoveryScope: () => 'player-b',
+      products: [{ info: product, inAppOfferToken: storeIdentity }],
+      authority: {
+        ...allowRecoveryOwnership,
+        async getAvailability() {
+          return 'available';
+        },
+        hasRecoveryOwnership,
+        verifyAndGrant,
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [];
+          },
+          async listPurchases() {
+            return [{ itemId: storeIdentity, purchaseToken: storeIdentity }];
+          },
+        };
+      },
+      recoveryIdStorage: storage.storage,
+    });
+
+    await expect(adapter.restore?.()).resolves.toEqual({ restoredEntitlements: [] });
+    expect(hasRecoveryOwnership).toHaveBeenCalledWith(expect.objectContaining({
+      productId: 'HINT_PACK_20',
+      purchaseToken: storeIdentity,
+    }));
+    expect(verifyAndGrant).not.toHaveBeenCalled();
+  });
+
+  it('returns pending without re-reserving a checkout owned by another player', async () => {
+    const storeIdentity = 'ttokdoku_hint_pack_20';
+    const recovery = memoryRecoveryStorage();
+    const complete = vi.fn(async () => {});
+    const onError = vi.fn();
+    const claimRecoveryOwnership = vi.fn(async () => false);
+    const verifyAndGrant = vi.fn();
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      getRecoveryScope,
+      products: [{ info: product, inAppOfferToken: storeIdentity }],
+      authority: {
+        ...allowRecoveryOwnership,
+        async getAvailability() {
+          return 'available';
+        },
+        claimRecoveryOwnership,
+        verifyAndGrant,
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [{
+              itemId: storeIdentity,
+              title: '20 hints',
+              price: { currency: 'USD', value: '0.99' },
+            }];
+          },
+          async listPurchases() {
+            return [{ itemId: storeIdentity, purchaseToken: storeIdentity }];
+          },
+        };
+      },
+      createPaymentRequest() {
+        return {
+          async show() {
+            return { details: { purchaseToken: storeIdentity }, complete };
+          },
+        };
+      },
+      recoveryIdStorage: recovery.storage,
+      onError,
+    });
+
+    await adapter.getProducts();
+    await expect(adapter.purchase({
+      productId: product.id,
+      source: 'shop',
+      idempotencyKey: 'conflicting-checkout',
+    })).resolves.toMatchObject({ status: 'pending' });
+    expect(claimRecoveryOwnership).toHaveBeenCalledOnce();
+    expect(verifyAndGrant).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledWith('unknown');
+    expect(onError).toHaveBeenCalledWith(expect.objectContaining({
+      message: 'Microsoft Store purchase is reserved for another authenticated player.',
+    }));
+    expect(recovery.values.size).toBe(0);
+  });
+
   it('reconciles independent unconsumed products concurrently', async () => {
     const secondProduct = Object.freeze({
       ...product,
@@ -713,10 +860,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
         transactionId: `ledger-${input.productId}`,
       };
     });
-    const recovery = memoryRecoveryStorage([
-      [recoveryOwnerKey('ttokdoku_hint_pack_20'), recoveryOwnerValue('player-1')],
-      [recoveryOwnerKey('ttokdoku_hint_pack_120'), recoveryOwnerValue('player-1')],
-    ]);
+    const recovery = memoryRecoveryStorage();
     const adapter = createMicrosoftStoreCommerceAdapter({
       getRecoveryScope,
       products: [
@@ -724,8 +868,12 @@ describe('Microsoft Store Digital Goods commerce', () => {
         { info: secondProduct, inAppOfferToken: 'ttokdoku_hint_pack_120' },
       ],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
+        },
+        async hasRecoveryOwnership() {
+          return true;
         },
         verifyAndGrant,
         async getEntitlements() {
@@ -770,6 +918,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -823,6 +972,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope: () => recoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -876,6 +1026,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope: () => recoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -936,10 +1087,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     expect(verifyAndGrant).not.toHaveBeenCalled();
     expect(listPurchases).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledWith('unknown');
-    expect([...storedRecoveries.keys()]).toEqual([
-      recoveryOwnerKey('ttokdoku_hint_pack_20'),
-      'mpgd:microsoft-store:pending-grant:v3:player-a:HINT_PACK_20',
-    ]);
+    expect([...storedRecoveries.keys()]).toEqual([]);
   });
 
   it('does not fulfill when the player scope changes during the ownership lookup', async () => {
@@ -951,6 +1099,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope: () => recoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -995,10 +1144,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     })).resolves.toMatchObject({ status: 'pending' });
     expect(verifyAndGrant).not.toHaveBeenCalled();
     expect(complete).toHaveBeenCalledWith('unknown');
-    expect([...recovery.values.keys()]).toEqual([
-      recoveryOwnerKey('ttokdoku_hint_pack_20'),
-      'mpgd:microsoft-store:pending-grant:v3:player-a:HINT_PACK_20',
-    ]);
+    expect([...recovery.values.keys()]).toEqual([]);
   });
 
   it('reports reconciliation pending without completing a paid response twice', async () => {
@@ -1007,6 +1153,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -1066,6 +1213,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -1118,6 +1266,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -1174,6 +1323,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },
@@ -1229,6 +1379,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       getRecoveryScope,
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
       authority: {
+        ...allowRecoveryOwnership,
         async getAvailability() {
           return 'available';
         },

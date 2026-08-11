@@ -20,8 +20,9 @@ export interface MicrosoftStoreCollectionsCredentials {
   readonly userStoreId: string;
   /**
    * Stable opaque ID for the trusted player-to-Store-account link. It must survive User Store ID
-   * renewal and change only when the player links a different Store account. Never use the
-   * User Store ID or another renewable credential as this value.
+   * renewal, resolve to the same value whenever the same Store account appears, and change only
+   * when the player links a different Store account. Never use the User Store ID, a player-pair
+   * identifier, or another renewable credential as this value.
    */
   readonly accountBindingId: string;
   /** Omit for RETAIL. Non-RETAIL developer-managed consume requires delegated XSTS. */
@@ -75,6 +76,11 @@ export interface CreateMicrosoftStorePurchaseBoundaryInput {
     playerId: string,
     signal: AbortSignal,
   ) => Promise<MicrosoftStoreCollectionsCredentials> | MicrosoftStoreCollectionsCredentials;
+  /**
+   * Durable, atomic ownership registry. Browser storage is never an authorization source.
+   * Production implementations must share this state across every game-service instance.
+   */
+  readonly recoveryOwnershipStore: MicrosoftStoreRecoveryOwnershipStore;
   readonly now?: () => string;
 }
 
@@ -83,10 +89,69 @@ export interface MicrosoftStoreHistoricalProductMapping {
   readonly storeId: string;
 }
 
+export interface MicrosoftStoreRecoveryOwnershipInput {
+  readonly playerId: string;
+  readonly productId: string;
+  readonly inAppOfferToken: string;
+  readonly purchaseToken: string;
+  readonly evidence: {
+    readonly schema: string;
+    readonly payload: Readonly<Record<string, unknown>>;
+  };
+  readonly signal: AbortSignal;
+}
+
+export interface MicrosoftStoreRecoveryOwnershipRecord {
+  readonly accountBindingHash: string;
+  readonly storeId: string;
+  readonly playerId: string;
+}
+
+export interface MicrosoftStoreRecoveryOwnershipStore {
+  /** Atomically claims an unconsumed Store product for one authenticated game player. */
+  claim(input: MicrosoftStoreRecoveryOwnershipRecord): Promise<boolean>;
+  has(input: MicrosoftStoreRecoveryOwnershipRecord): Promise<boolean>;
+  release(input: MicrosoftStoreRecoveryOwnershipRecord): Promise<void>;
+}
+
 export interface MicrosoftStorePurchaseBoundary extends GameServicesPurchaseGrantFinalizer {
+  claimRecoveryOwnership(input: MicrosoftStoreRecoveryOwnershipInput): Promise<boolean>;
+  hasRecoveryOwnership(input: MicrosoftStoreRecoveryOwnershipInput): Promise<boolean>;
   verifyPurchase(
     input: VerifyPurchaseEvidenceInput,
   ): ReturnType<GameServicesEvidenceVerifier['verifyPurchase']>;
+}
+
+/** Process-local test/development store. Production requires durable atomic shared storage. */
+export class InMemoryMicrosoftStoreRecoveryOwnershipStore
+implements MicrosoftStoreRecoveryOwnershipStore {
+  private readonly owners = new Map<string, string>();
+
+  async claim(input: MicrosoftStoreRecoveryOwnershipRecord): Promise<boolean> {
+    const key = createRecoveryOwnershipKey(input);
+    const owner = this.owners.get(key);
+    if (owner !== undefined && owner !== input.playerId) {
+      return false;
+    }
+    this.owners.set(key, input.playerId);
+    return true;
+  }
+
+  async has(input: MicrosoftStoreRecoveryOwnershipRecord): Promise<boolean> {
+    return this.owners.get(createRecoveryOwnershipKey(input)) === input.playerId;
+  }
+
+  async release(input: MicrosoftStoreRecoveryOwnershipRecord): Promise<void> {
+    const key = createRecoveryOwnershipKey(input);
+    if (this.owners.get(key) === input.playerId) {
+      this.owners.delete(key);
+    }
+  }
+}
+
+export function createInMemoryMicrosoftStoreRecoveryOwnershipStore():
+MicrosoftStoreRecoveryOwnershipStore {
+  return new InMemoryMicrosoftStoreRecoveryOwnershipStore();
 }
 
 export class MicrosoftStoreCollectionsUnavailableError extends Error {
@@ -198,7 +263,73 @@ export function createMicrosoftStorePurchaseBoundary(
   const now = input.now ?? (() => new Date().toISOString());
   const inFlightFinalizations = new Map<string, Promise<PurchaseGrantFinalization>>();
 
+  async function resolveRecoveryOwnership(
+    ownershipInput: MicrosoftStoreRecoveryOwnershipInput,
+  ): Promise<MicrosoftStoreRecoveryOwnershipRecord | undefined> {
+    const playerId = optionalIdentifier(ownershipInput.playerId);
+    const productId = optionalIdentifier(ownershipInput.productId);
+    const clientEvidence = readRecoveryOwnershipEvidence(ownershipInput);
+    if (playerId === undefined || productId === undefined || clientEvidence === undefined) {
+      return undefined;
+    }
+    const storeId = resolveMappedStoreId(
+      productId,
+      ownershipInput.inAppOfferToken,
+      clientEvidence.itemId,
+      storeIds,
+      historicalProductMappings,
+    );
+    if (storeId === undefined) {
+      return undefined;
+    }
+
+    let credentials: MicrosoftStoreCollectionsCredentials;
+    try {
+      credentials = await input.resolveCredentials(playerId, ownershipInput.signal);
+      assertCredentials(credentials);
+    } catch (error) {
+      if (ownershipInput.signal.aborted) {
+        throw error;
+      }
+      return undefined;
+    }
+
+    try {
+      return {
+        accountBindingHash: await createAccountBindingHash(credentials.accountBindingId),
+        storeId,
+        playerId,
+      };
+    } catch {
+      return undefined;
+    }
+  }
+
   return {
+    async claimRecoveryOwnership(ownershipInput) {
+      const ownership = await resolveRecoveryOwnership(ownershipInput);
+      if (ownership === undefined) {
+        return false;
+      }
+      try {
+        return await input.recoveryOwnershipStore.claim(ownership);
+      } catch {
+        return false;
+      }
+    },
+
+    async hasRecoveryOwnership(ownershipInput) {
+      const ownership = await resolveRecoveryOwnership(ownershipInput);
+      if (ownership === undefined) {
+        return false;
+      }
+      try {
+        return await input.recoveryOwnershipStore.has(ownership);
+      } catch {
+        return false;
+      }
+    },
+
     supportsPurchaseGrant(finalizationInput) {
       return finalizationInput.request.target === 'microsoft-store'
         && finalizationInput.product.type === 'consumable';
@@ -220,11 +351,13 @@ export function createMicrosoftStorePurchaseBoundary(
       if (currentStoreId === undefined) {
         return rejected('MICROSOFT_STORE_PRODUCT_MAPPING_REQUIRED');
       }
-      const storeId = clientEvidence.itemId === verificationInput.platformProductId
-        ? currentStoreId
-        : historicalProductMappings.get(verificationInput.product.id)?.get(
-          clientEvidence.itemId,
-        );
+      const storeId = resolveMappedStoreId(
+        verificationInput.product.id,
+        verificationInput.platformProductId,
+        clientEvidence.itemId,
+        storeIds,
+        historicalProductMappings,
+      );
       if (storeId === undefined) {
         return rejected('MICROSOFT_STORE_DIGITAL_GOODS_EVIDENCE_REQUIRED');
       }
@@ -255,6 +388,17 @@ export function createMicrosoftStorePurchaseBoundary(
         accountBindingHash = await createAccountBindingHash(credentials.accountBindingId);
       } catch {
         return pending('MICROSOFT_STORE_ACCOUNT_BINDING_UNAVAILABLE');
+      }
+      try {
+        if (!await input.recoveryOwnershipStore.has({
+          accountBindingHash,
+          storeId,
+          playerId: verificationInput.request.playerId,
+        })) {
+          return rejected('MICROSOFT_STORE_RECOVERY_OWNERSHIP_REQUIRED');
+        }
+      } catch {
+        return pending('MICROSOFT_STORE_RECOVERY_OWNERSHIP_UNAVAILABLE');
       }
 
       let response: unknown;
@@ -384,6 +528,17 @@ async function consumeMicrosoftStorePurchase(
       return finalizationPending('MICROSOFT_STORE_CONSUME_RESPONSE_MISMATCH');
     }
 
+    try {
+      await input.recoveryOwnershipStore.release({
+        accountBindingHash,
+        storeId: context.storeId,
+        playerId: finalizationInput.request.playerId,
+      });
+    } catch {
+      // Consumption is already authoritative and irreversible. A stale same-player claim is safe:
+      // it permits that player to repurchase, but remains fail-closed for every other player.
+    }
+
     return {
       status: 'completed',
       action: 'consume',
@@ -495,6 +650,45 @@ function readDigitalGoodsEvidence(input: VerifyPurchaseEvidenceInput): {
     return undefined;
   }
   return { itemId };
+}
+
+function readRecoveryOwnershipEvidence(input: MicrosoftStoreRecoveryOwnershipInput): {
+  readonly itemId: string;
+} | undefined {
+  if (input.evidence.schema !== microsoftStoreDigitalGoodsEvidenceSchema) {
+    return undefined;
+  }
+  const itemId = optionalIdentifier(input.evidence.payload.itemId);
+  const purchaseToken = optionalIdentifier(input.evidence.payload.purchaseToken);
+  if (
+    itemId === undefined
+    || purchaseToken === undefined
+    || itemId !== purchaseToken
+    || input.purchaseToken !== purchaseToken
+  ) {
+    return undefined;
+  }
+  return { itemId };
+}
+
+function resolveMappedStoreId(
+  productId: string,
+  currentInAppOfferToken: string,
+  purchasedInAppOfferToken: string,
+  storeIds: ReadonlyMap<string, string>,
+  historicalProductMappings: ReadonlyMap<string, ReadonlyMap<string, string>>,
+): string | undefined {
+  const currentStoreId = storeIds.get(productId);
+  if (currentStoreId === undefined) {
+    return undefined;
+  }
+  return purchasedInAppOfferToken === currentInAppOfferToken
+    ? currentStoreId
+    : historicalProductMappings.get(productId)?.get(purchasedInAppOfferToken);
+}
+
+function createRecoveryOwnershipKey(input: MicrosoftStoreRecoveryOwnershipRecord): string {
+  return JSON.stringify([input.accountBindingHash, input.storeId]);
 }
 
 function readFinalizationContext(
