@@ -562,7 +562,11 @@ function purchaseRejectionReason(purchase: PurchaseResult): string | undefined {
 function isGameServicesCommerceTarget(
   target: GameServicesLedgerTarget,
 ): target is GameServicesStoreTarget | 'verse8' {
-  return target === 'android' || target === 'ios' || target === 'ait' || target === 'verse8';
+  return target === 'microsoft-store'
+    || target === 'android'
+    || target === 'ios'
+    || target === 'ait'
+    || target === 'verse8';
 }
 
 function isGameServicesAdRewardTarget(

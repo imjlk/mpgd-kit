@@ -366,6 +366,47 @@ assertEqual(
   'unsupported target rewarded ad should not call ad reward backend',
 );
 
+let microsoftStoreVerificationTarget: string | undefined;
+const microsoftStoreBaseGateway = createMockGateway();
+const microsoftStoreGateway = {
+  ...microsoftStoreBaseGateway,
+  target: 'microsoft-store',
+} satisfies PlatformGateway;
+const microsoftStoreClient = createGameServicesClient({
+  gateway: microsoftStoreGateway,
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase(input) {
+        microsoftStoreVerificationTarget = input.target;
+        return {
+          verified: true,
+          ledgerEntryId: 'microsoft-store-ledger',
+          alreadyProcessed: false,
+        };
+      },
+    },
+  },
+});
+const microsoftStorePurchase = await microsoftStoreClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'microsoft-store-purchase',
+});
+
+assertEqual(
+  microsoftStorePurchase.status,
+  'granted',
+  'Microsoft Store should use the authoritative purchase client',
+);
+assertEqual(
+  microsoftStoreVerificationTarget,
+  'microsoft-store',
+  'Microsoft Store evidence should reach its verifier target',
+);
+
 let verse8PurchaseCalls = 0;
 let verse8RewardCalls = 0;
 let verse8LeaderboardCalls = 0;

@@ -205,7 +205,9 @@ export function initializeMicrosoftStoreStarter(
     ? dependencyVersion(input.adapterDependencyVersion)
     : existingAdapterDependency;
   if (typeof adapterDependency !== 'string' || adapterDependency.trim().length === 0) {
-    throw new Error(`package.json dependency ${microsoftStoreAdapterBasePackage} must be a string.`);
+    throw new Error(
+      `package.json dependency ${microsoftStoreAdapterBasePackage} must be a string.`,
+    );
   }
   // Preserve a game-owned non-empty npm spec such as workspace:, link:, file:, or a registry tag.
   dependencies[microsoftStoreAdapterBasePackage] = adapterDependency;

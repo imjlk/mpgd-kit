@@ -128,6 +128,7 @@ export function resolveGameServicesLedgerTarget(
 ): GameServicesLedgerTarget | null {
   if (
     target === 'browser'
+    || target === 'microsoft-store'
     || target === 'android'
     || target === 'ios'
     || target === 'ait'
