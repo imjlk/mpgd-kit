@@ -1,5 +1,6 @@
 {
   "name": "@mpgd/adapter-microsoft-store",
+  "private": true,
   "version": "0.1.0",
   "description": "Microsoft Store Digital Goods platform adapter for mpgd games.",
   "license": "MIT",
@@ -46,8 +47,5 @@
     "vitest": "^4.0.0"
   },
   "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "types": "./dist/index.d.ts"
 }

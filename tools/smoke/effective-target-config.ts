@@ -372,9 +372,11 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
   }
 
   if (target === 'microsoft-store') {
+    const consumables = config.monetization.products.filter(
+      (product) => product.type === 'consumable',
+    );
     assertEqual(
-      config.monetization.products.filter((product) => product.type === 'consumable')
-        .every((product) => product.enabled),
+      consumables.length > 0 && consumables.every((product) => product.enabled),
       true,
       'microsoft-store consumables should be enabled',
     );

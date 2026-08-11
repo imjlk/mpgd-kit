@@ -234,6 +234,19 @@ try {
     {
       ...base,
       commerce: {
+        mode: 'microsoft-store',
+        productType: 'developer-managed-consumable',
+        fulfillment: 'authoritative-server',
+        authoritativeGameServices: true,
+        products: [],
+      },
+    },
+    'at least one product',
+  );
+  expectConfigError(
+    {
+      ...base,
+      commerce: {
         ...commerceConfig.commerce,
         products: [
           {

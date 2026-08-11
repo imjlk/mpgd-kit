@@ -284,6 +284,9 @@ writes `artifacts/microsoft-store` with a linked web app manifest for
 PWABuilder packaging and Partner Center submission. A dedicated Microsoft Store
 commerce adapter uses Microsoft Edge's Digital Goods and Payment Request APIs,
 but exposes checkout only when a game-owned authoritative backend is available.
+Microsoft billing is available only when the Windows PWA was installed through
+Microsoft Store; ordinary browser execution may not expose
+`getDigitalGoodsService()`.
 See [Microsoft Store commerce](docs/MICROSOFT_STORE_COMMERCE.md).
 
 After reserving the product in Partner Center and building the target, copy the
