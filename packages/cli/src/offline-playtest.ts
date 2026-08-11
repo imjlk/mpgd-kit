@@ -4589,7 +4589,7 @@ function assertNoDynamicMetaElementCreation(
   codePositions: Uint8Array,
 ): void {
   const pattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(?:(globalThis|self|window)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource})?(document)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}createElement${javascriptTriviaPatternSource}\\(`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(?:(globalThis|self|window)${javascriptTriviaPatternSource}(?:\\.|\\?\\.)${javascriptTriviaPatternSource})?(document)${javascriptTriviaPatternSource}(?:\\.|\\?\\.)${javascriptTriviaPatternSource}createElement${javascriptTriviaPatternSource}(?:\\?\\.${javascriptTriviaPatternSource})?\\(`,
     'gu',
   );
 

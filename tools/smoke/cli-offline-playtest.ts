@@ -690,6 +690,21 @@ try {
     /does not support dynamically created meta elements/u,
   );
 
+  for (const [name, createElement] of [
+    ['optional-create-element-call', 'document.createElement?.("meta")'],
+    ['qualified-optional-create-element-call', 'window.document.createElement?.("meta")'],
+    ['optional-document-create-element-call', 'document?.createElement?.("meta")'],
+  ] as const) {
+    const optionalDynamicRefreshMetaGame = createPreviewFixture(name, {
+      mainJs: `const meta = ${createElement}; meta.httpEquiv = "refresh"; meta.content = "0;url=https://example.com/escape"; document.head.append(meta);`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: optionalDynamicRefreshMetaGame }),
+      /does not support dynamically created meta elements/u,
+      `expected ${createElement} to be rejected`,
+    );
+  }
+
   const shadowedDynamicMetaHtml = await packageAndReadFixture('shadowed-dynamic-meta', {
     mainJs: 'function make(document) { return document.createElement("meta"); } document.body.dataset.value = String(make({ createElement: (tag) => tag }));',
   });
