@@ -208,7 +208,6 @@ export function createMicrosoftStoreCommerceAdapter(
       }
 
       let response: MicrosoftStorePaymentResponse | undefined;
-      let paymentCompletionAttempted = false;
       let purchaseToken: string | undefined;
       try {
         const service = await getService();
@@ -223,7 +222,6 @@ export function createMicrosoftStoreCommerceAdapter(
             data: { sku: product.inAppOfferToken },
           },
         ]).show();
-        paymentCompletionAttempted = true;
         await completePayment(response, 'success');
         purchaseToken = readPurchaseToken(response.details);
         // A Store consumable must be consumed before the same item can be bought again, so an
@@ -244,9 +242,6 @@ export function createMicrosoftStoreCommerceAdapter(
           return cancelledPurchase();
         }
         input.onError?.(error);
-        if (response !== undefined && !paymentCompletionAttempted) {
-          await completePayment(response, 'fail');
-        }
         if (purchaseToken !== undefined) {
           return pendingPurchase(product.inAppOfferToken, purchaseToken);
         }
@@ -368,7 +363,11 @@ function formatPrice(
   formatters: Map<string, Intl.NumberFormat>,
 ): ProductInfo['price'] | undefined {
   const currencyCode = nonEmptyString(price.currency)?.toUpperCase();
-  const numericValue = Number(price.value);
+  const rawValue = nonEmptyString(price.value);
+  if (rawValue === undefined) {
+    return undefined;
+  }
+  const numericValue = Number(rawValue);
   if (
     currencyCode === undefined
     || !/^[A-Z]{3}$/u.test(currencyCode)

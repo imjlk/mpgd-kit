@@ -130,6 +130,39 @@ describe('Microsoft Store Digital Goods commerce', () => {
     })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
   });
 
+  it('rejects empty Store price values instead of presenting them as free', async () => {
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        async verifyAndGrant() {
+          throw new Error('must not run');
+        },
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [{
+              itemId: 'ttokdoku_hint_pack_20',
+              title: '20 hints',
+              price: { currency: 'USD', value: ' \n ' },
+            }];
+          },
+          async listPurchases() {
+            return [];
+          },
+        };
+      },
+    });
+
+    await expect(adapter.getProducts()).resolves.toEqual([]);
+  });
+
   it('recovers unconsumed Store purchases through the same authority boundary', async () => {
     const verifyAndGrant = vi.fn(async () => ({
       status: 'completed' as const,
