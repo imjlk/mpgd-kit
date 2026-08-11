@@ -110,6 +110,7 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
   });
   const createCommerce = (authorityResult: 'completed' | 'failed') => {
     return createMicrosoftStoreCommerceAdapter({
+      getRecoveryScope: () => 'smoke-player',
       products: [
         {
           info: {

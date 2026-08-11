@@ -218,6 +218,7 @@ function createMicrosoftStoreGateway(): CreatedGateway {
   const browser = createBrowserGateway();
   const base: PlatformGateway = { ...browser.gateway, target: 'microsoft-store' };
   const commerce = createMicrosoftStoreCommerceAdapter({
+    getRecoveryScope: () => 'configuration-required',
     products: [],
     authority: {
       async getAvailability() {

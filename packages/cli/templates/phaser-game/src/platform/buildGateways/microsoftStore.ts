@@ -10,6 +10,7 @@ import type { RuntimeConfig } from '../runtimeDetector';
 const browser = createBrowserPlatformGateway();
 const base: PlatformGateway = { ...browser, target: 'microsoft-store' };
 const commerce = createMicrosoftStoreCommerceAdapter({
+  getRecoveryScope: () => 'configuration-required',
   products: [],
   authority: {
     async getAvailability() {

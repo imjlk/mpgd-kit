@@ -94,6 +94,13 @@ export interface MicrosoftStoreRecoveryIdStorage {
   removeItem(key: string): void;
 }
 
+interface MicrosoftStorePendingRecovery {
+  readonly version: 1;
+  readonly idempotencyKey: string;
+  readonly inAppOfferToken: string;
+  readonly purchaseToken: string;
+}
+
 export interface CreateMicrosoftStoreCommerceAdapterInput {
   readonly products: readonly MicrosoftStoreCommerceProduct[];
   readonly authority: MicrosoftStorePurchaseAuthority;
@@ -105,8 +112,13 @@ export interface CreateMicrosoftStoreCommerceAdapterInput {
     }[],
   ) => MicrosoftStorePaymentRequest;
   readonly locale?: string;
+  /**
+   * Returns a stable, non-secret scope for the currently authenticated player.
+   * Recreate or refresh the adapter catalog after this value changes.
+   */
+  readonly getRecoveryScope: () => string;
   readonly createRecoveryId?: () => string;
-  /** Defaults to localStorage when available so pending grants survive a PWA restart. */
+  /** Defaults to localStorage when available so scoped pending grants survive a PWA restart. */
   readonly recoveryIdStorage?: MicrosoftStoreRecoveryIdStorage;
   readonly onError?: (error: unknown) => void;
 }
@@ -122,51 +134,82 @@ export function createMicrosoftStoreCommerceAdapter(
   const createRecoveryId = input.createRecoveryId
     ?? (() => `microsoft-store-recovery-${crypto.randomUUID()}`);
   const recoveryIdStorage = input.recoveryIdStorage ?? getGlobalRecoveryIdStorage();
-  const pendingRecoveryIds = new Map<string, string>();
+  const pendingRecoveries = new Map<string, readonly MicrosoftStorePendingRecovery[]>();
   const priceFormatters = new Map<string, Intl.NumberFormat>();
-  const preparedCheckoutServices = new Map<LogicalProductId, MicrosoftStoreDigitalGoodsService>();
+  const preparedCheckouts = new Map<LogicalProductId, {
+    readonly recoveryScope: string;
+    readonly service: MicrosoftStoreDigitalGoodsService;
+  }>();
 
-  function reserveRecoveryId(
+  function reserveRecovery(
     product: MicrosoftStoreCommerceProduct,
+    recoveryScope: string,
     preferredId?: string,
-  ): string {
-    const storageKey = createRecoveryStorageKey(product);
-    const storedId = getReservedRecoveryId(product);
-    if (storedId !== undefined) {
-      return storedId;
+    purchase?: MicrosoftStoreDigitalGoodsPurchase,
+  ): MicrosoftStorePendingRecovery {
+    const storageKey = createRecoveryStorageKey(recoveryScope, product);
+    const storedRecoveries = getReservedRecoveries(product, recoveryScope);
+    const inAppOfferToken = purchase?.itemId ?? product.inAppOfferToken;
+    const purchaseToken = purchase?.purchaseToken ?? inAppOfferToken;
+    const storedRecovery = storedRecoveries.find((candidate) => (
+      candidate.inAppOfferToken === inAppOfferToken
+      && candidate.purchaseToken === purchaseToken
+    ));
+    if (storedRecovery !== undefined) {
+      return storedRecovery;
     }
 
     const recoveryId = nonEmptyValue(preferredId) ?? nonEmptyValue(createRecoveryId());
     if (recoveryId === undefined) {
       throw new TypeError('Microsoft Store recovery ID must be a non-empty string.');
     }
-    pendingRecoveryIds.set(storageKey, recoveryId);
-    writeRecoveryId(recoveryIdStorage, storageKey, recoveryId);
-    return recoveryId;
+    const recovery = Object.freeze({
+      version: 1,
+      idempotencyKey: recoveryId,
+      inAppOfferToken,
+      purchaseToken,
+    }) satisfies MicrosoftStorePendingRecovery;
+    const next = Object.freeze([...storedRecoveries, recovery]);
+    pendingRecoveries.set(storageKey, next);
+    writeRecoveries(recoveryIdStorage, storageKey, next);
+    return recovery;
   }
 
-  function getReservedRecoveryId(
+  function getReservedRecoveries(
     product: MicrosoftStoreCommerceProduct,
-  ): string | undefined {
-    const storageKey = createRecoveryStorageKey(product);
-    const recoveryId = pendingRecoveryIds.get(storageKey)
-      ?? readRecoveryId(recoveryIdStorage, storageKey);
-    if (recoveryId !== undefined) {
-      pendingRecoveryIds.set(storageKey, recoveryId);
+    recoveryScope: string,
+  ): readonly MicrosoftStorePendingRecovery[] {
+    const storageKey = createRecoveryStorageKey(recoveryScope, product);
+    if (pendingRecoveries.has(storageKey)) {
+      return pendingRecoveries.get(storageKey) ?? [];
     }
-    return recoveryId;
+    const recoveries = readRecoveries(recoveryIdStorage, storageKey);
+    pendingRecoveries.set(storageKey, recoveries);
+    return recoveries;
   }
 
-  function releaseRecoveryId(product: MicrosoftStoreCommerceProduct): void {
-    const storageKey = createRecoveryStorageKey(product);
-    pendingRecoveryIds.delete(storageKey);
-    removeRecoveryId(recoveryIdStorage, storageKey);
+  function releaseRecovery(
+    product: MicrosoftStoreCommerceProduct,
+    recoveryScope: string,
+    recovery: MicrosoftStorePendingRecovery,
+  ): void {
+    const storageKey = createRecoveryStorageKey(recoveryScope, product);
+    const next = getReservedRecoveries(product, recoveryScope).filter((candidate) => (
+      candidate.inAppOfferToken !== recovery.inAppOfferToken
+      || candidate.purchaseToken !== recovery.purchaseToken
+    ));
+    pendingRecoveries.set(storageKey, next);
+    if (next.length === 0) {
+      removeRecoveries(recoveryIdStorage, storageKey);
+    } else {
+      writeRecoveries(recoveryIdStorage, storageKey, next);
+    }
   }
 
   async function getAvailability(): Promise<MicrosoftStoreCommerceAvailability> {
     const authorityAvailability = await input.authority.getAvailability();
     if (authorityAvailability !== 'available') {
-      preparedCheckoutServices.clear();
+      preparedCheckouts.clear();
       return authorityAvailability;
     }
 
@@ -174,7 +217,7 @@ export function createMicrosoftStoreCommerceAdapter(
       await getService();
       return 'available';
     } catch {
-      preparedCheckoutServices.clear();
+      preparedCheckouts.clear();
       return 'unsupported';
     }
   }
@@ -186,25 +229,30 @@ export function createMicrosoftStoreCommerceAdapter(
       readonly idempotencyKey: string;
       readonly source: MicrosoftStorePurchaseAuthorityInput['source'];
     },
+    recoveryScope: string,
   ): Promise<PurchaseResult> {
-    const evidence = createPurchaseEvidence(purchase);
     // Microsoft purchaseToken is the add-on Product ID rather than a purchase-unique token.
-    // Retain the first request identity while this one unconsumed item is pending so a later
-    // recovery can resume the durable ledger grant without re-verifying a changed Store mapping.
-    const idempotencyKey = reserveRecoveryId(product, request.idempotencyKey);
+    // Retain both the first request identity and the purchased Store identity. A later recovery
+    // must not assign a new player's key or fabricate evidence from a changed catalog mapping.
+    const recovery = reserveRecovery(product, recoveryScope, request.idempotencyKey, purchase);
+    const recoveredPurchase = {
+      itemId: recovery.inAppOfferToken,
+      purchaseToken: recovery.purchaseToken,
+    } as const;
+    const evidence = createPurchaseEvidence(recoveredPurchase);
 
     try {
       const result = await input.authority.verifyAndGrant({
         productId: product.info.id,
-        inAppOfferToken: product.inAppOfferToken,
-        purchaseToken: purchase.purchaseToken,
-        idempotencyKey,
+        inAppOfferToken: recovery.inAppOfferToken,
+        purchaseToken: recovery.purchaseToken,
+        idempotencyKey: recovery.idempotencyKey,
         source: request.source,
         evidence,
       });
 
       if (result.status !== 'pending') {
-        releaseRecoveryId(product);
+        releaseRecovery(product, recoveryScope, recovery);
       }
 
       return {
@@ -239,17 +287,18 @@ export function createMicrosoftStoreCommerceAdapter(
     getAvailability,
     async getProducts() {
       if (await getAvailability() !== 'available') {
-        preparedCheckoutServices.clear();
+        preparedCheckouts.clear();
         return [];
       }
 
       try {
+        const recoveryScope = resolveRecoveryScope(input.getRecoveryScope);
         const service = await getService();
         const details = await service.getDetails(products.map((product) => product.inAppOfferToken));
         const detailsById = new Map(details.map((detail) => [detail.itemId, detail]));
-        const nextPreparedCheckoutServices = new Map<
+        const nextPreparedCheckouts = new Map<
           LogicalProductId,
-          MicrosoftStoreDigitalGoodsService
+          { readonly recoveryScope: string; readonly service: MicrosoftStoreDigitalGoodsService }
         >();
 
         const availableProducts = products.flatMap((product) => {
@@ -263,7 +312,7 @@ export function createMicrosoftStoreCommerceAdapter(
             return [];
           }
 
-          nextPreparedCheckoutServices.set(product.info.id, service);
+          nextPreparedCheckouts.set(product.info.id, { recoveryScope, service });
           return [{
             ...product.info,
             title: nonEmptyString(detail.title) ?? product.info.title,
@@ -271,23 +320,37 @@ export function createMicrosoftStoreCommerceAdapter(
             price,
           }];
         });
-        preparedCheckoutServices.clear();
-        for (const [productId, preparedService] of nextPreparedCheckoutServices) {
-          preparedCheckoutServices.set(productId, preparedService);
+        preparedCheckouts.clear();
+        for (const [productId, preparedCheckout] of nextPreparedCheckouts) {
+          preparedCheckouts.set(productId, preparedCheckout);
         }
         return availableProducts;
       } catch (error) {
-        preparedCheckoutServices.clear();
+        preparedCheckouts.clear();
         input.onError?.(error);
         return [];
       }
     },
     async purchase(request) {
       const product = productsById.get(request.productId);
-      const service = preparedCheckoutServices.get(request.productId);
-      if (product === undefined || service === undefined) {
+      const preparedCheckout = preparedCheckouts.get(request.productId);
+      if (product === undefined || preparedCheckout === undefined) {
         return failedPurchase();
       }
+      let recoveryScope: string;
+      try {
+        recoveryScope = resolveRecoveryScope(input.getRecoveryScope);
+      } catch (error) {
+        preparedCheckouts.delete(request.productId);
+        input.onError?.(error);
+        return failedPurchase();
+      }
+      if (recoveryScope !== preparedCheckout.recoveryScope) {
+        preparedCheckouts.delete(request.productId);
+        input.onError?.(new Error('Microsoft Store player scope changed after catalog preparation.'));
+        return failedPurchase();
+      }
+      const { service } = preparedCheckout;
 
       let response: MicrosoftStorePaymentResponse | undefined;
       let purchaseToken: string | undefined;
@@ -311,14 +374,16 @@ export function createMicrosoftStoreCommerceAdapter(
         });
         let result: PurchaseResult;
         if (purchase === undefined) {
-          reserveRecoveryId(product, request.idempotencyKey);
+          reserveRecovery(product, recoveryScope, request.idempotencyKey, purchaseToken === undefined
+            ? undefined
+            : { itemId: product.inAppOfferToken, purchaseToken });
           if (purchaseToken === undefined) {
             result = pendingUnidentifiedPurchase();
           } else {
             result = pendingPurchase(product.inAppOfferToken, purchaseToken);
           }
         } else {
-          result = await fulfill(product, purchase, request);
+          result = await fulfill(product, purchase, request, recoveryScope);
         }
 
         await completePayment(response, paymentCompletionStatus(result));
@@ -329,7 +394,9 @@ export function createMicrosoftStoreCommerceAdapter(
         }
         if (response !== undefined) {
           await completePayment(response, 'unknown');
-          reserveRecoveryId(product, request.idempotencyKey);
+          reserveRecovery(product, recoveryScope, request.idempotencyKey, purchaseToken === undefined
+            ? undefined
+            : { itemId: product.inAppOfferToken, purchaseToken });
         }
         input.onError?.(error);
         if (purchaseToken !== undefined) {
@@ -344,28 +411,25 @@ export function createMicrosoftStoreCommerceAdapter(
       }
 
       try {
+        const recoveryScope = resolveRecoveryScope(input.getRecoveryScope);
         const service = await getService();
-        const resumedItems = new Set<string>();
+        const resumedPurchases = new Set<string>();
         await Promise.all(products.flatMap((product) => {
-          const recoveryId = getReservedRecoveryId(product);
-          if (recoveryId === undefined) {
-            return [];
-          }
-
-          resumedItems.add(product.inAppOfferToken);
-          return [
-            fulfill(product, {
-              itemId: product.inAppOfferToken,
-              purchaseToken: product.inAppOfferToken,
-            }, {
-              idempotencyKey: recoveryId,
+          return getReservedRecoveries(product, recoveryScope).map((recovery) => {
+            const purchase = {
+              itemId: recovery.inAppOfferToken,
+              purchaseToken: recovery.purchaseToken,
+            } as const;
+            resumedPurchases.add(createPurchaseIdentity(purchase));
+            return fulfill(product, purchase, {
+              idempotencyKey: recovery.idempotencyKey,
               source: 'recovery',
-            }),
-          ];
+            }, recoveryScope);
+          });
         }));
         const purchases = await service.listPurchases();
         await Promise.all(purchases.flatMap((purchase) => {
-          if (resumedItems.has(purchase.itemId)) {
+          if (resumedPurchases.has(createPurchaseIdentity(purchase))) {
             return [];
           }
           const product = productsByStoreId.get(purchase.itemId);
@@ -374,9 +438,10 @@ export function createMicrosoftStoreCommerceAdapter(
           }
           return [
             fulfill(product, purchase, {
-              idempotencyKey: reserveRecoveryId(product),
+              idempotencyKey: reserveRecovery(product, recoveryScope, undefined, purchase)
+                .idempotencyKey,
               source: 'recovery',
-            }),
+            }, recoveryScope),
           ];
         }));
         return { restoredEntitlements: await input.authority.getEntitlements() };
@@ -470,14 +535,26 @@ function readPurchaseToken(input: unknown): string | undefined {
   return nonEmptyString(Reflect.get(input, 'purchaseToken'));
 }
 
-function createRecoveryStorageKey(product: MicrosoftStoreCommerceProduct): string {
+function createRecoveryStorageKey(
+  recoveryScope: string,
+  product: MicrosoftStoreCommerceProduct,
+): string {
   return [
     'mpgd',
     'microsoft-store',
     'pending-grant',
-    'v2',
+    'v3',
+    encodeURIComponent(recoveryScope),
     encodeURIComponent(product.info.id),
   ].join(':');
+}
+
+function resolveRecoveryScope(getRecoveryScope: () => string): string {
+  return requireIdentifier(getRecoveryScope(), 'Microsoft Store recovery scope');
+}
+
+function createPurchaseIdentity(purchase: MicrosoftStoreDigitalGoodsPurchase): string {
+  return JSON.stringify([purchase.itemId, purchase.purchaseToken]);
 }
 
 function getGlobalRecoveryIdStorage(): MicrosoftStoreRecoveryIdStorage | undefined {
@@ -497,30 +574,72 @@ function isRecoveryIdStorage(input: unknown): input is MicrosoftStoreRecoveryIdS
     && typeof Reflect.get(input, 'removeItem') === 'function';
 }
 
-function readRecoveryId(
+function readRecoveries(
   storage: MicrosoftStoreRecoveryIdStorage | undefined,
   key: string,
-): string | undefined {
+): readonly MicrosoftStorePendingRecovery[] {
   try {
-    return storage === undefined ? undefined : nonEmptyValue(storage.getItem(key));
+    const serialized = storage?.getItem(key);
+    if (serialized === undefined || serialized === null) {
+      return [];
+    }
+    const parsed: unknown = JSON.parse(serialized);
+    if (!Array.isArray(parsed)) {
+      return [];
+    }
+    const recoveries: MicrosoftStorePendingRecovery[] = [];
+    const identities = new Set<string>();
+    for (const candidate of parsed) {
+      const recovery = readRecovery(candidate);
+      if (recovery === undefined) {
+        continue;
+      }
+      const identity = createPurchaseIdentity({
+        itemId: recovery.inAppOfferToken,
+        purchaseToken: recovery.purchaseToken,
+      });
+      if (!identities.has(identity)) {
+        identities.add(identity);
+        recoveries.push(recovery);
+      }
+    }
+    return Object.freeze(recoveries);
   } catch {
-    return undefined;
+    return [];
   }
 }
 
-function writeRecoveryId(
+function readRecovery(candidate: unknown): MicrosoftStorePendingRecovery | undefined {
+  if (typeof candidate !== 'object' || candidate === null || Array.isArray(candidate)) {
+    return undefined;
+  }
+  const idempotencyKey = nonEmptyValue(Reflect.get(candidate, 'idempotencyKey'));
+  const inAppOfferToken = readIdentifier(Reflect.get(candidate, 'inAppOfferToken'));
+  const purchaseToken = readIdentifier(Reflect.get(candidate, 'purchaseToken'));
+  if (
+    Reflect.get(candidate, 'version') !== 1
+    || idempotencyKey === undefined
+    || inAppOfferToken === undefined
+    || purchaseToken === undefined
+  ) {
+    return undefined;
+  }
+  return Object.freeze({ version: 1, idempotencyKey, inAppOfferToken, purchaseToken });
+}
+
+function writeRecoveries(
   storage: MicrosoftStoreRecoveryIdStorage | undefined,
   key: string,
-  recoveryId: string,
+  recoveries: readonly MicrosoftStorePendingRecovery[],
 ): void {
   try {
-    storage?.setItem(key, recoveryId);
+    storage?.setItem(key, JSON.stringify(recoveries));
   } catch {
     // In-memory recovery remains available when browser storage is denied or full.
   }
 }
 
-function removeRecoveryId(
+function removeRecoveries(
   storage: MicrosoftStoreRecoveryIdStorage | undefined,
   key: string,
 ): void {
@@ -645,6 +764,11 @@ function requireIdentifier(input: unknown, label: string): string {
     throw new TypeError(`${label} must be a non-empty identifier.`);
   }
   return value;
+}
+
+function readIdentifier(input: unknown): string | undefined {
+  const value = nonEmptyString(input);
+  return value === undefined || /[\p{Cc}\p{Cf}]/u.test(value) ? undefined : value;
 }
 
 function isAbortError(error: unknown): boolean {

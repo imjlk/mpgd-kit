@@ -7,4 +7,4 @@ npm/@mpgd/platform: minor (Added)
 npm/@mpgd/target-config: minor (Added)
 ---
 
-Add fail-closed Microsoft Store PWA Digital Goods checkout, first-class target configuration, submission product mappings, and authoritative Collections query and consume fulfillment.
+Add fail-closed Microsoft Store PWA Digital Goods checkout with player-scoped durable recovery, first-class target configuration, submission product mappings, and authoritative Collections query and consume fulfillment.

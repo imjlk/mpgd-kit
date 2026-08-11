@@ -51,17 +51,33 @@ If verification is unavailable, no grant is written. If consume fails after a
 successful ledger write, finalization stays pending and can be retried with the
 same tracking ID.
 
-The browser adapter also preserves the first checkout idempotency key while the
-Store item remains pending. It uses `localStorage` by default, with
-`recoveryIdStorage` available for a game-owned compatible store, so a PWA restart
-or later `restore()` resumes the recorded ledger grant instead of creating a new
-verification identity. Recovery storage is keyed by the stable logical product
-ID, not the current `inAppOfferToken`, so a catalog mapping change cannot hide a
-pending grant whose durable evidence still references the previous Store item.
-The key is removed only after the authority reports a completed or failed result;
-a transient exception or pending consume keeps it. This value is retry metadata,
-not proof of purchase, and the authority must still validate the authenticated
-player and Store account binding.
+The browser adapter also preserves the first checkout idempotency key and the
+purchased Store identity while the item remains pending. It uses `localStorage`
+by default, with `recoveryIdStorage` available for a game-owned compatible store,
+so a PWA restart or later `restore()` resumes the same verification identity and
+does not fabricate evidence from a newer catalog mapping. The required
+`getRecoveryScope()` callback must return a stable, non-secret identifier for the
+currently authenticated player. Recovery storage is partitioned by that scope
+and the stable logical product ID, so another player using the same browser
+profile cannot reuse or delete the first player's pending record. Refresh
+`getProducts()` after the authenticated player changes; checkout fails before
+opening Payment Request if the scope changed after catalog preparation.
+
+The record is removed only after the authority reports a completed or failed
+result; a transient exception or pending consume keeps it. Because a checkout
+can complete before `listPurchases()` reflects the item, game services must keep
+historical `inAppOfferToken` mappings recognizable until every pending record for
+that mapping is verified. Recovery metadata is not proof of purchase: the
+authority must still validate the authenticated player, Store account binding,
+and historical product mapping.
+
+Configure those aliases with `historicalProductMappings` on
+`createMicrosoftStorePurchaseBoundary()`. Each logical product entry pairs the
+old `inAppOfferToken` with its old Collections `storeId`. Keep the pair until
+operational telemetry confirms that no player-scoped pending recovery record or
+unconsumed Store entitlement references it; removing it earlier makes a charged
+pre-grant checkout unverifiable. Current mappings still come from the product
+catalog plus `storeIds`, and unknown old tokens remain rejected.
 
 User Store ID plus Entra authentication cannot consume developer-managed
 consumables in non-RETAIL sandboxes. The boundary fails closed with
@@ -83,6 +99,8 @@ Before enabling commerce, the game must provide:
 - an Entra application authorized for Microsoft Store service APIs;
 - a secure User Store ID acquisition and player-binding path with a stable,
   non-secret account-link ID separate from the renewable User Store ID;
+- a stable, non-secret player identifier wired to the browser adapter's
+  `getRecoveryScope()` callback, plus a catalog refresh on account changes;
 - a public HTTPS Game Services endpoint and durable entitlement ledger;
 - retry and alerting for pending consume finalizations.
 

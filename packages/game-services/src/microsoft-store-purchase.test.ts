@@ -143,6 +143,10 @@ function createHarness(input: {
   readonly sandbox?: string;
   readonly store?: TrackingStore;
   readonly storeIds?: Readonly<Record<string, string>>;
+  readonly historicalProductMappings?: Readonly<Record<
+    string,
+    readonly { readonly inAppOfferToken: string; readonly storeId: string }[]
+  >>;
   readonly resolveCredentials?: (
     playerId: string,
     signal: AbortSignal,
@@ -153,6 +157,9 @@ function createHarness(input: {
   const boundary = createMicrosoftStorePurchaseBoundary({
     client,
     storeIds: input.storeIds ?? { HINT_PACK_20: storeId },
+    ...(input.historicalProductMappings === undefined
+      ? {}
+      : { historicalProductMappings: input.historicalProductMappings }),
     resolveCredentials: input.resolveCredentials ?? (() => ({
       ...credentials,
       ...(input.sandbox === undefined ? {} : { sandbox: input.sandbox }),
@@ -213,6 +220,68 @@ const missingMappingResult = await missingMapping.backend.purchases.verifyPurcha
 assert.equal(missingMappingResult.verified, false);
 assert.equal(missingMappingResult.reason, 'MICROSOFT_STORE_PRODUCT_MAPPING_REQUIRED');
 assert.deepEqual(missingMapping.events, []);
+
+const historicalInAppOfferToken = 'ttokdoku_hint_pack_20_legacy';
+const historicalStoreId = '9N0000000000';
+const historicalMapping = createHarness({
+  historicalProductMappings: {
+    HINT_PACK_20: [{
+      inAppOfferToken: historicalInAppOfferToken,
+      storeId: historicalStoreId,
+    }],
+  },
+});
+historicalMapping.client.queryResponse = {
+  items: [{
+    id: collectionItemId,
+    modifiedDate,
+    productId: historicalStoreId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+  }],
+};
+const historicalMappingResult = await historicalMapping.backend.purchases.verifyPurchase(
+  createRequest({
+    platformTransactionId: historicalInAppOfferToken,
+    idempotencyKey: 'historical-product-mapping',
+    evidence: {
+      schema: microsoftStoreDigitalGoodsEvidenceSchema,
+      payload: {
+        itemId: historicalInAppOfferToken,
+        purchaseToken: historicalInAppOfferToken,
+      },
+    },
+  }),
+);
+assert.equal(historicalMappingResult.verified, true);
+assert.equal(historicalMappingResult.finalization?.status, 'completed');
+assert.deepEqual(historicalMapping.events, [
+  `provider:query:${historicalStoreId}`,
+  'ledger:historical-product-mapping',
+  `provider:consume:${historicalStoreId}`,
+]);
+
+const unknownHistoricalToken = createHarness();
+const unknownHistoricalTokenResult = await unknownHistoricalToken.backend.purchases.verifyPurchase(
+  createRequest({
+    platformTransactionId: historicalInAppOfferToken,
+    idempotencyKey: 'unknown-historical-product-mapping',
+    evidence: {
+      schema: microsoftStoreDigitalGoodsEvidenceSchema,
+      payload: {
+        itemId: historicalInAppOfferToken,
+        purchaseToken: historicalInAppOfferToken,
+      },
+    },
+  }),
+);
+assert.equal(unknownHistoricalTokenResult.verified, false);
+assert.equal(
+  unknownHistoricalTokenResult.reason,
+  'MICROSOFT_STORE_DIGITAL_GOODS_EVIDENCE_REQUIRED',
+);
+assert.deepEqual(unknownHistoricalToken.events, []);
 
 const notPropagated = createHarness();
 notPropagated.client.queryResponse = {};

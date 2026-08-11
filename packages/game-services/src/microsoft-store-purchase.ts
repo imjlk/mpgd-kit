@@ -66,11 +66,21 @@ export interface CreateMicrosoftStoreCollectionsClientInput {
 export interface CreateMicrosoftStorePurchaseBoundaryInput {
   readonly client: MicrosoftStoreCollectionsClient;
   readonly storeIds: Readonly<Record<string, string>>;
+  /** Keep old Digital Goods token/Collections ID pairs until pending purchases are settled. */
+  readonly historicalProductMappings?: Readonly<Record<
+    string,
+    readonly MicrosoftStoreHistoricalProductMapping[]
+  >>;
   readonly resolveCredentials: (
     playerId: string,
     signal: AbortSignal,
   ) => Promise<MicrosoftStoreCollectionsCredentials> | MicrosoftStoreCollectionsCredentials;
   readonly now?: () => string;
+}
+
+export interface MicrosoftStoreHistoricalProductMapping {
+  readonly inAppOfferToken: string;
+  readonly storeId: string;
 }
 
 export interface MicrosoftStorePurchaseBoundary extends GameServicesPurchaseGrantFinalizer {
@@ -181,6 +191,10 @@ export function createMicrosoftStorePurchaseBoundary(
   input: CreateMicrosoftStorePurchaseBoundaryInput,
 ): MicrosoftStorePurchaseBoundary {
   const storeIds = normalizeStoreIds(input.storeIds);
+  const historicalProductMappings = normalizeHistoricalProductMappings(
+    input.historicalProductMappings ?? {},
+    storeIds,
+  );
   const now = input.now ?? (() => new Date().toISOString());
   const inFlightFinalizations = new Map<string, Promise<PurchaseGrantFinalization>>();
 
@@ -202,9 +216,17 @@ export function createMicrosoftStorePurchaseBoundary(
       if (clientEvidence === undefined) {
         return rejected('MICROSOFT_STORE_DIGITAL_GOODS_EVIDENCE_REQUIRED');
       }
-      const storeId = storeIds.get(verificationInput.product.id);
-      if (storeId === undefined) {
+      const currentStoreId = storeIds.get(verificationInput.product.id);
+      if (currentStoreId === undefined) {
         return rejected('MICROSOFT_STORE_PRODUCT_MAPPING_REQUIRED');
+      }
+      const storeId = clientEvidence.itemId === verificationInput.platformProductId
+        ? currentStoreId
+        : historicalProductMappings.get(verificationInput.product.id)?.get(
+          clientEvidence.itemId,
+        );
+      if (storeId === undefined) {
+        return rejected('MICROSOFT_STORE_DIGITAL_GOODS_EVIDENCE_REQUIRED');
       }
 
       let credentials: MicrosoftStoreCollectionsCredentials;
@@ -467,8 +489,7 @@ function readDigitalGoodsEvidence(input: VerifyPurchaseEvidenceInput): {
   if (
     itemId === undefined
     || purchaseToken === undefined
-    || itemId !== input.platformProductId
-    || purchaseToken !== input.platformProductId
+    || itemId !== purchaseToken
     || input.request.platformTransactionId !== purchaseToken
   ) {
     return undefined;
@@ -570,6 +591,49 @@ function normalizeStoreIds(input: Readonly<Record<string, string>>): ReadonlyMap
   if (output.size === 0) {
     throw new TypeError('storeIds must contain at least one product mapping.');
   }
+  return output;
+}
+
+function normalizeHistoricalProductMappings(
+  input: Readonly<Record<string, readonly MicrosoftStoreHistoricalProductMapping[]>>,
+  currentStoreIds: ReadonlyMap<string, string>,
+): ReadonlyMap<string, ReadonlyMap<string, string>> {
+  const output = new Map<string, ReadonlyMap<string, string>>();
+  const storeIdOwners = new Map<string, string>();
+  for (const [logicalProductId, storeId] of currentStoreIds) {
+    storeIdOwners.set(storeId, logicalProductId);
+  }
+
+  for (const [rawLogicalProductId, rawMappings] of Object.entries(input)) {
+    const logicalProductId = identifier(rawLogicalProductId, 'logicalProductId');
+    if (!currentStoreIds.has(logicalProductId)) {
+      throw new TypeError(
+        `Historical Microsoft Store mapping requires a current product: ${logicalProductId}`,
+      );
+    }
+    if (!Array.isArray(rawMappings)) {
+      throw new TypeError(
+        `Historical Microsoft Store mappings must be an array: ${logicalProductId}`,
+      );
+    }
+
+    const mappings = new Map<string, string>();
+    for (const rawMapping of rawMappings) {
+      const inAppOfferToken = identifier(rawMapping.inAppOfferToken, 'historical inAppOfferToken');
+      const storeId = identifier(rawMapping.storeId, 'historical storeId');
+      if (mappings.has(inAppOfferToken)) {
+        throw new TypeError(`Duplicate historical Microsoft Store token: ${inAppOfferToken}`);
+      }
+      const owner = storeIdOwners.get(storeId);
+      if (owner !== undefined && owner !== logicalProductId) {
+        throw new TypeError(`Duplicate Microsoft Store product mapping: ${storeId}`);
+      }
+      storeIdOwners.set(storeId, logicalProductId);
+      mappings.set(inAppOfferToken, storeId);
+    }
+    output.set(logicalProductId, mappings);
+  }
+
   return output;
 }
 
