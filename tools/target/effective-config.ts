@@ -294,8 +294,9 @@ function platformAdapterForRuntime(runtime: EffectiveTargetConfig['runtime']): s
   switch (runtime) {
     case 'web':
     case 'web-preview':
-    case 'microsoft-store-pwa':
       return 'browser';
+    case 'microsoft-store-pwa':
+      return 'microsoft-store';
     case 'capacitor-android':
     case 'capacitor-ios':
       return 'capacitor';

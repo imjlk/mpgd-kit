@@ -123,7 +123,9 @@ Optional targets can add their own config, scripts, runtime wiring, and release
 skill. To enable Microsoft Store after creation, run
 `pnpm exec mpgd target init microsoft-store --game . --kit-path ../mpgd-kit`.
 The initializer is idempotent and stops before writing when it finds conflicting
-game-owned values.
+game-owned values. It requires this generated starter's existing
+`src/platform/runtimeDetector.ts` and `vite.shared.ts` files; custom layouts must
+add equivalent runtime and Vite gateway routing manually.
 
 ## Acceptance Handoff
 
@@ -358,7 +360,7 @@ HTTPS game-services backend that verifies purchase or reward evidence.
 
 - Browser preview is fully game-owned and writes to `artifacts/web-preview`.
 <!-- mpgd:microsoft-store:start -->
-- Microsoft Store is a game-owned PWA target that reuses the browser adapter and
+- Microsoft Store is a game-owned PWA target with a dedicated Digital Goods adapter and
   writes to `artifacts/microsoft-store` with `manifest.webmanifest` for
   PWABuilder packaging. Replace the starter icon and manifest metadata before
   Store submission. Production builds also emit `pwa-release.json` and an
@@ -369,6 +371,16 @@ HTTPS game-services backend that verifies purchase or reward evidence.
   app; do not force activation with `skipWaiting()`. Keep the web manifest `id`
   game-specific because the cache namespace uses it to isolate apps sharing an
   origin.
+  The generated target starts with `authoritativeGameServices: false` while
+  `mpgd.microsoft-store.json` uses `commerce.mode: "disabled"`, so its effective
+  target contains no enabled IAP products. Switch both settings to their enabled
+  values only after the game supplies consumable
+  `InAppOfferToken` mappings plus an authoritative HTTPS backend. The backend
+  must resolve the renewable User Store ID and a separate stable account-link
+  ID from trusted player identity, query Collections v9, record the grant
+  idempotently, and consume through Collections v8. Never derive the account-link
+  ID from the User Store ID or treat the browser `purchaseToken` as a unique
+  transaction ID.
   Before Partner Center submission, replace every placeholder in
   `mpgd.microsoft-store.json`, add at least one real PNG screenshot per listing
   locale (maximum 50 MB and at least 1366 x 768 in either orientation), and run

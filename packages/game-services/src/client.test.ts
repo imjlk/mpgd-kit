@@ -236,6 +236,53 @@ assertEqual(
   'non-completed platform flows should emit rejected analytics',
 );
 
+const pendingReasons: unknown[] = [];
+const pendingBaseGateway = createMockGateway();
+const pendingGateway = {
+  ...pendingBaseGateway,
+  target: 'android',
+  commerce: {
+    ...pendingBaseGateway.commerce,
+    async purchase() {
+      return {
+        status: 'pending',
+        entitlementIds: [],
+        evidence: { schema: 'platform.pending.v1', payload: { receipt: 'pending' } },
+      };
+    },
+  },
+} satisfies PlatformGateway;
+const purchaseClaimsBeforePending = purchaseClaims;
+const pendingClient = createGameServicesClient({
+  gateway: pendingGateway,
+  playerId,
+  target: 'android',
+  now: () => '2026-07-03T00:00:00.000Z',
+  backend,
+  analytics: {
+    track(event) {
+      pendingReasons.push(event.properties.reason);
+    },
+  },
+});
+const pendingPurchase = await pendingClient.purchase({
+  productId: 'COINS_100',
+  source: 'result',
+  idempotencyKey: 'pending-purchase',
+});
+
+assertEqual(pendingPurchase.status, 'pending', 'pending platform purchase should pass through');
+assertEqual(
+  pendingReasons.join(','),
+  'purchase_pending',
+  'pending purchases should not be mislabeled as missing a transaction ID',
+);
+assertEqual(
+  purchaseClaims,
+  purchaseClaimsBeforePending,
+  'pending purchases should not call purchase verification',
+);
+
 let unsupportedPurchaseCalls = 0;
 let unsupportedRewardCalls = 0;
 const purchaseClaimsBeforeUnsupported = purchaseClaims;
@@ -317,6 +364,82 @@ assertEqual(
   rewardClaims,
   rewardClaimsBeforeUnsupported,
   'unsupported target rewarded ad should not call ad reward backend',
+);
+
+let microsoftStoreVerificationCalls = 0;
+const microsoftStoreBaseGateway = createMockGateway();
+const microsoftStoreGateway = {
+  ...microsoftStoreBaseGateway,
+  target: 'microsoft-store',
+  commerce: {
+    ...microsoftStoreBaseGateway.commerce,
+    async purchase() {
+      return {
+        status: 'completed',
+        transactionId: 'microsoft-store-ledger',
+        authoritativeGrant: { ledgerEntryId: 'microsoft-store-ledger' },
+        entitlementIds: [],
+        evidence: {
+          schema: 'mpgd.microsoft-store.digital-goods.v1',
+          payload: {
+            itemId: 'coins_100',
+            purchaseToken: 'coins_100',
+          },
+        },
+      } as const;
+    },
+  },
+} satisfies PlatformGateway;
+const microsoftStoreClient = createGameServicesClient({
+  gateway: microsoftStoreGateway,
+  playerId,
+  target: 'microsoft-store',
+  backend: {
+    ...backend,
+    purchases: {
+      async verifyPurchase() {
+        microsoftStoreVerificationCalls += 1;
+        throw new Error('authoritative Store completion must not be reverified');
+      },
+    },
+  },
+});
+const microsoftStorePurchase = await microsoftStoreClient.purchase({
+  productId: 'COINS_100',
+  source: 'shop',
+  idempotencyKey: 'microsoft-store-purchase',
+});
+const microsoftStoreLeaderboard = await microsoftStoreClient.submitLeaderboardScore({
+  leaderboardId: 'daily',
+  score: 987,
+  runId: 'microsoft-store-run',
+  submittedAt: '2026-07-03T00:00:04.000Z',
+});
+
+assertEqual(
+  microsoftStorePurchase.status,
+  'granted',
+  'Microsoft Store should use the authoritative purchase client',
+);
+assertEqual(
+  microsoftStorePurchase.ledgerEntryId,
+  'microsoft-store-ledger',
+  'Microsoft Store should preserve the authority ledger ID',
+);
+assertEqual(
+  microsoftStoreVerificationCalls,
+  0,
+  'Microsoft Store authority completions should not be sent through verification twice',
+);
+assertEqual(
+  microsoftStoreLeaderboard.submitted,
+  true,
+  'Microsoft Store should use the generic leaderboard flow',
+);
+assertEqual(
+  microsoftStoreLeaderboard.platformSubmitted,
+  true,
+  'Microsoft Store should submit the score through its browser gateway',
 );
 
 let verse8PurchaseCalls = 0;
@@ -567,6 +690,7 @@ function createMockGateway(): PlatformGateway {
         rewardedAds: true,
         interstitialAds: true,
         nativeLeaderboard: true,
+        remoteLeaderboard: false,
         achievements: false,
         cloudSave: false,
         socialShare: false,

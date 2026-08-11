@@ -51,6 +51,10 @@ files:
 pnpm exec mpgd target init microsoft-store --game . --kit-path ../mpgd-kit
 ```
 
+This migration targets generated Phaser starters and requires their existing
+`src/platform/runtimeDetector.ts` and `vite.shared.ts` files so it can patch the
+runtime and gateway selection without replacing game-owned architecture.
+
 Every generated game receives `AGENTS.md`, `agent/game-manifest.json`,
 `.agents/skills/use-mpgd-kit`, and `docs/MPGD_KIT_WORKFLOWS.md`. Together they
 route game and agent work across the platform boundary, target config, icons,
@@ -277,13 +281,17 @@ app identity, console state, community devtools, icons, and review metadata stay
 with the game. Capacitor targets continue to use kit reference shells for smoke
 builds until a game creates production-owned Android and iOS shells.
 
-Optional Microsoft Store support is modeled as a PWA/web target, not a separate native
-SDK adapter. `pnpm build:microsoft-store` builds the Phaser game with the
-browser gateway, embeds the `microsoft-store` effective target config, and
+Optional Microsoft Store support is modeled as a PWA/web target with a dedicated
+Digital Goods commerce adapter. `pnpm build:microsoft-store` builds the Phaser game with the
+`microsoft-store` gateway, embeds the effective target config, and
 writes `artifacts/microsoft-store` with a linked web app manifest for
 PWABuilder packaging and Partner Center submission. A dedicated Microsoft Store
-commerce adapter should be added only when wiring Microsoft Edge's Digital Goods
-API and Payment Request API through backend ledger verification.
+commerce adapter uses Microsoft Edge's Digital Goods and Payment Request APIs,
+but exposes checkout only when a game-owned authoritative backend is available.
+Microsoft billing is available only when the Windows PWA was installed through
+Microsoft Store; ordinary browser execution may not expose
+`getDigitalGoodsService()`.
+See [Microsoft Store commerce](docs/MICROSOFT_STORE_COMMERCE.md).
 
 After reserving the product in Partner Center and building the target, copy the
 Product Identity values into the game-owned `mpgd.microsoft-store.json` and run
@@ -311,7 +319,9 @@ pnpm exec mpgd target generate-package microsoft-store \
 The command calls PWABuilder's fixed production package endpoint without
 credentials. It requires the deployed manifest and every manifest icon to
 match the preflight evidence both before and after generation, and requires the
-PWA URL to stay inside that manifest's deployed scope. Local icon inputs are
+PWA URL to stay inside that manifest's deployed scope. It also reparses the
+hash-bound effective target and rejects submission evidence whose commerce
+mode or product mappings contradict the built artifact. Local icon inputs are
 also hash-checked and monitored for changes. The hash-verified local manifest
 is pinned directly in the generator request using PWABuilder's custom-manifest
 mode; the manifest URL remains its relative-resource base for those deployed
@@ -360,7 +370,8 @@ new starter `@mpgd/*` pins without a separate hard-coded template version edit.
 - Deployment-owned AdMob SSV callback persistence and public-key refresh wiring.
 - Game-specific Apps in Toss mTLS/login transport and independently verified
   reward-authority implementations behind the included public ports.
-- Microsoft Store Digital Goods API and Payment Request integration.
+- Microsoft Store Partner Center add-on IDs, Entra credentials, and a secure
+  User Store ID acquisition/binding for each production game.
 - Devvit production payments/ad reward mapping and publish/playtest credentials.
 - Real product, ad placement, leaderboard, app, package, and bundle IDs.
 - Cloudflare D1 provisioning and deployment credentials for persistent Worker
@@ -470,12 +481,11 @@ Reddit response enters reconciliation and does not authorize a blind repost.
 
 ## Microsoft Store
 
-The Microsoft Store target is a PWA distribution path. Microsoft's current
-guidance is to package an existing PWA with PWABuilder and submit the generated
-package through Partner Center. The repo therefore treats `microsoft-store` as a
-store-reviewed web artifact that reuses `@mpgd/adapter-browser`; Store-specific
-commerce remains disabled until a Digital Goods API/Payment Request integration
-is added behind `PlatformGateway` and backend ledger APIs. The artifact includes
+The Microsoft Store target is a PWA distribution path. The repo treats
+`microsoft-store` as a store-reviewed web artifact with a dedicated
+`@mpgd/adapter-browser/microsoft-store` commerce boundary. Checkout uses Digital Goods
+and Payment Request, while grants and developer-managed consumption use
+authoritative Game Services and Microsoft Collections APIs. The artifact includes
 a linked `manifest.webmanifest`; game projects should replace the starter icon
 and manifest metadata before Store submission.
 
@@ -485,3 +495,5 @@ Official references:
 - [Turn your website into a high quality PWA](https://learn.microsoft.com/en-us/windows/apps/publish/publish-your-app/pwa/turn-your-website-pwa)
 - [PWABuilder Microsoft Store package service source](https://github.com/pwa-builder/PWABuilder/tree/ded7914e84d1509c901d2899a3f654f5d44ef08f/apps/pwabuilder-microsoft-store)
 - [Provide in-app purchases with Digital Goods API](https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/digital-goods-api)
+- [Query Microsoft Store products from a service](https://learn.microsoft.com/en-us/gaming/gdk/docs/store/commerce/service-to-service/microsoft-store-apis/xstore-v9-query-for-products)
+- [Consume Microsoft Store products from a service](https://learn.microsoft.com/en-us/gaming/gdk/docs/store/commerce/service-to-service/microsoft-store-apis/xstore-v8-consume)

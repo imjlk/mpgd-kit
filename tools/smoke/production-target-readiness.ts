@@ -105,14 +105,13 @@ try {
       authoritativeGameServices: false,
     },
   });
-  expectReadinessError(
-    {
-      target: 'verse8-staging',
-      profile: 'production',
-      targetPolicy: verse8RewardPolicy,
-    },
-    'cannot enable monetization without authoritative game services',
-  );
+  assertProductionTargetReadiness({
+    target: 'verse8-staging',
+    profile: 'production',
+    targetsFile,
+    gameRoot,
+    targetPolicy: verse8RewardPolicy,
+  });
 
   const webCommercePolicy = {
     runtime: 'web',
@@ -151,13 +150,48 @@ try {
       authoritativeGameServices: false,
     },
   });
+  assertProductionTargetReadiness({
+    target: 'storefront',
+    profile: 'production',
+    targetsFile,
+    gameRoot,
+    targetPolicy: webCommercePolicy,
+  });
+
+  const microsoftStoreCommercePolicy = {
+    ...webCommercePolicy,
+    runtime: 'microsoft-store-pwa',
+  } as const;
+  writeTargets({
+    'microsoft-store': {
+      kind: 'web',
+      gameApp: '.',
+      output: 'artifacts/microsoft-store',
+      authoritativeGameServices: false,
+    },
+  });
+  assertProductionTargetReadiness({
+    target: 'microsoft-store',
+    profile: 'production',
+    targetsFile,
+    gameRoot,
+    targetPolicy: microsoftStoreCommercePolicy,
+  });
+  writeTargets({
+    'microsoft-store': {
+      kind: 'web',
+      gameApp: '.',
+      output: 'artifacts/microsoft-store',
+      authoritativeGameServices: true,
+    },
+  });
   expectReadinessError(
     {
-      target: 'storefront',
+      target: 'microsoft-store',
       profile: 'production',
-      targetPolicy: webCommercePolicy,
+      targetPolicy: microsoftStoreCommercePolicy,
     },
-    'cannot enable monetization without authoritative game services',
+    'requires VITE_MPGD_GAME_SERVICES_URL',
   );
 
   expectReadinessError(

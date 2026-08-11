@@ -303,6 +303,7 @@ describe('adapter-devvit', () => {
     ).resolves.toBe('unavailable');
     await expect(gateway.getCapabilities()).resolves.toMatchObject({
       nativeLeaderboard: false,
+      remoteLeaderboard: false,
       cloudSave: true,
       socialShare: false,
     });

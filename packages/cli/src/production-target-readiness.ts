@@ -53,19 +53,32 @@ export function assertProductionTargetReadiness(
     throw new Error(`Production target ${input.target} requires a target policy.`);
   }
 
-  const requiresVerse8RewardAuthority = input.targetPolicy?.runtime === 'verse8-web'
+  const targetConfig = readTargets(input.targetsFile)[input.target];
+
+  if (!isRecord(targetConfig)) {
+    throw new Error(`Missing target configuration for ${input.target}.`);
+  }
+
+  const targetPolicy = targetConfig.authoritativeGameServices === false
+    ? disableMonetization(input.targetPolicy)
+    : input.targetPolicy;
+
+  const requiresVerse8RewardAuthority = targetPolicy?.runtime === 'verse8-web'
     && (
-      input.targetPolicy.features.rewardedAds
-      || input.targetPolicy.monetization.rewardedAds
+      targetPolicy.features.rewardedAds
+      || targetPolicy.monetization.rewardedAds
     );
-  const requiresWebMonetizationAuthority = input.targetPolicy?.runtime === 'web'
+  const requiresWebMonetizationAuthority = (
+    targetPolicy?.runtime === 'web'
+    || targetPolicy?.runtime === 'microsoft-store-pwa'
+  )
     && (
-      input.targetPolicy.features.iap
-      || input.targetPolicy.features.rewardedAds
-      || input.targetPolicy.features.interstitialAds
-      || input.targetPolicy.monetization.iap
-      || input.targetPolicy.monetization.rewardedAds
-      || input.targetPolicy.monetization.interstitialAds
+      targetPolicy.features.iap
+      || targetPolicy.features.rewardedAds
+      || targetPolicy.features.interstitialAds
+      || targetPolicy.monetization.iap
+      || targetPolicy.monetization.rewardedAds
+      || targetPolicy.monetization.interstitialAds
     );
   const requiresMonetizationAuthority = requiresVerse8RewardAuthority
     || requiresWebMonetizationAuthority;
@@ -74,23 +87,7 @@ export function assertProductionTargetReadiness(
     return;
   }
 
-  const targetConfig = readTargets(input.targetsFile)[input.target];
-
-  if (!isRecord(targetConfig)) {
-    throw new Error(`Missing target configuration for ${input.target}.`);
-  }
-
   if (ownerPathKey === undefined) {
-    if (
-      requiresMonetizationAuthority
-      && targetConfig.authoritativeGameServices === false
-    ) {
-      throw new Error(
-        `Production target ${input.target} cannot enable monetization without `
-          + 'authoritative game services.',
-      );
-    }
-
     if (requiresMonetizationAuthority || targetConfig.authoritativeGameServices !== false) {
       assertAuthoritativeGameServicesUrl(input.gameServicesUrl, input.target);
     }
@@ -153,6 +150,30 @@ export function assertProductionTargetReadiness(
   if (targetConfig.authoritativeGameServices !== false) {
     assertAuthoritativeGameServicesUrl(input.gameServicesUrl, input.target);
   }
+}
+
+function disableMonetization(
+  policy: ProductionTargetPolicy | undefined,
+): ProductionTargetPolicy | undefined {
+  if (policy === undefined) {
+    return undefined;
+  }
+
+  return {
+    ...policy,
+    features: {
+      ...policy.features,
+      iap: false,
+      rewardedAds: false,
+      interstitialAds: false,
+    },
+    monetization: {
+      ...policy.monetization,
+      iap: false,
+      rewardedAds: false,
+      interstitialAds: false,
+    },
+  };
 }
 
 function readTargets(targetsFile: string): Record<string, unknown> {

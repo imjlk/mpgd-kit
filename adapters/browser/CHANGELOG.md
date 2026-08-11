@@ -1,5 +1,13 @@
 # @mpgd/adapter-browser
 
+## Unreleased
+
+### Added
+
+- Add a `@mpgd/adapter-browser/microsoft-store` entrypoint with fail-closed
+  Microsoft Store PWA Digital Goods checkout, recovery, and authoritative
+  fulfillment hooks.
+
 ## 0.5.1 — 2026-07-23
 
 ### Patch changes
@@ -105,4 +113,3 @@
 ### Patch changes
 
 - Updated dependencies: platform@0.1.0
-

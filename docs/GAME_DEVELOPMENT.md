@@ -32,7 +32,10 @@ PWA target and release workflow. For a game created without it, run
 `pnpm exec mpgd target init microsoft-store --game . --kit-path
 <path-to-mpgd-kit>` later. The initializer is idempotent and stops instead of
 overwriting conflicting scripts, target configuration, bootstrap wiring, or
-agent workflow ownership.
+agent workflow ownership. This migration applies to generated Phaser starters
+whose `src/platform/runtimeDetector.ts` and `vite.shared.ts` files are still
+present; custom game layouts must add equivalent runtime and Vite routing
+manually.
 
 Use `examples/phaser-starter` when developing the starter inside this
 repository. It is a private example workspace that shows the reusable mpgd

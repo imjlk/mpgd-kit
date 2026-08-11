@@ -359,6 +359,7 @@ export function applyTargetConfigToCapabilities(
     rewardedAds: capabilities.rewardedAds && config.features.rewardedAds,
     interstitialAds: capabilities.interstitialAds && config.features.interstitialAds,
     nativeLeaderboard: capabilities.nativeLeaderboard && config.features.leaderboard,
+    remoteLeaderboard: capabilities.remoteLeaderboard && config.features.leaderboard,
     localizedContent: capabilities.localizedContent && config.features.localization,
   };
 }
@@ -526,6 +527,14 @@ export function withTargetAvailability(
   const isIapAvailable = async (): Promise<boolean> => (
     availabilityConfig.features.iap && (await getGatewayCapabilities()).nativeIap
   );
+  const isLeaderboardAvailable = async (): Promise<boolean> => {
+    if (!availabilityConfig.features.leaderboard) {
+      return false;
+    }
+
+    const capabilities = await getGatewayCapabilities();
+    return capabilities.nativeLeaderboard || capabilities.remoteLeaderboard;
+  };
   const isAdPlacementAllowed = (
     placementId: string,
     expectedType: AdPlacementType,
@@ -647,16 +656,22 @@ export function withTargetAvailability(
         return gateway.ads.showInterstitial(input);
       },
     },
-    leaderboard: availabilityConfig.features.leaderboard
-      ? gateway.leaderboard
-      : {
-          async submitScore() {
-            return {
-              submitted: false,
-            };
-          },
-          async open() {},
-        },
+    leaderboard: {
+      async submitScore(input) {
+        if (!await isLeaderboardAvailable()) {
+          return {
+            submitted: false,
+          };
+        }
+
+        return gateway.leaderboard.submitScore(input);
+      },
+      async open(input) {
+        if (await isLeaderboardAvailable()) {
+          await gateway.leaderboard.open(input);
+        }
+      },
+    },
   };
 }
 
@@ -690,7 +705,7 @@ function isFeatureCapabilitySupported(
     case 'interstitialAds':
       return capabilities.interstitialAds;
     case 'leaderboard':
-      return capabilities.nativeLeaderboard;
+      return capabilities.nativeLeaderboard || capabilities.remoteLeaderboard;
     case 'localization':
       return capabilities.localizedContent;
   }

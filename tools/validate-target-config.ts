@@ -60,9 +60,14 @@ function validateTargetConfigConsistency(target: string, config: TargetConfig): 
       config.monetization.interstitialAds,
       config.features.interstitialAds,
     ],
-    ['leaderboard.native', config.leaderboard.native, config.features.leaderboard],
     ['capabilities.localization', config.capabilities.localization, config.features.localization],
   ].filter(([, sectionValue, featureValue]) => sectionValue !== featureValue);
+
+  // A target may expose a Game Services leaderboard without a native platform
+  // leaderboard. Native support still implies that the feature must be enabled.
+  if (config.leaderboard.native && !config.features.leaderboard) {
+    mismatches.push(['leaderboard.native', config.leaderboard.native, config.features.leaderboard]);
+  }
 
   if (mismatches.length > 0) {
     const names = mismatches.map(([name]) => name).join(', ');

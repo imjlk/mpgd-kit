@@ -9,18 +9,21 @@ import type {
 
 export type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 
-export type GameServicesStoreTarget = Extract<PlatformTarget, 'android' | 'ios' | 'ait'>;
+export type GameServicesStoreTarget = Extract<
+  PlatformTarget,
+  'microsoft-store' | 'android' | 'ios' | 'ait'
+>;
 export type GameServicesAdRewardTarget = Extract<
   PlatformTarget,
   'android' | 'ios' | 'ait' | 'verse8'
 >;
 export type GameServicesLeaderboardTarget = Extract<
   PlatformTarget,
-  'browser' | 'android' | 'ios' | 'ait' | 'reddit'
+  'browser' | 'microsoft-store' | 'android' | 'ios' | 'ait' | 'reddit'
 >;
 export type GameServicesLedgerTarget = Extract<
   PlatformTarget,
-  'browser' | 'android' | 'ios' | 'ait' | 'reddit' | 'verse8'
+  'browser' | 'microsoft-store' | 'android' | 'ios' | 'ait' | 'reddit' | 'verse8'
 >;
 
 export type PurchaseIdempotencyKey = string;
@@ -303,8 +306,13 @@ function assertRecord(input: unknown, label: string): asserts input is Record<st
 }
 
 function assertStoreTarget(input: unknown): asserts input is GameServicesStoreTarget {
-  if (input !== 'android' && input !== 'ios' && input !== 'ait') {
-    throw new Error('target must be android, ios, or ait.');
+  if (
+    input !== 'microsoft-store'
+    && input !== 'android'
+    && input !== 'ios'
+    && input !== 'ait'
+  ) {
+    throw new Error('target must be microsoft-store, android, ios, or ait.');
   }
 }
 
@@ -353,12 +361,13 @@ const reservedDeploymentTargetNames = new Set([
 function assertLeaderboardTarget(input: unknown): asserts input is GameServicesLeaderboardTarget {
   if (
     input !== 'browser'
+    && input !== 'microsoft-store'
     && input !== 'android'
     && input !== 'ios'
     && input !== 'ait'
     && input !== 'reddit'
   ) {
-    throw new Error('target must be browser, android, ios, ait, or reddit.');
+    throw new Error('target must be browser, microsoft-store, android, ios, ait, or reddit.');
   }
 }
 

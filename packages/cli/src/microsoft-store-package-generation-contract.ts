@@ -93,6 +93,11 @@ export interface MicrosoftStoreSubmissionEvidenceInput {
   readonly manifestSha256: string;
   readonly manifest: Readonly<Record<string, unknown>>;
   readonly manifestIcons: readonly MicrosoftStoreManifestIconInput[];
+  readonly effectiveTarget: {
+    readonly file: string;
+    readonly snapshot: MicrosoftStoreFileSnapshot;
+  };
+  /** Comma-separated Store languages accepted by the pinned PWABuilder generator contract. */
   readonly resourceLanguage: string;
 }
 

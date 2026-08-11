@@ -228,13 +228,33 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         };
       }
 
+      if (isAuthoritativeMicrosoftStoreCompletion(target, purchase)) {
+        const result = {
+          status: 'granted',
+          purchase,
+          ledgerEntryId: purchase.transactionId,
+        } satisfies GameServicesPurchaseResult;
+
+        await analytics.track({
+          name: 'purchase_granted',
+          properties: {
+            productId: purchaseInput.productId,
+            status: result.status,
+            ledgerEntryId: purchase.transactionId,
+            alreadyProcessed: purchase.authoritativeGrant?.alreadyProcessed,
+          },
+        });
+
+        return result;
+      }
+
       if (purchase.status !== 'completed' || purchase.transactionId === undefined) {
         await analytics.track({
           name: 'purchase_rejected',
           properties: {
             productId: purchaseInput.productId,
             status: purchase.status,
-            reason: purchase.transactionId === undefined ? 'missing_transaction_id' : undefined,
+            reason: purchaseRejectionReason(purchase),
           },
         });
 
@@ -549,10 +569,34 @@ function normalizeSegment(value: string): string {
   return value.replaceAll(/[^a-zA-Z0-9_-]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 64);
 }
 
+function purchaseRejectionReason(purchase: PurchaseResult): string | undefined {
+  if (purchase.status === 'completed' && purchase.transactionId === undefined) {
+    return 'missing_transaction_id';
+  }
+  if (purchase.status === 'pending') {
+    return 'purchase_pending';
+  }
+  return undefined;
+}
+
+function isAuthoritativeMicrosoftStoreCompletion(
+  target: GameServicesLedgerTarget,
+  purchase: PurchaseResult,
+): purchase is PurchaseResult & { readonly status: 'completed'; readonly transactionId: string } {
+  return target === 'microsoft-store'
+    && purchase.status === 'completed'
+    && purchase.transactionId !== undefined
+    && purchase.authoritativeGrant?.ledgerEntryId === purchase.transactionId;
+}
+
 function isGameServicesCommerceTarget(
   target: GameServicesLedgerTarget,
 ): target is GameServicesStoreTarget | 'verse8' {
-  return target === 'android' || target === 'ios' || target === 'ait' || target === 'verse8';
+  return target === 'microsoft-store'
+    || target === 'android'
+    || target === 'ios'
+    || target === 'ait'
+    || target === 'verse8';
 }
 
 function isGameServicesAdRewardTarget(
@@ -565,6 +609,7 @@ function isGameServicesLeaderboardTarget(
   target: GameServicesLedgerTarget,
 ): target is GameServicesLeaderboardTarget {
   return target === 'browser'
+    || target === 'microsoft-store'
     || target === 'android'
     || target === 'ios'
     || target === 'ait'

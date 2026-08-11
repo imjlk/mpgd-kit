@@ -1,6 +1,7 @@
 import {
   createInMemoryNotificationDeliveryLedger,
   createNotificationDeliveryService,
+  normalizeNotificationDeliveryRequest,
   NotificationDeliveryNotSentError,
   type DeliveryReceipt,
   type NotificationDeliveryLedger,
@@ -721,6 +722,18 @@ await assertRejects(
   } as unknown as NotificationDeliveryRequest),
   'supported PlatformTarget',
   'unknown platform targets should fail validation',
+);
+assertEqual(
+  normalizeNotificationDeliveryRequest(
+    {
+      ...androidRequest,
+      target: 'microsoft-store',
+      idempotencyKey: 'notification-microsoft-store-target',
+    },
+    gameDeepLinkPolicy,
+  ).target,
+  'microsoft-store',
+  'Microsoft Store should normalize as a supported notification target',
 );
 await assertRejects(
   () => deliveryService.deliver({

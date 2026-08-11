@@ -192,10 +192,10 @@ generic client score-submit bridge must not be added.
 
 This provider is a server-side application service, not a Devvit-native
 `PlatformGateway` leaderboard. The default Devvit adapter therefore reports
-`nativeLeaderboard: false`, and the shared Reddit target configuration keeps the
-generic leaderboard feature disabled. A game enables ranking through its
-verified completion and authenticated snapshot routes instead of changing that
-platform capability.
+`nativeLeaderboard: false` and `remoteLeaderboard: false`, and the shared Reddit
+target configuration keeps the generic leaderboard feature disabled. A game
+enables ranking through its verified completion and authenticated snapshot
+routes instead of changing either platform capability.
 
 The adapter hashes board and attempt IDs into bounded Redis keys and fields,
 then checks stored identities so a digest collision fails closed. Each write

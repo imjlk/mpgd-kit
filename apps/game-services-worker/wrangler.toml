@@ -56,6 +56,21 @@ head_sampling_rate = 1
 # binding = "GAME_SERVICES_AIT_EVIDENCE_VERIFIER"
 # service = "game-evidence-verifier-ait"
 #
+# Microsoft Store developer-managed consumables require both bindings. The
+# verifier queries Collections before the ledger grant, while the finalizer
+# consumes the same collection item after the durable grant is committed.
+# Never configure only one of this pair.
+#
+# [[services]]
+# binding = "GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER"
+# service = "game-microsoft-store-authority"
+# entrypoint = "MicrosoftStoreEvidenceVerifier"
+#
+# [[services]]
+# binding = "GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER"
+# service = "game-microsoft-store-authority"
+# entrypoint = "MicrosoftStorePurchaseFinalizer"
+#
 # [[services]]
 # binding = "GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER"
 # service = "game-evidence-verifier-verse8"

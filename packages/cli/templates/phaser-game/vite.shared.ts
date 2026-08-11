@@ -126,6 +126,8 @@ export function resolveBuildGatewayModule(input: {
         : 'src/platform/buildGateways/reddit.ts';
     case 'verse8':
       return 'src/platform/buildGateways/verse8.ts';
+    case 'microsoft-store':
+      return 'src/platform/buildGateways/microsoftStore.ts';
     default:
       return 'src/platform/buildGateways/browser.ts';
   }

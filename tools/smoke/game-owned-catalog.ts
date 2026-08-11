@@ -44,6 +44,7 @@ try {
             android: 'android_sudoku_hint_pack',
             ios: 'ios.sudoku.hint-pack',
             ait: 'ait_sudoku_hint_pack',
+            'microsoft-store': 'sudoku_hint_pack',
             verse8: 'sudoku-hint-pack',
           },
         },
@@ -233,8 +234,24 @@ try {
   assert.match(matrix.version, /catalog\.game-v1/u);
   assert.match(matrix.version, /ads\.game-ads-v1/u);
   const ait = matrix.targets.ait;
+  const microsoftStore = matrix.targets['microsoft-store'];
 
   assert.ok(ait !== undefined, 'Expected "ait" target in the config matrix');
+  assert.ok(microsoftStore !== undefined, 'Expected Microsoft Store target in config matrix');
+  assert.deepEqual(microsoftStore.monetization.products, [
+    {
+      id: 'SUDOKU_HINT_PACK',
+      type: 'consumable',
+      grant: {
+        type: 'currency',
+        currency: 'gem',
+        amount: 5,
+      },
+      enabled: true,
+      reason: 'available',
+      platformProductId: 'sudoku_hint_pack',
+    },
+  ]);
   assert.deepEqual(ait.monetization.products, [
     {
       id: 'SUDOKU_HINT_PACK',

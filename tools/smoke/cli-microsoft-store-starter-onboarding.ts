@@ -20,6 +20,7 @@ import {
   microsoftStoreBlockEnd,
   microsoftStoreBlockStart,
   microsoftStoreDocumentationAnchors,
+  resolveMicrosoftStoreAdapterDependencyVersion,
 } from '../../packages/cli/src/microsoft-store-starter';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-cli-microsoft-store-starter-onboarding-'));
@@ -36,6 +37,10 @@ const genericSkill = '.agents/skills/use-mpgd-kit/SKILL.md';
 const genericSkillMetadata = '.agents/skills/use-mpgd-kit/agents/openai.yaml';
 
 try {
+  assert.equal(resolveMicrosoftStoreAdapterDependencyVersion('0.5.x'), '^0.6.0');
+  assert.equal(resolveMicrosoftStoreAdapterDependencyVersion('>=0.5.1 <0.6.0'), '^0.6.0');
+  assert.equal(resolveMicrosoftStoreAdapterDependencyVersion('^0.6.0'), '^0.6.0');
+
   const baseGame = createGame('without-store');
   assertGenericAgentWorkflow(baseGame);
   assertMicrosoftStoreDisabled(baseGame);
@@ -44,6 +49,14 @@ try {
   const selectedGame = createGame('with-store', ['--microsoft-store']);
   assertGenericAgentWorkflow(selectedGame);
   assertMicrosoftStoreEnabled(selectedGame);
+  assert.equal(
+    requireRecord(
+      readJson(join(selectedGame, 'package.json')).dependencies,
+      'selected game dependencies',
+    )['@mpgd/adapter-browser'],
+    '^0.6.0',
+    'source-checkout game creation must use the first adapter release with Store exports',
+  );
   assertNoUnresolvedTemplatePlaceholders(selectedGame);
 
   const nestedGame = createGame('nested/with-store', ['--microsoft-store']);
@@ -52,6 +65,16 @@ try {
   assertNoUnresolvedTemplatePlaceholders(nestedGame);
 
   const initializedGame = createGame('initialized-later');
+  const legacyTargetsJson = readJson(join(initializedGame, 'mpgd.targets.json'));
+  const legacyTargets = requireRecord(legacyTargetsJson.targets, 'legacy targets');
+  legacyTargets['microsoft-store'] = {
+    kind: 'web',
+    gameApp: '.',
+    adapter: 'browser',
+    icon: { profile: 'microsoft-pwa' },
+    output: 'artifacts/microsoft-store',
+  };
+  writeJson(join(initializedGame, 'mpgd.targets.json'), legacyTargetsJson);
   const legacyManifest = readJson(join(initializedGame, 'agent/game-manifest.json'));
   delete legacyManifest.agentWorkflow;
   assert.ok(Array.isArray(legacyManifest.targets));
@@ -107,6 +130,11 @@ try {
   const legacyScriptsGame = createGame('legacy-store-scripts', ['--microsoft-store']);
   const legacyPackageJson = readJson(join(legacyScriptsGame, 'package.json'));
   const legacyScripts = requireRecord(legacyPackageJson.scripts, 'legacy package scripts');
+  const legacyDependencies = requireRecord(
+    legacyPackageJson.dependencies,
+    'legacy package dependencies',
+  );
+  legacyDependencies['@mpgd/adapter-browser'] = ' link:../local-browser-adapter ';
   for (const name of [
     'build:microsoft-store',
     'smoke:microsoft-store',
@@ -125,9 +153,14 @@ try {
   });
   initializeGame(legacyScriptsGame);
   assertMicrosoftStoreEnabled(legacyScriptsGame);
-  const migratedScripts = requireRecord(
-    readJson(join(legacyScriptsGame, 'package.json')).scripts,
-    'migrated package scripts',
+  const migratedPackageJson = readJson(join(legacyScriptsGame, 'package.json'));
+  const migratedScripts = requireRecord(migratedPackageJson.scripts, 'migrated package scripts');
+  assert.equal(
+    requireRecord(
+      migratedPackageJson.dependencies,
+      'migrated package dependencies',
+    )['@mpgd/adapter-browser'],
+    'link:../local-browser-adapter',
   );
   for (const name of [
     'build:microsoft-store',
@@ -137,6 +170,117 @@ try {
     assert.match(String(migratedScripts[name]), /--kit-path "\$\{MPGD_KIT_PATH:-.+\}"$/u);
   }
 
+  const configuredAuthorityGame = createGame('configured-store-authority', ['--microsoft-store']);
+  const configuredAuthorityTargets = readJson(join(configuredAuthorityGame, 'mpgd.targets.json'));
+  const configuredAuthorityTarget = requireRecord(
+    requireRecord(configuredAuthorityTargets.targets, 'configured authority targets')[
+      'microsoft-store'
+    ],
+    'configured authority Microsoft Store target',
+  );
+  configuredAuthorityTarget.authoritativeGameServices = true;
+  writeJson(join(configuredAuthorityGame, 'mpgd.targets.json'), configuredAuthorityTargets);
+  initializeGame(configuredAuthorityGame);
+  assert.equal(
+    requireRecord(
+      requireRecord(
+        readJson(join(configuredAuthorityGame, 'mpgd.targets.json')).targets,
+        'reinitialized configured authority targets',
+      )['microsoft-store'],
+      'reinitialized configured authority Microsoft Store target',
+    ).authoritativeGameServices,
+    true,
+  );
+
+  const legacyRegistryGame = createGame('legacy-registry-adapter');
+  const legacyRegistryPackage = readJson(join(legacyRegistryGame, 'package.json'));
+  requireRecord(
+    legacyRegistryPackage.dependencies,
+    'legacy registry package dependencies',
+  )['@mpgd/adapter-browser'] = '^0.5.1';
+  writeJson(join(legacyRegistryGame, 'package.json'), legacyRegistryPackage);
+  const legacyRuntimeFile = join(legacyRegistryGame, 'src', 'platform', 'runtimeDetector.ts');
+  writeFileSync(
+    legacyRuntimeFile,
+    readFileSync(legacyRuntimeFile, 'utf8').replace("  'microsoft-store',\n", ''),
+  );
+  assert.doesNotMatch(readFileSync(legacyRuntimeFile, 'utf8'), /'microsoft-store'/u);
+  initializeGame(legacyRegistryGame);
+  assert.equal(
+    requireRecord(
+      readJson(join(legacyRegistryGame, 'package.json')).dependencies,
+      'migrated registry package dependencies',
+    )['@mpgd/adapter-browser'],
+    '0.6.0',
+  );
+  assert.match(readFileSync(legacyRuntimeFile, 'utf8'), /'microsoft-store'/u);
+
+  const prereleaseAdapterGame = createGame('prerelease-registry-adapter');
+  const prereleaseAdapterPackage = readJson(join(prereleaseAdapterGame, 'package.json'));
+  requireRecord(
+    prereleaseAdapterPackage.dependencies,
+    'prerelease registry package dependencies',
+  )['@mpgd/adapter-browser'] = '^0.6.0-alpha.1';
+  writeJson(join(prereleaseAdapterGame, 'package.json'), prereleaseAdapterPackage);
+  initializeMicrosoftStoreStarter({
+    gameRoot: prereleaseAdapterGame,
+    templateRoot,
+    defaultKitPath: relative(prereleaseAdapterGame, kitRoot),
+    adapterDependencyVersion: '0.6.0',
+    dryRun: false,
+  });
+  assert.equal(
+    requireRecord(
+      readJson(join(prereleaseAdapterGame, 'package.json')).dependencies,
+      'migrated prerelease registry package dependencies',
+    )['@mpgd/adapter-browser'],
+    '^0.6.0',
+  );
+
+  const compatiblePrereleaseRangeGame = createGame('compatible-prerelease-range-adapter');
+  const compatiblePrereleasePackage = readJson(join(compatiblePrereleaseRangeGame, 'package.json'));
+  requireRecord(
+    compatiblePrereleasePackage.dependencies,
+    'compatible prerelease package dependencies',
+  )['@mpgd/adapter-browser'] = '^1.0.0-alpha.1';
+  writeJson(join(compatiblePrereleaseRangeGame, 'package.json'), compatiblePrereleasePackage);
+  initializeMicrosoftStoreStarter({
+    gameRoot: compatiblePrereleaseRangeGame,
+    templateRoot,
+    defaultKitPath: relative(compatiblePrereleaseRangeGame, kitRoot),
+    adapterDependencyVersion: '1.5.0',
+    dryRun: false,
+  });
+  assert.equal(
+    requireRecord(
+      readJson(join(compatiblePrereleaseRangeGame, 'package.json')).dependencies,
+      'migrated lower-bound prerelease package dependencies',
+    )['@mpgd/adapter-browser'],
+    '1.5.0',
+  );
+
+  const excludedPrereleaseGame = createGame('excluded-prerelease-adapter');
+  const excludedPrereleasePackage = readJson(join(excludedPrereleaseGame, 'package.json'));
+  requireRecord(
+    excludedPrereleasePackage.dependencies,
+    'excluded prerelease package dependencies',
+  )['@mpgd/adapter-browser'] = '^1.0.0-alpha.1';
+  writeJson(join(excludedPrereleaseGame, 'package.json'), excludedPrereleasePackage);
+  initializeMicrosoftStoreStarter({
+    gameRoot: excludedPrereleaseGame,
+    templateRoot,
+    defaultKitPath: relative(excludedPrereleaseGame, kitRoot),
+    adapterDependencyVersion: '1.5.0-beta.1',
+    dryRun: false,
+  });
+  assert.equal(
+    requireRecord(
+      readJson(join(excludedPrereleaseGame, 'package.json')).dependencies,
+      'migrated excluded prerelease package dependencies',
+    )['@mpgd/adapter-browser'],
+    '1.5.0-beta.1',
+  );
+
   const applyRollbackGame = createGame('apply-rollback');
   const beforeApplyRollback = snapshotTree(applyRollbackGame);
   assert.throws(
@@ -145,6 +289,7 @@ try {
         gameRoot: applyRollbackGame,
         templateRoot,
         defaultKitPath: relative(applyRollbackGame, kitRoot),
+        adapterDependencyVersion: 'workspace:*',
         dryRun: false,
       },
       {
@@ -168,6 +313,7 @@ try {
         gameRoot: directoryRollbackGame,
         templateRoot,
         defaultKitPath: relative(directoryRollbackGame, kitRoot),
+        adapterDependencyVersion: 'workspace:*',
         dryRun: false,
       },
       {
@@ -193,6 +339,7 @@ try {
         gameRoot: incompleteRollbackGame,
         templateRoot,
         defaultKitPath: relative(incompleteRollbackGame, kitRoot),
+        adapterDependencyVersion: 'workspace:*',
         dryRun: false,
       },
       {
@@ -229,6 +376,7 @@ try {
       gameRoot: unsafeShellPathGame,
       templateRoot,
       defaultKitPath: '%PATH%',
+      adapterDependencyVersion: 'workspace:*',
       dryRun: false,
     }),
     /unsafe in a shell parameter default/u,
@@ -317,6 +465,33 @@ try {
     };
     writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
   }, /microsoft-pwa icon profile/u);
+
+  assertConflictIsAtomic('target-authority-conflict', (gameRoot) => {
+    const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));
+    const targets = requireRecord(targetsJson.targets, 'targets');
+    targets['microsoft-store'] = {
+      kind: 'web',
+      gameApp: '.',
+      adapter: 'microsoft-store',
+      authoritativeGameServices: 'enabled',
+      icon: { profile: 'microsoft-pwa' },
+      output: 'artifacts/microsoft-store',
+    };
+    writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
+  }, /authoritativeGameServices must be a boolean/u);
+
+  for (const [name, relativePath] of [
+    ['missing-runtime-detector', 'src/platform/runtimeDetector.ts'],
+    ['missing-vite-shared', 'vite.shared.ts'],
+  ] as const) {
+    assertConflictIsAtomic(
+      name,
+      (gameRoot) => {
+        rmSync(join(gameRoot, relativePath));
+      },
+      /requires existing generated starter files: src\/platform\/runtimeDetector\.ts and vite\.shared\.ts/u,
+    );
+  }
 
   assertConflictIsAtomic('bootstrap-conflict', (gameRoot) => {
     const mainFile = join(gameRoot, 'src/main.ts');
@@ -414,6 +589,7 @@ function assertGenericAgentWorkflow(gameRoot: string): void {
 function assertMicrosoftStoreDisabled(gameRoot: string): void {
   assert.equal(existsSync(join(gameRoot, 'mpgd.microsoft-store.json')), false);
   assert.equal(existsSync(join(gameRoot, 'src/platform/microsoftStorePwa.ts')), false);
+  assert.equal(existsSync(join(gameRoot, 'src/platform/buildGateways/microsoftStore.ts')), false);
   assert.equal(existsSync(join(gameRoot, storeSkill)), false);
   assert.equal(existsSync(join(gameRoot, storeSkillMetadata)), false);
 
@@ -435,6 +611,14 @@ function assertMicrosoftStoreDisabled(gameRoot: string): void {
 
   const main = readFileSync(join(gameRoot, 'src/main.ts'), 'utf8');
   assert.doesNotMatch(main, /installMicrosoftStorePwa/u);
+  assert.doesNotMatch(
+    readFileSync(join(gameRoot, 'vite.shared.ts'), 'utf8'),
+    /buildGateways\/microsoftStore/u,
+  );
+  assert.doesNotMatch(
+    readFileSync(join(gameRoot, 'src/platform/runtimeDetector.ts'), 'utf8'),
+    /'microsoft-store'/u,
+  );
   assert.doesNotMatch(readFileSync(join(gameRoot, 'README.md'), 'utf8'), /PWABuilder/u);
   assertManagedDocumentationCount(gameRoot, 0);
 }
@@ -442,6 +626,7 @@ function assertMicrosoftStoreDisabled(gameRoot: string): void {
 function assertMicrosoftStoreEnabled(gameRoot: string): void {
   for (const relativePath of [
     'mpgd.microsoft-store.json',
+    'src/platform/buildGateways/microsoftStore.ts',
     'src/platform/microsoftStorePwa.ts',
     storeSkill,
     storeSkillMetadata,
@@ -451,6 +636,8 @@ function assertMicrosoftStoreEnabled(gameRoot: string): void {
 
   const packageJson = readJson(join(gameRoot, 'package.json'));
   const scripts = requireRecord(packageJson.scripts, 'package scripts');
+  const dependencies = requireRecord(packageJson.dependencies, 'package dependencies');
+  assert.equal(typeof dependencies['@mpgd/adapter-browser'], 'string');
   for (const name of [
     'build:microsoft-store',
     'smoke:microsoft-store',
@@ -466,7 +653,8 @@ function assertMicrosoftStoreEnabled(gameRoot: string): void {
     'Microsoft Store target',
   );
   assert.equal(storeTarget.kind, 'web');
-  assert.equal(storeTarget.adapter, 'browser');
+  assert.equal(storeTarget.adapter, 'microsoft-store');
+  assert.equal(storeTarget.authoritativeGameServices, false);
   const manifest = readJson(join(gameRoot, 'agent/game-manifest.json'));
   assert.ok(Array.isArray(manifest.targets));
   assert.equal(manifest.targets.includes('microsoft-store'), true);
@@ -476,6 +664,14 @@ function assertMicrosoftStoreEnabled(gameRoot: string): void {
 
   const main = readFileSync(join(gameRoot, 'src/main.ts'), 'utf8');
   assert.match(main, /installMicrosoftStorePwa/u);
+  assert.match(
+    readFileSync(join(gameRoot, 'vite.shared.ts'), 'utf8'),
+    /buildGateways\/microsoftStore/u,
+  );
+  assert.match(
+    readFileSync(join(gameRoot, 'src/platform/runtimeDetector.ts'), 'utf8'),
+    /'microsoft-store'/u,
+  );
   assert.match(main, /disposeMicrosoftStorePwa\?\.\(\)/u);
   assert.match(readFileSync(join(gameRoot, 'README.md'), 'utf8'), /PWABuilder/u);
   assert.match(readFileSync(join(gameRoot, storeSkill), 'utf8'), /WACK as optional/u);

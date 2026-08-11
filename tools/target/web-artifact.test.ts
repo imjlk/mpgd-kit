@@ -519,13 +519,39 @@ try {
         'microsoft-store': {
           kind: 'web',
           gameApp: '.',
-          adapter: 'browser',
+          adapter: 'microsoft-store',
           output: 'artifact',
           installable: false,
         },
       },
     }),
     /microsoft-store\.installable must not be false/u,
+  );
+  assert.throws(
+    () => assertPlatformTargetsConfigShape({
+      targets: {
+        'microsoft-store-staging': {
+          kind: 'web',
+          gameApp: '.',
+          adapter: 'microsoft-store',
+          output: 'artifact',
+        },
+      },
+    }),
+    /microsoft-store-staging cannot use the reserved microsoft-store adapter/u,
+  );
+  assert.throws(
+    () => assertPlatformTargetsConfigShape({
+      targets: {
+        'microsoft-store': {
+          kind: 'web',
+          gameApp: '.',
+          adapter: 'browser',
+          output: 'artifact',
+        },
+      },
+    }),
+    /microsoft-store target must use the web kind and microsoft-store adapter/u,
   );
 
   const aitTarget = {

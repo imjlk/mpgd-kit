@@ -44,6 +44,7 @@ import {
   type EntitlementLedgerPayload,
   type EntitlementLedgerResult,
   type GameServicesAdRewardTarget,
+  type GameServicesStoreTarget,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
   type PurchaseGrantFinalization,
@@ -72,7 +73,7 @@ export interface CreateGameServicesBackendInput {
 }
 
 export type GameServicesDeploymentTargetBindings = Readonly<
-  Partial<Record<GameServicesAdRewardTarget, string>>
+  Partial<Record<GameServicesAdRewardTarget | GameServicesStoreTarget, string>>
 >;
 
 export interface GameServicesBackendApiHandler {
@@ -562,7 +563,10 @@ export function createGameServicesHttpFetchHandler(
   };
 }
 
-const gameServicesDeploymentTargetPlatforms = new Set<GameServicesAdRewardTarget>([
+type GameServicesDeploymentTargetPlatform = GameServicesAdRewardTarget | GameServicesStoreTarget;
+
+const gameServicesDeploymentTargetPlatforms = new Set<GameServicesDeploymentTargetPlatform>([
+  'microsoft-store',
   'android',
   'ios',
   'ait',
@@ -572,15 +576,17 @@ const gameServicesDeploymentTargetPlatforms = new Set<GameServicesAdRewardTarget
 function resolveDeploymentTargetBindings(
   input: GameServicesDeploymentTargetBindings | undefined,
 ): GameServicesDeploymentTargetBindings {
-  const bindings: Partial<Record<GameServicesAdRewardTarget, string>> = {};
+  const bindings: Partial<Record<GameServicesDeploymentTargetPlatform, string>> = {};
 
   for (const [platformTarget, deploymentTarget] of Object.entries(input ?? {})) {
-    if (!gameServicesDeploymentTargetPlatforms.has(platformTarget as GameServicesAdRewardTarget)) {
+    if (!gameServicesDeploymentTargetPlatforms.has(
+      platformTarget as GameServicesDeploymentTargetPlatform,
+    )) {
       throw new Error(`Unsupported deployment target binding platform: ${platformTarget}.`);
     }
 
     assertGameServicesDeploymentTarget(deploymentTarget);
-    bindings[platformTarget as GameServicesAdRewardTarget] = deploymentTarget;
+    bindings[platformTarget as GameServicesDeploymentTargetPlatform] = deploymentTarget;
   }
 
   return bindings;
@@ -744,6 +750,36 @@ async function verifyPurchaseWithStore(
   });
 
   if (grant.status === 'evidence_already_processed') {
+    const existingEvidence = await findEntitlementTransactionByEvidenceVerificationId(
+      context.store,
+      { source: 'purchase', evidenceVerificationId: verification.verificationId },
+    );
+    if (
+      existingEvidence !== undefined
+      && matchesPurchaseEvidenceRecovery(existingEvidence, {
+        playerId: request.playerId,
+        grantId: request.productId,
+        target: request.target,
+        ...(request.deploymentTarget === undefined
+          ? {}
+          : { deploymentTarget: request.deploymentTarget }),
+        evidenceVerificationId: verification.verificationId,
+      })
+    ) {
+      const finalization = await finalizeExistingPurchaseGrant(request, existingEvidence, context);
+      // A different idempotency key is evidence replay unless a configured finalizer can resume
+      // the provider operation. Keep generic stores fail-closed while allowing Store consume
+      // recovery to report the already-recorded grant.
+      if (finalization !== undefined) {
+        return assertVerifyPurchaseResponse({
+          verified: true,
+          ledgerEntryId: existingEvidence.ledgerEntryId,
+          alreadyProcessed: true,
+          finalization,
+        });
+      }
+    }
+
     return assertVerifyPurchaseResponse({
       verified: false,
       alreadyProcessed: false,
@@ -1327,13 +1363,16 @@ function createPromiseGate(): { readonly promise: Promise<void>; readonly releas
   return { promise, release };
 }
 
-interface EntitlementRetryIdentity {
+interface EntitlementTransactionIdentity {
   readonly source: EntitlementLedgerGrant['source'];
   readonly playerId: string;
-  readonly idempotencyKey: string;
   readonly grantId: string;
   readonly target: string;
   readonly deploymentTarget?: string;
+}
+
+interface EntitlementRetryIdentity extends EntitlementTransactionIdentity {
+  readonly idempotencyKey: string;
 }
 
 async function findEntitlementTransactionByIdempotency(
@@ -1432,9 +1471,36 @@ function matchesEntitlementRetry(
   transaction: ProductGrantTransaction,
   identity: EntitlementRetryIdentity,
 ): boolean {
+  return matchesEntitlementTransactionIdentity(transaction, identity)
+    && transaction.idempotencyKey === identity.idempotencyKey;
+}
+
+function matchesPurchaseEvidenceRecovery(
+  transaction: ProductGrantTransaction,
+  identity: {
+    readonly playerId: string;
+    readonly grantId: string;
+    readonly target: string;
+    readonly deploymentTarget?: string;
+    readonly evidenceVerificationId: string;
+  },
+): boolean {
+  return matchesEntitlementTransactionIdentity(transaction, {
+    ...identity,
+    source: 'purchase',
+  })
+    && (
+      transaction.evidenceVerificationId
+        ?? transaction.payload.evidenceVerificationId
+    ) === identity.evidenceVerificationId;
+}
+
+function matchesEntitlementTransactionIdentity(
+  transaction: ProductGrantTransaction,
+  identity: EntitlementTransactionIdentity,
+): boolean {
   return transaction.source === identity.source
     && transaction.playerId === identity.playerId
-    && transaction.idempotencyKey === identity.idempotencyKey
     && transaction.grantId === identity.grantId
     && transaction.payload.target === identity.target
     && transaction.payload.deploymentTarget === identity.deploymentTarget;

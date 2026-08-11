@@ -15,6 +15,10 @@ import {
 
 import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
+import {
+  createMicrosoftStoreCommerceAdapter,
+  withMicrosoftStoreCommerceAdapter,
+} from '../../adapters/browser/src/microsoft-store';
 import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
 import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
@@ -51,7 +55,7 @@ interface RuntimeMirrorCheck {
 
 const targetSpecs = [
   { configTarget: 'web-preview', expectedTarget: 'browser' },
-  { configTarget: 'microsoft-store', expectedTarget: 'browser' },
+  { configTarget: 'microsoft-store', expectedTarget: 'microsoft-store' },
   { configTarget: 'verse8', expectedTarget: 'verse8' },
   { configTarget: 'android', expectedTarget: 'android' },
   { configTarget: 'ios', expectedTarget: 'ios' },
@@ -65,6 +69,7 @@ const initialBridgeCapabilities = {
   rewardedAds: true,
   interstitialAds: true,
   nativeLeaderboard: true,
+  remoteLeaderboard: false,
   achievements: false,
   cloudSave: true,
   socialShare: true,
@@ -78,6 +83,7 @@ const updatedBridgeCapabilities = {
   rewardedAds: false,
   interstitialAds: false,
   nativeLeaderboard: false,
+  remoteLeaderboard: false,
   achievements: true,
   cloudSave: false,
   socialShare: false,
@@ -170,8 +176,9 @@ function createConfiguredFixture(spec: TargetSpec): {
 function createGateway(configTarget: ConfigTarget): CreatedGateway {
   switch (configTarget) {
     case 'web-preview':
-    case 'microsoft-store':
       return createBrowserGateway();
+    case 'microsoft-store':
+      return createMicrosoftStoreGateway();
     case 'verse8':
       return createVerse8Gateway();
     case 'android':
@@ -200,12 +207,44 @@ function createBrowserGateway(): CreatedGateway {
       rewardedAds: true,
       interstitialAds: true,
       nativeLeaderboard: false,
+      remoteLeaderboard: false,
       achievements: false,
       cloudSave: true,
       socialShare: true,
       haptics: false,
       localizedContent: true,
     },
+  };
+}
+
+function createMicrosoftStoreGateway(): CreatedGateway {
+  const browser = createBrowserGateway();
+  const base: PlatformGateway = { ...browser.gateway, target: 'microsoft-store' };
+  const commerce = createMicrosoftStoreCommerceAdapter({
+    getRecoveryScope: () => 'configuration-required',
+    products: [],
+    authority: {
+      async getAvailability() {
+        return 'configuration-required';
+      },
+      async claimRecoveryOwnership() {
+        return { status: 'denied' } as const;
+      },
+      async hasRecoveryOwnership() {
+        return { status: 'denied' } as const;
+      },
+      async verifyAndGrant() {
+        return { status: 'failed' };
+      },
+      async getEntitlements() {
+        return [];
+      },
+    },
+  });
+
+  return {
+    gateway: withMicrosoftStoreCommerceAdapter(base, commerce),
+    expectedCapabilities: browser.expectedCapabilities,
   };
 }
 
@@ -228,6 +267,7 @@ function createVerse8Gateway(): CreatedGateway {
       rewardedAds: true,
       interstitialAds: true,
       nativeLeaderboard: false,
+      remoteLeaderboard: false,
       achievements: false,
       cloudSave: true,
       socialShare: false,
@@ -305,6 +345,7 @@ function maskCapabilities(
     rewardedAds: capabilities.rewardedAds && config.features.rewardedAds,
     interstitialAds: capabilities.interstitialAds && config.features.interstitialAds,
     nativeLeaderboard: capabilities.nativeLeaderboard && config.features.leaderboard,
+    remoteLeaderboard: capabilities.remoteLeaderboard && config.features.leaderboard,
     localizedContent: capabilities.localizedContent && config.features.localization,
   };
 }

@@ -25,6 +25,7 @@ export function normalizeTarget(value: string): PlatformTarget {
     value === 'android'
     || value === 'ios'
     || value === 'ait'
+    || value === 'microsoft-store'
     || value === 'reddit'
     || value === 'verse8'
   ) {

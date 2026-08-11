@@ -252,6 +252,29 @@ assertEqual(remoteRuntime.target, 'android', 'runtime should preserve the ledger
 assertNotEqual(remoteRuntime.client, undefined, 'remote production should expose a client');
 assertLocalCalls(1, 'remote production factory creation');
 
+const microsoftStoreRuntime = createGameServicesRuntime({
+  gateway: createGateway('microsoft-store'),
+  playerId,
+  authorityMode: 'production',
+  baseUrl: 'https://services.example.com/api',
+});
+
+assertEqual(
+  microsoftStoreRuntime.mode,
+  'http',
+  'Microsoft Store should resolve an authoritative Game Services runtime',
+);
+assertEqual(
+  microsoftStoreRuntime.target,
+  'microsoft-store',
+  'Microsoft Store should preserve its ledger target',
+);
+assertNotEqual(
+  microsoftStoreRuntime.client,
+  undefined,
+  'Microsoft Store should expose the authoritative client',
+);
+
 const orpcRuntime = createGameServicesRuntime({
   gateway: createGateway(),
   playerId,
@@ -371,6 +394,7 @@ function createGateway(target: PlatformGateway['target'] = 'android'): PlatformG
         rewardedAds: true,
         interstitialAds: true,
         nativeLeaderboard: true,
+        remoteLeaderboard: false,
         achievements: false,
         cloudSave: false,
         socialShare: false,

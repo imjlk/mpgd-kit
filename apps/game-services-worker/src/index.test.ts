@@ -1,12 +1,14 @@
 import {
   createGameServicesOrpcBackendApi,
   createGameServicesOrpcClient,
+  microsoftStoreDigitalGoodsEvidenceSchema,
 } from '@mpgd/game-services';
 
 import {
   createWorkerFetchHandler,
   createWorkerService,
   type GameServicesEvidenceVerifierBinding,
+  type GameServicesPurchaseGrantFinalizerBinding,
   type GameServicesWorkerEnv,
 } from './handler.js';
 
@@ -26,6 +28,29 @@ const workerEnv = {
 const workerFetch = createWorkerFetchHandler(workerEnv);
 const workerService = createWorkerService(workerEnv);
 const baseUrl = 'https://game-services-worker.test';
+
+const insecureDevelopmentMicrosoftStorePurchase = await workerService.verifyPurchase({
+  target: 'microsoft-store',
+  playerId: 'worker-development-store-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'coins_100',
+  idempotencyKey: 'worker-development-store-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: microsoftStoreDigitalGoodsEvidenceSchema,
+    payload: { purchaseToken: 'coins_100' },
+  },
+}) as { readonly verified: boolean; readonly reason?: string };
+assertEqual(
+  insecureDevelopmentMicrosoftStorePurchase.verified,
+  false,
+  'development evidence fallback must not grant Store consumables without consumption',
+);
+assertEqual(
+  insecureDevelopmentMicrosoftStorePurchase.reason,
+  'EVIDENCE_VERIFIER_UNAVAILABLE',
+  'development Store evidence should fail closed with observable verifier state',
+);
 
 const defaultMemoryFetch = createWorkerFetchHandler({ MPGD_STORE: 'memory' });
 const defaultMemoryPurchase = await defaultMemoryFetch(
@@ -60,11 +85,13 @@ assertEqual(
 
 let verifierBindingReceivedSignal = true;
 let verifierBindingTimeoutMs = 0;
+let verifierBindingPurchaseCalls = 0;
 let rewardVerifierBindingReceivedSignal = true;
 const boundVerifierService = createWorkerService({
   MPGD_STORE: 'memory',
   GAME_SERVICES_EVIDENCE_VERIFIER: {
     async verifyPurchase(input) {
+      verifierBindingPurchaseCalls += 1;
       verifierBindingReceivedSignal = Object.hasOwn(input, 'signal');
       verifierBindingTimeoutMs = input.timeoutMs;
       return {
@@ -99,6 +126,18 @@ const boundVerifierReward = await boundVerifierService.claimAdReward({
   idempotencyKey: 'worker-binding-reward',
   completedAt: '2026-07-04T00:00:00.000Z',
 });
+const aggregateOnlyMicrosoftStorePurchase = await boundVerifierService.verifyPurchase({
+  target: 'microsoft-store',
+  playerId: 'worker-binding-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'coins_100',
+  idempotencyKey: 'worker-binding-microsoft-store-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: microsoftStoreDigitalGoodsEvidenceSchema,
+    payload: { purchaseToken: 'coins_100' },
+  },
+}) as { readonly verified: boolean; readonly reason?: string };
 
 assertEqual(
   (boundVerifierPurchase as { readonly verified: boolean }).verified,
@@ -124,6 +163,21 @@ assertEqual(
   rewardVerifierBindingReceivedSignal,
   false,
   'reward verifier bindings must not receive non-cloneable AbortSignal values',
+);
+assertEqual(
+  aggregateOnlyMicrosoftStorePurchase.verified,
+  false,
+  'an aggregate verifier must not grant Store evidence without the paired finalizer boundary',
+);
+assertEqual(
+  aggregateOnlyMicrosoftStorePurchase.reason,
+  'EVIDENCE_VERIFIER_UNAVAILABLE',
+  'aggregate-only Store verification should fail closed with observable verifier state',
+);
+assertEqual(
+  verifierBindingPurchaseCalls,
+  1,
+  'Microsoft Store evidence must not reach the legacy aggregate verifier',
 );
 
 let configuredDeploymentTarget: string | undefined;
@@ -443,6 +497,177 @@ assertEqual(
   'strict target-specific mode must not fall back to the aggregate binding',
 );
 
+let microsoftStoreFinalizerReceivedSignal = true;
+let microsoftStoreFinalizerCalls = 0;
+let microsoftStoreVerifierCalls = 0;
+const microsoftStoreFinalizerBinding = {
+  async finalizePurchaseGrant(input) {
+    microsoftStoreFinalizerCalls += 1;
+    microsoftStoreFinalizerReceivedSignal = Object.hasOwn(input, 'signal');
+    return {
+      status: 'completed',
+      action: 'consume',
+      alreadyCompleted: false,
+    };
+  },
+} satisfies GameServicesPurchaseGrantFinalizerBinding;
+assertThrows(
+  () => createWorkerService({
+    MPGD_STORE: 'memory',
+    GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER: {
+      async verifyPurchase() {
+        return verifiedDecision('microsoft-store:missing-finalizer');
+      },
+      async verifyAdReward() {
+        return { status: 'rejected', reason: 'NOT_SUPPORTED' };
+      },
+    },
+  }),
+  /must be configured together/u,
+  'Microsoft Store verifier-only configuration must fail closed',
+);
+assertThrows(
+  () => createWorkerService({
+    MPGD_STORE: 'memory',
+    GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER: microsoftStoreFinalizerBinding,
+  }),
+  /must be configured together/u,
+  'Microsoft Store finalizer-only configuration must fail closed',
+);
+const microsoftStoreService = createWorkerService({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER: {
+    async verifyPurchase(input) {
+      microsoftStoreVerifierCalls += 1;
+      return verifiedDecision(`microsoft-store:${input.request.idempotencyKey}`);
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_SUPPORTED' };
+    },
+  },
+  GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER: microsoftStoreFinalizerBinding,
+});
+const microsoftStorePurchase = await microsoftStoreService.verifyPurchase({
+  target: 'microsoft-store',
+  playerId: 'microsoft-store-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'coins_100',
+  idempotencyKey: 'microsoft-store-purchase',
+  purchasedAt: '2026-08-11T00:00:00.000Z',
+  evidence: {
+    schema: microsoftStoreDigitalGoodsEvidenceSchema,
+    payload: { purchaseToken: 'coins_100' },
+  },
+}) as {
+  readonly verified: boolean;
+  readonly finalization?: { readonly status: string; readonly action?: string };
+};
+assertEqual(microsoftStorePurchase.verified, true, 'Microsoft Store evidence should grant');
+assertEqual(
+  microsoftStorePurchase.finalization?.status,
+  'completed',
+  'Microsoft Store fulfillment should return the finalizer result',
+);
+assertEqual(
+  microsoftStorePurchase.finalization?.action,
+  'consume',
+  'Microsoft Store fulfillment should expose consume completion',
+);
+assertEqual(microsoftStoreFinalizerCalls, 1, 'Microsoft Store consume should run exactly once');
+assertEqual(
+  microsoftStoreFinalizerReceivedSignal,
+  false,
+  'AbortSignal must not cross the Worker service binding boundary',
+);
+assertEqual(microsoftStoreVerifierCalls, 1, 'Microsoft Store verification should run once');
+
+const microsoftStoreEvidenceLessRetry = await microsoftStoreService.verifyPurchase({
+  target: 'microsoft-store',
+  playerId: 'microsoft-store-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'coins_100',
+  idempotencyKey: 'microsoft-store-purchase',
+  purchasedAt: '2026-08-11T00:00:00.000Z',
+}) as {
+  readonly verified: boolean;
+  readonly alreadyProcessed?: boolean;
+  readonly finalization?: { readonly status: string };
+};
+assertEqual(
+  microsoftStoreEvidenceLessRetry.verified,
+  true,
+  'an existing Store grant should accept an evidence-less finalization retry',
+);
+assertEqual(
+  microsoftStoreEvidenceLessRetry.alreadyProcessed,
+  true,
+  'an evidence-less Store retry should reuse the existing grant',
+);
+assertEqual(
+  microsoftStoreEvidenceLessRetry.finalization?.status,
+  'completed',
+  'an evidence-less Store retry should still complete consumption',
+);
+assertEqual(
+  microsoftStoreVerifierCalls,
+  1,
+  'an existing Store grant should not be reverified from retry request evidence',
+);
+assertEqual(
+  microsoftStoreFinalizerCalls,
+  2,
+  'an existing Store grant should retry its finalizer from stored evidence',
+);
+
+const unsupportedMicrosoftStorePurchase = await microsoftStoreService.verifyPurchase({
+  target: 'microsoft-store',
+  playerId: 'microsoft-store-unsupported-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'coins_100-unsupported',
+  idempotencyKey: 'microsoft-store-unsupported-finalizer',
+  purchasedAt: '2026-08-11T00:00:00.000Z',
+}) as { readonly verified: boolean; readonly reason?: string };
+assertEqual(
+  unsupportedMicrosoftStorePurchase.verified,
+  false,
+  'unsupported Microsoft Store finalization must fail before the ledger grant',
+);
+assertEqual(
+  unsupportedMicrosoftStorePurchase.reason,
+  'MICROSOFT_STORE_PURCHASE_FINALIZER_UNSUPPORTED',
+  'unsupported Store finalization should remain observable',
+);
+assertEqual(
+  microsoftStoreVerifierCalls,
+  1,
+  'unsupported Store evidence must not reach a verifier that could authorize a grant',
+);
+assertEqual(
+  microsoftStoreFinalizerCalls,
+  2,
+  'unsupported Store evidence must not reach the finalizer',
+);
+
+const correctedMicrosoftStorePurchase = await microsoftStoreService.verifyPurchase({
+  target: 'microsoft-store',
+  playerId: 'microsoft-store-unsupported-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'coins_100-unsupported',
+  idempotencyKey: 'microsoft-store-unsupported-finalizer',
+  purchasedAt: '2026-08-11T00:00:00.000Z',
+  evidence: {
+    schema: microsoftStoreDigitalGoodsEvidenceSchema,
+    payload: { purchaseToken: 'coins_100' },
+  },
+}) as { readonly verified: boolean };
+assertEqual(
+  correctedMicrosoftStorePurchase.verified,
+  true,
+  'corrected Store evidence should reuse the idempotency key because no grant was recorded',
+);
+assertEqual(microsoftStoreVerifierCalls, 2, 'corrected Store evidence should reach the verifier');
+assertEqual(microsoftStoreFinalizerCalls, 3, 'corrected Store evidence should reach the finalizer');
+
 const health = await workerFetch(new Request(`${baseUrl}/health`));
 const healthBody = await health.json() as { readonly version: string };
 assertEqual(health.status, 200, 'health should return 200');
@@ -667,5 +892,19 @@ function assertDeepEqual<T>(
     throw new Error(
       `${message}: expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}.`,
     );
+  }
+}
+
+function assertThrows(run: () => unknown, expected: RegExp, message: string): void {
+  let error: unknown;
+
+  try {
+    run();
+  } catch (caught) {
+    error = caught;
+  }
+
+  if (!(error instanceof Error) || !expected.test(error.message)) {
+    throw new Error(`${message}: received ${String(error)}.`);
   }
 }

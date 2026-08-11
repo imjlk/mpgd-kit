@@ -329,6 +329,7 @@ assertEqual(webCapabilities.nativeIap, false);
 assertEqual(webCapabilities.rewardedAds, false);
 assertEqual(webCapabilities.interstitialAds, false);
 assertEqual(webCapabilities.nativeLeaderboard, false);
+assertEqual(webCapabilities.remoteLeaderboard, false);
 assertEqual(webCapabilities.localizedContent, true);
 assertDeepEqual(await webGateway.commerce.getProducts(), []);
 assertDeepEqual(
@@ -858,6 +859,28 @@ const blankAdPlacementConfig = getEffectiveAdPlacementConfig(
 assertEqual(blankAdPlacementConfig?.reason, 'missing-platform-id');
 assertEqual(blankAdPlacementConfig?.platformPlacementId, undefined);
 
+const leaderboardUnavailableGateway = withTargetAvailability({
+  ...gateway,
+  async getCapabilities() {
+    return {
+      ...await gateway.getCapabilities(),
+      nativeLeaderboard: false,
+      remoteLeaderboard: false,
+    };
+  },
+}, androidConfig);
+const delegatedCallsBeforeUnavailableLeaderboard = delegatedCalls.length;
+assertDeepEqual(
+  await leaderboardUnavailableGateway.leaderboard.submitScore({
+    leaderboardId: 'default',
+    score: 100,
+    runId: 'unavailable-leaderboard-run',
+    submittedAt: new Date().toISOString(),
+  }),
+  { submitted: false },
+);
+assertEqual(delegatedCalls.length, delegatedCallsBeforeUnavailableLeaderboard);
+
 await androidGateway.commerce.purchase({
   productId: 'COINS_100',
   source: 'shop',
@@ -923,6 +946,7 @@ function createGateway(): PlatformGateway {
         rewardedAds: true,
         interstitialAds: true,
         nativeLeaderboard: true,
+        remoteLeaderboard: false,
         achievements: true,
         cloudSave: true,
         socialShare: true,

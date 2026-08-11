@@ -9,12 +9,16 @@ import {
   createInMemoryGameServicesStore,
   createInMemoryVerifiedLeaderboardService,
   createVerifiedLeaderboardSnapshotFetchHandler,
+  microsoftStoreDigitalGoodsEvidenceSchema,
   type ClaimAdRewardRequest,
   type GameServicesBackendApi,
   type GameServicesDeploymentTargetBindings,
   type GameServicesEvidenceVerifier,
+  type GameServicesPurchaseGrantFinalizer,
   type EvidenceVerificationDecision,
+  type FinalizePurchaseGrantInput,
   type GameServicesStore,
+  type GameServicesStoreTarget,
   type GetVerifiedLeaderboardSnapshotRequest,
   type RecordLeaderboardScoreRequest,
   type RecordVerifiedLeaderboardAttemptRequest,
@@ -25,6 +29,7 @@ import {
   type VerifyPurchaseRequest,
   type VerifyPurchaseEvidenceInput,
   type VerifyAdRewardEvidenceInput,
+  type PurchaseGrantFinalization,
 } from '@mpgd/game-services';
 import type { ProductCatalog } from '@mpgd/catalog';
 import {
@@ -44,10 +49,14 @@ export interface GameServicesWorkerEnv {
   readonly GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_IOS_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_AIT_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  readonly GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
+  readonly GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER?:
+    GameServicesPurchaseGrantFinalizerBinding;
   readonly GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER?: GameServicesEvidenceVerifierBinding;
   readonly GAME_SERVICES_ANDROID_DEPLOYMENT_TARGET?: string;
   readonly GAME_SERVICES_IOS_DEPLOYMENT_TARGET?: string;
   readonly GAME_SERVICES_AIT_DEPLOYMENT_TARGET?: string;
+  readonly GAME_SERVICES_MICROSOFT_STORE_DEPLOYMENT_TARGET?: string;
   readonly GAME_SERVICES_VERSE8_DEPLOYMENT_TARGET?: string;
   readonly VERSE8_ADS_VERIFIER_AUTHORIZATION?: string;
   readonly VERSE8_ADS_VERIFIER_BASE_URL?: string;
@@ -60,6 +69,12 @@ export interface GameServicesEvidenceVerifierBinding {
   verifyAdReward(
     input: Omit<VerifyAdRewardEvidenceInput, 'signal'>,
   ): Promise<EvidenceVerificationDecision>;
+}
+
+export interface GameServicesPurchaseGrantFinalizerBinding {
+  finalizePurchaseGrant(
+    input: Omit<FinalizePurchaseGrantInput, 'signal'>,
+  ): Promise<PurchaseGrantFinalization>;
 }
 
 export interface VerifiedLeaderboardAuthBindingRequest {
@@ -100,6 +115,7 @@ const productCatalog = {
         'android-staging': 'coins_100_android_staging',
         ios: 'com.mpgd.game.coins100',
         ait: 'coins_100',
+        'microsoft-store': 'coins_100',
       },
     },
   ],
@@ -137,6 +153,7 @@ export function createWorkerFetchHandler(
   const backend = createWorkerBackend(env);
   const verifiedLeaderboard = createWorkerVerifiedLeaderboardService(env);
   const evidenceVerifier = resolveWorkerEvidenceVerifier(env);
+  const purchaseGrantFinalizer = resolveWorkerPurchaseGrantFinalizer(env);
   const deploymentTargetBindings = resolveWorkerDeploymentTargetBindings(env);
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
@@ -160,6 +177,9 @@ export function createWorkerFetchHandler(
       ...(evidenceVerifier === undefined
         ? {}
         : { evidenceVerifier }),
+      ...(purchaseGrantFinalizer === undefined
+        ? {}
+        : { purchaseGrantFinalizer }),
     }),
     {
       corsHeaders,
@@ -239,7 +259,9 @@ export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWor
 }
 
 function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi {
+  assertMicrosoftStorePurchaseBindings(env);
   const evidenceVerifier = resolveWorkerEvidenceVerifier(env);
+  const purchaseGrantFinalizer = resolveWorkerPurchaseGrantFinalizer(env);
 
   return createGameServicesBackend({
     catalog: productCatalog,
@@ -249,14 +271,57 @@ function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi
     ...(evidenceVerifier === undefined
       ? {}
       : { evidenceVerifier }),
+    ...(purchaseGrantFinalizer === undefined
+      ? {}
+      : { purchaseGrantFinalizer }),
     version: productCatalog.version,
   });
+}
+
+function assertMicrosoftStorePurchaseBindings(env: GameServicesWorkerEnv): void {
+  const hasVerifier = env.GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER !== undefined;
+  const hasFinalizer = env.GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER !== undefined;
+
+  if (hasVerifier !== hasFinalizer) {
+    const missingBinding = hasVerifier
+      ? 'GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER'
+      : 'GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER';
+    throw new Error(
+      'Microsoft Store evidence verifier and purchase finalizer bindings must be configured '
+        + `together. Missing: ${missingBinding}.`,
+    );
+  }
+}
+
+function resolveWorkerPurchaseGrantFinalizer(
+  env: GameServicesWorkerEnv,
+): GameServicesPurchaseGrantFinalizer | undefined {
+  const binding = env.GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER;
+  if (binding === undefined) {
+    return undefined;
+  }
+
+  return {
+    supportsPurchaseGrant(input) {
+      return supportsMicrosoftStorePurchaseGrant(input);
+    },
+    finalizePurchaseGrant(input) {
+      const { signal, ...bindingInput } = input;
+      // AbortSignal is not structured-cloneable across a Worker Service Binding. The remote
+      // binding receives timeoutMs and must enforce that timeout within its own request scope.
+      void signal;
+      return binding.finalizePurchaseGrant(bindingInput);
+    },
+  };
 }
 
 function resolveWorkerDeploymentTargetBindings(
   env: GameServicesWorkerEnv,
 ): GameServicesDeploymentTargetBindings {
   return {
+    ...(env.GAME_SERVICES_MICROSOFT_STORE_DEPLOYMENT_TARGET === undefined
+      ? {}
+      : { 'microsoft-store': env.GAME_SERVICES_MICROSOFT_STORE_DEPLOYMENT_TARGET }),
     ...(env.GAME_SERVICES_ANDROID_DEPLOYMENT_TARGET === undefined
       ? {}
       : { android: env.GAME_SERVICES_ANDROID_DEPLOYMENT_TARGET }),
@@ -288,9 +353,14 @@ function resolveWorkerEvidenceVerifier(
     const binding = env.GAME_SERVICES_EVIDENCE_VERIFIER;
 
     return createWorkerEvidenceVerifier(
-      (target) => target === 'verse8' && verse8Verifier !== undefined
-        ? undefined
-        : binding,
+      (target) => {
+        // Microsoft Store consumables require a paired verifier/finalizer boundary. Never let
+        // the legacy aggregate verifier grant Store evidence without a consume finalizer.
+        if (target === 'microsoft-store') {
+          return undefined;
+        }
+        return target === 'verse8' && verse8Verifier !== undefined ? undefined : binding;
+      },
       verse8Verifier,
     );
   }
@@ -299,7 +369,7 @@ function resolveWorkerEvidenceVerifier(
     ? createDevelopmentGameServicesEvidenceVerifier()
     : undefined;
 
-  if (verse8Verifier !== undefined) {
+  if (verse8Verifier !== undefined || developmentVerifier !== undefined) {
     return createWorkerEvidenceVerifier(
       () => undefined,
       verse8Verifier,
@@ -307,11 +377,12 @@ function resolveWorkerEvidenceVerifier(
     );
   }
 
-  return developmentVerifier;
+  return undefined;
 }
 
 function hasTargetSpecificEvidenceVerifierBinding(env: GameServicesWorkerEnv): boolean {
-  return env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER !== undefined
+  return env.GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER !== undefined
+    || env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER !== undefined
     || env.GAME_SERVICES_IOS_EVIDENCE_VERIFIER !== undefined
     || env.GAME_SERVICES_AIT_EVIDENCE_VERIFIER !== undefined
     || env.GAME_SERVICES_VERSE8_EVIDENCE_VERIFIER !== undefined;
@@ -319,9 +390,11 @@ function hasTargetSpecificEvidenceVerifierBinding(env: GameServicesWorkerEnv): b
 
 function resolveTargetSpecificEvidenceVerifierBinding(
   env: GameServicesWorkerEnv,
-  target: ClaimAdRewardRequest['target'],
+  target: ClaimAdRewardRequest['target'] | GameServicesStoreTarget,
 ): GameServicesEvidenceVerifierBinding | undefined {
   switch (target) {
+    case 'microsoft-store':
+      return env.GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER;
     case 'android':
       return env.GAME_SERVICES_ANDROID_EVIDENCE_VERIFIER;
     case 'ios':
@@ -340,7 +413,7 @@ function resolveTargetSpecificEvidenceVerifierBinding(
 
 function createWorkerEvidenceVerifier(
   resolveBinding: (
-    target: ClaimAdRewardRequest['target'],
+    target: ClaimAdRewardRequest['target'] | GameServicesStoreTarget,
   ) => GameServicesEvidenceVerifierBinding | undefined,
   verse8Verifier?: GameServicesEvidenceVerifier,
   fallbackVerifier?: GameServicesEvidenceVerifier,
@@ -350,6 +423,12 @@ function createWorkerEvidenceVerifier(
       const { request, product, platformProductId, timeoutMs } = input;
       const binding = resolveBinding(request.target);
 
+      if (request.target === 'microsoft-store' && !hasMicrosoftStorePurchaseEvidence(input)) {
+        return {
+          status: 'rejected',
+          reason: 'MICROSOFT_STORE_PURCHASE_FINALIZER_UNSUPPORTED',
+        };
+      }
       if (binding !== undefined) {
         return binding.verifyPurchase({
           request,
@@ -359,6 +438,11 @@ function createWorkerEvidenceVerifier(
         });
       }
 
+      if (request.target === 'microsoft-store') {
+        // Store grants are never safe through the generic development fallback because they must
+        // be paired with authoritative Collections consumption.
+        return unavailableEvidenceVerificationDecision();
+      }
       return fallbackVerifier?.verifyPurchase(input)
         ?? unavailableEvidenceVerificationDecision();
     },
@@ -381,6 +465,20 @@ function createWorkerEvidenceVerifier(
           ?? unavailableEvidenceVerificationDecision();
     },
   };
+}
+
+function supportsMicrosoftStorePurchaseGrant(
+  input: Pick<FinalizePurchaseGrantInput, 'request' | 'product'>,
+): boolean {
+  return input.request.target === 'microsoft-store'
+    && input.product.type === 'consumable';
+}
+
+function hasMicrosoftStorePurchaseEvidence(
+  input: Pick<FinalizePurchaseGrantInput, 'request' | 'product'>,
+): boolean {
+  return supportsMicrosoftStorePurchaseGrant(input)
+    && input.request.evidence?.schema === microsoftStoreDigitalGoodsEvidenceSchema;
 }
 
 function resolveVerse8AdsEvidenceVerifier(

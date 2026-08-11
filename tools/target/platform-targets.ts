@@ -101,6 +101,16 @@ function assertPlatformTargetConfigShape(
   assertTargetIntegrations(input.integrations, target);
   assertTargetIcon(input.icon, target);
 
+  if (
+    target === 'microsoft-store'
+    && (input.kind !== 'web' || input.adapter !== 'microsoft-store')
+  ) {
+    throw new Error('microsoft-store target must use the web kind and microsoft-store adapter.');
+  }
+  if (input.adapter === 'microsoft-store' && target !== 'microsoft-store') {
+    throw new Error(`Platform target ${target} cannot use the reserved microsoft-store adapter.`);
+  }
+
   switch (input.kind) {
     case 'web':
       assertString(input.output, `${target}.output`);

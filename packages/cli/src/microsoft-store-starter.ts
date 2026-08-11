@@ -35,6 +35,7 @@ const microsoftStoreOnlyTemplateFiles = new Set([
   '.agents/skills/release-microsoft-store/SKILL.md',
   '.agents/skills/release-microsoft-store/agents/openai.yaml',
   'mpgd.microsoft-store.json',
+  'src/platform/buildGateways/microsoftStore.ts',
   'src/platform/microsoftStorePwa.ts',
 ]);
 const microsoftStoreManagedTemplateFiles = new Set([
@@ -45,9 +46,20 @@ const microsoftStoreManagedTemplateFiles = new Set([
 const microsoftStoreTarget = {
   kind: 'web',
   gameApp: '.',
-  adapter: 'browser',
+  adapter: 'microsoft-store',
+  authoritativeGameServices: false,
   icon: { profile: 'microsoft-pwa' },
   output: 'artifacts/microsoft-store',
+} as const;
+const microsoftStoreAdapterBasePackage = '@mpgd/adapter-browser';
+export const microsoftStoreAdapterMinimumDependencyVersion = '^0.6.0';
+const microsoftStoreGatewayResolver = {
+  anchor: "    default:\n      return 'src/platform/buildGateways/browser.ts';",
+  block: "    case 'microsoft-store':\n      return 'src/platform/buildGateways/microsoftStore.ts';",
+} as const;
+const microsoftStoreRuntimeTarget = {
+  anchor: "  'ios',\n  'ait',",
+  line: "  'microsoft-store',",
 } as const;
 
 interface JsonObject {
@@ -78,6 +90,7 @@ export interface InitializeMicrosoftStoreStarterInput {
   readonly gameRoot: string;
   readonly templateRoot: string;
   readonly defaultKitPath: string;
+  readonly adapterDependencyVersion: string;
   readonly dryRun: boolean;
 }
 
@@ -135,6 +148,10 @@ export function prepareBaseGameTemplateFile(input: {
       });
     case 'src/main.ts':
       return removeMicrosoftStoreBootstrap(withoutBlocks);
+    case 'src/platform/runtimeDetector.ts':
+      return removeMicrosoftStoreRuntimeTarget(withoutBlocks);
+    case 'vite.shared.ts':
+      return removeMicrosoftStoreGatewayResolver(withoutBlocks);
     default:
       return withoutBlocks;
   }
@@ -172,6 +189,7 @@ export function initializeMicrosoftStoreStarter(
   const packageSource = readRequiredRegularFile(gameRoot, packageFile, 'package.json');
   const packageJson = parseJsonObject(packageSource, 'package.json');
   const scripts = requireJsonObject(packageJson.scripts, 'package.json scripts');
+  const dependencies = requireJsonObject(packageJson.dependencies, 'package.json dependencies');
   const legacyScripts = legacyMicrosoftStoreScripts(input.defaultKitPath);
 
   for (const [name, command] of Object.entries(microsoftStoreScripts(input.defaultKitPath))) {
@@ -185,6 +203,11 @@ export function initializeMicrosoftStoreStarter(
     scripts[name] = command;
   }
 
+  dependencies[microsoftStoreAdapterBasePackage] = resolveAdapterDependency(
+    dependencies[microsoftStoreAdapterBasePackage],
+    input.adapterDependencyVersion,
+  );
+
   plan('package.json', formatJson(packageJson));
 
   const targetsFile = resolveGameFile(gameRoot, 'mpgd.targets.json');
@@ -196,7 +219,14 @@ export function initializeMicrosoftStoreStarter(
   if (existingTarget === undefined) {
     targets['microsoft-store'] = microsoftStoreTarget;
   } else {
-    assertCompatibleMicrosoftStoreTarget(existingTarget);
+    const compatibleTarget = assertCompatibleMicrosoftStoreTarget(existingTarget);
+    targets['microsoft-store'] = {
+      ...compatibleTarget,
+      ...microsoftStoreTarget,
+      ...(compatibleTarget.authoritativeGameServices === undefined
+        ? {}
+        : { authoritativeGameServices: compatibleTarget.authoritativeGameServices }),
+    };
   }
 
   plan('mpgd.targets.json', formatJson(targetsJson));
@@ -204,6 +234,15 @@ export function initializeMicrosoftStoreStarter(
   const mainFile = resolveGameFile(gameRoot, 'src/main.ts');
   const mainSource = readRequiredRegularFile(gameRoot, mainFile, 'src/main.ts');
   plan('src/main.ts', addMicrosoftStoreBootstrap(mainSource));
+
+  const runtimeSource = readRequiredMicrosoftStoreMigrationFile(
+    gameRoot,
+    'src/platform/runtimeDetector.ts',
+  );
+  plan('src/platform/runtimeDetector.ts', addMicrosoftStoreRuntimeTarget(runtimeSource));
+
+  const viteSource = readRequiredMicrosoftStoreMigrationFile(gameRoot, 'vite.shared.ts');
+  plan('vite.shared.ts', addMicrosoftStoreGatewayResolver(viteSource));
 
   planGitignore(gameRoot, plan);
   planAgentManifest(gameRoot, plan);
@@ -217,6 +256,7 @@ export function initializeMicrosoftStoreStarter(
     '.agents/skills/release-microsoft-store/agents/openai.yaml',
     'docs/MPGD_KIT_WORKFLOWS.md',
     'mpgd.microsoft-store.json',
+    'src/platform/buildGateways/microsoftStore.ts',
     'src/platform/microsoftStorePwa.ts',
   ] as const) {
     const destination = resolveGameFile(gameRoot, relativePath);
@@ -239,6 +279,178 @@ export function initializeMicrosoftStoreStarter(
   }
 
   return { changedFiles: writes.map((write) => write.relativePath).sort() };
+}
+
+/**
+ * Floors registry-backed browser adapter versions at the first release that exports the
+ * Microsoft Store PWA adapter. Local workspace/link/file specs remain intentionally untouched.
+ */
+export function resolveMicrosoftStoreAdapterDependencyVersion(candidate: string): string {
+  return resolveAdapterDependency(candidate, microsoftStoreAdapterMinimumDependencyVersion);
+}
+
+function dependencyVersion(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.length === 0
+    || !/^(?:workspace:\*|[~^]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/u.test(normalized)
+  ) {
+    throw new Error(
+      'Microsoft Store adapter dependency version must be workspace:* or a SemVer version/range.',
+    );
+  }
+  return normalized;
+}
+
+function resolveAdapterDependency(existing: unknown, required: string): string {
+  const requiredDependency = dependencyVersion(required);
+  if (existing === undefined) {
+    return requiredDependency;
+  }
+  if (typeof existing !== 'string' || existing.trim().length === 0) {
+    throw new Error(
+      `package.json dependency ${microsoftStoreAdapterBasePackage} must be a string.`,
+    );
+  }
+
+  const normalized = existing.trim();
+  if (/^(?:workspace|link|file):/u.test(normalized)) {
+    return normalized;
+  }
+
+  const currentRange = parseSimpleSemverRange(normalized);
+  const requiredRange = parseSimpleSemverRange(requiredDependency);
+  if (currentRange === undefined) {
+    // A non-simple registry constraint cannot prove that installing it will expose the
+    // Microsoft Store entry point. Fail closed instead of retaining ranges such as
+    // `0.5.x` or `>=0.5.1 <0.6.0` that may resolve below the required release.
+    return requiredDependency;
+  }
+  if (
+    requiredRange !== undefined
+    && compareSemver(currentRange, requiredRange) < 0
+  ) {
+    return requiredDependency;
+  }
+
+  // Preserve simple exact, tilde, and caret ranges already at or above the feature floor.
+  return normalized;
+}
+
+interface SimpleSemverRange {
+  readonly major: number;
+  readonly minor: number;
+  readonly patch: number;
+  readonly prerelease?: readonly string[];
+}
+
+function parseSimpleSemverRange(value: string): SimpleSemverRange | undefined {
+  const match = /^([~^]?)(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/u.exec(value);
+  if (match === null) {
+    return undefined;
+  }
+  return {
+    major: Number(match[2]),
+    minor: Number(match[3]),
+    patch: Number(match[4]),
+    ...(match[5] === undefined ? {} : { prerelease: match[5].split('.') }),
+  };
+}
+
+function compareSemver(left: SimpleSemverRange, right: SimpleSemverRange): number {
+  const releaseComparison = left.major - right.major
+    || left.minor - right.minor
+    || left.patch - right.patch;
+  if (releaseComparison !== 0) {
+    return releaseComparison;
+  }
+  if (left.prerelease === undefined) {
+    return right.prerelease === undefined ? 0 : 1;
+  }
+  if (right.prerelease === undefined) {
+    return -1;
+  }
+  const identifierCount = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < identifierCount; index += 1) {
+    const comparison = comparePrereleaseIdentifier(left.prerelease[index], right.prerelease[index]);
+    if (comparison !== 0) {
+      return comparison;
+    }
+  }
+  return 0;
+}
+
+function comparePrereleaseIdentifier(left: string | undefined, right: string | undefined): number {
+  if (left === undefined) {
+    return right === undefined ? 0 : -1;
+  }
+  if (right === undefined) {
+    return 1;
+  }
+  const leftNumeric = /^\d+$/u.test(left);
+  const rightNumeric = /^\d+$/u.test(right);
+  if (leftNumeric && rightNumeric) {
+    const leftNumber = BigInt(left);
+    const rightNumber = BigInt(right);
+    if (leftNumber !== rightNumber) {
+      return leftNumber < rightNumber ? -1 : 1;
+    }
+    return 0;
+  }
+  if (leftNumeric !== rightNumeric) {
+    return leftNumeric ? -1 : 1;
+  }
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+}
+
+function addMicrosoftStoreGatewayResolver(source: string): string {
+  if (source.includes(microsoftStoreGatewayResolver.block)) {
+    return source;
+  }
+
+  return insertBefore(
+    source,
+    microsoftStoreGatewayResolver.anchor,
+    microsoftStoreGatewayResolver.block,
+    'vite.shared.ts Microsoft Store gateway resolver',
+  );
+}
+
+function addMicrosoftStoreRuntimeTarget(source: string): string {
+  if (source.includes(microsoftStoreRuntimeTarget.line)) {
+    return source;
+  }
+  return insertAfter(
+    source,
+    microsoftStoreRuntimeTarget.anchor,
+    microsoftStoreRuntimeTarget.line,
+    'src/platform/runtimeDetector.ts target list',
+  );
+}
+
+function removeMicrosoftStoreRuntimeTarget(source: string): string {
+  const managedLine = `${microsoftStoreRuntimeTarget.line}\n`;
+  const occurrences = source.split(managedLine).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(
+      'Template src/platform/runtimeDetector.ts must contain exactly one Microsoft Store target.',
+    );
+  }
+  return source.replace(managedLine, '');
+}
+
+function removeMicrosoftStoreGatewayResolver(source: string): string {
+  const managedBlock = `${microsoftStoreGatewayResolver.block}\n`;
+  const occurrences = source.split(managedBlock).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(
+      'Template vite.shared.ts must contain exactly one Microsoft Store gateway resolver block.',
+    );
+  }
+  return source.replace(managedBlock, '');
 }
 
 function microsoftStoreScripts(defaultKitPath: string): Readonly<Record<string, string>> {
@@ -278,21 +490,32 @@ function requireSafeShellParameterDefaultPath(value: string): string {
   return normalized;
 }
 
-function assertCompatibleMicrosoftStoreTarget(value: unknown): void {
+function assertCompatibleMicrosoftStoreTarget(value: unknown): JsonObject {
   const target = requireJsonObject(value, 'microsoft-store target');
   const icon = isJsonObject(target.icon) ? target.icon : undefined;
 
   if (
+    target.authoritativeGameServices !== undefined
+    && typeof target.authoritativeGameServices !== 'boolean'
+  ) {
+    throw new Error(
+      'Existing microsoft-store target authoritativeGameServices must be a boolean when present.',
+    );
+  }
+
+  if (
     target.kind !== 'web'
-    || target.adapter !== 'browser'
+    || (target.adapter !== 'browser' && target.adapter !== 'microsoft-store')
     || target.gameApp !== microsoftStoreTarget.gameApp
     || target.output !== microsoftStoreTarget.output
     || icon?.profile !== microsoftStoreTarget.icon.profile
   ) {
     throw new Error(
-      'Existing microsoft-store target must use the game root, Store artifact directory, browser adapter, and microsoft-pwa icon profile.',
+      'Existing microsoft-store target must use the game root, Store artifact directory, a supported Store adapter, and microsoft-pwa icon profile.',
     );
   }
+
+  return target;
 }
 
 function addMicrosoftStoreBootstrap(source: string): string {
@@ -620,6 +843,26 @@ function readOptionalRegularFile(
   }
 
   return readRequiredRegularFile(gameRoot, file, relativePath);
+}
+
+function readRequiredMicrosoftStoreMigrationFile(
+  gameRoot: string,
+  relativePath: 'src/platform/runtimeDetector.ts' | 'vite.shared.ts',
+): string {
+  const source = readOptionalRegularFile(
+    gameRoot,
+    resolveGameFile(gameRoot, relativePath),
+    relativePath,
+  );
+
+  if (source === undefined) {
+    throw new Error(
+      'target init microsoft-store requires existing generated starter files: '
+        + 'src/platform/runtimeDetector.ts and vite.shared.ts.',
+    );
+  }
+
+  return source;
 }
 
 function lstatIfExists(file: string): ReturnType<typeof lstatSync> | undefined {

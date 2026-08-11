@@ -4,6 +4,11 @@ import type { PlatformCapabilities, PlatformGateway } from '@mpgd/platform';
 
 import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
+import {
+  createMicrosoftStoreCommerceAdapter,
+  microsoftStoreDigitalGoodsEvidenceSchema,
+  withMicrosoftStoreCommerceAdapter,
+} from '../../adapters/browser/src/microsoft-store';
 import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
 import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
@@ -42,6 +47,7 @@ const enabledActionMethods = [
   'runtime.getCapabilities',
   'commerce.purchase',
   'ads.showRewarded',
+  'runtime.getCapabilities',
   'leaderboard.submitScore',
 ] as const;
 
@@ -88,21 +94,127 @@ async function verifyBrowserAdapter(): Promise<void> {
 }
 
 async function verifyMicrosoftStoreAdapter(): Promise<void> {
-  const gateway = wrapGateway('microsoft-store', createBrowserPlatformGateway());
+  const browser = createBrowserPlatformGateway();
+  const storeBase: PlatformGateway = { ...browser, target: 'microsoft-store' };
+  const microsoftStoreConfig = getTargetConfig(targetConfigMatrix, 'microsoft-store');
+  const authoritativeEffectiveConfig = createEffectiveTargetConfig({
+    target: 'microsoft-store',
+    targetConfigVersion: targetConfigMatrix.version,
+    config: microsoftStoreConfig,
+    catalog: productCatalog,
+    adPlacements,
+    platformTarget: {
+      kind: 'web',
+      adapter: 'microsoft-store',
+      authoritativeGameServices: true,
+    },
+  });
+  const createCommerce = (authorityResult: 'completed' | 'failed') => {
+    return createMicrosoftStoreCommerceAdapter({
+      getRecoveryScope: () => 'smoke-player',
+      products: [
+        {
+          info: {
+            id: 'COINS_100',
+            type: 'consumable',
+            title: '100 Coins',
+            description: 'Adds 100 coins.',
+            price: { formatted: '$0.99', currencyCode: 'USD' },
+          },
+          inAppOfferToken: 'coins_100',
+        },
+      ],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        async claimRecoveryOwnership(input) {
+          return {
+            status: 'granted',
+            idempotencyKey: input.idempotencyKey ?? 'microsoft-store-smoke',
+          } as const;
+        },
+        async hasRecoveryOwnership(input) {
+          return {
+            status: 'granted',
+            idempotencyKey: input.idempotencyKey ?? 'microsoft-store-smoke',
+          } as const;
+        },
+        async verifyAndGrant() {
+          return authorityResult === 'failed'
+            ? { status: 'failed' as const }
+            : {
+                status: 'completed' as const,
+                transactionId: 'microsoft-store-ledger',
+              };
+        },
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [
+              {
+                itemId: 'coins_100',
+                title: '100 Coins',
+                description: 'Adds 100 coins.',
+                price: { value: '0.99', currency: 'USD' },
+              },
+            ];
+          },
+          async listPurchases() {
+            return [{ itemId: 'coins_100', purchaseToken: 'coins_100' }];
+          },
+        };
+      },
+      createPaymentRequest() {
+        return {
+          async show() {
+            return { details: { purchaseToken: 'coins_100' } };
+          },
+        };
+      },
+    });
+  };
+  const gateway = wrapGateway(
+    'microsoft-store',
+    withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('completed'), {
+      remoteLeaderboard: true,
+    }),
+    authoritativeEffectiveConfig,
+  );
   const runtime = await gateway.getTargetRuntime();
   const effectiveConfig = requireEffectiveConfig(runtime.effectiveConfig, 'microsoft-store');
 
   assertEqual(effectiveConfig.target, 'microsoft-store', 'microsoft-store effective target');
   assertEqual(
-    getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
+    runtime.capabilities.nativeLeaderboard,
     false,
-    'microsoft-store product should be disabled until Digital Goods API is wired',
+    'microsoft-store should not advertise a native leaderboard',
+  );
+  assertEqual(
+    runtime.capabilities.remoteLeaderboard,
+    true,
+    'microsoft-store should advertise its Game Services leaderboard',
+  );
+  assertEqual(
+    runtime.features.leaderboard.reason,
+    'available',
+    'microsoft-store remote leaderboard should remain discoverable',
+  );
+  assertEqual(
+    getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
+    true,
+    'microsoft-store consumable should be enabled when Digital Goods is wired',
   );
   assertEqual(
     getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
     false,
     'microsoft-store rewarded placement should be disabled',
   );
+  await gateway.commerce.getProducts();
   assertDeepEqual(
     await gateway.commerce.purchase({
       productId: 'COINS_100',
@@ -110,10 +222,43 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
       idempotencyKey: 'microsoft-store-parity-purchase',
     }),
     {
-      status: 'cancelled',
+      status: 'completed',
+      transactionId: 'microsoft-store-ledger',
+      authoritativeGrant: { ledgerEntryId: 'microsoft-store-ledger' },
       entitlementIds: [],
+      evidence: {
+        schema: microsoftStoreDigitalGoodsEvidenceSchema,
+        payload: { itemId: 'coins_100', purchaseToken: 'coins_100' },
+      },
     },
-    'microsoft-store purchase should be target-disabled',
+    'microsoft-store purchase should require authoritative completion',
+  );
+  const rejectedGateway = wrapGateway(
+    'microsoft-store',
+    withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('failed'), {
+      remoteLeaderboard: true,
+    }),
+    authoritativeEffectiveConfig,
+  );
+  // Microsoft currently returns the add-on product ID as purchaseToken, so both independent
+  // authority scenarios intentionally exercise the same token without treating it as a
+  // transaction identity.
+  await rejectedGateway.commerce.getProducts();
+  assertDeepEqual(
+    await rejectedGateway.commerce.purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'microsoft-store-rejected-purchase',
+    }),
+    {
+      status: 'failed',
+      entitlementIds: [],
+      evidence: {
+        schema: microsoftStoreDigitalGoodsEvidenceSchema,
+        payload: { itemId: 'coins_100', purchaseToken: 'coins_100' },
+      },
+    },
+    'microsoft-store purchase must fail closed when authority does not grant',
   );
 }
 
@@ -278,7 +423,7 @@ async function verifyAitAdapter(): Promise<void> {
 
   assertDeepEqual(
     bridge.methods.slice(1),
-    ['leaderboard.submitScore'],
+    ['runtime.getCapabilities', 'leaderboard.submitScore'],
     'ait adapter should preserve native leaderboard while filtering grants',
   );
 
@@ -381,6 +526,11 @@ async function verifyDevvitAdapter(): Promise<void> {
     runtime.capabilities.nativeLeaderboard,
     false,
     'reddit should not advertise a native leaderboard',
+  );
+  assertEqual(
+    runtime.capabilities.remoteLeaderboard,
+    false,
+    'reddit should not advertise a remote leaderboard',
   );
 
   assertDeepEqual(
@@ -509,6 +659,7 @@ function enabledCapabilities(target: AdapterBridgeTarget): PlatformCapabilities 
     rewardedAds: target !== 'reddit',
     interstitialAds: target !== 'reddit',
     nativeLeaderboard: target !== 'reddit',
+    remoteLeaderboard: false,
     achievements: false,
     cloudSave: target === 'reddit',
     socialShare: target === 'ait' || target === 'reddit',
