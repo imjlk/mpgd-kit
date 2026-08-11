@@ -477,20 +477,28 @@ try {
   assert.equal(missingEffectiveTargetCalls.length, 0);
   assertNoGenerationOutputs(missingEffectiveTarget.input);
 
-  const disabledEffectiveTarget = createFixture('disabled-effective-target');
-  enableCommerceEvidence(disabledEffectiveTarget);
+  const contradictoryDisabledEffectiveTarget = createFixture(
+    'contradictory-disabled-effective-target',
+  );
+  enableCommerceEvidence(contradictoryDisabledEffectiveTarget);
   const disabledEffectiveTargetEvidence = JSON.parse(
-    readFileSync(disabledEffectiveTarget.input.submissionEvidenceFile, 'utf8'),
+    readFileSync(contradictoryDisabledEffectiveTarget.input.submissionEvidenceFile, 'utf8'),
   ) as Record<string, unknown>;
   disabledEffectiveTargetEvidence.commerce = { mode: 'disabled' };
-  writeJson(disabledEffectiveTarget.input.submissionEvidenceFile, disabledEffectiveTargetEvidence);
-  const disabledEffectiveTargetCalls: { url: string; init: RequestInit }[] = [];
-  await runMicrosoftStorePackageGeneration(
-    disabledEffectiveTarget.input,
-    createRuntime({ calls: disabledEffectiveTargetCalls }),
+  writeJson(
+    contradictoryDisabledEffectiveTarget.input.submissionEvidenceFile,
+    disabledEffectiveTargetEvidence,
   );
-  assert.equal(disabledEffectiveTargetCalls.length, 7);
-  assert.equal(existsSync(disabledEffectiveTarget.input.outputFile), true);
+  const disabledEffectiveTargetCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      contradictoryDisabledEffectiveTarget.input,
+      createRuntime({ calls: disabledEffectiveTargetCalls }),
+    ),
+    /must disable IAP when commerce mode is disabled/u,
+  );
+  assert.equal(disabledEffectiveTargetCalls.length, 0);
+  assertNoGenerationOutputs(contradictoryDisabledEffectiveTarget.input);
 
   const missingDisabledEffectiveTarget = createFixture('missing-disabled-effective-target');
   const missingDisabledEffectiveTargetEvidence = JSON.parse(
@@ -1117,7 +1125,11 @@ function createFixture(name: string): {
     'microsoft-store',
     'mpgd-effective-target.json',
   );
-  const effectiveTargetBytes = Buffer.from('{"target":"microsoft-store"}\n');
+  const effectiveTargetBytes = Buffer.from(`${JSON.stringify({
+    target: 'microsoft-store',
+    runtime: 'microsoft-store-pwa',
+    monetization: { iap: false, products: [] },
+  })}\n`);
 
   mkdirSync(dirname(manifestFile), { recursive: true });
   mkdirSync(dirname(submissionEvidenceFile), { recursive: true });
@@ -1194,12 +1206,34 @@ function enableCommerceEvidence(input: {
     'microsoft-store',
     'mpgd-effective-target.json',
   );
-  const effectiveTargetBytes = Buffer.from('{"target":"microsoft-store"}\n');
+  const effectiveTargetBytes = Buffer.from(`${JSON.stringify({
+    target: 'microsoft-store',
+    runtime: 'microsoft-store-pwa',
+    monetization: {
+      iap: true,
+      products: [{
+        id: 'HINT_PACK_20',
+        type: 'consumable',
+        enabled: true,
+        platformProductId: 'ttokdoku_hint_pack_20',
+      }],
+    },
+  })}\n`);
   writeFileSync(effectiveTargetFile, effectiveTargetBytes);
   const evidence = JSON.parse(
     readFileSync(input.input.submissionEvidenceFile, 'utf8'),
   ) as Record<string, unknown>;
-  evidence.commerce = { mode: 'microsoft-store' };
+  evidence.commerce = {
+    mode: 'microsoft-store',
+    productType: 'developer-managed-consumable',
+    fulfillment: 'authoritative-server',
+    authoritativeGameServices: true,
+    products: [{
+      logicalProductId: 'HINT_PACK_20',
+      inAppOfferToken: 'ttokdoku_hint_pack_20',
+      storeId: '9N0000000001',
+    }],
+  };
   evidence.effectiveTarget = {
     file: 'artifacts/microsoft-store/mpgd-effective-target.json',
     sha256: sha256(effectiveTargetBytes),

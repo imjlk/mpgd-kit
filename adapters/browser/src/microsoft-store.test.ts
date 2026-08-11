@@ -458,6 +458,61 @@ describe('Microsoft Store Digital Goods commerce', () => {
     expect(verifyAndGrant).not.toHaveBeenCalled();
   });
 
+  it('does not let a denied stale recovery suppress a newly listed purchase', async () => {
+    const storeIdentity = 'ttokdoku_hint_pack_20';
+    const storageKey = 'mpgd:microsoft-store:pending-grant:v3:player-1:HINT_PACK_20';
+    const recovery = memoryRecoveryStorage([[storageKey, JSON.stringify([{
+      version: 1,
+      idempotencyKey: 'stale-generation',
+      inAppOfferToken: storeIdentity,
+      purchaseToken: storeIdentity,
+    }])]]);
+    const hasRecoveryOwnership = vi.fn(async (input: { readonly idempotencyKey?: string }) => (
+      input.idempotencyKey === undefined
+        ? { status: 'granted' as const, idempotencyKey: 'fresh-provider-generation' }
+        : { status: 'denied' as const }
+    ));
+    const verifyAndGrant = vi.fn(async () => ({
+      status: 'completed' as const,
+      transactionId: 'fresh-ledger-entry',
+    }));
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      getRecoveryScope,
+      products: [{ info: product, inAppOfferToken: storeIdentity }],
+      authority: {
+        ...allowRecoveryOwnership,
+        async getAvailability() {
+          return 'available';
+        },
+        hasRecoveryOwnership,
+        verifyAndGrant,
+        async getEntitlements() {
+          return [entitlement];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [];
+          },
+          async listPurchases() {
+            return [{ itemId: storeIdentity, purchaseToken: storeIdentity }];
+          },
+        };
+      },
+      recoveryIdStorage: recovery.storage,
+    });
+
+    await expect(adapter.restore?.()).resolves.toEqual({ restoredEntitlements: [entitlement] });
+    expect(hasRecoveryOwnership).toHaveBeenCalledTimes(2);
+    expect(verifyAndGrant).toHaveBeenCalledOnce();
+    expect(verifyAndGrant).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: 'fresh-provider-generation',
+      source: 'recovery',
+    }));
+    expect(recovery.values.has(storageKey)).toBe(false);
+  });
+
   it('replaces a stale completed recovery key before granting a fresh consumable purchase', async () => {
     const storeIdentity = 'ttokdoku_hint_pack_20';
     const storageKey = 'mpgd:microsoft-store:pending-grant:v3:player-1:HINT_PACK_20';

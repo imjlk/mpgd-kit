@@ -587,11 +587,16 @@ export function createMicrosoftStoreCommerceAdapter(
               itemId: recovery.inAppOfferToken,
               purchaseToken: recovery.purchaseToken,
             } as const;
-            resumedPurchases.add(createPurchaseIdentity(purchase));
             return fulfill(product, purchase, {
               idempotencyKey: recovery.idempotencyKey,
               source: 'recovery',
-            }, recoveryScope);
+            }, recoveryScope).then((result) => {
+              // A durable denial removes the stale browser generation. Do not let that stale
+              // record suppress a newly listed purchase with the Store's reused product token.
+              if (result.status !== 'failed') {
+                resumedPurchases.add(createPurchaseIdentity(purchase));
+              }
+            });
           });
         }));
         const purchases = await service.listPurchases();

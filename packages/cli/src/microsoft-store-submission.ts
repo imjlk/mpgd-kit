@@ -295,7 +295,15 @@ function readMicrosoftStoreEffectiveTarget(
     'Microsoft Store effective target config',
     4 * 1024 * 1024,
   );
-  const root = requireRecord(snapshot.value, 'Microsoft Store effective target config');
+  assertMicrosoftStoreEffectiveTarget(snapshot.value, commerce);
+  return { file, sha256: hashBytes(snapshot.bytes) };
+}
+
+export function assertMicrosoftStoreEffectiveTarget(
+  input: unknown,
+  commerce: MicrosoftStoreSubmissionCommerce,
+): void {
+  const root = requireRecord(input, 'Microsoft Store effective target config');
   if (root.target !== 'microsoft-store' || root.runtime !== 'microsoft-store-pwa') {
     throw new Error(
       'Microsoft Store effective target config must target the microsoft-store-pwa runtime.',
@@ -326,7 +334,7 @@ function readMicrosoftStoreEffectiveTarget(
         );
       }
     }
-    return { file, sha256: hashBytes(snapshot.bytes) };
+    return;
   }
   if (monetization.iap !== true) {
     throw new Error('Microsoft Store effective target config must enable IAP.');
@@ -384,8 +392,6 @@ function readMicrosoftStoreEffectiveTarget(
       );
     }
   }
-
-  return { file, sha256: hashBytes(snapshot.bytes) };
 }
 
 export function parseMicrosoftStoreSubmissionConfig(
@@ -468,7 +474,7 @@ export function parseMicrosoftStoreSubmissionConfig(
   };
 }
 
-function parseMicrosoftStoreSubmissionCommerce(
+export function parseMicrosoftStoreSubmissionCommerce(
   input: Record<string, unknown>,
 ): MicrosoftStoreSubmissionCommerce {
   if (input.mode === 'disabled') {

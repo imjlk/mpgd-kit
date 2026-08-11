@@ -12,4 +12,4 @@ npm/@mpgd/platform: minor (Added)
 npm/@mpgd/target-config: minor (Added)
 ---
 
-Add fail-closed Microsoft Store PWA Digital Goods checkout with player-scoped retry storage, generation-bound server recovery ownership, explicit historical product mappings, first-class target configuration, opt-in remote leaderboard capability discovery, submission product mappings, and authoritative Collections query and consume fulfillment.
+Add fail-closed Microsoft Store PWA Digital Goods checkout with player-scoped retry storage, provider-purchase- and generation-bound server recovery ownership, explicit historical product mappings, first-class target configuration, opt-in remote leaderboard capability discovery, submission product mappings with effective-target revalidation, and authoritative Collections query and consume fulfillment.

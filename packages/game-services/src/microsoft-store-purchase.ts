@@ -110,11 +110,16 @@ export interface MicrosoftStoreRecoveryOwnershipRecord {
   readonly storeId: string;
   readonly playerId: string;
   readonly generation: string;
+  /** Stable identity derived from the exact Collections item being granted. */
+  readonly providerPurchaseId: string;
 }
 
 export type MicrosoftStoreRecoveryOwnershipLookup =
-  & Omit<MicrosoftStoreRecoveryOwnershipRecord, 'generation'>
-  & { readonly generation?: string };
+  & Omit<MicrosoftStoreRecoveryOwnershipRecord, 'generation' | 'providerPurchaseId'>
+  & {
+    readonly generation?: string;
+    readonly providerPurchaseId?: string;
+  };
 
 export type MicrosoftStoreRecoveryOwnershipResult =
   | { readonly status: 'granted'; readonly idempotencyKey: string }
@@ -124,14 +129,16 @@ export type MicrosoftStoreRecoveryOwnershipResult =
 export interface MicrosoftStoreRecoveryOwnershipStore {
   /**
    * Atomically claims an unconsumed Store product for one authenticated game player. An
-   * existing same-player claim remains unchanged so a retry cannot replace its generation.
-   * Return the effective record, or undefined when another player owns the product.
+   * existing claim for the same provider purchase remains unchanged so a retry cannot replace
+   * its generation. A different provider purchase may atomically replace the same player's
+   * consumed purchase claim. Return the effective record, or undefined when another player owns
+   * the Store product binding.
    */
   claim(input: MicrosoftStoreRecoveryOwnershipRecord):
     Promise<MicrosoftStoreRecoveryOwnershipRecord | undefined>;
   get(input: MicrosoftStoreRecoveryOwnershipLookup):
     Promise<MicrosoftStoreRecoveryOwnershipRecord | undefined>;
-  /** Atomically releases only the exact player and generation supplied by the caller. */
+  /** Atomically releases only the exact player, generation, and provider purchase supplied. */
   release(input: MicrosoftStoreRecoveryOwnershipRecord): Promise<void>;
 }
 
@@ -160,10 +167,11 @@ export class InMemoryMicrosoftStoreRecoveryOwnershipStore
     if (owner !== undefined && owner.playerId !== input.playerId) {
       return undefined;
     }
-    if (owner === undefined) {
+    if (owner === undefined || owner.providerPurchaseId !== input.providerPurchaseId) {
       this.owners.set(key, Object.freeze({ ...input }));
+      return Object.freeze({ ...input });
     }
-    return Object.freeze({ ...(owner ?? input) });
+    return Object.freeze({ ...owner });
   }
 
   async get(
@@ -176,7 +184,11 @@ export class InMemoryMicrosoftStoreRecoveryOwnershipStore
   async release(input: MicrosoftStoreRecoveryOwnershipRecord): Promise<void> {
     const key = createRecoveryOwnershipKey(input);
     const owner = this.owners.get(key);
-    if (owner?.playerId === input.playerId && owner.generation === input.generation) {
+    if (
+      owner?.playerId === input.playerId
+      && owner.generation === input.generation
+      && owner.providerPurchaseId === input.providerPurchaseId
+    ) {
       this.owners.delete(key);
     }
   }
@@ -352,19 +364,44 @@ export function createMicrosoftStorePurchaseBoundary(
       return { status: 'denied' };
     }
 
+    let accountBindingHash: string;
     try {
-      return {
-        status: 'granted',
-        record: {
-          accountBindingHash: await createAccountBindingHash(credentials.accountBindingId),
-          storeId,
-          playerId,
-        },
-        ...(generation === undefined ? {} : { requestedGeneration: generation }),
-      };
+      accountBindingHash = await createAccountBindingHash(credentials.accountBindingId);
     } catch {
       return { status: 'unavailable' };
     }
+
+    let response: unknown;
+    try {
+      response = await input.client.queryProduct({
+        credentials,
+        storeId,
+        signal: ownershipInput.signal,
+      });
+    } catch (error) {
+      if (ownershipInput.signal.aborted) {
+        throw error;
+      }
+      return { status: 'unavailable' };
+    }
+    const item = inspectPublisherQuery(response, storeId);
+    if (item.status === 'pending') {
+      return { status: 'unavailable' };
+    }
+    if (item.status === 'rejected') {
+      return { status: 'denied' };
+    }
+
+    return {
+      status: 'granted',
+      record: {
+        accountBindingHash,
+        storeId,
+        playerId,
+        providerPurchaseId: createVerificationId(item.item),
+      },
+      ...(generation === undefined ? {} : { requestedGeneration: generation }),
+    };
   }
 
   return {
@@ -383,6 +420,7 @@ export function createMicrosoftStorePurchaseBoundary(
         });
         return effective?.playerId === ownership.record.playerId
           && effective.generation === ownership.requestedGeneration
+          && effective.providerPurchaseId === ownership.record.providerPurchaseId
           ? { status: 'granted', idempotencyKey: effective.generation }
           : { status: 'denied' };
       } catch {
@@ -396,17 +434,28 @@ export function createMicrosoftStorePurchaseBoundary(
         return ownership;
       }
       try {
-        const effective = await input.recoveryOwnershipStore.get({
+        const existing = await input.recoveryOwnershipStore.get(ownership.record);
+        if (existing === undefined) {
+          return { status: 'denied' };
+        }
+        if (existing.providerPurchaseId === ownership.record.providerPurchaseId) {
+          return existing.playerId === ownership.record.playerId
+            && (
+              ownership.requestedGeneration === undefined
+              || existing.generation === ownership.requestedGeneration
+            )
+            ? { status: 'granted', idempotencyKey: existing.generation }
+            : { status: 'denied' };
+        }
+        if (ownership.requestedGeneration !== undefined) {
+          return { status: 'denied' };
+        }
+        const effective = await input.recoveryOwnershipStore.claim({
           ...ownership.record,
-          ...(ownership.requestedGeneration === undefined
-            ? {}
-            : { generation: ownership.requestedGeneration }),
+          generation: ownership.record.providerPurchaseId,
         });
         return effective?.playerId === ownership.record.playerId
-          && (
-            ownership.requestedGeneration === undefined
-            || effective.generation === ownership.requestedGeneration
-          )
+          && effective.providerPurchaseId === ownership.record.providerPurchaseId
           ? { status: 'granted', idempotencyKey: effective.generation }
           : { status: 'denied' };
       } catch {
@@ -523,6 +572,9 @@ export function createMicrosoftStorePurchaseBoundary(
         return pending('MICROSOFT_STORE_VERIFIER_CLOCK_INVALID');
       }
       const verificationId = createVerificationId(item.item);
+      if (recoveryOwnership.providerPurchaseId !== verificationId) {
+        return rejected('MICROSOFT_STORE_RECOVERY_OWNERSHIP_REQUIRED');
+      }
 
       return {
         status: 'verified',
@@ -620,7 +672,6 @@ async function consumeMicrosoftStorePurchase(
     }
     if (
       raw.itemId !== context.collectionItemId
-      || raw.productId !== context.storeId
       || raw.trackingId !== trackingId
       || raw.newQuantity !== 0
     ) {
@@ -633,6 +684,7 @@ async function consumeMicrosoftStorePurchase(
         storeId: context.storeId,
         playerId: finalizationInput.request.playerId,
         generation: context.recoveryOwnershipGeneration,
+        providerPurchaseId: finalizationInput.evidenceVerificationId,
       });
     } catch {
       return finalizationPending('MICROSOFT_STORE_RECOVERY_OWNERSHIP_RELEASE_UNAVAILABLE');

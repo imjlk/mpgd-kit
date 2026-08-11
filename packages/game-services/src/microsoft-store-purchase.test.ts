@@ -125,7 +125,7 @@ class FixtureCollectionsClient implements MicrosoftStoreCollectionsClient {
     }
     return {
       itemId: collectionItemId,
-      productId: input.storeId,
+      transactionId: 'consume-transaction-id',
       trackingId: input.trackingId,
       newQuantity: 0,
     };
@@ -191,6 +191,8 @@ function createHarness(input: {
         return {
           ...ownership,
           generation: ownership.generation ?? 'default-recovery-generation',
+          providerPurchaseId:
+            `microsoft-store:${ownership.storeId}:${collectionItemId}:${modifiedDate}`,
         };
       },
       async release() {},
@@ -274,6 +276,16 @@ const historicalOwnershipHarness = createHarness({
     }],
   },
 });
+historicalOwnershipHarness.client.queryResponse = {
+  items: [{
+    id: collectionItemId,
+    modifiedDate,
+    productId: '9N0000000000',
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+  }],
+};
 assert.deepEqual(
   await historicalOwnershipHarness.boundary.claimRecoveryOwnership(
     createRecoveryOwnershipInput(
@@ -313,6 +325,7 @@ assert.deepEqual(
   ),
   { status: 'denied' },
 );
+ownershipHarness.events.length = 0;
 const unclaimedRecoveryResult = await ownershipHarness.backend.purchases.verifyPurchase(
   createRequest({ idempotencyKey: 'unclaimed-recovery' }),
 );
@@ -419,13 +432,57 @@ const oldGeneration = {
   storeId,
   playerId: 'player-microsoft-store',
   generation: 'old-generation',
+  providerPurchaseId: 'provider-purchase-old',
 } as const;
 const newGeneration = { ...oldGeneration, generation: 'new-generation' } as const;
-await generationOwnershipStore.claim(oldGeneration);
+assert.deepEqual(await generationOwnershipStore.claim(oldGeneration), oldGeneration);
+assert.deepEqual(await generationOwnershipStore.claim(newGeneration), oldGeneration);
+const newPurchase = {
+  ...newGeneration,
+  providerPurchaseId: 'provider-purchase-new',
+} as const;
+assert.equal(
+  await generationOwnershipStore.claim({ ...newPurchase, playerId: 'player-other' }),
+  undefined,
+);
+assert.deepEqual(await generationOwnershipStore.claim(newPurchase), newPurchase);
 await generationOwnershipStore.release(oldGeneration);
-await generationOwnershipStore.claim(newGeneration);
-await generationOwnershipStore.release(oldGeneration);
-assert.deepEqual(await generationOwnershipStore.get(newGeneration), newGeneration);
+assert.deepEqual(await generationOwnershipStore.get(newPurchase), newPurchase);
+
+const advancedOwnershipStore = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+const advancedOwnershipHarness = createHarness({
+  recoveryOwnershipStore: advancedOwnershipStore,
+});
+assert.deepEqual(
+  await advancedOwnershipHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'stale-generation'),
+  ),
+  { status: 'granted', idempotencyKey: 'stale-generation' },
+);
+const nextCollectionItemId = 'collection-item-20-next';
+const nextModifiedDate = '2030-01-02T04:04:05.0000000+00:00';
+advancedOwnershipHarness.client.queryResponse = {
+  items: [{
+    id: nextCollectionItemId,
+    modifiedDate: nextModifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+  }],
+};
+assert.deepEqual(
+  await advancedOwnershipHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'fresh-generation'),
+  ),
+  { status: 'granted', idempotencyKey: 'fresh-generation' },
+);
+const advancedOwnershipResult = await advancedOwnershipHarness.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'fresh-generation' }),
+);
+assert.equal(advancedOwnershipResult.verified, true);
+assert.equal(advancedOwnershipResult.alreadyProcessed, false);
+assert.equal(advancedOwnershipHarness.events.includes('ledger:fresh-generation'), true);
 
 const completed = createHarness();
 const completedResult = await completed.backend.purchases.verifyPurchase(createRequest());
@@ -444,7 +501,12 @@ const releaseUnavailable = createHarness({
       return ownership;
     },
     async get(ownership) {
-      return { ...ownership, generation: 'release-generation' };
+      return {
+        ...ownership,
+        generation: 'release-generation',
+        providerPurchaseId:
+          `microsoft-store:${ownership.storeId}:${collectionItemId}:${modifiedDate}`,
+      };
     },
     async release() {
       throw new Error('ownership release unavailable');
@@ -906,7 +968,7 @@ const httpClient = createMicrosoftStoreCollectionsClient({
         ? JSON.stringify({ items: [] })
         : JSON.stringify({
             itemId: collectionItemId,
-            productId: storeId,
+            transactionId: 'consume-transaction-id',
             trackingId: '12345678-1234-5234-9234-123456789abc',
             newQuantity: 0,
           })).body,

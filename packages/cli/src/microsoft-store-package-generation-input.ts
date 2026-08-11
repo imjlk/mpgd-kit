@@ -20,8 +20,14 @@ import {
   assertMicrosoftStorePwaUrlInsideManifestScope,
   readHashVerifiedMicrosoftStoreManifest,
 } from './microsoft-store-package-generation-manifest.js';
+import {
+  assertMicrosoftStoreEffectiveTarget,
+  parseMicrosoftStoreSubmissionCommerce,
+  type MicrosoftStoreSubmissionCommerce,
+} from './microsoft-store-submission.js';
 
 const maximumSubmissionEvidenceBytes = 4 * 1024 * 1024;
+const maximumEffectiveTargetBytes = 4 * 1024 * 1024;
 const maximumManifestIcons = 32;
 const maximumManifestIconBytes = 2 * 1024 * 1024;
 
@@ -236,12 +242,17 @@ function readSubmissionEvidence(
   if (commerceMode !== 'disabled' && commerceMode !== 'microsoft-store') {
     throw new Error('Microsoft Store commerce evidence mode must be disabled or microsoft-store.');
   }
+  const parsedCommerce = parseMicrosoftStoreSubmissionCommerce(commerce);
   if (root.effectiveTarget === undefined) {
     throw new Error(
       'Microsoft Store effective target evidence is required for package generation.',
     );
   }
-  const effectiveTarget = readEffectiveTargetEvidence(root.effectiveTarget, gameRoot);
+  const effectiveTarget = readEffectiveTargetEvidence(
+    root.effectiveTarget,
+    gameRoot,
+    parsedCommerce,
+  );
 
   return {
     identity: {
@@ -316,6 +327,7 @@ function readSubmissionEvidence(
 function readEffectiveTargetEvidence(
   input: unknown,
   gameRoot: string,
+  commerce: MicrosoftStoreSubmissionCommerce,
 ): NonNullable<MicrosoftStoreSubmissionEvidenceInput['effectiveTarget']> {
   const evidence = requireRecord(
     input,
@@ -340,6 +352,40 @@ function readEffectiveTargetEvidence(
       `Microsoft Store effective target config SHA-256 must match submission evidence: expected ${expectedSha256}, received ${snapshot.sha256}.`,
     );
   }
+
+  const bytes = readBoundedMicrosoftStoreFileBytes(
+    file,
+    'Microsoft Store effective target config',
+    maximumEffectiveTargetBytes,
+  );
+  if (bytes === null) {
+    throw new Error('Microsoft Store effective target config is too large.');
+  }
+  if (bytes.length !== snapshot.sizeBytes || hashMicrosoftStoreBytes(bytes) !== snapshot.sha256) {
+    throw new Error(`Microsoft Store effective target config changed while it was read: ${file}`);
+  }
+  let source: string;
+  try {
+    source = new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+  } catch (error) {
+    throw new Error(
+      `Microsoft Store effective target config must use valid UTF-8: ${formatError(error)}`,
+    );
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(source);
+  } catch (error) {
+    throw new Error(
+      `Failed to parse Microsoft Store effective target config: ${formatError(error)}`,
+    );
+  }
+  assertMicrosoftStoreEffectiveTarget(parsed, commerce);
+  assertMicrosoftStoreSnapshotUnchanged(
+    file,
+    snapshot,
+    'Microsoft Store effective target config changed while it was parsed',
+  );
 
   return { file, snapshot };
 }

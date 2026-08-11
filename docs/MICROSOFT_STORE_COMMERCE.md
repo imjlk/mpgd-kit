@@ -88,10 +88,15 @@ not from `getRecoveryScope()` or another browser-supplied player ID. Make claims
 idempotent for the same player and reject an exact Store identity already bound
 to a different player. Store the original idempotency key as an opaque ownership
 generation: a retry with the same generation is idempotent, while a fresh
-generation cannot replace an unconsumed claim even for the same player. Release
-only the exact player and generation after authoritative consume succeeds. If
-that release is unavailable, keep finalization pending so the same deterministic
-consume and release can be retried. Pass
+generation cannot replace the same unconsumed provider purchase even for the
+same player. Persist the record's `providerPurchaseId`, which the boundary
+derives from the Collections item ID, Store product ID, and modified date. A
+different provider purchase may atomically replace the same player's stale
+claim left behind after the prior item was consumed; it must not transfer the
+binding to another game player. Release only the exact player, generation, and
+provider purchase after authoritative consume succeeds, so a delayed release
+cannot erase the replacement. If that release is unavailable, keep finalization
+pending so the same deterministic consume and release can be retried. Pass
 the current, server-trusted product catalog tokens as
 `inAppOfferTokens`; the boundary rejects a claim whose browser-supplied current
 token does not match that mapping. Never construct this mapping from the claim

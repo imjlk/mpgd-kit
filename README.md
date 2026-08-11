@@ -319,7 +319,9 @@ pnpm exec mpgd target generate-package microsoft-store \
 The command calls PWABuilder's fixed production package endpoint without
 credentials. It requires the deployed manifest and every manifest icon to
 match the preflight evidence both before and after generation, and requires the
-PWA URL to stay inside that manifest's deployed scope. Local icon inputs are
+PWA URL to stay inside that manifest's deployed scope. It also reparses the
+hash-bound effective target and rejects submission evidence whose commerce
+mode or product mappings contradict the built artifact. Local icon inputs are
 also hash-checked and monitored for changes. The hash-verified local manifest
 is pinned directly in the generator request using PWABuilder's custom-manifest
 mode; the manifest URL remains its relative-resource base for those deployed
