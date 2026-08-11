@@ -220,8 +220,10 @@ describe('Microsoft Store Digital Goods commerce', () => {
     }));
   });
 
-  it('reuses a pending checkout identity after restart instead of re-verifying current mappings', async () => {
+  it('reuses an exact pending identity after restart and an offer-token mapping change', async () => {
     const exactCheckoutIdempotencyKey = '  checkout-pending-consume  ';
+    const legacyInAppOfferToken = 'ttokdoku_hint_pack_20_legacy';
+    const currentInAppOfferToken = 'ttokdoku_hint_pack_20';
     const storedRecoveryIds = new Map<string, string>();
     const recoveryIdStorage = {
       getItem(key: string) {
@@ -235,8 +237,8 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     };
     const storePurchase = {
-      itemId: 'ttokdoku_hint_pack_20',
-      purchaseToken: 'ttokdoku_hint_pack_20',
+      itemId: legacyInAppOfferToken,
+      purchaseToken: legacyInAppOfferToken,
     } as const;
     const firstAuthority = vi.fn(async () => ({
       status: 'pending' as const,
@@ -245,7 +247,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     const createService = () => ({
       async getDetails() {
         return [{
-          itemId: 'ttokdoku_hint_pack_20',
+          itemId: legacyInAppOfferToken,
           title: '20 hints',
           price: { currency: 'USD', value: '0.99' },
         }];
@@ -255,7 +257,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     });
     const firstAdapter = createMicrosoftStoreCommerceAdapter({
-      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      products: [{ info: product, inAppOfferToken: legacyInAppOfferToken }],
       authority: {
         async getAvailability() {
           return 'available';
@@ -271,7 +273,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       createPaymentRequest() {
         return {
           async show() {
-            return { details: { purchaseToken: 'ttokdoku_hint_pack_20' } };
+            return { details: { purchaseToken: legacyInAppOfferToken } };
           },
         };
       },
@@ -296,7 +298,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       alreadyProcessed: true,
     }));
     const restartedAdapter = createMicrosoftStoreCommerceAdapter({
-      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      products: [{ info: product, inAppOfferToken: currentInAppOfferToken }],
       authority: {
         async getAvailability() {
           return 'available';
@@ -323,7 +325,15 @@ describe('Microsoft Store Digital Goods commerce', () => {
     });
     expect(resumedAuthority).toHaveBeenCalledWith(expect.objectContaining({
       idempotencyKey: exactCheckoutIdempotencyKey,
+      inAppOfferToken: currentInAppOfferToken,
       source: 'recovery',
+      evidence: {
+        schema: microsoftStoreDigitalGoodsEvidenceSchema,
+        payload: {
+          itemId: currentInAppOfferToken,
+          purchaseToken: currentInAppOfferToken,
+        },
+      },
     }));
     expect(createRecoveryId).not.toHaveBeenCalled();
     expect(storedRecoveryIds.size).toBe(0);

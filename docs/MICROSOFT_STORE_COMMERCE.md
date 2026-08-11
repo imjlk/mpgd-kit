@@ -55,10 +55,13 @@ The browser adapter also preserves the first checkout idempotency key while the
 Store item remains pending. It uses `localStorage` by default, with
 `recoveryIdStorage` available for a game-owned compatible store, so a PWA restart
 or later `restore()` resumes the recorded ledger grant instead of creating a new
-verification identity. The key is removed only after the authority reports a
-completed or failed result; a transient exception or pending consume keeps it.
-This value is retry metadata, not proof of purchase, and the authority must still
-validate the authenticated player and Store account binding.
+verification identity. Recovery storage is keyed by the stable logical product
+ID, not the current `inAppOfferToken`, so a catalog mapping change cannot hide a
+pending grant whose durable evidence still references the previous Store item.
+The key is removed only after the authority reports a completed or failed result;
+a transient exception or pending consume keeps it. This value is retry metadata,
+not proof of purchase, and the authority must still validate the authenticated
+player and Store account binding.
 
 User Store ID plus Entra authentication cannot consume developer-managed
 consumables in non-RETAIL sandboxes. The boundary fails closed with

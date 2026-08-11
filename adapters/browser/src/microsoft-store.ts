@@ -128,11 +128,10 @@ export function createMicrosoftStoreCommerceAdapter(
 
   function reserveRecoveryId(
     product: MicrosoftStoreCommerceProduct,
-    itemId: string,
     preferredId?: string,
   ): string {
-    const storageKey = createRecoveryStorageKey(product, itemId);
-    const storedId = getReservedRecoveryId(product, itemId);
+    const storageKey = createRecoveryStorageKey(product);
+    const storedId = getReservedRecoveryId(product);
     if (storedId !== undefined) {
       return storedId;
     }
@@ -148,9 +147,8 @@ export function createMicrosoftStoreCommerceAdapter(
 
   function getReservedRecoveryId(
     product: MicrosoftStoreCommerceProduct,
-    itemId: string,
   ): string | undefined {
-    const storageKey = createRecoveryStorageKey(product, itemId);
+    const storageKey = createRecoveryStorageKey(product);
     const recoveryId = pendingRecoveryIds.get(storageKey)
       ?? readRecoveryId(recoveryIdStorage, storageKey);
     if (recoveryId !== undefined) {
@@ -159,8 +157,8 @@ export function createMicrosoftStoreCommerceAdapter(
     return recoveryId;
   }
 
-  function releaseRecoveryId(product: MicrosoftStoreCommerceProduct, itemId: string): void {
-    const storageKey = createRecoveryStorageKey(product, itemId);
+  function releaseRecoveryId(product: MicrosoftStoreCommerceProduct): void {
+    const storageKey = createRecoveryStorageKey(product);
     pendingRecoveryIds.delete(storageKey);
     removeRecoveryId(recoveryIdStorage, storageKey);
   }
@@ -193,7 +191,7 @@ export function createMicrosoftStoreCommerceAdapter(
     // Microsoft purchaseToken is the add-on Product ID rather than a purchase-unique token.
     // Retain the first request identity while this one unconsumed item is pending so a later
     // recovery can resume the durable ledger grant without re-verifying a changed Store mapping.
-    const idempotencyKey = reserveRecoveryId(product, purchase.itemId, request.idempotencyKey);
+    const idempotencyKey = reserveRecoveryId(product, request.idempotencyKey);
 
     try {
       const result = await input.authority.verifyAndGrant({
@@ -206,7 +204,7 @@ export function createMicrosoftStoreCommerceAdapter(
       });
 
       if (result.status !== 'pending') {
-        releaseRecoveryId(product, purchase.itemId);
+        releaseRecoveryId(product);
       }
 
       return {
@@ -313,7 +311,7 @@ export function createMicrosoftStoreCommerceAdapter(
         });
         let result: PurchaseResult;
         if (purchase === undefined) {
-          reserveRecoveryId(product, product.inAppOfferToken, request.idempotencyKey);
+          reserveRecoveryId(product, request.idempotencyKey);
           if (purchaseToken === undefined) {
             result = pendingUnidentifiedPurchase();
           } else {
@@ -331,7 +329,7 @@ export function createMicrosoftStoreCommerceAdapter(
         }
         if (response !== undefined) {
           await completePayment(response, 'unknown');
-          reserveRecoveryId(product, product.inAppOfferToken, request.idempotencyKey);
+          reserveRecoveryId(product, request.idempotencyKey);
         }
         input.onError?.(error);
         if (purchaseToken !== undefined) {
@@ -349,7 +347,7 @@ export function createMicrosoftStoreCommerceAdapter(
         const service = await getService();
         const resumedItems = new Set<string>();
         await Promise.all(products.flatMap((product) => {
-          const recoveryId = getReservedRecoveryId(product, product.inAppOfferToken);
+          const recoveryId = getReservedRecoveryId(product);
           if (recoveryId === undefined) {
             return [];
           }
@@ -376,7 +374,7 @@ export function createMicrosoftStoreCommerceAdapter(
           }
           return [
             fulfill(product, purchase, {
-              idempotencyKey: reserveRecoveryId(product, purchase.itemId),
+              idempotencyKey: reserveRecoveryId(product),
               source: 'recovery',
             }),
           ];
@@ -472,17 +470,13 @@ function readPurchaseToken(input: unknown): string | undefined {
   return nonEmptyString(Reflect.get(input, 'purchaseToken'));
 }
 
-function createRecoveryStorageKey(
-  product: MicrosoftStoreCommerceProduct,
-  itemId: string,
-): string {
+function createRecoveryStorageKey(product: MicrosoftStoreCommerceProduct): string {
   return [
     'mpgd',
     'microsoft-store',
     'pending-grant',
-    'v1',
+    'v2',
     encodeURIComponent(product.info.id),
-    encodeURIComponent(itemId),
   ].join(':');
 }
 
