@@ -235,16 +235,13 @@ export function initializeMicrosoftStoreStarter(
   const mainSource = readRequiredRegularFile(gameRoot, mainFile, 'src/main.ts');
   plan('src/main.ts', addMicrosoftStoreBootstrap(mainSource));
 
-  const runtimeFile = resolveGameFile(gameRoot, 'src/platform/runtimeDetector.ts');
-  const runtimeSource = readRequiredRegularFile(
+  const runtimeSource = readRequiredMicrosoftStoreMigrationFile(
     gameRoot,
-    runtimeFile,
     'src/platform/runtimeDetector.ts',
   );
   plan('src/platform/runtimeDetector.ts', addMicrosoftStoreRuntimeTarget(runtimeSource));
 
-  const viteFile = resolveGameFile(gameRoot, 'vite.shared.ts');
-  const viteSource = readRequiredRegularFile(gameRoot, viteFile, 'vite.shared.ts');
+  const viteSource = readRequiredMicrosoftStoreMigrationFile(gameRoot, 'vite.shared.ts');
   plan('vite.shared.ts', addMicrosoftStoreGatewayResolver(viteSource));
 
   planGitignore(gameRoot, plan);
@@ -848,6 +845,26 @@ function readOptionalRegularFile(
   }
 
   return readRequiredRegularFile(gameRoot, file, relativePath);
+}
+
+function readRequiredMicrosoftStoreMigrationFile(
+  gameRoot: string,
+  relativePath: 'src/platform/runtimeDetector.ts' | 'vite.shared.ts',
+): string {
+  const source = readOptionalRegularFile(
+    gameRoot,
+    resolveGameFile(gameRoot, relativePath),
+    relativePath,
+  );
+
+  if (source === undefined) {
+    throw new Error(
+      'target init microsoft-store requires existing generated starter files: '
+        + 'src/platform/runtimeDetector.ts and vite.shared.ts.',
+    );
+  }
+
+  return source;
 }
 
 function lstatIfExists(file: string): ReturnType<typeof lstatSync> | undefined {

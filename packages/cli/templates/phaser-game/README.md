@@ -123,7 +123,9 @@ Optional targets can add their own config, scripts, runtime wiring, and release
 skill. To enable Microsoft Store after creation, run
 `pnpm exec mpgd target init microsoft-store --game . --kit-path ../mpgd-kit`.
 The initializer is idempotent and stops before writing when it finds conflicting
-game-owned values.
+game-owned values. It requires this generated starter's existing
+`src/platform/runtimeDetector.ts` and `vite.shared.ts` files; custom layouts must
+add equivalent runtime and Vite gateway routing manually.
 
 ## Acceptance Handoff
 

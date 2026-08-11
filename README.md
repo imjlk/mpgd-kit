@@ -51,6 +51,10 @@ files:
 pnpm exec mpgd target init microsoft-store --game . --kit-path ../mpgd-kit
 ```
 
+This migration targets generated Phaser starters and requires their existing
+`src/platform/runtimeDetector.ts` and `vite.shared.ts` files so it can patch the
+runtime and gateway selection without replacing game-owned architecture.
+
 Every generated game receives `AGENTS.md`, `agent/game-manifest.json`,
 `.agents/skills/use-mpgd-kit`, and `docs/MPGD_KIT_WORKFLOWS.md`. Together they
 route game and agent work across the platform boundary, target config, icons,

@@ -480,6 +480,19 @@ try {
     writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
   }, /authoritativeGameServices must be a boolean/u);
 
+  for (const [name, relativePath] of [
+    ['missing-runtime-detector', 'src/platform/runtimeDetector.ts'],
+    ['missing-vite-shared', 'vite.shared.ts'],
+  ] as const) {
+    assertConflictIsAtomic(
+      name,
+      (gameRoot) => {
+        rmSync(join(gameRoot, relativePath));
+      },
+      /requires existing generated starter files: src\/platform\/runtimeDetector\.ts and vite\.shared\.ts/u,
+    );
+  }
+
   assertConflictIsAtomic('bootstrap-conflict', (gameRoot) => {
     const mainFile = join(gameRoot, 'src/main.ts');
     const source = readFileSync(mainFile, 'utf8').replace(

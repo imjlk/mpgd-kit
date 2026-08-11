@@ -303,9 +303,7 @@ function resolveWorkerPurchaseGrantFinalizer(
 
   return {
     supportsPurchaseGrant(input) {
-      return input.request.target === 'microsoft-store'
-        && input.product.type === 'consumable'
-        && input.request.evidence?.schema === microsoftStoreDigitalGoodsEvidenceSchema;
+      return supportsMicrosoftStorePurchaseGrant(input);
     },
     finalizePurchaseGrant(input) {
       const { signal, ...bindingInput } = input;
@@ -425,6 +423,12 @@ function createWorkerEvidenceVerifier(
       const { request, product, platformProductId, timeoutMs } = input;
       const binding = resolveBinding(request.target);
 
+      if (request.target === 'microsoft-store' && !supportsMicrosoftStorePurchaseGrant(input)) {
+        return {
+          status: 'rejected',
+          reason: 'MICROSOFT_STORE_PURCHASE_FINALIZER_UNSUPPORTED',
+        };
+      }
       if (binding !== undefined) {
         return binding.verifyPurchase({
           request,
@@ -461,6 +465,14 @@ function createWorkerEvidenceVerifier(
           ?? unavailableEvidenceVerificationDecision();
     },
   };
+}
+
+function supportsMicrosoftStorePurchaseGrant(
+  input: Pick<FinalizePurchaseGrantInput, 'request' | 'product'>,
+): boolean {
+  return input.request.target === 'microsoft-store'
+    && input.product.type === 'consumable'
+    && input.request.evidence?.schema === microsoftStoreDigitalGoodsEvidenceSchema;
 }
 
 function resolveVerse8AdsEvidenceVerifier(
