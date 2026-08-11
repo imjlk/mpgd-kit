@@ -410,6 +410,7 @@ try {
   for (const [name, mainJs] of [
     ['computed-location-assignment', 'window["location"]["href"] = "https://example.com";'],
     ['computed-location-method', 'location["assign"]("https://example.com");'],
+    ['static-optional-computed-location-method', 'location?.["assign"]("https://example.com");'],
     [
       'optional-computed-location-method',
       'document.body.dataset.method = "reload"; location?.[document.body.dataset.method]();',
@@ -1761,6 +1762,14 @@ try {
   assert.doesNotMatch(commentedFetchHtml, /\/assets\/config\.json/u);
   assert.match(commentedFetchHtml, /data:application\/json;base64,/u);
 
+  const dynamicFetchGame = createPreviewFixture('dynamic-fetch-asset', {
+    mainJs: 'const selectedLevel = document.body.dataset.level; void fetch("/levels/" + selectedLevel + ".json");',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dynamicFetchGame }),
+    /requires a static native fetch URL/u,
+  );
+
   const optionalFetchHtml = await packageAndReadFixture('optional-fetch-assets', {
     mainJs: 'void fetch?.("/assets/config.json"); void window.fetch?.("/assets/config.json");',
   });
@@ -2628,6 +2637,17 @@ try {
     /does not support WebAssembly streaming/u,
   );
 
+  const optionalComputedWasmStreamingGame = createPreviewFixture(
+    'optional-computed-streaming-wasm',
+    {
+      mainJs: 'void globalThis?.["WebAssembly"].instantiateStreaming(Promise.resolve(new Response()));',
+    },
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: optionalComputedWasmStreamingGame }),
+    /does not support WebAssembly streaming/u,
+  );
+
   const memberOwnedWasmHtml = await packageAndReadFixture('member-owned-wasm', {
     mainJs: 'const sdk = { WebAssembly: { instantiateStreaming() { return "local"; } } }; document.body.dataset.result = sdk.WebAssembly.instantiateStreaming();',
   });
@@ -2637,6 +2657,20 @@ try {
     ['direct-eval', 'eval("document.body.dataset.ready = \'true\'");'],
     ['function-constructor', 'void new Function("return true")();'],
     ['string-timeout', 'setTimeout("document.body.dataset.ready = \'true\'", 0);'],
+    ['optional-computed-eval', 'globalThis?.["eval"]("document.body.dataset.ready = \'true\'");'],
+    ['aliased-eval', 'const evaluate = eval; evaluate("document.body.dataset.ready = \'true\'");'],
+    [
+      'aliased-function-constructor',
+      'const make = Function; document.body.dataset.value = String(make("return 1")());',
+    ],
+    [
+      'aliased-string-timeout',
+      'const schedule = setTimeout; schedule("document.body.dataset.ready = \'true\'", 0);',
+    ],
+    [
+      'destructured-function-constructor',
+      'const { Function: make } = globalThis; document.body.dataset.value = String(make("return 1")());',
+    ],
   ] as const) {
     const stringEvaluationGame = createPreviewFixture(name, { mainJs });
     await assert.rejects(

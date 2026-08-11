@@ -146,6 +146,15 @@ interface LocationAliasAssignment {
   readonly start: number;
 }
 
+type JavaScriptStringEvaluatorKind = 'evaluator' | 'timer';
+
+interface JavaScriptStringEvaluatorAssignment {
+  readonly expression: string;
+  readonly expressionRange: SourceRange;
+  readonly identifier: string;
+  readonly start: number;
+}
+
 const effectiveTargetConfigFileName = 'mpgd-effective-target.json';
 const offlineCharsetDeclaration = '<meta charset="utf-8">';
 const offlineEntryPlaceholder = '<!-- MPGD_OFFLINE_PLAYTEST_ENTRY -->';
@@ -1235,10 +1244,24 @@ function inlineStaticFetchArguments(
     }
 
     const openingParenthesis = match.index + match[0].length - 1;
+    const closingParenthesis = findMatchingJavaScriptClosingParenthesis(
+      source,
+      openingParenthesis,
+      source.length,
+      codePositions,
+    );
+    const nextCode = closingParenthesis === undefined
+      ? undefined
+      : findNextJavaScriptCodeIndex(source, closingParenthesis + 1, codePositions);
+
+    if (nextCode !== undefined && source[nextCode] === '{') {
+      continue;
+    }
+
     const argument = splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
 
     if (argument === undefined) {
-      continue;
+      throw new Error('Offline playtest requires a static native fetch URL.');
     }
 
     let referenceRange = argument;
@@ -1259,7 +1282,13 @@ function inlineStaticFetchArguments(
       }
     }
 
-    if (reference === undefined || isDataUrlReference(reference)) {
+    if (reference === undefined) {
+      throw new Error(
+        `Offline playtest requires a static native fetch URL: ${source.slice(argument.start, argument.end).trim()}`,
+      );
+    }
+
+    if (isDataUrlReference(reference)) {
       continue;
     }
 
@@ -1343,7 +1372,7 @@ function findStaticNativeRequestUrlRange(
   }
 
   const request = new RegExp(
-    `^new${javascriptTriviaPatternSource}(?:(globalThis|self|window)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource})?(Request)${javascriptTriviaPatternSource}\\(`,
+    `^new${javascriptTriviaPatternSource}(?:(globalThis|self|window)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource})?(Request|URL)${javascriptTriviaPatternSource}\\(`,
     'u',
   ).exec(expression);
 
@@ -1377,7 +1406,14 @@ function findStaticNativeRequestUrlRange(
     return undefined;
   }
 
-  return splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+  const urlRange = splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+
+  if (request[2] !== 'URL' || urlRange === undefined) {
+    return urlRange;
+  }
+
+  const reference = resolveStaticJavaScriptStringExpression(source, urlRange, codePositions);
+  return reference !== undefined && isDataUrlReference(reference) ? urlRange : undefined;
 }
 
 function unwrapJavaScriptParenthesizedRange(
@@ -5426,6 +5462,456 @@ function assertNoUnsafeJavaScriptEvaluation(
       throw new Error('Offline playtest does not support JavaScript string evaluation.');
     }
   }
+
+  const assignments = findJavaScriptStringEvaluatorAssignments(source, codePositions);
+  const potentialKinds = findPotentialJavaScriptStringEvaluatorKinds(assignments);
+  const aliasCallPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\(`,
+    'gu',
+  );
+
+  for (const match of source.matchAll(aliasCallPattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+      || !potentialKinds.has(match[1])
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = match.index + match[0].length - 1;
+    const closingParenthesis = findMatchingJavaScriptClosingParenthesis(
+      source,
+      openingParenthesis,
+      source.length,
+      codePositions,
+    );
+    const nextCode = closingParenthesis === undefined
+      ? undefined
+      : findNextJavaScriptCodeIndex(source, closingParenthesis + 1, codePositions);
+
+    if (nextCode !== undefined && source[nextCode] === '{') {
+      continue;
+    }
+
+    const kinds = resolveJavaScriptStringEvaluatorIdentifierAtPosition(
+      source,
+      match[1],
+      match.index,
+      codePositions,
+      assignments,
+      new Set<string>(),
+    );
+
+    if (kinds.has('evaluator')) {
+      throw new Error('Offline playtest does not support JavaScript string evaluation.');
+    }
+
+    const callback = splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+
+    if (
+      kinds.has('timer')
+      && callback !== undefined
+      && resolveStaticJavaScriptStringExpression(source, callback, codePositions) !== undefined
+    ) {
+      throw new Error('Offline playtest does not support JavaScript string evaluation.');
+    }
+  }
+}
+
+function findJavaScriptStringEvaluatorAssignments(
+  source: string,
+  codePositions: Uint8Array,
+): readonly JavaScriptStringEvaluatorAssignment[] {
+  const assignmentPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}(?:&&=|\\|\\|=|\\?\\?=|=)${javascriptTriviaPatternSource}(?!=|>)`,
+    'gu',
+  );
+  const assignments: JavaScriptStringEvaluatorAssignment[] = [];
+
+  for (const match of source.matchAll(assignmentPattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+    ) {
+      continue;
+    }
+
+    const previous = findPreviousJavaScriptCodeIndex(source, match.index - 1, codePositions);
+
+    if (previous !== undefined && (source[previous] === '.' || source[previous] === '?')) {
+      continue;
+    }
+
+    const expressionRange = findJavaScriptExpressionRange(
+      source,
+      match.index + match[0].length,
+      source.length,
+      codePositions,
+      true,
+      true,
+    );
+    assignments.push({
+      expression: maskNonCode(
+        source.slice(expressionRange.start, expressionRange.end),
+        codePositions.slice(expressionRange.start, expressionRange.end),
+      ).trim(),
+      expressionRange,
+      identifier: match[1],
+      start: match.index,
+    });
+  }
+
+  const destructuringPattern = /\b(?:const|let|var)\s*\{([^;=\r\n]*)\}\s*=\s*/gu;
+
+  for (const match of source.matchAll(destructuringPattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+    ) {
+      continue;
+    }
+
+    const expressionRange = findJavaScriptExpressionRange(
+      source,
+      match.index + match[0].length,
+      source.length,
+      codePositions,
+      true,
+      true,
+    );
+    const objectExpression = maskNonCode(
+      source.slice(expressionRange.start, expressionRange.end),
+      codePositions.slice(expressionRange.start, expressionRange.end),
+    ).trim();
+    const bindingSource = match[1];
+    const bindingStart = match.index + match[0].indexOf(bindingSource);
+    const propertyPattern = new RegExp(
+      `(?:^|,)\\s*(eval|Function|setInterval|setTimeout)\\s*(?::\\s*(${javascriptIdentifierPatternSource})|(?=\\s*(?:,|$)))`,
+      'gu',
+    );
+
+    for (const property of bindingSource.matchAll(propertyPattern)) {
+      if (property[1] === undefined) {
+        continue;
+      }
+
+      const identifier = property[2] ?? property[1];
+      const propertyOffset = property.index ?? 0;
+      assignments.push({
+        expression: `${objectExpression}.${property[1]}`,
+        expressionRange,
+        identifier,
+        start: bindingStart + propertyOffset + property[0].lastIndexOf(identifier),
+      });
+    }
+  }
+
+  return assignments;
+}
+
+function findPotentialJavaScriptStringEvaluatorKinds(
+  assignments: readonly JavaScriptStringEvaluatorAssignment[],
+): ReadonlyMap<string, ReadonlySet<JavaScriptStringEvaluatorKind>> {
+  const kinds = new Map<string, Set<JavaScriptStringEvaluatorKind>>([
+    ['eval', new Set(['evaluator'])],
+    ['Function', new Set(['evaluator'])],
+    ['setInterval', new Set(['timer'])],
+    ['setTimeout', new Set(['timer'])],
+  ]);
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+
+    for (const assignment of assignments) {
+      const assignedKinds = findPotentialJavaScriptStringEvaluatorExpressionKinds(
+        assignment.expression,
+        kinds,
+      );
+      const identifierKinds = kinds.get(assignment.identifier) ?? new Set();
+
+      for (const kind of assignedKinds) {
+        if (!identifierKinds.has(kind)) {
+          identifierKinds.add(kind);
+          changed = true;
+        }
+      }
+
+      if (identifierKinds.size > 0) {
+        kinds.set(assignment.identifier, identifierKinds);
+      }
+    }
+  }
+
+  return kinds;
+}
+
+function findPotentialJavaScriptStringEvaluatorExpressionKinds(
+  expression: string,
+  knownKinds: ReadonlyMap<string, ReadonlySet<JavaScriptStringEvaluatorKind>>,
+): ReadonlySet<JavaScriptStringEvaluatorKind> {
+  const unwrapped = unwrapBalancedOuterParentheses(expression);
+
+  if (unwrapped.offset > 0 || unwrapped.expression.length !== expression.length) {
+    return findPotentialJavaScriptStringEvaluatorExpressionKinds(unwrapped.expression, knownKinds);
+  }
+
+  const sequenceResult = findSequenceExpressionLastValue(expression);
+
+  if (sequenceResult !== undefined) {
+    return findPotentialJavaScriptStringEvaluatorExpressionKinds(
+      sequenceResult.expression,
+      knownKinds,
+    );
+  }
+
+  const assignmentResult = findAssignmentResultRightHandSide(expression);
+
+  if (assignmentResult !== undefined) {
+    return findPotentialJavaScriptStringEvaluatorExpressionKinds(
+      assignmentResult.expression,
+      knownKinds,
+    );
+  }
+
+  const native = /^(?:(?:globalThis|self|window)\s*\.\s*)?(eval|Function|setInterval|setTimeout)$/u.exec(
+    expression,
+  )?.[1];
+
+  if (native === 'eval' || native === 'Function') {
+    return new Set(['evaluator']);
+  }
+  if (native === 'setInterval' || native === 'setTimeout') {
+    return new Set(['timer']);
+  }
+
+  return exactJavaScriptIdentifierPattern.test(expression)
+    ? (knownKinds.get(expression) ?? new Set())
+    : new Set();
+}
+
+function resolveJavaScriptStringEvaluatorIdentifierAtPosition(
+  source: string,
+  identifier: string,
+  position: number,
+  codePositions: Uint8Array,
+  assignments: readonly JavaScriptStringEvaluatorAssignment[],
+  visitedAliases: Set<string>,
+): ReadonlySet<JavaScriptStringEvaluatorKind> {
+  const binding = findVisibleJavaScriptIdentifierBinding(
+    source,
+    identifier,
+    position,
+    codePositions,
+  );
+  let aliasKey = `unbound:${identifier}`;
+
+  if (binding?.kind === 'parameter') {
+    aliasKey = `parameter:${identifier}:${binding.bindingPath.join(',')}`;
+  } else if (binding !== undefined) {
+    aliasKey = `binding:${binding.start}`;
+  }
+
+  if (
+    (
+      binding !== undefined
+      && (
+        binding.start >= position
+        || (binding.start < 0 && binding.kind !== 'parameter')
+      )
+    )
+    || visitedAliases.has(aliasKey)
+  ) {
+    return new Set();
+  }
+
+  if (binding === undefined) {
+    if (identifier === 'eval' || identifier === 'Function') {
+      return new Set(['evaluator']);
+    }
+    if (identifier === 'setInterval' || identifier === 'setTimeout') {
+      return new Set(['timer']);
+    }
+  }
+
+  visitedAliases.add(aliasKey);
+  let directAssignment: JavaScriptAssignmentResolution | undefined;
+
+  if (binding !== undefined && binding.kind !== 'parameter') {
+    directAssignment = resolveLastDirectJavaScriptAssignment(
+      source,
+      identifier,
+      binding,
+      position,
+      codePositions,
+    );
+  }
+
+  if (directAssignment?.ambiguous === false && directAssignment.range !== undefined) {
+    const range = trimSourceRange(source, directAssignment.range);
+    return resolveJavaScriptStringEvaluatorExpressionKinds(
+      source,
+      maskNonCode(
+        source.slice(range.start, range.end),
+        codePositions.slice(range.start, range.end),
+      ).trim(),
+      range.start,
+      codePositions,
+      assignments,
+      new Set(visitedAliases),
+    );
+  }
+
+  const kinds = new Set<JavaScriptStringEvaluatorKind>();
+  const initializerRange = binding?.initializerRange === undefined
+    ? undefined
+    : trimSourceRange(source, binding.initializerRange);
+
+  if (initializerRange !== undefined && initializerRange.end <= position) {
+    for (const kind of resolveJavaScriptStringEvaluatorExpressionKinds(
+      source,
+      maskNonCode(
+        source.slice(initializerRange.start, initializerRange.end),
+        codePositions.slice(initializerRange.start, initializerRange.end),
+      ).trim(),
+      initializerRange.start,
+      codePositions,
+      assignments,
+      new Set(visitedAliases),
+    )) {
+      kinds.add(kind);
+    }
+  }
+
+  for (const assignment of assignments) {
+    if (
+      assignment.identifier !== identifier
+      || (binding !== undefined && assignment.start < binding.start)
+      || assignment.expressionRange.end > position
+    ) {
+      continue;
+    }
+
+    const assignmentBinding = findVisibleJavaScriptIdentifierBinding(
+      source,
+      identifier,
+      assignment.start,
+      codePositions,
+    );
+    let matchesParameterDefault = false;
+
+    if (binding?.kind === 'parameter') {
+      matchesParameterDefault = isInsideJavaScriptParameterBinding(
+        source,
+        assignment.start,
+        binding,
+        codePositions,
+      );
+    }
+
+    if (
+      binding === undefined
+      || assignmentBinding?.start === binding.start
+      || matchesParameterDefault
+    ) {
+      for (const kind of resolveJavaScriptStringEvaluatorExpressionKinds(
+        source,
+        assignment.expression,
+        assignment.expressionRange.start,
+        codePositions,
+        assignments,
+        new Set(visitedAliases),
+      )) {
+        kinds.add(kind);
+      }
+    }
+  }
+
+  return kinds;
+}
+
+function resolveJavaScriptStringEvaluatorExpressionKinds(
+  source: string,
+  expression: string,
+  position: number,
+  codePositions: Uint8Array,
+  assignments: readonly JavaScriptStringEvaluatorAssignment[],
+  visitedAliases: Set<string>,
+): ReadonlySet<JavaScriptStringEvaluatorKind> {
+  const unwrapped = unwrapBalancedOuterParentheses(expression);
+
+  if (unwrapped.offset > 0 || unwrapped.expression.length !== expression.length) {
+    return resolveJavaScriptStringEvaluatorExpressionKinds(
+      source,
+      unwrapped.expression,
+      position + unwrapped.offset,
+      codePositions,
+      assignments,
+      visitedAliases,
+    );
+  }
+
+  const sequenceResult = findSequenceExpressionLastValue(expression);
+
+  if (sequenceResult !== undefined) {
+    return resolveJavaScriptStringEvaluatorExpressionKinds(
+      source,
+      sequenceResult.expression,
+      position + sequenceResult.offset,
+      codePositions,
+      assignments,
+      visitedAliases,
+    );
+  }
+
+  const assignmentResult = findAssignmentResultRightHandSide(expression);
+
+  if (assignmentResult !== undefined) {
+    return resolveJavaScriptStringEvaluatorExpressionKinds(
+      source,
+      assignmentResult.expression,
+      position + assignmentResult.offset,
+      codePositions,
+      assignments,
+      visitedAliases,
+    );
+  }
+
+  const qualified = /^(globalThis|self|window)\s*\.\s*(eval|Function|setInterval|setTimeout)$/u.exec(
+    expression,
+  );
+
+  if (
+    qualified?.[1] !== undefined
+    && qualified[2] !== undefined
+    && findVisibleJavaScriptIdentifierBinding(
+      source,
+      qualified[1],
+      position,
+      codePositions,
+    ) === undefined
+  ) {
+    return qualified[2] === 'eval' || qualified[2] === 'Function'
+      ? new Set(['evaluator'])
+      : new Set(['timer']);
+  }
+
+  if (!exactJavaScriptIdentifierPattern.test(expression)) {
+    return new Set();
+  }
+
+  return resolveJavaScriptStringEvaluatorIdentifierAtPosition(
+    source,
+    expression,
+    position,
+    codePositions,
+    assignments,
+    visitedAliases,
+  );
 }
 
 function assertNoUnsafeDynamicElementCreation(
@@ -6724,10 +7210,18 @@ function normalizeStaticJavaScriptPropertyAccess(source: string): string {
     const property = decodeJavaScriptStringLiteral(match[1] ?? match[2] ?? match[3] ?? '');
 
     if (/^[$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*$/u.test(property)) {
+      const previous = findPreviousJavaScriptCodeIndex(source, match.index - 1, codePositions);
+      const beforePrevious = previous === undefined
+        ? undefined
+        : findPreviousJavaScriptCodeIndex(source, previous - 1, codePositions);
+      const followsOptionalChain = previous !== undefined
+        && beforePrevious !== undefined
+        && source[previous] === '.'
+        && source[beforePrevious] === '?';
       replacements.push({
         start: match.index,
         end: match.index + match[0].length,
-        value: `.${property}`,
+        value: followsOptionalChain ? property : `.${property}`,
       });
     }
   }
