@@ -5657,9 +5657,8 @@ function findNativeCallableAssignments(
     }
   }
 
-  const qualifiedIdentifierPatternSource = `${javascriptIdentifierPatternSource}(?:${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}${javascriptIdentifierPatternSource})*`;
   const classHeritagePattern = new RegExp(
-    `\\bclass${javascriptTriviaPatternSource}(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}extends${javascriptTriviaPatternSource}(${qualifiedIdentifierPatternSource})${javascriptTriviaPatternSource}\\{`,
+    `\\bclass(?![$\\u200C\\u200D\\p{ID_Continue}])${javascriptTriviaPatternSource}(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}extends(?![$\\u200C\\u200D\\p{ID_Continue}])${javascriptTriviaPatternSource}`,
     'gu',
   );
 
@@ -5667,21 +5666,27 @@ function findNativeCallableAssignments(
     if (
       match.index === undefined
       || match[1] === undefined
-      || match[2] === undefined
       || codePositions[match.index] !== 1
     ) {
       continue;
     }
 
-    const expressionStart = match.index + match[0].lastIndexOf(match[2]);
+    const expressionStart = match.index + match[0].length;
+    const bodyStart = findJavaScriptNamedExpressionBody(source, expressionStart, codePositions);
+
+    if (bodyStart === undefined) {
+      continue;
+    }
+
+    const expressionRange = trimSourceRange(source, { start: expressionStart, end: bodyStart });
     assignments.push({
       expression: maskNonCode(
-        match[2],
-        codePositions.slice(expressionStart, expressionStart + match[2].length),
+        source.slice(expressionRange.start, expressionRange.end),
+        codePositions.slice(expressionRange.start, expressionRange.end),
       ).trim(),
-      expressionRange: { start: expressionStart, end: expressionStart + match[2].length },
+      expressionRange,
       identifier: match[1],
-      start: expressionStart,
+      start: expressionRange.start,
     });
   }
 
@@ -6058,12 +6063,19 @@ function readNativeCallableMemberExpression(
 }
 
 function readNativeCallableClassHeritage(expression: string): string | undefined {
-  const qualifiedIdentifierPatternSource = `${javascriptIdentifierPatternSource}(?:\\s*\\.\\s*${javascriptIdentifierPatternSource})*`;
+  const codePositions = createCodePositionMap(expression, true);
   const pattern = new RegExp(
-    `^class(?:\\s+${javascriptIdentifierPatternSource})?\\s+extends\\s+(${qualifiedIdentifierPatternSource})\\s*\\{`,
+    `^class(?![$\\u200C\\u200D\\p{ID_Continue}])${javascriptTriviaPatternSource}(?:${javascriptIdentifierPatternSource}${javascriptTriviaPatternSource})?extends(?![$\\u200C\\u200D\\p{ID_Continue}])${javascriptTriviaPatternSource}`,
     'u',
   );
-  return pattern.exec(expression)?.[1];
+  const match = pattern.exec(expression);
+
+  if (match === null) {
+    return undefined;
+  }
+
+  const bodyStart = findJavaScriptNamedExpressionBody(expression, match[0].length, codePositions);
+  return bodyStart === undefined ? undefined : expression.slice(match[0].length, bodyStart).trim();
 }
 
 function deriveNativeCallablePropertyKinds(

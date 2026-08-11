@@ -236,6 +236,14 @@ try {
       'worker-base-class-chain',
       'class WorkerBase extends Worker {} class BackgroundWorker extends WorkerBase {} new BackgroundWorker("./worker.js");',
     ],
+    [
+      'parenthesized-worker-base-class-alias',
+      'const Base = Worker; class BackgroundWorker extends (Base) {} new BackgroundWorker("./worker.js");',
+    ],
+    [
+      'sequenced-worker-base-class-alias',
+      'const Base = Worker; const BackgroundWorker = class extends (0, Base) {}; new BackgroundWorker("./worker.js");',
+    ],
   ] as const;
 
   for (const [name, mainJs] of unsupportedWorkerAliasFixtures) {
