@@ -151,6 +151,7 @@ type NativeCallableKind =
   | 'fetch'
   | 'global-object'
   | 'timer'
+  | 'timer-bound-callback'
   | 'wasm-object'
   | 'wasm-streaming'
   | 'worker';
@@ -5532,12 +5533,12 @@ function assertNoUnsupportedNativeCallables(
     }
 
     const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
-    const callback = /\.\s*call\s*$/u.test(match[1]) ? arguments_[1] : arguments_[0];
+    const callback = /\.\s*(?:bind|call)\s*$/u.test(match[1]) ? arguments_[1] : arguments_[0];
 
     if (
       kinds.has('timer')
       && (
-        /\.\s*(?:apply|bind)\s*$/u.test(match[1])
+        /\.\s*apply\s*$/u.test(match[1])
         || (
           callback !== undefined
           && resolveStaticJavaScriptStringExpression(source, callback, codePositions) !== undefined
@@ -5656,6 +5657,34 @@ function findNativeCallableAssignments(
     }
   }
 
+  const qualifiedIdentifierPatternSource = `${javascriptIdentifierPatternSource}(?:${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}${javascriptIdentifierPatternSource})*`;
+  const classHeritagePattern = new RegExp(
+    `\\bclass${javascriptTriviaPatternSource}(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}extends${javascriptTriviaPatternSource}(${qualifiedIdentifierPatternSource})${javascriptTriviaPatternSource}\\{`,
+    'gu',
+  );
+
+  for (const match of source.matchAll(classHeritagePattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || match[2] === undefined
+      || codePositions[match.index] !== 1
+    ) {
+      continue;
+    }
+
+    const expressionStart = match.index + match[0].lastIndexOf(match[2]);
+    assignments.push({
+      expression: maskNonCode(
+        match[2],
+        codePositions.slice(expressionStart, expressionStart + match[2].length),
+      ).trim(),
+      expressionRange: { start: expressionStart, end: expressionStart + match[2].length },
+      identifier: match[1],
+      start: expressionStart,
+    });
+  }
+
   return assignments;
 }
 
@@ -5725,11 +5754,20 @@ function findPotentialNativeCallableExpressionKinds(
     return findPotentialNativeCallableExpressionKinds(assignmentResult.expression, knownKinds);
   }
 
-  const boundReceiver = readBoundNativeCallableReceiver(expression);
+  const classHeritage = readNativeCallableClassHeritage(expression);
 
-  if (boundReceiver !== undefined) {
-    const receiverKinds = findPotentialNativeCallableExpressionKinds(boundReceiver, knownKinds);
-    return receiverKinds.has('timer') ? new Set([...receiverKinds, 'evaluator']) : receiverKinds;
+  if (classHeritage !== undefined) {
+    return findPotentialNativeCallableExpressionKinds(classHeritage, knownKinds);
+  }
+
+  const bound = readBoundNativeCallableExpression(expression);
+
+  if (bound !== undefined) {
+    return deriveBoundNativeCallableKinds(
+      expression,
+      bound,
+      findPotentialNativeCallableExpressionKinds(bound.receiver, knownKinds),
+    );
   }
 
   const member = readNativeCallableMemberExpression(expression);
@@ -5945,18 +5983,34 @@ function resolveNativeCallableExpressionKinds(
     );
   }
 
-  const boundReceiver = readBoundNativeCallableReceiver(expression);
+  const classHeritage = readNativeCallableClassHeritage(expression);
 
-  if (boundReceiver !== undefined) {
-    const receiverKinds = resolveNativeCallableExpressionKinds(
+  if (classHeritage !== undefined) {
+    return resolveNativeCallableExpressionKinds(
       source,
-      boundReceiver,
+      classHeritage,
       position,
       codePositions,
       assignments,
       visitedAliases,
     );
-    return receiverKinds.has('timer') ? new Set([...receiverKinds, 'evaluator']) : receiverKinds;
+  }
+
+  const bound = readBoundNativeCallableExpression(expression);
+
+  if (bound !== undefined) {
+    return deriveBoundNativeCallableKinds(
+      expression,
+      bound,
+      resolveNativeCallableExpressionKinds(
+        source,
+        bound.receiver,
+        position,
+        codePositions,
+        assignments,
+        visitedAliases,
+      ),
+    );
   }
 
   const member = readNativeCallableMemberExpression(expression);
@@ -6003,6 +6057,15 @@ function readNativeCallableMemberExpression(
     : { owner: match[1], property: match[2] };
 }
 
+function readNativeCallableClassHeritage(expression: string): string | undefined {
+  const qualifiedIdentifierPatternSource = `${javascriptIdentifierPatternSource}(?:\\s*\\.\\s*${javascriptIdentifierPatternSource})*`;
+  const pattern = new RegExp(
+    `^class(?:\\s+${javascriptIdentifierPatternSource})?\\s+extends\\s+(${qualifiedIdentifierPatternSource})\\s*\\{`,
+    'u',
+  );
+  return pattern.exec(expression)?.[1];
+}
+
 function deriveNativeCallablePropertyKinds(
   ownerKinds: ReadonlySet<NativeCallableKind>,
   property: string,
@@ -6041,16 +6104,40 @@ function deriveNativeCallablePropertyKinds(
         kinds.add(kind);
       }
     }
-
-    if (property === 'bind' && ownerKinds.has('timer')) {
-      kinds.add('evaluator');
-    }
   }
 
   return kinds;
 }
 
-function readBoundNativeCallableReceiver(expression: string): string | undefined {
+function deriveBoundNativeCallableKinds(
+  expression: string,
+  bound: Readonly<{ receiver: string; arguments: readonly SourceRange[] }>,
+  receiverKinds: ReadonlySet<NativeCallableKind>,
+): ReadonlySet<NativeCallableKind> {
+  if (!receiverKinds.has('timer') || bound.arguments.length < 2) {
+    return receiverKinds;
+  }
+
+  // Once bind supplies the callback, later calls start with the delay rather than another callback.
+  const kinds = new Set(receiverKinds);
+  kinds.delete('timer');
+  kinds.add('timer-bound-callback');
+  const codePositions = createCodePositionMap(expression, true);
+  const callback = bound.arguments[1];
+
+  if (
+    callback !== undefined
+    && resolveStaticJavaScriptStringExpression(expression, callback, codePositions) !== undefined
+  ) {
+    kinds.add('evaluator');
+  }
+
+  return kinds;
+}
+
+function readBoundNativeCallableExpression(
+  expression: string,
+): { readonly receiver: string; readonly arguments: readonly SourceRange[] } | undefined {
   const qualifiedIdentifierPatternSource = `${javascriptIdentifierPatternSource}(?:\\s*\\.\\s*${javascriptIdentifierPatternSource})*`;
   const pattern = new RegExp(`^(${qualifiedIdentifierPatternSource})\\s*\\.\\s*bind\\s*\\(`, 'u');
   const match = pattern.exec(expression);
@@ -6067,7 +6154,15 @@ function readBoundNativeCallableReceiver(expression: string): string | undefined
     expression.length,
     codePositions,
   );
-  return closingParenthesis === expression.length - 1 ? match[1] : undefined;
+
+  if (closingParenthesis !== expression.length - 1) {
+    return undefined;
+  }
+
+  return {
+    receiver: match[1],
+    arguments: splitJavaScriptArguments(expression, openingParenthesis, codePositions),
+  };
 }
 
 function assertNoUnsafeDynamicElementCreation(

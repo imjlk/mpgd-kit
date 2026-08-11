@@ -224,6 +224,18 @@ try {
       'bound-worker',
       'const BackgroundWorker = Worker.bind(null); new BackgroundWorker("./worker.js");',
     ],
+    [
+      'worker-base-class-alias',
+      'const Base = Worker; class BackgroundWorker extends Base {} new BackgroundWorker("./worker.js");',
+    ],
+    [
+      'worker-anonymous-class-alias',
+      'const BackgroundWorker = class extends Worker {}; new BackgroundWorker("./worker.js");',
+    ],
+    [
+      'worker-base-class-chain',
+      'class WorkerBase extends Worker {} class BackgroundWorker extends WorkerBase {} new BackgroundWorker("./worker.js");',
+    ],
   ] as const;
 
   for (const [name, mainJs] of unsupportedWorkerAliasFixtures) {
@@ -1816,6 +1828,10 @@ try {
       'native-fetch-apply',
       'void fetch.apply(globalThis, ["/assets/config.json"]);',
     ],
+    [
+      'optional-native-fetch-alias',
+      'const load = fetch; void load?.("/assets/config.json");',
+    ],
   ] as const) {
     const aliasedFetchGame = createPreviewFixture(name, { mainJs });
     await assert.rejects(
@@ -2796,6 +2812,19 @@ try {
     'string-timeout-apply',
     'setTimeout.apply(globalThis, ["document.body.dataset.ready = \'true\'", 0]);',
   );
+  await assertStringEvaluationRejected(
+    'bound-string-timeout-without-callback',
+    'const schedule = setTimeout.bind(globalThis); schedule("document.body.dataset.ready = \'true\'", 0);',
+  );
+  await assertStringEvaluationRejected(
+    'function-constructor-base-class',
+    'class DynamicFunction extends Function {} document.body.dataset.value = String(new DynamicFunction("return 1")());',
+  );
+
+  const safelyBoundTimerHtml = await packageAndReadFixture('safely-bound-timer', {
+    mainJs: 'const timer = setTimeout; const schedule = timer.bind(globalThis, () => {}); schedule(0);',
+  });
+  assert.match(safelyBoundTimerHtml, /setTimeout/u);
 
   const memberOwnedStringEvaluatorHtml = await packageAndReadFixture('member-owned-string-evaluator', {
     mainJs: 'const sdk = { eval() {}, Function() { return () => {}; }, setTimeout() {} }; sdk.eval("local"); sdk.Function("local")(); sdk.setTimeout("local", 0);',
