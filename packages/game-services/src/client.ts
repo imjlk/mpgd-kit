@@ -234,11 +234,7 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           properties: {
             productId: purchaseInput.productId,
             status: purchase.status,
-            reason: purchase.status === 'completed' && purchase.transactionId === undefined
-              ? 'missing_transaction_id'
-              : purchase.status === 'pending'
-                ? 'purchase_pending'
-                : undefined,
+            reason: purchaseRejectionReason(purchase),
           },
         });
 
@@ -551,6 +547,16 @@ export function createGameServicesIdempotencyKey(input: {
 
 function normalizeSegment(value: string): string {
   return value.replaceAll(/[^a-zA-Z0-9_-]+/g, '-').replaceAll(/^-|-$/g, '').slice(0, 64);
+}
+
+function purchaseRejectionReason(purchase: PurchaseResult): string | undefined {
+  if (purchase.status === 'completed' && purchase.transactionId === undefined) {
+    return 'missing_transaction_id';
+  }
+  if (purchase.status === 'pending') {
+    return 'purchase_pending';
+  }
+  return undefined;
 }
 
 function isGameServicesCommerceTarget(
