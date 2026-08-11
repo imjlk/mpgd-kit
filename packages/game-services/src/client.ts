@@ -609,6 +609,7 @@ function isGameServicesLeaderboardTarget(
   target: GameServicesLedgerTarget,
 ): target is GameServicesLeaderboardTarget {
   return target === 'browser'
+    || target === 'microsoft-store'
     || target === 'android'
     || target === 'ios'
     || target === 'ait'

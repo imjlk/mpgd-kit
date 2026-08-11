@@ -63,9 +63,19 @@ and the stable logical product ID, so another player using the same browser
 profile cannot reuse or delete the first player's pending record. Refresh
 `getProducts()` after the authenticated player changes; checkout fails before
 opening Payment Request if the scope changed after catalog preparation. The
-scope is checked again after the payment UI returns; if it changed while payment
-was open, no authority call is made and the purchase remains recoverable only
-under the original player scope.
+scope is checked again after the payment UI returns and after the asynchronous
+ownership lookup; if it changed in either window, no authority call is made and
+the purchase remains recoverable only under the original player scope.
+
+Each pending Store purchase also has a separate owner record keyed by its exact
+Digital Goods item and purchase token. `listPurchases()` reconciliation only
+uses a listed item when that owner record names the current recovery scope; an
+item reserved by another player, or an unowned listing, is ignored. Existing
+player-scoped records from an earlier adapter version recreate the owner record
+when they resume. If all local ownership metadata is cleared before the first
+authoritative grant, automatic recovery intentionally fails closed because the
+globally listed Store item no longer contains enough information to attribute it
+to a game player safely.
 
 The record is removed only after the authority reports a completed or failed
 result; a transient exception or pending consume keeps it. Because a checkout
@@ -85,10 +95,11 @@ catalog plus `storeIds`, and unknown old tokens remain rejected.
 
 Pass the same old Digital Goods tokens as `historicalInAppOfferTokens` on the
 browser adapter product. That client-side alias lets `listPurchases()` associate
-an old unconsumed item with its logical product even after browser recovery
-storage was cleared; the server-side alias remains the authority that permits
-the corresponding old Collections product ID. Historical tokens are recovery
-aliases only and are never offered by `getProducts()` or used for new checkout.
+an old unconsumed item with its logical product when its exact player-owner
+record survives but its scoped pending-grant record does not; the server-side
+alias remains the authority that permits the corresponding old Collections
+product ID. Historical tokens are recovery aliases only and are never offered
+by `getProducts()` or used for new checkout.
 
 User Store ID plus Entra authentication cannot consume developer-managed
 consumables in non-RETAIL sandboxes. The boundary fails closed with

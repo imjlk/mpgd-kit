@@ -763,7 +763,6 @@ async function verifyPurchaseWithStore(
         ...(request.deploymentTarget === undefined
           ? {}
           : { deploymentTarget: request.deploymentTarget }),
-        platformProductId,
         evidenceVerificationId: verification.verificationId,
       })
     ) {
@@ -1483,7 +1482,6 @@ function matchesPurchaseEvidenceRecovery(
     readonly grantId: string;
     readonly target: string;
     readonly deploymentTarget?: string;
-    readonly platformProductId: string;
     readonly evidenceVerificationId: string;
   },
 ): boolean {
@@ -1491,7 +1489,6 @@ function matchesPurchaseEvidenceRecovery(
     ...identity,
     source: 'purchase',
   })
-    && transaction.payload.platformProductId === identity.platformProductId
     && (
       transaction.evidenceVerificationId
         ?? transaction.payload.evidenceVerificationId

@@ -143,6 +143,7 @@ function createHarness(input: {
   readonly sandbox?: string;
   readonly store?: TrackingStore;
   readonly storeIds?: Readonly<Record<string, string>>;
+  readonly catalog?: ProductCatalog;
   readonly historicalProductMappings?: Readonly<Record<
     string,
     readonly { readonly inAppOfferToken: string; readonly storeId: string }[]
@@ -169,7 +170,7 @@ function createHarness(input: {
   const developmentVerifier = createDevelopmentGameServicesEvidenceVerifier();
   const store = input.store ?? new TrackingStore(events);
   const backend = createGameServicesBackend({
-    catalog,
+    catalog: input.catalog ?? catalog,
     placements,
     store,
     evidenceVerifier: {
@@ -490,6 +491,79 @@ assert.deepEqual(migratedStoreEvents, [
   'ledger:store-id-migration',
   `provider:consume:${storeId}`,
   `provider:consume:${storeId}`,
+]);
+
+const offerTokenMigrationEvents: string[] = [];
+const legacyCatalog = {
+  ...catalog,
+  products: [{
+    ...catalog.products[0],
+    platformProductIds: { 'microsoft-store': historicalInAppOfferToken },
+  }],
+} satisfies ProductCatalog;
+const beforeOfferTokenMigration = createHarness({
+  events: offerTokenMigrationEvents,
+  catalog: legacyCatalog,
+  storeIds: { HINT_PACK_20: historicalStoreId },
+});
+beforeOfferTokenMigration.client.queryResponse = {
+  items: [{
+    id: collectionItemId,
+    modifiedDate,
+    productId: historicalStoreId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+  }],
+};
+beforeOfferTokenMigration.client.nextConsumeResponse = { malformed: true };
+const beforeOfferTokenMigrationResult =
+  await beforeOfferTokenMigration.backend.purchases.verifyPurchase(createRequest({
+    platformTransactionId: historicalInAppOfferToken,
+    idempotencyKey: 'offer-token-migration-original',
+    evidence: {
+      schema: microsoftStoreDigitalGoodsEvidenceSchema,
+      payload: {
+        itemId: historicalInAppOfferToken,
+        purchaseToken: historicalInAppOfferToken,
+      },
+    },
+  }));
+const afterOfferTokenMigration = createHarness({
+  events: offerTokenMigrationEvents,
+  store: beforeOfferTokenMigration.store,
+  historicalProductMappings: {
+    HINT_PACK_20: [{
+      inAppOfferToken: historicalInAppOfferToken,
+      storeId: historicalStoreId,
+    }],
+  },
+});
+afterOfferTokenMigration.client.queryResponse = structuredClone(
+  beforeOfferTokenMigration.client.queryResponse,
+);
+const afterOfferTokenMigrationResult =
+  await afterOfferTokenMigration.backend.purchases.verifyPurchase(createRequest({
+    platformTransactionId: historicalInAppOfferToken,
+    idempotencyKey: 'offer-token-migration-recovery',
+    evidence: {
+      schema: microsoftStoreDigitalGoodsEvidenceSchema,
+      payload: {
+        itemId: historicalInAppOfferToken,
+        purchaseToken: historicalInAppOfferToken,
+      },
+    },
+  }));
+assert.equal(beforeOfferTokenMigrationResult.finalization?.status, 'pending');
+assert.equal(afterOfferTokenMigrationResult.verified, true);
+assert.equal(afterOfferTokenMigrationResult.alreadyProcessed, true);
+assert.equal(afterOfferTokenMigrationResult.finalization?.status, 'completed');
+assert.deepEqual(offerTokenMigrationEvents, [
+  `provider:query:${historicalStoreId}`,
+  'ledger:offer-token-migration-original',
+  `provider:consume:${historicalStoreId}`,
+  `provider:query:${historicalStoreId}`,
+  `provider:consume:${historicalStoreId}`,
 ]);
 
 let duplicateStoreIdRejected = false;

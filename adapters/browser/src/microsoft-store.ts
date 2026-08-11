@@ -103,6 +103,11 @@ interface MicrosoftStorePendingRecovery {
   readonly purchaseToken: string;
 }
 
+interface MicrosoftStoreRecoveryOwner {
+  readonly version: 1;
+  readonly recoveryScope: string;
+}
+
 export interface CreateMicrosoftStoreCommerceAdapterInput {
   readonly products: readonly MicrosoftStoreCommerceProduct[];
   readonly authority: MicrosoftStorePurchaseAuthority;
@@ -140,6 +145,7 @@ export function createMicrosoftStoreCommerceAdapter(
     ?? (() => `microsoft-store-recovery-${crypto.randomUUID()}`);
   const recoveryIdStorage = input.recoveryIdStorage ?? getGlobalRecoveryIdStorage();
   const pendingRecoveries = new Map<string, readonly MicrosoftStorePendingRecovery[]>();
+  const pendingRecoveryOwners = new Map<string, MicrosoftStoreRecoveryOwner>();
   const priceFormatters = new Map<string, Intl.NumberFormat>();
   const preparedCheckouts = new Map<LogicalProductId, {
     readonly recoveryScope: string;
@@ -152,6 +158,10 @@ export function createMicrosoftStoreCommerceAdapter(
     preferredId?: string,
     purchase?: MicrosoftStoreDigitalGoodsPurchase,
   ): MicrosoftStorePendingRecovery {
+    claimRecoveryOwner(purchase ?? {
+      itemId: product.inAppOfferToken,
+      purchaseToken: product.inAppOfferToken,
+    }, recoveryScope);
     const storageKey = createRecoveryStorageKey(recoveryScope, product);
     const storedRecoveries = getReservedRecoveries(product, recoveryScope);
     const inAppOfferToken = purchase?.itemId ?? product.inAppOfferToken;
@@ -209,6 +219,55 @@ export function createMicrosoftStoreCommerceAdapter(
     } else {
       writeRecoveries(recoveryIdStorage, storageKey, next);
     }
+    releaseRecoveryOwner(
+      {
+        itemId: recovery.inAppOfferToken,
+        purchaseToken: recovery.purchaseToken,
+      },
+      recoveryScope,
+    );
+  }
+
+  function claimRecoveryOwner(
+    purchase: MicrosoftStoreDigitalGoodsPurchase,
+    recoveryScope: string,
+  ): void {
+    const storageKey = createRecoveryOwnerStorageKey(purchase);
+    const owner = getRecoveryOwner(purchase);
+    if (owner !== undefined && owner.recoveryScope !== recoveryScope) {
+      throw new Error('Microsoft Store purchase is reserved for another player scope.');
+    }
+    const next = Object.freeze({ version: 1, recoveryScope }) satisfies MicrosoftStoreRecoveryOwner;
+    pendingRecoveryOwners.set(storageKey, next);
+    writeRecoveryOwner(recoveryIdStorage, storageKey, next);
+  }
+
+  function getRecoveryOwner(
+    purchase: MicrosoftStoreDigitalGoodsPurchase,
+  ): MicrosoftStoreRecoveryOwner | undefined {
+    const storageKey = createRecoveryOwnerStorageKey(purchase);
+    const cached = pendingRecoveryOwners.get(storageKey);
+    if (cached !== undefined) {
+      return cached;
+    }
+    const owner = readRecoveryOwner(recoveryIdStorage, storageKey);
+    if (owner !== undefined) {
+      pendingRecoveryOwners.set(storageKey, owner);
+    }
+    return owner;
+  }
+
+  function releaseRecoveryOwner(
+    purchase: MicrosoftStoreDigitalGoodsPurchase,
+    recoveryScope: string,
+  ): void {
+    const storageKey = createRecoveryOwnerStorageKey(purchase);
+    const owner = getRecoveryOwner(purchase);
+    if (owner?.recoveryScope !== recoveryScope) {
+      return;
+    }
+    pendingRecoveryOwners.delete(storageKey);
+    removeRecoveries(recoveryIdStorage, storageKey);
   }
 
   async function getAvailability(): Promise<MicrosoftStoreCommerceAvailability> {
@@ -239,6 +298,9 @@ export function createMicrosoftStoreCommerceAdapter(
     // Microsoft purchaseToken is the add-on Product ID rather than a purchase-unique token.
     // Retain both the first request identity and the purchased Store identity. A later recovery
     // must not assign a new player's key or fabricate evidence from a changed catalog mapping.
+    if (resolveRecoveryScope(input.getRecoveryScope) !== recoveryScope) {
+      throw new Error('Microsoft Store player scope changed before fulfillment.');
+    }
     const recovery = reserveRecovery(product, recoveryScope, request.idempotencyKey, purchase);
     const recoveredPurchase = {
       itemId: recovery.inAppOfferToken,
@@ -380,6 +442,9 @@ export function createMicrosoftStoreCommerceAdapter(
           return candidate.itemId === product.inAppOfferToken
             && (purchaseToken === undefined || candidate.purchaseToken === purchaseToken);
         });
+        if (resolveRecoveryScope(input.getRecoveryScope) !== recoveryScope) {
+          throw new Error('Microsoft Store player scope changed during ownership lookup.');
+        }
         let result: PurchaseResult;
         if (purchase === undefined) {
           reserveRecovery(product, recoveryScope, request.idempotencyKey, purchaseToken === undefined
@@ -421,6 +486,9 @@ export function createMicrosoftStoreCommerceAdapter(
       try {
         const recoveryScope = resolveRecoveryScope(input.getRecoveryScope);
         const service = await getService();
+        if (resolveRecoveryScope(input.getRecoveryScope) !== recoveryScope) {
+          throw new Error('Microsoft Store player scope changed before recovery.');
+        }
         const resumedPurchases = new Set<string>();
         await Promise.all(products.flatMap((product) => {
           return getReservedRecoveries(product, recoveryScope).map((recovery) => {
@@ -436,12 +504,18 @@ export function createMicrosoftStoreCommerceAdapter(
           });
         }));
         const purchases = await service.listPurchases();
+        if (resolveRecoveryScope(input.getRecoveryScope) !== recoveryScope) {
+          throw new Error('Microsoft Store player scope changed during recovery lookup.');
+        }
         await Promise.all(purchases.flatMap((purchase) => {
           if (resumedPurchases.has(createPurchaseIdentity(purchase))) {
             return [];
           }
           const product = productsByStoreId.get(purchase.itemId);
           if (product === undefined) {
+            return [];
+          }
+          if (getRecoveryOwner(purchase)?.recoveryScope !== recoveryScope) {
             return [];
           }
           return [
@@ -563,6 +637,58 @@ function createRecoveryStorageKey(
     encodeURIComponent(recoveryScope),
     encodeURIComponent(product.info.id),
   ].join(':');
+}
+
+function createRecoveryOwnerStorageKey(
+  purchase: MicrosoftStoreDigitalGoodsPurchase,
+): string {
+  return [
+    'mpgd',
+    'microsoft-store',
+    'pending-owner',
+    'v1',
+    encodeURIComponent(purchase.itemId),
+    encodeURIComponent(purchase.purchaseToken),
+  ].join(':');
+}
+
+function readRecoveryOwner(
+  storage: MicrosoftStoreRecoveryIdStorage | undefined,
+  key: string,
+): MicrosoftStoreRecoveryOwner | undefined {
+  try {
+    const raw = storage?.getItem(key);
+    if (raw === undefined || raw === null) {
+      return undefined;
+    }
+    const parsed: unknown = JSON.parse(raw);
+    if (
+      typeof parsed === 'object'
+      && parsed !== null
+      && !Array.isArray(parsed)
+      && Reflect.get(parsed, 'version') === 1
+    ) {
+      const recoveryScope = nonEmptyString(Reflect.get(parsed, 'recoveryScope'));
+      if (recoveryScope !== undefined) {
+        return Object.freeze({ version: 1, recoveryScope });
+      }
+    }
+  } catch {
+    // A malformed owner record is not an authorization to claim a listed purchase.
+  }
+  return undefined;
+}
+
+function writeRecoveryOwner(
+  storage: MicrosoftStoreRecoveryIdStorage | undefined,
+  key: string,
+  owner: MicrosoftStoreRecoveryOwner,
+): void {
+  try {
+    storage?.setItem(key, JSON.stringify(owner));
+  } catch {
+    // The in-memory owner still prevents cross-scope recovery in this adapter instance.
+  }
 }
 
 function resolveRecoveryScope(getRecoveryScope: () => string): string {

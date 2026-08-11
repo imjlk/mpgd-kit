@@ -19,7 +19,7 @@ export type GameServicesAdRewardTarget = Extract<
 >;
 export type GameServicesLeaderboardTarget = Extract<
   PlatformTarget,
-  'browser' | 'android' | 'ios' | 'ait' | 'reddit'
+  'browser' | 'microsoft-store' | 'android' | 'ios' | 'ait' | 'reddit'
 >;
 export type GameServicesLedgerTarget = Extract<
   PlatformTarget,
@@ -361,12 +361,13 @@ const reservedDeploymentTargetNames = new Set([
 function assertLeaderboardTarget(input: unknown): asserts input is GameServicesLeaderboardTarget {
   if (
     input !== 'browser'
+    && input !== 'microsoft-store'
     && input !== 'android'
     && input !== 'ios'
     && input !== 'ait'
     && input !== 'reddit'
   ) {
-    throw new Error('target must be browser, android, ios, ait, or reddit.');
+    throw new Error('target must be browser, microsoft-store, android, ios, ait, or reddit.');
   }
 }
 

@@ -409,6 +409,12 @@ const microsoftStorePurchase = await microsoftStoreClient.purchase({
   source: 'shop',
   idempotencyKey: 'microsoft-store-purchase',
 });
+const microsoftStoreLeaderboard = await microsoftStoreClient.submitLeaderboardScore({
+  leaderboardId: 'daily',
+  score: 987,
+  runId: 'microsoft-store-run',
+  submittedAt: '2026-07-03T00:00:04.000Z',
+});
 
 assertEqual(
   microsoftStorePurchase.status,
@@ -424,6 +430,16 @@ assertEqual(
   microsoftStoreVerificationCalls,
   0,
   'Microsoft Store authority completions should not be sent through verification twice',
+);
+assertEqual(
+  microsoftStoreLeaderboard.submitted,
+  true,
+  'Microsoft Store should use the generic leaderboard flow',
+);
+assertEqual(
+  microsoftStoreLeaderboard.platformSubmitted,
+  true,
+  'Microsoft Store should submit the score through its browser gateway',
 );
 
 let verse8PurchaseCalls = 0;
