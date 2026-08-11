@@ -1794,12 +1794,30 @@ function inlineStaticElementSourceAssignments(
 
     const openingParenthesis = match.index + match[0].length - 1;
     const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
-    const attribute = arguments_[0] === undefined
+    const attributeRange = arguments_[0];
+    const attribute = attributeRange === undefined
       ? undefined
-      : resolveStaticJavaScriptStringExpression(source, arguments_[0], codePositions);
+      : resolveStaticJavaScriptStringExpression(source, attributeRange, codePositions);
     const referenceRange = arguments_[1];
 
-    if (attribute === undefined || referenceRange === undefined) {
+    if (attribute === undefined) {
+      if (
+        attributeRange !== undefined
+        && referenceRange !== undefined
+        && findStaticNativeElementBinding(
+          source,
+          match[1],
+          match.index,
+          codePositions,
+        ) !== undefined
+      ) {
+        throw new Error('Offline playtest requires a static native element attribute name.');
+      }
+
+      continue;
+    }
+
+    if (referenceRange === undefined) {
       continue;
     }
 
@@ -2160,7 +2178,7 @@ function parseStaticElementConstructor(
           arguments_[0],
           initializerCodePositions,
         )?.toLowerCase();
-    const supportedTagNames = new Set(['audio', 'img', 'source', 'track', 'video']);
+    const supportedTagNames = new Set(['audio', 'img', 'input', 'source', 'track', 'video']);
 
     return createdElement === null
       || tagName === undefined
@@ -5283,7 +5301,6 @@ function renderOfflineRuntimeGuard(): string {
 
 function assertSupportedBundledRuntime(source: string): void {
   const unsupported = [
-    { pattern: /\bWebAssembly\s*\.\s*instantiateStreaming\s*\(/gu, label: 'WebAssembly streaming' },
     { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
   ];
   const normalizedSource = normalizeRuntimeGlobalAliases(
@@ -5294,6 +5311,8 @@ function assertSupportedBundledRuntime(source: string): void {
   const codeOnlySource = maskNonCode(normalizedSource, codePositions);
   assertNoUnsupportedWorkerConstruction(normalizedSource, codePositions);
   assertNoUnsupportedBrowserApi(normalizedSource, codePositions);
+  assertNoNativeWebAssemblyStreaming(normalizedSource, codePositions);
+  assertNoUnsafeJavaScriptEvaluation(normalizedSource, codePositions);
   assertNoDynamicImport(normalizedSource, codePositions, braceKinds);
   assertNoUnsafeDynamicElementCreation(normalizedSource, codePositions);
   assertNoScriptDrivenNavigation(normalizedSource, codePositions);
@@ -5305,6 +5324,107 @@ function assertSupportedBundledRuntime(source: string): void {
     }
 
     candidate.pattern.lastIndex = 0;
+  }
+}
+
+function assertNoNativeWebAssemblyStreaming(
+  source: string,
+  codePositions: Uint8Array,
+): void {
+  const pattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(WebAssembly)\s*\.\s*instantiateStreaming\s*\(/gu;
+
+  for (const match of source.matchAll(pattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const bindingIdentifier = match[1] ?? match[2];
+
+    if (
+      bindingIdentifier !== undefined
+      && findVisibleJavaScriptIdentifierBinding(
+        source,
+        bindingIdentifier,
+        match.index,
+        codePositions,
+      ) === undefined
+    ) {
+      throw new Error('Offline playtest does not support WebAssembly streaming.');
+    }
+  }
+}
+
+function assertNoUnsafeJavaScriptEvaluation(
+  source: string,
+  codePositions: Uint8Array,
+): void {
+  const evaluatorPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:new\s+)?(?:(globalThis|self|window)\s*\.\s*)?(eval|Function)\s*\(/gu;
+
+  for (const match of source.matchAll(evaluatorPattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const openingParenthesis = match.index + match[0].length - 1;
+    const closingParenthesis = findMatchingJavaScriptClosingParenthesis(
+      source,
+      openingParenthesis,
+      source.length,
+      codePositions,
+    );
+    const nextCode = closingParenthesis === undefined
+      ? undefined
+      : findNextJavaScriptCodeIndex(source, closingParenthesis + 1, codePositions);
+
+    if (nextCode !== undefined && source[nextCode] === '{') {
+      continue;
+    }
+
+    const bindingIdentifier = match[1] ?? match[2];
+
+    if (
+      bindingIdentifier !== undefined
+      && findVisibleJavaScriptIdentifierBinding(
+        source,
+        bindingIdentifier,
+        match.index,
+        codePositions,
+      ) === undefined
+    ) {
+      throw new Error('Offline playtest does not support JavaScript string evaluation.');
+    }
+  }
+
+  const timerPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(setInterval|setTimeout)\s*\(/gu;
+
+  for (const match of source.matchAll(timerPattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const bindingIdentifier = match[1] ?? match[2];
+
+    if (
+      bindingIdentifier === undefined
+      || findVisibleJavaScriptIdentifierBinding(
+        source,
+        bindingIdentifier,
+        match.index,
+        codePositions,
+      ) !== undefined
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = match.index + match[0].length - 1;
+    const callback = splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+
+    if (
+      callback !== undefined
+      && resolveStaticJavaScriptStringExpression(source, callback, codePositions) !== undefined
+    ) {
+      throw new Error('Offline playtest does not support JavaScript string evaluation.');
+    }
   }
 }
 
@@ -5762,7 +5882,7 @@ function assertNoScriptDrivenNavigation(
   const aliasAssignments = findLocationAliasAssignments(source, codePositions);
   assertNoIndirectLocationMutation(source, codePositions, aliasAssignments);
 
-  const locationOperation = '(?:\\s*\\[|\\s*\\.\\s*(?:assign|replace|reload)\\b|(?:\\s*\\.\\s*href)?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
+  const locationOperation = '(?:\\s*\\.?\\s*\\[|\\s*\\.\\s*(?:assign|replace|reload)\\b|(?:\\s*\\.\\s*href)?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
   const groupedLocationOperationPattern = new RegExp(locationOperation, 'uy');
   const codeOnlySource = maskNonCodePreservingLength(source, codePositions);
 
@@ -6618,7 +6738,9 @@ function normalizeStaticJavaScriptPropertyAccess(source: string): string {
     output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
   }
 
-  return output.replace(/\?\.\s*(?=\()/gu, '').replace(/\?\./gu, '.');
+  return output
+    .replace(/\?\.\s*(?=[([])/gu, '')
+    .replace(/\?\./gu, '.');
 }
 
 function normalizeStaticJavaScriptPropertyKeys(source: string): string {

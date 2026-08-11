@@ -410,6 +410,10 @@ try {
   for (const [name, mainJs] of [
     ['computed-location-assignment', 'window["location"]["href"] = "https://example.com";'],
     ['computed-location-method', 'location["assign"]("https://example.com");'],
+    [
+      'optional-computed-location-method',
+      'document.body.dataset.method = "reload"; location?.[document.body.dataset.method]();',
+    ],
     ['grouped-location-assignment', '(location).href = "https://example.com";'],
     ['nested-grouped-location-assignment', '((window.location)).href = "https://example.com";'],
     ['grouped-location-method', '(location).assign("https://example.com");'],
@@ -1949,6 +1953,12 @@ try {
   );
   assert.match(nativeElementFetchingAttributesHtml, /data:image\/png;base64,/u);
 
+  const createdImageInputHtml = await packageAndReadFixture('created-image-input-asset', {
+    mainJs: 'const button = document.createElement("input"); button.type = "image"; button.src = "/assets/pixel.png"; document.body.append(button);',
+  });
+  assert.doesNotMatch(createdImageInputHtml, /\/assets\/pixel\.png/u);
+  assert.match(createdImageInputHtml, /data:image\/png;base64,/u);
+
   const computedBrowserImageHtml = await packageAndReadFixture('computed-browser-image-asset', {
     mainJs: 'const property = "src"; const literal = new Image(); const identified = new Image(); literal["src"] = "/assets/pixel.png"; identified[property] = "/assets/icon.png"; document.body.append(literal, identified);',
   });
@@ -1978,6 +1988,17 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: dynamicComputedBrowserImageGame }),
     /requires a static native element property assignment/u,
+  );
+
+  const dynamicAttributedBrowserImageGame = createPreviewFixture(
+    'dynamic-attributed-browser-image-asset',
+    {
+      mainJs: 'const splash = new Image(); splash.setAttribute(document.body.dataset.attribute, "/assets/pixel.png"); document.body.append(splash);',
+    },
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dynamicAttributedBrowserImageGame }),
+    /requires a static native element attribute name/u,
   );
 
   const memberElementReceiverHtml = await packageAndReadFixture(
@@ -2598,6 +2619,41 @@ try {
     mainJs: 'void WebAssembly.instantiate(new Uint8Array([0]));',
   });
   assert.match(wasmHtml, /wasm-unsafe-eval/u);
+
+  const wasmStreamingGame = createPreviewFixture('streaming-wasm', {
+    mainJs: 'void WebAssembly.instantiateStreaming(Promise.resolve(new Response()));',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: wasmStreamingGame }),
+    /does not support WebAssembly streaming/u,
+  );
+
+  const memberOwnedWasmHtml = await packageAndReadFixture('member-owned-wasm', {
+    mainJs: 'const sdk = { WebAssembly: { instantiateStreaming() { return "local"; } } }; document.body.dataset.result = sdk.WebAssembly.instantiateStreaming();',
+  });
+  assert.match(memberOwnedWasmHtml, /local/u);
+
+  for (const [name, mainJs] of [
+    ['direct-eval', 'eval("document.body.dataset.ready = \'true\'");'],
+    ['function-constructor', 'void new Function("return true")();'],
+    ['string-timeout', 'setTimeout("document.body.dataset.ready = \'true\'", 0);'],
+  ] as const) {
+    const stringEvaluationGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: stringEvaluationGame }),
+      /does not support JavaScript string evaluation/u,
+    );
+  }
+
+  const memberOwnedStringEvaluatorHtml = await packageAndReadFixture('member-owned-string-evaluator', {
+    mainJs: 'const sdk = { eval() {}, Function() { return () => {}; }, setTimeout() {} }; sdk.eval("local"); sdk.Function("local")(); sdk.setTimeout("local", 0);',
+  });
+  assert.match(memberOwnedStringEvaluatorHtml, /local/u);
+
+  const shadowedStringEvaluatorHtml = await packageAndReadFixture('shadowed-string-evaluator', {
+    mainJs: 'function run(Function, setTimeout) { Function("local"); setTimeout("local", 0); } run(() => () => {}, () => {});',
+  });
+  assert.match(shadowedStringEvaluatorHtml, /local/u);
 
   const embeddedWasmHtml = await packageAndReadFixture(
     'embedded-wasm',
