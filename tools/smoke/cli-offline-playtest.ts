@@ -262,6 +262,17 @@ try {
     /does not support script-driven navigation/u,
   );
 
+  for (const [name, mainJs] of [
+    ['location-reload-navigation', 'location.reload();'],
+    ['qualified-location-reload-navigation', 'window.location.reload();'],
+  ] as const) {
+    const reloadNavigationGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: reloadNavigationGame }),
+      /does not support script-driven navigation/u,
+    );
+  }
+
   const indirectMethodNavigationGame = createPreviewFixture('indirect-method-navigation', {
     mainJs: 'Reflect.apply(location.assign, location, ["https://example.com/escape"]);',
   });
@@ -681,6 +692,7 @@ try {
   assert.match(dynamicAnchorHtml, /HTMLAnchorElement\.prototype\.click/u);
   assert.match(dynamicAnchorHtml, /closest\('a,area'\)/u);
   assert.match(dynamicAnchorHtml, /getAttribute\('xlink:href'\)/u);
+  assert.match(dynamicAnchorHtml, /\['assign','replace','reload'\]/u);
   assert.match(dynamicAnchorHtml, /\['meta','object','embed'\]\.includes/u);
 
   for (const tagName of ['object', 'embed'] as const) {
