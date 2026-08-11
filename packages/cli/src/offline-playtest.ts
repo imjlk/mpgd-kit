@@ -284,6 +284,19 @@ const javascriptControlParenthesisKeywords = new Set([
 ]);
 const javascriptBlockKeywords = new Set(['do', 'else', 'finally', 'try']);
 const javascriptIdentifierPatternSource = '[$_\\p{ID_Start}][$\\u200C\\u200D\\p{ID_Continue}]*';
+const exactJavaScriptIdentifierPattern = new RegExp(`^${javascriptIdentifierPatternSource}$`, 'u');
+const importDefaultBindingPattern = new RegExp(
+  `^(${javascriptIdentifierPatternSource})(?:\\s*,|$)`,
+  'u',
+);
+const importNamespaceBindingPattern = new RegExp(
+  `\\*\\s*as\\s+(${javascriptIdentifierPatternSource})`,
+  'u',
+);
+const importNamedBindingPattern = new RegExp(
+  `^(${javascriptIdentifierPatternSource})(?:\\s+as\\s+(${javascriptIdentifierPatternSource}))?$`,
+  'u',
+);
 const htmlAssetAttributesByTag: Readonly<Record<string, readonly string[]>> = {
   audio: ['src'],
   body: ['background'],
@@ -1128,112 +1141,219 @@ function inlineStaticElementSourceAssignments(
   context: InliningContext,
 ): string {
   const assignmentPattern = new RegExp(
-    `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*src\\s*=\\s*(?:"((?:\\\\(?:\\r\\n|[\\s\\S])|[^"\\\\\\r\\n])*)"|'((?:\\\\(?:\\r\\n|[\\s\\S])|[^'\\\\\\r\\n])*)'|\`((?:\\\\(?:\\r\\n|[\\s\\S])|[^\`\\\\\\r\\n])*)\`)`,
+    `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*src\\s*=`,
+    'gu',
+  );
+  const setAttributePattern = new RegExp(
+    `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*(?:\\.\\s*|\\?\\.\\s*)setAttribute\\s*(?:\\?\\.\\s*)?\\(`,
     'gu',
   );
   const codePositions = createCodePositionMap(source, true);
+  const replacements: SourceReplacement[] = [];
 
-  return source.replace(
-    assignmentPattern,
-    (
-      match,
-      identifier: string,
-      doubleQuotedReference: string | undefined,
-      singleQuotedReference: string | undefined,
-      templateReference: string | undefined,
-      offset: number,
-    ) => {
-      if (
-        codePositions[offset] !== 1
-        || hasEscapedJavaScriptIdentifierContinuationBefore(
-          source,
-          offset,
-          codePositions,
-        )
-        || (
-          templateReference !== undefined
-          && containsUnescapedTemplateInterpolation(templateReference)
-        )
-      ) {
-        return match;
-      }
+  const addReplacement = (
+    identifier: string,
+    offset: number,
+    referenceRange: SourceRange,
+  ): void => {
+    const proof = findStaticNativeElementBinding(source, identifier, offset, codePositions);
 
-      const binding = findVisibleJavaScriptIdentifierBinding(
-        source,
-        identifier,
-        offset,
-        codePositions,
+    if (proof === undefined) {
+      return;
+    }
+
+    if (proof.binding.kind !== 'const') {
+      throw new Error(
+        `Offline playtest requires an immutable ${proof.constructorName} binding before rewriting src.`,
       );
-      const rawInitializer = binding?.initializerRange === undefined
-        ? undefined
-        : source.slice(binding.initializerRange.start, binding.initializerRange.end).trim();
-      const initializer = binding?.initializerRange === undefined
-        ? undefined
-        : maskNonCode(
-          source.slice(binding.initializerRange.start, binding.initializerRange.end),
-          codePositions.slice(binding.initializerRange.start, binding.initializerRange.end),
-        ).trim();
-      const constructor = initializer === undefined
-        ? undefined
-        : parseStaticElementConstructor(initializer, rawInitializer ?? initializer);
-      const qualifier = constructor?.qualifier;
-      const constructorName = constructor?.constructorName;
+    }
 
-      if (
-        binding === undefined
-        || initializer === undefined
-        || binding.start >= offset
-        || constructorName === undefined
-        || (
-          qualifier === undefined
-            ? findVisibleJavaScriptIdentifierBinding(
-              source,
-              constructorName,
-              binding.initializerRange?.start ?? offset,
-              codePositions,
-            ) !== undefined
-            : findVisibleJavaScriptIdentifierBinding(
-              source,
-              qualifier,
-              binding.initializerRange?.start ?? offset,
-              codePositions,
-            ) !== undefined
-        )
-      ) {
-        return match;
-      }
+    const reference = resolveStaticJavaScriptStringExpression(
+      source,
+      referenceRange,
+      codePositions,
+    );
 
-      if (binding.kind !== 'const') {
-        throw new Error(
-          `Offline playtest requires an immutable ${constructorName} binding before rewriting src.`,
-        );
-      }
+    if (reference === undefined) {
+      throw new Error(`Offline playtest requires a static ${proof.constructorName} src value.`);
+    }
 
-      let quote = '`';
+    if (isDataUrlReference(reference)) {
+      return;
+    }
 
-      if (doubleQuotedReference !== undefined) {
-        quote = '"';
-      } else if (singleQuotedReference !== undefined) {
-        quote = "'";
-      }
-      const rawReference = doubleQuotedReference ?? singleQuotedReference ?? templateReference ?? '';
-      const reference = decodeJavaScriptStringLiteral(rawReference);
+    if (isNonLocalReference(reference)) {
+      throw new Error(
+        `Offline playtest does not support network ${proof.constructorName} URL: ${reference}`,
+      );
+    }
 
-      if (isDataUrlReference(reference)) {
-        return match;
-      }
+    replacements.push({
+      start: referenceRange.start,
+      end: referenceRange.end,
+      value: JSON.stringify(readAssetDataUrl(documentFile, reference, context)),
+    });
+  };
 
-      if (isNonLocalReference(reference)) {
-        throw new Error(
-          `Offline playtest does not support network ${constructorName} URL: ${reference}`,
-        );
-      }
+  for (const match of source.matchAll(assignmentPattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+      || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
+    ) {
+      continue;
+    }
 
-      const dataUrl = escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote);
-      const assignmentPrefix = match.slice(0, match.length - rawReference.length - 2);
-      return `${assignmentPrefix}${quote}${dataUrl}${quote}`;
-    },
+    const referenceRange = findJavaScriptExpressionRange(
+      source,
+      match.index + match[0].length,
+      source.length,
+      codePositions,
+      true,
+    );
+    addReplacement(match[1], match.index, referenceRange);
+  }
+
+  for (const match of source.matchAll(setAttributePattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+      || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = source.indexOf('(', match.index);
+    const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
+    const attribute = arguments_[0] === undefined
+      ? undefined
+      : readStaticJavaScriptStringWithTrivia(source, arguments_[0], codePositions);
+    const referenceRange = arguments_[1];
+
+    if (attribute?.toLowerCase() !== 'src' || referenceRange === undefined) {
+      continue;
+    }
+
+    addReplacement(match[1], match.index, referenceRange);
+  }
+
+  let output = source;
+
+  for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
+  return output;
+}
+
+function findStaticNativeElementBinding(
+  source: string,
+  identifier: string,
+  position: number,
+  codePositions: Uint8Array,
+): Readonly<{
+  binding: JavaScriptIdentifierBinding;
+  constructorName: string;
+}> | undefined {
+  const binding = findVisibleJavaScriptIdentifierBinding(
+    source,
+    identifier,
+    position,
+    codePositions,
   );
+  const rawInitializer = binding?.initializerRange === undefined
+    ? undefined
+    : source.slice(binding.initializerRange.start, binding.initializerRange.end).trim();
+  const initializer = binding?.initializerRange === undefined
+    ? undefined
+    : maskNonCode(
+      source.slice(binding.initializerRange.start, binding.initializerRange.end),
+      codePositions.slice(binding.initializerRange.start, binding.initializerRange.end),
+    ).trim();
+  const constructor = initializer === undefined
+    ? undefined
+    : parseStaticElementConstructor(initializer, rawInitializer ?? initializer);
+  const qualifier = constructor?.qualifier;
+  const constructorName = constructor?.constructorName;
+
+  if (
+    binding === undefined
+    || initializer === undefined
+    || binding.start >= position
+    || constructorName === undefined
+    || (
+      qualifier === undefined
+        ? findVisibleJavaScriptIdentifierBinding(
+          source,
+          constructorName,
+          binding.initializerRange?.start ?? position,
+          codePositions,
+        ) !== undefined
+        : findVisibleJavaScriptIdentifierBinding(
+          source,
+          qualifier,
+          binding.initializerRange?.start ?? position,
+          codePositions,
+        ) !== undefined
+    )
+  ) {
+    return undefined;
+  }
+
+  return { binding, constructorName };
+}
+
+function resolveStaticJavaScriptStringExpression(
+  source: string,
+  expressionRange: SourceRange,
+  codePositions: Uint8Array,
+): string | undefined {
+  const direct = readStaticJavaScriptStringWithTrivia(source, expressionRange, codePositions);
+
+  if (direct !== undefined) {
+    return direct;
+  }
+
+  const expression = maskNonCode(
+    source.slice(expressionRange.start, expressionRange.end),
+    codePositions.slice(expressionRange.start, expressionRange.end),
+  ).trim();
+
+  if (!exactJavaScriptIdentifierPattern.test(expression)) {
+    return undefined;
+  }
+
+  let identifierOffset = expressionRange.start;
+
+  while (
+    identifierOffset < expressionRange.end
+    && (codePositions[identifierOffset] !== 1 || /\s/u.test(source[identifierOffset] ?? ''))
+  ) {
+    identifierOffset += 1;
+  }
+
+  if (source.slice(identifierOffset, identifierOffset + expression.length) !== expression) {
+    return undefined;
+  }
+
+  const binding = findVisibleJavaScriptIdentifierBinding(
+    source,
+    expression,
+    identifierOffset,
+    codePositions,
+  );
+
+  if (
+    binding?.kind !== 'const'
+    || binding.initializerRange === undefined
+    || binding.start >= identifierOffset
+  ) {
+    return undefined;
+  }
+
+  return readStaticJavaScriptStringWithTrivia(source, binding.initializerRange, codePositions);
 }
 
 function parseStaticElementConstructor(
@@ -2002,7 +2122,7 @@ function findVisibleJavaScriptIdentifierBinding(
     'gu',
   );
   const destructuringPattern = /\b(const|let|var)\s+(\{[^;=\r\n]*\}|\[[^;=\r\n]*\])\s*=/gu;
-  const importPattern = /\bimport\s+(?:(?:type\s+)?([$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*)|\*\s*as\s+([$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*)|\{([^}]*)\})/gu;
+  const importPattern = /\bimport\s+(?!["'`(])([\s\S]*?)\s+from\s*(?=["'`])/dgu;
   const identifierPattern = new RegExp(javascriptIdentifierPatternSource, 'gu');
   const declarations: JavaScriptIdentifierBinding[] = [];
 
@@ -2099,14 +2219,23 @@ function findVisibleJavaScriptIdentifierBinding(
   }
 
   for (const match of source.matchAll(importPattern)) {
-    if (match.index === undefined || codePositions[match.index] !== 1) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || match.indices?.[1] === undefined
+      || codePositions[match.index] !== 1
+    ) {
       continue;
     }
 
-    const importedNames = [match[1] ?? '', match[2] ?? '', match[3] ?? '']
-      .flatMap((value) => [...value.matchAll(identifierPattern)].map((candidate) => candidate[0]));
+    const clauseIndices = match.indices[1];
+    const importedNames = collectJavaScriptImportBindingNames(
+      source,
+      { start: clauseIndices[0], end: clauseIndices[1] },
+      codePositions,
+    );
 
-    if (importedNames.includes(identifier)) {
+    if (importedNames.has(identifier)) {
       declarations.push({ bindingPath: [], kind: 'unknown', start: match.index });
     }
   }
@@ -2397,6 +2526,48 @@ function findJavaScriptTopLevelCharacter(
   }
 
   return undefined;
+}
+
+function collectJavaScriptImportBindingNames(
+  source: string,
+  clauseRange: SourceRange,
+  codePositions: Uint8Array,
+): ReadonlySet<string> {
+  const clause = maskNonCode(
+    source.slice(clauseRange.start, clauseRange.end),
+    codePositions.slice(clauseRange.start, clauseRange.end),
+  ).trim().replace(/^type\s+/u, '');
+  const names = new Set<string>();
+  const defaultImport = importDefaultBindingPattern.exec(clause)?.[1];
+
+  if (defaultImport !== undefined) {
+    names.add(defaultImport);
+  }
+
+  const namespaceImport = importNamespaceBindingPattern.exec(clause)?.[1];
+
+  if (namespaceImport !== undefined) {
+    names.add(namespaceImport);
+  }
+
+  const namedStart = clause.indexOf('{');
+  const namedEnd = clause.lastIndexOf('}');
+
+  if (namedStart === -1 || namedEnd <= namedStart) {
+    return names;
+  }
+
+  for (const rawSpecifier of clause.slice(namedStart + 1, namedEnd).split(',')) {
+    const specifier = rawSpecifier.trim().replace(/^type\s+/u, '');
+    const match = importNamedBindingPattern.exec(specifier);
+    const localName = match?.[2] ?? match?.[1];
+
+    if (localName !== undefined) {
+      names.add(localName);
+    }
+  }
+
+  return names;
 }
 
 function findJavaScriptBlockBindingHeader(
@@ -3858,7 +4029,7 @@ function transformOutsideHtmlRawText(
 }
 
 function createHtmlRawTextPattern(): RegExp {
-  return /<!--[\s\S]*?--!?>|<(script|style|textarea|title)\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/\1\s*\/?\s*>/giu;
+  return /<!--[\s\S]*?--!?>|<(noscript|script|style|textarea|title)\b((?:"[^"]*"|'[^']*'|[^'">])*)>([\s\S]*?)<\/\1\s*\/?\s*>/giu;
 }
 
 function maskHtmlRawTextBodies(html: string): string {
@@ -4640,6 +4811,52 @@ function assertNoIndirectLocationMutation(
   codePositions: Uint8Array,
   aliasAssignments: readonly LocationAliasAssignment[],
 ): void {
+  const descriptorPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(Object|Reflect)\s*\.\s*getOwnPropertyDescriptor\s*\(/gu;
+
+  for (const match of source.matchAll(descriptorPattern)) {
+    if (
+      match.index === undefined
+      || codePositions[match.index] !== 1
+      || findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1] ?? match[2] ?? 'Object',
+        match.index,
+        codePositions,
+      ) !== undefined
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = source.indexOf('(', match.index);
+    const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
+    const target = arguments_[0];
+    const property = arguments_[1] === undefined
+      ? undefined
+      : readStaticJavaScriptStringWithTrivia(source, arguments_[1], codePositions);
+
+    if (target === undefined || property !== 'href') {
+      continue;
+    }
+
+    const targetExpression = maskNonCode(
+      source.slice(target.start, target.end),
+      codePositions.slice(target.start, target.end),
+    ).trim();
+
+    if (
+      isLocationAliasExpression(
+        source,
+        targetExpression,
+        target.start,
+        codePositions,
+        aliasAssignments,
+        new Set<string>(),
+      )
+    ) {
+      throw new Error('Offline playtest does not support script-driven navigation.');
+    }
+  }
+
   const pattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(Object|Reflect)\s*\.\s*(assign|defineProperties|defineProperty|set)\s*\(/gu;
 
   for (const match of source.matchAll(pattern)) {

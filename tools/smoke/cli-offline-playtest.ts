@@ -406,6 +406,14 @@ try {
       'optional-object-property-location-assignment',
       'Object?.assign(location, { href: "https://example.com" });',
     ],
+    [
+      'location-href-descriptor-setter',
+      'Object.getOwnPropertyDescriptor(location, "href").set.call(location, "https://example.com");',
+    ],
+    [
+      'reflected-location-href-descriptor-setter',
+      'Reflect.getOwnPropertyDescriptor(location, "href").set.call(location, "https://example.com");',
+    ],
     ['template-location-assignment', 'location[`href`] = "https://example.com";'],
     ['qualified-template-location-assignment', 'window.location[`href`] = "https://example.com";'],
     ['default-view-location', 'document.defaultView.location.href = "https://example.com";'],
@@ -452,6 +460,22 @@ try {
     },
   );
   assert.match(shadowedReflectLocationHtml, /local/u);
+
+  const shadowedObjectDescriptorHtml = await packageAndReadFixture(
+    'shadowed-object-location-descriptor',
+    {
+      mainJs: 'function inspect(Object, location) { return Object.getOwnPropertyDescriptor(location, "href"); } document.body.dataset.href = inspect({ getOwnPropertyDescriptor() { return "local"; } }, {});',
+    },
+  );
+  assert.match(shadowedObjectDescriptorHtml, /local/u);
+
+  const shadowedReflectDescriptorHtml = await packageAndReadFixture(
+    'shadowed-reflect-location-descriptor',
+    {
+      mainJs: 'function inspect(Reflect, location) { return Reflect.getOwnPropertyDescriptor(location, "href"); } document.body.dataset.href = inspect({ getOwnPropertyDescriptor() { return "local"; } }, {});',
+    },
+  );
+  assert.match(shadowedReflectDescriptorHtml, /local/u);
 
   const shadowedGroupedLocationHtml = await packageAndReadFixture(
     'shadowed-grouped-location-assignment',
@@ -766,6 +790,12 @@ try {
     mainJs: 'const frame = { location: "local" }; frame.location = "updated"; document.body.dataset.location = frame.location;',
   });
   assert.match(objectLocationHtml, /updated/u);
+
+  const noscriptFallbackHtml = await packageAndReadFixture('noscript-fallback', {
+    indexHtml: '<!doctype html><html><head></head><body><noscript><iframe src="/assets/fallback.html"></iframe><script src="/assets/fallback.js"></script></noscript><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  assert.match(noscriptFallbackHtml, /<noscript><iframe src="\/assets\/fallback\.html"/u);
+  assert.match(noscriptFallbackHtml, /<script src="\/assets\/fallback\.js"><\/script>/u);
 
   const externalFallbackGame = createPreviewFixture('external-fallback', {
     indexHtml: '<!doctype html><html><head></head><body><script src="/assets/side.js">fallback()</script><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
@@ -1137,6 +1167,17 @@ try {
   });
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: phaserBranchAssignedConfigGame }),
+    /does not support conditionally assigned Phaser loader configurations/u,
+  );
+
+  const phaserConditionallyReassignedConfigGame = createPreviewFixture(
+    'phaser-conditionally-reassigned-config',
+    {
+      mainJs: 'let config = { key: "hero", url: "/assets/pixel.png" }; if (globalThis.useLogo) config = { key: "logo", url: "/assets/icon.png" }; const scene = new Phaser.Scene(); scene.load.image(config);',
+    },
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: phaserConditionallyReassignedConfigGame }),
     /does not support conditionally assigned Phaser loader configurations/u,
   );
 
@@ -1559,6 +1600,23 @@ try {
   );
   assert.match(importedFetchHtml, /\/assets\/not-an-asset\.json/u);
 
+  const mixedImportedFetchHtml = await packageAndReadFixture('mixed-imported-fetch-binding', {
+    mainJs: 'import helper, { fetch } from "./fetch-helper.js"; document.body.dataset.value = `${helper}:${fetch("/assets/not-an-asset.json")}`;',
+  }, [[
+      'artifacts/web-preview/assets/fetch-helper.js',
+      'export default "helper"; export const fetch = (value) => value;',
+  ]]);
+  assert.match(mixedImportedFetchHtml, /\/assets\/not-an-asset\.json/u);
+
+  const aliasedImportedFetchHtml = await packageAndReadFixture('aliased-imported-fetch-binding', {
+    mainJs: 'import helper, { fetch as customFetch } from "./fetch-helper.js"; void helper; void customFetch; void fetch("/assets/config.json");',
+  }, [[
+    'artifacts/web-preview/assets/fetch-helper.js',
+    'export default "helper"; export const fetch = (value) => value;',
+  ]]);
+  assert.doesNotMatch(aliasedImportedFetchHtml, /fetch\(["']\/assets\/config\.json/u);
+  assert.match(aliasedImportedFetchHtml, /fetch\(["']data:application\/json;base64,/u);
+
   const browserAudioHtml = await packageAndReadFixture(
     'browser-audio-asset',
     { mainJs: 'const click = new Audio("/assets/click.mp3"); void click;' },
@@ -1605,6 +1663,36 @@ try {
   });
   assert.doesNotMatch(createdBrowserImageHtml, /\/assets\/pixel\.png/u);
   assert.match(createdBrowserImageHtml, /data:image\/png;base64,/u);
+
+  const identifiedBrowserImageHtml = await packageAndReadFixture('identified-browser-image-asset', {
+    mainJs: 'const source = "/assets/pixel.png"; const splash = new Image(); splash.src = source; document.body.append(splash);',
+  });
+  assert.doesNotMatch(identifiedBrowserImageHtml, /splash\.src\s*=\s*source/u);
+  assert.match(identifiedBrowserImageHtml, /splash\.src\s*=\s*["']data:image\/png;base64,/u);
+
+  const attributedBrowserImageHtml = await packageAndReadFixture('attributed-browser-image-asset', {
+    mainJs: 'const splash = document.createElement("img"); splash.setAttribute("src", "/assets/pixel.png"); document.body.append(splash);',
+  });
+  assert.doesNotMatch(
+    attributedBrowserImageHtml,
+    /setAttribute\(["']src["'],\s*["']\/assets\/pixel\.png/u,
+  );
+  assert.match(
+    attributedBrowserImageHtml,
+    /setAttribute\(["']src["'],\s*["']data:image\/png;base64,/u,
+  );
+
+  const identifiedAttributedBrowserImageHtml = await packageAndReadFixture(
+    'identified-attributed-browser-image-asset',
+    {
+      mainJs: 'const source = "/assets/pixel.png"; const splash = new Image(); splash.setAttribute("src", source); document.body.append(splash);',
+    },
+  );
+  assert.doesNotMatch(identifiedAttributedBrowserImageHtml, /setAttribute\(["']src["'],\s*source/u);
+  assert.match(
+    identifiedAttributedBrowserImageHtml,
+    /setAttribute\(["']src["'],\s*["']data:image\/png;base64,/u,
+  );
 
   for (const [lineEndingName, lineEnding] of [
     ['lf', '\n'],
