@@ -68,6 +68,7 @@ class FixtureCollectionsClient implements MicrosoftStoreCollectionsClient {
   readonly events: string[];
   readonly consumeTrackingIds: string[] = [];
   nextConsumeResponse: unknown;
+  nextQueryError: unknown;
   queryResponse: unknown = {
     items: [
       {
@@ -88,6 +89,11 @@ class FixtureCollectionsClient implements MicrosoftStoreCollectionsClient {
 
   async queryProduct(input: { readonly storeId: string }): Promise<unknown> {
     this.events.push(`provider:query:${input.storeId}`);
+    if (this.nextQueryError !== undefined) {
+      const error = this.nextQueryError;
+      this.nextQueryError = undefined;
+      throw error;
+    }
     return structuredClone(this.queryResponse);
   }
 
@@ -130,16 +136,23 @@ function createRequest(overrides: Partial<VerifyPurchaseRequest> = {}): VerifyPu
   };
 }
 
-function createHarness(input: { readonly sandbox?: string } = {}) {
+function createHarness(input: {
+  readonly sandbox?: string;
+  readonly storeIds?: Readonly<Record<string, string>>;
+  readonly resolveCredentials?: (
+    playerId: string,
+    signal: AbortSignal,
+  ) => Promise<MicrosoftStoreCollectionsCredentials> | MicrosoftStoreCollectionsCredentials;
+} = {}) {
   const events: string[] = [];
   const client = new FixtureCollectionsClient(events);
   const boundary = createMicrosoftStorePurchaseBoundary({
     client,
-    storeIds: { HINT_PACK_20: storeId },
-    resolveCredentials: () => ({
+    storeIds: input.storeIds ?? { HINT_PACK_20: storeId },
+    resolveCredentials: input.resolveCredentials ?? (() => ({
       ...credentials,
       ...(input.sandbox === undefined ? {} : { sandbox: input.sandbox }),
-    }),
+    })),
     now: () => '2030-01-02T03:04:06.000Z',
   });
   const developmentVerifier = createDevelopmentGameServicesEvidenceVerifier();
@@ -188,6 +201,54 @@ assert.equal(wrongKindResult.verified, false);
 assert.equal(wrongKindResult.reason, 'MICROSOFT_STORE_PRODUCT_KIND_MISMATCH');
 assert.deepEqual(wrongKind.events, [`provider:query:${storeId}`]);
 
+const missingMapping = createHarness({ storeIds: { HINT_PACK_120: '9N0000000002' } });
+const missingMappingResult = await missingMapping.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'missing-mapping' }),
+);
+assert.equal(missingMappingResult.verified, false);
+assert.equal(missingMappingResult.reason, 'MICROSOFT_STORE_PRODUCT_MAPPING_REQUIRED');
+assert.deepEqual(missingMapping.events, []);
+
+const notPropagated = createHarness();
+notPropagated.client.queryResponse = { items: [] };
+const notPropagatedResult = await notPropagated.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'not-propagated' }),
+);
+assert.equal(notPropagatedResult.verified, false);
+assert.equal(notPropagatedResult.reason, 'MICROSOFT_STORE_PURCHASE_NOT_PROPAGATED');
+assert.deepEqual(notPropagated.events, [`provider:query:${storeId}`]);
+
+const collectionsUnavailable = createHarness();
+collectionsUnavailable.client.nextQueryError = new Error('provider unavailable');
+const collectionsUnavailableResult = await collectionsUnavailable.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'collections-unavailable' }),
+);
+assert.equal(collectionsUnavailableResult.verified, false);
+assert.equal(collectionsUnavailableResult.reason, 'MICROSOFT_STORE_COLLECTIONS_UNAVAILABLE');
+assert.deepEqual(collectionsUnavailable.events, [`provider:query:${storeId}`]);
+
+const credentialsUnavailable = createHarness({
+  resolveCredentials() {
+    throw new Error('identity service unavailable');
+  },
+});
+const credentialsUnavailableResult = await credentialsUnavailable.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'credentials-unavailable' }),
+);
+assert.equal(credentialsUnavailableResult.verified, false);
+assert.equal(credentialsUnavailableResult.reason, 'MICROSOFT_STORE_CREDENTIALS_UNAVAILABLE');
+assert.deepEqual(credentialsUnavailable.events, []);
+
+const invalidCredentials = createHarness({
+  resolveCredentials: () => ({ ...credentials, accessToken: ' ' }),
+});
+const invalidCredentialsResult = await invalidCredentials.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'invalid-credentials' }),
+);
+assert.equal(invalidCredentialsResult.verified, false);
+assert.equal(invalidCredentialsResult.reason, 'MICROSOFT_STORE_CREDENTIALS_INVALID');
+assert.deepEqual(invalidCredentials.events, []);
+
 const untrustedToken = createHarness();
 const untrustedTokenResult = await untrustedToken.backend.purchases.verifyPurchase(
   createRequest({
@@ -206,6 +267,30 @@ assert.equal(sandboxResult.verified, true);
 assert.equal(sandboxResult.finalization?.status, 'pending');
 assert.equal(sandboxResult.finalization?.reason, 'MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX');
 assert.deepEqual(sandbox.events, [`provider:query:${storeId}`, 'ledger:sandbox-purchase']);
+
+let credentialResolutionCount = 0;
+const invalidFinalizationCredentials = createHarness({
+  resolveCredentials: () => {
+    credentialResolutionCount += 1;
+    return credentialResolutionCount === 1
+      ? credentials
+      : { ...credentials, userStoreId: '' };
+  },
+});
+const invalidFinalizationCredentialsResult =
+  await invalidFinalizationCredentials.backend.purchases.verifyPurchase(
+    createRequest({ idempotencyKey: 'invalid-finalization-credentials' }),
+  );
+assert.equal(invalidFinalizationCredentialsResult.verified, true);
+assert.equal(invalidFinalizationCredentialsResult.finalization?.status, 'pending');
+assert.equal(
+  invalidFinalizationCredentialsResult.finalization?.reason,
+  'MICROSOFT_STORE_CREDENTIALS_INVALID',
+);
+assert.deepEqual(invalidFinalizationCredentials.events, [
+  `provider:query:${storeId}`,
+  'ledger:invalid-finalization-credentials',
+]);
 
 const consumeRecovery = createHarness();
 consumeRecovery.client.nextConsumeResponse = { malformed: true };
@@ -296,5 +381,7 @@ assert.equal(
   (requests[1]?.body.beneficiary as Record<string, unknown> | undefined)?.identityValue,
   'server-resolved-user-store-id',
 );
+assert.equal(requests[1]?.body.skuId, undefined);
+assert.equal(requests[1]?.body.removeQuantity, undefined);
 
 console.log('Microsoft Store purchase boundary tests passed.');

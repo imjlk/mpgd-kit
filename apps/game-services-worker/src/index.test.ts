@@ -458,6 +458,29 @@ const microsoftStoreFinalizerBinding = {
     };
   },
 } satisfies GameServicesPurchaseGrantFinalizerBinding;
+assertThrows(
+  () => createWorkerService({
+    MPGD_STORE: 'memory',
+    GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER: {
+      async verifyPurchase() {
+        return verifiedDecision('microsoft-store:missing-finalizer');
+      },
+      async verifyAdReward() {
+        return { status: 'rejected', reason: 'NOT_SUPPORTED' };
+      },
+    },
+  }),
+  /must be configured together/u,
+  'Microsoft Store verifier-only configuration must fail closed',
+);
+assertThrows(
+  () => createWorkerService({
+    MPGD_STORE: 'memory',
+    GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER: microsoftStoreFinalizerBinding,
+  }),
+  /must be configured together/u,
+  'Microsoft Store finalizer-only configuration must fail closed',
+);
 const microsoftStoreService = createWorkerService({
   MPGD_STORE: 'memory',
   GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER: {
@@ -727,5 +750,19 @@ function assertDeepEqual<T>(
     throw new Error(
       `${message}: expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}.`,
     );
+  }
+}
+
+function assertThrows(run: () => unknown, expected: RegExp, message: string): void {
+  let error: unknown;
+
+  try {
+    run();
+  } catch (caught) {
+    error = caught;
+  }
+
+  if (!(error instanceof Error) || !expected.test(error.message)) {
+    throw new Error(`${message}: received ${String(error)}.`);
   }
 }

@@ -158,6 +158,8 @@ export function createMicrosoftStoreCollectionsClient(
         credentials,
         {
           beneficiary: beneficiary(credentials.userStoreId),
+          // Developer-managed v8 consume has no skuId or removeQuantity. Those fields are
+          // unsupported here or apply only to Store-managed consumables.
           productId: identifier(storeId, 'storeId'),
           trackingId: guid(trackingId, 'trackingId'),
           includeOrderIds: true,
@@ -201,13 +203,27 @@ export function createMicrosoftStorePurchaseBoundary(
         return rejected('MICROSOFT_STORE_PRODUCT_MAPPING_REQUIRED');
       }
 
-      let response: unknown;
+      let credentials: MicrosoftStoreCollectionsCredentials;
       try {
-        const credentials = await input.resolveCredentials(
+        credentials = await input.resolveCredentials(
           verificationInput.request.playerId,
           verificationInput.signal,
         );
+      } catch (error) {
+        if (verificationInput.signal.aborted) {
+          throw error;
+        }
+        return pending('MICROSOFT_STORE_CREDENTIALS_UNAVAILABLE');
+      }
+
+      try {
         assertCredentials(credentials);
+      } catch {
+        return rejected('MICROSOFT_STORE_CREDENTIALS_INVALID');
+      }
+
+      let response: unknown;
+      try {
         response = await input.client.queryProduct({
           credentials,
           storeId,
@@ -280,16 +296,29 @@ async function consumeMicrosoftStorePurchase(
   finalizationInput: FinalizePurchaseGrantInput,
   context: MicrosoftStoreFinalizationContext,
 ): Promise<PurchaseGrantFinalization> {
+  let credentials: MicrosoftStoreCollectionsCredentials;
   try {
-    const credentials = await input.resolveCredentials(
+    credentials = await input.resolveCredentials(
       finalizationInput.request.playerId,
       finalizationInput.signal,
     );
-    assertCredentials(credentials);
-    if (credentials.sandbox !== undefined && credentials.sandbox !== 'RETAIL') {
-      return finalizationPending('MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX');
+  } catch (error) {
+    if (finalizationInput.signal.aborted) {
+      throw error;
     }
+    return finalizationPending('MICROSOFT_STORE_CREDENTIALS_UNAVAILABLE');
+  }
 
+  try {
+    assertCredentials(credentials);
+  } catch {
+    return finalizationPending('MICROSOFT_STORE_CREDENTIALS_INVALID');
+  }
+  if (credentials.sandbox !== undefined && credentials.sandbox !== 'RETAIL') {
+    return finalizationPending('MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX');
+  }
+
+  try {
     const trackingId = await deterministicTrackingId(finalizationInput.evidenceVerificationId);
     const raw = await input.client.consumeProduct({
       credentials,

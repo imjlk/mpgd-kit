@@ -46,7 +46,7 @@ same tracking ID.
 
 User Store ID plus Entra authentication cannot consume developer-managed
 consumables in non-RETAIL sandboxes. The boundary fails closed with
-`MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX`; sandbox testing needs delegated
+`MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX`; sandbox testing requires delegated
 XSTS authentication supplied by the game service.
 
 ## Game-owned setup
@@ -62,6 +62,12 @@ Before enabling commerce, the game must provide:
 
 Until all of these exist, return `configuration-required` from the adapter
 authority so product enumeration and checkout stay unavailable.
+
+Worker deployments must configure
+`GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER` and
+`GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER` together. A verifier-only
+deployment is rejected because granting without consume finalization would
+prevent the user from buying that developer-managed consumable again.
 
 Official references:
 

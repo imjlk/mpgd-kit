@@ -259,6 +259,7 @@ export function createWorkerService(env: GameServicesWorkerEnv): GameServicesWor
 }
 
 function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi {
+  assertMicrosoftStorePurchaseBindings(env);
   const evidenceVerifier = resolveWorkerEvidenceVerifier(env);
   const purchaseGrantFinalizer = resolveWorkerPurchaseGrantFinalizer(env);
 
@@ -275,6 +276,17 @@ function createWorkerBackend(env: GameServicesWorkerEnv): GameServicesBackendApi
       : { purchaseGrantFinalizer }),
     version: productCatalog.version,
   });
+}
+
+function assertMicrosoftStorePurchaseBindings(env: GameServicesWorkerEnv): void {
+  const hasVerifier = env.GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER !== undefined;
+  const hasFinalizer = env.GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER !== undefined;
+
+  if (hasVerifier !== hasFinalizer) {
+    throw new Error(
+      'Microsoft Store evidence verifier and purchase finalizer bindings must be configured together.',
+    );
+  }
 }
 
 function resolveWorkerPurchaseGrantFinalizer(
