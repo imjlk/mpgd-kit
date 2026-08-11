@@ -51,7 +51,7 @@ const microsoftStoreTarget = {
   icon: { profile: 'microsoft-pwa' },
   output: 'artifacts/microsoft-store',
 } as const;
-const microsoftStoreAdapterPackage = '@mpgd/adapter-browser';
+const microsoftStoreAdapterBasePackage = '@mpgd/adapter-browser';
 const microsoftStoreGatewayResolver = {
   anchor: "    default:\n      return 'src/platform/buildGateways/browser.ts';",
   block: "    case 'microsoft-store':\n      return 'src/platform/buildGateways/microsoftStore.ts';",
@@ -200,15 +200,15 @@ export function initializeMicrosoftStoreStarter(
     scripts[name] = command;
   }
 
-  const existingAdapterDependency = dependencies[microsoftStoreAdapterPackage];
+  const existingAdapterDependency = dependencies[microsoftStoreAdapterBasePackage];
   const adapterDependency = existingAdapterDependency === undefined
     ? dependencyVersion(input.adapterDependencyVersion)
     : existingAdapterDependency;
   if (typeof adapterDependency !== 'string' || adapterDependency.trim().length === 0) {
-    throw new Error(`package.json dependency ${microsoftStoreAdapterPackage} must be a string.`);
+    throw new Error(`package.json dependency ${microsoftStoreAdapterBasePackage} must be a string.`);
   }
   // Preserve a game-owned non-empty npm spec such as workspace:, link:, file:, or a registry tag.
-  dependencies[microsoftStoreAdapterPackage] = adapterDependency;
+  dependencies[microsoftStoreAdapterBasePackage] = adapterDependency;
 
   plan('package.json', formatJson(packageJson));
 
