@@ -1903,20 +1903,22 @@ function inlineStaticStyleAssetReferences(
   context: InliningContext,
   readAsset: AssetDataUrlReader,
 ): string {
+  const nativeDocumentElementPatternSource = `(?:(?:globalThis|self|window)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource})?document${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}(?:body|documentElement)`;
+  const styleReceiverPatternSource = `(?:${javascriptIdentifierPatternSource}|${nativeDocumentElementPatternSource})`;
   const styleAssignmentPattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}${javascriptIdentifierPatternSource}${javascriptTriviaPatternSource}=(?!=|>)`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${styleReceiverPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}${javascriptIdentifierPatternSource}${javascriptTriviaPatternSource}=(?!=|>)`,
     'gu',
   );
   const computedStyleAssignmentPattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\[`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${styleReceiverPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\[`,
     'gu',
   );
   const setPropertyPattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}setProperty${javascriptTriviaPatternSource}\\(`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${styleReceiverPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}setProperty${javascriptTriviaPatternSource}\\(`,
     'gu',
   );
   const setAttributePattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}setAttribute${javascriptTriviaPatternSource}\\(`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${styleReceiverPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}setAttribute${javascriptTriviaPatternSource}\\(`,
     'gu',
   );
   const codePositions = createCodePositionMap(source, true);
@@ -1924,6 +1926,32 @@ function inlineStaticStyleAssetReferences(
   const hasMemberReceiverPrefix = (position: number): boolean => {
     const previousCode = findPreviousJavaScriptCodeIndex(source, position - 1, codePositions);
     return previousCode !== undefined && source[previousCode] === '.';
+  };
+  const isNativeStyleReceiver = (receiver: string, position: number): boolean => {
+    if (isNativeDocumentElementExpression(source, receiver, position, codePositions)) {
+      return true;
+    }
+
+    const nativeElement = findStaticNativeElementBinding(
+      source,
+      receiver,
+      position,
+      codePositions,
+      true,
+    );
+
+    if (nativeElement === undefined || nativeElement.binding.kind === 'const') {
+      return nativeElement !== undefined;
+    }
+
+    const assignment = resolveLastDirectJavaScriptAssignment(
+      source,
+      receiver,
+      nativeElement.binding,
+      position,
+      codePositions,
+    );
+    return assignment.ambiguous === false && assignment.range === undefined;
   };
   const addReplacement = (
     receiver: string,
@@ -1934,15 +1962,7 @@ function inlineStaticStyleAssetReferences(
       return;
     }
 
-    const nativeElement = findStaticNativeElementBinding(
-      source,
-      receiver,
-      matchPosition,
-      codePositions,
-      true,
-    );
-
-    if (nativeElement?.binding.kind !== 'const') {
+    if (!isNativeStyleReceiver(receiver, matchPosition)) {
       return;
     }
 
@@ -2018,14 +2038,7 @@ function inlineStaticStyleAssetReferences(
 
     const property = resolveStaticJavaScriptStringExpression(source, propertyRange, codePositions);
     if (property === undefined) {
-      const nativeElement = findStaticNativeElementBinding(
-        source,
-        match[1],
-        match.index,
-        codePositions,
-        true,
-      );
-      if (nativeElement !== undefined) {
+      if (isNativeStyleReceiver(match[1], match.index)) {
         throw new Error('Offline playtest requires a static computed style property.');
       }
       continue;
@@ -5161,7 +5174,7 @@ function assembleOfflineHtml(
 ): string {
   const csp = "default-src 'none'; img-src data: blob:; media-src data: blob:; font-src data:; style-src 'unsafe-inline'; script-src 'unsafe-inline' 'wasm-unsafe-eval'; connect-src data: blob:; object-src data:; worker-src 'none'; manifest-src 'none'; base-uri 'none'; form-action 'none'";
   const banner = '<!-- MPGD offline playtest: test-play-only, not a release target or store submission artifact. -->';
-  const runtimeGuard = renderOfflineRuntimeGuard();
+  const runtimeGuard = `${renderOfflineRuntimeGuard()}${renderOfflineRuntimeHardeningGuard()}`;
   const guardScript = `<script>${escapeClosingTag(runtimeGuard, 'script')}</script>`;
   const bundledStyle = bundledEntry.stylesheet === undefined
     ? ''
@@ -5349,6 +5362,10 @@ function renderOfflineRuntimeGuard(): string {
   return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const blockConstructor=(api,Native)=>new Proxy(Native,{construct(_target,args){throw denied(api,args[0])}});const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}for(const [object,names] of [[globalThis.navigation,['back','forward','navigate','reload','traverseTo']],[globalThis.history,['back','forward','go']],[globalThis.History?.prototype,['back','forward','go']]]){if(object){for(const name of names){if(typeof object[name]==='function'){try{Object.defineProperty(object,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}}if(globalThis.Location){for(const name of ['assign','replace','reload']){const method=Location.prototype[name];if(typeof method==='function'){try{Object.defineProperty(Location.prototype,name,{configurable:true,writable:true,value:function(value){if(name==='reload'||!fragmentOnly(value))throw denied('navigation',value??name);return method.call(this,value)}})}catch{}}}}if(globalThis.Document){for(const name of ['write','writeln']){if(typeof Document.prototype[name]==='function'){try{Object.defineProperty(Document.prototype,name,{configurable:true,writable:true,value:(...args)=>{throw denied('document.'+name,args[0])}})}catch{}}}const blockedTag=(namespace,name)=>(namespace===undefined||String(namespace).toLowerCase()==='http://www.w3.org/1999/xhtml')&&['meta','object','embed','script'].includes(String(name).toLowerCase());const createElement=Document.prototype.createElement;if(typeof createElement==='function'){Document.prototype.createElement=function(name,options){if(blockedTag(undefined,name))throw denied('document.createElement',name);return createElement.call(this,name,options)}}const createElementNS=Document.prototype.createElementNS;if(typeof createElementNS==='function'){Document.prototype.createElementNS=function(namespace,name,options){if(String(name).toLowerCase()==='script'||blockedTag(namespace,name))throw denied('document.createElementNS',name);return createElementNS.call(this,namespace,name,options)}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=blockConstructor('WebSocket',globalThis.WebSocket)}if(globalThis.EventSource){globalThis.EventSource=blockConstructor('EventSource',globalThis.EventSource)}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}const serviceWorkerPrototype=globalThis.ServiceWorkerContainer?.prototype;if(serviceWorkerPrototype&&typeof serviceWorkerPrototype.register==='function'){try{Object.defineProperty(serviceWorkerPrototype,'register',{configurable:true,writable:true,value:(...args)=>{throw denied('navigator.serviceWorker.register',args[0])}})}catch{}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
+function renderOfflineRuntimeHardeningGuard(): string {
+  return `(()=>{const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const localName=(name)=>String(name).toLowerCase().split(':').at(-1);if(globalThis.Document){for(const methodName of ['createElement','createElementNS']){const method=Document.prototype[methodName];if(typeof method==='function'){Document.prototype[methodName]=function(...args){const name=args[methodName==='createElementNS'?1:0];if(localName(name)==='script')throw denied('document.'+methodName,name);return method.apply(this,args)}}}}const blockMarkup=(prototype)=>{if(!prototype)return;for(const property of ['innerHTML','outerHTML']){const descriptor=Object.getOwnPropertyDescriptor(prototype,property);if(descriptor?.set){try{Object.defineProperty(prototype,property,{...descriptor,set(value){throw denied(property,value)}})}catch{}}}for(const methodName of ['insertAdjacentHTML','setHTML','setHTMLUnsafe']){if(typeof prototype[methodName]==='function'){try{Object.defineProperty(prototype,methodName,{configurable:true,writable:true,value:(...args)=>{throw denied(methodName,args.at(-1))}})}catch{}}}};blockMarkup(globalThis.Element?.prototype);blockMarkup(globalThis.ShadowRoot?.prototype);if(globalThis.Range?.prototype&&typeof Range.prototype.createContextualFragment==='function'){try{Object.defineProperty(Range.prototype,'createContextualFragment',{configurable:true,writable:true,value:(value)=>{throw denied('Range.createContextualFragment',value)}})}catch{}}for(const name of ['Worker','SharedWorker']){const Native=globalThis[name];if(typeof Native==='function'){try{globalThis[name]=new Proxy(Native,{construct(_target,args){throw denied(name,args[0])}})}catch{}}}if(globalThis.Location){for(const property of ['href','host','hostname','pathname','port','protocol','search']){const descriptor=Object.getOwnPropertyDescriptor(Location.prototype,property);if(descriptor?.set){try{Object.defineProperty(Location.prototype,property,{...descriptor,set(value){throw denied('location.'+property,value)}})}catch{}}}}})();`;
+}
+
 function assertSupportedBundledRuntime(source: string): void {
   const unsupported = [
     { pattern: /\bnew\s+URL\([^;]*import\.meta/gu, label: 'runtime-computed import.meta asset URL' },
@@ -5365,6 +5382,7 @@ function assertSupportedBundledRuntime(source: string): void {
   assertNoUnsupportedNativeCallables(normalizedSource, codePositions);
   assertNoDynamicImport(normalizedSource, codePositions, braceKinds);
   assertNoUnsafeDynamicElementCreation(normalizedSource, codePositions);
+  assertNoUnsafeMarkupInjection(normalizedSource, codePositions);
   assertNoScriptDrivenNavigation(normalizedSource, codePositions);
 
   for (const candidate of unsupported) {
@@ -5408,7 +5426,7 @@ function assertNoUnsupportedNativeCallables(
   source: string,
   codePositions: Uint8Array,
 ): void {
-  const evaluatorPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:new\s+)?(?:(globalThis|self|window)\s*\.\s*)?(eval|Function)\s*\(/gu;
+  const evaluatorPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:new\s+)?(?:(globalThis|self|window)\s*\.\s*)?(eval|Function)\s*(?:\?\.\s*)?\(/gu;
 
   for (const match of source.matchAll(evaluatorPattern)) {
     if (match.index === undefined || codePositions[match.index] !== 1) {
@@ -5501,7 +5519,7 @@ function assertNoUnsupportedNativeCallables(
 
   const callableReferencePatternSource = `${javascriptIdentifierPatternSource}(?:\\s*\\.\\s*${javascriptIdentifierPatternSource})*`;
   const aliasCallPattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${callableReferencePatternSource})\\s*\\(`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${callableReferencePatternSource})\\s*(?:\\?\\.\\s*)?\\(`,
     'gu',
   );
 
@@ -5578,6 +5596,132 @@ function assertNoUnsupportedNativeCallables(
       )
     ) {
       throw new Error('Offline playtest does not support JavaScript string evaluation.');
+    }
+  }
+
+  const reflectInvokePattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(Reflect)\s*\.\s*(apply|construct)\s*(?:\?\.\s*)?\(/gu;
+
+  for (const match of source.matchAll(reflectInvokePattern)) {
+    if (
+      match.index === undefined
+      || codePositions[match.index] !== 1
+      || findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1] ?? match[2] ?? 'Reflect',
+        match.index,
+        codePositions,
+      ) !== undefined
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = match.index + match[0].length - 1;
+    const constructor = splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+
+    if (constructor === undefined) {
+      continue;
+    }
+
+    const expression = maskNonCode(
+      source.slice(constructor.start, constructor.end),
+      codePositions.slice(constructor.start, constructor.end),
+    ).trim();
+
+    if (findPotentialNativeCallableExpressionKinds(expression, potentialKinds).size === 0) {
+      continue;
+    }
+
+    const kinds = resolveNativeCallableExpressionKinds(
+      source,
+      expression,
+      constructor.start,
+      codePositions,
+      assignments,
+      new Set<string>(),
+    );
+
+    if (kinds.has('worker')) {
+      throw new Error('Offline playtest does not support Worker.');
+    }
+    if (kinds.has('evaluator')) {
+      throw new Error('Offline playtest does not support JavaScript string evaluation.');
+    }
+    if (kinds.has('wasm-streaming')) {
+      throw new Error('Offline playtest does not support WebAssembly streaming.');
+    }
+    if (kinds.has('fetch')) {
+      throw new Error('Offline playtest does not support aliases of native fetch.');
+    }
+  }
+
+  for (let closingParenthesis = 0; closingParenthesis < source.length; closingParenthesis += 1) {
+    if (source[closingParenthesis] !== ')' || codePositions[closingParenthesis] !== 1) {
+      continue;
+    }
+
+    let callParenthesis = findNextJavaScriptCodeIndex(
+      source,
+      closingParenthesis + 1,
+      codePositions,
+    );
+
+    if (callParenthesis !== undefined && source[callParenthesis] === '?') {
+      const dot = findNextJavaScriptCodeIndex(source, callParenthesis + 1, codePositions);
+      callParenthesis = dot !== undefined && source[dot] === '.'
+        ? findNextJavaScriptCodeIndex(source, dot + 1, codePositions)
+        : undefined;
+    }
+
+    if (callParenthesis === undefined || source[callParenthesis] !== '(') {
+      continue;
+    }
+
+    const groupingParenthesis = findMatchingJavaScriptOpeningParenthesis(
+      source,
+      closingParenthesis,
+      codePositions,
+    );
+
+    if (
+      groupingParenthesis === undefined
+      || !isJavaScriptGroupingParenthesis(source, groupingParenthesis, codePositions)
+    ) {
+      continue;
+    }
+
+    const expressionRange = trimSourceRange(source, {
+      start: groupingParenthesis + 1,
+      end: closingParenthesis,
+    });
+    const expression = maskNonCode(
+      source.slice(expressionRange.start, expressionRange.end),
+      codePositions.slice(expressionRange.start, expressionRange.end),
+    ).trim();
+
+    if (findPotentialNativeCallableExpressionKinds(expression, potentialKinds).size === 0) {
+      continue;
+    }
+
+    const kinds = resolveNativeCallableExpressionKinds(
+      source,
+      expression,
+      expressionRange.start,
+      codePositions,
+      assignments,
+      new Set<string>(),
+    );
+
+    if (kinds.has('evaluator')) {
+      throw new Error('Offline playtest does not support JavaScript string evaluation.');
+    }
+    if (kinds.has('worker')) {
+      throw new Error('Offline playtest does not support Worker.');
+    }
+    if (kinds.has('wasm-streaming')) {
+      throw new Error('Offline playtest does not support WebAssembly streaming.');
+    }
+    if (kinds.has('fetch')) {
+      throw new Error('Offline playtest does not support aliases of native fetch.');
     }
   }
 }
@@ -6280,19 +6424,94 @@ function assertNoUnsafeDynamicElementCreation(
           tagArgument,
           codePositions,
         )?.toLowerCase();
+    const localTagName = tagName?.slice(tagName.lastIndexOf(':') + 1);
     const htmlElement = method === 'createElement'
       || namespace?.toLowerCase() === 'http://www.w3.org/1999/xhtml';
 
-    if (htmlElement && tagName === 'meta') {
+    if (htmlElement && localTagName === 'meta') {
       throw new Error('Offline playtest does not support dynamically created meta elements.');
     }
-    if (tagName === 'script') {
+    if (localTagName === 'script') {
       throw new Error('Offline playtest does not support dynamically created script elements.');
     }
-    if (htmlElement && (tagName === 'object' || tagName === 'embed')) {
+    if (htmlElement && (localTagName === 'object' || localTagName === 'embed')) {
       throw new Error(
         'Offline playtest does not support dynamically created object or embed elements.',
       );
+    }
+  }
+}
+
+function assertNoUnsafeMarkupInjection(
+  source: string,
+  codePositions: Uint8Array,
+): void {
+  const nativeDocumentPatternSource = `(?:(?:globalThis|self|window)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource})?document`;
+  const createdElementPatternSource = `${nativeDocumentPatternSource}${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}createElement(?:NS)?${javascriptTriviaPatternSource}\\([^)]*\\)`;
+  const receiverPatternSource = `(${javascriptIdentifierPatternSource}|${nativeDocumentPatternSource}${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}(?:body|documentElement)|${createdElementPatternSource})`;
+  const assignmentPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${receiverPatternSource}${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}(?:innerHTML|outerHTML)${javascriptTriviaPatternSource}(?:&&=|\\|\\|=|\\?\\?=|=)(?!=|>)`,
+    'gu',
+  );
+  const methodPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${receiverPatternSource}${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}(?:insertAdjacentHTML|setHTML|setHTMLUnsafe)${javascriptTriviaPatternSource}\\(`,
+    'gu',
+  );
+  const isNativeReceiver = (receiver: string, position: number): boolean => {
+    if (isNativeDocumentElementExpression(source, receiver, position, codePositions)) {
+      return true;
+    }
+
+    const createdElement = new RegExp(
+      `^(${nativeDocumentPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}createElement(?:NS)?${javascriptTriviaPatternSource}\\(`,
+      'u',
+    ).exec(receiver);
+
+    if (
+      createdElement?.[1] !== undefined
+      && isNativeDocumentExpression(
+        source,
+        createdElement[1],
+        position,
+        codePositions,
+        new Set<string>(),
+      )
+    ) {
+      return true;
+    }
+
+    const nativeElement = findStaticNativeElementBinding(
+      source,
+      receiver,
+      position,
+      codePositions,
+      true,
+    );
+
+    if (nativeElement === undefined || nativeElement.binding.kind === 'const') {
+      return nativeElement !== undefined;
+    }
+
+    const assignment = resolveLastDirectJavaScriptAssignment(
+      source,
+      receiver,
+      nativeElement.binding,
+      position,
+      codePositions,
+    );
+    return assignment.ambiguous === false && assignment.range === undefined;
+  };
+
+  for (const pattern of [assignmentPattern, methodPattern]) {
+    for (const match of source.matchAll(pattern)) {
+      if (
+        match.index !== undefined
+        && match[1] !== undefined
+        && codePositions[match.index] === 1
+        && isNativeReceiver(match[1], match.index)
+      ) {
+        throw new Error('Offline playtest does not support native DOM markup injection.');
+      }
     }
   }
 }
@@ -6377,6 +6596,87 @@ function isNativeDocumentExpression(
     codePositions.slice(initializerRange.start, initializerRange.end),
   ).trim();
   return isNativeDocumentExpression(
+    source,
+    initializer,
+    initializerRange.start,
+    codePositions,
+    visitedBindings,
+  );
+}
+
+function isNativeDocumentElementExpression(
+  source: string,
+  expression: string,
+  position: number,
+  codePositions: Uint8Array,
+  visitedBindings: Set<string> = new Set<string>(),
+): boolean {
+  const unwrapped = unwrapBalancedOuterParentheses(expression);
+
+  if (unwrapped.offset > 0 || unwrapped.expression.length !== expression.length) {
+    return isNativeDocumentElementExpression(
+      source,
+      unwrapped.expression,
+      position + unwrapped.offset,
+      codePositions,
+      visitedBindings,
+    );
+  }
+
+  const documentElementPattern = new RegExp(
+    `^((?:(?:globalThis|self|window)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource})?document)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}(?:body|documentElement)$`,
+    'u',
+  );
+  const match = documentElementPattern.exec(expression);
+
+  if (match?.[1] !== undefined) {
+    return isNativeDocumentExpression(source, match[1], position, codePositions, new Set<string>());
+  }
+
+  const identifier = exactJavaScriptIdentifierPattern.test(expression) ? expression : undefined;
+
+  if (identifier === undefined) {
+    return false;
+  }
+
+  const binding = findVisibleJavaScriptIdentifierBinding(
+    source,
+    identifier,
+    position,
+    codePositions,
+  );
+
+  if (binding === undefined || binding.start >= position) {
+    return false;
+  }
+
+  const assignment = resolveLastDirectJavaScriptAssignment(
+    source,
+    identifier,
+    binding,
+    position,
+    codePositions,
+  );
+  const initializerRange = assignment.range ?? binding.initializerRange;
+  const bindingKey = initializerRange === undefined
+    ? undefined
+    : `${identifier}:${binding.start}:${initializerRange.start}`;
+
+  if (
+    initializerRange === undefined
+    || assignment.ambiguous
+    || bindingKey === undefined
+    || visitedBindings.has(bindingKey)
+  ) {
+    return false;
+  }
+
+  visitedBindings.add(bindingKey);
+  const initializer = maskNonCode(
+    source.slice(initializerRange.start, initializerRange.end),
+    codePositions.slice(initializerRange.start, initializerRange.end),
+  ).trim();
+  return isNativeDocumentElementExpression(
     source,
     initializer,
     initializerRange.start,
@@ -6692,7 +6992,7 @@ function assertNoScriptDrivenNavigation(
   const aliasAssignments = findLocationAliasAssignments(source, codePositions);
   assertNoIndirectLocationMutation(source, codePositions, aliasAssignments);
 
-  const locationOperation = '(?:\\s*\\.?\\s*\\[|\\s*\\.\\s*(?:assign|replace|reload)\\b|(?:\\s*\\.\\s*href)?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
+  const locationOperation = '(?:\\s*\\.?\\s*\\[|\\s*\\.\\s*(?:assign|replace|reload)\\b|(?:\\s*\\.\\s*(?:href|host|hostname|pathname|port|protocol|search))?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
   const groupedLocationOperationPattern = new RegExp(locationOperation, 'uy');
   const codeOnlySource = maskNonCodePreservingLength(source, codePositions);
 

@@ -57,7 +57,25 @@ try {
       return { name, namespace };
     }
   }
-  new Script(runtimeGuardSource).runInNewContext({ Document: RuntimeGuardDocument });
+  class RuntimeGuardElement {
+    set innerHTML(_value: string) {}
+
+    insertAdjacentHTML(_position: string, _value: string): void {}
+  }
+  class RuntimeGuardLocation {
+    hash = '';
+
+    set pathname(_value: string) {}
+  }
+  class RuntimeGuardWorker {}
+  const runtimeGuardLocation = new RuntimeGuardLocation();
+  const runtimeGuardContext = {
+    Document: RuntimeGuardDocument,
+    Element: RuntimeGuardElement,
+    Location: RuntimeGuardLocation,
+    Worker: RuntimeGuardWorker,
+  };
+  new Script(runtimeGuardSource).runInNewContext(runtimeGuardContext);
   assert.throws(
     () => RuntimeGuardDocument.prototype.createElementNS.call(
       new RuntimeGuardDocument(),
@@ -66,6 +84,32 @@ try {
     ),
     /document\.createElementNS blocked network access: script/u,
   );
+  assert.throws(
+    () => RuntimeGuardDocument.prototype.createElementNS.call(
+      new RuntimeGuardDocument(),
+      'http://www.w3.org/2000/svg',
+      'svg:script',
+    ),
+    /document\.createElementNS blocked network access: svg:script/u,
+  );
+  assert.throws(
+    () => {
+      new RuntimeGuardElement().innerHTML = '<img src="https://example.com/escape">';
+    },
+    /innerHTML blocked network access/u,
+  );
+  assert.throws(
+    () => Reflect.construct(runtimeGuardContext.Worker, ['./worker.js']),
+    /Worker blocked network access/u,
+  );
+  assert.throws(
+    () => {
+      runtimeGuardLocation.pathname = '/escape';
+    },
+    /location\.pathname blocked network access/u,
+  );
+  runtimeGuardLocation.hash = '#local';
+  assert.equal(runtimeGuardLocation.hash, '#local');
 
   assert.match(readme, /TEST PLAY ONLY/u);
   assert.match(readme, /not a release target/u);
@@ -235,6 +279,10 @@ try {
     mainJs: 'new globalThis.SharedWorker("./worker.js");',
   });
 
+  await assertWorkerRejected('reflect-constructed-worker', {
+    mainJs: 'Reflect.construct(Worker, ["./worker.js"]);',
+  });
+
   const unsupportedWorkerAliasFixtures = [
     ['aliased-worker', 'const BackgroundWorker = Worker; new BackgroundWorker("./worker.js");'],
     [
@@ -333,6 +381,31 @@ try {
     /does not support script-driven navigation/u,
   );
 
+  const blockedLocationProperties = [
+    'host',
+    'hostname',
+    'pathname',
+    'port',
+    'protocol',
+    'search',
+  ] as const;
+
+  for (const property of blockedLocationProperties) {
+    const locationPropertyGame = createPreviewFixture(`location-${property}-navigation`, {
+      mainJs: `window.location.${property} = "escape";`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: locationPropertyGame }),
+      /does not support script-driven navigation/u,
+      `expected location.${property} assignment to be rejected`,
+    );
+  }
+
+  const fragmentNavigationHtml = await packageAndReadFixture('fragment-location-navigation', {
+    mainJs: 'window.location.hash = "#local";',
+  });
+  assert.match(fragmentNavigationHtml, /location\.hash\s*=\s*["']#local/u);
+
   const methodNavigationGame = createPreviewFixture('method-navigation', {
     mainJs: 'document.location.replace("https://example.com/escape");',
   });
@@ -341,10 +414,12 @@ try {
     /does not support script-driven navigation/u,
   );
 
-  for (const [name, mainJs] of [
+  const reloadNavigationFixtures = [
     ['location-reload-navigation', 'location.reload();'],
     ['qualified-location-reload-navigation', 'window.location.reload();'],
-  ] as const) {
+  ] as const;
+
+  for (const [name, mainJs] of reloadNavigationFixtures) {
     const reloadNavigationGame = createPreviewFixture(name, { mainJs });
     await assert.rejects(
       () => runOfflinePlaytestPackaging({ gameRoot: reloadNavigationGame }),
@@ -387,10 +462,12 @@ try {
     /does not support script-driven navigation/u,
   );
 
-  for (const [name, mainJs] of [
+  const navigationApiFixtures = [
     ['navigation-api', 'navigation.navigate("https://example.com/escape");'],
     ['qualified-navigation-api', 'globalThis.navigation.navigate("https://example.com/escape");'],
-  ] as const) {
+  ] as const;
+
+  for (const [name, mainJs] of navigationApiFixtures) {
     const navigationApiGame = createPreviewFixture(name, { mainJs });
     await assert.rejects(
       () => runOfflinePlaytestPackaging({ gameRoot: navigationApiGame }),
@@ -808,6 +885,10 @@ try {
       'dynamic-svg-script-element',
       'document.createElementNS("http://www.w3.org/2000/svg", "script")',
     ],
+    [
+      'dynamic-prefixed-svg-script-element',
+      'document.createElementNS("http://www.w3.org/2000/svg", "svg:script")',
+    ],
   ] as const) {
     const dynamicScriptGame = createPreviewFixture(name, {
       mainJs: `const script = ${createScript}; script.textContent = 'location.href="https://example.com/escape"'; document.body.append(script);`,
@@ -815,8 +896,34 @@ try {
     await assert.rejects(
       () => runOfflinePlaytestPackaging({ gameRoot: dynamicScriptGame }),
       /does not support dynamically created script elements/u,
+      `expected ${name} to be rejected`,
     );
   }
+
+  for (const [name, mainJs] of [
+    ['body-inner-html', 'document.body.innerHTML = `<img src="https://example.com/escape">`;'],
+    ['document-element-outer-html', 'document.documentElement.outerHTML = `<html></html>`;'],
+    [
+      'body-adjacent-html',
+      'document.body.insertAdjacentHTML("beforeend", `<img src="https://example.com/escape">`);',
+    ],
+    [
+      'aliased-body-inner-html',
+      'const surface = document.body; surface.innerHTML = `<img src="https://example.com/escape">`;',
+    ],
+  ] as const) {
+    const markupInjectionGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: markupInjectionGame }),
+      /does not support native DOM markup injection/u,
+      `expected ${name} to be rejected`,
+    );
+  }
+
+  const memberOwnedMarkupHtml = await packageAndReadFixture('member-owned-markup', {
+    mainJs: 'const view = { innerHTML: "local", insertAdjacentHTML() {} }; view.innerHTML = "local"; view.insertAdjacentHTML("beforeend", "local"); document.body.dataset.value = view.innerHTML;',
+  });
+  assert.match(memberOwnedMarkupHtml, /innerHTML:\s*"local"/u);
 
   for (const tagName of ['object', 'embed'] as const) {
     const activeDataElementGame = createPreviewFixture(`dynamic-${tagName}-element`, {
@@ -2086,6 +2193,23 @@ try {
   assert.doesNotMatch(staticStyleAssetHtml, /url\([^)]*\/assets\/(?:icon|pixel)\.png/u);
   assert.match(staticStyleAssetHtml, /data:image\/png;base64,/u);
 
+  const nativeDocumentStyleAssetHtml =
+    await packageAndReadFixture('native-document-style-assets', {
+      mainJs: 'const surface = document.body; surface.style.backgroundImage = "url(\\"/assets/pixel.png\\")"; document.documentElement.style.setProperty("background-image", "url(\\"/assets/icon.png\\")");',
+    });
+  assert.doesNotMatch(nativeDocumentStyleAssetHtml, /url\([^)]*\/assets\/(?:icon|pixel)\.png/u);
+  assert.match(nativeDocumentStyleAssetHtml, /data:image\/png;base64,/u);
+
+  const nativeDocumentExternalStyleGame =
+    createPreviewFixture('native-document-external-style', {
+      mainJs: 'document.body.style.backgroundImage = "url(\\"https://example.com/escape.png\\")";',
+    });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: nativeDocumentExternalStyleGame }),
+    /cannot inline external URL/u,
+    'expected native document external style URL to be rejected',
+  );
+
   const memberOwnedStyleHtml = await packageAndReadFixture('member-owned-style', {
     mainJs: 'const element = document.createElement("div"); const wrapper = { element: { style: {} } }; wrapper . element.style.backgroundImage = "url(\\"/api/background\\")"; void element; document.body.dataset.value = wrapper.element.style.backgroundImage;',
   });
@@ -2852,6 +2976,31 @@ try {
   for (const [name, mainJs] of unsupportedStringEvaluationFixtures) {
     await assertStringEvaluationRejected(name, mainJs);
   }
+
+  await assertStringEvaluationRejected(
+    'optional-eval-call',
+    'eval?.("document.body.dataset.ready = \'true\'");',
+  );
+  await assertStringEvaluationRejected(
+    'indirect-sequence-eval',
+    '(0, eval)("document.body.dataset.ready = \'true\'");',
+  );
+  await assertStringEvaluationRejected(
+    'optional-function-constructor',
+    'void Function?.("return true")();',
+  );
+  await assertStringEvaluationRejected(
+    'optional-aliased-eval',
+    'const evaluate = eval; evaluate?.("document.body.dataset.ready = \'true\'");',
+  );
+  await assertStringEvaluationRejected(
+    'reflect-applied-eval',
+    'Reflect.apply(eval, globalThis, ["document.body.dataset.ready = \'true\'"]);',
+  );
+  await assertStringEvaluationRejected(
+    'reflect-constructed-function',
+    'void Reflect.construct(Function, ["return true"])();',
+  );
 
   await assertStringEvaluationRejected(
     'bound-function-constructor',
