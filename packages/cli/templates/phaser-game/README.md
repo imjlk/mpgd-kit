@@ -318,6 +318,13 @@ Apps in Toss console, while the file owns `appName`, `brand.primaryColor`,
 permissions, `webView`, and `webBundleDir`. Do not restore the removed SDK 2
 `granite.config.ts` fields.
 
+Apps in Toss navigation chrome is target-owned. Configure the `ait` target's
+`navigationBar` in `mpgd.targets.json`; `mpgd target build ait` validates the
+supported appearance options and forwards them to `apps-in-toss.config.ts` at
+build time. The Phaser starter uses a transparent dark navigation bar without
+back or home chrome so game content can continue underneath it. Keep
+the game's own safe-area padding clear of Toss controls.
+
 Before the first SDK 3 release, allow both of these exact origins on every API
 called by the mini-app:
 

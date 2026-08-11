@@ -527,6 +527,72 @@ try {
     }),
     /microsoft-store\.installable must not be false/u,
   );
+
+  const aitTarget = {
+    kind: 'apps-in-toss',
+    gameApp: '.',
+    adapter: 'ait',
+    wrapperApp: 'apps/target-ait',
+    webDir: 'apps/target-ait/public/game',
+    artifact: '.ait',
+  } as const;
+  assert.doesNotThrow(() => assertPlatformTargetsConfigShape({
+    targets: {
+      ait: {
+        ...aitTarget,
+        navigationBar: {
+          withBackButton: false,
+          withHomeButton: false,
+          transparentBackground: true,
+          theme: 'dark',
+        },
+      },
+    },
+  }));
+  assert.throws(
+    () => assertPlatformTargetsConfigShape({
+      targets: {
+        ait: {
+          ...aitTarget,
+          navigationBar: { transparentBackground: 'yes' },
+        },
+      },
+    }),
+    /ait\.navigationBar\.transparentBackground must be a boolean/u,
+  );
+  assert.throws(
+    () => assertPlatformTargetsConfigShape({
+      targets: {
+        ait: {
+          ...aitTarget,
+          navigationBar: { theme: 'system' },
+        },
+      },
+    }),
+    /ait\.navigationBar\.theme must be light or dark/u,
+  );
+  assert.throws(
+    () => assertPlatformTargetsConfigShape({
+      targets: {
+        ait: {
+          ...aitTarget,
+          navigationBar: { withTitle: false },
+        },
+      },
+    }),
+    /ait\.navigationBar\.withTitle is not a recognized navigation option/u,
+  );
+  assert.throws(
+    () => assertPlatformTargetsConfigShape({
+      targets: {
+        ait: {
+          ...aitTarget,
+          navigationBar: { translucent: true },
+        },
+      },
+    }),
+    /ait\.navigationBar\.translucent is not a recognized navigation option/u,
+  );
 } finally {
   rmSync(root, { force: true, recursive: true });
 }
