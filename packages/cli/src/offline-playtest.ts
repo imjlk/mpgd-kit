@@ -1330,15 +1330,16 @@ function inlineStaticXmlHttpRequestOpenCalls(
     );
     const assignmentProof = binding === undefined
       ? undefined
-      : findLastXmlHttpRequestAssignmentBeforeUse(
+      : findLastDirectJavaScriptAssignmentExpressionRange(
           source,
           receiver,
           binding,
           match.index,
           codePositions,
         );
-    const isNativeXmlHttpRequest = assignmentProof
-      ?? isXmlHttpRequestBinding(source, binding, codePositions);
+    const isNativeXmlHttpRequest = assignmentProof === undefined
+      ? isXmlHttpRequestBinding(source, binding, codePositions)
+      : isNativeXmlHttpRequestExpression(source, assignmentProof, codePositions);
 
     if (
       binding === undefined
@@ -1403,19 +1404,19 @@ function isXmlHttpRequestBinding(
   return isNativeXmlHttpRequestExpression(source, binding.initializerRange, codePositions);
 }
 
-function findLastXmlHttpRequestAssignmentBeforeUse(
+function findLastDirectJavaScriptAssignmentExpressionRange(
   source: string,
   identifier: string,
   binding: JavaScriptIdentifierBinding,
   position: number,
   codePositions: Uint8Array,
-): boolean | undefined {
+): SourceRange | undefined {
   const identifierPattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${escapeRegExp(identifier)}(?![$\\u200C\\u200D\\p{ID_Continue}])`,
     'gu',
   );
 
-  let lastAssignmentIsNative: boolean | undefined;
+  let lastAssignmentRange: SourceRange | undefined;
 
   for (const match of source.slice(binding.start, position).matchAll(identifierPattern)) {
     if (match.index === undefined) {
@@ -1456,14 +1457,10 @@ function findLastXmlHttpRequestAssignmentBeforeUse(
       true,
     );
 
-    lastAssignmentIsNative = isNativeXmlHttpRequestExpression(
-      source,
-      expressionRange,
-      codePositions,
-    );
+    lastAssignmentRange = expressionRange;
   }
 
-  return lastAssignmentIsNative;
+  return lastAssignmentRange;
 }
 
 function isNativeXmlHttpRequestExpression(
@@ -2718,7 +2715,16 @@ function findPhaserLoaderConfigUrlRanges(
       );
 
       if (binding?.initializerRange !== undefined && binding.start < argument.start) {
-        const initializer = trimSourceRange(source, binding.initializerRange);
+        const initializer = trimSourceRange(
+          source,
+          findLastDirectJavaScriptAssignmentExpressionRange(
+            source,
+            identifier,
+            binding,
+            argument.start,
+            codePositions,
+          ) ?? binding.initializerRange,
+        );
         const initializerStart = source[initializer.start];
 
         if (initializerStart === '{' || initializerStart === '[') {
@@ -5882,13 +5888,7 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
       }
 
       if (
-        (
-          ((tag.name === 'a' || tag.name === 'area' || tag.name === 'base')
-            && attribute.name === 'href')
-          || (tag.name === 'form' && attribute.name === 'action')
-          || ((tag.name === 'button' || tag.name === 'input')
-            && attribute.name === 'formaction')
-        )
+        isActiveEmbeddedNavigationAttribute(tag.name, attribute.name)
         && (isDataUrlReference(value) || isJavaScriptUrlReference(value))
       ) {
         throw new Error(
@@ -5943,6 +5943,20 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
       );
     }
   }
+}
+
+function isActiveEmbeddedNavigationAttribute(
+  tagName: string,
+  attributeName: string,
+): boolean {
+  const localName = tagName.split(':').at(-1) ?? tagName;
+
+  return (
+    ((localName === 'a' || localName === 'area' || localName === 'base')
+      && (attributeName === 'href' || attributeName === 'xlink:href'))
+    || (localName === 'form' && attributeName === 'action')
+    || ((localName === 'button' || localName === 'input') && attributeName === 'formaction')
+  );
 }
 
 function isEmbeddedOrFragmentReference(reference: string): boolean {
@@ -6012,6 +6026,7 @@ function findExternalSvgReference(source: string): string | undefined {
 
   for (const match of source.matchAll(tagPattern)) {
     const attributes = tokenizeHtmlAttributes(match[0]);
+    const tagName = /^<([a-z][\w:-]*)/iu.exec(match[0])?.[1]?.toLowerCase() ?? '';
 
     for (const attribute of attributes) {
       if (attribute.value === undefined) {
@@ -6019,7 +6034,12 @@ function findExternalSvgReference(source: string): string | undefined {
       }
 
       const decodedValue = decodeHtmlCharacterReferences(attribute.value);
-      const functionalReference = findExternalCssReference(decodedValue);
+      const functionalReference = (
+        attribute.name === 'style'
+        || svgFunctionalUrlAttributeNames.has(attribute.name)
+      )
+        ? findExternalCssReference(decodedValue)
+        : undefined;
 
       if (functionalReference !== undefined) {
         return functionalReference;
@@ -6042,6 +6062,13 @@ function findExternalSvgReference(source: string): string | undefined {
       }
 
       const reference = normalizeUrlReference(decodedValue);
+
+      if (
+        isActiveEmbeddedNavigationAttribute(tagName, attribute.name)
+        && (isDataUrlReference(reference) || isJavaScriptUrlReference(reference))
+      ) {
+        return reference;
+      }
 
       if (!isDataUrlReference(reference) && !reference.startsWith('#')) {
         return reference;

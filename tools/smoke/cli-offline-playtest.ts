@@ -1116,6 +1116,12 @@ try {
   });
   assert.doesNotMatch(phaserVariableConfigHtml, /\/assets\/pixel\.png/u);
 
+  const phaserReassignedConfigHtml = await packageAndReadFixture('phaser-reassigned-config', {
+    mainJs: 'let config = { key: "unused", url: "/api/route" }; config = { key: "hero", url: "/assets/pixel.png" }; const scene = new Phaser.Scene(); scene.load.image(config);',
+  });
+  assert.match(phaserReassignedConfigHtml, /\/api\/route/u);
+  assert.doesNotMatch(phaserReassignedConfigHtml, /\/assets\/pixel\.png/u);
+
   const phaserShorthandConfigHtml = await packageAndReadFixture('phaser-shorthand-config', {
     mainJs: 'const key = "hero"; const url = "/assets/pixel.png"; const scene = new Phaser.Scene(); scene.load.image({ key, url });',
   });
@@ -2274,6 +2280,28 @@ try {
     () => runOfflinePlaytestPackaging({ gameRoot: activeSvgGame }),
     /does not support active SVG content/u,
   );
+
+  const dataHyperlinkSvgGame = createPreviewFixture('data-hyperlink-svg', {
+    indexHtml: '<!doctype html><html><head></head><body><object data="/assets/active.svg"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  });
+  fs.writeFileSync(
+    path.join(dataHyperlinkSvgGame, 'artifacts/web-preview/assets/active.svg'),
+    '<svg xmlns="http://www.w3.org/2000/svg"><a target="_top" href="data:text/html,escaped">escape</a></svg>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dataHyperlinkSvgGame }),
+    /requires self-contained SVG data URIs and fragment references/u,
+  );
+
+  const metadataSvgHtml = await packageAndReadFixture('metadata-svg-url-text', {
+    indexHtml: '<!doctype html><html><head></head><body><img src="/assets/metadata.svg"><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
+  }, [
+    [
+      'artifacts/web-preview/assets/metadata.svg',
+      '<svg xmlns="http://www.w3.org/2000/svg"><metadata data-description="Use url(example) syntax"/></svg>',
+    ],
+  ]);
+  assert.doesNotMatch(metadataSvgHtml, /\/assets\/metadata\.svg/u);
 
   const animatedSvgGame = createPreviewFixture('animated-svg-url', {
     indexHtml: '<!doctype html><html><head></head><body><object data="/assets/animated.svg"></object><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
