@@ -221,6 +221,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
   });
 
   it('reuses a pending checkout identity after restart instead of re-verifying current mappings', async () => {
+    const exactCheckoutIdempotencyKey = '  checkout-pending-consume  ';
     const storedRecoveryIds = new Map<string, string>();
     const recoveryIdStorage = {
       getItem(key: string) {
@@ -281,12 +282,12 @@ describe('Microsoft Store Digital Goods commerce', () => {
     await expect(firstAdapter.purchase({
       productId: product.id,
       source: 'shop',
-      idempotencyKey: 'checkout-pending-consume',
+      idempotencyKey: exactCheckoutIdempotencyKey,
     })).resolves.toMatchObject({ status: 'pending' });
     expect(firstAuthority).toHaveBeenCalledWith(expect.objectContaining({
-      idempotencyKey: 'checkout-pending-consume',
+      idempotencyKey: exactCheckoutIdempotencyKey,
     }));
-    expect([...storedRecoveryIds.values()]).toEqual(['checkout-pending-consume']);
+    expect([...storedRecoveryIds.values()]).toEqual([exactCheckoutIdempotencyKey]);
 
     const createRecoveryId = vi.fn(() => 'new-recovery-id');
     const resumedAuthority = vi.fn(async () => ({
@@ -321,7 +322,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       restoredEntitlements: [entitlement],
     });
     expect(resumedAuthority).toHaveBeenCalledWith(expect.objectContaining({
-      idempotencyKey: 'checkout-pending-consume',
+      idempotencyKey: exactCheckoutIdempotencyKey,
       source: 'recovery',
     }));
     expect(createRecoveryId).not.toHaveBeenCalled();
