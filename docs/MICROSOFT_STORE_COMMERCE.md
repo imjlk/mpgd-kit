@@ -12,6 +12,11 @@ for this provider, `purchaseToken` identifies the add-on product. A game-owned
 authority must therefore confirm the purchase with Microsoft Collections before
 granting anything.
 
+`purchaseToken` is also not a User Store ID. A Store-installed PWA cannot derive
+the purchasing account's `UserCollectionsId` from Digital Goods alone. Treat the
+checkout result only as a prompt to ask the trusted authority to query Store
+ownership for the already-bound player.
+
 ## Product identifiers
 
 Keep these identifiers separate:
@@ -63,6 +68,24 @@ Before enabling commerce, the game must provide:
 Until all of these exist, return `configuration-required` from the adapter
 authority so product enumeration and checkout stay unavailable.
 
+### User Store ID acquisition for a PWA
+
+Choose and document one trusted account-linking strategy before enabling the
+commerce capability:
+
+1. A Windows host bridge obtains a User Collections ID for the account signed in
+   to Microsoft Store, then sends it to the game service over an authenticated
+   player session.
+2. The service links the player through Microsoft/Xbox OAuth and uses delegated
+   X-tokens to create the User Collections ID server-side.
+
+Do not accept a User Store ID, service access token, or player identifier from
+Digital Goods purchase evidence. The Microsoft Store purchasing account can be
+different from the Xbox or game account, so the game must show which account is
+being linked and bind the resulting key to one authenticated player. User Store
+IDs expire and require a renewal path; a missing or expired binding must make
+verification pending without writing another grant.
+
 Worker deployments must configure
 `GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER` and
 `GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER` together. A verifier-only
@@ -74,3 +97,5 @@ Official references:
 - [Digital Goods API for Microsoft Store PWAs](https://learn.microsoft.com/en-us/microsoft-edge/progressive-web-apps/how-to/digital-goods-api)
 - [Collections v9 publisherQuery](https://learn.microsoft.com/en-us/gaming/gdk/docs/store/commerce/service-to-service/microsoft-store-apis/xstore-v9-query-for-products)
 - [Collections v8 consume](https://learn.microsoft.com/en-us/gaming/gdk/docs/store/commerce/service-to-service/microsoft-store-apis/xstore-v8-consume)
+- [Requesting a User Store ID](https://learn.microsoft.com/en-us/xbox/gdk/docs/store/commerce/service-to-service/xstore-requesting-a-userstoreid)
+- [Creating a User Store ID from delegated authentication](https://learn.microsoft.com/en-us/xbox/gdk/docs/store/commerce/service-to-service/xstore-requesting-a-userstoreid-from-services)
