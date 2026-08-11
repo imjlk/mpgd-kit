@@ -140,13 +140,14 @@ try {
   });
   initializeGame(legacyScriptsGame);
   assertMicrosoftStoreEnabled(legacyScriptsGame);
+  const migratedPackageJson = readJson(join(legacyScriptsGame, 'package.json'));
   const migratedScripts = requireRecord(
-    readJson(join(legacyScriptsGame, 'package.json')).scripts,
+    migratedPackageJson.scripts,
     'migrated package scripts',
   );
   assert.equal(
     requireRecord(
-      readJson(join(legacyScriptsGame, 'package.json')).dependencies,
+      migratedPackageJson.dependencies,
       'migrated package dependencies',
     )['@mpgd/adapter-microsoft-store'],
     'link:../local-microsoft-store-adapter',
