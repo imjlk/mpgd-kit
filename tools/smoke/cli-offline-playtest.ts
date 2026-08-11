@@ -1690,6 +1690,18 @@ try {
   assert.match(identifiedFetchHtml, /\/assets\/config\.json/u);
   assert.match(identifiedFetchHtml, /fetch\(["']data:application\/json;base64,/u);
 
+  const requestFetchHtml = await packageAndReadFixture('request-fetch-asset', {
+    mainJs: 'const url = "/assets/config.json"; document.body.dataset.url = url; void fetch(new Request(url));',
+  });
+  assert.match(requestFetchHtml, /\/assets\/config\.json/u);
+  assert.match(requestFetchHtml, /new Request\(["']data:application\/json;base64,/u);
+
+  const identifiedRequestFetchHtml = await packageAndReadFixture('identified-request-fetch-asset', {
+    mainJs: 'const url = "/assets/config.json"; const request = new Request(url); document.body.dataset.url = url; void fetch(request);',
+  });
+  assert.match(identifiedRequestFetchHtml, /\/assets\/config\.json/u);
+  assert.match(identifiedRequestFetchHtml, /new Request\(["']data:application\/json;base64,/u);
+
   const commentedFetchHtml = await packageAndReadFixture('commented-fetch-asset', {
     mainJs: 'void fetch(/* preload */ "/assets/config.json");',
   });
@@ -1812,6 +1824,16 @@ try {
   assert.doesNotMatch(browserAudioHtml, /\/assets\/click\.mp3/u);
   assert.match(browserAudioHtml, /data:audio\/mpeg;base64,/u);
 
+  const identifiedBrowserAudioHtml = await packageAndReadFixture(
+    'identified-browser-audio-asset',
+    {
+      mainJs: 'const url = "/assets/click.mp3"; document.body.dataset.url = url; const click = new Audio(url); void click;',
+    },
+    [['artifacts/web-preview/assets/click.mp3', Buffer.from('identified-browser-audio')]],
+  );
+  assert.match(identifiedBrowserAudioHtml, /\/assets\/click\.mp3/u);
+  assert.match(identifiedBrowserAudioHtml, /new Audio\(["']data:audio\/mpeg;base64,/u);
+
   const fontFaceAsset = Buffer.from('font-face-asset');
   const browserFontFaceHtml = await packageAndReadFixture(
     'browser-font-face-asset',
@@ -1838,6 +1860,17 @@ try {
   );
   assert.doesNotMatch(assignedBrowserAudioHtml, /\/assets\/click\.mp3/u);
   assert.match(assignedBrowserAudioHtml, /data:audio\/mpeg;base64,/u);
+
+  const staticStyleAssetHtml = await packageAndReadFixture('static-style-assets', {
+    mainJs: 'const direct = document.createElement("div"); const property = document.createElement("section"); const attributed = document.createElement("article"); const css = "url(\\"/assets/pixel.png\\")"; direct.style.backgroundImage = css; property.style.setProperty("background-image", "url(\\"/assets/icon.png\\")"); attributed.setAttribute("style", "background-image: url(\\"/assets/pixel.png\\")"); document.body.append(direct, property, attributed);',
+  });
+  assert.doesNotMatch(staticStyleAssetHtml, /url\([^)]*\/assets\/(?:icon|pixel)\.png/u);
+  assert.match(staticStyleAssetHtml, /data:image\/png;base64,/u);
+
+  const memberOwnedStyleHtml = await packageAndReadFixture('member-owned-style', {
+    mainJs: 'const element = document.createElement("div"); const wrapper = { element: { style: {} } }; wrapper . element.style.backgroundImage = "url(\\"/api/background\\")"; void element; document.body.dataset.value = wrapper.element.style.backgroundImage;',
+  });
+  assert.match(memberOwnedStyleHtml, /\/api\/background/u);
 
   const browserImageHtml = await packageAndReadFixture('browser-image-asset', {
     mainJs: 'const splash = new Image(); splash.src = "/assets/pixel.png"; document.body.append(splash);',

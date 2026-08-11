@@ -1188,8 +1188,10 @@ function inlineJavaScriptAssetReferences(
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
+  output = inlineStaticAudioArguments(output, documentFile, readAsset);
   output = inlineStaticFontFaceSources(output, documentFile, context, readAsset);
   output = inlineStaticElementSourceAssignments(output, documentFile, readAsset);
+  output = inlineStaticStyleAssetReferences(output, documentFile, context, readAsset);
   output = inlineStaticXmlHttpRequestOpenCalls(output, documentFile, readAsset, deferError);
   output = inlinePhaserAssetReferences(output, documentFile, readAsset);
   return output;
@@ -1239,6 +1241,256 @@ function inlineStaticFetchArguments(
       continue;
     }
 
+    let referenceRange = argument;
+    let reference = resolveStaticJavaScriptStringExpression(source, referenceRange, codePositions);
+
+    if (reference === undefined) {
+      const requestUrlRange = findStaticNativeRequestUrlRange(
+        source,
+        argument,
+        match.index,
+        codePositions,
+        new Set<number>(),
+      );
+
+      if (requestUrlRange !== undefined) {
+        referenceRange = requestUrlRange;
+        reference = resolveStaticJavaScriptStringExpression(source, referenceRange, codePositions);
+      }
+    }
+
+    if (reference === undefined || isDataUrlReference(reference)) {
+      continue;
+    }
+
+    if (!replacements.some((replacement) => (
+      replacement.start === referenceRange.start && replacement.end === referenceRange.end
+    ))) {
+      replacements.push({
+        start: referenceRange.start,
+        end: referenceRange.end,
+        value: JSON.stringify(
+          readAsset(
+            documentFile,
+            reference,
+            `Offline playtest does not support network fetch URL: ${reference}`,
+          ),
+        ),
+      });
+    }
+  }
+
+  let output = source;
+
+  for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
+  return output;
+}
+
+function findStaticNativeRequestUrlRange(
+  source: string,
+  expressionRange: SourceRange,
+  callPosition: number,
+  codePositions: Uint8Array,
+  visitedBindings: Set<number>,
+): SourceRange | undefined {
+  const range = unwrapJavaScriptParenthesizedRange(source, expressionRange, codePositions);
+  const expression = maskNonCode(
+    source.slice(range.start, range.end),
+    codePositions.slice(range.start, range.end),
+  ).trim();
+
+  if (exactJavaScriptIdentifierPattern.test(expression)) {
+    let identifierOffset = range.start;
+
+    while (
+      identifierOffset < range.end
+      && (codePositions[identifierOffset] !== 1 || /\s/u.test(source[identifierOffset] ?? ''))
+    ) {
+      identifierOffset += 1;
+    }
+
+    const binding = findVisibleJavaScriptIdentifierBinding(
+      source,
+      expression,
+      callPosition,
+      codePositions,
+    );
+
+    if (
+      binding?.kind !== 'const'
+      || binding.initializerRange === undefined
+      || binding.start >= callPosition
+      || visitedBindings.has(binding.start)
+    ) {
+      return undefined;
+    }
+
+    visitedBindings.add(binding.start);
+    return findStaticNativeRequestUrlRange(
+      source,
+      binding.initializerRange,
+      binding.initializerRange.start,
+      codePositions,
+      visitedBindings,
+    );
+  }
+
+  const request = new RegExp(
+    `^new${javascriptTriviaPatternSource}(?:(globalThis|self|window)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource})?(Request)${javascriptTriviaPatternSource}\\(`,
+    'u',
+  ).exec(expression);
+
+  if (request?.[2] === undefined) {
+    return undefined;
+  }
+
+  const qualifier = request[1];
+  const bindingIdentifier = qualifier ?? request[2];
+
+  if (
+    findVisibleJavaScriptIdentifierBinding(
+      source,
+      bindingIdentifier,
+      range.start,
+      codePositions,
+    ) !== undefined
+  ) {
+    return undefined;
+  }
+
+  const openingParenthesis = range.start + request[0].lastIndexOf('(');
+  const closingParenthesis = findMatchingJavaScriptClosingParenthesis(
+    source,
+    openingParenthesis,
+    range.end,
+    codePositions,
+  );
+
+  if (closingParenthesis !== range.end - 1) {
+    return undefined;
+  }
+
+  return splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+}
+
+function unwrapJavaScriptParenthesizedRange(
+  source: string,
+  expressionRange: SourceRange,
+  codePositions: Uint8Array,
+): SourceRange {
+  let range = trimJavaScriptCodeRange(source, expressionRange, codePositions);
+
+  while (source[range.start] === '(') {
+    const closingParenthesis = findMatchingJavaScriptClosingParenthesis(
+      source,
+      range.start,
+      range.end,
+      codePositions,
+    );
+
+    if (closingParenthesis !== range.end - 1) {
+      break;
+    }
+
+    range = trimJavaScriptCodeRange(
+      source,
+      { start: range.start + 1, end: range.end - 1 },
+      codePositions,
+    );
+  }
+
+  return range;
+}
+
+function trimJavaScriptCodeRange(
+  source: string,
+  expressionRange: SourceRange,
+  codePositions: Uint8Array,
+): SourceRange {
+  let { start, end } = expressionRange;
+
+  while (
+    start < end
+    && (codePositions[start] !== 1 || /\s/u.test(source[start] ?? ''))
+  ) {
+    start += 1;
+  }
+
+  while (
+    start < end
+    && (codePositions[end - 1] !== 1 || /\s/u.test(source[end - 1] ?? ''))
+  ) {
+    end -= 1;
+  }
+
+  return { start, end };
+}
+
+function findMatchingJavaScriptClosingParenthesis(
+  source: string,
+  openingParenthesis: number,
+  limit: number,
+  codePositions: Uint8Array,
+): number | undefined {
+  let depth = 0;
+
+  for (let index = openingParenthesis; index < limit; index += 1) {
+    if (codePositions[index] !== 1) {
+      continue;
+    }
+
+    if (source[index] === '(') {
+      depth += 1;
+    } else if (source[index] === ')') {
+      depth -= 1;
+
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function inlineStaticAudioArguments(
+  source: string,
+  documentFile: string,
+  readAsset: AssetDataUrlReader,
+): string {
+  const pattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])new${javascriptTriviaPatternSource}(?:(globalThis|self|window)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource})?(Audio)${javascriptTriviaPatternSource}\\(`,
+    'gu',
+  );
+  const codePositions = createCodePositionMap(source, true);
+  const replacements: SourceReplacement[] = [];
+
+  for (const match of source.matchAll(pattern)) {
+    if (
+      match.index === undefined
+      || match[2] === undefined
+      || codePositions[match.index] !== 1
+      || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
+      || findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1] ?? match[2],
+        match.index,
+        codePositions,
+      ) !== undefined
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = match.index + match[0].length - 1;
+    const argument = splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+
+    if (argument === undefined) {
+      continue;
+    }
+
     const reference = resolveStaticJavaScriptStringExpression(source, argument, codePositions);
 
     if (reference === undefined || isDataUrlReference(reference)) {
@@ -1252,7 +1504,7 @@ function inlineStaticFetchArguments(
         readAsset(
           documentFile,
           reference,
-          `Offline playtest does not support network fetch URL: ${reference}`,
+          `Offline playtest does not support network Audio URL: ${reference}`,
         ),
       ),
     });
@@ -1518,11 +1770,130 @@ function inlineStaticElementSourceAssignments(
   return output;
 }
 
+function inlineStaticStyleAssetReferences(
+  source: string,
+  documentFile: string,
+  context: InliningContext,
+  readAsset: AssetDataUrlReader,
+): string {
+  const styleAssignmentPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}${javascriptIdentifierPatternSource}${javascriptTriviaPatternSource}=(?!=|>)`,
+    'gu',
+  );
+  const setPropertyPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}setProperty${javascriptTriviaPatternSource}\\(`,
+    'gu',
+  );
+  const setAttributePattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}setAttribute${javascriptTriviaPatternSource}\\(`,
+    'gu',
+  );
+  const codePositions = createCodePositionMap(source, true);
+  const replacements: SourceReplacement[] = [];
+  const hasMemberReceiverPrefix = (position: number): boolean => {
+    const previousCode = findPreviousJavaScriptCodeIndex(source, position - 1, codePositions);
+    return previousCode !== undefined && source[previousCode] === '.';
+  };
+  const addReplacement = (
+    receiver: string,
+    matchPosition: number,
+    valueRange: SourceRange | undefined,
+  ): void => {
+    if (valueRange === undefined || hasMemberReceiverPrefix(matchPosition)) {
+      return;
+    }
+
+    const nativeElement = findStaticNativeElementBinding(
+      source,
+      receiver,
+      matchPosition,
+      codePositions,
+      true,
+    );
+
+    if (nativeElement?.binding.kind !== 'const') {
+      return;
+    }
+
+    const css = resolveStaticJavaScriptStringExpression(source, valueRange, codePositions);
+
+    if (css === undefined) {
+      return;
+    }
+
+    const inlined = inlineCssAssetReferences(css, documentFile, context, readAsset, true);
+
+    if (inlined !== css) {
+      replacements.push({
+        start: valueRange.start,
+        end: valueRange.end,
+        value: JSON.stringify(inlined),
+      });
+    }
+  };
+
+  for (const match of source.matchAll(styleAssignmentPattern)) {
+    if (match.index === undefined || match[1] === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    addReplacement(
+      match[1],
+      match.index,
+      findJavaScriptExpressionRange(
+        source,
+        match.index + match[0].length,
+        source.length,
+        codePositions,
+        true,
+      ),
+    );
+  }
+
+  for (const match of source.matchAll(setPropertyPattern)) {
+    if (match.index === undefined || match[1] === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const openingParenthesis = match.index + match[0].length - 1;
+    addReplacement(
+      match[1],
+      match.index,
+      splitJavaScriptArguments(source, openingParenthesis, codePositions)[1],
+    );
+  }
+
+  for (const match of source.matchAll(setAttributePattern)) {
+    if (match.index === undefined || match[1] === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const openingParenthesis = match.index + match[0].length - 1;
+    const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
+    const attribute = arguments_[0] === undefined
+      ? undefined
+      : resolveStaticJavaScriptStringExpression(source, arguments_[0], codePositions);
+
+    if (attribute?.toLowerCase() === 'style') {
+      addReplacement(match[1], match.index, arguments_[1]);
+    }
+  }
+
+  let output = source;
+
+  for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
+  return output;
+}
+
 function findStaticNativeElementBinding(
   source: string,
   identifier: string,
   position: number,
   codePositions: Uint8Array,
+  allowAnyCreatedElement = false,
 ): Readonly<{
   binding: JavaScriptIdentifierBinding;
   constructorName: string;
@@ -1544,7 +1915,11 @@ function findStaticNativeElementBinding(
     ).trim();
   const constructor = initializer === undefined
     ? undefined
-    : parseStaticElementConstructor(initializer, rawInitializer ?? initializer);
+    : parseStaticElementConstructor(
+        initializer,
+        rawInitializer ?? initializer,
+        allowAnyCreatedElement,
+      );
   const qualifier = constructor?.qualifier;
   const constructorName = constructor?.constructorName;
 
@@ -1629,6 +2004,7 @@ function resolveStaticJavaScriptStringExpression(
 function parseStaticElementConstructor(
   initializer: string,
   rawInitializer: string,
+  allowAnyCreatedElement = false,
 ): Readonly<{ constructorName: string; qualifier: string | undefined }> | undefined {
   const constructor = /^new\s+(?:(globalThis|self|window)\s*\.\s*)?(Audio|Image)(?=\s|\(|$)/u.exec(
     initializer,
@@ -1663,7 +2039,9 @@ function parseStaticElementConstructor(
         )?.toLowerCase();
     const supportedTagNames = new Set(['audio', 'img', 'source', 'track', 'video']);
 
-    return createdElement === null || tagName === undefined || !supportedTagNames.has(tagName)
+    return createdElement === null
+      || tagName === undefined
+      || (!allowAnyCreatedElement && !supportedTagNames.has(tagName))
       ? undefined
       : {
           constructorName: `HTML ${tagName} element`,
@@ -3965,8 +4343,9 @@ function inlineCssAssetReferences(
   context: InliningContext,
   readAsset: AssetDataUrlReader = (assetSourceFile, reference) =>
     readAssetDataUrl(assetSourceFile, reference, context),
+  allowImportRules = false,
 ): string {
-  if (containsCssImportRule(source)) {
+  if (!allowImportRules && containsCssImportRule(source)) {
     throw new Error(`Offline playtest does not support CSS @import rules: ${sourceFile}`);
   }
 
