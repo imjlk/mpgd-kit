@@ -1132,6 +1132,14 @@ try {
   });
   assert.doesNotMatch(phaserAssignedVarConfigHtml, /\/assets\/icon\.png/u);
 
+  const phaserBranchAssignedConfigGame = createPreviewFixture('phaser-branch-assigned-config', {
+    mainJs: 'let config; if (globalThis.useHero) { config = { key: "hero", url: "/assets/pixel.png" }; } else { config = { key: "logo", url: "/assets/icon.png" }; } const scene = new Phaser.Scene(); scene.load.image(config);',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: phaserBranchAssignedConfigGame }),
+    /does not support conditionally assigned Phaser loader configurations/u,
+  );
+
   const phaserShorthandConfigHtml = await packageAndReadFixture('phaser-shorthand-config', {
     mainJs: 'const key = "hero"; const url = "/assets/pixel.png"; const scene = new Phaser.Scene(); scene.load.image({ key, url });',
   });

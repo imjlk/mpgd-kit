@@ -118,6 +118,11 @@ interface JavaScriptIdentifierBinding {
   readonly start: number;
 }
 
+interface JavaScriptAssignmentResolution {
+  readonly ambiguous: boolean;
+  readonly range?: SourceRange;
+}
+
 interface LocationAliasAssignment {
   readonly expression: string;
   readonly expressionRange: SourceRange;
@@ -1328,15 +1333,23 @@ function inlineStaticXmlHttpRequestOpenCalls(
       match.index,
       codePositions,
     );
-    const assignmentProof = binding === undefined
+    const assignment = binding === undefined
       ? undefined
-      : findLastDirectJavaScriptAssignmentExpressionRange(
+      : resolveLastDirectJavaScriptAssignment(
           source,
           receiver,
           binding,
           match.index,
           codePositions,
         );
+    const assignmentProof = assignment?.range;
+
+    if (assignment?.ambiguous === true) {
+      throw new Error(
+        'Offline playtest requires an unambiguous XMLHttpRequest assignment before rewriting open.',
+      );
+    }
+
     const isNativeXmlHttpRequest = assignmentProof === undefined
       ? isXmlHttpRequestBinding(source, binding, codePositions)
       : isNativeXmlHttpRequestExpression(source, assignmentProof, codePositions);
@@ -1404,19 +1417,41 @@ function isXmlHttpRequestBinding(
   return isNativeXmlHttpRequestExpression(source, binding.initializerRange, codePositions);
 }
 
-function findLastDirectJavaScriptAssignmentExpressionRange(
+function resolveLastDirectJavaScriptAssignment(
   source: string,
   identifier: string,
   binding: JavaScriptIdentifierBinding,
   position: number,
   codePositions: Uint8Array,
-): SourceRange | undefined {
+): JavaScriptAssignmentResolution {
   const identifierPattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${escapeRegExp(identifier)}(?![$\\u200C\\u200D\\p{ID_Continue}])`,
     'gu',
   );
 
-  let lastAssignmentRange: SourceRange | undefined;
+  const assignments: {
+    readonly range: SourceRange;
+    readonly scopePath: readonly number[];
+    readonly standalone: boolean;
+  }[] = [];
+  const scopePath = [...findJavaScriptScopePath(source, binding.start, codePositions)];
+  let scopeCursor = binding.start;
+
+  const advanceScopePath = (end: number): void => {
+    for (let index = scopeCursor; index < end; index += 1) {
+      if (codePositions[index] !== 1) {
+        continue;
+      }
+
+      if (source[index] === '{') {
+        scopePath.push(index);
+      } else if (source[index] === '}') {
+        scopePath.pop();
+      }
+    }
+
+    scopeCursor = end;
+  };
 
   for (const match of source.slice(binding.start, position).matchAll(identifierPattern)) {
     if (match.index === undefined) {
@@ -1457,10 +1492,48 @@ function findLastDirectJavaScriptAssignmentExpressionRange(
       true,
     );
 
-    lastAssignmentRange = expressionRange;
+    advanceScopePath(assignmentStart);
+
+    let previous = assignmentStart - 1;
+
+    while (
+      previous >= binding.start
+      && (codePositions[previous] !== 1 || /\s/u.test(source[previous] ?? ''))
+    ) {
+      previous -= 1;
+    }
+
+    assignments.push({
+      range: expressionRange,
+      scopePath: [...scopePath],
+      standalone: binding.initializerRange?.start === expressionRange.start
+        || previous < binding.start
+        || /[;{}]/u.test(source[previous] ?? ''),
+    });
   }
 
-  return lastAssignmentRange;
+  advanceScopePath(position);
+
+  let ambiguous = false;
+  let range: SourceRange | undefined;
+
+  // A standalone assignment in the loader call's exact block path dominates earlier
+  // candidates. A later nested or control-expression assignment can execute only on
+  // some paths, so keep the resolution ambiguous until another direct assignment wins.
+  for (const assignment of assignments) {
+    const isDirect = assignment.standalone
+      && assignment.scopePath.length === scopePath.length
+      && assignment.scopePath.every((scope, index) => scopePath[index] === scope);
+
+    if (isDirect) {
+      range = assignment.range;
+      ambiguous = false;
+    } else {
+      ambiguous = true;
+    }
+  }
+
+  return range === undefined ? { ambiguous } : { ambiguous, range };
 }
 
 function isNativeXmlHttpRequestExpression(
@@ -2556,7 +2629,12 @@ function findPhaserLoaderUrlRanges(
     const configArgument = arguments_[0];
 
     if (configArgument !== undefined) {
-      ranges.push(...findPhaserLoaderConfigUrlRanges(source, configArgument, codePositions));
+      ranges.push(...findPhaserLoaderConfigUrlRanges(
+        source,
+        configArgument,
+        match.index,
+        codePositions,
+      ));
     }
 
     for (const argumentIndex of phaserLoaderUrlArgumentIndexes[method] ?? []) {
@@ -2698,6 +2776,7 @@ function isProvenPhaserNamespace(
 function findPhaserLoaderConfigUrlRanges(
   source: string,
   argumentRange: SourceRange,
+  loaderCallPosition: number,
   codePositions: Uint8Array,
 ): SourceRange[] {
   const argument = trimSourceRange(source, argumentRange);
@@ -2714,21 +2793,34 @@ function findPhaserLoaderConfigUrlRanges(
         codePositions,
       );
 
-      if (binding !== undefined && binding.start < argument.start) {
-        const configRange = findLastDirectJavaScriptAssignmentExpressionRange(
+      if (binding !== undefined && binding.start < loaderCallPosition) {
+        const assignment = resolveLastDirectJavaScriptAssignment(
           source,
           identifier,
           binding,
-          argument.start,
+          loaderCallPosition,
           codePositions,
-        ) ?? binding.initializerRange;
+        );
+
+        if (assignment.ambiguous) {
+          throw new Error(
+            'Offline playtest does not support conditionally assigned Phaser loader configurations.',
+          );
+        }
+
+        const configRange = assignment.range ?? binding.initializerRange;
 
         if (configRange !== undefined) {
           const initializer = trimSourceRange(source, configRange);
           const initializerStart = source[initializer.start];
 
           if (initializerStart === '{' || initializerStart === '[') {
-            return findPhaserLoaderConfigUrlRanges(source, initializer, codePositions);
+            return findPhaserLoaderConfigUrlRanges(
+              source,
+              initializer,
+              loaderCallPosition,
+              codePositions,
+            );
           }
         }
       }
