@@ -39,6 +39,7 @@ const modifiedDate = '2030-01-02T03:04:05.000Z';
 const credentials = {
   accessToken: 'entra-service-token',
   userStoreId: 'server-resolved-user-store-id',
+  accountBindingId: 'store-account-link-1',
 } as const satisfies MicrosoftStoreCollectionsCredentials;
 const catalog = {
   version: 'microsoft-store-test',
@@ -298,7 +299,7 @@ const changedFinalizationBinding = createHarness({
     changedBindingResolutionCount += 1;
     return changedBindingResolutionCount === 1
       ? credentials
-      : { ...credentials, userStoreId: 'different-server-resolved-user-store-id' };
+      : { ...credentials, accountBindingId: 'store-account-link-2' };
   },
 });
 const changedFinalizationBindingResult =
@@ -309,11 +310,31 @@ assert.equal(changedFinalizationBindingResult.verified, true);
 assert.equal(changedFinalizationBindingResult.finalization?.status, 'pending');
 assert.equal(
   changedFinalizationBindingResult.finalization?.reason,
-  'MICROSOFT_STORE_USER_BINDING_CHANGED',
+  'MICROSOFT_STORE_ACCOUNT_BINDING_CHANGED',
 );
 assert.deepEqual(changedFinalizationBinding.events, [
   `provider:query:${storeId}`,
   'ledger:changed-finalization-binding',
+]);
+
+let renewedUserStoreIdResolutionCount = 0;
+const renewedUserStoreId = createHarness({
+  resolveCredentials: () => {
+    renewedUserStoreIdResolutionCount += 1;
+    return renewedUserStoreIdResolutionCount === 1
+      ? credentials
+      : { ...credentials, userStoreId: 'renewed-user-store-id-for-the-same-account' };
+  },
+});
+const renewedUserStoreIdResult = await renewedUserStoreId.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'renewed-user-store-id' }),
+);
+assert.equal(renewedUserStoreIdResult.verified, true);
+assert.equal(renewedUserStoreIdResult.finalization?.status, 'completed');
+assert.deepEqual(renewedUserStoreId.events, [
+  `provider:query:${storeId}`,
+  'ledger:renewed-user-store-id',
+  `provider:consume:${storeId}`,
 ]);
 
 const consumeRecovery = createHarness();

@@ -52,6 +52,7 @@ const microsoftStoreTarget = {
   output: 'artifacts/microsoft-store',
 } as const;
 const microsoftStoreAdapterBasePackage = '@mpgd/adapter-browser';
+export const microsoftStoreAdapterMinimumDependencyVersion = '^0.6.0';
 const microsoftStoreGatewayResolver = {
   anchor: "    default:\n      return 'src/platform/buildGateways/browser.ts';",
   block: "    case 'microsoft-store':\n      return 'src/platform/buildGateways/microsoftStore.ts';",
@@ -275,6 +276,14 @@ export function initializeMicrosoftStoreStarter(
   }
 
   return { changedFiles: writes.map((write) => write.relativePath).sort() };
+}
+
+/**
+ * Floors registry-backed browser adapter versions at the first release that exports the
+ * Microsoft Store PWA adapter. Local workspace/link/file specs remain intentionally untouched.
+ */
+export function resolveMicrosoftStoreAdapterDependencyVersion(candidate: string): string {
+  return resolveAdapterDependency(candidate, microsoftStoreAdapterMinimumDependencyVersion);
 }
 
 function dependencyVersion(value: string): string {

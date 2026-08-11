@@ -123,6 +123,11 @@ export interface MicrosoftStoreSubmissionEvidence {
       readonly height: number;
     }[];
   };
+  /** Present when commerce is enabled; binds preflight evidence to the built target contract. */
+  readonly effectiveTarget?: {
+    readonly file: string;
+    readonly sha256: string;
+  };
   readonly listing: {
     readonly category: 'Games';
     readonly supportUrl: string;
@@ -238,6 +243,14 @@ export function runMicrosoftStoreSubmissionPreflight(
         height: icon.height,
       })),
     },
+    ...(effectiveTarget === undefined
+      ? {}
+      : {
+          effectiveTarget: {
+            file: relativeOrAbsolute(gameRoot, effectiveTarget.file),
+            sha256: effectiveTarget.sha256,
+          },
+        }),
     listing: {
       category: config.listing.category,
       supportUrl: config.listing.supportUrl,
@@ -278,6 +291,7 @@ function readMicrosoftStoreEffectiveTarget(
   commerce: Extract<MicrosoftStoreSubmissionCommerce, { readonly mode: 'microsoft-store' }>,
 ): {
   readonly file: string;
+  readonly sha256: string;
 } {
   const file = readCanonicalFileInside(
     artifactRoot,
@@ -359,7 +373,7 @@ function readMicrosoftStoreEffectiveTarget(
     }
   }
 
-  return { file };
+  return { file, sha256: hashBytes(snapshot.bytes) };
 }
 
 export function parseMicrosoftStoreSubmissionConfig(
@@ -527,6 +541,11 @@ export function renderMicrosoftStoreSubmissionMarkdown(
     `- Publisher ID: ${escapeMarkdownInline(evidence.productIdentity.publisherId)}`,
     `- Reserved name: ${escapeMarkdownInline(evidence.productIdentity.reservedName)}`,
     `- Manifest: ${escapeMarkdownInline(evidence.manifest.file)} (${evidence.manifest.sha256})`,
+    ...(evidence.effectiveTarget === undefined
+      ? []
+      : [
+          `- Effective target: ${escapeMarkdownInline(evidence.effectiveTarget.file)} (${evidence.effectiveTarget.sha256})`,
+        ]),
     `- Manifest icons: ${evidence.manifest.iconCount}`,
     `- Commerce: ${evidence.commerce.mode}`,
     `- Personal data accessed or transmitted: ${String(evidence.listing.personalData.accessedOrTransmitted)}`,

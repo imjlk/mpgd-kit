@@ -37,8 +37,10 @@ verification/finalization contract for developer-managed consumables:
 
 1. Reject requests that are not from the `microsoft-store` target or whose
    Digital Goods evidence does not match the catalog `inAppOfferToken`.
-2. Resolve an Entra service access token and User Store ID from trusted server
-   identity. Neither value may come from client purchase evidence.
+2. Resolve an Entra service access token, renewable User Store ID, and stable
+   opaque account-link ID from trusted server identity. None may come from
+   client purchase evidence. The account-link ID must survive User Store ID
+   renewal and change only when the player links a different Store account.
 3. Query Collections v9 for the configured `storeId` and require an active
    `UnmanagedConsumable` with remaining quantity.
 4. Record the product grant in the Game Services idempotency ledger.
@@ -61,7 +63,8 @@ Before enabling commerce, the game must provide:
 - published Partner Center developer-managed consumable add-ons;
 - both `inAppOfferToken` and `storeId` for every catalog product;
 - an Entra application authorized for Microsoft Store service APIs;
-- a secure User Store ID acquisition and player-binding path;
+- a secure User Store ID acquisition and player-binding path with a stable,
+  non-secret account-link ID separate from the renewable User Store ID;
 - a public HTTPS Game Services endpoint and durable entitlement ledger;
 - retry and alerting for pending consume finalizations.
 
@@ -79,12 +82,14 @@ commerce capability:
 2. The service links the player through Microsoft/Xbox OAuth and uses delegated
    X-tokens to create the User Collections ID server-side.
 
-Do not accept a User Store ID, service access token, or player identifier from
-Digital Goods purchase evidence. The Microsoft Store purchasing account can be
-different from the Xbox or game account, so the game must show which account is
-being linked and bind the resulting key to one authenticated player. User Store
-IDs expire and require a renewal path; a missing or expired binding must make
-verification pending without writing another grant.
+Do not accept a User Store ID, service access token, account-link ID, or player
+identifier from Digital Goods purchase evidence. The Microsoft Store purchasing
+account can be different from the Xbox or game account, so the game must show
+which account is being linked and bind the resulting key to one authenticated
+player. User Store IDs expire and require a renewal path; use the server's own
+durable account-link record identity for `accountBindingId` so renewal does not
+look like an account switch. A missing or expired binding must make verification
+pending without writing another grant.
 
 Worker deployments must configure
 `GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER` and

@@ -44,6 +44,14 @@ try {
   const selectedGame = createGame('with-store', ['--microsoft-store']);
   assertGenericAgentWorkflow(selectedGame);
   assertMicrosoftStoreEnabled(selectedGame);
+  assert.equal(
+    requireRecord(
+      readJson(join(selectedGame, 'package.json')).dependencies,
+      'selected game dependencies',
+    )['@mpgd/adapter-browser'],
+    '^0.6.0',
+    'source-checkout game creation must use the first adapter release with Store exports',
+  );
   assertNoUnresolvedTemplatePlaceholders(selectedGame);
 
   const nestedGame = createGame('nested/with-store', ['--microsoft-store']);
@@ -170,13 +178,7 @@ try {
     readFileSync(legacyRuntimeFile, 'utf8').replace("  'microsoft-store',\n", ''),
   );
   assert.doesNotMatch(readFileSync(legacyRuntimeFile, 'utf8'), /'microsoft-store'/u);
-  initializeMicrosoftStoreStarter({
-    gameRoot: legacyRegistryGame,
-    templateRoot,
-    defaultKitPath: relative(legacyRegistryGame, kitRoot),
-    adapterDependencyVersion: '^0.6.0',
-    dryRun: false,
-  });
+  initializeGame(legacyRegistryGame);
   assert.equal(
     requireRecord(
       readJson(join(legacyRegistryGame, 'package.json')).dependencies,

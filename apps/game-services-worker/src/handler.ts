@@ -355,9 +355,14 @@ function resolveWorkerEvidenceVerifier(
     const binding = env.GAME_SERVICES_EVIDENCE_VERIFIER;
 
     return createWorkerEvidenceVerifier(
-      (target) => target === 'verse8' && verse8Verifier !== undefined
-        ? undefined
-        : binding,
+      (target) => {
+        // Microsoft Store consumables require a paired verifier/finalizer boundary. Never let
+        // the legacy aggregate verifier grant Store evidence without a consume finalizer.
+        if (target === 'microsoft-store') {
+          return undefined;
+        }
+        return target === 'verse8' && verse8Verifier !== undefined ? undefined : binding;
+      },
       verse8Verifier,
     );
   }
@@ -366,7 +371,7 @@ function resolveWorkerEvidenceVerifier(
     ? createDevelopmentGameServicesEvidenceVerifier()
     : undefined;
 
-  if (verse8Verifier !== undefined) {
+  if (verse8Verifier !== undefined || developmentVerifier !== undefined) {
     return createWorkerEvidenceVerifier(
       () => undefined,
       verse8Verifier,
@@ -374,7 +379,7 @@ function resolveWorkerEvidenceVerifier(
     );
   }
 
-  return developmentVerifier;
+  return undefined;
 }
 
 function hasTargetSpecificEvidenceVerifierBinding(env: GameServicesWorkerEnv): boolean {
@@ -429,6 +434,11 @@ function createWorkerEvidenceVerifier(
         });
       }
 
+      if (request.target === 'microsoft-store') {
+        // Store grants are never safe through the generic development fallback because they must
+        // be paired with authoritative Collections consumption.
+        return unavailableEvidenceVerificationDecision();
+      }
       return fallbackVerifier?.verifyPurchase(input)
         ?? unavailableEvidenceVerificationDecision();
     },

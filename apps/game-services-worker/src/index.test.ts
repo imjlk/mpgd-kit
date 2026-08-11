@@ -29,6 +29,29 @@ const workerFetch = createWorkerFetchHandler(workerEnv);
 const workerService = createWorkerService(workerEnv);
 const baseUrl = 'https://game-services-worker.test';
 
+const insecureDevelopmentMicrosoftStorePurchase = await workerService.verifyPurchase({
+  target: 'microsoft-store',
+  playerId: 'worker-development-store-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'coins_100',
+  idempotencyKey: 'worker-development-store-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: microsoftStoreDigitalGoodsEvidenceSchema,
+    payload: { purchaseToken: 'coins_100' },
+  },
+}) as { readonly verified: boolean; readonly reason?: string };
+assertEqual(
+  insecureDevelopmentMicrosoftStorePurchase.verified,
+  false,
+  'development evidence fallback must not grant Store consumables without consumption',
+);
+assertEqual(
+  insecureDevelopmentMicrosoftStorePurchase.reason,
+  'EVIDENCE_VERIFIER_UNAVAILABLE',
+  'development Store evidence should fail closed with observable verifier state',
+);
+
 const defaultMemoryFetch = createWorkerFetchHandler({ MPGD_STORE: 'memory' });
 const defaultMemoryPurchase = await defaultMemoryFetch(
   new Request(`${baseUrl}/game-services/purchases/verify`, {
@@ -62,11 +85,13 @@ assertEqual(
 
 let verifierBindingReceivedSignal = true;
 let verifierBindingTimeoutMs = 0;
+let verifierBindingPurchaseCalls = 0;
 let rewardVerifierBindingReceivedSignal = true;
 const boundVerifierService = createWorkerService({
   MPGD_STORE: 'memory',
   GAME_SERVICES_EVIDENCE_VERIFIER: {
     async verifyPurchase(input) {
+      verifierBindingPurchaseCalls += 1;
       verifierBindingReceivedSignal = Object.hasOwn(input, 'signal');
       verifierBindingTimeoutMs = input.timeoutMs;
       return {
@@ -101,6 +126,18 @@ const boundVerifierReward = await boundVerifierService.claimAdReward({
   idempotencyKey: 'worker-binding-reward',
   completedAt: '2026-07-04T00:00:00.000Z',
 });
+const aggregateOnlyMicrosoftStorePurchase = await boundVerifierService.verifyPurchase({
+  target: 'microsoft-store',
+  playerId: 'worker-binding-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'coins_100',
+  idempotencyKey: 'worker-binding-microsoft-store-purchase',
+  purchasedAt: '2026-07-04T00:00:00.000Z',
+  evidence: {
+    schema: microsoftStoreDigitalGoodsEvidenceSchema,
+    payload: { purchaseToken: 'coins_100' },
+  },
+}) as { readonly verified: boolean; readonly reason?: string };
 
 assertEqual(
   (boundVerifierPurchase as { readonly verified: boolean }).verified,
@@ -126,6 +163,21 @@ assertEqual(
   rewardVerifierBindingReceivedSignal,
   false,
   'reward verifier bindings must not receive non-cloneable AbortSignal values',
+);
+assertEqual(
+  aggregateOnlyMicrosoftStorePurchase.verified,
+  false,
+  'an aggregate verifier must not grant Store evidence without the paired finalizer boundary',
+);
+assertEqual(
+  aggregateOnlyMicrosoftStorePurchase.reason,
+  'EVIDENCE_VERIFIER_UNAVAILABLE',
+  'aggregate-only Store verification should fail closed with observable verifier state',
+);
+assertEqual(
+  verifierBindingPurchaseCalls,
+  1,
+  'Microsoft Store evidence must not reach the legacy aggregate verifier',
 );
 
 let configuredDeploymentTarget: string | undefined;

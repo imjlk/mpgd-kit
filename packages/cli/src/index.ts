@@ -39,6 +39,7 @@ import {
   initializeMicrosoftStoreStarter,
   listMicrosoftStoreInitializerTemplateFiles,
   prepareBaseGameTemplateFile,
+  resolveMicrosoftStoreAdapterDependencyVersion,
 } from './microsoft-store-starter.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
 import {
@@ -1164,12 +1165,14 @@ const targetCommand = defineI18n({
           ? defaultMpgdKitPath
           : toTemplatePath(path.relative(gameRoot, resolvedKitPath) || '.');
         const dryRun = ctx.values['dry-run'] === true;
-        const adapterDependencyVersion = requireMpgdDependencyVersion(
-          resolveMpgdDependencyVersionReplacements({
-            workspace: false,
-            ...(resolvedKitPath === undefined ? {} : { kitPath: resolvedKitPath }),
-          }),
-          '@mpgd/adapter-browser',
+        const adapterDependencyVersion = resolveMicrosoftStoreAdapterDependencyVersion(
+          requireMpgdDependencyVersion(
+            resolveMpgdDependencyVersionReplacements({
+              workspace: false,
+              ...(resolvedKitPath === undefined ? {} : { kitPath: resolvedKitPath }),
+            }),
+            '@mpgd/adapter-browser',
+          ),
         );
         const result = initializeMicrosoftStoreStarter({
           gameRoot,
@@ -2269,9 +2272,11 @@ function createTemplateContext(input: {
     packageName: input.packageName,
     defaultDependencyVersion: input.dependencyVersion ?? defaultDependencyVersion,
     mpgdDependencyVersionReplacements,
-    microsoftStoreAdapterDependencyVersion: requireMpgdDependencyVersion(
-      mpgdDependencyVersionReplacements,
-      '@mpgd/adapter-browser',
+    microsoftStoreAdapterDependencyVersion: resolveMicrosoftStoreAdapterDependencyVersion(
+      requireMpgdDependencyVersion(
+        mpgdDependencyVersionReplacements,
+        '@mpgd/adapter-browser',
+      ),
     ),
     tsconfigExtendsLine: input.workspace
       ? `  "extends": "${workspacePrefix}/tsconfig.base.json",`

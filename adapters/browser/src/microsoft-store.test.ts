@@ -24,12 +24,18 @@ const entitlement = Object.freeze({
 
 describe('Microsoft Store Digital Goods commerce', () => {
   it('uses localized Store details and delegates fulfillment before reporting completion', async () => {
-    const complete = vi.fn(async () => {});
-    const verifyAndGrant = vi.fn(async () => ({
-      status: 'completed' as const,
-      transactionId: 'ledger-1',
-      alreadyProcessed: true,
-    }));
+    const events: string[] = [];
+    const complete = vi.fn(async (status?: 'success' | 'fail' | 'unknown') => {
+      events.push(`complete:${status}`);
+    });
+    const verifyAndGrant = vi.fn(async () => {
+      events.push('authority');
+      return {
+        status: 'completed' as const,
+        transactionId: 'ledger-1',
+        alreadyProcessed: true,
+      };
+    });
     const createPaymentRequest = vi.fn(() => ({
       async show() {
         return { details: { purchaseToken: 'ttokdoku_hint_pack_20' }, complete };
@@ -102,6 +108,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       purchaseToken: 'ttokdoku_hint_pack_20',
       idempotencyKey: 'checkout-1',
     }));
+    expect(events).toEqual(['authority', 'complete:success']);
   });
 
   it('fails closed when authoritative fulfillment is not configured', async () => {
@@ -366,7 +373,107 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     });
     expect(complete).toHaveBeenCalledTimes(1);
-    expect(complete).toHaveBeenCalledWith('success');
+    expect(complete).toHaveBeenCalledWith('unknown');
+  });
+
+  it('dismisses the paid response even when the error reporter throws', async () => {
+    const complete = vi.fn(async () => {});
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        async verifyAndGrant() {
+          throw new Error('must not run');
+        },
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [{
+              itemId: 'ttokdoku_hint_pack_20',
+              title: '20 hints',
+              price: { currency: 'USD', value: '0.99' },
+            }];
+          },
+          async listPurchases() {
+            throw new Error('ownership unavailable');
+          },
+        };
+      },
+      createPaymentRequest() {
+        return {
+          async show() {
+            return { details: { purchaseToken: 'ttokdoku_hint_pack_20' }, complete };
+          },
+        };
+      },
+      onError() {
+        throw new Error('reporter failed');
+      },
+    });
+
+    await expect(adapter.purchase({
+      productId: product.id,
+      source: 'shop',
+      idempotencyKey: 'checkout-throwing-reporter',
+    })).rejects.toThrow('reporter failed');
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledWith('unknown');
+  });
+
+  it('reports failed authoritative fulfillment to the payment UI', async () => {
+    const complete = vi.fn(async () => {});
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        async verifyAndGrant() {
+          return { status: 'failed' };
+        },
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [{
+              itemId: 'ttokdoku_hint_pack_20',
+              title: '20 hints',
+              price: { currency: 'USD', value: '0.99' },
+            }];
+          },
+          async listPurchases() {
+            return [{
+              itemId: 'ttokdoku_hint_pack_20',
+              purchaseToken: 'ttokdoku_hint_pack_20',
+            }];
+          },
+        };
+      },
+      createPaymentRequest() {
+        return {
+          async show() {
+            return { details: { purchaseToken: 'ttokdoku_hint_pack_20' }, complete };
+          },
+        };
+      },
+    });
+
+    await expect(adapter.purchase({
+      productId: product.id,
+      source: 'shop',
+      idempotencyKey: 'checkout-failed-authority',
+    })).resolves.toMatchObject({ status: 'failed' });
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledWith('fail');
   });
 
   it('recovers a paid purchase when the PaymentResponse omits its token', async () => {

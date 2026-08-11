@@ -371,9 +371,11 @@ HTTPS game-services backend that verifies purchase or reward evidence.
   origin.
   IAP remains `configuration-required` until the game supplies consumable
   `InAppOfferToken` mappings plus an authoritative HTTPS backend. The backend
-  must resolve the User Store ID from trusted player identity, query Collections
-  v9, record the grant idempotently, and consume through Collections v8. Never
-  treat the browser `purchaseToken` as a unique transaction ID.
+  must resolve the renewable User Store ID and a separate stable account-link
+  ID from trusted player identity, query Collections v9, record the grant
+  idempotently, and consume through Collections v8. Never derive the account-link
+  ID from the User Store ID or treat the browser `purchaseToken` as a unique
+  transaction ID.
   Before Partner Center submission, replace every placeholder in
   `mpgd.microsoft-store.json`, add at least one real PNG screenshot per listing
   locale (maximum 50 MB and at least 1366 x 768 in either orientation), and run

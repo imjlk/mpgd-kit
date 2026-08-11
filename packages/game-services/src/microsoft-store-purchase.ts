@@ -18,6 +18,12 @@ export interface MicrosoftStoreCollectionsCredentials {
   readonly accessToken: string;
   /** Server-resolved User Store ID. Never accept this value from purchase evidence. */
   readonly userStoreId: string;
+  /**
+   * Stable opaque ID for the trusted player-to-Store-account link. It must survive User Store ID
+   * renewal and change only when the player links a different Store account. Never use the
+   * User Store ID or another renewable credential as this value.
+   */
+  readonly accountBindingId: string;
   /** Omit for RETAIL. Non-RETAIL developer-managed consume requires delegated XSTS. */
   readonly sandbox?: string;
 }
@@ -221,11 +227,11 @@ export function createMicrosoftStorePurchaseBoundary(
       } catch {
         return rejected('MICROSOFT_STORE_CREDENTIALS_INVALID');
       }
-      let userBindingId: string;
+      let accountBindingHash: string;
       try {
-        userBindingId = await createUserStoreBindingId(credentials.userStoreId);
+        accountBindingHash = await createAccountBindingHash(credentials.accountBindingId);
       } catch {
-        return pending('MICROSOFT_STORE_USER_BINDING_UNAVAILABLE');
+        return pending('MICROSOFT_STORE_ACCOUNT_BINDING_UNAVAILABLE');
       }
 
       let response: unknown;
@@ -265,7 +271,7 @@ export function createMicrosoftStorePurchaseBoundary(
           microsoftStoreProductKind: item.item.productKind,
           microsoftStoreQuantity: item.item.quantity,
           microsoftStoreStatus: item.item.status,
-          microsoftStoreUserBindingId: userBindingId,
+          microsoftStoreAccountBindingHash: accountBindingHash,
           ...(item.item.transactionId === undefined
             ? {}
             : { microsoftStoreTransactionId: item.item.transactionId }),
@@ -324,14 +330,14 @@ async function consumeMicrosoftStorePurchase(
   if (credentials.sandbox !== undefined && credentials.sandbox !== 'RETAIL') {
     return finalizationPending('MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX');
   }
-  let userBindingId: string;
+  let accountBindingHash: string;
   try {
-    userBindingId = await createUserStoreBindingId(credentials.userStoreId);
+    accountBindingHash = await createAccountBindingHash(credentials.accountBindingId);
   } catch {
-    return finalizationPending('MICROSOFT_STORE_USER_BINDING_UNAVAILABLE');
+    return finalizationPending('MICROSOFT_STORE_ACCOUNT_BINDING_UNAVAILABLE');
   }
-  if (userBindingId !== context.userBindingId) {
-    return finalizationPending('MICROSOFT_STORE_USER_BINDING_CHANGED');
+  if (accountBindingHash !== context.accountBindingHash) {
+    return finalizationPending('MICROSOFT_STORE_ACCOUNT_BINDING_CHANGED');
   }
 
   try {
@@ -386,7 +392,7 @@ type MicrosoftStoreItemInspection =
 interface MicrosoftStoreFinalizationContext {
   readonly collectionItemId: string;
   readonly storeId: string;
-  readonly userBindingId: string;
+  readonly accountBindingHash: string;
 }
 
 function inspectPublisherQuery(
@@ -464,7 +470,7 @@ function readFinalizationContext(
       readonly status: 'verified';
       readonly collectionItemId: string;
       readonly storeId: string;
-      readonly userBindingId: string;
+      readonly accountBindingHash: string;
     }
   | { readonly status: 'pending'; readonly result: PurchaseGrantFinalization } {
   if (input.request.target !== 'microsoft-store' || input.product.type !== 'consumable') {
@@ -476,7 +482,9 @@ function readFinalizationContext(
     input.evidencePayload?.microsoftStoreCollectionItemId,
   );
   const modifiedDate = optionalIdentifier(input.evidencePayload?.microsoftStoreModifiedDate);
-  const userBindingId = optionalIdentifier(input.evidencePayload?.microsoftStoreUserBindingId);
+  const accountBindingHash = optionalIdentifier(
+    input.evidencePayload?.microsoftStoreAccountBindingHash,
+  );
   // The binding and this verifier ship together in the first Store release. Missing bindings are
   // therefore malformed evidence, not legacy evidence, and must fail closed to prevent an account
   // switch between verification and consumption.
@@ -485,7 +493,7 @@ function readFinalizationContext(
     || payloadStoreId !== storeId
     || collectionItemId === undefined
     || modifiedDate === undefined
-    || userBindingId === undefined
+    || accountBindingHash === undefined
     || input.evidenceVerificationId !== createVerificationId({
       id: collectionItemId,
       modifiedDate,
@@ -497,7 +505,7 @@ function readFinalizationContext(
       result: finalizationPending('MICROSOFT_STORE_FINALIZATION_EVIDENCE_MISMATCH'),
     };
   }
-  return { status: 'verified', collectionItemId, storeId, userBindingId };
+  return { status: 'verified', collectionItemId, storeId, accountBindingHash };
 }
 
 function createVerificationId(
@@ -517,10 +525,10 @@ async function deterministicTrackingId(value: string): Promise<string> {
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
-async function createUserStoreBindingId(userStoreId: string): Promise<string> {
+async function createAccountBindingHash(accountBindingId: string): Promise<string> {
   const subtle = readGlobalSubtleCrypto();
   const encoded = new TextEncoder().encode(
-    `mpgd-microsoft-store-user-v1\0${identifier(userStoreId, 'userStoreId')}`,
+    `mpgd-microsoft-store-account-v1\0${identifier(accountBindingId, 'accountBindingId')}`,
   );
   const digest = new Uint8Array(await subtle.digest('SHA-256', encoded));
   return `sha256:${Array.from(
@@ -550,6 +558,7 @@ function normalizeStoreIds(input: Readonly<Record<string, string>>): ReadonlyMap
 function assertCredentials(input: MicrosoftStoreCollectionsCredentials): void {
   authorizationValue(input.accessToken, 'accessToken');
   identifier(input.userStoreId, 'userStoreId');
+  identifier(input.accountBindingId, 'accountBindingId');
   if (input.sandbox !== undefined) {
     identifier(input.sandbox, 'sandbox');
   }

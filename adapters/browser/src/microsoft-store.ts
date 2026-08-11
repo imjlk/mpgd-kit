@@ -233,7 +233,6 @@ export function createMicrosoftStoreCommerceAdapter(
             data: { sku: product.inAppOfferToken },
           },
         ]).show();
-        await completePayment(response, 'success');
         purchaseToken = readPurchaseToken(response.details);
         // A Store consumable must be consumed before the same item can be bought again, so an
         // item has at most one recoverable unconsumed purchase at this boundary.
@@ -241,16 +240,25 @@ export function createMicrosoftStoreCommerceAdapter(
           return candidate.itemId === product.inAppOfferToken
             && (purchaseToken === undefined || candidate.purchaseToken === purchaseToken);
         });
+        let result: PurchaseResult;
         if (purchase === undefined) {
-          return purchaseToken === undefined
-            ? pendingUnidentifiedPurchase()
-            : pendingPurchase(product.inAppOfferToken, purchaseToken);
+          if (purchaseToken === undefined) {
+            result = pendingUnidentifiedPurchase();
+          } else {
+            result = pendingPurchase(product.inAppOfferToken, purchaseToken);
+          }
+        } else {
+          result = await fulfill(product, purchase, request);
         }
 
-        return fulfill(product, purchase, request);
+        await completePayment(response, paymentCompletionStatus(result));
+        return result;
       } catch (error) {
         if (isAbortError(error) && response === undefined) {
           return cancelledPurchase();
+        }
+        if (response !== undefined) {
+          await completePayment(response, 'unknown');
         }
         input.onError?.(error);
         if (purchaseToken !== undefined) {
@@ -454,13 +462,20 @@ function isPaymentRequest(input: unknown): input is MicrosoftStorePaymentRequest
 
 async function completePayment(
   response: MicrosoftStorePaymentResponse,
-  status: 'success' | 'fail',
+  status: 'success' | 'fail' | 'unknown',
 ): Promise<void> {
   try {
     await response.complete?.(status);
   } catch {
     // Completion only dismisses the provider UI. Store ownership is reconciled separately.
   }
+}
+
+function paymentCompletionStatus(result: PurchaseResult): 'success' | 'fail' | 'unknown' {
+  if (result.status === 'completed') {
+    return 'success';
+  }
+  return result.status === 'failed' ? 'fail' : 'unknown';
 }
 
 function nonEmptyString(input: unknown): string | undefined {

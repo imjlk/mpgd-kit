@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { deflateSync } from 'node:zlib';
@@ -226,13 +227,26 @@ try {
     products: [validCommerceProduct],
   });
   writeJson(submissionFile, commerceConfig);
-  runMicrosoftStoreSubmissionPreflight({
+  const commerceEvidence = runMicrosoftStoreSubmissionPreflight({
     gameRoot,
     artifactRoot,
     configFile: submissionFile,
     jsonFile: join(outputDir, 'commerce-valid.json'),
     markdownFile: join(outputDir, 'commerce-valid.md'),
   });
+  const commerceEffectiveTarget = commerceEvidence.effectiveTarget;
+  assert.ok(
+    commerceEffectiveTarget !== undefined,
+    'commerce-enabled evidence must include the effective target digest',
+  );
+  assert.deepEqual(commerceEffectiveTarget, {
+    file: 'artifacts/microsoft-store/mpgd-effective-target.json',
+    sha256: createHash('sha256').update(readFileSync(effectiveTargetFile)).digest('hex'),
+  });
+  assert.match(
+    readFileSync(join(outputDir, 'commerce-valid.md'), 'utf8'),
+    new RegExp(`Effective target: .*\\(${commerceEffectiveTarget.sha256}\\)`, 'u'),
+  );
   writeJson(
     effectiveTargetFile,
     validMicrosoftStoreEffectiveTarget({ platformProductId: 'stale_hint_pack_20' }),
