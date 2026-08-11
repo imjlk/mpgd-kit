@@ -1166,10 +1166,18 @@ const targetCommand = defineI18n({
           ? defaultMpgdKitPath
           : toTemplatePath(path.relative(gameRoot, resolvedKitPath) || '.');
         const dryRun = ctx.values['dry-run'] === true;
+        const adapterDependencyVersion = requireMpgdDependencyVersion(
+          resolveMpgdDependencyVersionReplacements({
+            workspace: false,
+            ...(resolvedKitPath === undefined ? {} : { kitPath: resolvedKitPath }),
+          }),
+          '@mpgd/adapter-microsoft-store',
+        );
         const result = initializeMicrosoftStoreStarter({
           gameRoot,
           templateRoot: gameTemplateDir,
           defaultKitPath,
+          adapterDependencyVersion,
           dryRun,
         });
 
@@ -2149,6 +2157,7 @@ function createGameApp(input: {
         gameRoot: appDir,
         templateRoot: gameTemplateDir,
         defaultKitPath: context.defaultKitPath,
+        adapterDependencyVersion: context.microsoftStoreAdapterDependencyVersion,
         dryRun: false,
       });
     }
@@ -2245,6 +2254,13 @@ function createTemplateContext(input: {
 
   const workspaceRoot = toTemplatePath(path.relative(input.appDir, kitPath ?? input.appDir) || '.');
   const workspacePrefix = workspaceRoot;
+  const mpgdDependencyVersionReplacements = resolveMpgdDependencyVersionReplacements({
+    ...(input.dependencyVersion === undefined
+      ? {}
+      : { overrideVersion: input.dependencyVersion }),
+    workspace: input.workspace,
+    ...(kitPath === undefined ? {} : { kitPath }),
+  });
 
   return {
     gameName: input.gameName,
@@ -2254,13 +2270,11 @@ function createTemplateContext(input: {
     legalLastUpdated: new Date().toISOString().slice(0, 10),
     packageName: input.packageName,
     defaultDependencyVersion: input.dependencyVersion ?? defaultDependencyVersion,
-    mpgdDependencyVersionReplacements: resolveMpgdDependencyVersionReplacements({
-      ...(input.dependencyVersion === undefined
-        ? {}
-        : { overrideVersion: input.dependencyVersion }),
-      workspace: input.workspace,
-      ...(kitPath === undefined ? {} : { kitPath }),
-    }),
+    mpgdDependencyVersionReplacements,
+    microsoftStoreAdapterDependencyVersion: requireMpgdDependencyVersion(
+      mpgdDependencyVersionReplacements,
+      '@mpgd/adapter-microsoft-store',
+    ),
     tsconfigExtendsLine: input.workspace
       ? `  "extends": "${workspacePrefix}/tsconfig.base.json",`
       : '',
@@ -2363,6 +2377,19 @@ function mpgdDependencyVersionPlaceholder(packageName: string): string {
       .replaceAll('-', '_')
       .toUpperCase()
   }__`;
+}
+
+function requireMpgdDependencyVersion(
+  replacements: readonly MpgdDependencyVersionReplacement[],
+  packageName: string,
+): string {
+  const placeholder = mpgdDependencyVersionPlaceholder(packageName);
+  const replacement = replacements.find((candidate) => candidate.placeholder === placeholder);
+
+  if (replacement === undefined) {
+    throw new Error(`Missing template dependency version for ${packageName}.`);
+  }
+  return replacement.version;
 }
 
 function assertValidGameTitle(title: string): void {

@@ -52,6 +52,16 @@ try {
   assertNoUnresolvedTemplatePlaceholders(nestedGame);
 
   const initializedGame = createGame('initialized-later');
+  const legacyTargetsJson = readJson(join(initializedGame, 'mpgd.targets.json'));
+  const legacyTargets = requireRecord(legacyTargetsJson.targets, 'legacy targets');
+  legacyTargets['microsoft-store'] = {
+    kind: 'web',
+    gameApp: '.',
+    adapter: 'browser',
+    icon: { profile: 'microsoft-pwa' },
+    output: 'artifacts/microsoft-store',
+  };
+  writeJson(join(initializedGame, 'mpgd.targets.json'), legacyTargetsJson);
   const legacyManifest = readJson(join(initializedGame, 'agent/game-manifest.json'));
   delete legacyManifest.agentWorkflow;
   assert.ok(Array.isArray(legacyManifest.targets));
@@ -145,6 +155,7 @@ try {
         gameRoot: applyRollbackGame,
         templateRoot,
         defaultKitPath: relative(applyRollbackGame, kitRoot),
+        adapterDependencyVersion: 'workspace:*',
         dryRun: false,
       },
       {
@@ -168,6 +179,7 @@ try {
         gameRoot: directoryRollbackGame,
         templateRoot,
         defaultKitPath: relative(directoryRollbackGame, kitRoot),
+        adapterDependencyVersion: 'workspace:*',
         dryRun: false,
       },
       {
@@ -193,6 +205,7 @@ try {
         gameRoot: incompleteRollbackGame,
         templateRoot,
         defaultKitPath: relative(incompleteRollbackGame, kitRoot),
+        adapterDependencyVersion: 'workspace:*',
         dryRun: false,
       },
       {
@@ -229,6 +242,7 @@ try {
       gameRoot: unsafeShellPathGame,
       templateRoot,
       defaultKitPath: '%PATH%',
+      adapterDependencyVersion: 'workspace:*',
       dryRun: false,
     }),
     /unsafe in a shell parameter default/u,
@@ -414,11 +428,14 @@ function assertGenericAgentWorkflow(gameRoot: string): void {
 function assertMicrosoftStoreDisabled(gameRoot: string): void {
   assert.equal(existsSync(join(gameRoot, 'mpgd.microsoft-store.json')), false);
   assert.equal(existsSync(join(gameRoot, 'src/platform/microsoftStorePwa.ts')), false);
+  assert.equal(existsSync(join(gameRoot, 'src/platform/buildGateways/microsoftStore.ts')), false);
   assert.equal(existsSync(join(gameRoot, storeSkill)), false);
   assert.equal(existsSync(join(gameRoot, storeSkillMetadata)), false);
 
   const packageJson = readJson(join(gameRoot, 'package.json'));
   const scripts = requireRecord(packageJson.scripts, 'package scripts');
+  const dependencies = requireRecord(packageJson.dependencies, 'package dependencies');
+  assert.equal(dependencies['@mpgd/adapter-microsoft-store'], undefined);
   assert.equal(scripts['build:microsoft-store'], undefined);
   assert.equal(scripts['smoke:microsoft-store'], undefined);
   assert.equal(scripts['preflight:microsoft-store'], undefined);
@@ -435,6 +452,10 @@ function assertMicrosoftStoreDisabled(gameRoot: string): void {
 
   const main = readFileSync(join(gameRoot, 'src/main.ts'), 'utf8');
   assert.doesNotMatch(main, /installMicrosoftStorePwa/u);
+  assert.doesNotMatch(
+    readFileSync(join(gameRoot, 'vite.shared.ts'), 'utf8'),
+    /buildGateways\/microsoftStore/u,
+  );
   assert.doesNotMatch(readFileSync(join(gameRoot, 'README.md'), 'utf8'), /PWABuilder/u);
   assertManagedDocumentationCount(gameRoot, 0);
 }
@@ -442,6 +463,7 @@ function assertMicrosoftStoreDisabled(gameRoot: string): void {
 function assertMicrosoftStoreEnabled(gameRoot: string): void {
   for (const relativePath of [
     'mpgd.microsoft-store.json',
+    'src/platform/buildGateways/microsoftStore.ts',
     'src/platform/microsoftStorePwa.ts',
     storeSkill,
     storeSkillMetadata,
@@ -451,6 +473,8 @@ function assertMicrosoftStoreEnabled(gameRoot: string): void {
 
   const packageJson = readJson(join(gameRoot, 'package.json'));
   const scripts = requireRecord(packageJson.scripts, 'package scripts');
+  const dependencies = requireRecord(packageJson.dependencies, 'package dependencies');
+  assert.equal(typeof dependencies['@mpgd/adapter-microsoft-store'], 'string');
   for (const name of [
     'build:microsoft-store',
     'smoke:microsoft-store',
@@ -477,6 +501,10 @@ function assertMicrosoftStoreEnabled(gameRoot: string): void {
 
   const main = readFileSync(join(gameRoot, 'src/main.ts'), 'utf8');
   assert.match(main, /installMicrosoftStorePwa/u);
+  assert.match(
+    readFileSync(join(gameRoot, 'vite.shared.ts'), 'utf8'),
+    /buildGateways\/microsoftStore/u,
+  );
   assert.match(main, /disposeMicrosoftStorePwa\?\.\(\)/u);
   assert.match(readFileSync(join(gameRoot, 'README.md'), 'utf8'), /PWABuilder/u);
   assert.match(readFileSync(join(gameRoot, storeSkill), 'utf8'), /WACK as optional/u);

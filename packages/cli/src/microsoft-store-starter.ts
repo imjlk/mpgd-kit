@@ -35,6 +35,7 @@ const microsoftStoreOnlyTemplateFiles = new Set([
   '.agents/skills/release-microsoft-store/SKILL.md',
   '.agents/skills/release-microsoft-store/agents/openai.yaml',
   'mpgd.microsoft-store.json',
+  'src/platform/buildGateways/microsoftStore.ts',
   'src/platform/microsoftStorePwa.ts',
 ]);
 const microsoftStoreManagedTemplateFiles = new Set([
@@ -49,6 +50,11 @@ const microsoftStoreTarget = {
   authoritativeGameServices: true,
   icon: { profile: 'microsoft-pwa' },
   output: 'artifacts/microsoft-store',
+} as const;
+const microsoftStoreAdapterPackage = '@mpgd/adapter-microsoft-store';
+const microsoftStoreGatewayResolver = {
+  anchor: "    default:\n      return 'src/platform/buildGateways/browser.ts';",
+  block: "    case 'microsoft-store':\n      return 'src/platform/buildGateways/microsoftStore.ts';",
 } as const;
 
 interface JsonObject {
@@ -79,6 +85,7 @@ export interface InitializeMicrosoftStoreStarterInput {
   readonly gameRoot: string;
   readonly templateRoot: string;
   readonly defaultKitPath: string;
+  readonly adapterDependencyVersion: string;
   readonly dryRun: boolean;
 }
 
@@ -107,10 +114,15 @@ export function prepareBaseGameTemplateFile(input: {
     case 'package.json':
       return updateJson(withoutBlocks, (value) => {
         const scripts = requireJsonObject(value.scripts, 'template package.json scripts');
+        const dependencies = requireJsonObject(
+          value.dependencies,
+          'template package.json dependencies',
+        );
 
         for (const script of Object.keys(microsoftStoreScripts(defaultMpgdKitPath))) {
           delete scripts[script];
         }
+        delete dependencies[microsoftStoreAdapterPackage];
       });
     case 'mpgd.targets.json':
       return updateJson(withoutBlocks, (value) => {
@@ -136,6 +148,8 @@ export function prepareBaseGameTemplateFile(input: {
       });
     case 'src/main.ts':
       return removeMicrosoftStoreBootstrap(withoutBlocks);
+    case 'vite.shared.ts':
+      return removeMicrosoftStoreGatewayResolver(withoutBlocks);
     default:
       return withoutBlocks;
   }
@@ -173,6 +187,7 @@ export function initializeMicrosoftStoreStarter(
   const packageSource = readRequiredRegularFile(gameRoot, packageFile, 'package.json');
   const packageJson = parseJsonObject(packageSource, 'package.json');
   const scripts = requireJsonObject(packageJson.scripts, 'package.json scripts');
+  const dependencies = requireJsonObject(packageJson.dependencies, 'package.json dependencies');
   const legacyScripts = legacyMicrosoftStoreScripts(input.defaultKitPath);
 
   for (const [name, command] of Object.entries(microsoftStoreScripts(input.defaultKitPath))) {
@@ -184,6 +199,16 @@ export function initializeMicrosoftStoreStarter(
     }
 
     scripts[name] = command;
+  }
+
+  const existingAdapterDependency = dependencies[microsoftStoreAdapterPackage];
+  if (existingAdapterDependency === undefined) {
+    dependencies[microsoftStoreAdapterPackage] = dependencyVersion(input.adapterDependencyVersion);
+  } else if (
+    typeof existingAdapterDependency !== 'string'
+    || existingAdapterDependency.trim().length === 0
+  ) {
+    throw new Error(`package.json dependency ${microsoftStoreAdapterPackage} must be a string.`);
   }
 
   plan('package.json', formatJson(packageJson));
@@ -207,6 +232,10 @@ export function initializeMicrosoftStoreStarter(
   const mainSource = readRequiredRegularFile(gameRoot, mainFile, 'src/main.ts');
   plan('src/main.ts', addMicrosoftStoreBootstrap(mainSource));
 
+  const viteFile = resolveGameFile(gameRoot, 'vite.shared.ts');
+  const viteSource = readRequiredRegularFile(gameRoot, viteFile, 'vite.shared.ts');
+  plan('vite.shared.ts', addMicrosoftStoreGatewayResolver(viteSource));
+
   planGitignore(gameRoot, plan);
   planAgentManifest(gameRoot, plan);
   planManagedDocumentation(gameRoot, templateRoot, plan);
@@ -219,6 +248,7 @@ export function initializeMicrosoftStoreStarter(
     '.agents/skills/release-microsoft-store/agents/openai.yaml',
     'docs/MPGD_KIT_WORKFLOWS.md',
     'mpgd.microsoft-store.json',
+    'src/platform/buildGateways/microsoftStore.ts',
     'src/platform/microsoftStorePwa.ts',
   ] as const) {
     const destination = resolveGameFile(gameRoot, relativePath);
@@ -241,6 +271,36 @@ export function initializeMicrosoftStoreStarter(
   }
 
   return { changedFiles: writes.map((write) => write.relativePath).sort() };
+}
+
+function dependencyVersion(value: string): string {
+  const normalized = value.trim();
+  if (
+    normalized.length === 0
+    || !/^(?:workspace:\*|[~^]?\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)$/u.test(normalized)
+  ) {
+    throw new Error(
+      'Microsoft Store adapter dependency version must be workspace:* or a SemVer version/range.',
+    );
+  }
+  return normalized;
+}
+
+function addMicrosoftStoreGatewayResolver(source: string): string {
+  if (source.includes(microsoftStoreGatewayResolver.block)) {
+    return source;
+  }
+
+  return insertBefore(
+    source,
+    microsoftStoreGatewayResolver.anchor,
+    microsoftStoreGatewayResolver.block,
+    'vite.shared.ts Microsoft Store gateway resolver',
+  );
+}
+
+function removeMicrosoftStoreGatewayResolver(source: string): string {
+  return source.replace(`${microsoftStoreGatewayResolver.block}\n`, '');
 }
 
 function microsoftStoreScripts(defaultKitPath: string): Readonly<Record<string, string>> {
