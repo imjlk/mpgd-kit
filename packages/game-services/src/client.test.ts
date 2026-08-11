@@ -236,6 +236,53 @@ assertEqual(
   'non-completed platform flows should emit rejected analytics',
 );
 
+const pendingReasons: unknown[] = [];
+const pendingBaseGateway = createMockGateway();
+const pendingGateway = {
+  ...pendingBaseGateway,
+  target: 'android',
+  commerce: {
+    ...pendingBaseGateway.commerce,
+    async purchase() {
+      return {
+        status: 'pending',
+        entitlementIds: [],
+        evidence: { schema: 'platform.pending.v1', payload: { receipt: 'pending' } },
+      };
+    },
+  },
+} satisfies PlatformGateway;
+const purchaseClaimsBeforePending = purchaseClaims;
+const pendingClient = createGameServicesClient({
+  gateway: pendingGateway,
+  playerId,
+  target: 'android',
+  now: () => '2026-07-03T00:00:00.000Z',
+  backend,
+  analytics: {
+    track(event) {
+      pendingReasons.push(event.properties.reason);
+    },
+  },
+});
+const pendingPurchase = await pendingClient.purchase({
+  productId: 'COINS_100',
+  source: 'result',
+  idempotencyKey: 'pending-purchase',
+});
+
+assertEqual(pendingPurchase.status, 'pending', 'pending platform purchase should pass through');
+assertEqual(
+  pendingReasons.join(','),
+  'purchase_pending',
+  'pending purchases should not be mislabeled as missing a transaction ID',
+);
+assertEqual(
+  purchaseClaims,
+  purchaseClaimsBeforePending,
+  'pending purchases should not call purchase verification',
+);
+
 let unsupportedPurchaseCalls = 0;
 let unsupportedRewardCalls = 0;
 const purchaseClaimsBeforeUnsupported = purchaseClaims;

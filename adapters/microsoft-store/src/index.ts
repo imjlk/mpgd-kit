@@ -472,6 +472,8 @@ function cancelledPurchase(): PurchaseResult {
 }
 
 function pendingPurchase(itemId: string, purchaseToken: string): PurchaseResult {
+  // Microsoft currently returns the add-on product ID as purchaseToken, not a
+  // transaction-unique identifier. Keep it in evidence and never publish it as transactionId.
   return Object.freeze({
     status: 'pending',
     entitlementIds: [],

@@ -234,7 +234,11 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
           properties: {
             productId: purchaseInput.productId,
             status: purchase.status,
-            reason: purchase.transactionId === undefined ? 'missing_transaction_id' : undefined,
+            reason: purchase.status === 'completed' && purchase.transactionId === undefined
+              ? 'missing_transaction_id'
+              : purchase.status === 'pending'
+                ? 'purchase_pending'
+                : undefined,
           },
         });
 

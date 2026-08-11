@@ -1361,21 +1361,16 @@ function createPromiseGate(): { readonly promise: Promise<void>; readonly releas
   return { promise, release };
 }
 
-interface EntitlementRetryIdentity {
-  readonly source: EntitlementLedgerGrant['source'];
-  readonly playerId: string;
-  readonly idempotencyKey: string;
-  readonly grantId: string;
-  readonly target: string;
-  readonly deploymentTarget?: string;
-}
-
 interface EntitlementTransactionIdentity {
   readonly source: EntitlementLedgerGrant['source'];
   readonly playerId: string;
   readonly grantId: string;
   readonly target: string;
   readonly deploymentTarget?: string;
+}
+
+interface EntitlementRetryIdentity extends EntitlementTransactionIdentity {
+  readonly idempotencyKey: string;
 }
 
 async function findEntitlementTransactionByIdempotency(
