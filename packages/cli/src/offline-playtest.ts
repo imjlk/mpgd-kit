@@ -4594,9 +4594,14 @@ function assertNoDynamicMetaElementCreation(
   );
 
   for (const match of source.matchAll(pattern)) {
+    const previousCode = match.index === undefined
+      ? undefined
+      : findPreviousJavaScriptCodeIndex(source, match.index - 1, codePositions);
+
     if (
       match.index === undefined
       || codePositions[match.index] !== 1
+      || (previousCode !== undefined && ['.', '?'].includes(source[previousCode] ?? ''))
       || findVisibleJavaScriptIdentifierBinding(
         source,
         match[1] ?? match[2] ?? 'document',

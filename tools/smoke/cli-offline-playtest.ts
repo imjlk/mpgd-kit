@@ -710,6 +710,11 @@ try {
   });
   assert.match(shadowedDynamicMetaHtml, /document\.createElement\("meta"\)/u);
 
+  const memberOwnedDynamicMetaHtml = await packageAndReadFixture('member-owned-dynamic-meta', {
+    mainJs: 'const wrapper = { document: { createElement: (tag) => tag } }; const spaced = wrapper . document.createElement?.("meta"); const commented = wrapper /* owner */ . /* member */ document?.createElement?.("meta"); document.body.dataset.value = `${spaced}:${commented}`;',
+  });
+  assert.match(memberOwnedDynamicMetaHtml, /createElement/u);
+
   const inlineEventHandlerGame = createPreviewFixture('inline-event-handler', {
     indexHtml: '<!doctype html><html><head></head><body><button onclick="fetch(\'/assets/config.json\')">load</button><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
