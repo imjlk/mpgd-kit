@@ -315,7 +315,11 @@ export function createMicrosoftStorePurchaseBoundary(
   ): Promise<
     | {
         readonly status: 'granted';
-        readonly record: Omit<MicrosoftStoreRecoveryOwnershipRecord, 'generation'>;
+        readonly record: Omit<
+          MicrosoftStoreRecoveryOwnershipRecord,
+          'generation' | 'providerPurchaseId'
+        >;
+        readonly providerPurchaseId?: string;
         readonly requestedGeneration?: string;
       }
     | { readonly status: 'denied' }
@@ -385,9 +389,6 @@ export function createMicrosoftStorePurchaseBoundary(
       return { status: 'unavailable' };
     }
     const item = inspectPublisherQuery(response, storeId);
-    if (item.status === 'pending') {
-      return { status: 'unavailable' };
-    }
     if (item.status === 'rejected') {
       return { status: 'denied' };
     }
@@ -398,8 +399,10 @@ export function createMicrosoftStorePurchaseBoundary(
         accountBindingHash,
         storeId,
         playerId,
-        providerPurchaseId: createVerificationId(item.item),
       },
+      ...(item.status === 'verified'
+        ? { providerPurchaseId: createVerificationId(item.item) }
+        : {}),
       ...(generation === undefined ? {} : { requestedGeneration: generation }),
     };
   }
@@ -413,14 +416,18 @@ export function createMicrosoftStorePurchaseBoundary(
       if (ownership.requestedGeneration === undefined) {
         return { status: 'denied' };
       }
+      if (ownership.providerPurchaseId === undefined) {
+        return { status: 'unavailable' };
+      }
       try {
         const effective = await input.recoveryOwnershipStore.claim({
           ...ownership.record,
           generation: ownership.requestedGeneration,
+          providerPurchaseId: ownership.providerPurchaseId,
         });
         return effective?.playerId === ownership.record.playerId
           && effective.generation === ownership.requestedGeneration
-          && effective.providerPurchaseId === ownership.record.providerPurchaseId
+          && effective.providerPurchaseId === ownership.providerPurchaseId
           ? { status: 'granted', idempotencyKey: effective.generation }
           : { status: 'denied' };
       } catch {
@@ -438,7 +445,21 @@ export function createMicrosoftStorePurchaseBoundary(
         if (existing === undefined) {
           return { status: 'denied' };
         }
-        if (existing.providerPurchaseId === ownership.record.providerPurchaseId) {
+        if (existing.playerId !== ownership.record.playerId) {
+          return { status: 'denied' };
+        }
+        if (ownership.providerPurchaseId === undefined) {
+          // Collections stops listing an item after consume. Preserve only an exact durable
+          // generation so its already-granted finalizer can retry a failed conditional release;
+          // a generationless listing still cannot establish player ownership.
+          if (ownership.requestedGeneration === undefined) {
+            return { status: 'unavailable' };
+          }
+          return ownership.requestedGeneration === existing.generation
+            ? { status: 'granted', idempotencyKey: existing.generation }
+            : { status: 'denied' };
+        }
+        if (existing.providerPurchaseId === ownership.providerPurchaseId) {
           return existing.playerId === ownership.record.playerId
             && (
               ownership.requestedGeneration === undefined
@@ -452,10 +473,11 @@ export function createMicrosoftStorePurchaseBoundary(
         }
         const effective = await input.recoveryOwnershipStore.claim({
           ...ownership.record,
-          generation: ownership.record.providerPurchaseId,
+          generation: ownership.providerPurchaseId,
+          providerPurchaseId: ownership.providerPurchaseId,
         });
         return effective?.playerId === ownership.record.playerId
-          && effective.providerPurchaseId === ownership.record.providerPurchaseId
+          && effective.providerPurchaseId === ownership.providerPurchaseId
           ? { status: 'granted', idempotencyKey: effective.generation }
           : { status: 'denied' };
       } catch {

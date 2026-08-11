@@ -358,6 +358,38 @@ assert.deepEqual(
   ),
   { status: 'denied' },
 );
+ownershipHarness.client.queryResponse = { items: [] };
+assert.deepEqual(
+  await ownershipHarness.boundary.hasRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'claimed-recovery'),
+  ),
+  { status: 'granted', idempotencyKey: 'claimed-recovery' },
+);
+assert.deepEqual(
+  await ownershipHarness.boundary.hasRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store', inAppOfferToken, 'wrong-generation'),
+  ),
+  { status: 'denied' },
+);
+const {
+  idempotencyKey: ignoredMissingPurchaseGeneration,
+  ...generationlessMissingPurchase
+} = createRecoveryOwnershipInput('player-microsoft-store');
+void ignoredMissingPurchaseGeneration;
+assert.deepEqual(
+  await ownershipHarness.boundary.hasRecoveryOwnership(generationlessMissingPurchase),
+  { status: 'unavailable' },
+);
+ownershipHarness.client.queryResponse = {
+  items: [{
+    id: collectionItemId,
+    modifiedDate,
+    productId: storeId,
+    productKind: 'UnmanagedConsumable',
+    quantity: 1,
+    status: 'Active',
+  }],
+};
 const claimedRecoveryResult = await ownershipHarness.backend.purchases.verifyPurchase(
   createRequest({ idempotencyKey: 'claimed-recovery' }),
 );

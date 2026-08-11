@@ -96,7 +96,9 @@ claim left behind after the prior item was consumed; it must not transfer the
 binding to another game player. Release only the exact player, generation, and
 provider purchase after authoritative consume succeeds, so a delayed release
 cannot erase the replacement. If that release is unavailable, keep finalization
-pending so the same deterministic consume and release can be retried. Pass
+pending so the same deterministic consume and release can be retried. Once
+Collections stops listing the consumed item, only the exact durable generation
+may resume that finalizer; a generationless recovery remains unavailable. Pass
 the current, server-trusted product catalog tokens as
 `inAppOfferTokens`; the boundary rejects a claim whose browser-supplied current
 token does not match that mapping. Never construct this mapping from the claim
