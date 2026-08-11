@@ -85,6 +85,29 @@ inventing game-specific behavior. See [Gameplay E2E](docs/GAMEPLAY_E2E.md).
 Each command has a 30-minute timeout by default; use `--timeout-ms` for a
 different per-step limit.
 
+For a direct-file test copy, first build the normal browser preview and then
+package that existing artifact:
+
+```sh
+pnpm mpgd target build web-preview staging \
+  --targets-file examples/phaser-starter/mpgd.targets.json \
+  --kit-path .
+pnpm mpgd game offline-playtest examples/phaser-starter
+```
+
+Open `examples/phaser-starter/artifacts/offline-playtest/index.html` directly.
+This command creates a single-file, network-blocked **test-play bundle**. It is
+deliberately not a new target, PWA, deployment artifact, release-manifest entry,
+or store-submission package. The source must be a `web-preview` artifact, and
+the result records its test-only purpose and hash in `offline-playtest.json`.
+Server-backed identity,
+purchases, ads, rewards, leaderboards, and cloud saves remain unavailable;
+games must handle those disabled paths themselves. Workers, service workers,
+WebAssembly streaming, dynamic imports, import maps, HTML base elements, CSS
+`@import`, runtime-computed asset URLs, retained inline-module imports,
+script-driven navigation, and browser-dependent `file://` storage are not
+generalized by this helper. Meta-refresh navigation is removed from the copy.
+
 For a minimum repo confidence check:
 
 ```sh

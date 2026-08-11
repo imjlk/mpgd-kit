@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BridgeRequest } from '@mpgd/bridge';
 import type { Entitlement } from '@mpgd/platform';
 
-import { createAitHostBridge, shareIntent, type AitHostDependencies } from './host';
+import {
+  createAitHostBridge,
+  shareIntent,
+  type AitHostDependencies,
+  type AitIapProductGrantVerificationInput,
+} from './host';
 
 describe('AIT production host bridge', () => {
   it('uses the native game identity and persistent string storage', async () => {
@@ -99,7 +104,9 @@ describe('AIT production host bridge', () => {
   it('maps configured native IAP products and completes only after server verification', async () => {
     let callbacks: IapPurchaseCallbacks | undefined;
     let cleanupCalls = 0;
-    const verifyIapProductGrant = vi.fn(async () => true);
+    const verifyIapProductGrant = vi.fn(
+      async (_input: AitIapProductGrantVerificationInput) => true,
+    );
     const readIapEntitlements = vi.fn(async () => [{
       id: 'HINT_PACK_5',
       source: 'purchase' as const,
@@ -193,9 +200,12 @@ describe('AIT production host bridge', () => {
       platformSku: 'ait.ttokdoku.hints.5',
       idempotencyKey: 'apps-in-toss:purchase:order-hints-5',
       source: 'process-product-grant',
-      timeoutMs: 25_000,
+      timeoutMs: expect.any(Number),
       signal: expect.any(AbortSignal),
     }));
+    const verificationTimeout = verifyIapProductGrant.mock.calls[0]?.[0].timeoutMs;
+    expect(verificationTimeout).toBeGreaterThan(0);
+    expect(verificationTimeout).toBeLessThanOrEqual(25_000);
     expect(cleanupCalls).toBe(1);
   });
 
@@ -2642,8 +2652,32 @@ type IapPendingOrdersResult = Awaited<
   ReturnType<AitHostDependencies['iap']['getPendingOrders']>
 >;
 
+type AitSdkDependencyKey =
+  | 'grantPromotionReward'
+  | 'openGameCenterLeaderboard'
+  | 'requestNotificationAgreement'
+  | 'submitGameCenterLeaderBoardScore';
+
+type CallableOnly<TFunction extends (...args: never[]) => unknown> = (
+  ...args: Parameters<TFunction>
+) => ReturnType<TFunction>;
+
+type AitSdkTestHandler<TKey extends AitSdkDependencyKey> =
+  CallableOnly<AitHostDependencies[TKey]>
+  & Partial<Pick<AitHostDependencies[TKey], 'isSupported'>>;
+
+type AitHostDependencyOverrides = Omit<Partial<AitHostDependencies>, AitSdkDependencyKey>
+  & {
+    grantPromotionReward?: AitSdkTestHandler<'grantPromotionReward'>;
+    openGameCenterLeaderboard?: AitSdkTestHandler<'openGameCenterLeaderboard'>;
+    requestNotificationAgreement?: AitSdkTestHandler<'requestNotificationAgreement'>;
+    submitGameCenterLeaderBoardScore?: AitSdkTestHandler<
+      'submitGameCenterLeaderBoardScore'
+    >;
+  };
+
 function createDependencies(
-  overrides: Partial<AitHostDependencies> = {},
+  overrides: AitHostDependencyOverrides = {},
 ): AitHostDependencies {
   const unsupportedAd = Object.assign(() => () => {}, { isSupported: () => false });
   const unsupportedIap = {
@@ -2652,6 +2686,13 @@ function createDependencies(
     getPendingOrders: Object.assign(async () => ({ orders: [] }), { isSupported: () => false }),
     completeProductGrant: Object.assign(async () => false, { isSupported: () => false }),
   };
+  const {
+    grantPromotionReward = async () => ({ key: 'test-promotion-receipt' }),
+    openGameCenterLeaderboard = async () => {},
+    requestNotificationAgreement = () => () => {},
+    submitGameCenterLeaderBoardScore = async () => ({ statusCode: 'SUCCESS' as const }),
+    ...otherOverrides
+  } = overrides;
 
   return {
     identityProvider: async () => ({ type: 'HASH', hash: 'test-player' }),
@@ -2662,18 +2703,29 @@ function createDependencies(
     },
     getTossShareLink: async () => 'https://toss.im/test',
     share: async () => {},
-    grantPromotionReward: async () => ({ key: 'test-promotion-receipt' }),
-    requestNotificationAgreement: Object.assign(() => () => {}, {
-      isSupported: () => false,
-    }),
+    grantPromotionReward: withSupportProbe(grantPromotionReward),
+    requestNotificationAgreement: withSupportProbe(
+      requestNotificationAgreement,
+      false,
+    ),
     isMinVersionSupported: () => true,
     loadFullScreenAd: unsupportedAd,
     showFullScreenAd: unsupportedAd,
-    openGameCenterLeaderboard: async () => {},
-    submitGameCenterLeaderBoardScore: async () => ({ statusCode: 'SUCCESS' }),
+    openGameCenterLeaderboard: withSupportProbe(openGameCenterLeaderboard),
+    submitGameCenterLeaderBoardScore: withSupportProbe(submitGameCenterLeaderBoardScore),
     iap: unsupportedIap,
-    ...overrides,
+    ...otherOverrides,
   } as AitHostDependencies;
+}
+
+function withSupportProbe<TKey extends AitSdkDependencyKey>(
+  handler: AitSdkTestHandler<TKey>,
+  supportedByDefault = true,
+): CallableOnly<AitHostDependencies[TKey]>
+  & Pick<AitHostDependencies[TKey], 'isSupported'> {
+  return Object.assign(handler, {
+    isSupported: handler.isSupported ?? (() => supportedByDefault),
+  });
 }
 
 function createMemoryStorage(values: Map<string, string>): AitHostDependencies['storage'] {

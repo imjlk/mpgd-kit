@@ -50,6 +50,7 @@ interface McpServerConfig {
 const aitWebFrameworkVersion = '3.0.2';
 const aitCliVersion = '3.0.2';
 const aitWebFrameworkPeerRange = '>=3.0.0 <4';
+const aitDevtoolsPeerSelector = '@ait-co/devtools>@apps-in-toss/web-framework';
 
 const requiredFiles = [
   '.mcp.json',
@@ -131,6 +132,7 @@ const requiredMcpRequirements = [
 ] as const;
 
 const failures: string[] = [];
+validatePeerDependencyRuleParser();
 
 for (const file of requiredFiles) {
   if (!existsSync(file)) {
@@ -841,6 +843,18 @@ function validatePhaserTemplateAITPolyfill(): void {
         if (!workspace.includes(requiredText)) {
           failures.push(`${workspacePath}: allowBuilds must include ${requiredText}.`);
         }
+      }
+
+      const actualAitDevtoolsPeerVersion = readAllowedPeerVersion(
+        workspace,
+        aitDevtoolsPeerSelector,
+      );
+
+      if (actualAitDevtoolsPeerVersion !== aitWebFrameworkVersion) {
+        failures.push(
+          `${workspacePath}: peerDependencyRules.allowedVersions must include `
+            + `'${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'.`,
+        );
       }
     }
   }
@@ -2170,6 +2184,142 @@ function findMatchingBraceIndex(content: string, openBraceIndex: number): number
   }
 
   return -1;
+}
+
+function validatePeerDependencyRuleParser(): void {
+  const positive = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`;
+  const hashValue = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': ${aitWebFrameworkVersion}+build#1\n`;
+  const invalid = [
+    `# peerDependencyRules:\n#   allowedVersions:\n#     '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `allowedVersions:\n  '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `peerDependencyRules: |\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `peerDependencyRules: >\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `peerDependencyRules:\n  ignored:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `peerDependencyRules:\n  allowedVersions: |\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `peerDependencyRules:\n  allowedVersions: >\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `peerDependencyRules:\n  allowedVersions: scalar\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+  ];
+
+  if (
+    readAllowedPeerVersion(positive, aitDevtoolsPeerSelector) !== aitWebFrameworkVersion
+    || readAllowedPeerVersion(hashValue, aitDevtoolsPeerSelector)
+      !== `${aitWebFrameworkVersion}+build#1`
+    || invalid.some(
+      (source) => readAllowedPeerVersion(source, aitDevtoolsPeerSelector) !== undefined,
+    )
+  ) {
+    failures.push('Internal peerDependencyRules.allowedVersions parser self-check failed.');
+  }
+}
+
+function readAllowedPeerVersion(source: string, selector: string): string | undefined {
+  let inPeerDependencyRules = false;
+  let inAllowedVersions = false;
+
+  for (const rawLine of source.split(/\r?\n/u)) {
+    const line = stripYamlComment(rawLine);
+
+    if (line.trim().length === 0) {
+      continue;
+    }
+
+    const indentation = /^ */u.exec(line)?.[0].length ?? 0;
+    const mapping = parseYamlMapping(line.trim());
+
+    if (mapping === undefined) {
+      continue;
+    }
+
+    if (indentation === 0) {
+      inPeerDependencyRules = mapping.key === 'peerDependencyRules' && mapping.value.length === 0;
+      inAllowedVersions = false;
+      continue;
+    }
+
+    if (!inPeerDependencyRules) {
+      continue;
+    }
+
+    if (indentation === 2) {
+      inAllowedVersions = mapping.key === 'allowedVersions' && mapping.value.length === 0;
+      continue;
+    }
+
+    if (inAllowedVersions && indentation === 4 && mapping.key === selector) {
+      return mapping.value;
+    }
+  }
+
+  return undefined;
+}
+
+function stripYamlComment(line: string): string {
+  const commentIndex = findFirstUnquotedCharacter(
+    line,
+    '#',
+    (index) => index === 0 || /\s/u.test(line[index - 1] ?? ''),
+  );
+  return commentIndex === -1 ? line : line.slice(0, commentIndex);
+}
+
+function parseYamlMapping(line: string): { readonly key: string; readonly value: string } | undefined {
+  const separatorIndex = findFirstUnquotedCharacter(line, ':');
+
+  if (separatorIndex === -1) {
+    return undefined;
+  }
+
+  return {
+    key: unquoteYamlScalar(line.slice(0, separatorIndex).trim()),
+    value: unquoteYamlScalar(line.slice(separatorIndex + 1).trim()),
+  };
+}
+
+function findFirstUnquotedCharacter(
+  line: string,
+  target: string,
+  accepts: (index: number) => boolean = () => true,
+): number {
+  let quote: '"' | "'" | undefined;
+
+  for (let index = 0; index < line.length; index += 1) {
+    const character = line[index];
+
+    if (quote !== undefined) {
+      if (quote === "'" && character === "'" && line[index + 1] === "'") {
+        index += 1;
+      } else if (character === quote) {
+        quote = undefined;
+      } else if (character === '\\' && quote === '"') {
+        index += 1;
+      }
+
+      continue;
+    }
+
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+
+    if (character === target && accepts(index)) {
+      return index;
+    }
+  }
+
+  return -1;
+}
+
+function unquoteYamlScalar(value: string): string {
+  if (
+    value.length >= 2
+    && ((value.startsWith("'") && value.endsWith("'"))
+      || (value.startsWith('"') && value.endsWith('"')))
+  ) {
+    return value.slice(1, -1);
+  }
+
+  return value;
 }
 
 function readText(path: string): string {

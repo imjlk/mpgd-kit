@@ -41,6 +41,12 @@ import {
   prepareBaseGameTemplateFile,
 } from './microsoft-store-starter.js';
 import { runMicrosoftStoreSubmissionPreflight } from './microsoft-store-submission.js';
+import {
+  defaultOfflinePlaytestArtifactDir,
+  defaultOfflinePlaytestMaximumBytes,
+  defaultOfflinePlaytestOutputDir,
+  runOfflinePlaytestPackaging,
+} from './offline-playtest.js';
 import { targetConfigExtensionsFileEnv } from './target-config-env.js';
 
 export {
@@ -95,6 +101,17 @@ export {
   type RunGameplayE2EInput,
   type RunGameplayE2EResult,
 } from './gameplay-e2e.js';
+
+export {
+  defaultOfflinePlaytestArtifactDir,
+  defaultOfflinePlaytestMaximumBytes,
+  defaultOfflinePlaytestOutputDir,
+  offlinePlaytestSchemaVersion,
+  runOfflinePlaytestPackaging,
+  type OfflinePlaytestEvidence,
+  type RunOfflinePlaytestPackagingInput,
+  type RunOfflinePlaytestPackagingResult,
+} from './offline-playtest.js';
 
 export {
   assertMicrosoftStorePwaCacheTransition,
@@ -569,6 +586,82 @@ const gameCommand = defineI18n({
         });
       },
     }),
+    'offline-playtest': defineI18n({
+      name: 'offline-playtest',
+      description: 'Package a web preview as a test-only, direct-file offline playtest.',
+      resource: commandResource(
+        {
+          en: 'Package an existing web-preview artifact as a network-blocked, direct-file test bundle.',
+          ko: '기존 web-preview 산출물을 네트워크가 차단된 직접 실행 테스트 묶음으로 패키징합니다.',
+        },
+        {
+          game: {
+            en: 'Game root containing the source artifact.',
+            ko: '원본 산출물이 있는 게임 루트.',
+          },
+          'artifact-dir': {
+            en: 'Existing web-preview artifact directory, relative to the game root.',
+            ko: '게임 루트 기준 기존 web-preview 산출물 디렉터리.',
+          },
+          'output-dir': {
+            en: 'Test-only output directory under the game artifacts directory.',
+            ko: '게임 artifacts 디렉터리 아래의 테스트 전용 출력 디렉터리.',
+          },
+          'maximum-bytes': {
+            en: 'Maximum size of the generated single index.html file.',
+            ko: '생성되는 단일 index.html 파일의 최대 바이트 수.',
+          },
+        },
+      ),
+      args: {
+        game: {
+          type: 'positional',
+          required: true,
+          description: 'Game root containing the source artifact.',
+        },
+        'artifact-dir': {
+          type: 'string',
+          required: false,
+          default: defaultOfflinePlaytestArtifactDir,
+          description: 'Existing web-preview artifact directory.',
+        },
+        'output-dir': {
+          type: 'string',
+          required: false,
+          default: defaultOfflinePlaytestOutputDir,
+          description: 'Test-only output directory under game artifacts.',
+        },
+        'maximum-bytes': {
+          type: 'string',
+          required: false,
+          default: String(defaultOfflinePlaytestMaximumBytes),
+          description: 'Maximum generated index.html size in bytes.',
+        },
+      },
+      run: async (ctx) => {
+        const positionals = readLocalPositionals(ctx.positionals, ['game', 'offline-playtest']);
+        const gameRoot = path.resolve(readRequiredPositional(positionals, 0, 'game'));
+        const artifactDir = readOptionalString(ctx.values['artifact-dir'])
+          ?? defaultOfflinePlaytestArtifactDir;
+        const outputDir = readOptionalString(ctx.values['output-dir'])
+          ?? defaultOfflinePlaytestOutputDir;
+        const maximumBytes = readPositiveInteger(
+          readOptionalString(ctx.values['maximum-bytes'])
+            ?? String(defaultOfflinePlaytestMaximumBytes),
+          '--maximum-bytes',
+        );
+        const result = await runOfflinePlaytestPackaging({
+          gameRoot,
+          artifactDir,
+          outputDir,
+          maximumBytes,
+        });
+
+        console.log(`Offline playtest (test only): ${result.entryFile}`);
+        console.log(`Evidence: ${result.evidenceFile}`);
+        console.log('Not a release target, deployment artifact, PWA, or store-submission package.');
+      },
+    }),
     icons: defineI18n({
       name: 'icons',
       description: 'Generate and verify target app icons from the game brand source.',
@@ -632,7 +725,7 @@ const gameCommand = defineI18n({
   },
   run: () => {
     console.log(
-      'Use "mpgd game create <directory>", "mpgd game accept <game>", or "mpgd game icons generate <game>".',
+      'Use "mpgd game create <directory>", "mpgd game accept <game>", "mpgd game offline-playtest <game>", or "mpgd game icons generate <game>".',
     );
   },
 });

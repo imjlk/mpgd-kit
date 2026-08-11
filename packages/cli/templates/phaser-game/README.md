@@ -65,6 +65,33 @@ pnpm --dir ../mpgd-kit mpgd target build-all \
 into `.mpgd.targets.generated.json` before calling the kit's existing target
 build and smoke scripts.
 
+### Offline test-play copy
+
+When a tester needs to open one local file without a server, package the
+existing browser preview:
+
+```sh
+pnpm exec mpgd target build web-preview staging \
+  --targets-file ./mpgd.targets.json \
+  --kit-path "${MPGD_KIT_PATH:-../mpgd-kit}"
+pnpm exec mpgd game offline-playtest .
+```
+
+Open `artifacts/offline-playtest/index.html` directly. This is a
+network-blocked, test-play-only copy—not a target in `mpgd.targets.json`, PWA,
+deployment artifact, release-manifest entry, or store-submission package.
+Custom output directories must remain below this game's `artifacts` directory.
+`README.txt` and `offline-playtest.json` preserve that boundary and record the
+result hash. Server-backed login, purchases, ads, rewards, leaderboards, and
+cloud saves do not work in this copy. Workers, service workers, WebAssembly
+streaming, dynamic imports, import maps, HTML base elements, CSS `@import`,
+runtime-computed asset URLs, retained inline-module imports, script-driven
+navigation, and browser-dependent `file://` storage are outside this helper's
+contract. Meta-refresh navigation is removed from the copy. glTF files must
+embed their dependencies as data URIs; use GLB for models with external buffers
+or textures. A successful package does not prove that every game path works
+offline; keep unavailable capability fallbacks in the game.
+
 The starter owns its Apps in Toss wrapper under `apps/target-ait`. With
 `authoritativeGameServices: false`, production keeps native identity, storage,
 sharing, and Game Center while disabling IAP and ads; no game-services URL is
