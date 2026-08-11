@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   lstatSync,
@@ -64,6 +64,18 @@ interface InliningContext {
   readonly maximumBytes: number;
   inlinedAssetBytes: number;
 }
+
+interface DeferredJavaScriptAsset {
+  readonly externalError?: string;
+  readonly reference: string;
+  readonly sourceFile: string;
+}
+
+type AssetDataUrlReader = (
+  sourceFile: string,
+  reference: string,
+  externalError?: string,
+) => string;
 
 interface BundledEntry {
   readonly script: string;
@@ -791,6 +803,7 @@ function rewriteExternalScripts(
 }
 
 async function bundleEntry(entryFile: string, context: InliningContext): Promise<BundledEntry> {
+  const deferredAssets = new Map<string, DeferredJavaScriptAsset>();
   const result = await build({
     entryPoints: [entryFile],
     absWorkingDir: context.artifactRoot,
@@ -805,7 +818,7 @@ async function bundleEntry(entryFile: string, context: InliningContext): Promise
     metafile: true,
     sourcemap: false,
     legalComments: 'none',
-    plugins: [offlineAssetInliningPlugin(context)],
+    plugins: [offlineAssetInliningPlugin(context, deferredAssets)],
     logLevel: 'silent',
   });
   const scriptOutput = result.outputFiles.find((file) => file.path.endsWith('.js'));
@@ -815,7 +828,7 @@ async function bundleEntry(entryFile: string, context: InliningContext): Promise
   }
 
   recordRetainedBundledAssets(result.metafile, context);
-  const script = scriptOutput.text;
+  const script = resolveDeferredJavaScriptAssets(scriptOutput.text, deferredAssets, context);
   const stylesheetOutput = result.outputFiles.find((file) => file.path.endsWith('.css'));
   assertNoEntryImportMetaUrl(script);
   assertSupportedBundledRuntime(script);
@@ -849,7 +862,58 @@ function recordRetainedBundledAssets(
   }
 }
 
-function offlineAssetInliningPlugin(context: InliningContext): Plugin {
+function deferJavaScriptAsset(
+  sourceFile: string,
+  reference: string,
+  deferredAssets: Map<string, DeferredJavaScriptAsset>,
+  externalError?: string,
+): string {
+  // Keep source-relative provenance in a valid data URL until esbuild removes dead code.
+  // Only markers retained in the final bundle are resolved, validated, and charged to limits.
+  const marker = `data:application/x-mpgd-deferred;id=${randomUUID()},`;
+  deferredAssets.set(marker, {
+    reference,
+    sourceFile,
+    ...(externalError === undefined ? {} : { externalError }),
+  });
+  return marker;
+}
+
+function resolveDeferredJavaScriptAssets(
+  source: string,
+  deferredAssets: ReadonlyMap<string, DeferredJavaScriptAsset>,
+  context: InliningContext,
+): string {
+  let output = source;
+
+  for (const [marker, asset] of deferredAssets) {
+    if (!output.includes(marker)) {
+      continue;
+    }
+
+    if (asset.externalError !== undefined && isNonLocalReference(asset.reference)) {
+      throw new Error(asset.externalError);
+    }
+
+    const occurrenceCount = output.split(marker).length - 1;
+    let dataUrl = '';
+
+    for (let occurrence = 0; occurrence < occurrenceCount; occurrence += 1) {
+      dataUrl = readAssetDataUrl(asset.sourceFile, asset.reference, context);
+    }
+    const safeDataUrl = dataUrl.replace(/["'`\\$\r\n]/gu, (character) =>
+      `%${(character.codePointAt(0) ?? 0).toString(16).padStart(2, '0').toUpperCase()}`,
+    );
+    output = output.replaceAll(marker, safeDataUrl);
+  }
+
+  return output;
+}
+
+function offlineAssetInliningPlugin(
+  context: InliningContext,
+  deferredAssets: Map<string, DeferredJavaScriptAsset>,
+): Plugin {
   return {
     name: 'mpgd-offline-playtest-assets',
     setup: (pluginBuild) => {
@@ -863,7 +927,7 @@ function offlineAssetInliningPlugin(context: InliningContext): Plugin {
       pluginBuild.onLoad({ filter: /\.(?:c|m)?js$/ }, (args) => {
         const source = readFileSync(resolveArtifactFile(context.artifactRoot, args.path), 'utf8');
         return {
-          contents: inlineJavaScriptAssetReferences(source, args.path, context),
+          contents: inlineJavaScriptAssetReferences(source, args.path, context, deferredAssets),
           loader: 'js',
           resolveDir: path.dirname(args.path),
         };
@@ -896,7 +960,22 @@ function inlineJavaScriptAssetReferences(
   source: string,
   sourceFile: string,
   context: InliningContext,
+  deferredAssets?: Map<string, DeferredJavaScriptAsset>,
 ): string {
+  const readAsset: AssetDataUrlReader = deferredAssets === undefined
+    ? (assetSourceFile, reference, externalError) => {
+        if (externalError !== undefined && isNonLocalReference(reference)) {
+          throw new Error(externalError);
+        }
+
+        return readAssetDataUrl(assetSourceFile, reference, context);
+      }
+    : (assetSourceFile, reference, externalError) => deferJavaScriptAsset(
+        assetSourceFile,
+        reference,
+        deferredAssets,
+        externalError,
+      );
   const staticUrlPattern = /(?<![$\u200C\u200D\p{ID_Continue}])new\s+(?:(globalThis|self|window)\s*\.\s*)?URL\(\s*(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`)\s*,\s*import\.meta\.url\s*\)(\s*\.\s*href)?/gu;
   const sourceCodePositions = createCodePositionMap(source, true);
   let output = source.replace(
@@ -939,7 +1018,7 @@ function inlineJavaScriptAssetReferences(
           : JSON.stringify(reference);
       }
 
-      const dataUrl = readAssetDataUrl(sourceFile, reference, context);
+      const dataUrl = readAsset(sourceFile, reference);
       return hrefAccess === undefined
         ? `new ${qualifier === undefined ? '' : `${qualifier}.`}URL(${JSON.stringify(dataUrl)})`
         : JSON.stringify(dataUrl);
@@ -1007,11 +1086,14 @@ function inlineJavaScriptAssetReferences(
         return match;
       }
 
-      if (isNonLocalReference(reference)) {
-        throw new Error(`Offline playtest does not support network fetch URL: ${reference}`);
-      }
-
-      const dataUrl = escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote);
+      const dataUrl = escapeForQuote(
+        readAsset(
+          documentFile,
+          reference,
+          `Offline playtest does not support network fetch URL: ${reference}`,
+        ),
+        quote,
+      );
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
@@ -1068,18 +1150,21 @@ function inlineJavaScriptAssetReferences(
         return match;
       }
 
-      if (isNonLocalReference(reference)) {
-        throw new Error(`Offline playtest does not support network Audio URL: ${reference}`);
-      }
-
-      const dataUrl = escapeForQuote(readAssetDataUrl(documentFile, reference, context), quote);
+      const dataUrl = escapeForQuote(
+        readAsset(
+          documentFile,
+          reference,
+          `Offline playtest does not support network Audio URL: ${reference}`,
+        ),
+        quote,
+      );
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
-  output = inlineStaticFontFaceSources(output, documentFile, context);
-  output = inlineStaticElementSourceAssignments(output, documentFile, context);
-  output = inlineStaticXmlHttpRequestOpenCalls(output, documentFile, context);
-  output = inlinePhaserAssetReferences(output, documentFile, context);
+  output = inlineStaticFontFaceSources(output, documentFile, context, readAsset);
+  output = inlineStaticElementSourceAssignments(output, documentFile, readAsset);
+  output = inlineStaticXmlHttpRequestOpenCalls(output, documentFile, readAsset);
+  output = inlinePhaserAssetReferences(output, documentFile, readAsset);
   return output;
 }
 
@@ -1087,6 +1172,7 @@ function inlineStaticFontFaceSources(
   source: string,
   documentFile: string,
   context: InliningContext,
+  readAsset: AssetDataUrlReader,
 ): string {
   const fontFacePattern = /((?<![$.\u200C\u200D\p{ID_Continue}])new\s+(?:(globalThis|self|window)\s*\.\s*)?FontFace\s*\(\s*(?:"(?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*"|'(?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*'|`(?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*`)\s*,\s*)(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`)/gu;
   const codePositions = createCodePositionMap(source, true);
@@ -1130,7 +1216,12 @@ function inlineStaticFontFaceSources(
 
       const rawSource = doubleQuotedSource ?? singleQuotedSource ?? templateSource ?? '';
       const descriptor = decodeJavaScriptStringLiteral(rawSource);
-      const inlinedDescriptor = inlineCssAssetReferences(descriptor, documentFile, context);
+      const inlinedDescriptor = inlineCssAssetReferences(
+        descriptor,
+        documentFile,
+        context,
+        readAsset,
+      );
       return `${prefix}${JSON.stringify(inlinedDescriptor)}`;
     },
   );
@@ -1139,7 +1230,7 @@ function inlineStaticFontFaceSources(
 function inlineStaticElementSourceAssignments(
   source: string,
   documentFile: string,
-  context: InliningContext,
+  readAsset: AssetDataUrlReader,
 ): string {
   const assignmentPattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}src${javascriptTriviaPatternSource}=`,
@@ -1191,16 +1282,14 @@ function inlineStaticElementSourceAssignments(
       return;
     }
 
-    if (isNonLocalReference(reference)) {
-      throw new Error(
-        `Offline playtest does not support network ${proof.constructorName} URL: ${reference}`,
-      );
-    }
-
     replacements.push({
       start: referenceRange.start,
       end: referenceRange.end,
-      value: JSON.stringify(readAssetDataUrl(documentFile, reference, context)),
+      value: JSON.stringify(readAsset(
+        documentFile,
+        reference,
+        `Offline playtest does not support network ${proof.constructorName} URL: ${reference}`,
+      )),
     });
   };
 
@@ -1514,7 +1603,7 @@ function parseStaticElementConstructor(
 function inlineStaticXmlHttpRequestOpenCalls(
   source: string,
   documentFile: string,
-  context: InliningContext,
+  readAsset: AssetDataUrlReader,
 ): string {
   const pattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*open\\s*\\(`,
@@ -1578,20 +1667,20 @@ function inlineStaticXmlHttpRequestOpenCalls(
       continue;
     }
 
-    const reference = readStaticJavaScriptString(source, urlArgument);
+    const reference = resolveStaticJavaScriptStringExpression(source, urlArgument, codePositions);
 
     if (reference === undefined || isDataUrlReference(reference)) {
       continue;
     }
 
-    if (isNonLocalReference(reference)) {
-      throw new Error(`Offline playtest does not support network XMLHttpRequest URL: ${reference}`);
-    }
-
     replacements.push({
       start: urlArgument.start,
       end: urlArgument.end,
-      value: JSON.stringify(readAssetDataUrl(documentFile, reference, context)),
+      value: JSON.stringify(readAsset(
+        documentFile,
+        reference,
+        `Offline playtest does not support network XMLHttpRequest URL: ${reference}`,
+      )),
     });
   }
 
@@ -1847,7 +1936,7 @@ function readStaticJavaScriptStringWithTrivia(
 function inlinePhaserAssetReferences(
   source: string,
   documentFile: string,
-  context: InliningContext,
+  readAsset: AssetDataUrlReader,
 ): string {
   const normalizedSource = normalizeStaticJavaScriptPropertyKeys(source);
   const discoveryCodePositions = createCodePositionMap(normalizedSource, true);
@@ -1911,7 +2000,7 @@ function inlinePhaserAssetReferences(
             replacements.push({
               start: match.index,
               end: match.index + match[0].length,
-              value: JSON.stringify(readAssetDataUrl(documentFile, reference, context)),
+              value: JSON.stringify(readAsset(documentFile, reference)),
             });
           }
         }
@@ -3757,12 +3846,14 @@ function inlineCssAssetReferences(
   source: string,
   sourceFile: string,
   context: InliningContext,
+  readAsset: AssetDataUrlReader = (assetSourceFile, reference) =>
+    readAssetDataUrl(assetSourceFile, reference, context),
 ): string {
   if (containsCssImportRule(source)) {
     throw new Error(`Offline playtest does not support CSS @import rules: ${sourceFile}`);
   }
 
-  const output = inlineCssImageSetStringReferences(source, sourceFile, context);
+  const output = inlineCssImageSetStringReferences(source, sourceFile, readAsset);
   let cursor = 0;
   let inlined = '';
 
@@ -3776,7 +3867,7 @@ function inlineCssAssetReferences(
     ) {
       inlined += output.slice(token.start, token.end);
     } else {
-      inlined += `url(${JSON.stringify(readAssetDataUrl(sourceFile, reference, context))})`;
+      inlined += `url(${JSON.stringify(readAsset(sourceFile, reference))})`;
     }
 
     cursor = token.end;
@@ -3788,7 +3879,7 @@ function inlineCssAssetReferences(
 function inlineCssImageSetStringReferences(
   source: string,
   sourceFile: string,
-  context: InliningContext,
+  readAsset: AssetDataUrlReader,
 ): string {
   let cursor = 0;
   let output = '';
@@ -3798,7 +3889,7 @@ function inlineCssImageSetStringReferences(
     output += inlineCssImageSetOptions(
       source.slice(token.openingParenthesis + 1, token.closingParenthesis),
       sourceFile,
-      context,
+      readAsset,
     );
     cursor = token.closingParenthesis;
   }
@@ -3900,10 +3991,10 @@ function findCssFunctionEnd(source: string, openingParenthesis: number): number 
 function inlineCssImageSetOptions(
   source: string,
   sourceFile: string,
-  context: InliningContext,
+  readAsset: AssetDataUrlReader,
 ): string {
   return splitCssImageSetOptions(source)
-    .map((option) => inlineCssImageSetOption(option, sourceFile, context))
+    .map((option) => inlineCssImageSetOption(option, sourceFile, readAsset))
     .join(',');
 }
 
@@ -3970,7 +4061,7 @@ function splitCssImageSetOptions(source: string): readonly string[] {
 function inlineCssImageSetOption(
   source: string,
   sourceFile: string,
-  context: InliningContext,
+  readAsset: AssetDataUrlReader,
 ): string {
   const token = findCssImageSetStringToken(source);
 
@@ -3982,7 +4073,7 @@ function inlineCssImageSetOption(
     return source;
   }
 
-  const dataUrl = readAssetDataUrl(sourceFile, token.reference, context);
+  const dataUrl = readAsset(sourceFile, token.reference);
   return `${source.slice(0, token.start)}${JSON.stringify(dataUrl)}${source.slice(token.end)}`;
 }
 
@@ -4589,7 +4680,7 @@ function assertNoDynamicMetaElementCreation(
   codePositions: Uint8Array,
 ): void {
   const pattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(?:(globalThis|self|window)${javascriptTriviaPatternSource}(?:\\.|\\?\\.)${javascriptTriviaPatternSource})?(document)${javascriptTriviaPatternSource}(?:\\.|\\?\\.)${javascriptTriviaPatternSource}createElement${javascriptTriviaPatternSource}(?:\\?\\.${javascriptTriviaPatternSource})?\\(`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(?:(globalThis|self|window)${javascriptTriviaPatternSource}(?:\\.|\\?\\.)${javascriptTriviaPatternSource})?(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}(?:\\.|\\?\\.)${javascriptTriviaPatternSource}createElement${javascriptTriviaPatternSource}(?:\\?\\.${javascriptTriviaPatternSource})?\\(`,
     'gu',
   );
 
@@ -4600,14 +4691,16 @@ function assertNoDynamicMetaElementCreation(
 
     if (
       match.index === undefined
+      || match[2] === undefined
       || codePositions[match.index] !== 1
       || (previousCode !== undefined && source[previousCode] === '.')
-      || findVisibleJavaScriptIdentifierBinding(
+      || !isNativeDocumentExpression(
         source,
-        match[1] ?? match[2] ?? 'document',
+        match[1] === undefined ? match[2] : `${match[1]}.${match[2]}`,
         match.index,
         codePositions,
-      ) !== undefined
+        new Set<string>(),
+      )
     ) {
       continue;
     }
@@ -4626,6 +4719,94 @@ function assertNoDynamicMetaElementCreation(
       throw new Error('Offline playtest does not support dynamically created meta elements.');
     }
   }
+}
+
+function isNativeDocumentExpression(
+  source: string,
+  expression: string,
+  position: number,
+  codePositions: Uint8Array,
+  visitedBindings: Set<string>,
+): boolean {
+  const unwrapped = unwrapBalancedOuterParentheses(expression);
+
+  if (unwrapped.offset > 0 || unwrapped.expression.length !== expression.length) {
+    return isNativeDocumentExpression(
+      source,
+      unwrapped.expression,
+      position + unwrapped.offset,
+      codePositions,
+      visitedBindings,
+    );
+  }
+
+  const qualified = /^(globalThis|self|window)\s*\.\s*document$/u.exec(expression);
+
+  if (qualified?.[1] !== undefined) {
+    return findVisibleJavaScriptIdentifierBinding(
+      source,
+      qualified[1],
+      position,
+      codePositions,
+    ) === undefined;
+  }
+
+  const identifier = exactJavaScriptIdentifierPattern.test(expression) ? expression : undefined;
+
+  if (identifier === undefined) {
+    return false;
+  }
+
+  const binding = findVisibleJavaScriptIdentifierBinding(
+    source,
+    identifier,
+    position,
+    codePositions,
+  );
+
+  if (identifier === 'document' && binding === undefined) {
+    return true;
+  }
+
+  let assignment: JavaScriptAssignmentResolution | undefined;
+
+  if (binding !== undefined) {
+    assignment = resolveLastDirectJavaScriptAssignment(
+      source,
+      identifier,
+      binding,
+      position,
+      codePositions,
+    );
+  }
+  const initializerRange = assignment?.range ?? binding?.initializerRange;
+  const bindingKey = binding === undefined || initializerRange === undefined
+    ? undefined
+    : `${identifier}:${binding.start}:${initializerRange.start}`;
+
+  if (
+    binding === undefined
+    || initializerRange === undefined
+    || binding.start >= position
+    || assignment?.ambiguous === true
+    || bindingKey === undefined
+    || visitedBindings.has(bindingKey)
+  ) {
+    return false;
+  }
+
+  visitedBindings.add(bindingKey);
+  const initializer = maskNonCode(
+    source.slice(initializerRange.start, initializerRange.end),
+    codePositions.slice(initializerRange.start, initializerRange.end),
+  ).trim();
+  return isNativeDocumentExpression(
+    source,
+    initializer,
+    initializerRange.start,
+    codePositions,
+    visitedBindings,
+  );
 }
 
 function assertNoUnsupportedBrowserApi(

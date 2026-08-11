@@ -713,6 +713,21 @@ try {
     /does not support dynamically created meta elements/u,
   );
 
+  const nativeDocumentAliases = [
+    ['document-alias-refresh-meta', 'const doc = document;'],
+    ['qualified-document-alias-refresh-meta', 'const doc = window.document;'],
+  ] as const;
+
+  for (const [name, aliasDeclaration] of nativeDocumentAliases) {
+    const aliasedDynamicRefreshMetaGame = createPreviewFixture(name, {
+      mainJs: `${aliasDeclaration} const meta = doc.createElement("meta"); meta.httpEquiv = "refresh"; meta.content = "0;url=https://example.com/escape"; document.head.append(meta);`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: aliasedDynamicRefreshMetaGame }),
+      /does not support dynamically created meta elements/u,
+    );
+  }
+
   const shadowedDynamicMetaHtml = await packageAndReadFixture('shadowed-dynamic-meta', {
     mainJs: 'function make(document) { return document.createElement("meta"); } document.body.dataset.value = String(make({ createElement: (tag) => tag }));',
   });
@@ -1663,6 +1678,19 @@ try {
   });
   assert.match(shadowedFetchHtml, /\/assets\/not-an-asset\.json/u);
 
+  const treeShakenFetchHtml = await packageAndReadFixture(
+    'tree-shaken-fetch-asset-validation',
+    {
+      mainJs: 'import { retained } from "./debug.js"; document.body.dataset.value = retained;',
+    },
+    [[
+      'artifacts/web-preview/assets/debug.js',
+      'export const retained = "retained"; export function loadDebug() { return fetch("/api/route"); }',
+    ]],
+  );
+  assert.match(treeShakenFetchHtml, /retained/u);
+  assert.doesNotMatch(treeShakenFetchHtml, /\/api\/route/u);
+
   const namedFunctionExpressionFetchHtml = await packageAndReadFixture(
     'named-function-expression-fetch-binding',
     {
@@ -2052,6 +2080,16 @@ try {
   );
   assert.doesNotMatch(xmlHttpRequestHtml, /\/assets\/level\.json/u);
   assert.match(xmlHttpRequestHtml, /data:application\/json;base64,/u);
+
+  const identifiedXmlHttpRequestHtml = await packageAndReadFixture(
+    'identified-xml-http-request-asset',
+    {
+      mainJs: 'const url = "/assets/level.json"; const request = new XMLHttpRequest(); request.open("GET", url); request.send();',
+    },
+    [['artifacts/web-preview/assets/level.json', '{"level":1}\n']],
+  );
+  assert.doesNotMatch(identifiedXmlHttpRequestHtml, /\/assets\/level\.json/u);
+  assert.match(identifiedXmlHttpRequestHtml, /data:application\/json;base64,/u);
 
   for (const [name, mainJs] of [
     [
