@@ -13,6 +13,7 @@
         "android": "coins_100",
         "ios": "com.mpgd.game.coins100",
         "ait": "coins_100",
+        "microsoft-store": "coins_100",
         "verse8": "coins-100"
       }
     },
@@ -28,6 +29,7 @@
         "android": "coins_500",
         "ios": "com.mpgd.game.coins500",
         "ait": "coins_500",
+        "microsoft-store": "coins_500",
         "verse8": "coins-500"
       }
     },

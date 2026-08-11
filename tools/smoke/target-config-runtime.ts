@@ -178,7 +178,7 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
     `${configTarget} localization feature should control locale resolution`,
   );
 
-  if (configTarget === 'web-preview' || configTarget === 'microsoft-store') {
+  if (configTarget === 'web-preview') {
     assertEqual(
       getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
       'target-disabled',
@@ -190,6 +190,31 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       `${configTarget} ad placements should be target-disabled`,
     );
     await verifyBrowserOnlyFallbacks(gateway, configTarget);
+    return;
+  }
+
+  if (configTarget === 'microsoft-store') {
+    assertEqual(
+      getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
+      'available',
+      'microsoft-store consumables should be available',
+    );
+    assertEqual(
+      getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.reason,
+      'target-disabled',
+      'microsoft-store ad placements should be target-disabled',
+    );
+    assertEqual(runtime.features.iap.reason, 'available', 'microsoft-store IAP should work');
+    await gateway.commerce.purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'microsoft-store-purchase',
+    });
+    assertDeepEqual(
+      targetGateway.calls,
+      ['purchase'],
+      'microsoft-store should delegate only configured commerce',
+    );
     return;
   }
 
@@ -309,7 +334,7 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
 
 async function verifyBrowserOnlyFallbacks(
   gateway: TargetConfiguredGateway,
-  configTarget: 'web-preview' | 'microsoft-store' | 'verse8',
+  configTarget: 'web-preview' | 'verse8',
 ): Promise<void> {
   const runtime = await gateway.getTargetRuntime();
   const adsEnabled = configTarget === 'verse8';
@@ -554,9 +579,7 @@ function createTargetGateway(target: PlatformTarget): {
 }
 
 function platformTargetForConfig(configTarget: (typeof configTargets)[number]): PlatformTarget {
-  return configTarget === 'web-preview' || configTarget === 'microsoft-store'
-    ? 'browser'
-    : configTarget;
+  return configTarget === 'web-preview' ? 'browser' : configTarget;
 }
 
 function supportsIntegration(

@@ -305,6 +305,10 @@ function effectiveProductReason(
     return 'capability-unsupported';
   }
 
+  if (runtime === 'microsoft-store-pwa' && product.type !== 'consumable') {
+    return 'capability-unsupported';
+  }
+
   return effectiveItemReason(targetEnabled, platformProductId);
 }
 

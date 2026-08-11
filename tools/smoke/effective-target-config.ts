@@ -355,7 +355,7 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     `${target} presentation mode should match its runtime surface`,
   );
 
-  if (target === 'web-preview' || target === 'microsoft-store') {
+  if (target === 'web-preview') {
     assertEqual(
       config.monetization.products.every((product) => !product.enabled),
       true,
@@ -368,6 +368,29 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
     );
     assertEqual(config.localization.enabled, true, `${target} localization should be enabled`);
     assertEqual(config.storage.support, 'local', `${target} should use local storage`);
+    return;
+  }
+
+  if (target === 'microsoft-store') {
+    assertEqual(
+      config.monetization.products.filter((product) => product.type === 'consumable')
+        .every((product) => product.enabled),
+      true,
+      'microsoft-store consumables should be enabled',
+    );
+    assertEqual(
+      config.monetization.products.filter((product) => product.type !== 'consumable')
+        .every((product) => !product.enabled),
+      true,
+      'microsoft-store unsupported product types should stay disabled',
+    );
+    assertEqual(
+      config.ads.placements.every((placement) => !placement.enabled),
+      true,
+      'microsoft-store ads should be disabled',
+    );
+    assertEqual(config.localization.enabled, true, 'microsoft-store localization should work');
+    assertEqual(config.storage.support, 'local', 'microsoft-store should use local storage');
     return;
   }
 

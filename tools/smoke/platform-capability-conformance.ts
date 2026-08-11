@@ -17,6 +17,10 @@ import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
 import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
+import {
+  createMicrosoftStoreCommerceAdapter,
+  withMicrosoftStoreCommerceAdapter,
+} from '../../adapters/microsoft-store/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
 import { readJsonFile } from '../io';
 
@@ -51,7 +55,7 @@ interface RuntimeMirrorCheck {
 
 const targetSpecs = [
   { configTarget: 'web-preview', expectedTarget: 'browser' },
-  { configTarget: 'microsoft-store', expectedTarget: 'browser' },
+  { configTarget: 'microsoft-store', expectedTarget: 'microsoft-store' },
   { configTarget: 'verse8', expectedTarget: 'verse8' },
   { configTarget: 'android', expectedTarget: 'android' },
   { configTarget: 'ios', expectedTarget: 'ios' },
@@ -170,8 +174,9 @@ function createConfiguredFixture(spec: TargetSpec): {
 function createGateway(configTarget: ConfigTarget): CreatedGateway {
   switch (configTarget) {
     case 'web-preview':
-    case 'microsoft-store':
       return createBrowserGateway();
+    case 'microsoft-store':
+      return createMicrosoftStoreGateway();
     case 'verse8':
       return createVerse8Gateway();
     case 'android':
@@ -206,6 +211,30 @@ function createBrowserGateway(): CreatedGateway {
       haptics: false,
       localizedContent: true,
     },
+  };
+}
+
+function createMicrosoftStoreGateway(): CreatedGateway {
+  const browser = createBrowserGateway();
+  const base: PlatformGateway = { ...browser.gateway, target: 'microsoft-store' };
+  const commerce = createMicrosoftStoreCommerceAdapter({
+    products: [],
+    authority: {
+      async getAvailability() {
+        return 'configuration-required';
+      },
+      async verifyAndGrant() {
+        return { status: 'failed' };
+      },
+      async getEntitlements() {
+        return [];
+      },
+    },
+  });
+
+  return {
+    gateway: withMicrosoftStoreCommerceAdapter(base, commerce),
+    expectedCapabilities: browser.expectedCapabilities,
   };
 }
 

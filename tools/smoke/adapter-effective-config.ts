@@ -6,6 +6,10 @@ import { createAitPlatformGateway } from '../../adapters/ait/src/index';
 import { createBrowserPlatformGateway } from '../../adapters/browser/src/index';
 import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/index';
 import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
+import {
+  createMicrosoftStoreCommerceAdapter,
+  withMicrosoftStoreCommerceAdapter,
+} from '../../adapters/microsoft-store/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
 import {
   createEffectiveTargetConfig,
@@ -88,15 +92,69 @@ async function verifyBrowserAdapter(): Promise<void> {
 }
 
 async function verifyMicrosoftStoreAdapter(): Promise<void> {
-  const gateway = wrapGateway('microsoft-store', createBrowserPlatformGateway());
+  const browser = createBrowserPlatformGateway();
+  const storeBase: PlatformGateway = { ...browser, target: 'microsoft-store' };
+  const commerce = createMicrosoftStoreCommerceAdapter({
+    products: [
+      {
+        info: {
+          id: 'COINS_100',
+          type: 'consumable',
+          title: '100 Coins',
+          description: 'Adds 100 coins.',
+          price: { formatted: '$0.99', currencyCode: 'USD' },
+        },
+        inAppOfferToken: 'coins_100',
+      },
+    ],
+    authority: {
+      async getAvailability() {
+        return 'available';
+      },
+      async verifyAndGrant() {
+        return { status: 'completed', transactionId: 'microsoft-store-ledger' };
+      },
+      async getEntitlements() {
+        return [];
+      },
+    },
+    async getDigitalGoodsService() {
+      return {
+        async getDetails() {
+          return [
+            {
+              itemId: 'coins_100',
+              title: '100 Coins',
+              description: 'Adds 100 coins.',
+              price: { value: '0.99', currency: 'USD' },
+            },
+          ];
+        },
+        async listPurchases() {
+          return [{ itemId: 'coins_100', purchaseToken: 'coins_100' }];
+        },
+      };
+    },
+    createPaymentRequest() {
+      return {
+        async show() {
+          return { details: { purchaseToken: 'coins_100' } };
+        },
+      };
+    },
+  });
+  const gateway = wrapGateway(
+    'microsoft-store',
+    withMicrosoftStoreCommerceAdapter(storeBase, commerce),
+  );
   const runtime = await gateway.getTargetRuntime();
   const effectiveConfig = requireEffectiveConfig(runtime.effectiveConfig, 'microsoft-store');
 
   assertEqual(effectiveConfig.target, 'microsoft-store', 'microsoft-store effective target');
   assertEqual(
     getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
-    false,
-    'microsoft-store product should be disabled until Digital Goods API is wired',
+    true,
+    'microsoft-store consumable should be enabled when Digital Goods is wired',
   );
   assertEqual(
     getEffectiveAdPlacementConfig(effectiveConfig, 'CONTINUE_AFTER_FAIL')?.enabled,
@@ -110,10 +168,15 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
       idempotencyKey: 'microsoft-store-parity-purchase',
     }),
     {
-      status: 'cancelled',
+      status: 'completed',
+      transactionId: 'microsoft-store-ledger',
       entitlementIds: [],
+      evidence: {
+        schema: 'mpgd.microsoft-store.digital-goods.v1',
+        payload: { itemId: 'coins_100', purchaseToken: 'coins_100' },
+      },
     },
-    'microsoft-store purchase should be target-disabled',
+    'microsoft-store purchase should require authoritative completion',
   );
 }
 

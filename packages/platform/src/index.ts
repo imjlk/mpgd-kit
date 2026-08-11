@@ -1,5 +1,6 @@
 export type PlatformTarget =
   | 'browser'
+  | 'microsoft-store'
   | 'android'
   | 'ios'
   | 'ait'
