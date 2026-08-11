@@ -203,9 +203,12 @@ describe('AIT production host bridge', () => {
       timeoutMs: expect.any(Number),
       signal: expect.any(AbortSignal),
     }));
-    const verificationTimeout = verifyIapProductGrant.mock.calls[0]?.[0].timeoutMs;
-    expect(verificationTimeout).toBeGreaterThan(0);
-    expect(verificationTimeout).toBeLessThanOrEqual(25_000);
+    const verificationInput = verifyIapProductGrant.mock.calls[0]?.[0];
+    if (verificationInput === undefined) {
+      throw new Error('Expected the Apps in Toss product grant verifier to run.');
+    }
+    expect(verificationInput.timeoutMs).toBeGreaterThan(0);
+    expect(verificationInput.timeoutMs).toBeLessThanOrEqual(25_000);
     expect(cleanupCalls).toBe(1);
   });
 

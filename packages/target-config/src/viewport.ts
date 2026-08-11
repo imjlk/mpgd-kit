@@ -24,6 +24,13 @@ export type TargetViewportMeasurementSource = 'container' | 'visual-viewport' | 
 export type TargetViewportControlPlacement = 'bottom' | 'side';
 /** Recommended placement for secondary game panels. */
 export type TargetViewportPanelPlacement = 'below' | 'side' | 'drawer';
+/** Adaptive shell arrangement for a game surface and its surrounding UI. */
+export type TargetViewportCompositionMode =
+  | 'side-rails'
+  | 'bottom-controls'
+  | 'compact-portrait';
+/** Optional expanded-screen arrangement requested by a game. */
+export type TargetViewportExpandedLayout = 'none' | 'side-rails';
 
 /** Width thresholds used to classify target viewports. */
 export interface TargetViewportBreakpoints {
@@ -131,6 +138,44 @@ export interface TargetViewportSnapshot extends TargetViewportPlan {
 }
 
 /**
+ * Input for resolving a concrete adaptive game shell from an existing viewport
+ * snapshot. The aspect ratio is expressed as width divided by height.
+ */
+export interface TargetViewportCompositionInput {
+  readonly viewport: Pick<TargetViewportSnapshot, 'layout' | 'safeArea'>;
+  readonly gameAspectRatio: number;
+  readonly expandedLayout?: TargetViewportExpandedLayout;
+  readonly minRailWidth?: number;
+}
+
+interface TargetViewportCompositionBounds {
+  readonly contentBounds: TargetViewportBounds;
+  readonly gameBounds: TargetViewportBounds;
+}
+
+/** Concrete safe-area-relative geometry for an adaptive game shell. */
+export type TargetViewportComposition = TargetViewportCompositionBounds &
+  (
+    | {
+        readonly mode: 'side-rails';
+        readonly leftRailBounds: TargetViewportBounds;
+        readonly rightRailBounds: TargetViewportBounds;
+        readonly primaryControls: 'side';
+        readonly secondaryPanels: 'side';
+      }
+    | {
+        readonly mode: 'bottom-controls';
+        readonly primaryControls: 'bottom';
+        readonly secondaryPanels: 'below';
+      }
+    | {
+        readonly mode: 'compact-portrait';
+        readonly primaryControls: 'bottom';
+        readonly secondaryPanels: 'drawer';
+      }
+  );
+
+/**
  * The minimal browser style surface needed to read CSS safe-area custom
  * properties. Keeping this structural avoids a runtime DOM dependency in the
  * target-config package.
@@ -184,6 +229,9 @@ export const defaultTargetViewportSafeAreaCssVariables = {
   bottom: '--mpgd-safe-area-bottom',
   left: '--mpgd-safe-area-left',
 } as const satisfies TargetViewportSafeAreaCssVariables;
+
+/** Default minimum width for each expanded-layout side rail. */
+export const defaultTargetViewportCompositionMinRailWidth = 160;
 
 const targetViewportOrientationPolicyModeDescriptors = {
   responsive: {
@@ -352,6 +400,97 @@ export function resolveTargetViewportSnapshot(
 }
 
 /**
+ * Resolve an adaptive game shell inside the snapshot's safe content bounds.
+ *
+ * A landscape viewport uses side rails only when the requested game aspect and
+ * both minimum rails fit at full content height. Portrait viewports remain
+ * full-bleed so phone shells do not inherit desktop letterboxing. Intermediate
+ * layouts keep the full game bounds and move persistent controls to the bottom.
+ */
+export function resolveTargetViewportComposition(
+  input: TargetViewportCompositionInput,
+): TargetViewportComposition {
+  const gameAspectRatio = normalizeViewportAspectRatio(input.gameAspectRatio);
+  const minRailWidth = normalizeViewportMinimum(
+    input.minRailWidth ?? defaultTargetViewportCompositionMinRailWidth,
+    'minRailWidth',
+  );
+  const contentBounds = { ...input.viewport.safeArea.contentBounds };
+  const portrait = input.viewport.layout.orientation === 'portrait';
+
+  if (portrait) {
+    if (input.viewport.layout.sizeClass === 'compact') {
+      return {
+        mode: 'compact-portrait',
+        contentBounds,
+        gameBounds: contentBounds,
+        primaryControls: 'bottom',
+        secondaryPanels: 'drawer',
+      };
+    }
+
+    return {
+      mode: 'bottom-controls',
+      contentBounds,
+      gameBounds: contentBounds,
+      primaryControls: 'bottom',
+      secondaryPanels: 'below',
+    };
+  }
+
+  const requestedSideRails = input.expandedLayout === 'side-rails';
+  const minimumGameWidth = contentBounds.width > 0 && contentBounds.height > 0 ? 1 : 0;
+  const desiredGameWidth = Math.max(
+    minimumGameWidth,
+    Math.round(contentBounds.height * gameAspectRatio),
+  );
+  const fittedGameWidth = Math.min(contentBounds.width, desiredGameWidth);
+  const availableRailWidth = (contentBounds.width - fittedGameWidth) / 2;
+
+  if (
+    requestedSideRails &&
+    input.viewport.layout.sizeClass === 'expanded' &&
+    desiredGameWidth <= contentBounds.width &&
+    availableRailWidth >= minRailWidth
+  ) {
+    const gameBounds = {
+      x: contentBounds.x + availableRailWidth,
+      y: contentBounds.y,
+      width: fittedGameWidth,
+      height: contentBounds.height,
+    };
+
+    return {
+      mode: 'side-rails',
+      contentBounds,
+      gameBounds,
+      leftRailBounds: {
+        x: contentBounds.x,
+        y: contentBounds.y,
+        width: availableRailWidth,
+        height: contentBounds.height,
+      },
+      rightRailBounds: {
+        x: gameBounds.x + gameBounds.width,
+        y: contentBounds.y,
+        width: availableRailWidth,
+        height: contentBounds.height,
+      },
+      primaryControls: 'side',
+      secondaryPanels: 'side',
+    };
+  }
+
+  return {
+    mode: 'bottom-controls',
+    contentBounds,
+    gameBounds: contentBounds,
+    primaryControls: 'bottom',
+    secondaryPanels: 'below',
+  };
+}
+
+/**
  * Resolve safe-area insets and content bounds for a given layout.
  *
  * Insets are clamped sequentially (top before bottom, left before right) so
@@ -491,6 +630,24 @@ function normalizeViewportInset(value: number, name: string): number {
   }
 
   return Math.round(value);
+}
+
+/** Validate a non-negative CSS-pixel minimum without discarding fractions. */
+function normalizeViewportMinimum(value: number, name: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`Viewport ${name} must be a non-negative finite number.`);
+  }
+
+  return value;
+}
+
+/** Validate a finite positive width-to-height aspect ratio. */
+function normalizeViewportAspectRatio(value: number): number {
+  if (!Number.isFinite(value) || value <= 0) {
+    throw new Error('Viewport gameAspectRatio must be a positive finite number.');
+  }
+
+  return value;
 }
 
 /** Parse a non-negative CSS pixel custom-property value. */

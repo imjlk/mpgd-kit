@@ -196,6 +196,37 @@ Recommended starter composition:
   and keep persistent state behind `/api/` and server storage as described
   below.
 
+Games that keep a stable playfield aspect on wide screens can resolve concrete
+shell bounds without duplicating CSS breakpoints:
+
+```ts
+import { resolveTargetViewportComposition } from '@mpgd/target-config';
+
+const composition = resolveTargetViewportComposition({
+  viewport,
+  gameAspectRatio: 3 / 4,
+  expandedLayout: 'side-rails',
+  minRailWidth: 160,
+});
+
+mountGame(composition.gameBounds);
+
+if (composition.mode === 'side-rails') {
+  mountLeftRail(composition.leftRailBounds);
+  mountRightRail(composition.rightRailBounds);
+} else {
+  unmountRails();
+}
+```
+
+`side-rails` is selected only when the game can use the full safe content height
+and both rails meet `minRailWidth`. Otherwise landscape layouts fall back to
+`bottom-controls`. Compact portrait layouts return `compact-portrait` and use
+the complete safe content bounds, so a desktop aspect preference never creates
+phone letterboxing. Treat all returned bounds as CSS-pixel coordinates relative
+to the measured viewport, and keep authoritative gameplay rules independent
+from the selected composition mode.
+
 Generated games own their Reddit Devvit app root in `apps/target-devvit`.
 Run `pnpm devvit:login`, `pnpm devvit:init`, and `pnpm devvit:playtest` from the
 game root when you are ready to create the Reddit-side app record and test it.

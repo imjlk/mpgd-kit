@@ -27,6 +27,7 @@ import {
 } from '../src/runtime';
 import {
   readTargetViewportSafeAreaInsets,
+  resolveTargetViewportComposition,
   resolveTargetViewportOrientationPlan,
   resolveTargetViewportPlan,
   resolveTargetViewportSafeArea,
@@ -1283,6 +1284,145 @@ function assertViewportPlans(): void {
         height: 390,
       },
     },
+  );
+  const desktopComposition = resolveTargetViewportComposition({
+    viewport: resolveTargetViewportSnapshot({
+      width: 1_280,
+      height: 720,
+      runtime: 'web',
+    }),
+    gameAspectRatio: 3 / 4,
+    expandedLayout: 'side-rails',
+    minRailWidth: 160,
+  });
+  assertDeepEqual(desktopComposition, {
+    mode: 'side-rails',
+    contentBounds: { x: 0, y: 0, width: 1_280, height: 720 },
+    gameBounds: { x: 370, y: 0, width: 540, height: 720 },
+    leftRailBounds: { x: 0, y: 0, width: 370, height: 720 },
+    rightRailBounds: { x: 910, y: 0, width: 370, height: 720 },
+    primaryControls: 'side',
+    secondaryPanels: 'side',
+  });
+  if (desktopComposition.mode === 'side-rails') {
+    assertEqual(desktopComposition.leftRailBounds.width, 370);
+    assertEqual(desktopComposition.rightRailBounds.width, 370);
+  }
+  assertDeepEqual(
+    resolveTargetViewportComposition({
+      viewport: resolveTargetViewportSnapshot({
+        width: 1_280,
+        height: 720,
+        runtime: 'web',
+      }),
+      gameAspectRatio: 0.0001,
+      expandedLayout: 'side-rails',
+      minRailWidth: 0,
+    }),
+    {
+      mode: 'side-rails',
+      contentBounds: { x: 0, y: 0, width: 1_280, height: 720 },
+      gameBounds: { x: 639.5, y: 0, width: 1, height: 720 },
+      leftRailBounds: { x: 0, y: 0, width: 639.5, height: 720 },
+      rightRailBounds: { x: 640.5, y: 0, width: 639.5, height: 720 },
+      primaryControls: 'side',
+      secondaryPanels: 'side',
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportComposition({
+      viewport: resolveTargetViewportSnapshot({
+        width: 720,
+        height: 540,
+        runtime: 'web-preview',
+      }),
+      gameAspectRatio: 3 / 4,
+      expandedLayout: 'side-rails',
+      minRailWidth: 160,
+    }),
+    {
+      mode: 'bottom-controls',
+      contentBounds: { x: 0, y: 0, width: 720, height: 540 },
+      gameBounds: { x: 0, y: 0, width: 720, height: 540 },
+      primaryControls: 'bottom',
+      secondaryPanels: 'below',
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportComposition({
+      viewport: resolveTargetViewportSnapshot({
+        width: 720,
+        height: 540,
+        runtime: 'web-preview',
+      }),
+      gameAspectRatio: 2,
+      expandedLayout: 'side-rails',
+      minRailWidth: 0,
+    }),
+    {
+      mode: 'bottom-controls',
+      contentBounds: { x: 0, y: 0, width: 720, height: 540 },
+      gameBounds: { x: 0, y: 0, width: 720, height: 540 },
+      primaryControls: 'bottom',
+      secondaryPanels: 'below',
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportComposition({
+      viewport: resolveTargetViewportSnapshot({
+        width: 899,
+        height: 400,
+        runtime: 'web-preview',
+      }),
+      gameAspectRatio: 3 / 4,
+      expandedLayout: 'side-rails',
+    }),
+    {
+      mode: 'bottom-controls',
+      contentBounds: { x: 0, y: 0, width: 899, height: 400 },
+      gameBounds: { x: 0, y: 0, width: 899, height: 400 },
+      primaryControls: 'bottom',
+      secondaryPanels: 'below',
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportComposition({
+      viewport: resolveTargetViewportSnapshot({
+        width: 900,
+        height: 600,
+        runtime: 'web-preview',
+      }),
+      gameAspectRatio: 3 / 2,
+      expandedLayout: 'side-rails',
+      minRailWidth: 0.1,
+    }),
+    {
+      mode: 'bottom-controls',
+      contentBounds: { x: 0, y: 0, width: 900, height: 600 },
+      gameBounds: { x: 0, y: 0, width: 900, height: 600 },
+      primaryControls: 'bottom',
+      secondaryPanels: 'below',
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportComposition({
+      viewport: mobileSafeArea,
+      gameAspectRatio: 3 / 4,
+      expandedLayout: 'side-rails',
+    }),
+    {
+      mode: 'compact-portrait',
+      contentBounds: { x: 0, y: 24, width: 390, height: 786 },
+      gameBounds: { x: 0, y: 24, width: 390, height: 786 },
+      primaryControls: 'bottom',
+      secondaryPanels: 'drawer',
+    },
+  );
+  assertThrows(() =>
+    resolveTargetViewportComposition({
+      viewport: mobileSafeArea,
+      gameAspectRatio: 0,
+    }),
   );
   assertThrows(() =>
     resolveTargetViewportSafeArea(
