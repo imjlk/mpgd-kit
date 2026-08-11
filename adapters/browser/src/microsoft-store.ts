@@ -98,7 +98,7 @@ export interface MicrosoftStorePurchaseAuthority {
   ): Promise<boolean>;
   /**
    * Checks the authenticated authority's durable ownership binding before recovery.
-   * Recovery fails closed when the method is unavailable or returns false.
+   * Recovery fails closed when the authority is unavailable or returns false.
    */
   hasRecoveryOwnership(
     input: MicrosoftStoreRecoveryAuthorityInput,

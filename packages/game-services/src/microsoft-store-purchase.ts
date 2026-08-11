@@ -124,7 +124,7 @@ export interface MicrosoftStorePurchaseBoundary extends GameServicesPurchaseGran
 
 /** Process-local test/development store. Production requires durable atomic shared storage. */
 export class InMemoryMicrosoftStoreRecoveryOwnershipStore
-implements MicrosoftStoreRecoveryOwnershipStore {
+  implements MicrosoftStoreRecoveryOwnershipStore {
   private readonly owners = new Map<string, string>();
 
   async claim(input: MicrosoftStoreRecoveryOwnershipRecord): Promise<boolean> {
@@ -150,7 +150,7 @@ implements MicrosoftStoreRecoveryOwnershipStore {
 }
 
 export function createInMemoryMicrosoftStoreRecoveryOwnershipStore():
-MicrosoftStoreRecoveryOwnershipStore {
+  MicrosoftStoreRecoveryOwnershipStore {
   return new InMemoryMicrosoftStoreRecoveryOwnershipStore();
 }
 
