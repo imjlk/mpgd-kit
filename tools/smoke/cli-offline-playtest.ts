@@ -241,6 +241,12 @@ try {
   });
   assert.match(shadowedServiceWorkerHtml, /local/u);
 
+  const aliasedServiceWorkerHtml = await packageAndReadFixture('aliased-service-worker', {
+    mainJs: 'function start(api) { return api.register("./sw.js"); } void start(navigator.serviceWorker);',
+  });
+  assert.match(aliasedServiceWorkerHtml, /ServiceWorkerContainer\?\.prototype/u);
+  assert.match(aliasedServiceWorkerHtml, /navigator\.serviceWorker\.register/u);
+
   const shadowedWebRtcHtml = await packageAndReadFixture('shadowed-webrtc', {
     mainJs: 'class RTCPeerConnection { close() { return "local"; } } const peer = new RTCPeerConnection(); document.body.dataset.state = peer.close();',
   });
@@ -272,6 +278,25 @@ try {
       /does not support script-driven navigation/u,
     );
   }
+
+  const dynamicLocationOperationGame = createPreviewFixture('dynamic-location-operation', {
+    mainJs: 'location[document.body.dataset.method]();',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dynamicLocationOperationGame }),
+    /does not support script-driven navigation/u,
+  );
+
+  const dynamicAliasedLocationOperationGame = createPreviewFixture(
+    'dynamic-aliased-location-operation',
+    {
+      mainJs: 'const destination = window.location; destination[document.body.dataset.method]();',
+    },
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dynamicAliasedLocationOperationGame }),
+    /does not support script-driven navigation/u,
+  );
 
   const indirectMethodNavigationGame = createPreviewFixture('indirect-method-navigation', {
     mainJs: 'Reflect.apply(location.assign, location, ["https://example.com/escape"]);',
@@ -1911,6 +1936,18 @@ try {
   });
   assert.doesNotMatch(browserImageHtml, /\/assets\/pixel\.png/u);
   assert.match(browserImageHtml, /data:image\/png;base64,/u);
+
+  const nativeElementFetchingAttributesHtml = await packageAndReadFixture(
+    'native-element-fetching-attributes',
+    {
+      mainJs: 'const image = new Image(); const video = document.createElement("video"); const source = document.createElement("source"); const sourceAttribute = "srcset"; image.srcset = "/assets/pixel.png 1x, /assets/icon.png 2x"; video.poster = "/assets/pixel.png"; source.setAttribute(sourceAttribute, "/assets/icon.png 1x"); document.body.append(image, video, source);',
+    },
+  );
+  assert.doesNotMatch(
+    nativeElementFetchingAttributesHtml,
+    /(?:srcset|poster)[^;]*\/assets\/(?:icon|pixel)\.png/u,
+  );
+  assert.match(nativeElementFetchingAttributesHtml, /data:image\/png;base64,/u);
 
   const computedBrowserImageHtml = await packageAndReadFixture('computed-browser-image-asset', {
     mainJs: 'const property = "src"; const literal = new Image(); const identified = new Image(); literal["src"] = "/assets/pixel.png"; identified[property] = "/assets/icon.png"; document.body.append(literal, identified);',

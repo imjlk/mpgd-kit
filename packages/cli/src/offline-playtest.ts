@@ -1598,7 +1598,7 @@ function inlineStaticElementSourceAssignments(
   readAsset: AssetDataUrlReader,
 ): string {
   const assignmentPattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}src${javascriptTriviaPatternSource}=`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}(src|srcset|poster)${javascriptTriviaPatternSource}=`,
     'gu',
   );
   const computedAssignmentPattern = new RegExp(
@@ -1619,6 +1619,7 @@ function inlineStaticElementSourceAssignments(
   const addReplacement = (
     identifier: string,
     offset: number,
+    attribute: string,
     referenceRange: SourceRange,
   ): void => {
     const proof = findStaticNativeElementBinding(source, identifier, offset, codePositions);
@@ -1627,9 +1628,13 @@ function inlineStaticElementSourceAssignments(
       return;
     }
 
+    if (!staticNativeElementAssetAttributes(proof.constructorName).includes(attribute)) {
+      return;
+    }
+
     if (proof.binding.kind !== 'const') {
       throw new Error(
-        `Offline playtest requires an immutable ${proof.constructorName} binding before rewriting src.`,
+        `Offline playtest requires an immutable ${proof.constructorName} binding before rewriting ${attribute}.`,
       );
     }
 
@@ -1640,22 +1645,45 @@ function inlineStaticElementSourceAssignments(
     );
 
     if (reference === undefined) {
-      throw new Error(`Offline playtest requires a static ${proof.constructorName} src value.`);
+      throw new Error(
+        `Offline playtest requires a static ${proof.constructorName} ${attribute} value.`,
+      );
     }
 
-    if (isDataUrlReference(reference)) {
-      return;
-    }
+    let inlined: string;
 
-    replacements.push({
-      start: referenceRange.start,
-      end: referenceRange.end,
-      value: JSON.stringify(readAsset(
+    if (attribute === 'srcset') {
+      inlined = parseHtmlSrcset(reference, documentFile)
+        .map(({ reference: candidate, descriptor }) => {
+          const inlinedCandidate = isDataUrlReference(candidate)
+            ? candidate
+            : readAsset(
+                documentFile,
+                candidate,
+                `Offline playtest does not support network ${proof.constructorName} srcset URL: ${candidate}`,
+              );
+          return descriptor.length === 0
+            ? inlinedCandidate
+            : `${inlinedCandidate} ${descriptor}`;
+        })
+        .join(', ');
+    } else if (isDataUrlReference(reference)) {
+      inlined = reference;
+    } else {
+      inlined = readAsset(
         documentFile,
         reference,
-        `Offline playtest does not support network ${proof.constructorName} URL: ${reference}`,
-      )),
-    });
+        `Offline playtest does not support network ${proof.constructorName} ${attribute} URL: ${reference}`,
+      );
+    }
+
+    if (inlined !== reference) {
+      replacements.push({
+        start: referenceRange.start,
+        end: referenceRange.end,
+        value: JSON.stringify(inlined),
+      });
+    }
   };
 
   for (const match of source.matchAll(assignmentPattern)) {
@@ -1677,7 +1705,7 @@ function inlineStaticElementSourceAssignments(
       codePositions,
       true,
     );
-    addReplacement(match[1], match.index, referenceRange);
+    addReplacement(match[1], match.index, match[2] ?? 'src', referenceRange);
   }
 
   for (const match of source.matchAll(computedAssignmentPattern)) {
@@ -1728,10 +1756,13 @@ function inlineStaticElementSourceAssignments(
 
     const property = resolveStaticJavaScriptStringExpression(source, propertyRange, codePositions);
 
-    if (property !== 'src') {
-      const nativeElementProof = property === undefined
-        ? findStaticNativeElementBinding(source, match[1], match.index, codePositions)
-        : undefined;
+    if (property === undefined) {
+      const nativeElementProof = findStaticNativeElementBinding(
+        source,
+        match[1],
+        match.index,
+        codePositions,
+      );
 
       if (nativeElementProof !== undefined) {
         throw new Error('Offline playtest requires a static native element property assignment.');
@@ -1747,7 +1778,7 @@ function inlineStaticElementSourceAssignments(
       codePositions,
       true,
     );
-    addReplacement(match[1], match.index, referenceRange);
+    addReplacement(match[1], match.index, property.toLowerCase(), referenceRange);
   }
 
   for (const match of source.matchAll(setAttributePattern)) {
@@ -1765,14 +1796,14 @@ function inlineStaticElementSourceAssignments(
     const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
     const attribute = arguments_[0] === undefined
       ? undefined
-      : readStaticJavaScriptStringWithTrivia(source, arguments_[0], codePositions);
+      : resolveStaticJavaScriptStringExpression(source, arguments_[0], codePositions);
     const referenceRange = arguments_[1];
 
-    if (attribute?.toLowerCase() !== 'src' || referenceRange === undefined) {
+    if (attribute === undefined || referenceRange === undefined) {
       continue;
     }
 
-    addReplacement(match[1], match.index, referenceRange);
+    addReplacement(match[1], match.index, attribute.toLowerCase(), referenceRange);
   }
 
   let output = source;
@@ -1782,6 +1813,20 @@ function inlineStaticElementSourceAssignments(
   }
 
   return output;
+}
+
+function staticNativeElementAssetAttributes(constructorName: string): readonly string[] {
+  let tagName: string | undefined;
+
+  if (constructorName === 'Image') {
+    tagName = 'img';
+  } else if (constructorName === 'Audio') {
+    tagName = 'audio';
+  } else {
+    tagName = /^HTML ([a-z]+) element$/u.exec(constructorName)?.[1];
+  }
+
+  return tagName === undefined ? [] : (htmlAssetAttributesByTag[tagName] ?? []);
 }
 
 function inlineStaticStyleAssetReferences(
@@ -5233,7 +5278,7 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const blockConstructor=(api,Native)=>new Proxy(Native,{construct(_target,args){throw denied(api,args[0])}});const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}for(const [object,names] of [[globalThis.navigation,['back','forward','navigate','reload','traverseTo']],[globalThis.history,['back','forward','go']],[globalThis.History?.prototype,['back','forward','go']]]){if(object){for(const name of names){if(typeof object[name]==='function'){try{Object.defineProperty(object,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}}if(globalThis.Location){for(const name of ['assign','replace','reload']){const method=Location.prototype[name];if(typeof method==='function'){try{Object.defineProperty(Location.prototype,name,{configurable:true,writable:true,value:function(value){if(name==='reload'||!fragmentOnly(value))throw denied('navigation',value??name);return method.call(this,value)}})}catch{}}}}if(globalThis.Document){for(const name of ['write','writeln']){if(typeof Document.prototype[name]==='function'){try{Object.defineProperty(Document.prototype,name,{configurable:true,writable:true,value:(...args)=>{throw denied('document.'+name,args[0])}})}catch{}}}const blockedTag=(namespace,name)=>(namespace===undefined||String(namespace).toLowerCase()==='http://www.w3.org/1999/xhtml')&&['meta','object','embed'].includes(String(name).toLowerCase());const createElement=Document.prototype.createElement;if(typeof createElement==='function'){Document.prototype.createElement=function(name,options){if(blockedTag(undefined,name))throw denied('document.createElement',name);return createElement.call(this,name,options)}}const createElementNS=Document.prototype.createElementNS;if(typeof createElementNS==='function'){Document.prototype.createElementNS=function(namespace,name,options){if(blockedTag(namespace,name))throw denied('document.createElementNS',name);return createElementNS.call(this,namespace,name,options)}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=blockConstructor('WebSocket',globalThis.WebSocket)}if(globalThis.EventSource){globalThis.EventSource=blockConstructor('EventSource',globalThis.EventSource)}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const blockConstructor=(api,Native)=>new Proxy(Native,{construct(_target,args){throw denied(api,args[0])}});const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}for(const [object,names] of [[globalThis.navigation,['back','forward','navigate','reload','traverseTo']],[globalThis.history,['back','forward','go']],[globalThis.History?.prototype,['back','forward','go']]]){if(object){for(const name of names){if(typeof object[name]==='function'){try{Object.defineProperty(object,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}}if(globalThis.Location){for(const name of ['assign','replace','reload']){const method=Location.prototype[name];if(typeof method==='function'){try{Object.defineProperty(Location.prototype,name,{configurable:true,writable:true,value:function(value){if(name==='reload'||!fragmentOnly(value))throw denied('navigation',value??name);return method.call(this,value)}})}catch{}}}}if(globalThis.Document){for(const name of ['write','writeln']){if(typeof Document.prototype[name]==='function'){try{Object.defineProperty(Document.prototype,name,{configurable:true,writable:true,value:(...args)=>{throw denied('document.'+name,args[0])}})}catch{}}}const blockedTag=(namespace,name)=>(namespace===undefined||String(namespace).toLowerCase()==='http://www.w3.org/1999/xhtml')&&['meta','object','embed'].includes(String(name).toLowerCase());const createElement=Document.prototype.createElement;if(typeof createElement==='function'){Document.prototype.createElement=function(name,options){if(blockedTag(undefined,name))throw denied('document.createElement',name);return createElement.call(this,name,options)}}const createElementNS=Document.prototype.createElementNS;if(typeof createElementNS==='function'){Document.prototype.createElementNS=function(namespace,name,options){if(blockedTag(namespace,name))throw denied('document.createElementNS',name);return createElementNS.call(this,namespace,name,options)}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=blockConstructor('WebSocket',globalThis.WebSocket)}if(globalThis.EventSource){globalThis.EventSource=blockConstructor('EventSource',globalThis.EventSource)}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}const serviceWorkerPrototype=globalThis.ServiceWorkerContainer?.prototype;if(serviceWorkerPrototype&&typeof serviceWorkerPrototype.register==='function'){try{Object.defineProperty(serviceWorkerPrototype,'register',{configurable:true,writable:true,value:(...args)=>{throw denied('navigator.serviceWorker.register',args[0])}})}catch{}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
@@ -5717,7 +5762,7 @@ function assertNoScriptDrivenNavigation(
   const aliasAssignments = findLocationAliasAssignments(source, codePositions);
   assertNoIndirectLocationMutation(source, codePositions, aliasAssignments);
 
-  const locationOperation = '(?:\\s*\\.\\s*(?:assign|replace|reload)\\b|(?:\\s*\\.\\s*href)?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
+  const locationOperation = '(?:\\s*\\[|\\s*\\.\\s*(?:assign|replace|reload)\\b|(?:\\s*\\.\\s*href)?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
   const groupedLocationOperationPattern = new RegExp(locationOperation, 'uy');
   const codeOnlySource = maskNonCodePreservingLength(source, codePositions);
 
