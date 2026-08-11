@@ -682,6 +682,19 @@ try {
   assert.match(dynamicAnchorHtml, /closest\('a,area'\)/u);
   assert.match(dynamicAnchorHtml, /getAttribute\('xlink:href'\)/u);
 
+  const dynamicRefreshMetaGame = createPreviewFixture('dynamic-refresh-meta-navigation', {
+    mainJs: 'const meta = document /* native */ . createElement /* call( */ ("meta"); meta.httpEquiv = "refresh"; meta.content = "0;url=https://example.com/escape"; document.head.append(meta);',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dynamicRefreshMetaGame }),
+    /does not support dynamically created meta elements/u,
+  );
+
+  const shadowedDynamicMetaHtml = await packageAndReadFixture('shadowed-dynamic-meta', {
+    mainJs: 'function make(document) { return document.createElement("meta"); } document.body.dataset.value = String(make({ createElement: (tag) => tag }));',
+  });
+  assert.match(shadowedDynamicMetaHtml, /document\.createElement\("meta"\)/u);
+
   const inlineEventHandlerGame = createPreviewFixture('inline-event-handler', {
     indexHtml: '<!doctype html><html><head></head><body><button onclick="fetch(\'/assets/config.json\')">load</button><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -1622,6 +1635,40 @@ try {
   });
   assert.match(shadowedFetchHtml, /\/assets\/not-an-asset\.json/u);
 
+  const namedFunctionExpressionFetchHtml = await packageAndReadFixture(
+    'named-function-expression-fetch-binding',
+    {
+      mainJs: 'const helper = function fetch() {}; void helper; void fetch("/assets/config.json");',
+    },
+  );
+  assert.doesNotMatch(namedFunctionExpressionFetchHtml, /fetch\(["']\/assets\/config\.json/u);
+  assert.match(namedFunctionExpressionFetchHtml, /fetch\(["']data:application\/json;base64,/u);
+
+  const namedClassExpressionFetchHtml = await packageAndReadFixture(
+    'named-class-expression-fetch-binding',
+    {
+      mainJs: 'const Helper = class fetch {}; void Helper; void fetch("/assets/config.json");',
+    },
+  );
+  assert.doesNotMatch(namedClassExpressionFetchHtml, /fetch\(["']\/assets\/config\.json/u);
+  assert.match(namedClassExpressionFetchHtml, /fetch\(["']data:application\/json;base64,/u);
+
+  const internalNamedFunctionFetchHtml = await packageAndReadFixture(
+    'internal-named-function-fetch-binding',
+    {
+      mainJs: 'const helper = function fetch() { return fetch("/assets/not-an-asset.json"); }; void helper;',
+    },
+  );
+  assert.match(internalNamedFunctionFetchHtml, /\/assets\/not-an-asset\.json/u);
+
+  const namedLocationExpressionGame = createPreviewFixture('named-location-expression-navigation', {
+    mainJs: 'const helper = function location() {}; void helper; location.href = "https://example.com/escape";',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: namedLocationExpressionGame }),
+    /does not support script-driven navigation/u,
+  );
+
   const importedFetchHtml = await packageAndReadFixture(
     'imported-fetch-binding',
     {
@@ -1703,6 +1750,20 @@ try {
   });
   assert.doesNotMatch(computedBrowserImageHtml, /\/assets\/(?:icon|pixel)\.png/u);
   assert.match(computedBrowserImageHtml, /data:image\/png;base64,/u);
+
+  const comparedBrowserImageHtml = await packageAndReadFixture('compared-browser-image-src', {
+    mainJs: 'const image = new Image(); const expected = ""; document.body.dataset.equal = String(image.src === expected);',
+  });
+  assert.match(comparedBrowserImageHtml, /image\.src\s*===\s*expected/u);
+
+  const commentedBrowserImageHtml = await packageAndReadFixture(
+    'commented-browser-image-source-assignments',
+    {
+      mainJs: 'const direct = new Image(); const computed = new Image(); const attributed = new Image(); direct /* cache */ . /* property */ src /* value */ = "/assets/pixel.png"; computed /* cache[ */ [/* key */ "src" /* key */] /* value */ = "/assets/icon.png"; attributed /* cache */ . /* method */ setAttribute /* call( */ (/* attr */ "src", "/assets/pixel.png"); document.body.append(direct, computed, attributed);',
+    },
+  );
+  assert.doesNotMatch(commentedBrowserImageHtml, /\/assets\/(?:icon|pixel)\.png/u);
+  assert.match(commentedBrowserImageHtml, /data:image\/png;base64,/u);
 
   const dynamicComputedBrowserImageGame = createPreviewFixture(
     'dynamic-computed-browser-image-asset',

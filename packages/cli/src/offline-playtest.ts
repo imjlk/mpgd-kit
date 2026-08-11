@@ -284,6 +284,7 @@ const javascriptControlParenthesisKeywords = new Set([
 ]);
 const javascriptBlockKeywords = new Set(['do', 'else', 'finally', 'try']);
 const javascriptIdentifierPatternSource = '[$_\\p{ID_Start}][$\\u200C\\u200D\\p{ID_Continue}]*';
+const javascriptTriviaPatternSource = String.raw`(?:\s|\/\*(?:[^*]|\*(?!\/))*\*\/|\/\/[^\r\n]*(?:\r\n?|\n|$))*`;
 const exactJavaScriptIdentifierPattern = new RegExp(`^${javascriptIdentifierPatternSource}$`, 'u');
 const importDefaultBindingPattern = new RegExp(
   `^(${javascriptIdentifierPatternSource})(?:\\s*,|$)`,
@@ -1141,15 +1142,15 @@ function inlineStaticElementSourceAssignments(
   context: InliningContext,
 ): string {
   const assignmentPattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*src\\s*=`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}src${javascriptTriviaPatternSource}=`,
     'gu',
   );
   const computedAssignmentPattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\[`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\[`,
     'gu',
   );
   const setAttributePattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*(?:\\.\\s*|\\?\\.\\s*)setAttribute\\s*(?:\\?\\.\\s*)?\\(`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}(?:\\.${javascriptTriviaPatternSource}|\\?\\.${javascriptTriviaPatternSource})setAttribute${javascriptTriviaPatternSource}(?:\\?\\.${javascriptTriviaPatternSource})?\\(`,
     'gu',
   );
   const codePositions = createCodePositionMap(source, true);
@@ -1210,6 +1211,7 @@ function inlineStaticElementSourceAssignments(
       || codePositions[match.index] !== 1
       || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
       || hasMemberReceiverPrefix(match.index)
+      || ['=', '>'].includes(source[match.index + match[0].length] ?? '')
     ) {
       continue;
     }
@@ -1235,7 +1237,7 @@ function inlineStaticElementSourceAssignments(
       continue;
     }
 
-    const openingBracket = source.indexOf('[', match.index);
+    const openingBracket = match.index + match[0].length - 1;
     const propertyRange = findJavaScriptExpressionRange(
       source,
       openingBracket + 1,
@@ -1305,7 +1307,7 @@ function inlineStaticElementSourceAssignments(
       continue;
     }
 
-    const openingParenthesis = source.indexOf('(', match.index);
+    const openingParenthesis = match.index + match[0].length - 1;
     const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
     const attribute = arguments_[0] === undefined
       ? undefined
@@ -2257,7 +2259,25 @@ function findVisibleJavaScriptIdentifierBinding(
       continue;
     }
 
-    const bindingPath = findJavaScriptScopePath(source, match.index, codePositions);
+    const namedDeclaration = isJavaScriptNamedDeclaration(
+      source,
+      match.index,
+      match[1] as 'class' | 'function',
+      codePositions,
+    );
+    const expressionBody = namedDeclaration
+      ? undefined
+      : findJavaScriptNamedExpressionBody(source, match.index + match[0].length, codePositions);
+    const bindingPath = expressionBody === undefined
+      ? findJavaScriptScopePath(source, match.index, codePositions)
+      : findJavaScriptScopePath(source, expressionBody + 1, codePositions);
+
+    if (
+      expressionBody !== undefined
+      && !targetScopePath.includes(expressionBody)
+    ) {
+      continue;
+    }
 
     if (isJavaScriptScopePathPrefix(bindingPath, targetScopePath)) {
       declarations.push({
@@ -2400,6 +2420,73 @@ function findVisibleJavaScriptIdentifierBinding(
     .filter((candidate) => candidate.start < position)
     .sort((left, right) => right.start - left.start)[0]
     ?? nearestDeclarations[0];
+}
+
+function isJavaScriptNamedDeclaration(
+  source: string,
+  keywordStart: number,
+  kind: 'class' | 'function',
+  codePositions: Uint8Array,
+): boolean {
+  // A declaration name belongs to the surrounding scope. An expression name is private to
+  // that function or class, so peel only declaration modifiers before checking the boundary.
+  let boundary = keywordStart - 1;
+
+  while (true) {
+    const previousCode = findPreviousJavaScriptCodeIndex(source, boundary, codePositions);
+
+    if (previousCode === undefined || [';', '{', '}'].includes(source[previousCode] ?? '')) {
+      return true;
+    }
+
+    if (!/[$\u200C\u200D\p{ID_Continue}]/u.test(source[previousCode] ?? '')) {
+      return false;
+    }
+
+    const identifierStart = findJavaScriptIdentifierStart(source, previousCode, codePositions);
+    const modifier = source.slice(identifierStart, previousCode + 1);
+
+    if (
+      modifier !== 'export'
+      && modifier !== 'default'
+      && (modifier !== 'async' || kind !== 'function')
+    ) {
+      return false;
+    }
+
+    boundary = identifierStart - 1;
+  }
+}
+
+function findJavaScriptNamedExpressionBody(
+  source: string,
+  start: number,
+  codePositions: Uint8Array,
+): number | undefined {
+  let roundDepth = 0;
+  let squareDepth = 0;
+
+  for (let index = start; index < source.length; index += 1) {
+    if (codePositions[index] !== 1) {
+      continue;
+    }
+
+    const character = source[index] ?? '';
+
+    if (character === '(') {
+      roundDepth += 1;
+    } else if (character === ')') {
+      roundDepth -= 1;
+    } else if (character === '[') {
+      squareDepth += 1;
+    } else if (character === ']') {
+      squareDepth -= 1;
+    } else if (character === '{' && roundDepth === 0 && squareDepth === 0) {
+      return index;
+    }
+  }
+
+  return undefined;
 }
 
 function findJavaScriptScopePath(
@@ -4484,6 +4571,7 @@ function assertSupportedBundledRuntime(source: string): void {
   assertNoUnsupportedWorkerConstruction(normalizedSource, codePositions);
   assertNoUnsupportedBrowserApi(normalizedSource, codePositions);
   assertNoDynamicImport(normalizedSource, codePositions, braceKinds);
+  assertNoDynamicMetaElementCreation(normalizedSource, codePositions);
   assertNoScriptDrivenNavigation(normalizedSource, codePositions);
 
   for (const candidate of unsupported) {
@@ -4493,6 +4581,45 @@ function assertSupportedBundledRuntime(source: string): void {
     }
 
     candidate.pattern.lastIndex = 0;
+  }
+}
+
+function assertNoDynamicMetaElementCreation(
+  source: string,
+  codePositions: Uint8Array,
+): void {
+  const pattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(?:(globalThis|self|window)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource})?(document)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}createElement${javascriptTriviaPatternSource}\\(`,
+    'gu',
+  );
+
+  for (const match of source.matchAll(pattern)) {
+    if (
+      match.index === undefined
+      || codePositions[match.index] !== 1
+      || findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1] ?? match[2] ?? 'document',
+        match.index,
+        codePositions,
+      ) !== undefined
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = match.index + match[0].length - 1;
+    const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
+    const tagName = arguments_[0] === undefined
+      ? undefined
+      : readStaticJavaScriptStringWithTrivia(
+          source,
+          arguments_[0],
+          codePositions,
+        )?.toLowerCase();
+
+    if (tagName === 'meta') {
+      throw new Error('Offline playtest does not support dynamically created meta elements.');
+    }
   }
 }
 
