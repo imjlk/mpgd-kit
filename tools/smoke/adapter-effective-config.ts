@@ -47,6 +47,7 @@ const enabledActionMethods = [
   'runtime.getCapabilities',
   'commerce.purchase',
   'ads.showRewarded',
+  'runtime.getCapabilities',
   'leaderboard.submitScore',
 ] as const;
 
@@ -180,6 +181,21 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
   const effectiveConfig = requireEffectiveConfig(runtime.effectiveConfig, 'microsoft-store');
 
   assertEqual(effectiveConfig.target, 'microsoft-store', 'microsoft-store effective target');
+  assertEqual(
+    runtime.capabilities.nativeLeaderboard,
+    false,
+    'microsoft-store should not advertise a native leaderboard',
+  );
+  assertEqual(
+    runtime.capabilities.remoteLeaderboard,
+    true,
+    'microsoft-store should advertise its Game Services leaderboard',
+  );
+  assertEqual(
+    runtime.features.leaderboard.reason,
+    'available',
+    'microsoft-store remote leaderboard should remain discoverable',
+  );
   assertEqual(
     getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.enabled,
     true,
@@ -397,7 +413,7 @@ async function verifyAitAdapter(): Promise<void> {
 
   assertDeepEqual(
     bridge.methods.slice(1),
-    ['leaderboard.submitScore'],
+    ['runtime.getCapabilities', 'leaderboard.submitScore'],
     'ait adapter should preserve native leaderboard while filtering grants',
   );
 
@@ -500,6 +516,11 @@ async function verifyDevvitAdapter(): Promise<void> {
     runtime.capabilities.nativeLeaderboard,
     false,
     'reddit should not advertise a native leaderboard',
+  );
+  assertEqual(
+    runtime.capabilities.remoteLeaderboard,
+    false,
+    'reddit should not advertise a remote leaderboard',
   );
 
   assertDeepEqual(
@@ -628,6 +649,7 @@ function enabledCapabilities(target: AdapterBridgeTarget): PlatformCapabilities 
     rewardedAds: target !== 'reddit',
     interstitialAds: target !== 'reddit',
     nativeLeaderboard: target !== 'reddit',
+    remoteLeaderboard: false,
     achievements: false,
     cloudSave: target === 'reddit',
     socialShare: target === 'ait' || target === 'reddit',

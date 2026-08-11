@@ -553,9 +553,11 @@ export function withMicrosoftStoreCommerceAdapter(
   return {
     ...gateway,
     async getCapabilities() {
+      const availability = await commerce.getAvailability();
       return {
         ...await gateway.getCapabilities(),
-        nativeIap: await commerce.getAvailability() === 'available',
+        nativeIap: availability === 'available',
+        remoteLeaderboard: availability === 'available',
       };
     },
     commerce,

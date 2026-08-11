@@ -226,6 +226,7 @@ export function createDevvitSandboxBridge(): DevvitBridge {
             rewardedAds: false,
             interstitialAds: false,
             nativeLeaderboard: false,
+            remoteLeaderboard: false,
             achievements: false,
             cloudSave: true,
             socialShare: false,

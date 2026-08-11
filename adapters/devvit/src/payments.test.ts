@@ -165,6 +165,7 @@ function createGateway(target: PlatformGateway['target']): PlatformGateway {
         rewardedAds: false,
         interstitialAds: false,
         nativeLeaderboard: false,
+        remoteLeaderboard: false,
         achievements: false,
         cloudSave: true,
         socialShare: true,

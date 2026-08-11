@@ -141,6 +141,7 @@ async function handleBridgeRequest(input: BridgeRequest): Promise<BridgeResponse
         rewardedAds: false,
         interstitialAds: false,
         nativeLeaderboard: false,
+        remoteLeaderboard: false,
         achievements: false,
         cloudSave: true,
         socialShare: false,

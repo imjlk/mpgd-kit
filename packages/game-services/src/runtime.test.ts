@@ -394,6 +394,7 @@ function createGateway(target: PlatformGateway['target'] = 'android'): PlatformG
         rewardedAds: true,
         interstitialAds: true,
         nativeLeaderboard: true,
+        remoteLeaderboard: false,
         achievements: false,
         cloudSave: false,
         socialShare: false,

@@ -2545,6 +2545,7 @@ describe('AIT production host bridge', () => {
 
       await expect(request(bridge, 'runtime.getCapabilities', {})).resolves.toMatchObject({
         nativeLeaderboard: false,
+        remoteLeaderboard: false,
       });
       await expect(request(bridge, 'leaderboard.submitScore', { score: 42 })).resolves.toEqual({
         submitted: false,

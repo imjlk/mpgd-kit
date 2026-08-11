@@ -160,6 +160,10 @@ function createHarness(input: {
   const client = new FixtureCollectionsClient(events);
   const boundary = createMicrosoftStorePurchaseBoundary({
     client,
+    inAppOfferTokens: {
+      HINT_PACK_20: input.catalog?.products[0]?.platformProductIds['microsoft-store']
+        ?? inAppOfferToken,
+    },
     storeIds: input.storeIds ?? { HINT_PACK_20: storeId },
     ...(input.historicalProductMappings === undefined
       ? {}
@@ -224,6 +228,24 @@ assert.equal(
     createRecoveryOwnershipInput('player-microsoft-store'),
   ),
   false,
+);
+
+const trustedTokenOwnershipStore = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
+const trustedTokenOwnershipHarness = createHarness({
+  recoveryOwnershipStore: trustedTokenOwnershipStore,
+});
+assert.equal(
+  await trustedTokenOwnershipHarness.boundary.claimRecoveryOwnership({
+    ...createRecoveryOwnershipInput('player-attacker'),
+    inAppOfferToken: 'attacker-controlled-token',
+  }),
+  false,
+);
+assert.equal(
+  await trustedTokenOwnershipHarness.boundary.claimRecoveryOwnership(
+    createRecoveryOwnershipInput('player-microsoft-store'),
+  ),
+  true,
 );
 
 const historicalOwnershipStore = createInMemoryMicrosoftStoreRecoveryOwnershipStore();
@@ -675,6 +697,10 @@ let duplicateStoreIdRejected = false;
 try {
   createMicrosoftStorePurchaseBoundary({
     client: new FixtureCollectionsClient([]),
+    inAppOfferTokens: {
+      HINT_PACK_20: inAppOfferToken,
+      HINT_PACK_120: 'ttokdoku_hint_pack_120',
+    },
     storeIds: {
       HINT_PACK_20: storeId,
       HINT_PACK_120: storeId,

@@ -1403,7 +1403,11 @@ describe('Microsoft Store Digital Goods commerce', () => {
     });
 
     const gateway = withMicrosoftStoreCommerceAdapter(createGateway('microsoft-store'), adapter);
-    await expect(gateway.getCapabilities()).resolves.toMatchObject({ nativeIap: true });
+    await expect(gateway.getCapabilities()).resolves.toMatchObject({
+      nativeIap: true,
+      nativeLeaderboard: false,
+      remoteLeaderboard: true,
+    });
     expect(() => withMicrosoftStoreCommerceAdapter(createGateway('browser'), adapter))
       .toThrow('only be installed on a microsoft-store gateway');
   });
@@ -1419,6 +1423,7 @@ function createGateway(target: PlatformGateway['target']): PlatformGateway {
         rewardedAds: false,
         interstitialAds: false,
         nativeLeaderboard: false,
+        remoteLeaderboard: false,
         achievements: false,
         cloudSave: true,
         socialShare: true,

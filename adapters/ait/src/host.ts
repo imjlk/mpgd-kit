@@ -350,6 +350,7 @@ export function createAitHostBridge(
           rewardedAds,
           interstitialAds,
           nativeLeaderboard: isGameCenterSupported(dependencies),
+          remoteLeaderboard: false,
           achievements: false,
           cloudSave: false,
           socialShare: true,

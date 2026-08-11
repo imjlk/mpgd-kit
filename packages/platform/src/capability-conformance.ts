@@ -6,6 +6,7 @@ export const platformCapabilityKeys = Object.freeze([
   'rewardedAds',
   'interstitialAds',
   'nativeLeaderboard',
+  'remoteLeaderboard',
   'achievements',
   'cloudSave',
   'socialShare',

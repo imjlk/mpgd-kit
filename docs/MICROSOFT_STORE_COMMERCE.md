@@ -83,7 +83,10 @@ cannot authorize a grant.
 The claim endpoint must derive the player from its authenticated server session,
 not from `getRecoveryScope()` or another browser-supplied player ID. Make claims
 idempotent for the same player and reject an exact Store identity already bound
-to a different player. Pass a durable, atomically implemented
+to a different player. Pass the current, server-trusted product catalog tokens as
+`inAppOfferTokens`; the boundary rejects a claim whose browser-supplied current
+token does not match that mapping. Never construct this mapping from the claim
+request. Pass a durable, atomically implemented
 `recoveryOwnershipStore` to `createMicrosoftStorePurchaseBoundary()`; the
 in-memory implementation is for tests and single-process development only. The
 credential resolver must return the same stable `accountBindingId` for the same
@@ -106,8 +109,9 @@ Configure those aliases with `historicalProductMappings` on
 old `inAppOfferToken` with its old Collections `storeId`. Keep the pair until
 operational telemetry confirms that no player-scoped pending recovery record or
 unconsumed Store entitlement references it; removing it earlier makes a charged
-pre-grant checkout unverifiable. Current mappings still come from the product
-catalog plus `storeIds`, and unknown old tokens remain rejected.
+pre-grant checkout unverifiable. Current mappings come from the server-trusted
+`inAppOfferTokens` and `storeIds` passed to the boundary, and unknown old tokens
+remain rejected.
 
 Pass the same old Digital Goods tokens as `historicalInAppOfferTokens` on the
 browser adapter product. That client-side alias lets `listPurchases()` associate
@@ -142,6 +146,13 @@ Before enabling commerce, the game must provide:
 - a public HTTPS Game Services endpoint, durable entitlement ledger, and an
   atomic shared implementation of `MicrosoftStoreRecoveryOwnershipStore`;
 - retry and alerting for pending consume finalizations.
+
+The configured Store commerce wrapper advertises `remoteLeaderboard: true`
+while its shared Game Services authority and Digital Goods boundary are
+available. It intentionally keeps `nativeLeaderboard: false`: target feature
+discovery exposes the remote Game Services flow without claiming that Microsoft
+provides a native leaderboard surface. Target availability requires the feature
+flag plus either the native or remote capability before delegating calls.
 
 Until all of these exist, return `configuration-required` from the adapter
 authority so product enumeration and checkout stay unavailable.

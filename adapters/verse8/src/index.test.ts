@@ -72,6 +72,7 @@ describe('adapter-verse8', () => {
       rewardedAds: true,
       interstitialAds: true,
       nativeLeaderboard: false,
+      remoteLeaderboard: false,
       cloudSave: false,
       localizedContent: true,
     });

@@ -149,6 +149,8 @@ export interface PlatformCapabilities {
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
   readonly nativeLeaderboard: boolean;
+  /** A game-owned server leaderboard is available without a native platform surface. */
+  readonly remoteLeaderboard: boolean;
   readonly achievements: boolean;
   readonly cloudSave: boolean;
   readonly socialShare: boolean;
@@ -315,6 +317,7 @@ export function createUnsupportedCapabilities(): PlatformCapabilities {
     rewardedAds: false,
     interstitialAds: false,
     nativeLeaderboard: false,
+    remoteLeaderboard: false,
     achievements: false,
     cloudSave: false,
     socialShare: false,

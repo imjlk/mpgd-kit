@@ -690,6 +690,7 @@ function createMockGateway(): PlatformGateway {
         rewardedAds: true,
         interstitialAds: true,
         nativeLeaderboard: true,
+        remoteLeaderboard: false,
         achievements: false,
         cloudSave: false,
         socialShare: false,

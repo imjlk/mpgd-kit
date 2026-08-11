@@ -160,6 +160,7 @@ export function createMpgdCloudflarePagesBridgeHandler<
           rewardedAds: false,
           interstitialAds: false,
           nativeLeaderboard: false,
+          remoteLeaderboard: false,
           achievements: false,
           cloudSave: false,
           socialShare: false,
