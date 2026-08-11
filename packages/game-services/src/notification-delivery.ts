@@ -11,6 +11,7 @@ const platformTargets = new Set<PlatformTarget>([
   'verse8',
   'telegram',
   'tauri',
+  'microsoft-store',
 ]);
 const notificationTopics = new Set<NotificationTopic>([
   'daily-ready',

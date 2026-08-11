@@ -35,7 +35,8 @@ const assert = {
 const inAppOfferToken = 'ttokdoku_hint_pack_20';
 const storeId = '9N0000000001';
 const collectionItemId = 'collection-item-20';
-const modifiedDate = '2030-01-02T03:04:05.000Z';
+// Collections v9 examples serialize datetime fields with an explicit UTC offset.
+const modifiedDate = '2030-01-02T03:04:05.0000000+00:00';
 const credentials = {
   accessToken: 'entra-service-token',
   userStoreId: 'server-resolved-user-store-id',
@@ -211,13 +212,22 @@ assert.equal(missingMappingResult.reason, 'MICROSOFT_STORE_PRODUCT_MAPPING_REQUI
 assert.deepEqual(missingMapping.events, []);
 
 const notPropagated = createHarness();
-notPropagated.client.queryResponse = { items: [] };
+notPropagated.client.queryResponse = {};
 const notPropagatedResult = await notPropagated.backend.purchases.verifyPurchase(
   createRequest({ idempotencyKey: 'not-propagated' }),
 );
 assert.equal(notPropagatedResult.verified, false);
 assert.equal(notPropagatedResult.reason, 'MICROSOFT_STORE_PURCHASE_NOT_PROPAGATED');
 assert.deepEqual(notPropagated.events, [`provider:query:${storeId}`]);
+
+const emptyItems = createHarness();
+emptyItems.client.queryResponse = { items: [] };
+const emptyItemsResult = await emptyItems.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'empty-items' }),
+);
+assert.equal(emptyItemsResult.verified, false);
+assert.equal(emptyItemsResult.reason, 'MICROSOFT_STORE_PURCHASE_NOT_PROPAGATED');
+assert.deepEqual(emptyItems.events, [`provider:query:${storeId}`]);
 
 const multipleUnits = createHarness();
 multipleUnits.client.queryResponse = {

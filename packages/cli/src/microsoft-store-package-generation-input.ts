@@ -243,17 +243,17 @@ function readSubmissionEvidence(
   ) {
     throw new Error('Microsoft Store commerce evidence mode must be disabled or microsoft-store.');
   }
-  if (commerceMode === 'microsoft-store' && root.effectiveTarget === undefined) {
+  if (commerceMode !== undefined && root.effectiveTarget === undefined) {
     throw new Error(
-      'Microsoft Store effective target evidence is required when commerce mode is microsoft-store.',
+      'Microsoft Store effective target evidence is required when commerce mode is declared.',
     );
   }
-  const effectiveTarget = commerceMode === 'microsoft-store'
-    ? readEffectiveTargetEvidence(root.effectiveTarget, gameRoot)
-    : undefined;
-  if (effectiveTarget === undefined && root.effectiveTarget !== undefined) {
+  const effectiveTarget = root.effectiveTarget === undefined
+    ? undefined
+    : readEffectiveTargetEvidence(root.effectiveTarget, gameRoot);
+  if (effectiveTarget !== undefined && commerceMode === undefined) {
     throw new Error(
-      'Microsoft Store effective target evidence must not be present unless commerce mode is microsoft-store.',
+      'Microsoft Store effective target evidence must not be present unless commerce mode is declared.',
     );
   }
 
@@ -332,7 +332,7 @@ function readEffectiveTargetEvidence(
 ): NonNullable<MicrosoftStoreSubmissionEvidenceInput['effectiveTarget']> {
   const evidence = requireRecord(
     input,
-    'Microsoft Store effective target evidence for commerce-enabled package generation',
+    'Microsoft Store effective target evidence for package generation',
   );
   const file = readCanonicalFileInside(
     gameRoot,

@@ -459,26 +459,40 @@ try {
   assert.equal(missingEffectiveTargetCalls.length, 0);
   assertNoGenerationOutputs(missingEffectiveTarget.input);
 
-  const unexpectedEffectiveTarget = createFixture('unexpected-effective-target');
-  enableCommerceEvidence(unexpectedEffectiveTarget);
-  const unexpectedEffectiveTargetEvidence = JSON.parse(
-    readFileSync(unexpectedEffectiveTarget.input.submissionEvidenceFile, 'utf8'),
+  const disabledEffectiveTarget = createFixture('disabled-effective-target');
+  enableCommerceEvidence(disabledEffectiveTarget);
+  const disabledEffectiveTargetEvidence = JSON.parse(
+    readFileSync(disabledEffectiveTarget.input.submissionEvidenceFile, 'utf8'),
   ) as Record<string, unknown>;
-  unexpectedEffectiveTargetEvidence.commerce = { mode: 'disabled' };
-  writeJson(
-    unexpectedEffectiveTarget.input.submissionEvidenceFile,
-    unexpectedEffectiveTargetEvidence,
+  disabledEffectiveTargetEvidence.commerce = { mode: 'disabled' };
+  writeJson(disabledEffectiveTarget.input.submissionEvidenceFile, disabledEffectiveTargetEvidence);
+  const disabledEffectiveTargetCalls: { url: string; init: RequestInit }[] = [];
+  await runMicrosoftStorePackageGeneration(
+    disabledEffectiveTarget.input,
+    createRuntime({ calls: disabledEffectiveTargetCalls }),
   );
-  const unexpectedEffectiveTargetCalls: { url: string; init: RequestInit }[] = [];
+  assert.equal(disabledEffectiveTargetCalls.length, 7);
+  assert.equal(existsSync(disabledEffectiveTarget.input.outputFile), true);
+
+  const missingDisabledEffectiveTarget = createFixture('missing-disabled-effective-target');
+  const missingDisabledEffectiveTargetEvidence = JSON.parse(
+    readFileSync(missingDisabledEffectiveTarget.input.submissionEvidenceFile, 'utf8'),
+  ) as Record<string, unknown>;
+  missingDisabledEffectiveTargetEvidence.commerce = { mode: 'disabled' };
+  writeJson(
+    missingDisabledEffectiveTarget.input.submissionEvidenceFile,
+    missingDisabledEffectiveTargetEvidence,
+  );
+  const missingDisabledEffectiveTargetCalls: { url: string; init: RequestInit }[] = [];
   await assert.rejects(
     runMicrosoftStorePackageGeneration(
-      unexpectedEffectiveTarget.input,
-      createRuntime({ calls: unexpectedEffectiveTargetCalls }),
+      missingDisabledEffectiveTarget.input,
+      createRuntime({ calls: missingDisabledEffectiveTargetCalls }),
     ),
-    /effective target evidence must not be present/u,
+    /effective target evidence is required when commerce mode is declared/u,
   );
-  assert.equal(unexpectedEffectiveTargetCalls.length, 0);
-  assertNoGenerationOutputs(unexpectedEffectiveTarget.input);
+  assert.equal(missingDisabledEffectiveTargetCalls.length, 0);
+  assertNoGenerationOutputs(missingDisabledEffectiveTarget.input);
 
   const invalidCommerceMode = createFixture('invalid-commerce-mode');
   const invalidCommerceModeEvidence = JSON.parse(

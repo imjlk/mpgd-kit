@@ -65,7 +65,7 @@ try {
     },
   });
   writeJson(manifestFile, validManifest);
-  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget());
+  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget({ iap: false }));
   writeJson(submissionFile, validConfig());
   const spawnOptions = {
     cwd: gameRoot,
@@ -128,6 +128,7 @@ try {
       readonly locales: Record<string, unknown>;
     };
     readonly commerce: { readonly mode: string };
+    readonly effectiveTarget: { readonly file: string; readonly sha256: string };
     readonly warnings: readonly string[];
   };
   assert.equal(evidence.target, 'microsoft-store');
@@ -136,6 +137,10 @@ try {
   assert.equal(evidence.listing.personalData.accessedOrTransmitted, true);
   assert.deepEqual(Object.keys(evidence.listing.locales), ['en-US']);
   assert.equal(evidence.commerce.mode, 'disabled');
+  assert.deepEqual(evidence.effectiveTarget, {
+    file: 'artifacts/microsoft-store/mpgd-effective-target.json',
+    sha256: createHash('sha256').update(readFileSync(effectiveTargetFile)).digest('hex'),
+  });
   assert.deepEqual(evidence.warnings, []);
   assert.match(
     readFileSync(join(outputDir, 'submission-preflight.md'), 'utf8'),
@@ -226,6 +231,32 @@ try {
     authoritativeGameServices: true,
     products: [validCommerceProduct],
   });
+  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget());
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'commerce-disabled-iap-enabled.json'),
+      markdownFile: join(outputDir, 'commerce-disabled-iap-enabled.md'),
+    }),
+    /must disable IAP when commerce mode is disabled/u,
+  );
+  writeJson(
+    effectiveTargetFile,
+    validMicrosoftStoreEffectiveTarget({ iap: false, productEnabled: true }),
+  );
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'commerce-disabled-product-enabled.json'),
+      markdownFile: join(outputDir, 'commerce-disabled-product-enabled.md'),
+    }),
+    /products\[0\] must be disabled when commerce mode is disabled/u,
+  );
+  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget());
   writeJson(submissionFile, commerceConfig);
   const commerceEvidence = runMicrosoftStoreSubmissionPreflight({
     gameRoot,
@@ -289,7 +320,7 @@ try {
     }),
     /duplicates platformProductId ttokdoku_hint_pack_20/u,
   );
-  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget());
+  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget({ iap: false }));
   writeJson(submissionFile, validConfig());
   expectConfigError(
     {
@@ -838,17 +869,20 @@ function validConfig() {
 
 function validMicrosoftStoreEffectiveTarget(
   input: {
+    readonly iap?: boolean;
+    readonly productEnabled?: boolean;
     readonly logicalProductId?: string;
     readonly platformProductId?: string;
     readonly duplicatePlatformProductId?: boolean;
   } = {},
 ) {
+  const iap = input.iap ?? true;
   const platformProductId = input.platformProductId ?? 'ttokdoku_hint_pack_20';
   const products = [
     {
       id: input.logicalProductId ?? 'HINT_PACK_20',
       type: 'consumable',
-      enabled: true,
+      enabled: input.productEnabled ?? iap,
       platformProductId,
     },
   ];
@@ -864,7 +898,7 @@ function validMicrosoftStoreEffectiveTarget(
     target: 'microsoft-store',
     runtime: 'microsoft-store-pwa',
     monetization: {
-      iap: true,
+      iap,
       products,
     },
   };

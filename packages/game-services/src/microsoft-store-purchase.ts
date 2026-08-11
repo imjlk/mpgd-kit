@@ -399,9 +399,19 @@ function inspectPublisherQuery(
   raw: unknown,
   expectedStoreId: string,
 ): MicrosoftStoreItemInspection {
-  if (!isRecord(raw) || !Array.isArray(raw.items)) {
+  if (!isRecord(raw)) {
     return rejected('MICROSOFT_STORE_COLLECTIONS_RESPONSE_INVALID');
   }
+
+  // Collections v9 omits `items` when there are no matching entitlements. Treat that
+  // provider-defined empty result like an empty list so a just-completed purchase can retry.
+  if (raw.items === undefined) {
+    return pending('MICROSOFT_STORE_PURCHASE_NOT_PROPAGATED');
+  }
+  if (!Array.isArray(raw.items)) {
+    return rejected('MICROSOFT_STORE_COLLECTIONS_RESPONSE_INVALID');
+  }
+
   const candidates = raw.items.filter((candidate): candidate is Record<string, unknown> => (
     isRecord(candidate) && candidate.productId === expectedStoreId
   ));
@@ -627,7 +637,8 @@ function positiveSafeInteger(input: unknown, label: string): number {
 }
 
 function validIsoDate(input: string): boolean {
-  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(input)
+  // Collections datetime fields commonly use an explicit `+00:00` offset rather than `Z`.
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/u.test(input)
     && Number.isFinite(Date.parse(input));
 }
 

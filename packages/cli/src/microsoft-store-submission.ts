@@ -123,8 +123,8 @@ export interface MicrosoftStoreSubmissionEvidence {
       readonly height: number;
     }[];
   };
-  /** Present when commerce is enabled; binds preflight evidence to the built target contract. */
-  readonly effectiveTarget?: {
+  /** Binds preflight evidence to the exact built target contract in every commerce mode. */
+  readonly effectiveTarget: {
     readonly file: string;
     readonly sha256: string;
   };
@@ -170,9 +170,7 @@ export function runMicrosoftStoreSubmissionPreflight(
     'Microsoft Store submission config',
   );
   const config = parseMicrosoftStoreSubmissionConfig(readJson(configFile, 'submission config'));
-  const effectiveTarget = config.commerce.mode === 'microsoft-store'
-    ? readMicrosoftStoreEffectiveTarget(artifactRoot, config.commerce)
-    : undefined;
+  const effectiveTarget = readMicrosoftStoreEffectiveTarget(artifactRoot, config.commerce);
   const manifestFile = readCanonicalFileInside(
     artifactRoot,
     path.join(artifactRoot, 'manifest.webmanifest'),
@@ -184,9 +182,7 @@ export function runMicrosoftStoreSubmissionPreflight(
   const protectedFiles: { readonly file: string; readonly label: string }[] = [
     { file: configFile, label: 'Microsoft Store submission config' },
     { file: manifestFile, label: 'Microsoft Store web app manifest' },
-    ...(effectiveTarget === undefined
-      ? []
-      : [{ file: effectiveTarget.file, label: 'Microsoft Store effective target config' }]),
+    { file: effectiveTarget.file, label: 'Microsoft Store effective target config' },
     ...manifest.icons.map((icon) => ({
       file: icon.file,
       label: 'Microsoft Store web app manifest icon',
@@ -243,14 +239,10 @@ export function runMicrosoftStoreSubmissionPreflight(
         height: icon.height,
       })),
     },
-    ...(effectiveTarget === undefined
-      ? {}
-      : {
-          effectiveTarget: {
-            file: relativeOrAbsolute(gameRoot, effectiveTarget.file),
-            sha256: effectiveTarget.sha256,
-          },
-        }),
+    effectiveTarget: {
+      file: relativeOrAbsolute(gameRoot, effectiveTarget.file),
+      sha256: effectiveTarget.sha256,
+    },
     listing: {
       category: config.listing.category,
       supportUrl: config.listing.supportUrl,
@@ -288,7 +280,7 @@ interface MicrosoftStoreEffectiveTargetProduct {
 
 function readMicrosoftStoreEffectiveTarget(
   artifactRoot: string,
-  commerce: Extract<MicrosoftStoreSubmissionCommerce, { readonly mode: 'microsoft-store' }>,
+  commerce: MicrosoftStoreSubmissionCommerce,
 ): {
   readonly file: string;
   readonly sha256: string;
@@ -313,15 +305,35 @@ function readMicrosoftStoreEffectiveTarget(
     root.monetization,
     'Microsoft Store effective target config monetization',
   );
+  const rawProducts = requireArray(
+    monetization.products,
+    'Microsoft Store effective target config products',
+  );
+  if (commerce.mode === 'disabled') {
+    if (monetization.iap !== false) {
+      throw new Error(
+        'Microsoft Store effective target config must disable IAP when commerce mode is disabled.',
+      );
+    }
+    for (const [index, rawProduct] of rawProducts.entries()) {
+      const product = requireRecord(
+        rawProduct,
+        `Microsoft Store effective target config products[${String(index)}]`,
+      );
+      if (product.enabled !== false) {
+        throw new Error(
+          `Microsoft Store effective target config products[${String(index)}] must be disabled when commerce mode is disabled.`,
+        );
+      }
+    }
+    return { file, sha256: hashBytes(snapshot.bytes) };
+  }
   if (monetization.iap !== true) {
     throw new Error('Microsoft Store effective target config must enable IAP.');
   }
   const seenProductIds = new Set<string>();
   const seenPlatformProductIds = new Set<string>();
-  const products: MicrosoftStoreEffectiveTargetProduct[] = requireArray(
-    monetization.products,
-    'Microsoft Store effective target config products',
-  ).flatMap((rawProduct, index) => {
+  const products: MicrosoftStoreEffectiveTargetProduct[] = rawProducts.flatMap((rawProduct, index) => {
     const product = requireRecord(
       rawProduct,
       `Microsoft Store effective target config products[${String(index)}]`,
@@ -541,11 +553,7 @@ export function renderMicrosoftStoreSubmissionMarkdown(
     `- Publisher ID: ${escapeMarkdownInline(evidence.productIdentity.publisherId)}`,
     `- Reserved name: ${escapeMarkdownInline(evidence.productIdentity.reservedName)}`,
     `- Manifest: ${escapeMarkdownInline(evidence.manifest.file)} (${evidence.manifest.sha256})`,
-    ...(evidence.effectiveTarget === undefined
-      ? []
-      : [
-          `- Effective target: ${escapeMarkdownInline(evidence.effectiveTarget.file)} (${evidence.effectiveTarget.sha256})`,
-        ]),
+    `- Effective target: ${escapeMarkdownInline(evidence.effectiveTarget.file)} (${evidence.effectiveTarget.sha256})`,
     `- Manifest icons: ${evidence.manifest.iconCount}`,
     `- Commerce: ${evidence.commerce.mode}`,
     `- Personal data accessed or transmitted: ${String(evidence.listing.personalData.accessedOrTransmitted)}`,

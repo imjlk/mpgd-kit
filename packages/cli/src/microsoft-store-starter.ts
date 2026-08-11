@@ -326,7 +326,6 @@ function resolveAdapterDependency(existing: unknown, required: string): string {
   if (
     requiredRange !== undefined
     && compareSemver(currentRange, requiredRange) < 0
-    && !simpleSemverRangeIncludes(currentRange, requiredRange)
   ) {
     return requiredDependency;
   }
@@ -404,46 +403,6 @@ function comparePrereleaseIdentifier(left: string | undefined, right: string | u
     return 0;
   }
   return left < right ? -1 : 1;
-}
-
-/** Checks whether a simple exact, tilde, or caret range includes a version. */
-function simpleSemverRangeIncludes(
-  range: SimpleSemverRange,
-  version: SimpleSemverRange,
-): boolean {
-  if (compareSemver(version, range) < 0) {
-    return false;
-  }
-  if (range.operator === '') {
-    return compareSemver(version, range) === 0;
-  }
-  if (range.operator === '~') {
-    if (isExcludedPrerelease(range, version)) {
-      return false;
-    }
-    return range.major === version.major && range.minor === version.minor;
-  }
-  if (isExcludedPrerelease(range, version)) {
-    return false;
-  }
-  if (range.major > 0) {
-    return range.major === version.major;
-  }
-  // npm caret ranges stay within the first non-zero component.
-  if (range.minor > 0) {
-    return version.major === 0 && range.minor === version.minor;
-  }
-  return version.major === 0 && version.minor === 0 && range.patch === version.patch;
-}
-
-function isExcludedPrerelease(range: SimpleSemverRange, version: SimpleSemverRange): boolean {
-  return version.prerelease !== undefined
-    && (
-      range.prerelease === undefined
-      || range.major !== version.major
-      || range.minor !== version.minor
-      || range.patch !== version.patch
-    );
 }
 
 function addMicrosoftStoreGatewayResolver(source: string): string {

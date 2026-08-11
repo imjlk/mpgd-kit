@@ -189,7 +189,7 @@ try {
       readJson(join(legacyRegistryGame, 'package.json')).dependencies,
       'migrated registry package dependencies',
     )['@mpgd/adapter-browser'],
-    '^0.6.0',
+    '0.6.0',
   );
   assert.match(readFileSync(legacyRuntimeFile, 'utf8'), /'microsoft-store'/u);
 
@@ -198,7 +198,7 @@ try {
   requireRecord(
     prereleaseAdapterPackage.dependencies,
     'prerelease registry package dependencies',
-  )['@mpgd/adapter-browser'] = '0.6.0-alpha.1';
+  )['@mpgd/adapter-browser'] = '^0.6.0-alpha.1';
   writeJson(join(prereleaseAdapterGame, 'package.json'), prereleaseAdapterPackage);
   initializeMicrosoftStoreStarter({
     gameRoot: prereleaseAdapterGame,
@@ -212,7 +212,7 @@ try {
       readJson(join(prereleaseAdapterGame, 'package.json')).dependencies,
       'migrated prerelease registry package dependencies',
     )['@mpgd/adapter-browser'],
-    '0.6.0',
+    '^0.6.0',
   );
 
   const compatiblePrereleaseRangeGame = createGame('compatible-prerelease-range-adapter');
@@ -232,9 +232,9 @@ try {
   assert.equal(
     requireRecord(
       readJson(join(compatiblePrereleaseRangeGame, 'package.json')).dependencies,
-      'preserved compatible prerelease package dependencies',
+      'migrated lower-bound prerelease package dependencies',
     )['@mpgd/adapter-browser'],
-    '^1.0.0-alpha.1',
+    '1.5.0',
   );
 
   const excludedPrereleaseGame = createGame('excluded-prerelease-adapter');
