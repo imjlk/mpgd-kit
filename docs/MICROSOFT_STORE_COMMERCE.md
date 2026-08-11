@@ -75,15 +75,24 @@ binding keyed by the stable Store-account binding and Collections Store product
 ID. A successful checkout claims that binding before verification; `restore()`
 calls `hasRecoveryOwnership()` before
 it submits either a scoped pending record or a global `listPurchases()` item to
-the grant authority. Recovery fails closed when the ownership method returns
-false or reports another player. Legacy `pending-owner` localStorage
+the grant authority. An approved result returns the durable checkout
+`idempotencyKey`; this lets a global Store listing resume the original ledger
+identity even after browser retry storage is lost. Recovery fails closed when
+the ownership method returns `denied`, and keeps a scoped retry when it returns
+`unavailable`. Legacy `pending-owner` localStorage
 records are deliberately ignored, so rewriting or copying browser storage
 cannot authorize a grant.
 
 The claim endpoint must derive the player from its authenticated server session,
 not from `getRecoveryScope()` or another browser-supplied player ID. Make claims
 idempotent for the same player and reject an exact Store identity already bound
-to a different player. Pass the current, server-trusted product catalog tokens as
+to a different player. Store the original idempotency key as an opaque ownership
+generation: a retry with the same generation is idempotent, while a fresh
+generation cannot replace an unconsumed claim even for the same player. Release
+only the exact player and generation after authoritative consume succeeds. If
+that release is unavailable, keep finalization pending so the same deterministic
+consume and release can be retried. Pass
+the current, server-trusted product catalog tokens as
 `inAppOfferTokens`; the boundary rejects a claim whose browser-supplied current
 token does not match that mapping. Never construct this mapping from the claim
 request. Pass a durable, atomically implemented
@@ -147,12 +156,13 @@ Before enabling commerce, the game must provide:
   atomic shared implementation of `MicrosoftStoreRecoveryOwnershipStore`;
 - retry and alerting for pending consume finalizations.
 
-The configured Store commerce wrapper advertises `remoteLeaderboard: true`
-while its shared Game Services authority and Digital Goods boundary are
-available. It intentionally keeps `nativeLeaderboard: false`: target feature
-discovery exposes the remote Game Services flow without claiming that Microsoft
-provides a native leaderboard surface. Target availability requires the feature
-flag plus either the native or remote capability before delegating calls.
+The Store commerce wrapper reports Digital Goods IAP availability independently
+from leaderboard support. Pass `{ remoteLeaderboard: true }` as the third
+argument to `withMicrosoftStoreCommerceAdapter()` only when the game also
+installs a real Game Services leaderboard adapter. The wrapper otherwise
+preserves the base gateway capability and never infers a leaderboard from IAP
+availability. Target availability requires the feature flag plus either the
+native or remote capability before delegating calls.
 
 Until all of these exist, return `configuration-required` from the adapter
 authority so product enumeration and checkout stay unavailable.

@@ -71,8 +71,15 @@ export interface MicrosoftStoreRecoveryAuthorityInput {
   /** Current catalog token; historical purchased identity remains in evidence. */
   readonly inAppOfferToken: string;
   readonly purchaseToken: string;
+  /** Stable checkout identity used as an opaque ownership generation. */
+  readonly idempotencyKey?: string;
   readonly evidence: PlatformEvidenceEnvelope;
 }
+
+export type MicrosoftStoreRecoveryAuthorityResult =
+  | { readonly status: 'granted'; readonly idempotencyKey: string }
+  | { readonly status: 'denied' }
+  | { readonly status: 'unavailable' };
 
 export type MicrosoftStorePurchaseAuthorityResult =
   | {
@@ -90,19 +97,20 @@ export interface MicrosoftStorePurchaseAuthority {
   getAvailability(): Promise<MicrosoftStoreCommerceAvailability>;
   /**
    * Persists the authenticated player's ownership of a checkout result outside browser storage.
-   * The server must derive the player from its authenticated session. Return false when the Store
-   * identity is already bound to another player.
+   * The server must derive the player from its authenticated session. Deny a Store identity bound
+   * to another player or generation, and distinguish that durable denial from an outage.
    */
   claimRecoveryOwnership(
     input: MicrosoftStoreRecoveryAuthorityInput,
-  ): Promise<boolean>;
+  ): Promise<MicrosoftStoreRecoveryAuthorityResult>;
   /**
    * Checks the authenticated authority's durable ownership binding before recovery.
-   * Recovery fails closed when the authority is unavailable or returns false.
+   * A grant returns the original idempotency key. Recovery removes a denied local record, but
+   * retains it while the authority is unavailable.
    */
   hasRecoveryOwnership(
     input: MicrosoftStoreRecoveryAuthorityInput,
-  ): Promise<boolean>;
+  ): Promise<MicrosoftStoreRecoveryAuthorityResult>;
   verifyAndGrant(
     input: MicrosoftStorePurchaseAuthorityInput,
   ): Promise<MicrosoftStorePurchaseAuthorityResult>;
@@ -111,6 +119,11 @@ export interface MicrosoftStorePurchaseAuthority {
 
 export interface MicrosoftStoreCommerceAdapter extends CommerceAdapter {
   getAvailability(): Promise<MicrosoftStoreCommerceAvailability>;
+}
+
+export interface MicrosoftStoreCommerceGatewayOptions {
+  /** Set only when the game installs a real server-backed leaderboard adapter. */
+  readonly remoteLeaderboard?: boolean;
 }
 
 export interface MicrosoftStoreRecoveryIdStorage {
@@ -182,6 +195,7 @@ export function createMicrosoftStoreCommerceAdapter(
     recoveryScope: string,
     preferredId?: string,
     purchase?: MicrosoftStoreDigitalGoodsPurchase,
+    reuseExisting = false,
   ): MicrosoftStorePendingRecovery {
     const storageKey = createRecoveryStorageKey(recoveryScope, product);
     const storedRecoveries = getReservedRecoveries(product, recoveryScope);
@@ -190,8 +204,9 @@ export function createMicrosoftStoreCommerceAdapter(
     const storedRecovery = storedRecoveries.find((candidate) => (
       candidate.inAppOfferToken === inAppOfferToken
       && candidate.purchaseToken === purchaseToken
+      && (preferredId === undefined || candidate.idempotencyKey === preferredId)
     ));
-    if (storedRecovery !== undefined) {
+    if (reuseExisting && storedRecovery !== undefined) {
       return storedRecovery;
     }
 
@@ -201,7 +216,15 @@ export function createMicrosoftStoreCommerceAdapter(
       inAppOfferToken,
       purchaseToken,
     }) satisfies MicrosoftStorePendingRecovery;
-    const next = Object.freeze([...storedRecoveries, recovery]);
+    // A fresh checkout must replace a stale completed identity even though Microsoft reuses the
+    // product token for later consumable purchases. Recovery retries alone reuse the old key.
+    const next = Object.freeze([
+      ...storedRecoveries.filter((candidate) => (
+        candidate.inAppOfferToken !== inAppOfferToken
+        || candidate.purchaseToken !== purchaseToken
+      )),
+      recovery,
+    ]);
     pendingRecoveries.set(storageKey, next);
     writeRecoveries(recoveryIdStorage, storageKey, next);
     return recovery;
@@ -229,6 +252,7 @@ export function createMicrosoftStoreCommerceAdapter(
     const next = getReservedRecoveries(product, recoveryScope).filter((candidate) => (
       candidate.inAppOfferToken !== recovery.inAppOfferToken
       || candidate.purchaseToken !== recovery.purchaseToken
+      || candidate.idempotencyKey !== recovery.idempotencyKey
     ));
     pendingRecoveries.set(storageKey, next);
     if (next.length === 0) {
@@ -241,25 +265,27 @@ export function createMicrosoftStoreCommerceAdapter(
   async function authorizeRecovery(
     product: MicrosoftStoreCommerceProduct,
     purchase: MicrosoftStoreDigitalGoodsPurchase,
-    source: MicrosoftStorePurchaseAuthorityInput['source'],
-  ): Promise<void> {
+    request: {
+      readonly idempotencyKey?: string;
+      readonly source: MicrosoftStorePurchaseAuthorityInput['source'];
+    },
+  ): Promise<MicrosoftStoreRecoveryAuthorityResult> {
     const evidence = createPurchaseEvidence(purchase);
     const authorityInput = {
       productId: product.info.id,
       inAppOfferToken: product.inAppOfferToken,
       purchaseToken: purchase.purchaseToken,
+      ...(request.idempotencyKey === undefined
+        ? {}
+        : { idempotencyKey: request.idempotencyKey }),
       evidence,
     } as const;
-    const authorized = source === 'recovery'
-      ? await input.authority.hasRecoveryOwnership(authorityInput)
-      : await input.authority.claimRecoveryOwnership(authorityInput);
-
-    if (!authorized) {
-      throw new Error(
-        source === 'recovery'
-          ? 'Microsoft Store recovery is not bound to the authenticated player.'
-          : 'Microsoft Store purchase is reserved for another authenticated player.',
-      );
+    try {
+      return request.source === 'recovery'
+        ? await input.authority.hasRecoveryOwnership(authorityInput)
+        : await input.authority.claimRecoveryOwnership(authorityInput);
+    } catch {
+      return { status: 'unavailable' };
     }
   }
 
@@ -283,7 +309,7 @@ export function createMicrosoftStoreCommerceAdapter(
     product: MicrosoftStoreCommerceProduct,
     purchase: MicrosoftStoreDigitalGoodsPurchase,
     request: {
-      readonly idempotencyKey: string;
+      readonly idempotencyKey?: string;
       readonly source: MicrosoftStorePurchaseAuthorityInput['source'];
     },
     recoveryScope: string,
@@ -297,11 +323,56 @@ export function createMicrosoftStoreCommerceAdapter(
     const evidence = createPurchaseEvidence(purchase);
 
     try {
-      await authorizeRecovery(product, purchase, request.source);
+      const authorization = await authorizeRecovery(product, purchase, request);
       if (resolveRecoveryScope(input.getRecoveryScope) !== recoveryScope) {
         throw new Error('Microsoft Store player scope changed during recovery authorization.');
       }
-      const recovery = reserveRecovery(product, recoveryScope, request.idempotencyKey, purchase);
+      if (authorization.status === 'denied') {
+        const recovery = getReservedRecoveries(product, recoveryScope).find((candidate) => (
+          candidate.idempotencyKey === request.idempotencyKey
+          && candidate.inAppOfferToken === purchase.itemId
+          && candidate.purchaseToken === purchase.purchaseToken
+        ));
+        if (request.source === 'recovery' && recovery !== undefined) {
+          releaseRecovery(product, recoveryScope, recovery);
+        }
+        const denialMessage = request.source === 'recovery'
+          ? 'Microsoft Store recovery is not bound to the authenticated player.'
+          : 'Microsoft Store purchase is reserved for another authenticated player.';
+        input.onError?.(new Error(denialMessage));
+        return {
+          status: request.source === 'recovery' ? 'failed' : 'pending',
+          entitlementIds: [],
+          evidence,
+        };
+      }
+      if (authorization.status === 'unavailable') {
+        if (request.idempotencyKey !== undefined) {
+          reserveRecovery(
+            product,
+            recoveryScope,
+            request.idempotencyKey,
+            purchase,
+            request.source === 'recovery',
+          );
+        }
+        return { status: 'pending', entitlementIds: [], evidence };
+      }
+      if (
+        request.source !== 'recovery'
+        && authorization.idempotencyKey !== request.idempotencyKey
+      ) {
+        const message = 'Microsoft Store authority changed the checkout idempotency identity.';
+        input.onError?.(new Error(message));
+        return { status: 'pending', entitlementIds: [], evidence };
+      }
+      const recovery = reserveRecovery(
+        product,
+        recoveryScope,
+        authorization.idempotencyKey,
+        purchase,
+        request.source === 'recovery',
+      );
       const result = await input.authority.verifyAndGrant({
         productId: product.info.id,
         inAppOfferToken: recovery.inAppOfferToken,
@@ -444,20 +515,30 @@ export function createMicrosoftStoreCommerceAdapter(
             itemId: product.inAppOfferToken,
             purchaseToken: purchaseToken ?? product.inAppOfferToken,
           } as const;
-          await authorizeRecovery(product, unidentifiedPurchase, request.source);
+          const authorization = await authorizeRecovery(product, unidentifiedPurchase, request);
           if (resolveRecoveryScope(input.getRecoveryScope) !== recoveryScope) {
             throw new Error('Microsoft Store player scope changed during recovery authorization.');
           }
-          reserveRecovery(
-            product,
-            recoveryScope,
-            request.idempotencyKey,
-            unidentifiedPurchase,
-          );
-          if (purchaseToken === undefined) {
-            result = pendingUnidentifiedPurchase();
+          if (authorization.status === 'denied') {
+            input.onError?.(new Error(
+              'Microsoft Store purchase is reserved for another authenticated player.',
+            ));
+            result = purchaseToken === undefined
+              ? pendingUnidentifiedPurchase()
+              : pendingPurchase(product.inAppOfferToken, purchaseToken);
           } else {
-            result = pendingPurchase(product.inAppOfferToken, purchaseToken);
+            const recoveryId = authorization.status === 'granted'
+              ? authorization.idempotencyKey
+              : request.idempotencyKey;
+            reserveRecovery(
+              product,
+              recoveryScope,
+              recoveryId,
+              unidentifiedPurchase,
+            );
+            result = purchaseToken === undefined
+              ? pendingUnidentifiedPurchase()
+              : pendingPurchase(product.inAppOfferToken, purchaseToken);
           }
         } else {
           result = await fulfill(product, purchase, request, recoveryScope);
@@ -518,7 +599,6 @@ export function createMicrosoftStoreCommerceAdapter(
           }
           return [
             fulfill(product, purchase, {
-              idempotencyKey: resolveRecoveryId(),
               source: 'recovery',
             }, recoveryScope),
           ];
@@ -538,6 +618,7 @@ export function createMicrosoftStoreCommerceAdapter(
 export function withMicrosoftStoreCommerceAdapter(
   gateway: PlatformGateway,
   commerce: MicrosoftStoreCommerceAdapter,
+  options: MicrosoftStoreCommerceGatewayOptions = {},
 ): PlatformGateway {
   if (gateway.target !== 'microsoft-store') {
     throw new TypeError(
@@ -553,11 +634,15 @@ export function withMicrosoftStoreCommerceAdapter(
   return {
     ...gateway,
     async getCapabilities() {
-      const availability = await commerce.getAvailability();
+      const [availability, capabilities] = await Promise.all([
+        commerce.getAvailability(),
+        gateway.getCapabilities(),
+      ]);
       return {
-        ...await gateway.getCapabilities(),
+        ...capabilities,
         nativeIap: availability === 'available',
-        remoteLeaderboard: availability === 'available',
+        remoteLeaderboard:
+          capabilities.remoteLeaderboard || options.remoteLeaderboard === true,
       };
     },
     commerce,

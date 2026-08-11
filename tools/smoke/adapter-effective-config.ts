@@ -128,11 +128,17 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
         async getAvailability() {
           return 'available';
         },
-        async claimRecoveryOwnership() {
-          return true;
+        async claimRecoveryOwnership(input) {
+          return {
+            status: 'granted',
+            idempotencyKey: input.idempotencyKey ?? 'microsoft-store-smoke',
+          } as const;
         },
-        async hasRecoveryOwnership() {
-          return true;
+        async hasRecoveryOwnership(input) {
+          return {
+            status: 'granted',
+            idempotencyKey: input.idempotencyKey ?? 'microsoft-store-smoke',
+          } as const;
         },
         async verifyAndGrant() {
           return authorityResult === 'failed'
@@ -174,7 +180,9 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
   };
   const gateway = wrapGateway(
     'microsoft-store',
-    withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('completed')),
+    withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('completed'), {
+      remoteLeaderboard: true,
+    }),
     authoritativeEffectiveConfig,
   );
   const runtime = await gateway.getTargetRuntime();
@@ -227,7 +235,9 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
   );
   const rejectedGateway = wrapGateway(
     'microsoft-store',
-    withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('failed')),
+    withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('failed'), {
+      remoteLeaderboard: true,
+    }),
     authoritativeEffectiveConfig,
   );
   // Microsoft currently returns the add-on product ID as purchaseToken, so both independent
