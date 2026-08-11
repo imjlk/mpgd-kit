@@ -1,5 +1,15 @@
 # @mpgd/adapter-verse8
 
+## 0.3.0 — 2026-08-12
+
+### Added
+
+- [8d8e36a](https://github.com/imjlk/mpgd-kit/commit/8d8e36ae790d2dfa1971a10ce5c3aab64f1a31fe) Add fail-closed Microsoft Store PWA Digital Goods checkout with player-scoped retry storage, provider-purchase- and generation-bound server recovery ownership, explicit historical product mappings, first-class target configuration, opt-in remote leaderboard capability discovery, submission product mappings with effective-target revalidation, and authoritative Collections query and consume fulfillment. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.6.0, game-services@0.12.0, platform@0.9.0
+
 ## 0.2.3 — 2026-08-04
 
 ### Changed
