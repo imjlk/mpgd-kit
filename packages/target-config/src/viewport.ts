@@ -411,7 +411,7 @@ export function resolveTargetViewportComposition(
   input: TargetViewportCompositionInput,
 ): TargetViewportComposition {
   const gameAspectRatio = normalizeViewportAspectRatio(input.gameAspectRatio);
-  const minRailWidth = normalizeViewportInset(
+  const minRailWidth = normalizeViewportMinimum(
     input.minRailWidth ?? defaultTargetViewportCompositionMinRailWidth,
     'minRailWidth',
   );
@@ -449,6 +449,7 @@ export function resolveTargetViewportComposition(
 
   if (
     requestedSideRails &&
+    input.viewport.layout.sizeClass === 'expanded' &&
     desiredGameWidth <= contentBounds.width &&
     availableRailWidth >= minRailWidth
   ) {
@@ -629,6 +630,15 @@ function normalizeViewportInset(value: number, name: string): number {
   }
 
   return Math.round(value);
+}
+
+/** Validate a non-negative CSS-pixel minimum without discarding fractions. */
+function normalizeViewportMinimum(value: number, name: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`Viewport ${name} must be a non-negative finite number.`);
+  }
+
+  return value;
 }
 
 /** Validate a finite positive width-to-height aspect ratio. */

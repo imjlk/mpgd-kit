@@ -1369,6 +1369,43 @@ function assertViewportPlans(): void {
   );
   assertDeepEqual(
     resolveTargetViewportComposition({
+      viewport: resolveTargetViewportSnapshot({
+        width: 899,
+        height: 400,
+        runtime: 'web-preview',
+      }),
+      gameAspectRatio: 3 / 4,
+      expandedLayout: 'side-rails',
+    }),
+    {
+      mode: 'bottom-controls',
+      contentBounds: { x: 0, y: 0, width: 899, height: 400 },
+      gameBounds: { x: 0, y: 0, width: 899, height: 400 },
+      primaryControls: 'bottom',
+      secondaryPanels: 'below',
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportComposition({
+      viewport: resolveTargetViewportSnapshot({
+        width: 900,
+        height: 600,
+        runtime: 'web-preview',
+      }),
+      gameAspectRatio: 3 / 2,
+      expandedLayout: 'side-rails',
+      minRailWidth: 0.1,
+    }),
+    {
+      mode: 'bottom-controls',
+      contentBounds: { x: 0, y: 0, width: 900, height: 600 },
+      gameBounds: { x: 0, y: 0, width: 900, height: 600 },
+      primaryControls: 'bottom',
+      secondaryPanels: 'below',
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportComposition({
       viewport: mobileSafeArea,
       gameAspectRatio: 3 / 4,
       expandedLayout: 'side-rails',
