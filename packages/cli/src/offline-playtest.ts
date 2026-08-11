@@ -1060,9 +1060,15 @@ function inlineJavaScriptAssetReferences(
       const qualifier = /\b(globalThis|self|window)\s*\.\s*fetch\s*(?:\?\.\s*)?\(/u.exec(
         prefix,
       )?.[1];
+      const previousCode = findPreviousJavaScriptCodeIndex(
+        output,
+        offset - 1,
+        fetchCodePositions,
+      );
 
       if (
         fetchCodePositions[offset] !== 1
+        || (previousCode !== undefined && output[previousCode] === '.')
         || hasEscapedJavaScriptIdentifierContinuationBefore(
           output,
           offset,
@@ -1199,10 +1205,15 @@ function inlineStaticFetchArguments(
   const replacements: SourceReplacement[] = [];
 
   for (const match of source.matchAll(pattern)) {
+    const previousCode = match.index === undefined
+      ? undefined
+      : findPreviousJavaScriptCodeIndex(source, match.index - 1, codePositions);
+
     if (
       match.index === undefined
       || match[2] === undefined
       || codePositions[match.index] !== 1
+      || (previousCode !== undefined && source[previousCode] === '.')
       || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
     ) {
       continue;

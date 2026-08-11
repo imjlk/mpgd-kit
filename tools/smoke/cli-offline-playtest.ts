@@ -1717,6 +1717,11 @@ try {
   });
   assert.match(shadowedFetchHtml, /\/assets\/not-an-asset\.json/u);
 
+  const memberOwnedFetchHtml = await packageAndReadFixture('member-owned-fetch', {
+    mainJs: 'const client = { fetch: (value) => value }; document.body.dataset.value = [client . fetch("/api/route"), client /* owner */ . /* method */ fetch("/api/route")].join("|");',
+  });
+  assert.match(memberOwnedFetchHtml, /\/api\/route/u);
+
   const treeShakenFetchHtml = await packageAndReadFixture(
     'tree-shaken-fetch-asset-validation',
     {
