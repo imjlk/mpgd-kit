@@ -1122,6 +1122,16 @@ try {
   assert.match(phaserReassignedConfigHtml, /\/api\/route/u);
   assert.doesNotMatch(phaserReassignedConfigHtml, /\/assets\/pixel\.png/u);
 
+  const phaserAssignedLetConfigHtml = await packageAndReadFixture('phaser-assigned-let-config', {
+    mainJs: 'let config; config = { key: "hero", url: "/assets/pixel.png" }; const scene = new Phaser.Scene(); scene.load.image(config);',
+  });
+  assert.doesNotMatch(phaserAssignedLetConfigHtml, /\/assets\/pixel\.png/u);
+
+  const phaserAssignedVarConfigHtml = await packageAndReadFixture('phaser-assigned-var-config', {
+    mainJs: 'var config; config = [{ key: "logo", url: "/assets/icon.png" }]; const scene = new Phaser.Scene(); scene.load.image(config);',
+  });
+  assert.doesNotMatch(phaserAssignedVarConfigHtml, /\/assets\/icon\.png/u);
+
   const phaserShorthandConfigHtml = await packageAndReadFixture('phaser-shorthand-config', {
     mainJs: 'const key = "hero"; const url = "/assets/pixel.png"; const scene = new Phaser.Scene(); scene.load.image({ key, url });',
   });

@@ -2714,21 +2714,22 @@ function findPhaserLoaderConfigUrlRanges(
         codePositions,
       );
 
-      if (binding?.initializerRange !== undefined && binding.start < argument.start) {
-        const initializer = trimSourceRange(
+      if (binding !== undefined && binding.start < argument.start) {
+        const configRange = findLastDirectJavaScriptAssignmentExpressionRange(
           source,
-          findLastDirectJavaScriptAssignmentExpressionRange(
-            source,
-            identifier,
-            binding,
-            argument.start,
-            codePositions,
-          ) ?? binding.initializerRange,
-        );
-        const initializerStart = source[initializer.start];
+          identifier,
+          binding,
+          argument.start,
+          codePositions,
+        ) ?? binding.initializerRange;
 
-        if (initializerStart === '{' || initializerStart === '[') {
-          return findPhaserLoaderConfigUrlRanges(source, initializer, codePositions);
+        if (configRange !== undefined) {
+          const initializer = trimSourceRange(source, configRange);
+          const initializerStart = source[initializer.start];
+
+          if (initializerStart === '{' || initializerStart === '[') {
+            return findPhaserLoaderConfigUrlRanges(source, initializer, codePositions);
+          }
         }
       }
     }
