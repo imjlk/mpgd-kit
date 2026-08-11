@@ -210,6 +210,26 @@ try {
     mainJs: 'new globalThis.SharedWorker("./worker.js");',
   });
 
+  const unsupportedWorkerAliasFixtures = [
+    ['aliased-worker', 'const BackgroundWorker = Worker; new BackgroundWorker("./worker.js");'],
+    [
+      'global-object-aliased-worker',
+      'const runtime = globalThis; new runtime.Worker("./worker.js");',
+    ],
+    [
+      'destructured-worker',
+      'const { Worker: BackgroundWorker } = globalThis; new BackgroundWorker("./worker.js");',
+    ],
+    [
+      'bound-worker',
+      'const BackgroundWorker = Worker.bind(null); new BackgroundWorker("./worker.js");',
+    ],
+  ] as const;
+
+  for (const [name, mainJs] of unsupportedWorkerAliasFixtures) {
+    await assertWorkerRejected(name, { mainJs });
+  }
+
   const shadowedInlineWorkerHtml = await packageAndReadFixture('shadowed-inline-workers', {
     indexHtml: '<!doctype html><html><head><script>class Worker {} class SharedWorker {} new Worker(); new SharedWorker();</script></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
   });
@@ -1770,6 +1790,40 @@ try {
     /requires a static native fetch URL/u,
   );
 
+  for (const [name, mainJs] of [
+    ['aliased-native-fetch', 'const load = fetch; void load("/assets/config.json");'],
+    [
+      'chained-native-fetch-alias',
+      'const first = window.fetch; const second = first; void second("/assets/config.json");',
+    ],
+    [
+      'global-object-aliased-fetch',
+      'const runtime = globalThis; void runtime.fetch("/assets/config.json");',
+    ],
+    [
+      'destructured-native-fetch',
+      'const { fetch: load } = globalThis; void load("/assets/config.json");',
+    ],
+    [
+      'bound-native-fetch',
+      'const load = fetch.bind(globalThis); void load("/assets/config.json");',
+    ],
+    [
+      'native-fetch-call',
+      'void fetch.call(globalThis, "/assets/config.json");',
+    ],
+    [
+      'native-fetch-apply',
+      'void fetch.apply(globalThis, ["/assets/config.json"]);',
+    ],
+  ] as const) {
+    const aliasedFetchGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: aliasedFetchGame }),
+      /does not support aliases of native fetch/u,
+    );
+  }
+
   const optionalFetchHtml = await packageAndReadFixture('optional-fetch-assets', {
     mainJs: 'void fetch?.("/assets/config.json"); void window.fetch?.("/assets/config.json");',
   });
@@ -1792,9 +1846,17 @@ try {
   assert.match(shadowedFetchHtml, /\/assets\/not-an-asset\.json/u);
 
   const memberOwnedFetchHtml = await packageAndReadFixture('member-owned-fetch', {
-    mainJs: 'const client = { fetch: (value) => value }; document.body.dataset.value = [client . fetch("/api/route"), client /* owner */ . /* method */ fetch("/api/route")].join("|");',
+    mainJs: 'const client = { fetch: (value) => value }; document.body.dataset.value = [client . fetch("/api/route"), client /* owner */ . /* method */ fetch("/api/route"), client.fetch.call(client, "/api/route")].join("|");',
   });
   assert.match(memberOwnedFetchHtml, /\/api\/route/u);
+
+  const shadowedGlobalObjectFetchHtml = await packageAndReadFixture(
+    'shadowed-global-object-fetch',
+    {
+      mainJs: 'function load(globalThis) { const runtime = globalThis; return runtime.fetch("/api/route"); } document.body.dataset.value = load({ fetch: (value) => value });',
+    },
+  );
+  assert.match(shadowedGlobalObjectFetchHtml, /\/api\/route/u);
 
   const treeShakenFetchHtml = await packageAndReadFixture(
     'tree-shaken-fetch-asset-validation',
@@ -2648,12 +2710,41 @@ try {
     /does not support WebAssembly streaming/u,
   );
 
+  for (const [name, mainJs] of [
+    [
+      'aliased-webassembly-object',
+      'const Wasm = WebAssembly; void Wasm.instantiateStreaming(Promise.resolve(new Response()));',
+    ],
+    [
+      'aliased-webassembly-streaming-method',
+      'const stream = WebAssembly.instantiateStreaming; void stream(Promise.resolve(new Response()));',
+    ],
+    [
+      'global-object-aliased-webassembly',
+      'const runtime = globalThis; void runtime.WebAssembly.instantiateStreaming(Promise.resolve(new Response()));',
+    ],
+    [
+      'destructured-webassembly-streaming-method',
+      'const { instantiateStreaming: stream } = WebAssembly; void stream(Promise.resolve(new Response()));',
+    ],
+    [
+      'bound-webassembly-streaming-method',
+      'const stream = WebAssembly.instantiateStreaming.bind(WebAssembly); void stream(Promise.resolve(new Response()));',
+    ],
+  ] as const) {
+    const aliasedWasmStreamingGame = createPreviewFixture(name, { mainJs });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: aliasedWasmStreamingGame }),
+      /does not support WebAssembly streaming/u,
+    );
+  }
+
   const memberOwnedWasmHtml = await packageAndReadFixture('member-owned-wasm', {
     mainJs: 'const sdk = { WebAssembly: { instantiateStreaming() { return "local"; } } }; document.body.dataset.result = sdk.WebAssembly.instantiateStreaming();',
   });
   assert.match(memberOwnedWasmHtml, /local/u);
 
-  for (const [name, mainJs] of [
+  const unsupportedStringEvaluationFixtures = [
     ['direct-eval', 'eval("document.body.dataset.ready = \'true\'");'],
     ['function-constructor', 'void new Function("return true")();'],
     ['string-timeout', 'setTimeout("document.body.dataset.ready = \'true\'", 0);'],
@@ -2671,13 +2762,40 @@ try {
       'destructured-function-constructor',
       'const { Function: make } = globalThis; document.body.dataset.value = String(make("return 1")());',
     ],
-  ] as const) {
-    const stringEvaluationGame = createPreviewFixture(name, { mainJs });
-    await assert.rejects(
-      () => runOfflinePlaytestPackaging({ gameRoot: stringEvaluationGame }),
-      /does not support JavaScript string evaluation/u,
-    );
+  ] as const;
+
+  for (const [name, mainJs] of unsupportedStringEvaluationFixtures) {
+    await assertStringEvaluationRejected(name, mainJs);
   }
+
+  await assertStringEvaluationRejected(
+    'bound-function-constructor',
+    'const make = Function.bind(null); document.body.dataset.value = String(make("return 1")());',
+  );
+  await assertStringEvaluationRejected(
+    'global-object-aliased-function-constructor',
+    'const runtime = globalThis; document.body.dataset.value = String(runtime.Function("return 1")());',
+  );
+  await assertStringEvaluationRejected(
+    'function-constructor-call',
+    'document.body.dataset.value = String(Function.call(null, "return 1")());',
+  );
+  await assertStringEvaluationRejected(
+    'eval-apply',
+    'eval.apply(globalThis, ["document.body.dataset.ready = \'true\'"]);',
+  );
+  await assertStringEvaluationRejected(
+    'bound-string-timeout',
+    'const schedule = setTimeout.bind(globalThis, "document.body.dataset.ready = \'true\'"); schedule(0);',
+  );
+  await assertStringEvaluationRejected(
+    'string-timeout-call',
+    'setTimeout.call(globalThis, "document.body.dataset.ready = \'true\'", 0);',
+  );
+  await assertStringEvaluationRejected(
+    'string-timeout-apply',
+    'setTimeout.apply(globalThis, ["document.body.dataset.ready = \'true\'", 0]);',
+  );
 
   const memberOwnedStringEvaluatorHtml = await packageAndReadFixture('member-owned-string-evaluator', {
     mainJs: 'const sdk = { eval() {}, Function() { return () => {}; }, setTimeout() {} }; sdk.eval("local"); sdk.Function("local")(); sdk.setTimeout("local", 0);',
@@ -3164,6 +3282,14 @@ async function assertWorkerRejected(
   const gameRoot = createPreviewFixture(name, options);
   fs.writeFileSync(path.join(gameRoot, 'artifacts/web-preview/assets/worker.js'), 'self.close();');
   await assert.rejects(() => runOfflinePlaytestPackaging({ gameRoot }), /does not support Worker/u);
+}
+
+async function assertStringEvaluationRejected(name: string, mainJs: string): Promise<void> {
+  const gameRoot = createPreviewFixture(name, { mainJs });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot }),
+    /does not support JavaScript string evaluation/u,
+  );
 }
 
 async function packageAndReadFixture(

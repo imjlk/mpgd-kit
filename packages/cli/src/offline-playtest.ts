@@ -146,9 +146,16 @@ interface LocationAliasAssignment {
   readonly start: number;
 }
 
-type JavaScriptStringEvaluatorKind = 'evaluator' | 'timer';
+type NativeCallableKind =
+  | 'evaluator'
+  | 'fetch'
+  | 'global-object'
+  | 'timer'
+  | 'wasm-object'
+  | 'wasm-streaming'
+  | 'worker';
 
-interface JavaScriptStringEvaluatorAssignment {
+interface NativeCallableAssignment {
   readonly expression: string;
   readonly expressionRange: SourceRange;
   readonly identifier: string;
@@ -5348,7 +5355,7 @@ function assertSupportedBundledRuntime(source: string): void {
   assertNoUnsupportedWorkerConstruction(normalizedSource, codePositions);
   assertNoUnsupportedBrowserApi(normalizedSource, codePositions);
   assertNoNativeWebAssemblyStreaming(normalizedSource, codePositions);
-  assertNoUnsafeJavaScriptEvaluation(normalizedSource, codePositions);
+  assertNoUnsupportedNativeCallables(normalizedSource, codePositions);
   assertNoDynamicImport(normalizedSource, codePositions, braceKinds);
   assertNoUnsafeDynamicElementCreation(normalizedSource, codePositions);
   assertNoScriptDrivenNavigation(normalizedSource, codePositions);
@@ -5390,7 +5397,7 @@ function assertNoNativeWebAssemblyStreaming(
   }
 }
 
-function assertNoUnsafeJavaScriptEvaluation(
+function assertNoUnsupportedNativeCallables(
   source: string,
   codePositions: Uint8Array,
 ): void {
@@ -5463,10 +5470,11 @@ function assertNoUnsafeJavaScriptEvaluation(
     }
   }
 
-  const assignments = findJavaScriptStringEvaluatorAssignments(source, codePositions);
-  const potentialKinds = findPotentialJavaScriptStringEvaluatorKinds(assignments);
+  const assignments = findNativeCallableAssignments(source, codePositions);
+  const potentialKinds = findPotentialNativeCallableKinds(assignments);
+  const callableReferencePatternSource = `${javascriptIdentifierPatternSource}(?:\\s*\\.\\s*${javascriptIdentifierPatternSource})*`;
   const aliasCallPattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\(`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${callableReferencePatternSource})\\s*\\(`,
     'gu',
   );
 
@@ -5475,7 +5483,7 @@ function assertNoUnsafeJavaScriptEvaluation(
       match.index === undefined
       || match[1] === undefined
       || codePositions[match.index] !== 1
-      || !potentialKinds.has(match[1])
+      || findPotentialNativeCallableExpressionKinds(match[1], potentialKinds).size === 0
     ) {
       continue;
     }
@@ -5495,7 +5503,7 @@ function assertNoUnsafeJavaScriptEvaluation(
       continue;
     }
 
-    const kinds = resolveJavaScriptStringEvaluatorIdentifierAtPosition(
+    const kinds = resolveNativeCallableExpressionKinds(
       source,
       match[1],
       match.index,
@@ -5508,27 +5516,65 @@ function assertNoUnsafeJavaScriptEvaluation(
       throw new Error('Offline playtest does not support JavaScript string evaluation.');
     }
 
-    const callback = splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+    if (
+      kinds.has('fetch')
+      && !isDirectNativeFetchReference(source, match[1], match.index, codePositions)
+    ) {
+      throw new Error('Offline playtest does not support aliases of native fetch.');
+    }
+
+    if (kinds.has('worker')) {
+      throw new Error('Offline playtest does not support Worker.');
+    }
+
+    if (kinds.has('wasm-streaming')) {
+      throw new Error('Offline playtest does not support WebAssembly streaming.');
+    }
+
+    const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
+    const callback = /\.\s*call\s*$/u.test(match[1]) ? arguments_[1] : arguments_[0];
 
     if (
       kinds.has('timer')
-      && callback !== undefined
-      && resolveStaticJavaScriptStringExpression(source, callback, codePositions) !== undefined
+      && (
+        /\.\s*(?:apply|bind)\s*$/u.test(match[1])
+        || (
+          callback !== undefined
+          && resolveStaticJavaScriptStringExpression(source, callback, codePositions) !== undefined
+        )
+      )
     ) {
       throw new Error('Offline playtest does not support JavaScript string evaluation.');
     }
   }
 }
 
-function findJavaScriptStringEvaluatorAssignments(
+function isDirectNativeFetchReference(
+  source: string,
+  expression: string,
+  position: number,
+  codePositions: Uint8Array,
+): boolean {
+  const match = /^(?:(globalThis|self|window)\s*\.\s*)?(fetch)$/u.exec(expression);
+  const bindingIdentifier = match?.[1] ?? match?.[2];
+  return bindingIdentifier !== undefined
+    && findVisibleJavaScriptIdentifierBinding(
+      source,
+      bindingIdentifier,
+      position,
+      codePositions,
+    ) === undefined;
+}
+
+function findNativeCallableAssignments(
   source: string,
   codePositions: Uint8Array,
-): readonly JavaScriptStringEvaluatorAssignment[] {
+): readonly NativeCallableAssignment[] {
   const assignmentPattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}(?:&&=|\\|\\|=|\\?\\?=|=)${javascriptTriviaPatternSource}(?!=|>)`,
     'gu',
   );
-  const assignments: JavaScriptStringEvaluatorAssignment[] = [];
+  const assignments: NativeCallableAssignment[] = [];
 
   for (const match of source.matchAll(assignmentPattern)) {
     if (
@@ -5590,7 +5636,7 @@ function findJavaScriptStringEvaluatorAssignments(
     const bindingSource = match[1];
     const bindingStart = match.index + match[0].indexOf(bindingSource);
     const propertyPattern = new RegExp(
-      `(?:^|,)\\s*(eval|Function|setInterval|setTimeout)\\s*(?::\\s*(${javascriptIdentifierPatternSource})|(?=\\s*(?:,|$)))`,
+      `(?:^|,)\\s*(eval|fetch|Function|globalThis|instantiateStreaming|self|setInterval|setTimeout|SharedWorker|WebAssembly|window|Worker)\\s*(?::\\s*(${javascriptIdentifierPatternSource})|(?=\\s*(?:,|$)))`,
       'gu',
     );
 
@@ -5613,14 +5659,21 @@ function findJavaScriptStringEvaluatorAssignments(
   return assignments;
 }
 
-function findPotentialJavaScriptStringEvaluatorKinds(
-  assignments: readonly JavaScriptStringEvaluatorAssignment[],
-): ReadonlyMap<string, ReadonlySet<JavaScriptStringEvaluatorKind>> {
-  const kinds = new Map<string, Set<JavaScriptStringEvaluatorKind>>([
+function findPotentialNativeCallableKinds(
+  assignments: readonly NativeCallableAssignment[],
+): ReadonlyMap<string, ReadonlySet<NativeCallableKind>> {
+  const kinds = new Map<string, Set<NativeCallableKind>>([
     ['eval', new Set(['evaluator'])],
+    ['fetch', new Set(['fetch'])],
     ['Function', new Set(['evaluator'])],
+    ['globalThis', new Set(['global-object'])],
+    ['self', new Set(['global-object'])],
     ['setInterval', new Set(['timer'])],
     ['setTimeout', new Set(['timer'])],
+    ['SharedWorker', new Set(['worker'])],
+    ['WebAssembly', new Set(['wasm-object'])],
+    ['window', new Set(['global-object'])],
+    ['Worker', new Set(['worker'])],
   ]);
   let changed = true;
 
@@ -5628,7 +5681,7 @@ function findPotentialJavaScriptStringEvaluatorKinds(
     changed = false;
 
     for (const assignment of assignments) {
-      const assignedKinds = findPotentialJavaScriptStringEvaluatorExpressionKinds(
+      const assignedKinds = findPotentialNativeCallableExpressionKinds(
         assignment.expression,
         kinds,
       );
@@ -5650,43 +5703,42 @@ function findPotentialJavaScriptStringEvaluatorKinds(
   return kinds;
 }
 
-function findPotentialJavaScriptStringEvaluatorExpressionKinds(
+function findPotentialNativeCallableExpressionKinds(
   expression: string,
-  knownKinds: ReadonlyMap<string, ReadonlySet<JavaScriptStringEvaluatorKind>>,
-): ReadonlySet<JavaScriptStringEvaluatorKind> {
+  knownKinds: ReadonlyMap<string, ReadonlySet<NativeCallableKind>>,
+): ReadonlySet<NativeCallableKind> {
   const unwrapped = unwrapBalancedOuterParentheses(expression);
 
   if (unwrapped.offset > 0 || unwrapped.expression.length !== expression.length) {
-    return findPotentialJavaScriptStringEvaluatorExpressionKinds(unwrapped.expression, knownKinds);
+    return findPotentialNativeCallableExpressionKinds(unwrapped.expression, knownKinds);
   }
 
   const sequenceResult = findSequenceExpressionLastValue(expression);
 
   if (sequenceResult !== undefined) {
-    return findPotentialJavaScriptStringEvaluatorExpressionKinds(
-      sequenceResult.expression,
-      knownKinds,
-    );
+    return findPotentialNativeCallableExpressionKinds(sequenceResult.expression, knownKinds);
   }
 
   const assignmentResult = findAssignmentResultRightHandSide(expression);
 
   if (assignmentResult !== undefined) {
-    return findPotentialJavaScriptStringEvaluatorExpressionKinds(
-      assignmentResult.expression,
-      knownKinds,
+    return findPotentialNativeCallableExpressionKinds(assignmentResult.expression, knownKinds);
+  }
+
+  const boundReceiver = readBoundNativeCallableReceiver(expression);
+
+  if (boundReceiver !== undefined) {
+    const receiverKinds = findPotentialNativeCallableExpressionKinds(boundReceiver, knownKinds);
+    return receiverKinds.has('timer') ? new Set([...receiverKinds, 'evaluator']) : receiverKinds;
+  }
+
+  const member = readNativeCallableMemberExpression(expression);
+
+  if (member !== undefined) {
+    return deriveNativeCallablePropertyKinds(
+      findPotentialNativeCallableExpressionKinds(member.owner, knownKinds),
+      member.property,
     );
-  }
-
-  const native = /^(?:(?:globalThis|self|window)\s*\.\s*)?(eval|Function|setInterval|setTimeout)$/u.exec(
-    expression,
-  )?.[1];
-
-  if (native === 'eval' || native === 'Function') {
-    return new Set(['evaluator']);
-  }
-  if (native === 'setInterval' || native === 'setTimeout') {
-    return new Set(['timer']);
   }
 
   return exactJavaScriptIdentifierPattern.test(expression)
@@ -5694,14 +5746,14 @@ function findPotentialJavaScriptStringEvaluatorExpressionKinds(
     : new Set();
 }
 
-function resolveJavaScriptStringEvaluatorIdentifierAtPosition(
+function resolveNativeCallableIdentifierAtPosition(
   source: string,
   identifier: string,
   position: number,
   codePositions: Uint8Array,
-  assignments: readonly JavaScriptStringEvaluatorAssignment[],
+  assignments: readonly NativeCallableAssignment[],
   visitedAliases: Set<string>,
-): ReadonlySet<JavaScriptStringEvaluatorKind> {
+): ReadonlySet<NativeCallableKind> {
   const binding = findVisibleJavaScriptIdentifierBinding(
     source,
     identifier,
@@ -5733,8 +5785,20 @@ function resolveJavaScriptStringEvaluatorIdentifierAtPosition(
     if (identifier === 'eval' || identifier === 'Function') {
       return new Set(['evaluator']);
     }
+    if (identifier === 'globalThis' || identifier === 'self' || identifier === 'window') {
+      return new Set(['global-object']);
+    }
     if (identifier === 'setInterval' || identifier === 'setTimeout') {
       return new Set(['timer']);
+    }
+    if (identifier === 'fetch') {
+      return new Set(['fetch']);
+    }
+    if (identifier === 'SharedWorker' || identifier === 'Worker') {
+      return new Set(['worker']);
+    }
+    if (identifier === 'WebAssembly') {
+      return new Set(['wasm-object']);
     }
   }
 
@@ -5753,7 +5817,7 @@ function resolveJavaScriptStringEvaluatorIdentifierAtPosition(
 
   if (directAssignment?.ambiguous === false && directAssignment.range !== undefined) {
     const range = trimSourceRange(source, directAssignment.range);
-    return resolveJavaScriptStringEvaluatorExpressionKinds(
+    return resolveNativeCallableExpressionKinds(
       source,
       maskNonCode(
         source.slice(range.start, range.end),
@@ -5766,13 +5830,13 @@ function resolveJavaScriptStringEvaluatorIdentifierAtPosition(
     );
   }
 
-  const kinds = new Set<JavaScriptStringEvaluatorKind>();
+  const kinds = new Set<NativeCallableKind>();
   const initializerRange = binding?.initializerRange === undefined
     ? undefined
     : trimSourceRange(source, binding.initializerRange);
 
   if (initializerRange !== undefined && initializerRange.end <= position) {
-    for (const kind of resolveJavaScriptStringEvaluatorExpressionKinds(
+    for (const kind of resolveNativeCallableExpressionKinds(
       source,
       maskNonCode(
         source.slice(initializerRange.start, initializerRange.end),
@@ -5818,7 +5882,7 @@ function resolveJavaScriptStringEvaluatorIdentifierAtPosition(
       || assignmentBinding?.start === binding.start
       || matchesParameterDefault
     ) {
-      for (const kind of resolveJavaScriptStringEvaluatorExpressionKinds(
+      for (const kind of resolveNativeCallableExpressionKinds(
         source,
         assignment.expression,
         assignment.expressionRange.start,
@@ -5834,18 +5898,18 @@ function resolveJavaScriptStringEvaluatorIdentifierAtPosition(
   return kinds;
 }
 
-function resolveJavaScriptStringEvaluatorExpressionKinds(
+function resolveNativeCallableExpressionKinds(
   source: string,
   expression: string,
   position: number,
   codePositions: Uint8Array,
-  assignments: readonly JavaScriptStringEvaluatorAssignment[],
+  assignments: readonly NativeCallableAssignment[],
   visitedAliases: Set<string>,
-): ReadonlySet<JavaScriptStringEvaluatorKind> {
+): ReadonlySet<NativeCallableKind> {
   const unwrapped = unwrapBalancedOuterParentheses(expression);
 
   if (unwrapped.offset > 0 || unwrapped.expression.length !== expression.length) {
-    return resolveJavaScriptStringEvaluatorExpressionKinds(
+    return resolveNativeCallableExpressionKinds(
       source,
       unwrapped.expression,
       position + unwrapped.offset,
@@ -5858,7 +5922,7 @@ function resolveJavaScriptStringEvaluatorExpressionKinds(
   const sequenceResult = findSequenceExpressionLastValue(expression);
 
   if (sequenceResult !== undefined) {
-    return resolveJavaScriptStringEvaluatorExpressionKinds(
+    return resolveNativeCallableExpressionKinds(
       source,
       sequenceResult.expression,
       position + sequenceResult.offset,
@@ -5871,7 +5935,7 @@ function resolveJavaScriptStringEvaluatorExpressionKinds(
   const assignmentResult = findAssignmentResultRightHandSide(expression);
 
   if (assignmentResult !== undefined) {
-    return resolveJavaScriptStringEvaluatorExpressionKinds(
+    return resolveNativeCallableExpressionKinds(
       source,
       assignmentResult.expression,
       position + assignmentResult.offset,
@@ -5881,30 +5945,41 @@ function resolveJavaScriptStringEvaluatorExpressionKinds(
     );
   }
 
-  const qualified = /^(globalThis|self|window)\s*\.\s*(eval|Function|setInterval|setTimeout)$/u.exec(
-    expression,
-  );
+  const boundReceiver = readBoundNativeCallableReceiver(expression);
 
-  if (
-    qualified?.[1] !== undefined
-    && qualified[2] !== undefined
-    && findVisibleJavaScriptIdentifierBinding(
+  if (boundReceiver !== undefined) {
+    const receiverKinds = resolveNativeCallableExpressionKinds(
       source,
-      qualified[1],
+      boundReceiver,
       position,
       codePositions,
-    ) === undefined
-  ) {
-    return qualified[2] === 'eval' || qualified[2] === 'Function'
-      ? new Set(['evaluator'])
-      : new Set(['timer']);
+      assignments,
+      visitedAliases,
+    );
+    return receiverKinds.has('timer') ? new Set([...receiverKinds, 'evaluator']) : receiverKinds;
+  }
+
+  const member = readNativeCallableMemberExpression(expression);
+
+  if (member !== undefined) {
+    return deriveNativeCallablePropertyKinds(
+      resolveNativeCallableExpressionKinds(
+        source,
+        member.owner,
+        position,
+        codePositions,
+        assignments,
+        visitedAliases,
+      ),
+      member.property,
+    );
   }
 
   if (!exactJavaScriptIdentifierPattern.test(expression)) {
     return new Set();
   }
 
-  return resolveJavaScriptStringEvaluatorIdentifierAtPosition(
+  return resolveNativeCallableIdentifierAtPosition(
     source,
     expression,
     position,
@@ -5912,6 +5987,87 @@ function resolveJavaScriptStringEvaluatorExpressionKinds(
     assignments,
     visitedAliases,
   );
+}
+
+function readNativeCallableMemberExpression(
+  expression: string,
+): { readonly owner: string; readonly property: string } | undefined {
+  const pattern = new RegExp(
+    `^(${javascriptIdentifierPatternSource}(?:\\s*\\.\\s*${javascriptIdentifierPatternSource})*)\\s*\\.\\s*(${javascriptIdentifierPatternSource})$`,
+    'u',
+  );
+  const match = pattern.exec(expression);
+
+  return match?.[1] === undefined || match[2] === undefined
+    ? undefined
+    : { owner: match[1], property: match[2] };
+}
+
+function deriveNativeCallablePropertyKinds(
+  ownerKinds: ReadonlySet<NativeCallableKind>,
+  property: string,
+): ReadonlySet<NativeCallableKind> {
+  const kinds = new Set<NativeCallableKind>();
+
+  if (ownerKinds.has('global-object')) {
+    if (property === 'eval' || property === 'Function') {
+      kinds.add('evaluator');
+    } else if (property === 'fetch') {
+      kinds.add('fetch');
+    } else if (property === 'globalThis' || property === 'self' || property === 'window') {
+      kinds.add('global-object');
+    } else if (property === 'setInterval' || property === 'setTimeout') {
+      kinds.add('timer');
+    } else if (property === 'SharedWorker' || property === 'Worker') {
+      kinds.add('worker');
+    } else if (property === 'WebAssembly') {
+      kinds.add('wasm-object');
+    }
+  }
+
+  if (ownerKinds.has('wasm-object') && property === 'instantiateStreaming') {
+    kinds.add('wasm-streaming');
+  }
+
+  if (property === 'call' || property === 'apply' || property === 'bind') {
+    for (const kind of ownerKinds) {
+      if (
+        kind === 'evaluator'
+        || kind === 'fetch'
+        || kind === 'timer'
+        || kind === 'wasm-streaming'
+        || kind === 'worker'
+      ) {
+        kinds.add(kind);
+      }
+    }
+
+    if (property === 'bind' && ownerKinds.has('timer')) {
+      kinds.add('evaluator');
+    }
+  }
+
+  return kinds;
+}
+
+function readBoundNativeCallableReceiver(expression: string): string | undefined {
+  const qualifiedIdentifierPatternSource = `${javascriptIdentifierPatternSource}(?:\\s*\\.\\s*${javascriptIdentifierPatternSource})*`;
+  const pattern = new RegExp(`^(${qualifiedIdentifierPatternSource})\\s*\\.\\s*bind\\s*\\(`, 'u');
+  const match = pattern.exec(expression);
+
+  if (match?.[1] === undefined) {
+    return undefined;
+  }
+
+  const openingParenthesis = match[0].length - 1;
+  const codePositions = createCodePositionMap(expression, true);
+  const closingParenthesis = findMatchingJavaScriptClosingParenthesis(
+    expression,
+    openingParenthesis,
+    expression.length,
+    codePositions,
+  );
+  return closingParenthesis === expression.length - 1 ? match[1] : undefined;
 }
 
 function assertNoUnsafeDynamicElementCreation(
