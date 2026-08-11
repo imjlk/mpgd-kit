@@ -52,7 +52,8 @@ leaderboard. Devvit ranking should be owned by a server completion handler that
 validates the game-specific attempt, records it through the verified leaderboard
 provider from `@mpgd/adapter-devvit/server`, and exposes only an authenticated
 game-scoped snapshot route. Do not enable `nativeLeaderboard` or trust a raw
-client score submission for that flow.
+client score submission for that flow. Keep `remoteLeaderboard` disabled too;
+the verified completion route is not the generic `PlatformGateway` leaderboard.
 
 `devvit playtest` runs the official unified Vite build in watch mode, so a
 separate client/server watcher or staging prebuild is not required.

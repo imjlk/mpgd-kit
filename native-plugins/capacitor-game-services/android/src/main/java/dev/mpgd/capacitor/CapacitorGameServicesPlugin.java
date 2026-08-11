@@ -296,6 +296,7 @@ public class CapacitorGameServicesPlugin extends Plugin {
             .put("rewardedAds", true)
             .put("interstitialAds", true)
             .put("nativeLeaderboard", true)
+            .put("remoteLeaderboard", false)
             .put("achievements", false)
             .put("cloudSave", false)
             .put("socialShare", false)
