@@ -36,7 +36,8 @@ and rejects duplicate mappings.
 verification/finalization contract for developer-managed consumables:
 
 1. Reject requests that are not from the `microsoft-store` target or whose
-   Digital Goods evidence does not match the catalog `inAppOfferToken`.
+   Digital Goods evidence matches neither the current catalog `inAppOfferToken`
+   nor an explicitly configured historical product mapping.
 2. Resolve an Entra service access token, renewable User Store ID, and stable
    opaque account-link ID from trusted server identity. None may come from
    client purchase evidence. The account-link ID must survive User Store ID
@@ -78,6 +79,13 @@ operational telemetry confirms that no player-scoped pending recovery record or
 unconsumed Store entitlement references it; removing it earlier makes a charged
 pre-grant checkout unverifiable. Current mappings still come from the product
 catalog plus `storeIds`, and unknown old tokens remain rejected.
+
+Pass the same old Digital Goods tokens as `historicalInAppOfferTokens` on the
+browser adapter product. That client-side alias lets `listPurchases()` associate
+an old unconsumed item with its logical product even after browser recovery
+storage was cleared; the server-side alias remains the authority that permits
+the corresponding old Collections product ID. Historical tokens are recovery
+aliases only and are never offered by `getProducts()` or used for new checkout.
 
 User Store ID plus Entra authentication cannot consume developer-managed
 consumables in non-RETAIL sandboxes. The boundary fails closed with

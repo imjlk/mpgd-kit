@@ -25,7 +25,7 @@ const commerce = createMicrosoftStoreCommerceAdapter({
   },
 });
 
-/** Configure Store products and a game-owned authority before enabling checkout. */
+/** Configure Store products, authenticated recovery scope, and authority before checkout. */
 export async function createBuildGateway(_runtime: RuntimeConfig): Promise<PlatformGateway> {
   return withMicrosoftStoreCommerceAdapter(base, commerce);
 }
