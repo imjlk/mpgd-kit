@@ -728,6 +728,24 @@ try {
     );
   }
 
+  for (const [name, aliasDeclaration, receiver] of [
+    ['native-create-element-ns-refresh-meta', '', 'document'],
+    ['aliased-create-element-ns-refresh-meta', 'const doc = document;', 'doc'],
+  ] as const) {
+    const namespacedDynamicRefreshMetaGame = createPreviewFixture(name, {
+      mainJs: `${aliasDeclaration} const meta = ${receiver}.createElementNS("http://www.w3.org/1999/xhtml", "meta"); meta.httpEquiv = "refresh"; meta.content = "0;url=https://example.com/escape"; document.head.append(meta);`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: namespacedDynamicRefreshMetaGame }),
+      /does not support dynamically created meta elements/u,
+    );
+  }
+
+  const svgMetaHtml = await packageAndReadFixture('svg-create-element-ns-meta', {
+    mainJs: 'const meta = document.createElementNS("http://www.w3.org/2000/svg", "meta"); document.body.dataset.namespace = meta.namespaceURI;',
+  });
+  assert.match(svgMetaHtml, /http:\/\/www\.w3\.org\/2000\/svg/u);
+
   const shadowedDynamicMetaHtml = await packageAndReadFixture('shadowed-dynamic-meta', {
     mainJs: 'function make(document) { return document.createElement("meta"); } document.body.dataset.value = String(make({ createElement: (tag) => tag }));',
   });
@@ -1355,6 +1373,21 @@ try {
     'expected the Phaser HTML asset to be inlined as an exact data URL',
   );
 
+  const inertCustomAttributeAsset = '<div href="/chapter/1"></div><game-card src="chapter-one"></game-card>';
+  const inertCustomAttributeHtml = await packageAndReadFixture(
+    'inert-custom-html-asset-attributes',
+    {
+      mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
+    },
+    [['artifacts/web-preview/assets/panel.html', inertCustomAttributeAsset]],
+  );
+  assert.ok(
+    inertCustomAttributeHtml.includes(
+      `data:text/html;base64,${Buffer.from(inertCustomAttributeAsset).toString('base64')}`,
+    ),
+    'expected inert src and href attributes to remain literal HTML asset content',
+  );
+
   const rawTextPhaserHtmlAsset = '<textarea><script>example</script></textarea><title><img src="/assets/not-an-asset.png"></title><style>.label::before { content: "<script>example</script>"; }</style>';
   const rawTextPhaserHtml = await packageAndReadFixture(
     'raw-text-phaser-html-asset',
@@ -1651,6 +1684,12 @@ try {
   assert.doesNotMatch(documentRelativeFetchHtml, /fetch\(["']\.\/level\.json/u);
   assert.match(documentRelativeFetchHtml, /fetch\(["']data:application\/json;base64,/u);
 
+  const identifiedFetchHtml = await packageAndReadFixture('identified-fetch-asset', {
+    mainJs: 'const url = "/assets/config.json"; document.body.dataset.url = url; void fetch(url);',
+  });
+  assert.match(identifiedFetchHtml, /\/assets\/config\.json/u);
+  assert.match(identifiedFetchHtml, /fetch\(["']data:application\/json;base64,/u);
+
   const commentedFetchHtml = await packageAndReadFixture('commented-fetch-asset', {
     mainJs: 'void fetch(/* preload */ "/assets/config.json");',
   });
@@ -1685,7 +1724,7 @@ try {
     },
     [[
       'artifacts/web-preview/assets/debug.js',
-      'export const retained = "retained"; export function loadDebug() { return fetch("/api/route"); }',
+      'export const retained = "retained"; export function loadDebug() { return fetch("/api/route"); } export function loadXhr() { let request = new XMLHttpRequest(); request.open("GET", "/api/route"); }',
     ]],
   );
   assert.match(treeShakenFetchHtml, /retained/u);

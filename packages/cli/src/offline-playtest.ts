@@ -65,17 +65,21 @@ interface InliningContext {
   inlinedAssetBytes: number;
 }
 
-interface DeferredJavaScriptAsset {
-  readonly externalError?: string;
-  readonly reference: string;
-  readonly sourceFile: string;
-}
+type DeferredJavaScriptAsset =
+  | {
+    readonly externalError?: string;
+    readonly reference: string;
+    readonly sourceFile: string;
+  }
+  | { readonly retainedError: string };
 
 type AssetDataUrlReader = (
   sourceFile: string,
   reference: string,
   externalError?: string,
 ) => string;
+
+type JavaScriptErrorDeferrer = (error: string) => string;
 
 interface BundledEntry {
   readonly script: string;
@@ -879,6 +883,15 @@ function deferJavaScriptAsset(
   return marker;
 }
 
+function deferJavaScriptError(
+  error: string,
+  deferredAssets: Map<string, DeferredJavaScriptAsset>,
+): string {
+  const marker = `data:application/x-mpgd-deferred;id=${randomUUID()},`;
+  deferredAssets.set(marker, { retainedError: error });
+  return marker;
+}
+
 function resolveDeferredJavaScriptAssets(
   source: string,
   deferredAssets: ReadonlyMap<string, DeferredJavaScriptAsset>,
@@ -889,6 +902,10 @@ function resolveDeferredJavaScriptAssets(
   for (const [marker, asset] of deferredAssets) {
     if (!output.includes(marker)) {
       continue;
+    }
+
+    if ('retainedError' in asset) {
+      throw new Error(asset.retainedError);
     }
 
     if (asset.externalError !== undefined && isNonLocalReference(asset.reference)) {
@@ -976,6 +993,9 @@ function inlineJavaScriptAssetReferences(
         deferredAssets,
         externalError,
       );
+  const deferError: JavaScriptErrorDeferrer | undefined = deferredAssets === undefined
+    ? undefined
+    : (error) => deferJavaScriptError(error, deferredAssets);
   const staticUrlPattern = /(?<![$\u200C\u200D\p{ID_Continue}])new\s+(?:(globalThis|self|window)\s*\.\s*)?URL\(\s*(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`)\s*,\s*import\.meta\.url\s*\)(\s*\.\s*href)?/gu;
   const sourceCodePositions = createCodePositionMap(source, true);
   let output = source.replace(
@@ -1097,6 +1117,7 @@ function inlineJavaScriptAssetReferences(
       return `${prefix}${quote}${dataUrl}${quote}`;
     },
   );
+  output = inlineStaticFetchArguments(output, documentFile, readAsset);
   const staticAudioPattern = /((?<![$.\u200C\u200D\p{ID_Continue}])new\s+(?:(?:globalThis|self|window)\s*\.\s*)?Audio\s*\((?:(?:\s+)|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*(?:\r?\n|$))*)(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`)/gu;
   const audioCodePositions = createCodePositionMap(output, true);
   output = output.replace(
@@ -1163,8 +1184,75 @@ function inlineJavaScriptAssetReferences(
   );
   output = inlineStaticFontFaceSources(output, documentFile, context, readAsset);
   output = inlineStaticElementSourceAssignments(output, documentFile, readAsset);
-  output = inlineStaticXmlHttpRequestOpenCalls(output, documentFile, readAsset);
+  output = inlineStaticXmlHttpRequestOpenCalls(output, documentFile, readAsset, deferError);
   output = inlinePhaserAssetReferences(output, documentFile, readAsset);
+  return output;
+}
+
+function inlineStaticFetchArguments(
+  source: string,
+  documentFile: string,
+  readAsset: AssetDataUrlReader,
+): string {
+  const pattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(fetch)\s*(?:\?\.\s*)?\(/gu;
+  const codePositions = createCodePositionMap(source, true);
+  const replacements: SourceReplacement[] = [];
+
+  for (const match of source.matchAll(pattern)) {
+    if (
+      match.index === undefined
+      || match[2] === undefined
+      || codePositions[match.index] !== 1
+      || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
+    ) {
+      continue;
+    }
+
+    const bindingIdentifier = match[1] ?? match[2];
+
+    if (
+      findVisibleJavaScriptIdentifierBinding(
+        source,
+        bindingIdentifier,
+        match.index,
+        codePositions,
+      ) !== undefined
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = match.index + match[0].length - 1;
+    const argument = splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+
+    if (argument === undefined) {
+      continue;
+    }
+
+    const reference = resolveStaticJavaScriptStringExpression(source, argument, codePositions);
+
+    if (reference === undefined || isDataUrlReference(reference)) {
+      continue;
+    }
+
+    replacements.push({
+      start: argument.start,
+      end: argument.end,
+      value: JSON.stringify(
+        readAsset(
+          documentFile,
+          reference,
+          `Offline playtest does not support network fetch URL: ${reference}`,
+        ),
+      ),
+    });
+  }
+
+  let output = source;
+
+  for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
   return output;
 }
 
@@ -1604,6 +1692,7 @@ function inlineStaticXmlHttpRequestOpenCalls(
   source: string,
   documentFile: string,
   readAsset: AssetDataUrlReader,
+  deferError: JavaScriptErrorDeferrer | undefined,
 ): string {
   const pattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*open\\s*\\(`,
@@ -1618,6 +1707,9 @@ function inlineStaticXmlHttpRequestOpenCalls(
     }
 
     const receiver = match[1];
+    const openingParenthesis = match.index + match[0].length - 1;
+    const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
+    const urlArgument = arguments_[1];
     const binding = findVisibleJavaScriptIdentifierBinding(
       source,
       receiver,
@@ -1636,9 +1728,18 @@ function inlineStaticXmlHttpRequestOpenCalls(
     const assignmentProof = assignment?.range;
 
     if (assignment?.ambiguous === true) {
-      throw new Error(
-        'Offline playtest requires an unambiguous XMLHttpRequest assignment before rewriting open.',
-      );
+      const error = 'Offline playtest requires an unambiguous XMLHttpRequest assignment before rewriting open.';
+
+      if (deferError !== undefined && urlArgument !== undefined) {
+        replacements.push({
+          start: urlArgument.start,
+          end: urlArgument.end,
+          value: JSON.stringify(deferError(error)),
+        });
+        continue;
+      }
+
+      throw new Error(error);
     }
 
     const isNativeXmlHttpRequest = assignmentProof === undefined
@@ -1654,14 +1755,19 @@ function inlineStaticXmlHttpRequestOpenCalls(
     }
 
     if (binding.kind !== 'const') {
-      throw new Error(
-        'Offline playtest requires an immutable XMLHttpRequest binding before rewriting open.',
-      );
-    }
+      const error = 'Offline playtest requires an immutable XMLHttpRequest binding before rewriting open.';
 
-    const openingParenthesis = source.indexOf('(', match.index);
-    const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
-    const urlArgument = arguments_[1];
+      if (deferError !== undefined && urlArgument !== undefined) {
+        replacements.push({
+          start: urlArgument.start,
+          end: urlArgument.end,
+          value: JSON.stringify(deferError(error)),
+        });
+        continue;
+      }
+
+      throw new Error(error);
+    }
 
     if (urlArgument === undefined) {
       continue;
@@ -4680,7 +4786,7 @@ function assertNoDynamicMetaElementCreation(
   codePositions: Uint8Array,
 ): void {
   const pattern = new RegExp(
-    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(?:(globalThis|self|window)${javascriptTriviaPatternSource}(?:\\.|\\?\\.)${javascriptTriviaPatternSource})?(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}(?:\\.|\\?\\.)${javascriptTriviaPatternSource}createElement${javascriptTriviaPatternSource}(?:\\?\\.${javascriptTriviaPatternSource})?\\(`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(?:(globalThis|self|window)${javascriptTriviaPatternSource}(?:\\.|\\?\\.)${javascriptTriviaPatternSource})?(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}(?:\\.|\\?\\.)${javascriptTriviaPatternSource}(createElement(?:NS)?)${javascriptTriviaPatternSource}(?:\\?\\.${javascriptTriviaPatternSource})?\\(`,
     'gu',
   );
 
@@ -4692,6 +4798,7 @@ function assertNoDynamicMetaElementCreation(
     if (
       match.index === undefined
       || match[2] === undefined
+      || match[3] === undefined
       || codePositions[match.index] !== 1
       || (previousCode !== undefined && source[previousCode] === '.')
       || !isNativeDocumentExpression(
@@ -4707,15 +4814,26 @@ function assertNoDynamicMetaElementCreation(
 
     const openingParenthesis = match.index + match[0].length - 1;
     const arguments_ = splitJavaScriptArguments(source, openingParenthesis, codePositions);
-    const tagName = arguments_[0] === undefined
+    const method = match[3];
+    const namespace = method === 'createElementNS' && arguments_[0] !== undefined
+      ? readStaticJavaScriptStringWithTrivia(source, arguments_[0], codePositions)
+      : undefined;
+    const tagArgument = method === 'createElementNS' ? arguments_[1] : arguments_[0];
+    const tagName = tagArgument === undefined
       ? undefined
       : readStaticJavaScriptStringWithTrivia(
           source,
-          arguments_[0],
+          tagArgument,
           codePositions,
         )?.toLowerCase();
 
-    if (tagName === 'meta') {
+    if (
+      tagName === 'meta'
+      && (
+        method === 'createElement'
+        || namespace?.toLowerCase() === 'http://www.w3.org/1999/xhtml'
+      )
+    ) {
       throw new Error('Offline playtest does not support dynamically created meta elements.');
     }
   }
@@ -6753,7 +6871,12 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
         }
       }
 
-      if (attribute.name === 'srcset') {
+      const resourceAttributes = htmlAssetAttributesByTag[tag.name] ?? [];
+      const isResourceReference = resourceAttributes.includes(attribute.name)
+        || (tag.name === 'link' && attribute.name === 'href')
+        || isActiveEmbeddedNavigationAttribute(tag.name, attribute.name);
+
+      if (attribute.name === 'srcset' && resourceAttributes.includes('srcset')) {
         const external = parseHtmlSrcset(value, htmlFile).find(
           (candidate) => !isEmbeddedOrFragmentReference(candidate.reference),
         );
@@ -6764,9 +6887,7 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
           );
         }
       } else if (
-        ['action', 'data', 'formaction', 'href', 'poster', 'src', 'xlink:href'].includes(
-          attribute.name,
-        )
+        isResourceReference
         && value.trim().length > 0
         && !isEmbeddedOrFragmentReference(value)
       ) {
