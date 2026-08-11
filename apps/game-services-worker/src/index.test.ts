@@ -7,6 +7,7 @@ import {
   createWorkerFetchHandler,
   createWorkerService,
   type GameServicesEvidenceVerifierBinding,
+  type GameServicesPurchaseGrantFinalizerBinding,
   type GameServicesWorkerEnv,
 } from './handler.js';
 
@@ -441,6 +442,60 @@ assertEqual(
   aggregateFallbackCalls,
   0,
   'strict target-specific mode must not fall back to the aggregate binding',
+);
+
+let microsoftStoreFinalizerReceivedSignal = true;
+let microsoftStoreFinalizerCalls = 0;
+const microsoftStoreFinalizerBinding = {
+  async finalizePurchaseGrant(input) {
+    microsoftStoreFinalizerCalls += 1;
+    microsoftStoreFinalizerReceivedSignal = Object.hasOwn(input, 'signal');
+    return {
+      status: 'completed',
+      action: 'consume',
+      alreadyCompleted: false,
+    };
+  },
+} satisfies GameServicesPurchaseGrantFinalizerBinding;
+const microsoftStoreService = createWorkerService({
+  MPGD_STORE: 'memory',
+  GAME_SERVICES_MICROSOFT_STORE_EVIDENCE_VERIFIER: {
+    async verifyPurchase() {
+      return verifiedDecision('microsoft-store:collection-item:modified-date');
+    },
+    async verifyAdReward() {
+      return { status: 'rejected', reason: 'NOT_SUPPORTED' };
+    },
+  },
+  GAME_SERVICES_MICROSOFT_STORE_PURCHASE_FINALIZER: microsoftStoreFinalizerBinding,
+});
+const microsoftStorePurchase = await microsoftStoreService.verifyPurchase({
+  target: 'microsoft-store',
+  playerId: 'microsoft-store-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'coins_100',
+  idempotencyKey: 'microsoft-store-purchase',
+  purchasedAt: '2026-08-11T00:00:00.000Z',
+}) as {
+  readonly verified: boolean;
+  readonly finalization?: { readonly status: string; readonly action?: string };
+};
+assertEqual(microsoftStorePurchase.verified, true, 'Microsoft Store evidence should grant');
+assertEqual(
+  microsoftStorePurchase.finalization?.status,
+  'completed',
+  'Microsoft Store fulfillment should return the finalizer result',
+);
+assertEqual(
+  microsoftStorePurchase.finalization?.action,
+  'consume',
+  'Microsoft Store fulfillment should expose consume completion',
+);
+assertEqual(microsoftStoreFinalizerCalls, 1, 'Microsoft Store consume should run exactly once');
+assertEqual(
+  microsoftStoreFinalizerReceivedSignal,
+  false,
+  'AbortSignal must not cross the Worker service binding boundary',
 );
 
 const health = await workerFetch(new Request(`${baseUrl}/health`));

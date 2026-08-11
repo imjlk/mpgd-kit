@@ -44,6 +44,7 @@ import {
   type EntitlementLedgerPayload,
   type EntitlementLedgerResult,
   type GameServicesAdRewardTarget,
+  type GameServicesStoreTarget,
   type LeaderboardScoreTransaction,
   type ProductGrantTransaction,
   type PurchaseGrantFinalization,
@@ -72,7 +73,7 @@ export interface CreateGameServicesBackendInput {
 }
 
 export type GameServicesDeploymentTargetBindings = Readonly<
-  Partial<Record<GameServicesAdRewardTarget, string>>
+  Partial<Record<GameServicesAdRewardTarget | GameServicesStoreTarget, string>>
 >;
 
 export interface GameServicesBackendApiHandler {
@@ -562,7 +563,10 @@ export function createGameServicesHttpFetchHandler(
   };
 }
 
-const gameServicesDeploymentTargetPlatforms = new Set<GameServicesAdRewardTarget>([
+type GameServicesDeploymentTargetPlatform = GameServicesAdRewardTarget | GameServicesStoreTarget;
+
+const gameServicesDeploymentTargetPlatforms = new Set<GameServicesDeploymentTargetPlatform>([
+  'microsoft-store',
   'android',
   'ios',
   'ait',
@@ -572,15 +576,17 @@ const gameServicesDeploymentTargetPlatforms = new Set<GameServicesAdRewardTarget
 function resolveDeploymentTargetBindings(
   input: GameServicesDeploymentTargetBindings | undefined,
 ): GameServicesDeploymentTargetBindings {
-  const bindings: Partial<Record<GameServicesAdRewardTarget, string>> = {};
+  const bindings: Partial<Record<GameServicesDeploymentTargetPlatform, string>> = {};
 
   for (const [platformTarget, deploymentTarget] of Object.entries(input ?? {})) {
-    if (!gameServicesDeploymentTargetPlatforms.has(platformTarget as GameServicesAdRewardTarget)) {
+    if (!gameServicesDeploymentTargetPlatforms.has(
+      platformTarget as GameServicesDeploymentTargetPlatform,
+    )) {
       throw new Error(`Unsupported deployment target binding platform: ${platformTarget}.`);
     }
 
     assertGameServicesDeploymentTarget(deploymentTarget);
-    bindings[platformTarget as GameServicesAdRewardTarget] = deploymentTarget;
+    bindings[platformTarget as GameServicesDeploymentTargetPlatform] = deploymentTarget;
   }
 
   return bindings;
@@ -744,6 +750,34 @@ async function verifyPurchaseWithStore(
   });
 
   if (grant.status === 'evidence_already_processed') {
+    const existingEvidence = await findEntitlementTransactionByEvidenceVerificationId(
+      context.store,
+      { source: 'purchase', evidenceVerificationId: verification.verificationId },
+    );
+    if (
+      existingEvidence !== undefined
+      && matchesPurchaseEvidenceRecovery(existingEvidence, {
+        playerId: request.playerId,
+        grantId: request.productId,
+        target: request.target,
+        ...(request.deploymentTarget === undefined
+          ? {}
+          : { deploymentTarget: request.deploymentTarget }),
+        platformProductId,
+        evidenceVerificationId: verification.verificationId,
+      })
+    ) {
+      const finalization = await finalizeExistingPurchaseGrant(request, existingEvidence, context);
+      if (finalization !== undefined) {
+        return assertVerifyPurchaseResponse({
+          verified: true,
+          ledgerEntryId: existingEvidence.ledgerEntryId,
+          alreadyProcessed: true,
+          finalization,
+        });
+      }
+    }
+
     return assertVerifyPurchaseResponse({
       verified: false,
       alreadyProcessed: false,
@@ -1438,6 +1472,29 @@ function matchesEntitlementRetry(
     && transaction.grantId === identity.grantId
     && transaction.payload.target === identity.target
     && transaction.payload.deploymentTarget === identity.deploymentTarget;
+}
+
+function matchesPurchaseEvidenceRecovery(
+  transaction: ProductGrantTransaction,
+  identity: {
+    readonly playerId: string;
+    readonly grantId: string;
+    readonly target: string;
+    readonly deploymentTarget?: string;
+    readonly platformProductId: string;
+    readonly evidenceVerificationId: string;
+  },
+): boolean {
+  return transaction.source === 'purchase'
+    && transaction.playerId === identity.playerId
+    && transaction.grantId === identity.grantId
+    && transaction.payload.target === identity.target
+    && transaction.payload.deploymentTarget === identity.deploymentTarget
+    && transaction.payload.platformProductId === identity.platformProductId
+    && (
+      transaction.evidenceVerificationId
+        ?? transaction.payload.evidenceVerificationId
+    ) === identity.evidenceVerificationId;
 }
 
 function resolveEvidenceVerificationTimeout(timeoutMs: number | undefined): number {
