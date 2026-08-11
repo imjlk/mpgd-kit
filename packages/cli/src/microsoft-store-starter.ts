@@ -338,7 +338,6 @@ function resolveAdapterDependency(existing: unknown, required: string): string {
 }
 
 interface SimpleSemverRange {
-  readonly operator: '' | '^' | '~';
   readonly major: number;
   readonly minor: number;
   readonly patch: number;
@@ -351,7 +350,6 @@ function parseSimpleSemverRange(value: string): SimpleSemverRange | undefined {
     return undefined;
   }
   return {
-    operator: (match[1] ?? '') as SimpleSemverRange['operator'],
     major: Number(match[2]),
     minor: Number(match[3]),
     patch: Number(match[4]),

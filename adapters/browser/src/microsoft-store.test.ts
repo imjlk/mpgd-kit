@@ -80,11 +80,13 @@ describe('Microsoft Store Digital Goods commerce', () => {
       description: 'Store description',
       price: { formatted: '$0.99', currencyCode: 'USD' },
     }]);
-    await expect(adapter.purchase({
+    const purchase = adapter.purchase({
       productId: product.id,
       source: 'shop',
       idempotencyKey: 'checkout-1',
-    })).resolves.toEqual({
+    });
+    expect(createPaymentRequest).toHaveBeenCalledOnce();
+    await expect(purchase).resolves.toEqual({
       status: 'completed',
       transactionId: 'ledger-1',
       authoritativeGrant: { ledgerEntryId: 'ledger-1', alreadyProcessed: true },
@@ -170,6 +172,11 @@ describe('Microsoft Store Digital Goods commerce', () => {
     });
 
     await expect(adapter.getProducts()).resolves.toEqual([]);
+    await expect(adapter.purchase({
+      productId: product.id,
+      source: 'shop',
+      idempotencyKey: 'checkout-invalid-price',
+    })).resolves.toEqual({ status: 'failed', entitlementIds: [] });
   });
 
   it('recovers unconsumed Store purchases through the same authority boundary', async () => {
@@ -311,10 +318,16 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     });
 
+    await adapter.getProducts();
     await expect(adapter.purchase({
       productId: product.id,
       source: 'shop',
       idempotencyKey: 'checkout-3',
+    })).resolves.toEqual({ status: 'cancelled', entitlementIds: [] });
+    await expect(adapter.purchase({
+      productId: product.id,
+      source: 'shop',
+      idempotencyKey: 'checkout-3-retry',
     })).resolves.toEqual({ status: 'cancelled', entitlementIds: [] });
     expect(verifyAndGrant).not.toHaveBeenCalled();
   });
@@ -357,6 +370,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     });
 
+    await adapter.getProducts();
     await expect(adapter.purchase({
       productId: product.id,
       source: 'shop',
@@ -417,6 +431,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     });
 
+    await adapter.getProducts();
     await expect(adapter.purchase({
       productId: product.id,
       source: 'shop',
@@ -467,6 +482,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     });
 
+    await adapter.getProducts();
     await expect(adapter.purchase({
       productId: product.id,
       source: 'shop',
@@ -519,6 +535,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
       },
     });
 
+    await adapter.getProducts();
     await expect(adapter.purchase({
       productId: product.id,
       source: 'shop',

@@ -423,7 +423,7 @@ function createWorkerEvidenceVerifier(
       const { request, product, platformProductId, timeoutMs } = input;
       const binding = resolveBinding(request.target);
 
-      if (request.target === 'microsoft-store' && !supportsMicrosoftStorePurchaseGrant(input)) {
+      if (request.target === 'microsoft-store' && !hasMicrosoftStorePurchaseEvidence(input)) {
         return {
           status: 'rejected',
           reason: 'MICROSOFT_STORE_PURCHASE_FINALIZER_UNSUPPORTED',
@@ -471,7 +471,13 @@ function supportsMicrosoftStorePurchaseGrant(
   input: Pick<FinalizePurchaseGrantInput, 'request' | 'product'>,
 ): boolean {
   return input.request.target === 'microsoft-store'
-    && input.product.type === 'consumable'
+    && input.product.type === 'consumable';
+}
+
+function hasMicrosoftStorePurchaseEvidence(
+  input: Pick<FinalizePurchaseGrantInput, 'request' | 'product'>,
+): boolean {
+  return supportsMicrosoftStorePurchaseGrant(input)
     && input.request.evidence?.schema === microsoftStoreDigitalGoodsEvidenceSchema;
 }
 

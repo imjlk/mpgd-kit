@@ -187,9 +187,7 @@ export function createMicrosoftStorePurchaseBoundary(
   return {
     supportsPurchaseGrant(finalizationInput) {
       return finalizationInput.request.target === 'microsoft-store'
-        && finalizationInput.product.type === 'consumable'
-        && finalizationInput.request.evidence?.schema
-          === microsoftStoreDigitalGoodsEvidenceSchema;
+        && finalizationInput.product.type === 'consumable';
     },
 
     async verifyPurchase(verificationInput) {

@@ -371,8 +371,12 @@ consumeRecovery.client.nextConsumeResponse = { malformed: true };
 const pendingConsume = await consumeRecovery.backend.purchases.verifyPurchase(
   createRequest({ idempotencyKey: 'consume-recovery-original' }),
 );
+const { evidence: ignoredRecoveryEvidence, ...evidenceLessRecoveryRequest } = createRequest({
+  idempotencyKey: 'consume-recovery-original',
+});
+void ignoredRecoveryEvidence;
 const recoveredConsume = await consumeRecovery.backend.purchases.verifyPurchase(
-  createRequest({ idempotencyKey: 'consume-recovery-retry' }),
+  evidenceLessRecoveryRequest,
 );
 assert.equal(pendingConsume.verified, true);
 assert.equal(pendingConsume.finalization?.status, 'pending');
@@ -383,7 +387,6 @@ assert.deepEqual(consumeRecovery.events, [
   `provider:query:${storeId}`,
   'ledger:consume-recovery-original',
   `provider:consume:${storeId}`,
-  `provider:query:${storeId}`,
   `provider:consume:${storeId}`,
 ]);
 assert.equal(consumeRecovery.client.consumeTrackingIds.length, 2);

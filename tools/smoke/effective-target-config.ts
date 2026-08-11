@@ -381,9 +381,14 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
       'microsoft-store should have at least one consumable product',
     );
     assertEqual(
-      consumables.every((product) => product.enabled),
+      consumables.every((product) => !product.enabled && product.reason === 'target-disabled'),
       true,
-      'microsoft-store consumables should be enabled',
+      'microsoft-store consumables should stay disabled until authority is configured',
+    );
+    assertEqual(
+      config.monetization.iap,
+      false,
+      'microsoft-store IAP should stay disabled until authority is configured',
     );
     assertEqual(
       config.monetization.products.filter((product) => product.type !== 'consumable')

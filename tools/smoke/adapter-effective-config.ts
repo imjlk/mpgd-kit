@@ -95,6 +95,19 @@ async function verifyBrowserAdapter(): Promise<void> {
 async function verifyMicrosoftStoreAdapter(): Promise<void> {
   const browser = createBrowserPlatformGateway();
   const storeBase: PlatformGateway = { ...browser, target: 'microsoft-store' };
+  const microsoftStoreConfig = getTargetConfig(targetConfigMatrix, 'microsoft-store');
+  const authoritativeEffectiveConfig = createEffectiveTargetConfig({
+    target: 'microsoft-store',
+    targetConfigVersion: targetConfigMatrix.version,
+    config: microsoftStoreConfig,
+    catalog: productCatalog,
+    adPlacements,
+    platformTarget: {
+      kind: 'web',
+      adapter: 'microsoft-store',
+      authoritativeGameServices: true,
+    },
+  });
   const createCommerce = (authorityResult: 'completed' | 'failed') => {
     return createMicrosoftStoreCommerceAdapter({
       products: [
@@ -154,6 +167,7 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
   const gateway = wrapGateway(
     'microsoft-store',
     withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('completed')),
+    authoritativeEffectiveConfig,
   );
   const runtime = await gateway.getTargetRuntime();
   const effectiveConfig = requireEffectiveConfig(runtime.effectiveConfig, 'microsoft-store');
@@ -169,6 +183,7 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
     false,
     'microsoft-store rewarded placement should be disabled',
   );
+  await gateway.commerce.getProducts();
   assertDeepEqual(
     await gateway.commerce.purchase({
       productId: 'COINS_100',
@@ -190,10 +205,12 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
   const rejectedGateway = wrapGateway(
     'microsoft-store',
     withMicrosoftStoreCommerceAdapter(storeBase, createCommerce('failed')),
+    authoritativeEffectiveConfig,
   );
   // Microsoft currently returns the add-on product ID as purchaseToken, so both independent
   // authority scenarios intentionally exercise the same token without treating it as a
   // transaction identity.
+  await rejectedGateway.commerce.getProducts();
   assertDeepEqual(
     await rejectedGateway.commerce.purchase({
       productId: 'COINS_100',

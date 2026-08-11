@@ -581,6 +581,44 @@ assertEqual(
 );
 assertEqual(microsoftStoreVerifierCalls, 1, 'Microsoft Store verification should run once');
 
+const microsoftStoreEvidenceLessRetry = await microsoftStoreService.verifyPurchase({
+  target: 'microsoft-store',
+  playerId: 'microsoft-store-player',
+  productId: 'COINS_100',
+  platformTransactionId: 'coins_100',
+  idempotencyKey: 'microsoft-store-purchase',
+  purchasedAt: '2026-08-11T00:00:00.000Z',
+}) as {
+  readonly verified: boolean;
+  readonly alreadyProcessed?: boolean;
+  readonly finalization?: { readonly status: string };
+};
+assertEqual(
+  microsoftStoreEvidenceLessRetry.verified,
+  true,
+  'an existing Store grant should accept an evidence-less finalization retry',
+);
+assertEqual(
+  microsoftStoreEvidenceLessRetry.alreadyProcessed,
+  true,
+  'an evidence-less Store retry should reuse the existing grant',
+);
+assertEqual(
+  microsoftStoreEvidenceLessRetry.finalization?.status,
+  'completed',
+  'an evidence-less Store retry should still complete consumption',
+);
+assertEqual(
+  microsoftStoreVerifierCalls,
+  1,
+  'an existing Store grant should not be reverified from retry request evidence',
+);
+assertEqual(
+  microsoftStoreFinalizerCalls,
+  2,
+  'an existing Store grant should retry its finalizer from stored evidence',
+);
+
 const unsupportedMicrosoftStorePurchase = await microsoftStoreService.verifyPurchase({
   target: 'microsoft-store',
   playerId: 'microsoft-store-unsupported-player',
@@ -606,7 +644,7 @@ assertEqual(
 );
 assertEqual(
   microsoftStoreFinalizerCalls,
-  1,
+  2,
   'unsupported Store evidence must not reach the finalizer',
 );
 
@@ -628,7 +666,7 @@ assertEqual(
   'corrected Store evidence should reuse the idempotency key because no grant was recorded',
 );
 assertEqual(microsoftStoreVerifierCalls, 2, 'corrected Store evidence should reach the verifier');
-assertEqual(microsoftStoreFinalizerCalls, 2, 'corrected Store evidence should reach the finalizer');
+assertEqual(microsoftStoreFinalizerCalls, 3, 'corrected Store evidence should reach the finalizer');
 
 const health = await workerFetch(new Request(`${baseUrl}/health`));
 const healthBody = await health.json() as { readonly version: string };

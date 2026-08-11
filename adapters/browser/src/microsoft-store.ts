@@ -114,10 +114,12 @@ export function createMicrosoftStoreCommerceAdapter(
   const createRecoveryId = input.createRecoveryId
     ?? (() => `microsoft-store-recovery-${crypto.randomUUID()}`);
   const priceFormatters = new Map<string, Intl.NumberFormat>();
+  const preparedCheckoutServices = new Map<LogicalProductId, MicrosoftStoreDigitalGoodsService>();
 
   async function getAvailability(): Promise<MicrosoftStoreCommerceAvailability> {
     const authorityAvailability = await input.authority.getAvailability();
     if (authorityAvailability !== 'available') {
+      preparedCheckoutServices.clear();
       return authorityAvailability;
     }
 
@@ -125,6 +127,7 @@ export function createMicrosoftStoreCommerceAdapter(
       await getService();
       return 'available';
     } catch {
+      preparedCheckoutServices.clear();
       return 'unsupported';
     }
   }
@@ -181,6 +184,7 @@ export function createMicrosoftStoreCommerceAdapter(
     getAvailability,
     async getProducts() {
       if (await getAvailability() !== 'available') {
+        preparedCheckoutServices.clear();
         return [];
       }
 
@@ -188,8 +192,12 @@ export function createMicrosoftStoreCommerceAdapter(
         const service = await getService();
         const details = await service.getDetails(products.map((product) => product.inAppOfferToken));
         const detailsById = new Map(details.map((detail) => [detail.itemId, detail]));
+        const nextPreparedCheckoutServices = new Map<
+          LogicalProductId,
+          MicrosoftStoreDigitalGoodsService
+        >();
 
-        return products.flatMap((product) => {
+        const availableProducts = products.flatMap((product) => {
           const detail = detailsById.get(product.inAppOfferToken);
           if (detail === undefined) {
             return [];
@@ -200,6 +208,7 @@ export function createMicrosoftStoreCommerceAdapter(
             return [];
           }
 
+          nextPreparedCheckoutServices.set(product.info.id, service);
           return [{
             ...product.info,
             title: nonEmptyString(detail.title) ?? product.info.title,
@@ -207,26 +216,31 @@ export function createMicrosoftStoreCommerceAdapter(
             price,
           }];
         });
+        preparedCheckoutServices.clear();
+        for (const [productId, preparedService] of nextPreparedCheckoutServices) {
+          preparedCheckoutServices.set(productId, preparedService);
+        }
+        return availableProducts;
       } catch (error) {
+        preparedCheckoutServices.clear();
         input.onError?.(error);
         return [];
       }
     },
     async purchase(request) {
       const product = productsById.get(request.productId);
-      if (product === undefined || await getAvailability() !== 'available') {
+      const service = preparedCheckoutServices.get(request.productId);
+      if (product === undefined || service === undefined) {
         return failedPurchase();
       }
 
       let response: MicrosoftStorePaymentResponse | undefined;
       let purchaseToken: string | undefined;
       try {
-        const service = await getService();
-        const details = await service.getDetails([product.inAppOfferToken]);
-        if (!details.some((detail) => detail.itemId === product.inAppOfferToken)) {
-          return failedPurchase();
-        }
-
+        // getProducts() prepares the authoritative Store service and validates this SKU. Keep
+        // checkout free of pre-show awaits so PaymentRequest retains the caller's user activation.
+        // The prepared catalog remains reusable for cancellation retries and later products; an
+        // explicit catalog refresh or availability failure replaces or clears it.
         response = await createPaymentRequest([
           {
             supportedMethods: microsoftStoreBillingMethod,
