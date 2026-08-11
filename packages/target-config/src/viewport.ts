@@ -415,10 +415,12 @@ export function resolveTargetViewportComposition(
   }
 
   const requestedSideRails = input.expandedLayout === 'side-rails';
-  const fittedGameWidth = Math.min(
-    contentBounds.width,
+  const minimumGameWidth = contentBounds.width > 0 && contentBounds.height > 0 ? 1 : 0;
+  const desiredGameWidth = Math.max(
+    minimumGameWidth,
     Math.round(contentBounds.height * gameAspectRatio),
   );
+  const fittedGameWidth = Math.min(contentBounds.width, desiredGameWidth);
   const availableRailWidth = (contentBounds.width - fittedGameWidth) / 2;
 
   if (requestedSideRails && availableRailWidth >= minRailWidth) {
