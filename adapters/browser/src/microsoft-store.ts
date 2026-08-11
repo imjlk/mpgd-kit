@@ -69,6 +69,7 @@ export type MicrosoftStorePurchaseAuthorityResult =
       readonly status: 'completed';
       /** Authoritative ledger or provider transaction identity. */
       readonly transactionId: string;
+      readonly alreadyProcessed?: boolean;
     }
   | {
       readonly status: 'pending' | 'failed';
@@ -151,6 +152,16 @@ export function createMicrosoftStoreCommerceAdapter(
       return {
         status: result.status,
         ...(result.transactionId === undefined ? {} : { transactionId: result.transactionId }),
+        ...(result.status === 'completed'
+          ? {
+              authoritativeGrant: {
+                ledgerEntryId: result.transactionId,
+                ...(result.alreadyProcessed === undefined
+                  ? {}
+                  : { alreadyProcessed: result.alreadyProcessed }),
+              },
+            }
+          : {}),
         entitlementIds: [],
         evidence,
       };

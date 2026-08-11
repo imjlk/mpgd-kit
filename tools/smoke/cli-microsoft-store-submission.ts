@@ -15,6 +15,7 @@ const artifactRoot = join(gameRoot, 'artifacts', 'microsoft-store');
 const outputDir = join(gameRoot, 'release-output', 'microsoft-store');
 const screenshotFile = join(gameRoot, 'store-assets', 'en-US', '01.png');
 const manifestFile = join(artifactRoot, 'manifest.webmanifest');
+const effectiveTargetFile = join(artifactRoot, 'mpgd-effective-target.json');
 const iconFile = join(artifactRoot, 'icon.png');
 const icon192File = join(artifactRoot, 'icon-192.png');
 const oversizedDecodedIconFile = join(artifactRoot, 'icon-oversized-decoded.png');
@@ -63,6 +64,7 @@ try {
     },
   });
   writeJson(manifestFile, validManifest);
+  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget());
   writeJson(submissionFile, validConfig());
   const spawnOptions = {
     cwd: gameRoot,
@@ -223,6 +225,58 @@ try {
     authoritativeGameServices: true,
     products: [validCommerceProduct],
   });
+  writeJson(submissionFile, commerceConfig);
+  runMicrosoftStoreSubmissionPreflight({
+    gameRoot,
+    artifactRoot,
+    configFile: submissionFile,
+    jsonFile: join(outputDir, 'commerce-valid.json'),
+    markdownFile: join(outputDir, 'commerce-valid.md'),
+  });
+  writeJson(
+    effectiveTargetFile,
+    validMicrosoftStoreEffectiveTarget({ platformProductId: 'stale_hint_pack_20' }),
+  );
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'commerce-stale-token.json'),
+      markdownFile: join(outputDir, 'commerce-stale-token.md'),
+    }),
+    /InAppOfferToken does not match built artifact platformProductId/u,
+  );
+  writeJson(
+    effectiveTargetFile,
+    validMicrosoftStoreEffectiveTarget({ logicalProductId: 'HINT_PACK_120' }),
+  );
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'commerce-missing-product.json'),
+      markdownFile: join(outputDir, 'commerce-missing-product.md'),
+    }),
+    /HINT_PACK_20 is not present in the built artifact effective target/u,
+  );
+  writeJson(
+    effectiveTargetFile,
+    validMicrosoftStoreEffectiveTarget({ duplicatePlatformProductId: true }),
+  );
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'commerce-duplicate-platform-product.json'),
+      markdownFile: join(outputDir, 'commerce-duplicate-platform-product.md'),
+    }),
+    /duplicates platformProductId ttokdoku_hint_pack_20/u,
+  );
+  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget());
+  writeJson(submissionFile, validConfig());
   expectConfigError(
     {
       ...base,
@@ -765,6 +819,40 @@ function validConfig() {
       iarcId: 'fixture-iarc-id',
     },
     commerce: { mode: 'disabled' },
+  };
+}
+
+function validMicrosoftStoreEffectiveTarget(
+  input: {
+    readonly logicalProductId?: string;
+    readonly platformProductId?: string;
+    readonly duplicatePlatformProductId?: boolean;
+  } = {},
+) {
+  const platformProductId = input.platformProductId ?? 'ttokdoku_hint_pack_20';
+  const products = [
+    {
+      id: input.logicalProductId ?? 'HINT_PACK_20',
+      type: 'consumable',
+      enabled: true,
+      platformProductId,
+    },
+  ];
+  if (input.duplicatePlatformProductId === true) {
+    products.push({
+      id: 'HINT_PACK_120',
+      type: 'consumable',
+      enabled: true,
+      platformProductId,
+    });
+  }
+  return {
+    target: 'microsoft-store',
+    runtime: 'microsoft-store-pwa',
+    monetization: {
+      iap: true,
+      products,
+    },
   };
 }
 

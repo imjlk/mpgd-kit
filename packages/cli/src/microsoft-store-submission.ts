@@ -165,6 +165,9 @@ export function runMicrosoftStoreSubmissionPreflight(
     'Microsoft Store submission config',
   );
   const config = parseMicrosoftStoreSubmissionConfig(readJson(configFile, 'submission config'));
+  const effectiveTarget = config.commerce.mode === 'microsoft-store'
+    ? readMicrosoftStoreEffectiveTarget(artifactRoot, config.commerce)
+    : undefined;
   const manifestFile = readCanonicalFileInside(
     artifactRoot,
     path.join(artifactRoot, 'manifest.webmanifest'),
@@ -176,6 +179,9 @@ export function runMicrosoftStoreSubmissionPreflight(
   const protectedFiles: { readonly file: string; readonly label: string }[] = [
     { file: configFile, label: 'Microsoft Store submission config' },
     { file: manifestFile, label: 'Microsoft Store web app manifest' },
+    ...(effectiveTarget === undefined
+      ? []
+      : [{ file: effectiveTarget.file, label: 'Microsoft Store effective target config' }]),
     ...manifest.icons.map((icon) => ({
       file: icon.file,
       label: 'Microsoft Store web app manifest icon',
@@ -260,6 +266,100 @@ export function runMicrosoftStoreSubmissionPreflight(
   writeFileSync(markdownFile, renderMicrosoftStoreSubmissionMarkdown(evidence));
 
   return evidence;
+}
+
+interface MicrosoftStoreEffectiveTargetProduct {
+  readonly id: string;
+  readonly platformProductId: string;
+}
+
+function readMicrosoftStoreEffectiveTarget(
+  artifactRoot: string,
+  commerce: Extract<MicrosoftStoreSubmissionCommerce, { readonly mode: 'microsoft-store' }>,
+): {
+  readonly file: string;
+} {
+  const file = readCanonicalFileInside(
+    artifactRoot,
+    path.join(artifactRoot, 'mpgd-effective-target.json'),
+    'Microsoft Store effective target config',
+  );
+  const snapshot = readJsonSnapshot(
+    file,
+    'Microsoft Store effective target config',
+    4 * 1024 * 1024,
+  );
+  const root = requireRecord(snapshot.value, 'Microsoft Store effective target config');
+  if (root.target !== 'microsoft-store' || root.runtime !== 'microsoft-store-pwa') {
+    throw new Error(
+      'Microsoft Store effective target config must target the microsoft-store-pwa runtime.',
+    );
+  }
+  const monetization = requireRecord(
+    root.monetization,
+    'Microsoft Store effective target config monetization',
+  );
+  if (monetization.iap !== true) {
+    throw new Error('Microsoft Store effective target config must enable IAP.');
+  }
+  const seenProductIds = new Set<string>();
+  const seenPlatformProductIds = new Set<string>();
+  const products: MicrosoftStoreEffectiveTargetProduct[] = requireArray(
+    monetization.products,
+    'Microsoft Store effective target config products',
+  ).flatMap((rawProduct, index) => {
+    const product = requireRecord(
+      rawProduct,
+      `Microsoft Store effective target config products[${String(index)}]`,
+    );
+    if (product.enabled !== true) {
+      return [];
+    }
+    if (product.type !== 'consumable') {
+      throw new Error('Microsoft Store effective target config can only enable consumables.');
+    }
+    const id = requireProductionString(
+      product.id,
+      `Microsoft Store effective target config products[${String(index)}].id`,
+    );
+    const platformProductId = requireProductionString(
+      product.platformProductId,
+      `Microsoft Store effective target config products[${String(index)}].platformProductId`,
+    );
+    if (seenProductIds.has(id)) {
+      throw new Error(`Microsoft Store effective target config duplicates product ${id}.`);
+    }
+    if (seenPlatformProductIds.has(platformProductId)) {
+      throw new Error(
+        `Microsoft Store effective target config duplicates platformProductId ${platformProductId}.`,
+      );
+    }
+    seenProductIds.add(id);
+    seenPlatformProductIds.add(platformProductId);
+    return [{ id, platformProductId }];
+  });
+
+  if (products.length !== commerce.products.length) {
+    throw new Error(
+      'commerce.products must exactly match enabled Microsoft Store consumables in the built artifact.',
+    );
+  }
+  const productsById = new Map(products.map((product) => [product.id, product]));
+  for (const product of commerce.products) {
+    const effectiveProduct = productsById.get(product.logicalProductId);
+    if (effectiveProduct === undefined) {
+      throw new Error(
+        `commerce product ${product.logicalProductId} is not present in the built artifact effective target.`,
+      );
+    }
+    if (effectiveProduct.platformProductId !== product.inAppOfferToken) {
+      throw new Error(
+        `commerce product ${product.logicalProductId} InAppOfferToken does not match built artifact platformProductId ${effectiveProduct.platformProductId}.`,
+      );
+    }
+  }
+
+  return { file };
 }
 
 export function parseMicrosoftStoreSubmissionConfig(

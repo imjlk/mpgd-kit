@@ -49,6 +49,11 @@ export interface PurchaseResult {
   readonly transactionId?: string;
   readonly entitlementIds: readonly string[];
   readonly evidence?: PlatformEvidenceEnvelope;
+  /** Present only when the adapter already completed the authoritative server grant. */
+  readonly authoritativeGrant?: Readonly<{
+    readonly ledgerEntryId: string;
+    readonly alreadyProcessed?: boolean;
+  }>;
 }
 
 export interface PurchaseRestoreResult {

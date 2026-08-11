@@ -28,6 +28,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     const verifyAndGrant = vi.fn(async () => ({
       status: 'completed' as const,
       transactionId: 'ledger-1',
+      alreadyProcessed: true,
     }));
     const createPaymentRequest = vi.fn(() => ({
       async show() {
@@ -80,6 +81,7 @@ describe('Microsoft Store Digital Goods commerce', () => {
     })).resolves.toEqual({
       status: 'completed',
       transactionId: 'ledger-1',
+      authoritativeGrant: { ledgerEntryId: 'ledger-1', alreadyProcessed: true },
       entitlementIds: [],
       evidence: {
         schema: microsoftStoreDigitalGoodsEvidenceSchema,

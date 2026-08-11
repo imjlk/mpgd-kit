@@ -178,6 +178,7 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
     {
       status: 'completed',
       transactionId: 'microsoft-store-ledger',
+      authoritativeGrant: { ledgerEntryId: 'microsoft-store-ledger' },
       entitlementIds: [],
       evidence: {
         schema: microsoftStoreDigitalGoodsEvidenceSchema,

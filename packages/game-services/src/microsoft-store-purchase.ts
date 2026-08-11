@@ -221,6 +221,12 @@ export function createMicrosoftStorePurchaseBoundary(
       } catch {
         return rejected('MICROSOFT_STORE_CREDENTIALS_INVALID');
       }
+      let userBindingId: string;
+      try {
+        userBindingId = await createUserStoreBindingId(credentials.userStoreId);
+      } catch {
+        return pending('MICROSOFT_STORE_USER_BINDING_UNAVAILABLE');
+      }
 
       let response: unknown;
       try {
@@ -259,6 +265,7 @@ export function createMicrosoftStorePurchaseBoundary(
           microsoftStoreProductKind: item.item.productKind,
           microsoftStoreQuantity: item.item.quantity,
           microsoftStoreStatus: item.item.status,
+          microsoftStoreUserBindingId: userBindingId,
           ...(item.item.transactionId === undefined
             ? {}
             : { microsoftStoreTransactionId: item.item.transactionId }),
@@ -317,6 +324,15 @@ async function consumeMicrosoftStorePurchase(
   if (credentials.sandbox !== undefined && credentials.sandbox !== 'RETAIL') {
     return finalizationPending('MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX');
   }
+  let userBindingId: string;
+  try {
+    userBindingId = await createUserStoreBindingId(credentials.userStoreId);
+  } catch {
+    return finalizationPending('MICROSOFT_STORE_USER_BINDING_UNAVAILABLE');
+  }
+  if (userBindingId !== context.userBindingId) {
+    return finalizationPending('MICROSOFT_STORE_USER_BINDING_CHANGED');
+  }
 
   try {
     const trackingId = await deterministicTrackingId(finalizationInput.evidenceVerificationId);
@@ -370,6 +386,7 @@ type MicrosoftStoreItemInspection =
 interface MicrosoftStoreFinalizationContext {
   readonly collectionItemId: string;
   readonly storeId: string;
+  readonly userBindingId: string;
 }
 
 function inspectPublisherQuery(
@@ -443,7 +460,12 @@ function readFinalizationContext(
   input: FinalizePurchaseGrantInput,
   storeIds: ReadonlyMap<string, string>,
 ):
-  | { readonly status: 'verified'; readonly collectionItemId: string; readonly storeId: string }
+  | {
+      readonly status: 'verified';
+      readonly collectionItemId: string;
+      readonly storeId: string;
+      readonly userBindingId: string;
+    }
   | { readonly status: 'pending'; readonly result: PurchaseGrantFinalization } {
   if (input.request.target !== 'microsoft-store' || input.product.type !== 'consumable') {
     return { status: 'pending', result: finalizationPending('MICROSOFT_STORE_TARGET_REQUIRED') };
@@ -454,11 +476,13 @@ function readFinalizationContext(
     input.evidencePayload?.microsoftStoreCollectionItemId,
   );
   const modifiedDate = optionalIdentifier(input.evidencePayload?.microsoftStoreModifiedDate);
+  const userBindingId = optionalIdentifier(input.evidencePayload?.microsoftStoreUserBindingId);
   if (
     storeId === undefined
     || payloadStoreId !== storeId
     || collectionItemId === undefined
     || modifiedDate === undefined
+    || userBindingId === undefined
     || input.evidenceVerificationId !== createVerificationId({
       id: collectionItemId,
       modifiedDate,
@@ -470,7 +494,7 @@ function readFinalizationContext(
       result: finalizationPending('MICROSOFT_STORE_FINALIZATION_EVIDENCE_MISMATCH'),
     };
   }
-  return { status: 'verified', collectionItemId, storeId };
+  return { status: 'verified', collectionItemId, storeId, userBindingId };
 }
 
 function createVerificationId(
@@ -488,6 +512,18 @@ async function deterministicTrackingId(value: string): Promise<string> {
   const hex = Array.from(digest.slice(0, 16), (byte) => byte.toString(16).padStart(2, '0'))
     .join('');
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
+
+async function createUserStoreBindingId(userStoreId: string): Promise<string> {
+  const subtle = readGlobalSubtleCrypto();
+  const encoded = new TextEncoder().encode(
+    `mpgd-microsoft-store-user-v1\0${identifier(userStoreId, 'userStoreId')}`,
+  );
+  const digest = new Uint8Array(await subtle.digest('SHA-256', encoded));
+  return `sha256:${Array.from(
+    digest,
+    (byte) => byte.toString(16).padStart(2, '0'),
+  ).join('')}`;
 }
 
 function normalizeStoreIds(input: Readonly<Record<string, string>>): ReadonlyMap<string, string> {

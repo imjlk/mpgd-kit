@@ -228,6 +228,26 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
         };
       }
 
+      if (isAuthoritativeMicrosoftStoreCompletion(target, purchase)) {
+        const result = {
+          status: 'granted',
+          purchase,
+          ledgerEntryId: purchase.transactionId,
+        } satisfies GameServicesPurchaseResult;
+
+        await analytics.track({
+          name: 'purchase_granted',
+          properties: {
+            productId: purchaseInput.productId,
+            status: result.status,
+            ledgerEntryId: purchase.transactionId,
+            alreadyProcessed: purchase.authoritativeGrant?.alreadyProcessed,
+          },
+        });
+
+        return result;
+      }
+
       if (purchase.status !== 'completed' || purchase.transactionId === undefined) {
         await analytics.track({
           name: 'purchase_rejected',
@@ -557,6 +577,16 @@ function purchaseRejectionReason(purchase: PurchaseResult): string | undefined {
     return 'purchase_pending';
   }
   return undefined;
+}
+
+function isAuthoritativeMicrosoftStoreCompletion(
+  target: GameServicesLedgerTarget,
+  purchase: PurchaseResult,
+): purchase is PurchaseResult & { readonly status: 'completed'; readonly transactionId: string } {
+  return target === 'microsoft-store'
+    && purchase.status === 'completed'
+    && purchase.transactionId !== undefined
+    && purchase.authoritativeGrant?.ledgerEntryId === purchase.transactionId;
 }
 
 function isGameServicesCommerceTarget(

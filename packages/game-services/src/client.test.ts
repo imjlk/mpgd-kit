@@ -366,11 +366,29 @@ assertEqual(
   'unsupported target rewarded ad should not call ad reward backend',
 );
 
-let microsoftStoreVerificationTarget: string | undefined;
+let microsoftStoreVerificationCalls = 0;
 const microsoftStoreBaseGateway = createMockGateway();
 const microsoftStoreGateway = {
   ...microsoftStoreBaseGateway,
   target: 'microsoft-store',
+  commerce: {
+    ...microsoftStoreBaseGateway.commerce,
+    async purchase() {
+      return {
+        status: 'completed',
+        transactionId: 'microsoft-store-ledger',
+        authoritativeGrant: { ledgerEntryId: 'microsoft-store-ledger' },
+        entitlementIds: [],
+        evidence: {
+          schema: 'mpgd.microsoft-store.digital-goods.v1',
+          payload: {
+            itemId: 'coins_100',
+            purchaseToken: 'coins_100',
+          },
+        },
+      } as const;
+    },
+  },
 } satisfies PlatformGateway;
 const microsoftStoreClient = createGameServicesClient({
   gateway: microsoftStoreGateway,
@@ -379,13 +397,9 @@ const microsoftStoreClient = createGameServicesClient({
   backend: {
     ...backend,
     purchases: {
-      async verifyPurchase(input) {
-        microsoftStoreVerificationTarget = input.target;
-        return {
-          verified: true,
-          ledgerEntryId: 'microsoft-store-ledger',
-          alreadyProcessed: false,
-        };
+      async verifyPurchase() {
+        microsoftStoreVerificationCalls += 1;
+        throw new Error('authoritative Store completion must not be reverified');
       },
     },
   },
@@ -402,9 +416,14 @@ assertEqual(
   'Microsoft Store should use the authoritative purchase client',
 );
 assertEqual(
-  microsoftStoreVerificationTarget,
-  'microsoft-store',
-  'Microsoft Store evidence should reach its verifier target',
+  microsoftStorePurchase.ledgerEntryId,
+  'microsoft-store-ledger',
+  'Microsoft Store should preserve the authority ledger ID',
+);
+assertEqual(
+  microsoftStoreVerificationCalls,
+  0,
+  'Microsoft Store authority completions should not be sent through verification twice',
 );
 
 let verse8PurchaseCalls = 0;

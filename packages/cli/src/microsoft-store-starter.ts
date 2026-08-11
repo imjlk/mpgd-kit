@@ -56,6 +56,10 @@ const microsoftStoreGatewayResolver = {
   anchor: "    default:\n      return 'src/platform/buildGateways/browser.ts';",
   block: "    case 'microsoft-store':\n      return 'src/platform/buildGateways/microsoftStore.ts';",
 } as const;
+const microsoftStoreRuntimeTarget = {
+  anchor: "  'ios',\n  'ait',",
+  line: "  'microsoft-store',",
+} as const;
 
 interface JsonObject {
   [key: string]: unknown;
@@ -143,6 +147,8 @@ export function prepareBaseGameTemplateFile(input: {
       });
     case 'src/main.ts':
       return removeMicrosoftStoreBootstrap(withoutBlocks);
+    case 'src/platform/runtimeDetector.ts':
+      return removeMicrosoftStoreRuntimeTarget(withoutBlocks);
     case 'vite.shared.ts':
       return removeMicrosoftStoreGatewayResolver(withoutBlocks);
     default:
@@ -196,17 +202,10 @@ export function initializeMicrosoftStoreStarter(
     scripts[name] = command;
   }
 
-  const existingAdapterDependency = dependencies[microsoftStoreAdapterBasePackage];
-  const adapterDependency = existingAdapterDependency === undefined
-    ? dependencyVersion(input.adapterDependencyVersion)
-    : existingAdapterDependency;
-  if (typeof adapterDependency !== 'string' || adapterDependency.trim().length === 0) {
-    throw new Error(
-      `package.json dependency ${microsoftStoreAdapterBasePackage} must be a string.`,
-    );
-  }
-  // Preserve a game-owned non-empty npm spec such as workspace:, link:, file:, or a registry tag.
-  dependencies[microsoftStoreAdapterBasePackage] = adapterDependency;
+  dependencies[microsoftStoreAdapterBasePackage] = resolveAdapterDependency(
+    dependencies[microsoftStoreAdapterBasePackage],
+    input.adapterDependencyVersion,
+  );
 
   plan('package.json', formatJson(packageJson));
 
@@ -228,6 +227,14 @@ export function initializeMicrosoftStoreStarter(
   const mainFile = resolveGameFile(gameRoot, 'src/main.ts');
   const mainSource = readRequiredRegularFile(gameRoot, mainFile, 'src/main.ts');
   plan('src/main.ts', addMicrosoftStoreBootstrap(mainSource));
+
+  const runtimeFile = resolveGameFile(gameRoot, 'src/platform/runtimeDetector.ts');
+  const runtimeSource = readRequiredRegularFile(
+    gameRoot,
+    runtimeFile,
+    'src/platform/runtimeDetector.ts',
+  );
+  plan('src/platform/runtimeDetector.ts', addMicrosoftStoreRuntimeTarget(runtimeSource));
 
   const viteFile = resolveGameFile(gameRoot, 'vite.shared.ts');
   const viteSource = readRequiredRegularFile(gameRoot, viteFile, 'vite.shared.ts');
@@ -283,6 +290,148 @@ function dependencyVersion(value: string): string {
   return normalized;
 }
 
+function resolveAdapterDependency(existing: unknown, required: string): string {
+  const requiredDependency = dependencyVersion(required);
+  if (existing === undefined) {
+    return requiredDependency;
+  }
+  if (typeof existing !== 'string' || existing.trim().length === 0) {
+    throw new Error(
+      `package.json dependency ${microsoftStoreAdapterBasePackage} must be a string.`,
+    );
+  }
+
+  const normalized = existing.trim();
+  if (/^(?:workspace|link|file):/u.test(normalized)) {
+    return normalized;
+  }
+
+  const currentRange = parseSimpleSemverRange(normalized);
+  const requiredRange = parseSimpleSemverRange(requiredDependency);
+  if (
+    currentRange !== undefined
+    && requiredRange !== undefined
+    && compareSemver(currentRange, requiredRange) < 0
+    && !simpleSemverRangeIncludes(currentRange, requiredRange)
+  ) {
+    return requiredDependency;
+  }
+
+  // Preserve newer compatible ranges, registry tags, aliases, and game-owned remote specs.
+  return normalized;
+}
+
+interface SimpleSemverRange {
+  readonly operator: '' | '^' | '~';
+  readonly major: number;
+  readonly minor: number;
+  readonly patch: number;
+  readonly prerelease?: readonly string[];
+}
+
+function parseSimpleSemverRange(value: string): SimpleSemverRange | undefined {
+  const match = /^([~^]?)(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?$/u.exec(value);
+  if (match === null) {
+    return undefined;
+  }
+  return {
+    operator: (match[1] ?? '') as SimpleSemverRange['operator'],
+    major: Number(match[2]),
+    minor: Number(match[3]),
+    patch: Number(match[4]),
+    ...(match[5] === undefined ? {} : { prerelease: match[5].split('.') }),
+  };
+}
+
+function compareSemver(left: SimpleSemverRange, right: SimpleSemverRange): number {
+  const releaseComparison = left.major - right.major
+    || left.minor - right.minor
+    || left.patch - right.patch;
+  if (releaseComparison !== 0) {
+    return releaseComparison;
+  }
+  if (left.prerelease === undefined) {
+    return right.prerelease === undefined ? 0 : 1;
+  }
+  if (right.prerelease === undefined) {
+    return -1;
+  }
+  const identifierCount = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < identifierCount; index += 1) {
+    const comparison = comparePrereleaseIdentifier(left.prerelease[index], right.prerelease[index]);
+    if (comparison !== 0) {
+      return comparison;
+    }
+  }
+  return 0;
+}
+
+function comparePrereleaseIdentifier(left: string | undefined, right: string | undefined): number {
+  if (left === undefined) {
+    return right === undefined ? 0 : -1;
+  }
+  if (right === undefined) {
+    return 1;
+  }
+  const leftNumeric = /^\d+$/u.test(left);
+  const rightNumeric = /^\d+$/u.test(right);
+  if (leftNumeric && rightNumeric) {
+    const leftNumber = BigInt(left);
+    const rightNumber = BigInt(right);
+    if (leftNumber !== rightNumber) {
+      return leftNumber < rightNumber ? -1 : 1;
+    }
+    return 0;
+  }
+  if (leftNumeric !== rightNumeric) {
+    return leftNumeric ? -1 : 1;
+  }
+  if (left === right) {
+    return 0;
+  }
+  return left < right ? -1 : 1;
+}
+
+/** Checks whether a simple exact, tilde, or caret range includes a version. */
+function simpleSemverRangeIncludes(
+  range: SimpleSemverRange,
+  version: SimpleSemverRange,
+): boolean {
+  if (compareSemver(version, range) < 0) {
+    return false;
+  }
+  if (range.operator === '') {
+    return compareSemver(version, range) === 0;
+  }
+  if (range.operator === '~') {
+    if (isExcludedPrerelease(range, version)) {
+      return false;
+    }
+    return range.major === version.major && range.minor === version.minor;
+  }
+  if (isExcludedPrerelease(range, version)) {
+    return false;
+  }
+  if (range.major > 0) {
+    return range.major === version.major;
+  }
+  // npm caret ranges stay within the first non-zero component.
+  if (range.minor > 0) {
+    return version.major === 0 && range.minor === version.minor;
+  }
+  return version.major === 0 && version.minor === 0 && range.patch === version.patch;
+}
+
+function isExcludedPrerelease(range: SimpleSemverRange, version: SimpleSemverRange): boolean {
+  return version.prerelease !== undefined
+    && (
+      range.prerelease === undefined
+      || range.major !== version.major
+      || range.minor !== version.minor
+      || range.patch !== version.patch
+    );
+}
+
 function addMicrosoftStoreGatewayResolver(source: string): string {
   if (source.includes(microsoftStoreGatewayResolver.block)) {
     return source;
@@ -294,6 +443,29 @@ function addMicrosoftStoreGatewayResolver(source: string): string {
     microsoftStoreGatewayResolver.block,
     'vite.shared.ts Microsoft Store gateway resolver',
   );
+}
+
+function addMicrosoftStoreRuntimeTarget(source: string): string {
+  if (source.includes(microsoftStoreRuntimeTarget.line)) {
+    return source;
+  }
+  return insertAfter(
+    source,
+    microsoftStoreRuntimeTarget.anchor,
+    microsoftStoreRuntimeTarget.line,
+    'src/platform/runtimeDetector.ts target list',
+  );
+}
+
+function removeMicrosoftStoreRuntimeTarget(source: string): string {
+  const managedLine = `${microsoftStoreRuntimeTarget.line}\n`;
+  const occurrences = source.split(managedLine).length - 1;
+  if (occurrences !== 1) {
+    throw new Error(
+      'Template src/platform/runtimeDetector.ts must contain exactly one Microsoft Store target.',
+    );
+  }
+  return source.replace(managedLine, '');
 }
 
 function removeMicrosoftStoreGatewayResolver(source: string): string {

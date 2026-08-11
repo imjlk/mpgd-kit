@@ -4,6 +4,7 @@ const validTargets = new Set<string>([
   'android',
   'ios',
   'ait',
+  'microsoft-store',
   'reddit',
   'verse8',
   'telegram',

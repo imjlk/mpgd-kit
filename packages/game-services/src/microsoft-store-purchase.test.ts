@@ -292,6 +292,30 @@ assert.deepEqual(invalidFinalizationCredentials.events, [
   'ledger:invalid-finalization-credentials',
 ]);
 
+let changedBindingResolutionCount = 0;
+const changedFinalizationBinding = createHarness({
+  resolveCredentials: () => {
+    changedBindingResolutionCount += 1;
+    return changedBindingResolutionCount === 1
+      ? credentials
+      : { ...credentials, userStoreId: 'different-server-resolved-user-store-id' };
+  },
+});
+const changedFinalizationBindingResult =
+  await changedFinalizationBinding.backend.purchases.verifyPurchase(
+    createRequest({ idempotencyKey: 'changed-finalization-binding' }),
+  );
+assert.equal(changedFinalizationBindingResult.verified, true);
+assert.equal(changedFinalizationBindingResult.finalization?.status, 'pending');
+assert.equal(
+  changedFinalizationBindingResult.finalization?.reason,
+  'MICROSOFT_STORE_USER_BINDING_CHANGED',
+);
+assert.deepEqual(changedFinalizationBinding.events, [
+  `provider:query:${storeId}`,
+  'ledger:changed-finalization-binding',
+]);
+
 const consumeRecovery = createHarness();
 consumeRecovery.client.nextConsumeResponse = { malformed: true };
 const pendingConsume = await consumeRecovery.backend.purchases.verifyPurchase(
