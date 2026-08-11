@@ -220,6 +220,114 @@ describe('Microsoft Store Digital Goods commerce', () => {
     }));
   });
 
+  it('reuses a pending checkout identity after restart instead of re-verifying current mappings', async () => {
+    const storedRecoveryIds = new Map<string, string>();
+    const recoveryIdStorage = {
+      getItem(key: string) {
+        return storedRecoveryIds.get(key) ?? null;
+      },
+      setItem(key: string, value: string) {
+        storedRecoveryIds.set(key, value);
+      },
+      removeItem(key: string) {
+        storedRecoveryIds.delete(key);
+      },
+    };
+    const storePurchase = {
+      itemId: 'ttokdoku_hint_pack_20',
+      purchaseToken: 'ttokdoku_hint_pack_20',
+    } as const;
+    const firstAuthority = vi.fn(async () => ({
+      status: 'pending' as const,
+      transactionId: 'ledger-pending-consume',
+    }));
+    const createService = () => ({
+      async getDetails() {
+        return [{
+          itemId: 'ttokdoku_hint_pack_20',
+          title: '20 hints',
+          price: { currency: 'USD', value: '0.99' },
+        }];
+      },
+      async listPurchases() {
+        return [storePurchase];
+      },
+    });
+    const firstAdapter = createMicrosoftStoreCommerceAdapter({
+      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        verifyAndGrant: firstAuthority,
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return createService();
+      },
+      createPaymentRequest() {
+        return {
+          async show() {
+            return { details: { purchaseToken: 'ttokdoku_hint_pack_20' } };
+          },
+        };
+      },
+      recoveryIdStorage,
+    });
+
+    await firstAdapter.getProducts();
+    await expect(firstAdapter.purchase({
+      productId: product.id,
+      source: 'shop',
+      idempotencyKey: 'checkout-pending-consume',
+    })).resolves.toMatchObject({ status: 'pending' });
+    expect(firstAuthority).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: 'checkout-pending-consume',
+    }));
+    expect([...storedRecoveryIds.values()]).toEqual(['checkout-pending-consume']);
+
+    const createRecoveryId = vi.fn(() => 'new-recovery-id');
+    const resumedAuthority = vi.fn(async () => ({
+      status: 'completed' as const,
+      transactionId: 'ledger-pending-consume',
+      alreadyProcessed: true,
+    }));
+    const restartedAdapter = createMicrosoftStoreCommerceAdapter({
+      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        verifyAndGrant: resumedAuthority,
+        async getEntitlements() {
+          return [entitlement];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          ...createService(),
+          async listPurchases() {
+            return [];
+          },
+        };
+      },
+      createRecoveryId,
+      recoveryIdStorage,
+    });
+
+    await expect(restartedAdapter.restore?.()).resolves.toEqual({
+      restoredEntitlements: [entitlement],
+    });
+    expect(resumedAuthority).toHaveBeenCalledWith(expect.objectContaining({
+      idempotencyKey: 'checkout-pending-consume',
+      source: 'recovery',
+    }));
+    expect(createRecoveryId).not.toHaveBeenCalled();
+    expect(storedRecoveryIds.size).toBe(0);
+  });
+
   it('reconciles independent unconsumed products concurrently', async () => {
     const secondProduct = Object.freeze({
       ...product,
