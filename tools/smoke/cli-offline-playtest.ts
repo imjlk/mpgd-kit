@@ -248,6 +248,10 @@ try {
       'commented-worker-base-class-alias',
       'const BackgroundWorker = class /* retained trivia */ extends /* native base */ Worker {}; new BackgroundWorker("./worker.js");',
     ],
+    [
+      'property-stored-worker-base-class',
+      'globalThis.workerClasses = { BackgroundWorker: class extends Worker {} }; new globalThis.workerClasses.BackgroundWorker("./worker.js");',
+    ],
   ] as const;
 
   for (const [name, mainJs] of unsupportedWorkerAliasFixtures) {
@@ -767,7 +771,27 @@ try {
   assert.match(dynamicAnchorHtml, /closest\('a,area'\)/u);
   assert.match(dynamicAnchorHtml, /getAttribute\('xlink:href'\)/u);
   assert.match(dynamicAnchorHtml, /\['assign','replace','reload'\]/u);
-  assert.match(dynamicAnchorHtml, /\['meta','object','embed'\]\.includes/u);
+  assert.match(dynamicAnchorHtml, /\['meta','object','embed','script'\]\.includes/u);
+
+  for (const [name, createScript] of [
+    ['dynamic-script-element', 'document.createElement("script")'],
+    [
+      'dynamic-namespaced-script-element',
+      'document.createElementNS("http://www.w3.org/1999/xhtml", "script")',
+    ],
+    [
+      'dynamic-svg-script-element',
+      'document.createElementNS("http://www.w3.org/2000/svg", "script")',
+    ],
+  ] as const) {
+    const dynamicScriptGame = createPreviewFixture(name, {
+      mainJs: `const script = ${createScript}; script.textContent = 'location.href="https://example.com/escape"'; document.body.append(script);`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: dynamicScriptGame }),
+      /does not support dynamically created script elements/u,
+    );
+  }
 
   for (const tagName of ['object', 'embed'] as const) {
     const activeDataElementGame = createPreviewFixture(`dynamic-${tagName}-element`, {
@@ -969,6 +993,14 @@ try {
   assert.match(selfClosingScriptEndHtml, /window\.fixture\s*=\s*["']ready["']/u);
   assert.doesNotMatch(selfClosingScriptEndHtml, /\/assets\/pixel\.png/u);
   assert.match(selfClosingScriptEndHtml, /data:image\/png;base64,/u);
+
+  const attributedScriptEndGame = createPreviewFixture('attributed-script-end', {
+    indexHtml: '<!doctype html><html><head></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script><script>location.href="https://example.com/escape";</script ignored></body></html>',
+  });
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: attributedScriptEndGame }),
+    /does not support script-driven navigation/u,
+  );
 
   const objectLocationHtml = await packageAndReadFixture('object-location-property', {
     mainJs: 'const frame = { location: "local" }; frame.location = "updated"; document.body.dataset.location = frame.location;',
@@ -2832,11 +2864,24 @@ try {
     'function-constructor-base-class',
     'class DynamicFunction extends Function {} document.body.dataset.value = String(new DynamicFunction("return 1")());',
   );
+  await assertStringEvaluationRejected(
+    'nested-bind-call-string-timeout',
+    'const schedule = setTimeout.bind.call(setTimeout, globalThis, "document.body.dataset.ready = \'true\'"); schedule(0);',
+  );
+  await assertStringEvaluationRejected(
+    'nested-bind-call-string-timeout-without-callback',
+    'const schedule = setTimeout.bind.call(setTimeout, globalThis); schedule("document.body.dataset.ready = \'true\'", 0);',
+  );
 
   const safelyBoundTimerHtml = await packageAndReadFixture('safely-bound-timer', {
     mainJs: 'const timer = setTimeout; const schedule = timer.bind(globalThis, () => {}); schedule(0);',
   });
   assert.match(safelyBoundTimerHtml, /setTimeout/u);
+
+  const safelyNestedBoundTimerHtml = await packageAndReadFixture('safely-nested-bound-timer', {
+    mainJs: 'const schedule = setTimeout.bind.call(setTimeout, globalThis, () => {}); schedule(0);',
+  });
+  assert.match(safelyNestedBoundTimerHtml, /setTimeout/u);
 
   const memberOwnedStringEvaluatorHtml = await packageAndReadFixture('member-owned-string-evaluator', {
     mainJs: 'const sdk = { eval() {}, Function() { return () => {}; }, setTimeout() {} }; sdk.eval("local"); sdk.Function("local")(); sdk.setTimeout("local", 0);',
