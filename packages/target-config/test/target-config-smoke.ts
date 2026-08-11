@@ -1304,6 +1304,10 @@ function assertViewportPlans(): void {
     primaryControls: 'side',
     secondaryPanels: 'side',
   });
+  if (desktopComposition.mode === 'side-rails') {
+    assertEqual(desktopComposition.leftRailBounds.width, 370);
+    assertEqual(desktopComposition.rightRailBounds.width, 370);
+  }
   assertDeepEqual(
     resolveTargetViewportComposition({
       viewport: resolveTargetViewportSnapshot({
@@ -1335,6 +1339,25 @@ function assertViewportPlans(): void {
       gameAspectRatio: 3 / 4,
       expandedLayout: 'side-rails',
       minRailWidth: 160,
+    }),
+    {
+      mode: 'bottom-controls',
+      contentBounds: { x: 0, y: 0, width: 720, height: 540 },
+      gameBounds: { x: 0, y: 0, width: 720, height: 540 },
+      primaryControls: 'bottom',
+      secondaryPanels: 'below',
+    },
+  );
+  assertDeepEqual(
+    resolveTargetViewportComposition({
+      viewport: resolveTargetViewportSnapshot({
+        width: 720,
+        height: 540,
+        runtime: 'web-preview',
+      }),
+      gameAspectRatio: 2,
+      expandedLayout: 'side-rails',
+      minRailWidth: 0,
     }),
     {
       mode: 'bottom-controls',

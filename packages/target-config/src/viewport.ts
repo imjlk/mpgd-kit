@@ -148,16 +148,32 @@ export interface TargetViewportCompositionInput {
   readonly minRailWidth?: number;
 }
 
-/** Concrete safe-area-relative geometry for an adaptive game shell. */
-export interface TargetViewportComposition {
-  readonly mode: TargetViewportCompositionMode;
+interface TargetViewportCompositionBounds {
   readonly contentBounds: TargetViewportBounds;
   readonly gameBounds: TargetViewportBounds;
-  readonly leftRailBounds?: TargetViewportBounds;
-  readonly rightRailBounds?: TargetViewportBounds;
-  readonly primaryControls: TargetViewportControlPlacement;
-  readonly secondaryPanels: TargetViewportPanelPlacement;
 }
+
+/** Concrete safe-area-relative geometry for an adaptive game shell. */
+export type TargetViewportComposition = TargetViewportCompositionBounds &
+  (
+    | {
+        readonly mode: 'side-rails';
+        readonly leftRailBounds: TargetViewportBounds;
+        readonly rightRailBounds: TargetViewportBounds;
+        readonly primaryControls: 'side';
+        readonly secondaryPanels: 'side';
+      }
+    | {
+        readonly mode: 'bottom-controls';
+        readonly primaryControls: 'bottom';
+        readonly secondaryPanels: 'below';
+      }
+    | {
+        readonly mode: 'compact-portrait';
+        readonly primaryControls: 'bottom';
+        readonly secondaryPanels: 'drawer';
+      }
+  );
 
 /**
  * The minimal browser style surface needed to read CSS safe-area custom
@@ -403,14 +419,22 @@ export function resolveTargetViewportComposition(
   const portrait = input.viewport.layout.orientation === 'portrait';
 
   if (portrait) {
-    const compact = input.viewport.layout.sizeClass === 'compact';
+    if (input.viewport.layout.sizeClass === 'compact') {
+      return {
+        mode: 'compact-portrait',
+        contentBounds,
+        gameBounds: contentBounds,
+        primaryControls: 'bottom',
+        secondaryPanels: 'drawer',
+      };
+    }
 
     return {
-      mode: compact ? 'compact-portrait' : 'bottom-controls',
+      mode: 'bottom-controls',
       contentBounds,
       gameBounds: contentBounds,
       primaryControls: 'bottom',
-      secondaryPanels: compact ? 'drawer' : 'below',
+      secondaryPanels: 'below',
     };
   }
 
@@ -423,7 +447,11 @@ export function resolveTargetViewportComposition(
   const fittedGameWidth = Math.min(contentBounds.width, desiredGameWidth);
   const availableRailWidth = (contentBounds.width - fittedGameWidth) / 2;
 
-  if (requestedSideRails && availableRailWidth >= minRailWidth) {
+  if (
+    requestedSideRails &&
+    desiredGameWidth <= contentBounds.width &&
+    availableRailWidth >= minRailWidth
+  ) {
     const gameBounds = {
       x: contentBounds.x + availableRailWidth,
       y: contentBounds.y,
