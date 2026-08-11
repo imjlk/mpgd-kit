@@ -95,12 +95,10 @@ export function prepareMicrosoftStorePackageGenerationInput(
     { file: markdownFile, label: 'package generation Markdown' },
     { file: submissionEvidenceFile, label: 'submission evidence' },
     { file: submission.manifestFile, label: 'web app manifest' },
-    ...(submission.effectiveTarget === undefined
-      ? []
-      : [{
-          file: submission.effectiveTarget.file,
-          label: 'Microsoft Store effective target config',
-        }]),
+    {
+      file: submission.effectiveTarget.file,
+      label: 'Microsoft Store effective target config',
+    },
   ];
   assertDistinctFiles(filesThatMustAlwaysBeDistinct);
 
@@ -140,13 +138,11 @@ export function assertMicrosoftStorePackageGenerationInputUnchanged(
     input.manifestBefore,
     'Microsoft Store web app manifest changed during package generation',
   );
-  if (input.submission.effectiveTarget !== undefined) {
-    assertMicrosoftStoreSnapshotUnchanged(
-      input.submission.effectiveTarget.file,
-      input.submission.effectiveTarget.snapshot,
-      'Microsoft Store effective target config changed during package generation',
-    );
-  }
+  assertMicrosoftStoreSnapshotUnchanged(
+    input.submission.effectiveTarget.file,
+    input.submission.effectiveTarget.snapshot,
+    'Microsoft Store effective target config changed during package generation',
+  );
 
   for (const [index, icon] of input.submission.manifestIcons.entries()) {
     assertMicrosoftStoreSnapshotUnchanged(
@@ -232,30 +228,20 @@ function readSubmissionEvidence(
     );
   }
 
-  const commerce = root.commerce === undefined
-    ? undefined
-    : requireRecord(root.commerce, 'Microsoft Store commerce evidence');
-  const commerceMode = commerce?.mode;
-  if (
-    commerceMode !== undefined
-    && commerceMode !== 'disabled'
-    && commerceMode !== 'microsoft-store'
-  ) {
+  if (root.commerce === undefined) {
+    throw new Error('Microsoft Store commerce evidence is required for package generation.');
+  }
+  const commerce = requireRecord(root.commerce, 'Microsoft Store commerce evidence');
+  const commerceMode = commerce.mode;
+  if (commerceMode !== 'disabled' && commerceMode !== 'microsoft-store') {
     throw new Error('Microsoft Store commerce evidence mode must be disabled or microsoft-store.');
   }
-  if (commerceMode !== undefined && root.effectiveTarget === undefined) {
+  if (root.effectiveTarget === undefined) {
     throw new Error(
-      'Microsoft Store effective target evidence is required when commerce mode is declared.',
+      'Microsoft Store effective target evidence is required for package generation.',
     );
   }
-  const effectiveTarget = root.effectiveTarget === undefined
-    ? undefined
-    : readEffectiveTargetEvidence(root.effectiveTarget, gameRoot);
-  if (effectiveTarget !== undefined && commerceMode === undefined) {
-    throw new Error(
-      'Microsoft Store effective target evidence must not be present unless commerce mode is declared.',
-    );
-  }
+  const effectiveTarget = readEffectiveTargetEvidence(root.effectiveTarget, gameRoot);
 
   return {
     identity: {
@@ -321,7 +307,8 @@ function readSubmissionEvidence(
         ),
       };
     }),
-    ...(effectiveTarget === undefined ? {} : { effectiveTarget }),
+    effectiveTarget,
+    // The pinned PWABuilder source accepts multiple Store languages as one comma-separated field.
     resourceLanguage: resourceLanguages.join(','),
   };
 }

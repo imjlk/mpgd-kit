@@ -11,7 +11,7 @@
       "kind": "web",
       "gameApp": ".",
       "adapter": "microsoft-store",
-      "authoritativeGameServices": true,
+      "authoritativeGameServices": false,
       "icon": { "profile": "microsoft-pwa" },
       "output": "artifacts/microsoft-store"
     },

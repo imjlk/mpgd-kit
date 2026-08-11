@@ -47,7 +47,7 @@ const microsoftStoreTarget = {
   kind: 'web',
   gameApp: '.',
   adapter: 'microsoft-store',
-  authoritativeGameServices: true,
+  authoritativeGameServices: false,
   icon: { profile: 'microsoft-pwa' },
   output: 'artifacts/microsoft-store',
 } as const;
@@ -219,8 +219,14 @@ export function initializeMicrosoftStoreStarter(
   if (existingTarget === undefined) {
     targets['microsoft-store'] = microsoftStoreTarget;
   } else {
-    assertCompatibleMicrosoftStoreTarget(existingTarget);
-    targets['microsoft-store'] = { ...existingTarget, ...microsoftStoreTarget };
+    const compatibleTarget = assertCompatibleMicrosoftStoreTarget(existingTarget);
+    targets['microsoft-store'] = {
+      ...compatibleTarget,
+      ...microsoftStoreTarget,
+      ...(compatibleTarget.authoritativeGameServices === undefined
+        ? {}
+        : { authoritativeGameServices: compatibleTarget.authoritativeGameServices }),
+    };
   }
 
   plan('mpgd.targets.json', formatJson(targetsJson));
@@ -489,9 +495,18 @@ function requireSafeShellParameterDefaultPath(value: string): string {
   return normalized;
 }
 
-function assertCompatibleMicrosoftStoreTarget(value: unknown): void {
+function assertCompatibleMicrosoftStoreTarget(value: unknown): JsonObject {
   const target = requireJsonObject(value, 'microsoft-store target');
   const icon = isJsonObject(target.icon) ? target.icon : undefined;
+
+  if (
+    target.authoritativeGameServices !== undefined
+    && typeof target.authoritativeGameServices !== 'boolean'
+  ) {
+    throw new Error(
+      'Existing microsoft-store target authoritativeGameServices must be a boolean when present.',
+    );
+  }
 
   if (
     target.kind !== 'web'
@@ -504,6 +519,8 @@ function assertCompatibleMicrosoftStoreTarget(value: unknown): void {
       'Existing microsoft-store target must use the game root, Store artifact directory, a supported Store adapter, and microsoft-pwa icon profile.',
     );
   }
+
+  return target;
 }
 
 function addMicrosoftStoreBootstrap(source: string): string {

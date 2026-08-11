@@ -256,8 +256,19 @@ try {
     }),
     /products\[0\] must be disabled when commerce mode is disabled/u,
   );
-  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget());
   writeJson(submissionFile, commerceConfig);
+  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget({ iap: false }));
+  assert.throws(
+    () => runMicrosoftStoreSubmissionPreflight({
+      gameRoot,
+      artifactRoot,
+      configFile: submissionFile,
+      jsonFile: join(outputDir, 'commerce-enabled-iap-disabled.json'),
+      markdownFile: join(outputDir, 'commerce-enabled-iap-disabled.md'),
+    }),
+    /must enable IAP/u,
+  );
+  writeJson(effectiveTargetFile, validMicrosoftStoreEffectiveTarget());
   const commerceEvidence = runMicrosoftStoreSubmissionPreflight({
     gameRoot,
     artifactRoot,

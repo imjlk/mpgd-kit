@@ -441,6 +441,24 @@ try {
   assert.equal(invalidUtf8SubmissionCalls.length, 0);
   assertNoGenerationOutputs(invalidUtf8Submission.input);
 
+  const unboundSubmission = createFixture('unbound-submission');
+  const unboundSubmissionEvidence = JSON.parse(
+    readFileSync(unboundSubmission.input.submissionEvidenceFile, 'utf8'),
+  ) as Record<string, unknown>;
+  delete unboundSubmissionEvidence.commerce;
+  delete unboundSubmissionEvidence.effectiveTarget;
+  writeJson(unboundSubmission.input.submissionEvidenceFile, unboundSubmissionEvidence);
+  const unboundSubmissionCalls: { url: string; init: RequestInit }[] = [];
+  await assert.rejects(
+    runMicrosoftStorePackageGeneration(
+      unboundSubmission.input,
+      createRuntime({ calls: unboundSubmissionCalls }),
+    ),
+    /commerce evidence is required for package generation/u,
+  );
+  assert.equal(unboundSubmissionCalls.length, 0);
+  assertNoGenerationOutputs(unboundSubmission.input);
+
   const missingEffectiveTarget = createFixture('missing-effective-target');
   enableCommerceEvidence(missingEffectiveTarget);
   const missingEffectiveTargetEvidence = JSON.parse(
@@ -479,6 +497,7 @@ try {
     readFileSync(missingDisabledEffectiveTarget.input.submissionEvidenceFile, 'utf8'),
   ) as Record<string, unknown>;
   missingDisabledEffectiveTargetEvidence.commerce = { mode: 'disabled' };
+  delete missingDisabledEffectiveTargetEvidence.effectiveTarget;
   writeJson(
     missingDisabledEffectiveTarget.input.submissionEvidenceFile,
     missingDisabledEffectiveTargetEvidence,
@@ -489,7 +508,7 @@ try {
       missingDisabledEffectiveTarget.input,
       createRuntime({ calls: missingDisabledEffectiveTargetCalls }),
     ),
-    /effective target evidence is required when commerce mode is declared/u,
+    /effective target evidence is required for package generation/u,
   );
   assert.equal(missingDisabledEffectiveTargetCalls.length, 0);
   assertNoGenerationOutputs(missingDisabledEffectiveTarget.input);
@@ -1092,10 +1111,18 @@ function createFixture(name: string): {
   );
   const outputFile = join(gameRoot, 'release-input', 'microsoft-store', 'package.zip');
   const evidenceDirectory = join(gameRoot, 'release-output', 'microsoft-store');
+  const effectiveTargetFile = join(
+    gameRoot,
+    'artifacts',
+    'microsoft-store',
+    'mpgd-effective-target.json',
+  );
+  const effectiveTargetBytes = Buffer.from('{"target":"microsoft-store"}\n');
 
   mkdirSync(dirname(manifestFile), { recursive: true });
   mkdirSync(dirname(submissionEvidenceFile), { recursive: true });
   writeFileSync(manifestFile, manifestBytes);
+  writeFileSync(effectiveTargetFile, effectiveTargetBytes);
   const icon192File = join(gameRoot, 'artifacts', 'microsoft-store', 'icon-192.png');
   const icon512File = join(gameRoot, 'artifacts', 'microsoft-store', 'icon-512.png');
   writeFileSync(icon192File, icon192Bytes);
@@ -1133,6 +1160,11 @@ function createFixture(name: string): {
         'ko-KR': {},
         'en-US': {},
       },
+    },
+    commerce: { mode: 'disabled' },
+    effectiveTarget: {
+      file: 'artifacts/microsoft-store/mpgd-effective-target.json',
+      sha256: sha256(effectiveTargetBytes),
     },
   });
 

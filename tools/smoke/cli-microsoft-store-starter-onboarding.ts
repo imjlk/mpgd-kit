@@ -170,6 +170,28 @@ try {
     assert.match(String(migratedScripts[name]), /--kit-path "\$\{MPGD_KIT_PATH:-.+\}"$/u);
   }
 
+  const configuredAuthorityGame = createGame('configured-store-authority', ['--microsoft-store']);
+  const configuredAuthorityTargets = readJson(join(configuredAuthorityGame, 'mpgd.targets.json'));
+  const configuredAuthorityTarget = requireRecord(
+    requireRecord(configuredAuthorityTargets.targets, 'configured authority targets')[
+      'microsoft-store'
+    ],
+    'configured authority Microsoft Store target',
+  );
+  configuredAuthorityTarget.authoritativeGameServices = true;
+  writeJson(join(configuredAuthorityGame, 'mpgd.targets.json'), configuredAuthorityTargets);
+  initializeGame(configuredAuthorityGame);
+  assert.equal(
+    requireRecord(
+      requireRecord(
+        readJson(join(configuredAuthorityGame, 'mpgd.targets.json')).targets,
+        'reinitialized configured authority targets',
+      )['microsoft-store'],
+      'reinitialized configured authority Microsoft Store target',
+    ).authoritativeGameServices,
+    true,
+  );
+
   const legacyRegistryGame = createGame('legacy-registry-adapter');
   const legacyRegistryPackage = readJson(join(legacyRegistryGame, 'package.json'));
   requireRecord(
@@ -444,6 +466,20 @@ try {
     writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
   }, /microsoft-pwa icon profile/u);
 
+  assertConflictIsAtomic('target-authority-conflict', (gameRoot) => {
+    const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));
+    const targets = requireRecord(targetsJson.targets, 'targets');
+    targets['microsoft-store'] = {
+      kind: 'web',
+      gameApp: '.',
+      adapter: 'microsoft-store',
+      authoritativeGameServices: 'enabled',
+      icon: { profile: 'microsoft-pwa' },
+      output: 'artifacts/microsoft-store',
+    };
+    writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
+  }, /authoritativeGameServices must be a boolean/u);
+
   assertConflictIsAtomic('bootstrap-conflict', (gameRoot) => {
     const mainFile = join(gameRoot, 'src/main.ts');
     const source = readFileSync(mainFile, 'utf8').replace(
@@ -605,7 +641,7 @@ function assertMicrosoftStoreEnabled(gameRoot: string): void {
   );
   assert.equal(storeTarget.kind, 'web');
   assert.equal(storeTarget.adapter, 'microsoft-store');
-  assert.equal(storeTarget.authoritativeGameServices, true);
+  assert.equal(storeTarget.authoritativeGameServices, false);
   const manifest = readJson(join(gameRoot, 'agent/game-manifest.json'));
   assert.ok(Array.isArray(manifest.targets));
   assert.equal(manifest.targets.includes('microsoft-store'), true);

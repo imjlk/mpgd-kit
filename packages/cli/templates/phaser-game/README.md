@@ -369,7 +369,10 @@ HTTPS game-services backend that verifies purchase or reward evidence.
   app; do not force activation with `skipWaiting()`. Keep the web manifest `id`
   game-specific because the cache namespace uses it to isolate apps sharing an
   origin.
-  IAP remains `configuration-required` until the game supplies consumable
+  The generated target starts with `authoritativeGameServices: false` while
+  `mpgd.microsoft-store.json` uses `commerce.mode: "disabled"`, so its effective
+  target contains no enabled IAP products. Switch both settings to their enabled
+  values only after the game supplies consumable
   `InAppOfferToken` mappings plus an authoritative HTTPS backend. The backend
   must resolve the renewable User Store ID and a separate stable account-link
   ID from trusted player identity, query Collections v9, record the grant

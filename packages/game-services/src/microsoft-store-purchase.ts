@@ -227,6 +227,9 @@ export function createMicrosoftStorePurchaseBoundary(
       } catch {
         return rejected('MICROSOFT_STORE_CREDENTIALS_INVALID');
       }
+      if (credentials.sandbox !== undefined && credentials.sandbox !== 'RETAIL') {
+        return pending('MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX');
+      }
       let accountBindingHash: string;
       try {
         accountBindingHash = await createAccountBindingHash(credentials.accountBindingId);

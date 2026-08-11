@@ -294,10 +294,9 @@ const sandbox = createHarness({ sandbox: 'XDKS.1' });
 const sandboxResult = await sandbox.backend.purchases.verifyPurchase(
   createRequest({ idempotencyKey: 'sandbox-purchase' }),
 );
-assert.equal(sandboxResult.verified, true);
-assert.equal(sandboxResult.finalization?.status, 'pending');
-assert.equal(sandboxResult.finalization?.reason, 'MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX');
-assert.deepEqual(sandbox.events, [`provider:query:${storeId}`, 'ledger:sandbox-purchase']);
+assert.equal(sandboxResult.verified, false);
+assert.equal(sandboxResult.reason, 'MICROSOFT_STORE_XSTS_REQUIRED_FOR_SANDBOX');
+assert.deepEqual(sandbox.events, []);
 
 let credentialResolutionCount = 0;
 const invalidFinalizationCredentials = createHarness({

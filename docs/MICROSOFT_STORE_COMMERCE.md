@@ -58,6 +58,12 @@ XSTS authentication supplied by the game service.
 
 ## Game-owned setup
 
+Generated and initialized Store targets start with `commerce.mode: "disabled"`
+and `authoritativeGameServices: false`, so their effective target disables IAP
+and every product. After the requirements below are configured, switch the
+submission commerce mode to `microsoft-store` and the target's
+`authoritativeGameServices` flag to `true` together.
+
 Before enabling commerce, the game must provide:
 
 - published Partner Center developer-managed consumable add-ons;
