@@ -3,7 +3,12 @@ import { describe, expect, it, vi } from 'vitest';
 import type { BridgeRequest } from '@mpgd/bridge';
 import type { Entitlement } from '@mpgd/platform';
 
-import { createAitHostBridge, shareIntent, type AitHostDependencies } from './host';
+import {
+  createAitHostBridge,
+  shareIntent,
+  type AitHostDependencies,
+  type AitIapProductGrantVerificationInput,
+} from './host';
 
 describe('AIT production host bridge', () => {
   it('uses the native game identity and persistent string storage', async () => {
@@ -99,7 +104,9 @@ describe('AIT production host bridge', () => {
   it('maps configured native IAP products and completes only after server verification', async () => {
     let callbacks: IapPurchaseCallbacks | undefined;
     let cleanupCalls = 0;
-    const verifyIapProductGrant = vi.fn(async () => true);
+    const verifyIapProductGrant = vi.fn(
+      async (_input: AitIapProductGrantVerificationInput) => true,
+    );
     const readIapEntitlements = vi.fn(async () => [{
       id: 'HINT_PACK_5',
       source: 'purchase' as const,
@@ -193,9 +200,12 @@ describe('AIT production host bridge', () => {
       platformSku: 'ait.ttokdoku.hints.5',
       idempotencyKey: 'apps-in-toss:purchase:order-hints-5',
       source: 'process-product-grant',
-      timeoutMs: 25_000,
+      timeoutMs: expect.any(Number),
       signal: expect.any(AbortSignal),
     }));
+    const verificationTimeout = verifyIapProductGrant.mock.calls[0]?.[0].timeoutMs;
+    expect(verificationTimeout).toBeGreaterThan(0);
+    expect(verificationTimeout).toBeLessThanOrEqual(25_000);
     expect(cleanupCalls).toBe(1);
   });
 

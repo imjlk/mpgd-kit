@@ -414,6 +414,10 @@ try {
       'reflected-location-href-descriptor-setter',
       'Reflect.getOwnPropertyDescriptor(location, "href").set.call(location, "https://example.com");',
     ],
+    [
+      'location-href-bulk-descriptor-setter',
+      'Object.getOwnPropertyDescriptors(location).href.set.call(location, "https://example.com");',
+    ],
     ['template-location-assignment', 'location[`href`] = "https://example.com";'],
     ['qualified-template-location-assignment', 'window.location[`href`] = "https://example.com";'],
     ['default-view-location', 'document.defaultView.location.href = "https://example.com";'],
@@ -476,6 +480,14 @@ try {
     },
   );
   assert.match(shadowedReflectDescriptorHtml, /local/u);
+
+  const shadowedObjectBulkDescriptorHtml = await packageAndReadFixture(
+    'shadowed-object-location-bulk-descriptor',
+    {
+      mainJs: 'function inspect(Object, location) { return Object.getOwnPropertyDescriptors(location).href; } document.body.dataset.href = inspect({ getOwnPropertyDescriptors() { return { href: "local" }; } }, {});',
+    },
+  );
+  assert.match(shadowedObjectBulkDescriptorHtml, /local/u);
 
   const shadowedGroupedLocationHtml = await packageAndReadFixture(
     'shadowed-grouped-location-assignment',
@@ -939,6 +951,18 @@ try {
     mainJs: 'const ratio = {} / new Worker("./worker.js") / 1; void ratio;',
   });
 
+  await assertWorkerRejected('arrow-function-division-worker', {
+    mainJs: 'const ratio = (() => {}) / new Worker("./worker.js") / 1; void ratio;',
+  });
+
+  await assertWorkerRejected('function-expression-division-worker', {
+    mainJs: 'const ratio = (function () {}) / new Worker("./worker.js") / 1; void ratio;',
+  });
+
+  await assertWorkerRejected('nested-function-expression-division-worker', {
+    mainJs: 'const ratio = (function (fallback = function () {}) {}) / new Worker("./worker.js") / 1; void ratio;',
+  });
+
   await assertWorkerRejected('unicode-identifier-division-worker', {
     mainJs: 'const π = 1; void (π / new Worker("worker.js") / 1);',
   });
@@ -1102,6 +1126,13 @@ try {
     mainJs: 'const scene = new Phaser.Scene(); scene.load.image({ key: "hero", url: "/assets/pixel.png" }); scene.load.image([{ key: "logo", url: "/assets/icon.png" }]);',
   });
   assert.doesNotMatch(phaserConfigObjectHtml, /\/assets\/(?:icon|pixel)\.png/u);
+
+  const phaserNestedMetadataHtml = await packageAndReadFixture('phaser-nested-metadata', {
+    mainJs: 'const scene = new Phaser.Scene(); const config = { key: "hero", url: "/assets/pixel.png", metadata: { key: "route", url: "/api/route" } }; const incomplete = { url: "/api/incomplete", metadata: { key: "route" } }; scene.load.image(config); scene.load.image(incomplete); document.body.dataset.route = `${config.metadata.url}:${incomplete.url}`;',
+  });
+  assert.doesNotMatch(phaserNestedMetadataHtml, /\/assets\/pixel\.png/u);
+  assert.match(phaserNestedMetadataHtml, /\/api\/route/u);
+  assert.match(phaserNestedMetadataHtml, /\/api\/incomplete/u);
 
   const phaserStaticKeyConfigHtml = await packageAndReadFixture('phaser-static-key-config', {
     mainJs: 'const scene = new Phaser.Scene(); scene.load.image({ "key": "hero", "url": "/assets/pixel.png" }); scene.load.image({ ["key"]: "logo", [`url`]: "/assets/icon.png" });',
@@ -1617,6 +1648,15 @@ try {
   assert.doesNotMatch(aliasedImportedFetchHtml, /fetch\(["']\/assets\/config\.json/u);
   assert.match(aliasedImportedFetchHtml, /fetch\(["']data:application\/json;base64,/u);
 
+  const aliasedDestructuredFetchHtml = await packageAndReadFixture(
+    'aliased-destructured-fetch-binding',
+    {
+      mainJs: 'const client = { fetch: (value) => value }; const fallback = (value) => value; const { fetch: customFetch = fallback } = client; void customFetch; void fetch("/assets/config.json");',
+    },
+  );
+  assert.doesNotMatch(aliasedDestructuredFetchHtml, /fetch\(["']\/assets\/config\.json/u);
+  assert.match(aliasedDestructuredFetchHtml, /fetch\(["']data:application\/json;base64,/u);
+
   const browserAudioHtml = await packageAndReadFixture(
     'browser-audio-asset',
     { mainJs: 'const click = new Audio("/assets/click.mp3"); void click;' },
@@ -1657,6 +1697,23 @@ try {
   });
   assert.doesNotMatch(browserImageHtml, /\/assets\/pixel\.png/u);
   assert.match(browserImageHtml, /data:image\/png;base64,/u);
+
+  const computedBrowserImageHtml = await packageAndReadFixture('computed-browser-image-asset', {
+    mainJs: 'const property = "src"; const literal = new Image(); const identified = new Image(); literal["src"] = "/assets/pixel.png"; identified[property] = "/assets/icon.png"; document.body.append(literal, identified);',
+  });
+  assert.doesNotMatch(computedBrowserImageHtml, /\/assets\/(?:icon|pixel)\.png/u);
+  assert.match(computedBrowserImageHtml, /data:image\/png;base64,/u);
+
+  const dynamicComputedBrowserImageGame = createPreviewFixture(
+    'dynamic-computed-browser-image-asset',
+    {
+      mainJs: 'const splash = new Image(); splash[globalThis.assetProperty] = "/assets/pixel.png"; document.body.append(splash);',
+    },
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dynamicComputedBrowserImageGame }),
+    /requires a static native element property assignment/u,
+  );
 
   const createdBrowserImageHtml = await packageAndReadFixture('created-browser-image-asset', {
     mainJs: 'const splash = document.createElement("img"); splash.src = "/assets/pixel.png"; document.body.append(splash);',

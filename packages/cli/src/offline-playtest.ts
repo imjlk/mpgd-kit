@@ -1144,6 +1144,10 @@ function inlineStaticElementSourceAssignments(
     `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*src\\s*=`,
     'gu',
   );
+  const computedAssignmentPattern = new RegExp(
+    `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\[`,
+    'gu',
+  );
   const setAttributePattern = new RegExp(
     `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*(?:\\.\\s*|\\?\\.\\s*)setAttribute\\s*(?:\\?\\.\\s*)?\\(`,
     'gu',
@@ -1208,6 +1212,75 @@ function inlineStaticElementSourceAssignments(
     const referenceRange = findJavaScriptExpressionRange(
       source,
       match.index + match[0].length,
+      source.length,
+      codePositions,
+      true,
+    );
+    addReplacement(match[1], match.index, referenceRange);
+  }
+
+  for (const match of source.matchAll(computedAssignmentPattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+      || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
+    ) {
+      continue;
+    }
+
+    const openingBracket = source.indexOf('[', match.index);
+    const propertyRange = findJavaScriptExpressionRange(
+      source,
+      openingBracket + 1,
+      source.length,
+      codePositions,
+      false,
+      true,
+    );
+    let closingBracket = propertyRange.end;
+
+    while (
+      closingBracket < source.length
+      && (codePositions[closingBracket] !== 1 || /\s/u.test(source[closingBracket] ?? ''))
+    ) {
+      closingBracket += 1;
+    }
+
+    if (source[closingBracket] !== ']') {
+      continue;
+    }
+
+    let equals = closingBracket + 1;
+
+    while (
+      equals < source.length
+      && (codePositions[equals] !== 1 || /\s/u.test(source[equals] ?? ''))
+    ) {
+      equals += 1;
+    }
+
+    if (source[equals] !== '=' || ['=', '>'].includes(source[equals + 1] ?? '')) {
+      continue;
+    }
+
+    const property = resolveStaticJavaScriptStringExpression(source, propertyRange, codePositions);
+
+    if (property !== 'src') {
+      const nativeElementProof = property === undefined
+        ? findStaticNativeElementBinding(source, match[1], match.index, codePositions)
+        : undefined;
+
+      if (nativeElementProof !== undefined) {
+        throw new Error('Offline playtest requires a static native element property assignment.');
+      }
+
+      continue;
+    }
+
+    const referenceRange = findJavaScriptExpressionRange(
+      source,
+      equals + 1,
       source.length,
       codePositions,
       true,
@@ -2121,9 +2194,8 @@ function findVisibleJavaScriptIdentifierBinding(
     `\\b(class|function)\\s*\\*?\\s+(${javascriptIdentifierPatternSource})`,
     'gu',
   );
-  const destructuringPattern = /\b(const|let|var)\s+(\{[^;=\r\n]*\}|\[[^;=\r\n]*\])\s*=/gu;
+  const destructuringPattern = /\b(const|let|var)\s*([\{\[])/gu;
   const importPattern = /\bimport\s+(?!["'`(])([\s\S]*?)\s+from\s*(?=["'`])/dgu;
-  const identifierPattern = new RegExp(javascriptIdentifierPatternSource, 'gu');
   const declarations: JavaScriptIdentifierBinding[] = [];
 
   for (const match of source.matchAll(variablePattern)) {
@@ -2194,14 +2266,49 @@ function findVisibleJavaScriptIdentifierBinding(
       continue;
     }
 
-    const bindingSource = match[2] ?? '';
-    const bindingStart = match.index + match[0].indexOf(bindingSource);
-    const bindingNames = [...maskNonCode(
-      bindingSource,
-      codePositions.slice(bindingStart, bindingStart + bindingSource.length),
-    ).matchAll(identifierPattern)].map((candidate) => candidate[0]);
+    const openingDelimiter = match.index + match[0].length - 1;
+    const closingDelimiter = match[2] === '{' ? '}' : ']';
+    const bindingInterior = findJavaScriptExpressionRange(
+      source,
+      openingDelimiter + 1,
+      source.length,
+      codePositions,
+      false,
+      true,
+    );
+    let bindingEnd = bindingInterior.end;
 
-    if (!bindingNames.includes(identifier)) {
+    while (
+      bindingEnd < source.length
+      && (codePositions[bindingEnd] !== 1 || /\s/u.test(source[bindingEnd] ?? ''))
+    ) {
+      bindingEnd += 1;
+    }
+
+    if (source[bindingEnd] !== closingDelimiter) {
+      continue;
+    }
+
+    let equals = bindingEnd + 1;
+
+    while (
+      equals < source.length
+      && (codePositions[equals] !== 1 || /\s/u.test(source[equals] ?? ''))
+    ) {
+      equals += 1;
+    }
+
+    if (source[equals] !== '=') {
+      continue;
+    }
+
+    const bindingNames = collectJavaScriptBindingIdentifiers(
+      source,
+      { start: openingDelimiter, end: bindingEnd + 1 },
+      codePositions,
+    );
+
+    if (!bindingNames.has(identifier)) {
       continue;
     }
 
@@ -3000,6 +3107,60 @@ function findPhaserLoaderConfigUrlRanges(
     return [];
   }
 
+  const configObjectRanges = firstCharacter === '{'
+    ? [argument]
+    : splitJavaScriptTopLevelRanges(
+        source,
+        { start: argument.start + 1, end: argument.end - 1 },
+        ',',
+        codePositions,
+      ).map((range) => trimSourceRange(source, range)).filter((range) =>
+        source[range.start] === '{' && source[range.end - 1] === '}',
+      );
+  const isDirectConfigObject = (objectRange: SourceRange | undefined): objectRange is SourceRange =>
+    objectRange !== undefined
+    && configObjectRanges.some((candidate) =>
+      candidate.start === objectRange.start && candidate.end === objectRange.end,
+    );
+  const keyPattern = /\bkey\b/gu;
+  const hasDirectConfigKey = (objectRange: SourceRange): boolean => {
+    keyPattern.lastIndex = objectRange.start + 1;
+    let keyMatch = keyPattern.exec(source);
+
+    while (keyMatch !== null && keyMatch.index < objectRange.end - 1) {
+      const containingObject = findContainingJavaScriptObject(
+        source,
+        keyMatch.index,
+        codePositions,
+      );
+      const previous = findAdjacentJavaScriptCodeCharacter(
+        source,
+        keyMatch.index - 1,
+        -1,
+        codePositions,
+      );
+      const next = findAdjacentJavaScriptCodeCharacter(
+        source,
+        keyMatch.index + keyMatch[0].length,
+        1,
+        codePositions,
+      );
+
+      if (
+        containingObject?.start === objectRange.start
+        && containingObject.end === objectRange.end
+        && (previous === '{' || previous === ',')
+        && (next === ':' || next === ',' || next === '}')
+      ) {
+        return true;
+      }
+
+      keyMatch = keyPattern.exec(source);
+    }
+
+    return false;
+  };
+
   const propertyPattern = new RegExp(
     `\\b(${[...phaserManifestUrlPropertyNames].map(escapeRegExp).join('|')})\\s*:`,
     'gu',
@@ -3012,26 +3173,15 @@ function findPhaserLoaderConfigUrlRanges(
     if (codePositions[match.index] === 1) {
       const objectRange = findContainingJavaScriptObject(source, match.index, codePositions);
 
-      if (
-        objectRange !== undefined
-        && objectRange.start >= argument.start
-        && objectRange.end <= argument.end
-      ) {
-        const objectCode = maskNonCode(
-          source.slice(objectRange.start, objectRange.end),
-          codePositions.slice(objectRange.start, objectRange.end),
+      if (isDirectConfigObject(objectRange) && hasDirectConfigKey(objectRange)) {
+        const colon = source.indexOf(':', match.index);
+        const valueRange = findJavaScriptExpressionRange(
+          source,
+          colon + 1,
+          objectRange.end - 1,
+          codePositions,
         );
-
-        if (/\bkey\s*:/u.test(objectCode)) {
-          const colon = source.indexOf(':', match.index);
-          const valueRange = findJavaScriptExpressionRange(
-            source,
-            colon + 1,
-            objectRange.end - 1,
-            codePositions,
-          );
-          ranges.push(valueRange);
-        }
+        ranges.push(valueRange);
       }
     }
 
@@ -3068,19 +3218,8 @@ function findPhaserLoaderConfigUrlRanges(
     ) {
       const objectRange = findContainingJavaScriptObject(source, match.index, codePositions);
 
-      if (
-        objectRange !== undefined
-        && objectRange.start >= argument.start
-        && objectRange.end <= argument.end
-      ) {
-        const objectCode = maskNonCode(
-          source.slice(objectRange.start, objectRange.end),
-          codePositions.slice(objectRange.start, objectRange.end),
-        );
-
-        if (/\bkey(?:\s*:|\s*(?=[,}]))/u.test(objectCode)) {
-          ranges.push({ start: match.index, end: match.index + propertyName.length });
-        }
+      if (isDirectConfigObject(objectRange) && hasDirectConfigKey(objectRange)) {
+        ranges.push({ start: match.index, end: match.index + propertyName.length });
       }
     }
 
@@ -4811,6 +4950,48 @@ function assertNoIndirectLocationMutation(
   codePositions: Uint8Array,
   aliasAssignments: readonly LocationAliasAssignment[],
 ): void {
+  const bulkDescriptorPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(Object)\s*\.\s*getOwnPropertyDescriptors\s*\(/gu;
+
+  for (const match of source.matchAll(bulkDescriptorPattern)) {
+    if (
+      match.index === undefined
+      || codePositions[match.index] !== 1
+      || findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1] ?? match[2] ?? 'Object',
+        match.index,
+        codePositions,
+      ) !== undefined
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = source.indexOf('(', match.index);
+    const target = splitJavaScriptArguments(source, openingParenthesis, codePositions)[0];
+
+    if (target === undefined) {
+      continue;
+    }
+
+    const targetExpression = maskNonCode(
+      source.slice(target.start, target.end),
+      codePositions.slice(target.start, target.end),
+    ).trim();
+
+    if (
+      isLocationAliasExpression(
+        source,
+        targetExpression,
+        target.start,
+        codePositions,
+        aliasAssignments,
+        new Set<string>(),
+      )
+    ) {
+      throw new Error('Offline playtest does not support script-driven navigation.');
+    }
+  }
+
   const descriptorPattern = /(?<![$.\u200C\u200D\p{ID_Continue}])(?:(globalThis|self|window)\s*\.\s*)?(Object|Reflect)\s*\.\s*getOwnPropertyDescriptor\s*\(/gu;
 
   for (const match of source.matchAll(descriptorPattern)) {
@@ -5610,10 +5791,14 @@ function scanJavaScriptCodePositions(
   let regexAllowed = true;
   let pendingControlParenthesis = false;
   let pendingClassBody = false;
+  let pendingClassBodyCompletesExpression = false;
+  let pendingAsyncFunctionCompletesExpression: boolean | undefined;
+  const pendingFunctionBodiesCompletingExpression: boolean[] = [];
   let nextBraceIsBlock = false;
   let previousToken: string | undefined;
   const parenthesisKinds: Array<'control' | 'normal'> = [];
   const braceKinds: boolean[] = [];
+  const braceCompletesExpression: boolean[] = [];
 
   for (let index = start; index < source.length; index += 1) {
     const character = source.charAt(index);
@@ -5658,7 +5843,8 @@ function scanJavaScriptCodePositions(
       identifierStartCharacter !== undefined
       && isJavaScriptIdentifierStart(identifierStartCharacter)
     ) {
-      const identifierCanStartExpression = regexAllowed;
+      const declarationPosition = previousToken === undefined
+        || [';', 'block-open', 'block-close', 'export', 'default'].includes(previousToken);
       const identifierStart = index;
       index += identifierStartCharacter.length;
 
@@ -5675,7 +5861,22 @@ function scanJavaScriptCodePositions(
       const identifier = source.slice(identifierStart, index);
       index -= 1;
       pendingControlParenthesis = javascriptControlParenthesisKeywords.has(identifier);
-      pendingClassBody ||= identifier === 'class' && identifierCanStartExpression;
+
+      if (identifier === 'async') {
+        pendingAsyncFunctionCompletesExpression = !declarationPosition;
+      } else if (identifier === 'function') {
+        const functionCompletesExpression = previousToken === 'async'
+          ? (pendingAsyncFunctionCompletesExpression ?? true)
+          : !declarationPosition;
+        pendingFunctionBodiesCompletingExpression.push(functionCompletesExpression);
+        pendingAsyncFunctionCompletesExpression = undefined;
+      }
+
+      if (identifier === 'class') {
+        pendingClassBody = true;
+        pendingClassBodyCompletesExpression = !declarationPosition;
+      }
+
       nextBraceIsBlock = javascriptBlockKeywords.has(identifier);
       regexAllowed = javascriptRegexPrefixKeywords.has(identifier);
       previousToken = identifier;
@@ -5752,13 +5953,28 @@ function scanJavaScriptCodePositions(
         || previousToken === ';'
         || previousToken === 'block-open'
         || previousToken === 'block-close';
+      const isArrowBody = previousToken === '=>';
+      const isFunctionBody = isBlock
+        && !isArrowBody
+        && findJavaScriptBlockBindingHeader(source, index, positions)?.kind === 'function';
+      const functionBodyCompletesExpression = isFunctionBody
+        ? (pendingFunctionBodiesCompletingExpression.pop() ?? false)
+        : false;
+      const completesExpression = !isBlock
+        || isArrowBody
+        || (isClassBody && pendingClassBodyCompletesExpression)
+        || functionBodyCompletesExpression;
       braceKinds.push(isBlock);
+      braceCompletesExpression.push(completesExpression);
 
       if (braceKindPositions !== undefined) {
         braceKindPositions[index] = isClassBody ? 3 : isBlock ? 1 : 2;
       }
 
       pendingClassBody &&= !isClassBody;
+      if (isClassBody) {
+        pendingClassBodyCompletesExpression = false;
+      }
       regexAllowed = true;
       pendingControlParenthesis = false;
       previousToken = isBlock ? 'block-open' : 'object-open';
@@ -5771,9 +5987,10 @@ function scanJavaScriptCodePositions(
       }
 
       const isBlock = braceKinds.pop() ?? true;
-      regexAllowed = isBlock;
+      const completesExpression = braceCompletesExpression.pop() ?? false;
+      regexAllowed = isBlock && !completesExpression;
       pendingControlParenthesis = false;
-      previousToken = isBlock ? 'block-close' : 'object-close';
+      previousToken = completesExpression ? 'value' : isBlock ? 'block-close' : 'object-close';
       continue;
     }
 
