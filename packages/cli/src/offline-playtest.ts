@@ -1312,6 +1312,10 @@ function findStaticNativeRequestUrlRange(
       identifierOffset += 1;
     }
 
+    if (source.slice(identifierOffset, identifierOffset + expression.length) !== expression) {
+      return undefined;
+    }
+
     const binding = findVisibleJavaScriptIdentifierBinding(
       source,
       expression,
