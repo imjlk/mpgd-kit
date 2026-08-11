@@ -10,7 +10,8 @@
     "microsoft-store": {
       "kind": "web",
       "gameApp": ".",
-      "adapter": "browser",
+      "adapter": "microsoft-store",
+      "authoritativeGameServices": true,
       "icon": { "profile": "microsoft-pwa" },
       "output": "artifacts/microsoft-store"
     },

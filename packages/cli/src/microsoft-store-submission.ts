@@ -25,6 +25,24 @@ import { isMicrosoftStoreSupportedListingLocale } from './microsoft-store-suppor
 
 export const microsoftStoreSubmissionSchemaVersion = 1 as const;
 
+export interface MicrosoftStoreSubmissionCommerceProduct {
+  readonly logicalProductId: string;
+  /** Add-on Product ID used by the PWA Digital Goods API. */
+  readonly inAppOfferToken: string;
+  /** Partner Center Store ID used by Microsoft collections query and consume APIs. */
+  readonly storeId: string;
+}
+
+export type MicrosoftStoreSubmissionCommerce =
+  | { readonly mode: 'disabled' }
+  | {
+      readonly mode: 'microsoft-store';
+      readonly productType: 'developer-managed-consumable';
+      readonly fulfillment: 'authoritative-server';
+      readonly authoritativeGameServices: true;
+      readonly products: readonly MicrosoftStoreSubmissionCommerceProduct[];
+    };
+
 // Microsoft Store listing and package identity limits documented by Microsoft Learn.
 const maximumStoreDescriptionCharacters = 10_000;
 const maximumStoreDesktopScreenshots = 10;
@@ -80,9 +98,7 @@ export interface MicrosoftStoreSubmissionConfig {
     readonly questionnaireCompleted: true;
     readonly iarcId?: string;
   };
-  readonly commerce: {
-    readonly mode: 'disabled';
-  };
+  readonly commerce: MicrosoftStoreSubmissionCommerce;
 }
 
 export interface MicrosoftStoreSubmissionEvidence {
@@ -291,11 +307,7 @@ export function parseMicrosoftStoreSubmissionConfig(
     throw new Error('ageRating.questionnaireCompleted must be true before submission.');
   }
 
-  if (commerce.mode !== 'disabled') {
-    throw new Error(
-      'commerce.mode must stay disabled until Microsoft Store commerce is backed by server-side ledger verification.',
-    );
-  }
+  const parsedCommerce = parseMicrosoftStoreSubmissionCommerce(commerce);
 
   const iarcId = optionalProductionString(ageRating.iarcId, 'ageRating.iarcId');
 
@@ -326,8 +338,80 @@ export function parseMicrosoftStoreSubmissionConfig(
       questionnaireCompleted: true,
       ...(iarcId === undefined ? {} : { iarcId }),
     },
-    commerce: { mode: 'disabled' },
+    commerce: parsedCommerce,
   };
+}
+
+function parseMicrosoftStoreSubmissionCommerce(
+  input: Record<string, unknown>,
+): MicrosoftStoreSubmissionCommerce {
+  if (input.mode === 'disabled') {
+    return { mode: 'disabled' };
+  }
+  if (input.mode !== 'microsoft-store') {
+    throw new Error('commerce.mode must be disabled or microsoft-store.');
+  }
+  if (input.productType !== 'developer-managed-consumable') {
+    throw new Error(
+      'commerce.productType must be developer-managed-consumable for Digital Goods purchases.',
+    );
+  }
+  if (input.fulfillment !== 'authoritative-server') {
+    throw new Error(
+      'commerce.fulfillment must be authoritative-server for server-side ledger verification.',
+    );
+  }
+  if (input.authoritativeGameServices !== true) {
+    throw new Error('commerce.authoritativeGameServices must be true.');
+  }
+
+  const rawProducts = requireArray(input.products, 'commerce.products');
+  if (rawProducts.length === 0) {
+    throw new Error('commerce.products must contain at least one product.');
+  }
+  const logicalProductIds = new Set<string>();
+  const inAppOfferTokens = new Set<string>();
+  const storeIds = new Set<string>();
+  const products = rawProducts.map((rawProduct, index) => {
+    const product = requireRecord(rawProduct, `commerce.products[${String(index)}]`);
+    const logicalProductId = requireProductionString(
+      product.logicalProductId,
+      `commerce.products[${String(index)}].logicalProductId`,
+    );
+    const inAppOfferToken = requireProductionString(
+      product.inAppOfferToken,
+      `commerce.products[${String(index)}].inAppOfferToken`,
+    );
+    const storeId = requireProductionString(
+      product.storeId,
+      `commerce.products[${String(index)}].storeId`,
+    );
+
+    assertUniqueCommerceIdentifier(logicalProductIds, logicalProductId, 'logicalProductId');
+    assertUniqueCommerceIdentifier(inAppOfferTokens, inAppOfferToken, 'inAppOfferToken');
+    assertUniqueCommerceIdentifier(storeIds, storeId, 'storeId');
+
+    return { logicalProductId, inAppOfferToken, storeId };
+  });
+
+  return {
+    mode: 'microsoft-store',
+    productType: 'developer-managed-consumable',
+    fulfillment: 'authoritative-server',
+    authoritativeGameServices: true,
+    products,
+  };
+}
+
+function assertUniqueCommerceIdentifier(
+  seen: Set<string>,
+  value: string,
+  field: keyof MicrosoftStoreSubmissionCommerceProduct,
+): void {
+  if (seen.has(value)) {
+    throw new Error(`commerce.products must use unique ${field} values.`);
+  }
+  seen.add(value);
 }
 
 export function renderMicrosoftStoreSubmissionMarkdown(
@@ -346,6 +430,18 @@ export function renderMicrosoftStoreSubmissionMarkdown(
     `- Personal data accessed or transmitted: ${String(evidence.listing.personalData.accessedOrTransmitted)}`,
     `- Privacy policy: ${escapeMarkdownInline(evidence.listing.personalData.privacyPolicyUrl ?? 'Not required')}`,
     '',
+    ...(evidence.commerce.mode === 'microsoft-store'
+      ? [
+          '## Commerce Products',
+          '',
+          '| Logical product | InAppOfferToken | Store ID |',
+          '| --- | --- | --- |',
+          ...evidence.commerce.products.map((product) => (
+            `| ${escapeMarkdownTable(product.logicalProductId)} | ${escapeMarkdownTable(product.inAppOfferToken)} | ${escapeMarkdownTable(product.storeId)} |`
+          )),
+          '',
+        ]
+      : []),
     '## Store Listings',
     '',
     '| Locale | Screenshots | Description |',

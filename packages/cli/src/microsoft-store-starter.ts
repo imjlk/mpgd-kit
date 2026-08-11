@@ -45,7 +45,8 @@ const microsoftStoreManagedTemplateFiles = new Set([
 const microsoftStoreTarget = {
   kind: 'web',
   gameApp: '.',
-  adapter: 'browser',
+  adapter: 'microsoft-store',
+  authoritativeGameServices: true,
   icon: { profile: 'microsoft-pwa' },
   output: 'artifacts/microsoft-store',
 } as const;
@@ -197,6 +198,7 @@ export function initializeMicrosoftStoreStarter(
     targets['microsoft-store'] = microsoftStoreTarget;
   } else {
     assertCompatibleMicrosoftStoreTarget(existingTarget);
+    targets['microsoft-store'] = { ...existingTarget, ...microsoftStoreTarget };
   }
 
   plan('mpgd.targets.json', formatJson(targetsJson));
@@ -284,13 +286,13 @@ function assertCompatibleMicrosoftStoreTarget(value: unknown): void {
 
   if (
     target.kind !== 'web'
-    || target.adapter !== 'browser'
+    || (target.adapter !== 'browser' && target.adapter !== 'microsoft-store')
     || target.gameApp !== microsoftStoreTarget.gameApp
     || target.output !== microsoftStoreTarget.output
     || icon?.profile !== microsoftStoreTarget.icon.profile
   ) {
     throw new Error(
-      'Existing microsoft-store target must use the game root, Store artifact directory, browser adapter, and microsoft-pwa icon profile.',
+      'Existing microsoft-store target must use the game root, Store artifact directory, a supported Store adapter, and microsoft-pwa icon profile.',
     );
   }
 }

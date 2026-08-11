@@ -166,6 +166,8 @@ export {
   renderMicrosoftStoreSubmissionMarkdown,
   runMicrosoftStoreSubmissionPreflight,
   type MicrosoftStoreSubmissionConfig,
+  type MicrosoftStoreSubmissionCommerce,
+  type MicrosoftStoreSubmissionCommerceProduct,
   type MicrosoftStoreSubmissionEvidence,
   type RunMicrosoftStoreSubmissionPreflightInput,
 } from './microsoft-store-submission.js';
@@ -195,6 +197,7 @@ const mpgdTemplateDependencyPackages = [
   { name: '@mpgd/adapter-browser', packageDir: 'adapters/browser' },
   { name: '@mpgd/adapter-capacitor', packageDir: 'adapters/capacitor' },
   { name: '@mpgd/adapter-devvit', packageDir: 'adapters/devvit' },
+  { name: '@mpgd/adapter-microsoft-store', packageDir: 'adapters/microsoft-store' },
   { name: '@mpgd/adapter-verse8', packageDir: 'adapters/verse8' },
   { name: '@mpgd/analytics', packageDir: 'packages/analytics' },
   { name: '@mpgd/bridge', packageDir: 'packages/bridge' },

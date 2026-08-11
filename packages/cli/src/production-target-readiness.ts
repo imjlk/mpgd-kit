@@ -58,7 +58,10 @@ export function assertProductionTargetReadiness(
       input.targetPolicy.features.rewardedAds
       || input.targetPolicy.monetization.rewardedAds
     );
-  const requiresWebMonetizationAuthority = input.targetPolicy?.runtime === 'web'
+  const requiresWebMonetizationAuthority = (
+    input.targetPolicy?.runtime === 'web'
+    || input.targetPolicy?.runtime === 'microsoft-store-pwa'
+  )
     && (
       input.targetPolicy.features.iap
       || input.targetPolicy.features.rewardedAds

@@ -466,7 +466,8 @@ function assertMicrosoftStoreEnabled(gameRoot: string): void {
     'Microsoft Store target',
   );
   assert.equal(storeTarget.kind, 'web');
-  assert.equal(storeTarget.adapter, 'browser');
+  assert.equal(storeTarget.adapter, 'microsoft-store');
+  assert.equal(storeTarget.authoritativeGameServices, true);
   const manifest = readJson(join(gameRoot, 'agent/game-manifest.json'));
   assert.ok(Array.isArray(manifest.targets));
   assert.equal(manifest.targets.includes('microsoft-store'), true);

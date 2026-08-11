@@ -198,7 +198,58 @@ try {
       ...base,
       commerce: { mode: 'microsoft-store' },
     },
-    'server-side ledger verification',
+    'developer-managed-consumable',
+  );
+
+  const commerceConfig = parseMicrosoftStoreSubmissionConfig({
+    ...base,
+    commerce: {
+      mode: 'microsoft-store',
+      productType: 'developer-managed-consumable',
+      fulfillment: 'authoritative-server',
+      authoritativeGameServices: true,
+      products: [
+        {
+          logicalProductId: 'HINT_PACK_20',
+          inAppOfferToken: 'ttokdoku_hint_pack_20',
+          storeId: '9N0000000001',
+        },
+      ],
+    },
+  });
+  assert.deepEqual(commerceConfig.commerce, {
+    mode: 'microsoft-store',
+    productType: 'developer-managed-consumable',
+    fulfillment: 'authoritative-server',
+    authoritativeGameServices: true,
+    products: [
+      {
+        logicalProductId: 'HINT_PACK_20',
+        inAppOfferToken: 'ttokdoku_hint_pack_20',
+        storeId: '9N0000000001',
+      },
+    ],
+  });
+  expectConfigError(
+    {
+      ...base,
+      commerce: {
+        ...commerceConfig.commerce,
+        products: [
+          {
+            logicalProductId: 'HINT_PACK_20',
+            inAppOfferToken: 'ttokdoku_hint_pack_20',
+            storeId: '9N0000000001',
+          },
+          {
+            logicalProductId: 'HINT_PACK_120',
+            inAppOfferToken: 'ttokdoku_hint_pack_120',
+            storeId: '9N0000000001',
+          },
+        ],
+      },
+    },
+    'unique storeId',
   );
 
   expectConfigError(
