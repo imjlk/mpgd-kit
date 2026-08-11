@@ -210,8 +210,13 @@ const composition = resolveTargetViewportComposition({
 });
 
 mountGame(composition.gameBounds);
-mountLeftRail(composition.leftRailBounds);
-mountRightRail(composition.rightRailBounds);
+
+if (composition.mode === 'side-rails') {
+  mountLeftRail(composition.leftRailBounds);
+  mountRightRail(composition.rightRailBounds);
+} else {
+  unmountRails();
+}
 ```
 
 `side-rails` is selected only when the game can use the full safe content height
