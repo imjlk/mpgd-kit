@@ -1152,7 +1152,6 @@ function validatePhaserTemplateAITWrapper(): void {
           readonly navigationBar?: {
             readonly withBackButton?: unknown;
             readonly withHomeButton?: unknown;
-            readonly withTitle?: unknown;
             readonly transparentBackground?: unknown;
             readonly theme?: unknown;
           };
@@ -1201,11 +1200,6 @@ function validatePhaserTemplateAITWrapper(): void {
         targets.targets?.ait?.navigationBar?.withHomeButton,
         false,
         `${targetsPath}: targets.ait.navigationBar.withHomeButton`,
-      );
-      assertEqual(
-        targets.targets?.ait?.navigationBar?.withTitle,
-        false,
-        `${targetsPath}: targets.ait.navigationBar.withTitle`,
       );
       assertEqual(
         targets.targets?.ait?.navigationBar?.transparentBackground,

@@ -543,7 +543,6 @@ try {
         navigationBar: {
           withBackButton: false,
           withHomeButton: false,
-          withTitle: false,
           transparentBackground: true,
           theme: 'dark',
         },
@@ -571,6 +570,17 @@ try {
       },
     }),
     /ait\.navigationBar\.theme must be light or dark/u,
+  );
+  assert.throws(
+    () => assertPlatformTargetsConfigShape({
+      targets: {
+        ait: {
+          ...aitTarget,
+          navigationBar: { withTitle: false },
+        },
+      },
+    }),
+    /ait\.navigationBar\.withTitle is not a recognized navigation option/u,
   );
   assert.throws(
     () => assertPlatformTargetsConfigShape({

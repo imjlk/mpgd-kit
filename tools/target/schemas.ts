@@ -72,7 +72,6 @@ export interface AppsInTossTargetConfig extends BaseTargetConfig {
 export interface AppsInTossNavigationBarConfig {
   readonly withBackButton?: boolean;
   readonly withHomeButton?: boolean;
-  readonly withTitle?: boolean;
   readonly transparentBackground?: boolean;
   readonly theme?: 'light' | 'dark';
 }
