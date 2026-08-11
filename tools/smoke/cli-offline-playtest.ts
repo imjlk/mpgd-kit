@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { Script } from 'node:vm';
 
 import {
   defaultOfflinePlaytestMaximumBytes,
@@ -42,6 +43,30 @@ try {
   assert.doesNotMatch(html, /<script\b[^>]*\bsrc=/u);
   assert.doesNotMatch(html, /<link\b[^>]*\brel=["']stylesheet/u);
   assert.match(html, /<script type="module">/u);
+
+  const runtimeGuardStart = html.indexOf('(()=>{const allowed=');
+  const runtimeGuardEnd = html.indexOf('</script>', runtimeGuardStart);
+  assert.ok(runtimeGuardStart >= 0 && runtimeGuardEnd > runtimeGuardStart);
+  const runtimeGuardSource = html.slice(runtimeGuardStart, runtimeGuardEnd);
+  class RuntimeGuardDocument {
+    createElement(name: string): { name: string } {
+      return { name };
+    }
+
+    createElementNS(namespace: string, name: string): { name: string; namespace: string } {
+      return { name, namespace };
+    }
+  }
+  new Script(runtimeGuardSource).runInNewContext({ Document: RuntimeGuardDocument });
+  assert.throws(
+    () => RuntimeGuardDocument.prototype.createElementNS.call(
+      new RuntimeGuardDocument(),
+      'http://www.w3.org/2000/svg',
+      'script',
+    ),
+    /document\.createElementNS blocked network access: script/u,
+  );
+
   assert.match(readme, /TEST PLAY ONLY/u);
   assert.match(readme, /not a release target/u);
   assert.equal(evidence.purpose, 'test-play-only');
