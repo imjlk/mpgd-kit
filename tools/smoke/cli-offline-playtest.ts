@@ -244,6 +244,10 @@ try {
       'sequenced-worker-base-class-alias',
       'const Base = Worker; const BackgroundWorker = class extends (0, Base) {}; new BackgroundWorker("./worker.js");',
     ],
+    [
+      'commented-worker-base-class-alias',
+      'const BackgroundWorker = class /* retained trivia */ extends /* native base */ Worker {}; new BackgroundWorker("./worker.js");',
+    ],
   ] as const;
 
   for (const [name, mainJs] of unsupportedWorkerAliasFixtures) {
