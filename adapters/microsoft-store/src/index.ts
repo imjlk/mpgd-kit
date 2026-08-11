@@ -205,6 +205,8 @@ export function createMicrosoftStoreCommerceAdapter(
       }
 
       let response: MicrosoftStorePaymentResponse | undefined;
+      let paymentCompletionAttempted = false;
+      let purchaseToken: string | undefined;
       try {
         const service = await getService();
         const details = await service.getDetails([product.inAppOfferToken]);
@@ -218,11 +220,13 @@ export function createMicrosoftStoreCommerceAdapter(
             data: { sku: product.inAppOfferToken },
           },
         ]).show();
-        const purchaseToken = readPurchaseToken(response.details);
+        purchaseToken = readPurchaseToken(response.details);
         if (purchaseToken === undefined) {
+          paymentCompletionAttempted = true;
           await completePayment(response, 'fail');
           return failedPurchase();
         }
+        paymentCompletionAttempted = true;
         await completePayment(response, 'success');
 
         const purchase = (await service.listPurchases()).find((candidate) => (
@@ -230,25 +234,20 @@ export function createMicrosoftStoreCommerceAdapter(
           && candidate.purchaseToken === purchaseToken
         ));
         if (purchase === undefined) {
-          return {
-            status: 'pending',
-            transactionId: purchaseToken,
-            entitlementIds: [],
-            evidence: createPurchaseEvidence({
-              itemId: product.inAppOfferToken,
-              purchaseToken,
-            }),
-          };
+          return pendingPurchase(product.inAppOfferToken, purchaseToken);
         }
 
         return fulfill(product, purchase, request);
       } catch (error) {
-        if (isAbortError(error)) {
+        if (isAbortError(error) && response === undefined) {
           return cancelledPurchase();
         }
         input.onError?.(error);
-        if (response !== undefined) {
+        if (response !== undefined && !paymentCompletionAttempted) {
           await completePayment(response, 'fail');
+        }
+        if (purchaseToken !== undefined) {
+          return pendingPurchase(product.inAppOfferToken, purchaseToken);
         }
         return failedPurchase();
       }
@@ -470,4 +469,12 @@ function failedPurchase(): PurchaseResult {
 
 function cancelledPurchase(): PurchaseResult {
   return Object.freeze({ status: 'cancelled', entitlementIds: [] });
+}
+
+function pendingPurchase(itemId: string, purchaseToken: string): PurchaseResult {
+  return Object.freeze({
+    status: 'pending',
+    entitlementIds: [],
+    evidence: createPurchaseEvidence({ itemId, purchaseToken }),
+  });
 }

@@ -1,6 +1,7 @@
 import {
   createGameServicesOrpcBackendApi,
   createGameServicesOrpcClient,
+  microsoftStoreDigitalGoodsEvidenceSchema,
 } from '@mpgd/game-services';
 
 import {
@@ -476,6 +477,10 @@ const microsoftStorePurchase = await microsoftStoreService.verifyPurchase({
   platformTransactionId: 'coins_100',
   idempotencyKey: 'microsoft-store-purchase',
   purchasedAt: '2026-08-11T00:00:00.000Z',
+  evidence: {
+    schema: microsoftStoreDigitalGoodsEvidenceSchema,
+    payload: { purchaseToken: 'coins_100' },
+  },
 }) as {
   readonly verified: boolean;
   readonly finalization?: { readonly status: string; readonly action?: string };

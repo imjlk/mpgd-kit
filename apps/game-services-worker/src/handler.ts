@@ -9,6 +9,7 @@ import {
   createInMemoryGameServicesStore,
   createInMemoryVerifiedLeaderboardService,
   createVerifiedLeaderboardSnapshotFetchHandler,
+  microsoftStoreDigitalGoodsEvidenceSchema,
   type ClaimAdRewardRequest,
   type GameServicesBackendApi,
   type GameServicesDeploymentTargetBindings,
@@ -286,10 +287,14 @@ function resolveWorkerPurchaseGrantFinalizer(
 
   return {
     supportsPurchaseGrant(input) {
-      return input.request.target === 'microsoft-store';
+      return input.request.target === 'microsoft-store'
+        && input.product.type === 'consumable'
+        && input.request.evidence?.schema === microsoftStoreDigitalGoodsEvidenceSchema;
     },
     finalizePurchaseGrant(input) {
       const { signal, ...bindingInput } = input;
+      // AbortSignal is not structured-cloneable across a Worker Service Binding. The remote
+      // binding receives timeoutMs and must enforce that timeout within its own request scope.
       void signal;
       return binding.finalizePurchaseGrant(bindingInput);
     },

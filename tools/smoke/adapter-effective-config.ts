@@ -8,6 +8,7 @@ import { createCapacitorPlatformGateway } from '../../adapters/capacitor/src/ind
 import { createDevvitPlatformGateway } from '../../adapters/devvit/src/index';
 import {
   createMicrosoftStoreCommerceAdapter,
+  microsoftStoreDigitalGoodsEvidenceSchema,
   withMicrosoftStoreCommerceAdapter,
 } from '../../adapters/microsoft-store/src/index';
 import { createVerse8PlatformGateway } from '../../adapters/verse8/src/index';
@@ -172,7 +173,7 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
       transactionId: 'microsoft-store-ledger',
       entitlementIds: [],
       evidence: {
-        schema: 'mpgd.microsoft-store.digital-goods.v1',
+        schema: microsoftStoreDigitalGoodsEvidenceSchema,
         payload: { itemId: 'coins_100', purchaseToken: 'coins_100' },
       },
     },

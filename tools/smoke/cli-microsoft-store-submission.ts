@@ -251,6 +251,48 @@ try {
     },
     'unique storeId',
   );
+  expectConfigError(
+    {
+      ...base,
+      commerce: {
+        ...commerceConfig.commerce,
+        products: [
+          {
+            logicalProductId: 'HINT_PACK_20',
+            inAppOfferToken: 'ttokdoku_hint_pack_20',
+            storeId: '9N0000000001',
+          },
+          {
+            logicalProductId: 'HINT_PACK_20',
+            inAppOfferToken: 'ttokdoku_hint_pack_120',
+            storeId: '9N0000000002',
+          },
+        ],
+      },
+    },
+    'unique logicalProductId',
+  );
+  expectConfigError(
+    {
+      ...base,
+      commerce: {
+        ...commerceConfig.commerce,
+        products: [
+          {
+            logicalProductId: 'HINT_PACK_20',
+            inAppOfferToken: 'ttokdoku_hint_pack_20',
+            storeId: '9N0000000001',
+          },
+          {
+            logicalProductId: 'HINT_PACK_120',
+            inAppOfferToken: 'ttokdoku_hint_pack_20',
+            storeId: '9N0000000002',
+          },
+        ],
+      },
+    },
+    'unique inAppOfferToken',
+  );
 
   expectConfigError(
     {

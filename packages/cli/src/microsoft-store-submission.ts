@@ -409,7 +409,9 @@ function assertUniqueCommerceIdentifier(
   field: keyof MicrosoftStoreSubmissionCommerceProduct,
 ): void {
   if (seen.has(value)) {
-    throw new Error(`commerce.products must use unique ${field} values.`);
+    throw new Error(
+      `commerce.products must use unique ${field} values; duplicate value "${value}" found.`,
+    );
   }
   seen.add(value);
 }

@@ -211,6 +211,24 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       idempotencyKey: 'microsoft-store-purchase',
     });
     assertDeepEqual(
+      await gateway.ads.showRewarded({
+        placementId: 'CONTINUE_AFTER_FAIL',
+        idempotencyKey: 'microsoft-store-reward',
+      }),
+      { status: 'unavailable', rewardGranted: false },
+      'microsoft-store rewarded ads should be unavailable',
+    );
+    assertDeepEqual(
+      await gateway.leaderboard.submitScore({
+        leaderboardId: 'default',
+        score: 1,
+        runId: 'microsoft-store-run',
+        submittedAt: new Date().toISOString(),
+      }),
+      { submitted: false },
+      'microsoft-store leaderboard should be disabled',
+    );
+    assertDeepEqual(
       targetGateway.calls,
       ['purchase'],
       'microsoft-store should delegate only configured commerce',

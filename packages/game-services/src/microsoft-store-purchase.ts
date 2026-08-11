@@ -99,8 +99,8 @@ export function createMicrosoftStoreCollectionsClient(
     body: Readonly<Record<string, unknown>>,
     signal: AbortSignal,
   ): Promise<unknown> {
-    const accessToken = authorizationValue(credentials.accessToken, 'accessToken');
     assertCredentials(credentials);
+    const accessToken = credentials.accessToken;
     let response: MicrosoftStoreFetchResponse;
 
     try {
@@ -451,9 +451,9 @@ function createVerificationId(
 }
 
 async function deterministicTrackingId(value: string): Promise<string> {
-  const digest = new Uint8Array(
-    await crypto.subtle.digest('SHA-256', new TextEncoder().encode(value)),
-  );
+  const subtle = readGlobalSubtleCrypto();
+  const encoded = new TextEncoder().encode(value);
+  const digest = new Uint8Array(await subtle.digest('SHA-256', encoded));
   digest[6] = ((digest.at(6) ?? 0) & 0x0f) | 0x50;
   digest[8] = ((digest.at(8) ?? 0) & 0x3f) | 0x80;
   const hex = Array.from(digest.slice(0, 16), (byte) => byte.toString(16).padStart(2, '0'))
@@ -547,7 +547,20 @@ function positiveSafeInteger(input: unknown, label: string): number {
 }
 
 function validIsoDate(input: string): boolean {
-  return Number.isFinite(Date.parse(input));
+  return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/u.test(input)
+    && Number.isFinite(Date.parse(input));
+}
+
+function readGlobalSubtleCrypto(): SubtleCrypto {
+  const subtle = globalThis.crypto?.subtle;
+
+  if (subtle === undefined) {
+    throw new Error(
+      'globalThis.crypto.subtle is unavailable. Provide a Web Crypto SubtleCrypto implementation.',
+    );
+  }
+
+  return subtle;
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

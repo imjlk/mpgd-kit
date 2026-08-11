@@ -1370,6 +1370,14 @@ interface EntitlementRetryIdentity {
   readonly deploymentTarget?: string;
 }
 
+interface EntitlementTransactionIdentity {
+  readonly source: EntitlementLedgerGrant['source'];
+  readonly playerId: string;
+  readonly grantId: string;
+  readonly target: string;
+  readonly deploymentTarget?: string;
+}
+
 async function findEntitlementTransactionByIdempotency(
   store: GameServicesStore,
   identity: EntitlementRetryIdentity,
@@ -1466,12 +1474,8 @@ function matchesEntitlementRetry(
   transaction: ProductGrantTransaction,
   identity: EntitlementRetryIdentity,
 ): boolean {
-  return transaction.source === identity.source
-    && transaction.playerId === identity.playerId
-    && transaction.idempotencyKey === identity.idempotencyKey
-    && transaction.grantId === identity.grantId
-    && transaction.payload.target === identity.target
-    && transaction.payload.deploymentTarget === identity.deploymentTarget;
+  return matchesEntitlementTransactionIdentity(transaction, identity)
+    && transaction.idempotencyKey === identity.idempotencyKey;
 }
 
 function matchesPurchaseEvidenceRecovery(
@@ -1485,16 +1489,26 @@ function matchesPurchaseEvidenceRecovery(
     readonly evidenceVerificationId: string;
   },
 ): boolean {
-  return transaction.source === 'purchase'
-    && transaction.playerId === identity.playerId
-    && transaction.grantId === identity.grantId
-    && transaction.payload.target === identity.target
-    && transaction.payload.deploymentTarget === identity.deploymentTarget
+  return matchesEntitlementTransactionIdentity(transaction, {
+    ...identity,
+    source: 'purchase',
+  })
     && transaction.payload.platformProductId === identity.platformProductId
     && (
       transaction.evidenceVerificationId
         ?? transaction.payload.evidenceVerificationId
     ) === identity.evidenceVerificationId;
+}
+
+function matchesEntitlementTransactionIdentity(
+  transaction: ProductGrantTransaction,
+  identity: EntitlementTransactionIdentity,
+): boolean {
+  return transaction.source === identity.source
+    && transaction.playerId === identity.playerId
+    && transaction.grantId === identity.grantId
+    && transaction.payload.target === identity.target
+    && transaction.payload.deploymentTarget === identity.deploymentTarget;
 }
 
 function resolveEvidenceVerificationTimeout(timeoutMs: number | undefined): number {

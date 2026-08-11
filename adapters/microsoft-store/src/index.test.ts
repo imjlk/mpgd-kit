@@ -215,6 +215,63 @@ describe('Microsoft Store Digital Goods commerce', () => {
     expect(verifyAndGrant).not.toHaveBeenCalled();
   });
 
+  it('reports reconciliation pending without completing a paid response twice', async () => {
+    const complete = vi.fn(async () => {});
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        async verifyAndGrant() {
+          throw new Error('must not run');
+        },
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [{
+              itemId: 'ttokdoku_hint_pack_20',
+              title: '20 hints',
+              price: { currency: 'USD', value: '0.99' },
+            }];
+          },
+          async listPurchases() {
+            throw new Error('Store ownership has not propagated yet');
+          },
+        };
+      },
+      createPaymentRequest() {
+        return {
+          async show() {
+            return { details: { purchaseToken: 'ttokdoku_hint_pack_20' }, complete };
+          },
+        };
+      },
+    });
+
+    await expect(adapter.purchase({
+      productId: product.id,
+      source: 'shop',
+      idempotencyKey: 'checkout-pending',
+    })).resolves.toEqual({
+      status: 'pending',
+      entitlementIds: [],
+      evidence: {
+        schema: microsoftStoreDigitalGoodsEvidenceSchema,
+        payload: {
+          itemId: 'ttokdoku_hint_pack_20',
+          purchaseToken: 'ttokdoku_hint_pack_20',
+        },
+      },
+    });
+    expect(complete).toHaveBeenCalledTimes(1);
+    expect(complete).toHaveBeenCalledWith('success');
+  });
+
   it('only installs on a first-class Microsoft Store gateway', async () => {
     const adapter = createMicrosoftStoreCommerceAdapter({
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],

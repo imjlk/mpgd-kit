@@ -19,6 +19,7 @@ const commerce = createMicrosoftStoreCommerceAdapter({
   },
 });
 
+/** Configure Store products and a game-owned authority before enabling checkout. */
 export function createPlatformGateway(): PlatformGateway {
   return withMicrosoftStoreCommerceAdapter(base, commerce);
 }
