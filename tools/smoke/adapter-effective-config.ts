@@ -95,6 +95,7 @@ async function verifyBrowserAdapter(): Promise<void> {
 async function verifyMicrosoftStoreAdapter(): Promise<void> {
   const browser = createBrowserPlatformGateway();
   const storeBase: PlatformGateway = { ...browser, target: 'microsoft-store' };
+  let authorityShouldFail = false;
   const commerce = createMicrosoftStoreCommerceAdapter({
     products: [
       {
@@ -113,7 +114,9 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
         return 'available';
       },
       async verifyAndGrant() {
-        return { status: 'completed', transactionId: 'microsoft-store-ledger' };
+        return authorityShouldFail
+          ? { status: 'failed' }
+          : { status: 'completed', transactionId: 'microsoft-store-ledger' };
       },
       async getEntitlements() {
         return [];
@@ -178,6 +181,23 @@ async function verifyMicrosoftStoreAdapter(): Promise<void> {
       },
     },
     'microsoft-store purchase should require authoritative completion',
+  );
+  authorityShouldFail = true;
+  assertDeepEqual(
+    await gateway.commerce.purchase({
+      productId: 'COINS_100',
+      source: 'shop',
+      idempotencyKey: 'microsoft-store-rejected-purchase',
+    }),
+    {
+      status: 'failed',
+      entitlementIds: [],
+      evidence: {
+        schema: microsoftStoreDigitalGoodsEvidenceSchema,
+        payload: { itemId: 'coins_100', purchaseToken: 'coins_100' },
+      },
+    },
+    'microsoft-store purchase must fail closed when authority does not grant',
   );
 }
 

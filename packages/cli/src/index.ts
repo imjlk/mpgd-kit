@@ -190,6 +190,7 @@ const recommendedMatrixTargetsWithoutMicrosoftStore = recommendedMatrixTargets
 const defaultDependencyVersion = `^${cliVersion}`;
 const standaloneTemplateDependencyVersionFallbacks: Readonly<Record<string, string>> = {
   // Initial-published independently from the CLI release line; package metadata wins once concrete.
+  '@mpgd/adapter-microsoft-store': '^0.1.0',
   '@mpgd/adapter-verse8': '^0.1.0',
 };
 const mpgdTemplateDependencyPackages = [

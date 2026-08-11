@@ -112,6 +112,7 @@ export function createMicrosoftStoreCommerceAdapter(
   const createPaymentRequest = input.createPaymentRequest ?? createGlobalPaymentRequest;
   const createRecoveryId = input.createRecoveryId
     ?? (() => `microsoft-store-recovery-${crypto.randomUUID()}`);
+  const priceFormatters = new Map<string, Intl.NumberFormat>();
 
   async function getAvailability(): Promise<MicrosoftStoreCommerceAvailability> {
     const authorityAvailability = await input.authority.getAvailability();
@@ -155,6 +156,8 @@ export function createMicrosoftStoreCommerceAdapter(
       };
     } catch (error) {
       input.onError?.(error);
+      // Preserve evidence as pending. The authority is idempotent and restore() retries the same
+      // unconsumed Store ownership after transient transport or authorization failures.
       return {
         status: 'pending',
         entitlementIds: [],
@@ -181,7 +184,7 @@ export function createMicrosoftStoreCommerceAdapter(
             return [];
           }
 
-          const price = formatPrice(detail.price, input.locale);
+          const price = formatPrice(detail.price, input.locale, priceFormatters);
           if (price === undefined) {
             return [];
           }
@@ -220,21 +223,19 @@ export function createMicrosoftStoreCommerceAdapter(
             data: { sku: product.inAppOfferToken },
           },
         ]).show();
-        purchaseToken = readPurchaseToken(response.details);
-        if (purchaseToken === undefined) {
-          paymentCompletionAttempted = true;
-          await completePayment(response, 'fail');
-          return failedPurchase();
-        }
         paymentCompletionAttempted = true;
         await completePayment(response, 'success');
-
-        const purchase = (await service.listPurchases()).find((candidate) => (
-          candidate.itemId === product.inAppOfferToken
-          && candidate.purchaseToken === purchaseToken
-        ));
+        purchaseToken = readPurchaseToken(response.details);
+        // A Store consumable must be consumed before the same item can be bought again, so an
+        // item has at most one recoverable unconsumed purchase at this boundary.
+        const purchase = (await service.listPurchases()).find((candidate) => {
+          return candidate.itemId === product.inAppOfferToken
+            && (purchaseToken === undefined || candidate.purchaseToken === purchaseToken);
+        });
         if (purchase === undefined) {
-          return pendingPurchase(product.inAppOfferToken, purchaseToken);
+          return purchaseToken === undefined
+            ? pendingUnidentifiedPurchase()
+            : pendingPurchase(product.inAppOfferToken, purchaseToken);
         }
 
         return fulfill(product, purchase, request);
@@ -249,7 +250,7 @@ export function createMicrosoftStoreCommerceAdapter(
         if (purchaseToken !== undefined) {
           return pendingPurchase(product.inAppOfferToken, purchaseToken);
         }
-        return failedPurchase();
+        return response === undefined ? failedPurchase() : pendingUnidentifiedPurchase();
       }
     },
     async restore() {
@@ -364,6 +365,7 @@ function readPurchaseToken(input: unknown): string | undefined {
 function formatPrice(
   price: MicrosoftStoreDigitalGoodsPrice,
   locale: string | undefined,
+  formatters: Map<string, Intl.NumberFormat>,
 ): ProductInfo['price'] | undefined {
   const currencyCode = nonEmptyString(price.currency)?.toUpperCase();
   const numericValue = Number(price.value);
@@ -377,11 +379,17 @@ function formatPrice(
   }
 
   try {
-    return {
-      formatted: new Intl.NumberFormat(locale, {
+    const formatterKey = `${locale ?? ''}\u0000${currencyCode}`;
+    let formatter = formatters.get(formatterKey);
+    if (formatter === undefined) {
+      formatter = new Intl.NumberFormat(locale, {
         style: 'currency',
         currency: currencyCode,
-      }).format(numericValue),
+      });
+      formatters.set(formatterKey, formatter);
+    }
+    return {
+      formatted: formatter.format(numericValue),
       currencyCode,
     };
   } catch {
@@ -456,7 +464,7 @@ function requireIdentifier(input: unknown, label: string): string {
 }
 
 function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException
+  return typeof DOMException !== 'undefined' && error instanceof DOMException
     ? error.name === 'AbortError'
     : typeof error === 'object'
       && error !== null
@@ -479,4 +487,10 @@ function pendingPurchase(itemId: string, purchaseToken: string): PurchaseResult 
     entitlementIds: [],
     evidence: createPurchaseEvidence({ itemId, purchaseToken }),
   });
+}
+
+function pendingUnidentifiedPurchase(): PurchaseResult {
+  // A resolved Store payment is authoritative even if a malformed client response omitted its
+  // token. Leave it pending so a later listPurchases() recovery can verify and grant it safely.
+  return Object.freeze({ status: 'pending', entitlementIds: [] });
 }

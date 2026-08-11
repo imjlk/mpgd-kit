@@ -873,6 +873,7 @@ function requireProductionString(input: unknown, label: string): string {
   const templateIdentityField =
     label.startsWith('productIdentity.')
     || label.startsWith('web app manifest')
+    || label.startsWith('commerce.products[')
     || label === 'ageRating.iarcId';
 
   if (

@@ -293,6 +293,20 @@ try {
     },
     'unique inAppOfferToken',
   );
+  expectConfigError(
+    {
+      ...base,
+      commerce: {
+        ...commerceConfig.commerce,
+        products: [{
+          logicalProductId: 'HINT_PACK_20',
+          inAppOfferToken: 'ttokdoku_hint_pack_20',
+          storeId: 'contoso-product',
+        }],
+      },
+    },
+    'placeholder content',
+  );
 
   expectConfigError(
     {

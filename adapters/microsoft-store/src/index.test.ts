@@ -272,6 +272,64 @@ describe('Microsoft Store Digital Goods commerce', () => {
     expect(complete).toHaveBeenCalledWith('success');
   });
 
+  it('recovers a paid purchase when the PaymentResponse omits its token', async () => {
+    const complete = vi.fn(async () => {});
+    const verifyAndGrant = vi.fn(async () => ({
+      status: 'completed' as const,
+      transactionId: 'ledger-recovered-response',
+    }));
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        verifyAndGrant,
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [{
+              itemId: 'ttokdoku_hint_pack_20',
+              title: '20 hints',
+              price: { currency: 'USD', value: '0.99' },
+            }];
+          },
+          async listPurchases() {
+            return [{
+              itemId: 'ttokdoku_hint_pack_20',
+              purchaseToken: 'ttokdoku_hint_pack_20',
+            }];
+          },
+        };
+      },
+      createPaymentRequest() {
+        return {
+          async show() {
+            return { details: {}, complete };
+          },
+        };
+      },
+    });
+
+    await expect(adapter.purchase({
+      productId: product.id,
+      source: 'shop',
+      idempotencyKey: 'checkout-missing-response-token',
+    })).resolves.toMatchObject({
+      status: 'completed',
+      transactionId: 'ledger-recovered-response',
+    });
+    expect(complete).toHaveBeenCalledOnce();
+    expect(complete).toHaveBeenCalledWith('success');
+    expect(verifyAndGrant).toHaveBeenCalledWith(expect.objectContaining({
+      purchaseToken: 'ttokdoku_hint_pack_20',
+    }));
+  });
+
   it('only installs on a first-class Microsoft Store gateway', async () => {
     const adapter = createMicrosoftStoreCommerceAdapter({
       products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
