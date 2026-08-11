@@ -1,5 +1,26 @@
 # @mpgd/cli
 
+## 0.22.0 — 2026-08-12
+
+### Added
+
+- [fda83d0](https://github.com/imjlk/mpgd-kit/commit/fda83d01cc4b9ac2f62c646425c976de9720eddd) Add a test-only, direct-file offline playtest packager for existing web-preview artifacts.
+  Generated Apps in Toss wrappers now use the available stable 3.0.2 framework and CLI packages,
+  with a narrow pnpm peer allowance for the tested devtools integration. — Thanks @imjlk!
+- [949dc45](https://github.com/imjlk/mpgd-kit/commit/949dc45be7ec60d4961bf26cc8cc0d0bf400c9ee) Add opt-in Apps in Toss IAP authority hooks, partner API contracts, and stable SDK 3 target support. — Thanks @imjlk!
+- [8d8e36a](https://github.com/imjlk/mpgd-kit/commit/8d8e36ae790d2dfa1971a10ce5c3aab64f1a31fe) Add fail-closed Microsoft Store PWA Digital Goods checkout with player-scoped retry storage, provider-purchase- and generation-bound server recovery ownership, explicit historical product mappings, first-class target configuration, opt-in remote leaderboard capability discovery, submission product mappings with effective-target revalidation, and authoritative Collections query and consume fulfillment. — Thanks @imjlk!
+- [8ca5064](https://github.com/imjlk/mpgd-kit/commit/8ca50644c67f54d6d8663d6aeb8add1e1d7d10bd) Allow Apps in Toss targets to configure validated navigation bar appearance, including transparent game chrome, from `mpgd.targets.json`. — Thanks @imjlk!
+
+### Fixed
+
+- [43a1936](https://github.com/imjlk/mpgd-kit/commit/43a19368ada63fbab2ce3c4079c28e697af2448b) Bound the generated Phaser starter's ttsc unplugin to Vite's public plugin type so monorepo typechecks do not exceed TypeScript's recursive comparison depth. — Thanks @imjlk!
+- [9cc3538](https://github.com/imjlk/mpgd-kit/commit/9cc3538f61ecc8ed976118bc5c6544ebf1a24492) Pin generated Phaser starters to the verified Vite version so fresh installs do not resolve a patch release that exceeds TypeScript 7's recursive plugin-type comparison depth. — Thanks @imjlk!
+- [70f7a95](https://github.com/imjlk/mpgd-kit/commit/70f7a955df00f913aff52088426921b48005336c) Render an accessible fallback instead of leaving generated Phaser game documents blank when a dynamic platform or gameplay entry module fails to load. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.9.0, adapter-browser@0.6.0, adapter-capacitor@0.4.6, adapter-devvit@0.9.0, adapter-verse8@0.3.0, analytics@0.3.9, bridge@0.8.0, catalog@0.6.0, game-services@0.12.0, i18n@0.5.5, platform@0.9.0, target-config@0.12.0
+
 ## 0.21.0 — 2026-08-08
 
 ### Added
