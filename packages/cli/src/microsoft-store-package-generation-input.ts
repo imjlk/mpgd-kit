@@ -95,6 +95,12 @@ export function prepareMicrosoftStorePackageGenerationInput(
     { file: markdownFile, label: 'package generation Markdown' },
     { file: submissionEvidenceFile, label: 'submission evidence' },
     { file: submission.manifestFile, label: 'web app manifest' },
+    ...(submission.effectiveTarget === undefined
+      ? []
+      : [{
+          file: submission.effectiveTarget.file,
+          label: 'Microsoft Store effective target config',
+        }]),
   ];
   assertDistinctFiles(filesThatMustAlwaysBeDistinct);
 
@@ -134,6 +140,13 @@ export function assertMicrosoftStorePackageGenerationInputUnchanged(
     input.manifestBefore,
     'Microsoft Store web app manifest changed during package generation',
   );
+  if (input.submission.effectiveTarget !== undefined) {
+    assertMicrosoftStoreSnapshotUnchanged(
+      input.submission.effectiveTarget.file,
+      input.submission.effectiveTarget.snapshot,
+      'Microsoft Store effective target config changed during package generation',
+    );
+  }
 
   for (const [index, icon] of input.submission.manifestIcons.entries()) {
     assertMicrosoftStoreSnapshotUnchanged(
@@ -219,6 +232,31 @@ function readSubmissionEvidence(
     );
   }
 
+  const commerce = root.commerce === undefined
+    ? undefined
+    : requireRecord(root.commerce, 'Microsoft Store commerce evidence');
+  const commerceMode = commerce?.mode;
+  if (
+    commerceMode !== undefined
+    && commerceMode !== 'disabled'
+    && commerceMode !== 'microsoft-store'
+  ) {
+    throw new Error('Microsoft Store commerce evidence mode must be disabled or microsoft-store.');
+  }
+  if (commerceMode === 'microsoft-store' && root.effectiveTarget === undefined) {
+    throw new Error(
+      'Microsoft Store effective target evidence is required when commerce mode is microsoft-store.',
+    );
+  }
+  const effectiveTarget = commerceMode === 'microsoft-store'
+    ? readEffectiveTargetEvidence(root.effectiveTarget, gameRoot)
+    : undefined;
+  if (effectiveTarget === undefined && root.effectiveTarget !== undefined) {
+    throw new Error(
+      'Microsoft Store effective target evidence must not be present unless commerce mode is microsoft-store.',
+    );
+  }
+
   return {
     identity: {
       packageId: requireNonEmptyString(identity.packageId, 'Microsoft Store package ID'),
@@ -283,8 +321,40 @@ function readSubmissionEvidence(
         ),
       };
     }),
+    ...(effectiveTarget === undefined ? {} : { effectiveTarget }),
     resourceLanguage: resourceLanguages.join(','),
   };
+}
+
+function readEffectiveTargetEvidence(
+  input: unknown,
+  gameRoot: string,
+): NonNullable<MicrosoftStoreSubmissionEvidenceInput['effectiveTarget']> {
+  const evidence = requireRecord(
+    input,
+    'Microsoft Store effective target evidence for commerce-enabled package generation',
+  );
+  const file = readCanonicalFileInside(
+    gameRoot,
+    path.resolve(
+      gameRoot,
+      requireNonEmptyString(evidence.file, 'Microsoft Store effective target evidence file'),
+    ),
+    'Microsoft Store effective target config',
+  );
+  const snapshot = hashMicrosoftStoreFileSnapshot(file, 'Microsoft Store effective target config');
+  const expectedSha256 = requireSha256(
+    evidence.sha256,
+    'Microsoft Store effective target evidence SHA-256',
+  );
+
+  if (snapshot.sha256 !== expectedSha256) {
+    throw new Error(
+      `Microsoft Store effective target config SHA-256 must match submission evidence: expected ${expectedSha256}, received ${snapshot.sha256}.`,
+    );
+  }
+
+  return { file, snapshot };
 }
 
 function prepareManifestIcons(

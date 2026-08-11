@@ -317,16 +317,21 @@ function resolveAdapterDependency(existing: unknown, required: string): string {
 
   const currentRange = parseSimpleSemverRange(normalized);
   const requiredRange = parseSimpleSemverRange(requiredDependency);
+  if (currentRange === undefined) {
+    // A non-simple registry constraint cannot prove that installing it will expose the
+    // Microsoft Store entry point. Fail closed instead of retaining ranges such as
+    // `0.5.x` or `>=0.5.1 <0.6.0` that may resolve below the required release.
+    return requiredDependency;
+  }
   if (
-    currentRange !== undefined
-    && requiredRange !== undefined
+    requiredRange !== undefined
     && compareSemver(currentRange, requiredRange) < 0
     && !simpleSemverRangeIncludes(currentRange, requiredRange)
   ) {
     return requiredDependency;
   }
 
-  // Preserve newer compatible ranges, registry tags, aliases, and game-owned remote specs.
+  // Preserve simple exact, tilde, and caret ranges already at or above the feature floor.
   return normalized;
 }
 

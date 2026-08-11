@@ -219,6 +219,26 @@ assert.equal(notPropagatedResult.verified, false);
 assert.equal(notPropagatedResult.reason, 'MICROSOFT_STORE_PURCHASE_NOT_PROPAGATED');
 assert.deepEqual(notPropagated.events, [`provider:query:${storeId}`]);
 
+const multipleUnits = createHarness();
+multipleUnits.client.queryResponse = {
+  items: [
+    {
+      id: collectionItemId,
+      modifiedDate,
+      productId: storeId,
+      productKind: 'UnmanagedConsumable',
+      quantity: 2,
+      status: 'Active',
+    },
+  ],
+};
+const multipleUnitsResult = await multipleUnits.backend.purchases.verifyPurchase(
+  createRequest({ idempotencyKey: 'multiple-units' }),
+);
+assert.equal(multipleUnitsResult.verified, false);
+assert.equal(multipleUnitsResult.reason, 'MICROSOFT_STORE_PURCHASE_QUANTITY_MISMATCH');
+assert.deepEqual(multipleUnits.events, [`provider:query:${storeId}`]);
+
 const collectionsUnavailable = createHarness();
 collectionsUnavailable.client.nextQueryError = new Error('provider unavailable');
 const collectionsUnavailableResult = await collectionsUnavailable.backend.purchases.verifyPurchase(

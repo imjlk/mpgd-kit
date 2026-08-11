@@ -20,6 +20,7 @@ import {
   microsoftStoreBlockEnd,
   microsoftStoreBlockStart,
   microsoftStoreDocumentationAnchors,
+  resolveMicrosoftStoreAdapterDependencyVersion,
 } from '../../packages/cli/src/microsoft-store-starter';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-cli-microsoft-store-starter-onboarding-'));
@@ -36,6 +37,10 @@ const genericSkill = '.agents/skills/use-mpgd-kit/SKILL.md';
 const genericSkillMetadata = '.agents/skills/use-mpgd-kit/agents/openai.yaml';
 
 try {
+  assert.equal(resolveMicrosoftStoreAdapterDependencyVersion('0.5.x'), '^0.6.0');
+  assert.equal(resolveMicrosoftStoreAdapterDependencyVersion('>=0.5.1 <0.6.0'), '^0.6.0');
+  assert.equal(resolveMicrosoftStoreAdapterDependencyVersion('^0.6.0'), '^0.6.0');
+
   const baseGame = createGame('without-store');
   assertGenericAgentWorkflow(baseGame);
   assertMicrosoftStoreDisabled(baseGame);

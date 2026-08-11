@@ -419,6 +419,9 @@ function inspectPublisherQuery(
   if (!Number.isSafeInteger(active.quantity) || Number(active.quantity) < 1) {
     return pending('MICROSOFT_STORE_PURCHASE_ALREADY_CONSUMED');
   }
+  if (Number(active.quantity) !== 1) {
+    return rejected('MICROSOFT_STORE_PURCHASE_QUANTITY_MISMATCH');
+  }
 
   const id = optionalIdentifier(active.id);
   const modifiedDate = optionalIdentifier(active.modifiedDate);
