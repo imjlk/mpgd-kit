@@ -84,6 +84,7 @@ jobs:
         if: ${{ env.IS_RELEASE_PR != 'true' }}
         env:
           MPGD_SKIP_BUILD_TARGET_PREFLIGHT: '1'
+          VITE_MPGD_GAME_SERVICES_URL: https://services.example.com
       - run: pnpm smoke:target microsoft-store
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm build:verse8
