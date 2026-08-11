@@ -460,8 +460,7 @@ export function createMicrosoftStorePurchaseBoundary(
             : { status: 'denied' };
         }
         if (existing.providerPurchaseId === ownership.providerPurchaseId) {
-          return existing.playerId === ownership.record.playerId
-            && (
+          return (
               ownership.requestedGeneration === undefined
               || existing.generation === ownership.requestedGeneration
             )
