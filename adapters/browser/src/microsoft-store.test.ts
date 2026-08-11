@@ -563,6 +563,53 @@ describe('Microsoft Store Digital Goods commerce', () => {
     expect(storedRecoveries.size).toBe(0);
   });
 
+  it('restores a listed historical Store identity without local recovery metadata', async () => {
+    const verifyAndGrant = vi.fn(async () => ({
+      status: 'completed' as const,
+      transactionId: 'ledger-historical-listing',
+    }));
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      getRecoveryScope: () => 'player-a',
+      products: [{
+        info: product,
+        inAppOfferToken: 'ttokdoku_hint_pack_20',
+        historicalInAppOfferTokens: ['ttokdoku_hint_pack_20_legacy'],
+      }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        verifyAndGrant,
+        async getEntitlements() {
+          return [entitlement];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [];
+          },
+          async listPurchases() {
+            return [{
+              itemId: 'ttokdoku_hint_pack_20_legacy',
+              purchaseToken: 'ttokdoku_hint_pack_20_legacy',
+            }];
+          },
+        };
+      },
+      createRecoveryId: () => 'historical-listing-recovery',
+    });
+
+    await expect(adapter.restore?.()).resolves.toEqual({ restoredEntitlements: [entitlement] });
+    expect(verifyAndGrant).toHaveBeenCalledWith(expect.objectContaining({
+      productId: 'HINT_PACK_20',
+      inAppOfferToken: 'ttokdoku_hint_pack_20_legacy',
+      purchaseToken: 'ttokdoku_hint_pack_20_legacy',
+      idempotencyKey: 'historical-listing-recovery',
+      source: 'recovery',
+    }));
+  });
+
   it('reconciles independent unconsumed products concurrently', async () => {
     const secondProduct = Object.freeze({
       ...product,
@@ -724,6 +771,83 @@ describe('Microsoft Store Digital Goods commerce', () => {
     expect(onError).toHaveBeenCalledWith(expect.objectContaining({
       message: 'Microsoft Store player scope changed after catalog preparation.',
     }));
+  });
+
+  it('preserves the original player recovery when the scope changes during checkout', async () => {
+    let recoveryScope = 'player-a';
+    const complete = vi.fn(async () => {});
+    const verifyAndGrant = vi.fn();
+    const listPurchases = vi.fn(async () => {
+      throw new Error('must not query ownership for a changed player');
+    });
+    const storedRecoveries = new Map<string, string>();
+    const adapter = createMicrosoftStoreCommerceAdapter({
+      getRecoveryScope: () => recoveryScope,
+      products: [{ info: product, inAppOfferToken: 'ttokdoku_hint_pack_20' }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        verifyAndGrant,
+        async getEntitlements() {
+          return [];
+        },
+      },
+      async getDigitalGoodsService() {
+        return {
+          async getDetails() {
+            return [{
+              itemId: 'ttokdoku_hint_pack_20',
+              title: '20 hints',
+              price: { currency: 'USD', value: '0.99' },
+            }];
+          },
+          listPurchases,
+        };
+      },
+      createPaymentRequest() {
+        return {
+          async show() {
+            recoveryScope = 'player-b';
+            return { details: { purchaseToken: 'ttokdoku_hint_pack_20' }, complete };
+          },
+        };
+      },
+      recoveryIdStorage: {
+        getItem(key) {
+          return storedRecoveries.get(key) ?? null;
+        },
+        setItem(key, value) {
+          storedRecoveries.set(key, value);
+        },
+        removeItem(key) {
+          storedRecoveries.delete(key);
+        },
+      },
+    });
+
+    await adapter.getProducts();
+    await expect(adapter.purchase({
+      productId: product.id,
+      source: 'shop',
+      idempotencyKey: 'checkout-during-account-change',
+    })).resolves.toEqual({
+      status: 'pending',
+      entitlementIds: [],
+      evidence: {
+        schema: microsoftStoreDigitalGoodsEvidenceSchema,
+        payload: {
+          itemId: 'ttokdoku_hint_pack_20',
+          purchaseToken: 'ttokdoku_hint_pack_20',
+        },
+      },
+    });
+    expect(verifyAndGrant).not.toHaveBeenCalled();
+    expect(listPurchases).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledWith('unknown');
+    expect([...storedRecoveries.keys()]).toEqual([
+      'mpgd:microsoft-store:pending-grant:v3:player-a:HINT_PACK_20',
+    ]);
   });
 
   it('reports reconciliation pending without completing a paid response twice', async () => {

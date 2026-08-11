@@ -52,6 +52,8 @@ export interface MicrosoftStoreCommerceProduct {
   readonly info: ProductInfo;
   /** Partner Center add-on Product ID used by the browser Digital Goods API. */
   readonly inAppOfferToken: string;
+  /** Old Product IDs retained while their unconsumed purchases can still be restored. */
+  readonly historicalInAppOfferTokens?: readonly string[];
 }
 
 export interface MicrosoftStorePurchaseAuthorityInput {
@@ -128,7 +130,10 @@ export function createMicrosoftStoreCommerceAdapter(
 ): MicrosoftStoreCommerceAdapter {
   const products = normalizeProducts(input.products);
   const productsById = new Map(products.map((product) => [product.info.id, product]));
-  const productsByStoreId = new Map(products.map((product) => [product.inAppOfferToken, product]));
+  const productsByStoreId = new Map(products.flatMap((product) => (
+    [product.inAppOfferToken, ...(product.historicalInAppOfferTokens ?? [])]
+      .map((inAppOfferToken) => [inAppOfferToken, product] as const)
+  )));
   const getService = input.getDigitalGoodsService ?? getGlobalDigitalGoodsService;
   const createPaymentRequest = input.createPaymentRequest ?? createGlobalPaymentRequest;
   const createRecoveryId = input.createRecoveryId
@@ -366,6 +371,9 @@ export function createMicrosoftStoreCommerceAdapter(
           },
         ]).show();
         purchaseToken = readPurchaseToken(response.details);
+        if (resolveRecoveryScope(input.getRecoveryScope) !== recoveryScope) {
+          throw new Error('Microsoft Store player scope changed during checkout.');
+        }
         // A Store consumable must be consumed before the same item can be bought again, so an
         // item has at most one recoverable unconsumed purchase at this boundary.
         const purchase = (await service.listPurchases()).find((candidate) => {
@@ -500,15 +508,23 @@ function normalizeProducts(
       product.inAppOfferToken,
       'Microsoft Store InAppOfferToken',
     );
-    if (inAppOfferTokens.has(inAppOfferToken)) {
-      throw new TypeError(`Duplicate Microsoft Store InAppOfferToken: ${inAppOfferToken}`);
+    const historicalInAppOfferTokens = Object.freeze(
+      (product.historicalInAppOfferTokens ?? []).map((token) => (
+        requireIdentifier(token, 'historical Microsoft Store InAppOfferToken')
+      )),
+    );
+    for (const token of [inAppOfferToken, ...historicalInAppOfferTokens]) {
+      if (inAppOfferTokens.has(token)) {
+        throw new TypeError(`Duplicate Microsoft Store InAppOfferToken: ${token}`);
+      }
+      inAppOfferTokens.add(token);
     }
 
     productIds.add(product.info.id);
-    inAppOfferTokens.add(inAppOfferToken);
     return Object.freeze({
       info: Object.freeze({ ...product.info }),
       inAppOfferToken,
+      ...(historicalInAppOfferTokens.length === 0 ? {} : { historicalInAppOfferTokens }),
     });
   }));
 }

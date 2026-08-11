@@ -62,7 +62,10 @@ currently authenticated player. Recovery storage is partitioned by that scope
 and the stable logical product ID, so another player using the same browser
 profile cannot reuse or delete the first player's pending record. Refresh
 `getProducts()` after the authenticated player changes; checkout fails before
-opening Payment Request if the scope changed after catalog preparation.
+opening Payment Request if the scope changed after catalog preparation. The
+scope is checked again after the payment UI returns; if it changed while payment
+was open, no authority call is made and the purchase remains recoverable only
+under the original player scope.
 
 The record is removed only after the authority reports a completed or failed
 result; a transient exception or pending consume keeps it. Because a checkout
