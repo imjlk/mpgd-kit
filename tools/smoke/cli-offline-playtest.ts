@@ -681,6 +681,18 @@ try {
   assert.match(dynamicAnchorHtml, /HTMLAnchorElement\.prototype\.click/u);
   assert.match(dynamicAnchorHtml, /closest\('a,area'\)/u);
   assert.match(dynamicAnchorHtml, /getAttribute\('xlink:href'\)/u);
+  assert.match(dynamicAnchorHtml, /\['meta','object','embed'\]\.includes/u);
+
+  for (const tagName of ['object', 'embed'] as const) {
+    const activeDataElementGame = createPreviewFixture(`dynamic-${tagName}-element`, {
+      mainJs: `const element = document.createElement("${tagName}"); element.${tagName === 'object' ? 'data' : 'src'} = "data:text/html,<script>top.location='https://example.com/escape'</script>"; document.body.append(element);`,
+    });
+    await assert.rejects(
+      () => runOfflinePlaytestPackaging({ gameRoot: activeDataElementGame }),
+      /does not support dynamically created object or embed elements/u,
+      `expected a dynamically created ${tagName} element to be rejected`,
+    );
+  }
 
   const dynamicRefreshMetaGame = createPreviewFixture('dynamic-refresh-meta-navigation', {
     mainJs: 'const meta = document /* native */ . createElement /* call( */ ("meta"); meta.httpEquiv = "refresh"; meta.content = "0;url=https://example.com/escape"; document.head.append(meta);',
@@ -1853,6 +1865,16 @@ try {
   });
   assert.match(shadowedFontFaceHtml, /\/assets\/not-a-font\.woff2/u);
 
+  const identifiedFontFaceHtml = await packageAndReadFixture(
+    'identified-font-face-source',
+    {
+      mainJs: 'const source = "url(\\"/assets/game.woff2\\")"; document.body.dataset.source = source; const face = new FontFace("Game", source); void face.load();',
+    },
+    [['artifacts/web-preview/assets/game.woff2', fontFaceAsset]],
+  );
+  assert.match(identifiedFontFaceHtml, /\/assets\/game\.woff2/u);
+  assert.match(identifiedFontFaceHtml, /new FontFace\(["']Game["'],["']data:font\/woff2;base64,/u);
+
   const assignedBrowserAudioHtml = await packageAndReadFixture(
     'assigned-browser-audio-asset',
     { mainJs: 'const click = new Audio(); click.src = "/assets/click.mp3"; void click;' },
@@ -1862,7 +1884,7 @@ try {
   assert.match(assignedBrowserAudioHtml, /data:audio\/mpeg;base64,/u);
 
   const staticStyleAssetHtml = await packageAndReadFixture('static-style-assets', {
-    mainJs: 'const direct = document.createElement("div"); const property = document.createElement("section"); const attributed = document.createElement("article"); const css = "url(\\"/assets/pixel.png\\")"; direct.style.backgroundImage = css; property.style.setProperty("background-image", "url(\\"/assets/icon.png\\")"); attributed.setAttribute("style", "background-image: url(\\"/assets/pixel.png\\")"); document.body.append(direct, property, attributed);',
+    mainJs: 'const direct = document.createElement("div"); const property = document.createElement("section"); const attributed = document.createElement("article"); const computed = document.createElement("aside"); const css = "url(\\"/assets/pixel.png\\")"; const computedProperty = "backgroundImage"; direct.style.backgroundImage = css; property.style.setProperty("background-image", "url(\\"/assets/icon.png\\")"); attributed.setAttribute("style", "background-image: url(\\"/assets/pixel.png\\")"); computed.style[computedProperty] = "url(\\"/assets/icon.png\\")"; document.body.append(direct, property, attributed, computed);',
   });
   assert.doesNotMatch(staticStyleAssetHtml, /url\([^)]*\/assets\/(?:icon|pixel)\.png/u);
   assert.match(staticStyleAssetHtml, /data:image\/png;base64,/u);

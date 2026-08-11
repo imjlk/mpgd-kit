@@ -1529,57 +1529,67 @@ function inlineStaticFontFaceSources(
   context: InliningContext,
   readAsset: AssetDataUrlReader,
 ): string {
-  const fontFacePattern = /((?<![$.\u200C\u200D\p{ID_Continue}])new\s+(?:(globalThis|self|window)\s*\.\s*)?FontFace\s*\(\s*(?:"(?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*"|'(?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*'|`(?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*`)\s*,\s*)(?:"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\\r\n])*)`)/gu;
-  const codePositions = createCodePositionMap(source, true);
-
-  return source.replace(
-    fontFacePattern,
-    (
-      match,
-      prefix: string,
-      qualifier: string | undefined,
-      doubleQuotedSource: string | undefined,
-      singleQuotedSource: string | undefined,
-      templateSource: string | undefined,
-      offset: number,
-    ) => {
-      if (
-        codePositions[offset] !== 1
-        || hasEscapedJavaScriptIdentifierContinuationBefore(source, offset, codePositions)
-        || (
-          templateSource !== undefined
-          && containsUnescapedTemplateInterpolation(templateSource)
-        )
-        || (
-          qualifier === undefined
-            ? findVisibleJavaScriptIdentifierBinding(
-              source,
-              'FontFace',
-              offset,
-              codePositions,
-            ) !== undefined
-            : findVisibleJavaScriptIdentifierBinding(
-              source,
-              qualifier,
-              offset,
-              codePositions,
-            ) !== undefined
-        )
-      ) {
-        return match;
-      }
-
-      const rawSource = doubleQuotedSource ?? singleQuotedSource ?? templateSource ?? '';
-      const descriptor = decodeJavaScriptStringLiteral(rawSource);
-      const inlinedDescriptor = inlineCssAssetReferences(
-        descriptor,
-        documentFile,
-        context,
-        readAsset,
-      );
-      return `${prefix}${JSON.stringify(inlinedDescriptor)}`;
-    },
+  const fontFacePattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])new${javascriptTriviaPatternSource}(?:(globalThis|self|window)${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource})?(FontFace)${javascriptTriviaPatternSource}\\(`,
+    'gu',
   );
+  const codePositions = createCodePositionMap(source, true);
+  const replacements: SourceReplacement[] = [];
+
+  for (const match of source.matchAll(fontFacePattern)) {
+    if (
+      match.index === undefined
+      || match[2] === undefined
+      || codePositions[match.index] !== 1
+      || hasEscapedJavaScriptIdentifierContinuationBefore(source, match.index, codePositions)
+      || findVisibleJavaScriptIdentifierBinding(
+        source,
+        match[1] ?? match[2],
+        match.index,
+        codePositions,
+      ) !== undefined
+    ) {
+      continue;
+    }
+
+    const openingParenthesis = match.index + match[0].length - 1;
+    const sourceArgument = splitJavaScriptArguments(source, openingParenthesis, codePositions)[1];
+
+    if (sourceArgument === undefined) {
+      continue;
+    }
+
+    const descriptor = resolveStaticJavaScriptStringExpression(
+      source,
+      sourceArgument,
+      codePositions,
+    );
+    if (descriptor === undefined) {
+      throw new Error('Offline playtest requires a static FontFace source descriptor.');
+    }
+
+    const inlinedDescriptor = inlineCssAssetReferences(
+      descriptor,
+      documentFile,
+      context,
+      readAsset,
+    );
+    if (inlinedDescriptor !== descriptor) {
+      replacements.push({
+        start: sourceArgument.start,
+        end: sourceArgument.end,
+        value: JSON.stringify(inlinedDescriptor),
+      });
+    }
+  }
+
+  let output = source;
+
+  for (const replacement of replacements.sort((left, right) => right.start - left.start)) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
+  return output;
 }
 
 function inlineStaticElementSourceAssignments(
@@ -1784,6 +1794,10 @@ function inlineStaticStyleAssetReferences(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}${javascriptIdentifierPatternSource}${javascriptTriviaPatternSource}=(?!=|>)`,
     'gu',
   );
+  const computedStyleAssignmentPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\[`,
+    'gu',
+  );
   const setPropertyPattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}style${javascriptTriviaPatternSource}\\.${javascriptTriviaPatternSource}setProperty${javascriptTriviaPatternSource}\\(`,
     'gu',
@@ -1852,6 +1866,66 @@ function inlineStaticStyleAssetReferences(
         true,
       ),
     );
+  }
+
+  for (const match of source.matchAll(computedStyleAssignmentPattern)) {
+    if (
+      match.index === undefined
+      || match[1] === undefined
+      || codePositions[match.index] !== 1
+      || hasMemberReceiverPrefix(match.index)
+    ) {
+      continue;
+    }
+
+    const openingBracket = match.index + match[0].length - 1;
+    const propertyRange = findJavaScriptExpressionRange(
+      source,
+      openingBracket + 1,
+      source.length,
+      codePositions,
+      false,
+      true,
+    );
+    const closingBracket = findNextJavaScriptCodeIndex(source, propertyRange.end, codePositions);
+
+    if (closingBracket === undefined || source[closingBracket] !== ']') {
+      continue;
+    }
+
+    const equals = findNextJavaScriptCodeIndex(source, closingBracket + 1, codePositions);
+
+    if (
+      equals === undefined
+      || source[equals] !== '='
+      || ['=', '>'].includes(source[equals + 1] ?? '')
+    ) {
+      continue;
+    }
+
+    const property = resolveStaticJavaScriptStringExpression(source, propertyRange, codePositions);
+    if (property === undefined) {
+      const nativeElement = findStaticNativeElementBinding(
+        source,
+        match[1],
+        match.index,
+        codePositions,
+        true,
+      );
+      if (nativeElement !== undefined) {
+        throw new Error('Offline playtest requires a static computed style property.');
+      }
+      continue;
+    }
+
+    const valueRange = findJavaScriptExpressionRange(
+      source,
+      equals + 1,
+      source.length,
+      codePositions,
+      true,
+    );
+    addReplacement(match[1], match.index, valueRange);
   }
 
   for (const match of source.matchAll(setPropertyPattern)) {
@@ -3434,6 +3508,20 @@ function findPreviousJavaScriptCodeIndex(
   codePositions: Uint8Array,
 ): number | undefined {
   for (let index = start; index >= 0; index -= 1) {
+    if (codePositions[index] === 1 && !/\s/u.test(source[index] ?? '')) {
+      return index;
+    }
+  }
+
+  return undefined;
+}
+
+function findNextJavaScriptCodeIndex(
+  source: string,
+  start: number,
+  codePositions: Uint8Array,
+): number | undefined {
+  for (let index = start; index < source.length; index += 1) {
     if (codePositions[index] === 1 && !/\s/u.test(source[index] ?? '')) {
       return index;
     }
@@ -5145,7 +5233,7 @@ function removeExistingCharsetDeclaration(html: string): string {
 }
 
 function renderOfflineRuntimeGuard(): string {
-  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const blockConstructor=(api,Native)=>new Proxy(Native,{construct(_target,args){throw denied(api,args[0])}});const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}for(const [object,names] of [[globalThis.navigation,['back','forward','navigate','reload','traverseTo']],[globalThis.history,['back','forward','go']],[globalThis.History?.prototype,['back','forward','go']]]){if(object){for(const name of names){if(typeof object[name]==='function'){try{Object.defineProperty(object,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}}if(globalThis.Location){for(const name of ['assign','replace']){const method=Location.prototype[name];if(typeof method==='function'){try{Object.defineProperty(Location.prototype,name,{configurable:true,writable:true,value:function(value){if(!fragmentOnly(value))throw denied('navigation',value);return method.call(this,value)}})}catch{}}}}if(globalThis.Document){for(const name of ['write','writeln']){if(typeof Document.prototype[name]==='function'){try{Object.defineProperty(Document.prototype,name,{configurable:true,writable:true,value:(...args)=>{throw denied('document.'+name,args[0])}})}catch{}}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=blockConstructor('WebSocket',globalThis.WebSocket)}if(globalThis.EventSource){globalThis.EventSource=blockConstructor('EventSource',globalThis.EventSource)}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
+  return `(()=>{const allowed=(value)=>{const raw=typeof value==='string'?value:typeof URL!=='undefined'&&value instanceof URL?value.href:typeof Request!=='undefined'&&value instanceof Request?value.url:String(value);const scheme=raw.slice(0,5).toLowerCase();return scheme==='data:'||scheme==='blob:'};const fragmentOnly=(value)=>typeof value==='string'&&value.trim().startsWith('#');const denied=(api,value)=>new TypeError('[mpgd offline playtest] '+api+' blocked network access: '+String(value));const blockConstructor=(api,Native)=>new Proxy(Native,{construct(_target,args){throw denied(api,args[0])}});const originalFetch=globalThis.fetch?.bind(globalThis);if(originalFetch){globalThis.fetch=(input,init)=>{if(!allowed(input))return Promise.reject(denied('fetch',input));return originalFetch(input,init)}}if(typeof globalThis.open==='function'){globalThis.open=(url)=>{throw denied('open',url)}}for(const [object,names] of [[globalThis.navigation,['back','forward','navigate','reload','traverseTo']],[globalThis.history,['back','forward','go']],[globalThis.History?.prototype,['back','forward','go']]]){if(object){for(const name of names){if(typeof object[name]==='function'){try{Object.defineProperty(object,name,{configurable:true,writable:true,value:(...args)=>{throw denied('navigation',args[0]??name)}})}catch{}}}}}if(globalThis.Location){for(const name of ['assign','replace']){const method=Location.prototype[name];if(typeof method==='function'){try{Object.defineProperty(Location.prototype,name,{configurable:true,writable:true,value:function(value){if(!fragmentOnly(value))throw denied('navigation',value);return method.call(this,value)}})}catch{}}}}if(globalThis.Document){for(const name of ['write','writeln']){if(typeof Document.prototype[name]==='function'){try{Object.defineProperty(Document.prototype,name,{configurable:true,writable:true,value:(...args)=>{throw denied('document.'+name,args[0])}})}catch{}}}const blockedTag=(namespace,name)=>(namespace===undefined||String(namespace).toLowerCase()==='http://www.w3.org/1999/xhtml')&&['meta','object','embed'].includes(String(name).toLowerCase());const createElement=Document.prototype.createElement;if(typeof createElement==='function'){Document.prototype.createElement=function(name,options){if(blockedTag(undefined,name))throw denied('document.createElement',name);return createElement.call(this,name,options)}}const createElementNS=Document.prototype.createElementNS;if(typeof createElementNS==='function'){Document.prototype.createElementNS=function(namespace,name,options){if(blockedTag(namespace,name))throw denied('document.createElementNS',name);return createElementNS.call(this,namespace,name,options)}}}if(globalThis.HTMLAnchorElement){const click=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){const href=this.getAttribute('href');if(href!==null&&!fragmentOnly(href))throw denied('navigation',href);return click.call(this)}}if(typeof document!=='undefined'){document.addEventListener('click',(event)=>{const anchor=typeof Element!=='undefined'&&event.target instanceof Element?event.target.closest('a,area'):null;const href=anchor?.getAttribute('href')??anchor?.getAttribute('xlink:href');if(href!==null&&href!==undefined&&!fragmentOnly(href)){event.preventDefault();event.stopImmediatePropagation();throw denied('navigation',href)}},true)}if(globalThis.XMLHttpRequest){const open=XMLHttpRequest.prototype.open;XMLHttpRequest.prototype.open=function(method,url,...rest){if(!allowed(url))throw denied('XMLHttpRequest',url);return open.call(this,method,url,...rest)}}if(globalThis.WebSocket){globalThis.WebSocket=blockConstructor('WebSocket',globalThis.WebSocket)}if(globalThis.EventSource){globalThis.EventSource=blockConstructor('EventSource',globalThis.EventSource)}for(const name of ['RTCPeerConnection','webkitRTCPeerConnection']){if(name in globalThis){Object.defineProperty(globalThis,name,{configurable:true,writable:true,value:class{constructor(){throw denied('WebRTC',name)}}})}}if(typeof navigator!=='undefined'&&navigator.sendBeacon){navigator.sendBeacon=()=>false}})();`;
 }
 
 function assertSupportedBundledRuntime(source: string): void {
@@ -5162,7 +5250,7 @@ function assertSupportedBundledRuntime(source: string): void {
   assertNoUnsupportedWorkerConstruction(normalizedSource, codePositions);
   assertNoUnsupportedBrowserApi(normalizedSource, codePositions);
   assertNoDynamicImport(normalizedSource, codePositions, braceKinds);
-  assertNoDynamicMetaElementCreation(normalizedSource, codePositions);
+  assertNoUnsafeDynamicElementCreation(normalizedSource, codePositions);
   assertNoScriptDrivenNavigation(normalizedSource, codePositions);
 
   for (const candidate of unsupported) {
@@ -5175,7 +5263,7 @@ function assertSupportedBundledRuntime(source: string): void {
   }
 }
 
-function assertNoDynamicMetaElementCreation(
+function assertNoUnsafeDynamicElementCreation(
   source: string,
   codePositions: Uint8Array,
 ): void {
@@ -5215,20 +5303,21 @@ function assertNoDynamicMetaElementCreation(
     const tagArgument = method === 'createElementNS' ? arguments_[1] : arguments_[0];
     const tagName = tagArgument === undefined
       ? undefined
-      : readStaticJavaScriptStringWithTrivia(
+      : resolveStaticJavaScriptStringExpression(
           source,
           tagArgument,
           codePositions,
         )?.toLowerCase();
+    const htmlElement = method === 'createElement'
+      || namespace?.toLowerCase() === 'http://www.w3.org/1999/xhtml';
 
-    if (
-      tagName === 'meta'
-      && (
-        method === 'createElement'
-        || namespace?.toLowerCase() === 'http://www.w3.org/1999/xhtml'
-      )
-    ) {
+    if (htmlElement && tagName === 'meta') {
       throw new Error('Offline playtest does not support dynamically created meta elements.');
+    }
+    if (htmlElement && (tagName === 'object' || tagName === 'embed')) {
+      throw new Error(
+        'Offline playtest does not support dynamically created object or embed elements.',
+      );
     }
   }
 }
