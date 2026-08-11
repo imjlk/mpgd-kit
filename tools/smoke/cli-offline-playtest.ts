@@ -374,6 +374,9 @@ try {
   for (const [name, mainJs] of [
     ['computed-location-assignment', 'window["location"]["href"] = "https://example.com";'],
     ['computed-location-method', 'location["assign"]("https://example.com");'],
+    ['grouped-location-assignment', '(location).href = "https://example.com";'],
+    ['nested-grouped-location-assignment', '((window.location)).href = "https://example.com";'],
+    ['grouped-location-method', '(location).assign("https://example.com");'],
     ['reflected-location-assignment', 'Reflect.set(location, "href", "https://example.com");'],
     [
       'qualified-reflected-location-assignment',
@@ -449,6 +452,14 @@ try {
     },
   );
   assert.match(shadowedReflectLocationHtml, /local/u);
+
+  const shadowedGroupedLocationHtml = await packageAndReadFixture(
+    'shadowed-grouped-location-assignment',
+    {
+      mainJs: 'function route(location) { (location).href = "local"; } route({});',
+    },
+  );
+  assert.match(shadowedGroupedLocationHtml, /local/u);
 
   const shadowedQualifiedReflectLocationHtml = await packageAndReadFixture(
     'shadowed-qualified-reflect-location-assignment',
@@ -1062,6 +1073,11 @@ try {
   });
   assert.doesNotMatch(phaserConfigObjectHtml, /\/assets\/(?:icon|pixel)\.png/u);
 
+  const phaserStaticKeyConfigHtml = await packageAndReadFixture('phaser-static-key-config', {
+    mainJs: 'const scene = new Phaser.Scene(); scene.load.image({ "key": "hero", "url": "/assets/pixel.png" }); scene.load.image({ ["key"]: "logo", [`url`]: "/assets/icon.png" });',
+  });
+  assert.doesNotMatch(phaserStaticKeyConfigHtml, /\/assets\/(?:icon|pixel)\.png/u);
+
   const phaserNormalMapHtml = await packageAndReadFixture('phaser-normal-map', {
     mainJs: 'const scene = new Phaser.Scene(); scene.load.image({ key: "hero", url: "/assets/pixel.png", normalMap: "/assets/icon.png" });',
   });
@@ -1248,6 +1264,33 @@ try {
   await assert.rejects(
     () => runOfflinePlaytestPackaging({ gameRoot: dataStylesheetPhaserHtmlGame }),
     /contains a data-backed stylesheet/u,
+  );
+
+  const dataHyperlinkPhaserHtmlGame = createPreviewFixture('data-hyperlink-phaser-html', {
+    mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
+  });
+  fs.writeFileSync(
+    path.join(dataHyperlinkPhaserHtmlGame, 'artifacts/web-preview/assets/panel.html'),
+    '<a target="_top" href="data:text/html,escaped">escape</a>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: dataHyperlinkPhaserHtmlGame }),
+    /contains an active hyperlink URL/u,
+  );
+
+  const javascriptHyperlinkPhaserHtmlGame = createPreviewFixture(
+    'javascript-hyperlink-phaser-html',
+    {
+      mainJs: 'const scene = new Phaser.Scene(); scene.load.html("panel", "/assets/panel.html");',
+    },
+  );
+  fs.writeFileSync(
+    path.join(javascriptHyperlinkPhaserHtmlGame, 'artifacts/web-preview/assets/panel.html'),
+    '<a target="_top" href="java&#x0A;script:location.assign(\'https://example.com\')">escape</a>',
+  );
+  await assert.rejects(
+    () => runOfflinePlaytestPackaging({ gameRoot: javascriptHyperlinkPhaserHtmlGame }),
+    /contains an active hyperlink URL/u,
   );
 
   const refreshingPhaserHtmlGame = createPreviewFixture('refreshing-phaser-html', {
@@ -1747,12 +1790,12 @@ try {
       'let request = new XMLHttpRequest(); request.open("GET", "/assets/level.json");',
     ],
     [
-      'reassigned-xml-http-request',
-      [
-        'const client = { open(method, url) { document.body.dataset.url = url; } };',
-        'let request = new XMLHttpRequest(); request = client;',
-        'request.open("GET", "/api/route");',
-      ].join(' '),
+      'assigned-let-xml-http-request',
+      'let request; request /* assignment */ = /* constructor */ new XMLHttpRequest(); request.open("GET", "/assets/level.json");',
+    ],
+    [
+      'assigned-var-xml-http-request',
+      'var request; request = new XMLHttpRequest(); request.open("GET", "/assets/level.json");',
     ],
   ] as const) {
     const xmlHttpRequestGame = createPreviewFixture(name, { mainJs });
@@ -1761,6 +1804,39 @@ try {
       /requires an immutable XMLHttpRequest binding/u,
     );
   }
+
+  const assignedLocalOpenHtml = await packageAndReadFixture('assigned-local-open', {
+    mainJs: 'let request; request = { open(method, url) { document.body.dataset.url = url; } }; request.open("GET", "/api/route");',
+  });
+  assert.match(assignedLocalOpenHtml, /\/api\/route/u);
+
+  const reassignedXmlHttpRequestHtml = await packageAndReadFixture(
+    'reassigned-xml-http-request',
+    {
+      mainJs: [
+        'const client = { open(method, url) { document.body.dataset.url = url; } };',
+        'let request = new XMLHttpRequest(); request = client;',
+        'request.open("GET", "/api/route");',
+      ].join(' '),
+    },
+  );
+  assert.match(reassignedXmlHttpRequestHtml, /\/api\/route/u);
+
+  const reassignedAfterAssignmentHtml = await packageAndReadFixture(
+    'reassigned-after-assignment-xml-http-request',
+    {
+      mainJs: 'let request; request = new XMLHttpRequest(); request = { open(method, url) { document.body.dataset.url = url; } }; request.open("GET", "/api/route");',
+    },
+  );
+  assert.match(reassignedAfterAssignmentHtml, /\/api\/route/u);
+
+  const assignedShadowedXmlHttpRequestHtml = await packageAndReadFixture(
+    'assigned-shadowed-xml-http-request',
+    {
+      mainJs: 'function load(XMLHttpRequest) { let request; request = new XMLHttpRequest(); request.open("GET", "/api/route"); } load(class { open() {} });',
+    },
+  );
+  assert.match(assignedShadowedXmlHttpRequestHtml, /\/api\/route/u);
 
   const shadowedXmlHttpRequestHtml = await packageAndReadFixture('shadowed-xml-http-request', {
     mainJs: 'class XMLHttpRequest { open(method, url) { document.body.dataset.url = url; } send() {} } const request = new XMLHttpRequest(); request.open("GET", "/assets/level.json"); request.send();',

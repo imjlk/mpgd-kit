@@ -1328,11 +1328,22 @@ function inlineStaticXmlHttpRequestOpenCalls(
       match.index,
       codePositions,
     );
+    const assignmentProof = binding === undefined
+      ? undefined
+      : findLastXmlHttpRequestAssignmentBeforeUse(
+          source,
+          receiver,
+          binding,
+          match.index,
+          codePositions,
+        );
+    const isNativeXmlHttpRequest = assignmentProof
+      ?? isXmlHttpRequestBinding(source, binding, codePositions);
 
     if (
       binding === undefined
       || binding.start >= match.index
-      || !isXmlHttpRequestBinding(source, binding, codePositions)
+      || !isNativeXmlHttpRequest
     ) {
       continue;
     }
@@ -1389,9 +1400,80 @@ function isXmlHttpRequestBinding(
     return false;
   }
 
+  return isNativeXmlHttpRequestExpression(source, binding.initializerRange, codePositions);
+}
+
+function findLastXmlHttpRequestAssignmentBeforeUse(
+  source: string,
+  identifier: string,
+  binding: JavaScriptIdentifierBinding,
+  position: number,
+  codePositions: Uint8Array,
+): boolean | undefined {
+  const identifierPattern = new RegExp(
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${escapeRegExp(identifier)}(?![$\\u200C\\u200D\\p{ID_Continue}])`,
+    'gu',
+  );
+
+  let lastAssignmentIsNative: boolean | undefined;
+
+  for (const match of source.slice(binding.start, position).matchAll(identifierPattern)) {
+    if (match.index === undefined) {
+      continue;
+    }
+
+    const assignmentStart = binding.start + match.index;
+    let equals = assignmentStart + match[0].length;
+
+    while (
+      equals < position
+      && (codePositions[equals] !== 1 || /\s/u.test(source[equals] ?? ''))
+    ) {
+      equals += 1;
+    }
+
+    if (
+      codePositions[assignmentStart] !== 1
+      || source[equals] !== '='
+      || source[equals + 1] === '='
+      || source[equals + 1] === '>'
+      || findVisibleJavaScriptIdentifierBinding(
+        source,
+        identifier,
+        assignmentStart,
+        codePositions,
+      )?.start !== binding.start
+    ) {
+      continue;
+    }
+
+    const expressionStart = equals + 1;
+    const expressionRange = findJavaScriptExpressionRange(
+      source,
+      expressionStart,
+      position,
+      codePositions,
+      true,
+    );
+
+    lastAssignmentIsNative = isNativeXmlHttpRequestExpression(
+      source,
+      expressionRange,
+      codePositions,
+    );
+  }
+
+  return lastAssignmentIsNative;
+}
+
+function isNativeXmlHttpRequestExpression(
+  source: string,
+  expressionRange: SourceRange,
+  codePositions: Uint8Array,
+): boolean {
   const initializer = maskNonCode(
-    source.slice(binding.initializerRange.start, binding.initializerRange.end),
-    codePositions.slice(binding.initializerRange.start, binding.initializerRange.end),
+    source.slice(expressionRange.start, expressionRange.end),
+    codePositions.slice(expressionRange.start, expressionRange.end),
   ).trim();
   const match = /^new\s+(?:(globalThis|self|window)\s*\.\s*)?XMLHttpRequest\s*(?:\(\s*\))?$/u.exec(
     initializer,
@@ -1405,14 +1487,23 @@ function isXmlHttpRequestBinding(
     return findVisibleJavaScriptIdentifierBinding(
       source,
       match[1],
-      binding.initializerRange.start,
+      expressionRange.start,
       codePositions,
     ) === undefined;
   }
 
-  const constructorOffset = source.indexOf('XMLHttpRequest', binding.initializerRange.start);
-  return constructorOffset >= binding.initializerRange.start
-    && constructorOffset < binding.initializerRange.end
+  let constructorOffset = source.indexOf('XMLHttpRequest', expressionRange.start);
+
+  while (
+    constructorOffset >= expressionRange.start
+    && constructorOffset < expressionRange.end
+    && codePositions[constructorOffset] !== 1
+  ) {
+    constructorOffset = source.indexOf('XMLHttpRequest', constructorOffset + 1);
+  }
+
+  return constructorOffset >= expressionRange.start
+    && constructorOffset < expressionRange.end
     && findVisibleJavaScriptIdentifierBinding(
       source,
       'XMLHttpRequest',
@@ -1486,11 +1577,21 @@ function inlinePhaserAssetReferences(
   documentFile: string,
   context: InliningContext,
 ): string {
+  const normalizedSource = normalizeStaticJavaScriptPropertyKeys(source);
+  const discoveryCodePositions = createCodePositionMap(normalizedSource, true);
+  assertSupportedPhaserLoaderConfiguration(normalizedSource);
+  const loaderRanges = findPhaserLoaderUrlRanges(normalizedSource, discoveryCodePositions);
+  const manifestProofs = findProvenPhaserManifestProperties(
+    normalizedSource,
+    loaderRanges,
+    discoveryCodePositions,
+  );
+  const manifestRanges = findPhaserManifestUrlRanges(
+    normalizedSource,
+    discoveryCodePositions,
+    manifestProofs,
+  );
   const codePositions = createCodePositionMap(source, true);
-  assertSupportedPhaserLoaderConfiguration(source);
-  const loaderRanges = findPhaserLoaderUrlRanges(source, codePositions);
-  const manifestProofs = findProvenPhaserManifestProperties(source, loaderRanges, codePositions);
-  const manifestRanges = findPhaserManifestUrlRanges(source, codePositions, manifestProofs);
   const ranges: SourceRange[] = [...manifestRanges, ...loaderRanges];
   const identifierRanges = [
     ...manifestRanges.filter((range) => range.traceIdentifiers),
@@ -4287,6 +4388,56 @@ function assertNoScriptDrivenNavigation(
   assertNoIndirectLocationMutation(source, codePositions, aliasAssignments);
 
   const locationOperation = '(?:\\s*\\.\\s*(?:assign|replace)\\b|(?:\\s*\\.\\s*href)?\\s*(?:(?:&&|\\?\\?|\\|\\|)|[+\\-*/%&|^])?=(?!=))';
+  const groupedLocationOperationPattern = new RegExp(locationOperation, 'uy');
+  const codeOnlySource = maskNonCodePreservingLength(source, codePositions);
+
+  for (let closingParenthesis = 0; closingParenthesis < source.length; closingParenthesis += 1) {
+    if (source[closingParenthesis] !== ')' || codePositions[closingParenthesis] !== 1) {
+      continue;
+    }
+
+    groupedLocationOperationPattern.lastIndex = closingParenthesis + 1;
+
+    if (groupedLocationOperationPattern.exec(codeOnlySource) === null) {
+      continue;
+    }
+
+    const openingParenthesis = findMatchingJavaScriptOpeningParenthesis(
+      source,
+      closingParenthesis,
+      codePositions,
+    );
+
+    if (
+      openingParenthesis === undefined
+      || !isJavaScriptGroupingParenthesis(source, openingParenthesis, codePositions)
+    ) {
+      continue;
+    }
+
+    const expressionRange = trimSourceRange(source, {
+      start: openingParenthesis + 1,
+      end: closingParenthesis,
+    });
+    const expression = maskNonCode(
+      source.slice(expressionRange.start, expressionRange.end),
+      codePositions.slice(expressionRange.start, expressionRange.end),
+    ).trim();
+
+    if (
+      isLocationAliasExpression(
+        source,
+        expression,
+        expressionRange.start,
+        codePositions,
+        aliasAssignments,
+        new Set<string>(),
+      )
+    ) {
+      throw new Error('Offline playtest does not support script-driven navigation.');
+    }
+  }
+
   const qualifiedLocationPattern = new RegExp(
     `(?<![$.\\u200C\\u200D\\p{ID_Continue}])${globalObject}\\s*\\.\\s*location${locationOperation}`,
     'gu',
@@ -4357,6 +4508,32 @@ function assertNoScriptDrivenNavigation(
       throw new Error('Offline playtest does not support script-driven navigation.');
     }
   }
+}
+
+function isJavaScriptGroupingParenthesis(
+  source: string,
+  openingParenthesis: number,
+  codePositions: Uint8Array,
+): boolean {
+  const previousCode = findPreviousJavaScriptCodeIndex(
+    source,
+    openingParenthesis - 1,
+    codePositions,
+  );
+
+  if (previousCode === undefined) {
+    return true;
+  }
+
+  const previousCharacter = source[previousCode] ?? '';
+
+  if (/[$\u200C\u200D\p{ID_Continue}]/u.test(previousCharacter)) {
+    return ['await', 'case', 'delete', 'return', 'throw', 'typeof', 'void', 'yield'].includes(
+      readPreviousJavaScriptIdentifier(source, previousCode, codePositions) ?? '',
+    );
+  }
+
+  return previousCharacter !== ')' && previousCharacter !== ']';
 }
 
 function assertNoIndirectLocationMutation(
@@ -4981,6 +5158,66 @@ function normalizeStaticJavaScriptPropertyAccess(source: string): string {
   return output.replace(/\?\.\s*(?=\()/gu, '').replace(/\?\./gu, '.');
 }
 
+function normalizeStaticJavaScriptPropertyKeys(source: string): string {
+  const codePositions = createCodePositionMap(source, true);
+  const stringLiteralPatternSource = /"((?:\\(?:\r\n|[\s\S])|[^"\\\r\n])*)"|'((?:\\(?:\r\n|[\s\S])|[^'\\\r\n])*)'|`((?:\\(?:\r\n|[\s\S])|[^`\\$\r\n]|\$(?!\{))*)`/u.source;
+  const pattern = new RegExp(
+    `${stringLiteralPatternSource}|\\[\\s*(?:${stringLiteralPatternSource})\\s*\\]`,
+    'gu',
+  );
+  const replacements: SourceReplacement[] = [];
+
+  for (const match of source.matchAll(pattern)) {
+    if (match.index === undefined || codePositions[match.index] !== 1) {
+      continue;
+    }
+
+    const previous = findAdjacentJavaScriptCodeCharacter(
+      source,
+      match.index - 1,
+      -1,
+      codePositions,
+    );
+    let colon = match.index + match[0].length;
+
+    while (
+      colon < source.length
+      && (codePositions[colon] !== 1 || /\s/u.test(source[colon] ?? ''))
+    ) {
+      colon += 1;
+    }
+
+    if ((previous !== '{' && previous !== ',') || source[colon] !== ':') {
+      continue;
+    }
+
+    const propertyName = decodeJavaScriptStringLiteral(
+      match[1] ?? match[2] ?? match[3] ?? match[4] ?? match[5] ?? match[6] ?? '',
+    );
+
+    if (
+      !/^[$_\p{ID_Start}][$\u200C\u200D\p{ID_Continue}]*$/u.test(propertyName)
+      || propertyName.length > match[0].length
+    ) {
+      continue;
+    }
+
+    replacements.push({
+      start: match.index,
+      end: match.index + match[0].length,
+      value: propertyName.padEnd(match[0].length),
+    });
+  }
+
+  let output = source;
+
+  for (const replacement of replacements.reverse()) {
+    output = `${output.slice(0, replacement.start)}${replacement.value}${output.slice(replacement.end)}`;
+  }
+
+  return output;
+}
+
 function maskNonCode(source: string, codePositions: Uint8Array): string {
   const chunks: string[] = [];
   let codeStart: number | undefined;
@@ -4999,6 +5236,16 @@ function maskNonCode(source: string, codePositions: Uint8Array): string {
   }
 
   return chunks.join('');
+}
+
+function maskNonCodePreservingLength(source: string, codePositions: Uint8Array): string {
+  const characters = new Array<string>(source.length);
+
+  for (let index = 0; index < source.length; index += 1) {
+    characters[index] = codePositions[index] === 1 ? (source[index] ?? '') : ' ';
+  }
+
+  return characters.join('');
 }
 
 function createCodePositionMap(
@@ -5631,6 +5878,21 @@ function assertSelfContainedHtmlAsset(htmlFile: string, source: string): void {
       ) {
         throw new Error(
           `Offline playtest requires inert self-contained HTML assets: ${htmlFile} contains an embedded active data document`,
+        );
+      }
+
+      if (
+        (
+          ((tag.name === 'a' || tag.name === 'area' || tag.name === 'base')
+            && attribute.name === 'href')
+          || (tag.name === 'form' && attribute.name === 'action')
+          || ((tag.name === 'button' || tag.name === 'input')
+            && attribute.name === 'formaction')
+        )
+        && (isDataUrlReference(value) || isJavaScriptUrlReference(value))
+      ) {
+        throw new Error(
+          `Offline playtest requires inert self-contained HTML assets: ${htmlFile} contains an active hyperlink URL`,
         );
       }
 
@@ -6315,6 +6577,14 @@ function isNonLocalReference(reference: string): boolean {
 
 function isDataUrlReference(reference: string): boolean {
   return /^data:/iu.test(normalizeUrlReference(reference));
+}
+
+function isJavaScriptUrlReference(reference: string): boolean {
+  const normalized = normalizeUrlReference(reference);
+  const schemeEnd = normalized.indexOf(':');
+
+  return schemeEnd >= 0
+    && normalized.slice(0, schemeEnd).replace(/[\t\n\f\r ]/gu, '').toLowerCase() === 'javascript';
 }
 
 function normalizeUrlReference(reference: string): string {
