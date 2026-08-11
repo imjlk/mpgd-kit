@@ -141,10 +141,7 @@ try {
   initializeGame(legacyScriptsGame);
   assertMicrosoftStoreEnabled(legacyScriptsGame);
   const migratedPackageJson = readJson(join(legacyScriptsGame, 'package.json'));
-  const migratedScripts = requireRecord(
-    migratedPackageJson.scripts,
-    'migrated package scripts',
-  );
+  const migratedScripts = requireRecord(migratedPackageJson.scripts, 'migrated package scripts');
   assert.equal(
     requireRecord(
       migratedPackageJson.dependencies,
