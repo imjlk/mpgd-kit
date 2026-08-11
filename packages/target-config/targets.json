@@ -1,5 +1,5 @@
 {
-  "version": "2026-08-11.1",
+  "version": "2026-08-12",
   "targets": {
     "web-preview": {
       "runtime": "web-preview",
@@ -50,7 +50,7 @@
         "iap": true,
         "rewardedAds": false,
         "interstitialAds": false,
-        "leaderboard": false,
+        "leaderboard": true,
         "localization": true
       },
       "capabilities": {

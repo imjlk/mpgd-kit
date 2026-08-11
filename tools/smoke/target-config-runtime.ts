@@ -195,6 +195,11 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
 
   if (configTarget === 'microsoft-store') {
     assertEqual(
+      config.leaderboard.native,
+      false,
+      'microsoft-store should use Game Services rather than a native Store leaderboard',
+    );
+    assertEqual(
       getEffectiveProductConfig(effectiveConfig, 'COINS_100')?.reason,
       'available',
       'microsoft-store consumables should be available',
@@ -205,6 +210,11 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
       'microsoft-store ad placements should be target-disabled',
     );
     assertEqual(runtime.features.iap.reason, 'available', 'microsoft-store IAP should work');
+    assertEqual(
+      runtime.features.leaderboard.reason,
+      'available',
+      'microsoft-store Game Services leaderboard should be available',
+    );
     await gateway.commerce.purchase({
       productId: 'COINS_100',
       source: 'shop',
@@ -225,13 +235,13 @@ async function verifyConfigTarget(configTarget: (typeof configTargets)[number]):
         runId: 'microsoft-store-run',
         submittedAt: new Date().toISOString(),
       }),
-      { submitted: false },
-      'microsoft-store leaderboard should be disabled',
+      { submitted: true },
+      'microsoft-store Game Services leaderboard should be available',
     );
     assertDeepEqual(
       targetGateway.calls,
-      ['purchase'],
-      'microsoft-store should delegate only configured commerce',
+      ['purchase', 'submitScore'],
+      'microsoft-store should delegate configured commerce and leaderboard calls',
     );
     return;
   }
