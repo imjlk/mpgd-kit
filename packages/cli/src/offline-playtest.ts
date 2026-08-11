@@ -1141,15 +1141,15 @@ function inlineStaticElementSourceAssignments(
   context: InliningContext,
 ): string {
   const assignmentPattern = new RegExp(
-    `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*src\\s*=`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\.\\s*src\\s*=`,
     'gu',
   );
   const computedAssignmentPattern = new RegExp(
-    `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\[`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*\\[`,
     'gu',
   );
   const setAttributePattern = new RegExp(
-    `(?<![$\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*(?:\\.\\s*|\\?\\.\\s*)setAttribute\\s*(?:\\?\\.\\s*)?\\(`,
+    `(?<![$.\\u200C\\u200D\\p{ID_Continue}])(${javascriptIdentifierPatternSource})\\s*(?:\\.\\s*|\\?\\.\\s*)setAttribute\\s*(?:\\?\\.\\s*)?\\(`,
     'gu',
   );
   const codePositions = createCodePositionMap(source, true);

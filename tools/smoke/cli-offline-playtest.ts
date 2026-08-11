@@ -1715,6 +1715,16 @@ try {
     /requires a static native element property assignment/u,
   );
 
+  const memberElementReceiverHtml = await packageAndReadFixture(
+    'member-element-receiver-boundary',
+    {
+      mainJs: 'const image = new Image(); const wrapper = { image: { setAttribute() {} } }; wrapper.image["src"] = "/api/computed"; wrapper.image.src = "/api/direct"; wrapper.image.setAttribute("src", "/api/attribute"); void image; document.body.dataset.src = wrapper.image.src;',
+    },
+  );
+  assert.match(memberElementReceiverHtml, /\/api\/computed/u);
+  assert.match(memberElementReceiverHtml, /\/api\/direct/u);
+  assert.match(memberElementReceiverHtml, /\/api\/attribute/u);
+
   const createdBrowserImageHtml = await packageAndReadFixture('created-browser-image-asset', {
     mainJs: 'const splash = document.createElement("img"); splash.src = "/assets/pixel.png"; document.body.append(splash);',
   });
