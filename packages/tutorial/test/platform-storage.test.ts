@@ -51,7 +51,10 @@ describe('platform tutorial progress store', () => {
     const disabled = await createPlatformTutorialProgressStore({
       definition: tutorial,
       key: 'tutorial',
-      onError: (error) => errors.push(error),
+      onError: (error) => {
+        errors.push(error);
+        throw new Error('error observer failed');
+      },
       storage: {
         load: async () => ({ value: { schemaVersion: 99 } }),
         save: async () => undefined,
@@ -69,33 +72,46 @@ describe('platform tutorial progress store', () => {
 
     expect(disabled.available).toBe(false);
     expect(errors).toHaveLength(1);
+    expect(errors[0]).toEqual(expect.objectContaining({
+      message: 'Invalid tutorial progress: tutorial',
+    }));
     expect(ignored.available).toBe(true);
     expect(ignored.getSnapshot()).toBeNull();
   });
 
   it('stops queued writes after the storage adapter fails', async () => {
     const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    const storageError = new Error('storage unavailable');
+    const onError = vi.fn(() => {
+      throw new Error('error observer failed');
+    });
     let attempts = 0;
     const store = await createPlatformTutorialProgressStore({
       definition: tutorial,
       key: 'tutorial',
+      onError,
       storage: {
         load: async () => ({ value: initial }),
         save: async () => {
           attempts += 1;
-          throw new Error('storage unavailable');
+          throw storageError;
         },
       },
     });
 
     const first = { ...initial, updatedAt: '2026-08-12T00:01:00.000Z' };
     const second = { ...initial, updatedAt: '2026-08-12T00:02:00.000Z' };
-    await Promise.allSettled([store.save(first), store.save(second)]);
-    await store.flush();
+    const firstSave = store.save(first);
+    const secondSave = store.save(second);
+
+    await expect(firstSave).rejects.toBe(storageError);
+    await expect(secondSave).resolves.toBeUndefined();
+    await expect(store.flush()).resolves.toBeUndefined();
 
     expect(attempts).toBe(1);
     expect(store.available).toBe(false);
     expect(store.getSnapshot()).toEqual(initial);
+    expect(onError).toHaveBeenCalledExactlyOnceWith(storageError);
   });
 
   it('fails closed when the storage load times out', async () => {

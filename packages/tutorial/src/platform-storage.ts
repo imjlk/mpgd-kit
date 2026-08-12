@@ -29,6 +29,14 @@ export async function createPlatformTutorialProgressStore<
   let available = true;
   let queue = Promise.resolve();
 
+  function reportError(error: unknown): void {
+    try {
+      input.onError?.(error);
+    } catch {
+      // Error reporting must not interrupt storage lifecycle handling.
+    }
+  }
+
   try {
     const stored = await loadWithTimeout(input.storage.load({ key: input.key }), loadTimeoutMs);
 
@@ -38,12 +46,12 @@ export async function createPlatformTutorialProgressStore<
 
       if (current === null && (input.invalidRecord ?? 'disable') === 'disable') {
         available = false;
-        input.onError?.(new Error(`Invalid tutorial progress: ${input.key}`));
+        reportError(new Error(`Invalid tutorial progress: ${input.key}`));
       }
     }
   } catch (error) {
     available = false;
-    input.onError?.(error);
+    reportError(error);
   }
 
   return {
@@ -70,7 +78,7 @@ export async function createPlatformTutorialProgressStore<
 
       void (queue = operation.catch((error: unknown) => {
         available = false;
-        input.onError?.(error);
+        reportError(error);
       }));
       return operation;
     },
