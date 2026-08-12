@@ -360,13 +360,19 @@ tools and Codex MCP graph inspection can see the same TypeScript surface.
 Every generated game includes an agent-facing brief, manifest, and acceptance
 loop at these game-relative paths:
 
-- `agent/brief.template.md`
+- `agent/brief.md`
 - `agent/game.manifest.json`
 - `agent/acceptance.md`
-- `.codex/agents/*`
 - `.agents/skills/*`
 
-Kit contributors maintain their source and reference copies at:
+Kit contributors maintain the generated-game source at:
+
+- `packages/cli/templates/phaser-game/agent/brief.md`
+- `packages/cli/templates/phaser-game/agent/game-manifest.json`
+- `packages/cli/templates/phaser-game/agent/acceptance.md`
+- `packages/cli/templates/phaser-game/.agents/skills/*`
+
+The checked-in reference fixture and kit-only agent configurations live at:
 
 - `examples/phaser-starter/agent/brief.template.md`
 - `examples/phaser-starter/agent/game.manifest.json`
