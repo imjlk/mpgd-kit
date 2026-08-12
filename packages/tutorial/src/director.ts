@@ -113,6 +113,10 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
   }
 
   function publish(): void {
+    if (destroyed) {
+      return;
+    }
+
     const publishedSnapshot = createSnapshot(
       definition,
       progress,
@@ -206,6 +210,10 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
 
   return {
     acknowledge(stepId) {
+      if (destroyed) {
+        return;
+      }
+
       const step = getCurrentStep();
 
       if (step?.id === stepId && step.advance.kind === 'acknowledge') {
@@ -213,12 +221,21 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       }
     },
     destroy() {
+      if (destroyed) {
+        return;
+      }
+
       destroyed = true;
       listeners.clear();
+      pendingSnapshots.length = 0;
     },
     flush: () => progressStore.flush(),
     getSnapshot: () => snapshot,
     observeAction(action) {
+      if (destroyed) {
+        return;
+      }
+
       const step = getCurrentStep();
 
       if (canAdvance(step) && step.advance.kind === 'action' && step.advance.action === action) {
@@ -226,6 +243,10 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       }
     },
     observeScene(scene) {
+      if (destroyed) {
+        return;
+      }
+
       currentScene = scene;
       const step = getCurrentStep();
 
@@ -237,6 +258,10 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       publish();
     },
     observeSignal(signal) {
+      if (destroyed) {
+        return;
+      }
+
       const step = getCurrentStep();
 
       if (canAdvance(step) && step.advance.kind === 'signal' && step.advance.signal === signal) {
@@ -244,6 +269,10 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       }
     },
     async replay(options = {}) {
+      if (destroyed) {
+        return;
+      }
+
       const replayProgress = options.fromStepId === undefined
         ? createInitialTutorialProgress(definition, now())
         : createTutorialProgressAtStep(definition, options.fromStepId, now());
@@ -261,7 +290,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       publish();
     },
     setSuspended(nextSuspended) {
-      if (suspended === nextSuspended) {
+      if (destroyed || suspended === nextSuspended) {
         return;
       }
 
@@ -269,7 +298,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       publish();
     },
     async skip() {
-      if (progress === null) {
+      if (destroyed || progress === null) {
         return;
       }
 
@@ -317,6 +346,10 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       }
     },
     subscribe(listener) {
+      if (destroyed) {
+        return () => undefined;
+      }
+
       const subscription: Subscription = { listener };
       listeners.add(subscription);
       notifyListener(listener, snapshot);

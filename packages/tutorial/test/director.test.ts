@@ -3,8 +3,11 @@ import { describe, expect, it } from 'vitest';
 import {
   createInitialTutorialProgress,
   createTutorialDirector,
+  createTutorialProgressAtStep,
   defineTutorial,
   parseTutorialProgress,
+  type TutorialDirector,
+  type TutorialProgressOf,
 } from '../src/index.js';
 import {
   applyTutorialDebugLaunchPolicy,
@@ -178,7 +181,7 @@ describe('tutorial director', () => {
     expect(store.getSnapshot()).toEqual(completed);
   });
 
-  it('does not persist a skip when publication destroys the director', async () => {
+  it('does not persist or publish queued state when publication destroys the director', async () => {
     const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
     const saved: unknown[] = [];
     const director = createTutorialDirector({
@@ -196,6 +199,7 @@ describe('tutorial director', () => {
 
     director.subscribe((snapshot) => {
       if (snapshot.status === 'skipped') {
+        void director.replay({ fromStepId: 'move' });
         director.destroy();
       }
     });
@@ -337,6 +341,79 @@ describe('tutorial director', () => {
 
     expect(snapshots).toHaveLength(1);
     expect(snapshots[0]).toMatchObject({ currentStepId: 'welcome' });
+  });
+
+  it('makes destruction terminal while preserving snapshot and flush access', async () => {
+    const timestamp = '2026-08-12T00:00:00.000Z';
+    const initial = createInitialTutorialProgress(tutorial, timestamp);
+    const beforeSceneObservation: TutorialProgressOf<typeof tutorial> = {
+      ...createTutorialProgressAtStep(tutorial, 'move', timestamp),
+      checkpoint: 'lobby',
+    };
+
+    async function expectTerminalNoOp(
+      initialProgress: TutorialProgressOf<typeof tutorial>,
+      invoke: (director: TutorialDirector<typeof tutorial>) => Promise<void> | void,
+      initialScene?: string,
+    ): Promise<void> {
+      const saved: TutorialProgressOf<typeof tutorial>[] = [];
+      let flushes = 0;
+      const director = createTutorialDirector({
+        autoStart: false,
+        definition: tutorial,
+        ...(initialScene === undefined ? {} : { initialScene }),
+        progressStore: {
+          available: true,
+          async flush() {
+            flushes += 1;
+          },
+          getSnapshot: () => initialProgress,
+          save: async (progress) => {
+            saved.push(progress);
+          },
+        },
+      });
+      const published: unknown[] = [];
+      const unsubscribe = director.subscribe((snapshot) => published.push(snapshot));
+      const terminalSnapshot = director.getSnapshot();
+
+      director.destroy();
+      director.destroy();
+
+      let lateDeliveries = 0;
+      const unsubscribeLate = director.subscribe(() => {
+        lateDeliveries += 1;
+      });
+      unsubscribeLate();
+      unsubscribeLate();
+      unsubscribe();
+      await invoke(director);
+      await expect(director.flush()).resolves.toBeUndefined();
+
+      expect(director.getSnapshot()).toBe(terminalSnapshot);
+      expect(published).toEqual([terminalSnapshot]);
+      expect(lateDeliveries).toBe(0);
+      expect(saved).toEqual([]);
+      expect(flushes).toBe(1);
+    }
+
+    await expectTerminalNoOp(initial, (director) => director.acknowledge('welcome'));
+    await expectTerminalNoOp(
+      createTutorialProgressAtStep(tutorial, 'open-play', timestamp),
+      (director) => director.observeAction('open-play'),
+    );
+    await expectTerminalNoOp(
+      beforeSceneObservation,
+      (director) => director.observeScene('play'),
+    );
+    await expectTerminalNoOp(
+      createTutorialProgressAtStep(tutorial, 'move', timestamp),
+      (director) => director.observeSignal('moved'),
+      'play',
+    );
+    await expectTerminalNoOp(initial, (director) => director.replay({ fromStepId: 'move' }));
+    await expectTerminalNoOp(initial, (director) => director.setSuspended(true));
+    await expectTerminalNoOp(initial, (director) => director.skip());
   });
 
   it('does not mutate replay state when an unknown step is requested', async () => {
