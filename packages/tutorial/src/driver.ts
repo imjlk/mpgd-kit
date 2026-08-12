@@ -40,6 +40,7 @@ export interface DriverTutorialPresenter<TStep extends TutorialStep = TutorialSt
   destroy(): void;
   present(presentation: DriverTutorialPresentation<TStep> | null): void;
   refresh(): void;
+  resetForReplay(): void;
 }
 
 interface TutorialTargetSemanticsGuard {
@@ -424,6 +425,11 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       scheduleRefresh();
     },
     refresh: scheduleRefresh,
+    resetForReplay() {
+      dismissedPresentationKey = null;
+      retryableDismissedKey = null;
+      scheduleRefresh();
+    },
   };
 
   function rebindActiveTarget(
@@ -625,6 +631,7 @@ export function bindTutorialReplayTrigger<TDefinition extends TutorialDefinition
   readonly director: TutorialDirector<TDefinition>;
   readonly element: HTMLElement;
   readonly onError?: (error: unknown) => void;
+  readonly presenter: Pick<DriverTutorialPresenter, 'resetForReplay'>;
 }): () => void {
   let pending = false;
   const listener = (): void => {
@@ -636,6 +643,7 @@ export function bindTutorialReplayTrigger<TDefinition extends TutorialDefinition
     void Promise.resolve()
       .then(() => input.beforeReplay?.())
       .then(() => input.director.replay())
+      .then(() => input.presenter.resetForReplay())
       .catch((error: unknown) => input.onError?.(error))
       .finally(() => {
         pending = false;
@@ -933,14 +941,26 @@ function clearDetachedDriverTargetClasses(
 
 function isRenderableTutorialTarget(element: HTMLElement, view: Window): boolean {
   const rect = element.getBoundingClientRect();
-  const style = view.getComputedStyle(element);
 
-  return element.isConnected
-    && style.display !== 'none'
-    && style.visibility !== 'hidden'
-    && Number.parseFloat(style.opacity || '1') > 0
-    && rect.width > 0
-    && rect.height > 0;
+  if (!element.isConnected || rect.width <= 0 || rect.height <= 0) {
+    return false;
+  }
+
+  let current: HTMLElement | null = element;
+
+  while (current !== null) {
+    const style = view.getComputedStyle(current);
+
+    if (style.display === 'none'
+      || style.visibility === 'hidden'
+      || Number.parseFloat(style.opacity || '1') <= 0) {
+      return false;
+    }
+
+    current = current.parentElement;
+  }
+
+  return true;
 }
 
 function intersectRect(

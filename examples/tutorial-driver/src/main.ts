@@ -142,9 +142,11 @@ const unbindReplay = hostReplay === null
       beforeReplay: () => showLobby(),
       director,
       element: hostReplay,
+      presenter,
     });
 const debug = import.meta.env.DEV
   ? installTutorialDebugBridge({
+      afterReplay: () => presenter.resetForReplay(),
       beforeReplay: (options) => prepareHostForStep(options.fromStepId ?? 'welcome'),
       director,
       floatingReplayTrigger: parameters.get('trigger') === '1'

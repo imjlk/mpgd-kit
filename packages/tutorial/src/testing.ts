@@ -32,17 +32,22 @@ export function createMemoryTutorialProgressStore<TProgress extends TutorialProg
   readonly initial?: TProgress | null;
   readonly rejectSave?: boolean;
 } = {}): MemoryTutorialProgressStore<TProgress> {
+  const available = input.available ?? true;
   let current = input.initial ?? null;
   const saves: TProgress[] = [];
 
   return {
-    available: input.available ?? true,
+    available,
     flush: () => Promise.resolve(),
     get saves() {
       return saves;
     },
     getSnapshot: () => current,
     async save(progress) {
+      if (!available) {
+        return;
+      }
+
       if (input.rejectSave === true) {
         throw new Error('Memory tutorial progress store rejected a save.');
       }
@@ -126,6 +131,9 @@ export interface TutorialDebugBridge<TDefinition extends TutorialDefinition> {
 }
 
 export interface InstallTutorialDebugBridgeInput<TDefinition extends TutorialDefinition> {
+  readonly afterReplay?: (
+    options: TutorialReplayOptions<TDefinition>,
+  ) => Promise<void> | void;
   readonly beforeReplay?: (
     options: TutorialReplayOptions<TDefinition>,
   ) => Promise<void> | void;
@@ -141,6 +149,17 @@ export interface InstallTutorialDebugBridgeInput<TDefinition extends TutorialDef
   readonly onError?: (error: unknown) => void;
 }
 
+interface TutorialDebugBridgeInstallation {
+  readonly bridge: object;
+  readonly fallback: unknown;
+  readonly globalKey: string;
+  readonly predecessor: TutorialDebugBridgeInstallation | null;
+  readonly record: Record<string, unknown>;
+  destroyed: boolean;
+}
+
+const tutorialDebugBridgeInstallations = new WeakMap<object, TutorialDebugBridgeInstallation>();
+
 export function installTutorialDebugBridge<TDefinition extends TutorialDefinition>(
   input: InstallTutorialDebugBridgeInput<TDefinition>,
 ): { readonly bridge: TutorialDebugBridge<TDefinition>; destroy(): void } {
@@ -151,6 +170,7 @@ export function installTutorialDebugBridge<TDefinition extends TutorialDefinitio
   const replay = async (options: TutorialReplayOptions<TDefinition> = {}): Promise<void> => {
     await input.beforeReplay?.(options);
     await input.director.replay(options);
+    await input.afterReplay?.(options);
   };
   const bridge: TutorialDebugBridge<TDefinition> = {
     action: (action) => input.director.observeAction(action),
@@ -162,6 +182,22 @@ export function installTutorialDebugBridge<TDefinition extends TutorialDefinitio
     skip: () => input.director.skip(),
     suspend: (suspended) => input.director.setSuspended(suspended),
   };
+  const possiblePredecessor = typeof previous === 'object' && previous !== null
+    ? tutorialDebugBridgeInstallations.get(previous)
+    : undefined;
+  const predecessor = possiblePredecessor?.record === record
+      && possiblePredecessor.globalKey === globalKey
+    ? possiblePredecessor
+    : null;
+  const installation: TutorialDebugBridgeInstallation = {
+    bridge,
+    destroyed: false,
+    fallback: predecessor === null ? previous : predecessor.fallback,
+    globalKey,
+    predecessor,
+    record,
+  };
+  tutorialDebugBridgeInstallations.set(bridge, installation);
   record[globalKey] = bridge;
 
   const destroyTrigger = createFloatingReplayTrigger(input, bridge);
@@ -169,16 +205,29 @@ export function installTutorialDebugBridge<TDefinition extends TutorialDefinitio
   return {
     bridge,
     destroy() {
+      if (installation.destroyed) {
+        return;
+      }
+
+      installation.destroyed = true;
       destroyTrigger?.();
 
       if (record[globalKey] !== bridge) {
         return;
       }
 
-      if (previous === undefined) {
+      let restoredInstallation = installation.predecessor;
+
+      while (restoredInstallation?.destroyed === true) {
+        restoredInstallation = restoredInstallation.predecessor;
+      }
+
+      if (restoredInstallation !== null) {
+        record[globalKey] = restoredInstallation.bridge;
+      } else if (installation.fallback === undefined) {
         Reflect.deleteProperty(record, globalKey);
       } else {
-        record[globalKey] = previous;
+        record[globalKey] = installation.fallback;
       }
     },
   };
