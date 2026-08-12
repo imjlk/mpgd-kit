@@ -159,16 +159,22 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       }
 
       const modalSelector = input.modalSelector ?? '[role="dialog"][aria-modal="true"]';
+      const retainCurrentModal = modalSemanticsGuard
+        ?.isOwnedAttributeCurrent('aria-modal') ?? false;
       const modal = resolveUnderlyingTutorialModal(
         popover,
         presentation.step.interaction,
         created.getActiveElement(),
         modalSelector,
         modalSemanticsGuard?.modal ?? null,
-        modalSemanticsGuard?.isOwnedAttributeCurrent('aria-modal') ?? false,
+        retainCurrentModal,
       );
 
-      if (modalSemanticsGuard?.modal === modal && modalSemanticsGuard.popover === popover) {
+      if (modalSemanticsGuard?.modal === modal
+        && modalSemanticsGuard.popover === popover
+        && (presentation.step.interaction !== 'blocked'
+          || modal === null
+          || retainCurrentModal)) {
         return;
       }
 
@@ -652,12 +658,12 @@ export function resolveVisibleTutorialTarget(input: {
   const candidates = [...root.querySelectorAll<HTMLElement>(selector)];
 
   return candidates.find((element) => isVisibleTutorialTarget(element, view))
-    ?? candidates.find((element) => isRenderableTutorialTarget(element, view))
+    ?? candidates.find((element) => isEligibleTutorialTarget(element, view))
     ?? null;
 }
 
 export function isVisibleTutorialTarget(element: HTMLElement, view: Window = window): boolean {
-  if (!isRenderableTutorialTarget(element, view)) {
+  if (!isEligibleTutorialTarget(element, view)) {
     return false;
   }
 
@@ -814,7 +820,16 @@ function resolveUnderlyingTutorialModal(
     && view !== null
     && isEligibleUnderlyingTutorialModal(candidate, view)
   );
-  const renderableActiveModal = isRenderableModal(activeModal) ? activeModal : null;
+  const hostReactivatedCurrentModal = currentModal?.getAttribute('aria-modal')
+    ?.toLowerCase() === 'true';
+  const canSelectCurrentModal = interaction !== 'blocked'
+    || retainCurrentModal
+    || hostReactivatedCurrentModal;
+  const isSelectableModal = (candidate: HTMLElement | null): candidate is HTMLElement => (
+    isRenderableModal(candidate)
+    && (candidate !== currentModal || canSelectCurrentModal)
+  );
+  const renderableActiveModal = isSelectableModal(activeModal) ? activeModal : null;
   const renderableCurrentModal = isRenderableModal(currentModal) ? currentModal : null;
 
   if (interaction !== 'blocked') {
@@ -828,10 +843,58 @@ function resolveUnderlyingTutorialModal(
   }
 
   return renderableActiveModal
-    ?? (retainCurrentModal ? renderableCurrentModal : null)
-    ?? [...popover.ownerDocument.querySelectorAll<HTMLElement>(modalSelector)]
-      .find(isRenderableModal)
+    ?? (canSelectCurrentModal ? renderableCurrentModal : null)
+    ?? findComposedTutorialModalCandidates(popover.ownerDocument, modalSelector)
+      .find(isSelectableModal)
     ?? null;
+}
+
+function findComposedTutorialModalCandidates(
+  ownerDocument: Document,
+  selector: string,
+): HTMLElement[] {
+  const matches: HTMLElement[] = [];
+  const visited = new Set<Element>();
+  const visit = (element: Element): void => {
+    if (visited.has(element)) {
+      return;
+    }
+
+    visited.add(element);
+
+    if (element instanceof HTMLElement && element.matches(selector)) {
+      matches.push(element);
+    }
+
+    const shadowRoot = element.shadowRoot;
+
+    if (shadowRoot !== null) {
+      visitChildren(shadowRoot);
+      return;
+    }
+
+    if (element instanceof HTMLSlotElement) {
+      const assignedElements = element.assignedElements({ flatten: true });
+
+      if (assignedElements.length > 0) {
+        for (const assignedElement of assignedElements) {
+          visit(assignedElement);
+        }
+
+        return;
+      }
+    }
+
+    visitChildren(element);
+  };
+  const visitChildren = (parent: ParentNode): void => {
+    for (const child of parent.children) {
+      visit(child);
+    }
+  };
+
+  visitChildren(ownerDocument);
+  return matches;
 }
 
 function configureTutorialModalSemantics(
@@ -1098,10 +1161,15 @@ function isRenderableTutorialTarget(element: HTMLElement, view: Window): boolean
 }
 
 function isEligibleUnderlyingTutorialModal(element: HTMLElement, view: Window): boolean {
-  if (!isRenderableTutorialTarget(element, view)) {
-    return false;
-  }
+  return isEligibleTutorialTarget(element, view);
+}
 
+function isEligibleTutorialTarget(element: HTMLElement, view: Window): boolean {
+  return isRenderableTutorialTarget(element, view)
+    && isSemanticallyActiveTutorialElement(element);
+}
+
+function isSemanticallyActiveTutorialElement(element: HTMLElement): boolean {
   let current: HTMLElement | null = element;
 
   while (current !== null) {
