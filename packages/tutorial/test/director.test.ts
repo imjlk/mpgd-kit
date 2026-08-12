@@ -267,6 +267,10 @@ describe('tutorial director', () => {
         },
       },
     });
+    const observed: string[] = [];
+    director.subscribe((snapshot) => {
+      observed.push(`${snapshot.status}:${snapshot.currentStepId ?? 'none'}`);
+    });
 
     director.acknowledge('welcome');
     let flushed = false;
@@ -291,6 +295,45 @@ describe('tutorial director', () => {
     ]);
     expect(durable).toMatchObject({ completedStepIds: ['welcome'], status: 'skipped' });
     expect(flushedSaveCount).toBe(2);
+    expect(observed).toEqual(['active:welcome', 'skipped:none']);
+  });
+
+  it('does not duplicate a replay synchronously started by a custom save', async () => {
+    const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    let director: TutorialDirector<typeof tutorial>;
+    let replaying: Promise<void> | undefined;
+    let reentered = false;
+    director = createTutorialDirector({
+      autoStart: false,
+      definition: tutorial,
+      progressStore: {
+        available: true,
+        flush: async () => undefined,
+        getSnapshot: () => initial,
+        save: async () => {
+          if (!reentered) {
+            reentered = true;
+            const replay = director.replay({ fromStepId: 'move' });
+            void (replaying = replay);
+          }
+        },
+      },
+    });
+    const observed: string[] = [];
+    director.subscribe((snapshot) => {
+      observed.push(
+        `${snapshot.status}:${snapshot.currentStepId ?? 'none'}:${String(snapshot.replaying)}`,
+      );
+    });
+
+    director.acknowledge('welcome');
+    await replaying;
+    await director.flush();
+
+    expect(observed).toEqual([
+      'active:welcome:false',
+      'active:move:true',
+    ]);
   });
 
   it('preserves durable completion when a replay is skipped', async () => {
