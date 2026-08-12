@@ -1026,6 +1026,30 @@ describe('Driver tutorial presenter', () => {
     expect(choice.getAttribute('aria-haspopup')).toBe('dialog');
   });
 
+  it('removes the tutorial token from merged host aria-owns updates', async () => {
+    const modal = document.createElement('section');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('aria-owns', 'host-before');
+    modal.setAttribute('role', 'dialog');
+    setRect(modal, { height: 300, left: 20, top: 20, width: 300 });
+    const choice = document.createElement('button');
+    choice.dataset.mpgdTutorialTarget = 'choice';
+    setRect(choice, { height: 40, left: 40, top: 40, width: 100 });
+    modal.appendChild(choice);
+    document.body.appendChild(modal);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    presenter.present({ copy, step: tutorial.steps[1] });
+    await nextFrame();
+    modal.setAttribute('aria-owns', 'host-before driver-popover-content host-after');
+    presenter.destroy();
+
+    expect(modal.getAttribute('aria-owns')).toBe('host-before host-after');
+  });
+
   it('tracks exact-value host writes and removals on an underlying modal', async () => {
     const modal = document.createElement('section');
     modal.setAttribute('aria-modal', 'true');
@@ -1784,6 +1808,31 @@ describe('Driver tutorial presenter', () => {
     } finally {
       presenter.destroy();
       window.removeEventListener('error', recordWindowError);
+    }
+  });
+
+  it('rejects a custom target from another document', async () => {
+    const foreignDocument = document.implementation.createHTMLDocument('foreign');
+    const target = foreignDocument.createElement('button');
+    const onError = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      missingTarget: 'error',
+      onAcknowledge: vi.fn(),
+      onError,
+      onSkip: vi.fn(),
+      resolveTarget: () => target,
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[0] });
+      await nextFrame();
+
+      expect(onError).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({
+        message: 'Tutorial target must belong to the presenter document.',
+      }));
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+    } finally {
+      presenter.destroy();
     }
   });
 

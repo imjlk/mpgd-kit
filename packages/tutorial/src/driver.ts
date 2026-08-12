@@ -439,7 +439,13 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
     try {
       if (input.resolveTarget !== undefined) {
-        return input.resolveTarget(presentationTarget, root);
+        const target = input.resolveTarget(presentationTarget, root);
+
+        if (target !== null && target.ownerDocument !== ownerDocument) {
+          throw new Error('Tutorial target must belong to the presenter document.');
+        }
+
+        return target;
       }
 
       return resolveVisibleTutorialTarget({
@@ -2179,7 +2185,15 @@ function preserveTutorialModalSemantics(
 
       for (const [attribute, previousValue] of previous) {
         if (hostValues.has(attribute)) {
-          restoreAttribute(element, attribute, hostValues.get(attribute) ?? null);
+          const hostValue = hostValues.get(attribute) ?? null;
+          const restoredHostValue = attribute === 'aria-owns'
+            ? removeTutorialOwnedAriaTokens(
+                hostValue,
+                ownedAttributes.get(attribute) ?? '',
+                previousValue,
+              )
+            : hostValue;
+          restoreAttribute(element, attribute, restoredHostValue);
           continue;
         }
 
@@ -2192,6 +2206,25 @@ function preserveTutorialModalSemantics(
       }
     },
   };
+}
+
+function removeTutorialOwnedAriaTokens(
+  hostValue: string | null,
+  ownedValue: string,
+  previousValue: string | null,
+): string | null {
+  if (hostValue === null) {
+    return null;
+  }
+
+  const previousTokens = new Set((previousValue ?? '').split(/\s+/u).filter(Boolean));
+  const tutorialTokens = new Set(
+    ownedValue.split(/\s+/u).filter((token) => token !== '' && !previousTokens.has(token)),
+  );
+  const remaining = hostValue.split(/\s+/u).filter(
+    (token) => token !== '' && !tutorialTokens.has(token),
+  );
+  return remaining.length === 0 ? null : remaining.join(' ');
 }
 
 function isTutorialModalAttribute(
