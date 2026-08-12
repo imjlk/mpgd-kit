@@ -437,6 +437,62 @@ describe('tutorial director', () => {
     expect(director.getSnapshot().status).toBe('skipped');
   });
 
+  it('persists a committed skip when its subscriber destroys the director', async () => {
+    type Progress = TutorialProgressOf<typeof tutorial>;
+    const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    let durable: Progress = initial;
+    let releaseSave: (() => void) | undefined;
+    const saved: Progress[] = [];
+    let flushes = 0;
+    const director = createTutorialDirector({
+      autoStart: false,
+      definition: tutorial,
+      progressStore: {
+        available: true,
+        async flush() {
+          flushes += 1;
+        },
+        getSnapshot: () => durable,
+        save(progress) {
+          saved.push(progress);
+          return new Promise<void>((resolve) => {
+            releaseSave = () => {
+              durable = progress;
+              resolve();
+            };
+          });
+        },
+      },
+    });
+    director.subscribe((snapshot) => {
+      if (snapshot.status === 'skipped') {
+        director.destroy();
+      }
+    });
+
+    let skipSettled = false;
+    const skipping = director.skip().then(() => {
+      skipSettled = true;
+    });
+    let flushSettled = false;
+    const flushing = director.flush().then(() => {
+      flushSettled = true;
+    });
+
+    await Promise.resolve();
+    expect(saved.map((progress) => progress.status)).toEqual(['skipped']);
+    expect(skipSettled).toBe(false);
+    expect(flushSettled).toBe(false);
+
+    releaseSave?.();
+    await skipping;
+    await flushing;
+
+    expect(durable.status).toBe('skipped');
+    expect(director.getSnapshot().status).toBe('skipped');
+    expect(flushes).toBe(1);
+  });
+
   it('persists a skip and continues publication when a listener throws', async () => {
     const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
     const store = createMemoryTutorialProgressStore({ definition: tutorial, initial });

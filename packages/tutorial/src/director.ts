@@ -151,11 +151,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
     }
   }
 
-  function persist(next: TutorialProgressOf<TDefinition>): Promise<void> {
-    if (destroyed || replaying) {
-      return Promise.resolve();
-    }
-
+  function enqueuePersistence(next: TutorialProgressOf<TDefinition>): Promise<void> {
     const completion = new Promise<void>((resolve) => {
       persistenceQueue.push({ progress: next, resolve });
     });
@@ -169,6 +165,14 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
 
     pumpPersistence();
     return completion;
+  }
+
+  function persist(next: TutorialProgressOf<TDefinition>): Promise<void> {
+    if (destroyed || replaying) {
+      return Promise.resolve();
+    }
+
+    return enqueuePersistence(next);
   }
 
   async function flush(): Promise<void> {
@@ -411,6 +415,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
         status: 'skipped',
         updatedAt: timestamp,
       };
+      const skippedProgress = progress;
       replaying = false;
       durableBeforeReplay = null;
       replayRestorePending = false;
@@ -422,11 +427,11 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
         durableFallbackDuringPublish = undefined;
       }
 
-      if (destroyed || replaying) {
+      if (progress !== skippedProgress || replaying) {
         return;
       }
 
-      await persist(progress);
+      await enqueuePersistence(skippedProgress);
     },
     subscribe(listener) {
       if (destroyed) {
