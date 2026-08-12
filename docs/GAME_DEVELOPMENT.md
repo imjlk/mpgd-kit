@@ -361,7 +361,7 @@ Every generated game includes an agent-facing brief, manifest, and acceptance
 loop at these game-relative paths:
 
 - `agent/brief.md`
-- `agent/game.manifest.json`
+- `agent/game-manifest.json`
 - `agent/acceptance.md`
 - `.agents/skills/*`
 
