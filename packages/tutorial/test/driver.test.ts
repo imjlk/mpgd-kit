@@ -590,7 +590,6 @@ describe('Driver tutorial presenter', () => {
     await nextFrame();
     expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
 
-    presenter.present(null);
     presenter.present(presentation);
     await nextFrame();
     expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
