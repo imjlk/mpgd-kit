@@ -1,0 +1,80 @@
+@import 'driver.js/dist/driver.css';
+
+.mpgd-tutorial-popover.driver-popover {
+  --mpgd-tutorial-accent: #ff8768;
+  --mpgd-tutorial-focus: #76cbd1;
+  --mpgd-tutorial-foreground: #fff0dc;
+  --mpgd-tutorial-muted: #aebbc0;
+  --mpgd-tutorial-surface: rgb(29 35 39 / 98%);
+
+  box-sizing: border-box;
+  min-width: min(280px, calc(100vw - 28px));
+  max-width: min(360px, calc(100vw - 28px));
+  padding: 16px;
+  border: 1px solid rgb(239 226 205 / 22%);
+  border-top: 3px solid var(--mpgd-tutorial-accent);
+  border-radius: 12px;
+  background: var(--mpgd-tutorial-surface);
+  box-shadow: 0 24px 70px rgb(0 0 0 / 52%);
+  color: var(--mpgd-tutorial-foreground);
+  font-family: system-ui, sans-serif;
+}
+
+.mpgd-tutorial-popover .driver-popover-title {
+  padding-right: 96px;
+  color: var(--mpgd-tutorial-foreground);
+  font-size: 18px;
+  font-weight: 800;
+  line-height: 1.25;
+}
+
+.mpgd-tutorial-popover .driver-popover-description {
+  margin-top: 7px;
+  color: var(--mpgd-tutorial-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.mpgd-tutorial-popover .driver-popover-close-btn {
+  width: auto;
+  min-width: 36px;
+  height: 36px;
+  padding-inline: 8px;
+  color: var(--mpgd-tutorial-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.mpgd-tutorial-popover .driver-popover-footer-btn {
+  min-width: 86px;
+  min-height: 42px;
+  padding: 0 14px;
+  border: 1px solid var(--mpgd-tutorial-accent);
+  border-radius: 8px;
+  background: var(--mpgd-tutorial-accent);
+  color: #24110d;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.mpgd-tutorial-popover :is(button, [href]):focus-visible {
+  outline: 2px solid var(--mpgd-tutorial-focus);
+  outline-offset: 2px;
+}
+
+[data-mpgd-tutorial-active='true'] .driver-active-element {
+  outline: 2px solid color-mix(
+    in srgb,
+    var(--mpgd-tutorial-focus, #76cbd1) 52%,
+    transparent
+  );
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mpgd-tutorial-popover.driver-popover,
+  .driver-overlay {
+    animation: none;
+  }
+}
