@@ -208,23 +208,26 @@ describe('Driver tutorial presenter', () => {
       onSkip: vi.fn(),
     });
 
-    presenter.present({
-      acknowledgeOnTargetClick: true,
-      copy,
-      step: tutorial.steps[0],
-    });
-    await nextFrame();
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
 
-    expect(inertTarget.classList.contains('driver-active-element')).toBe(false);
-    expect(slottedTarget.assignedSlot).toBe(slot);
-    expect(slottedTarget.classList.contains('driver-active-element')).toBe(false);
-    expect(activeTarget.classList.contains('driver-active-element')).toBe(true);
-    inertTarget.click();
-    slottedTarget.click();
-    expect(onAcknowledge).not.toHaveBeenCalled();
-    activeTarget.click();
-    expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
-    presenter.destroy();
+      expect(inertTarget.classList.contains('driver-active-element')).toBe(false);
+      expect(slottedTarget.assignedSlot).toBe(slot);
+      expect(slottedTarget.classList.contains('driver-active-element')).toBe(false);
+      expect(activeTarget.classList.contains('driver-active-element')).toBe(true);
+      inertTarget.click();
+      slottedTarget.click();
+      expect(onAcknowledge).not.toHaveBeenCalled();
+      activeTarget.click();
+      expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    } finally {
+      presenter.destroy();
+    }
   });
 
   it('keeps interactive modal semantics and restores blocked modal semantics', async () => {
@@ -303,14 +306,17 @@ describe('Driver tutorial presenter', () => {
       onSkip: vi.fn(),
     });
 
-    presenter.present({ copy, step: tutorial.steps[2] });
-    await nextFrame();
+    try {
+      presenter.present({ copy, step: tutorial.steps[2] });
+      await nextFrame();
 
-    expect(hiddenModal.getAttribute('aria-modal')).toBe('true');
-    expect(ariaHiddenModal.getAttribute('aria-modal')).toBe('true');
-    expect(inertModal.getAttribute('aria-modal')).toBe('true');
-    expect(visibleModal.getAttribute('aria-modal')).toBe('false');
-    presenter.destroy();
+      expect(hiddenModal.getAttribute('aria-modal')).toBe('true');
+      expect(ariaHiddenModal.getAttribute('aria-modal')).toBe('true');
+      expect(inertModal.getAttribute('aria-modal')).toBe('true');
+      expect(visibleModal.getAttribute('aria-modal')).toBe('false');
+    } finally {
+      presenter.destroy();
+    }
     expect(visibleModal.getAttribute('aria-modal')).toBe('true');
   });
 
@@ -328,13 +334,16 @@ describe('Driver tutorial presenter', () => {
       onSkip: vi.fn(),
     });
 
-    presenter.present({ copy, step: tutorial.steps[2] });
-    await nextFrame();
+    try {
+      presenter.present({ copy, step: tutorial.steps[2] });
+      await nextFrame();
 
-    expect(shadowModal.getAttribute('aria-modal')).toBe('false');
-    expect(document.querySelector('[data-mpgd-tutorial-popover]')?.getAttribute('aria-modal'))
-      .toBe('true');
-    presenter.destroy();
+      expect(shadowModal.getAttribute('aria-modal')).toBe('false');
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')?.getAttribute('aria-modal'))
+        .toBe('true');
+    } finally {
+      presenter.destroy();
+    }
     expect(shadowModal.getAttribute('aria-modal')).toBe('true');
   });
 
@@ -388,26 +397,29 @@ describe('Driver tutorial presenter', () => {
       onAcknowledge: vi.fn(),
       onSkip: vi.fn(),
     });
-    presenter.present({ copy, step: tutorial.steps[2] });
-    await nextFrame();
-    expect(currentModal.getAttribute('aria-modal')).toBe('false');
-
-    currentModal.setAttribute('aria-modal', 'true');
-    await nextFrame();
-    expect(currentModal.getAttribute('aria-modal')).toBe('false');
-
-    currentModal.setAttribute('aria-modal', 'false');
     const replacementModal = document.createElement('section');
     replacementModal.className = 'game-modal';
     replacementModal.setAttribute('aria-modal', 'true');
     replacementModal.setAttribute('role', 'dialog');
     setRect(replacementModal, { height: 300, left: 340, top: 20, width: 300 });
-    document.body.appendChild(replacementModal);
-    await nextFrame();
+    try {
+      presenter.present({ copy, step: tutorial.steps[2] });
+      await nextFrame();
+      expect(currentModal.getAttribute('aria-modal')).toBe('false');
 
-    expect(currentModal.getAttribute('aria-modal')).toBe('false');
-    expect(replacementModal.getAttribute('aria-modal')).toBe('false');
-    presenter.destroy();
+      currentModal.setAttribute('aria-modal', 'true');
+      await nextFrame();
+      expect(currentModal.getAttribute('aria-modal')).toBe('false');
+
+      currentModal.setAttribute('aria-modal', 'false');
+      document.body.appendChild(replacementModal);
+      await nextFrame();
+
+      expect(currentModal.getAttribute('aria-modal')).toBe('false');
+      expect(replacementModal.getAttribute('aria-modal')).toBe('false');
+    } finally {
+      presenter.destroy();
+    }
     expect(currentModal.getAttribute('aria-modal')).toBe('false');
     expect(replacementModal.getAttribute('aria-modal')).toBe('true');
   });
@@ -1163,15 +1175,17 @@ describe('Driver tutorial presenter', () => {
       onSkip: vi.fn(),
     });
 
-    presenter.present({ copy, step: tutorial.steps[0] });
-    await nextFrame();
-    expect(target.classList.contains('driver-active-element')).toBe(true);
-    expect(onError).toHaveBeenCalledWith(activeError);
+    try {
+      presenter.present({ copy, step: tutorial.steps[0] });
+      await nextFrame();
+      expect(target.classList.contains('driver-active-element')).toBe(true);
+      expect(onError).toHaveBeenCalledWith(activeError);
 
-    document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]')?.click();
-    expect(onError).toHaveBeenCalledWith(acknowledgeError);
-
-    presenter.destroy();
+      document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]')?.click();
+      expect(onError).toHaveBeenCalledWith(acknowledgeError);
+    } finally {
+      presenter.destroy();
+    }
     expect(onError).toHaveBeenCalledTimes(3);
   });
 
@@ -1184,24 +1198,33 @@ describe('Driver tutorial presenter', () => {
       onAcknowledge: vi.fn(),
       onSkip: vi.fn(),
     });
-    oldPresenter.present({ copy, step: tutorial.steps[0] });
-    await nextFrame();
-    oldPresenter.destroy();
-    const replacement = createDriverTutorialPresenter({
-      onAcknowledge: vi.fn(),
-      onSkip: vi.fn(),
-    });
-    replacement.present({ copy, step: tutorial.steps[0] });
-    await nextFrame();
+    let oldPresenterDestroyed = false;
+    let replacement: ReturnType<typeof createDriverTutorialPresenter> | undefined;
+    try {
+      oldPresenter.present({ copy, step: tutorial.steps[0] });
+      await nextFrame();
+      oldPresenter.destroy();
+      oldPresenterDestroyed = true;
+      replacement = createDriverTutorialPresenter({
+        onAcknowledge: vi.fn(),
+        onSkip: vi.fn(),
+      });
+      replacement.present({ copy, step: tutorial.steps[0] });
+      await nextFrame();
 
-    oldPresenter.destroy();
-    oldPresenter.present({ copy, step: tutorial.steps[0] });
+      oldPresenter.destroy();
+      oldPresenter.present({ copy, step: tutorial.steps[0] });
 
-    expect(document.body.dataset.mpgdTutorialActive).toBe('true');
-    expect(document.body.dataset.mpgdTutorialStep).toBe('blocked');
-    expect(target.classList.contains('driver-active-element')).toBe(true);
-    expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
-    replacement.destroy();
+      expect(document.body.dataset.mpgdTutorialActive).toBe('true');
+      expect(document.body.dataset.mpgdTutorialStep).toBe('blocked');
+      expect(target.classList.contains('driver-active-element')).toBe(true);
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
+    } finally {
+      replacement?.destroy();
+      if (!oldPresenterDestroyed) {
+        oldPresenter.destroy();
+      }
+    }
   });
 
   it('keeps a skipped presentation dismissed when skipping fails', async () => {
