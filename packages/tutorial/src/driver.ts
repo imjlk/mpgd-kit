@@ -63,6 +63,13 @@ interface TutorialModalAttributeGuard {
   restore(): void;
 }
 
+interface TutorialTargetAcknowledgeBinding {
+  readonly driver: Driver;
+  readonly listener: () => void;
+  readonly stepId: string;
+  readonly target: HTMLElement;
+}
+
 export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   input: DriverTutorialPresenterInput<TStep>,
 ): DriverTutorialPresenter<TStep> {
@@ -102,6 +109,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let retryableDismissedKey: string | null = null;
   let missingTargetErrorKey: string | null = null;
   let syncModalSemantics: (() => void) | undefined;
+  let targetAcknowledgeBinding: TutorialTargetAcknowledgeBinding | undefined;
   const pendingSkipOperations = new Set<Promise<void>>();
 
   const reportError = (error: unknown): void => {
@@ -228,6 +236,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
           .catch(() => undefined);
       },
       onDestroyed: () => {
+        clearTargetAcknowledgeBinding(created);
+
         if (!targetRestorePending) {
           targetSemanticsGuard?.restore(true);
         }
@@ -263,8 +273,11 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         syncCreatedModalSemantics();
         if (presentation.step.advance.kind === 'acknowledge'
           || presentation.step.interaction === 'blocked') {
+          const activeTarget = created.getActiveElement();
+          const acknowledgeFromTarget = activeTarget instanceof HTMLElement
+            && shouldAcknowledgeOnTargetClick(presentation, activeTarget);
           const initialFocus = presentation.step.advance.kind !== 'acknowledge'
-            || created.getActiveStep()?.advanceOnClick === true
+            || acknowledgeFromTarget
             ? closeButton
             : nextButton;
           browserWindow.queueMicrotask(() => initialFocus.focus());
@@ -319,6 +332,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         createDriveStep(input, presentation, target ?? undefined, ownerDocument, reportError),
       ]);
       applyDriverTargetMutation(() => nextInstance.drive());
+      syncTargetAcknowledgeBinding(nextInstance, presentation, target ?? undefined);
       syncModalSemantics?.();
       reportActive(true);
     } catch (error) {
@@ -352,6 +366,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       }
 
       return resolveVisibleTutorialTarget({
+        preferActivatable: presentation.acknowledgeOnTargetClick === true
+          && presentation.step.advance.kind === 'acknowledge',
         root,
         target: presentation.step.target,
         targetAttribute,
@@ -372,7 +388,17 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   const resizeObservationRoot = root.nodeType === 9
     ? ownerDocument.documentElement
     : root as HTMLElement;
-  const processMutationRecords = (records: readonly MutationRecord[]): void => {
+  const mutationOptions: MutationObserverInit = {
+    attributes: true,
+    childList: true,
+    subtree: true,
+  };
+  const mutationObserver = new browserWindow.MutationObserver(processMutationRecords);
+  let observedShadowRoots = new Set<ShadowRoot>();
+
+  function processMutationRecords(records: readonly MutationRecord[]): void {
+    reconcileMutationRoots();
+
     if (activePresentation === null && instance === null) {
       return;
     }
@@ -380,17 +406,32 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     if (records.some((record) => !isDriverOwnedMutation(record))) {
       scheduleRefresh();
     }
-  };
-  const mutationObserver = new browserWindow.MutationObserver(processMutationRecords);
-  const observeDocumentMutations = (): void => mutationObserver.observe(
-    ownerDocument.documentElement,
-    {
-      attributes: true,
-      childList: true,
-      subtree: true,
-    },
-  );
-  observeDocumentMutations();
+  }
+
+  function reconcileMutationRoots(force = false): void {
+    if (destroyed) {
+      return;
+    }
+
+    const nextShadowRoots = new Set(findOpenTutorialShadowRoots(ownerDocument));
+    const rootsChanged = nextShadowRoots.size !== observedShadowRoots.size
+      || [...nextShadowRoots].some((shadowRoot) => !observedShadowRoots.has(shadowRoot));
+
+    if (!force && !rootsChanged) {
+      return;
+    }
+
+    mutationObserver.disconnect();
+    mutationObserver.observe(ownerDocument.documentElement, mutationOptions);
+
+    for (const shadowRoot of nextShadowRoots) {
+      mutationObserver.observe(shadowRoot, mutationOptions);
+    }
+
+    observedShadowRoots = nextShadowRoots;
+  }
+
+  reconcileMutationRoots(true);
   const resizeObserver = typeof browserWindow.ResizeObserver === 'function'
     ? new browserWindow.ResizeObserver(scheduleRefresh)
     : null;
@@ -414,6 +455,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       retryableDismissedKey = null;
       missingTargetErrorKey = null;
       mutationObserver.disconnect();
+      observedShadowRoots.clear();
       resizeObserver?.disconnect();
       ownerDocument.removeEventListener('scroll', scheduleRefresh, true);
       browserWindow.removeEventListener('resize', scheduleRefresh);
@@ -431,6 +473,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
       instance = null;
       targetSemanticsGuard = undefined;
+      clearTargetAcknowledgeBinding();
       clearTutorialState(stateHost);
       reportActive(false);
     },
@@ -483,7 +526,11 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       reportActive(false);
       scheduleRefresh();
     },
-    refresh: scheduleRefresh,
+    refresh() {
+      // attachShadow() itself emits no mutation, so explicit refresh also discovers new roots.
+      reconcileMutationRoots();
+      scheduleRefresh();
+    },
     resetForReplay() {
       dismissedPresentationKey = null;
       retryableDismissedKey = null;
@@ -554,6 +601,16 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     missingTargetErrorKey = null;
 
     if (currentInstance.getActiveElement() === target) {
+      const desiredAdvanceOnClick = shouldAcknowledgeOnTargetClick(presentation, target);
+      const hasTargetAcknowledgeBinding = targetAcknowledgeBinding?.driver === currentInstance
+        && targetAcknowledgeBinding.target === target
+        && targetAcknowledgeBinding.stepId === presentation.step.id;
+
+      if (hasTargetAcknowledgeBinding !== desiredAdvanceOnClick) {
+        rebindTarget(currentInstance, presentation, target);
+        return;
+      }
+
       applyDriverTargetMutation(() => currentInstance.refresh());
       syncModalSemantics?.();
       return;
@@ -577,7 +634,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   ): void {
     const previousTarget = currentInstance.getActiveElement();
     targetSemanticsGuard?.restore();
-    const restorePreviousTarget = !(previousTarget instanceof HTMLElement)
+    const restorePreviousTarget = previousTarget === target
+      || !(previousTarget instanceof HTMLElement)
       || previousTarget.id === 'driver-dummy-element'
       ? undefined
       : captureTutorialTargetSemantics(previousTarget, target?.parentElement ?? null);
@@ -585,7 +643,9 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       ? undefined
       : preserveTutorialTargetSemantics(target, browserWindow);
     const nextStep = createDriveStep(input, presentation, target, ownerDocument, reportError);
+    clearTargetAcknowledgeBinding(currentInstance);
     applyDriverTargetMutation(() => currentInstance.highlight(nextStep));
+    syncTargetAcknowledgeBinding(currentInstance, presentation, target);
     restorePreviousTarget?.();
     syncModalSemantics?.();
   }
@@ -603,6 +663,53 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     missingTargetErrorKey = presentationKey;
     const target = String(presentation.step.target);
     reportError(new Error(`Tutorial target was not found: ${target}`));
+  }
+
+  function syncTargetAcknowledgeBinding(
+    currentInstance: Driver,
+    presentation: DriverTutorialPresentation<TStep>,
+    target: HTMLElement | undefined,
+  ): void {
+    clearTargetAcknowledgeBinding(currentInstance);
+
+    if (target === undefined || !shouldAcknowledgeOnTargetClick(presentation, target)) {
+      return;
+    }
+
+    const presentationKey = activePresentationKey;
+    const listener = (): void => {
+      if (destroyed
+        || instance !== currentInstance
+        || activePresentationKey !== presentationKey
+        || !shouldAcknowledgeOnTargetClick(presentation, target)) {
+        return;
+      }
+
+      try {
+        input.onAcknowledge(presentation.step.id);
+      } catch (error) {
+        reportError(error);
+      }
+    };
+    target.addEventListener('click', listener);
+    targetAcknowledgeBinding = {
+      driver: currentInstance,
+      listener,
+      stepId: presentation.step.id,
+      target,
+    };
+  }
+
+  function clearTargetAcknowledgeBinding(currentInstance?: Driver): void {
+    const binding = targetAcknowledgeBinding;
+
+    if (binding === undefined
+      || (currentInstance !== undefined && binding.driver !== currentInstance)) {
+      return;
+    }
+
+    binding.target.removeEventListener('click', binding.listener);
+    targetAcknowledgeBinding = undefined;
   }
 
   function destroyInstancePreservingTarget(currentInstance: Driver): void {
@@ -628,13 +735,14 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         : targetSemanticsGuard.applyDriverMutation(mutation);
     } finally {
       if (!destroyed) {
-        observeDocumentMutations();
+        reconcileMutationRoots(true);
       }
     }
   }
 }
 
 export function resolveVisibleTutorialTarget(input: {
+  readonly preferActivatable?: boolean;
   readonly root?: Document | HTMLElement;
   readonly target: string;
   readonly targetAttribute?: string;
@@ -656,6 +764,19 @@ export function resolveVisibleTutorialTarget(input: {
   const attribute = input.targetAttribute ?? tutorialDomAttributes.target;
   const selector = `[${attribute}="${escapeAttributeValue(input.target)}"]`;
   const candidates = [...root.querySelectorAll<HTMLElement>(selector)];
+
+  if (input.preferActivatable === true) {
+    return candidates.find(
+      (element) => isActivatableTutorialTarget(element)
+        && isVisibleTutorialTarget(element, view),
+    )
+      ?? candidates.find((element) => (
+        isActivatableTutorialTarget(element) && isEligibleTutorialTarget(element, view)
+      ))
+      ?? candidates.find((element) => isVisibleTutorialTarget(element, view))
+      ?? candidates.find((element) => isEligibleTutorialTarget(element, view))
+      ?? null;
+  }
 
   return candidates.find((element) => isVisibleTutorialTarget(element, view))
     ?? candidates.find((element) => isEligibleTutorialTarget(element, view))
@@ -765,10 +886,8 @@ function createDriveStep<TStep extends TutorialStep>(
 ): DriveStep {
   const { step } = presentation;
   const actionGated = step.advance.kind === 'action' || step.advance.kind === 'signal';
-  const acknowledgeOnTargetClick = presentation.acknowledgeOnTargetClick === true
-    && step.advance.kind === 'acknowledge'
-    && step.target !== null
-    && target !== undefined;
+  const acknowledgeOnTargetClick = target instanceof HTMLElement
+    && shouldAcknowledgeOnTargetClick(presentation, target);
   const targetInteraction = presentation.allowTargetInteraction === true
     || acknowledgeOnTargetClick
     || step.interaction === 'target'
@@ -776,7 +895,8 @@ function createDriveStep<TStep extends TutorialStep>(
 
   return {
     ...(target === undefined ? {} : { element: target }),
-    advanceOnClick: acknowledgeOnTargetClick,
+    // The presenter owns target clicks so Shadow DOM retargeting cannot hide them from Driver.
+    advanceOnClick: false,
     disableActiveInteraction: !targetInteraction,
     popover: {
       ...(step.side === undefined ? {} : { side: step.side }),
@@ -803,6 +923,17 @@ function createDriveStep<TStep extends TutorialStep>(
   };
 }
 
+function shouldAcknowledgeOnTargetClick<TStep extends TutorialStep>(
+  presentation: DriverTutorialPresentation<TStep>,
+  target: HTMLElement,
+): boolean {
+  return presentation.acknowledgeOnTargetClick === true
+    && presentation.step.advance.kind === 'acknowledge'
+    && presentation.step.target !== null
+    && target.id !== 'driver-dummy-element'
+    && isActivatableTutorialTarget(target);
+}
+
 function resolveUnderlyingTutorialModal(
   popover: HTMLElement,
   interaction: TutorialStep['interaction'],
@@ -811,7 +942,7 @@ function resolveUnderlyingTutorialModal(
   currentModal: HTMLElement | null,
   retainCurrentModal: boolean,
 ): HTMLElement | null {
-  const activeModal = activeElement?.closest<HTMLElement>(modalSelector) ?? null;
+  const activeModal = findClosestComposedTutorialModal(activeElement, modalSelector);
   const view = popover.ownerDocument.defaultView;
   const isRenderableModal = (candidate: HTMLElement | null): candidate is HTMLElement => (
     candidate !== null
@@ -849,11 +980,50 @@ function resolveUnderlyingTutorialModal(
     ?? null;
 }
 
+function findClosestComposedTutorialModal(
+  activeElement: Element | undefined,
+  selector: string,
+): HTMLElement | null {
+  let current: Element | null = activeElement ?? null;
+
+  while (current !== null) {
+    if (current instanceof HTMLElement && current.matches(selector)) {
+      return current;
+    }
+
+    current = getComposedParentElement(current);
+  }
+
+  return null;
+}
+
 function findComposedTutorialModalCandidates(
   ownerDocument: Document,
   selector: string,
 ): HTMLElement[] {
   const matches: HTMLElement[] = [];
+  visitComposedTutorialElements(ownerDocument, (element) => {
+    if (element instanceof HTMLElement && element.matches(selector)) {
+      matches.push(element);
+    }
+  });
+  return matches;
+}
+
+function findOpenTutorialShadowRoots(ownerDocument: Document): ShadowRoot[] {
+  const shadowRoots: ShadowRoot[] = [];
+  visitComposedTutorialElements(ownerDocument, (element) => {
+    if (element.shadowRoot !== null) {
+      shadowRoots.push(element.shadowRoot);
+    }
+  });
+  return shadowRoots;
+}
+
+function visitComposedTutorialElements(
+  ownerDocument: Document,
+  visitor: (element: Element) => void,
+): void {
   const visited = new Set<Element>();
   const visit = (element: Element): void => {
     if (visited.has(element)) {
@@ -861,10 +1031,7 @@ function findComposedTutorialModalCandidates(
     }
 
     visited.add(element);
-
-    if (element instanceof HTMLElement && element.matches(selector)) {
-      matches.push(element);
-    }
+    visitor(element);
 
     const shadowRoot = element.shadowRoot;
 
@@ -894,7 +1061,6 @@ function findComposedTutorialModalCandidates(
   };
 
   visitChildren(ownerDocument);
-  return matches;
 }
 
 function configureTutorialModalSemantics(
@@ -1169,6 +1335,24 @@ function isEligibleTutorialTarget(element: HTMLElement, view: Window): boolean {
     && isSemanticallyActiveTutorialElement(element);
 }
 
+function isActivatableTutorialTarget(element: HTMLElement): boolean {
+  if (element.matches(':disabled')) {
+    return false;
+  }
+
+  let current: HTMLElement | null = element;
+
+  while (current !== null) {
+    if (current.getAttribute('aria-disabled')?.toLowerCase() === 'true') {
+      return false;
+    }
+
+    current = getComposedParentElement(current);
+  }
+
+  return true;
+}
+
 function isSemanticallyActiveTutorialElement(element: HTMLElement): boolean {
   let current: HTMLElement | null = element;
 
@@ -1185,7 +1369,7 @@ function isSemanticallyActiveTutorialElement(element: HTMLElement): boolean {
   return true;
 }
 
-function getComposedParentElement(element: HTMLElement): HTMLElement | null {
+function getComposedParentElement(element: Element): HTMLElement | null {
   if (element.assignedSlot !== null) {
     return element.assignedSlot;
   }
