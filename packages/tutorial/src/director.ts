@@ -60,6 +60,10 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
   const { definition, progressStore } = input;
   type Listener = (snapshot: TutorialDirectorSnapshot<TDefinition>) => void;
   interface Subscription { readonly listener: Listener }
+  interface PendingPersistence {
+    readonly progress: TutorialProgressOf<TDefinition>;
+    readonly resolve: () => void;
+  }
   const listeners = new Set<Subscription>();
   const clock = input.clock ?? (() => new Date());
   const stored = progressStore.getSnapshot();
@@ -75,9 +79,13 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
   let currentScene: string = input.initialScene ?? definition.initialScene;
   let publishing = false;
   const pendingSnapshots: TutorialDirectorSnapshot<TDefinition>[] = [];
+  const persistenceQueue: PendingPersistence[] = [];
+  let persistenceBusy = false;
+  let persistenceIdle: Promise<void> | null = null;
+  let resolvePersistenceIdle: (() => void) | null = null;
 
   if (stored === null && progress !== null) {
-    persist(progress);
+    void persist(progress);
   }
 
   let snapshot = createSnapshot(definition, progress, replaying, suspended, currentScene);
@@ -94,18 +102,83 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
     }
   }
 
-  function persist(next: TutorialProgressOf<TDefinition>): void {
-    if (destroyed || replaying) {
-      return;
-    }
-
+  function invokeProgressSave(next: TutorialProgressOf<TDefinition>): Promise<void> | null {
     try {
-      void progressStore.save(next).catch((error: unknown) => {
+      return progressStore.save(next).catch((error: unknown) => {
         reportError(error);
       });
     } catch (error) {
       reportError(error);
+      return null;
     }
+  }
+
+  function finishPersistenceCycle(): void {
+    const resolveIdle = resolvePersistenceIdle;
+    resolvePersistenceIdle = null;
+    persistenceIdle = null;
+    resolveIdle?.();
+  }
+
+  function pumpPersistence(): void {
+    if (persistenceBusy) {
+      return;
+    }
+
+    while (true) {
+      const pending = persistenceQueue.shift();
+
+      if (pending === undefined) {
+        finishPersistenceCycle();
+        return;
+      }
+
+      persistenceBusy = true;
+      const operation = invokeProgressSave(pending.progress);
+
+      if (operation === null) {
+        persistenceBusy = false;
+        pending.resolve();
+        continue;
+      }
+
+      void operation.then(() => {
+        persistenceBusy = false;
+        pending.resolve();
+        pumpPersistence();
+      });
+      return;
+    }
+  }
+
+  function persist(next: TutorialProgressOf<TDefinition>): Promise<void> {
+    if (destroyed || replaying) {
+      return Promise.resolve();
+    }
+
+    const completion = new Promise<void>((resolve) => {
+      persistenceQueue.push({ progress: next, resolve });
+    });
+
+    if (persistenceIdle === null) {
+      const idle = new Promise<void>((resolve) => {
+        resolvePersistenceIdle = resolve;
+      });
+      void (persistenceIdle = idle);
+    }
+
+    pumpPersistence();
+    return completion;
+  }
+
+  async function flush(): Promise<void> {
+    const pendingPersistence = persistenceIdle;
+
+    if (pendingPersistence !== null) {
+      await pendingPersistence;
+    }
+
+    await progressStore.flush();
   }
 
   function notifyListener(listener: Listener, nextSnapshot: TutorialDirectorSnapshot<TDefinition>): void {
@@ -208,7 +281,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       durableBeforeReplay = null;
     }
 
-    persist(progress);
+    void persist(progress);
     publish();
   }
 
@@ -233,7 +306,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       listeners.clear();
       pendingSnapshots.length = 0;
     },
-    flush: () => progressStore.flush(),
+    flush,
     getSnapshot: () => snapshot,
     observeAction(action) {
       if (destroyed) {
@@ -256,7 +329,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
 
       if (progress?.status === 'active' && step?.scene === scene && progress.checkpoint !== scene) {
         progress = { ...progress, checkpoint: scene, updatedAt: now() };
-        persist(progress);
+        void persist(progress);
       }
 
       publish();
@@ -343,11 +416,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
         return;
       }
 
-      try {
-        await progressStore.save(progress);
-      } catch (error) {
-        reportError(error);
-      }
+      await persist(progress);
     },
     subscribe(listener) {
       if (destroyed) {

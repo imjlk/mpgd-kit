@@ -165,6 +165,134 @@ describe('tutorial director', () => {
     expect(flushed).toBe(true);
   });
 
+  it('serializes custom-store saves through advancement and an explicit skip', async () => {
+    type Progress = TutorialProgressOf<typeof tutorial>;
+    let releaseInitialSave: (() => void) | undefined;
+    const initialSavePending = new Promise<void>((resolve) => {
+      releaseInitialSave = resolve;
+    });
+    const pendingSaves = new Set<Promise<void>>();
+    const started: Progress[] = [];
+    let durable: Progress | null = null;
+    const director = createTutorialDirector({
+      autoStart: true,
+      definition: tutorial,
+      progressStore: {
+        available: true,
+        async flush() {
+          await Promise.all([...pendingSaves]);
+        },
+        getSnapshot: () => durable,
+        save(progress) {
+          started.push(progress);
+          const operation = (async () => {
+            if (progress.completedStepIds.length === 0) {
+              await initialSavePending;
+            }
+
+            durable = progress;
+          })();
+          pendingSaves.add(operation);
+          void operation.finally(() => pendingSaves.delete(operation));
+          return operation;
+        },
+      },
+    });
+
+    director.acknowledge('welcome');
+    const skipping = director.skip();
+    let flushed = false;
+    const flushing = director.flush().then(() => {
+      flushed = true;
+    });
+
+    await Promise.resolve();
+    expect(started.map((progress) => progress.completedStepIds)).toEqual([[]]);
+    expect(flushed).toBe(false);
+
+    releaseInitialSave?.();
+    await skipping;
+    await flushing;
+
+    expect(started.map((progress) => ({
+      completedStepIds: progress.completedStepIds,
+      status: progress.status,
+    }))).toEqual([
+      { completedStepIds: [], status: 'active' },
+      { completedStepIds: ['welcome'], status: 'active' },
+      { completedStepIds: ['welcome'], status: 'skipped' },
+    ]);
+    expect(durable).toMatchObject({
+      completedStepIds: ['welcome'],
+      status: 'skipped',
+    });
+  });
+
+  it('queues a save that synchronously reenters the director', async () => {
+    type Progress = TutorialProgressOf<typeof tutorial>;
+    const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    let releaseFirstSave: (() => void) | undefined;
+    const firstSavePending = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    const started: Progress[] = [];
+    let durable: Progress = initial;
+    let firstSave = true;
+    let reentrantSkip: Promise<void> | undefined;
+    let flushedSaveCount = 0;
+    let director: TutorialDirector<typeof tutorial>;
+    director = createTutorialDirector({
+      autoStart: false,
+      definition: tutorial,
+      progressStore: {
+        available: true,
+        async flush() {
+          flushedSaveCount = started.length;
+        },
+        getSnapshot: () => durable,
+        save(progress) {
+          started.push(progress);
+
+          if (firstSave) {
+            firstSave = false;
+            const skipping = director.skip();
+            void (reentrantSkip = skipping);
+            return firstSavePending.then(() => {
+              durable = progress;
+            });
+          }
+
+          durable = progress;
+          return Promise.resolve();
+        },
+      },
+    });
+
+    director.acknowledge('welcome');
+    let flushed = false;
+    const flushing = director.flush().then(() => {
+      flushed = true;
+    });
+
+    await Promise.resolve();
+    expect(started.map((progress) => progress.status)).toEqual(['active']);
+    expect(flushed).toBe(false);
+
+    releaseFirstSave?.();
+    await reentrantSkip;
+    await flushing;
+
+    expect(started.map((progress) => ({
+      completedStepIds: progress.completedStepIds,
+      status: progress.status,
+    }))).toEqual([
+      { completedStepIds: ['welcome'], status: 'active' },
+      { completedStepIds: ['welcome'], status: 'skipped' },
+    ]);
+    expect(durable).toMatchObject({ completedStepIds: ['welcome'], status: 'skipped' });
+    expect(flushedSaveCount).toBe(2);
+  });
+
   it('preserves durable completion when a replay is skipped', async () => {
     const completed = {
       ...createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z'),
