@@ -2,8 +2,8 @@
 
 `@mpgd/tutorial` separates game-owned onboarding content from reusable tutorial
 progression and presentation. Version `0.1.0` is registered publicly on npm.
-Future package releases use Sampo changesets after npm Trusted Publishing is
-configured for `.github/workflows/release.yml`.
+Future package releases use Sampo changesets through the OIDC-enabled
+`.github/workflows/release.yml` workflow and its configured npm Trusted Publisher.
 
 The package does not decide what a game teaches, how a Phaser simulation is
 paused, or whether a help button exists. A game owns those policies.
