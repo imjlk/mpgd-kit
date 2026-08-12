@@ -96,13 +96,26 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let syncModalSemantics: (() => void) | undefined;
   const pendingSkipOperations = new Set<Promise<void>>();
 
+  const reportError = (error: unknown): void => {
+    try {
+      input.onError?.(error);
+    } catch {
+      // Error reporting must not interrupt presenter lifecycle handling.
+    }
+  };
+
   const reportActive = (active: boolean): void => {
     if (reportedActive === active) {
       return;
     }
 
     reportedActive = active;
-    input.onActiveChange?.(active);
+
+    try {
+      input.onActiveChange?.(active);
+    } catch (error) {
+      reportError(error);
+    }
   };
 
   const scheduleRefresh = (): void => {
@@ -192,7 +205,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
               retryableDismissedKey = dismissedKey;
             }
 
-            input.onError?.(error);
+            reportError(error);
           });
         pendingSkipOperations.add(skipOperation);
         void skipOperation
@@ -288,7 +301,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       stateHost.setAttribute(tutorialDomAttributes.active, 'true');
       stateHost.setAttribute(tutorialDomAttributes.step, presentation.step.id);
       nextInstance.setSteps([
-        createDriveStep(input, presentation, target ?? undefined, ownerDocument),
+        createDriveStep(input, presentation, target ?? undefined, ownerDocument, reportError),
       ]);
       applyDriverTargetMutation(() => nextInstance.drive());
       syncModalSemantics?.();
@@ -306,7 +319,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         reportActive(false);
       }
 
-      input.onError?.(error);
+      reportError(error);
     }
   };
 
@@ -334,7 +347,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         && presentationKey === activePresentationKey
         && missingTargetErrorKey !== presentationKey) {
         missingTargetErrorKey = presentationKey;
-        input.onError?.(error);
+        reportError(error);
       }
 
       return null;
@@ -344,7 +357,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   const resizeObservationRoot = root.nodeType === 9
     ? ownerDocument.documentElement
     : root as HTMLElement;
-  const mutationObserver = new browserWindow.MutationObserver((records) => {
+  const processMutationRecords = (records: readonly MutationRecord[]): void => {
     if (activePresentation === null && instance === null) {
       return;
     }
@@ -352,17 +365,23 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     if (records.some((record) => !isDriverOwnedMutation(record))) {
       scheduleRefresh();
     }
-  });
-  mutationObserver.observe(ownerDocument.documentElement, {
-    attributes: true,
-    childList: true,
-    subtree: true,
-  });
+  };
+  const mutationObserver = new browserWindow.MutationObserver(processMutationRecords);
+  const observeDocumentMutations = (): void => mutationObserver.observe(
+    ownerDocument.documentElement,
+    {
+      attributes: true,
+      childList: true,
+      subtree: true,
+    },
+  );
+  observeDocumentMutations();
   const resizeObserver = typeof browserWindow.ResizeObserver === 'function'
     ? new browserWindow.ResizeObserver(scheduleRefresh)
     : null;
   resizeObserver?.observe(resizeObservationRoot);
   ownerDocument.addEventListener('scroll', scheduleRefresh, true);
+  browserWindow.addEventListener('resize', scheduleRefresh);
   browserWindow.visualViewport?.addEventListener('resize', scheduleRefresh);
   browserWindow.visualViewport?.addEventListener('scroll', scheduleRefresh);
   browserWindow.addEventListener('orientationchange', scheduleRefresh);
@@ -378,6 +397,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       mutationObserver.disconnect();
       resizeObserver?.disconnect();
       ownerDocument.removeEventListener('scroll', scheduleRefresh, true);
+      browserWindow.removeEventListener('resize', scheduleRefresh);
       browserWindow.visualViewport?.removeEventListener('resize', scheduleRefresh);
       browserWindow.visualViewport?.removeEventListener('scroll', scheduleRefresh);
       browserWindow.removeEventListener('orientationchange', scheduleRefresh);
@@ -541,7 +561,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     targetSemanticsGuard = target === undefined
       ? undefined
       : preserveTutorialTargetSemantics(target, browserWindow);
-    const nextStep = createDriveStep(input, presentation, target, ownerDocument);
+    const nextStep = createDriveStep(input, presentation, target, ownerDocument, reportError);
     applyDriverTargetMutation(() => currentInstance.highlight(nextStep));
     restorePreviousTarget?.();
     syncModalSemantics?.();
@@ -558,9 +578,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     }
 
     missingTargetErrorKey = presentationKey;
-    input.onError?.(
-      new Error(`Tutorial target was not found: ${String(presentation.step.target)}`),
-    );
+    const target = String(presentation.step.target);
+    reportError(new Error(`Tutorial target was not found: ${target}`));
   }
 
   function destroyInstancePreservingTarget(currentInstance: Driver): void {
@@ -577,9 +596,18 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   }
 
   function applyDriverTargetMutation<T>(mutation: () => T): T {
-    return targetSemanticsGuard === undefined
-      ? mutation()
-      : targetSemanticsGuard.applyDriverMutation(mutation);
+    processMutationRecords(mutationObserver.takeRecords());
+    mutationObserver.disconnect();
+
+    try {
+      return targetSemanticsGuard === undefined
+        ? mutation()
+        : targetSemanticsGuard.applyDriverMutation(mutation);
+    } finally {
+      if (!destroyed) {
+        observeDocumentMutations();
+      }
+    }
   }
 }
 
@@ -710,6 +738,7 @@ function createDriveStep<TStep extends TutorialStep>(
   presentation: DriverTutorialPresentation<TStep>,
   target: DriveStep['element'],
   ownerDocument: Document,
+  reportError: (error: unknown) => void,
 ): DriveStep {
   const { step } = presentation;
   const actionGated = step.advance.kind === 'action' || step.advance.kind === 'signal';
@@ -740,7 +769,13 @@ function createDriveStep<TStep extends TutorialStep>(
         ? ['close']
         : ['next', 'close'],
       title: escapeTutorialText(ownerDocument, presentation.copy.title),
-      onNextClick: () => input.onAcknowledge(step.id),
+      onNextClick: () => {
+        try {
+          input.onAcknowledge(step.id);
+        } catch (error) {
+          reportError(error);
+        }
+      },
     },
   };
 }

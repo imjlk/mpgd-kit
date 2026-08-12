@@ -584,9 +584,89 @@ describe('Driver tutorial presenter', () => {
     presenter.destroy();
   });
 
+  it('rebinds scoped targets on a layout viewport resize without visualViewport', async () => {
+    vi.stubGlobal('innerWidth', 640);
+    vi.stubGlobal('visualViewport', undefined);
+    const addEventListener = vi.spyOn(window, 'addEventListener');
+    const removeEventListener = vi.spyOn(window, 'removeEventListener');
+    const root = document.createElement('div');
+    const first = document.createElement('button');
+    const second = document.createElement('button');
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    second.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(first, { height: 40, left: 420, top: 20, width: 100 });
+    setRect(second, { height: 40, left: 20, top: 80, width: 100 });
+    root.append(first, second);
+    document.body.appendChild(root);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+      root,
+    });
+    const resizeListener = addEventListener.mock.calls.find(([type]) => type === 'resize')?.[1];
+
+    try {
+      expect(resizeListener).toEqual(expect.any(Function));
+      presenter.present({ copy, step: tutorial.steps[0] });
+      await nextFrame();
+      expect(first.classList.contains('driver-active-element')).toBe(true);
+
+      vi.stubGlobal('innerWidth', 320);
+      window.dispatchEvent(new Event('resize'));
+      await nextFrame();
+
+      expect(first.classList.contains('driver-active-element')).toBe(false);
+      expect(second.classList.contains('driver-active-element')).toBe(true);
+      presenter.destroy();
+      expect(removeEventListener).toHaveBeenCalledWith('resize', resizeListener);
+    } finally {
+      presenter.destroy();
+      addEventListener.mockRestore();
+      removeEventListener.mockRestore();
+    }
+  });
+
+  it('settles Driver-owned target ARIA writes without a refresh loop', async () => {
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    target.setAttribute('aria-controls', 'original-panel');
+    target.setAttribute('aria-expanded', 'false');
+    target.setAttribute('aria-haspopup', 'menu');
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(target);
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame');
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[0] });
+      await nextFrame();
+      await nextFrame();
+      const settledFrameCount = requestFrame.mock.calls.length;
+
+      await nextFrame();
+
+      expect(requestFrame.mock.calls).toHaveLength(settledFrameCount + 2);
+    } finally {
+      presenter.destroy();
+      requestFrame.mockRestore();
+    }
+  });
+
   it('reports a custom target resolver failure without escaping the frame', async () => {
     const error = new Error('resolver failed');
-    const onError = vi.fn();
+    const reporterError = new Error('reporter failed');
+    const onError = vi.fn(() => {
+      throw reporterError;
+    });
+    const windowErrors: unknown[] = [];
+    const recordWindowError = (event: ErrorEvent): void => {
+      windowErrors.push(event.error);
+      event.preventDefault();
+    };
+    window.addEventListener('error', recordWindowError);
     const presenter = createDriverTutorialPresenter({
       onAcknowledge: vi.fn(),
       onError,
@@ -596,12 +676,17 @@ describe('Driver tutorial presenter', () => {
       },
     });
 
-    presenter.present({ copy, step: tutorial.steps[0] });
-    await nextFrame();
+    try {
+      presenter.present({ copy, step: tutorial.steps[0] });
+      await nextFrame();
 
-    expect(onError).toHaveBeenCalledExactlyOnceWith(error);
-    expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
-    presenter.destroy();
+      expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+      expect(windowErrors).toEqual([]);
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+    } finally {
+      presenter.destroy();
+      window.removeEventListener('error', recordWindowError);
+    }
   });
 
   it('honors a custom resolver null result with the unanchored policy', async () => {
@@ -780,6 +865,40 @@ describe('Driver tutorial presenter', () => {
 
     expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
     presenter.destroy();
+  });
+
+  it('contains throwing active-state and acknowledge callbacks', async () => {
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(target);
+    const activeError = new Error('active callback failed');
+    const acknowledgeError = new Error('acknowledge callback failed');
+    const reporterError = new Error('reporting failed');
+    const onError = vi.fn(() => {
+      throw reporterError;
+    });
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: () => {
+        throw acknowledgeError;
+      },
+      onActiveChange: () => {
+        throw activeError;
+      },
+      onError,
+      onSkip: vi.fn(),
+    });
+
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+    expect(target.classList.contains('driver-active-element')).toBe(true);
+    expect(onError).toHaveBeenCalledWith(activeError);
+
+    document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]')?.click();
+    expect(onError).toHaveBeenCalledWith(acknowledgeError);
+
+    presenter.destroy();
+    expect(onError).toHaveBeenCalledTimes(3);
   });
 
   it('keeps a skipped presentation dismissed when skipping fails', async () => {
