@@ -52,6 +52,14 @@ interface TutorialTargetSemanticsGuard {
 interface TutorialModalSemanticsGuard {
   readonly modal: HTMLElement | null;
   readonly popover: HTMLElement;
+  isOwnedAttributeCurrent(attribute: TutorialModalAttribute): boolean;
+  restore(): void;
+}
+
+type TutorialModalAttribute = 'aria-modal' | 'aria-owns';
+
+interface TutorialModalAttributeGuard {
+  isOwned(attribute: TutorialModalAttribute): boolean;
   restore(): void;
 }
 
@@ -157,6 +165,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         created.getActiveElement(),
         modalSelector,
         modalSemanticsGuard?.modal ?? null,
+        modalSemanticsGuard?.isOwnedAttributeCurrent('aria-modal') ?? false,
       );
 
       if (modalSemanticsGuard?.modal === modal && modalSemanticsGuard.popover === popover) {
@@ -653,7 +662,7 @@ export function isVisibleTutorialTarget(element: HTMLElement, view: Window = win
   }
 
   let visible = intersectRect(element.getBoundingClientRect(), resolveViewportRect(view));
-  let ancestor = element.parentElement;
+  let ancestor = getComposedParentElement(element);
 
   while (visible !== null && ancestor !== null) {
     const style = view.getComputedStyle(ancestor);
@@ -670,7 +679,7 @@ export function isVisibleTutorialTarget(element: HTMLElement, view: Window = win
       visible = intersectRect(visible, ancestor.getBoundingClientRect());
     }
 
-    ancestor = ancestor.parentElement;
+    ancestor = getComposedParentElement(ancestor);
   }
 
   return visible !== null && visible.right > visible.left && visible.bottom > visible.top;
@@ -794,6 +803,7 @@ function resolveUnderlyingTutorialModal(
   activeElement: Element | undefined,
   modalSelector: string,
   currentModal: HTMLElement | null,
+  retainCurrentModal: boolean,
 ): HTMLElement | null {
   const activeModal = activeElement?.closest<HTMLElement>(modalSelector) ?? null;
   const view = popover.ownerDocument.defaultView;
@@ -802,7 +812,7 @@ function resolveUnderlyingTutorialModal(
     && candidate !== popover
     && !popover.contains(candidate)
     && view !== null
-    && isRenderableTutorialTarget(candidate, view)
+    && isEligibleUnderlyingTutorialModal(candidate, view)
   );
   const renderableActiveModal = isRenderableModal(activeModal) ? activeModal : null;
   const renderableCurrentModal = isRenderableModal(currentModal) ? currentModal : null;
@@ -811,13 +821,14 @@ function resolveUnderlyingTutorialModal(
     return renderableActiveModal;
   }
 
-  if (activeElement !== undefined
+  if (retainCurrentModal
+    && activeElement !== undefined
     && renderableCurrentModal?.contains(activeElement) === true) {
     return renderableCurrentModal;
   }
 
   return renderableActiveModal
-    ?? renderableCurrentModal
+    ?? (retainCurrentModal ? renderableCurrentModal : null)
     ?? [...popover.ownerDocument.querySelectorAll<HTMLElement>(modalSelector)]
       .find(isRenderableModal)
     ?? null;
@@ -828,7 +839,7 @@ function configureTutorialModalSemantics(
   interaction: TutorialStep['interaction'],
   underlyingModal: HTMLElement | null,
 ): TutorialModalSemanticsGuard {
-  const ownedAttributes = new Map<'aria-modal' | 'aria-owns', string>();
+  const ownedAttributes = new Map<TutorialModalAttribute, string>();
 
   if (interaction === 'blocked') {
     popover.setAttribute('role', 'dialog');
@@ -850,27 +861,34 @@ function configureTutorialModalSemantics(
     }
   }
 
-  const restore = underlyingModal === null
-    ? () => undefined
+  const attributeGuard = underlyingModal === null
+    ? null
     : preserveTutorialModalSemantics(underlyingModal, ownedAttributes, popover.ownerDocument);
 
-  return { modal: underlyingModal, popover, restore };
+  return {
+    isOwnedAttributeCurrent: (attribute) => attributeGuard?.isOwned(attribute) ?? false,
+    modal: underlyingModal,
+    popover,
+    restore: () => attributeGuard?.restore(),
+  };
 }
 
 function preserveTutorialModalSemantics(
   element: HTMLElement,
-  ownedAttributes: ReadonlyMap<'aria-modal' | 'aria-owns', string>,
+  ownedAttributes: ReadonlyMap<TutorialModalAttribute, string>,
   ownerDocument: Document,
-): () => void {
+): TutorialModalAttributeGuard {
   const view = ownerDocument.defaultView;
 
   if (view === null || ownedAttributes.size === 0) {
-    return () => undefined;
+    return {
+      isOwned: () => false,
+      restore: () => undefined,
+    };
   }
 
-  type Attribute = 'aria-modal' | 'aria-owns';
-  const previous = new Map<Attribute, string | null>();
-  const hostValues = new Map<Attribute, string | null>();
+  const previous = new Map<TutorialModalAttribute, string | null>();
+  const hostValues = new Map<TutorialModalAttribute, string | null>();
   const captureHostMutations = (records: readonly MutationRecord[]): void => {
     for (const record of records) {
       const attribute = record.attributeName;
@@ -893,7 +911,10 @@ function preserveTutorialModalSemantics(
   }
 
   if (previous.size === 0) {
-    return () => undefined;
+    return {
+      isOwned: () => false,
+      restore: () => undefined,
+    };
   }
 
   const observer = new view.MutationObserver(captureHostMutations);
@@ -902,29 +923,37 @@ function preserveTutorialModalSemantics(
     attributes: true,
   });
 
-  return () => {
-    captureHostMutations(observer.takeRecords());
-    observer.disconnect();
+  return {
+    isOwned(attribute) {
+      captureHostMutations(observer.takeRecords());
+      return previous.has(attribute)
+        && !hostValues.has(attribute)
+        && element.getAttribute(attribute) === ownedAttributes.get(attribute);
+    },
+    restore() {
+      captureHostMutations(observer.takeRecords());
+      observer.disconnect();
 
-    for (const [attribute, previousValue] of previous) {
-      if (hostValues.has(attribute)) {
-        restoreAttribute(element, attribute, hostValues.get(attribute) ?? null);
-        continue;
+      for (const [attribute, previousValue] of previous) {
+        if (hostValues.has(attribute)) {
+          restoreAttribute(element, attribute, hostValues.get(attribute) ?? null);
+          continue;
+        }
+
+        restoreOwnedAttribute(
+          element,
+          attribute,
+          ownedAttributes.get(attribute) ?? null,
+          previousValue,
+        );
       }
-
-      restoreOwnedAttribute(
-        element,
-        attribute,
-        ownedAttributes.get(attribute) ?? null,
-        previousValue,
-      );
-    }
+    },
   };
 }
 
 function isTutorialModalAttribute(
   attribute: string | null,
-): attribute is 'aria-modal' | 'aria-owns' {
+): attribute is TutorialModalAttribute {
   return attribute === 'aria-modal' || attribute === 'aria-owns';
 }
 
@@ -1062,10 +1091,43 @@ function isRenderableTutorialTarget(element: HTMLElement, view: Window): boolean
       return false;
     }
 
-    current = current.parentElement;
+    current = getComposedParentElement(current);
   }
 
   return true;
+}
+
+function isEligibleUnderlyingTutorialModal(element: HTMLElement, view: Window): boolean {
+  if (!isRenderableTutorialTarget(element, view)) {
+    return false;
+  }
+
+  let current: HTMLElement | null = element;
+
+  while (current !== null) {
+    if (current.getAttribute('aria-hidden')?.toLowerCase() === 'true'
+      || current.inert
+      || current.hasAttribute('inert')) {
+      return false;
+    }
+
+    current = getComposedParentElement(current);
+  }
+
+  return true;
+}
+
+function getComposedParentElement(element: HTMLElement): HTMLElement | null {
+  if (element.assignedSlot !== null) {
+    return element.assignedSlot;
+  }
+
+  if (element.parentElement !== null) {
+    return element.parentElement;
+  }
+
+  const root = element.getRootNode();
+  return root instanceof ShadowRoot && root.host instanceof HTMLElement ? root.host : null;
 }
 
 function intersectRect(
