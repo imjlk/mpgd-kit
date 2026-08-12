@@ -15,6 +15,8 @@ distribution target gets the right adapter and validation path.
 - Single-source PNG/SVG app icon generation with versioned profiles and release evidence for every target.
 - `PlatformGateway` contracts for identity, storage, IAP, ads, leaderboard, and lifecycle.
 - Target-specific feature availability through `@mpgd/target-config`.
+- Private `@mpgd/tutorial` incubator for headless onboarding progression,
+  optional Driver.js presentation, and opt-in local reproduction tools.
 - Effective target config bundles for products, ad placements, storage, release profile, and localization.
 - Stateful cross-platform identity, launch, share, and notification contracts; see [Shared Platform Game Flow](docs/PLATFORM_GAME_FLOW.md).
 - Paraglide-backed `@mpgd/i18n` translation-key/message catalog.
@@ -143,6 +145,17 @@ pnpm test
 Kit contributors should follow [Contributing](CONTRIBUTING.md) for the in-repo
 reference fixture and repository validation loop.
 
+For the optional tutorial presenter harness:
+
+```sh
+pnpm dev:tutorial
+pnpm build:tutorial
+pnpm smoke:tutorial:dist
+```
+
+The kit does not add a production help button. Games can bind their own `?` or
+Settings action, or expose no replay action. See [Tutorial Engine](docs/TUTORIAL_ENGINE.md).
+
 ## Starter And Target Configs
 
 - `packages/cli/templates/phaser-game` is the source template used by
@@ -169,6 +182,8 @@ starter manifests, and Apps in Toss MCP guidance.
 - `@mpgd/catalog`: product catalog and ad placement config schemas plus sample JSON.
 - `@mpgd/i18n`: Paraglide-backed localized messages.
 - `@mpgd/analytics`: typed analytics events and sink helpers for platform integrations.
+- `@mpgd/tutorial`: private incubator for a headless tutorial director,
+  platform-backed progress, optional Driver.js presentation, and debug helpers.
 - `@mpgd/game-services`: client orchestration, oRPC v2 beta contract, HTTP/oRPC handlers,
   memory/D1 store integration points, authenticated cursor-paginated verified
   leaderboard reads, and backend service assembly.
