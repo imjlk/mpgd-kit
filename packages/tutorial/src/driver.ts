@@ -42,6 +42,11 @@ export interface DriverTutorialPresenter<TStep extends TutorialStep = TutorialSt
   refresh(): void;
 }
 
+interface TutorialTargetSemanticsGuard {
+  applyDriverMutation<T>(mutation: () => T): T;
+  restore(driverAlreadyDestroyed?: boolean): void;
+}
+
 export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   input: DriverTutorialPresenterInput<TStep>,
 ): DriverTutorialPresenter<TStep> {
@@ -58,11 +63,13 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     throw new Error('Driver tutorial presenter supports only the current browser document.');
   }
 
-  const browserWindow = ownerDocument.defaultView;
+  const browserWindowCandidate = ownerDocument.defaultView;
 
-  if (browserWindow === null) {
+  if (browserWindowCandidate === null) {
     throw new Error('Driver tutorial presenter requires a browser document.');
   }
+
+  const browserWindow = browserWindowCandidate;
 
   const stateHost = input.stateHost ?? ownerDocument.body;
   const targetAttribute = input.targetAttribute ?? tutorialDomAttributes.target;
@@ -73,7 +80,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let frame: number | undefined;
   let destroyed = false;
   let reportedActive = false;
-  let restoreTargetSemantics: (() => void) | undefined;
+  let targetSemanticsGuard: TutorialTargetSemanticsGuard | undefined;
   let targetRestorePending = false;
 
   const reportActive = (active: boolean): void => {
@@ -137,10 +144,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       },
       onDestroyed: () => {
         if (!targetRestorePending) {
-          restoreTargetSemantics?.();
+          targetSemanticsGuard?.restore(true);
         }
 
-        restoreTargetSemantics = undefined;
+        targetSemanticsGuard = undefined;
         targetRestorePending = false;
         restoreModalSemantics?.();
         restoreModalSemantics = undefined;
@@ -203,15 +210,17 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
     const nextInstance = createInstance(presentation);
     instance = nextInstance;
-    restoreTargetSemantics?.();
-    restoreTargetSemantics = target === null ? undefined : preserveTutorialTargetSemantics(target);
+    targetSemanticsGuard?.restore();
+    targetSemanticsGuard = target === null
+      ? undefined
+      : preserveTutorialTargetSemantics(target, browserWindow);
     stateHost.setAttribute(tutorialDomAttributes.active, 'true');
     stateHost.setAttribute(tutorialDomAttributes.step, presentation.step.id);
     reportActive(true);
     nextInstance.setSteps([
       createDriveStep(input, presentation, target ?? undefined, ownerDocument),
     ]);
-    nextInstance.drive();
+    applyDriverTargetMutation(() => nextInstance.drive());
   };
 
   const resolvePresentationTarget = (
@@ -269,7 +278,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       }
 
       instance = null;
-      restoreTargetSemantics = undefined;
+      targetSemanticsGuard = undefined;
       clearTutorialState(stateHost);
       reportActive(false);
     },
@@ -315,37 +324,37 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     presentation: DriverTutorialPresentation<TStep> | null,
   ): void {
     if (presentation === null || presentation.step.target === null || !currentInstance.isActive()) {
-      currentInstance.refresh();
+      applyDriverTargetMutation(() => currentInstance.refresh());
       return;
     }
 
     const target = resolvePresentationTarget(presentation);
 
     if (target === null || currentInstance.getActiveElement() === target) {
-      currentInstance.refresh();
+      applyDriverTargetMutation(() => currentInstance.refresh());
       return;
     }
 
     const current = currentInstance.getActiveStep();
 
     if (current === undefined) {
-      currentInstance.refresh();
+      applyDriverTargetMutation(() => currentInstance.refresh());
       return;
     }
 
     const previousTarget = currentInstance.getActiveElement();
-    restoreTargetSemantics?.();
+    targetSemanticsGuard?.restore();
     const restorePreviousTarget = !(previousTarget instanceof HTMLElement)
       ? undefined
       : captureTutorialTargetSemantics(previousTarget);
-    restoreTargetSemantics = preserveTutorialTargetSemantics(target);
-    currentInstance.highlight({ ...current, element: target });
+    targetSemanticsGuard = preserveTutorialTargetSemantics(target, browserWindow);
+    applyDriverTargetMutation(() => currentInstance.highlight({ ...current, element: target }));
     restorePreviousTarget?.();
   }
 
   function destroyInstancePreservingTarget(currentInstance: Driver): void {
     const target = currentInstance.getActiveElement();
-    restoreTargetSemantics?.();
+    targetSemanticsGuard?.restore();
     const restoreAfterDestroy = !(target instanceof HTMLElement)
       ? undefined
       : captureTutorialTargetSemantics(target);
@@ -353,7 +362,13 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     currentInstance.destroy();
     targetRestorePending = false;
     restoreAfterDestroy?.();
-    restoreTargetSemantics = undefined;
+    targetSemanticsGuard = undefined;
+  }
+
+  function applyDriverTargetMutation<T>(mutation: () => T): T {
+    return targetSemanticsGuard === undefined
+      ? mutation()
+      : targetSemanticsGuard.applyDriverMutation(mutation);
   }
 }
 
@@ -513,7 +528,7 @@ function configureTutorialModalSemantics(
   }
 
   return () => {
-    if (underlyingModal?.isConnected !== true) {
+    if (underlyingModal === null) {
       return;
     }
 
@@ -522,47 +537,113 @@ function configureTutorialModalSemantics(
   };
 }
 
-function preserveTutorialTargetSemantics(element: HTMLElement): () => void {
+function preserveTutorialTargetSemantics(
+  element: HTMLElement,
+  view: Window & typeof globalThis,
+): TutorialTargetSemanticsGuard {
   const attributes = ['aria-controls', 'aria-expanded', 'aria-haspopup'] as const;
+  type Attribute = (typeof attributes)[number];
   const previous = Object.fromEntries(
     attributes.map((attribute) => [attribute, element.getAttribute(attribute)]),
-  ) as Record<(typeof attributes)[number], string | null>;
+  ) as Record<Attribute, string | null>;
   const driverOwned = {
     'aria-controls': 'driver-popover-content',
     'aria-expanded': 'true',
     'aria-haspopup': 'dialog',
   } as const;
+  const hostValues = new Map<Attribute, string | null>();
+  const decoratedParent = element.parentElement;
+  let active = true;
+  const captureHostMutations = (records: readonly MutationRecord[]): void => {
+    for (const record of records) {
+      const attribute = record.attributeName;
 
-  return () => {
-    if (!element.isConnected) {
-      return;
-    }
-
-    for (const attribute of attributes) {
-      const current = element.getAttribute(attribute);
-
-      if (current === null || current === driverOwned[attribute]) {
-        restoreAttribute(element, attribute, previous[attribute]);
+      if (record.target === element && isTutorialTargetAttribute(attribute)) {
+        hostValues.set(attribute, element.getAttribute(attribute));
       }
     }
   };
+  const observer = new view.MutationObserver(captureHostMutations);
+  observer.observe(element, {
+    attributeFilter: [...attributes],
+    attributes: true,
+  });
+
+  return {
+    applyDriverMutation<T>(mutation: () => T): T {
+      captureHostMutations(observer.takeRecords());
+
+      try {
+        return mutation();
+      } finally {
+        observer.takeRecords();
+      }
+    },
+    restore(driverAlreadyDestroyed = false) {
+      if (!active) {
+        return;
+      }
+
+      if (driverAlreadyDestroyed) {
+        observer.takeRecords();
+      } else {
+        captureHostMutations(observer.takeRecords());
+      }
+
+      observer.disconnect();
+      active = false;
+
+      for (const attribute of attributes) {
+        if (hostValues.has(attribute)) {
+          restoreAttribute(element, attribute, hostValues.get(attribute) ?? null);
+          continue;
+        }
+
+        const current = element.getAttribute(attribute);
+
+        if (current === driverOwned[attribute] || (driverAlreadyDestroyed && current === null)) {
+          restoreAttribute(element, attribute, previous[attribute]);
+        }
+      }
+
+      clearDetachedDriverTargetClasses(element, decoratedParent);
+    },
+  };
+}
+
+function isTutorialTargetAttribute(
+  attribute: string | null,
+): attribute is 'aria-controls' | 'aria-expanded' | 'aria-haspopup' {
+  return attribute === 'aria-controls'
+    || attribute === 'aria-expanded'
+    || attribute === 'aria-haspopup';
 }
 
 function captureTutorialTargetSemantics(element: HTMLElement): () => void {
   const attributes = ['aria-controls', 'aria-expanded', 'aria-haspopup'] as const;
+  const decoratedParent = element.parentElement;
   const captured = Object.fromEntries(
     attributes.map((attribute) => [attribute, element.getAttribute(attribute)]),
   ) as Record<(typeof attributes)[number], string | null>;
 
   return () => {
-    if (!element.isConnected) {
-      return;
-    }
-
     for (const attribute of attributes) {
       restoreAttribute(element, attribute, captured[attribute]);
     }
+
+    clearDetachedDriverTargetClasses(element, decoratedParent);
   };
+}
+
+function clearDetachedDriverTargetClasses(
+  element: HTMLElement,
+  decoratedParent: HTMLElement | null,
+): void {
+  element.classList.remove('driver-active-element', 'driver-no-interaction');
+  decoratedParent?.classList.remove(
+    'driver-active-element-parent',
+    'driver-active-element-parent-no-scroll',
+  );
 }
 
 function isRenderableTutorialTarget(element: HTMLElement, view: Window): boolean {

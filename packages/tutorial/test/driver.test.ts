@@ -133,7 +133,9 @@ describe('Driver tutorial presenter', () => {
     setRect(modal, { height: 300, left: 20, top: 20, width: 300 });
     const choice = document.createElement('button');
     choice.dataset.mpgdTutorialTarget = 'choice';
+    choice.setAttribute('aria-controls', 'original-panel');
     choice.setAttribute('aria-expanded', 'false');
+    choice.setAttribute('aria-haspopup', 'menu');
     setRect(choice, { height: 40, left: 40, top: 40, width: 100 });
     modal.appendChild(choice);
     document.body.appendChild(modal);
@@ -146,14 +148,74 @@ describe('Driver tutorial presenter', () => {
 
     modal.setAttribute('aria-modal', 'host-closed');
     modal.setAttribute('aria-owns', 'host-owned');
-    choice.setAttribute('aria-expanded', 'host-updated');
-    choice.setAttribute('aria-controls', 'host-panel');
+    choice.setAttribute('aria-expanded', 'true');
+    choice.removeAttribute('aria-controls');
+    choice.setAttribute('aria-haspopup', 'dialog');
     presenter.destroy();
 
     expect(modal.getAttribute('aria-modal')).toBe('host-closed');
     expect(modal.getAttribute('aria-owns')).toBe('host-owned');
-    expect(choice.getAttribute('aria-expanded')).toBe('host-updated');
-    expect(choice.getAttribute('aria-controls')).toBe('host-panel');
+    expect(choice.getAttribute('aria-expanded')).toBe('true');
+    expect(choice.getAttribute('aria-controls')).toBeNull();
+    expect(choice.getAttribute('aria-haspopup')).toBe('dialog');
+  });
+
+  it('cleans a detached guided target and its still-connected parent before reuse', async () => {
+    const host = document.createElement('div');
+    const modal = document.createElement('section');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('role', 'dialog');
+    setRect(modal, { height: 300, left: 20, top: 20, width: 300 });
+    const choice = document.createElement('button');
+    choice.dataset.mpgdTutorialTarget = 'choice';
+    choice.setAttribute('aria-controls', 'original-panel');
+    choice.setAttribute('aria-expanded', 'false');
+    choice.setAttribute('aria-haspopup', 'menu');
+    setRect(choice, { height: 40, left: 40, top: 40, width: 100 });
+    modal.appendChild(choice);
+    host.appendChild(modal);
+    document.body.appendChild(host);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+    presenter.present({ copy, step: tutorial.steps[1] });
+    await nextFrame();
+
+    choice.remove();
+    presenter.destroy();
+
+    expect(choice.getAttribute('aria-controls')).toBe('original-panel');
+    expect(choice.getAttribute('aria-expanded')).toBe('false');
+    expect(choice.getAttribute('aria-haspopup')).toBe('menu');
+    expect(choice.classList.contains('driver-active-element')).toBe(false);
+    expect(modal.classList.contains('driver-active-element-parent')).toBe(false);
+    expect(modal.getAttribute('aria-modal')).toBe('true');
+    expect(modal.hasAttribute('aria-owns')).toBe(false);
+  });
+
+  it('restores tutorial-owned semantics on a detached game modal', async () => {
+    const modal = document.createElement('section');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('role', 'dialog');
+    setRect(modal, { height: 300, left: 20, top: 20, width: 300 });
+    const choice = document.createElement('button');
+    choice.dataset.mpgdTutorialTarget = 'choice';
+    setRect(choice, { height: 40, left: 40, top: 40, width: 100 });
+    modal.appendChild(choice);
+    document.body.appendChild(modal);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+    presenter.present({ copy, step: tutorial.steps[1] });
+    await nextFrame();
+
+    modal.remove();
+    presenter.destroy();
+
+    expect(modal.getAttribute('aria-modal')).toBe('true');
+    expect(modal.hasAttribute('aria-owns')).toBe(false);
   });
 
   it('binds replay only when a host provides a trigger', async () => {
