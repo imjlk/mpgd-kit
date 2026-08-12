@@ -485,6 +485,29 @@ describe('Driver tutorial presenter', () => {
     presenter.destroy();
   });
 
+  it('honors a custom resolver null result with the unanchored policy', async () => {
+    const defaultTarget = document.createElement('button');
+    defaultTarget.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(defaultTarget, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(defaultTarget);
+    const resolveTarget = vi.fn(() => null);
+    const presenter = createDriverTutorialPresenter({
+      missingTarget: 'unanchored',
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+      resolveTarget,
+    });
+
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+
+    expect(resolveTarget).toHaveBeenCalledWith('duplicate', document);
+    expect(defaultTarget.classList.contains('driver-active-element')).toBe(false);
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
+    expect(document.getElementById('driver-dummy-element')).not.toBeNull();
+    presenter.destroy();
+  });
+
   it('reapplies the missing-target error policy when replaying the same step', async () => {
     const replayButton = document.createElement('button');
     const onError = vi.fn();
