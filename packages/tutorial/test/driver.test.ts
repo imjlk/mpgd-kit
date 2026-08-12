@@ -61,6 +61,16 @@ afterEach(() => {
 });
 
 describe('Driver tutorial presenter', () => {
+  it('resolves raw target attribute values containing CSS control characters', () => {
+    const target = document.createElement('button');
+    const value = 'line\nreturn\rform\fnull\0end';
+    target.setAttribute('data-mpgd-tutorial-target', value);
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(target);
+
+    expect(resolveVisibleTutorialTarget({ target: value })).toBe(target);
+  });
+
   it('prefers the visible duplicate target and exposes stable gated controls', async () => {
     const hidden = document.createElement('button');
     hidden.dataset.mpgdTutorialTarget = 'duplicate';
@@ -92,6 +102,43 @@ describe('Driver tutorial presenter', () => {
     expect(visible.getAttribute('aria-controls')).toBe('original-panel');
     expect(visible.getAttribute('aria-expanded')).toBe('false');
     expect(visible.getAttribute('aria-haspopup')).toBe('menu');
+  });
+
+  it('recreates a same-id presentation when rendering fields change', async () => {
+    const first = document.createElement('button');
+    const second = document.createElement('button');
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    second.dataset.mpgdTutorialTarget = 'choice';
+    setRect(first, { height: 40, left: 20, top: 20, width: 100 });
+    setRect(second, { height: 40, left: 180, top: 20, width: 100 });
+    document.body.append(first, second);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[0] });
+      await nextFrame();
+      const firstPopover = document.querySelector('[data-mpgd-tutorial-popover]');
+      expect(first.classList.contains('driver-active-element')).toBe(true);
+
+      presenter.present({
+        copy,
+        step: {
+          ...tutorial.steps[1],
+          id: tutorial.steps[0].id,
+          side: 'left',
+        },
+      });
+      await nextFrame();
+
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBe(firstPopover);
+      expect(first.classList.contains('driver-active-element')).toBe(false);
+      expect(second.classList.contains('driver-active-element')).toBe(true);
+    } finally {
+      presenter.destroy();
+    }
   });
 
   it('resolves a standard tutorial target through an open shadow root', async () => {
@@ -1273,8 +1320,14 @@ describe('Driver tutorial presenter', () => {
     first.dataset.mpgdTutorialTarget = 'duplicate';
     second.dataset.mpgdTutorialTarget = 'duplicate';
     let moved = false;
+    let secondVisible = false;
     setDynamicRect(first, () => ({ height: 40, left: 20, top: moved ? -100 : 20, width: 100 }));
-    setDynamicRect(second, () => ({ height: 40, left: 20, top: moved ? 20 : 140, width: 100 }));
+    setDynamicRect(second, () => ({
+      height: 40,
+      left: 20,
+      top: moved ? 20 : secondVisible ? 50 : 140,
+      width: 100,
+    }));
     root.append(first, second);
     document.body.append(root, focusAnchor);
     const onActiveChange = vi.fn();
@@ -1306,6 +1359,20 @@ describe('Driver tutorial presenter', () => {
       expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBe(initialPopover);
       expect(document.activeElement).toBe(focusAnchor);
 
+      secondVisible = true;
+      intersectionCallback?.(
+        [second].map((target) => ({ target }) as unknown as IntersectionObserverEntry),
+        {} as IntersectionObserver,
+      );
+      await nextFrame();
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBe(initialPopover);
+      expect(document.activeElement).toBe(focusAnchor);
+
+      secondVisible = false;
+      intersectionCallback?.(
+        [second].map((target) => ({ target }) as unknown as IntersectionObserverEntry),
+        {} as IntersectionObserver,
+      );
       moved = true;
       intersectionCallback?.(
         [first, second].map((target) => ({ target }) as unknown as IntersectionObserverEntry),
@@ -1371,10 +1438,10 @@ describe('Driver tutorial presenter', () => {
       expect(setAttribute?.mock.calls.some(([attribute]) => attribute === 'd')).toBe(false);
 
       moved = true;
-      await nextFrame();
-      await nextFrame();
+      await vi.waitFor(() => {
+        expect(overlayPath?.getAttribute('d')).not.toBe(initialStage);
+      });
 
-      expect(overlayPath?.getAttribute('d')).not.toBe(initialStage);
       expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBe(initialPopover);
       expect(document.activeElement).toBe(focusAnchor);
       expect(onActiveChange).toHaveBeenCalledExactlyOnceWith(true);
@@ -1409,8 +1476,9 @@ describe('Driver tutorial presenter', () => {
       const initialPopover = document.querySelector('[data-mpgd-tutorial-popover]');
 
       moved = true;
-      await nextFrame();
-      await nextFrame();
+      await vi.waitFor(() => {
+        expect(second.classList.contains('driver-active-element')).toBe(true);
+      });
 
       expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBe(initialPopover);
       expect(first.classList.contains('driver-active-element')).toBe(false);
@@ -2023,6 +2091,55 @@ describe('Driver tutorial presenter', () => {
     } finally {
       presenter.destroy();
       driverPointerRules.remove();
+
+      if (elementFromPointDescriptor === undefined) {
+        Reflect.deleteProperty(document, 'elementFromPoint');
+      } else {
+        Object.defineProperty(document, 'elementFromPoint', elementFromPointDescriptor);
+      }
+    }
+  });
+
+  it('lets a shadow action target receive input when the overlay wins hit testing', async () => {
+    const host = document.createElement('div');
+    const shadowRoot = host.attachShadow({ mode: 'open' });
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'choice';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    shadowRoot.appendChild(target);
+    document.body.appendChild(host);
+    const elementFromPointDescriptor = Object.getOwnPropertyDescriptor(
+      document,
+      'elementFromPoint',
+    );
+    let hitTestCount = 0;
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: () => hitTestCount++ === 0
+        ? host
+        : document.querySelector('.driver-overlay'),
+    });
+    Object.defineProperty(shadowRoot, 'elementFromPoint', {
+      configurable: true,
+      value: () => target,
+    });
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[1] });
+      await nextFrame();
+      await nextFrame();
+
+      expect(hitTestCount).toBeGreaterThanOrEqual(2);
+      expect(document.querySelector<SVGElement>('.driver-overlay')?.style.pointerEvents)
+        .toBe('none');
+      expect(document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]')?.style.display)
+        .not.toBe('block');
+    } finally {
+      presenter.destroy();
 
       if (elementFromPointDescriptor === undefined) {
         Reflect.deleteProperty(document, 'elementFromPoint');

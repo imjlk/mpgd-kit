@@ -134,7 +134,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let targetAcknowledgeBinding: TutorialTargetAcknowledgeBinding | undefined;
   let targetClickState: TutorialTargetClickState | undefined;
   let targetHitTestFrame: number | undefined;
-  let targetGeometryFrame: number | undefined;
+  let targetGeometryTimer: number | undefined;
+  let targetOverlayPointerRestore: (() => void) | undefined;
   const pendingSkipOperations = new Set<Promise<void>>();
 
   const reportError = (error: unknown): void => {
@@ -552,7 +553,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     }
 
     return input.resolveTarget === undefined && changedNodes.some(
-      (node) => mutationNodeMayContainTarget(node, createTargetSelector(presentation)),
+      (node) => mutationNodeMayContainTarget(node, presentation.step.target ?? ''),
     );
   }
 
@@ -632,9 +633,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     }
 
     if (input.resolveTarget === undefined && presentation.step.target !== null) {
-      for (const candidate of findComposedTutorialCandidates(
+      for (const candidate of findComposedTutorialTargets(
         root,
-        createTargetSelector(presentation),
+        targetAttribute,
+        presentation.step.target,
       )) {
         targets.add(candidate);
       }
@@ -723,16 +725,13 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       && node.rel.toLowerCase().split(/\s+/u).includes('stylesheet');
   }
 
-  function createTargetSelector(presentation: DriverTutorialPresentation<TStep>): string {
-    return `[${targetAttribute}="${escapeAttributeValue(presentation.step.target ?? '')}"]`;
-  }
-
-  function mutationNodeMayContainTarget(node: Node, selector: string): boolean {
-    if (node instanceof HTMLElement && (node.matches(selector) || node.shadowRoot !== null)) {
+  function mutationNodeMayContainTarget(node: Node, target: string): boolean {
+    if (node instanceof HTMLElement
+      && (node.getAttribute(targetAttribute) === target || node.shadowRoot !== null)) {
       return true;
     }
 
-    return [...node.childNodes].some((child) => mutationNodeMayContainTarget(child, selector));
+    return [...node.childNodes].some((child) => mutationNodeMayContainTarget(child, target));
   }
 
   function reconcileMutationRoots(force = false): void {
@@ -843,7 +842,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     let previousRect = readTutorialTargetRect(target);
     let previousVisible = isVisibleTutorialTargetWithRect(target, browserWindow, previousRect);
     const monitor = (): void => {
-      targetGeometryFrame = undefined;
+      targetGeometryTimer = undefined;
       const currentPresentation = activePresentation;
 
       if (destroyed
@@ -861,7 +860,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       const selectionInvalid = !target.isConnected
         || !isNodeWithinLookupRoot(target)
         || (input.resolveTarget === undefined
-          && !target.matches(createTargetSelector(currentPresentation)));
+          && target.getAttribute(targetAttribute) !== currentPresentation.step.target);
 
       if (rectChanged || selectionInvalid) {
         const nextVisible = !selectionInvalid
@@ -877,18 +876,18 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         previousVisible = nextVisible;
       }
 
-      targetGeometryFrame = browserWindow.requestAnimationFrame(monitor);
+      targetGeometryTimer = browserWindow.setTimeout(monitor, 250);
     };
-    targetGeometryFrame = browserWindow.requestAnimationFrame(monitor);
+    targetGeometryTimer = browserWindow.setTimeout(monitor, 250);
   }
 
   function cancelTargetGeometryMonitor(): void {
-    if (targetGeometryFrame === undefined) {
+    if (targetGeometryTimer === undefined) {
       return;
     }
 
-    browserWindow.cancelAnimationFrame(targetGeometryFrame);
-    targetGeometryFrame = undefined;
+    browserWindow.clearTimeout(targetGeometryTimer);
+    targetGeometryTimer = undefined;
   }
 
   function recordTargetVisibilityChange(target: HTMLElement): boolean {
@@ -899,25 +898,25 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   }
 
   function processIntersectionRecords(entries: IntersectionObserverEntry[]): void {
-    const targetSelectionChanged = entries.some((entry) => (
+    const visibilityChanges = entries.map((entry) => (
       entry.target instanceof HTMLElement
       && observedGeometryTargets.has(entry.target)
       && recordTargetVisibilityChange(entry.target)
     ));
 
-    if (targetSelectionChanged) {
+    if (visibilityChanges.some(Boolean) && preferredTargetIdentityChanged()) {
       scheduleHostRefresh();
     }
   }
 
   function processResizeRecords(entries: ResizeObserverEntry[]): void {
-    const targetSelectionChanged = entries.some((entry) => (
+    const visibilityChanges = entries.map((entry) => (
       entry.target instanceof HTMLElement
       && observedGeometryTargets.has(entry.target)
       && recordTargetVisibilityChange(entry.target)
     ));
 
-    if (targetSelectionChanged) {
+    if (visibilityChanges.some(Boolean) && preferredTargetIdentityChanged()) {
       scheduleHostRefresh();
       return;
     }
@@ -925,6 +924,30 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     if (entries.some((entry) => entry.target === resizeObservationRoot)) {
       scheduleViewportRefresh();
     }
+  }
+
+  function preferredTargetIdentityChanged(): boolean {
+    const presentation = activePresentation;
+    const currentTarget = instance?.getActiveElement();
+
+    if (presentation === null
+      || presentation.step.target === null
+      || input.resolveTarget !== undefined
+      || !(currentTarget instanceof HTMLElement)) {
+      return true;
+    }
+
+    const candidates = findComposedTutorialTargets(root, targetAttribute, presentation.step.target);
+    const nextTarget = candidates.find((candidate) => (
+      isStructurallyActivatableTutorialTarget(candidate)
+      && (targetVisibility.get(candidate)
+        ?? isVisibleTutorialTarget(candidate, browserWindow))
+    ))
+      ?? candidates.find((candidate) => (
+        targetVisibility.get(candidate) ?? isVisibleTutorialTarget(candidate, browserWindow)
+      ))
+      ?? currentTarget;
+    return nextTarget !== currentTarget;
   }
 
   function scheduleViewportRefresh(): void {
@@ -1002,6 +1025,11 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         ? null
         : JSON.stringify([
             presentation.step.id,
+            presentation.step.target,
+            presentation.step.interaction,
+            presentation.step.advance,
+            presentation.step.side ?? null,
+            presentation.step.align ?? null,
             presentation.copy.title,
             presentation.copy.description,
             presentation.copy.next,
@@ -1220,6 +1248,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     mode: TutorialTargetClickMode,
     targetActivatable: boolean,
   ): void {
+    clearTargetOverlayPointerGuard();
     const nextStep = createDriveStep(
       input,
       presentation,
@@ -1242,10 +1271,13 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     target: HTMLElement | undefined,
     mode: TutorialTargetClickMode,
   ): void {
+    const shadowTargetHitTestable = target === undefined
+      || isShadowTutorialTargetHitTestable(target);
+
     if (mode.acknowledgeOnTargetClick
       && target !== undefined
       && (!isActivatableTutorialTarget(target, browserWindow)
-        || !isShadowTutorialTargetHitTestable(target))) {
+        || !shadowTargetHitTestable)) {
       applyTargetClickMode(
         currentInstance,
         presentation,
@@ -1253,8 +1285,12 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         { acknowledgeOnTargetClick: false },
         true,
       );
-    } else if (mode.acknowledgeOnTargetClick && target !== undefined) {
-      scheduleShadowTargetHitTest(currentInstance, presentation, target);
+    } else if (target !== undefined && shouldAllowTutorialTargetInteraction(presentation)) {
+      if (shadowTargetHitTestable) {
+        scheduleShadowTargetHitTest(currentInstance, presentation, target);
+      } else {
+        allowShadowTargetThroughOverlay();
+      }
     }
 
     syncTargetAcknowledgeBinding(currentInstance, presentation);
@@ -1342,21 +1378,54 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         || activePresentation !== presentation
         || activePresentationKey !== presentationKey
         || targetClickState !== state
-        || state?.acknowledgeOnTargetClick !== true
         || isShadowTutorialTargetHitTestable(target)) {
         return;
       }
 
-      applyTargetClickMode(
-        currentInstance,
-        presentation,
-        target,
-        { acknowledgeOnTargetClick: false },
-        true,
-      );
-      syncTargetAcknowledgeBinding(currentInstance, presentation);
-      syncModalSemantics?.();
+      if (state?.acknowledgeOnTargetClick === true) {
+        applyTargetClickMode(
+          currentInstance,
+          presentation,
+          target,
+          { acknowledgeOnTargetClick: false },
+          true,
+        );
+        syncTargetAcknowledgeBinding(currentInstance, presentation);
+        syncModalSemantics?.();
+      } else {
+        allowShadowTargetThroughOverlay();
+      }
     });
+  }
+
+  function allowShadowTargetThroughOverlay(): void {
+    clearTargetOverlayPointerGuard();
+    const overlay = ownerDocument.querySelector<SVGElement>('.driver-overlay');
+
+    if (overlay === null) {
+      return;
+    }
+
+    const previousValue = overlay.style.getPropertyValue('pointer-events');
+    const previousPriority = overlay.style.getPropertyPriority('pointer-events');
+    overlay.style.setProperty('pointer-events', 'none', 'important');
+    targetOverlayPointerRestore = () => {
+      if (overlay.style.getPropertyValue('pointer-events') !== 'none'
+        || overlay.style.getPropertyPriority('pointer-events') !== 'important') {
+        return;
+      }
+
+      if (previousValue === '') {
+        overlay.style.removeProperty('pointer-events');
+      } else {
+        overlay.style.setProperty('pointer-events', previousValue, previousPriority);
+      }
+    };
+  }
+
+  function clearTargetOverlayPointerGuard(): void {
+    targetOverlayPointerRestore?.();
+    targetOverlayPointerRestore = undefined;
   }
 
   function cancelShadowTargetHitTest(): void {
@@ -1469,6 +1538,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     }
 
     cancelShadowTargetHitTest();
+    clearTargetOverlayPointerGuard();
     targetClickState = undefined;
   }
 
@@ -1584,8 +1654,7 @@ export function resolveVisibleTutorialTarget(input: {
   }
 
   const attribute = input.targetAttribute ?? tutorialDomAttributes.target;
-  const selector = `[${attribute}="${escapeAttributeValue(input.target)}"]`;
-  const candidates = findComposedTutorialCandidates(root, selector);
+  const candidates = findComposedTutorialTargets(root, attribute, input.target);
 
   if (input.preferActivatable === true) {
     return candidates.find(
@@ -1603,6 +1672,15 @@ export function resolveVisibleTutorialTarget(input: {
   return candidates.find((element) => isVisibleTutorialTarget(element, view))
     ?? candidates.find((element) => isEligibleTutorialTarget(element, view))
     ?? null;
+}
+
+function findComposedTutorialTargets(
+  root: Document | HTMLElement,
+  attribute: string,
+  target: string,
+): HTMLElement[] {
+  return findComposedTutorialCandidates(root, `[${attribute}]`)
+    .filter((candidate) => candidate.getAttribute(attribute) === target);
 }
 
 export function isVisibleTutorialTarget(element: HTMLElement, view: Window = window): boolean {
@@ -2222,7 +2300,15 @@ function isActivatableTutorialTarget(
 ): boolean {
   if (view === null
     || view.getComputedStyle(element).pointerEvents === 'none'
-    || element.matches(':disabled')) {
+    || !isStructurallyActivatableTutorialTarget(element)) {
+    return false;
+  }
+
+  return true;
+}
+
+function isStructurallyActivatableTutorialTarget(element: HTMLElement): boolean {
+  if (element.matches(':disabled')) {
     return false;
   }
 
@@ -2348,10 +2434,6 @@ function isDriverOwnedMutation(record: MutationRecord): boolean {
 
   return element.matches('.driver-overlay, .driver-popover, .driver-popover *')
     || element.closest('.driver-overlay, .driver-popover') !== null;
-}
-
-function escapeAttributeValue(value: string): string {
-  return value.replaceAll('\\', '\\\\').replaceAll('"', '\\"');
 }
 
 function escapeTutorialText(ownerDocument: Document, value: string): string {
