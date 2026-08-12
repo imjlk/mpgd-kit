@@ -134,8 +134,10 @@ Targets use stable game-owned IDs:
 When responsive layouts render the same target more than once, the presenter
 selects the visible in-viewport element and rebinds on DOM or viewport changes.
 Open shadow roots present at mount or added through DOM mutations are observed
-automatically. If an already-connected host calls `attachShadow()` later, call
-`presenter.refresh()` after attaching it because that operation emits no DOM mutation.
+automatically. If an already-connected host calls `attachShadow()` later, CSS
+changes through a CSSOM API such as `insertRule()`, or an external stylesheet
+finishes loading, call `presenter.refresh()` afterward because those changes do
+not reliably emit an observed DOM mutation.
 Driver keyboard navigation is disabled so gameplay arrow keys remain available.
 Blocked guidance becomes the active modal; interactive guidance inside an
 existing game modal is exposed as a region owned by that modal. Original ARIA
