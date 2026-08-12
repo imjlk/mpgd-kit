@@ -26,7 +26,22 @@ distribution target gets the right adapter and validation path.
 
 ## Quick Start
 
-Create a standalone game starter:
+Choose the workflow that matches where the game will live:
+
+- **Single-game repository**: one repository owns one game, its target wrappers,
+  release evidence, and deployment scripts. This is the default generated-game
+  workflow.
+- **Multi-game workspace**: one repository owns multiple `games/*` projects,
+  optional shared packages, and workspace-level dispatch scripts. Each game
+  still owns its target config, wrappers, artifacts, and external app records.
+- **Kit contributor checkout**: this repository's `examples/phaser-starter` is a
+  regression fixture for developing `mpgd-kit`; it is not the downstream
+  project users should copy.
+
+See [Game Project Models](docs/GAME_PROJECT_MODELS.md) for the ownership,
+command, build, and deployment boundaries for all three workflows.
+
+Create a single-game repository:
 
 ```sh
 pnpm create @mpgd/game my-game
@@ -62,18 +77,23 @@ i18n, analytics, game services, build/smoke, acceptance, and target-specific
 release evidence. Selecting Microsoft Store also adds its dedicated release
 skill, config, scripts, and PWA runtime hook.
 
-For local kit development inside this repository:
+For a multi-game workspace, keep one generated-game-shaped project under each
+`games/<game>` directory and invoke the same public CLI with that game's target
+file:
 
 ```sh
-pnpm install
-pnpm mpgd game create examples/my-game --title "My Game" --workspace
-cd examples/my-game
-pnpm install --filter . --filter ./apps/target-devvit
-pnpm exec mpgd game accept . --targets default --profile staging --kit-path ../..
+pnpm exec mpgd target build-all \
+  --targets-file ./games/puzzle-one/mpgd.targets.json \
+  --targets web,ait,reddit \
+  --profile staging \
+  --ait-variant wrapper \
+  --kit-path ../mpgd-kit
 ```
 
-Use `--workspace` for local kit development. Omit it when generating an external
-game repo that should consume published `@mpgd/*` packages.
+Workspace-specific shortcuts such as `target:build <game>` may wrap this
+command, but they are workspace APIs rather than a second public `mpgd` CLI.
+Keep those wrappers thin so effective target config and release provenance
+continue to come from the kit.
 
 The starter wires `PlatformGateway`, target-config/effective-config, i18n, asset
 manifest loading, and optional game-services client creation without copying the
@@ -112,7 +132,7 @@ WebAssembly streaming, dynamic imports, import maps, HTML base elements, CSS
 script-driven navigation, and browser-dependent `file://` storage are not
 generalized by this helper. Meta-refresh navigation is removed from the copy.
 
-For a minimum repo confidence check:
+For a minimum kit-repository confidence check:
 
 ```sh
 pnpm validate:public
@@ -120,27 +140,24 @@ pnpm check
 pnpm test
 ```
 
-For day-to-day work on the in-repo starter:
-
-```sh
-pnpm dev:game
-pnpm --dir examples/phaser-starter check
-pnpm --dir examples/phaser-starter build
-pnpm graph:starter
-```
+Kit contributors should follow [Contributing](CONTRIBUTING.md) for the in-repo
+reference fixture and repository validation loop.
 
 ## Starter And Target Configs
 
-- `examples/phaser-starter` is the clean starting point for a new game.
-  It is private, not publishable, and intentionally small. The repo's root
-  target build scripts use this example's `mpgd.targets.json` so the kit does
-  not own a separate sample game app.
+- `packages/cli/templates/phaser-game` is the source template used by
+  `@mpgd/create-game`. Run the initializer instead of copying this directory.
+- `examples/phaser-starter` is a private, non-publishable reference fixture.
+  Kit contributors use it to validate generated-game wiring and root target
+  scripts; downstream games do not depend on it.
 - Generated games own their own `mpgd.targets.json`. The CLI resolves that file
   into a local generated target config before invoking the kit target tools.
 
 See [Game Development Guide](docs/GAME_DEVELOPMENT.md) for boundaries and the
-starter workflow. See [Agentic Game Workflow](docs/AGENTIC_GAME_WORKFLOW.md) for
-Codex agents, skills, starter manifests, and Apps in Toss MCP guidance.
+generated-game workflow. See [Game Project Models](docs/GAME_PROJECT_MODELS.md)
+for single-game, multi-game, and kit-contributor repository layouts. See
+[Agentic Game Workflow](docs/AGENTIC_GAME_WORKFLOW.md) for Codex agents, skills,
+starter manifests, and Apps in Toss MCP guidance.
 
 ## Package Map
 

@@ -49,18 +49,6 @@ pnpm exec mpgd target doctor \
   --targets __RECOMMENDED_MATRIX_TARGETS__
 ```
 
-When developing the kit itself, the same commands work through the repository
-script:
-
-```sh
-pnpm --dir ../mpgd-kit mpgd target build-all \
-  --targets-file "$PWD/mpgd.targets.json" \
-  --kit-path ../mpgd-kit \
-  --targets __RECOMMENDED_MATRIX_TARGETS__ \
-  --profile staging \
-  --ait-variant wrapper
-```
-
 `mpgd.targets.json` contains `${MPGD_KIT_PATH}` tokens. The CLI resolves them
 into `.mpgd.targets.generated.json` before calling the kit's existing target
 build and smoke scripts.
