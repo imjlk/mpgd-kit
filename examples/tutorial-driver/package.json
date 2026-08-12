@@ -1,0 +1,24 @@
+{
+  "name": "@mpgd/example-tutorial-driver",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Local browser harness for the optional @mpgd/tutorial Driver.js presenter.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 0.0.0.0",
+    "build": "vite build",
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@mpgd/tutorial": "workspace:*"
+  },
+  "devDependencies": {
+    "@ttsc/unplugin": "0.18.4",
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
+    "vite": "8.1.3"
+  }
+}
