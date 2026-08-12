@@ -861,12 +861,12 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         || !isNodeWithinLookupRoot(target)
         || (input.resolveTarget === undefined
           && target.getAttribute(targetAttribute) !== currentPresentation.step.target);
+      const nextVisible = !selectionInvalid
+        && isVisibleTutorialTargetWithRect(target, browserWindow, nextRect);
+      const visibilityChanged = nextVisible !== previousVisible;
 
-      if (rectChanged || selectionInvalid) {
-        const nextVisible = !selectionInvalid
-          && isVisibleTutorialTargetWithRect(target, browserWindow, nextRect);
-
-        if (selectionInvalid || nextVisible !== previousVisible) {
+      if (rectChanged || selectionInvalid || visibilityChanged) {
+        if (selectionInvalid || visibilityChanged) {
           scheduleHostRefresh();
         } else {
           scheduleRefresh();
@@ -935,6 +935,13 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       || input.resolveTarget !== undefined
       || !(currentTarget instanceof HTMLElement)) {
       return true;
+    }
+
+    const currentVisible = targetVisibility.get(currentTarget)
+      ?? isVisibleTutorialTarget(currentTarget, browserWindow);
+
+    if (currentVisible && isStructurallyActivatableTutorialTarget(currentTarget)) {
+      return false;
     }
 
     const candidates = findComposedTutorialTargets(root, targetAttribute, presentation.step.target);
@@ -1145,6 +1152,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
       applyDriverTargetMutation(() => currentInstance.refresh());
       syncModalSemantics?.();
+      syncPreferredTargetInteraction(currentInstance, presentation);
       return;
     }
 
@@ -1241,6 +1249,26 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     syncModalSemantics?.();
   }
 
+  function syncPreferredTargetInteraction(
+    currentInstance: Driver,
+    presentation: DriverTutorialPresentation<TStep>,
+  ): void {
+    const target = currentInstance.getActiveElement();
+
+    if (!(target instanceof HTMLElement) || target.id === 'driver-dummy-element') {
+      return;
+    }
+
+    const targetActivatable = isActivatableTutorialTarget(target, browserWindow);
+    const desiredMode = resolveTutorialTargetClickMode(presentation, target, targetActivatable);
+
+    if (targetClickState?.acknowledgeOnTargetClick !== desiredMode.acknowledgeOnTargetClick) {
+      applyTargetClickMode(currentInstance, presentation, target, desiredMode, targetActivatable);
+    }
+
+    downgradeInactiveTargetClickMode(currentInstance, presentation, target, desiredMode);
+  }
+
   function applyTargetClickMode(
     currentInstance: Driver,
     presentation: DriverTutorialPresentation<TStep>,
@@ -1287,6 +1315,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       );
     } else if (target !== undefined && shouldAllowTutorialTargetInteraction(presentation)) {
       if (shadowTargetHitTestable) {
+        clearTargetOverlayPointerGuard();
         scheduleShadowTargetHitTest(currentInstance, presentation, target);
       } else {
         allowShadowTargetThroughOverlay();
@@ -2300,7 +2329,8 @@ function isActivatableTutorialTarget(
 ): boolean {
   if (view === null
     || view.getComputedStyle(element).pointerEvents === 'none'
-    || !isStructurallyActivatableTutorialTarget(element)) {
+    || !isStructurallyActivatableTutorialTarget(element)
+    || !isSemanticallyActiveTutorialElement(element)) {
     return false;
   }
 
