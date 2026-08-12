@@ -1488,6 +1488,48 @@ describe('Driver tutorial presenter', () => {
     }
   });
 
+  it('reselects when a stable target is clipped by a moving ancestor without observers', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    const clip = document.createElement('div');
+    clip.style.overflow = 'hidden';
+    const first = document.createElement('button');
+    const second = document.createElement('button');
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    second.dataset.mpgdTutorialTarget = 'duplicate';
+    let clipped = false;
+    setDynamicRect(clip, () => ({
+      height: 80,
+      left: clipped ? 300 : 0,
+      top: 0,
+      width: 180,
+    }));
+    setRect(first, { height: 40, left: 20, top: 20, width: 100 });
+    setRect(second, { height: 40, left: 220, top: 20, width: 100 });
+    clip.appendChild(first);
+    document.body.append(clip, second);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+      expect(first.classList.contains('driver-active-element')).toBe(true);
+
+      clipped = true;
+      await vi.waitFor(() => {
+        expect(second.classList.contains('driver-active-element')).toBe(true);
+      });
+    } finally {
+      presenter.destroy();
+    }
+  });
+
   it('keeps a visible target stable on scroll and recreates only after it leaves view', async () => {
     const driverPointerRules = installDriverPointerRules();
     const scroller = document.createElement('div');
@@ -1743,6 +1785,35 @@ describe('Driver tutorial presenter', () => {
     expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
     expect(document.getElementById('driver-dummy-element')).not.toBeNull();
     presenter.destroy();
+  });
+
+  it('keeps Next available when a custom resolver returns an inert target', async () => {
+    const inertHost = document.createElement('div');
+    const target = document.createElement('button');
+    inertHost.inert = true;
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    inertHost.appendChild(target);
+    document.body.appendChild(inertHost);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+      resolveTarget: () => target,
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+
+      expect(document.querySelector<HTMLElement>('[data-mpgd-tutorial-next]')?.style.display)
+        .toBe('block');
+    } finally {
+      presenter.destroy();
+    }
   });
 
   it('restarts a preferred custom target only when resolver identity changes', async () => {
@@ -2138,6 +2209,59 @@ describe('Driver tutorial presenter', () => {
         .toBe('none');
       expect(document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]')?.style.display)
         .not.toBe('block');
+    } finally {
+      presenter.destroy();
+
+      if (elementFromPointDescriptor === undefined) {
+        Reflect.deleteProperty(document, 'elementFromPoint');
+      } else {
+        Object.defineProperty(document, 'elementFromPoint', elementFromPointDescriptor);
+      }
+    }
+  });
+
+  it('rechecks shadow hit testing after a stable host mutation', async () => {
+    const host = document.createElement('div');
+    const shadowRoot = host.attachShadow({ mode: 'open' });
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    shadowRoot.appendChild(target);
+    document.body.appendChild(host);
+    const elementFromPointDescriptor = Object.getOwnPropertyDescriptor(
+      document,
+      'elementFromPoint',
+    );
+    let obstructed = false;
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: () => obstructed ? document.querySelector('.driver-overlay') : host,
+    });
+    Object.defineProperty(shadowRoot, 'elementFromPoint', {
+      configurable: true,
+      value: () => target,
+    });
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+      expect(document.querySelector<HTMLElement>('[data-mpgd-tutorial-next]')?.style.display)
+        .not.toBe('block');
+
+      obstructed = true;
+      document.body.appendChild(document.createElement('div'));
+      await nextFrame();
+
+      expect(document.querySelector<HTMLElement>('[data-mpgd-tutorial-next]')?.style.display)
+        .toBe('block');
     } finally {
       presenter.destroy();
 
