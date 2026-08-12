@@ -58,7 +58,9 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
   input: CreateTutorialDirectorInput<TDefinition>,
 ): TutorialDirector<TDefinition> {
   const { definition, progressStore } = input;
-  const listeners = new Set<(snapshot: TutorialDirectorSnapshot<TDefinition>) => void>();
+  type Listener = (snapshot: TutorialDirectorSnapshot<TDefinition>) => void;
+  interface Subscription { readonly listener: Listener }
+  const listeners = new Set<Subscription>();
   const clock = input.clock ?? (() => new Date());
   const stored = progressStore.getSnapshot();
   let durableBeforeReplay: TutorialProgressOf<TDefinition> | null = null;
@@ -102,7 +104,6 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       suspended,
       currentScene,
     );
-    snapshot = publishedSnapshot;
     pendingSnapshots.push(publishedSnapshot);
 
     if (publishing) {
@@ -119,8 +120,13 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
           continue;
         }
 
-        for (const listener of listeners) {
-          listener(pendingSnapshot);
+        snapshot = pendingSnapshot;
+        const recipients = [...listeners];
+
+        for (const subscription of recipients) {
+          if (listeners.has(subscription)) {
+            subscription.listener(pendingSnapshot);
+          }
         }
       }
     } finally {
@@ -295,9 +301,10 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       }
     },
     subscribe(listener) {
-      listeners.add(listener);
+      const subscription: Subscription = { listener };
+      listeners.add(subscription);
       listener(snapshot);
-      return () => listeners.delete(listener);
+      return () => listeners.delete(subscription);
     },
   };
 }

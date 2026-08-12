@@ -89,6 +89,11 @@ Hidden steps wait for a real game signal without opening a popover. Progress
 records require the exact completed-step prefix and definition revision; invalid
 records fail closed by default.
 
+Initialization reads use a bounded `loadTimeoutMs` (10 seconds by default).
+Writes stay serialized and `flush()` waits for their actual adapter result;
+`StorageAdapter.save()` has no cancellation contract, so the tutorial store
+never reports an uncancellable write as failed while it may still commit.
+
 Changing the meaning or order of persisted steps requires a new `revision` and
 an explicit migration, or a new tutorial ID/storage key.
 

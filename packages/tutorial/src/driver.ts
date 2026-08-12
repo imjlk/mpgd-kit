@@ -89,7 +89,6 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let targetSemanticsGuard: TutorialTargetSemanticsGuard | undefined;
   let targetRestorePending = false;
   let dismissedPresentationKey: string | null = null;
-  let skipPendingKey: string | null = null;
   let retryableDismissedKey: string | null = null;
   let missingTargetErrorKey: string | null = null;
   let syncModalSemantics: (() => void) | undefined;
@@ -181,7 +180,6 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       onCloseClick: () => {
         const dismissedKey = activePresentationKey;
         dismissedPresentationKey = dismissedKey;
-        skipPendingKey = dismissedKey;
         retryableDismissedKey = null;
         destroyInstancePreservingTarget(created);
         void Promise.resolve()
@@ -192,11 +190,6 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
             }
 
             input.onError?.(error);
-          })
-          .finally(() => {
-            if (skipPendingKey === dismissedKey) {
-              skipPendingKey = null;
-            }
           });
       },
       onDestroyed: () => {
@@ -363,7 +356,6 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       activePresentation = null;
       activePresentationKey = null;
       dismissedPresentationKey = null;
-      skipPendingKey = null;
       retryableDismissedKey = null;
       missingTargetErrorKey = null;
       mutationObserver.disconnect();
@@ -402,6 +394,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
           ]);
 
       if (dismissedPresentationKey !== null
+        && nextKey !== null
         && (dismissedPresentationKey !== nextKey || retryableDismissedKey === nextKey)) {
         dismissedPresentationKey = null;
         retryableDismissedKey = null;
