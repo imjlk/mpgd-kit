@@ -1,9 +1,9 @@
 # Tutorial Engine
 
 `@mpgd/tutorial` separates game-owned onboarding content from reusable tutorial
-progression and presentation. The package is currently a private incubator in
-this repository. Publishing it requires initial npm registration, npm Trusted
-Publishing configuration, and a Sampo release change in a follow-up PR.
+progression and presentation. Version `0.1.0` is registered publicly on npm.
+Future package releases use Sampo changesets after npm Trusted Publishing is
+configured for `.github/workflows/release.yml`.
 
 The package does not decide what a game teaches, how a Phaser simulation is
 paused, or whether a help button exists. A game owns those policies.

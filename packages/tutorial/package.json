@@ -1,7 +1,6 @@
 {
   "name": "@mpgd/tutorial",
-  "private": true,
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Headless tutorial progression, optional Driver.js presentation, and local reproduction helpers for mpgd games.",
   "license": "MIT",
   "repository": {
@@ -20,6 +19,9 @@
     "onboarding",
     "driver.js"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "type": "module",
   "sideEffects": [
     "./driver.css"

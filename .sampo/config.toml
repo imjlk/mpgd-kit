@@ -21,6 +21,9 @@ fixed = [
     "npm/@mpgd/create-game",
   ],
 ]
-# Explicitly register the independently versioned Verse8 adapter without
-# fixed-group dependency bumps changing its requested SemVer level.
-linked = [["npm/@mpgd/adapter-verse8"]]
+# Explicitly register independently versioned packages without fixed-group
+# dependency bumps changing their requested SemVer levels.
+linked = [
+  ["npm/@mpgd/adapter-verse8"],
+  ["npm/@mpgd/tutorial"],
+]
