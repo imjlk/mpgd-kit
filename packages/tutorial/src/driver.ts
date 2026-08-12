@@ -456,16 +456,6 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   const mutationObserver = new browserWindow.MutationObserver(processMutationRecords);
   let observedShadowRoots = new Set<ShadowRoot>();
   let observingDocumentMutations = false;
-  const targetSelectionAttributes = new Set([
-    'aria-disabled',
-    'aria-hidden',
-    'class',
-    'disabled',
-    'hidden',
-    'inert',
-    'style',
-    targetAttribute,
-  ]);
 
   function processMutationRecords(records: readonly MutationRecord[]): void {
     if (activePresentation === null && instance === null) {
@@ -507,8 +497,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         return true;
       }
 
-      if (!targetSelectionAttributes.has(record.attributeName ?? '')
-        || !(record.target instanceof Element)) {
+      if (!(record.target instanceof Element)) {
         return false;
       }
 
@@ -606,9 +595,28 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
   function stylesheetMutationAffectsLookupRoot(node: Node): boolean {
     const treeScope = node.getRootNode();
-    return treeScope === ownerDocument
-      || treeScope === root.getRootNode()
-      || isNodeWithinLookupRoot(node);
+
+    if (treeScope === ownerDocument) {
+      return true;
+    }
+
+    const presentation = activePresentation;
+
+    if (presentation === null) {
+      return false;
+    }
+
+    const activeElement = instance?.getActiveElement();
+    const targets = activeElement instanceof HTMLElement
+      && activeElement.id !== 'driver-dummy-element'
+      ? [activeElement]
+      : [];
+
+    if (input.resolveTarget === undefined && presentation.step.target !== null) {
+      targets.push(...findComposedTutorialCandidates(root, createTargetSelector(presentation)));
+    }
+
+    return targets.some((target) => composedElementUsesTreeScope(target, treeScope));
   }
 
   function nodeContainsStylesheetElement(node: Node): boolean {
@@ -1034,7 +1042,9 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     const presentationKey = activePresentationKey;
     let acknowledgementQueued = false;
     const listener = (): void => {
-      if (acknowledgementQueued) {
+      const targetActivatableAtCapture = isActivatableTutorialTarget(target, browserWindow);
+
+      if (acknowledgementQueued || !targetActivatableAtCapture) {
         return;
       }
 
@@ -1045,8 +1055,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         if (destroyed
           || instance !== currentInstance
           || activePresentationKey !== presentationKey
-          || targetClickState !== state
-          || !isActivatableTutorialTarget(target, browserWindow)) {
+          || targetClickState !== state) {
           return;
         }
 
@@ -1122,9 +1131,17 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       return;
     }
 
+    const targetPosition = browserWindow.getComputedStyle(target).position;
+    const positionRule = targetPosition === '' || targetPosition === 'static'
+      ? 'position: relative !important;'
+      : '';
     const style = ownerDocument.createElement('style');
     style.textContent = `
-      .driver-active-element:not(.driver-no-interaction),
+      .driver-active-element:not(.driver-no-interaction) {
+        ${positionRule}
+        z-index: 1000000001 !important;
+        pointer-events: auto !important;
+      }
       .driver-active-element:not(.driver-no-interaction) * {
         pointer-events: auto !important;
       }
@@ -1849,6 +1866,20 @@ function isComposedAncestorOrSelf(element: Element, candidateAncestor: Element):
 
   while (current !== null) {
     if (current === candidateAncestor) {
+      return true;
+    }
+
+    current = getComposedParentElement(current);
+  }
+
+  return false;
+}
+
+function composedElementUsesTreeScope(element: Element, treeScope: Node): boolean {
+  let current: Element | null = element;
+
+  while (current !== null) {
+    if (current.getRootNode() === treeScope) {
       return true;
     }
 
