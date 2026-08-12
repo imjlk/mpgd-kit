@@ -209,7 +209,8 @@ const debug = installTutorialDebugBridge({
   director,
   beforeReplay: async (options) => {
     await presenter.waitForPendingSkip();
-    prepareHostFor(options.fromStepId);
+    await prepareHostFor(options.fromStepId);
+    await presenter.waitForPendingSkip();
   },
   floatingReplayTrigger: false,
 });
