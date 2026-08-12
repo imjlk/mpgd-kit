@@ -534,6 +534,38 @@ describe('Driver tutorial presenter', () => {
     presenter.destroy();
   });
 
+  it('rebinds scoped targets when an outer ancestor class changes visibility', async () => {
+    const style = document.createElement('style');
+    style.textContent = '.show-second .first-duplicate { opacity: 0; }';
+    const outer = document.createElement('div');
+    const root = document.createElement('div');
+    const first = document.createElement('button');
+    const second = document.createElement('button');
+    first.className = 'first-duplicate';
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    second.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(first, { height: 40, left: 20, top: 20, width: 100 });
+    setRect(second, { height: 40, left: 20, top: 80, width: 100 });
+    root.append(first, second);
+    outer.appendChild(root);
+    document.body.append(style, outer);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+      root,
+    });
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+    expect(first.classList.contains('driver-active-element')).toBe(true);
+
+    outer.classList.add('show-second');
+    await nextFrame();
+
+    expect(first.classList.contains('driver-active-element')).toBe(false);
+    expect(second.classList.contains('driver-active-element')).toBe(true);
+    presenter.destroy();
+  });
+
   it('reports a custom target resolver failure without escaping the frame', async () => {
     const error = new Error('resolver failed');
     const onError = vi.fn();
