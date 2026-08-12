@@ -47,6 +47,8 @@ export async function createPlatformTutorialProgressStore<
       if (current === null && (input.invalidRecord ?? 'disable') === 'disable') {
         available = false;
         reportError(new Error(`Invalid tutorial progress: ${input.key}`));
+      } else if (current !== null && input.migrate !== undefined) {
+        await input.storage.save({ key: input.key, value: current });
       }
     }
   } catch (error) {

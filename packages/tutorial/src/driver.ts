@@ -206,7 +206,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         return;
       }
 
-      const modalSelector = input.modalSelector ?? '[role="dialog"][aria-modal="true"]';
+      const modalSelector = input.modalSelector
+        ?? '[role="dialog"][aria-modal="true"], [role="alertdialog"][aria-modal="true"]';
       const retainCurrentModal = modalSemanticsGuard
         ?.isOwnedAttributeCurrent('aria-modal') ?? false;
       const modal = resolveUnderlyingTutorialModal(
@@ -1318,7 +1319,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         clearTargetOverlayPointerGuard();
         scheduleShadowTargetHitTest(currentInstance, presentation, target);
       } else {
-        allowShadowTargetThroughOverlay();
+        allowShadowTargetThroughOverlay(target);
       }
     }
 
@@ -1406,7 +1407,9 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         || !currentInstance.isActive()
         || activePresentation !== presentation
         || activePresentationKey !== presentationKey
-        || targetClickState !== state
+        || targetClickState?.driver !== currentInstance
+        || targetClickState.target !== target
+        || targetClickState.stepId !== presentation.step.id
         || isShadowTutorialTargetHitTestable(target)) {
         return;
       }
@@ -1422,33 +1425,42 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         syncTargetAcknowledgeBinding(currentInstance, presentation);
         syncModalSemantics?.();
       } else {
-        allowShadowTargetThroughOverlay();
+        allowShadowTargetThroughOverlay(target);
       }
     });
   }
 
-  function allowShadowTargetThroughOverlay(): void {
+  function allowShadowTargetThroughOverlay(target: HTMLElement): void {
     clearTargetOverlayPointerGuard();
-    const overlay = ownerDocument.querySelector<SVGElement>('.driver-overlay');
+    const rect = intersectRect(target.getBoundingClientRect(), resolveViewportRect(browserWindow));
 
-    if (overlay === null) {
+    if (rect === null) {
       return;
     }
 
-    const previousValue = overlay.style.getPropertyValue('pointer-events');
-    const previousPriority = overlay.style.getPropertyPriority('pointer-events');
-    overlay.style.setProperty('pointer-events', 'none', 'important');
+    const proxy = ownerDocument.createElement('div');
+    proxy.dataset.mpgdTutorialTargetProxy = 'true';
+    proxy.setAttribute('aria-hidden', 'true');
+    Object.assign(proxy.style, {
+      background: 'transparent',
+      height: `${rect.bottom - rect.top}px`,
+      left: `${rect.left}px`,
+      pointerEvents: 'auto',
+      position: 'fixed',
+      top: `${rect.top}px`,
+      width: `${rect.right - rect.left}px`,
+      zIndex: '999999999',
+    });
+    const listener = (): void => {
+      if (isActivatableTutorialTarget(target, browserWindow)) {
+        target.click();
+      }
+    };
+    proxy.addEventListener('click', listener);
+    ownerDocument.body.appendChild(proxy);
     targetOverlayPointerRestore = () => {
-      if (overlay.style.getPropertyValue('pointer-events') !== 'none'
-        || overlay.style.getPropertyPriority('pointer-events') !== 'important') {
-        return;
-      }
-
-      if (previousValue === '') {
-        overlay.style.removeProperty('pointer-events');
-      } else {
-        overlay.style.setProperty('pointer-events', previousValue, previousPriority);
-      }
+      proxy.removeEventListener('click', listener);
+      proxy.remove();
     };
   }
 
@@ -2455,6 +2467,11 @@ function restoreOwnedAttribute(
 }
 
 function isDriverOwnedMutation(record: MutationRecord): boolean {
+  if (record.type === 'childList'
+    && [...record.addedNodes, ...record.removedNodes].every(isTutorialTargetProxy)) {
+    return true;
+  }
+
   const target = record.target;
   const element = target instanceof Element ? target : target.parentElement;
 
@@ -2462,8 +2479,16 @@ function isDriverOwnedMutation(record: MutationRecord): boolean {
     return false;
   }
 
-  return element.matches('.driver-overlay, .driver-popover, .driver-popover *')
-    || element.closest('.driver-overlay, .driver-popover') !== null;
+  return element.matches(
+    '.driver-overlay, .driver-popover, .driver-popover *, [data-mpgd-tutorial-target-proxy]',
+  )
+    || element.closest(
+      '.driver-overlay, .driver-popover, [data-mpgd-tutorial-target-proxy]',
+    ) !== null;
+}
+
+function isTutorialTargetProxy(node: Node): boolean {
+  return node instanceof Element && node.matches('[data-mpgd-tutorial-target-proxy]');
 }
 
 function escapeTutorialText(ownerDocument: Document, value: string): string {
