@@ -70,6 +70,16 @@ interface TutorialTargetAcknowledgeBinding {
   readonly target: HTMLElement;
 }
 
+interface TutorialTargetClickMode {
+  readonly acknowledgeOnTargetClick: boolean;
+}
+
+interface TutorialTargetClickState extends TutorialTargetClickMode {
+  readonly driver: Driver;
+  readonly stepId: string;
+  readonly target: HTMLElement;
+}
+
 export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   input: DriverTutorialPresenterInput<TStep>,
 ): DriverTutorialPresenter<TStep> {
@@ -104,12 +114,16 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let destroyed = false;
   let reportedActive = false;
   let targetSemanticsGuard: TutorialTargetSemanticsGuard | undefined;
+  let targetShadowPointerStyle: HTMLStyleElement | undefined;
   let targetRestorePending = false;
+  let restartPreferredOnFrame = false;
+  let restartingInstance = false;
   let dismissedPresentationKey: string | null = null;
   let retryableDismissedKey: string | null = null;
   let missingTargetErrorKey: string | null = null;
   let syncModalSemantics: (() => void) | undefined;
   let targetAcknowledgeBinding: TutorialTargetAcknowledgeBinding | undefined;
+  let targetClickState: TutorialTargetClickState | undefined;
   const pendingSkipOperations = new Set<Promise<void>>();
 
   const reportError = (error: unknown): void => {
@@ -134,7 +148,9 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     }
   };
 
-  const scheduleRefresh = (): void => {
+  const scheduleRefresh = (restartPreferred = false): void => {
+    restartPreferredOnFrame ||= restartPreferred;
+
     if (destroyed || frame !== undefined || dismissedPresentationKey !== null) {
       return;
     }
@@ -146,6 +162,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         return;
       }
 
+      const shouldRestartPreferred = restartPreferredOnFrame;
+      restartPreferredOnFrame = false;
       const currentInstance = instance;
 
       if (currentInstance === null || !currentInstance.isActive()) {
@@ -153,9 +171,19 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         return;
       }
 
-      rebindActiveTarget(currentInstance, activePresentation);
+      const presentation = activePresentation;
+
+      if (shouldRestartPreferred
+        && presentation !== null
+        && shouldPreferActivatableTutorialTarget(presentation)) {
+        restartActiveInstance(currentInstance, presentation);
+        return;
+      }
+
+      rebindActiveTarget(currentInstance, presentation);
     });
   };
+  const scheduleHostRefresh = (): void => scheduleRefresh(true);
 
   const createInstance = (presentation: DriverTutorialPresentation<TStep>): Driver => {
     let created!: Driver;
@@ -237,6 +265,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       },
       onDestroyed: () => {
         clearTargetAcknowledgeBinding(created);
+        clearTargetClickState(created);
 
         if (!targetRestorePending) {
           targetSemanticsGuard?.restore(true);
@@ -253,11 +282,14 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
         if (instance === created) {
           instance = null;
-          clearTutorialState(stateHost);
-          reportActive(false);
+
+          if (!restartingInstance) {
+            clearTutorialState(stateHost);
+            reportActive(false);
+          }
         }
 
-        if (!destroyed && activePresentation !== null) {
+        if (!destroyed && !restartingInstance && activePresentation !== null) {
           scheduleRefresh();
         }
       },
@@ -275,7 +307,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
           || presentation.step.interaction === 'blocked') {
           const activeTarget = created.getActiveElement();
           const acknowledgeFromTarget = activeTarget instanceof HTMLElement
-            && shouldAcknowledgeOnTargetClick(presentation, activeTarget);
+            && targetClickState?.driver === created
+            && targetClickState.target === activeTarget
+            && targetClickState.stepId === presentation.step.id
+            && targetClickState.acknowledgeOnTargetClick;
           const initialFocus = presentation.step.advance.kind !== 'acknowledge'
             || acknowledgeFromTarget
             ? closeButton
@@ -318,21 +353,44 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       missingTargetErrorKey = null;
     }
 
+    const targetActivatable = target !== null
+      && isActivatableTutorialTarget(target, browserWindow);
+    const targetClickMode = resolveTutorialTargetClickMode(
+      presentation,
+      target ?? undefined,
+      targetActivatable,
+    );
     const nextInstance = createInstance(presentation);
     instance = nextInstance;
+    setTargetClickState(nextInstance, presentation, target ?? undefined, targetClickMode);
     targetSemanticsGuard?.restore();
     targetSemanticsGuard = target === null
       ? undefined
       : preserveTutorialTargetSemantics(target, browserWindow);
 
     try {
-      stateHost.setAttribute(tutorialDomAttributes.active, 'true');
-      stateHost.setAttribute(tutorialDomAttributes.step, presentation.step.id);
       nextInstance.setSteps([
-        createDriveStep(input, presentation, target ?? undefined, ownerDocument, reportError),
+        createDriveStep(
+          input,
+          presentation,
+          target ?? undefined,
+          targetClickMode.acknowledgeOnTargetClick,
+          ownerDocument,
+          reportError,
+        ),
       ]);
-      applyDriverTargetMutation(() => nextInstance.drive());
-      syncTargetAcknowledgeBinding(nextInstance, presentation, target ?? undefined);
+      applyDriverTargetMutation(() => {
+        syncTargetShadowPointerStyle(presentation, target ?? undefined, targetActivatable);
+        stateHost.setAttribute(tutorialDomAttributes.active, 'true');
+        stateHost.setAttribute(tutorialDomAttributes.step, presentation.step.id);
+        nextInstance.drive();
+      });
+      downgradeInactiveTargetClickMode(
+        nextInstance,
+        presentation,
+        target ?? undefined,
+        targetClickMode,
+      );
       syncModalSemantics?.();
       reportActive(true);
     } catch (error) {
@@ -360,15 +418,17 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       return null;
     }
 
+    const presentationTarget = presentation.step.target;
+
     try {
       if (input.resolveTarget !== undefined) {
-        return input.resolveTarget(presentation.step.target, root);
+        return input.resolveTarget(presentationTarget, root);
       }
 
       return resolveVisibleTutorialTarget({
         preferActivatable: shouldPreferActivatableTutorialTarget(presentation),
         root,
-        target: presentation.step.target,
+        target: presentationTarget,
         targetAttribute,
         view: browserWindow,
       });
@@ -389,22 +449,192 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     : root as HTMLElement;
   const mutationOptions: MutationObserverInit = {
     attributes: true,
+    characterData: true,
     childList: true,
     subtree: true,
   };
   const mutationObserver = new browserWindow.MutationObserver(processMutationRecords);
   let observedShadowRoots = new Set<ShadowRoot>();
+  let observingDocumentMutations = false;
+  const targetSelectionAttributes = new Set([
+    'aria-disabled',
+    'aria-hidden',
+    'class',
+    'disabled',
+    'hidden',
+    'inert',
+    'style',
+    targetAttribute,
+  ]);
 
   function processMutationRecords(records: readonly MutationRecord[]): void {
-    reconcileMutationRoots();
-
     if (activePresentation === null && instance === null) {
+      observeDocumentOnlyMutations();
       return;
     }
 
-    if (records.some((record) => !isDriverOwnedMutation(record))) {
-      scheduleRefresh();
+    reconcileMutationRoots();
+    const hostRecords = records.filter((record) => !isDriverOwnedMutation(record));
+
+    if (hostRecords.length > 0) {
+      scheduleRefresh(hostRecords.some(isTargetSelectionMutation));
     }
+  }
+
+  function isTargetSelectionMutation(record: MutationRecord): boolean {
+    const presentation = activePresentation;
+
+    if (presentation === null
+      || presentation.step.target === null
+      || !shouldPreferActivatableTutorialTarget(presentation)) {
+      return false;
+    }
+
+    const activeElement = instance?.getActiveElement();
+    const currentTarget = activeElement instanceof HTMLElement
+      && activeElement.id !== 'driver-dummy-element'
+      ? activeElement
+      : null;
+
+    if (record.type === 'characterData') {
+      return record.target.parentElement instanceof HTMLStyleElement
+        && stylesheetMutationAffectsLookupRoot(record.target);
+    }
+
+    if (record.type === 'attributes') {
+      if (isStylesheetAttributeMutation(record)
+        && stylesheetMutationAffectsLookupRoot(record.target)) {
+        return true;
+      }
+
+      if (!targetSelectionAttributes.has(record.attributeName ?? '')
+        || !(record.target instanceof Element)) {
+        return false;
+      }
+
+      const mutationTarget = record.target;
+
+      if (currentTarget !== null && isComposedAncestorOrSelf(currentTarget, mutationTarget)) {
+        return true;
+      }
+
+      if (input.resolveTarget !== undefined) {
+        return false;
+      }
+
+      const candidates = findComposedTutorialCandidates(root, createTargetSelector(presentation));
+      return candidates.some((candidate) => isComposedAncestorOrSelf(candidate, mutationTarget));
+    }
+
+    if (record.type !== 'childList') {
+      return false;
+    }
+
+    const changedNodes = [...record.addedNodes, ...record.removedNodes];
+    const touchesLookupRoot = childListTouchesLookupRoot(record, changedNodes);
+
+    if (isStylesheetDomMutation(record, changedNodes)
+      && stylesheetMutationAffectsLookupRoot(record.target)) {
+      return true;
+    }
+
+    if (!touchesLookupRoot) {
+      return false;
+    }
+
+    if (currentTarget !== null && !currentTarget.isConnected) {
+      return true;
+    }
+
+    if (currentTarget !== null && changedNodes.some(
+      (node) => node instanceof Element && isComposedAncestorOrSelf(currentTarget, node),
+    )) {
+      return true;
+    }
+
+    return input.resolveTarget === undefined && changedNodes.some(
+      (node) => mutationNodeMayContainTarget(node, createTargetSelector(presentation)),
+    );
+  }
+
+  function childListTouchesLookupRoot(
+    record: MutationRecord,
+    changedNodes: readonly Node[],
+  ): boolean {
+    if (root.nodeType === 9 || isNodeWithinLookupRoot(record.target)) {
+      return true;
+    }
+
+    return changedNodes.some((node) => {
+      if (node === root) {
+        return true;
+      }
+
+      return node instanceof Element && isComposedAncestorOrSelf(root as HTMLElement, node);
+    });
+  }
+
+  function isNodeWithinLookupRoot(node: Node): boolean {
+    if (root.nodeType === 9) {
+      return true;
+    }
+
+    const element = node instanceof ShadowRoot
+      ? node.host
+      : node instanceof Element
+        ? node
+        : node.parentElement;
+    return element !== null && isComposedAncestorOrSelf(element, root as HTMLElement);
+  }
+
+  function isStylesheetDomMutation(
+    record: MutationRecord,
+    changedNodes: readonly Node[],
+  ): boolean {
+    return isStylesheetElement(record.target)
+      || changedNodes.some(nodeContainsStylesheetElement);
+  }
+
+  function isStylesheetAttributeMutation(record: MutationRecord): boolean {
+    if (record.target instanceof HTMLStyleElement) {
+      return true;
+    }
+
+    return record.target instanceof HTMLLinkElement
+      && ['disabled', 'href', 'media', 'rel'].includes(record.attributeName ?? '');
+  }
+
+  function stylesheetMutationAffectsLookupRoot(node: Node): boolean {
+    const treeScope = node.getRootNode();
+    return treeScope === ownerDocument
+      || treeScope === root.getRootNode()
+      || isNodeWithinLookupRoot(node);
+  }
+
+  function nodeContainsStylesheetElement(node: Node): boolean {
+    return isStylesheetElement(node)
+      || [...node.childNodes].some(nodeContainsStylesheetElement);
+  }
+
+  function isStylesheetElement(node: Node): boolean {
+    if (node instanceof HTMLStyleElement) {
+      return true;
+    }
+
+    return node instanceof HTMLLinkElement
+      && node.rel.toLowerCase().split(/\s+/u).includes('stylesheet');
+  }
+
+  function createTargetSelector(presentation: DriverTutorialPresentation<TStep>): string {
+    return `[${targetAttribute}="${escapeAttributeValue(presentation.step.target ?? '')}"]`;
+  }
+
+  function mutationNodeMayContainTarget(node: Node, selector: string): boolean {
+    if (node instanceof HTMLElement && (node.matches(selector) || node.shadowRoot !== null)) {
+      return true;
+    }
+
+    return [...node.childNodes].some((child) => mutationNodeMayContainTarget(child, selector));
   }
 
   function reconcileMutationRoots(force = false): void {
@@ -412,16 +642,22 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       return;
     }
 
+    if (activePresentation === null && instance === null) {
+      observeDocumentOnlyMutations(force);
+      return;
+    }
+
     const nextShadowRoots = new Set(findOpenTutorialShadowRoots(ownerDocument));
     const rootsChanged = nextShadowRoots.size !== observedShadowRoots.size
       || [...nextShadowRoots].some((shadowRoot) => !observedShadowRoots.has(shadowRoot));
 
-    if (!force && !rootsChanged) {
+    if (!force && observingDocumentMutations && !rootsChanged) {
       return;
     }
 
     mutationObserver.disconnect();
     mutationObserver.observe(ownerDocument.documentElement, mutationOptions);
+    observingDocumentMutations = true;
 
     for (const shadowRoot of nextShadowRoots) {
       mutationObserver.observe(shadowRoot, mutationOptions);
@@ -430,16 +666,37 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     observedShadowRoots = nextShadowRoots;
   }
 
+  function observeDocumentOnlyMutations(force = false): void {
+    if (!force && observingDocumentMutations && observedShadowRoots.size === 0) {
+      return;
+    }
+
+    mutationObserver.disconnect();
+    mutationObserver.observe(ownerDocument.documentElement, mutationOptions);
+    observingDocumentMutations = true;
+    observedShadowRoots.clear();
+  }
+
+  function scheduleViewportRefresh(): void {
+    const presentation = activePresentation;
+    const activeElement = instance?.getActiveElement();
+    const restartPreferred = presentation !== null
+      && shouldPreferActivatableTutorialTarget(presentation)
+      && (!(activeElement instanceof HTMLElement)
+        || !isVisibleTutorialTarget(activeElement, browserWindow));
+    scheduleRefresh(restartPreferred);
+  }
+
   reconcileMutationRoots(true);
   const resizeObserver = typeof browserWindow.ResizeObserver === 'function'
-    ? new browserWindow.ResizeObserver(scheduleRefresh)
+    ? new browserWindow.ResizeObserver(scheduleViewportRefresh)
     : null;
   resizeObserver?.observe(resizeObservationRoot);
-  ownerDocument.addEventListener('scroll', scheduleRefresh, true);
-  browserWindow.addEventListener('resize', scheduleRefresh);
-  browserWindow.visualViewport?.addEventListener('resize', scheduleRefresh);
-  browserWindow.visualViewport?.addEventListener('scroll', scheduleRefresh);
-  browserWindow.addEventListener('orientationchange', scheduleRefresh);
+  ownerDocument.addEventListener('scroll', scheduleViewportRefresh, true);
+  browserWindow.addEventListener('resize', scheduleViewportRefresh);
+  browserWindow.visualViewport?.addEventListener('resize', scheduleViewportRefresh);
+  browserWindow.visualViewport?.addEventListener('scroll', scheduleViewportRefresh);
+  browserWindow.addEventListener('orientationchange', scheduleViewportRefresh);
 
   return {
     destroy() {
@@ -454,13 +711,14 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       retryableDismissedKey = null;
       missingTargetErrorKey = null;
       mutationObserver.disconnect();
+      observingDocumentMutations = false;
       observedShadowRoots.clear();
       resizeObserver?.disconnect();
-      ownerDocument.removeEventListener('scroll', scheduleRefresh, true);
-      browserWindow.removeEventListener('resize', scheduleRefresh);
-      browserWindow.visualViewport?.removeEventListener('resize', scheduleRefresh);
-      browserWindow.visualViewport?.removeEventListener('scroll', scheduleRefresh);
-      browserWindow.removeEventListener('orientationchange', scheduleRefresh);
+      ownerDocument.removeEventListener('scroll', scheduleViewportRefresh, true);
+      browserWindow.removeEventListener('resize', scheduleViewportRefresh);
+      browserWindow.visualViewport?.removeEventListener('resize', scheduleViewportRefresh);
+      browserWindow.visualViewport?.removeEventListener('scroll', scheduleViewportRefresh);
+      browserWindow.removeEventListener('orientationchange', scheduleViewportRefresh);
 
       if (frame !== undefined) {
         browserWindow.cancelAnimationFrame(frame);
@@ -472,7 +730,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
       instance = null;
       targetSemanticsGuard = undefined;
+      targetShadowPointerStyle?.remove();
+      targetShadowPointerStyle = undefined;
       clearTargetAcknowledgeBinding();
+      clearTargetClickState();
       clearTutorialState(stateHost);
       reportActive(false);
     },
@@ -508,6 +769,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
       if (activePresentationKey === nextKey) {
         activePresentation = presentation;
+        reconcileMutationRoots(true);
         scheduleRefresh();
         return;
       }
@@ -521,6 +783,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         destroyInstancePreservingTarget(previousInstance);
       }
 
+      reconcileMutationRoots(true);
       clearTutorialState(stateHost);
       reportActive(false);
       scheduleRefresh();
@@ -528,7 +791,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     refresh() {
       // attachShadow() itself emits no mutation, so explicit refresh also discovers new roots.
       reconcileMutationRoots();
-      scheduleRefresh();
+      scheduleHostRefresh();
     },
     resetForReplay() {
       dismissedPresentationKey = null;
@@ -543,10 +806,64 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     },
   };
 
+  function restartActiveInstance(
+    currentInstance: Driver,
+    presentation: DriverTutorialPresentation<TStep>,
+  ): void {
+    const presentationKey = activePresentationKey;
+    restartingInstance = true;
+
+    try {
+      applyDriverTargetMutation(() => destroyInstancePreservingTarget(currentInstance));
+    } finally {
+      restartingInstance = false;
+    }
+
+    if (!destroyed
+      && dismissedPresentationKey === null
+      && activePresentation === presentation
+      && activePresentationKey === presentationKey) {
+      driveActiveStep();
+    }
+
+    if (instance === null || !instance.isActive()) {
+      clearTutorialState(stateHost);
+      reportActive(false);
+    }
+  }
+
   function rebindActiveTarget(
     currentInstance: Driver,
     presentation: DriverTutorialPresentation<TStep> | null,
   ): void {
+    if (presentation !== null && shouldPreferActivatableTutorialTarget(presentation)) {
+      if (input.resolveTarget !== undefined && presentation.step.target !== null) {
+        const presentationKey = activePresentationKey;
+        const target = resolvePresentationTarget(presentation, presentationKey);
+
+        if (destroyed
+          || activePresentation !== presentation
+          || activePresentationKey !== presentationKey
+          || instance !== currentInstance
+          || !currentInstance.isActive()) {
+          return;
+        }
+
+        const activeElement = currentInstance.getActiveElement();
+        const targetUnchanged = target === activeElement
+          || (target === null && activeElement?.id === 'driver-dummy-element');
+
+        if (!targetUnchanged) {
+          restartActiveInstance(currentInstance, presentation);
+          return;
+        }
+      }
+
+      applyDriverTargetMutation(() => currentInstance.refresh());
+      syncModalSemantics?.();
+      return;
+    }
+
     if (presentation === null || presentation.step.target === null || !currentInstance.isActive()) {
       applyDriverTargetMutation(() => currentInstance.refresh());
       syncModalSemantics?.();
@@ -600,16 +917,6 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     missingTargetErrorKey = null;
 
     if (currentInstance.getActiveElement() === target) {
-      const desiredAdvanceOnClick = shouldAcknowledgeOnTargetClick(presentation, target);
-      const hasTargetAcknowledgeBinding = targetAcknowledgeBinding?.driver === currentInstance
-        && targetAcknowledgeBinding.target === target
-        && targetAcknowledgeBinding.stepId === presentation.step.id;
-
-      if (hasTargetAcknowledgeBinding !== desiredAdvanceOnClick) {
-        rebindTarget(currentInstance, presentation, target);
-        return;
-      }
-
       applyDriverTargetMutation(() => currentInstance.refresh());
       syncModalSemantics?.();
       return;
@@ -641,12 +948,57 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     targetSemanticsGuard = target === undefined
       ? undefined
       : preserveTutorialTargetSemantics(target, browserWindow);
-    const nextStep = createDriveStep(input, presentation, target, ownerDocument, reportError);
-    clearTargetAcknowledgeBinding(currentInstance);
-    applyDriverTargetMutation(() => currentInstance.highlight(nextStep));
-    syncTargetAcknowledgeBinding(currentInstance, presentation, target);
+    const targetActivatable = target !== undefined
+      && isActivatableTutorialTarget(target, browserWindow);
+    const targetClickMode = resolveTutorialTargetClickMode(presentation, target, targetActivatable);
+    applyTargetClickMode(currentInstance, presentation, target, targetClickMode, targetActivatable);
+    downgradeInactiveTargetClickMode(currentInstance, presentation, target, targetClickMode);
     restorePreviousTarget?.();
     syncModalSemantics?.();
+  }
+
+  function applyTargetClickMode(
+    currentInstance: Driver,
+    presentation: DriverTutorialPresentation<TStep>,
+    target: HTMLElement | undefined,
+    mode: TutorialTargetClickMode,
+    targetActivatable: boolean,
+  ): void {
+    const nextStep = createDriveStep(
+      input,
+      presentation,
+      target,
+      mode.acknowledgeOnTargetClick,
+      ownerDocument,
+      reportError,
+    );
+    clearTargetAcknowledgeBinding(currentInstance);
+    setTargetClickState(currentInstance, presentation, target, mode);
+    applyDriverTargetMutation(() => {
+      syncTargetShadowPointerStyle(presentation, target, targetActivatable);
+      currentInstance.highlight(nextStep);
+    });
+  }
+
+  function downgradeInactiveTargetClickMode(
+    currentInstance: Driver,
+    presentation: DriverTutorialPresentation<TStep>,
+    target: HTMLElement | undefined,
+    mode: TutorialTargetClickMode,
+  ): void {
+    if (mode.acknowledgeOnTargetClick
+      && target !== undefined
+      && !isActivatableTutorialTarget(target, browserWindow)) {
+      applyTargetClickMode(
+        currentInstance,
+        presentation,
+        target,
+        { acknowledgeOnTargetClick: false },
+        true,
+      );
+    }
+
+    syncTargetAcknowledgeBinding(currentInstance, presentation);
   }
 
   function reportMissingTarget(
@@ -667,30 +1019,45 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   function syncTargetAcknowledgeBinding(
     currentInstance: Driver,
     presentation: DriverTutorialPresentation<TStep>,
-    target: HTMLElement | undefined,
   ): void {
     clearTargetAcknowledgeBinding(currentInstance);
+    const state = targetClickState;
 
-    if (target === undefined || !shouldAcknowledgeOnTargetClick(presentation, target)) {
+    if (state === undefined
+      || state.driver !== currentInstance
+      || state.stepId !== presentation.step.id
+      || !state.acknowledgeOnTargetClick) {
       return;
     }
 
+    const { target } = state;
     const presentationKey = activePresentationKey;
+    let acknowledgementQueued = false;
     const listener = (): void => {
-      if (destroyed
-        || instance !== currentInstance
-        || activePresentationKey !== presentationKey
-        || !shouldAcknowledgeOnTargetClick(presentation, target)) {
+      if (acknowledgementQueued) {
         return;
       }
 
-      try {
-        input.onAcknowledge(presentation.step.id);
-      } catch (error) {
-        reportError(error);
-      }
+      acknowledgementQueued = true;
+      browserWindow.queueMicrotask(() => {
+        acknowledgementQueued = false;
+
+        if (destroyed
+          || instance !== currentInstance
+          || activePresentationKey !== presentationKey
+          || targetClickState !== state
+          || !isActivatableTutorialTarget(target, browserWindow)) {
+          return;
+        }
+
+        try {
+          input.onAcknowledge(presentation.step.id);
+        } catch (error) {
+          reportError(error);
+        }
+      });
     };
-    target.addEventListener('click', listener);
+    target.addEventListener('click', listener, true);
     targetAcknowledgeBinding = {
       driver: currentInstance,
       listener,
@@ -707,13 +1074,75 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       return;
     }
 
-    binding.target.removeEventListener('click', binding.listener);
+    binding.target.removeEventListener('click', binding.listener, true);
     targetAcknowledgeBinding = undefined;
+  }
+
+  function setTargetClickState(
+    currentInstance: Driver,
+    presentation: DriverTutorialPresentation<TStep>,
+    target: HTMLElement | undefined,
+    mode: TutorialTargetClickMode,
+  ): void {
+    targetClickState = target === undefined
+      ? undefined
+      : {
+          ...mode,
+          driver: currentInstance,
+          stepId: presentation.step.id,
+          target,
+        };
+  }
+
+  function clearTargetClickState(currentInstance?: Driver): void {
+    if (currentInstance !== undefined && targetClickState?.driver !== currentInstance) {
+      return;
+    }
+
+    targetClickState = undefined;
+  }
+
+  function syncTargetShadowPointerStyle(
+    presentation: DriverTutorialPresentation<TStep>,
+    target: HTMLElement | undefined,
+    targetActivatable: boolean,
+  ): void {
+    targetShadowPointerStyle?.remove();
+    targetShadowPointerStyle = undefined;
+
+    if (target === undefined
+      || !targetActivatable
+      || !shouldAllowTutorialTargetInteraction(presentation)) {
+      return;
+    }
+
+    const targetRoot = target.getRootNode();
+
+    if (!(targetRoot instanceof ShadowRoot)) {
+      return;
+    }
+
+    const style = ownerDocument.createElement('style');
+    style.textContent = `
+      .driver-active-element:not(.driver-no-interaction),
+      .driver-active-element:not(.driver-no-interaction) * {
+        pointer-events: auto !important;
+      }
+      .driver-no-interaction,
+      .driver-no-interaction * {
+        pointer-events: none !important;
+      }
+    `;
+    targetRoot.appendChild(style);
+    targetShadowPointerStyle = style;
   }
 
   function destroyInstancePreservingTarget(currentInstance: Driver): void {
     const target = currentInstance.getActiveElement();
     targetSemanticsGuard?.restore();
+    targetSemanticsGuard = undefined;
+    targetShadowPointerStyle?.remove();
+    targetShadowPointerStyle = undefined;
     const restoreAfterDestroy = !(target instanceof HTMLElement)
       ? undefined
       : captureTutorialTargetSemantics(target);
@@ -721,7 +1150,6 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     currentInstance.destroy();
     targetRestorePending = false;
     restoreAfterDestroy?.();
-    targetSemanticsGuard = undefined;
   }
 
   function applyDriverTargetMutation<T>(mutation: () => T): T {
@@ -737,6 +1165,21 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         reconcileMutationRoots(true);
       }
     }
+  }
+
+  function resolveTutorialTargetClickMode(
+    presentation: DriverTutorialPresentation<TStep>,
+    target: HTMLElement | undefined,
+    targetActivatable: boolean,
+  ): TutorialTargetClickMode {
+    return {
+      acknowledgeOnTargetClick: target !== undefined
+        && presentation.acknowledgeOnTargetClick === true
+        && presentation.step.advance.kind === 'acknowledge'
+        && presentation.step.target !== null
+        && target.id !== 'driver-dummy-element'
+        && targetActivatable,
+    };
   }
 }
 
@@ -766,11 +1209,11 @@ export function resolveVisibleTutorialTarget(input: {
 
   if (input.preferActivatable === true) {
     return candidates.find(
-      (element) => isActivatableTutorialTarget(element)
+      (element) => isActivatableTutorialTarget(element, view)
         && isVisibleTutorialTarget(element, view),
     )
       ?? candidates.find((element) => (
-        isActivatableTutorialTarget(element) && isEligibleTutorialTarget(element, view)
+        isActivatableTutorialTarget(element, view) && isEligibleTutorialTarget(element, view)
       ))
       ?? candidates.find((element) => isVisibleTutorialTarget(element, view))
       ?? candidates.find((element) => isEligibleTutorialTarget(element, view))
@@ -880,13 +1323,12 @@ function createDriveStep<TStep extends TutorialStep>(
   input: DriverTutorialPresenterInput<TStep>,
   presentation: DriverTutorialPresentation<TStep>,
   target: DriveStep['element'],
+  acknowledgeOnTargetClick: boolean,
   ownerDocument: Document,
   reportError: (error: unknown) => void,
 ): DriveStep {
   const { step } = presentation;
   const actionGated = step.advance.kind === 'action' || step.advance.kind === 'signal';
-  const acknowledgeOnTargetClick = target instanceof HTMLElement
-    && shouldAcknowledgeOnTargetClick(presentation, target);
   const targetInteraction = presentation.allowTargetInteraction === true
     || acknowledgeOnTargetClick
     || step.interaction === 'target'
@@ -922,15 +1364,15 @@ function createDriveStep<TStep extends TutorialStep>(
   };
 }
 
-function shouldAcknowledgeOnTargetClick<TStep extends TutorialStep>(
+function shouldAllowTutorialTargetInteraction<TStep extends TutorialStep>(
   presentation: DriverTutorialPresentation<TStep>,
-  target: HTMLElement,
 ): boolean {
-  return presentation.acknowledgeOnTargetClick === true
-    && presentation.step.advance.kind === 'acknowledge'
-    && presentation.step.target !== null
-    && target.id !== 'driver-dummy-element'
-    && isActivatableTutorialTarget(target);
+  const { step } = presentation;
+  return presentation.allowTargetInteraction === true
+    || (presentation.acknowledgeOnTargetClick === true
+      && step.advance.kind === 'acknowledge')
+    || step.interaction === 'target'
+    || step.interaction === 'gameplay';
 }
 
 function shouldPreferActivatableTutorialTarget<TStep extends TutorialStep>(
@@ -1350,8 +1792,13 @@ function isEligibleTutorialTarget(element: HTMLElement, view: Window): boolean {
     && isSemanticallyActiveTutorialElement(element);
 }
 
-function isActivatableTutorialTarget(element: HTMLElement): boolean {
-  if (element.matches(':disabled')) {
+function isActivatableTutorialTarget(
+  element: HTMLElement,
+  view: Window | null = element.ownerDocument.defaultView,
+): boolean {
+  if (view === null
+    || view.getComputedStyle(element).pointerEvents === 'none'
+    || element.matches(':disabled')) {
     return false;
   }
 
@@ -1395,6 +1842,20 @@ function getComposedParentElement(element: Element): HTMLElement | null {
 
   const root = element.getRootNode();
   return root instanceof ShadowRoot && root.host instanceof HTMLElement ? root.host : null;
+}
+
+function isComposedAncestorOrSelf(element: Element, candidateAncestor: Element): boolean {
+  let current: Element | null = element;
+
+  while (current !== null) {
+    if (current === candidateAncestor) {
+      return true;
+    }
+
+    current = getComposedParentElement(current);
+  }
+
+  return false;
 }
 
 function intersectRect(
@@ -1441,12 +1902,11 @@ function restoreOwnedAttribute(
 
 function isDriverOwnedMutation(record: MutationRecord): boolean {
   const target = record.target;
+  const element = target instanceof Element ? target : target.parentElement;
 
-  if (target.nodeType !== 1) {
+  if (element === null) {
     return false;
   }
-
-  const element = target as Element;
 
   return element.matches('.driver-overlay, .driver-popover, .driver-popover *')
     || element.closest('.driver-overlay, .driver-popover') !== null;
