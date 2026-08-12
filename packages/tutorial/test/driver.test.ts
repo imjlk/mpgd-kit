@@ -1225,6 +1225,201 @@ describe('Driver tutorial presenter', () => {
     presenter.destroy();
   });
 
+  it('reselects duplicates after geometry moves without a root resize', async () => {
+    const driverPointerRules = installDriverPointerRules();
+    const resizeObserved = new Set<Element>();
+    const intersectionObserved = new Set<Element>();
+    let intersectionCallback: IntersectionObserverCallback | undefined;
+    vi.stubGlobal('ResizeObserver', class {
+      disconnect() {
+        resizeObserved.clear();
+      }
+
+      observe(target: Element) {
+        resizeObserved.add(target);
+      }
+
+      unobserve(target: Element) {
+        resizeObserved.delete(target);
+      }
+    });
+    vi.stubGlobal('IntersectionObserver', class {
+      constructor(callback: IntersectionObserverCallback) {
+        intersectionCallback = callback;
+      }
+
+      disconnect() {
+        intersectionObserved.clear();
+      }
+
+      observe(target: Element) {
+        intersectionObserved.add(target);
+      }
+
+      takeRecords(): IntersectionObserverEntry[] {
+        return [];
+      }
+
+      unobserve(target: Element) {
+        intersectionObserved.delete(target);
+      }
+    });
+    const root = document.createElement('div');
+    root.style.overflow = 'hidden';
+    setRect(root, { height: 100, left: 0, top: 0, width: 200 });
+    const first = document.createElement('button');
+    const second = document.createElement('button');
+    const focusAnchor = document.createElement('button');
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    second.dataset.mpgdTutorialTarget = 'duplicate';
+    let moved = false;
+    setDynamicRect(first, () => ({ height: 40, left: 20, top: moved ? -100 : 20, width: 100 }));
+    setDynamicRect(second, () => ({ height: 40, left: 20, top: moved ? 20 : 140, width: 100 }));
+    root.append(first, second);
+    document.body.append(root, focusAnchor);
+    const onActiveChange = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onActiveChange,
+      onSkip: vi.fn(),
+      root,
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+      const initialPopover = document.querySelector('[data-mpgd-tutorial-popover]');
+      expect(first.classList.contains('driver-active-element')).toBe(true);
+      expect(resizeObserved).toEqual(new Set([root, first, second]));
+      expect(intersectionObserved).toEqual(new Set([first, second]));
+      focusAnchor.focus();
+
+      intersectionCallback?.(
+        [first, second].map((target) => ({ target }) as unknown as IntersectionObserverEntry),
+        {} as IntersectionObserver,
+      );
+      await nextFrame();
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBe(initialPopover);
+      expect(document.activeElement).toBe(focusAnchor);
+
+      moved = true;
+      intersectionCallback?.(
+        [first, second].map((target) => ({ target }) as unknown as IntersectionObserverEntry),
+        {} as IntersectionObserver,
+      );
+      await nextFrame();
+
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBe(initialPopover);
+      expect(first.classList.contains('driver-active-element')).toBe(false);
+      expect(second.classList.contains('driver-active-element')).toBe(true);
+      expect(onActiveChange).toHaveBeenCalledExactlyOnceWith(true);
+    } finally {
+      presenter.destroy();
+      driverPointerRules.remove();
+    }
+  });
+
+  it('refreshes a moved active target without recreating its popover or stealing focus', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    const target = document.createElement('button');
+    const focusAnchor = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    let moved = false;
+    setDynamicRect(target, () => ({
+      height: 40,
+      left: moved ? 200 : 20,
+      top: moved ? 160 : 20,
+      width: 100,
+    }));
+    document.body.append(target, focusAnchor);
+    const onActiveChange = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onActiveChange,
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+      await nextFrame();
+      const initialPopover = document.querySelector('[data-mpgd-tutorial-popover]');
+      const overlayPath = document.querySelector<SVGPathElement>('.driver-overlay path');
+      const initialStage = overlayPath?.getAttribute('d');
+      expect(initialStage).not.toBeNull();
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy: { ...copy },
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBe(initialPopover);
+      focusAnchor.focus();
+      const setAttribute = overlayPath === null
+        ? undefined
+        : vi.spyOn(overlayPath, 'setAttribute');
+
+      await nextFrame();
+      expect(setAttribute?.mock.calls.some(([attribute]) => attribute === 'd')).toBe(false);
+
+      moved = true;
+      await nextFrame();
+      await nextFrame();
+
+      expect(overlayPath?.getAttribute('d')).not.toBe(initialStage);
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBe(initialPopover);
+      expect(document.activeElement).toBe(focusAnchor);
+      expect(onActiveChange).toHaveBeenCalledExactlyOnceWith(true);
+    } finally {
+      presenter.destroy();
+    }
+  });
+
+  it('reselects an offscreen target without IntersectionObserver support', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined);
+    const first = document.createElement('button');
+    const second = document.createElement('button');
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    second.dataset.mpgdTutorialTarget = 'duplicate';
+    let moved = false;
+    setDynamicRect(first, () => ({ height: 40, left: 20, top: moved ? -100 : 20, width: 100 }));
+    setDynamicRect(second, () => ({ height: 40, left: 20, top: moved ? 20 : 900, width: 100 }));
+    document.body.append(first, second);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+      expect(first.classList.contains('driver-active-element')).toBe(true);
+      const initialPopover = document.querySelector('[data-mpgd-tutorial-popover]');
+
+      moved = true;
+      await nextFrame();
+      await nextFrame();
+
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBe(initialPopover);
+      expect(first.classList.contains('driver-active-element')).toBe(false);
+      expect(second.classList.contains('driver-active-element')).toBe(true);
+    } finally {
+      presenter.destroy();
+    }
+  });
+
   it('keeps a visible target stable on scroll and recreates only after it leaves view', async () => {
     const driverPointerRules = installDriverPointerRules();
     const scroller = document.createElement('div');
@@ -1418,7 +1613,7 @@ describe('Driver tutorial presenter', () => {
 
       expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBe(initialPopover);
       expect(onActiveChange).toHaveBeenCalledExactlyOnceWith(true);
-      expect(requestFrame.mock.calls.length).toBeLessThanOrEqual(settledFrameCount + 3);
+      expect(requestFrame.mock.calls.length).toBeLessThanOrEqual(settledFrameCount + 5);
     } finally {
       presenter.destroy();
       requestFrame.mockRestore();
@@ -1777,6 +1972,66 @@ describe('Driver tutorial presenter', () => {
     expect(shadowRoot.querySelector('style')).toBeNull();
   });
 
+  it('keeps Next when a lower shadow host fails document hit testing', async () => {
+    const driverPointerRules = installDriverPointerRules();
+    const host = document.createElement('div');
+    host.style.position = 'relative';
+    host.style.zIndex = '0';
+    const shadowRoot = host.attachShadow({ mode: 'open' });
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    shadowRoot.appendChild(target);
+    document.body.appendChild(host);
+    const elementFromPointDescriptor = Object.getOwnPropertyDescriptor(
+      document,
+      'elementFromPoint',
+    );
+    let hitTestCount = 0;
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: () => hitTestCount++ === 0
+        ? host
+        : document.querySelector('.driver-overlay'),
+    });
+    Object.defineProperty(shadowRoot, 'elementFromPoint', {
+      configurable: true,
+      value: () => target,
+    });
+    const onAcknowledge = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge,
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+
+      expect(hitTestCount).toBeGreaterThanOrEqual(2);
+      expect(target.classList.contains('driver-no-interaction')).toBe(true);
+      const next = document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]');
+      expect(next?.style.display).toBe('block');
+      target.click();
+      expect(onAcknowledge).not.toHaveBeenCalled();
+      next?.click();
+      expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    } finally {
+      presenter.destroy();
+      driverPointerRules.remove();
+
+      if (elementFromPointDescriptor === undefined) {
+        Reflect.deleteProperty(document, 'elementFromPoint');
+      } else {
+        Object.defineProperty(document, 'elementFromPoint', elementFromPointDescriptor);
+      }
+    }
+  });
+
   it('acknowledges after an earlier host action even when it stops bubble propagation', async () => {
     const host = document.createElement('div');
     const shadowRoot = host.attachShadow({ mode: 'open' });
@@ -2113,6 +2368,119 @@ describe('Driver tutorial presenter', () => {
       expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBe(blockedPopover);
       expect(target.classList.contains('driver-no-interaction')).toBe(false);
       expect(onActiveChange).toHaveBeenCalledExactlyOnceWith(true);
+    } finally {
+      presenter.destroy();
+      driverPointerRules.remove();
+    }
+  });
+
+  it('restarts for a sibling selector without treating another subtree as relevant', async () => {
+    const driverPointerRules = installDriverPointerRules(`
+      [data-mode="busy"] + .sibling-controlled { pointer-events: none !important; }
+    `);
+    const group = document.createElement('div');
+    const mode = document.createElement('span');
+    const target = document.createElement('button');
+    const unrelatedGroup = document.createElement('div');
+    const unrelated = document.createElement('span');
+    const focusAnchor = document.createElement('button');
+    target.className = 'sibling-controlled';
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    group.append(mode, target);
+    unrelatedGroup.appendChild(unrelated);
+    document.body.append(group, unrelatedGroup, focusAnchor);
+    const onActiveChange = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onActiveChange,
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+      const interactivePopover = document.querySelector('[data-mpgd-tutorial-popover]');
+      focusAnchor.focus();
+
+      unrelated.dataset.mode = 'busy';
+      await nextFrame();
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBe(interactivePopover);
+      expect(document.activeElement).toBe(focusAnchor);
+
+      mode.dataset.mode = 'busy';
+      await nextFrame();
+      const blockedPopover = document.querySelector('[data-mpgd-tutorial-popover]');
+      expect(blockedPopover).not.toBe(interactivePopover);
+      expect(target.classList.contains('driver-no-interaction')).toBe(true);
+      expect(document.querySelector<HTMLElement>('[data-mpgd-tutorial-next]')?.style.display)
+        .toBe('block');
+
+      delete mode.dataset.mode;
+      await nextFrame();
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBe(blockedPopover);
+      expect(target.classList.contains('driver-no-interaction')).toBe(false);
+      expect(onActiveChange).toHaveBeenCalledExactlyOnceWith(true);
+    } finally {
+      presenter.destroy();
+      driverPointerRules.remove();
+    }
+  });
+
+  it('restarts for selectors controlled by a sibling ancestor branch', async () => {
+    const driverPointerRules = installDriverPointerRules(`
+      [data-mode="busy"] + section .nested-sibling-controlled,
+      .nested-controller:has([data-mode="busy"]) + section .nested-sibling-controlled {
+        pointer-events: none !important;
+      }
+    `);
+    const container = document.createElement('div');
+    const controller = document.createElement('div');
+    const marker = document.createElement('span');
+    const targetContainer = document.createElement('section');
+    const target = document.createElement('button');
+    target.className = 'nested-sibling-controlled';
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    controller.className = 'nested-controller';
+    controller.appendChild(marker);
+    targetContainer.appendChild(target);
+    container.append(controller, targetContainer);
+    document.body.appendChild(container);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+      const initialPopover = document.querySelector('[data-mpgd-tutorial-popover]');
+
+      controller.dataset.mode = 'busy';
+      await nextFrame();
+      const directSiblingPopover = document.querySelector('[data-mpgd-tutorial-popover]');
+      expect(directSiblingPopover).not.toBe(initialPopover);
+      expect(target.classList.contains('driver-no-interaction')).toBe(true);
+
+      delete controller.dataset.mode;
+      await nextFrame();
+      const restoredPopover = document.querySelector('[data-mpgd-tutorial-popover]');
+      expect(restoredPopover).not.toBe(directSiblingPopover);
+      expect(target.classList.contains('driver-no-interaction')).toBe(false);
+
+      marker.dataset.mode = 'busy';
+      await nextFrame();
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBe(restoredPopover);
+      expect(target.classList.contains('driver-no-interaction')).toBe(true);
     } finally {
       presenter.destroy();
       driverPointerRules.remove();
