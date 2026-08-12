@@ -80,6 +80,15 @@ interface TutorialTargetClickState extends TutorialTargetClickMode {
   readonly target: HTMLElement;
 }
 
+interface TutorialTargetRect {
+  readonly bottom: number;
+  readonly height: number;
+  readonly left: number;
+  readonly right: number;
+  readonly top: number;
+  readonly width: number;
+}
+
 export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   input: DriverTutorialPresenterInput<TStep>,
 ): DriverTutorialPresenter<TStep> {
@@ -124,6 +133,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let syncModalSemantics: (() => void) | undefined;
   let targetAcknowledgeBinding: TutorialTargetAcknowledgeBinding | undefined;
   let targetClickState: TutorialTargetClickState | undefined;
+  let targetHitTestFrame: number | undefined;
+  let targetGeometryFrame: number | undefined;
   const pendingSkipOperations = new Set<Promise<void>>();
 
   const reportError = (error: unknown): void => {
@@ -281,6 +292,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         }
 
         if (instance === created) {
+          cancelTargetGeometryMonitor();
+          clearTargetGeometryObservers();
           instance = null;
 
           if (!restartingInstance) {
@@ -392,6 +405,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         targetClickMode,
       );
       syncModalSemantics?.();
+      syncTargetGeometryObservers(presentation);
+      syncTargetGeometryMonitor(nextInstance, presentation);
       reportActive(true);
     } catch (error) {
       dismissedPresentationKey = activePresentationKey;
@@ -456,6 +471,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   const mutationObserver = new browserWindow.MutationObserver(processMutationRecords);
   let observedShadowRoots = new Set<ShadowRoot>();
   let observingDocumentMutations = false;
+  let resizeObserver: ResizeObserver | null = null;
+  let intersectionObserver: IntersectionObserver | null = null;
+  const observedGeometryTargets = new Set<HTMLElement>();
+  const targetVisibility = new Map<HTMLElement, boolean>();
 
   function processMutationRecords(records: readonly MutationRecord[]): void {
     if (activePresentation === null && instance === null) {
@@ -502,17 +521,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       }
 
       const mutationTarget = record.target;
-
-      if (currentTarget !== null && isComposedAncestorOrSelf(currentTarget, mutationTarget)) {
-        return true;
-      }
-
-      if (input.resolveTarget !== undefined) {
-        return false;
-      }
-
-      const candidates = findComposedTutorialCandidates(root, createTargetSelector(presentation));
-      return candidates.some((candidate) => isComposedAncestorOrSelf(candidate, mutationTarget));
+      return collectTargetSelectionElements(presentation, currentTarget)
+        .some((target) => attributeMutationMayAffectTarget(target, mutationTarget));
     }
 
     if (record.type !== 'childList') {
@@ -606,17 +616,97 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       return false;
     }
 
-    const activeElement = instance?.getActiveElement();
-    const targets = activeElement instanceof HTMLElement
-      && activeElement.id !== 'driver-dummy-element'
-      ? [activeElement]
-      : [];
+    return collectTargetSelectionElements(presentation)
+      .some((target) => composedElementUsesTreeScope(target, treeScope));
+  }
 
-    if (input.resolveTarget === undefined && presentation.step.target !== null) {
-      targets.push(...findComposedTutorialCandidates(root, createTargetSelector(presentation)));
+  function collectTargetSelectionElements(
+    presentation: DriverTutorialPresentation<TStep>,
+    currentTarget?: HTMLElement | null,
+  ): HTMLElement[] {
+    const targets = new Set<HTMLElement>();
+    const activeTarget = currentTarget ?? instance?.getActiveElement();
+
+    if (activeTarget instanceof HTMLElement && activeTarget.id !== 'driver-dummy-element') {
+      targets.add(activeTarget);
     }
 
-    return targets.some((target) => composedElementUsesTreeScope(target, treeScope));
+    if (input.resolveTarget === undefined && presentation.step.target !== null) {
+      for (const candidate of findComposedTutorialCandidates(
+        root,
+        createTargetSelector(presentation),
+      )) {
+        targets.add(candidate);
+      }
+    }
+
+    return [...targets];
+  }
+
+  function attributeMutationMayAffectTarget(
+    target: HTMLElement,
+    mutationTarget: Element,
+  ): boolean {
+    if (isComposedAncestorOrSelf(target, mutationTarget)) {
+      return true;
+    }
+
+    if (target.getRootNode() !== mutationTarget.getRootNode()) {
+      return false;
+    }
+
+    if (target.getRootNode() instanceof ShadowRoot) {
+      return true;
+    }
+
+    if (root instanceof HTMLElement && isNodeWithinLookupRoot(mutationTarget)) {
+      return true;
+    }
+
+    if (target.contains(mutationTarget)
+      || target.parentElement !== null
+        && mutationTarget.parentElement === target.parentElement) {
+      return true;
+    }
+
+    return composedAncestorBranchesAreSiblings(target, mutationTarget);
+  }
+
+  function composedAncestorBranchesAreSiblings(
+    target: HTMLElement,
+    mutationTarget: Element,
+  ): boolean {
+    const targetAncestors = collectComposedAncestors(target);
+    let mutationAncestor: Element | null = mutationTarget;
+
+    while (mutationAncestor !== null) {
+      const mutationParent = getComposedParentElement(mutationAncestor);
+
+      if (mutationParent !== null
+        && mutationParent !== ownerDocument.body
+        && mutationParent !== ownerDocument.documentElement
+        && targetAncestors.some(
+          (targetAncestor) => getComposedParentElement(targetAncestor) === mutationParent,
+        )) {
+        return true;
+      }
+
+      mutationAncestor = mutationParent;
+    }
+
+    return false;
+  }
+
+  function collectComposedAncestors(element: Element): Element[] {
+    const ancestors: Element[] = [];
+    let current: Element | null = element;
+
+    while (current !== null) {
+      ancestors.push(current);
+      current = getComposedParentElement(current);
+    }
+
+    return ancestors;
   }
 
   function nodeContainsStylesheetElement(node: Node): boolean {
@@ -685,6 +775,158 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     observedShadowRoots.clear();
   }
 
+  function syncTargetGeometryObservers(
+    presentation: DriverTutorialPresentation<TStep>,
+  ): void {
+    const nextTargets = shouldPreferActivatableTutorialTarget(presentation)
+      ? new Set(collectTargetSelectionElements(presentation))
+      : new Set<HTMLElement>();
+
+    for (const target of observedGeometryTargets) {
+      if (nextTargets.has(target)) {
+        continue;
+      }
+
+      intersectionObserver?.unobserve(target);
+
+      if (target !== resizeObservationRoot) {
+        resizeObserver?.unobserve(target);
+      }
+
+      observedGeometryTargets.delete(target);
+      targetVisibility.delete(target);
+    }
+
+    for (const target of nextTargets) {
+      if (observedGeometryTargets.has(target)) {
+        continue;
+      }
+
+      observedGeometryTargets.add(target);
+      targetVisibility.set(target, isVisibleTutorialTarget(target, browserWindow));
+      resizeObserver?.observe(target);
+      intersectionObserver?.observe(target);
+    }
+  }
+
+  function clearTargetGeometryObservers(): void {
+    for (const target of observedGeometryTargets) {
+      intersectionObserver?.unobserve(target);
+
+      if (target !== resizeObservationRoot) {
+        resizeObserver?.unobserve(target);
+      }
+    }
+
+    intersectionObserver?.takeRecords();
+    observedGeometryTargets.clear();
+    targetVisibility.clear();
+  }
+
+  function syncTargetGeometryMonitor(
+    currentInstance: Driver,
+    presentation: DriverTutorialPresentation<TStep>,
+  ): void {
+    cancelTargetGeometryMonitor();
+
+    if (!shouldPreferActivatableTutorialTarget(presentation)) {
+      return;
+    }
+
+    const target = currentInstance.getActiveElement();
+
+    if (!(target instanceof HTMLElement) || target.id === 'driver-dummy-element') {
+      return;
+    }
+
+    const presentationKey = activePresentationKey;
+    let previousRect = readTutorialTargetRect(target);
+    let previousVisible = isVisibleTutorialTargetWithRect(target, browserWindow, previousRect);
+    const monitor = (): void => {
+      targetGeometryFrame = undefined;
+      const currentPresentation = activePresentation;
+
+      if (destroyed
+        || instance !== currentInstance
+        || !currentInstance.isActive()
+        || currentPresentation === null
+        || activePresentationKey !== presentationKey
+        || !shouldPreferActivatableTutorialTarget(currentPresentation)
+        || currentInstance.getActiveElement() !== target) {
+        return;
+      }
+
+      const nextRect = readTutorialTargetRect(target);
+      const rectChanged = !tutorialTargetRectsEqual(previousRect, nextRect);
+      const selectionInvalid = !target.isConnected
+        || !isNodeWithinLookupRoot(target)
+        || (input.resolveTarget === undefined
+          && !target.matches(createTargetSelector(currentPresentation)));
+
+      if (rectChanged || selectionInvalid) {
+        const nextVisible = !selectionInvalid
+          && isVisibleTutorialTargetWithRect(target, browserWindow, nextRect);
+
+        if (selectionInvalid || nextVisible !== previousVisible) {
+          scheduleHostRefresh();
+        } else {
+          scheduleRefresh();
+        }
+
+        previousRect = nextRect;
+        previousVisible = nextVisible;
+      }
+
+      targetGeometryFrame = browserWindow.requestAnimationFrame(monitor);
+    };
+    targetGeometryFrame = browserWindow.requestAnimationFrame(monitor);
+  }
+
+  function cancelTargetGeometryMonitor(): void {
+    if (targetGeometryFrame === undefined) {
+      return;
+    }
+
+    browserWindow.cancelAnimationFrame(targetGeometryFrame);
+    targetGeometryFrame = undefined;
+  }
+
+  function recordTargetVisibilityChange(target: HTMLElement): boolean {
+    const previous = targetVisibility.get(target);
+    const next = isVisibleTutorialTarget(target, browserWindow);
+    targetVisibility.set(target, next);
+    return previous !== undefined && previous !== next;
+  }
+
+  function processIntersectionRecords(entries: IntersectionObserverEntry[]): void {
+    const targetSelectionChanged = entries.some((entry) => (
+      entry.target instanceof HTMLElement
+      && observedGeometryTargets.has(entry.target)
+      && recordTargetVisibilityChange(entry.target)
+    ));
+
+    if (targetSelectionChanged) {
+      scheduleHostRefresh();
+    }
+  }
+
+  function processResizeRecords(entries: ResizeObserverEntry[]): void {
+    const targetSelectionChanged = entries.some((entry) => (
+      entry.target instanceof HTMLElement
+      && observedGeometryTargets.has(entry.target)
+      && recordTargetVisibilityChange(entry.target)
+    ));
+
+    if (targetSelectionChanged) {
+      scheduleHostRefresh();
+      return;
+    }
+
+    if (entries.some((entry) => entry.target === resizeObservationRoot)) {
+      scheduleViewportRefresh();
+    }
+  }
+
   function scheduleViewportRefresh(): void {
     const presentation = activePresentation;
     const activeElement = instance?.getActiveElement();
@@ -696,8 +938,11 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   }
 
   reconcileMutationRoots(true);
-  const resizeObserver = typeof browserWindow.ResizeObserver === 'function'
-    ? new browserWindow.ResizeObserver(scheduleViewportRefresh)
+  resizeObserver = typeof browserWindow.ResizeObserver === 'function'
+    ? new browserWindow.ResizeObserver(processResizeRecords)
+    : null;
+  intersectionObserver = typeof browserWindow.IntersectionObserver === 'function'
+    ? new browserWindow.IntersectionObserver(processIntersectionRecords, { threshold: 0 })
     : null;
   resizeObserver?.observe(resizeObservationRoot);
   ownerDocument.addEventListener('scroll', scheduleViewportRefresh, true);
@@ -721,7 +966,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       mutationObserver.disconnect();
       observingDocumentMutations = false;
       observedShadowRoots.clear();
+      cancelTargetGeometryMonitor();
+      clearTargetGeometryObservers();
       resizeObserver?.disconnect();
+      intersectionObserver?.disconnect();
       ownerDocument.removeEventListener('scroll', scheduleViewportRefresh, true);
       browserWindow.removeEventListener('resize', scheduleViewportRefresh);
       browserWindow.visualViewport?.removeEventListener('resize', scheduleViewportRefresh);
@@ -996,7 +1244,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   ): void {
     if (mode.acknowledgeOnTargetClick
       && target !== undefined
-      && !isActivatableTutorialTarget(target, browserWindow)) {
+      && (!isActivatableTutorialTarget(target, browserWindow)
+        || !isShadowTutorialTargetHitTestable(target))) {
       applyTargetClickMode(
         currentInstance,
         presentation,
@@ -1004,9 +1253,119 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         { acknowledgeOnTargetClick: false },
         true,
       );
+    } else if (mode.acknowledgeOnTargetClick && target !== undefined) {
+      scheduleShadowTargetHitTest(currentInstance, presentation, target);
     }
 
     syncTargetAcknowledgeBinding(currentInstance, presentation);
+  }
+
+  function isShadowTutorialTargetHitTestable(target: HTMLElement): boolean {
+    if (!(target.getRootNode() instanceof ShadowRoot)) {
+      return true;
+    }
+
+    if (typeof ownerDocument.elementFromPoint !== 'function') {
+      return true;
+    }
+
+    const shadowRoots: ShadowRoot[] = [];
+    let current: Element | null = target;
+
+    while (current !== null) {
+      const treeScope = current.getRootNode();
+
+      if (!(treeScope instanceof ShadowRoot)) {
+        break;
+      }
+
+      shadowRoots.unshift(treeScope);
+      current = treeScope.host;
+    }
+
+    const visibleRect = intersectRect(
+      target.getBoundingClientRect(),
+      resolveViewportRect(browserWindow),
+    );
+
+    if (visibleRect === null) {
+      return false;
+    }
+
+    const x = (visibleRect.left + visibleRect.right) / 2;
+    const y = (visibleRect.top + visibleRect.bottom) / 2;
+    let hit = ownerDocument.elementFromPoint(x, y);
+    const outerHost = shadowRoots[0]?.host;
+
+    if (!(hit instanceof Element)
+      || outerHost === undefined
+      || !isComposedAncestorOrSelf(hit, outerHost)) {
+      return false;
+    }
+
+    for (const [index, shadowRoot] of shadowRoots.entries()) {
+      if (typeof shadowRoot.elementFromPoint !== 'function') {
+        return false;
+      }
+
+      hit = shadowRoot.elementFromPoint(x, y);
+      const expectedTarget = shadowRoots[index + 1]?.host ?? target;
+
+      if (!(hit instanceof Element)
+        || !isComposedAncestorOrSelf(hit, expectedTarget)) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+
+  function scheduleShadowTargetHitTest(
+    currentInstance: Driver,
+    presentation: DriverTutorialPresentation<TStep>,
+    target: HTMLElement,
+  ): void {
+    if (!(target.getRootNode() instanceof ShadowRoot)
+      || typeof ownerDocument.elementFromPoint !== 'function') {
+      return;
+    }
+
+    cancelShadowTargetHitTest();
+    const state = targetClickState;
+    const presentationKey = activePresentationKey;
+    targetHitTestFrame = browserWindow.requestAnimationFrame(() => {
+      targetHitTestFrame = undefined;
+
+      if (destroyed
+        || instance !== currentInstance
+        || !currentInstance.isActive()
+        || activePresentation !== presentation
+        || activePresentationKey !== presentationKey
+        || targetClickState !== state
+        || state?.acknowledgeOnTargetClick !== true
+        || isShadowTutorialTargetHitTestable(target)) {
+        return;
+      }
+
+      applyTargetClickMode(
+        currentInstance,
+        presentation,
+        target,
+        { acknowledgeOnTargetClick: false },
+        true,
+      );
+      syncTargetAcknowledgeBinding(currentInstance, presentation);
+      syncModalSemantics?.();
+    });
+  }
+
+  function cancelShadowTargetHitTest(): void {
+    if (targetHitTestFrame === undefined) {
+      return;
+    }
+
+    browserWindow.cancelAnimationFrame(targetHitTestFrame);
+    targetHitTestFrame = undefined;
   }
 
   function reportMissingTarget(
@@ -1093,6 +1452,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     target: HTMLElement | undefined,
     mode: TutorialTargetClickMode,
   ): void {
+    cancelShadowTargetHitTest();
     targetClickState = target === undefined
       ? undefined
       : {
@@ -1108,6 +1468,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       return;
     }
 
+    cancelShadowTargetHitTest();
     targetClickState = undefined;
   }
 
@@ -1155,6 +1516,8 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   }
 
   function destroyInstancePreservingTarget(currentInstance: Driver): void {
+    cancelTargetGeometryMonitor();
+    clearTargetGeometryObservers();
     const target = currentInstance.getActiveElement();
     targetSemanticsGuard?.restore();
     targetSemanticsGuard = undefined;
@@ -1243,11 +1606,19 @@ export function resolveVisibleTutorialTarget(input: {
 }
 
 export function isVisibleTutorialTarget(element: HTMLElement, view: Window = window): boolean {
-  if (!isEligibleTutorialTarget(element, view)) {
+  return isVisibleTutorialTargetWithRect(element, view, element.getBoundingClientRect());
+}
+
+function isVisibleTutorialTargetWithRect(
+  element: HTMLElement,
+  view: Window,
+  rect: TutorialTargetRect,
+): boolean {
+  if (!isEligibleTutorialTargetWithRect(element, view, rect)) {
     return false;
   }
 
-  let visible = intersectRect(element.getBoundingClientRect(), resolveViewportRect(view));
+  let visible = intersectRect(rect, resolveViewportRect(view));
   let ancestor = getComposedParentElement(element);
 
   while (visible !== null && ancestor !== null) {
@@ -1269,6 +1640,27 @@ export function isVisibleTutorialTarget(element: HTMLElement, view: Window = win
   }
 
   return visible !== null && visible.right > visible.left && visible.bottom > visible.top;
+}
+
+function readTutorialTargetRect(element: HTMLElement): TutorialTargetRect {
+  const rect = element.getBoundingClientRect();
+  return {
+    bottom: rect.bottom,
+    height: rect.height,
+    left: rect.left,
+    right: rect.right,
+    top: rect.top,
+    width: rect.width,
+  };
+}
+
+function tutorialTargetRectsEqual(left: TutorialTargetRect, right: TutorialTargetRect): boolean {
+  return left.bottom === right.bottom
+    && left.height === right.height
+    && left.left === right.left
+    && left.right === right.right
+    && left.top === right.top
+    && left.width === right.width;
 }
 
 function resolveViewportRect(
@@ -1777,8 +2169,14 @@ function clearDetachedDriverTargetClasses(
 }
 
 function isRenderableTutorialTarget(element: HTMLElement, view: Window): boolean {
-  const rect = element.getBoundingClientRect();
+  return isRenderableTutorialTargetWithRect(element, view, element.getBoundingClientRect());
+}
 
+function isRenderableTutorialTargetWithRect(
+  element: HTMLElement,
+  view: Window,
+  rect: Pick<DOMRect, 'height' | 'width'>,
+): boolean {
   if (!element.isConnected || rect.width <= 0 || rect.height <= 0) {
     return false;
   }
@@ -1806,6 +2204,15 @@ function isEligibleUnderlyingTutorialModal(element: HTMLElement, view: Window): 
 
 function isEligibleTutorialTarget(element: HTMLElement, view: Window): boolean {
   return isRenderableTutorialTarget(element, view)
+    && isSemanticallyActiveTutorialElement(element);
+}
+
+function isEligibleTutorialTargetWithRect(
+  element: HTMLElement,
+  view: Window,
+  rect: TutorialTargetRect,
+): boolean {
+  return isRenderableTutorialTargetWithRect(element, view, rect)
     && isSemanticallyActiveTutorialElement(element);
 }
 
