@@ -74,6 +74,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let destroyed = false;
   let reportedActive = false;
   let restoreTargetSemantics: (() => void) | undefined;
+  let targetRestorePending = false;
 
   const reportActive = (active: boolean): void => {
     if (reportedActive === active) {
@@ -129,14 +130,18 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       stageRadius: 9,
       waitForElement: 900,
       onCloseClick: () => {
-        created.destroy();
+        destroyInstancePreservingTarget(created);
         void Promise.resolve()
           .then(() => input.onSkip())
           .catch((error: unknown) => input.onError?.(error));
       },
       onDestroyed: () => {
-        restoreTargetSemantics?.();
+        if (!targetRestorePending) {
+          restoreTargetSemantics?.();
+        }
+
         restoreTargetSemantics = undefined;
+        targetRestorePending = false;
         restoreModalSemantics?.();
         restoreModalSemantics = undefined;
 
@@ -259,9 +264,11 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         browserWindow.cancelAnimationFrame(frame);
       }
 
-      instance?.destroy();
+      if (instance !== null) {
+        destroyInstancePreservingTarget(instance);
+      }
+
       instance = null;
-      restoreTargetSemantics?.();
       restoreTargetSemantics = undefined;
       clearTutorialState(stateHost);
       reportActive(false);
@@ -291,7 +298,11 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       activePresentationKey = nextKey;
       const previousInstance = instance;
       instance = null;
-      previousInstance?.destroy();
+
+      if (previousInstance !== null) {
+        destroyInstancePreservingTarget(previousInstance);
+      }
+
       clearTutorialState(stateHost);
       reportActive(false);
       scheduleRefresh();
@@ -322,10 +333,27 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       return;
     }
 
-    const restorePreviousTarget = restoreTargetSemantics;
+    const previousTarget = currentInstance.getActiveElement();
+    restoreTargetSemantics?.();
+    const restorePreviousTarget = !(previousTarget instanceof HTMLElement)
+      ? undefined
+      : captureTutorialTargetSemantics(previousTarget);
     restoreTargetSemantics = preserveTutorialTargetSemantics(target);
     currentInstance.highlight({ ...current, element: target });
     restorePreviousTarget?.();
+  }
+
+  function destroyInstancePreservingTarget(currentInstance: Driver): void {
+    const target = currentInstance.getActiveElement();
+    restoreTargetSemantics?.();
+    const restoreAfterDestroy = !(target instanceof HTMLElement)
+      ? undefined
+      : captureTutorialTargetSemantics(target);
+    targetRestorePending = true;
+    currentInstance.destroy();
+    targetRestorePending = false;
+    restoreAfterDestroy?.();
+    restoreTargetSemantics = undefined;
   }
 }
 
@@ -464,11 +492,14 @@ function configureTutorialModalSemantics(
   const underlyingModal = activeElement?.closest<HTMLElement>(modalSelector) ?? null;
   const previousAriaModal = underlyingModal?.getAttribute('aria-modal') ?? null;
   const previousAriaOwns = underlyingModal?.getAttribute('aria-owns') ?? null;
+  let ownedAriaModal: string | null = previousAriaModal;
+  let ownedAriaOwns: string | null = previousAriaOwns;
 
   if (interaction === 'blocked') {
     popover.setAttribute('role', 'dialog');
     popover.setAttribute('aria-modal', 'true');
     underlyingModal?.setAttribute('aria-modal', 'false');
+    ownedAriaModal = underlyingModal === null ? previousAriaModal : 'false';
   } else {
     popover.setAttribute('role', 'region');
     popover.removeAttribute('aria-modal');
@@ -476,7 +507,8 @@ function configureTutorialModalSemantics(
     if (underlyingModal !== null) {
       const ownedIds = new Set((previousAriaOwns ?? '').split(/\s+/u).filter(Boolean));
       ownedIds.add(popover.id);
-      underlyingModal.setAttribute('aria-owns', [...ownedIds].join(' '));
+      ownedAriaOwns = [...ownedIds].join(' ');
+      underlyingModal.setAttribute('aria-owns', ownedAriaOwns);
     }
   }
 
@@ -485,14 +517,40 @@ function configureTutorialModalSemantics(
       return;
     }
 
-    restoreAttribute(underlyingModal, 'aria-modal', previousAriaModal);
-    restoreAttribute(underlyingModal, 'aria-owns', previousAriaOwns);
+    restoreOwnedAttribute(underlyingModal, 'aria-modal', ownedAriaModal, previousAriaModal);
+    restoreOwnedAttribute(underlyingModal, 'aria-owns', ownedAriaOwns, previousAriaOwns);
   };
 }
 
 function preserveTutorialTargetSemantics(element: HTMLElement): () => void {
   const attributes = ['aria-controls', 'aria-expanded', 'aria-haspopup'] as const;
   const previous = Object.fromEntries(
+    attributes.map((attribute) => [attribute, element.getAttribute(attribute)]),
+  ) as Record<(typeof attributes)[number], string | null>;
+  const driverOwned = {
+    'aria-controls': 'driver-popover-content',
+    'aria-expanded': 'true',
+    'aria-haspopup': 'dialog',
+  } as const;
+
+  return () => {
+    if (!element.isConnected) {
+      return;
+    }
+
+    for (const attribute of attributes) {
+      const current = element.getAttribute(attribute);
+
+      if (current === null || current === driverOwned[attribute]) {
+        restoreAttribute(element, attribute, previous[attribute]);
+      }
+    }
+  };
+}
+
+function captureTutorialTargetSemantics(element: HTMLElement): () => void {
+  const attributes = ['aria-controls', 'aria-expanded', 'aria-haspopup'] as const;
+  const captured = Object.fromEntries(
     attributes.map((attribute) => [attribute, element.getAttribute(attribute)]),
   ) as Record<(typeof attributes)[number], string | null>;
 
@@ -502,7 +560,7 @@ function preserveTutorialTargetSemantics(element: HTMLElement): () => void {
     }
 
     for (const attribute of attributes) {
-      restoreAttribute(element, attribute, previous[attribute]);
+      restoreAttribute(element, attribute, captured[attribute]);
     }
   };
 }
@@ -546,6 +604,19 @@ function restoreAttribute(element: HTMLElement, name: string, value: string | nu
   } else {
     element.setAttribute(name, value);
   }
+}
+
+function restoreOwnedAttribute(
+  element: HTMLElement,
+  name: string,
+  ownedValue: string | null,
+  previousValue: string | null,
+): void {
+  if (element.getAttribute(name) !== ownedValue) {
+    return;
+  }
+
+  restoreAttribute(element, name, previousValue);
 }
 
 function isDriverOwnedMutation(record: MutationRecord): boolean {

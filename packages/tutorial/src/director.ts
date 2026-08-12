@@ -184,6 +184,10 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       }
     },
     async replay(options = {}) {
+      const replayProgress = options.fromStepId === undefined
+        ? createInitialTutorialProgress(definition, now())
+        : createTutorialProgressAtStep(definition, options.fromStepId, now());
+
       if (!replaying) {
         durableBeforeReplay = progress;
         replayRestorePending = true;
@@ -191,9 +195,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
 
       replaying = true;
       suspended = false;
-      progress = options.fromStepId === undefined
-        ? createInitialTutorialProgress(definition, now())
-        : createTutorialProgressAtStep(definition, options.fromStepId, now());
+      progress = replayProgress;
       publish();
     },
     setSuspended(nextSuspended) {

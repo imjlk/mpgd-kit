@@ -77,8 +77,8 @@ const director = createTutorialDirector({
   progressStore,
 });
 
-director.observeScene('play');
 director.observeAction('stage.start');
+director.observeScene('play');
 director.observeSignal('worker.moved');
 await director.flush();
 director.destroy();
