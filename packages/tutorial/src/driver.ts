@@ -233,8 +233,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         popover = wrapper;
         syncModalSemantics = syncCreatedModalSemantics;
         syncCreatedModalSemantics();
-        if (presentation.step.advance.kind === 'acknowledge') {
-          const initialFocus = created.getActiveStep()?.advanceOnClick === true
+        if (presentation.step.advance.kind === 'acknowledge'
+          || presentation.step.interaction === 'blocked') {
+          const initialFocus = presentation.step.advance.kind !== 'acknowledge'
+            || created.getActiveStep()?.advanceOnClick === true
             ? closeButton
             : nextButton;
           browserWindow.queueMicrotask(() => initialFocus.focus());
@@ -358,7 +360,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     ? new browserWindow.ResizeObserver(scheduleRefresh)
     : null;
   resizeObserver?.observe(observationRoot);
-  observationRoot.addEventListener('scroll', scheduleRefresh, true);
+  ownerDocument.addEventListener('scroll', scheduleRefresh, true);
   browserWindow.visualViewport?.addEventListener('resize', scheduleRefresh);
   browserWindow.visualViewport?.addEventListener('scroll', scheduleRefresh);
   browserWindow.addEventListener('orientationchange', scheduleRefresh);
@@ -373,7 +375,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       missingTargetErrorKey = null;
       mutationObserver.disconnect();
       resizeObserver?.disconnect();
-      observationRoot.removeEventListener('scroll', scheduleRefresh, true);
+      ownerDocument.removeEventListener('scroll', scheduleRefresh, true);
       browserWindow.visualViewport?.removeEventListener('resize', scheduleRefresh);
       browserWindow.visualViewport?.removeEventListener('scroll', scheduleRefresh);
       browserWindow.removeEventListener('orientationchange', scheduleRefresh);

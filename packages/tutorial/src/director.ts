@@ -86,14 +86,30 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
     return clock().toISOString();
   }
 
+  function reportError(error: unknown): void {
+    try {
+      input.onError?.(error);
+    } catch {
+      // Error reporting must not interrupt tutorial state transitions.
+    }
+  }
+
   function persist(next: TutorialProgressOf<TDefinition>): void {
     if (destroyed || replaying) {
       return;
     }
 
     void progressStore.save(next).catch((error: unknown) => {
-      input.onError?.(error);
+      reportError(error);
     });
+  }
+
+  function notifyListener(listener: Listener, nextSnapshot: TutorialDirectorSnapshot<TDefinition>): void {
+    try {
+      listener(nextSnapshot);
+    } catch (error) {
+      reportError(error);
+    }
   }
 
   function publish(): void {
@@ -125,7 +141,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
 
         for (const subscription of recipients) {
           if (listeners.has(subscription)) {
-            subscription.listener(pendingSnapshot);
+            notifyListener(subscription.listener, pendingSnapshot);
           }
         }
       }
@@ -297,13 +313,13 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       try {
         await progressStore.save(progress);
       } catch (error) {
-        input.onError?.(error);
+        reportError(error);
       }
     },
     subscribe(listener) {
       const subscription: Subscription = { listener };
       listeners.add(subscription);
-      listener(snapshot);
+      notifyListener(listener, snapshot);
       return () => listeners.delete(subscription);
     },
   };
