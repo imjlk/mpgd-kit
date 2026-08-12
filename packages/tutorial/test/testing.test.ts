@@ -75,6 +75,37 @@ describe('tutorial testing helpers', () => {
     expect(record[globalKey]).not.toBe(first.bridge);
   });
 
+  it('restores an own undefined debug key after stacked bridges are removed out of order', () => {
+    const globalObject = {} as typeof globalThis;
+    const record = globalObject as unknown as Record<string, unknown>;
+    const globalKey = '__TEST_UNDEFINED_TUTORIAL__';
+    record[globalKey] = undefined;
+    const first = installTutorialDebugBridge({
+      director: createTutorialDirector({
+        autoStart: true,
+        definition: tutorial,
+        progressStore: createMemoryTutorialProgressStore({ definition: tutorial, initial: null }),
+      }),
+      globalKey,
+      globalObject,
+    });
+    const second = installTutorialDebugBridge({
+      director: createTutorialDirector({
+        autoStart: true,
+        definition: tutorial,
+        progressStore: createMemoryTutorialProgressStore({ definition: tutorial, initial: null }),
+      }),
+      globalKey,
+      globalObject,
+    });
+
+    first.destroy();
+    second.destroy();
+
+    expect(Object.hasOwn(record, globalKey)).toBe(true);
+    expect(record[globalKey]).toBeUndefined();
+  });
+
   it('runs the debug replay completion hook only after replay succeeds', async () => {
     const events: string[] = [];
     const afterReplay = vi.fn(() => {

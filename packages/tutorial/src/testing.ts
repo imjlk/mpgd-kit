@@ -152,6 +152,7 @@ export interface InstallTutorialDebugBridgeInput<TDefinition extends TutorialDef
 interface TutorialDebugBridgeInstallation {
   readonly bridge: object;
   readonly fallback: unknown;
+  readonly fallbackHadOwnProperty: boolean;
   readonly globalKey: string;
   readonly predecessor: TutorialDebugBridgeInstallation | null;
   readonly record: Record<string, unknown>;
@@ -166,6 +167,7 @@ export function installTutorialDebugBridge<TDefinition extends TutorialDefinitio
   const globalObject = input.globalObject ?? globalThis;
   const globalKey = input.globalKey ?? '__MPGD_TUTORIAL__';
   const record = globalObject as unknown as Record<string, unknown>;
+  const previousHadOwnProperty = Object.hasOwn(record, globalKey);
   const previous = record[globalKey];
   const replay = async (options: TutorialReplayOptions<TDefinition> = {}): Promise<void> => {
     await input.beforeReplay?.(options);
@@ -193,6 +195,9 @@ export function installTutorialDebugBridge<TDefinition extends TutorialDefinitio
     bridge,
     destroyed: false,
     fallback: predecessor === null ? previous : predecessor.fallback,
+    fallbackHadOwnProperty: predecessor === null
+      ? previousHadOwnProperty
+      : predecessor.fallbackHadOwnProperty,
     globalKey,
     predecessor,
     record,
@@ -224,10 +229,10 @@ export function installTutorialDebugBridge<TDefinition extends TutorialDefinitio
 
       if (restoredInstallation !== null) {
         record[globalKey] = restoredInstallation.bridge;
-      } else if (installation.fallback === undefined) {
-        Reflect.deleteProperty(record, globalKey);
-      } else {
+      } else if (installation.fallbackHadOwnProperty) {
         record[globalKey] = installation.fallback;
+      } else {
+        Reflect.deleteProperty(record, globalKey);
       }
     },
   };

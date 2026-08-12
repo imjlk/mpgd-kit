@@ -317,13 +317,16 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     }
 
     try {
-      return input.resolveTarget?.(presentation.step.target, root)
-        ?? resolveVisibleTutorialTarget({
-          root,
-          target: presentation.step.target,
-          targetAttribute,
-          view: browserWindow,
-        });
+      if (input.resolveTarget !== undefined) {
+        return input.resolveTarget(presentation.step.target, root);
+      }
+
+      return resolveVisibleTutorialTarget({
+        root,
+        target: presentation.step.target,
+        targetAttribute,
+        view: browserWindow,
+      });
     } catch (error) {
       if (presentationKey !== null
         && presentationKey === activePresentationKey
