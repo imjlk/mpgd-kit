@@ -388,6 +388,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
   return {
     destroy() {
+      if (destroyed) {
+        return;
+      }
+
       destroyed = true;
       activePresentation = null;
       activePresentationKey = null;
@@ -416,6 +420,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       reportActive(false);
     },
     present(presentation) {
+      if (destroyed) {
+        return;
+      }
+
       const nextKey = presentation === null
         ? null
         : JSON.stringify([
@@ -788,21 +796,30 @@ function resolveUnderlyingTutorialModal(
   currentModal: HTMLElement | null,
 ): HTMLElement | null {
   const activeModal = activeElement?.closest<HTMLElement>(modalSelector) ?? null;
+  const view = popover.ownerDocument.defaultView;
+  const isRenderableModal = (candidate: HTMLElement | null): candidate is HTMLElement => (
+    candidate !== null
+    && candidate !== popover
+    && !popover.contains(candidate)
+    && view !== null
+    && isRenderableTutorialTarget(candidate, view)
+  );
+  const renderableActiveModal = isRenderableModal(activeModal) ? activeModal : null;
+  const renderableCurrentModal = isRenderableModal(currentModal) ? currentModal : null;
 
   if (interaction !== 'blocked') {
-    return activeModal;
+    return renderableActiveModal;
   }
 
   if (activeElement !== undefined
-    && currentModal?.isConnected === true
-    && currentModal.contains(activeElement)) {
-    return currentModal;
+    && renderableCurrentModal?.contains(activeElement) === true) {
+    return renderableCurrentModal;
   }
 
-  return activeModal
+  return renderableActiveModal
+    ?? renderableCurrentModal
     ?? [...popover.ownerDocument.querySelectorAll<HTMLElement>(modalSelector)]
-      .find((candidate) => candidate !== popover && !popover.contains(candidate))
-    ?? (currentModal?.isConnected === true ? currentModal : null)
+      .find(isRenderableModal)
     ?? null;
 }
 
