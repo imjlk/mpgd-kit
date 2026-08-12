@@ -993,6 +993,48 @@ describe('Driver tutorial presenter', () => {
     expect(resetForReplay).toHaveBeenCalledOnce();
   });
 
+  it('contains throwing replay error reporters and allows a retry', async () => {
+    const button = document.createElement('button');
+    const replayError = new Error('replay failed');
+    let replayShouldFail = true;
+    const replay = vi.fn(async () => {
+      if (replayShouldFail) {
+        throw replayError;
+      }
+    });
+    const onError = vi.fn(() => {
+      throw new Error('reporting failed');
+    });
+    const unhandledRejections: unknown[] = [];
+    const recordUnhandledRejection = (reason: unknown): void => {
+      unhandledRejections.push(reason);
+    };
+    process.on('unhandledRejection', recordUnhandledRejection);
+    const unbind = bindTutorialReplayTrigger({
+      director: { replay } as never,
+      element: button,
+      onError,
+      presenter: {
+        resetForReplay: vi.fn(),
+        waitForPendingSkip: vi.fn(async () => undefined),
+      },
+    });
+
+    try {
+      button.click();
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledExactlyOnceWith(replayError));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      replayShouldFail = false;
+      button.click();
+      await vi.waitFor(() => expect(replay).toHaveBeenCalledTimes(2));
+      expect(unhandledRejections).toEqual([]);
+    } finally {
+      unbind();
+      process.off('unhandledRejection', recordUnhandledRejection);
+    }
+  });
+
   it('rechecks pending skips after asynchronous replay preparation', async () => {
     const button = document.createElement('button');
     let resolvePreparation!: () => void;

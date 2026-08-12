@@ -259,8 +259,15 @@ function createFloatingReplayTrigger<TDefinition extends TutorialDefinition>(
   button.style.insetBlockStart = '12px';
   button.style.insetInlineEnd = '12px';
   button.style.zIndex = '2147483647';
+  const reportError = (error: unknown): void => {
+    try {
+      input.onError?.(error);
+    } catch {
+      // Error reporting must not interrupt floating replay trigger handling.
+    }
+  };
   const handleClick = (): void => {
-    void bridge.replay().catch((error: unknown) => input.onError?.(error));
+    void bridge.replay().catch(reportError);
   };
   button.addEventListener('click', handleClick);
   (options.parent ?? document.body).appendChild(button);
