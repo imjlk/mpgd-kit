@@ -158,14 +158,21 @@ const unbind = helpButton === null
       beforeReplay: () => navigateToTutorialStart(),
       director,
       element: helpButton,
+      presenter,
     });
 ```
 
 `beforeReplay` is important when the trigger can appear outside the tutorial's
-initial scene. `replay()` itself remains navigation-agnostic. Completing or
-skipping an in-session replay restores the prior durable progress exactly,
-whether it was active, completed, skipped, or `null` when no prior progress
-existed.
+initial scene. `presenter` lets the binding clear a successful same-step skip
+dismissal only after `replay()` succeeds; ordinary `null` to same-step host
+rerenders remain suppressed. A host that invokes `director.replay()` directly
+should likewise call `presenter.resetForReplay()` after the replay promise
+resolves. Pass the same callback as `afterReplay` when using
+`installTutorialDebugBridge`, so its console and optional floating replay
+triggers follow the same lifecycle. `replay()` itself remains
+navigation-agnostic. Completing or skipping
+an in-session replay restores the prior durable progress exactly, whether it was
+active, completed, skipped, or `null` when no prior progress existed.
 
 ## Local reproduction
 
@@ -198,6 +205,7 @@ URL policy is applied only when the caller passes `enabled: true`, normally from
 
 ```ts
 const debug = installTutorialDebugBridge({
+  afterReplay: () => presenter.resetForReplay(),
   director,
   beforeReplay: (options) => prepareHostFor(options.fromStepId),
   floatingReplayTrigger: false,

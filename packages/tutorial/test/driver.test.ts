@@ -94,6 +94,36 @@ describe('Driver tutorial presenter', () => {
     expect(visible.getAttribute('aria-haspopup')).toBe('menu');
   });
 
+  it('rejects ancestor-hidden targets while retaining an off-viewport fallback', () => {
+    const hiddenStyles = [
+      ['display', 'none'],
+      ['visibility', 'hidden'],
+      ['opacity', '0'],
+    ] as const;
+
+    for (const [property, value] of hiddenStyles) {
+      const ancestor = document.createElement('div');
+      ancestor.style[property] = value;
+      const target = document.createElement('button');
+      target.dataset.mpgdTutorialTarget = 'duplicate';
+      setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+      ancestor.appendChild(target);
+      document.body.appendChild(ancestor);
+    }
+
+    const offViewport = document.createElement('button');
+    offViewport.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(offViewport, {
+      height: 40,
+      left: window.innerWidth + 20,
+      top: 20,
+      width: 100,
+    });
+    document.body.appendChild(offViewport);
+
+    expect(resolveVisibleTutorialTarget({ target: 'duplicate' })).toBe(offViewport);
+  });
+
   it('keeps interactive modal semantics and restores blocked modal semantics', async () => {
     const modal = document.createElement('section');
     modal.setAttribute('aria-modal', 'true');
@@ -628,6 +658,36 @@ describe('Driver tutorial presenter', () => {
     await nextFrame();
 
     expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+
+    const replayButton = document.createElement('button');
+    const onError = vi.fn();
+    let replayShouldFail = true;
+    const replay = vi.fn(async () => {
+      presenter.present(null);
+      presenter.present(presentation);
+
+      if (replayShouldFail) {
+        throw new Error('replay failed');
+      }
+    });
+    const unbindReplay = bindTutorialReplayTrigger({
+      director: { replay } as never,
+      element: replayButton,
+      onError,
+      presenter,
+    });
+    replayButton.click();
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledOnce());
+    await nextFrame();
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+
+    replayShouldFail = false;
+    replayButton.click();
+    await vi.waitFor(() => expect(replay).toHaveBeenCalledTimes(2));
+    await nextFrame();
+
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
+    unbindReplay();
     presenter.destroy();
   });
 
@@ -676,15 +736,19 @@ describe('Driver tutorial presenter', () => {
   it('binds replay only when a host provides a trigger', async () => {
     const button = document.createElement('button');
     const replay = vi.fn(async () => undefined);
+    const resetForReplay = vi.fn();
     const unbind = bindTutorialReplayTrigger({
       director: { replay } as never,
       element: button,
+      presenter: { resetForReplay },
     });
     button.click();
     await vi.waitFor(() => expect(replay).toHaveBeenCalledOnce());
+    expect(resetForReplay).toHaveBeenCalledOnce();
     unbind();
     button.click();
     expect(replay).toHaveBeenCalledOnce();
+    expect(resetForReplay).toHaveBeenCalledOnce();
   });
 });
 
