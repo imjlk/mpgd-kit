@@ -677,6 +677,13 @@ export function bindTutorialReplayTrigger<TDefinition extends TutorialDefinition
   readonly presenter: Pick<DriverTutorialPresenter, 'resetForReplay' | 'waitForPendingSkip'>;
 }): () => void {
   let pending = false;
+  const reportError = (error: unknown): void => {
+    try {
+      input.onError?.(error);
+    } catch {
+      // Error reporting must not interrupt replay trigger lifecycle handling.
+    }
+  };
   const listener = (): void => {
     if (pending) {
       return;
@@ -689,7 +696,7 @@ export function bindTutorialReplayTrigger<TDefinition extends TutorialDefinition
       .then(() => input.presenter.waitForPendingSkip())
       .then(() => input.director.replay())
       .then(() => input.presenter.resetForReplay())
-      .catch((error: unknown) => input.onError?.(error))
+      .catch(reportError)
       .finally(() => {
         pending = false;
       });

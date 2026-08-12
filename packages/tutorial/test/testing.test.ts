@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -130,5 +132,34 @@ describe('tutorial testing helpers', () => {
     expect(events).toEqual(['before', 'replay', 'after']);
     expect(afterReplay).toHaveBeenCalledOnce();
     bridge.destroy();
+  });
+
+  it('contains throwing floating replay error reporters', async () => {
+    const replayError = new Error('Floating replay failed.');
+    const onError = vi.fn(() => {
+      throw new Error('Floating replay reporting failed.');
+    });
+    const installation = installTutorialDebugBridge({
+      director: {
+        replay: async () => {
+          throw replayError;
+        },
+      } as never,
+      floatingReplayTrigger: {},
+      globalKey: '__TEST_FLOATING_REPLAY_FAILURE__',
+      globalObject: {} as typeof globalThis,
+      onError,
+    });
+    const button = document.querySelector<HTMLButtonElement>(
+      '[data-mpgd-tutorial-debug-replay="true"]',
+    );
+
+    try {
+      button?.click();
+      await vi.waitFor(() => expect(onError).toHaveBeenCalledExactlyOnceWith(replayError));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      installation.destroy();
+    }
   });
 });
