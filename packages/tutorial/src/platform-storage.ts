@@ -7,6 +7,8 @@ import {
   type TutorialProgressStore,
 } from './progress.js';
 
+export const defaultTutorialStorageTimeoutMs = 10_000;
+
 export interface CreatePlatformTutorialProgressStoreInput<TDefinition extends TutorialDefinition> {
   readonly definition: TDefinition;
   readonly invalidRecord?: 'disable' | 'ignore';
@@ -14,6 +16,7 @@ export interface CreatePlatformTutorialProgressStoreInput<TDefinition extends Tu
   readonly migrate?: (value: unknown) => unknown;
   readonly onError?: (error: unknown) => void;
   readonly storage: Pick<StorageAdapter, 'load' | 'save'>;
+  readonly timeoutMs?: number;
 }
 
 export async function createPlatformTutorialProgressStore<
@@ -21,12 +24,17 @@ export async function createPlatformTutorialProgressStore<
 >(
   input: CreatePlatformTutorialProgressStoreInput<TDefinition>,
 ): Promise<TutorialProgressStore<TutorialProgressOf<TDefinition>>> {
+  const timeoutMs = resolveTimeoutMs(input.timeoutMs);
   let current: TutorialProgressOf<TDefinition> | null = null;
   let available = true;
   let queue = Promise.resolve();
 
   try {
-    const stored = await input.storage.load({ key: input.key });
+    const stored = await withStorageTimeout(
+      input.storage.load({ key: input.key }),
+      'load',
+      timeoutMs,
+    );
 
     if (stored !== null) {
       const migrated = input.migrate === undefined ? stored.value : input.migrate(stored.value);
@@ -60,7 +68,11 @@ export async function createPlatformTutorialProgressStore<
           return;
         }
 
-        await input.storage.save({ key: input.key, value: progress });
+        await withStorageTimeout(
+          input.storage.save({ key: input.key, value: progress }),
+          'save',
+          timeoutMs,
+        );
         current = progress;
       });
 
@@ -71,4 +83,37 @@ export async function createPlatformTutorialProgressStore<
       return operation;
     },
   };
+}
+
+function resolveTimeoutMs(timeoutMs: number | undefined): number {
+  const resolved = timeoutMs ?? defaultTutorialStorageTimeoutMs;
+
+  if (!Number.isFinite(resolved) || resolved <= 0) {
+    throw new TypeError('Tutorial storage timeoutMs must be a positive finite number.');
+  }
+
+  return resolved;
+}
+
+async function withStorageTimeout<T>(
+  operation: Promise<T>,
+  kind: 'load' | 'save',
+  timeoutMs: number,
+): Promise<T> {
+  let timer: ReturnType<typeof globalThis.setTimeout> | undefined;
+
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<never>((_resolve, reject) => {
+        timer = globalThis.setTimeout(() => {
+          reject(new Error(`Tutorial storage ${kind} timed out after ${timeoutMs}ms.`));
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) {
+      globalThis.clearTimeout(timer);
+    }
+  }
 }

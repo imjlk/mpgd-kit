@@ -16,5 +16,6 @@ export const tutorialDomSelectors = Object.freeze({
   next: '[data-mpgd-tutorial-next]',
   popover: '[data-mpgd-tutorial-popover]',
   skip: '[data-mpgd-tutorial-skip]',
+  step: '[data-mpgd-tutorial-step]',
   target: '[data-mpgd-tutorial-target]',
 });

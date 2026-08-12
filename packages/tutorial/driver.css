@@ -5,6 +5,7 @@
   --mpgd-tutorial-focus: #76cbd1;
   --mpgd-tutorial-foreground: #fff0dc;
   --mpgd-tutorial-muted: #aebbc0;
+  --mpgd-tutorial-on-accent: #24110d;
   --mpgd-tutorial-surface: rgb(29 35 39 / 98%);
 
   box-sizing: border-box;
@@ -21,7 +22,7 @@
 }
 
 .mpgd-tutorial-popover .driver-popover-title {
-  padding-right: 96px;
+  padding-inline-end: 45%;
   color: var(--mpgd-tutorial-foreground);
   font-size: 18px;
   font-weight: 800;
@@ -40,9 +41,13 @@
   min-width: 36px;
   height: 36px;
   padding-inline: 8px;
+  max-width: calc(45% - 8px);
+  overflow: hidden;
   color: var(--mpgd-tutorial-muted);
   font-size: 11px;
   font-weight: 700;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .mpgd-tutorial-popover .driver-popover-footer-btn {
@@ -52,7 +57,7 @@
   border: 1px solid var(--mpgd-tutorial-accent);
   border-radius: 8px;
   background: var(--mpgd-tutorial-accent);
-  color: #24110d;
+  color: var(--mpgd-tutorial-on-accent);
   font: inherit;
   font-size: 13px;
   font-weight: 800;
@@ -64,12 +69,18 @@
 }
 
 [data-mpgd-tutorial-active='true'] .driver-active-element {
-  outline: 2px solid color-mix(
-    in srgb,
-    var(--mpgd-tutorial-focus, #76cbd1) 52%,
-    transparent
-  );
+  outline: 2px solid var(--mpgd-tutorial-focus, #76cbd1);
   outline-offset: 2px;
+}
+
+@supports (color: color-mix(in srgb, red, blue)) {
+  [data-mpgd-tutorial-active='true'] .driver-active-element {
+    outline: 2px solid color-mix(
+      in srgb,
+      var(--mpgd-tutorial-focus, #76cbd1) 52%,
+      transparent
+    );
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

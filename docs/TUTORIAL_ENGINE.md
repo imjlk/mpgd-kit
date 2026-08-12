@@ -157,8 +157,10 @@ const unbind = helpButton === null
 ```
 
 `beforeReplay` is important when the trigger can appear outside the tutorial's
-initial scene. `replay()` itself remains navigation-agnostic. Skipping an
-in-session replay restores the previous durable completed or skipped state.
+initial scene. `replay()` itself remains navigation-agnostic. Completing or
+skipping an in-session replay restores the prior durable progress exactly,
+whether it was active, completed, skipped, or `null` when no prior progress
+existed.
 
 ## Local reproduction
 
@@ -183,7 +185,8 @@ http://localhost:5198/?mpgd-tutorial=replay&mpgd-tutorial-step=modal-choice
   the package on its own.
 - `mpgd-tutorial=off` suspends presentation even when progress is active.
 - `mpgd-tutorial=replay` starts an in-session replay without erasing durable
-  completion. `mpgd-tutorial-step` opens a specific step.
+  progress. `mpgd-tutorial-step` opens a known specific step; an unknown ID
+  falls back to a full replay.
 
 URL policy is applied only when the caller passes `enabled: true`, normally from
 `import.meta.env.DEV`. The debug bridge is also opt-in:

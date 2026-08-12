@@ -1,6 +1,6 @@
 import { driver, type Driver, type DriveStep } from 'driver.js';
 
-import type { TutorialDefinition, TutorialStep, TutorialStepIdOf } from './definition.js';
+import type { TutorialDefinition, TutorialStep } from './definition.js';
 import type { TutorialDirector } from './director.js';
 import { tutorialDomAttributes } from './index.js';
 
@@ -47,6 +47,12 @@ interface TutorialTargetSemanticsGuard {
   restore(driverAlreadyDestroyed?: boolean): void;
 }
 
+interface TutorialModalSemanticsGuard {
+  readonly modal: HTMLElement | null;
+  readonly popover: HTMLElement;
+  restore(): void;
+}
+
 export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   input: DriverTutorialPresenterInput<TStep>,
 ): DriverTutorialPresenter<TStep> {
@@ -82,6 +88,9 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let reportedActive = false;
   let targetSemanticsGuard: TutorialTargetSemanticsGuard | undefined;
   let targetRestorePending = false;
+  let dismissedPresentationKey: string | null = null;
+  let missingTargetErrorKey: string | null = null;
+  let syncModalSemantics: (() => void) | undefined;
 
   const reportActive = (active: boolean): void => {
     if (reportedActive === active) {
@@ -93,12 +102,17 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   };
 
   const scheduleRefresh = (): void => {
-    if (destroyed || frame !== undefined) {
+    if (destroyed || frame !== undefined || dismissedPresentationKey !== null) {
       return;
     }
 
     frame = browserWindow.requestAnimationFrame(() => {
       frame = undefined;
+
+      if (destroyed || dismissedPresentationKey !== null) {
+        return;
+      }
+
       const currentInstance = instance;
 
       if (currentInstance === null || !currentInstance.isActive()) {
@@ -112,7 +126,33 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
   const createInstance = (presentation: DriverTutorialPresentation<TStep>): Driver => {
     let created!: Driver;
-    let restoreModalSemantics: (() => void) | undefined;
+    let modalSemanticsGuard: TutorialModalSemanticsGuard | undefined;
+    let popover: HTMLElement | null = null;
+    const syncCreatedModalSemantics = (): void => {
+      if (popover === null) {
+        return;
+      }
+
+      const modalSelector = input.modalSelector ?? '[role="dialog"][aria-modal="true"]';
+      const modal = resolveUnderlyingTutorialModal(
+        popover,
+        presentation.step.interaction,
+        created.getActiveElement(),
+        modalSelector,
+        modalSemanticsGuard?.modal ?? null,
+      );
+
+      if (modalSemanticsGuard?.modal === modal && modalSemanticsGuard.popover === popover) {
+        return;
+      }
+
+      modalSemanticsGuard?.restore();
+      modalSemanticsGuard = configureTutorialModalSemantics(
+        popover,
+        presentation.step.interaction,
+        modal,
+      );
+    };
     created = driver({
       allowClose: true,
       allowKeyboardControl: false,
@@ -137,6 +177,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       stageRadius: 9,
       waitForElement: 900,
       onCloseClick: () => {
+        dismissedPresentationKey = activePresentationKey;
         destroyInstancePreservingTarget(created);
         void Promise.resolve()
           .then(() => input.onSkip())
@@ -149,8 +190,12 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
         targetSemanticsGuard = undefined;
         targetRestorePending = false;
-        restoreModalSemantics?.();
-        restoreModalSemantics = undefined;
+        modalSemanticsGuard?.restore();
+        modalSemanticsGuard = undefined;
+
+        if (syncModalSemantics === syncCreatedModalSemantics) {
+          syncModalSemantics = undefined;
+        }
 
         if (instance === created) {
           instance = null;
@@ -162,20 +207,16 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
           scheduleRefresh();
         }
       },
-      onPopoverRender: ({ closeButton, nextButton, wrapper }, { state }) => {
+      onPopoverRender: ({ closeButton, nextButton, wrapper }) => {
         closeButton.setAttribute('aria-label', presentation.copy.skip);
         closeButton.title = presentation.copy.skip;
         closeButton.textContent = presentation.copy.skip;
         closeButton.setAttribute(tutorialDomAttributes.skip, 'true');
         nextButton.setAttribute(tutorialDomAttributes.next, 'true');
         wrapper.setAttribute(tutorialDomAttributes.popover, 'true');
-        restoreModalSemantics?.();
-        restoreModalSemantics = configureTutorialModalSemantics(
-          wrapper,
-          presentation.step.interaction,
-          state.activeElement,
-          input.modalSelector ?? '[role="dialog"][aria-modal="true"]',
-        );
+        popover = wrapper;
+        syncModalSemantics = syncCreatedModalSemantics;
+        syncCreatedModalSemantics();
         if (presentation.step.advance.kind === 'acknowledge') {
           browserWindow.queueMicrotask(() => nextButton.focus());
         }
@@ -186,26 +227,33 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
   const driveActiveStep = (): void => {
     const presentation = activePresentation;
+    const presentationKey = activePresentationKey;
 
-    if (presentation === null || instance?.isActive() === true) {
+    if (presentation === null || presentationKey === null || instance?.isActive() === true) {
       return;
     }
 
-    const target = resolvePresentationTarget(presentation);
+    const target = resolvePresentationTarget(presentation, presentationKey);
+
+    if (destroyed
+      || activePresentation !== presentation
+      || activePresentationKey !== presentationKey) {
+      return;
+    }
 
     if (presentation.step.target !== null && target === null) {
       const policy = input.missingTarget ?? 'wait';
 
       if (policy === 'error') {
-        input.onError?.(
-          new Error(`Tutorial target was not found: ${String(presentation.step.target)}`),
-        );
+        reportMissingTarget(presentation, presentationKey);
         return;
       }
 
       if (policy === 'wait') {
         return;
       }
+    } else {
+      missingTargetErrorKey = null;
     }
 
     const nextInstance = createInstance(presentation);
@@ -214,33 +262,67 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     targetSemanticsGuard = target === null
       ? undefined
       : preserveTutorialTargetSemantics(target, browserWindow);
-    stateHost.setAttribute(tutorialDomAttributes.active, 'true');
-    stateHost.setAttribute(tutorialDomAttributes.step, presentation.step.id);
-    reportActive(true);
-    nextInstance.setSteps([
-      createDriveStep(input, presentation, target ?? undefined, ownerDocument),
-    ]);
-    applyDriverTargetMutation(() => nextInstance.drive());
+
+    try {
+      stateHost.setAttribute(tutorialDomAttributes.active, 'true');
+      stateHost.setAttribute(tutorialDomAttributes.step, presentation.step.id);
+      nextInstance.setSteps([
+        createDriveStep(input, presentation, target ?? undefined, ownerDocument),
+      ]);
+      applyDriverTargetMutation(() => nextInstance.drive());
+      syncModalSemantics?.();
+      reportActive(true);
+    } catch (error) {
+      dismissedPresentationKey = activePresentationKey;
+
+      try {
+        destroyInstancePreservingTarget(nextInstance);
+      } finally {
+        targetSemanticsGuard = undefined;
+        instance = null;
+        syncModalSemantics = undefined;
+        clearTutorialState(stateHost);
+        reportActive(false);
+      }
+
+      input.onError?.(error);
+    }
   };
 
   const resolvePresentationTarget = (
     presentation: DriverTutorialPresentation<TStep>,
+    presentationKey: string | null = activePresentationKey,
   ): HTMLElement | null => {
     if (presentation.step.target === null) {
       return null;
     }
 
-    return input.resolveTarget?.(presentation.step.target, root)
-      ?? resolveVisibleTutorialTarget({
-        root,
-        target: presentation.step.target,
-        targetAttribute,
-        view: browserWindow,
-      });
+    try {
+      return input.resolveTarget?.(presentation.step.target, root)
+        ?? resolveVisibleTutorialTarget({
+          root,
+          target: presentation.step.target,
+          targetAttribute,
+          view: browserWindow,
+        });
+    } catch (error) {
+      if (presentationKey !== null
+        && presentationKey === activePresentationKey
+        && missingTargetErrorKey !== presentationKey) {
+        missingTargetErrorKey = presentationKey;
+        input.onError?.(error);
+      }
+
+      return null;
+    }
   };
 
   const observationRoot = root.nodeType === 9 ? ownerDocument.documentElement : root as HTMLElement;
   const mutationObserver = new browserWindow.MutationObserver((records) => {
+    if (activePresentation === null && instance === null) {
+      return;
+    }
+
     if (records.some((record) => !isDriverOwnedMutation(record))) {
       scheduleRefresh();
     }
@@ -254,6 +336,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     ? new browserWindow.ResizeObserver(scheduleRefresh)
     : null;
   resizeObserver?.observe(observationRoot);
+  observationRoot.addEventListener('scroll', scheduleRefresh, true);
   browserWindow.visualViewport?.addEventListener('resize', scheduleRefresh);
   browserWindow.visualViewport?.addEventListener('scroll', scheduleRefresh);
   browserWindow.addEventListener('orientationchange', scheduleRefresh);
@@ -263,8 +346,11 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       destroyed = true;
       activePresentation = null;
       activePresentationKey = null;
+      dismissedPresentationKey = null;
+      missingTargetErrorKey = null;
       mutationObserver.disconnect();
       resizeObserver?.disconnect();
+      observationRoot.removeEventListener('scroll', scheduleRefresh, true);
       browserWindow.visualViewport?.removeEventListener('resize', scheduleRefresh);
       browserWindow.visualViewport?.removeEventListener('scroll', scheduleRefresh);
       browserWindow.removeEventListener('orientationchange', scheduleRefresh);
@@ -297,6 +383,14 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
             presentation.finalStep === true,
           ]);
 
+      if (dismissedPresentationKey !== null && dismissedPresentationKey !== nextKey) {
+        dismissedPresentationKey = null;
+      }
+
+      if (activePresentationKey !== nextKey) {
+        missingTargetErrorKey = null;
+      }
+
       if (activePresentationKey === nextKey) {
         activePresentation = presentation;
         scheduleRefresh();
@@ -325,13 +419,59 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   ): void {
     if (presentation === null || presentation.step.target === null || !currentInstance.isActive()) {
       applyDriverTargetMutation(() => currentInstance.refresh());
+      syncModalSemantics?.();
       return;
     }
 
-    const target = resolvePresentationTarget(presentation);
+    const presentationKey = activePresentationKey;
+    const target = resolvePresentationTarget(presentation, presentationKey);
 
-    if (target === null || currentInstance.getActiveElement() === target) {
+    if (destroyed
+      || activePresentation !== presentation
+      || activePresentationKey !== presentationKey
+      || instance !== currentInstance
+      || !currentInstance.isActive()) {
+      return;
+    }
+
+    if (target === null) {
+      const policy = input.missingTarget ?? 'wait';
+
+      if (policy === 'unanchored') {
+        missingTargetErrorKey = null;
+
+        if (currentInstance.getActiveElement()?.id === 'driver-dummy-element') {
+          applyDriverTargetMutation(() => currentInstance.refresh());
+          syncModalSemantics?.();
+          return;
+        }
+
+        const current = currentInstance.getActiveStep();
+
+        if (current === undefined) {
+          applyDriverTargetMutation(() => currentInstance.refresh());
+          syncModalSemantics?.();
+          return;
+        }
+
+        rebindTarget(currentInstance, current, undefined);
+        return;
+      }
+
+      destroyInstancePreservingTarget(currentInstance);
+
+      if (policy === 'error') {
+        reportMissingTarget(presentation, presentationKey);
+      }
+
+      return;
+    }
+
+    missingTargetErrorKey = null;
+
+    if (currentInstance.getActiveElement() === target) {
       applyDriverTargetMutation(() => currentInstance.refresh());
+      syncModalSemantics?.();
       return;
     }
 
@@ -339,17 +479,50 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
     if (current === undefined) {
       applyDriverTargetMutation(() => currentInstance.refresh());
+      syncModalSemantics?.();
       return;
     }
 
+    rebindTarget(currentInstance, current, target);
+  }
+
+  function rebindTarget(
+    currentInstance: Driver,
+    current: DriveStep,
+    target: HTMLElement | undefined,
+  ): void {
     const previousTarget = currentInstance.getActiveElement();
+    const { element: _previousElement, ...currentWithoutElement } = current;
     targetSemanticsGuard?.restore();
     const restorePreviousTarget = !(previousTarget instanceof HTMLElement)
       ? undefined
-      : captureTutorialTargetSemantics(previousTarget);
-    targetSemanticsGuard = preserveTutorialTargetSemantics(target, browserWindow);
-    applyDriverTargetMutation(() => currentInstance.highlight({ ...current, element: target }));
+      : captureTutorialTargetSemantics(previousTarget, target?.parentElement ?? null);
+    targetSemanticsGuard = target === undefined
+      ? undefined
+      : preserveTutorialTargetSemantics(target, browserWindow);
+    applyDriverTargetMutation(() => currentInstance.highlight(
+      target === undefined
+        ? currentWithoutElement
+        : { ...currentWithoutElement, element: target },
+    ));
     restorePreviousTarget?.();
+    syncModalSemantics?.();
+  }
+
+  function reportMissingTarget(
+    presentation: DriverTutorialPresentation<TStep>,
+    presentationKey: string | null = activePresentationKey,
+  ): void {
+    if (presentationKey === null
+      || presentationKey !== activePresentationKey
+      || missingTargetErrorKey === presentationKey) {
+      return;
+    }
+
+    missingTargetErrorKey = presentationKey;
+    input.onError?.(
+      new Error(`Tutorial target was not found: ${String(presentation.step.target)}`),
+    );
   }
 
   function destroyInstancePreservingTarget(currentInstance: Driver): void {
@@ -498,43 +671,135 @@ function createDriveStep<TStep extends TutorialStep>(
   };
 }
 
-function configureTutorialModalSemantics(
+function resolveUnderlyingTutorialModal(
   popover: HTMLElement,
   interaction: TutorialStep['interaction'],
   activeElement: Element | undefined,
   modalSelector: string,
-): () => void {
-  const underlyingModal = activeElement?.closest<HTMLElement>(modalSelector) ?? null;
-  const previousAriaModal = underlyingModal?.getAttribute('aria-modal') ?? null;
-  const previousAriaOwns = underlyingModal?.getAttribute('aria-owns') ?? null;
-  let ownedAriaModal: string | null = previousAriaModal;
-  let ownedAriaOwns: string | null = previousAriaOwns;
+  currentModal: HTMLElement | null,
+): HTMLElement | null {
+  const activeModal = activeElement?.closest<HTMLElement>(modalSelector) ?? null;
+
+  if (interaction !== 'blocked') {
+    return activeModal;
+  }
+
+  if (activeElement !== undefined
+    && currentModal?.isConnected === true
+    && currentModal.contains(activeElement)) {
+    return currentModal;
+  }
+
+  return activeModal
+    ?? [...popover.ownerDocument.querySelectorAll<HTMLElement>(modalSelector)]
+      .find((candidate) => candidate !== popover && !popover.contains(candidate))
+    ?? (currentModal?.isConnected === true ? currentModal : null)
+    ?? null;
+}
+
+function configureTutorialModalSemantics(
+  popover: HTMLElement,
+  interaction: TutorialStep['interaction'],
+  underlyingModal: HTMLElement | null,
+): TutorialModalSemanticsGuard {
+  const ownedAttributes = new Map<'aria-modal' | 'aria-owns', string>();
 
   if (interaction === 'blocked') {
     popover.setAttribute('role', 'dialog');
     popover.setAttribute('aria-modal', 'true');
-    underlyingModal?.setAttribute('aria-modal', 'false');
-    ownedAriaModal = underlyingModal === null ? previousAriaModal : 'false';
+
+    if (underlyingModal !== null) {
+      ownedAttributes.set('aria-modal', 'false');
+    }
   } else {
     popover.setAttribute('role', 'region');
     popover.removeAttribute('aria-modal');
 
-    if (underlyingModal !== null) {
-      const ownedIds = new Set((previousAriaOwns ?? '').split(/\s+/u).filter(Boolean));
+    if (underlyingModal !== null && popover.id !== '') {
+      const ownedIds = new Set(
+        (underlyingModal.getAttribute('aria-owns') ?? '').split(/\s+/u).filter(Boolean),
+      );
       ownedIds.add(popover.id);
-      ownedAriaOwns = [...ownedIds].join(' ');
-      underlyingModal.setAttribute('aria-owns', ownedAriaOwns);
+      ownedAttributes.set('aria-owns', [...ownedIds].join(' '));
     }
   }
 
-  return () => {
-    if (underlyingModal === null) {
-      return;
+  const restore = underlyingModal === null
+    ? () => undefined
+    : preserveTutorialModalSemantics(underlyingModal, ownedAttributes, popover.ownerDocument);
+
+  return { modal: underlyingModal, popover, restore };
+}
+
+function preserveTutorialModalSemantics(
+  element: HTMLElement,
+  ownedAttributes: ReadonlyMap<'aria-modal' | 'aria-owns', string>,
+  ownerDocument: Document,
+): () => void {
+  const view = ownerDocument.defaultView;
+
+  if (view === null || ownedAttributes.size === 0) {
+    return () => undefined;
+  }
+
+  type Attribute = 'aria-modal' | 'aria-owns';
+  const previous = new Map<Attribute, string | null>();
+  const hostValues = new Map<Attribute, string | null>();
+  const captureHostMutations = (records: readonly MutationRecord[]): void => {
+    for (const record of records) {
+      const attribute = record.attributeName;
+
+      if (record.target === element && isTutorialModalAttribute(attribute)) {
+        hostValues.set(attribute, element.getAttribute(attribute));
+      }
+    }
+  };
+
+  for (const [attribute, value] of ownedAttributes) {
+    const current = element.getAttribute(attribute);
+
+    if (current === value) {
+      continue;
     }
 
-    restoreOwnedAttribute(underlyingModal, 'aria-modal', ownedAriaModal, previousAriaModal);
-    restoreOwnedAttribute(underlyingModal, 'aria-owns', ownedAriaOwns, previousAriaOwns);
+    previous.set(attribute, current);
+    element.setAttribute(attribute, value);
+  }
+
+  if (previous.size === 0) {
+    return () => undefined;
+  }
+
+  const observer = new view.MutationObserver(captureHostMutations);
+  observer.observe(element, {
+    attributeFilter: [...previous.keys()],
+    attributes: true,
+  });
+
+  return () => {
+    captureHostMutations(observer.takeRecords());
+    observer.disconnect();
+
+    for (const [attribute, previousValue] of previous) {
+      if (hostValues.has(attribute)) {
+        restoreAttribute(element, attribute, hostValues.get(attribute) ?? null);
+        continue;
+      }
+
+      restoreOwnedAttribute(
+        element,
+        attribute,
+        ownedAttributes.get(attribute) ?? null,
+        previousValue,
+      );
+    }
   };
+}
+
+function isTutorialModalAttribute(
+  attribute: string | null,
+): attribute is 'aria-modal' | 'aria-owns' {
+  return attribute === 'aria-modal' || attribute === 'aria-owns';
 }
 
 function preserveTutorialTargetSemantics(
@@ -619,7 +884,10 @@ function isTutorialTargetAttribute(
     || attribute === 'aria-haspopup';
 }
 
-function captureTutorialTargetSemantics(element: HTMLElement): () => void {
+function captureTutorialTargetSemantics(
+  element: HTMLElement,
+  preservedParent: HTMLElement | null = null,
+): () => void {
   const attributes = ['aria-controls', 'aria-expanded', 'aria-haspopup'] as const;
   const decoratedParent = element.parentElement;
   const captured = Object.fromEntries(
@@ -631,19 +899,23 @@ function captureTutorialTargetSemantics(element: HTMLElement): () => void {
       restoreAttribute(element, attribute, captured[attribute]);
     }
 
-    clearDetachedDriverTargetClasses(element, decoratedParent);
+    clearDetachedDriverTargetClasses(element, decoratedParent, preservedParent);
   };
 }
 
 function clearDetachedDriverTargetClasses(
   element: HTMLElement,
   decoratedParent: HTMLElement | null,
+  preservedParent: HTMLElement | null = null,
 ): void {
   element.classList.remove('driver-active-element', 'driver-no-interaction');
-  decoratedParent?.classList.remove(
-    'driver-active-element-parent',
-    'driver-active-element-parent-no-scroll',
-  );
+
+  if (decoratedParent !== preservedParent) {
+    decoratedParent?.classList.remove(
+      'driver-active-element-parent',
+      'driver-active-element-parent-no-scroll',
+    );
+  }
 }
 
 function isRenderableTutorialTarget(element: HTMLElement, view: Window): boolean {

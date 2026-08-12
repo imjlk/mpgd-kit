@@ -69,6 +69,7 @@ const tutorial = defineTutorial({
 const app = requireElement('app');
 const parameters = new URLSearchParams(window.location.search);
 const debugLaunchPolicy = resolveTutorialDebugLaunchPolicy({
+  definition: tutorial,
   enabled: import.meta.env.DEV,
   search: window.location.search,
 });
@@ -169,11 +170,19 @@ for (const button of document.querySelectorAll<HTMLButtonElement>('[data-action]
   });
 }
 
-await applyTutorialDebugLaunchPolicy(director, debugLaunchPolicy);
+try {
+  await applyTutorialDebugLaunchPolicy(director, debugLaunchPolicy);
+} catch (error) {
+  console.error('Failed to apply the tutorial debug launch policy.', error);
+}
 syncHostForCurrentStep();
 render();
 
-window.addEventListener('pagehide', () => {
+window.addEventListener('pagehide', (event) => {
+  if (event.persisted) {
+    return;
+  }
+
   if (hiddenSignalTimer !== undefined) {
     window.clearTimeout(hiddenSignalTimer);
   }
@@ -183,7 +192,7 @@ window.addEventListener('pagehide', () => {
   unsubscribe();
   presenter.destroy();
   director.destroy();
-}, { once: true });
+});
 
 function render(): void {
   const snapshot = director.getSnapshot();

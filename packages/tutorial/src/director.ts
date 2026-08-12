@@ -67,9 +67,12 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
     ? createInitialTutorialProgress(definition, now())
     : null);
   let replaying = false;
+  let durableFallbackDuringPublish: TutorialProgressOf<TDefinition> | null | undefined;
   let suspended = input.suspended ?? false;
   let destroyed = false;
   let currentScene: string = input.initialScene ?? definition.initialScene;
+  let publishing = false;
+  const pendingSnapshots: TutorialDirectorSnapshot<TDefinition>[] = [];
 
   if (stored === null && progress !== null) {
     persist(progress);
@@ -92,10 +95,36 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
   }
 
   function publish(): void {
-    snapshot = createSnapshot(definition, progress, replaying, suspended, currentScene);
+    const publishedSnapshot = createSnapshot(
+      definition,
+      progress,
+      replaying,
+      suspended,
+      currentScene,
+    );
+    snapshot = publishedSnapshot;
+    pendingSnapshots.push(publishedSnapshot);
 
-    for (const listener of listeners) {
-      listener(snapshot);
+    if (publishing) {
+      return;
+    }
+
+    publishing = true;
+
+    try {
+      while (pendingSnapshots.length > 0) {
+        const pendingSnapshot = pendingSnapshots.shift();
+
+        if (pendingSnapshot === undefined) {
+          continue;
+        }
+
+        for (const listener of listeners) {
+          listener(pendingSnapshot);
+        }
+      }
+    } finally {
+      publishing = false;
     }
   }
 
@@ -133,6 +162,15 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       status: complete ? 'completed' : 'active',
       updatedAt: timestamp,
     };
+
+    if (complete && replaying && replayRestorePending) {
+      progress = durableBeforeReplay;
+      replaying = false;
+      replayRestorePending = false;
+      durableBeforeReplay = null;
+      publish();
+      return;
+    }
 
     if (complete) {
       replaying = false;
@@ -189,7 +227,9 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
         : createTutorialProgressAtStep(definition, options.fromStepId, now());
 
       if (!replaying) {
-        durableBeforeReplay = progress;
+        durableBeforeReplay = durableFallbackDuringPublish === undefined
+          ? progress
+          : durableFallbackDuringPublish;
         replayRestorePending = true;
       }
 
@@ -224,6 +264,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
         return;
       }
 
+      const progressBeforeSkip = progress;
       const timestamp = now();
       progress = {
         ...progress,
@@ -235,7 +276,17 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       replaying = false;
       durableBeforeReplay = null;
       replayRestorePending = false;
-      publish();
+      durableFallbackDuringPublish = progressBeforeSkip;
+
+      try {
+        publish();
+      } finally {
+        durableFallbackDuringPublish = undefined;
+      }
+
+      if (destroyed || replaying) {
+        return;
+      }
 
       try {
         await progressStore.save(progress);
