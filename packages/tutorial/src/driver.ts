@@ -341,7 +341,9 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     }
   };
 
-  const observationRoot = root.nodeType === 9 ? ownerDocument.documentElement : root as HTMLElement;
+  const resizeObservationRoot = root.nodeType === 9
+    ? ownerDocument.documentElement
+    : root as HTMLElement;
   const mutationObserver = new browserWindow.MutationObserver((records) => {
     if (activePresentation === null && instance === null) {
       return;
@@ -351,7 +353,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       scheduleRefresh();
     }
   });
-  mutationObserver.observe(observationRoot, {
+  mutationObserver.observe(ownerDocument.documentElement, {
     attributes: true,
     childList: true,
     subtree: true,
@@ -359,7 +361,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   const resizeObserver = typeof browserWindow.ResizeObserver === 'function'
     ? new browserWindow.ResizeObserver(scheduleRefresh)
     : null;
-  resizeObserver?.observe(observationRoot);
+  resizeObserver?.observe(resizeObservationRoot);
   ownerDocument.addEventListener('scroll', scheduleRefresh, true);
   browserWindow.visualViewport?.addEventListener('resize', scheduleRefresh);
   browserWindow.visualViewport?.addEventListener('scroll', scheduleRefresh);
