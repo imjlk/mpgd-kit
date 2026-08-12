@@ -83,12 +83,12 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
   let persistenceBusy = false;
   let persistenceIdle: Promise<void> | null = null;
   let resolvePersistenceIdle: (() => void) | null = null;
+  let publicationVersion = 0;
+  let snapshot = createSnapshot(definition, progress, replaying, suspended, currentScene);
 
   if (stored === null && progress !== null) {
     void persist(progress);
   }
-
-  let snapshot = createSnapshot(definition, progress, replaying, suspended, currentScene);
 
   function now(): string {
     return clock().toISOString();
@@ -181,6 +181,15 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
     await progressStore.flush();
   }
 
+  function persistAndPublish(next: TutorialProgressOf<TDefinition>): void {
+    const versionBeforePersistence = publicationVersion;
+    void persist(next);
+
+    if (publicationVersion === versionBeforePersistence) {
+      publish();
+    }
+  }
+
   function notifyListener(listener: Listener, nextSnapshot: TutorialDirectorSnapshot<TDefinition>): void {
     try {
       listener(nextSnapshot);
@@ -194,6 +203,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       return;
     }
 
+    publicationVersion += 1;
     const publishedSnapshot = createSnapshot(
       definition,
       progress,
@@ -281,8 +291,7 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       durableBeforeReplay = null;
     }
 
-    void persist(progress);
-    publish();
+    persistAndPublish(progress);
   }
 
   return {
@@ -329,7 +338,8 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
 
       if (progress?.status === 'active' && step?.scene === scene && progress.checkpoint !== scene) {
         progress = { ...progress, checkpoint: scene, updatedAt: now() };
-        void persist(progress);
+        persistAndPublish(progress);
+        return;
       }
 
       publish();
