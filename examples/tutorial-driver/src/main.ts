@@ -147,7 +147,10 @@ const unbindReplay = hostReplay === null
 const debug = import.meta.env.DEV
   ? installTutorialDebugBridge({
       afterReplay: () => presenter.resetForReplay(),
-      beforeReplay: (options) => prepareHostForStep(options.fromStepId ?? 'welcome'),
+      beforeReplay: async (options) => {
+        await presenter.waitForPendingSkip();
+        prepareHostForStep(options.fromStepId ?? 'welcome');
+      },
       director,
       floatingReplayTrigger: parameters.get('trigger') === '1'
         ? { ariaLabel: 'Debug replay tutorial', label: '?' }

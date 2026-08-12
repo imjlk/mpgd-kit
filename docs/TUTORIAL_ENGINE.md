@@ -166,11 +166,11 @@ const unbind = helpButton === null
 initial scene. `presenter` lets the binding clear a successful same-step skip
 dismissal only after `replay()` succeeds; ordinary `null` to same-step host
 rerenders remain suppressed. A host that invokes `director.replay()` directly
-should likewise call `presenter.resetForReplay()` after the replay promise
-resolves. Pass the same callback as `afterReplay` when using
-`installTutorialDebugBridge`, so its console and optional floating replay
-triggers follow the same lifecycle. `replay()` itself remains
-navigation-agnostic. Completing or skipping
+should await `presenter.waitForPendingSkip()` immediately before replay, then call
+`presenter.resetForReplay()` after the replay promise resolves. Use the same
+ordering in `beforeReplay` and `afterReplay` when installing a debug bridge, so
+its console and optional floating replay triggers follow the same lifecycle.
+`replay()` itself remains navigation-agnostic. Completing or skipping
 an in-session replay restores the prior durable progress exactly, whether it was
 active, completed, skipped, or `null` when no prior progress existed.
 
@@ -207,7 +207,10 @@ URL policy is applied only when the caller passes `enabled: true`, normally from
 const debug = installTutorialDebugBridge({
   afterReplay: () => presenter.resetForReplay(),
   director,
-  beforeReplay: (options) => prepareHostFor(options.fromStepId),
+  beforeReplay: async (options) => {
+    await presenter.waitForPendingSkip();
+    prepareHostFor(options.fromStepId);
+  },
   floatingReplayTrigger: false,
 });
 

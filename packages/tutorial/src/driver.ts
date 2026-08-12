@@ -41,6 +41,7 @@ export interface DriverTutorialPresenter<TStep extends TutorialStep = TutorialSt
   present(presentation: DriverTutorialPresentation<TStep> | null): void;
   refresh(): void;
   resetForReplay(): void;
+  waitForPendingSkip(): Promise<void>;
 }
 
 interface TutorialTargetSemanticsGuard {
@@ -93,6 +94,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let retryableDismissedKey: string | null = null;
   let missingTargetErrorKey: string | null = null;
   let syncModalSemantics: (() => void) | undefined;
+  const pendingSkipOperations = new Set<Promise<void>>();
 
   const reportActive = (active: boolean): void => {
     if (reportedActive === active) {
@@ -183,7 +185,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         dismissedPresentationKey = dismissedKey;
         retryableDismissedKey = null;
         destroyInstancePreservingTarget(created);
-        void Promise.resolve()
+        const skipOperation = Promise.resolve()
           .then(() => input.onSkip())
           .catch((error: unknown) => {
             if (dismissedPresentationKey === dismissedKey) {
@@ -192,6 +194,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
             input.onError?.(error);
           });
+        pendingSkipOperations.add(skipOperation);
+        void skipOperation
+          .finally(() => pendingSkipOperations.delete(skipOperation))
+          .catch(() => undefined);
       },
       onDestroyed: () => {
         if (!targetRestorePending) {
@@ -228,7 +234,10 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         syncModalSemantics = syncCreatedModalSemantics;
         syncCreatedModalSemantics();
         if (presentation.step.advance.kind === 'acknowledge') {
-          browserWindow.queueMicrotask(() => nextButton.focus());
+          const initialFocus = created.getActiveStep()?.advanceOnClick === true
+            ? closeButton
+            : nextButton;
+          browserWindow.queueMicrotask(() => initialFocus.focus());
         }
       },
     });
@@ -428,7 +437,13 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     resetForReplay() {
       dismissedPresentationKey = null;
       retryableDismissedKey = null;
+      missingTargetErrorKey = null;
       scheduleRefresh();
+    },
+    async waitForPendingSkip() {
+      while (pendingSkipOperations.size > 0) {
+        await Promise.allSettled(pendingSkipOperations);
+      }
     },
   };
 
@@ -473,7 +488,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
           return;
         }
 
-        rebindTarget(currentInstance, current, undefined);
+        rebindTarget(currentInstance, presentation, undefined);
         return;
       }
 
@@ -502,28 +517,25 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       return;
     }
 
-    rebindTarget(currentInstance, current, target);
+    rebindTarget(currentInstance, presentation, target);
   }
 
   function rebindTarget(
     currentInstance: Driver,
-    current: DriveStep,
+    presentation: DriverTutorialPresentation<TStep>,
     target: HTMLElement | undefined,
   ): void {
     const previousTarget = currentInstance.getActiveElement();
-    const { element: _previousElement, ...currentWithoutElement } = current;
     targetSemanticsGuard?.restore();
     const restorePreviousTarget = !(previousTarget instanceof HTMLElement)
+      || previousTarget.id === 'driver-dummy-element'
       ? undefined
       : captureTutorialTargetSemantics(previousTarget, target?.parentElement ?? null);
     targetSemanticsGuard = target === undefined
       ? undefined
       : preserveTutorialTargetSemantics(target, browserWindow);
-    applyDriverTargetMutation(() => currentInstance.highlight(
-      target === undefined
-        ? currentWithoutElement
-        : { ...currentWithoutElement, element: target },
-    ));
+    const nextStep = createDriveStep(input, presentation, target, ownerDocument);
+    applyDriverTargetMutation(() => currentInstance.highlight(nextStep));
     restorePreviousTarget?.();
     syncModalSemantics?.();
   }
@@ -631,7 +643,7 @@ export function bindTutorialReplayTrigger<TDefinition extends TutorialDefinition
   readonly director: TutorialDirector<TDefinition>;
   readonly element: HTMLElement;
   readonly onError?: (error: unknown) => void;
-  readonly presenter: Pick<DriverTutorialPresenter, 'resetForReplay'>;
+  readonly presenter: Pick<DriverTutorialPresenter, 'resetForReplay' | 'waitForPendingSkip'>;
 }): () => void {
   let pending = false;
   const listener = (): void => {
@@ -641,7 +653,9 @@ export function bindTutorialReplayTrigger<TDefinition extends TutorialDefinition
 
     pending = true;
     void Promise.resolve()
+      .then(() => input.presenter.waitForPendingSkip())
       .then(() => input.beforeReplay?.())
+      .then(() => input.presenter.waitForPendingSkip())
       .then(() => input.director.replay())
       .then(() => input.presenter.resetForReplay())
       .catch((error: unknown) => input.onError?.(error))
@@ -663,7 +677,8 @@ function createDriveStep<TStep extends TutorialStep>(
   const actionGated = step.advance.kind === 'action' || step.advance.kind === 'signal';
   const acknowledgeOnTargetClick = presentation.acknowledgeOnTargetClick === true
     && step.advance.kind === 'acknowledge'
-    && step.target !== null;
+    && step.target !== null
+    && target !== undefined;
   const targetInteraction = presentation.allowTargetInteraction === true
     || acknowledgeOnTargetClick
     || step.interaction === 'target'

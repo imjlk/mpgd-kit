@@ -409,15 +409,27 @@ describe('Driver tutorial presenter', () => {
       onAcknowledge: vi.fn(),
       onSkip: vi.fn(),
     });
-    unanchored.present({ copy, step: tutorial.steps[0] });
+    unanchored.present({
+      acknowledgeOnTargetClick: true,
+      copy,
+      step: tutorial.steps[0],
+    });
     await nextFrame();
     target.remove();
     await nextFrame();
     expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
     expect(document.getElementById('driver-dummy-element')).not.toBeNull();
+    expect(document.activeElement).toBe(
+      document.querySelector('[data-mpgd-tutorial-next]'),
+    );
     target = createTarget();
     await nextFrame();
     expect(target.classList.contains('driver-active-element')).toBe(true);
+    const dummy = document.getElementById('driver-dummy-element');
+    expect(dummy?.hasAttribute('aria-controls')).toBe(false);
+    expect(dummy?.hasAttribute('aria-expanded')).toBe(false);
+    expect(dummy?.hasAttribute('aria-haspopup')).toBe(false);
+    expect(dummy?.classList.contains('driver-active-element')).toBe(false);
     unanchored.destroy();
   });
 
@@ -470,6 +482,34 @@ describe('Driver tutorial presenter', () => {
 
     expect(onError).toHaveBeenCalledExactlyOnceWith(error);
     expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+    presenter.destroy();
+  });
+
+  it('reapplies the missing-target error policy when replaying the same step', async () => {
+    const replayButton = document.createElement('button');
+    const onError = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      missingTarget: 'error',
+      onAcknowledge: vi.fn(),
+      onError,
+      onSkip: vi.fn(),
+    });
+    const presentation = { copy, step: tutorial.steps[0] };
+    presenter.present(presentation);
+    await nextFrame();
+    expect(onError).toHaveBeenCalledOnce();
+
+    const replay = vi.fn(async () => presenter.present(presentation));
+    const unbindReplay = bindTutorialReplayTrigger({
+      director: { replay } as never,
+      element: replayButton,
+      presenter,
+    });
+    replayButton.click();
+
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledTimes(2));
+    expect(replay).toHaveBeenCalledOnce();
+    unbindReplay();
     presenter.destroy();
   });
 
@@ -591,6 +631,9 @@ describe('Driver tutorial presenter', () => {
     });
     await nextFrame();
 
+    expect(document.activeElement).toBe(
+      document.querySelector('[data-mpgd-tutorial-skip]'),
+    );
     target.click();
 
     expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
@@ -691,6 +734,61 @@ describe('Driver tutorial presenter', () => {
     presenter.destroy();
   });
 
+  it('waits for a pending asynchronous skip before starting replay', async () => {
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(target);
+    const events: string[] = [];
+    let resolveSkip!: () => void;
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(() => new Promise<void>((resolve) => {
+        events.push('skip:start');
+        resolveSkip = () => {
+          events.push('skip:end');
+          resolve();
+        };
+      })),
+    });
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+    document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-skip]')?.click();
+    await vi.waitFor(() => expect(events).toEqual(['skip:start']));
+
+    const replayButton = document.createElement('button');
+    const beforeReplay = vi.fn(() => {
+      events.push('replay:prepare');
+    });
+    const replay = vi.fn(async () => {
+      events.push('replay:start');
+    });
+    const unbindReplay = bindTutorialReplayTrigger({
+      beforeReplay,
+      director: { replay } as never,
+      element: replayButton,
+      presenter,
+    });
+    replayButton.click();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(beforeReplay).not.toHaveBeenCalled();
+    expect(replay).not.toHaveBeenCalled();
+
+    resolveSkip();
+    await vi.waitFor(() => expect(replay).toHaveBeenCalledOnce());
+
+    expect(events).toEqual([
+      'skip:start',
+      'skip:end',
+      'replay:prepare',
+      'replay:start',
+    ]);
+    unbindReplay();
+    presenter.destroy();
+  });
+
   it('does not add an empty popover id to modal ownership', async () => {
     const idDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'id');
 
@@ -737,18 +835,51 @@ describe('Driver tutorial presenter', () => {
     const button = document.createElement('button');
     const replay = vi.fn(async () => undefined);
     const resetForReplay = vi.fn();
+    const waitForPendingSkip = vi.fn(async () => undefined);
     const unbind = bindTutorialReplayTrigger({
       director: { replay } as never,
       element: button,
-      presenter: { resetForReplay },
+      presenter: { resetForReplay, waitForPendingSkip },
     });
     button.click();
     await vi.waitFor(() => expect(replay).toHaveBeenCalledOnce());
+    expect(waitForPendingSkip).toHaveBeenCalledTimes(2);
     expect(resetForReplay).toHaveBeenCalledOnce();
     unbind();
     button.click();
     expect(replay).toHaveBeenCalledOnce();
     expect(resetForReplay).toHaveBeenCalledOnce();
+  });
+
+  it('rechecks pending skips after asynchronous replay preparation', async () => {
+    const button = document.createElement('button');
+    let resolvePreparation!: () => void;
+    let resolveSecondWait!: () => void;
+    const beforeReplay = vi.fn(() => new Promise<void>((resolve) => {
+      resolvePreparation = resolve;
+    }));
+    const waitForPendingSkip = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(() => new Promise<void>((resolve) => {
+        resolveSecondWait = resolve;
+      }));
+    const replay = vi.fn(async () => undefined);
+    const unbind = bindTutorialReplayTrigger({
+      beforeReplay,
+      director: { replay } as never,
+      element: button,
+      presenter: { resetForReplay: vi.fn(), waitForPendingSkip },
+    });
+
+    button.click();
+    await vi.waitFor(() => expect(beforeReplay).toHaveBeenCalledOnce());
+    resolvePreparation();
+    await vi.waitFor(() => expect(waitForPendingSkip).toHaveBeenCalledTimes(2));
+    expect(replay).not.toHaveBeenCalled();
+
+    resolveSecondWait();
+    await vi.waitFor(() => expect(replay).toHaveBeenCalledOnce());
+    unbind();
   });
 });
 
