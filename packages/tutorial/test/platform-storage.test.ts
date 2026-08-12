@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createInitialTutorialProgress, defineTutorial } from '../src/index.js';
 import { createPlatformTutorialProgressStore } from '../src/platform-storage.js';
@@ -17,6 +17,10 @@ const tutorial = defineTutorial({
 } as const);
 
 describe('platform tutorial progress store', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('loads validated progress and serializes queued writes', async () => {
     const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
     const saved: unknown[] = [];
@@ -92,5 +96,66 @@ describe('platform tutorial progress store', () => {
     expect(attempts).toBe(1);
     expect(store.available).toBe(false);
     expect(store.getSnapshot()).toEqual(initial);
+  });
+
+  it('fails closed when the storage load times out', async () => {
+    vi.useFakeTimers();
+    const errors: unknown[] = [];
+    const storePromise = createPlatformTutorialProgressStore({
+      definition: tutorial,
+      key: 'tutorial',
+      onError: (error) => errors.push(error),
+      storage: {
+        load: () => new Promise<never>(() => undefined),
+        save: async () => undefined,
+      },
+      timeoutMs: 25,
+    });
+
+    await vi.advanceTimersByTimeAsync(25);
+    const store = await storePromise;
+
+    expect(store.available).toBe(false);
+    expect(store.getSnapshot()).toBeNull();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toEqual(expect.objectContaining({
+      message: 'Tutorial storage load timed out after 25ms.',
+    }));
+    await expect(store.flush()).resolves.toBeUndefined();
+  });
+
+  it('fails closed and releases the write queue when storage save times out', async () => {
+    vi.useFakeTimers();
+    const errors: unknown[] = [];
+    let attempts = 0;
+    const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    const store = await createPlatformTutorialProgressStore({
+      definition: tutorial,
+      key: 'tutorial',
+      onError: (error) => errors.push(error),
+      storage: {
+        load: async () => ({ value: initial }),
+        save: () => {
+          attempts += 1;
+          return new Promise<never>(() => undefined);
+        },
+      },
+      timeoutMs: 25,
+    });
+    const first = { ...initial, updatedAt: '2026-08-12T00:01:00.000Z' };
+    const second = { ...initial, updatedAt: '2026-08-12T00:02:00.000Z' };
+    const firstSave = store.save(first);
+    const secondSave = store.save(second);
+    const flushing = store.flush();
+
+    await vi.advanceTimersByTimeAsync(25);
+
+    await expect(firstSave).rejects.toThrow('Tutorial storage save timed out after 25ms.');
+    await expect(secondSave).resolves.toBeUndefined();
+    await expect(flushing).resolves.toBeUndefined();
+    expect(attempts).toBe(1);
+    expect(store.available).toBe(false);
+    expect(store.getSnapshot()).toEqual(initial);
+    expect(errors).toHaveLength(1);
   });
 });

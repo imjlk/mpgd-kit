@@ -109,7 +109,7 @@ export function parseTutorialProgress<TDefinition extends TutorialDefinition>(
   return {
     checkpoint: value.checkpoint as TutorialSceneOf<TDefinition>,
     completedAt: value.completedAt,
-    completedStepIds: completedStepIds as TutorialStepIdOf<TDefinition>[],
+    completedStepIds: [...completedStepIds] as TutorialStepIdOf<TDefinition>[],
     definitionRevision: definition.revision,
     schemaVersion: 1,
     skippedAt: value.skippedAt,

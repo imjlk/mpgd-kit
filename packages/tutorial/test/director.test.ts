@@ -135,6 +135,29 @@ describe('tutorial director', () => {
     expect(store.getSnapshot()).toEqual(completed);
   });
 
+  it('restores durable progress when an in-session replay completes', async () => {
+    const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    const store = createMemoryTutorialProgressStore({ definition: tutorial, initial });
+    const director = createTutorialDirector({
+      autoStart: false,
+      definition: tutorial,
+      progressStore: store,
+    });
+
+    await director.replay({ fromStepId: 'result' });
+    director.observeScene('result');
+    director.acknowledge('result');
+    await director.flush();
+
+    expect(director.getSnapshot()).toMatchObject({
+      currentStepId: 'welcome',
+      replaying: false,
+      status: 'active',
+    });
+    expect(store.getSnapshot()).toEqual(initial);
+    expect(store.saves).toEqual([]);
+  });
+
   it('does not replace a durable completion with a direct skip', async () => {
     const completed = {
       ...createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z'),
@@ -153,6 +176,91 @@ describe('tutorial director', () => {
 
     expect(director.getSnapshot().status).toBe('completed');
     expect(store.getSnapshot()).toEqual(completed);
+  });
+
+  it('does not persist a skip when publication destroys the director', async () => {
+    const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    const saved: unknown[] = [];
+    const director = createTutorialDirector({
+      autoStart: false,
+      definition: tutorial,
+      progressStore: {
+        available: true,
+        flush: async () => undefined,
+        getSnapshot: () => initial,
+        save: async (progress) => {
+          saved.push(progress);
+        },
+      },
+    });
+
+    director.subscribe((snapshot) => {
+      if (snapshot.status === 'skipped') {
+        director.destroy();
+      }
+    });
+    await director.skip();
+
+    expect(saved).toEqual([]);
+    expect(director.getSnapshot().status).toBe('skipped');
+  });
+
+  it('restores the prior durable state when replay starts during skip publication', async () => {
+    const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    const store = createMemoryTutorialProgressStore({ definition: tutorial, initial });
+    const director = createTutorialDirector({
+      autoStart: false,
+      definition: tutorial,
+      progressStore: store,
+    });
+    let replayStarted = false;
+    director.subscribe((snapshot) => {
+      if (snapshot.status === 'skipped' && !replayStarted) {
+        replayStarted = true;
+        void director.replay({ fromStepId: 'move' });
+      }
+    });
+
+    await director.skip();
+    await director.skip();
+    await director.flush();
+
+    expect(director.getSnapshot()).toMatchObject({
+      currentStepId: 'welcome',
+      replaying: false,
+      status: 'active',
+    });
+    expect(store.getSnapshot()).toEqual(initial);
+    expect(store.saves).toEqual([]);
+  });
+
+  it('publishes one stable snapshot to every listener during a reentrant replay', async () => {
+    const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    const store = createMemoryTutorialProgressStore({ definition: tutorial, initial });
+    const director = createTutorialDirector({
+      autoStart: false,
+      definition: tutorial,
+      progressStore: store,
+    });
+    let replayStarted = false;
+    const observed: string[] = [];
+    director.subscribe((snapshot) => {
+      if (snapshot.status === 'skipped' && !replayStarted) {
+        replayStarted = true;
+        void director.replay({ fromStepId: 'move' });
+      }
+    });
+    director.subscribe((snapshot) => {
+      observed.push(`${snapshot.status}:${snapshot.currentStepId ?? 'none'}`);
+    });
+
+    await director.skip();
+
+    expect(observed.slice(-2)).toEqual(['skipped:none', 'active:move']);
+    expect(observed.at(-1)).toBe(
+      `${director.getSnapshot().status}:${director.getSnapshot().currentStepId ?? 'none'}`,
+    );
+    expect(director.getSnapshot()).toMatchObject({ currentStepId: 'move', replaying: true });
   });
 
   it('publishes the current snapshot when a listener subscribes', () => {
@@ -200,17 +308,29 @@ describe('tutorial director', () => {
     });
 
     await applyTutorialDebugLaunchPolicy(director, resolveTutorialDebugLaunchPolicy({
+      definition: tutorial,
       enabled: false,
       search: '?mpgd-tutorial=off',
     }));
     expect(director.getSnapshot().suspended).toBe(false);
 
     await applyTutorialDebugLaunchPolicy(director, resolveTutorialDebugLaunchPolicy({
+      definition: tutorial,
       enabled: true,
       search: '?mpgd-tutorial=replay&mpgd-tutorial-step=move',
     }));
     expect(director.getSnapshot()).toMatchObject({
       currentStepId: 'move',
+      replaying: true,
+    });
+
+    await expect(applyTutorialDebugLaunchPolicy(director, resolveTutorialDebugLaunchPolicy({
+      definition: tutorial,
+      enabled: true,
+      search: '?mpgd-tutorial-step=missing',
+    }))).resolves.toBeUndefined();
+    expect(director.getSnapshot()).toMatchObject({
+      currentStepId: 'welcome',
       replaying: true,
     });
   });

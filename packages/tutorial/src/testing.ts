@@ -55,37 +55,42 @@ export function createMemoryTutorialProgressStore<TProgress extends TutorialProg
 
 export type TutorialDebugMode = 'default' | 'off' | 'replay';
 
-export interface TutorialDebugLaunchPolicy {
+export interface TutorialDebugLaunchPolicy<TStepId extends string = string> {
   readonly enabled: boolean;
   readonly mode: TutorialDebugMode;
-  readonly stepId: string | null;
+  readonly stepId: TStepId | null;
 }
 
-export function resolveTutorialDebugLaunchPolicy(input: {
+export function resolveTutorialDebugLaunchPolicy<TDefinition extends TutorialDefinition>(input: {
+  readonly definition: TDefinition;
   readonly enabled: boolean;
   readonly search: string;
-}): TutorialDebugLaunchPolicy {
+}): TutorialDebugLaunchPolicy<TutorialStepIdOf<TDefinition>> {
   if (!input.enabled) {
     return { enabled: false, mode: 'default', stepId: null };
   }
 
   const parameters = new URLSearchParams(input.search);
   const requestedMode = parameters.get('mpgd-tutorial');
+  const requestedStepId = parameters.get('mpgd-tutorial-step');
   const mode: TutorialDebugMode = requestedMode === 'off'
-      || requestedMode === 'replay'
-    ? requestedMode
-    : 'default';
+    ? 'off'
+    : requestedMode === 'replay' || requestedStepId !== null
+      ? 'replay'
+      : 'default';
 
   return {
     enabled: true,
     mode,
-    stepId: parameters.get('mpgd-tutorial-step'),
+    stepId: requestedStepId !== null && isTutorialStepId(input.definition, requestedStepId)
+      ? requestedStepId
+      : null,
   };
 }
 
 export async function applyTutorialDebugLaunchPolicy<TDefinition extends TutorialDefinition>(
   director: TutorialDirector<TDefinition>,
-  policy: TutorialDebugLaunchPolicy,
+  policy: TutorialDebugLaunchPolicy<TutorialStepIdOf<TDefinition>>,
 ): Promise<void> {
   if (!policy.enabled || policy.mode === 'default' && policy.stepId === null) {
     return;
@@ -98,8 +103,15 @@ export async function applyTutorialDebugLaunchPolicy<TDefinition extends Tutoria
 
   const options: TutorialReplayOptions<TDefinition> = policy.stepId === null
     ? {}
-    : { fromStepId: policy.stepId as TutorialStepIdOf<TDefinition> };
+    : { fromStepId: policy.stepId };
   await director.replay(options);
+}
+
+function isTutorialStepId<TDefinition extends TutorialDefinition>(
+  definition: TDefinition,
+  stepId: string,
+): stepId is TutorialStepIdOf<TDefinition> {
+  return definition.steps.some((step) => step.id === stepId);
 }
 
 export interface TutorialDebugBridge<TDefinition extends TutorialDefinition> {
@@ -152,12 +164,12 @@ export function installTutorialDebugBridge<TDefinition extends TutorialDefinitio
   };
   record[globalKey] = bridge;
 
-  const trigger = createFloatingReplayTrigger(input, bridge);
+  const destroyTrigger = createFloatingReplayTrigger(input, bridge);
 
   return {
     bridge,
     destroy() {
-      trigger?.remove();
+      destroyTrigger?.();
 
       if (record[globalKey] !== bridge) {
         return;
@@ -175,7 +187,7 @@ export function installTutorialDebugBridge<TDefinition extends TutorialDefinitio
 function createFloatingReplayTrigger<TDefinition extends TutorialDefinition>(
   input: InstallTutorialDebugBridgeInput<TDefinition>,
   bridge: TutorialDebugBridge<TDefinition>,
-): HTMLButtonElement | null {
+): (() => void) | null {
   if (input.floatingReplayTrigger === false
     || input.floatingReplayTrigger === undefined
     || typeof document === 'undefined') {
@@ -193,9 +205,13 @@ function createFloatingReplayTrigger<TDefinition extends TutorialDefinition>(
   button.style.insetBlockStart = '12px';
   button.style.insetInlineEnd = '12px';
   button.style.zIndex = '2147483647';
-  button.addEventListener('click', () => {
+  const handleClick = (): void => {
     void bridge.replay().catch((error: unknown) => input.onError?.(error));
-  });
+  };
+  button.addEventListener('click', handleClick);
   (options.parent ?? document.body).appendChild(button);
-  return button;
+  return () => {
+    button.removeEventListener('click', handleClick);
+    button.remove();
+  };
 }

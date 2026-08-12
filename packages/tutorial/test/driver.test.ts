@@ -28,6 +28,13 @@ const tutorial = defineTutorial({
       scene: 'lobby',
       target: 'choice',
     },
+    {
+      advance: { kind: 'acknowledge' },
+      id: 'unanchored-blocked',
+      interaction: 'blocked',
+      scene: 'lobby',
+      target: null,
+    },
   ],
 } as const);
 
@@ -121,9 +128,41 @@ describe('Driver tutorial presenter', () => {
     expect(blockedPopover?.getAttribute('aria-modal')).toBe('true');
     expect(modal.getAttribute('aria-modal')).toBe('false');
 
+    presenter.present({ copy, step: tutorial.steps[2] });
+    await nextFrame();
+    const unanchoredPopover = document.querySelector<HTMLElement>(
+      '[data-mpgd-tutorial-popover]',
+    );
+    expect(unanchoredPopover?.getAttribute('role')).toBe('dialog');
+    expect(unanchoredPopover?.getAttribute('aria-modal')).toBe('true');
+    expect(modal.getAttribute('aria-modal')).toBe('false');
+
     presenter.destroy();
     expect(modal.getAttribute('aria-modal')).toBe('true');
     expect(modal.hasAttribute('aria-owns')).toBe(false);
+  });
+
+  it('does not associate an outside interactive target with an unrelated modal', async () => {
+    const modal = document.createElement('section');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('role', 'dialog');
+    setRect(modal, { height: 300, left: 20, top: 20, width: 300 });
+    const choice = document.createElement('button');
+    choice.dataset.mpgdTutorialTarget = 'choice';
+    setRect(choice, { height: 40, left: 360, top: 40, width: 100 });
+    document.body.append(modal, choice);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    presenter.present({ copy, step: tutorial.steps[1] });
+    await nextFrame();
+
+    expect(modal.hasAttribute('aria-owns')).toBe(false);
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')?.getAttribute('role'))
+      .toBe('region');
+    presenter.destroy();
   });
 
   it('does not overwrite host ARIA updates made during a guided step', async () => {
@@ -158,6 +197,79 @@ describe('Driver tutorial presenter', () => {
     expect(choice.getAttribute('aria-expanded')).toBe('true');
     expect(choice.getAttribute('aria-controls')).toBeNull();
     expect(choice.getAttribute('aria-haspopup')).toBe('dialog');
+  });
+
+  it('tracks exact-value host writes and removals on an underlying modal', async () => {
+    const modal = document.createElement('section');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('role', 'dialog');
+    setRect(modal, { height: 300, left: 20, top: 20, width: 300 });
+    const choice = document.createElement('button');
+    choice.dataset.mpgdTutorialTarget = 'choice';
+    setRect(choice, { height: 40, left: 40, top: 40, width: 100 });
+    const blocked = document.createElement('button');
+    blocked.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(blocked, { height: 40, left: 60, top: 60, width: 100 });
+    modal.append(choice, blocked);
+    document.body.appendChild(modal);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+    presenter.present({ copy, step: tutorial.steps[1] });
+    await nextFrame();
+
+    expect(modal.getAttribute('aria-owns')).toBe('driver-popover-content');
+    modal.removeAttribute('aria-owns');
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+    expect(modal.hasAttribute('aria-owns')).toBe(false);
+
+    expect(modal.getAttribute('aria-modal')).toBe('false');
+    modal.setAttribute('aria-modal', 'false');
+    presenter.destroy();
+
+    expect(modal.getAttribute('aria-modal')).toBe('false');
+    expect(modal.hasAttribute('aria-owns')).toBe(false);
+  });
+
+  it('moves blocked modal ownership when the host replaces its modal', async () => {
+    const firstModal = document.createElement('section');
+    firstModal.setAttribute('aria-modal', 'true');
+    firstModal.setAttribute('role', 'dialog');
+    setRect(firstModal, { height: 300, left: 20, top: 20, width: 300 });
+    document.body.appendChild(firstModal);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+    presenter.present({ copy, step: tutorial.steps[2] });
+    await nextFrame();
+    expect(firstModal.getAttribute('aria-modal')).toBe('false');
+
+    firstModal.remove();
+    const secondModal = document.createElement('section');
+    secondModal.setAttribute('aria-modal', 'true');
+    secondModal.setAttribute('role', 'dialog');
+    setRect(secondModal, { height: 300, left: 20, top: 20, width: 300 });
+    document.body.appendChild(secondModal);
+    await nextFrame();
+
+    expect(firstModal.getAttribute('aria-modal')).toBe('true');
+    expect(secondModal.getAttribute('aria-modal')).toBe('false');
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')?.getAttribute('aria-modal'))
+      .toBe('true');
+
+    const modalMutations: MutationRecord[] = [];
+    const modalObserver = new MutationObserver((records) => modalMutations.push(...records));
+    modalObserver.observe(secondModal, { attributeFilter: ['aria-modal'], attributes: true });
+    presenter.refresh();
+    await nextFrame();
+    expect(modalMutations).toEqual([]);
+    modalObserver.disconnect();
+
+    presenter.destroy();
+    expect(secondModal.getAttribute('aria-modal')).toBe('true');
   });
 
   it('cleans a detached guided target and its still-connected parent before reuse', async () => {
@@ -218,6 +330,315 @@ describe('Driver tutorial presenter', () => {
     expect(modal.hasAttribute('aria-owns')).toBe(false);
   });
 
+  it('reapplies wait, error, and unanchored policies when an active target disappears', async () => {
+    const createTarget = (): HTMLButtonElement => {
+      const target = document.createElement('button');
+      target.dataset.mpgdTutorialTarget = 'duplicate';
+      setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+      document.body.appendChild(target);
+      return target;
+    };
+
+    let target = createTarget();
+    const waiting = createDriverTutorialPresenter({
+      missingTarget: 'wait',
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+    waiting.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+    target.remove();
+    await nextFrame();
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+    expect(document.body.dataset.mpgdTutorialActive).toBeUndefined();
+    target = createTarget();
+    await nextFrame();
+    expect(target.classList.contains('driver-active-element')).toBe(true);
+    waiting.destroy();
+    target.remove();
+
+    target = createTarget();
+    const onError = vi.fn();
+    const failing = createDriverTutorialPresenter({
+      missingTarget: 'error',
+      onAcknowledge: vi.fn(),
+      onError,
+      onSkip: vi.fn(),
+    });
+    failing.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+    target.remove();
+    await nextFrame();
+    expect(onError).toHaveBeenCalledOnce();
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+    failing.destroy();
+
+    target = createTarget();
+    const unanchored = createDriverTutorialPresenter({
+      missingTarget: 'unanchored',
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+    unanchored.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+    target.remove();
+    await nextFrame();
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
+    expect(document.getElementById('driver-dummy-element')).not.toBeNull();
+    target = createTarget();
+    await nextFrame();
+    expect(target.classList.contains('driver-active-element')).toBe(true);
+    unanchored.destroy();
+  });
+
+  it('rebinds visible duplicate targets after captured nested scrolling', async () => {
+    const scroller = document.createElement('div');
+    scroller.style.overflow = 'auto';
+    setRect(scroller, { height: 100, left: 0, top: 0, width: 200 });
+    const first = document.createElement('button');
+    const second = document.createElement('button');
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    second.dataset.mpgdTutorialTarget = 'duplicate';
+    let scrolled = false;
+    setDynamicRect(first, () => ({ height: 40, left: 20, top: scrolled ? -100 : 20, width: 100 }));
+    setDynamicRect(second, () => ({ height: 40, left: 20, top: scrolled ? 20 : 140, width: 100 }));
+    scroller.append(first, second);
+    document.body.appendChild(scroller);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+    expect(first.classList.contains('driver-active-element')).toBe(true);
+
+    scrolled = true;
+    scroller.dispatchEvent(new Event('scroll'));
+    await nextFrame();
+
+    expect(first.classList.contains('driver-active-element')).toBe(false);
+    expect(second.classList.contains('driver-active-element')).toBe(true);
+    expect(scroller.classList.contains('driver-active-element-parent')).toBe(true);
+    presenter.destroy();
+    expect(scroller.classList.contains('driver-active-element-parent')).toBe(false);
+  });
+
+  it('reports a custom target resolver failure without escaping the frame', async () => {
+    const error = new Error('resolver failed');
+    const onError = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onError,
+      onSkip: vi.fn(),
+      resolveTarget: () => {
+        throw error;
+      },
+    });
+
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+
+    expect(onError).toHaveBeenCalledExactlyOnceWith(error);
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+    presenter.destroy();
+  });
+
+  it('abandons a stale resolver failure when the error handler replaces the step', async () => {
+    const replacement = document.createElement('button');
+    replacement.dataset.mpgdTutorialTarget = 'choice';
+    setRect(replacement, { height: 40, left: 20, top: 80, width: 100 });
+    document.body.appendChild(replacement);
+    const onError = vi.fn();
+    let presenter!: ReturnType<typeof createDriverTutorialPresenter<typeof tutorial.steps[number]>>;
+    presenter = createDriverTutorialPresenter({
+      missingTarget: 'error',
+      onAcknowledge: vi.fn(),
+      onError: (error) => {
+        onError(error);
+        presenter.present({ copy, step: tutorial.steps[1] });
+      },
+      onSkip: vi.fn(),
+      resolveTarget: (target) => {
+        if (target === 'duplicate') {
+          throw new Error('resolver failed');
+        }
+
+        return replacement;
+      },
+    });
+
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+
+    expect(onError).toHaveBeenCalledOnce();
+    expect(document.body.dataset.mpgdTutorialStep).toBe('interactive');
+    expect(replacement.classList.contains('driver-active-element')).toBe(true);
+    presenter.destroy();
+  });
+
+  it('replaces a fully active Driver instance during an active-state callback', async () => {
+    const first = document.createElement('button');
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(first, { height: 40, left: 20, top: 20, width: 100 });
+    const replacement = document.createElement('button');
+    replacement.dataset.mpgdTutorialTarget = 'choice';
+    setRect(replacement, { height: 40, left: 20, top: 80, width: 100 });
+    document.body.append(first, replacement);
+    let replaced = false;
+    let presenter!: ReturnType<typeof createDriverTutorialPresenter<typeof tutorial.steps[number]>>;
+    presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onActiveChange: (active) => {
+        if (active && !replaced) {
+          replaced = true;
+          presenter.present({ copy, step: tutorial.steps[1] });
+        }
+      },
+      onSkip: vi.fn(),
+    });
+
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+
+    expect(document.body.dataset.mpgdTutorialStep).toBe('interactive');
+    expect(document.querySelectorAll('[data-mpgd-tutorial-popover]')).toHaveLength(1);
+    expect(document.body.classList.contains('driver-active')).toBe(true);
+    expect(first.classList.contains('driver-active-element')).toBe(false);
+    expect(replacement.classList.contains('driver-active-element')).toBe(true);
+    presenter.destroy();
+  });
+
+  it('does not report a removed presentation under a reentrant replacement', async () => {
+    const first = document.createElement('button');
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(first, { height: 40, left: 20, top: 20, width: 100 });
+    const replacement = document.createElement('button');
+    replacement.dataset.mpgdTutorialTarget = 'choice';
+    setRect(replacement, { height: 40, left: 20, top: 80, width: 100 });
+    document.body.append(first, replacement);
+    const onError = vi.fn();
+    let replaceWhenDismissed = false;
+    let presenter!: ReturnType<typeof createDriverTutorialPresenter<typeof tutorial.steps[number]>>;
+    presenter = createDriverTutorialPresenter({
+      missingTarget: 'error',
+      onAcknowledge: vi.fn(),
+      onActiveChange: (active) => {
+        if (!active && replaceWhenDismissed) {
+          replaceWhenDismissed = false;
+          presenter.present({ copy, step: tutorial.steps[1] });
+        }
+      },
+      onError,
+      onSkip: vi.fn(),
+    });
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+
+    replaceWhenDismissed = true;
+    first.remove();
+    await nextFrame();
+
+    expect(onError).not.toHaveBeenCalled();
+    expect(document.body.dataset.mpgdTutorialStep).toBe('interactive');
+    expect(replacement.classList.contains('driver-active-element')).toBe(true);
+    presenter.destroy();
+  });
+
+  it('acknowledges an acknowledge-on-target-click step through Driver', async () => {
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(target);
+    const onAcknowledge = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge,
+      onSkip: vi.fn(),
+    });
+    presenter.present({
+      acknowledgeOnTargetClick: true,
+      copy,
+      step: tutorial.steps[0],
+    });
+    await nextFrame();
+
+    target.click();
+
+    expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    presenter.destroy();
+  });
+
+  it('keeps a skipped presentation dismissed when skipping fails', async () => {
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(target);
+    const error = new Error('skip failed');
+    const onError = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onError,
+      onSkip: vi.fn(async () => Promise.reject(error)),
+    });
+    const presentation = { copy, step: tutorial.steps[0] };
+    presenter.present(presentation);
+    await nextFrame();
+
+    document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-skip]')?.click();
+    await vi.waitFor(() => expect(onError).toHaveBeenCalledExactlyOnceWith(error));
+    await nextFrame();
+    presenter.refresh();
+    await nextFrame();
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+
+    presenter.present(null);
+    presenter.present(presentation);
+    await nextFrame();
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
+    presenter.destroy();
+  });
+
+  it('does not add an empty popover id to modal ownership', async () => {
+    const idDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'id');
+
+    if (idDescriptor?.set === undefined) {
+      throw new Error('Expected Element.id to expose a setter.');
+    }
+
+    Object.defineProperty(Element.prototype, 'id', {
+      ...idDescriptor,
+      set(value: string) {
+        if (this instanceof HTMLElement && this.classList.contains('driver-popover')) {
+          return;
+        }
+
+        idDescriptor.set?.call(this, value);
+      },
+    });
+
+    try {
+      const modal = document.createElement('section');
+      modal.setAttribute('aria-modal', 'true');
+      modal.setAttribute('role', 'dialog');
+      const choice = document.createElement('button');
+      choice.dataset.mpgdTutorialTarget = 'choice';
+      setRect(choice, { height: 40, left: 40, top: 40, width: 100 });
+      modal.appendChild(choice);
+      document.body.appendChild(modal);
+      const presenter = createDriverTutorialPresenter({
+        onAcknowledge: vi.fn(),
+        onSkip: vi.fn(),
+      });
+      presenter.present({ copy, step: tutorial.steps[1] });
+      await nextFrame();
+
+      expect(document.querySelector('.driver-popover')?.id).toBe('');
+      expect(modal.hasAttribute('aria-owns')).toBe(false);
+      presenter.destroy();
+    } finally {
+      Object.defineProperty(Element.prototype, 'id', idDescriptor);
+    }
+  });
+
   it('binds replay only when a host provides a trigger', async () => {
     const button = document.createElement('button');
     const replay = vi.fn(async () => undefined);
@@ -248,6 +669,32 @@ function setRect(
     y: rect.top,
     toJSON: () => undefined,
   });
+}
+
+function setDynamicRect(
+  element: HTMLElement,
+  read: () => {
+    readonly height: number;
+    readonly left: number;
+    readonly top: number;
+    readonly width: number;
+  },
+): void {
+  element.getBoundingClientRect = () => {
+    const rect = read();
+
+    return {
+      bottom: rect.top + rect.height,
+      height: rect.height,
+      left: rect.left,
+      right: rect.left + rect.width,
+      top: rect.top,
+      width: rect.width,
+      x: rect.left,
+      y: rect.top,
+      toJSON: () => undefined,
+    };
+  };
 }
 
 async function nextFrame(): Promise<void> {
