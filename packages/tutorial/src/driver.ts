@@ -366,8 +366,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       }
 
       return resolveVisibleTutorialTarget({
-        preferActivatable: presentation.acknowledgeOnTargetClick === true
-          && presentation.step.advance.kind === 'acknowledge',
+        preferActivatable: shouldPreferActivatableTutorialTarget(presentation),
         root,
         target: presentation.step.target,
         targetAttribute,
@@ -763,7 +762,7 @@ export function resolveVisibleTutorialTarget(input: {
 
   const attribute = input.targetAttribute ?? tutorialDomAttributes.target;
   const selector = `[${attribute}="${escapeAttributeValue(input.target)}"]`;
-  const candidates = [...root.querySelectorAll<HTMLElement>(selector)];
+  const candidates = findComposedTutorialCandidates(root, selector);
 
   if (input.preferActivatable === true) {
     return candidates.find(
@@ -934,6 +933,21 @@ function shouldAcknowledgeOnTargetClick<TStep extends TutorialStep>(
     && isActivatableTutorialTarget(target);
 }
 
+function shouldPreferActivatableTutorialTarget<TStep extends TutorialStep>(
+  presentation: DriverTutorialPresentation<TStep>,
+): boolean {
+  const { step } = presentation;
+  const targetInteraction = presentation.allowTargetInteraction === true
+    || step.interaction === 'target'
+    || step.interaction === 'gameplay';
+  const acknowledgeOnTargetClick = presentation.acknowledgeOnTargetClick === true
+    && step.advance.kind === 'acknowledge';
+  const targetGated = targetInteraction
+    && (step.advance.kind === 'action' || step.advance.kind === 'signal');
+
+  return acknowledgeOnTargetClick || targetGated;
+}
+
 function resolveUnderlyingTutorialModal(
   popover: HTMLElement,
   interaction: TutorialStep['interaction'],
@@ -975,7 +989,7 @@ function resolveUnderlyingTutorialModal(
 
   return renderableActiveModal
     ?? (canSelectCurrentModal ? renderableCurrentModal : null)
-    ?? findComposedTutorialModalCandidates(popover.ownerDocument, modalSelector)
+    ?? findComposedTutorialCandidates(popover.ownerDocument, modalSelector)
       .find(isSelectableModal)
     ?? null;
 }
@@ -997,12 +1011,12 @@ function findClosestComposedTutorialModal(
   return null;
 }
 
-function findComposedTutorialModalCandidates(
-  ownerDocument: Document,
+function findComposedTutorialCandidates(
+  root: Document | HTMLElement,
   selector: string,
 ): HTMLElement[] {
   const matches: HTMLElement[] = [];
-  visitComposedTutorialElements(ownerDocument, (element) => {
+  visitComposedTutorialElements(root, (element) => {
     if (element instanceof HTMLElement && element.matches(selector)) {
       matches.push(element);
     }
@@ -1021,7 +1035,7 @@ function findOpenTutorialShadowRoots(ownerDocument: Document): ShadowRoot[] {
 }
 
 function visitComposedTutorialElements(
-  ownerDocument: Document,
+  root: Document | HTMLElement,
   visitor: (element: Element) => void,
 ): void {
   const visited = new Set<Element>();
@@ -1033,15 +1047,21 @@ function visitComposedTutorialElements(
     visited.add(element);
     visitor(element);
 
-    const shadowRoot = element.shadowRoot;
-
-    if (shadowRoot !== null) {
-      visitChildren(shadowRoot);
+    visitComposedChildren(element);
+  };
+  const visitChildren = (parent: ParentNode): void => {
+    for (const child of parent.children) {
+      visit(child);
+    }
+  };
+  const visitComposedChildren = (parent: Document | Element): void => {
+    if (parent instanceof Element && parent.shadowRoot !== null) {
+      visitChildren(parent.shadowRoot);
       return;
     }
 
-    if (element instanceof HTMLSlotElement) {
-      const assignedElements = element.assignedElements({ flatten: true });
+    if (parent instanceof HTMLSlotElement) {
+      const assignedElements = parent.assignedElements({ flatten: true });
 
       if (assignedElements.length > 0) {
         for (const assignedElement of assignedElements) {
@@ -1052,15 +1072,10 @@ function visitComposedTutorialElements(
       }
     }
 
-    visitChildren(element);
-  };
-  const visitChildren = (parent: ParentNode): void => {
-    for (const child of parent.children) {
-      visit(child);
-    }
+    visitChildren(parent);
   };
 
-  visitChildren(ownerDocument);
+  visitComposedChildren(root);
 }
 
 function configureTutorialModalSemantics(
