@@ -94,6 +94,40 @@ describe('Driver tutorial presenter', () => {
     expect(visible.getAttribute('aria-haspopup')).toBe('menu');
   });
 
+  it('resolves a standard tutorial target through an open shadow root', async () => {
+    const host = document.createElement('div');
+    const shadowRoot = host.attachShadow({ mode: 'open' });
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    shadowRoot.appendChild(target);
+    document.body.appendChild(host);
+
+    expect(resolveVisibleTutorialTarget({ target: 'duplicate' })).toBe(target);
+    expect(resolveVisibleTutorialTarget({ root: host, target: 'duplicate' })).toBe(target);
+    const onAcknowledge = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge,
+      onSkip: vi.fn(),
+      root: host,
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+
+      expect(target.classList.contains('driver-active-element')).toBe(true);
+      target.click();
+      expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    } finally {
+      presenter.destroy();
+    }
+  });
+
   it('selects the duplicate inside a shifted narrow visual viewport', () => {
     vi.stubGlobal('visualViewport', {
       height: 240,
@@ -1389,6 +1423,68 @@ describe('Driver tutorial presenter', () => {
       expect(document.activeElement).toBe(next);
       next?.click();
       expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    } finally {
+      presenter.destroy();
+    }
+  });
+
+  it('prefers an enabled duplicate for an action-gated target step', async () => {
+    const disabledTarget = document.createElement('button');
+    disabledTarget.disabled = true;
+    disabledTarget.dataset.mpgdTutorialTarget = 'choice';
+    setRect(disabledTarget, { height: 40, left: 20, top: 20, width: 100 });
+    const enabledTarget = document.createElement('button');
+    enabledTarget.dataset.mpgdTutorialTarget = 'choice';
+    setRect(enabledTarget, { height: 40, left: 140, top: 20, width: 100 });
+    document.body.append(disabledTarget, enabledTarget);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[1] });
+      await nextFrame();
+
+      expect(disabledTarget.classList.contains('driver-active-element')).toBe(false);
+      expect(enabledTarget.classList.contains('driver-active-element')).toBe(true);
+      expect(document.querySelector<HTMLElement>('.driver-popover-footer')?.style.display)
+        .toBe('none');
+      expect(document.querySelector('[data-mpgd-tutorial-skip]')).not.toBeNull();
+    } finally {
+      presenter.destroy();
+    }
+  });
+
+  it('keeps a disabled-only action target guided until the host enables it', async () => {
+    const target = document.createElement('button');
+    target.disabled = true;
+    target.dataset.mpgdTutorialTarget = 'choice';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    const hostAction = vi.fn();
+    target.addEventListener('click', hostAction);
+    document.body.appendChild(target);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[1] });
+      await nextFrame();
+
+      expect(target.classList.contains('driver-active-element')).toBe(true);
+      expect(document.querySelector<HTMLElement>('.driver-popover-footer')?.style.display)
+        .toBe('none');
+      expect(document.querySelector('[data-mpgd-tutorial-skip]')).not.toBeNull();
+      target.click();
+      expect(hostAction).not.toHaveBeenCalled();
+
+      target.disabled = false;
+      await nextFrame();
+      expect(target.classList.contains('driver-active-element')).toBe(true);
+      target.click();
+      expect(hostAction).toHaveBeenCalledOnce();
     } finally {
       presenter.destroy();
     }
