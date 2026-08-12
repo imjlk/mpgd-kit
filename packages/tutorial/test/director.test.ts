@@ -135,18 +135,19 @@ describe('tutorial director', () => {
 
   it('registers persistence before an immediate flush', async () => {
     let releaseSave: (() => void) | undefined;
-    let pendingSave = Promise.resolve();
+    const pendingSave = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let registeredSave = Promise.resolve();
     const director = createTutorialDirector({
       autoStart: true,
       definition: tutorial,
       progressStore: {
         available: true,
-        flush: () => pendingSave,
+        flush: () => registeredSave,
         getSnapshot: () => null,
         save: () => {
-          pendingSave = new Promise<void>((resolve) => {
-            releaseSave = resolve;
-          });
+          void (registeredSave = pendingSave);
           return pendingSave;
         },
       },
