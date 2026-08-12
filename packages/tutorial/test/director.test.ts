@@ -251,16 +251,48 @@ describe('tutorial director', () => {
       }
     });
     director.subscribe((snapshot) => {
-      observed.push(`${snapshot.status}:${snapshot.currentStepId ?? 'none'}`);
+      const argumentKey = `${snapshot.status}:${snapshot.currentStepId ?? 'none'}`;
+      const current = director.getSnapshot();
+      const currentKey = `${current.status}:${current.currentStepId ?? 'none'}`;
+      observed.push(`${argumentKey}|${currentKey}`);
     });
 
     await director.skip();
 
-    expect(observed.slice(-2)).toEqual(['skipped:none', 'active:move']);
+    expect(observed.slice(-2)).toEqual([
+      'skipped:none|skipped:none',
+      'active:move|active:move',
+    ]);
+    const finalSnapshot = director.getSnapshot();
     expect(observed.at(-1)).toBe(
-      `${director.getSnapshot().status}:${director.getSnapshot().currentStepId ?? 'none'}`,
+      `${finalSnapshot.status}:${finalSnapshot.currentStepId ?? 'none'}|${finalSnapshot.status}:${finalSnapshot.currentStepId ?? 'none'}`,
     );
     expect(director.getSnapshot()).toMatchObject({ currentStepId: 'move', replaying: true });
+  });
+
+  it('does not duplicate the current publication for a reentrant subscriber', async () => {
+    const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    const store = createMemoryTutorialProgressStore({ definition: tutorial, initial });
+    const director = createTutorialDirector({
+      autoStart: false,
+      definition: tutorial,
+      progressStore: store,
+    });
+    const observed: string[] = [];
+    let subscribed = false;
+    director.subscribe((snapshot) => {
+      if (snapshot.status === 'skipped' && !subscribed) {
+        subscribed = true;
+        void director.replay({ fromStepId: 'move' });
+        director.subscribe((nested) => {
+          observed.push(`${nested.status}:${nested.currentStepId ?? 'none'}`);
+        });
+      }
+    });
+
+    await director.skip();
+
+    expect(observed).toEqual(['skipped:none', 'active:move']);
   });
 
   it('publishes the current snapshot when a listener subscribes', () => {

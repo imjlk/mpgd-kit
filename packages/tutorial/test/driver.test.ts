@@ -574,22 +574,32 @@ describe('Driver tutorial presenter', () => {
     document.body.appendChild(target);
     const error = new Error('skip failed');
     const onError = vi.fn();
+    let rejectSkip!: (error: Error) => void;
     const presenter = createDriverTutorialPresenter({
       onAcknowledge: vi.fn(),
       onError,
-      onSkip: vi.fn(async () => Promise.reject(error)),
+      onSkip: vi.fn(() => new Promise<void>((_resolve, reject) => {
+        rejectSkip = reject;
+      })),
     });
     const presentation = { copy, step: tutorial.steps[0] };
     presenter.present(presentation);
     await nextFrame();
 
     document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-skip]')?.click();
+    presenter.present(null);
+    presenter.present(presentation);
+    await nextFrame();
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+
+    rejectSkip(error);
     await vi.waitFor(() => expect(onError).toHaveBeenCalledExactlyOnceWith(error));
     await nextFrame();
     presenter.refresh();
     await nextFrame();
     expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
 
+    presenter.present(null);
     presenter.present(presentation);
     await nextFrame();
     expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
@@ -613,6 +623,7 @@ describe('Driver tutorial presenter', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
     });
+    presenter.present(null);
     presenter.present(presentation);
     await nextFrame();
 
