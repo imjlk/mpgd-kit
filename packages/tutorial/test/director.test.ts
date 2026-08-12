@@ -205,6 +205,35 @@ describe('tutorial director', () => {
     expect(director.getSnapshot().status).toBe('skipped');
   });
 
+  it('persists a skip and continues publication when a listener throws', async () => {
+    const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    const store = createMemoryTutorialProgressStore({ definition: tutorial, initial });
+    const listenerError = new Error('Listener rejected the skipped snapshot.');
+    const errors: unknown[] = [];
+    const observedStatuses: string[] = [];
+    const director = createTutorialDirector({
+      autoStart: false,
+      definition: tutorial,
+      onError: (error) => errors.push(error),
+      progressStore: store,
+    });
+    director.subscribe((snapshot) => {
+      if (snapshot.status === 'skipped') {
+        throw listenerError;
+      }
+    });
+    director.subscribe((snapshot) => observedStatuses.push(snapshot.status));
+
+    await expect(director.skip()).resolves.toBeUndefined();
+    await director.flush();
+
+    expect(errors).toEqual([listenerError]);
+    expect(observedStatuses.at(-1)).toBe('skipped');
+    expect(director.getSnapshot().status).toBe('skipped');
+    expect(store.getSnapshot()?.status).toBe('skipped');
+    expect(store.saves.at(-1)?.status).toBe('skipped');
+  });
+
   it('restores the prior durable state when replay starts during skip publication', async () => {
     const initial = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
     const store = createMemoryTutorialProgressStore({ definition: tutorial, initial });

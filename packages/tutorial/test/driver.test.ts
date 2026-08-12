@@ -94,6 +94,42 @@ describe('Driver tutorial presenter', () => {
     expect(visible.getAttribute('aria-haspopup')).toBe('menu');
   });
 
+  it('focuses the rendered skip control for blocked action and signal steps', async () => {
+    const outside = document.createElement('button');
+    document.body.appendChild(outside);
+    const blockedSteps = [
+      {
+        advance: { action: 'continue', kind: 'action' },
+        id: 'blocked-action',
+        interaction: 'blocked',
+        scene: 'lobby',
+        target: null,
+      },
+      {
+        advance: { kind: 'signal', signal: 'continue' },
+        id: 'blocked-signal',
+        interaction: 'blocked',
+        scene: 'lobby',
+        target: null,
+      },
+    ] as const;
+
+    for (const step of blockedSteps) {
+      outside.focus();
+      const presenter = createDriverTutorialPresenter({
+        onAcknowledge: vi.fn(),
+        onSkip: vi.fn(),
+      });
+      presenter.present({ copy, step });
+      await nextFrame();
+
+      expect(document.activeElement).toBe(
+        document.querySelector('[data-mpgd-tutorial-skip]'),
+      );
+      presenter.destroy();
+    }
+  });
+
   it('rejects ancestor-hidden targets while retaining an off-viewport fallback', () => {
     const hiddenStyles = [
       ['display', 'none'],
@@ -463,6 +499,39 @@ describe('Driver tutorial presenter', () => {
     expect(scroller.classList.contains('driver-active-element-parent')).toBe(true);
     presenter.destroy();
     expect(scroller.classList.contains('driver-active-element-parent')).toBe(false);
+  });
+
+  it('rebinds scoped targets when an outer scroll ancestor changes visibility', async () => {
+    const scroller = document.createElement('div');
+    scroller.style.overflow = 'auto';
+    setRect(scroller, { height: 100, left: 0, top: 0, width: 200 });
+    const root = document.createElement('div');
+    const first = document.createElement('button');
+    const second = document.createElement('button');
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    second.dataset.mpgdTutorialTarget = 'duplicate';
+    let scrolled = false;
+    setDynamicRect(first, () => ({ height: 40, left: 20, top: scrolled ? -100 : 20, width: 100 }));
+    setDynamicRect(second, () => ({ height: 40, left: 20, top: scrolled ? 20 : 140, width: 100 }));
+    root.append(first, second);
+    scroller.appendChild(root);
+    document.body.appendChild(scroller);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+      root,
+    });
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+    expect(first.classList.contains('driver-active-element')).toBe(true);
+
+    scrolled = true;
+    scroller.dispatchEvent(new Event('scroll'));
+    await nextFrame();
+
+    expect(first.classList.contains('driver-active-element')).toBe(false);
+    expect(second.classList.contains('driver-active-element')).toBe(true);
+    presenter.destroy();
   });
 
   it('reports a custom target resolver failure without escaping the frame', async () => {
