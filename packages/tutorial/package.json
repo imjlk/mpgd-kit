@@ -1,0 +1,69 @@
+{
+  "name": "@mpgd/tutorial",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Headless tutorial progression, optional Driver.js presentation, and local reproduction helpers for mpgd games.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/tutorial"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "game-development",
+    "tutorial",
+    "onboarding",
+    "driver.js"
+  ],
+  "type": "module",
+  "sideEffects": [
+    "./driver.css"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./platform-storage": {
+      "types": "./dist/platform-storage.d.ts",
+      "default": "./dist/platform-storage.js"
+    },
+    "./driver": {
+      "types": "./dist/driver.d.ts",
+      "default": "./dist/driver.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "default": "./dist/testing.js"
+    },
+    "./driver.css": "./driver.css"
+  },
+  "files": [
+    "dist",
+    "driver.css"
+  ],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "test": "vitest run",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@mpgd/platform": "workspace:*",
+    "driver.js": "1.8.0"
+  },
+  "devDependencies": {
+    "jsdom": "24.1.0",
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
+    "vitest": "^4.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts"
+}
