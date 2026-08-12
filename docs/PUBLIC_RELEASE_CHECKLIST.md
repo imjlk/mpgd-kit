@@ -42,7 +42,7 @@ Use this before making the repository public or announcing a package release.
 - [x] `@mpgd/adapter-verse8` npm Trusted Publishing/OIDC is configured for `.github/workflows/release.yml` before adding its independent singleton Sampo linked group.
 - [x] `@mpgd/tutorial` has been initial-published as `0.1.0` and verified with `npm view @mpgd/tutorial version` before its first automated release.
 - [x] `@mpgd/tutorial` is registered in its own independent Sampo-linked group.
-- [ ] `@mpgd/tutorial` npm Trusted Publishing/OIDC is configured for `.github/workflows/release.yml` before relying on automated tutorial releases.
+- [x] `@mpgd/tutorial` npm Trusted Publishing/OIDC is configured for `.github/workflows/release.yml` before relying on automated tutorial releases.
 - [x] `@mpgd/cli` has been initial-published locally and verified with `npm view @mpgd/cli version` before the first automated CLI release.
 - [x] `@mpgd/create-game` has been initial-published locally and verified with `npm view @mpgd/create-game version` before the first automated create-package release.
 - [ ] `@mpgd/cli` and `@mpgd/create-game` npm Trusted Publishing/OIDC are configured for `.github/workflows/release.yml`.
