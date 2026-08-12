@@ -94,6 +94,24 @@ describe('Driver tutorial presenter', () => {
     expect(visible.getAttribute('aria-haspopup')).toBe('menu');
   });
 
+  it('selects the duplicate inside a shifted narrow visual viewport', () => {
+    vi.stubGlobal('visualViewport', {
+      height: 240,
+      offsetLeft: 400,
+      offsetTop: 100,
+      width: 240,
+    });
+    const layoutViewportTarget = document.createElement('button');
+    layoutViewportTarget.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(layoutViewportTarget, { height: 40, left: 20, top: 20, width: 100 });
+    const visualViewportTarget = document.createElement('button');
+    visualViewportTarget.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(visualViewportTarget, { height: 40, left: 420, top: 120, width: 100 });
+    document.body.append(layoutViewportTarget, visualViewportTarget);
+
+    expect(resolveVisibleTutorialTarget({ target: 'duplicate' })).toBe(visualViewportTarget);
+  });
+
   it('focuses the rendered skip control for blocked action and signal steps', async () => {
     const outside = document.createElement('button');
     document.body.appendChild(outside);

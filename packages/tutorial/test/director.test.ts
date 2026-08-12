@@ -108,6 +108,62 @@ describe('tutorial director', () => {
     ]);
   });
 
+  it('reports synchronous progress saves without interrupting construction or advancement', async () => {
+    const saveError = new Error('Synchronous save failed.');
+    const errors: unknown[] = [];
+    const director = createTutorialDirector({
+      autoStart: true,
+      definition: tutorial,
+      onError: (error) => errors.push(error),
+      progressStore: {
+        available: true,
+        flush: async () => undefined,
+        getSnapshot: () => null,
+        save: () => {
+          throw saveError;
+        },
+      },
+    });
+
+    expect(director.getSnapshot().currentStepId).toBe('welcome');
+    expect(errors).toEqual([saveError]);
+
+    director.acknowledge('welcome');
+    expect(director.getSnapshot().currentStepId).toBe('open-play');
+    expect(errors).toEqual([saveError, saveError]);
+  });
+
+  it('registers persistence before an immediate flush', async () => {
+    let releaseSave: (() => void) | undefined;
+    let pendingSave = Promise.resolve();
+    const director = createTutorialDirector({
+      autoStart: true,
+      definition: tutorial,
+      progressStore: {
+        available: true,
+        flush: () => pendingSave,
+        getSnapshot: () => null,
+        save: () => {
+          pendingSave = new Promise<void>((resolve) => {
+            releaseSave = resolve;
+          });
+          return pendingSave;
+        },
+      },
+    });
+    let flushed = false;
+    const flushing = director.flush().then(() => {
+      flushed = true;
+    });
+
+    await Promise.resolve();
+    expect(flushed).toBe(false);
+
+    releaseSave?.();
+    await flushing;
+    expect(flushed).toBe(true);
+  });
+
   it('preserves durable completion when a replay is skipped', async () => {
     const completed = {
       ...createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z'),
