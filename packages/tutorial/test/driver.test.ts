@@ -278,6 +278,36 @@ describe('Driver tutorial presenter', () => {
     expect(modal.hasAttribute('aria-owns')).toBe(false);
   });
 
+  it('associates a shadow target with its composed light-DOM modal host', async () => {
+    const modal = document.createElement('section');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('role', 'dialog');
+    setRect(modal, { height: 300, left: 20, top: 20, width: 300 });
+    const shadowRoot = modal.attachShadow({ mode: 'open' });
+    const choice = document.createElement('button');
+    choice.dataset.mpgdTutorialTarget = 'choice';
+    setRect(choice, { height: 40, left: 40, top: 40, width: 100 });
+    shadowRoot.appendChild(choice);
+    document.body.appendChild(modal);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+      resolveTarget: () => choice,
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[1] });
+      await nextFrame();
+
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')?.getAttribute('role'))
+        .toBe('region');
+      expect(modal.getAttribute('aria-owns')).toContain('driver-popover-content');
+    } finally {
+      presenter.destroy();
+    }
+    expect(modal.hasAttribute('aria-owns')).toBe(false);
+  });
+
   it('associates an unanchored blocked step with the renderable modal', async () => {
     const hiddenModal = document.createElement('section');
     hiddenModal.setAttribute('aria-modal', 'true');
@@ -345,6 +375,80 @@ describe('Driver tutorial presenter', () => {
       presenter.destroy();
     }
     expect(shadowModal.getAttribute('aria-modal')).toBe('true');
+  });
+
+  it('observes an open shadow root added after an unanchored presentation', async () => {
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame');
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[2] });
+      await nextFrame();
+
+      const host = document.createElement('div');
+      const shadowRoot = host.attachShadow({ mode: 'open' });
+      const shadowModal = document.createElement('section');
+      shadowModal.setAttribute('aria-modal', 'true');
+      shadowModal.setAttribute('role', 'dialog');
+      setRect(shadowModal, { height: 300, left: 20, top: 20, width: 300 });
+      shadowRoot.appendChild(shadowModal);
+      document.body.appendChild(host);
+      await nextFrame();
+      await nextFrame();
+
+      expect(shadowModal.getAttribute('aria-modal')).toBe('false');
+      const settledFrameCount = requestFrame.mock.calls.length;
+      await nextFrame();
+      expect(requestFrame.mock.calls).toHaveLength(settledFrameCount + 2);
+
+      presenter.destroy();
+      expect(shadowModal.getAttribute('aria-modal')).toBe('true');
+      const destroyedFrameCount = requestFrame.mock.calls.length;
+      shadowRoot.appendChild(document.createElement('div'));
+      await nextFrame();
+      expect(requestFrame.mock.calls).toHaveLength(destroyedFrameCount + 2);
+    } finally {
+      presenter.destroy();
+      requestFrame.mockRestore();
+    }
+  });
+
+  it('stops observing an open shadow root after its host is detached', async () => {
+    const host = document.createElement('div');
+    const shadowRoot = host.attachShadow({ mode: 'open' });
+    const shadowModal = document.createElement('section');
+    shadowModal.setAttribute('aria-modal', 'true');
+    shadowModal.setAttribute('role', 'dialog');
+    setRect(shadowModal, { height: 300, left: 20, top: 20, width: 300 });
+    shadowRoot.appendChild(shadowModal);
+    document.body.appendChild(host);
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame');
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[2] });
+      await nextFrame();
+      expect(shadowModal.getAttribute('aria-modal')).toBe('false');
+
+      host.remove();
+      await nextFrame();
+      await nextFrame();
+      const detachedFrameCount = requestFrame.mock.calls.length;
+
+      shadowRoot.appendChild(document.createElement('div'));
+      await nextFrame();
+
+      expect(requestFrame.mock.calls).toHaveLength(detachedFrameCount + 2);
+    } finally {
+      presenter.destroy();
+      requestFrame.mockRestore();
+    }
   });
 
   it('keeps an unanchored blocked step on the same renderable modal', async () => {
@@ -1151,6 +1255,226 @@ describe('Driver tutorial presenter', () => {
 
     expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
     presenter.destroy();
+  });
+
+  it('acknowledges a target click inside an open shadow root exactly once', async () => {
+    const host = document.createElement('div');
+    const shadowRoot = host.attachShadow({ mode: 'open' });
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    shadowRoot.appendChild(target);
+    document.body.appendChild(host);
+    const onAcknowledge = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge,
+      onSkip: vi.fn(),
+      resolveTarget: () => target,
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+
+      target.click();
+
+      expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    } finally {
+      presenter.destroy();
+    }
+  });
+
+  it('cleans target-click bindings across rebind and destroy without duplicate callbacks', async () => {
+    const first = document.createElement('button');
+    first.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(first, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(first);
+    const onAcknowledge = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge,
+      onSkip: vi.fn(),
+    });
+
+    presenter.present({
+      acknowledgeOnTargetClick: true,
+      copy,
+      step: tutorial.steps[0],
+    });
+    await nextFrame();
+
+    first.style.display = 'none';
+    const replacement = document.createElement('button');
+    replacement.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(replacement, { height: 40, left: 140, top: 20, width: 100 });
+    document.body.appendChild(replacement);
+    await nextFrame();
+
+    expect(replacement.classList.contains('driver-active-element')).toBe(true);
+    first.click();
+    expect(onAcknowledge).not.toHaveBeenCalled();
+    replacement.click();
+    expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+
+    presenter.destroy();
+    replacement.click();
+    expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+  });
+
+  it('rebinds target-click acknowledgement from a disabled duplicate to an enabled one', async () => {
+    const disabledTarget = document.createElement('button');
+    disabledTarget.disabled = true;
+    disabledTarget.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(disabledTarget, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(disabledTarget);
+    const onAcknowledge = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge,
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+      expect(disabledTarget.classList.contains('driver-active-element')).toBe(true);
+      expect(document.querySelector<HTMLElement>('[data-mpgd-tutorial-next]')?.style.display)
+        .toBe('block');
+
+      const enabledTarget = document.createElement('button');
+      enabledTarget.dataset.mpgdTutorialTarget = 'duplicate';
+      setRect(enabledTarget, { height: 40, left: 140, top: 20, width: 100 });
+      document.body.appendChild(enabledTarget);
+      await nextFrame();
+
+      expect(disabledTarget.classList.contains('driver-active-element')).toBe(false);
+      expect(enabledTarget.classList.contains('driver-active-element')).toBe(true);
+      enabledTarget.click();
+      expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    } finally {
+      presenter.destroy();
+    }
+  });
+
+  it('keeps Next available when the only target-click acknowledgement target is disabled', async () => {
+    const disabledTarget = document.createElement('button');
+    disabledTarget.disabled = true;
+    disabledTarget.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(disabledTarget, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(disabledTarget);
+    const onAcknowledge = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge,
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+
+      disabledTarget.click();
+      expect(onAcknowledge).not.toHaveBeenCalled();
+      const next = document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]');
+      expect(next).not.toBeNull();
+      expect(document.activeElement).toBe(next);
+      next?.click();
+      expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    } finally {
+      presenter.destroy();
+    }
+  });
+
+  it('updates target-click acknowledgement when the same target becomes disabled and enabled', async () => {
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(target);
+    const onAcknowledge = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge,
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+      expect(document.activeElement).toBe(
+        document.querySelector('[data-mpgd-tutorial-skip]'),
+      );
+
+      target.disabled = true;
+      await nextFrame();
+      expect(document.querySelector<HTMLElement>('[data-mpgd-tutorial-next]')?.style.display)
+        .toBe('block');
+      expect(target.classList.contains('driver-active-element')).toBe(true);
+      expect(target.classList.contains('driver-no-interaction')).toBe(true);
+      expect(target.getAttribute('aria-controls')).toBe('driver-popover-content');
+      expect(target.getAttribute('aria-expanded')).toBe('true');
+      expect(target.getAttribute('aria-haspopup')).toBe('dialog');
+      target.click();
+      expect(onAcknowledge).not.toHaveBeenCalled();
+
+      target.disabled = false;
+      await nextFrame();
+      expect(target.classList.contains('driver-active-element')).toBe(true);
+      expect(target.classList.contains('driver-no-interaction')).toBe(false);
+      expect(target.getAttribute('aria-controls')).toBe('driver-popover-content');
+      expect(target.getAttribute('aria-expanded')).toBe('true');
+      expect(target.getAttribute('aria-haspopup')).toBe('dialog');
+      target.click();
+      expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    } finally {
+      presenter.destroy();
+    }
+  });
+
+  it('keeps Next available beneath a composed aria-disabled ancestor', async () => {
+    const host = document.createElement('div');
+    host.setAttribute('aria-disabled', 'true');
+    const shadowRoot = host.attachShadow({ mode: 'open' });
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    shadowRoot.appendChild(target);
+    document.body.appendChild(host);
+    const onAcknowledge = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge,
+      onSkip: vi.fn(),
+      resolveTarget: () => target,
+    });
+
+    try {
+      presenter.present({
+        acknowledgeOnTargetClick: true,
+        copy,
+        step: tutorial.steps[0],
+      });
+      await nextFrame();
+
+      const next = document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]');
+      expect(next?.style.display).toBe('block');
+      target.click();
+      expect(onAcknowledge).not.toHaveBeenCalled();
+      next?.click();
+      expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    } finally {
+      presenter.destroy();
+    }
   });
 
   it('contains throwing active-state and acknowledge callbacks', async () => {
