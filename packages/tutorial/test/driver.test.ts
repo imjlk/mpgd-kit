@@ -226,6 +226,69 @@ describe('Driver tutorial presenter', () => {
     expect(modal.hasAttribute('aria-owns')).toBe(false);
   });
 
+  it('associates an unanchored blocked step with the renderable modal', async () => {
+    const hiddenModal = document.createElement('section');
+    hiddenModal.setAttribute('aria-modal', 'true');
+    hiddenModal.setAttribute('role', 'dialog');
+    hiddenModal.style.display = 'none';
+    setRect(hiddenModal, { height: 300, left: 20, top: 20, width: 300 });
+    const visibleModal = document.createElement('section');
+    visibleModal.setAttribute('aria-modal', 'true');
+    visibleModal.setAttribute('role', 'dialog');
+    setRect(visibleModal, { height: 300, left: 340, top: 20, width: 300 });
+    document.body.append(hiddenModal, visibleModal);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    presenter.present({ copy, step: tutorial.steps[2] });
+    await nextFrame();
+
+    expect(hiddenModal.getAttribute('aria-modal')).toBe('true');
+    expect(visibleModal.getAttribute('aria-modal')).toBe('false');
+    presenter.destroy();
+    expect(visibleModal.getAttribute('aria-modal')).toBe('true');
+  });
+
+  it('keeps an unanchored blocked step on the same renderable modal', async () => {
+    const firstModal = document.createElement('section');
+    firstModal.setAttribute('aria-modal', 'true');
+    firstModal.setAttribute('role', 'dialog');
+    setRect(firstModal, { height: 300, left: 20, top: 20, width: 300 });
+    const secondModal = document.createElement('section');
+    secondModal.setAttribute('aria-modal', 'true');
+    secondModal.setAttribute('role', 'dialog');
+    setRect(secondModal, { height: 300, left: 340, top: 20, width: 300 });
+    document.body.append(firstModal, secondModal);
+    const requestFrame = vi.spyOn(window, 'requestAnimationFrame');
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[2] });
+      await nextFrame();
+      expect(firstModal.getAttribute('aria-modal')).toBe('false');
+      expect(secondModal.getAttribute('aria-modal')).toBe('true');
+
+      presenter.refresh();
+      await nextFrame();
+      await nextFrame();
+      expect(firstModal.getAttribute('aria-modal')).toBe('false');
+      expect(secondModal.getAttribute('aria-modal')).toBe('true');
+      const settledFrameCount = requestFrame.mock.calls.length;
+
+      await nextFrame();
+
+      expect(requestFrame.mock.calls).toHaveLength(settledFrameCount + 2);
+    } finally {
+      presenter.destroy();
+      requestFrame.mockRestore();
+    }
+  });
+
   it('does not associate an outside interactive target with an unrelated modal', async () => {
     const modal = document.createElement('section');
     modal.setAttribute('aria-modal', 'true');
@@ -899,6 +962,35 @@ describe('Driver tutorial presenter', () => {
 
     presenter.destroy();
     expect(onError).toHaveBeenCalledTimes(3);
+  });
+
+  it('does not clear a replacement presenter state when an old presenter is destroyed twice', async () => {
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(target);
+    const oldPresenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+    oldPresenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+    oldPresenter.destroy();
+    const replacement = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+    replacement.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+
+    oldPresenter.destroy();
+    oldPresenter.present({ copy, step: tutorial.steps[0] });
+
+    expect(document.body.dataset.mpgdTutorialActive).toBe('true');
+    expect(document.body.dataset.mpgdTutorialStep).toBe('blocked');
+    expect(target.classList.contains('driver-active-element')).toBe(true);
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).not.toBeNull();
+    replacement.destroy();
   });
 
   it('keeps a skipped presentation dismissed when skipping fails', async () => {
