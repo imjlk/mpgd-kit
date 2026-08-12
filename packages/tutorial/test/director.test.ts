@@ -170,6 +170,27 @@ describe('tutorial director', () => {
     expect(snapshots[0]).toMatchObject({ currentStepId: 'welcome' });
   });
 
+  it('does not mutate replay state when an unknown step is requested', async () => {
+    const store = createMemoryTutorialProgressStore({ definition: tutorial, initial: null });
+    const director = createTutorialDirector({
+      autoStart: true,
+      definition: tutorial,
+      progressStore: store,
+    });
+
+    await expect(director.replay({ fromStepId: 'missing' as 'welcome' })).rejects.toThrow(
+      'Unknown tutorial step: missing',
+    );
+
+    expect(director.getSnapshot()).toMatchObject({
+      currentStepId: 'welcome',
+      replaying: false,
+    });
+    director.acknowledge('welcome');
+    await director.flush();
+    expect(store.getSnapshot()?.completedStepIds).toEqual(['welcome']);
+  });
+
   it('applies debug launch policy only when explicitly enabled', async () => {
     const store = createMemoryTutorialProgressStore({ definition: tutorial, initial: null });
     const director = createTutorialDirector({

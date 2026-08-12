@@ -126,6 +126,36 @@ describe('Driver tutorial presenter', () => {
     expect(modal.hasAttribute('aria-owns')).toBe(false);
   });
 
+  it('does not overwrite host ARIA updates made during a guided step', async () => {
+    const modal = document.createElement('section');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('role', 'dialog');
+    setRect(modal, { height: 300, left: 20, top: 20, width: 300 });
+    const choice = document.createElement('button');
+    choice.dataset.mpgdTutorialTarget = 'choice';
+    choice.setAttribute('aria-expanded', 'false');
+    setRect(choice, { height: 40, left: 40, top: 40, width: 100 });
+    modal.appendChild(choice);
+    document.body.appendChild(modal);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+    presenter.present({ copy, step: tutorial.steps[1] });
+    await nextFrame();
+
+    modal.setAttribute('aria-modal', 'host-closed');
+    modal.setAttribute('aria-owns', 'host-owned');
+    choice.setAttribute('aria-expanded', 'host-updated');
+    choice.setAttribute('aria-controls', 'host-panel');
+    presenter.destroy();
+
+    expect(modal.getAttribute('aria-modal')).toBe('host-closed');
+    expect(modal.getAttribute('aria-owns')).toBe('host-owned');
+    expect(choice.getAttribute('aria-expanded')).toBe('host-updated');
+    expect(choice.getAttribute('aria-controls')).toBe('host-panel');
+  });
+
   it('binds replay only when a host provides a trigger', async () => {
     const button = document.createElement('button');
     const replay = vi.fn(async () => undefined);
