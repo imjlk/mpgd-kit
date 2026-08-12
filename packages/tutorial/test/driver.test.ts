@@ -2231,22 +2231,13 @@ describe('Driver tutorial presenter', () => {
 
       expect(hitTestCount).toBeGreaterThanOrEqual(1);
       const overlay = document.querySelector<SVGElement>('.driver-overlay');
-      expect(overlay?.style.pointerEvents).not.toBe('none');
+      expect(overlay?.style.pointerEvents).toBe('none');
       expect(document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]')?.style.display)
         .not.toBe('block');
-      const hostClick = vi.fn();
-      target.addEventListener('click', hostClick);
-      document.querySelector<HTMLElement>('[data-mpgd-tutorial-target-proxy]')?.click();
-      expect(hostClick).toHaveBeenCalledOnce();
-      hostClick.mockClear();
-      overlay?.dispatchEvent(new MouseEvent('click', {
-        bubbles: true,
-        clientX: 400,
-        clientY: 400,
-      }));
-      expect(hostClick).not.toHaveBeenCalled();
+      expect(document.querySelectorAll('[data-mpgd-tutorial-outside-blocker]')).toHaveLength(4);
     } finally {
       presenter.destroy();
+      expect(document.querySelector('[data-mpgd-tutorial-outside-blocker]')).toBeNull();
 
       if (elementFromPointDescriptor === undefined) {
         Reflect.deleteProperty(document, 'elementFromPoint');
@@ -2298,6 +2289,46 @@ describe('Driver tutorial presenter', () => {
 
       expect(document.querySelector<HTMLElement>('[data-mpgd-tutorial-next]')?.style.display)
         .toBe('block');
+    } finally {
+      presenter.destroy();
+
+      if (elementFromPointDescriptor === undefined) {
+        Reflect.deleteProperty(document, 'elementFromPoint');
+      } else {
+        Object.defineProperty(document, 'elementFromPoint', elementFromPointDescriptor);
+      }
+    }
+  });
+
+  it('does not open a target hole for a non-Driver occluder', async () => {
+    const host = document.createElement('div');
+    const shadowRoot = host.attachShadow({ mode: 'open' });
+    const target = document.createElement('button');
+    const occluder = document.createElement('div');
+    target.dataset.mpgdTutorialTarget = 'choice';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    shadowRoot.appendChild(target);
+    document.body.append(host, occluder);
+    const elementFromPointDescriptor = Object.getOwnPropertyDescriptor(
+      document,
+      'elementFromPoint',
+    );
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: () => occluder,
+    });
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[1] });
+      await nextFrame();
+
+      expect(document.querySelector<SVGElement>('.driver-overlay')?.style.pointerEvents)
+        .not.toBe('none');
+      expect(document.querySelector('[data-mpgd-tutorial-outside-blocker]')).toBeNull();
     } finally {
       presenter.destroy();
 
