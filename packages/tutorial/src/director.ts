@@ -99,9 +99,13 @@ export function createTutorialDirector<TDefinition extends TutorialDefinition>(
       return;
     }
 
-    void progressStore.save(next).catch((error: unknown) => {
+    try {
+      void progressStore.save(next).catch((error: unknown) => {
+        reportError(error);
+      });
+    } catch (error) {
       reportError(error);
-    });
+    }
   }
 
   function notifyListener(listener: Listener, nextSnapshot: TutorialDirectorSnapshot<TDefinition>): void {

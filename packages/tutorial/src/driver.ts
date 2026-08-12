@@ -616,12 +616,7 @@ export function isVisibleTutorialTarget(element: HTMLElement, view: Window = win
     return false;
   }
 
-  let visible = intersectRect(element.getBoundingClientRect(), {
-    bottom: view.innerHeight,
-    left: 0,
-    right: view.innerWidth,
-    top: 0,
-  });
+  let visible = intersectRect(element.getBoundingClientRect(), resolveViewportRect(view));
   let ancestor = element.parentElement;
 
   while (visible !== null && ancestor !== null) {
@@ -643,6 +638,35 @@ export function isVisibleTutorialTarget(element: HTMLElement, view: Window = win
   }
 
   return visible !== null && visible.right > visible.left && visible.bottom > visible.top;
+}
+
+function resolveViewportRect(
+  view: Window,
+): { readonly bottom: number; readonly left: number; readonly right: number; readonly top: number } {
+  const visualViewport = view.visualViewport;
+
+  if (visualViewport !== undefined
+    && visualViewport !== null
+    && Number.isFinite(visualViewport.offsetLeft)
+    && Number.isFinite(visualViewport.offsetTop)
+    && Number.isFinite(visualViewport.width)
+    && Number.isFinite(visualViewport.height)
+    && visualViewport.width > 0
+    && visualViewport.height > 0) {
+    return {
+      bottom: visualViewport.offsetTop + visualViewport.height,
+      left: visualViewport.offsetLeft,
+      right: visualViewport.offsetLeft + visualViewport.width,
+      top: visualViewport.offsetTop,
+    };
+  }
+
+  return {
+    bottom: view.innerHeight,
+    left: 0,
+    right: view.innerWidth,
+    top: 0,
+  };
 }
 
 export function bindTutorialReplayTrigger<TDefinition extends TutorialDefinition>(input: {
