@@ -1,19 +1,24 @@
 # Game Development Guide
 
-This repository is ready for real Phaser game iteration when the game stays inside
+Generated games are ready for real Phaser iteration when the game stays inside
 clear boundaries:
 
-- `examples/phaser-starter/src/game` demonstrates the minimal in-repo game
-  boundaries used by the starter.
+- The generated repository owns its game modules, assets, wrappers, target
+  configuration, and release evidence.
 - Generated games own stable asset keys, authored tuning, input verbs, and save
   models inside their own project roots.
 - `packages/game-core` owns deterministic simulation and scoring rules.
 - Phaser scenes adapt state into Phaser objects, cameras, tweens, and scene
   transitions.
 
-## Starter vs Demo
+Repository ownership and command routing differ between a single-game
+repository, a multi-game workspace, and a kit contributor checkout. Read
+[Game Project Models](GAME_PROJECT_MODELS.md) before adapting these commands to
+a workspace.
 
-Use the create package when starting a new standalone game:
+## Generated Game vs Reference Fixture
+
+Use the create package when starting a new single-game repository:
 
 ```sh
 pnpm create @mpgd/game my-game
@@ -25,7 +30,9 @@ pnpm build
 ```
 
 The `@mpgd/game` initializer name resolves to the public `@mpgd/create-game`
-package. The reusable command implementation lives in `@mpgd/cli`.
+package. The reusable command implementation lives in `@mpgd/cli`. For a
+multi-game workspace, generate or place the same game-shaped project under
+`games/<game>` and select it through its own `mpgd.targets.json`.
 
 Pass `--microsoft-store` when the new game should include the Microsoft Store
 PWA target and release workflow. For a game created without it, run
@@ -37,17 +44,12 @@ whose `src/platform/runtimeDetector.ts` and `vite.shared.ts` files are still
 present; custom game layouts must add equivalent runtime and Vite routing
 manually.
 
-Use `examples/phaser-starter` when developing the starter inside this
-repository. It is a private example workspace that shows the reusable mpgd
-wiring without inheriting the demo game's score, coin, result, or mock purchase
-loop.
+Do not copy `examples/phaser-starter` to create a downstream game. The public
+initializer reads `packages/cli/templates/phaser-game`; the checked-in example
+is a private reference fixture that kit contributors use to validate the same
+generated-project contract.
 
-Use `examples/phaser-starter` when validating kit-level starter wiring. The
-starter keeps gameplay intentionally small and lets target build tools read
-`examples/phaser-starter/mpgd.targets.json`, matching the generated-project
-model without keeping a separate repo-owned demo game app.
-
-Starter loop:
+Kit contributor fixture loop:
 
 ```sh
 pnpm mpgd game create examples/my-game --title "My Game" --workspace --kit-path .
@@ -61,6 +63,10 @@ pnpm --dir examples/phaser-starter dev
 pnpm --dir examples/phaser-starter check
 pnpm --dir examples/phaser-starter build
 ```
+
+Downstream users can skip that fixture loop. Multi-game workspaces may add thin
+game-selection wrappers, but should continue to delegate target builds to the
+public CLI or kit builder.
 
 The generated starter includes `AGENTS.md`, an agent capability manifest, a
 kit-workflow router skill, and a shared workflow guide so downstream agents can
@@ -351,7 +357,16 @@ tools and Codex MCP graph inspection can see the same TypeScript surface.
 
 ## Agentic Starter Workflow
 
-The starter includes an agent-facing brief, manifest, and acceptance loop:
+Every generated game includes an agent-facing brief, manifest, and acceptance
+loop at these game-relative paths:
+
+- `agent/brief.template.md`
+- `agent/game.manifest.json`
+- `agent/acceptance.md`
+- `.codex/agents/*`
+- `.agents/skills/*`
+
+Kit contributors maintain their source and reference copies at:
 
 - `examples/phaser-starter/agent/brief.template.md`
 - `examples/phaser-starter/agent/game.manifest.json`

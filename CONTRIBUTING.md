@@ -15,6 +15,44 @@ pnpm graph:preflight
 
 Use `pnpm dev:game` for the in-repo Phaser starter loop.
 
+## Repository Roles
+
+Keep kit contributor paths distinct from downstream game workflows:
+
+- `packages/cli/templates/phaser-game` is initializer source. Change it when a
+  newly generated game should receive different files or documentation.
+- `examples/phaser-starter` is the checked-in regression fixture. Use it to
+  exercise starter wiring and target builds while changing this repository.
+- An external generated game is the user-facing product. Create it with
+  `pnpm create @mpgd/game`; do not instruct users to copy the reference fixture.
+- A multi-game workspace may place generated-game-shaped projects under
+  `games/*` and add thin selection wrappers, but target configuration and
+  external app ownership remain per game.
+
+See [Game Project Models](docs/GAME_PROJECT_MODELS.md) for the full command and
+deployment split.
+
+For day-to-day work on the permanent reference fixture:
+
+```sh
+pnpm dev:game
+pnpm --dir examples/phaser-starter check
+pnpm --dir examples/phaser-starter build
+pnpm graph:starter
+```
+
+To inspect a newly generated project inside this repository, use `--workspace`
+and a disposable path rather than turning that project into release guidance:
+
+```sh
+pnpm mpgd game create examples/my-game --title "My Game" --workspace --kit-path .
+pnpm --dir examples/my-game install --filter . --filter ./apps/target-devvit
+pnpm --dir examples/my-game exec mpgd game accept . \
+  --targets default \
+  --profile staging \
+  --kit-path ../..
+```
+
 ## Development Rules
 
 - Keep game rules outside Phaser scenes where practical.
