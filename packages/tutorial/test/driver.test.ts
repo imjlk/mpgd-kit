@@ -178,6 +178,55 @@ describe('Driver tutorial presenter', () => {
     expect(resolveVisibleTutorialTarget({ target: 'duplicate' })).toBe(offViewport);
   });
 
+  it('skips semantically inactive duplicates for target-click acknowledgement', async () => {
+    const inertWrapper = document.createElement('div');
+    inertWrapper.setAttribute('inert', '');
+    const inertTarget = document.createElement('button');
+    inertTarget.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(inertTarget, { height: 40, left: 20, top: 20, width: 100 });
+    inertWrapper.appendChild(inertTarget);
+    const shadowHost = document.createElement('div');
+    const shadowRoot = shadowHost.attachShadow({ mode: 'open' });
+    const ariaHiddenWrapper = document.createElement('div');
+    ariaHiddenWrapper.setAttribute('aria-hidden', 'true');
+    const slot = document.createElement('slot');
+    slot.name = 'inactive-target';
+    ariaHiddenWrapper.appendChild(slot);
+    shadowRoot.appendChild(ariaHiddenWrapper);
+    const slottedTarget = document.createElement('button');
+    slottedTarget.dataset.mpgdTutorialTarget = 'duplicate';
+    slottedTarget.slot = slot.name;
+    setRect(slottedTarget, { height: 40, left: 140, top: 20, width: 100 });
+    shadowHost.appendChild(slottedTarget);
+    const activeTarget = document.createElement('button');
+    activeTarget.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(activeTarget, { height: 40, left: 260, top: 20, width: 100 });
+    document.body.append(inertWrapper, shadowHost, activeTarget);
+    const onAcknowledge = vi.fn();
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge,
+      onSkip: vi.fn(),
+    });
+
+    presenter.present({
+      acknowledgeOnTargetClick: true,
+      copy,
+      step: tutorial.steps[0],
+    });
+    await nextFrame();
+
+    expect(inertTarget.classList.contains('driver-active-element')).toBe(false);
+    expect(slottedTarget.assignedSlot).toBe(slot);
+    expect(slottedTarget.classList.contains('driver-active-element')).toBe(false);
+    expect(activeTarget.classList.contains('driver-active-element')).toBe(true);
+    inertTarget.click();
+    slottedTarget.click();
+    expect(onAcknowledge).not.toHaveBeenCalled();
+    activeTarget.click();
+    expect(onAcknowledge).toHaveBeenCalledExactlyOnceWith('blocked');
+    presenter.destroy();
+  });
+
   it('keeps interactive modal semantics and restores blocked modal semantics', async () => {
     const modal = document.createElement('section');
     modal.setAttribute('aria-modal', 'true');
@@ -265,6 +314,30 @@ describe('Driver tutorial presenter', () => {
     expect(visibleModal.getAttribute('aria-modal')).toBe('true');
   });
 
+  it('discovers an unanchored blocked modal inside an open shadow root', async () => {
+    const host = document.createElement('div');
+    const shadowRoot = host.attachShadow({ mode: 'open' });
+    const shadowModal = document.createElement('section');
+    shadowModal.setAttribute('aria-modal', 'true');
+    shadowModal.setAttribute('role', 'dialog');
+    setRect(shadowModal, { height: 300, left: 20, top: 20, width: 300 });
+    shadowRoot.appendChild(shadowModal);
+    document.body.appendChild(host);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    presenter.present({ copy, step: tutorial.steps[2] });
+    await nextFrame();
+
+    expect(shadowModal.getAttribute('aria-modal')).toBe('false');
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')?.getAttribute('aria-modal'))
+      .toBe('true');
+    presenter.destroy();
+    expect(shadowModal.getAttribute('aria-modal')).toBe('true');
+  });
+
   it('keeps an unanchored blocked step on the same renderable modal', async () => {
     const firstModal = document.createElement('section');
     firstModal.setAttribute('aria-modal', 'true');
@@ -303,13 +376,15 @@ describe('Driver tutorial presenter', () => {
     }
   });
 
-  it('releases a current modal after an exact-value host demotion', async () => {
+  it('releases a class-selected current modal after an exact-value host demotion', async () => {
     const currentModal = document.createElement('section');
+    currentModal.className = 'game-modal';
     currentModal.setAttribute('aria-modal', 'true');
     currentModal.setAttribute('role', 'dialog');
     setRect(currentModal, { height: 300, left: 20, top: 20, width: 300 });
     document.body.appendChild(currentModal);
     const presenter = createDriverTutorialPresenter({
+      modalSelector: '.game-modal',
       onAcknowledge: vi.fn(),
       onSkip: vi.fn(),
     });
@@ -317,8 +392,13 @@ describe('Driver tutorial presenter', () => {
     await nextFrame();
     expect(currentModal.getAttribute('aria-modal')).toBe('false');
 
+    currentModal.setAttribute('aria-modal', 'true');
+    await nextFrame();
+    expect(currentModal.getAttribute('aria-modal')).toBe('false');
+
     currentModal.setAttribute('aria-modal', 'false');
     const replacementModal = document.createElement('section');
+    replacementModal.className = 'game-modal';
     replacementModal.setAttribute('aria-modal', 'true');
     replacementModal.setAttribute('role', 'dialog');
     setRect(replacementModal, { height: 300, left: 340, top: 20, width: 300 });
