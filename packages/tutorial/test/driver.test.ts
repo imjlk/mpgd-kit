@@ -559,6 +559,29 @@ describe('Driver tutorial presenter', () => {
     expect(modal.hasAttribute('aria-owns')).toBe(false);
   });
 
+  it('owns alertdialog modal semantics by default', async () => {
+    const modal = document.createElement('section');
+    modal.setAttribute('aria-modal', 'true');
+    modal.setAttribute('role', 'alertdialog');
+    setRect(modal, { height: 300, left: 20, top: 20, width: 300 });
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 40, top: 40, width: 100 });
+    modal.appendChild(target);
+    document.body.appendChild(modal);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    presenter.present({ copy, step: tutorial.steps[0] });
+    await nextFrame();
+
+    expect(modal.getAttribute('aria-modal')).toBe('false');
+    presenter.destroy();
+    expect(modal.getAttribute('aria-modal')).toBe('true');
+  });
+
   it('associates a shadow target with its composed light-DOM modal host', async () => {
     const modal = document.createElement('section');
     modal.setAttribute('aria-modal', 'true');
@@ -2129,9 +2152,10 @@ describe('Driver tutorial presenter', () => {
     let hitTestCount = 0;
     Object.defineProperty(document, 'elementFromPoint', {
       configurable: true,
-      value: () => hitTestCount++ === 0
-        ? host
-        : document.querySelector('.driver-overlay'),
+      value: () => {
+        hitTestCount += 1;
+        return document.querySelector('.driver-overlay');
+      },
     });
     Object.defineProperty(shadowRoot, 'elementFromPoint', {
       configurable: true,
@@ -2151,7 +2175,7 @@ describe('Driver tutorial presenter', () => {
       });
       await nextFrame();
 
-      expect(hitTestCount).toBeGreaterThanOrEqual(2);
+      expect(hitTestCount).toBeGreaterThanOrEqual(1);
       expect(target.classList.contains('driver-no-interaction')).toBe(true);
       const next = document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]');
       expect(next?.style.display).toBe('block');
@@ -2186,9 +2210,10 @@ describe('Driver tutorial presenter', () => {
     let hitTestCount = 0;
     Object.defineProperty(document, 'elementFromPoint', {
       configurable: true,
-      value: () => hitTestCount++ === 0
-        ? host
-        : document.querySelector('.driver-overlay'),
+      value: () => {
+        hitTestCount += 1;
+        return document.querySelector('.driver-overlay');
+      },
     });
     Object.defineProperty(shadowRoot, 'elementFromPoint', {
       configurable: true,
@@ -2204,11 +2229,22 @@ describe('Driver tutorial presenter', () => {
       await nextFrame();
       await nextFrame();
 
-      expect(hitTestCount).toBeGreaterThanOrEqual(2);
-      expect(document.querySelector<SVGElement>('.driver-overlay')?.style.pointerEvents)
-        .toBe('none');
+      expect(hitTestCount).toBeGreaterThanOrEqual(1);
+      const overlay = document.querySelector<SVGElement>('.driver-overlay');
+      expect(overlay?.style.pointerEvents).not.toBe('none');
       expect(document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]')?.style.display)
         .not.toBe('block');
+      const hostClick = vi.fn();
+      target.addEventListener('click', hostClick);
+      document.querySelector<HTMLElement>('[data-mpgd-tutorial-target-proxy]')?.click();
+      expect(hostClick).toHaveBeenCalledOnce();
+      hostClick.mockClear();
+      overlay?.dispatchEvent(new MouseEvent('click', {
+        bubbles: true,
+        clientX: 400,
+        clientY: 400,
+      }));
+      expect(hostClick).not.toHaveBeenCalled();
     } finally {
       presenter.destroy();
 

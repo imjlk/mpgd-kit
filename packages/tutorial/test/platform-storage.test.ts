@@ -46,6 +46,24 @@ describe('platform tutorial progress store', () => {
     expect(store.getSnapshot()).toEqual(second);
   });
 
+  it('persists valid migrated progress during initialization', async () => {
+    const migrated = createInitialTutorialProgress(tutorial, '2026-08-12T00:00:00.000Z');
+    const save = vi.fn(async () => undefined);
+    const store = await createPlatformTutorialProgressStore({
+      definition: tutorial,
+      key: 'tutorial',
+      migrate: () => migrated,
+      storage: {
+        load: async () => ({ value: { schemaVersion: 0 } }),
+        save,
+      },
+    });
+
+    expect(store.available).toBe(true);
+    expect(store.getSnapshot()).toEqual(migrated);
+    expect(save).toHaveBeenCalledExactlyOnceWith({ key: 'tutorial', value: migrated });
+  });
+
   it('fails closed for corrupt records unless ignore is explicit', async () => {
     const errors: unknown[] = [];
     const disabled = await createPlatformTutorialProgressStore({
