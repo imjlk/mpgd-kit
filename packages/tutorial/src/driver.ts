@@ -90,6 +90,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   let targetRestorePending = false;
   let dismissedPresentationKey: string | null = null;
   let skipPendingKey: string | null = null;
+  let retryableDismissedKey: string | null = null;
   let missingTargetErrorKey: string | null = null;
   let syncModalSemantics: (() => void) | undefined;
 
@@ -181,10 +182,17 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         const dismissedKey = activePresentationKey;
         dismissedPresentationKey = dismissedKey;
         skipPendingKey = dismissedKey;
+        retryableDismissedKey = null;
         destroyInstancePreservingTarget(created);
         void Promise.resolve()
           .then(() => input.onSkip())
-          .catch((error: unknown) => input.onError?.(error))
+          .catch((error: unknown) => {
+            if (dismissedPresentationKey === dismissedKey) {
+              retryableDismissedKey = dismissedKey;
+            }
+
+            input.onError?.(error);
+          })
           .finally(() => {
             if (skipPendingKey === dismissedKey) {
               skipPendingKey = null;
@@ -356,6 +364,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       activePresentationKey = null;
       dismissedPresentationKey = null;
       skipPendingKey = null;
+      retryableDismissedKey = null;
       missingTargetErrorKey = null;
       mutationObserver.disconnect();
       resizeObserver?.disconnect();
@@ -393,8 +402,9 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
           ]);
 
       if (dismissedPresentationKey !== null
-        && (dismissedPresentationKey !== nextKey || skipPendingKey === null)) {
+        && (dismissedPresentationKey !== nextKey || retryableDismissedKey === nextKey)) {
         dismissedPresentationKey = null;
+        retryableDismissedKey = null;
       }
 
       if (activePresentationKey !== nextKey) {

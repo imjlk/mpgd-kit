@@ -596,6 +596,30 @@ describe('Driver tutorial presenter', () => {
     presenter.destroy();
   });
 
+  it('keeps a successfully skipped presentation dismissed across same-key renders', async () => {
+    const target = document.createElement('button');
+    target.dataset.mpgdTutorialTarget = 'duplicate';
+    setRect(target, { height: 40, left: 20, top: 20, width: 100 });
+    document.body.appendChild(target);
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(async () => undefined),
+    });
+    const presentation = { copy, step: tutorial.steps[0] };
+    presenter.present(presentation);
+    await nextFrame();
+
+    document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-skip]')?.click();
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+    });
+    presenter.present(presentation);
+    await nextFrame();
+
+    expect(document.querySelector('[data-mpgd-tutorial-popover]')).toBeNull();
+    presenter.destroy();
+  });
+
   it('does not add an empty popover id to modal ownership', async () => {
     const idDescriptor = Object.getOwnPropertyDescriptor(Element.prototype, 'id');
 
