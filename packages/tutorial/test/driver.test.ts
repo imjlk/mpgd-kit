@@ -2293,6 +2293,51 @@ describe('Driver tutorial presenter', () => {
     }
   });
 
+  it('hit-tests the target within its composed overflow-clipped region', async () => {
+    const clip = document.createElement('div');
+    const target = document.createElement('button');
+    clip.style.overflow = 'hidden';
+    target.dataset.mpgdTutorialTarget = 'choice';
+    setRect(clip, { height: 40, left: 0, top: 0, width: 20 });
+    setRect(target, { height: 40, left: 0, top: 0, width: 100 });
+    clip.appendChild(target);
+    document.body.appendChild(clip);
+    const elementFromPointDescriptor = Object.getOwnPropertyDescriptor(
+      document,
+      'elementFromPoint',
+    );
+    const sampledX: number[] = [];
+    Object.defineProperty(document, 'elementFromPoint', {
+      configurable: true,
+      value: (x: number) => {
+        sampledX.push(x);
+        return x < 20 ? target : document.querySelector('.driver-overlay');
+      },
+    });
+    const presenter = createDriverTutorialPresenter({
+      onAcknowledge: vi.fn(),
+      onSkip: vi.fn(),
+    });
+
+    try {
+      presenter.present({ copy, step: tutorial.steps[1] });
+      await nextFrame();
+      await nextFrame();
+
+      expect(sampledX).toContain(10);
+      expect(document.querySelector<SVGElement>('.driver-overlay')?.style.pointerEvents).toBe('');
+      expect(document.querySelector('[data-mpgd-tutorial-outside-blocker]')).toBeNull();
+    } finally {
+      presenter.destroy();
+
+      if (elementFromPointDescriptor === undefined) {
+        Reflect.deleteProperty(document, 'elementFromPoint');
+      } else {
+        Object.defineProperty(document, 'elementFromPoint', elementFromPointDescriptor);
+      }
+    }
+  });
+
   it('falls back to Next when the overlay blocks a light-DOM acknowledge target', async () => {
     const target = document.createElement('button');
     target.dataset.mpgdTutorialTarget = 'duplicate';
@@ -2379,7 +2424,13 @@ describe('Driver tutorial presenter', () => {
       expect(overlay?.style.pointerEvents).toBe('none');
       expect(document.querySelector<HTMLButtonElement>('[data-mpgd-tutorial-next]')?.style.display)
         .not.toBe('block');
-      expect(document.querySelectorAll('[data-mpgd-tutorial-outside-blocker]')).toHaveLength(4);
+      const blockers = document.querySelectorAll<HTMLElement>(
+        '[data-mpgd-tutorial-outside-blocker]',
+      );
+      expect(blockers).toHaveLength(4);
+      expect([...blockers].every((blocker) => (
+        blocker.style.zIndex === getComputedStyle(overlay as SVGElement).zIndex
+      ))).toBe(true);
     } finally {
       presenter.destroy();
       expect(document.querySelector('[data-mpgd-tutorial-outside-blocker]')).toBeNull();
