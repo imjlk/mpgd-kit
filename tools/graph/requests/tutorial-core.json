@@ -6,7 +6,10 @@
     "packages/tutorial/src/director.ts",
     "packages/tutorial/src/platform-storage.ts",
     "packages/tutorial/src/progress.ts",
-    "packages/tutorial/src/testing.ts"
+    "packages/tutorial/src/testing.ts",
+    "packages/tutorial/test/director.test.ts",
+    "packages/tutorial/test/platform-storage.test.ts",
+    "packages/tutorial/test/testing.test.ts"
   ],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central tutorial definition, director transition, replay, skip, persistence queue, progress parsing, and platform storage flows and their regression tests?",
