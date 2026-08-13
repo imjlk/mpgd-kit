@@ -1,0 +1,18 @@
+{
+  "name": "tutorial-driver",
+  "description": "Driver presenter, target resolution, modal ownership, replay binding, and debug helper flow.",
+  "expectedFiles": [
+    "packages/tutorial/src/driver.ts",
+    "packages/tutorial/src/testing.ts"
+  ],
+  "tsconfig": "tsconfig.graph.json",
+  "question": "What are the central Driver tutorial presentation, target resolution, accessibility ownership, target rebinding, replay trigger, and debug helper flows?",
+  "draft": "Use a tour because the optional Driver integration crosses presentation lifecycle, composed-DOM target resolution, modal semantics, replay binding, debug helpers, and tests.",
+  "review": "A tutorial Driver integration question should use a focused graph tour over the presenter and testing helpers, including graph-reached tests when available.",
+  "request": {
+    "type": "tour",
+    "query": "createDriverTutorialPresenter DriverTutorialPresenter resolveVisibleTutorialTarget isVisibleTutorialTarget bindTutorialReplayTrigger createDriveStep tutorial modal semantics target rebinding shadow replay installTutorialDebugBridge applyTutorialDebugLaunchPolicy createFloatingReplayTrigger driver.test testing.test",
+    "includeTests": true,
+    "limit": 100
+  }
+}

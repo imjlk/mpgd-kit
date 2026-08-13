@@ -1,0 +1,21 @@
+{
+  "name": "tutorial-core",
+  "description": "Tutorial definition, director state machine, progress durability, and platform storage flow.",
+  "expectedFiles": [
+    "packages/tutorial/src/definition.ts",
+    "packages/tutorial/src/director.ts",
+    "packages/tutorial/src/platform-storage.ts",
+    "packages/tutorial/src/progress.ts",
+    "packages/tutorial/src/testing.ts"
+  ],
+  "tsconfig": "tsconfig.graph.json",
+  "question": "What are the central tutorial definition, director transition, replay, skip, persistence queue, progress parsing, and platform storage flows and their regression tests?",
+  "draft": "Use a tour because the headless tutorial lifecycle crosses definition validation, director transitions, serialized persistence, progress parsing, storage migration, and tests.",
+  "review": "A tutorial core lifecycle question should use a focused graph tour over the headless definition, director, progress, and storage modules with their regression tests.",
+  "request": {
+    "type": "tour",
+    "query": "defineTutorial findTutorialStep createTutorialDirector TutorialDirector acknowledge observeAction observeScene observeSignal replay skip flush createInitialTutorialProgress createTutorialProgressAtStep parseTutorialProgress TutorialProgressStore createPlatformTutorialProgressStore createMemoryTutorialProgressStore director.test progress.test platform-storage.test",
+    "includeTests": true,
+    "limit": 90
+  }
+}
