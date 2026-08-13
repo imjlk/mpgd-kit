@@ -1364,10 +1364,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       current = treeScope.host;
     }
 
-    const visibleRect = intersectRect(
-      target.getBoundingClientRect(),
-      resolveViewportRect(browserWindow),
-    );
+    const visibleRect = resolveTutorialTargetVisibleRect(target, browserWindow);
 
     if (visibleRect === null) {
       return false;
@@ -1450,7 +1447,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   function allowShadowTargetThroughOverlay(target: HTMLElement): void {
     clearTargetOverlayPointerGuard();
     const overlay = ownerDocument.querySelector<SVGElement>('.driver-overlay');
-    const rect = intersectRect(target.getBoundingClientRect(), resolveViewportRect(browserWindow));
+    const rect = resolveTutorialTargetVisibleRect(target, browserWindow);
 
     if (overlay === null || rect === null) {
       return;
@@ -1467,6 +1464,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
 
     const previousValue = overlay.style.getPropertyValue('pointer-events');
     const previousPriority = overlay.style.getPropertyPriority('pointer-events');
+    const overlayZIndex = browserWindow.getComputedStyle(overlay).zIndex;
     overlay.style.setProperty('pointer-events', 'none', 'important');
 
     if (!isShadowTutorialTargetHitTestable(target)) {
@@ -1500,7 +1498,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         position: 'fixed',
         top: `${region.top}px`,
         width: `${region.right - region.left}px`,
-        zIndex: '999999999',
+        zIndex: overlayZIndex,
       });
       ownerDocument.body.appendChild(blocker);
       return blocker;
@@ -1794,6 +1792,16 @@ function isVisibleTutorialTargetWithRect(
     return false;
   }
 
+  const visible = resolveTutorialTargetVisibleRect(element, view, rect);
+
+  return visible !== null;
+}
+
+function resolveTutorialTargetVisibleRect(
+  element: HTMLElement,
+  view: Window,
+  rect: TutorialTargetRect = element.getBoundingClientRect(),
+): { readonly bottom: number; readonly left: number; readonly right: number; readonly top: number } | null {
   let visible = intersectRect(rect, resolveViewportRect(view));
   let ancestor = getComposedParentElement(element);
 
@@ -1803,7 +1811,7 @@ function isVisibleTutorialTargetWithRect(
     if (style.display === 'none'
       || style.visibility === 'hidden'
       || Number.parseFloat(style.opacity || '1') <= 0) {
-      return false;
+      return null;
     }
 
     if ([style.overflow, style.overflowX, style.overflowY].some(
@@ -1815,7 +1823,7 @@ function isVisibleTutorialTargetWithRect(
     ancestor = getComposedParentElement(ancestor);
   }
 
-  return visible !== null && visible.right > visible.left && visible.bottom > visible.top;
+  return visible;
 }
 
 function readTutorialTargetRect(element: HTMLElement): TutorialTargetRect {
