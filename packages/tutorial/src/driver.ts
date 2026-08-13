@@ -261,9 +261,16 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
         const dismissedKey = activePresentationKey;
         dismissedPresentationKey = dismissedKey;
         retryableDismissedKey = null;
+        const skipping = (() => {
+          try {
+            return Promise.resolve(input.onSkip());
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        })();
+
         destroyInstancePreservingTarget(created);
-        const skipOperation = Promise.resolve()
-          .then(() => input.onSkip())
+        const skipOperation = skipping
           .catch((error: unknown) => {
             if (dismissedPresentationKey === dismissedKey) {
               retryableDismissedKey = dismissedKey;
@@ -848,6 +855,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     const presentationKey = activePresentationKey;
     let previousRect = readTutorialTargetRect(target);
     let previousVisible = isVisibleTutorialTargetWithRect(target, browserWindow, previousRect);
+    let previousActivatable = isActivatableTutorialTarget(target, browserWindow);
     const monitor = (): void => {
       targetGeometryTimer = undefined;
       const currentPresentation = activePresentation;
@@ -871,16 +879,21 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
       const nextVisible = !selectionInvalid
         && isVisibleTutorialTargetWithRect(target, browserWindow, nextRect);
       const visibilityChanged = nextVisible !== previousVisible;
+      const nextActivatable = isActivatableTutorialTarget(target, browserWindow);
+      const activatableChanged = nextActivatable !== previousActivatable;
 
-      if (rectChanged || selectionInvalid || visibilityChanged) {
+      if (rectChanged || selectionInvalid || visibilityChanged || activatableChanged) {
         if (selectionInvalid || visibilityChanged) {
           scheduleHostRefresh();
+        } else if (activatableChanged) {
+          scheduleRefresh();
         } else {
           scheduleRefresh();
         }
 
         previousRect = nextRect;
         previousVisible = nextVisible;
+        previousActivatable = nextActivatable;
       }
 
       targetGeometryTimer = browserWindow.setTimeout(monitor, 250);
@@ -1333,10 +1346,6 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
   }
 
   function isShadowTutorialTargetHitTestable(target: HTMLElement): boolean {
-    if (!(target.getRootNode() instanceof ShadowRoot)) {
-      return true;
-    }
-
     if (typeof ownerDocument.elementFromPoint !== 'function') {
       return true;
     }
@@ -1369,8 +1378,11 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     let hit = ownerDocument.elementFromPoint(x, y);
     const outerHost = shadowRoots[0]?.host;
 
+    if (outerHost === undefined) {
+      return hit instanceof Element && isComposedAncestorOrSelf(hit, target);
+    }
+
     if (!(hit instanceof Element)
-      || outerHost === undefined
       || !isComposedAncestorOrSelf(hit, outerHost)) {
       return false;
     }
@@ -1397,8 +1409,7 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     presentation: DriverTutorialPresentation<TStep>,
     target: HTMLElement,
   ): void {
-    if (!(target.getRootNode() instanceof ShadowRoot)
-      || typeof ownerDocument.elementFromPoint !== 'function') {
+    if (typeof ownerDocument.elementFromPoint !== 'function') {
       return;
     }
 
@@ -1457,6 +1468,17 @@ export function createDriverTutorialPresenter<TStep extends TutorialStep>(
     const previousValue = overlay.style.getPropertyValue('pointer-events');
     const previousPriority = overlay.style.getPropertyPriority('pointer-events');
     overlay.style.setProperty('pointer-events', 'none', 'important');
+
+    if (!isShadowTutorialTargetHitTestable(target)) {
+      if (previousValue === '') {
+        overlay.style.removeProperty('pointer-events');
+      } else {
+        overlay.style.setProperty('pointer-events', previousValue, previousPriority);
+      }
+
+      return;
+    }
+
     const viewport = resolveViewportRect(browserWindow);
     const regions = [
       { bottom: rect.top, left: viewport.left, right: viewport.right, top: viewport.top },
