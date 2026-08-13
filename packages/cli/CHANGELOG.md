@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.22.1 — 2026-08-13
+
+### Changed
+
+- [a70be9d](https://github.com/imjlk/mpgd-kit/commit/a70be9d5c8542eb87191ef3e82a4fc09a9d02eff) Keep generated game documentation focused on downstream target builds while the kit documentation separates single-game repositories, multi-game workspaces, and contributor-only reference fixtures. — Thanks @imjlk!
+
 ## 0.22.0 — 2026-08-12
 
 ### Added
