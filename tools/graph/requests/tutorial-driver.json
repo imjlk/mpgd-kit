@@ -3,16 +3,26 @@
   "description": "Driver presenter, target resolution, modal ownership, replay binding, and debug helper flow.",
   "expectedFiles": [
     "packages/tutorial/src/driver.ts",
-    "packages/tutorial/src/testing.ts"
+    "packages/tutorial/src/testing.ts",
+    "packages/tutorial/test/driver.test.ts",
+    "packages/tutorial/test/testing.test.ts"
   ],
   "tsconfig": "tsconfig.graph.json",
   "question": "What are the central Driver tutorial presentation, target resolution, accessibility ownership, target rebinding, replay trigger, and debug helper flows?",
-  "draft": "Use a tour because the optional Driver integration crosses presentation lifecycle, composed-DOM target resolution, modal semantics, replay binding, debug helpers, and tests.",
-  "review": "A tutorial Driver integration question should use a focused graph tour over the presenter and testing helpers, including graph-reached tests when available.",
+  "draft": "Use details because the public Driver, replay, debug, and regression-test handles are known and should remain pinned.",
+  "review": "Exact details handles are the smallest answer-ready evidence that enforces both the Driver integration surface and its regression-test anchors.",
   "request": {
-    "type": "tour",
-    "query": "createDriverTutorialPresenter DriverTutorialPresenter resolveVisibleTutorialTarget isVisibleTutorialTarget bindTutorialReplayTrigger createDriveStep tutorial modal semantics target rebinding shadow replay installTutorialDebugBridge applyTutorialDebugLaunchPolicy createFloatingReplayTrigger driver.test testing.test",
-    "includeTests": true,
-    "limit": 100
+    "type": "details",
+    "handles": [
+      "packages/tutorial/src/driver.ts#createDriverTutorialPresenter:function",
+      "packages/tutorial/src/driver.ts#bindTutorialReplayTrigger:function",
+      "packages/tutorial/src/testing.ts#installTutorialDebugBridge:function",
+      "packages/tutorial/test/driver.test.ts#tutorial:variable",
+      "packages/tutorial/test/testing.test.ts#tutorial:variable"
+    ],
+    "includeExternal": false,
+    "neighbors": true,
+    "memberLimit": 24,
+    "dependencyLimit": 24
   }
 }
