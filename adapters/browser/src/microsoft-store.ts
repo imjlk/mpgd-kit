@@ -848,13 +848,12 @@ function formatPrice(
 ): ProductInfo['price'] | undefined {
   const currencyCode = nonEmptyString(price.currency)?.toUpperCase();
   const providerFormatted = nonEmptyString(price.formatted);
-  if (currencyCode !== undefined && /^[A-Z]{3}$/u.test(currencyCode)) {
-    if (providerFormatted !== undefined) {
-      return {
-        formatted: providerFormatted,
-        currencyCode,
-      };
-    }
+  const currencyValid = currencyCode !== undefined && /^[A-Z]{3}$/u.test(currencyCode);
+  if (currencyValid && providerFormatted !== undefined) {
+    return {
+      formatted: providerFormatted,
+      currencyCode,
+    };
   }
   const rawValue = nonEmptyString(price.value);
   if (rawValue === undefined) {
@@ -862,8 +861,7 @@ function formatPrice(
   }
   const numericValue = Number(rawValue);
   if (
-    currencyCode === undefined
-    || !/^[A-Z]{3}$/u.test(currencyCode)
+    !currencyValid
     || !Number.isFinite(numericValue)
     || numericValue < 0
   ) {

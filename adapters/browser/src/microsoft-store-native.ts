@@ -341,10 +341,12 @@ function readPaymentSku(
     readonly data: { readonly sku: string };
   }[],
 ): string {
-  if (methodData.length !== 1 || methodData[0]?.supportedMethods !== microsoftStoreBillingMethod) {
+  const method = methodData[0];
+  if (methodData.length !== 1 || method?.supportedMethods !== microsoftStoreBillingMethod) {
     throw new TypeError('Native Microsoft Store payment request must contain one Store method.');
   }
-  return requireIdentifier(methodData[0].data.sku, 'Microsoft Store item ID', 256);
+  const data: unknown = method.data;
+  return requireIdentifier(isRecord(data) ? data.sku : undefined, 'Microsoft Store item ID', 256);
 }
 
 function readResponseEnvelope(input: unknown):
