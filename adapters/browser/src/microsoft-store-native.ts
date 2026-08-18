@@ -71,6 +71,7 @@ export interface MicrosoftStoreNativeWebViewTransport {
 
 export interface CreateMicrosoftStoreNativeBridgeClientInput {
   readonly webView: MicrosoftStoreNativeWebViewTransport;
+  /** Supplies the per-client request-ID nonce. It is invoked at most once. */
   readonly createRequestId?: () => string;
   readonly timeoutMs?: number;
   readonly purchaseTimeoutMs?: number;
@@ -119,7 +120,7 @@ const defaultSignInTimeoutMs = 10 * 60_000;
 const maximumBridgeStringLength = 16_384;
 const maximumItemCount = 64;
 const maximumPendingRequests = 64;
-const maximumRetainedRequestIds = 4_096;
+const maximumRequestNonceLength = 96;
 const minimumPlayerSessionLifetimeMs = 60_000;
 const maximumPlayerSessionLifetimeMs = 24 * 60 * 60_000;
 // Session tokens are ASCII JWTs or opaque bearers; these are UTF-16 code-unit limits.
@@ -142,7 +143,8 @@ export function createMicrosoftStoreNativeBridgeClient(
   const now = input.now ?? Date.now;
   const createRequestId = input.createRequestId ?? defaultRequestId;
   const pending = new Map<string, PendingBridgeRequest>();
-  const issuedRequestIds = new Set<string>();
+  let requestNonce: string | undefined;
+  let requestSequence = 0;
   let disposed = false;
 
   const onMessage = (event: MicrosoftStoreNativeWebViewMessageEvent): void => {
@@ -185,7 +187,16 @@ export function createMicrosoftStoreNativeBridgeClient(
     }
     let requestId: string;
     try {
-      requestId = requireIdentifier(createRequestId(), 'native bridge request ID', 128);
+      requestNonce ??= requireIdentifier(
+        createRequestId(),
+        'native bridge request nonce',
+        maximumRequestNonceLength,
+      );
+      if (!Number.isSafeInteger(requestSequence)) {
+        throw new RangeError('Native bridge request sequence is exhausted.');
+      }
+      requestId = `${requestNonce}.${requestSequence.toString(36)}`;
+      requestSequence += 1;
     } catch (cause) {
       return Promise.reject(
         new MicrosoftStoreNativeBridgeError(
@@ -195,24 +206,6 @@ export function createMicrosoftStoreNativeBridgeClient(
         ),
       );
     }
-    if (issuedRequestIds.has(requestId)) {
-      return Promise.reject(
-        new MicrosoftStoreNativeBridgeError(
-          'BRIDGE_PROTOCOL_ERROR',
-          'Native bridge request ID was reused.',
-        ),
-      );
-    }
-    issuedRequestIds.add(requestId);
-    if (issuedRequestIds.size > maximumRetainedRequestIds) {
-      for (const retainedRequestId of issuedRequestIds) {
-        if (!pending.has(retainedRequestId)) {
-          issuedRequestIds.delete(retainedRequestId);
-          break;
-        }
-      }
-    }
-
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
         pending.delete(requestId);
@@ -282,7 +275,6 @@ export function createMicrosoftStoreNativeBridgeClient(
         pendingRequest.reject(new MicrosoftStoreNativeBridgeError('BRIDGE_DISPOSED'));
       }
       pending.clear();
-      issuedRequestIds.clear();
     },
   };
   return Object.freeze(client);

@@ -60,12 +60,12 @@ describe('Microsoft Store native bridge', () => {
 
     expect(webView.messages).toEqual([{
       protocol: microsoftStoreNativeBridgeProtocol,
-      requestId: 'sign-in-1',
+      requestId: 'sign-in-1.0',
       method: 'identity.signIn',
       payload: {},
     }]);
     webView.respond({
-      requestId: 'sign-in-1',
+      requestId: 'sign-in-1.0',
       method: 'identity.signIn',
       ok: true,
       result: {
@@ -87,15 +87,14 @@ describe('Microsoft Store native bridge', () => {
   it('rejects near-expiry or over-specified native player sessions', async () => {
     const webView = new FakeWebView();
     const now = Date.parse('2026-08-18T08:00:00.000Z');
-    const requestIds = ['expired-session', 'extra-session'];
     const client = createMicrosoftStoreNativeBridgeClient({
       webView,
-      createRequestId: () => requestIds.shift() ?? 'unexpected-request',
+      createRequestId: () => 'player-session',
       now: () => now,
     });
     const expired = client.signIn();
     webView.respond({
-      requestId: 'expired-session',
+      requestId: 'player-session.0',
       method: 'identity.signIn',
       ok: true,
       result: {
@@ -108,7 +107,7 @@ describe('Microsoft Store native bridge', () => {
 
     const extra = client.signIn();
     webView.respond({
-      requestId: 'extra-session',
+      requestId: 'player-session.1',
       method: 'identity.signIn',
       ok: true,
       result: {
@@ -314,7 +313,7 @@ describe('Microsoft Store native bridge', () => {
     });
     const pending = client.getDetails(['hint_pack_20', 'hint_pack_120']);
     webView.respond({
-      requestId: 'catalog-1',
+      requestId: 'catalog-1.0',
       method: 'catalog.getDetails',
       ok: true,
       result: {
@@ -345,7 +344,7 @@ describe('Microsoft Store native bridge', () => {
     });
     const pending = client.getDetails(['hint_pack_20']);
     webView.respond({
-      requestId: 'catalog-currency',
+      requestId: 'catalog-currency.0',
       method: 'catalog.getDetails',
       ok: true,
       result: {
@@ -363,14 +362,13 @@ describe('Microsoft Store native bridge', () => {
 
   it('allows description line breaks but rejects native display format controls', async () => {
     const webView = new FakeWebView();
-    const requestIds = ['catalog-multiline', 'catalog-format'];
     const client = createMicrosoftStoreNativeBridgeClient({
       webView,
-      createRequestId: () => requestIds.shift() ?? 'unexpected-request',
+      createRequestId: () => 'catalog-display',
     });
     const multiline = client.getDetails(['hint_pack_20']);
     webView.respond({
-      requestId: 'catalog-multiline',
+      requestId: 'catalog-display.0',
       method: 'catalog.getDetails',
       ok: true,
       result: {
@@ -388,7 +386,7 @@ describe('Microsoft Store native bridge', () => {
 
     const formatted = client.getDetails(['hint_pack_20']);
     webView.respond({
-      requestId: 'catalog-format',
+      requestId: 'catalog-display.1',
       method: 'catalog.getDetails',
       ok: true,
       result: {
@@ -405,15 +403,14 @@ describe('Microsoft Store native bridge', () => {
 
   it('rejects native purchase tokens that differ from their item IDs', async () => {
     const webView = new FakeWebView();
-    const requestIds = ['purchase-token-mismatch', 'list-token-mismatch'];
     const client = createMicrosoftStoreNativeBridgeClient({
       webView,
-      createRequestId: () => requestIds.shift() ?? 'unexpected-request',
+      createRequestId: () => 'purchase-token-mismatch',
     });
 
     const purchase = client.requestPurchase('hint_pack_20');
     webView.respond({
-      requestId: 'purchase-token-mismatch',
+      requestId: 'purchase-token-mismatch.0',
       method: 'purchase.request',
       ok: true,
       result: { status: 'succeeded', purchaseToken: 'provider-transaction-1' },
@@ -422,7 +419,7 @@ describe('Microsoft Store native bridge', () => {
 
     const purchases = client.listPurchases();
     webView.respond({
-      requestId: 'list-token-mismatch',
+      requestId: 'purchase-token-mismatch.1',
       method: 'purchase.list',
       ok: true,
       result: {
@@ -435,15 +432,14 @@ describe('Microsoft Store native bridge', () => {
 
   it('rejects whitespace-only native product titles and formatted prices', async () => {
     const webView = new FakeWebView();
-    const requestIds = ['blank-title', 'blank-price'];
     const client = createMicrosoftStoreNativeBridgeClient({
       webView,
-      createRequestId: () => requestIds.shift() ?? 'unexpected-request',
+      createRequestId: () => 'blank-display',
     });
 
     for (const [requestId, title, formattedPrice] of [
-      ['blank-title', '   ', '₩1,000'],
-      ['blank-price', '20 hints', '   '],
+      ['blank-display.0', '   ', '₩1,000'],
+      ['blank-display.1', '20 hints', '   '],
     ] as const) {
       const pending = client.getDetails(['hint_pack_20']);
       webView.respond({
@@ -474,7 +470,7 @@ describe('Microsoft Store native bridge', () => {
     try {
       const pending = client.listPurchases();
       webView.respond({
-        requestId: 'timeout-1',
+        requestId: 'timeout-1.0',
         method: 'purchase.list',
         ok: false,
       });
@@ -487,7 +483,7 @@ describe('Microsoft Store native bridge', () => {
     }
   });
 
-  it('never reuses a completed request identity within one bridge lifetime', async () => {
+  it('ignores a delayed response after advancing the monotonic request identity', async () => {
     const webView = new FakeWebView();
     const client = createMicrosoftStoreNativeBridgeClient({
       webView,
@@ -495,34 +491,42 @@ describe('Microsoft Store native bridge', () => {
     });
     const first = client.listPurchases();
     webView.respond({
-      requestId: 'fixed-request',
+      requestId: 'fixed-request.0',
       method: 'purchase.list',
       ok: true,
       result: { items: [] },
     });
     await expect(first).resolves.toEqual([]);
 
-    await expect(client.listPurchases()).rejects.toMatchObject({
-      code: 'BRIDGE_PROTOCOL_ERROR',
+    const second = client.listPurchases();
+    webView.respond({
+      requestId: 'fixed-request.0',
+      method: 'purchase.list',
+      ok: true,
+      result: { items: [{ itemId: 'stale', purchaseToken: 'stale' }] },
     });
-    expect(webView.messages).toHaveLength(1);
+    webView.respond({
+      requestId: 'fixed-request.1',
+      method: 'purchase.list',
+      ok: true,
+      result: { items: [] },
+    });
+    await expect(second).resolves.toEqual([]);
+    expect(webView.messages).toHaveLength(2);
     client.dispose();
   });
 
-  it('bounds completed request identity retention in a long-lived bridge', async () => {
+  it('keeps request identities unique past the former retention window', async () => {
     const webView = new FakeWebView();
-    let requestSequence = 0;
     const client = createMicrosoftStoreNativeBridgeClient({
       webView,
-      createRequestId: () => requestSequence <= 4_096
-        ? `retained-${String(requestSequence++)}`
-        : 'retained-0',
+      createRequestId: () => 'long-session',
     });
 
     for (let index = 0; index <= 4_096; index += 1) {
       const pending = client.listPurchases();
       webView.respond({
-        requestId: `retained-${String(index)}`,
+        requestId: `long-session.${index.toString(36)}`,
         method: 'purchase.list',
         ok: true,
         result: { items: [] },
@@ -530,14 +534,18 @@ describe('Microsoft Store native bridge', () => {
       await expect(pending).resolves.toEqual([]);
     }
 
-    const reused = client.listPurchases();
+    const next = client.listPurchases();
     webView.respond({
-      requestId: 'retained-0',
+      requestId: `long-session.${(4_097).toString(36)}`,
       method: 'purchase.list',
       ok: true,
       result: { items: [] },
     });
-    await expect(reused).resolves.toEqual([]);
+    await expect(next).resolves.toEqual([]);
+    const requestIds = webView.messages.map((message) => {
+      return (message as { readonly requestId: string }).requestId;
+    });
+    expect(new Set(requestIds).size).toBe(requestIds.length);
     client.dispose();
   });
 

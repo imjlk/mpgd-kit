@@ -40,6 +40,10 @@ Every request contains:
 }
 ```
 
+The web client derives each `requestId` from one random per-client nonce and a monotonic sequence.
+It never reuses an ID during that bridge lifetime, so a delayed native response cannot complete a
+newer request for the same method.
+
 The response repeats `protocol`, `requestId`, and `method`. Success uses
 `{ "ok": true, "result": ... }`; failure uses
 `{ "ok": false, "errorCode": "SANITIZED_NATIVE_CODE" }`.
