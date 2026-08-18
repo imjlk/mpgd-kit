@@ -12,6 +12,7 @@ export const microsoftStoreNativeBridgeProtocol = 'mpgd.microsoft-store.native.v
 export type MicrosoftStoreNativeBridgeMethod =
   | 'catalog.getDetails'
   | 'identity.getCustomerCollectionsId'
+  | 'identity.signIn'
   | 'purchase.list'
   | 'purchase.request';
 
@@ -33,6 +34,8 @@ export interface MicrosoftStoreNativeProductDetail {
 }
 
 export interface MicrosoftStoreNativeBridgeClient {
+  /** Runs platform sign-in and Store account linking entirely in the trusted native host. */
+  signIn(): Promise<MicrosoftStoreNativePlayerSession>;
   getDetails(itemIds: readonly string[]): Promise<readonly MicrosoftStoreNativeProductDetail[]>;
   getCustomerCollectionsId(input: {
     /** Short-lived Entra token for the Store collections-key creation audience. */
@@ -47,6 +50,14 @@ export interface MicrosoftStoreNativeBridgeClient {
     status: MicrosoftStoreNativePurchaseStatus;
   }>>;
   dispose(): void;
+}
+
+export interface MicrosoftStoreNativePlayerSession {
+  /** Unix epoch milliseconds when this game-scoped session expires. */
+  readonly expiresAt: number;
+  readonly playerId: string;
+  /** Game-scoped bearer. The native host must never return Microsoft or Store credentials. */
+  readonly sessionToken: string;
 }
 
 export interface MicrosoftStoreNativeWebViewMessageEvent {
@@ -70,6 +81,8 @@ export interface CreateMicrosoftStoreNativeBridgeClientInput {
   readonly createRequestId?: () => string;
   readonly timeoutMs?: number;
   readonly purchaseTimeoutMs?: number;
+  readonly signInTimeoutMs?: number;
+  readonly now?: () => number;
 }
 
 export interface MicrosoftStoreNativeCommerceRuntime {
@@ -109,10 +122,17 @@ interface PendingBridgeRequest {
 
 const defaultTimeoutMs = 30_000;
 const defaultPurchaseTimeoutMs = 10 * 60_000;
+const defaultSignInTimeoutMs = 10 * 60_000;
 const maximumBridgeStringLength = 16_384;
 const maximumItemCount = 64;
 const maximumPendingRequests = 64;
 const maximumRetainedRequestIds = 4_096;
+const minimumPlayerSessionLifetimeMs = 60_000;
+const maximumPlayerSessionLifetimeMs = 24 * 60 * 60_000;
+// Session tokens are ASCII JWTs or opaque bearers; these are UTF-16 code-unit limits.
+const minimumPlayerSessionTokenLength = 32;
+const maximumPlayerSessionTokenLength = 4_096;
+const maximumPlayerIdLength = 256;
 
 export function createMicrosoftStoreNativeBridgeClient(
   input: CreateMicrosoftStoreNativeBridgeClientInput,
@@ -122,6 +142,11 @@ export function createMicrosoftStoreNativeBridgeClient(
     input.purchaseTimeoutMs ?? defaultPurchaseTimeoutMs,
     'purchaseTimeoutMs',
   );
+  const signInTimeoutMs = requireTimeout(
+    input.signInTimeoutMs ?? defaultSignInTimeoutMs,
+    'signInTimeoutMs',
+  );
+  const now = input.now ?? Date.now;
   const createRequestId = input.createRequestId ?? defaultRequestId;
   const pending = new Map<string, PendingBridgeRequest>();
   const issuedRequestIds = new Set<string>();
@@ -221,6 +246,12 @@ export function createMicrosoftStoreNativeBridgeClient(
   };
 
   const client: MicrosoftStoreNativeBridgeClient = {
+    async signIn() {
+      return readPlayerSession(
+        await request('identity.signIn', {}, signInTimeoutMs),
+        now(),
+      );
+    },
     async getDetails(itemIds: readonly string[]) {
       const normalized = normalizeItemIds(itemIds);
       const result = await request('catalog.getDetails', { itemIds: normalized });
@@ -290,7 +321,7 @@ export function createMicrosoftStoreNativeBridgeClient(
 }
 
 export function createMicrosoftStoreNativeCommerceRuntime(
-  bridge: MicrosoftStoreNativeBridgeClient,
+  bridge: Omit<MicrosoftStoreNativeBridgeClient, 'signIn'>,
 ): MicrosoftStoreNativeCommerceRuntime {
   const service: MicrosoftStoreDigitalGoodsService = Object.freeze({
     async getDetails(
@@ -464,6 +495,43 @@ function readPurchases(input: unknown): readonly MicrosoftStoreDigitalGoodsPurch
   }));
 }
 
+function readPlayerSession(
+  input: unknown,
+  nowMs: number,
+): MicrosoftStoreNativePlayerSession {
+  const session = requireExactRecord(
+    input,
+    ['expiresAt', 'playerId', 'sessionToken'],
+    'native player session',
+  );
+  const expiresAt = session.expiresAt;
+  if (
+    typeof expiresAt !== 'number'
+    || !Number.isSafeInteger(expiresAt)
+    || expiresAt < nowMs + minimumPlayerSessionLifetimeMs
+    || expiresAt > nowMs + maximumPlayerSessionLifetimeMs
+  ) {
+    throw protocolError('Native player session expiration is invalid.');
+  }
+  const sessionToken = requireNativeIdentifier(
+    session.sessionToken,
+    'native player session token',
+    maximumPlayerSessionTokenLength,
+  );
+  if (sessionToken.length < minimumPlayerSessionTokenLength || /\s/u.test(sessionToken)) {
+    throw protocolError('Native player session token is invalid.');
+  }
+  return Object.freeze({
+    expiresAt,
+    playerId: requireNativeIdentifier(
+      session.playerId,
+      'native player ID',
+      maximumPlayerIdLength,
+    ),
+    sessionToken,
+  });
+}
+
 function normalizeItemIds(input: readonly string[]): readonly string[] {
   if (input.length === 0 || input.length > maximumItemCount) {
     throw new TypeError(`Microsoft Store item IDs must contain 1-${maximumItemCount} values.`);
@@ -494,6 +562,7 @@ function readMethod(input: unknown): MicrosoftStoreNativeBridgeMethod | undefine
   switch (input) {
     case 'catalog.getDetails':
     case 'identity.getCustomerCollectionsId':
+    case 'identity.signIn':
     case 'purchase.list':
     case 'purchase.request':
       return input;
@@ -514,6 +583,20 @@ function requireRecord(input: unknown, label: string): Record<string, unknown> {
     throw protocolError(`${label} is invalid.`);
   }
   return input;
+}
+
+function requireExactRecord(
+  input: unknown,
+  keys: readonly string[],
+  label: string,
+): Record<string, unknown> {
+  const record = requireRecord(input, label);
+  const actual = Object.keys(record).sort();
+  const expected = [...keys].sort();
+  if (actual.length !== expected.length || actual.some((key, index) => key !== expected[index])) {
+    throw protocolError(`${label} is invalid.`);
+  }
+  return record;
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

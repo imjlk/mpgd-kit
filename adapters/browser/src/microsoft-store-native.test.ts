@@ -48,6 +48,80 @@ class ThrowingWebView extends FakeWebView {
 }
 
 describe('Microsoft Store native bridge', () => {
+  it('receives only a game-scoped session after native sign-in and Store linking', async () => {
+    const webView = new FakeWebView();
+    const now = Date.parse('2026-08-18T08:00:00.000Z');
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'sign-in-1',
+      now: () => now,
+    });
+    const pending = client.signIn();
+
+    expect(webView.messages).toEqual([{
+      protocol: microsoftStoreNativeBridgeProtocol,
+      requestId: 'sign-in-1',
+      method: 'identity.signIn',
+      payload: {},
+    }]);
+    webView.respond({
+      requestId: 'sign-in-1',
+      method: 'identity.signIn',
+      ok: true,
+      result: {
+        expiresAt: now + 60_000,
+        playerId: `microsoft.${'a'.repeat(64)}`,
+        sessionToken: `game-session-${'s'.repeat(32)}`,
+      },
+    });
+
+    await expect(pending).resolves.toEqual({
+      expiresAt: now + 60_000,
+      playerId: `microsoft.${'a'.repeat(64)}`,
+      sessionToken: `game-session-${'s'.repeat(32)}`,
+    });
+    expect(JSON.stringify(await pending)).not.toContain('userStoreId');
+    client.dispose();
+  });
+
+  it('rejects near-expiry or over-specified native player sessions', async () => {
+    const webView = new FakeWebView();
+    const now = Date.parse('2026-08-18T08:00:00.000Z');
+    const requestIds = ['expired-session', 'extra-session'];
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => requestIds.shift() ?? 'unexpected-request',
+      now: () => now,
+    });
+    const expired = client.signIn();
+    webView.respond({
+      requestId: 'expired-session',
+      method: 'identity.signIn',
+      ok: true,
+      result: {
+        expiresAt: now + 59_000,
+        playerId: `microsoft.${'a'.repeat(64)}`,
+        sessionToken: `game-session-${'s'.repeat(32)}`,
+      },
+    });
+    await expect(expired).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+
+    const extra = client.signIn();
+    webView.respond({
+      requestId: 'extra-session',
+      method: 'identity.signIn',
+      ok: true,
+      result: {
+        expiresAt: now + 30 * 60_000,
+        playerId: `microsoft.${'a'.repeat(64)}`,
+        sessionToken: `game-session-${'s'.repeat(32)}`,
+        userStoreId: 'must-not-cross-the-web-boundary',
+      },
+    });
+    await expect(extra).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+    client.dispose();
+  });
+
   it('requests a bounded User Collections ID without exposing a global host object', async () => {
     const webView = new FakeWebView();
     const client = createMicrosoftStoreNativeBridgeClient({

@@ -51,6 +51,7 @@ Supported methods are:
 | `purchase.request` | `{ itemId: string }` | `{ status, purchaseToken? }` |
 | `purchase.list` | `{}` | `{ items: { itemId, purchaseToken }[] }` |
 | `identity.getCustomerCollectionsId` | `{ serviceTicket, publisherUserId }` | `{ userStoreId }` |
+| `identity.signIn` | `{}` | `{ playerId, sessionToken, expiresAt }` |
 
 The `status` field in the `purchase.request` response is one of `succeeded`,
 `already-purchased`, `not-purchased`, `network-error`, or `server-error`, matching the meaningful
@@ -63,10 +64,27 @@ developer-managed consumable allowlist. Microsoft Digital Goods uses the add-on 
 must query Microsoft Collections, claim the exact provider purchase idempotently, grant the game
 ledger, and consume the entitlement.
 
-## User Collections ID handoff
+## Recommended native identity handoff
 
-The game first authenticates its own stable player. Its backend returns a short-lived Entra access
-token scoped only to the Store collections-key creation audience. The web client then calls:
+For a Store game that owns its player authentication, prefer `identity.signIn`. The trusted host
+uses WAM or the system browser outside WebView2, sends the Microsoft token directly to the game
+backend, obtains the short-lived publisher ticket, calls
+`StoreContext.GetCustomerCollectionsIdAsync`, and submits that key to the private account-link
+service. Only the final game-scoped player ID and bearer session cross back into web content:
+
+```ts
+const session = await bridge.signIn();
+```
+
+The host must not include the Microsoft ID token, publisher service ticket, User Collections ID,
+provider account subject, or account-binding record in this response. The returned bearer must be
+short-lived, audience-restricted to the game, and accepted only by that game's backend.
+
+## Direct User Collections ID handoff
+
+For a host whose trusted web layer already owns a stable authenticated session, the backend may
+return a short-lived Entra access token scoped only to the Store collections-key creation audience.
+The web client then calls:
 
 ```ts
 const userStoreId = await bridge.getCustomerCollectionsId({
@@ -78,7 +96,9 @@ const userStoreId = await bridge.getCustomerCollectionsId({
 The native host passes both values to `StoreContext.GetCustomerCollectionsIdAsync`. The web client
 returns the result immediately to the trusted account-link service. That service validates the
 embedded publisher user ID and client ID and proves the opaque key with Microsoft Collections
-before persisting it. The general game API must never expose the stored key again.
+before persisting it. The general game API must never expose the stored key again. Do not use this
+lower-level method when the web layer would receive a Microsoft ID token or when `identity.signIn`
+can keep all provider and Store credentials native.
 
 This contract does not make a PWABuilder hosted package native. A game that selects this path still
 needs a signed WinUI/WebView2 package, Windows acceptance tests, and a Store-installed end-to-end
