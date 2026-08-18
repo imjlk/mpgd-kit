@@ -24,6 +24,7 @@
       "@mpgd/adapter-devvit/view-mode": ["./adapters/devvit/src/view-mode.ts"],
       "@mpgd/adapter-devvit/web": ["./adapters/devvit/src/web.ts"],
       "@mpgd/adapter-browser/microsoft-store": ["./adapters/browser/src/microsoft-store.ts"],
+      "@mpgd/adapter-browser/microsoft-store-native": ["./adapters/browser/src/microsoft-store-native.ts"],
       "@mpgd/adapter-ait/package.json": ["./adapters/ait/package.json"],
       "@mpgd/adapter-ait/ad-config": ["./adapters/ait/src/ad-config.ts"],
       "@mpgd/adapter-ait/host": ["./adapters/ait/src/host.ts"],
