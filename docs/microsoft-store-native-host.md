@@ -20,8 +20,9 @@ The native host must enforce all of these rules before handling a bridge request
   ID or product kind from web content.
 - Execute Store UI calls on the owning window's UI thread and initialize `StoreContext` with that
   window before a call that can display UI.
-- Never log, persist in plaintext, or attach telemetry to the Entra service ticket or returned User
-  Collections ID.
+- Keep the Entra service ticket and returned User Collections ID inside the trusted host. Never
+  return either value to WebView content, log it, persist it in plaintext, or attach telemetry to
+  it.
 - Return only the fields defined below. Provider diagnostics remain in native logs with secrets
   removed.
 - Map a cancelled Store purchase to `not-purchased`; do not turn cancellation into a grant.
@@ -50,7 +51,6 @@ Supported methods are:
 | `catalog.getDetails` | `{ itemIds: string[] }` | `{ items: { itemId, title, description?, price: { currencyCode, formatted } }[] }` |
 | `purchase.request` | `{ itemId: string }` | `{ status, purchaseToken? }` |
 | `purchase.list` | `{}` | `{ items: { itemId, purchaseToken }[] }` |
-| `identity.getCustomerCollectionsId` | `{ serviceTicket, publisherUserId }` | `{ userStoreId }` |
 | `identity.signIn` | `{}` | `{ playerId, sessionToken, expiresAt }` |
 
 The `status` field in the `purchase.request` response is one of `succeeded`,
@@ -80,25 +80,11 @@ The host must not include the Microsoft ID token, publisher service ticket, User
 provider account subject, or account-binding record in this response. The returned bearer must be
 short-lived, audience-restricted to the game, and accepted only by that game's backend.
 
-## Direct User Collections ID handoff
-
-For a host whose trusted web layer already owns a stable authenticated session, the backend may
-return a short-lived Entra access token scoped only to the Store collections-key creation audience.
-The web client then calls:
-
-```ts
-const userStoreId = await bridge.getCustomerCollectionsId({
-  serviceTicket,
-  publisherUserId: authenticatedPlayerId,
-});
-```
-
-The native host passes both values to `StoreContext.GetCustomerCollectionsIdAsync`. The web client
-returns the result immediately to the trusted account-link service. That service validates the
-embedded publisher user ID and client ID and proves the opaque key with Microsoft Collections
-before persisting it. The general game API must never expose the stored key again. Do not use this
-lower-level method when the web layer would receive a Microsoft ID token or when `identity.signIn`
-can keep all provider and Store credentials native.
+The web bridge intentionally has no lower-level User Collections ID method. If a host needs to
+renew the Store key, it must repeat that operation inside native code and send the result directly
+to the authenticated account-link service. A browser-accessible primitive would expose Store
+credentials to any compromised game-origin content and expand the protocol beyond what checkout
+requires.
 
 This contract does not make a PWABuilder hosted package native. A game that selects this path still
 needs a signed WinUI/WebView2 package, Windows acceptance tests, and a Store-installed end-to-end

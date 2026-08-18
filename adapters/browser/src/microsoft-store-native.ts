@@ -11,7 +11,6 @@ export const microsoftStoreNativeBridgeProtocol = 'mpgd.microsoft-store.native.v
 
 export type MicrosoftStoreNativeBridgeMethod =
   | 'catalog.getDetails'
-  | 'identity.getCustomerCollectionsId'
   | 'identity.signIn'
   | 'purchase.list'
   | 'purchase.request';
@@ -37,12 +36,6 @@ export interface MicrosoftStoreNativeBridgeClient {
   /** Runs platform sign-in and Store account linking entirely in the trusted native host. */
   signIn(): Promise<MicrosoftStoreNativePlayerSession>;
   getDetails(itemIds: readonly string[]): Promise<readonly MicrosoftStoreNativeProductDetail[]>;
-  getCustomerCollectionsId(input: {
-    /** Short-lived Entra token for the Store collections-key creation audience. */
-    readonly serviceTicket: string;
-    /** Stable authenticated game-player ID embedded into the resulting Store key. */
-    readonly publisherUserId: string;
-  }): Promise<string>;
   listPurchases(): Promise<readonly MicrosoftStoreDigitalGoodsPurchase[]>;
   requestPurchase(itemId: string): Promise<Readonly<{
     /** Microsoft Digital Goods product ID; when present, this must equal the requested itemId. */
@@ -257,31 +250,6 @@ export function createMicrosoftStoreNativeBridgeClient(
       const result = await request('catalog.getDetails', { itemIds: normalized });
       return readProductDetails(result, normalized);
     },
-    async getCustomerCollectionsId(identityInput: {
-      readonly serviceTicket: string;
-      readonly publisherUserId: string;
-    }) {
-      const serviceTicket = requireIdentifier(
-        identityInput.serviceTicket,
-        'Microsoft Store collections service ticket',
-        maximumBridgeStringLength,
-      );
-      const publisherUserId = requireIdentifier(
-        identityInput.publisherUserId,
-        'Microsoft Store publisher user ID',
-        512,
-      );
-      const result = await request('identity.getCustomerCollectionsId', {
-        serviceTicket,
-        publisherUserId,
-      });
-      const record = requireRecord(result, 'native identity result');
-      return requireNativeIdentifier(
-        record.userStoreId,
-        'Microsoft Store User Collections ID',
-        maximumBridgeStringLength,
-      );
-    },
     async listPurchases() {
       return readPurchases(await request('purchase.list', {}));
     },
@@ -321,7 +289,10 @@ export function createMicrosoftStoreNativeBridgeClient(
 }
 
 export function createMicrosoftStoreNativeCommerceRuntime(
-  bridge: Omit<MicrosoftStoreNativeBridgeClient, 'signIn'>,
+  bridge: Pick<
+    MicrosoftStoreNativeBridgeClient,
+    'getDetails' | 'listPurchases' | 'requestPurchase'
+  >,
 ): MicrosoftStoreNativeCommerceRuntime {
   const service: MicrosoftStoreDigitalGoodsService = Object.freeze({
     async getDetails(
@@ -561,7 +532,6 @@ function readPurchaseStatus(input: unknown): MicrosoftStoreNativePurchaseStatus 
 function readMethod(input: unknown): MicrosoftStoreNativeBridgeMethod | undefined {
   switch (input) {
     case 'catalog.getDetails':
-    case 'identity.getCustomerCollectionsId':
     case 'identity.signIn':
     case 'purchase.list':
     case 'purchase.request':
