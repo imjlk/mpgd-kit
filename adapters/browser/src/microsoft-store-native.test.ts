@@ -473,6 +473,36 @@ describe('Microsoft Store native bridge', () => {
     client.dispose();
   });
 
+  it('rejects whitespace-only native product titles and formatted prices', async () => {
+    const webView = new FakeWebView();
+    const requestIds = ['blank-title', 'blank-price'];
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => requestIds.shift() ?? 'unexpected-request',
+    });
+
+    for (const [requestId, title, formattedPrice] of [
+      ['blank-title', '   ', '₩1,000'],
+      ['blank-price', '20 hints', '   '],
+    ] as const) {
+      const pending = client.getDetails(['hint_pack_20']);
+      webView.respond({
+        requestId,
+        method: 'catalog.getDetails',
+        ok: true,
+        result: {
+          items: [{
+            itemId: 'hint_pack_20',
+            title,
+            price: { currencyCode: 'KRW', formatted: formattedPrice },
+          }],
+        },
+      });
+      await expect(pending).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+    }
+    client.dispose();
+  });
+
   it('classifies invalid host identifiers as bridge protocol errors', async () => {
     const webView = new FakeWebView();
     const client = createMicrosoftStoreNativeBridgeClient({

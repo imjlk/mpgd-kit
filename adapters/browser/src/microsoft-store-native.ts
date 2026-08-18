@@ -639,8 +639,8 @@ function requireText(
 ): string {
   if (
     typeof input !== 'string'
-    || input.length === 0
     || input.length > maximumLength
+    || input.trim().length === 0
   ) {
     throw protocolError(`${label} is invalid.`);
   }
