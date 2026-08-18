@@ -52,13 +52,16 @@ Supported methods are:
 | `purchase.list` | `{}` | `{ items: { itemId, purchaseToken }[] }` |
 | `identity.getCustomerCollectionsId` | `{ serviceTicket, publisherUserId }` | `{ userStoreId }` |
 
-`purchase.request.status` is one of `succeeded`, `already-purchased`, `not-purchased`,
-`network-error`, or `server-error`, matching the meaningful `StorePurchaseStatus` outcomes.
+The `status` field in the `purchase.request` response is one of `succeeded`,
+`already-purchased`, `not-purchased`, `network-error`, or `server-error`, matching the meaningful
+`StorePurchaseStatus` outcomes.
 
 The host obtains product metadata and current ownership from `StoreContext`, using the configured
-developer-managed consumable allowlist. `purchaseToken` is provider evidence for reconciliation;
-it is not assumed to be a transaction-unique ID. The backend must query Microsoft Collections,
-claim the exact provider purchase idempotently, grant the game ledger, and consume the entitlement.
+developer-managed consumable allowlist. Microsoft Digital Goods uses the add-on product ID as its
+`purchaseToken`, so the host must return the same allowlisted value for `itemId` and
+`purchaseToken`; the bridge rejects a mismatch. This token is not transaction-unique. The backend
+must query Microsoft Collections, claim the exact provider purchase idempotently, grant the game
+ledger, and consume the entitlement.
 
 ## User Collections ID handoff
 

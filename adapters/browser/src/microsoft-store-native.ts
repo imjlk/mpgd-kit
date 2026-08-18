@@ -42,6 +42,7 @@ export interface MicrosoftStoreNativeBridgeClient {
   }): Promise<string>;
   listPurchases(): Promise<readonly MicrosoftStoreDigitalGoodsPurchase[]>;
   requestPurchase(itemId: string): Promise<Readonly<{
+    /** Microsoft Digital Goods product ID; when present, this must equal the requested itemId. */
     purchaseToken?: string;
     status: MicrosoftStoreNativePurchaseStatus;
   }>>;
@@ -111,6 +112,7 @@ const defaultPurchaseTimeoutMs = 10 * 60_000;
 const maximumBridgeStringLength = 16_384;
 const maximumItemCount = 64;
 const maximumPendingRequests = 64;
+const maximumRetainedRequestIds = 4_096;
 
 export function createMicrosoftStoreNativeBridgeClient(
   input: CreateMicrosoftStoreNativeBridgeClientInput,
@@ -184,6 +186,14 @@ export function createMicrosoftStoreNativeBridgeClient(
       );
     }
     issuedRequestIds.add(requestId);
+    if (issuedRequestIds.size > maximumRetainedRequestIds) {
+      for (const retainedRequestId of issuedRequestIds) {
+        if (!pending.has(retainedRequestId)) {
+          issuedRequestIds.delete(retainedRequestId);
+          break;
+        }
+      }
+    }
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -235,7 +245,7 @@ export function createMicrosoftStoreNativeBridgeClient(
         publisherUserId,
       });
       const record = requireRecord(result, 'native identity result');
-      return requireIdentifier(
+      return requireNativeIdentifier(
         record.userStoreId,
         'Microsoft Store User Collections ID',
         maximumBridgeStringLength,
@@ -253,7 +263,10 @@ export function createMicrosoftStoreNativeBridgeClient(
       const status = readPurchaseStatus(result.status);
       const purchaseToken = result.purchaseToken === undefined
         ? undefined
-        : requireIdentifier(result.purchaseToken, 'Microsoft Store purchase token', 1_024);
+        : requireNativeIdentifier(result.purchaseToken, 'Microsoft Store purchase token', 1_024);
+      if (purchaseToken !== undefined && purchaseToken !== normalizedItemId) {
+        throw protocolError('Native purchase token must equal its Microsoft Store item ID.');
+      }
       return Object.freeze({
         status,
         ...(purchaseToken === undefined ? {} : { purchaseToken }),
@@ -265,11 +278,12 @@ export function createMicrosoftStoreNativeBridgeClient(
       }
       disposed = true;
       input.webView.removeEventListener('message', onMessage);
-      for (const request of pending.values()) {
-        clearTimeout(request.timeout);
-        request.reject(new MicrosoftStoreNativeBridgeError('BRIDGE_DISPOSED'));
+      for (const pendingRequest of pending.values()) {
+        clearTimeout(pendingRequest.timeout);
+        pendingRequest.reject(new MicrosoftStoreNativeBridgeError('BRIDGE_DISPOSED'));
       }
       pending.clear();
+      issuedRequestIds.clear();
     },
   };
   return Object.freeze(client);
@@ -390,13 +404,17 @@ function readProductDetails(
   const seen = new Set<string>();
   return Object.freeze(record.items.map((candidate) => {
     const item = requireRecord(candidate, 'native product detail');
-    const itemId = requireIdentifier(item.itemId, 'Microsoft Store item ID', 256);
+    const itemId = requireNativeIdentifier(item.itemId, 'Microsoft Store item ID', 256);
     if (!requested.has(itemId) || seen.has(itemId)) {
       throw protocolError('Native product detail identity is invalid.');
     }
     seen.add(itemId);
     const price = requireRecord(item.price, 'native product price');
-    const currencyCode = requireIdentifier(price.currencyCode, 'currency code', 3).toUpperCase();
+    const currencyCode = requireNativeIdentifier(
+      price.currencyCode,
+      'currency code',
+      3,
+    ).toUpperCase();
     if (!/^[A-Z]{3}$/u.test(currencyCode)) {
       throw protocolError('Native product currency is invalid.');
     }
@@ -405,7 +423,14 @@ function readProductDetails(
       title: requireText(item.title, 'Microsoft Store item title', 512),
       ...(item.description === undefined
         ? {}
-        : { description: requireText(item.description, 'Microsoft Store item description', 4_096) }),
+        : {
+            description: requireText(
+              item.description,
+              'Microsoft Store item description',
+              4_096,
+              true,
+            ),
+          }),
       price: Object.freeze({
         currencyCode,
         formatted: requireText(price.formatted, 'Microsoft Store formatted price', 128),
@@ -422,19 +447,20 @@ function readPurchases(input: unknown): readonly MicrosoftStoreDigitalGoodsPurch
   const seen = new Set<string>();
   return Object.freeze(record.items.map((candidate) => {
     const purchase = requireRecord(candidate, 'native purchase');
-    const itemId = requireIdentifier(purchase.itemId, 'Microsoft Store item ID', 256);
+    const itemId = requireNativeIdentifier(purchase.itemId, 'Microsoft Store item ID', 256);
     if (seen.has(itemId)) {
       throw protocolError('Native purchase identity is duplicated.');
     }
     seen.add(itemId);
-    return Object.freeze({
-      itemId,
-      purchaseToken: requireIdentifier(
-        purchase.purchaseToken,
-        'Microsoft Store purchase token',
-        1_024,
-      ),
-    });
+    const purchaseToken = requireNativeIdentifier(
+      purchase.purchaseToken,
+      'Microsoft Store purchase token',
+      1_024,
+    );
+    if (purchaseToken !== itemId) {
+      throw protocolError('Native purchase token must equal its Microsoft Store item ID.');
+    }
+    return Object.freeze({ itemId, purchaseToken });
   }));
 }
 
@@ -502,6 +528,14 @@ function requireIdentifier(input: unknown, label: string, maximumLength: number)
   return value;
 }
 
+function requireNativeIdentifier(input: unknown, label: string, maximumLength: number): string {
+  const value = readIdentifier(input, maximumLength);
+  if (value === undefined) {
+    throw protocolError(`${label} is invalid.`);
+  }
+  return value;
+}
+
 function readIdentifier(input: unknown, maximumLength: number): string | undefined {
   if (typeof input !== 'string') {
     return undefined;
@@ -514,13 +548,21 @@ function readIdentifier(input: unknown, maximumLength: number): string | undefin
       : undefined;
 }
 
-function requireText(input: unknown, label: string, maximumLength: number): string {
+function requireText(
+  input: unknown,
+  label: string,
+  maximumLength: number,
+  allowDescriptionWhitespace = false,
+): string {
   if (
     typeof input !== 'string'
     || input.length === 0
     || input.length > maximumLength
-    || /\p{Cc}/u.test(input)
   ) {
+    throw protocolError(`${label} is invalid.`);
+  }
+  const inspected = allowDescriptionWhitespace ? input.replace(/[\t\n\r]/gu, '') : input;
+  if (/[\p{Cc}\p{Cf}]/u.test(inspected)) {
     throw protocolError(`${label} is invalid.`);
   }
   return input;
