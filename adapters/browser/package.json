@@ -32,6 +32,10 @@
     "./microsoft-store": {
       "types": "./dist/microsoft-store.d.ts",
       "default": "./dist/microsoft-store.js"
+    },
+    "./microsoft-store-native": {
+      "types": "./dist/microsoft-store-native.d.ts",
+      "default": "./dist/microsoft-store-native.js"
     }
   },
   "files": [

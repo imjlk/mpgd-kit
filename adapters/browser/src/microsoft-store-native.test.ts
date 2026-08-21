@@ -1,0 +1,621 @@
+import { describe, expect, it, vi } from 'vitest';
+
+import { createMicrosoftStoreCommerceAdapter } from './microsoft-store';
+import {
+  createMicrosoftStoreNativeBridgeClient,
+  createMicrosoftStoreNativeCommerceRuntime,
+  MicrosoftStoreNativeBridgeError,
+  microsoftStoreNativeBridgeProtocol,
+  type MicrosoftStoreNativeWebViewMessageEvent,
+  type MicrosoftStoreNativeWebViewTransport,
+} from './microsoft-store-native';
+
+class FakeWebView implements MicrosoftStoreNativeWebViewTransport {
+  readonly messages: unknown[] = [];
+  private readonly listeners = new Set<(
+    event: MicrosoftStoreNativeWebViewMessageEvent,
+  ) => void>();
+
+  postMessage(message: unknown): void {
+    this.messages.push(message);
+  }
+
+  addEventListener(
+    _type: 'message',
+    listener: (event: MicrosoftStoreNativeWebViewMessageEvent) => void,
+  ): void {
+    this.listeners.add(listener);
+  }
+
+  removeEventListener(
+    _type: 'message',
+    listener: (event: MicrosoftStoreNativeWebViewMessageEvent) => void,
+  ): void {
+    this.listeners.delete(listener);
+  }
+
+  respond(input: Readonly<Record<string, unknown>>): void {
+    for (const listener of this.listeners) {
+      listener({ data: { protocol: microsoftStoreNativeBridgeProtocol, ...input } });
+    }
+  }
+}
+
+class ThrowingWebView extends FakeWebView {
+  override postMessage(): void {
+    throw new Error('transport unavailable');
+  }
+}
+
+describe('Microsoft Store native bridge', () => {
+  it('receives only a game-scoped session after native sign-in and Store linking', async () => {
+    const webView = new FakeWebView();
+    const now = Date.parse('2026-08-18T08:00:00.000Z');
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'sign-in-1',
+      now: () => now,
+    });
+    const pending = client.signIn();
+
+    expect(webView.messages).toEqual([{
+      protocol: microsoftStoreNativeBridgeProtocol,
+      requestId: 'sign-in-1.0',
+      method: 'identity.signIn',
+      payload: {},
+    }]);
+    webView.respond({
+      requestId: 'sign-in-1.0',
+      method: 'identity.signIn',
+      ok: true,
+      result: {
+        expiresAt: now + 60_000,
+        playerId: `microsoft.${'a'.repeat(64)}`,
+        sessionToken: `game-session-${'s'.repeat(32)}`,
+      },
+    });
+
+    await expect(pending).resolves.toEqual({
+      expiresAt: now + 60_000,
+      playerId: `microsoft.${'a'.repeat(64)}`,
+      sessionToken: `game-session-${'s'.repeat(32)}`,
+    });
+    expect(JSON.stringify(await pending)).not.toContain('userStoreId');
+    client.dispose();
+  });
+
+  it('rejects near-expiry or over-specified native player sessions', async () => {
+    const webView = new FakeWebView();
+    const now = Date.parse('2026-08-18T08:00:00.000Z');
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'player-session',
+      now: () => now,
+    });
+    const expired = client.signIn();
+    webView.respond({
+      requestId: 'player-session.0',
+      method: 'identity.signIn',
+      ok: true,
+      result: {
+        expiresAt: now + 59_000,
+        playerId: `microsoft.${'a'.repeat(64)}`,
+        sessionToken: `game-session-${'s'.repeat(32)}`,
+      },
+    });
+    await expect(expired).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+
+    const extra = client.signIn();
+    webView.respond({
+      requestId: 'player-session.1',
+      method: 'identity.signIn',
+      ok: true,
+      result: {
+        expiresAt: now + 30 * 60_000,
+        playerId: `microsoft.${'a'.repeat(64)}`,
+        sessionToken: `game-session-${'s'.repeat(32)}`,
+        userStoreId: 'must-not-cross-the-web-boundary',
+      },
+    });
+    await expect(extra).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+    client.dispose();
+  });
+
+  it('adapts native formatted prices, ownership, and purchase UI to the commerce adapter', async () => {
+    const bridge = {
+      getDetails: vi.fn(async () => [{
+        itemId: 'hint_pack_20',
+        title: '20 hints',
+        price: { currencyCode: 'KRW', formatted: '₩1,000' },
+      }]),
+      listPurchases: vi.fn(async () => [{
+        itemId: 'hint_pack_20',
+        purchaseToken: 'hint_pack_20',
+      }]),
+      requestPurchase: vi.fn(async () => ({
+        status: 'succeeded' as const,
+        purchaseToken: 'hint_pack_20',
+      })),
+      dispose: vi.fn(),
+    };
+    const runtime = createMicrosoftStoreNativeCommerceRuntime(bridge);
+    const service = await runtime.getDigitalGoodsService();
+
+    await expect(service.getDetails(['hint_pack_20'])).resolves.toEqual([{
+      itemId: 'hint_pack_20',
+      title: '20 hints',
+      price: { currency: 'KRW', formatted: '₩1,000' },
+    }]);
+    await expect(service.listPurchases()).resolves.toEqual([{
+      itemId: 'hint_pack_20',
+      purchaseToken: 'hint_pack_20',
+    }]);
+    await expect(runtime.createPaymentRequest([{
+      supportedMethods: 'https://store.microsoft.com/billing',
+      data: { sku: 'hint_pack_20' },
+    }]).show()).resolves.toEqual({ details: { purchaseToken: 'hint_pack_20' } });
+
+    const commerce = createMicrosoftStoreCommerceAdapter({
+      products: [{
+        info: {
+          id: 'HINT_PACK_20',
+          type: 'consumable',
+          title: '20 hints',
+          description: '20 hints',
+          price: { formatted: '₩1,000', currencyCode: 'KRW' },
+        },
+        inAppOfferToken: 'hint_pack_20',
+      }],
+      authority: {
+        async getAvailability() {
+          return 'available';
+        },
+        async claimRecoveryOwnership() {
+          return { status: 'unavailable' };
+        },
+        async hasRecoveryOwnership() {
+          return { status: 'unavailable' };
+        },
+        async verifyAndGrant() {
+          return { status: 'pending' };
+        },
+        async getEntitlements() {
+          return [];
+        },
+      },
+      getRecoveryScope: () => 'authenticated-player',
+      ...runtime,
+    });
+    await expect(commerce.getProducts()).resolves.toEqual([{
+      id: 'HINT_PACK_20',
+      type: 'consumable',
+      title: '20 hints',
+      description: '20 hints',
+      price: { formatted: '₩1,000', currencyCode: 'KRW' },
+    }]);
+  });
+
+  it('maps a native not-purchased result to cancellation', async () => {
+    const runtime = createMicrosoftStoreNativeCommerceRuntime({
+      getDetails: vi.fn(),
+      listPurchases: vi.fn(),
+      requestPurchase: vi.fn(async () => ({ status: 'not-purchased' as const })),
+    });
+
+    await expect(runtime.createPaymentRequest([{
+      supportedMethods: 'https://store.microsoft.com/billing',
+      data: { sku: 'hint_pack_20' },
+    }]).show()).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  it('uses the requested SKU when a successful native purchase omits its token', async () => {
+    const runtime = createMicrosoftStoreNativeCommerceRuntime({
+      getDetails: vi.fn(),
+      listPurchases: vi.fn(),
+      requestPurchase: vi.fn(async () => ({ status: 'succeeded' as const })),
+    });
+
+    await expect(runtime.createPaymentRequest([{
+      supportedMethods: 'https://store.microsoft.com/billing',
+      data: { sku: 'hint_pack_20' },
+    }]).show()).resolves.toEqual({ details: { purchaseToken: 'hint_pack_20' } });
+  });
+
+  it.each([
+    ['network-error', 'NATIVE_PURCHASE_NETWORK_ERROR'],
+    ['server-error', 'NATIVE_PURCHASE_SERVER_ERROR'],
+  ] as const)('maps native %s purchases to %s', async (status, code) => {
+    const runtime = createMicrosoftStoreNativeCommerceRuntime({
+      getDetails: vi.fn(),
+      listPurchases: vi.fn(),
+      requestPurchase: vi.fn(async () => ({ status })),
+    });
+
+    await expect(runtime.createPaymentRequest([{
+      supportedMethods: 'https://store.microsoft.com/billing',
+      data: { sku: 'hint_pack_20' },
+    }]).show()).rejects.toMatchObject({ code });
+  });
+
+  it('rejects an untyped payment request without Store method data', () => {
+    const runtime = createMicrosoftStoreNativeCommerceRuntime({
+      getDetails: vi.fn(),
+      listPurchases: vi.fn(),
+      requestPurchase: vi.fn(),
+    });
+    const invalid = [{
+      supportedMethods: 'https://store.microsoft.com/billing',
+    }] as unknown as Parameters<typeof runtime.createPaymentRequest>[0];
+
+    expect(() => runtime.createPaymentRequest(invalid)).toThrow(
+      'Microsoft Store item ID is invalid.',
+    );
+  });
+
+  it('ignores unrelated responses and rejects all pending work when disposed', async () => {
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'catalog-1',
+    });
+    const pending = client.getDetails(['hint_pack_20']);
+    webView.respond({
+      requestId: 'different',
+      method: 'catalog.getDetails',
+      ok: true,
+      result: { items: [] },
+    });
+    client.dispose();
+
+    await expect(pending).rejects.toMatchObject({
+      code: 'BRIDGE_DISPOSED',
+    } satisfies Partial<MicrosoftStoreNativeBridgeError>);
+  });
+
+  it('maps a throwing native transport to NATIVE_OPERATION_FAILED', async () => {
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView: new ThrowingWebView(),
+      createRequestId: () => 'transport-failure',
+    });
+    try {
+      await expect(client.listPurchases()).rejects.toMatchObject({
+        code: 'NATIVE_OPERATION_FAILED',
+      } satisfies Partial<MicrosoftStoreNativeBridgeError>);
+    } finally {
+      client.dispose();
+    }
+  });
+
+  it('rejects work above the pending native request limit', async () => {
+    const webView = new FakeWebView();
+    let requestSequence = 0;
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => `pending-${String(requestSequence++)}`,
+    });
+    const pending = Array.from({ length: 64 }, () => client.listPurchases());
+    try {
+      await expect(client.listPurchases()).rejects.toMatchObject({
+        code: 'BRIDGE_PROTOCOL_ERROR',
+      } satisfies Partial<MicrosoftStoreNativeBridgeError>);
+      expect(webView.messages).toHaveLength(64);
+    } finally {
+      client.dispose();
+      await Promise.allSettled(pending);
+    }
+  });
+
+  it('rejects duplicated item identities returned by the native host', async () => {
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'catalog-1',
+    });
+    const pending = client.getDetails(['hint_pack_20', 'hint_pack_120']);
+    webView.respond({
+      requestId: 'catalog-1.0',
+      method: 'catalog.getDetails',
+      ok: true,
+      result: {
+        items: [
+          {
+            itemId: 'hint_pack_20',
+            title: '20 hints',
+            price: { currencyCode: 'KRW', formatted: '₩1,000' },
+          },
+          {
+            itemId: 'hint_pack_20',
+            title: '20 hints again',
+            price: { currencyCode: 'KRW', formatted: '₩1,000' },
+          },
+        ],
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+    client.dispose();
+  });
+
+  it('rejects a malformed native currency code', async () => {
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'catalog-currency',
+    });
+    const pending = client.getDetails(['hint_pack_20']);
+    webView.respond({
+      requestId: 'catalog-currency.0',
+      method: 'catalog.getDetails',
+      ok: true,
+      result: {
+        items: [{
+          itemId: 'hint_pack_20',
+          title: '20 hints',
+          price: { currencyCode: '12$', formatted: '₩1,000' },
+        }],
+      },
+    });
+
+    await expect(pending).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+    client.dispose();
+  });
+
+  it('allows description line breaks but rejects native display format controls', async () => {
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'catalog-display',
+    });
+    const multiline = client.getDetails(['hint_pack_20']);
+    webView.respond({
+      requestId: 'catalog-display.0',
+      method: 'catalog.getDetails',
+      ok: true,
+      result: {
+        items: [{
+          itemId: 'hint_pack_20',
+          title: '20 hints',
+          description: 'First line\r\nSecond line\tvalue',
+          price: { currencyCode: 'KRW', formatted: '₩1,000' },
+        }],
+      },
+    });
+    await expect(multiline).resolves.toEqual([expect.objectContaining({
+      description: 'First line\r\nSecond line\tvalue',
+    })]);
+
+    const formatted = client.getDetails(['hint_pack_20']);
+    webView.respond({
+      requestId: 'catalog-display.1',
+      method: 'catalog.getDetails',
+      ok: true,
+      result: {
+        items: [{
+          itemId: 'hint_pack_20',
+          title: '20 hints\u202e000,1',
+          price: { currencyCode: 'KRW', formatted: '₩1,000' },
+        }],
+      },
+    });
+    await expect(formatted).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+    client.dispose();
+  });
+
+  it('rejects native purchase tokens that differ from their item IDs', async () => {
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'purchase-token-mismatch',
+    });
+
+    const purchase = client.requestPurchase('hint_pack_20');
+    webView.respond({
+      requestId: 'purchase-token-mismatch.0',
+      method: 'purchase.request',
+      ok: true,
+      result: { status: 'succeeded', purchaseToken: 'provider-transaction-1' },
+    });
+    await expect(purchase).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+
+    const purchases = client.listPurchases();
+    webView.respond({
+      requestId: 'purchase-token-mismatch.1',
+      method: 'purchase.list',
+      ok: true,
+      result: {
+        items: [{ itemId: 'hint_pack_20', purchaseToken: 'provider-transaction-1' }],
+      },
+    });
+    await expect(purchases).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+    client.dispose();
+  });
+
+  it('rejects whitespace-only native product titles and formatted prices', async () => {
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'blank-display',
+    });
+
+    for (const [requestId, title, formattedPrice] of [
+      ['blank-display.0', '   ', '₩1,000'],
+      ['blank-display.1', '20 hints', '   '],
+    ] as const) {
+      const pending = client.getDetails(['hint_pack_20']);
+      webView.respond({
+        requestId,
+        method: 'catalog.getDetails',
+        ok: true,
+        result: {
+          items: [{
+            itemId: 'hint_pack_20',
+            title,
+            price: { currencyCode: 'KRW', formatted: formattedPrice },
+          }],
+        },
+      });
+      await expect(pending).rejects.toMatchObject({ code: 'BRIDGE_PROTOCOL_ERROR' });
+    }
+    client.dispose();
+  });
+
+  it('times out after ignoring a malformed native response', async () => {
+    vi.useFakeTimers();
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'timeout-1',
+      timeoutMs: 25,
+    });
+    try {
+      const pending = client.listPurchases();
+      webView.respond({
+        requestId: 'timeout-1.0',
+        method: 'purchase.list',
+        ok: false,
+      });
+      const assertion = expect(pending).rejects.toMatchObject({ code: 'BRIDGE_TIMEOUT' });
+      await vi.advanceTimersByTimeAsync(25);
+      await assertion;
+    } finally {
+      client.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores a delayed response after advancing the monotonic request identity', async () => {
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'fixed-request',
+    });
+    const first = client.listPurchases();
+    webView.respond({
+      requestId: 'fixed-request.0',
+      method: 'purchase.list',
+      ok: true,
+      result: { items: [] },
+    });
+    await expect(first).resolves.toEqual([]);
+
+    const second = client.listPurchases();
+    webView.respond({
+      requestId: 'fixed-request.0',
+      method: 'purchase.list',
+      ok: true,
+      result: { items: [{ itemId: 'stale', purchaseToken: 'stale' }] },
+    });
+    webView.respond({
+      requestId: 'fixed-request.1',
+      method: 'purchase.list',
+      ok: true,
+      result: { items: [] },
+    });
+    await expect(second).resolves.toEqual([]);
+    expect(webView.messages).toHaveLength(2);
+    client.dispose();
+  });
+
+  it('keeps request identities unique past the former retention window', async () => {
+    const webView = new FakeWebView();
+    const client = createMicrosoftStoreNativeBridgeClient({
+      webView,
+      createRequestId: () => 'long-session',
+    });
+
+    for (let index = 0; index <= 4_096; index += 1) {
+      const pending = client.listPurchases();
+      webView.respond({
+        requestId: `long-session.${index.toString(36)}`,
+        method: 'purchase.list',
+        ok: true,
+        result: { items: [] },
+      });
+      await expect(pending).resolves.toEqual([]);
+    }
+
+    const next = client.listPurchases();
+    webView.respond({
+      requestId: `long-session.${(4_097).toString(36)}`,
+      method: 'purchase.list',
+      ok: true,
+      result: { items: [] },
+    });
+    await expect(next).resolves.toEqual([]);
+    const requestIds = webView.messages.map((message) => {
+      return (message as { readonly requestId: string }).requestId;
+    });
+    expect(new Set(requestIds).size).toBe(requestIds.length);
+    client.dispose();
+  });
+
+  it('prefers native formatted prices and falls back to numeric Digital Goods values', async () => {
+    const formattedDetail = {
+      itemId: 'hint_pack_20',
+      title: '20 hints',
+      price: { currency: 'KRW', formatted: 'Store ₩1,000', value: '999' },
+    };
+    const createCommerce = (price: typeof formattedDetail.price) =>
+      createMicrosoftStoreCommerceAdapter({
+        products: [{
+          info: {
+            id: 'HINT_PACK_20',
+            type: 'consumable',
+            title: '20 hints',
+            description: '20 hints',
+            price: { formatted: 'fallback', currencyCode: 'KRW' },
+          },
+          inAppOfferToken: 'hint_pack_20',
+        }],
+        authority: {
+          async getAvailability() {
+            return 'available';
+          },
+          async claimRecoveryOwnership() {
+            return { status: 'unavailable' };
+          },
+          async hasRecoveryOwnership() {
+            return { status: 'unavailable' };
+          },
+          async verifyAndGrant() {
+            return { status: 'pending' };
+          },
+          async getEntitlements() {
+            return [];
+          },
+        },
+        getRecoveryScope: () => 'authenticated-player',
+        async getDigitalGoodsService() {
+          return {
+            async getDetails() {
+              return [{ ...formattedDetail, price }];
+            },
+            async listPurchases() {
+              return [];
+            },
+          };
+        },
+        locale: 'ko-KR',
+      });
+
+    await expect(createCommerce(formattedDetail.price).getProducts()).resolves.toEqual([
+      expect.objectContaining({
+        price: { formatted: 'Store ₩1,000', currencyCode: 'KRW' },
+      }),
+    ]);
+    await expect(createCommerce({
+      currency: 'KRW',
+      formatted: '  ',
+      value: '1000',
+    }).getProducts()).resolves.toEqual([
+      expect.objectContaining({
+        price: { formatted: '₩1,000', currencyCode: 'KRW' },
+      }),
+    ]);
+    await expect(createCommerce({
+      currency: 'invalid',
+      formatted: '₩1,000',
+      value: '1000',
+    }).getProducts()).resolves.toEqual([]);
+  });
+});

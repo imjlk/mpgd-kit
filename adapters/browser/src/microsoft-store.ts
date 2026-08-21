@@ -19,7 +19,10 @@ export type MicrosoftStoreCommerceAvailability =
 
 export interface MicrosoftStoreDigitalGoodsPrice {
   readonly currency: string;
-  readonly value: string;
+  /** Numeric provider value when the provider exposes one, as Digital Goods does. */
+  readonly value?: string;
+  /** Provider-formatted value when the native StoreContext API exposes no numeric price. */
+  readonly formatted?: string;
 }
 
 export interface MicrosoftStoreDigitalGoodsItem {
@@ -844,14 +847,21 @@ function formatPrice(
   formatters: Map<string, Intl.NumberFormat>,
 ): ProductInfo['price'] | undefined {
   const currencyCode = nonEmptyString(price.currency)?.toUpperCase();
+  const providerFormatted = nonEmptyString(price.formatted);
+  const currencyValid = currencyCode !== undefined && /^[A-Z]{3}$/u.test(currencyCode);
+  if (currencyValid && providerFormatted !== undefined) {
+    return {
+      formatted: providerFormatted,
+      currencyCode,
+    };
+  }
   const rawValue = nonEmptyString(price.value);
   if (rawValue === undefined) {
     return undefined;
   }
   const numericValue = Number(rawValue);
   if (
-    currencyCode === undefined
-    || !/^[A-Z]{3}$/u.test(currencyCode)
+    !currencyValid
     || !Number.isFinite(numericValue)
     || numericValue < 0
   ) {
