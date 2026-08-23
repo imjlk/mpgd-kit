@@ -1,5 +1,15 @@
 # @mpgd/adapter-browser
 
+## 0.7.0 — 2026-08-21
+
+### Minor changes
+
+- [842fc11](https://github.com/imjlk/mpgd-kit/commit/842fc1190d92692cf503233d9f916ea49d9b050c) Add a bounded WebView2 message bridge for native Microsoft Store player sign-in, catalog,
+  purchase, and ownership operations. Native StoreContext hosts can now reuse the browser commerce
+  adapter without granting purchases from client callbacks. The sign-in contract keeps the Microsoft
+  ID token, publisher ticket, and User Collections ID inside the trusted native host and returns only
+  a short-lived game-scoped session to web content. — Thanks @imjlk!
+
 ## 0.6.0 — 2026-08-12
 
 ### Added

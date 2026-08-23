@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.23.0 — 2026-08-21
+
+### Patch changes
+
+- Updated dependencies: adapter-browser@0.7.0
+
 ## 0.22.1 — 2026-08-13
 
 ### Changed
