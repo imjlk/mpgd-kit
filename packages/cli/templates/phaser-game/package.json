@@ -54,8 +54,8 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@ait-co/polyfill": "^0.1.17",
-    "@apps-in-toss/web-framework": "3.0.2",
+    "@ait-co/polyfill": "^0.1.19",
+    "@apps-in-toss/web-framework": "3.1.1",
     "@mpgd/adapter-ait": "__MPGD_DEPENDENCY_VERSION_ADAPTER_AIT__",
     "@mpgd/adapter-browser": "__MPGD_DEPENDENCY_VERSION_ADAPTER_BROWSER__",
     "@mpgd/adapter-capacitor": "__MPGD_DEPENDENCY_VERSION_ADAPTER_CAPACITOR__",
@@ -72,7 +72,7 @@
     "phaser": "4.2.0"
   },
   "devDependencies": {
-    "@ait-co/console-cli": "^0.1.45",
+    "@ait-co/console-cli": "^0.1.49",
     "@cloudflare/workers-types": "^5.20260707.1",
     "@mpgd/cli": "__MPGD_DEPENDENCY_VERSION_CLI__",
     "@ttsc/unplugin": "0.18.4",

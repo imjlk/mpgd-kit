@@ -569,6 +569,7 @@ try {
         navigationBar: {
           withBackButton: false,
           withHomeButton: false,
+          withTitle: false,
           transparentBackground: true,
           theme: 'dark',
         },
@@ -602,11 +603,11 @@ try {
       targets: {
         ait: {
           ...aitTarget,
-          navigationBar: { withTitle: false },
+          navigationBar: { withTitle: 'no' },
         },
       },
     }),
-    /ait\.navigationBar\.withTitle is not a recognized navigation option/u,
+    /ait\.navigationBar\.withTitle must be a boolean/u,
   );
   assert.throws(
     () => assertPlatformTargetsConfigShape({

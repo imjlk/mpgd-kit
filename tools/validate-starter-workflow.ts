@@ -47,10 +47,25 @@ interface McpServerConfig {
   readonly args?: unknown;
 }
 
-const aitWebFrameworkVersion = '3.0.2';
-const aitCliVersion = '3.0.2';
+interface AitNavigationTargetsConfig {
+  readonly targets?: {
+    readonly ait?: {
+      readonly navigationBar?: {
+        readonly withBackButton?: unknown;
+        readonly withHomeButton?: unknown;
+        readonly withTitle?: unknown;
+        readonly transparentBackground?: unknown;
+        readonly theme?: unknown;
+      };
+    };
+  };
+}
+
+const aitWebFrameworkVersion = '3.1.1';
+const aitCliVersion = '3.1.1';
 const aitWebFrameworkPeerRange = '>=3.0.0 <4';
 const aitDevtoolsPeerSelector = '@ait-co/devtools>@apps-in-toss/web-framework';
+const aitXmldomOverrideVersion = '0.9.12';
 
 const requiredFiles = [
   '.mcp.json',
@@ -857,6 +872,12 @@ function validatePhaserTemplateAITPolyfill(): void {
           failures.push(`${workspacePath}: allowBuilds must include ${requiredText}.`);
         }
       }
+      if (!workspace.includes(`'@xmldom/xmldom': '${aitXmldomOverrideVersion}'`)) {
+        failures.push(
+          `${workspacePath}: overrides must pin @xmldom/xmldom to `
+            + `${aitXmldomOverrideVersion}.`,
+        );
+      }
 
       const actualAitDevtoolsPeerVersion = readAllowedPeerVersion(
         workspace,
@@ -1161,12 +1182,6 @@ function validatePhaserTemplateAITWrapper(): void {
         readonly ait?: {
           readonly wrapperApp?: unknown;
           readonly webDir?: unknown;
-          readonly navigationBar?: {
-            readonly withBackButton?: unknown;
-            readonly withHomeButton?: unknown;
-            readonly transparentBackground?: unknown;
-            readonly theme?: unknown;
-          };
           readonly metadata?: {
             readonly appName?: unknown;
             readonly displayName?: unknown;
@@ -1202,26 +1217,6 @@ function validatePhaserTemplateAITWrapper(): void {
         targets.targets?.ait?.metadata?.primaryColor,
         '#101820',
         `${targetsPath}: targets.ait.metadata.primaryColor`,
-      );
-      assertEqual(
-        targets.targets?.ait?.navigationBar?.withBackButton,
-        false,
-        `${targetsPath}: targets.ait.navigationBar.withBackButton`,
-      );
-      assertEqual(
-        targets.targets?.ait?.navigationBar?.withHomeButton,
-        false,
-        `${targetsPath}: targets.ait.navigationBar.withHomeButton`,
-      );
-      assertEqual(
-        targets.targets?.ait?.navigationBar?.transparentBackground,
-        true,
-        `${targetsPath}: targets.ait.navigationBar.transparentBackground`,
-      );
-      assertEqual(
-        targets.targets?.ait?.navigationBar?.theme,
-        'dark',
-        `${targetsPath}: targets.ait.navigationBar.theme`,
       );
       if (targets.targets?.ait?.metadata?.sdkMajor !== 3) {
         failures.push(`${targetsPath}: targets.ait.metadata.sdkMajor must be 3.`);
@@ -1650,12 +1645,16 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
     'examples/phaser-starter/mpgd.targets.json',
     'packages/cli/templates/phaser-game/mpgd.targets.json',
   ]) {
-    const config = readJson(path) as {
-      readonly targets?: Record<string, { readonly kind?: unknown; readonly buildStrategy?: unknown }>;
+    const config = readJson(path) as AitNavigationTargetsConfig & {
+      readonly targets?: Record<string, {
+        readonly kind?: unknown;
+        readonly buildStrategy?: unknown;
+      }>;
     } | null;
 
     if (config !== null) {
       assertEqual(config.targets?.reddit?.kind, 'devvit-web', `${path}: targets.reddit.kind`);
+      assertTransparentAitNavigation(config, path);
 
       if (config.targets?.reddit?.buildStrategy !== undefined) {
         failures.push(`${path}: Devvit targets must not configure a legacy build strategy.`);
@@ -1663,6 +1662,22 @@ function validatePhaserTemplateDevvitVitePlugin(): void {
     }
   }
 
+}
+
+function assertTransparentAitNavigation(
+  config: AitNavigationTargetsConfig,
+  path: string,
+): void {
+  const navigationBar = config.targets?.ait?.navigationBar;
+  for (const [key, expected] of [
+    ['withBackButton', false],
+    ['withHomeButton', false],
+    ['withTitle', false],
+    ['transparentBackground', true],
+    ['theme', 'dark'],
+  ] as const) {
+    assertEqual(navigationBar?.[key], expected, `${path}: targets.ait.navigationBar.${key}`);
+  }
 }
 
 function validatePhaserTemplateOrientationPolicy(): void {
@@ -2250,14 +2265,14 @@ function validatePeerDependencyRuleParser(): void {
   const positive = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`;
   const hashValue = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': ${aitWebFrameworkVersion}+build#1\n`;
   const invalid = [
-    `# peerDependencyRules:\n#   allowedVersions:\n#     '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `allowedVersions:\n  '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules: |\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules: >\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules:\n  ignored:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules:\n  allowedVersions: |\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules:\n  allowedVersions: >\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules:\n  allowedVersions: scalar\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `# peerDependencyRules:\n#   allowedVersions:\n#     '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `allowedVersions:\n  '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules: |\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules: >\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules:\n  ignored:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules:\n  allowedVersions: |\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules:\n  allowedVersions: >\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules:\n  allowedVersions: scalar\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
   ];
 
   if (
