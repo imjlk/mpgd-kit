@@ -2256,14 +2256,14 @@ function validatePeerDependencyRuleParser(): void {
   const positive = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`;
   const hashValue = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': ${aitWebFrameworkVersion}+build#1\n`;
   const invalid = [
-    `# peerDependencyRules:\n#   allowedVersions:\n#     '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
-    `allowedVersions:\n  '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
-    `peerDependencyRules: |\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
-    `peerDependencyRules: >\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
-    `peerDependencyRules:\n  ignored:\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
-    `peerDependencyRules:\n  allowedVersions: |\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
-    `peerDependencyRules:\n  allowedVersions: >\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
-    `peerDependencyRules:\n  allowedVersions: scalar\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
+    `# peerDependencyRules:\n#   allowedVersions:\n#     '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `allowedVersions:\n  '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules: |\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules: >\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules:\n  ignored:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules:\n  allowedVersions: |\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules:\n  allowedVersions: >\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
+    `peerDependencyRules:\n  allowedVersions: scalar\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`,
   ];
 
   if (
