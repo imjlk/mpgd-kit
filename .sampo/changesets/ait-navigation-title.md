@@ -1,5 +1,6 @@
 ---
 npm/@mpgd/cli: minor (Added)
+npm/@mpgd/adapter-ait: patch (Changed)
 ---
 
 Update generated Apps in Toss games to SDK/CLI 3.1.1 and support the SDK 3
