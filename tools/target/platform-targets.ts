@@ -146,13 +146,13 @@ function assertAppsInTossNavigationBar(input: unknown, target: string): void {
   }
 
   assertRecord(input, `${target}.navigationBar`);
-  const supportedKeys = new Set([
+  const booleanKeys = [
     'withBackButton',
     'withHomeButton',
     'withTitle',
     'transparentBackground',
-    'theme',
-  ]);
+  ] as const;
+  const supportedKeys = new Set<string>([...booleanKeys, 'theme']);
 
   for (const key of Object.keys(input)) {
     if (!supportedKeys.has(key)) {
@@ -160,12 +160,7 @@ function assertAppsInTossNavigationBar(input: unknown, target: string): void {
     }
   }
 
-  for (const key of [
-    'withBackButton',
-    'withHomeButton',
-    'withTitle',
-    'transparentBackground',
-  ] as const) {
+  for (const key of booleanKeys) {
     assertOptionalBoolean(input[key], `${target}.navigationBar.${key}`);
   }
 
