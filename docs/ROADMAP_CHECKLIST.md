@@ -80,8 +80,8 @@ loading compatibility. The root project toolchain remains TypeScript 7 RC.
 ## Phase 4 - Apps In Toss Target
 
 - [x] apps/target-ait created
-- [x] @apps-in-toss/web-framework 3.0.5 installed
-- [x] @apps-in-toss/cli 3.0.5 installed
+- [x] @apps-in-toss/web-framework 3.1.1 installed
+- [x] @apps-in-toss/cli 3.1.1 installed
 - [x] apps-in-toss.config.ts written
 - [x] aitBridge.ts written
 - [x] globalThis.__GAME_PLATFORM_BRIDGE__ injected
