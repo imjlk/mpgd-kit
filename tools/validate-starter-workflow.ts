@@ -47,8 +47,8 @@ interface McpServerConfig {
   readonly args?: unknown;
 }
 
-const aitWebFrameworkVersion = '3.0.2';
-const aitCliVersion = '3.0.2';
+const aitWebFrameworkVersion = '3.0.5';
+const aitCliVersion = '3.0.5';
 const aitWebFrameworkPeerRange = '>=3.0.0 <4';
 const aitDevtoolsPeerSelector = '@ait-co/devtools>@apps-in-toss/web-framework';
 
@@ -1164,6 +1164,7 @@ function validatePhaserTemplateAITWrapper(): void {
           readonly navigationBar?: {
             readonly withBackButton?: unknown;
             readonly withHomeButton?: unknown;
+            readonly withTitle?: unknown;
             readonly transparentBackground?: unknown;
             readonly theme?: unknown;
           };
@@ -1212,6 +1213,11 @@ function validatePhaserTemplateAITWrapper(): void {
         targets.targets?.ait?.navigationBar?.withHomeButton,
         false,
         `${targetsPath}: targets.ait.navigationBar.withHomeButton`,
+      );
+      assertEqual(
+        targets.targets?.ait?.navigationBar?.withTitle,
+        false,
+        `${targetsPath}: targets.ait.navigationBar.withTitle`,
       );
       assertEqual(
         targets.targets?.ait?.navigationBar?.transparentBackground,
@@ -2250,14 +2256,14 @@ function validatePeerDependencyRuleParser(): void {
   const positive = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '${aitWebFrameworkVersion}'\n`;
   const hashValue = `peerDependencyRules:\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': ${aitWebFrameworkVersion}+build#1\n`;
   const invalid = [
-    `# peerDependencyRules:\n#   allowedVersions:\n#     '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `allowedVersions:\n  '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules: |\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules: >\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules:\n  ignored:\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules:\n  allowedVersions: |\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules:\n  allowedVersions: >\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
-    `peerDependencyRules:\n  allowedVersions: scalar\n    '${aitDevtoolsPeerSelector}': '3.0.2'\n`,
+    `# peerDependencyRules:\n#   allowedVersions:\n#     '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
+    `allowedVersions:\n  '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
+    `peerDependencyRules: |\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
+    `peerDependencyRules: >\n  allowedVersions:\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
+    `peerDependencyRules:\n  ignored:\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
+    `peerDependencyRules:\n  allowedVersions: |\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
+    `peerDependencyRules:\n  allowedVersions: >\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
+    `peerDependencyRules:\n  allowedVersions: scalar\n    '${aitDevtoolsPeerSelector}': '3.0.5'\n`,
   ];
 
   if (

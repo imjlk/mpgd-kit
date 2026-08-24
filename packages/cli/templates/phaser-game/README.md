@@ -312,18 +312,21 @@ Apps in Toss navigation chrome is target-owned. Configure the `ait` target's
 `navigationBar` in `mpgd.targets.json`; `mpgd target build ait` validates the
 supported appearance options and forwards them to `apps-in-toss.config.ts` at
 build time. The Phaser starter uses a transparent dark navigation bar without
-back or home chrome so game content can continue underneath it. Keep
+back, home, title, or app-icon chrome so game content can continue underneath it. Keep
 the game's own safe-area padding clear of Toss controls.
 
-Before the first SDK 3 release, allow both of these exact origins on every API
+During the SDK 3 origin transition, allow all four exact origins on every API
 called by the mini-app:
 
 - `https://__GAME_NAME__.web.tossmini.com`
 - `https://__GAME_NAME__.private-web.tossmini.com`
+- `https://__GAME_NAME__.apps.tossmini.com`
+- `https://__GAME_NAME__.private-apps.tossmini.com`
 
-The first is production and the second is console QR testing. Apps in Toss does
-not allow an app that has released an SDK 3 bundle to roll back to SDK 2, so run
-the QR test and verify both CORS origins before publishing.
+The `web` pair is the legacy production/QR origin and the `apps` pair is the
+replacement production/QR origin for uploads after the transition. Apps in Toss
+does not allow an app that has released an SDK 3 bundle to roll back to SDK 2,
+so run the QR test and verify all applicable CORS origins before publishing.
 
 The starter also installs `@apps-in-toss/web-framework` and awaits
 `install()` from `@ait-co/polyfill` only when `__APP_TARGET__` is `ait`. In the

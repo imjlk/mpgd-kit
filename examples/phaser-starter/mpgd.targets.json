@@ -55,6 +55,7 @@
       "navigationBar": {
         "withBackButton": false,
         "withHomeButton": false,
+        "withTitle": false,
         "transparentBackground": true,
         "theme": "dark"
       },

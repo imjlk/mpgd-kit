@@ -70,7 +70,7 @@
     }
   },
   "devDependencies": {
-    "@apps-in-toss/web-framework": "3.0.2",
+    "@apps-in-toss/web-framework": "3.0.5",
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"

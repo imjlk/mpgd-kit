@@ -149,6 +149,7 @@ function assertAppsInTossNavigationBar(input: unknown, target: string): void {
   const supportedKeys = new Set([
     'withBackButton',
     'withHomeButton',
+    'withTitle',
     'transparentBackground',
     'theme',
   ]);
@@ -159,7 +160,12 @@ function assertAppsInTossNavigationBar(input: unknown, target: string): void {
     }
   }
 
-  for (const key of ['withBackButton', 'withHomeButton', 'transparentBackground'] as const) {
+  for (const key of [
+    'withBackButton',
+    'withHomeButton',
+    'withTitle',
+    'transparentBackground',
+  ] as const) {
     assertOptionalBoolean(input[key], `${target}.navigationBar.${key}`);
   }
 

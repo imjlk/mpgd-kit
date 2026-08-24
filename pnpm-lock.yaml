@@ -88,8 +88,8 @@ importers:
         version: link:../../packages/platform
     devDependencies:
       '@apps-in-toss/web-framework':
-        specifier: 3.0.2
-        version: 3.0.2(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+        specifier: 3.0.5
+        version: 3.0.5(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       ttsc:
         specifier: 0.18.4
         version: 0.18.4
@@ -253,18 +253,18 @@ importers:
   apps/target-ait:
     dependencies:
       '@apps-in-toss/web-framework':
-        specifier: 3.0.2
-        version: 3.0.2(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+        specifier: 3.0.5
+        version: 3.0.5(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
       '@mpgd/adapter-ait':
         specifier: workspace:*
         version: link:../../adapters/ait
     devDependencies:
       '@ait-co/devtools':
         specifier: ^0.1.140
-        version: 0.1.140(@apps-in-toss/web-framework@3.0.2(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2))(rolldown@1.1.4)(supports-color@8.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(zod@4.4.3)
+        version: 0.1.140(@apps-in-toss/web-framework@3.0.5(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2))(rolldown@1.1.4)(supports-color@8.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(zod@4.4.3)
       '@apps-in-toss/cli':
-        specifier: 3.0.2
-        version: 3.0.2(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
+        specifier: 3.0.5
+        version: 3.0.5(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
       '@ttsc/unplugin':
         specifier: 0.18.4
         version: 0.18.4
@@ -778,12 +778,12 @@ packages:
     resolution: {integrity: sha512-1no0CXOhPEeSCrGduT37KMmCqA6irhowXa0S7AaPHb4RQSHGioR3wvvD7HHBCaUriMYs0EvtqRJfOgYd0ycKlQ==}
     engines: {node: '>=24'}
 
-  '@apps-in-toss/cli@3.0.2':
-    resolution: {integrity: sha512-Aj7kCQbHVpjN++aiwIZbLiYjMONbABxhvODDgylCZb5w1G3U/9Smbqyb33wjo6UcjNa2vO/80RKuGR+scTMmdQ==}
+  '@apps-in-toss/cli@3.0.5':
+    resolution: {integrity: sha512-10Vhd8539WzEoQ7CmoQxbW2PhYpLGDRd4cb9zINtyvdD73NfebBDgFABvEIVu8swHHDWc1gSO1wFRO1mpV4BjA==}
     hasBin: true
 
-  '@apps-in-toss/web-framework@3.0.2':
-    resolution: {integrity: sha512-O5KjIMPwI9Wo2Vu8khBqP66zca0XsnFnIusF8KZ9vXH80cLg5oRTTaT+BFAnIWvHxkS4b4sDhK/ybJwiX9/HgQ==}
+  '@apps-in-toss/web-framework@3.0.5':
+    resolution: {integrity: sha512-3FSzQ1ik2sb5giZW/1lQKjAK+/p5m/x10kC8KfUwBNg863T25MnY3sCy/23SHphHPimEmI3X9oendpCQ3Y7IzA==}
     hasBin: true
 
   '@asamuzakjp/css-color@3.2.0':
@@ -2945,18 +2945,19 @@ packages:
   '@vitest/utils@4.1.9':
     resolution: {integrity: sha512-A51o8ymO5PpqlWNnBP9ZHPXDIpuMtTLlGSjN7la4US+LJzoUMyhwjA5QXlm39JexgwHKW4Xjs8Z2d3dLCXOeuA==}
 
-  '@webview-bridge/types@1.7.9':
-    resolution: {integrity: sha512-Xqi6opGJB+LVpyb+2ZxqpKv2ox2/cnkbp0G2OMCnSNi/D6U5HkMsSbaW8GrXGEVwbybltK7uLKN+el1CqEGiRg==}
+  '@webview-bridge/types@1.7.10':
+    resolution: {integrity: sha512-s5JfIzkKo6SIMErw1u/UVHM8/rh4kRAuaQPeSk3iXH2momsv4GFY9U3NKUr+Wq2V4Nalrzx0dNxqFad6UcvX/Q==}
 
-  '@webview-bridge/utils@1.7.9':
-    resolution: {integrity: sha512-qTgppsE7ydroMJTeIpLiS7TIdKmdw2z6CtakPDutivkG2pztKa8CCB8ap1UkUoaE6RHQS1XeEBEII3HasW/WRw==}
+  '@webview-bridge/utils@1.7.10':
+    resolution: {integrity: sha512-otH5LE6P7F3nVZUqgxVcmNVsMioZBx6l+Djyl1cNwIBL3607b4Y5V1mt8lTSu6byCly2ADx6kxM2oldxBvgZzw==}
 
-  '@webview-bridge/web@1.7.9':
-    resolution: {integrity: sha512-CxOOGpE4yOwdpm15S6i/KagwYXX5W6CedPRKor+ublk8sDkbotWImSdO99L7Z1wEoSic0EF3fN3MeU7dObBG3w==}
+  '@webview-bridge/web@1.7.10':
+    resolution: {integrity: sha512-E38r69W13RwizgtbQwMh7qf6Fk3VW0YzeasYpx7+RhNSufegCrIAtwEaGHLNJsnu2X0Od38gNOI4iWtTOSpFdg==}
 
   '@xmldom/xmldom@0.9.10':
     resolution: {integrity: sha512-A9gOqLdi6cV4ibazAjcQufGj0B1y/vDqYrcuP6d/6x8P27gRS8643Dj9o1dEKtB6O7fwxb2FgBmJS2mX7gpvdw==}
     engines: {node: '>=14.6'}
+    deprecated: this version has critical issues, please update to the latest version
 
   accepts@1.3.8:
     resolution: {integrity: sha512-PYAthTa2m2VKxuvSD3DPC/Gy+U+sOA1LAuT8mkmRuvw+NACSaeXEQ+NHcVF7rONl6qcaxV3Uuemwawk+7+SJLw==}
@@ -5861,7 +5862,7 @@ packages:
 
 snapshots:
 
-  '@ait-co/devtools@0.1.140(@apps-in-toss/web-framework@3.0.2(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2))(rolldown@1.1.4)(supports-color@8.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(zod@4.4.3)':
+  '@ait-co/devtools@0.1.140(@apps-in-toss/web-framework@3.0.5(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2))(rolldown@1.1.4)(supports-color@8.1.1)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))(zod@4.4.3)':
     dependencies:
       '@modelcontextprotocol/sdk': 1.29.0(supports-color@8.1.1)(zod@4.4.3)
       '@vitest/expect': 4.1.9
@@ -5876,7 +5877,7 @@ snapshots:
       unplugin: 3.3.0(esbuild@0.28.1)(rolldown@1.1.4)(vite@8.1.3(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
       ws: 8.21.0
     optionalDependencies:
-      '@apps-in-toss/web-framework': 3.0.2(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
+      '@apps-in-toss/web-framework': 3.0.5(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)
     transitivePeerDependencies:
       - '@cfworker/json-schema'
       - '@farmfe/core'
@@ -5902,13 +5903,14 @@ snapshots:
       '@apps-in-toss/ait-format-proto': 1.0.0
       fflate: 0.8.3
 
-  '@apps-in-toss/cli@3.0.2(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)':
+  '@apps-in-toss/cli@3.0.5(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)':
     dependencies:
       '@apps-in-toss/ait-format': 1.0.0
       '@clack/prompts': 1.7.0
       c12: 3.3.4
       clipanion: 4.0.0-rc.4(typanion@3.14.0)
       jscodeshift: 17.3.0(@babel/preset-env@7.28.5(@babel/core@7.29.7))
+      picocolors: 1.1.1
       uuidv7: 1.2.1
     transitivePeerDependencies:
       - '@babel/preset-env'
@@ -5916,10 +5918,10 @@ snapshots:
       - supports-color
       - typanion
 
-  '@apps-in-toss/web-framework@3.0.2(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)':
+  '@apps-in-toss/web-framework@3.0.5(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)(typescript@7.0.2)':
     dependencies:
-      '@apps-in-toss/cli': 3.0.2(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
-      '@webview-bridge/web': 1.7.9
+      '@apps-in-toss/cli': 3.0.5(@babel/preset-env@7.28.5(@babel/core@7.29.7))(typanion@3.14.0)
+      '@webview-bridge/web': 1.7.10
       semver: 7.8.5
       valibot: 1.4.2(typescript@7.0.2)
     transitivePeerDependencies:
@@ -8259,14 +8261,14 @@ snapshots:
       convert-source-map: 2.0.0
       tinyrainbow: 3.1.0
 
-  '@webview-bridge/types@1.7.9': {}
+  '@webview-bridge/types@1.7.10': {}
 
-  '@webview-bridge/utils@1.7.9': {}
+  '@webview-bridge/utils@1.7.10': {}
 
-  '@webview-bridge/web@1.7.9':
+  '@webview-bridge/web@1.7.10':
     dependencies:
-      '@webview-bridge/types': 1.7.9
-      '@webview-bridge/utils': 1.7.9
+      '@webview-bridge/types': 1.7.10
+      '@webview-bridge/utils': 1.7.10
 
   '@xmldom/xmldom@0.9.10': {}
 
