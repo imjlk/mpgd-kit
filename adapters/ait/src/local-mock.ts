@@ -61,6 +61,21 @@ export const showFullScreenAd = Object.assign(
   { isSupported: unsupported },
 );
 
+export const TossAds = {
+  initialize: Object.assign(
+    (_options: unknown): void => {},
+    { isSupported: unsupported },
+  ),
+  attachBanner: Object.assign(
+    (_adGroupId: string, _target: string | HTMLElement, _options?: unknown) => ({
+      destroy(): void {},
+    }),
+    { isSupported: unsupported },
+  ),
+  destroy: Object.assign((_slotId: string): void => {}, { isSupported: unsupported }),
+  destroyAll: Object.assign((): void => {}, { isSupported: unsupported }),
+};
+
 export async function openGameCenterLeaderboard(): Promise<void> {}
 
 export async function submitGameCenterLeaderBoardScore(): Promise<{ readonly statusCode: 'ERROR' }> {

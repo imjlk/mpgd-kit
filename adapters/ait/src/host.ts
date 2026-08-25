@@ -11,6 +11,7 @@ import {
   showFullScreenAd,
   Storage,
   submitGameCenterLeaderBoardScore,
+  TossAds,
   type IapProductListItem,
 } from '@apps-in-toss/web-framework';
 
@@ -41,6 +42,7 @@ const defaultAdTimeoutMs = 60_000;
 const defaultAdLoadQueueTimeoutMs = 5_000;
 const defaultAdDisplayStartTimeoutMs = 60_000;
 const defaultAdMaximumDisplayMs = 30 * 60_000;
+const defaultBannerRenderTimeoutMs = 15_000;
 /** Leaves five seconds of headroom inside the native IAP 30-second grant callback. */
 const defaultIapProductGrantTimeoutMs = 25_000;
 /** Bounds abandoned checkout UI while still allowing the user to finish an interactive purchase. */
@@ -105,6 +107,11 @@ interface AitIapDependencies {
   readonly completeProductGrant: AitNativeMethod<typeof IAP.completeProductGrant>;
 }
 
+interface AitBannerDependencies {
+  readonly initialize: typeof TossAds.initialize;
+  readonly attachBanner: typeof TossAds.attachBanner;
+}
+
 export interface AitHostDependencies {
   readonly identityProvider: AitIdentityProvider;
   readonly storage: Pick<typeof Storage, 'getItem' | 'removeItem' | 'setItem'>;
@@ -115,6 +122,7 @@ export interface AitHostDependencies {
   readonly isMinVersionSupported: typeof isMinVersionSupported;
   readonly loadFullScreenAd: AitNativeMethod<typeof loadFullScreenAd>;
   readonly showFullScreenAd: AitNativeMethod<typeof showFullScreenAd>;
+  readonly tossAds: AitBannerDependencies;
   readonly openGameCenterLeaderboard: AitNativeMethod<typeof openGameCenterLeaderboard>;
   readonly submitGameCenterLeaderBoardScore: AitNativeMethod<
     typeof submitGameCenterLeaderBoardScore
@@ -215,7 +223,7 @@ export type AitPromotionGrantAuthorizer = (
 export interface InstallAitHostBridgeOptions {
   readonly appName?: string;
   readonly adGroupIds?: Readonly<Record<string, string>>;
-  readonly adPlacementTypes?: Readonly<Record<string, 'rewarded' | 'interstitial'>>;
+  readonly adPlacementTypes?: Readonly<Record<string, 'rewarded' | 'interstitial' | 'banner'>>;
   /** Logical campaign ids mapped to console-issued Apps in Toss promotion configuration. */
   readonly promotionRewards?: Readonly<Record<string, AitPromotionRewardConfig>>;
   readonly authorizePromotionGrant?: AitPromotionGrantAuthorizer;
@@ -238,6 +246,8 @@ export interface InstallAitHostBridgeOptions {
   readonly adDisplayStartTimeoutMs?: number;
   /** Last-resort cleanup when the native SDK omits its terminal display callback. */
   readonly adMaximumDisplayMs?: number;
+  /** Maximum wait for an inline banner to render or report no-fill/failure. */
+  readonly bannerRenderTimeoutMs?: number;
   readonly dependencies?: Partial<AitHostDependencies>;
 }
 
@@ -251,6 +261,7 @@ const defaultDependencies: AitHostDependencies = {
   isMinVersionSupported,
   loadFullScreenAd,
   showFullScreenAd,
+  tossAds: TossAds,
   openGameCenterLeaderboard,
   submitGameCenterLeaderBoardScore,
   iap: IAP,
@@ -286,11 +297,14 @@ export function createAitHostBridge(
   const loadedAdGroupIds = new Set<string>();
   const loadingAdGroups = new Map<string, Promise<void>>();
   const activeAdGroupIds = new Set<string>();
+  const activeBannerAttachments = new Map<string, { readonly destroy: () => void }>();
+  let bannerInitialization: Promise<boolean> | undefined;
   let warnedUnsupportedAdPreload = false;
   const adTimeoutMs = normalizeTimeout(options.adTimeoutMs);
   const adLoadQueueTimeoutMs = normalizeLoadQueueTimeout(options.adLoadQueueTimeoutMs);
   const adDisplayStartTimeoutMs = normalizeDisplayStartTimeout(options.adDisplayStartTimeoutMs);
   const adMaximumDisplayMs = normalizeMaximumDisplayTimeout(options.adMaximumDisplayMs);
+  const bannerRenderTimeoutMs = normalizeBannerRenderTimeout(options.bannerRenderTimeoutMs);
   const adLoadCoordinator: AitAdLoadCoordinator = {
     active: undefined,
     waitTimeoutMs: adLoadQueueTimeoutMs,
@@ -335,6 +349,8 @@ export function createAitHostBridge(
           && hasConfiguredAdType(adGroupIds, adPlacementTypes, 'rewarded');
         const interstitialAds = adsSupported
           && hasConfiguredAdType(adGroupIds, adPlacementTypes, 'interstitial');
+        const bannerAds = areBannerAdsSupported(dependencies)
+          && hasConfiguredAdType(adGroupIds, adPlacementTypes, 'banner');
         const nativeIap = isAitIapSupported({
           dependencies,
           products: iapProducts,
@@ -346,7 +362,8 @@ export function createAitHostBridge(
 
         return ok(request, {
           nativeIap,
-          nativeAds: rewardedAds || interstitialAds,
+          nativeAds: rewardedAds || interstitialAds || bannerAds,
+          bannerAds,
           rewardedAds,
           interstitialAds,
           nativeLeaderboard: isGameCenterSupported(dependencies),
@@ -601,6 +618,10 @@ export function createAitHostBridge(
           );
         }
 
+        if (placementType === 'banner') {
+          return ok(request, {});
+        }
+
         if (!isAitNativeMethodSupported(dependencies.loadFullScreenAd)) {
           if (!warnedUnsupportedAdPreload) {
             warnedUnsupportedAdPreload = true;
@@ -710,6 +731,52 @@ export function createAitHostBridge(
           showInterstitial,
         );
         return ok(request, shown.acquired ? shown.value : { status: 'unavailable' });
+      }
+
+      case 'ads.mountBanner': {
+        const placementId = readPlacementId(request.payload);
+        const surfaceId = readBannerSurfaceId(request.payload);
+        const adGroupId = adGroupIds.get(placementId);
+
+        if (
+          adGroupId === undefined
+          || adPlacementTypes.get(placementId) !== 'banner'
+          || !areBannerAdsSupported(dependencies)
+        ) {
+          return ok(request, { status: 'unavailable' });
+        }
+
+        const target = globalThis.document?.getElementById(surfaceId);
+        if (target === null || target === undefined) {
+          return ok(request, { status: 'failed' });
+        }
+
+        activeBannerAttachments.get(surfaceId)?.destroy();
+        activeBannerAttachments.delete(surfaceId);
+        const initializeBanner = bannerInitialization
+          ?? initializeAitBannerAds(dependencies, bannerRenderTimeoutMs);
+        void (bannerInitialization = initializeBanner);
+        if (!await initializeBanner) {
+          bannerInitialization = undefined;
+          return ok(request, { status: 'failed' });
+        }
+
+        const result = await attachAitBanner({
+          dependencies,
+          adGroupId,
+          surfaceId,
+          target,
+          timeoutMs: bannerRenderTimeoutMs,
+          activeAttachments: activeBannerAttachments,
+        });
+        return ok(request, result);
+      }
+
+      case 'ads.unmountBanner': {
+        const surfaceId = readBannerSurfaceId(request.payload);
+        activeBannerAttachments.get(surfaceId)?.destroy();
+        activeBannerAttachments.delete(surfaceId);
+        return ok(request, {});
       }
 
       case 'leaderboard.submitScore': {
@@ -2774,6 +2841,95 @@ function areFullScreenAdsSupported(dependencies: AitHostDependencies): boolean {
     && isAitNativeMethodSupported(dependencies.showFullScreenAd);
 }
 
+function areBannerAdsSupported(dependencies: AitHostDependencies): boolean {
+  return isAitNativeMethodSupported(dependencies.tossAds.initialize)
+    && isAitNativeMethodSupported(dependencies.tossAds.attachBanner);
+}
+
+function initializeAitBannerAds(
+  dependencies: AitHostDependencies,
+  timeoutMs: number,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (initialized: boolean): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      globalThis.clearTimeout(timer);
+      resolve(initialized);
+    };
+    const timer = globalThis.setTimeout(() => finish(false), timeoutMs);
+
+    try {
+      dependencies.tossAds.initialize({
+        callbacks: {
+          onInitialized: () => finish(true),
+          onInitializationFailed: () => finish(false),
+        },
+      });
+    } catch (error) {
+      console.warn('Failed to initialize AIT banner ads.', error);
+      finish(false);
+    }
+  });
+}
+
+async function attachAitBanner(input: {
+  readonly dependencies: AitHostDependencies;
+  readonly adGroupId: string;
+  readonly surfaceId: string;
+  readonly target: HTMLElement;
+  readonly timeoutMs: number;
+  readonly activeAttachments: Map<string, { readonly destroy: () => void }>;
+}): Promise<{ readonly status: 'mounted' | 'unavailable' | 'failed' }> {
+  return new Promise((resolve) => {
+    let settled = false;
+    let terminalStatus: 'mounted' | 'unavailable' | 'failed' | undefined;
+    let attachment: { readonly destroy: () => void } | undefined;
+    const finish = (status: 'mounted' | 'unavailable' | 'failed'): void => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      terminalStatus = status;
+      globalThis.clearTimeout(timer);
+      if (status !== 'mounted') {
+        attachment?.destroy();
+        input.activeAttachments.delete(input.surfaceId);
+      }
+      resolve({ status });
+    };
+    const timer = globalThis.setTimeout(() => finish('failed'), input.timeoutMs);
+
+    try {
+      attachment = input.dependencies.tossAds.attachBanner(input.adGroupId, input.target, {
+        theme: 'dark',
+        tone: 'blackAndWhite',
+        variant: 'expanded',
+        callbacks: {
+          onAdRendered: () => finish('mounted'),
+          onNoFill: () => finish('unavailable'),
+          onAdFailedToRender: (payload) => {
+            console.warn('Failed to render an AIT banner ad.', input.adGroupId, payload.error);
+            finish('failed');
+          },
+        },
+      });
+
+      if (terminalStatus === 'unavailable' || terminalStatus === 'failed') {
+        attachment.destroy();
+        return;
+      }
+      input.activeAttachments.set(input.surfaceId, attachment);
+    } catch (error) {
+      console.warn('Failed to attach an AIT banner ad.', input.adGroupId, error);
+      finish('failed');
+    }
+  });
+}
+
 function isAitNativeMethodSupported(method: AitCapabilityProbe): boolean {
   return isCapabilitySupported(() => method.isSupported?.() === true);
 }
@@ -2828,15 +2984,15 @@ function decodeStoredValue(serialized: string | null): BridgeStorageLoadData {
 
 function hasConfiguredAdType(
   adGroupIds: ReadonlyMap<string, string>,
-  adPlacementTypes: ReadonlyMap<string, 'rewarded' | 'interstitial'>,
-  type: 'rewarded' | 'interstitial',
+  adPlacementTypes: ReadonlyMap<string, 'rewarded' | 'interstitial' | 'banner'>,
+  type: 'rewarded' | 'interstitial' | 'banner',
 ): boolean {
   return [...adGroupIds.keys()].some((placementId) => adPlacementTypes.get(placementId) === type);
 }
 
 function normalizeAdPlacementTypes(
-  input: Readonly<Record<string, 'rewarded' | 'interstitial'>> | undefined,
-): ReadonlyMap<string, 'rewarded' | 'interstitial'> {
+  input: Readonly<Record<string, 'rewarded' | 'interstitial' | 'banner'>> | undefined,
+): ReadonlyMap<string, 'rewarded' | 'interstitial' | 'banner'> {
   return new Map(
     Object.entries(input ?? {})
       .map(([placementId, type]) => [placementId.trim(), type] as const)
@@ -2918,6 +3074,14 @@ function normalizeMaximumDisplayTimeout(value: number | undefined): number {
   );
 }
 
+function normalizeBannerRenderTimeout(value: number | undefined): number {
+  return normalizePositiveTimeout(
+    value,
+    defaultBannerRenderTimeoutMs,
+    'AIT banner render timeout must be a positive finite number.',
+  );
+}
+
 function normalizeIapProductGrantTimeout(value: number | undefined): number {
   const timeout = normalizePositiveTimeout(
     value,
@@ -2960,6 +3124,19 @@ function readPlacementId(payload: unknown): string {
     throw new TypeError('AIT ad placementId must be a non-empty string.');
   }
   return placementId;
+}
+
+function readBannerSurfaceId(payload: unknown): string {
+  const surfaceId = readPayloadRecord(payload).surfaceId;
+  if (
+    typeof surfaceId !== 'string'
+    || surfaceId.length === 0
+    || surfaceId.length > 128
+    || !/^[A-Za-z][A-Za-z0-9_:-]*$/u.test(surfaceId)
+  ) {
+    throw new TypeError('AIT banner surfaceId must be a valid non-empty element id.');
+  }
+  return surfaceId;
 }
 
 function readIdempotencyKey(payload: unknown, fallback: string): string {

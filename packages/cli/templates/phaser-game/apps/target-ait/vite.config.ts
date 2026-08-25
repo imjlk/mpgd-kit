@@ -42,7 +42,9 @@ export default defineConfig(({ command, isPreview }) => {
 
 function readAitAdConfig(path: string | undefined): {
   readonly adGroupIds: Readonly<Record<string, string>>;
-  readonly adPlacementTypes: Readonly<Record<string, 'rewarded' | 'interstitial'>>;
+  readonly adPlacementTypes: Readonly<
+    Record<string, 'rewarded' | 'interstitial' | 'banner'>
+  >;
 } {
   if (path === undefined || path.trim().length === 0) {
     return { adGroupIds: {}, adPlacementTypes: {} };

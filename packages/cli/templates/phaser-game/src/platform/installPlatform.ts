@@ -23,7 +23,7 @@ const targetAdPlacements = adPlacements.placements.map((placement) => ({
   id: placement.id,
   type: placement.type,
 }));
-const adPlacementTypes = new Map<string, 'rewarded' | 'interstitial'>(
+const adPlacementTypes = new Map<string, 'rewarded' | 'interstitial' | 'banner'>(
   targetAdPlacements.map((placement) => [placement.id, placement.type]),
 );
 

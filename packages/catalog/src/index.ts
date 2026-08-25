@@ -57,7 +57,7 @@ export type AdReward =
 
 export interface AdPlacementEntry {
   readonly id: LogicalAdPlacementId;
-  readonly type: 'rewarded' | 'interstitial';
+  readonly type: 'rewarded' | 'interstitial' | 'banner';
   readonly reward?: AdReward;
   readonly frequencyCap: FrequencyCap;
   readonly platformPlacementIds: Partial<Record<AdPlacementTarget, string>>;

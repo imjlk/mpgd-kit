@@ -21,11 +21,13 @@ export interface ProductionTargetPolicy {
   readonly runtime: string;
   readonly features: {
     readonly iap: boolean;
+    readonly bannerAds?: boolean;
     readonly rewardedAds: boolean;
     readonly interstitialAds: boolean;
   };
   readonly monetization: {
     readonly iap: boolean;
+    readonly bannerAds?: boolean;
     readonly rewardedAds: boolean;
     readonly interstitialAds: boolean;
   };
@@ -74,9 +76,11 @@ export function assertProductionTargetReadiness(
   )
     && (
       targetPolicy.features.iap
+      || targetPolicy.features.bannerAds === true
       || targetPolicy.features.rewardedAds
       || targetPolicy.features.interstitialAds
       || targetPolicy.monetization.iap
+      || targetPolicy.monetization.bannerAds === true
       || targetPolicy.monetization.rewardedAds
       || targetPolicy.monetization.interstitialAds
     );
@@ -164,12 +168,14 @@ function disableMonetization(
     features: {
       ...policy.features,
       iap: false,
+      bannerAds: false,
       rewardedAds: false,
       interstitialAds: false,
     },
     monetization: {
       ...policy.monetization,
       iap: false,
+      bannerAds: false,
       rewardedAds: false,
       interstitialAds: false,
     },

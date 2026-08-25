@@ -5,12 +5,13 @@ import type { EffectiveTargetConfig } from './effective.js';
 
 export type PlatformFeature =
   | 'iap'
+  | 'bannerAds'
   | 'rewardedAds'
   | 'interstitialAds'
   | 'leaderboard'
   | 'localization';
 
-export type AdPlacementType = 'rewarded' | 'interstitial';
+export type AdPlacementType = 'rewarded' | 'interstitial' | 'banner';
 type PlatformConfigTarget = PlatformGateway['target'];
 
 export type TargetRuntimeKind =
@@ -62,6 +63,8 @@ export interface TargetIntegrationConfig {
 
 export interface TargetFeatureConfig {
   readonly iap: boolean;
+  /** Optional for target matrices authored before inline banner support. */
+  readonly bannerAds?: boolean;
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
   readonly leaderboard: boolean;
@@ -79,6 +82,8 @@ export interface TargetLocalizationConfig {
 
 export interface TargetMonetizationConfig {
   readonly iap: boolean;
+  /** Optional for target matrices authored before inline banner support. */
+  readonly bannerAds?: boolean;
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
 }
@@ -176,6 +181,7 @@ export interface TargetConfiguredGateway extends PlatformGateway {
 
 export const platformFeatures = [
   'iap',
+  'bannerAds',
   'rewardedAds',
   'interstitialAds',
   'leaderboard',
@@ -343,7 +349,7 @@ export function isPlatformFeatureEnabled(
   config: TargetConfig,
   feature: PlatformFeature,
 ): boolean {
-  return config.features[feature];
+  return config.features[feature] === true;
 }
 
 export function applyTargetConfigToCapabilities(
@@ -355,7 +361,12 @@ export function applyTargetConfigToCapabilities(
     nativeIap: capabilities.nativeIap && config.features.iap,
     nativeAds:
       capabilities.nativeAds &&
-      (config.features.rewardedAds || config.features.interstitialAds),
+      (
+        config.features.bannerAds === true
+        || config.features.rewardedAds
+        || config.features.interstitialAds
+      ),
+    bannerAds: capabilities.bannerAds === true && config.features.bannerAds === true,
     rewardedAds: capabilities.rewardedAds && config.features.rewardedAds,
     interstitialAds: capabilities.interstitialAds && config.features.interstitialAds,
     nativeLeaderboard: capabilities.nativeLeaderboard && config.features.leaderboard,
@@ -369,7 +380,7 @@ export function getFeatureAvailability(
   config: TargetConfig,
   capabilities: PlatformCapabilities,
 ): FeatureAvailability {
-  const targetEnabled = config.features[feature];
+  const targetEnabled = config.features[feature] === true;
   const capabilitySupported = isFeatureCapabilitySupported(feature, capabilities);
   const enabled = targetEnabled && capabilitySupported;
 
@@ -409,6 +420,11 @@ export function createTargetRuntimeSnapshot(input: {
   const features = {
     iap: getFeatureAvailability(
       'iap',
+      availabilityConfig,
+      input.capabilities,
+    ),
+    bannerAds: getFeatureAvailability(
+      'bannerAds',
       availabilityConfig,
       input.capabilities,
     ),
@@ -460,7 +476,11 @@ export function createTargetRuntimeSnapshot(input: {
     features,
     integrations,
     adPlacements: (input.adPlacements ?? []).map((placement) => {
-      const feature = placement.type === 'rewarded' ? 'rewardedAds' : 'interstitialAds';
+      const feature = placement.type === 'rewarded'
+        ? 'rewardedAds'
+        : placement.type === 'interstitial'
+          ? 'interstitialAds'
+          : 'bannerAds';
       const availability = features[feature];
 
       return {
@@ -547,7 +567,9 @@ export function withTargetAvailability(
 
     return expectedType === 'rewarded'
       ? availabilityConfig.features.rewardedAds
-      : availabilityConfig.features.interstitialAds;
+      : expectedType === 'interstitial'
+        ? availabilityConfig.features.interstitialAds
+        : availabilityConfig.features.bannerAds === true;
   };
 
   const canPreloadAdPlacement = (placementId: string): boolean => {
@@ -561,9 +583,14 @@ export function withTargetAvailability(
       return availabilityConfig.features.interstitialAds;
     }
 
+    if (actualType === 'banner') {
+      return availabilityConfig.features.bannerAds === true;
+    }
+
     return (
       availabilityConfig.features.rewardedAds ||
-      availabilityConfig.features.interstitialAds
+      availabilityConfig.features.interstitialAds ||
+      availabilityConfig.features.bannerAds === true
     );
   };
 
@@ -655,6 +682,21 @@ export function withTargetAvailability(
 
         return gateway.ads.showInterstitial(input);
       },
+      async mountBanner(input) {
+        if (
+          !isAdPlacementAllowed(input.placementId, 'banner')
+          || gateway.ads.mountBanner === undefined
+        ) {
+          return { status: 'unavailable' };
+        }
+
+        return gateway.ads.mountBanner(input);
+      },
+      async unmountBanner(input) {
+        if (gateway.ads.unmountBanner !== undefined) {
+          await gateway.ads.unmountBanner(input);
+        }
+      },
     },
     leaderboard: {
       async submitScore(input) {
@@ -700,6 +742,8 @@ function isFeatureCapabilitySupported(
   switch (feature) {
     case 'iap':
       return capabilities.nativeIap;
+    case 'bannerAds':
+      return capabilities.bannerAds === true;
     case 'rewardedAds':
       return capabilities.rewardedAds;
     case 'interstitialAds':

@@ -114,6 +114,8 @@ export function createAitPlatformGateway(input: {
       preload: (payload) => request('ads.preload', payload),
       showRewarded: (payload) => request('ads.showRewarded', payload),
       showInterstitial: (payload) => request('ads.showInterstitial', payload),
+      mountBanner: (payload) => request('ads.mountBanner', payload),
+      unmountBanner: (payload) => request('ads.unmountBanner', payload),
     },
     leaderboard: {
       submitScore: (payload) => request('leaderboard.submitScore', payload),
@@ -161,6 +163,7 @@ export function createAitSandboxBridge(
           return ok(input, {
             nativeIap: true,
             nativeAds: true,
+            bannerAds: false,
             rewardedAds: true,
             interstitialAds: true,
             nativeLeaderboard: true,
@@ -262,6 +265,12 @@ export function createAitSandboxBridge(
           return ok(input, {
             status: 'shown',
           });
+
+        case 'ads.mountBanner':
+          return ok(input, { status: 'unavailable' });
+
+        case 'ads.unmountBanner':
+          return ok(input, {});
 
         case 'leaderboard.submitScore':
           return ok(input, {

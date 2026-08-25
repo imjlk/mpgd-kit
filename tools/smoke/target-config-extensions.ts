@@ -78,7 +78,7 @@ try {
     deployedWeb,
   );
 
-  for (const feature of ['iap', 'rewardedAds', 'interstitialAds'] as const) {
+  for (const feature of ['iap', 'bannerAds', 'rewardedAds', 'interstitialAds'] as const) {
     writeFileSync(extensionsFile, `${JSON.stringify({
       schemaVersion: 1,
       targets: {

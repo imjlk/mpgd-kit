@@ -71,6 +71,15 @@ export interface InterstitialAdResult {
   readonly status: 'shown' | 'skipped' | 'unavailable';
 }
 
+/**
+ * Result of mounting a platform-rendered inline banner into a game-owned surface.
+ * The platform host owns the native/SDK attachment; games only reserve and name
+ * a surface, so this contract does not leak DOM or provider types.
+ */
+export interface BannerAdMountResult {
+  readonly status: 'mounted' | 'unavailable' | 'failed';
+}
+
 export interface CommerceAdapter {
   getProducts(): Promise<readonly ProductInfo[]>;
   purchase(input: {
@@ -91,6 +100,12 @@ export interface AdAdapter {
   showInterstitial?(input: {
     readonly placementId: LogicalAdPlacementId;
   }): Promise<InterstitialAdResult>;
+  mountBanner?(input: {
+    readonly placementId: LogicalAdPlacementId;
+    /** Host-resolvable identifier for an empty, game-owned inline ad surface. */
+    readonly surfaceId: string;
+  }): Promise<BannerAdMountResult>;
+  unmountBanner?(input: { readonly surfaceId: string }): Promise<void>;
 }
 
 export type PromotionRewardAvailability =
@@ -148,6 +163,8 @@ export interface PlatformCapabilities {
   readonly nativeAds: boolean;
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
+  /** Optional for compatibility with adapters published before inline ads. */
+  readonly bannerAds?: boolean;
   readonly nativeLeaderboard: boolean;
   /** A game-owned server leaderboard is available without a native platform surface. */
   readonly remoteLeaderboard: boolean;

@@ -14,6 +14,10 @@ export const platformCapabilityKeys = Object.freeze([
   'localizedContent',
 ] as const satisfies readonly (keyof PlatformCapabilities)[]);
 
+export const optionalPlatformCapabilityKeys = Object.freeze([
+  'bannerAds',
+] as const satisfies readonly (keyof PlatformCapabilities)[]);
+
 export interface PlatformGatewayCapabilityConformanceTransition {
   readonly update: () => Promise<void> | void;
   readonly expectedCapabilities: PlatformCapabilities;
@@ -121,12 +125,19 @@ function assertCapabilitySnapshot(
   expected: PlatformCapabilities,
 ): void {
   const actualKeys = Object.keys(actual).sort();
-  const expectedKeys = [...platformCapabilityKeys].sort();
+  const allowedKeys = new Set<keyof PlatformCapabilities>([
+    ...platformCapabilityKeys,
+    ...optionalPlatformCapabilityKeys,
+  ]);
+  const missingKeys = platformCapabilityKeys.filter((key) => !Object.hasOwn(actual, key));
+  const unexpectedKeys = actualKeys.filter(
+    (key) => !allowedKeys.has(key as keyof PlatformCapabilities),
+  );
 
   assertEqual(
-    JSON.stringify(actualKeys),
-    JSON.stringify(expectedKeys),
-    'capability snapshots must contain exactly the public capability keys',
+    JSON.stringify({ missingKeys, unexpectedKeys }),
+    JSON.stringify({ missingKeys: [], unexpectedKeys: [] }),
+    'capability snapshots must contain all required keys and no unknown keys',
   );
 
   for (const key of platformCapabilityKeys) {
@@ -134,6 +145,19 @@ function assertCapabilitySnapshot(
     assertEqual(
       actual[key],
       expected[key],
+      `capability ${key} must match the expected provider state`,
+    );
+  }
+
+  for (const key of optionalPlatformCapabilityKeys) {
+    const actualValue = actual[key] ?? false;
+    const expectedValue = expected[key] ?? false;
+    if (Object.hasOwn(actual, key)) {
+      assertEqual(typeof actual[key], 'boolean', `capability ${key} must be a boolean`);
+    }
+    assertEqual(
+      actualValue,
+      expectedValue,
       `capability ${key} must match the expected provider state`,
     );
   }
@@ -151,7 +175,8 @@ function hasCapabilityDifference(
   first: PlatformCapabilities,
   second: PlatformCapabilities,
 ): boolean {
-  return platformCapabilityKeys.some((key) => first[key] !== second[key]);
+  return [...platformCapabilityKeys, ...optionalPlatformCapabilityKeys]
+    .some((key) => (first[key] ?? false) !== (second[key] ?? false));
 }
 
 function assert(condition: unknown, message: string): asserts condition {

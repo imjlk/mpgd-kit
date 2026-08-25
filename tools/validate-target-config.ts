@@ -54,6 +54,11 @@ function readTargetFilterFromEnv(name: string): readonly string[] | undefined {
 function validateTargetConfigConsistency(target: string, config: TargetConfig): void {
   const mismatches = [
     ['monetization.iap', config.monetization.iap, config.features.iap],
+    [
+      'monetization.bannerAds',
+      config.monetization.bannerAds === true,
+      config.features.bannerAds === true,
+    ],
     ['monetization.rewardedAds', config.monetization.rewardedAds, config.features.rewardedAds],
     [
       'monetization.interstitialAds',

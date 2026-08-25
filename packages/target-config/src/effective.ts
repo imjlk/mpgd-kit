@@ -68,6 +68,7 @@ export interface EffectiveMonetizationConfig {
 }
 
 export interface EffectiveAdsConfig {
+  readonly bannerAds: boolean;
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
   readonly placements: readonly EffectiveAdPlacementConfig[];
@@ -131,6 +132,7 @@ export interface CreateEffectiveTargetConfigMatrixInput {
 export const defaultLeaderboardId = 'default';
 const disabledAuthoritativeMonetization = {
   iap: false,
+  bannerAds: false,
   rewardedAds: false,
   interstitialAds: false,
 } as const;
@@ -184,6 +186,7 @@ export function createEffectiveTargetConfig(
       products,
     },
     ads: {
+      bannerAds: config.monetization.bannerAds === true,
       rewardedAds: config.monetization.rewardedAds,
       interstitialAds: config.monetization.interstitialAds,
       placements,
@@ -317,9 +320,11 @@ function createEffectiveAdPlacementConfig(
   config: TargetConfig,
   placement: AdPlacementEntry,
 ): EffectiveAdPlacementConfig {
-  const featureEnabled = isRewardedPlacement(placement)
+  const featureEnabled = placement.type === 'rewarded'
     ? config.features.rewardedAds
-    : config.features.interstitialAds;
+    : placement.type === 'interstitial'
+      ? config.features.interstitialAds
+      : config.features.bannerAds === true;
   const platformPlacementId = resolveAdPlacementPlatformId(placement, target);
   const reason = effectiveItemReason(featureEnabled, platformPlacementId);
 
@@ -351,8 +356,4 @@ function effectiveTargetConfigVersion(input: {
   readonly adPlacements: string;
 }): string {
   return `${input.targetConfig}+catalog.${input.productCatalog}+ads.${input.adPlacements}`;
-}
-
-function isRewardedPlacement(placement: AdPlacementEntry): boolean {
-  return placement.type === 'rewarded';
 }

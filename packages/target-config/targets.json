@@ -220,6 +220,7 @@
       "runtime": "apps-in-toss",
       "features": {
         "iap": true,
+        "bannerAds": true,
         "rewardedAds": true,
         "interstitialAds": true,
         "leaderboard": true,
@@ -234,6 +235,7 @@
       },
       "monetization": {
         "iap": true,
+        "bannerAds": true,
         "rewardedAds": true,
         "interstitialAds": true
       },

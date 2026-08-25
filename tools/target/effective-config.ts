@@ -210,9 +210,11 @@ function validateEffectiveTargetConfig(config: EffectiveTargetConfig): void {
   }
 
   for (const placement of config.ads.placements) {
-    const featureEnabled = isRewardedPlacement(placement)
+    const featureEnabled = placement.type === 'rewarded'
       ? config.features.rewardedAds
-      : config.features.interstitialAds;
+      : placement.type === 'interstitial'
+        ? config.features.interstitialAds
+        : config.features.bannerAds === true;
 
     if (!featureEnabled && placement.enabled) {
       throw new Error(
@@ -311,10 +313,4 @@ function platformAdapterForRuntime(runtime: EffectiveTargetConfig['runtime']): s
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
-}
-
-function isRewardedPlacement(
-  placement: EffectiveTargetConfig['ads']['placements'][number],
-): boolean {
-  return placement.type === 'rewarded';
 }

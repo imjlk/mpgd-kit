@@ -341,7 +341,12 @@ function maskCapabilities(
     nativeIap: capabilities.nativeIap && config.features.iap,
     nativeAds:
       capabilities.nativeAds
-      && (config.features.rewardedAds || config.features.interstitialAds),
+      && (
+        config.features.bannerAds === true
+        || config.features.rewardedAds
+        || config.features.interstitialAds
+      ),
+    bannerAds: capabilities.bannerAds === true && config.features.bannerAds === true,
     rewardedAds: capabilities.rewardedAds && config.features.rewardedAds,
     interstitialAds: capabilities.interstitialAds && config.features.interstitialAds,
     nativeLeaderboard: capabilities.nativeLeaderboard && config.features.leaderboard,

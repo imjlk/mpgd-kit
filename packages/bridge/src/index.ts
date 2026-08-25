@@ -20,6 +20,8 @@ export type BridgeMethod =
   | 'ads.preload'
   | 'ads.showRewarded'
   | 'ads.showInterstitial'
+  | 'ads.mountBanner'
+  | 'ads.unmountBanner'
   | 'leaderboard.submitScore'
   | 'leaderboard.open'
   | 'storage.load'
