@@ -115,7 +115,10 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
 
   if (config.runtime === 'web') {
     for (const feature of webMonetizationFeatures) {
-      if (config.features[feature] !== config.monetization[feature]) {
+      if (
+        (config.features[feature] === true)
+        !== (config.monetization[feature] === true)
+      ) {
         throw new Error(
           `Target config extension ${target} must configure matching features.${feature} and monetization.${feature} values for web runtime.`,
         );

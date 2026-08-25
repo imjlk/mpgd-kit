@@ -23,6 +23,7 @@ import {
   type BridgeStorageLoadData,
 } from '@mpgd/bridge';
 import type {
+  BannerAdMountResult,
   Entitlement,
   LaunchEntry,
   LaunchIntent,
@@ -308,6 +309,10 @@ export function createAitHostBridge(
   const activeAdGroupIds = new Set<string>();
   const activeBannerAttachments = new Map<string, { readonly destroy: () => void }>();
   const bannerMountOwners = new Map<string, symbol>();
+  const pendingBannerMountSettlements = new Map<
+    string,
+    { readonly mountOwner: symbol; readonly settleUnavailable: () => void }
+  >();
   let bannerInitialization: Promise<boolean> | undefined;
   let warnedUnsupportedAdPreload = false;
   const adTimeoutMs = normalizeTimeout(options.adTimeoutMs);
@@ -766,6 +771,7 @@ export function createAitHostBridge(
           return ok(request, { status: 'failed' });
         }
 
+        pendingBannerMountSettlements.get(surfaceId)?.settleUnavailable();
         const mountOwner = Symbol(surfaceId);
         bannerMountOwners.set(surfaceId, mountOwner);
         activeBannerAttachments.get(surfaceId)?.destroy();
@@ -797,12 +803,14 @@ export function createAitHostBridge(
           activeAttachments: activeBannerAttachments,
           mountOwner,
           mountOwners: bannerMountOwners,
+          pendingSettlements: pendingBannerMountSettlements,
         });
         return ok(request, result);
       }
 
       case 'ads.unmountBanner': {
         const surfaceId = readBannerSurfaceId(request.payload);
+        pendingBannerMountSettlements.get(surfaceId)?.settleUnavailable();
         bannerMountOwners.delete(surfaceId);
         activeBannerAttachments.get(surfaceId)?.destroy();
         activeBannerAttachments.delete(surfaceId);
@@ -2916,12 +2924,16 @@ async function attachAitBanner(input: {
   readonly activeAttachments: Map<string, { readonly destroy: () => void }>;
   readonly mountOwner: symbol;
   readonly mountOwners: Map<string, symbol>;
-}): Promise<{ readonly status: 'mounted' | 'unavailable' | 'failed' }> {
+  readonly pendingSettlements: Map<
+    string,
+    { readonly mountOwner: symbol; readonly settleUnavailable: () => void }
+  >;
+}): Promise<BannerAdMountResult> {
   return new Promise((resolve) => {
     let settled = false;
-    let terminalStatus: 'mounted' | 'unavailable' | 'failed' | undefined;
+    let terminalStatus: BannerAdMountResult['status'] | undefined;
     let attachment: { readonly destroy: () => void } | undefined;
-    const finish = (requestedStatus: 'mounted' | 'unavailable' | 'failed'): void => {
+    const finish = (requestedStatus: BannerAdMountResult['status']): void => {
       const ownsSurface = input.mountOwners.get(input.surfaceId) === input.mountOwner;
       const status = requestedStatus === 'mounted' && !ownsSurface
         ? 'unavailable'
@@ -2939,6 +2951,9 @@ async function attachAitBanner(input: {
       settled = true;
       terminalStatus = status;
       globalThis.clearTimeout(timer);
+      if (input.pendingSettlements.get(input.surfaceId)?.mountOwner === input.mountOwner) {
+        input.pendingSettlements.delete(input.surfaceId);
+      }
       if (status !== 'mounted') {
         attachment?.destroy();
         if (input.activeAttachments.get(input.surfaceId) === attachment) {
@@ -2951,6 +2966,10 @@ async function attachAitBanner(input: {
       resolve({ status });
     };
     const timer = globalThis.setTimeout(() => finish('failed'), input.timeoutMs);
+    input.pendingSettlements.set(input.surfaceId, {
+      mountOwner: input.mountOwner,
+      settleUnavailable: () => finish('unavailable'),
+    });
 
     try {
       const sdkAttachment = input.dependencies.tossAds.attachBanner(
@@ -3199,12 +3218,7 @@ function readPlacementId(payload: unknown): string {
 
 function readBannerSurfaceId(payload: unknown): string {
   const surfaceId = readPayloadRecord(payload).surfaceId;
-  if (
-    typeof surfaceId !== 'string'
-    || surfaceId.length === 0
-    || surfaceId.length > 128
-    || !/^[A-Za-z][A-Za-z0-9_:-]*$/u.test(surfaceId)
-  ) {
+  if (typeof surfaceId !== 'string' || surfaceId.length === 0) {
     throw new TypeError('AIT banner surfaceId must be a valid non-empty element id.');
   }
   return surfaceId;

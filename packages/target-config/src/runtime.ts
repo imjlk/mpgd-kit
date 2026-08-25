@@ -365,19 +365,19 @@ export function applyTargetConfigToCapabilities(
   capabilities: PlatformCapabilities,
   config: TargetConfig,
 ): PlatformCapabilities {
+  const bannerAds = capabilities.bannerAds === true && config.features.bannerAds === true;
+  const rewardedAds = capabilities.rewardedAds && config.features.rewardedAds;
+  const interstitialAds = capabilities.interstitialAds && config.features.interstitialAds;
+
   return {
     ...capabilities,
     nativeIap: capabilities.nativeIap && config.features.iap,
     nativeAds:
       capabilities.nativeAds &&
-      (
-        config.features.bannerAds === true
-        || config.features.rewardedAds
-        || config.features.interstitialAds
-      ),
-    bannerAds: capabilities.bannerAds === true && config.features.bannerAds === true,
-    rewardedAds: capabilities.rewardedAds && config.features.rewardedAds,
-    interstitialAds: capabilities.interstitialAds && config.features.interstitialAds,
+      (bannerAds || rewardedAds || interstitialAds),
+    bannerAds,
+    rewardedAds,
+    interstitialAds,
     nativeLeaderboard: capabilities.nativeLeaderboard && config.features.leaderboard,
     remoteLeaderboard: capabilities.remoteLeaderboard && config.features.leaderboard,
     localizedContent: capabilities.localizedContent && config.features.localization,

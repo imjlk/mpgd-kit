@@ -1861,7 +1861,7 @@ describe('AIT production host bridge', () => {
   it('mounts and destroys a configured inline banner by game-owned surface id', async () => {
     const destroy = vi.fn();
     const surface = {} as HTMLElement;
-    const getElementById = vi.fn((id: string) => id === 'gameplay-banner' ? surface : null);
+    const getElementById = vi.fn((id: string) => id === '1.game-banner' ? surface : null);
     const initialize = Object.assign(
       vi.fn((options: Parameters<AitHostDependencies['tossAds']['initialize']>[0]) => {
         options.callbacks?.onInitialized?.();
@@ -1903,7 +1903,7 @@ describe('AIT production host bridge', () => {
       })).resolves.toEqual({});
       await expect(request(bridge, 'ads.mountBanner', {
         placementId: 'SUDOKU_GAMEPLAY_BANNER',
-        surfaceId: 'gameplay-banner',
+        surfaceId: '1.game-banner',
       })).resolves.toEqual({ status: 'mounted' });
       expect(initialize).toHaveBeenCalledOnce();
       expect(attachBanner).toHaveBeenCalledWith(
@@ -1913,7 +1913,7 @@ describe('AIT production host bridge', () => {
       );
 
       await expect(request(bridge, 'ads.unmountBanner', {
-        surfaceId: 'gameplay-banner',
+        surfaceId: '1.game-banner',
       })).resolves.toEqual({});
       expect(destroy).toHaveBeenCalledOnce();
     } finally {
@@ -1970,6 +1970,103 @@ describe('AIT production host bridge', () => {
       await expect(firstMount).resolves.toEqual({ status: 'unavailable' });
       await expect(secondMount).resolves.toEqual({ status: 'mounted' });
       await request(bridge, 'ads.unmountBanner', { surfaceId: 'gameplay-banner' });
+      expect(destroy).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('settles an attached pending banner immediately when a newer mount replaces it', async () => {
+    const renderBanners: Array<() => void> = [];
+    const destroyFirst = vi.fn();
+    const destroySecond = vi.fn();
+    const surface = {} as HTMLElement;
+    const initialize = Object.assign(
+      vi.fn((options: Parameters<AitHostDependencies['tossAds']['initialize']>[0]) => {
+        options.callbacks?.onInitialized?.();
+      }),
+      { isSupported: () => true },
+    );
+    const attachBanner = Object.assign(
+      vi.fn((
+        adGroupId: string,
+        _target: string | HTMLElement,
+        options?: Parameters<AitHostDependencies['tossAds']['attachBanner']>[2],
+      ) => {
+        const callIndex = renderBanners.length;
+        renderBanners.push(() => options?.callbacks?.onAdRendered?.({
+          slotId: `slot-${String(callIndex + 1)}`,
+          adGroupId,
+          adMetadata: {
+            creativeId: `creative-${String(callIndex + 1)}`,
+            requestId: `request-${String(callIndex + 1)}`,
+          },
+        }));
+        return { destroy: callIndex === 0 ? destroyFirst : destroySecond };
+      }),
+      { isSupported: () => true },
+    );
+    vi.stubGlobal('document', { getElementById: () => surface });
+
+    try {
+      const bridge = createAitHostBridge({
+        adGroupIds: { SUDOKU_GAMEPLAY_BANNER: 'ait-banner-group' },
+        adPlacementTypes: { SUDOKU_GAMEPLAY_BANNER: 'banner' },
+        dependencies: createDependencies({ tossAds: { initialize, attachBanner } }),
+      });
+      const payload = {
+        placementId: 'SUDOKU_GAMEPLAY_BANNER',
+        surfaceId: 'gameplay-banner',
+      };
+      const firstMount = request(bridge, 'ads.mountBanner', payload);
+      await vi.waitFor(() => expect(attachBanner).toHaveBeenCalledOnce());
+
+      const secondMount = request(bridge, 'ads.mountBanner', payload);
+      await expect(firstMount).resolves.toEqual({ status: 'unavailable' });
+      await vi.waitFor(() => expect(attachBanner).toHaveBeenCalledTimes(2));
+      renderBanners[1]?.();
+
+      await expect(secondMount).resolves.toEqual({ status: 'mounted' });
+      expect(destroyFirst).toHaveBeenCalledOnce();
+      await request(bridge, 'ads.unmountBanner', { surfaceId: 'gameplay-banner' });
+      expect(destroySecond).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('settles an attached pending banner immediately when its surface unmounts', async () => {
+    const destroy = vi.fn();
+    const surface = {} as HTMLElement;
+    const initialize = Object.assign(
+      vi.fn((options: Parameters<AitHostDependencies['tossAds']['initialize']>[0]) => {
+        options.callbacks?.onInitialized?.();
+      }),
+      { isSupported: () => true },
+    );
+    const attachBanner = Object.assign(
+      vi.fn(() => ({ destroy })),
+      { isSupported: () => true },
+    );
+    vi.stubGlobal('document', { getElementById: () => surface });
+
+    try {
+      const bridge = createAitHostBridge({
+        adGroupIds: { SUDOKU_GAMEPLAY_BANNER: 'ait-banner-group' },
+        adPlacementTypes: { SUDOKU_GAMEPLAY_BANNER: 'banner' },
+        dependencies: createDependencies({ tossAds: { initialize, attachBanner } }),
+      });
+      const payload = {
+        placementId: 'SUDOKU_GAMEPLAY_BANNER',
+        surfaceId: 'gameplay-banner',
+      };
+      const mount = request(bridge, 'ads.mountBanner', payload);
+      await vi.waitFor(() => expect(attachBanner).toHaveBeenCalledOnce());
+
+      await expect(request(bridge, 'ads.unmountBanner', {
+        surfaceId: 'gameplay-banner',
+      })).resolves.toEqual({});
+      await expect(mount).resolves.toEqual({ status: 'unavailable' });
       expect(destroy).toHaveBeenCalledOnce();
     } finally {
       vi.unstubAllGlobals();

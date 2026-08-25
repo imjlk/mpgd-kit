@@ -74,7 +74,9 @@ export interface InterstitialAdResult {
 /**
  * Result of mounting a platform-rendered inline banner into a game-owned surface.
  * The platform host owns the native/SDK attachment; games only reserve and name
- * a surface, so this contract does not leak DOM or provider types.
+ * a surface, so this contract does not leak DOM or provider types. Adapters must
+ * release any partial attachment before resolving `unavailable` or `failed`;
+ * games only need to unmount a successfully mounted banner.
  */
 export interface BannerAdMountResult {
   readonly status: 'mounted' | 'unavailable' | 'failed';
