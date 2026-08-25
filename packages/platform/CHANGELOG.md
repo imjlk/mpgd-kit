@@ -1,5 +1,15 @@
 # @mpgd/platform
 
+## 0.10.0 — 2026-08-26
+
+### Added
+
+- [17cbec9](https://github.com/imjlk/mpgd-kit/commit/17cbec9de406aae06949b1c9df832f3ae0446b95) Add provider-neutral inline banner placements and surface lifecycle methods. Apps in Toss hosts now
+  initialize and attach Toss banner ads by game-owned surface ID, report rendered/no-fill/failure
+  states, and destroy active attachments on unmount. Target configuration, effective artifacts,
+  starter validation, and bridge contracts understand optional `bannerAds` capability flags while
+  remaining compatible with previously published adapters and target matrices. — Thanks @imjlk!
+
 ## 0.9.0 — 2026-08-12
 
 ### Added

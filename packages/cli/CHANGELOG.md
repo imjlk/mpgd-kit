@@ -1,5 +1,26 @@
 # @mpgd/cli
 
+## 0.24.0 — 2026-08-26
+
+### Added
+
+- [938e934](https://github.com/imjlk/mpgd-kit/commit/938e934bb53c3d18fda7c50da7e736fe6ccda351) Update generated Apps in Toss games to SDK/CLI 3.1.1 and support the SDK 3
+  `navigationBar.withTitle` option in target validation. New starters hide the title and app icon when
+  using transparent navigation, mirror the kit XML parser resolution policy, and document both legacy
+  and replacement SDK 3 WebView origins. — Thanks @imjlk!
+
+### Changed
+
+- [17cbec9](https://github.com/imjlk/mpgd-kit/commit/17cbec9de406aae06949b1c9df832f3ae0446b95) Add provider-neutral inline banner placements and surface lifecycle methods. Apps in Toss hosts now
+  initialize and attach Toss banner ads by game-owned surface ID, report rendered/no-fill/failure
+  states, and destroy active attachments on unmount. Target configuration, effective artifacts,
+  starter validation, and bridge contracts understand optional `bannerAds` capability flags while
+  remaining compatible with previously published adapters and target matrices. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.10.0, adapter-browser@0.7.1, adapter-capacitor@0.4.7, adapter-devvit@0.9.1, adapter-verse8@0.3.1, analytics@0.3.10, bridge@0.9.0, catalog@0.7.0, game-services@0.12.1, i18n@0.5.6, platform@0.10.0, target-config@0.13.0
+
 ## 0.23.0 — 2026-08-21
 
 ### Patch changes
