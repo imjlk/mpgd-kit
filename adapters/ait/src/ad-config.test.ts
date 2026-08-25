@@ -20,16 +20,28 @@ describe('extractAitAdBridgeConfig', () => {
           frequencyCap: { cooldownSeconds: 60 },
           platformPlacementIds: { android: 'android-only' },
         },
+        {
+          id: 'GAMEPLAY_BANNER',
+          type: 'banner',
+          frequencyCap: { cooldownSeconds: 0 },
+          platformPlacementIds: { ait: ' banner-group ' },
+        },
       ],
     })).toEqual({
-      adGroupIds: { HINT_REWARDED: 'rewarded-group' },
-      adPlacementTypes: { HINT_REWARDED: 'rewarded' },
+      adGroupIds: {
+        HINT_REWARDED: 'rewarded-group',
+        GAMEPLAY_BANNER: 'banner-group',
+      },
+      adPlacementTypes: {
+        HINT_REWARDED: 'rewarded',
+        GAMEPLAY_BANNER: 'banner',
+      },
     });
   });
 
   it('rejects malformed placement entries with their source label', () => {
     expect(() => extractAitAdBridgeConfig({
-      placements: [{ id: 'BROKEN', type: 'banner' }],
+      placements: [{ id: 'BROKEN', type: 'native' }],
     }, '/tmp/placements.json')).toThrow(
       'AIT ad placement entry at index 0 is invalid: /tmp/placements.json',
     );

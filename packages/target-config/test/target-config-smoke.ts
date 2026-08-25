@@ -327,11 +327,30 @@ assertDeepEqual(
   ],
 );
 assertEqual(webCapabilities.nativeIap, false);
+assertEqual(webCapabilities.nativeAds, false);
 assertEqual(webCapabilities.rewardedAds, false);
 assertEqual(webCapabilities.interstitialAds, false);
 assertEqual(webCapabilities.nativeLeaderboard, false);
 assertEqual(webCapabilities.remoteLeaderboard, false);
 assertEqual(webCapabilities.localizedContent, true);
+assertEqual(
+  applyTargetConfigToCapabilities(
+    {
+      ...(await gateway.getCapabilities()),
+      bannerAds: true,
+      rewardedAds: false,
+      interstitialAds: false,
+    },
+    createTargetConfig({
+      iap: false,
+      rewardedAds: true,
+      interstitialAds: false,
+      leaderboard: false,
+      localization: true,
+    }),
+  ).nativeAds,
+  false,
+);
 assertDeepEqual(await webGateway.commerce.getProducts(), []);
 assertDeepEqual(
   await webGateway.commerce.purchase({

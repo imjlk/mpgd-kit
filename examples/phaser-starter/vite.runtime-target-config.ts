@@ -78,6 +78,7 @@ function assertTargetConfig(input: unknown, label: string): asserts input is Tar
     ['iap', 'rewardedAds', 'interstitialAds', 'leaderboard', 'localization'],
     `${label}.features`,
   );
+  assertOptionalBoolean(input.features.bannerAds, `${label}.features.bannerAds`);
 
   assertRecord(input.capabilities, `${label}.capabilities`);
   assertOneOf(input.capabilities.storage, storageSupportValues, `${label}.capabilities.storage`);
@@ -92,6 +93,7 @@ function assertTargetConfig(input: unknown, label: string): asserts input is Tar
     ['iap', 'rewardedAds', 'interstitialAds'],
     `${label}.monetization`,
   );
+  assertOptionalBoolean(input.monetization.bannerAds, `${label}.monetization.bannerAds`);
 
   assertRecord(input.leaderboard, `${label}.leaderboard`);
   assertBoolean(input.leaderboard.native, `${label}.leaderboard.native`);
@@ -142,6 +144,12 @@ function assertBooleanFields(
 function assertBoolean(input: unknown, label: string): asserts input is boolean {
   if (typeof input !== 'boolean') {
     throw new Error(`${label} must be a boolean.`);
+  }
+}
+
+function assertOptionalBoolean(input: unknown, label: string): void {
+  if (input !== undefined) {
+    assertBoolean(input, label);
   }
 }
 

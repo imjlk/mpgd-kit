@@ -8,6 +8,7 @@ import {
   getTargetConfig,
   targetConfigKeyForPlatform,
   withTargetAvailability,
+  type AdPlacementType,
   type TargetConfigMatrix,
   type TargetConfiguredGateway,
 } from '@mpgd/target-config';
@@ -23,7 +24,7 @@ const targetAdPlacements = adPlacements.placements.map((placement) => ({
   id: placement.id,
   type: placement.type,
 }));
-const adPlacementTypes = new Map<string, 'rewarded' | 'interstitial'>(
+const adPlacementTypes = new Map<string, AdPlacementType>(
   targetAdPlacements.map((placement) => [placement.id, placement.type]),
 );
 

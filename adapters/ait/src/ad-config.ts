@@ -1,6 +1,8 @@
+export type AitAdPlacementType = 'rewarded' | 'interstitial' | 'banner';
+
 export interface AitAdBridgeConfig {
   readonly adGroupIds: Readonly<Record<string, string>>;
-  readonly adPlacementTypes: Readonly<Record<string, 'rewarded' | 'interstitial'>>;
+  readonly adPlacementTypes: Readonly<Record<string, AitAdPlacementType>>;
 }
 
 export function extractAitAdBridgeConfig(
@@ -13,14 +15,14 @@ export function extractAitAdBridgeConfig(
 
   const placements: readonly unknown[] = input.placements;
   const adGroupIds: Record<string, string> = {};
-  const adPlacementTypes: Record<string, 'rewarded' | 'interstitial'> = {};
+  const adPlacementTypes: Record<string, AitAdPlacementType> = {};
   const placementIds = new Set<string>();
 
   for (const [placementIndex, placement] of placements.entries()) {
     if (
       !isRecord(placement)
       || typeof placement.id !== 'string'
-      || (placement.type !== 'rewarded' && placement.type !== 'interstitial')
+      || !isAitAdPlacementType(placement.type)
     ) {
       throw new Error(
         `AIT ad placement entry at index ${placementIndex} is invalid: ${sourceLabel}`,
@@ -47,6 +49,10 @@ export function extractAitAdBridgeConfig(
   }
 
   return { adGroupIds, adPlacementTypes };
+}
+
+function isAitAdPlacementType(value: unknown): value is AitAdPlacementType {
+  return value === 'rewarded' || value === 'interstitial' || value === 'banner';
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {

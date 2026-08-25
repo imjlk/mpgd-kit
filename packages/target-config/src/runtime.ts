@@ -5,12 +5,18 @@ import type { EffectiveTargetConfig } from './effective.js';
 
 export type PlatformFeature =
   | 'iap'
+  | 'bannerAds'
   | 'rewardedAds'
   | 'interstitialAds'
   | 'leaderboard'
   | 'localization';
 
-export type AdPlacementType = 'rewarded' | 'interstitial';
+export type AdPlacementType = 'rewarded' | 'interstitial' | 'banner';
+const adPlacementFeatureByType = {
+  rewarded: 'rewardedAds',
+  interstitial: 'interstitialAds',
+  banner: 'bannerAds',
+} as const satisfies Record<AdPlacementType, PlatformFeature>;
 type PlatformConfigTarget = PlatformGateway['target'];
 
 export type TargetRuntimeKind =
@@ -62,6 +68,8 @@ export interface TargetIntegrationConfig {
 
 export interface TargetFeatureConfig {
   readonly iap: boolean;
+  /** Optional for target matrices authored before inline banner support. */
+  readonly bannerAds?: boolean;
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
   readonly leaderboard: boolean;
@@ -79,6 +87,8 @@ export interface TargetLocalizationConfig {
 
 export interface TargetMonetizationConfig {
   readonly iap: boolean;
+  /** Optional for target matrices authored before inline banner support. */
+  readonly bannerAds?: boolean;
   readonly rewardedAds: boolean;
   readonly interstitialAds: boolean;
 }
@@ -176,11 +186,16 @@ export interface TargetConfiguredGateway extends PlatformGateway {
 
 export const platformFeatures = [
   'iap',
+  'bannerAds',
   'rewardedAds',
   'interstitialAds',
   'leaderboard',
   'localization',
 ] as const satisfies readonly PlatformFeature[];
+
+export function adPlacementFeatureFor(type: AdPlacementType): PlatformFeature {
+  return adPlacementFeatureByType[type];
+}
 
 export const targetIntegrations = [
   'identityUpgrade',
@@ -343,21 +358,26 @@ export function isPlatformFeatureEnabled(
   config: TargetConfig,
   feature: PlatformFeature,
 ): boolean {
-  return config.features[feature];
+  return config.features[feature] === true;
 }
 
 export function applyTargetConfigToCapabilities(
   capabilities: PlatformCapabilities,
   config: TargetConfig,
 ): PlatformCapabilities {
+  const bannerAds = capabilities.bannerAds === true && config.features.bannerAds === true;
+  const rewardedAds = capabilities.rewardedAds && config.features.rewardedAds;
+  const interstitialAds = capabilities.interstitialAds && config.features.interstitialAds;
+
   return {
     ...capabilities,
     nativeIap: capabilities.nativeIap && config.features.iap,
     nativeAds:
       capabilities.nativeAds &&
-      (config.features.rewardedAds || config.features.interstitialAds),
-    rewardedAds: capabilities.rewardedAds && config.features.rewardedAds,
-    interstitialAds: capabilities.interstitialAds && config.features.interstitialAds,
+      (bannerAds || rewardedAds || interstitialAds),
+    bannerAds,
+    rewardedAds,
+    interstitialAds,
     nativeLeaderboard: capabilities.nativeLeaderboard && config.features.leaderboard,
     remoteLeaderboard: capabilities.remoteLeaderboard && config.features.leaderboard,
     localizedContent: capabilities.localizedContent && config.features.localization,
@@ -369,7 +389,7 @@ export function getFeatureAvailability(
   config: TargetConfig,
   capabilities: PlatformCapabilities,
 ): FeatureAvailability {
-  const targetEnabled = config.features[feature];
+  const targetEnabled = config.features[feature] === true;
   const capabilitySupported = isFeatureCapabilitySupported(feature, capabilities);
   const enabled = targetEnabled && capabilitySupported;
 
@@ -409,6 +429,11 @@ export function createTargetRuntimeSnapshot(input: {
   const features = {
     iap: getFeatureAvailability(
       'iap',
+      availabilityConfig,
+      input.capabilities,
+    ),
+    bannerAds: getFeatureAvailability(
+      'bannerAds',
       availabilityConfig,
       input.capabilities,
     ),
@@ -460,7 +485,7 @@ export function createTargetRuntimeSnapshot(input: {
     features,
     integrations,
     adPlacements: (input.adPlacements ?? []).map((placement) => {
-      const feature = placement.type === 'rewarded' ? 'rewardedAds' : 'interstitialAds';
+      const feature = adPlacementFeatureFor(placement.type);
       const availability = features[feature];
 
       return {
@@ -545,25 +570,20 @@ export function withTargetAvailability(
       return false;
     }
 
-    return expectedType === 'rewarded'
-      ? availabilityConfig.features.rewardedAds
-      : availabilityConfig.features.interstitialAds;
+    return availabilityConfig.features[adPlacementFeatureFor(expectedType)] === true;
   };
 
   const canPreloadAdPlacement = (placementId: string): boolean => {
     const actualType = options.resolveAdPlacementType?.(placementId);
 
-    if (actualType === 'rewarded') {
-      return availabilityConfig.features.rewardedAds;
-    }
-
-    if (actualType === 'interstitial') {
-      return availabilityConfig.features.interstitialAds;
+    if (actualType !== undefined) {
+      return availabilityConfig.features[adPlacementFeatureFor(actualType)] === true;
     }
 
     return (
       availabilityConfig.features.rewardedAds ||
-      availabilityConfig.features.interstitialAds
+      availabilityConfig.features.interstitialAds ||
+      availabilityConfig.features.bannerAds === true
     );
   };
 
@@ -655,6 +675,21 @@ export function withTargetAvailability(
 
         return gateway.ads.showInterstitial(input);
       },
+      async mountBanner(input) {
+        if (
+          !isAdPlacementAllowed(input.placementId, 'banner')
+          || gateway.ads.mountBanner === undefined
+        ) {
+          return { status: 'unavailable' };
+        }
+
+        return gateway.ads.mountBanner(input);
+      },
+      async unmountBanner(input) {
+        if (gateway.ads.unmountBanner !== undefined) {
+          await gateway.ads.unmountBanner(input);
+        }
+      },
     },
     leaderboard: {
       async submitScore(input) {
@@ -700,6 +735,8 @@ function isFeatureCapabilitySupported(
   switch (feature) {
     case 'iap':
       return capabilities.nativeIap;
+    case 'bannerAds':
+      return capabilities.bannerAds === true;
     case 'rewardedAds':
       return capabilities.rewardedAds;
     case 'interstitialAds':

@@ -11,6 +11,7 @@ import {
   type EffectiveTargetConfig,
   type EffectiveTargetConfigMatrix,
 } from '../../packages/target-config/src/effective';
+import { adPlacementFeatureFor } from '../../packages/target-config/src/runtime';
 import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import { readJsonFile } from '../io';
 import { loadPlatformTargetsConfig } from './platform-targets';
@@ -210,9 +211,7 @@ function validateEffectiveTargetConfig(config: EffectiveTargetConfig): void {
   }
 
   for (const placement of config.ads.placements) {
-    const featureEnabled = isRewardedPlacement(placement)
-      ? config.features.rewardedAds
-      : config.features.interstitialAds;
+    const featureEnabled = config.features[adPlacementFeatureFor(placement.type)] === true;
 
     if (!featureEnabled && placement.enabled) {
       throw new Error(
@@ -311,10 +310,4 @@ function platformAdapterForRuntime(runtime: EffectiveTargetConfig['runtime']): s
 
 function sha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
-}
-
-function isRewardedPlacement(
-  placement: EffectiveTargetConfig['ads']['placements'][number],
-): boolean {
-  return placement.type === 'rewarded';
 }

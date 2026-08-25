@@ -236,6 +236,16 @@ the reward authority stays game-owned instead of assuming an undocumented
 server callback. Both paths match server evidence before the replay-safe ledger
 can grant. See [Apps in Toss Production Evidence](docs/APPS_IN_TOSS_PRODUCTION_EVIDENCE.md).
 
+Inline banner ads use a separate, non-rewarding surface lifecycle. Games create
+an empty provider-sized container and call `platform.ads.mountBanner()` with a
+logical placement ID plus a stable `surfaceId`; adapters resolve the host
+surface, attach the provider creative, and return `mounted`, `unavailable`, or
+`failed`. Games should reserve layout space only after `mounted`, collapse it
+for the other states, and call `unmountBanner()` when the surface leaves the
+page. The Apps in Toss adapter initializes `TossAds` once, uses
+`attachBanner()`, and destroys replaced or unmounted attachments. Banner
+callbacks never grant currency, hints, or entitlements.
+
 Authenticated-encrypted Agent8 cloud saves are opt-in through a game-owned RPC
 client, so the Phaser starter does not install the React browser SDK. The same
 server-only adapter export provides a collection-backed verified leaderboard
@@ -276,8 +286,8 @@ has authenticated identity/session infrastructure.
 
 `packages/target-config/targets.json` is the source of truth for target-specific
 platform feature availability, runtime metadata, release profiles, and nested
-platform policy restrictions. Features include IAP, rewarded ads, interstitial
-ads, leaderboard, and localization. Each target supplies a localization
+platform policy restrictions. Features include IAP, inline banner ads,
+rewarded ads, interstitial ads, leaderboard, and localization. Each target supplies a localization
 `fallbackLocale`; `@mpgd/i18n` can resolve a locale from a saved value, device
 preferences, then that configured fallback without assigning defaults to
 platform names.

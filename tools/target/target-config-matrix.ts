@@ -30,7 +30,7 @@ const supportedCustomTargetRuntimes = new Set<TargetRuntimeKind>([
   'verse8-web',
   'web-preview',
 ]);
-const webMonetizationFeatures = ['iap', 'rewardedAds', 'interstitialAds'] as const;
+const webMonetizationFeatures = ['iap', 'bannerAds', 'rewardedAds', 'interstitialAds'] as const;
 const releaseProfileByRuntime = {
   web: 'web',
   'web-preview': 'web-preview',
@@ -115,7 +115,10 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
 
   if (config.runtime === 'web') {
     for (const feature of webMonetizationFeatures) {
-      if (config.features[feature] !== config.monetization[feature]) {
+      if (
+        (config.features[feature] === true)
+        !== (config.monetization[feature] === true)
+      ) {
         throw new Error(
           `Target config extension ${target} must configure matching features.${feature} and monetization.${feature} values for web runtime.`,
         );
@@ -140,7 +143,20 @@ function assertCustomTargetPolicy(target: string, config: TargetConfig): void {
 
 function getUnsupportedCustomWebFeature(
   config: TargetConfig,
-): 'in-app purchases' | 'interstitial ads' | 'leaderboard' | 'rewarded ads' | undefined {
+):
+  | 'banner ads'
+  | 'in-app purchases'
+  | 'interstitial ads'
+  | 'leaderboard'
+  | 'rewarded ads'
+  | undefined {
+  if (
+    config.runtime === 'web-preview'
+    && (config.features.bannerAds === true || config.monetization.bannerAds === true)
+  ) {
+    return 'banner ads';
+  }
+
   if (
     config.runtime === 'web-preview'
     && (config.features.iap || config.monetization.iap)

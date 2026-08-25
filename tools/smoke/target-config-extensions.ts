@@ -78,7 +78,30 @@ try {
     deployedWeb,
   );
 
-  for (const feature of ['iap', 'rewardedAds', 'interstitialAds'] as const) {
+  const legacyBannerDisabledWeb = {
+    ...deployedWeb,
+    features: {
+      ...deployedWeb.features,
+      bannerAds: false,
+    },
+    monetization: {
+      iap: deployedWeb.monetization.iap,
+      rewardedAds: deployedWeb.monetization.rewardedAds,
+      interstitialAds: deployedWeb.monetization.interstitialAds,
+    },
+  } as const;
+  writeFileSync(extensionsFile, `${JSON.stringify({
+    schemaVersion: 1,
+    targets: {
+      storefront: legacyBannerDisabledWeb,
+    },
+  })}\n`);
+  assert.deepEqual(
+    loadTargetConfigMatrix(undefined, extensionsFile).targets.storefront,
+    legacyBannerDisabledWeb,
+  );
+
+  for (const feature of ['iap', 'bannerAds', 'rewardedAds', 'interstitialAds'] as const) {
     writeFileSync(extensionsFile, `${JSON.stringify({
       schemaVersion: 1,
       targets: {

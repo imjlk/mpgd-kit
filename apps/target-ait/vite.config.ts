@@ -1,7 +1,10 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-import { extractAitAdBridgeConfig } from '@mpgd/adapter-ait/ad-config';
+import {
+  extractAitAdBridgeConfig,
+  type AitAdBridgeConfig,
+} from '@mpgd/adapter-ait/ad-config';
 import ttsc from '@ttsc/unplugin/vite';
 import { defineConfig } from 'vite';
 
@@ -49,10 +52,7 @@ export default defineConfig(({ command, isPreview }) => {
   };
 });
 
-function readAitAdConfig(path: string | undefined): {
-  readonly adGroupIds: Readonly<Record<string, string>>;
-  readonly adPlacementTypes: Readonly<Record<string, 'rewarded' | 'interstitial'>>;
-} {
+function readAitAdConfig(path: string | undefined): AitAdBridgeConfig {
   if (path === undefined || path.trim().length === 0) {
     return { adGroupIds: {}, adPlacementTypes: {} };
   }

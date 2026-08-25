@@ -14,6 +14,20 @@ export const platformCapabilityKeys = Object.freeze([
   'localizedContent',
 ] as const satisfies readonly (keyof PlatformCapabilities)[]);
 
+export const optionalPlatformCapabilityKeys = Object.freeze([
+  'bannerAds',
+] as const satisfies readonly (keyof PlatformCapabilities)[]);
+const allowedPlatformCapabilityKeys = Object.freeze([
+  ...platformCapabilityKeys,
+  ...optionalPlatformCapabilityKeys,
+] as const satisfies readonly (keyof PlatformCapabilities)[]);
+const allowedPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>(
+  allowedPlatformCapabilityKeys,
+);
+const optionalPlatformCapabilityKeySet = new Set<keyof PlatformCapabilities>(
+  optionalPlatformCapabilityKeys,
+);
+
 export interface PlatformGatewayCapabilityConformanceTransition {
   readonly update: () => Promise<void> | void;
   readonly expectedCapabilities: PlatformCapabilities;
@@ -121,19 +135,25 @@ function assertCapabilitySnapshot(
   expected: PlatformCapabilities,
 ): void {
   const actualKeys = Object.keys(actual).sort();
-  const expectedKeys = [...platformCapabilityKeys].sort();
-
-  assertEqual(
-    JSON.stringify(actualKeys),
-    JSON.stringify(expectedKeys),
-    'capability snapshots must contain exactly the public capability keys',
+  const missingKeys = platformCapabilityKeys.filter((key) => !Object.hasOwn(actual, key));
+  const unexpectedKeys = actualKeys.filter(
+    (key) => !allowedPlatformCapabilityKeySet.has(key as keyof PlatformCapabilities),
   );
 
-  for (const key of platformCapabilityKeys) {
-    assertEqual(typeof actual[key], 'boolean', `capability ${key} must be a boolean`);
+  assertEqual(
+    JSON.stringify({ missingKeys, unexpectedKeys }),
+    JSON.stringify({ missingKeys: [], unexpectedKeys: [] }),
+    'capability snapshots must contain all required keys and no unknown keys',
+  );
+
+  for (const key of allowedPlatformCapabilityKeys) {
+    const optional = optionalPlatformCapabilityKeySet.has(key);
+    if (!optional || Object.hasOwn(actual, key)) {
+      assertEqual(typeof actual[key], 'boolean', `capability ${key} must be a boolean`);
+    }
     assertEqual(
-      actual[key],
-      expected[key],
+      optional ? (actual[key] ?? false) : actual[key],
+      optional ? (expected[key] ?? false) : expected[key],
       `capability ${key} must match the expected provider state`,
     );
   }
@@ -151,7 +171,8 @@ function hasCapabilityDifference(
   first: PlatformCapabilities,
   second: PlatformCapabilities,
 ): boolean {
-  return platformCapabilityKeys.some((key) => first[key] !== second[key]);
+  return allowedPlatformCapabilityKeys
+    .some((key) => (first[key] ?? false) !== (second[key] ?? false));
 }
 
 function assert(condition: unknown, message: string): asserts condition {
