@@ -54,6 +54,7 @@ function readTargetFilterFromEnv(name: string): readonly string[] | undefined {
 function validateTargetConfigConsistency(target: string, config: TargetConfig): void {
   const mismatches = [
     ['monetization.iap', config.monetization.iap, config.features.iap],
+    // bannerAds is optional in legacy matrices; normalize absence to false.
     [
       'monetization.bannerAds',
       config.monetization.bannerAds === true,

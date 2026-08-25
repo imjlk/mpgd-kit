@@ -97,6 +97,19 @@ const customTargetPlacement = {
   platformPlacementIds: { 'verse8-staging': ' rewarded_staging ' },
 } as const satisfies AdPlacementEntry;
 assertAdPlacements({ version: 'custom-target', placements: [customTargetPlacement] });
+assertThrows(
+  () => assertAdPlacements({
+    version: 'banner-reward',
+    placements: [{
+      id: 'INVALID_BANNER_REWARD',
+      type: 'banner',
+      reward: { type: 'currency', currency: 'coin', amount: 1 },
+      frequencyCap: { cooldownSeconds: 0 },
+      platformPlacementIds: { ait: 'banner-group' },
+    }],
+  } as never),
+  'banner placements must not carry rewards',
+);
 assertEqual(
   resolveAdPlacementPlatformId(customTargetPlacement, 'verse8-staging'),
   'rewarded_staging',

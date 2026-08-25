@@ -22,6 +22,7 @@ import {
 import {
   getTargetConfig,
   withTargetAvailability,
+  type AdPlacementType,
   type TargetConfigMatrix,
 } from '../../packages/target-config/src/runtime';
 import { readJsonFile } from '../io';
@@ -38,7 +39,7 @@ const targetAdPlacements = adPlacements.placements.map((placement) => ({
   id: placement.id,
   type: placement.type,
 }));
-const adPlacementTypes = new Map<string, 'rewarded' | 'interstitial' | 'banner'>(
+const adPlacementTypes = new Map<string, AdPlacementType>(
   targetAdPlacements.map((placement) => [placement.id, placement.type]),
 );
 type AdapterBridgeTarget = 'android' | 'ios' | 'ait' | 'reddit';

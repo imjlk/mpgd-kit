@@ -1921,6 +1921,61 @@ describe('AIT production host bridge', () => {
     }
   });
 
+  it('keeps only the newest concurrent mount for one inline banner surface', async () => {
+    let initializeOptions: Parameters<AitHostDependencies['tossAds']['initialize']>[0] | undefined;
+    let renderBanner: (() => void) | undefined;
+    const destroy = vi.fn();
+    const surface = {} as HTMLElement;
+    const initialize = Object.assign(
+      vi.fn((options: Parameters<AitHostDependencies['tossAds']['initialize']>[0]) => {
+        initializeOptions = options;
+      }),
+      { isSupported: () => true },
+    );
+    const attachBanner = Object.assign(
+      vi.fn((
+        adGroupId: string,
+        _target: string | HTMLElement,
+        options?: Parameters<AitHostDependencies['tossAds']['attachBanner']>[2],
+      ) => {
+        renderBanner = () => options?.callbacks?.onAdRendered?.({
+          slotId: 'newest-slot',
+          adGroupId,
+          adMetadata: { creativeId: 'creative-2', requestId: 'request-2' },
+        });
+        return { destroy };
+      }),
+      { isSupported: () => true },
+    );
+    vi.stubGlobal('document', { getElementById: () => surface });
+
+    try {
+      const bridge = createAitHostBridge({
+        adGroupIds: { SUDOKU_GAMEPLAY_BANNER: 'ait-banner-group' },
+        adPlacementTypes: { SUDOKU_GAMEPLAY_BANNER: 'banner' },
+        dependencies: createDependencies({ tossAds: { initialize, attachBanner } }),
+      });
+      const payload = {
+        placementId: 'SUDOKU_GAMEPLAY_BANNER',
+        surfaceId: 'gameplay-banner',
+      };
+      const firstMount = request(bridge, 'ads.mountBanner', payload);
+      const secondMount = request(bridge, 'ads.mountBanner', payload);
+
+      await vi.waitFor(() => expect(initializeOptions).toBeDefined());
+      initializeOptions?.callbacks?.onInitialized?.();
+      await vi.waitFor(() => expect(attachBanner).toHaveBeenCalledOnce());
+      renderBanner?.();
+
+      await expect(firstMount).resolves.toEqual({ status: 'unavailable' });
+      await expect(secondMount).resolves.toEqual({ status: 'mounted' });
+      await request(bridge, 'ads.unmountBanner', { surfaceId: 'gameplay-banner' });
+      expect(destroy).toHaveBeenCalledOnce();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('treats missing Ads 2.0 support constants as unsupported without blocking startup', async () => {
     const warning = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const diagnostic = vi.spyOn(console, 'debug').mockImplementation(() => {});

@@ -35,6 +35,7 @@ import type {
   ShareResult,
 } from '@mpgd/platform';
 
+import type { AitAdPlacementType } from './ad-config.js';
 import type { GamePlatformBridge } from './index.js';
 import { dispatchAitLifecycleEvent } from './lifecycle.js';
 
@@ -220,10 +221,16 @@ export type AitPromotionGrantAuthorizer = (
   input: AitPromotionGrantAuthorizationInput,
 ) => Promise<AitPromotionGrantAuthorization>;
 
+export interface AitBannerAppearance {
+  readonly theme?: 'auto' | 'light' | 'dark';
+  readonly tone?: 'blackAndWhite' | 'grey';
+  readonly variant?: 'card' | 'expanded';
+}
+
 export interface InstallAitHostBridgeOptions {
   readonly appName?: string;
   readonly adGroupIds?: Readonly<Record<string, string>>;
-  readonly adPlacementTypes?: Readonly<Record<string, 'rewarded' | 'interstitial' | 'banner'>>;
+  readonly adPlacementTypes?: Readonly<Record<string, AitAdPlacementType>>;
   /** Logical campaign ids mapped to console-issued Apps in Toss promotion configuration. */
   readonly promotionRewards?: Readonly<Record<string, AitPromotionRewardConfig>>;
   readonly authorizePromotionGrant?: AitPromotionGrantAuthorizer;
@@ -248,6 +255,8 @@ export interface InstallAitHostBridgeOptions {
   readonly adMaximumDisplayMs?: number;
   /** Maximum wait for an inline banner to render or report no-fill/failure. */
   readonly bannerRenderTimeoutMs?: number;
+  /** Provider-neutral host preference mapped to the Apps in Toss banner appearance. */
+  readonly bannerAppearance?: AitBannerAppearance;
   readonly dependencies?: Partial<AitHostDependencies>;
 }
 
@@ -298,6 +307,7 @@ export function createAitHostBridge(
   const loadingAdGroups = new Map<string, Promise<void>>();
   const activeAdGroupIds = new Set<string>();
   const activeBannerAttachments = new Map<string, { readonly destroy: () => void }>();
+  const bannerMountOwners = new Map<string, symbol>();
   let bannerInitialization: Promise<boolean> | undefined;
   let warnedUnsupportedAdPreload = false;
   const adTimeoutMs = normalizeTimeout(options.adTimeoutMs);
@@ -305,6 +315,11 @@ export function createAitHostBridge(
   const adDisplayStartTimeoutMs = normalizeDisplayStartTimeout(options.adDisplayStartTimeoutMs);
   const adMaximumDisplayMs = normalizeMaximumDisplayTimeout(options.adMaximumDisplayMs);
   const bannerRenderTimeoutMs = normalizeBannerRenderTimeout(options.bannerRenderTimeoutMs);
+  const bannerAppearance = {
+    theme: options.bannerAppearance?.theme ?? 'dark',
+    tone: options.bannerAppearance?.tone ?? 'blackAndWhite',
+    variant: options.bannerAppearance?.variant ?? 'expanded',
+  } as const;
   const adLoadCoordinator: AitAdLoadCoordinator = {
     active: undefined,
     waitTimeoutMs: adLoadQueueTimeoutMs,
@@ -751,6 +766,8 @@ export function createAitHostBridge(
           return ok(request, { status: 'failed' });
         }
 
+        const mountOwner = Symbol(surfaceId);
+        bannerMountOwners.set(surfaceId, mountOwner);
         activeBannerAttachments.get(surfaceId)?.destroy();
         activeBannerAttachments.delete(surfaceId);
         const initializeBanner = bannerInitialization
@@ -758,8 +775,17 @@ export function createAitHostBridge(
         void (bannerInitialization = initializeBanner);
         if (!await initializeBanner) {
           bannerInitialization = undefined;
+          if (bannerMountOwners.get(surfaceId) === mountOwner) {
+            bannerMountOwners.delete(surfaceId);
+          }
           return ok(request, { status: 'failed' });
         }
+
+        if (bannerMountOwners.get(surfaceId) !== mountOwner) {
+          return ok(request, { status: 'unavailable' });
+        }
+        activeBannerAttachments.get(surfaceId)?.destroy();
+        activeBannerAttachments.delete(surfaceId);
 
         const result = await attachAitBanner({
           dependencies,
@@ -767,13 +793,17 @@ export function createAitHostBridge(
           surfaceId,
           target,
           timeoutMs: bannerRenderTimeoutMs,
+          appearance: bannerAppearance,
           activeAttachments: activeBannerAttachments,
+          mountOwner,
+          mountOwners: bannerMountOwners,
         });
         return ok(request, result);
       }
 
       case 'ads.unmountBanner': {
         const surfaceId = readBannerSurfaceId(request.payload);
+        bannerMountOwners.delete(surfaceId);
         activeBannerAttachments.get(surfaceId)?.destroy();
         activeBannerAttachments.delete(surfaceId);
         return ok(request, {});
@@ -2882,14 +2912,28 @@ async function attachAitBanner(input: {
   readonly surfaceId: string;
   readonly target: HTMLElement;
   readonly timeoutMs: number;
+  readonly appearance: Required<AitBannerAppearance>;
   readonly activeAttachments: Map<string, { readonly destroy: () => void }>;
+  readonly mountOwner: symbol;
+  readonly mountOwners: Map<string, symbol>;
 }): Promise<{ readonly status: 'mounted' | 'unavailable' | 'failed' }> {
   return new Promise((resolve) => {
     let settled = false;
     let terminalStatus: 'mounted' | 'unavailable' | 'failed' | undefined;
     let attachment: { readonly destroy: () => void } | undefined;
-    const finish = (status: 'mounted' | 'unavailable' | 'failed'): void => {
+    const finish = (requestedStatus: 'mounted' | 'unavailable' | 'failed'): void => {
+      const ownsSurface = input.mountOwners.get(input.surfaceId) === input.mountOwner;
+      const status = requestedStatus === 'mounted' && !ownsSurface
+        ? 'unavailable'
+        : requestedStatus;
       if (settled) {
+        if (status !== 'mounted' && input.activeAttachments.get(input.surfaceId) === attachment) {
+          attachment?.destroy();
+          input.activeAttachments.delete(input.surfaceId);
+        }
+        if (status !== 'mounted' && ownsSurface) {
+          input.mountOwners.delete(input.surfaceId);
+        }
         return;
       }
       settled = true;
@@ -2897,30 +2941,57 @@ async function attachAitBanner(input: {
       globalThis.clearTimeout(timer);
       if (status !== 'mounted') {
         attachment?.destroy();
-        input.activeAttachments.delete(input.surfaceId);
+        if (input.activeAttachments.get(input.surfaceId) === attachment) {
+          input.activeAttachments.delete(input.surfaceId);
+        }
+        if (ownsSurface) {
+          input.mountOwners.delete(input.surfaceId);
+        }
       }
       resolve({ status });
     };
     const timer = globalThis.setTimeout(() => finish('failed'), input.timeoutMs);
 
     try {
-      attachment = input.dependencies.tossAds.attachBanner(input.adGroupId, input.target, {
-        theme: 'dark',
-        tone: 'blackAndWhite',
-        variant: 'expanded',
-        callbacks: {
-          onAdRendered: () => finish('mounted'),
-          onNoFill: () => finish('unavailable'),
-          onAdFailedToRender: (payload) => {
-            console.warn('Failed to render an AIT banner ad.', input.adGroupId, payload.error);
-            finish('failed');
+      const sdkAttachment = input.dependencies.tossAds.attachBanner(
+        input.adGroupId,
+        input.target,
+        {
+          theme: input.appearance.theme,
+          tone: input.appearance.tone,
+          variant: input.appearance.variant,
+          callbacks: {
+            onAdRendered: () => finish('mounted'),
+            onNoFill: () => finish('unavailable'),
+            onAdFailedToRender: (payload) => {
+              console.warn('Failed to render an AIT banner ad.', input.adGroupId, payload.error);
+              finish('failed');
+            },
           },
         },
-      });
+      );
+      let attachmentDestroyed = false;
+      attachment = {
+        destroy() {
+          if (!attachmentDestroyed) {
+            attachmentDestroyed = true;
+            sdkAttachment.destroy();
+          }
+        },
+      };
 
       if (terminalStatus === 'unavailable' || terminalStatus === 'failed') {
         attachment.destroy();
         return;
+      }
+      if (input.mountOwners.get(input.surfaceId) !== input.mountOwner) {
+        attachment.destroy();
+        finish('unavailable');
+        return;
+      }
+      const existingAttachment = input.activeAttachments.get(input.surfaceId);
+      if (existingAttachment !== undefined && existingAttachment !== attachment) {
+        existingAttachment.destroy();
       }
       input.activeAttachments.set(input.surfaceId, attachment);
     } catch (error) {
@@ -2984,15 +3055,15 @@ function decodeStoredValue(serialized: string | null): BridgeStorageLoadData {
 
 function hasConfiguredAdType(
   adGroupIds: ReadonlyMap<string, string>,
-  adPlacementTypes: ReadonlyMap<string, 'rewarded' | 'interstitial' | 'banner'>,
-  type: 'rewarded' | 'interstitial' | 'banner',
+  adPlacementTypes: ReadonlyMap<string, AitAdPlacementType>,
+  type: AitAdPlacementType,
 ): boolean {
   return [...adGroupIds.keys()].some((placementId) => adPlacementTypes.get(placementId) === type);
 }
 
 function normalizeAdPlacementTypes(
-  input: Readonly<Record<string, 'rewarded' | 'interstitial' | 'banner'>> | undefined,
-): ReadonlyMap<string, 'rewarded' | 'interstitial' | 'banner'> {
+  input: Readonly<Record<string, AitAdPlacementType>> | undefined,
+): ReadonlyMap<string, AitAdPlacementType> {
   return new Map(
     Object.entries(input ?? {})
       .map(([placementId, type]) => [placementId.trim(), type] as const)

@@ -55,13 +55,22 @@ export type AdReward =
       readonly currency: 'coin' | 'gem';
     };
 
-export interface AdPlacementEntry {
+interface AdPlacementEntryBase {
   readonly id: LogicalAdPlacementId;
-  readonly type: 'rewarded' | 'interstitial' | 'banner';
-  readonly reward?: AdReward;
   readonly frequencyCap: FrequencyCap;
   readonly platformPlacementIds: Partial<Record<AdPlacementTarget, string>>;
 }
+
+export type AdPlacementEntry =
+  | AdPlacementEntryBase & {
+      readonly type: 'rewarded';
+      readonly reward?: AdReward;
+    }
+  | AdPlacementEntryBase & {
+      readonly type: 'interstitial' | 'banner';
+      /** Non-rewarding placements must never describe a game grant. */
+      readonly reward?: never;
+    };
 
 export interface AdPlacements {
   readonly version: string;

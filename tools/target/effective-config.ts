@@ -11,6 +11,7 @@ import {
   type EffectiveTargetConfig,
   type EffectiveTargetConfigMatrix,
 } from '../../packages/target-config/src/effective';
+import { adPlacementFeatureFor } from '../../packages/target-config/src/runtime';
 import { adPlacementsFilePath, productCatalogFilePath } from '../catalog-paths';
 import { readJsonFile } from '../io';
 import { loadPlatformTargetsConfig } from './platform-targets';
@@ -210,11 +211,7 @@ function validateEffectiveTargetConfig(config: EffectiveTargetConfig): void {
   }
 
   for (const placement of config.ads.placements) {
-    const featureEnabled = placement.type === 'rewarded'
-      ? config.features.rewardedAds
-      : placement.type === 'interstitial'
-        ? config.features.interstitialAds
-        : config.features.bannerAds === true;
+    const featureEnabled = config.features[adPlacementFeatureFor(placement.type)] === true;
 
     if (!featureEnabled && placement.enabled) {
       throw new Error(

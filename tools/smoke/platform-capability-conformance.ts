@@ -66,6 +66,7 @@ const targetSpecs = [
 const initialBridgeCapabilities = {
   nativeIap: true,
   nativeAds: true,
+  bannerAds: true,
   rewardedAds: true,
   interstitialAds: true,
   nativeLeaderboard: true,
@@ -80,6 +81,7 @@ const initialBridgeCapabilities = {
 const updatedBridgeCapabilities = {
   nativeIap: false,
   nativeAds: false,
+  bannerAds: false,
   rewardedAds: false,
   interstitialAds: false,
   nativeLeaderboard: false,

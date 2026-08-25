@@ -8,6 +8,7 @@ import {
 } from '@mpgd/catalog';
 
 import {
+  adPlacementFeatureFor,
   assertTargetIntegrationRuntimeBounds,
   type FeatureAvailabilityReason,
   type TargetCapabilityConfig,
@@ -320,11 +321,7 @@ function createEffectiveAdPlacementConfig(
   config: TargetConfig,
   placement: AdPlacementEntry,
 ): EffectiveAdPlacementConfig {
-  const featureEnabled = placement.type === 'rewarded'
-    ? config.features.rewardedAds
-    : placement.type === 'interstitial'
-      ? config.features.interstitialAds
-      : config.features.bannerAds === true;
+  const featureEnabled = config.features[adPlacementFeatureFor(placement.type)] === true;
   const platformPlacementId = resolveAdPlacementPlatformId(placement, target);
   const reason = effectiveItemReason(featureEnabled, platformPlacementId);
 

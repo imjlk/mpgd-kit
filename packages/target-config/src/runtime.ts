@@ -12,6 +12,11 @@ export type PlatformFeature =
   | 'localization';
 
 export type AdPlacementType = 'rewarded' | 'interstitial' | 'banner';
+const adPlacementFeatureByType = {
+  rewarded: 'rewardedAds',
+  interstitial: 'interstitialAds',
+  banner: 'bannerAds',
+} as const satisfies Record<AdPlacementType, PlatformFeature>;
 type PlatformConfigTarget = PlatformGateway['target'];
 
 export type TargetRuntimeKind =
@@ -187,6 +192,10 @@ export const platformFeatures = [
   'leaderboard',
   'localization',
 ] as const satisfies readonly PlatformFeature[];
+
+export function adPlacementFeatureFor(type: AdPlacementType): PlatformFeature {
+  return adPlacementFeatureByType[type];
+}
 
 export const targetIntegrations = [
   'identityUpgrade',
@@ -476,11 +485,7 @@ export function createTargetRuntimeSnapshot(input: {
     features,
     integrations,
     adPlacements: (input.adPlacements ?? []).map((placement) => {
-      const feature = placement.type === 'rewarded'
-        ? 'rewardedAds'
-        : placement.type === 'interstitial'
-          ? 'interstitialAds'
-          : 'bannerAds';
+      const feature = adPlacementFeatureFor(placement.type);
       const availability = features[feature];
 
       return {
@@ -565,26 +570,14 @@ export function withTargetAvailability(
       return false;
     }
 
-    return expectedType === 'rewarded'
-      ? availabilityConfig.features.rewardedAds
-      : expectedType === 'interstitial'
-        ? availabilityConfig.features.interstitialAds
-        : availabilityConfig.features.bannerAds === true;
+    return availabilityConfig.features[adPlacementFeatureFor(expectedType)] === true;
   };
 
   const canPreloadAdPlacement = (placementId: string): boolean => {
     const actualType = options.resolveAdPlacementType?.(placementId);
 
-    if (actualType === 'rewarded') {
-      return availabilityConfig.features.rewardedAds;
-    }
-
-    if (actualType === 'interstitial') {
-      return availabilityConfig.features.interstitialAds;
-    }
-
-    if (actualType === 'banner') {
-      return availabilityConfig.features.bannerAds === true;
+    if (actualType !== undefined) {
+      return availabilityConfig.features[adPlacementFeatureFor(actualType)] === true;
     }
 
     return (
