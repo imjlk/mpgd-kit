@@ -17,18 +17,18 @@
     "fix": "ttsc fix"
   },
   "dependencies": {
-    "@devvit/web": "0.13.8",
+    "@devvit/web": "0.14.1",
     "@mpgd/adapter-devvit": "workspace:*",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/game-services": "workspace:*"
   },
   "devDependencies": {
-    "@devvit/start": "0.13.8",
+    "@devvit/start": "0.14.1",
     "@ttsc/unplugin": "0.18.4",
     "@types/node": "^24.0.0",
-    "devvit": "0.13.8",
+    "devvit": "0.14.1",
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
-    "vite": "^8.1.3"
+    "vite": "7.3.6"
   }
 }

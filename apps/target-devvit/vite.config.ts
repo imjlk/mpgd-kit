@@ -2,7 +2,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { devvit } from '@devvit/start/vite';
-import { defineConfig } from 'vite';
+import { defineConfig, type PluginOption } from 'vite';
 
 import { createGameViteSharedConfig } from '../../examples/phaser-starter/vite.shared';
 
@@ -10,7 +10,7 @@ const wrapperRoot = fileURLToPath(new URL('.', import.meta.url));
 const gameRoot = resolve(wrapperRoot, '../../examples/phaser-starter');
 
 export default defineConfig(({ mode }) => {
-  const shared = createGameViteSharedConfig({
+  const shared = createGameViteSharedConfig<PluginOption>({
     appTarget: 'reddit',
     configTarget: 'reddit',
     gameRoot,
