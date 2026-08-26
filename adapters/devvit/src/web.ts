@@ -4,11 +4,15 @@ import type { ShareResult } from '@mpgd/platform';
 
 import {
   startDevvitSurface,
+  type DevvitSurfaceClient,
   type DevvitSurfaceOptions,
   type DevvitSurfaceResult,
 } from './surface.js';
 import {
+  startDevvitPreviewViewMode,
   startDevvitViewMode,
+  type DevvitPreviewViewModeOptions,
+  type DevvitPreviewViewModeResult,
   type DevvitViewModeOptions,
   type DevvitViewModeResult,
 } from './view-mode.js';
@@ -21,6 +25,8 @@ export type {
 } from './surface.js';
 export type {
   DevvitInlineModeContext,
+  DevvitPreviewViewModeOptions,
+  DevvitPreviewViewModeResult,
   DevvitViewMode,
   DevvitViewModeClient,
   DevvitViewModeOptions,
@@ -28,6 +34,7 @@ export type {
 } from './view-mode.js';
 
 export type DevvitWebSurfaceOptions = Omit<DevvitSurfaceOptions, 'client'>;
+export type DevvitWebPreviewOptions = Omit<DevvitPreviewViewModeOptions, 'client'>;
 export type DevvitWebViewOptions = Omit<DevvitViewModeOptions, 'client'>;
 
 export interface DevvitShareSheetOptions {
@@ -44,26 +51,44 @@ const browserClient = devvitWebClient as unknown as {
   readonly requestExpandedMode: (event: MouseEvent, entry: string) => void | Promise<void>;
   readonly showShareSheet: (options: DevvitShareSheetOptions) => Promise<void>;
 };
+const browserSurfaceClient: DevvitSurfaceClient = {
+  getWebViewMode: browserClient.getWebViewMode,
+};
 
 export function startDevvitWebSurface(
   options: DevvitWebSurfaceOptions,
 ): Promise<DevvitSurfaceResult> {
   return startDevvitSurface({
     ...options,
-    client: { getWebViewMode: browserClient.getWebViewMode },
+    client: browserSurfaceClient,
+  });
+}
+
+/**
+ * Starts a preview-only inline entry and loads gameplay only in expanded mode.
+ * This is the safe default for generated Devvit games.
+ */
+export function startDevvitPreviewWebView(
+  options: DevvitWebPreviewOptions,
+): Promise<DevvitPreviewViewModeResult> {
+  return startDevvitPreviewViewMode({
+    ...options,
+    client: browserSurfaceClient,
   });
 }
 
 /**
  * Starts a Devvit web view in inline or expanded mode. Inline mode can defer
  * gameplay until an explicit user action while remaining inside the post.
+ * This is an explicit inline-gameplay opt-in; generated games use
+ * {@link startDevvitPreviewWebView} by default.
  */
 export function startDevvitWebView(
   options: DevvitWebViewOptions,
 ): Promise<DevvitViewModeResult> {
   return startDevvitViewMode({
     ...options,
-    client: { getWebViewMode: browserClient.getWebViewMode },
+    client: browserSurfaceClient,
   });
 }
 

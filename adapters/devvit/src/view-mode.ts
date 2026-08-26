@@ -1,8 +1,20 @@
+import {
+  startDevvitSurface,
+  type DevvitSurfaceOptions,
+  type DevvitSurfaceResult,
+} from './surface.js';
+
 export type DevvitViewMode = 'inline' | 'expanded';
 
 export interface DevvitViewModeClient {
   getWebViewMode(): DevvitViewMode;
 }
+
+export type DevvitPreviewViewModeOptions = DevvitSurfaceOptions;
+
+export type DevvitPreviewViewModeResult = {
+  readonly surface: DevvitSurfaceResult;
+};
 
 export interface DevvitInlineModeContext {
   /**
@@ -31,11 +43,32 @@ export interface DevvitViewModeOptions {
 }
 
 /**
+ * Preview-only inline entry contract. This is intentionally a thin alias of
+ * {@link startDevvitSurface}; generated games pin this policy-facing name while
+ * the lower-level surface API remains independently available.
+ *
+ * Use this contract by default for generated games. Games that intentionally
+ * support policy-compliant inline gameplay can opt in through
+ * {@link startDevvitViewMode} instead.
+ */
+export async function startDevvitPreviewViewMode(
+  options: DevvitPreviewViewModeOptions,
+): Promise<DevvitPreviewViewModeResult> {
+  const surface = await startDevvitSurface(options);
+
+  return { surface };
+}
+
+/**
  * Starts a Devvit web view using Reddit's official inline and expanded mode
  * terminology. Inline mode mounts lightweight content first and exposes a
  * retryable, concurrency-safe gameplay loader for a later user action.
  * Expanded mode loads gameplay immediately. Outside a Devvit host, expanded
  * mode is used as the local-browser fallback.
+ *
+ * This is an explicit inline-gameplay opt-in. Prefer
+ * {@link startDevvitPreviewViewMode} unless the game's inline interaction and
+ * gesture model has been reviewed against current Reddit requirements.
  */
 export async function startDevvitViewMode(
   options: DevvitViewModeOptions,

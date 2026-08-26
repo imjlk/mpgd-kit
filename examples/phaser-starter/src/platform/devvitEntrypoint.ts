@@ -1,28 +1,26 @@
 import {
   requestDevvitExpandedMode,
-  startDevvitWebView,
-  type DevvitInlineModeContext,
+  startDevvitPreviewWebView,
 } from '@mpgd/adapter-devvit/web';
 
-await startDevvitWebView({
-  async mountInlineMode(context) {
+const expandedRequestRecoveryMs = 8_000;
+
+await startDevvitPreviewWebView({
+  async mountInlinePreview() {
     await import('./devvitInlineMode.css');
-    renderInlineLaunchScreen(context);
+    renderInlineLaunchScreen();
   },
-  async loadGameplay() {
+  async loadExpandedGame() {
     await import('../main');
   },
   onModeUnavailable(error) {
     if (!(error instanceof ReferenceError)) {
-      console.warn('[devvit] web view mode unavailable; loading gameplay.', error);
+      console.warn('[devvit] web view mode unavailable; loading expanded gameplay.', error);
     }
   },
 });
 
-function renderInlineLaunchScreen(
-  context: DevvitInlineModeContext,
-  errorMessage?: string,
-): void {
+function renderInlineLaunchScreen(): void {
   const launchScreen = document.createElement('main');
   launchScreen.className = 'devvit-launch-screen';
 
@@ -35,90 +33,59 @@ function renderInlineLaunchScreen(
 
   const description = document.createElement('p');
   description.className = 'devvit-launch-screen__description';
-  description.textContent = 'Play directly in the post or open expanded mode.';
+  description.textContent = 'Open the full game without interrupting your Reddit feed.';
 
   const actions = document.createElement('div');
   actions.className = 'devvit-launch-screen__actions';
 
-  const playInlineButton = document.createElement('button');
-  playInlineButton.className = 'devvit-launch-screen__button';
-  playInlineButton.type = 'button';
-  playInlineButton.textContent = 'Play here';
-
   const expandButton = document.createElement('button');
-  expandButton.className =
-    'devvit-launch-screen__button devvit-launch-screen__button--secondary';
+  expandButton.className = 'devvit-launch-screen__button';
   expandButton.type = 'button';
-  expandButton.textContent = 'Open expanded mode';
+  expandButton.textContent = 'Play full screen';
 
   const status = document.createElement('p');
   status.className = 'devvit-launch-screen__status';
   status.setAttribute('aria-live', 'polite');
-  status.textContent = errorMessage ?? '';
+  status.setAttribute('role', 'status');
 
-  playInlineButton.addEventListener('click', () => {
-    setBusy(true, 'Loading gameplay…');
-    const loading = mountGameplayDocument();
+  let recoveryTimeout: ReturnType<typeof globalThis.setTimeout> | undefined;
+  const recover = (message: string) => {
+    if (recoveryTimeout !== undefined) {
+      globalThis.clearTimeout(recoveryTimeout);
+      recoveryTimeout = undefined;
+    }
 
-    void context.startGameplay()
-      .then(() => {
-        loading.remove();
-      })
-      .catch((error: unknown) => {
-        console.error('[devvit] inline mode gameplay failed to load.', error);
-        renderInlineLaunchScreen(context, 'Gameplay could not start. Try again.');
-      });
-  });
+    expandButton.disabled = false;
+    status.textContent = message;
+  };
   expandButton.addEventListener('click', (event) => {
-    setBusy(true, 'Opening expanded mode…');
+    expandButton.disabled = true;
+    status.textContent = 'Opening full screen…';
+    recoveryTimeout = globalThis.setTimeout(() => {
+      recover('Full screen did not open. Try again.');
+    }, expandedRequestRecoveryMs);
 
     void requestDevvitExpandedMode(event, 'game')
-      .then(() => {
-        setBusy(false, '');
-      })
       .catch((error: unknown) => {
         console.error('[devvit] expanded mode request failed.', error);
-        setBusy(false, 'Expanded mode is unavailable. Try again.');
+        recover('Full screen is unavailable. Try again.');
       });
   });
+  const recoverAfterReturn = () => {
+    if (expandButton.disabled) {
+      recover('');
+    }
+  };
+  globalThis.addEventListener('focus', recoverAfterReturn);
+  globalThis.addEventListener('pageshow', recoverAfterReturn);
 
-  actions.append(playInlineButton, expandButton);
+  actions.append(expandButton);
   launchScreen.append(eyebrow, title, description, actions, status);
   const body = requireDocumentBody();
 
-  body.classList.remove('devvit-inline-mode-gameplay');
   body.classList.add('devvit-inline-mode-host');
   delete body.dataset.mpgdPreserveBrowserTouchGestures;
   body.replaceChildren(launchScreen);
-
-  function setBusy(busy: boolean, message: string): void {
-    playInlineButton.disabled = busy;
-    expandButton.disabled = busy;
-    status.textContent = message;
-  }
-}
-
-function mountGameplayDocument(): HTMLElement {
-  const body = requireDocumentBody();
-  const app = document.createElement('main');
-  const game = document.createElement('div');
-  const loading = document.createElement('p');
-
-  app.id = 'app';
-  game.id = 'game';
-  loading.className = 'devvit-inline-gameplay-loading';
-  loading.setAttribute('aria-live', 'polite');
-  loading.setAttribute('role', 'status');
-  loading.textContent = 'Loading gameplay…';
-  game.append(loading);
-  app.append(game);
-
-  body.classList.remove('devvit-inline-mode-host');
-  body.classList.add('devvit-inline-mode-gameplay');
-  body.dataset.mpgdPreserveBrowserTouchGestures = 'true';
-  body.replaceChildren(app);
-
-  return loading;
 }
 
 function requireDocumentBody(): HTMLElement {

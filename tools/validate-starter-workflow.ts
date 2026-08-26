@@ -1442,17 +1442,31 @@ function validatePhaserTemplateDevvitViewModes(): void {
       const source = readText(devvitEntryPath);
       for (const requiredText of [
         "from '@mpgd/adapter-devvit/web'",
+        'startDevvitPreviewWebView',
+        'mountInlinePreview',
+        'loadExpandedGame',
+        "await import('../main')",
+        "requestDevvitExpandedMode(event, 'game')",
+        'expandedRequestRecoveryMs',
+        "recover('Full screen did not open. Try again.')",
+      ]) {
+        assertIncludesText(source, requiredText, `${devvitEntryPath}: Devvit view modes.`);
+      }
+
+      for (const forbiddenText of [
         'startDevvitWebView',
+        'startDevvitViewMode',
         'mountInlineMode',
         'context.startGameplay()',
         'mountGameplayDocument()',
         'devvit-inline-gameplay-loading',
-        'mpgdPreserveBrowserTouchGestures',
-        "await import('../main')",
-        "requestDevvitExpandedMode(event, 'game')",
-        "setBusy(false, '')",
+        "textContent = 'Play here'",
       ]) {
-        assertIncludesText(source, requiredText, `${devvitEntryPath}: Devvit view modes.`);
+        if (source.includes(forbiddenText)) {
+          failures.push(
+            `${devvitEntryPath}: preview-only default must not contain ${forbiddenText}.`,
+          );
+        }
       }
     }
 
@@ -1480,13 +1494,27 @@ function validatePhaserTemplateDevvitViewModes(): void {
 
       for (const requiredText of [
         'body.devvit-inline-mode-host',
-        'body.devvit-inline-mode-gameplay',
         '.devvit-launch-screen',
         '.devvit-launch-screen__button',
-        '.devvit-inline-gameplay-loading',
-        'touch-action: pan-y !important',
+        'position: fixed',
+        'overflow: hidden',
+        'touch-action: pan-y',
+        '@media (max-height: 440px)',
       ]) {
         assertIncludesText(source, requiredText, `${devvitStylePath}: inline mode styles.`);
+      }
+
+      for (const forbiddenText of [
+        'body.devvit-inline-mode-gameplay',
+        '.devvit-inline-gameplay-loading',
+      ]) {
+        if (source.includes(forbiddenText)) {
+          failures.push(`${devvitStylePath}: inline preview must not contain ${forbiddenText}.`);
+        }
+      }
+
+      if (/overflow(?:-[xy])?:\s*(?:auto|scroll|overlay)/iu.test(source)) {
+        failures.push(`${devvitStylePath}: inline preview must not create a scroll container.`);
       }
     }
 
@@ -1499,6 +1527,28 @@ function validatePhaserTemplateDevvitViewModes(): void {
       ]) {
         assertIncludesText(source, requiredText, `${vitePath}: Devvit multi-page build.`);
       }
+    }
+  }
+
+  for (const relativePath of [
+    'src/platform/devvitEntrypoint.ts',
+    'src/platform/devvitInlineMode.css',
+  ]) {
+    const templatePath = `packages/cli/templates/phaser-game/${relativePath}`;
+    const examplePath = `examples/phaser-starter/${relativePath}`;
+    const templateSource = existsSync(templatePath) ? readText(templatePath) : undefined;
+    const exampleSource = existsSync(examplePath) ? readText(examplePath) : undefined;
+    const comparableTemplateSource =
+      relativePath === 'src/platform/devvitEntrypoint.ts'
+        ? templateSource?.replace('__GAME_TITLE__', 'mpgd Phaser Starter')
+        : templateSource;
+
+    if (
+      comparableTemplateSource !== undefined
+      && exampleSource !== undefined
+      && comparableTemplateSource !== exampleSource
+    ) {
+      failures.push(`${templatePath}: must stay in parity with ${examplePath}.`);
     }
   }
 

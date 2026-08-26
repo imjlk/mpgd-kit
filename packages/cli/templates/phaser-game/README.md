@@ -231,12 +231,16 @@ The generated `devvit.json` app name is a Devvit-safe slug derived from the game
 directory name; edit it before `devvit:init` if you need a different Reddit app
 name.
 
-The default post entry builds a lightweight inline mode launch screen without
-importing Phaser eagerly. Play here loads gameplay inside the post only after a
-user click; Open expanded mode requests the separate `game` entrypoint, whose
-`game.html` document starts the Phaser bundle directly. Keep these physical
-entries separate so feed cards meet Devvit's inline mode performance and
-gesture requirements while still supporting playable posts.
+The default post entry builds a fixed, non-scrolling inline preview without
+importing Phaser. Play full screen requests the separate `game` entrypoint,
+whose `game.html` document starts the Phaser bundle directly. Keep these
+physical entries separate so feed cards preserve Reddit-native gestures and do
+not create scroll traps.
+
+Inline gameplay remains an explicit opt-in through `startDevvitWebView`. Use it
+only when the game interaction is tap/click based and the complete inline
+surface has been reviewed against current Reddit requirements. Generated games
+use `startDevvitPreviewWebView` by default.
 
 First-time Devvit setup:
 
