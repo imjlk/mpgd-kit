@@ -29,8 +29,8 @@ game-specific state.
 - Inbound share payloads are treated as untrusted, and progress linking plus notification delivery remain server-owned.
 - Orientation locks are soft prompts unless a platform adapter explicitly supplies hard-lock support.
 - Safe-area geometry is reserved exactly once: CSS-padded containers do not also subtract `safeArea.contentBounds`, while full-bleed game surfaces use the snapshot bounds.
-- The Reddit inline mode document renders a lightweight launch screen without loading Phaser eagerly.
-- Play here loads gameplay inside the post after a user click.
+- The Reddit inline mode document renders a fixed preview without loading Phaser or creating a scroll container.
+- Play full screen requests the separate expanded gameplay entry after a user click.
 - The Reddit `game` entrypoint opens the separate expanded mode document and starts Phaser directly.
 
 ## Apps in Toss Target

@@ -119,14 +119,15 @@
       "entry": "src/platform/devvitEntrypoint.ts",
       "capabilities": [
         "inline-mode-launch-screen",
-        "inline-mode-gameplay",
+        "inline-mode-preview",
         "expanded-mode-game-entry",
+        "expanded-mode-gameplay",
         "deferred-phaser-load"
       ],
       "gotchas": [
-        "Keep the inline mode launch screen independent of Phaser and game runtime imports until the user starts gameplay.",
+        "Keep the inline preview independent of Phaser and game runtime imports; the generated default loads gameplay only from the expanded game document.",
         "Keep the expanded mode game document mapped to the game entrypoint in devvit.json.",
-        "Inline mode gameplay must use tap or click input without trapping feed scrolling.",
+        "Treat inline gameplay as a separate adapter opt-in that requires a current Reddit gesture and scroll-policy review.",
         "Use the Devvit adapter web API instead of importing the Devvit SDK in game code."
       ]
     },

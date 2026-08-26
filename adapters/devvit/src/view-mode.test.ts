@@ -1,6 +1,62 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { startDevvitViewMode } from './view-mode';
+import { startDevvitPreviewViewMode, startDevvitViewMode } from './view-mode';
+
+describe('startDevvitPreviewViewMode', () => {
+  it('mounts an inline preview without exposing or loading gameplay', async () => {
+    const mountInlinePreview = vi.fn();
+    const loadExpandedGame = vi.fn();
+
+    await expect(
+      startDevvitPreviewViewMode({
+        client: { getWebViewMode: () => 'inline' },
+        mountInlinePreview,
+        loadExpandedGame,
+      }),
+    ).resolves.toEqual({ surface: 'inline-preview' });
+
+    expect(mountInlinePreview).toHaveBeenCalledOnce();
+    expect(loadExpandedGame).not.toHaveBeenCalled();
+  });
+
+  it('loads gameplay immediately in expanded mode', async () => {
+    const mountInlinePreview = vi.fn();
+    const loadExpandedGame = vi.fn();
+
+    await expect(
+      startDevvitPreviewViewMode({
+        client: { getWebViewMode: () => 'expanded' },
+        mountInlinePreview,
+        loadExpandedGame,
+      }),
+    ).resolves.toEqual({ surface: 'expanded-game' });
+
+    expect(mountInlinePreview).not.toHaveBeenCalled();
+    expect(loadExpandedGame).toHaveBeenCalledOnce();
+  });
+
+  it('uses expanded gameplay as the local-browser fallback', async () => {
+    const hostError = new ReferenceError('devvit is not defined');
+    const onModeUnavailable = vi.fn();
+    const loadExpandedGame = vi.fn();
+
+    await expect(
+      startDevvitPreviewViewMode({
+        client: {
+          getWebViewMode() {
+            throw hostError;
+          },
+        },
+        mountInlinePreview: vi.fn(),
+        loadExpandedGame,
+        onModeUnavailable,
+      }),
+    ).resolves.toEqual({ surface: 'expanded-game' });
+
+    expect(onModeUnavailable).toHaveBeenCalledWith(hostError);
+    expect(loadExpandedGame).toHaveBeenCalledOnce();
+  });
+});
 
 describe('startDevvitViewMode', () => {
   it('mounts inline mode without loading gameplay eagerly', async () => {

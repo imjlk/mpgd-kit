@@ -41,11 +41,15 @@ replace the `devvit.json` scheduler endpoint and should not use process-local
 memory when delivery must cross instances. The generated target exposes only
 the oRPC bridge route; the former JSON compatibility route is not generated.
 
-The default post entry uses `index.html` for a lightweight inline mode launch
-screen. Play here loads Phaser inside the post after a user click. Open expanded
-mode requests the `game` entrypoint, which loads the separate `game.html`
-document. Keep launch UI free of eager game runtime imports, and keep inline
-gameplay tap/click only so the post does not trap feed scrolling.
+The default post entry uses `index.html` for a fixed, non-scrolling preview.
+Play full screen requests the `game` entrypoint, which loads Phaser from the
+separate `game.html` document. Keep preview UI free of game runtime imports so
+the post cannot trap feed scrolling.
+
+Games that intentionally support inline gameplay can opt in through
+`startDevvitWebView`; the generated default uses `startDevvitPreviewWebView`.
+An opt-in inline surface must remain tap/click based and preserve Reddit-native
+gestures across its complete gameplay flow.
 
 The generated bridge does not advertise or accept a generic platform
 leaderboard. Devvit ranking should be owned by a server completion handler that

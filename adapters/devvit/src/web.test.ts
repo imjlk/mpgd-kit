@@ -17,7 +17,26 @@ vi.mock('@devvit/web/client', () => ({
   showShareSheet,
 }));
 
-import { presentDevvitShareSheet, requestDevvitExpandedMode, startDevvitWebView } from './web';
+import {
+  presentDevvitShareSheet,
+  requestDevvitExpandedMode,
+  startDevvitPreviewWebView,
+  startDevvitWebView,
+} from './web';
+
+describe('startDevvitPreviewWebView', () => {
+  it('uses the Devvit client while keeping the inline entry preview-only', async () => {
+    const mountInlinePreview = vi.fn();
+    const loadExpandedGame = vi.fn();
+
+    await expect(
+      startDevvitPreviewWebView({ mountInlinePreview, loadExpandedGame }),
+    ).resolves.toEqual({ surface: 'inline-preview' });
+
+    expect(mountInlinePreview).toHaveBeenCalledOnce();
+    expect(loadExpandedGame).not.toHaveBeenCalled();
+  });
+});
 
 describe('startDevvitWebView', () => {
   it('uses the Devvit client view mode and defers inline gameplay', async () => {

@@ -509,12 +509,18 @@ SDK 3 bundle, follow the [SDK 3 release and CORS checklist](docs/APPS_IN_TOSS_SD
 
 ## Reddit Devvit
 
-The Reddit target uses Devvit Web 0.13.x. `pnpm build:devvit` builds the
+The Reddit target uses Devvit Web 0.14.1. `pnpm build:devvit` builds the
 configured Phaser game with `APP_TARGET=reddit`, copies it to
 `apps/target-devvit/dist/client`,
 builds the Devvit server bridge to CJS, and writes the release manifest. Live
 `devvit playtest`, `devvit upload`, and `devvit publish` remain local commands
 because they depend on Reddit auth state in `~/.devvit/token`.
+
+Generated games use a fixed, non-scrolling inline preview and load Phaser only
+through the separate Expanded Mode entry. The adapter still exposes
+`startDevvitWebView` for games that intentionally opt in to policy-compliant
+inline gameplay; that path is not the generated default and must preserve
+Reddit-native gestures without creating a scroll trap.
 
 Repeatable server-side custom-post flows can use the
 [`@mpgd/adapter-devvit/server` durable operation coordinator](docs/DEVVIT_DURABLE_POST_OPERATIONS.md).

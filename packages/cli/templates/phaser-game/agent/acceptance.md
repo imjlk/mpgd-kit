@@ -32,9 +32,9 @@ continue to expose game-facing behavior through `PlatformGateway`. The Devvit
 app root is game-owned in `apps/target-devvit`; run `pnpm devvit:init` once
 after login before upload or playtest.
 Verify the default post entry renders a lightweight inline mode launch screen,
-Play here starts gameplay inside the post, and the `game` entry opens the
-separate expanded mode Phaser document. Inline gameplay must remain tap/click
-only and must not trap feed scrolling.
+does not load Phaser or create a scroll container, and Play full screen opens
+the separate expanded mode Phaser document. Inline gameplay remains available
+only as an explicit adapter opt-in and must preserve Reddit-native gestures.
 
 <!-- mpgd:microsoft-store:start -->
 For Microsoft Store changes, keep the first pass as a PWA/web target that uses
