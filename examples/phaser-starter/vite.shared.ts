@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import ttsc from '@ttsc/unplugin/vite';
-import type { PluginOption, UserConfig } from 'vite';
+import type { PluginOption } from 'vite';
 
 import {
   assertRuntimeTargetConfigMatrix,
@@ -29,9 +29,19 @@ export interface CreateGameViteSharedConfigInput {
   readonly adPlacementsFile?: string;
 }
 
-export function createGameViteSharedConfig(
+/** Vite-major-neutral subset shared by every generated target wrapper. */
+export interface GameViteSharedConfig<SharedPluginOption> {
+  readonly base: string;
+  readonly plugins: SharedPluginOption[];
+  readonly resolve: {
+    readonly alias: Record<string, string>;
+  };
+  readonly define: Record<string, string>;
+}
+
+export function createGameViteSharedConfig<SharedPluginOption = PluginOption>(
   input: CreateGameViteSharedConfigInput,
-): UserConfig {
+): GameViteSharedConfig<SharedPluginOption> {
   const isProduction = input.mode === 'production';
   const appTarget = input.appTarget ?? process.env.APP_TARGET ?? 'browser';
   const configTarget = input.configTarget ?? process.env.MPGD_CONFIG_TARGET ?? '';
@@ -56,7 +66,7 @@ export function createGameViteSharedConfig(
       ttsc({
         project: input.project,
         plugins: false,
-      }) as unknown as PluginOption,
+      }) as unknown as SharedPluginOption,
     ],
     resolve: {
       alias: {

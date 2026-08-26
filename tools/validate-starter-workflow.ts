@@ -116,7 +116,11 @@ const requiredDevvitQueries = [
   'playtest',
   'payments',
 ] as const;
-const expectedDevvitVersion = '0.13.8';
+const expectedDevvitVersion = '0.14.1';
+/** Verified Vite baseline for generated games and kit targets. */
+const expectedViteVersion = '8.1.3';
+/** Devvit 0.14.x targets pin Vite 7 for compatibility with @devvit/start. */
+const expectedDevvitTargetViteVersion = '7.3.6';
 /** Starter configs that must keep the baseline gameplay evidence plan. */
 const gameplayE2EConfigPaths = [
   'examples/phaser-starter/mpgd.game.json',
@@ -325,16 +329,18 @@ function validateGeneratedConsumerWorkflow(): void {
 }
 
 function validateGeneratedViteVersionPins(): void {
-  const packagePaths = [
-    'examples/phaser-starter/package.json',
-    'packages/cli/templates/phaser-game/package.json',
-    'packages/cli/templates/phaser-game/apps/target-ait/package.json',
-    'packages/cli/templates/phaser-game/apps/target-cloudflare-pages/package.json',
-    'packages/cli/templates/phaser-game/apps/target-devvit/package.json',
-  ] as const;
-  const expectedVersion = '8.1.3';
+  const expectedVersionsByPackagePath = {
+    'apps/target-devvit/package.json': expectedDevvitTargetViteVersion,
+    'examples/phaser-starter/package.json': expectedViteVersion,
+    'packages/cli/templates/phaser-game/package.json': expectedViteVersion,
+    'packages/cli/templates/phaser-game/apps/target-ait/package.json': expectedViteVersion,
+    'packages/cli/templates/phaser-game/apps/target-cloudflare-pages/package.json':
+      expectedViteVersion,
+    'packages/cli/templates/phaser-game/apps/target-devvit/package.json':
+      expectedDevvitTargetViteVersion,
+  } as const;
 
-  for (const packagePath of packagePaths) {
+  for (const [packagePath, expectedVersion] of Object.entries(expectedVersionsByPackagePath)) {
     const packageJson = readJson(packagePath) as {
       readonly devDependencies?: Record<string, unknown>;
     } | null;
@@ -356,7 +362,7 @@ function validateGeneratedViteVersionPins(): void {
     assertEqual(
       viteVersion,
       expectedVersion,
-      `${packagePath}: devDependencies.vite must match the verified Vite baseline`,
+      `${packagePath}: devDependencies.vite must match the verified Vite baseline (${expectedVersion})`,
     );
   }
 }
@@ -372,7 +378,7 @@ function validateGeneratedViteConfigTyping(): void {
 
     assertIncludesText(
       content,
-      'as unknown as PluginOption',
+      'as unknown as SharedPluginOption',
       `${configPath}: bounded unplugin type`,
     );
   }

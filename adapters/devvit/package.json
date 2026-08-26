@@ -61,7 +61,7 @@
     "test": "vitest run && node test/payments-dist-import.mjs && node test/server-dist-import.mjs && node --conditions=browser test/web-dist-import.mjs"
   },
   "dependencies": {
-    "@devvit/web": "0.13.8",
+    "@devvit/web": "0.14.1",
     "@mpgd/bridge": "workspace:*",
     "@mpgd/game-services": "workspace:*",
     "@mpgd/platform": "workspace:*"
