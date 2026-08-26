@@ -316,8 +316,14 @@ Apps in Toss navigation chrome is target-owned. Configure the `ait` target's
 `navigationBar` in `mpgd.targets.json`; `mpgd target build ait` validates the
 supported appearance options and forwards them to `apps-in-toss.config.ts` at
 build time. The Phaser starter uses a transparent dark navigation bar without
-back, home, title, or app-icon chrome so game content can continue underneath it. Keep
-the game's own safe-area padding clear of Toss controls.
+back, home, title, or app-icon chrome so game content can continue underneath
+it. The wrapper installs `installAitSafeAreaCssVariables()` before the game
+mount, mirrors the official `SafeArea.get()` and `SafeArea.subscribe()` values
+into `--mpgd-safe-area-*`, and exposes
+`--mpgd-ait-navigation-content-top` for a full-width HUD below the native
+controls. CSS `env(safe-area-inset-*)` remains the local and older-host
+fallback. Custom wrappers should import the installer from
+`@mpgd/adapter-ait/safe-area`; keep SDK imports out of Phaser scenes.
 
 During the SDK 3 origin transition, allow all four exact origins on every API
 called by the mini-app:

@@ -45,6 +45,10 @@
       "types": "./dist/local-mock.d.ts",
       "default": "./dist/local-mock.js"
     },
+    "./safe-area": {
+      "types": "./dist/safe-area.d.ts",
+      "default": "./dist/safe-area.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [

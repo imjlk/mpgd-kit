@@ -1017,6 +1017,7 @@ function validatePhaserTemplateAITConsoleCli(): void {
 
 function validateCheckedInAITWrapperNavigation(): void {
   const wrapperConfigPath = 'apps/target-ait/apps-in-toss.config.ts';
+  const wrapperMainPath = 'apps/target-ait/src/main.ts';
 
   if (!existsSync(wrapperConfigPath)) {
     failures.push(`${wrapperConfigPath}: required for the checked-in AIT wrapper flow.`);
@@ -1031,6 +1032,19 @@ function validateCheckedInAITWrapperNavigation(): void {
     'JSON.parse(encoded)',
   ]) {
     assertIncludesText(content, requiredText, wrapperConfigPath);
+  }
+
+  if (!existsSync(wrapperMainPath)) {
+    failures.push(`${wrapperMainPath}: required for the checked-in AIT safe-area flow.`);
+    return;
+  }
+
+  const wrapperMain = readText(wrapperMainPath);
+  for (const requiredText of [
+    "from '@mpgd/adapter-ait/safe-area'",
+    'installAitSafeAreaCssVariables();',
+  ]) {
+    assertIncludesText(wrapperMain, requiredText, wrapperMainPath);
   }
 }
 
@@ -1092,6 +1106,7 @@ function validatePhaserTemplateAITWrapper(): void {
         ['./ad-config', 'ad-config'],
         ['./host', 'host'],
         ['./local-mock', 'local-mock'],
+        ['./safe-area', 'safe-area'],
         ['./wrapper', 'wrapper'],
       ] as const) {
         const exported = packageJson.exports?.[subpath];
@@ -1127,6 +1142,11 @@ function validatePhaserTemplateAITWrapper(): void {
         tsconfig.compilerOptions?.paths?.['@mpgd/adapter-ait/package.json'],
         './adapters/ait/package.json',
         `${baseTsconfigPath}: compilerOptions.paths[@mpgd/adapter-ait/package.json]`,
+      );
+      assertIncludes(
+        tsconfig.compilerOptions?.paths?.['@mpgd/adapter-ait/safe-area'],
+        './adapters/ait/src/safe-area.ts',
+        `${baseTsconfigPath}: compilerOptions.paths[@mpgd/adapter-ait/safe-area]`,
       );
     }
   }
@@ -1165,7 +1185,9 @@ function validatePhaserTemplateAITWrapper(): void {
     const content = readText(wrapperMainPath);
     for (const requiredText of [
       "from '@mpgd/adapter-ait/host'",
+      "from '@mpgd/adapter-ait/safe-area'",
       "from '@mpgd/adapter-ait/wrapper'",
+      'installAitSafeAreaCssVariables();',
       'installAitHostBridge({',
       'mountAitGameBundle(app)',
     ]) {

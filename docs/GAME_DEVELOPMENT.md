@@ -145,6 +145,25 @@ CSS exposes the browser values through `--mpgd-safe-area-top`, `right`,
 `bottom`, and `left`. The values passed to `safeAreaInsets` must be in the
 **same coordinate space as the measured viewport**.
 
+Generated Apps in Toss wrappers replace those browser fallbacks with the
+official WebView `SafeArea.get()` snapshot and keep them synchronized through
+`SafeArea.subscribe()`. They also expose
+`--mpgd-ait-navigation-content-top`, the first full-width content position
+below the transparent game navigation controls. A custom AIT wrapper should
+install the same bridge before mounting its game:
+
+```ts
+import { installAitSafeAreaCssVariables } from '@mpgd/adapter-ait/safe-area';
+
+installAitSafeAreaCssVariables();
+```
+
+Use `--mpgd-ait-navigation-content-top` for a persistent top HUD when the AIT
+navigation bar is transparent. Continue using the ordinary
+`--mpgd-safe-area-*` variables for device cutouts and the home indicator. The
+bridge leaves the CSS `env(safe-area-inset-*)` values untouched when the native
+snapshot is unavailable, so local browser playtests keep a safe fallback.
+
 The starter measures `#game` after its outer CSS has already reserved the safe
 area, so its default snapshot correctly reports a full-content rectangle with
 zero local insets. Do not pass the browser insets again in that case: doing so
