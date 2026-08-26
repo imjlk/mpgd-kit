@@ -1,5 +1,15 @@
 # @mpgd/cli
 
+## 0.24.1 — 2026-08-26
+
+### Changed
+
+- [d49be5b](https://github.com/imjlk/mpgd-kit/commit/d49be5b890f0a7058487f5763d2acc0433ac2b39) Align the Devvit adapter, generated target, and starter template on Devvit 0.14.1. Generated targets pin Vite 7.3.6 for compatibility with the current Devvit Vite plugin. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-devvit@0.9.2
+
 ## 0.24.0 — 2026-08-26
 
 ### Added
