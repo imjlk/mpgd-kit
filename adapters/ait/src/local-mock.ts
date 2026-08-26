@@ -16,6 +16,20 @@ function noOpSubscription(): () => void {
   return () => {};
 }
 
+/**
+ * Local browsers have no native safe-area constant. Throwing preserves the
+ * wrapper's CSS `env(safe-area-inset-*)` fallback while keeping ESM exports in
+ * parity with the SDK surface consumed by the adapter.
+ */
+export const SafeArea = {
+  get(): never {
+    throw new Error('SafeArea is unavailable in the Apps in Toss local mock.');
+  },
+  subscribe(_input: { readonly onEvent: (insets: unknown) => void }): () => void {
+    return noOpSubscription();
+  },
+};
+
 export const Storage = {
   async getItem(key: string): Promise<string | null> {
     return localStorageValues.get(key) ?? null;

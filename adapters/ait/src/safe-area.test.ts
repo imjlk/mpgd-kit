@@ -101,6 +101,9 @@ describe('AIT safe-area CSS bridge', () => {
 
   it('is a no-op when rendered outside a browser', () => {
     expect(() => installAitSafeAreaCssVariables()()).not.toThrow();
+    expect(() => installAitSafeAreaCssVariables({
+      navigationControlEdgeGapPx: Number.POSITIVE_INFINITY,
+    })).toThrow('navigationControlEdgeGapPx');
   });
 
   it('restores CSS fallbacks even when the native unsubscribe throws', () => {
@@ -120,5 +123,29 @@ describe('AIT safe-area CSS bridge', () => {
     expect(style.getPropertyValue(aitSafeAreaCssVariables.bottom)).toBe(
       'env(safe-area-inset-bottom)',
     );
+  });
+
+  it('supports measured navigation geometry overrides and rejects invalid values', () => {
+    const style = new MemoryStyle();
+    installAitSafeAreaCssVariables({
+      style,
+      navigationControlBandHeightPx: 60,
+      navigationControlEdgeGapPx: 12,
+      source: {
+        get: () => ({ top: 47, right: 4, bottom: 34, left: 0 }),
+        subscribe: () => () => {},
+      },
+    });
+
+    expect(style.getPropertyValue(aitSafeAreaCssVariables.navigationControlRight)).toBe('16px');
+    expect(style.getPropertyValue(aitSafeAreaCssVariables.navigationContentTop)).toBe('107px');
+    expect(() => installAitSafeAreaCssVariables({
+      style,
+      navigationControlBandHeightPx: -1,
+      source: {
+        get: () => ({ top: 0, right: 0, bottom: 0, left: 0 }),
+        subscribe: () => () => {},
+      },
+    })).toThrow('navigationControlBandHeightPx');
   });
 });

@@ -163,6 +163,9 @@ navigation bar is transparent. Continue using the ordinary
 `--mpgd-safe-area-*` variables for device cutouts and the home indicator. The
 bridge leaves the CSS `env(safe-area-inset-*)` values untouched when the native
 snapshot is unavailable, so local browser playtests keep a safe fallback.
+The default 52px navigation band and 10px edge gap match the current game
+navigation treatment. A wrapper with measured custom host geometry can pass
+`navigationControlBandHeightPx` and `navigationControlEdgeGapPx` overrides.
 
 The starter measures `#game` after its outer CSS has already reserved the safe
 area, so its default snapshot correctly reports a full-content rectangle with

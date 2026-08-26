@@ -324,6 +324,8 @@ into `--mpgd-safe-area-*`, and exposes
 controls. CSS `env(safe-area-inset-*)` remains the local and older-host
 fallback. Custom wrappers should import the installer from
 `@mpgd/adapter-ait/safe-area`; keep SDK imports out of Phaser scenes.
+The default 52px navigation band and 10px edge gap can be overridden through
+the installer options when a custom host treatment has measured geometry.
 
 During the SDK 3 origin transition, allow all four exact origins on every API
 called by the mini-app:

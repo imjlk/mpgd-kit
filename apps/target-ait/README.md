@@ -27,6 +27,9 @@ values into `--mpgd-safe-area-top`, `right`, `bottom`, and `left`, and exposes
 navigation controls. CSS `env(safe-area-inset-*)` remains the local and
 older-host fallback. Custom wrappers should import the installer from
 `@mpgd/adapter-ait/safe-area` instead of reading the SDK inside a Phaser scene.
+The 52px navigation band and 10px edge gap match the current game navigation
+treatment; wrappers with measured custom host geometry can override both
+values through the installer options.
 
 The production bridge maps the stable game-scoped `getUserKeyForGame()` hash
 to `PlatformGateway.identity.getPlayer()` and serializes gateway storage values

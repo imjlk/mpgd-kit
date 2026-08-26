@@ -25,6 +25,10 @@ export interface AitSafeAreaCssStyle {
 export interface InstallAitSafeAreaCssVariablesOptions {
   readonly source?: AitSafeAreaSource;
   readonly style?: AitSafeAreaCssStyle;
+  /** Override only when a host version or custom navigation treatment has a measured band. */
+  readonly navigationControlBandHeightPx?: number;
+  /** Override only when native navigation uses a measured right-edge gap. */
+  readonly navigationControlEdgeGapPx?: number;
 }
 
 /**
@@ -48,6 +52,7 @@ export const aitSafeAreaCssVariables = Object.freeze({
 } as const);
 
 const maximumSafeAreaInsetPx = 4_096;
+const maximumCssPixelOptionPx = 4_096;
 
 /**
  * Mirror the official AIT `SafeArea` snapshot into CSS custom properties and
@@ -59,6 +64,16 @@ const maximumSafeAreaInsetPx = 4_096;
 export function installAitSafeAreaCssVariables(
   options: InstallAitSafeAreaCssVariablesOptions = {},
 ): () => void {
+  const navigationControlBandHeightPx = normalizeCssPixelOption(
+    options.navigationControlBandHeightPx,
+    aitNavigationControlBandHeightPx,
+    'navigationControlBandHeightPx',
+  );
+  const navigationControlEdgeGapPx = normalizeCssPixelOption(
+    options.navigationControlEdgeGapPx,
+    aitNavigationControlEdgeGapPx,
+    'navigationControlEdgeGapPx',
+  );
   const style = options.style ?? resolveDocumentRootStyle();
   if (style === undefined) {
     return () => {};
@@ -85,11 +100,11 @@ export function installAitSafeAreaCssVariables(
     style.setProperty(aitSafeAreaCssVariables.navigationControlTop, formatCssPixels(insets.top));
     style.setProperty(
       aitSafeAreaCssVariables.navigationControlRight,
-      formatCssPixels(insets.right + aitNavigationControlEdgeGapPx),
+      formatCssPixels(insets.right + navigationControlEdgeGapPx),
     );
     style.setProperty(
       aitSafeAreaCssVariables.navigationContentTop,
-      formatCssPixels(insets.top + aitNavigationControlBandHeightPx),
+      formatCssPixels(insets.top + navigationControlBandHeightPx),
     );
   };
 
@@ -143,6 +158,14 @@ function normalizeInset(input: unknown): number | null {
     && input <= maximumSafeAreaInsetPx
     ? input
     : null;
+}
+
+function normalizeCssPixelOption(input: number | undefined, fallback: number, name: string): number {
+  const value = input ?? fallback;
+  if (!Number.isFinite(value) || value < 0 || value > maximumCssPixelOptionPx) {
+    throw new TypeError(`${name} must be a non-negative finite CSS pixel value.`);
+  }
+  return value;
 }
 
 function formatCssPixels(value: number): string {
