@@ -199,6 +199,35 @@ if (manifest !== null) {
   assertString(manifest.agentWorkflow?.acceptance, `${manifestPath}: agentWorkflow.acceptance`);
   assertMcpRequirements(manifest.agentWorkflow?.mcp, `${manifestPath}: agentWorkflow.mcp`);
   assertBlocks(manifest.blocks, `${manifestPath}: blocks`);
+  const devvitViewModeBlock = findAgentBlockById<StarterBlock>(
+    manifest.blocks,
+    'platform.devvit.view-modes',
+  );
+
+  if (devvitViewModeBlock === undefined) {
+    failures.push(`${manifestPath}: blocks must include platform.devvit.view-modes.`);
+  } else {
+    for (const capability of [
+      'inline-mode-preview',
+      'expanded-mode-gameplay',
+      'deferred-phaser-load',
+    ]) {
+      assertIncludes(
+        devvitViewModeBlock.capabilities,
+        capability,
+        `${manifestPath}: platform.devvit.view-modes capabilities`,
+      );
+    }
+
+    if (
+      Array.isArray(devvitViewModeBlock.capabilities)
+      && devvitViewModeBlock.capabilities.includes('inline-mode-gameplay')
+    ) {
+      failures.push(
+        `${manifestPath}: generated Devvit defaults must not advertise inline-mode-gameplay.`,
+      );
+    }
+  }
   assertStringArray(manifest.acceptance?.commands, `${manifestPath}: acceptance.commands`);
   assertIncludes(
     manifest.acceptance?.commands,
@@ -1500,6 +1529,8 @@ function validatePhaserTemplateDevvitViewModes(): void {
         'position: fixed',
         'overflow: hidden',
         'touch-action: pan-y',
+        '-webkit-line-clamp: 2',
+        'overflow-wrap: anywhere',
         '@media (max-height: 440px)',
       ]) {
         assertIncludesText(source, requiredText, `${devvitStylePath}: inline mode styles.`);
@@ -2188,13 +2219,10 @@ function assertTemplateAgentBlock(
     return;
   }
 
-  const block = input.find((candidate): candidate is { readonly id?: unknown; readonly owner?: unknown } => {
-    return (
-      typeof candidate === 'object'
-      && candidate !== null
-      && (candidate as { readonly id?: unknown }).id === expectedId
-    );
-  });
+  const block = findAgentBlockById<{ readonly id?: unknown; readonly owner?: unknown }>(
+    input,
+    expectedId,
+  );
 
   if (block === undefined) {
     failures.push(`${label} must include ${expectedId}.`);
@@ -2217,13 +2245,7 @@ function assertStarterAgentBlockContract(
     return;
   }
 
-  const block = input.find((candidate): candidate is StarterBlock => {
-    return (
-      typeof candidate === 'object'
-      && candidate !== null
-      && (candidate as StarterBlock).id === expectedId
-    );
-  });
+  const block = findAgentBlockById<StarterBlock>(input, expectedId);
 
   if (block === undefined) {
     failures.push(`${label} must include ${expectedId}.`);
@@ -2246,6 +2268,22 @@ function assertStarterAgentBlockContract(
   for (const requiredText of expectedGotchaTexts) {
     assertIncludesText(gotchaText, requiredText, `${label}.${expectedId}.gotchas`);
   }
+}
+
+function findAgentBlockById<T extends { readonly id?: unknown }>(
+  input: unknown,
+  expectedId: string,
+): T | undefined {
+  if (!Array.isArray(input)) {
+    return undefined;
+  }
+
+  return input.find(
+    (candidate) =>
+      typeof candidate === 'object'
+      && candidate !== null
+      && (candidate as { readonly id?: unknown }).id === expectedId,
+  ) as T | undefined;
 }
 
 function resolvePwaManifestOrientation(mode: string | undefined): string | undefined {

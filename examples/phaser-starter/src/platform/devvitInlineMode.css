@@ -53,9 +53,16 @@ body.devvit-inline-mode-host {
 }
 
 .devvit-launch-screen h1 {
+  display: -webkit-box;
   max-width: 18ch;
+  max-height: 1.9em;
+  overflow: hidden;
   font-size: clamp(2rem, 9vw, 4.5rem);
   line-height: 0.95;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
 }
 
 .devvit-launch-screen__description {
