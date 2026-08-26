@@ -48,8 +48,15 @@ function renderInlineLaunchScreen(): void {
   status.setAttribute('aria-live', 'polite');
   status.setAttribute('role', 'status');
 
+  let nextRequestId = 0;
+  let activeRequestId: number | undefined;
   let recoveryTimeout: ReturnType<typeof globalThis.setTimeout> | undefined;
-  const recover = (message: string) => {
+  const recover = (requestId: number, message: string) => {
+    if (activeRequestId !== requestId) {
+      return;
+    }
+
+    activeRequestId = undefined;
     if (recoveryTimeout !== undefined) {
       globalThis.clearTimeout(recoveryTimeout);
       recoveryTimeout = undefined;
@@ -59,21 +66,24 @@ function renderInlineLaunchScreen(): void {
     status.textContent = message;
   };
   expandButton.addEventListener('click', (event) => {
+    const requestId = ++nextRequestId;
+
+    activeRequestId = requestId;
     expandButton.disabled = true;
     status.textContent = 'Opening full screen…';
     recoveryTimeout = globalThis.setTimeout(() => {
-      recover('Full screen did not open. Try again.');
+      recover(requestId, 'Full screen did not open. Try again.');
     }, expandedRequestRecoveryMs);
 
     void requestDevvitExpandedMode(event, 'game')
       .catch((error: unknown) => {
         console.error('[devvit] expanded mode request failed.', error);
-        recover('Full screen is unavailable. Try again.');
+        recover(requestId, 'Full screen is unavailable. Try again.');
       });
   });
   const recoverAfterReturn = () => {
-    if (expandButton.disabled) {
-      recover('');
+    if (activeRequestId !== undefined) {
+      recover(activeRequestId, '');
     }
   };
   globalThis.addEventListener('focus', recoverAfterReturn);

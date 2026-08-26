@@ -1448,7 +1448,8 @@ function validatePhaserTemplateDevvitViewModes(): void {
         "await import('../main')",
         "requestDevvitExpandedMode(event, 'game')",
         'expandedRequestRecoveryMs',
-        "recover('Full screen did not open. Try again.')",
+        'activeRequestId !== requestId',
+        "recover(requestId, 'Full screen did not open. Try again.')",
       ]) {
         assertIncludesText(source, requiredText, `${devvitEntryPath}: Devvit view modes.`);
       }
