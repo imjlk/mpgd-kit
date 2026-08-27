@@ -23,8 +23,10 @@ pending-order recovery flow below.
    creates an `apps-in-toss.iap.callback.v1` envelope and awaits the
    game-services purchase endpoint before returning `true` or `false`.
 3. The injected `AppsInTossPurchaseAuthority` uses the partner-server order
-   status API. Its adapter must associate the lookup with the authenticated
-   Toss login user and return that server-authenticated game player identity.
+   status API and returns the server-authenticated game player identity bound
+   to the order. Supply `tossUserKey` when the game already uses Toss Login.
+   Otherwise, verify the platform anonymous key on the server and atomically
+   bind the order id to that game player through a consume-once order authority.
 4. The verifier matches order id, player id, platform SKU, status, and status
    timestamp. Only `PURCHASED` and `PAYMENT_COMPLETED` are grantable.
 5. The game-services ledger records the catalog grant with
@@ -114,10 +116,15 @@ The authority maps order states as follows:
 | `FAILED`, `REFUNDED`, `NOT_FOUND`, `MINIAPP_MISMATCH` | rejected |
 
 The official order-status API base is `https://apps-in-toss-api.toss.im`; the
-partner-server call requires mTLS, and status lookup requires Toss login
-integration. Keep the mTLS certificate/private key, login tokens, user-key
-mapping, base URL overrides, and transport configuration in the deployment
-runtime. Do not commit them or include them in client bundles.
+partner-server call requires mTLS, and the mini app must have Toss Login
+integration configured before the status API is available. The request's
+`x-toss-user-key` header is optional: include it to restrict the lookup to a
+linked Toss user, or omit it for an order-id-only lookup. In the latter flow,
+the game backend must still authenticate the platform-anonymous player, match
+the returned order id/SKU/status, and atomically reserve the order id globally
+before writing that player's ledger grant. Keep mTLS credentials, optional
+login tokens/user-key mappings, base URL overrides, and transport configuration
+in the deployment runtime. Do not commit them or include them in client bundles.
 
 `@mpgd/game-services/apps-in-toss-partner-api` provides the shared server-only
 transport for the documented anonymous-key verification and functional-message

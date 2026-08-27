@@ -372,6 +372,23 @@ assertDeepEqual(
 responses.push(jsonResponse({
   resultType: 'SUCCESS',
   success: {
+    orderId: 'order-without-login',
+    sku: 'ait.hint-pack-5',
+    statusDeterminedAt: '2026-08-08T10:01:00',
+    status: 'PAYMENT_COMPLETED',
+  },
+}));
+await client.getIapOrderStatus({ orderId: 'order-without-login' });
+const anonymousOrderCall = calls[calls.length - 1];
+assertEqual(
+  new Headers(anonymousOrderCall?.init?.headers).has('x-toss-user-key'),
+  false,
+  'IAP lookups should allow the documented order-id-only flow without forcing Toss Login',
+);
+
+responses.push(jsonResponse({
+  resultType: 'SUCCESS',
+  success: {
     orderId: 'different-order',
     sku: 'ait.hint-pack-5',
     statusDeterminedAt: '2026-08-08T10:00:00',

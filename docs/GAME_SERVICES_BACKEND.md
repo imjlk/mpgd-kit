@@ -438,9 +438,11 @@ Protocol references:
   rewards are tied to `userEarnedReward`, not `dismissed`.
 - `@mpgd/game-services/apps-in-toss-evidence-verification` provides versioned
   callback envelopes and server authority ports. Purchase authorities must bind
-  mTLS order-status results to authenticated Toss-login players; reward
-  authorities must independently verify a consume-once event. Missing or
-  mismatched authorities fail closed. See
+  mTLS order-status results to a server-authenticated game player. They may use
+  a Toss Login user key, or a server-verified platform-anonymous key together
+  with a global consume-once order-id reservation. Reward authorities must
+  independently verify a consume-once event. Missing or mismatched authorities
+  fail closed. See
   [Apps in Toss Production Evidence](APPS_IN_TOSS_PRODUCTION_EVIDENCE.md).
 
 ## Production Gaps
@@ -454,7 +456,8 @@ starter. Game-specific production integrations still need these pieces:
   verifier boundary.
 - App Store Server API or signed StoreKit transaction verification.
 - Deployment-owned AdMob callback persistence and public-key refresh wiring.
-- Game-specific Apps in Toss mTLS/login transport and independently verified
+- Game-specific Apps in Toss mTLS transport, optional Toss Login binding or a
+  verified anonymous-player/order association, and independently verified
   rewarded-ad authority implementations behind the included public ports.
 - Real product, ad placement, leaderboard, app, and bundle identifiers.
 - Cloudflare D1 provisioning plus `MPGD_STORE = "d1"` for persistent Worker
