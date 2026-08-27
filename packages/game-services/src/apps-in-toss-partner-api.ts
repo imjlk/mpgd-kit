@@ -101,10 +101,11 @@ export interface AppsInTossPartnerApiClient {
   getIapOrderStatus(input: {
     readonly orderId: string;
     /**
-     * A user key resolved through Apps in Toss login. Supplying it binds the
-     * lookup to the same authenticated user that initiated the purchase.
+     * Optional user key resolved through Apps in Toss login. Supplying it
+     * narrows the lookup to the same authenticated user; the official API also
+     * supports an order-id-only lookup when a game does not require login.
      */
-    readonly tossUserKey: string;
+    readonly tossUserKey?: string;
     readonly signal?: AbortSignal;
   }): Promise<AppsInTossIapOrderStatusResult>;
 }
@@ -224,12 +225,14 @@ export function createAppsInTossPartnerApiClient(
 
     async getIapOrderStatus(request) {
       const orderId = normalizeIdentifier(request.orderId, 'orderId');
-      const tossUserKey = normalizeTossUserKey(request.tossUserKey, 'tossUserKey');
+      const tossUserKey = request.tossUserKey === undefined
+        ? undefined
+        : normalizeTossUserKey(request.tossUserKey, 'tossUserKey');
       const response = await requestJson({
         mtls: input.mtls,
         method: 'POST',
         url: new URL(getIapOrderStatusPath, baseUrl).href,
-        headers: { 'x-toss-user-key': tossUserKey },
+        headers: tossUserKey === undefined ? {} : { 'x-toss-user-key': tossUserKey },
         body: { orderId },
         timeoutMs,
         ...(request.signal === undefined ? {} : { signal: request.signal }),

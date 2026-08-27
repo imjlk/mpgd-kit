@@ -125,8 +125,9 @@ export interface AppsInTossPurchaseAuthorityInput {
 export interface AppsInTossPurchaseOrderRecord {
   readonly orderId: string;
   /**
-   * Server-authenticated game player identity associated with the Toss login
-   * user used for the order-status lookup.
+   * Server-authenticated game player identity associated with this order.
+   * It may be bound through a Toss Login user key or through a verified
+   * platform-anonymous game identity plus a consume-once order authority.
    */
   readonly playerId: string;
   readonly sku: string;
