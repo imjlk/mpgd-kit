@@ -1,5 +1,13 @@
 # @mpgd/cli
 
+## 0.25.0 — 2026-08-27
+
+### Patch changes
+
+- [8948cae](https://github.com/imjlk/mpgd-kit/commit/8948caee3600be457c4662ffab9947abfdb60685) Bridge the official Apps in Toss `SafeArea.get()` and `SafeArea.subscribe()` values into shared CSS custom properties, including a transparent-navigation content boundary, and install the bridge in generated AIT wrappers. — Thanks @imjlk!
+- [4e92350](https://github.com/imjlk/mpgd-kit/commit/4e92350c4cf29d71c2a73aa164f814ef8ecd1c50) Add a preview-only Devvit view-mode contract and make generated games load Phaser only from the Expanded Mode entry by default. The existing inline-gameplay contract remains available as an explicit opt-in. — Thanks @imjlk!
+- Updated dependencies: adapter-ait@0.11.0, adapter-devvit@0.9.3
+
 ## 0.24.1 — 2026-08-26
 
 ### Changed

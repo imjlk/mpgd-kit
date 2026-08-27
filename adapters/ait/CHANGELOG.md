@@ -1,5 +1,11 @@
 # @mpgd/adapter-ait
 
+## 0.11.0 — 2026-08-27
+
+### Minor changes
+
+- [8948cae](https://github.com/imjlk/mpgd-kit/commit/8948caee3600be457c4662ffab9947abfdb60685) Bridge the official Apps in Toss `SafeArea.get()` and `SafeArea.subscribe()` values into shared CSS custom properties, including a transparent-navigation content boundary, and install the bridge in generated AIT wrappers. — Thanks @imjlk!
+
 ## 0.10.0 — 2026-08-26
 
 ### Changed
