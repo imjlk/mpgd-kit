@@ -44,7 +44,7 @@ describe('adapter-ait', () => {
     });
   });
 
-  it('throws bridge errors as JavaScript errors', async () => {
+  it('preserves bridge error codes and retry hints', async () => {
     const bridge: GamePlatformBridge = {
       async request(input) {
         return {
@@ -65,7 +65,12 @@ describe('adapter-ait', () => {
       bridge,
     });
 
-    await expect(gateway.getCapabilities()).rejects.toThrow('Unsupported method.');
+    await expect(gateway.getCapabilities()).rejects.toMatchObject({
+      name: 'PlatformOperationError',
+      code: 'UNSUPPORTED_METHOD',
+      message: 'Unsupported method.',
+      retryable: false,
+    });
   });
 
   it('uses fallback sandbox bridge only when no bridge is installed', async () => {

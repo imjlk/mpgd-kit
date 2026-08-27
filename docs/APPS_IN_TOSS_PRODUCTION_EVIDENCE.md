@@ -10,6 +10,63 @@ injects server authorities. If the matching authority is absent, throws, returns
 pending, or does not match the order/player/SKU or reward/player/placement, no
 ledger grant is written.
 
+## Test environments and commerce diagnostics
+
+Apps in Toss does not expose a client flag that turns a production checkout
+into a test checkout. The host environment selects the behavior:
+
+- Use the current Sandbox app, keep its developer login active, and expose the
+  console products to test one-time IAP without a real charge. Only products
+  whose console visibility is enabled are returned by `getProductItemList()`.
+- Use the uploaded bundle's `intoss-private://` QR scheme for the final Toss-app
+  integration check. The QR origin and production origin are separate browser
+  origins and must both be covered by the backend's exact CORS policy.
+- Sandbox identity APIs return mock data. A production backend must not treat a
+  client-provided mock key as a verified production identity. If a game needs a
+  sandbox-only authority, isolate it to a staging backend and keep production
+  grants fail-closed.
+
+`@mpgd/adapter-ait` preserves bridge rejection metadata as a
+`PlatformOperationError`. Game UI can report a safe code without importing the
+Apps in Toss SDK or parsing a localized provider message:
+
+```ts
+import { readPlatformOperationFailure } from '@mpgd/platform';
+
+try {
+  const products = await gateway.commerce.getProducts();
+  // Render only provider-returned products and prices.
+} catch (error) {
+  const failure = readPlatformOperationFailure(error);
+  reportCommerceDiagnostic(
+    failure?.code ?? 'COMMERCE_CATALOG_FAILED',
+    failure?.retryable ?? true,
+  );
+}
+```
+
+Share one session-scoped AIT identity provider between platform bootstrap,
+promotion, IAP preparation, verification, and entitlement reads. The helper
+coalesces concurrent native reads and evicts a rejected read so a resumed
+mobile host can retry:
+
+```ts
+import {
+  createAitHostBridge,
+  createAitSessionIdentityProvider,
+} from '@mpgd/adapter-ait/host';
+import { User } from '@apps-in-toss/web-framework';
+
+const identityProvider = createAitSessionIdentityProvider(
+  () => User.getAnonymousKey(),
+);
+
+const bridge = createAitHostBridge({
+  dependencies: { identityProvider },
+  // Reuse identityProvider from prepareIap/verifyIapProductGrant closures too.
+});
+```
+
 ## Purchase flow
 
 Apps in Toss SDK 1.1.3 and later requires product-grant completion. The current

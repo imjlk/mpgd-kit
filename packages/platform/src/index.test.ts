@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isShareCompleted,
+  PlatformOperationError,
+  readPlatformOperationFailure,
   resolveShareCompletion,
   type LogicalAdPlacementId,
   type LogicalProductId,
@@ -36,5 +38,44 @@ describe('share completion semantics', () => {
     expect(resolveShareCompletion({ status: 'cancelled' })).toBeUndefined();
     expect(resolveShareCompletion({ status: 'unavailable' })).toBeUndefined();
     expect(isShareCompleted({ status: 'cancelled' })).toBe(false);
+  });
+});
+
+describe('platform operation failures', () => {
+  it('preserves a safe code and retry hint across adapter boundaries', () => {
+    const error = new PlatformOperationError({
+      code: 'AIT_IAP_CATALOG_UNAVAILABLE',
+      message: 'The native catalog is unavailable.',
+      retryable: true,
+    });
+
+    expect(error).toMatchObject({
+      name: 'PlatformOperationError',
+      code: 'AIT_IAP_CATALOG_UNAVAILABLE',
+      message: 'The native catalog is unavailable.',
+      retryable: true,
+    });
+    expect(readPlatformOperationFailure(error)).toEqual({
+      code: 'AIT_IAP_CATALOG_UNAVAILABLE',
+      retryable: true,
+    });
+  });
+
+  it('accepts a cross-realm structural failure but rejects unsafe codes', () => {
+    expect(readPlatformOperationFailure({
+      code: 'MOBILE_STORE_UNAVAILABLE',
+      retryable: false,
+    })).toEqual({ code: 'MOBILE_STORE_UNAVAILABLE', retryable: false });
+    expect(readPlatformOperationFailure({
+      code: 'provider message with spaces',
+      retryable: true,
+    })).toBeNull();
+
+    const normalized = new PlatformOperationError({
+      code: 'unsafe provider message',
+      message: 'The provider rejected the operation.',
+      retryable: false,
+    });
+    expect(normalized.code).toBe('PLATFORM_OPERATION_FAILED');
   });
 });

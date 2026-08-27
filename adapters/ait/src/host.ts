@@ -1,6 +1,5 @@
 import {
   getTossShareLink,
-  getUserKeyForGame,
   grantPromotionRewardForGame as grantPromotionReward,
   IAP,
   isMinVersionSupported,
@@ -12,6 +11,7 @@ import {
   Storage,
   submitGameCenterLeaderBoardScore,
   TossAds,
+  User,
   type IapProductListItem,
 } from '@apps-in-toss/web-framework';
 
@@ -85,6 +85,31 @@ const launchEntries = new Set<LaunchEntry>([
 ]);
 
 export type AitIdentityProvider = () => Promise<unknown>;
+
+/**
+ * Shares one platform-anonymous identity read across a wrapper session.
+ * Rejected reads are evicted so a resumed mobile host can retry after login or
+ * WebView state has recovered.
+ */
+export function createAitSessionIdentityProvider(
+  provider: AitIdentityProvider = () => User.getAnonymousKey(),
+): AitIdentityProvider {
+  let pending: Promise<unknown> | undefined;
+  return () => {
+    const current = pending;
+    if (current !== undefined) {
+      return current;
+    }
+    const attempt = Promise.resolve().then(provider);
+    void (pending = attempt);
+    void attempt.catch(() => {
+      if (pending === attempt) {
+        pending = undefined;
+      }
+    });
+    return attempt;
+  };
+}
 
 /**
  * The AIT SDK adds support-version metadata to native functions over time.
@@ -262,7 +287,7 @@ export interface InstallAitHostBridgeOptions {
 }
 
 const defaultDependencies: AitHostDependencies = {
-  identityProvider: getUserKeyForGame,
+  identityProvider: () => User.getAnonymousKey(),
   storage: Storage,
   getTossShareLink,
   share,
@@ -286,7 +311,13 @@ export function installAitHostBridge(options: InstallAitHostBridgeOptions = {}):
 export function createAitHostBridge(
   options: InstallAitHostBridgeOptions = {},
 ): GamePlatformBridge {
-  const dependencies = { ...defaultDependencies, ...options.dependencies };
+  const configuredDependencies = { ...defaultDependencies, ...options.dependencies };
+  const dependencies: AitHostDependencies = {
+    ...configuredDependencies,
+    identityProvider: createAitSessionIdentityProvider(
+      configuredDependencies.identityProvider,
+    ),
+  };
   const appName = normalizeAppName(options.appName ?? 'mpgd-kit');
   const adGroupIds = normalizeAdGroupIds(options.adGroupIds);
   const adPlacementTypes = normalizeAdPlacementTypes(options.adPlacementTypes);
