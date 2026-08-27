@@ -1,5 +1,11 @@
 # @mpgd/game-services
 
+## 0.13.0 — 2026-08-27
+
+### Minor changes
+
+- [1834243](https://github.com/imjlk/mpgd-kit/commit/1834243e55affa81cba197620c544258025978ca) Allow Apps in Toss IAP order verification by order ID without forcing a Toss Login user key. Callers may still supply `tossUserKey` to narrow the authoritative lookup to a linked account. — Thanks @imjlk!
+
 ## 0.12.1 — 2026-08-26
 
 ### Patch changes
