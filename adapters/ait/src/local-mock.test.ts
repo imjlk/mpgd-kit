@@ -1,6 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
-import { getUserKeyForGame, IAP, loadFullScreenAd, Storage, TossAds } from './local-mock.js';
+import {
+  getUserKeyForGame,
+  IAP,
+  loadFullScreenAd,
+  SafeArea,
+  Storage,
+  TossAds,
+} from './local-mock.js';
 
 describe('Apps in Toss local SDK mock', () => {
   it('provides a local identity and storage without advertising native capabilities', async () => {
@@ -16,5 +23,7 @@ describe('Apps in Toss local SDK mock', () => {
     expect(TossAds.attachBanner.isSupported()).toBe(false);
     expect(IAP.createOneTimePurchaseOrder.isSupported()).toBe(false);
     expect(IAP.getProductItemList.isSupported()).toBe(false);
+    expect(() => SafeArea.get()).toThrow('SafeArea is unavailable');
+    expect(() => SafeArea.subscribe({ onEvent: () => {} })()).not.toThrow();
   });
 });

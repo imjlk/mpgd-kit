@@ -28,6 +28,7 @@
       "@mpgd/adapter-ait/package.json": ["./adapters/ait/package.json"],
       "@mpgd/adapter-ait/ad-config": ["./adapters/ait/src/ad-config.ts"],
       "@mpgd/adapter-ait/host": ["./adapters/ait/src/host.ts"],
+      "@mpgd/adapter-ait/safe-area": ["./adapters/ait/src/safe-area.ts"],
       "@mpgd/adapter-ait/wrapper": ["./adapters/ait/src/wrapper.ts"],
       "@mpgd/adapter-verse8/agent8": ["./adapters/verse8/src/agent8.ts"],
       "@mpgd/adapter-verse8/server": ["./adapters/verse8/src/server.ts"],

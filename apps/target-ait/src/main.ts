@@ -2,6 +2,7 @@ import './styles.css';
 
 import type { AitAdPlacementType } from '@mpgd/adapter-ait/ad-config';
 import { installAitHostBridge, type InstallAitHostBridgeOptions } from '@mpgd/adapter-ait/host';
+import { installAitSafeAreaCssVariables } from '@mpgd/adapter-ait/safe-area';
 import { mountAitGameBundle } from '@mpgd/adapter-ait/wrapper';
 
 declare const __MPGD_AIT_APP_NAME__: string;
@@ -10,6 +11,7 @@ declare const __MPGD_AIT_AD_PLACEMENT_TYPES__: Readonly<
   Record<string, AitAdPlacementType>
 >;
 
+installAitSafeAreaCssVariables();
 installAitHostBridge({
   appName: __MPGD_AIT_APP_NAME__,
   adGroupIds: __MPGD_AIT_AD_GROUP_IDS__,

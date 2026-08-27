@@ -66,6 +66,11 @@ const aitCliVersion = '3.1.1';
 const aitWebFrameworkPeerRange = '>=3.0.0 <4';
 const aitDevtoolsPeerSelector = '@ait-co/devtools>@apps-in-toss/web-framework';
 const aitXmldomOverrideVersion = '0.9.12';
+const aitSafeAreaWrapperRequiredTexts = [
+  "from '@mpgd/adapter-ait/safe-area'",
+  'installAitSafeAreaCssVariables();',
+] as const;
+const aitSafeAreaViewportText = 'viewport-fit=cover';
 
 const requiredFiles = [
   '.mcp.json',
@@ -242,7 +247,7 @@ if (manifest !== null) {
 }
 
 validatePhaserTemplateAITPolyfill();
-validateCheckedInAITWrapperNavigation();
+validateCheckedInAITWrapper();
 validatePhaserTemplateAITWrapper();
 validatePhaserTemplateAITConsoleCli();
 validatePhaserTemplateDevvitPostOperations();
@@ -1015,22 +1020,38 @@ function validatePhaserTemplateAITConsoleCli(): void {
   }
 }
 
-function validateCheckedInAITWrapperNavigation(): void {
+function validateCheckedInAITWrapper(): void {
   const wrapperConfigPath = 'apps/target-ait/apps-in-toss.config.ts';
+  const wrapperIndexPath = 'apps/target-ait/index.html';
+  const wrapperMainPath = 'apps/target-ait/src/main.ts';
 
   if (!existsSync(wrapperConfigPath)) {
     failures.push(`${wrapperConfigPath}: required for the checked-in AIT wrapper flow.`);
-    return;
+  } else {
+    const content = readText(wrapperConfigPath);
+    for (const requiredText of [
+      'readNavigationBar(process.env.MPGD_AIT_NAVIGATION_BAR)',
+      'navigationBar === undefined ? {} : { navigationBar }',
+      "AppsInTossConfig['navigationBar']",
+      'JSON.parse(encoded)',
+    ]) {
+      assertIncludesText(content, requiredText, wrapperConfigPath);
+    }
   }
 
-  const content = readText(wrapperConfigPath);
-  for (const requiredText of [
-    'readNavigationBar(process.env.MPGD_AIT_NAVIGATION_BAR)',
-    'navigationBar === undefined ? {} : { navigationBar }',
-    "AppsInTossConfig['navigationBar']",
-    'JSON.parse(encoded)',
-  ]) {
-    assertIncludesText(content, requiredText, wrapperConfigPath);
+  if (!existsSync(wrapperMainPath)) {
+    failures.push(`${wrapperMainPath}: required for the checked-in AIT safe-area flow.`);
+  } else {
+    const wrapperMain = readText(wrapperMainPath);
+    for (const requiredText of aitSafeAreaWrapperRequiredTexts) {
+      assertIncludesText(wrapperMain, requiredText, wrapperMainPath);
+    }
+  }
+
+  if (!existsSync(wrapperIndexPath)) {
+    failures.push(`${wrapperIndexPath}: required for the checked-in AIT safe-area fallback.`);
+  } else {
+    assertIncludesText(readText(wrapperIndexPath), aitSafeAreaViewportText, wrapperIndexPath);
   }
 }
 
@@ -1038,6 +1059,7 @@ function validatePhaserTemplateAITWrapper(): void {
   const templateRoot = 'packages/cli/templates/phaser-game';
   const wrapperRoot = `${templateRoot}/apps/target-ait`;
   const wrapperPackagePath = `${wrapperRoot}/package.json`;
+  const wrapperIndexPath = `${wrapperRoot}/index.html`;
   const wrapperMainPath = `${wrapperRoot}/src/main.ts`;
   const wrapperVitePath = `${wrapperRoot}/vite.config.ts`;
   const wrapperConfigPath = `${wrapperRoot}/apps-in-toss.config.ts`;
@@ -1050,6 +1072,7 @@ function validatePhaserTemplateAITWrapper(): void {
 
   for (const path of [
     wrapperPackagePath,
+    wrapperIndexPath,
     wrapperMainPath,
     wrapperVitePath,
     wrapperConfigPath,
@@ -1092,6 +1115,7 @@ function validatePhaserTemplateAITWrapper(): void {
         ['./ad-config', 'ad-config'],
         ['./host', 'host'],
         ['./local-mock', 'local-mock'],
+        ['./safe-area', 'safe-area'],
         ['./wrapper', 'wrapper'],
       ] as const) {
         const exported = packageJson.exports?.[subpath];
@@ -1127,6 +1151,11 @@ function validatePhaserTemplateAITWrapper(): void {
         tsconfig.compilerOptions?.paths?.['@mpgd/adapter-ait/package.json'],
         './adapters/ait/package.json',
         `${baseTsconfigPath}: compilerOptions.paths[@mpgd/adapter-ait/package.json]`,
+      );
+      assertIncludes(
+        tsconfig.compilerOptions?.paths?.['@mpgd/adapter-ait/safe-area'],
+        './adapters/ait/src/safe-area.ts',
+        `${baseTsconfigPath}: compilerOptions.paths[@mpgd/adapter-ait/safe-area]`,
       );
     }
   }
@@ -1166,11 +1195,16 @@ function validatePhaserTemplateAITWrapper(): void {
     for (const requiredText of [
       "from '@mpgd/adapter-ait/host'",
       "from '@mpgd/adapter-ait/wrapper'",
+      ...aitSafeAreaWrapperRequiredTexts,
       'installAitHostBridge({',
       'mountAitGameBundle(app)',
     ]) {
       assertIncludesText(content, requiredText, wrapperMainPath);
     }
+  }
+
+  if (existsSync(wrapperIndexPath)) {
+    assertIncludesText(readText(wrapperIndexPath), aitSafeAreaViewportText, wrapperIndexPath);
   }
 
   if (existsSync(wrapperVitePath)) {
