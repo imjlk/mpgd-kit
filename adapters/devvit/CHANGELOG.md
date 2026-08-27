@@ -1,5 +1,11 @@
 # @mpgd/adapter-devvit
 
+## 0.9.3 — 2026-08-27
+
+### Patch changes
+
+- [4e92350](https://github.com/imjlk/mpgd-kit/commit/4e92350c4cf29d71c2a73aa164f814ef8ecd1c50) Add a preview-only Devvit view-mode contract and make generated games load Phaser only from the Expanded Mode entry by default. The existing inline-gameplay contract remains available as an explicit opt-in. — Thanks @imjlk!
+
 ## 0.9.2 — 2026-08-26
 
 ### Changed
