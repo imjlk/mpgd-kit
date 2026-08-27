@@ -1,6 +1,11 @@
 import { createUnsupportedCapabilities } from '@mpgd/platform';
 
-import { m, resolveMpgdLocale, resolveTargetMpgdLocale } from '../src/index';
+import {
+  m,
+  readMpgdPreferredLocales,
+  resolveMpgdLocale,
+  resolveTargetMpgdLocale,
+} from '../src/index';
 
 const localizedCapabilities = {
   ...createUnsupportedCapabilities(),
@@ -41,6 +46,10 @@ const disabledFallback = resolveTargetMpgdLocale({
   preferredLocales: ['ko-KR'],
   fallbackLocale: 'en',
 });
+const preferredLocales = readMpgdPreferredLocales({
+  language: 'ko-KR',
+  languages: ['ko-KR', 'en-US'],
+});
 
 assertEqual(ko, 'ko', 'Korean locale should resolve when localized content is available');
 assertEqual(en, 'en', 'Locale should fall back when localized content is target-disabled');
@@ -53,6 +62,16 @@ assertEqual(
   'Target fallback should apply when device preferences are unavailable',
 );
 assertEqual(disabledFallback, 'en', 'Target-disabled localization should use target fallback');
+assertEqual(
+  JSON.stringify(preferredLocales),
+  JSON.stringify(['ko-KR', 'en-US']),
+  'Browser and WebView language preferences should preserve order without duplicates',
+);
+assertEqual(
+  Object.isFrozen(preferredLocales),
+  true,
+  'Collected language preferences should be immutable',
+);
 assertEqual(
   m.score({ score: 120 }, { locale: ko }),
   '점수 120',

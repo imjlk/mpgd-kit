@@ -13,6 +13,11 @@ export interface ResolveTargetMpgdLocaleInput {
   readonly fallbackLocale: MpgdLocale;
 }
 
+export interface MpgdLocaleEnvironment {
+  readonly language?: string;
+  readonly languages?: readonly string[];
+}
+
 export function isMpgdLocale(input: string): input is MpgdLocale {
   return (locales as readonly string[]).includes(input);
 }
@@ -35,7 +40,7 @@ export function normalizeMpgdLocale(input: string): MpgdLocale | null {
 
 export function resolveMpgdLocale(
   capabilities: Pick<PlatformCapabilities, 'localizedContent'>,
-  preferredLocales = readPreferredLocales(),
+  preferredLocales = readMpgdPreferredLocales(),
 ): MpgdLocale {
   return resolveTargetMpgdLocale({
     capabilities,
@@ -60,7 +65,7 @@ export function resolveTargetMpgdLocale(input: ResolveTargetMpgdLocaleInput): Mp
     }
   }
 
-  for (const preferredLocale of input.preferredLocales ?? readPreferredLocales()) {
+  for (const preferredLocale of input.preferredLocales ?? readMpgdPreferredLocales()) {
     const locale = normalizeMpgdLocale(preferredLocale);
 
     if (locale !== null) {
@@ -71,13 +76,14 @@ export function resolveTargetMpgdLocale(input: ResolveTargetMpgdLocaleInput): Mp
   return fallbackLocale;
 }
 
-function readPreferredLocales(): readonly string[] {
-  const navigatorLanguages = globalThis.navigator?.languages;
+/** Read an ordered, de-duplicated browser or WebView language preference list. */
+export function readMpgdPreferredLocales(
+  environment: MpgdLocaleEnvironment | undefined = globalThis.navigator,
+): readonly string[] {
+  const preferredLocales = [
+    ...(environment?.languages ?? []),
+    ...(environment?.language === undefined ? [] : [environment.language]),
+  ].filter((locale, index, locales) => locale.length > 0 && locales.indexOf(locale) === index);
 
-  if (navigatorLanguages !== undefined && navigatorLanguages.length > 0) {
-    return navigatorLanguages;
-  }
-
-  const navigatorLanguage = globalThis.navigator?.language;
-  return navigatorLanguage === undefined ? [] : [navigatorLanguage];
+  return Object.freeze(preferredLocales);
 }
