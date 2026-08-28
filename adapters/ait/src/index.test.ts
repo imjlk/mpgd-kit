@@ -44,7 +44,7 @@ describe('adapter-ait', () => {
     });
   });
 
-  it('throws bridge errors as JavaScript errors', async () => {
+  it('preserves bridge error codes and retry hints', async () => {
     const bridge: GamePlatformBridge = {
       async request(input) {
         return {
@@ -65,7 +65,37 @@ describe('adapter-ait', () => {
       bridge,
     });
 
-    await expect(gateway.getCapabilities()).rejects.toThrow('Unsupported method.');
+    await expect(gateway.getCapabilities()).rejects.toMatchObject({
+      name: 'PlatformOperationError',
+      code: 'UNSUPPORTED_METHOD',
+      message: 'Unsupported method.',
+      retryable: false,
+    });
+  });
+
+  it('classifies a missing bridge as a non-retryable configuration failure', async () => {
+    const previousBridge = (globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge })
+      .__GAME_PLATFORM_BRIDGE__;
+    delete (globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge })
+      .__GAME_PLATFORM_BRIDGE__;
+
+    try {
+      const gateway = createAitPlatformGateway({
+        appVersion: '1.2.3',
+        buildId: 'build-ait',
+      });
+
+      await expect(gateway.getCapabilities()).rejects.toMatchObject({
+        name: 'PlatformOperationError',
+        code: 'AIT_BRIDGE_NOT_INSTALLED',
+        retryable: false,
+      });
+    } finally {
+      if (previousBridge !== undefined) {
+        (globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge })
+          .__GAME_PLATFORM_BRIDGE__ = previousBridge;
+      }
+    }
   });
 
   it('uses fallback sandbox bridge only when no bridge is installed', async () => {

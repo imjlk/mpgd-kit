@@ -277,13 +277,22 @@ and non-native flow checks:
 ```sh
 pnpm ait:wrapper:dev
 pnpm ait:wrapper:dev:plain
+pnpm ait:wrapper:dev:sandbox
 ```
 
 `ait:wrapper:dev` loads the last game bundle copied by `pnpm build:ait` from the
 wrapper's `public/game` directory, so run `pnpm build:ait` again after game
 changes before opening it. The local mock deliberately keeps ads, promotions,
-and IAP unavailable; test those flows from the Apps in Toss console QR sandbox
-or a real device after uploading the `.ait` bundle.
+and IAP unavailable.
+
+`ait:wrapper:dev:sandbox` disables every local bridge and identity mock so the
+official Apps in Toss Sandbox host can inject its native SDK. Supply any
+game-owned staging endpoints, product SKUs, and server-authority configuration
+as environment variables before starting it. Use this route for native identity,
+one-time IAP, and Game Center tests; it is not a normal browser preview. The
+Sandbox does not support ads, so upload a staging `.ait` bundle and use the
+console `intoss-private://` QR in the Toss app for test-ad and final integration
+checks.
 
 The starter includes `@ait-co/console-cli`, the Apps in Toss community console
 CLI, as a dev dependency for project-local console automation:

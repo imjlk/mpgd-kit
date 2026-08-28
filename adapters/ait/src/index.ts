@@ -6,19 +6,20 @@ import {
   type BridgeResponse,
   type BridgeStorageLoadData,
 } from '@mpgd/bridge';
-import type {
-  IdentitySession,
-  IdentityUpgradeResult,
-  InboundShare,
-  LaunchIntent,
-  NotificationSubscriptionResult,
-  NotificationSubscriptionStatus,
-  PlatformCapabilities,
-  PlatformGateway,
-  PresentationResult,
-  PromotionRewardAvailability,
-  PromotionRewardResult,
-  ShareResult,
+import {
+  PlatformOperationError,
+  type IdentitySession,
+  type IdentityUpgradeResult,
+  type InboundShare,
+  type LaunchIntent,
+  type NotificationSubscriptionResult,
+  type NotificationSubscriptionStatus,
+  type PlatformCapabilities,
+  type PlatformGateway,
+  type PresentationResult,
+  type PromotionRewardAvailability,
+  type PromotionRewardResult,
+  type ShareResult,
 } from '@mpgd/platform';
 
 import { createAitLifecycleAdapter } from './lifecycle.js';
@@ -50,7 +51,11 @@ export function createAitPlatformGateway(input: {
     const bridge = input.bridge ?? getBridge() ?? input.fallbackBridge;
 
     if (bridge === undefined) {
-      throw new Error('AIT bridge is not installed.');
+      throw new PlatformOperationError({
+        code: 'AIT_BRIDGE_NOT_INSTALLED',
+        message: 'AIT bridge is not installed.',
+        retryable: false,
+      });
     }
 
     const response = await bridge.request({
@@ -66,7 +71,7 @@ export function createAitPlatformGateway(input: {
     });
 
     if (!response.ok) {
-      throw new Error(response.error.message);
+      throw new PlatformOperationError(response.error);
     }
 
     return response.data as TData;

@@ -6,7 +6,7 @@ Current scope:
 
 - SDK 3 `apps-in-toss.config.ts`
 - `ait build` script
-- SDK-backed anonymous game identity through `getUserKeyForGame`
+- SDK-backed anonymous game identity through `User.getAnonymousKey()`
 - persistent progress through the native `Storage` API
 - SDK-backed sharing and Ads 2.0 callbacks
 - Game Center leaderboard bridge methods
@@ -31,14 +31,16 @@ The 52px navigation band and 10px edge gap match the current game navigation
 treatment; wrappers with measured custom host geometry can override both
 values through the installer options.
 
-The production bridge maps the stable game-scoped `getUserKeyForGame()` hash
+The production bridge maps the stable anonymous `User.getAnonymousKey()` hash
 to `PlatformGateway.identity.getPlayer()` and serializes gateway storage values
-through the native `Storage` API. `dev:plain` installs a deliberately limited
-local SDK mock for browser layout work only; it does not validate native identity,
-IAP, promotion, or ad behavior. Release builds never use its fixed local player
-id. Game identity requires Toss app 5.232.0 or newer, while Game Center requires
-Toss app 5.221.0 or newer. Verify every native flow with a QR test in the Toss
-app before publishing.
+through the native `Storage` API. `dev` and `dev:plain` install a deliberately
+limited local SDK mock for browser layout work only; they do not validate native
+identity, IAP, promotion, or ad behavior. `dev:sandbox` explicitly disables that
+mock and fixed identity so the official Apps in Toss Sandbox host can inject its
+native SDK. Games must provide their own staging commerce and authority settings
+to that process. Game identity requires Toss app 5.232.0 or newer, while Game
+Center requires Toss app 5.221.0 or newer. Verify IAP in the Sandbox and then
+verify the uploaded bundle through the Toss-app QR before publishing.
 
 SDK 3 bundles require API servers to allow both the production
 `https://<appName>.web.tossmini.com` origin and the QR-test

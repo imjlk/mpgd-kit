@@ -499,8 +499,9 @@ for target overrides, native staging, and the Apps in Toss console URL gate.
 ## Apps in Toss
 
 The Apps in Toss target uses the SDK 3 `apps-in-toss.config.ts` contract and
-`ait build` scripts. The reusable production host resolves a stable game-scoped
-player id with the game-only `getUserKeyForGame`, persists gateway state with
+`ait build` scripts. The reusable production host resolves a stable anonymous
+player id with `User.getAnonymousKey()` (the current SDK entry point for the
+legacy game-scoped anonymous-key API), persists gateway state with
 native `Storage`, and delegates sharing, Game Center, and Ads 2.0 to the official SDK. Purchases
 stay fail-closed, and rewarded-ad callbacks remain evidence until a game-owned
 authority verifies them. Generated wrappers use SDK 3 only; the removed SDK 2

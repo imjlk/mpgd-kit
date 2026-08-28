@@ -44,6 +44,65 @@ export interface PlatformEvidenceEnvelope {
   readonly payload: Readonly<Record<string, string | number | boolean>>;
 }
 
+export interface PlatformOperationFailure {
+  readonly code: string;
+  readonly retryable: boolean;
+}
+
+/**
+ * Provider-neutral error raised when a platform bridge rejects an operation.
+ *
+ * Adapters preserve a stable, non-sensitive code and retry hint so game UI can
+ * distinguish configuration, environment, and transient failures without
+ * importing a provider SDK or parsing localized error messages.
+ */
+export class PlatformOperationError extends Error implements PlatformOperationFailure {
+  override readonly name = 'PlatformOperationError';
+  readonly code: string;
+  readonly retryable: boolean;
+
+  constructor(input?: Readonly<{
+    readonly code?: unknown;
+    readonly message?: unknown;
+    readonly retryable?: unknown;
+  }>) {
+    const diagnostics = input ?? {};
+    super(
+      typeof diagnostics.message === 'string'
+        ? diagnostics.message
+        : 'The platform operation failed.',
+    );
+    this.code = normalizePlatformOperationCode(diagnostics.code);
+    this.retryable = diagnostics.retryable === true;
+  }
+}
+
+export function readPlatformOperationFailure(error: unknown): PlatformOperationFailure | null {
+  if (error instanceof PlatformOperationError) {
+    return { code: error.code, retryable: error.retryable };
+  }
+  if (typeof error !== 'object' || error === null || Array.isArray(error)) {
+    return null;
+  }
+  const record = error as Readonly<Record<string, unknown>>;
+  return typeof record.code === 'string'
+    && isPlatformOperationCode(record.code)
+    && typeof record.retryable === 'boolean'
+      ? { code: record.code, retryable: record.retryable }
+      : null;
+}
+
+function normalizePlatformOperationCode(code: unknown): string {
+  return isPlatformOperationCode(code) ? code : 'PLATFORM_OPERATION_FAILED';
+}
+
+function isPlatformOperationCode(code: unknown): code is string {
+  return typeof code === 'string'
+    && code.length > 0
+    && code.length <= 128
+    && /^[A-Z][A-Z0-9_:-]*$/u.test(code);
+}
+
 export interface PurchaseResult {
   readonly status: 'completed' | 'cancelled' | 'pending' | 'failed';
   readonly transactionId?: string;

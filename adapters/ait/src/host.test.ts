@@ -5,6 +5,7 @@ import type { Entitlement } from '@mpgd/platform';
 
 import {
   createAitHostBridge,
+  createAitSessionIdentityProvider,
   shareIntent,
   type AitHostDependencies,
   type AitIapProductGrantVerificationInput,
@@ -48,6 +49,40 @@ describe('AIT production host bridge', () => {
     await expect(request(bridge, 'storage.load', { key: 'save:v1' })).resolves.toMatchObject({
       value: { hints: 3 },
     });
+  });
+
+  it('coalesces concurrent identity reads for one wrapper session', async () => {
+    const identityProvider = vi.fn(async () => ({ type: 'HASH', hash: 'player-shared' }));
+    const bridge = createAitHostBridge({
+      dependencies: createDependencies({ identityProvider }),
+    });
+
+    await expect(Promise.all([
+      request(bridge, 'identity.getPlayer', {}),
+      request(bridge, 'identity.getSession', {}),
+    ])).resolves.toEqual([
+      { playerId: 'player-shared' },
+      {
+        identityLevel: 'platform-anonymous',
+        playerId: 'player-shared',
+        trustLevel: 'platform-asserted',
+      },
+    ]);
+    expect(identityProvider).toHaveBeenCalledOnce();
+  });
+
+  it('retries a session identity read after a rejected native request', async () => {
+    const nativeProvider = vi.fn()
+      .mockRejectedValueOnce(new Error('native session unavailable'))
+      .mockResolvedValueOnce({ type: 'HASH', hash: 'player-recovered' });
+    const identityProvider = createAitSessionIdentityProvider(nativeProvider);
+
+    await expect(identityProvider()).rejects.toThrow('native session unavailable');
+    await expect(identityProvider()).resolves.toEqual({
+      type: 'HASH',
+      hash: 'player-recovered',
+    });
+    expect(nativeProvider).toHaveBeenCalledTimes(2);
   });
 
   it('fails closed when the native game identity is invalid', async () => {

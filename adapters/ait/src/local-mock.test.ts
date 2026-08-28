@@ -7,6 +7,7 @@ import {
   SafeArea,
   Storage,
   TossAds,
+  User,
 } from './local-mock.js';
 
 describe('Apps in Toss local SDK mock', () => {
@@ -14,6 +15,10 @@ describe('Apps in Toss local SDK mock', () => {
     await Storage.setItem('mock-key', 'mock-value');
 
     await expect(getUserKeyForGame()).resolves.toEqual({
+      type: 'HASH',
+      hash: 'ait-local-player',
+    });
+    await expect(User.getAnonymousKey()).resolves.toEqual({
       type: 'HASH',
       hash: 'ait-local-player',
     });
