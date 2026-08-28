@@ -1,5 +1,15 @@
 # @mpgd/cli
 
+## 0.27.0 — 2026-08-29
+
+### Minor changes
+
+- [c1c39a2](https://github.com/imjlk/mpgd-kit/commit/c1c39a2aaaefcde6a2a04e5ae06c784df07d0fce) Preserve provider-neutral platform operation codes and retry hints across adapter boundaries. Apps in Toss now uses the current anonymous identity API, coalesces concurrent identity reads for one wrapper session, retries a rejected identity read after the host recovers, and gives generated games an explicit native Sandbox wrapper command without local SDK or identity mocks. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.12.0, adapter-browser@0.7.2, adapter-capacitor@0.4.8, adapter-devvit@0.9.5, adapter-verse8@0.3.3, analytics@0.3.11, catalog@0.7.1, game-services@0.13.1, i18n@0.5.7, platform@0.11.0, target-config@0.13.1
+
 ## 0.26.0 — 2026-08-27
 
 ### Patch changes

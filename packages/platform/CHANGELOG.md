@@ -1,5 +1,11 @@
 # @mpgd/platform
 
+## 0.11.0 — 2026-08-29
+
+### Minor changes
+
+- [c1c39a2](https://github.com/imjlk/mpgd-kit/commit/c1c39a2aaaefcde6a2a04e5ae06c784df07d0fce) Preserve provider-neutral platform operation codes and retry hints across adapter boundaries. Apps in Toss now uses the current anonymous identity API, coalesces concurrent identity reads for one wrapper session, retries a rejected identity read after the host recovers, and gives generated games an explicit native Sandbox wrapper command without local SDK or identity mocks. — Thanks @imjlk!
+
 ## 0.10.0 — 2026-08-26
 
 ### Added

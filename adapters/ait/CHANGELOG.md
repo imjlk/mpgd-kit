@@ -1,5 +1,16 @@
 # @mpgd/adapter-ait
 
+## 0.12.0 — 2026-08-29
+
+### Minor changes
+
+- [c1c39a2](https://github.com/imjlk/mpgd-kit/commit/c1c39a2aaaefcde6a2a04e5ae06c784df07d0fce) Preserve provider-neutral platform operation codes and retry hints across adapter boundaries. Apps in Toss now uses the current anonymous identity API, coalesces concurrent identity reads for one wrapper session, retries a rejected identity read after the host recovers, and gives generated games an explicit native Sandbox wrapper command without local SDK or identity mocks. — Thanks @imjlk!
+
+### Patch changes
+
+- [d8f8578](https://github.com/imjlk/mpgd-kit/commit/d8f8578c9d32c5fdea63d16e7c738387fbf7b7ee) Use the documented Apps in Toss game identity API for AIT game wrappers and accept both the current OpenAPI boolean and legacy string anonymous-key verification response shapes. — Thanks @imjlk!
+- Updated dependencies: platform@0.11.0
+
 ## 0.11.0 — 2026-08-27
 
 ### Minor changes
