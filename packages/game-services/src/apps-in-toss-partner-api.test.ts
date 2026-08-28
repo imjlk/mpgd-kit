@@ -33,6 +33,41 @@ assertEqual(
   'anonymous-key verification should use the documented route',
 );
 
+const verificationShapeResponses = [
+  jsonResponse({ resultType: 'SUCCESS', success: true }),
+  jsonResponse({ resultType: 'SUCCESS', success: false }),
+  jsonResponse({ resultType: 'SUCCESS', success: 'false' }),
+];
+const verificationShapeClient = createAppsInTossPartnerApiClient({
+  mtls: {
+    async fetch() {
+      const response = verificationShapeResponses.shift();
+      if (response === undefined) {
+        throw new Error('Missing verification-shape response.');
+      }
+      return response;
+    },
+  },
+  baseUrl: 'https://ait-partner.example',
+});
+assertEqual(
+  await verificationShapeClient.verifyAnonymousKey({ anonymousKey: 'boolean-anon-key' }),
+  true,
+  'the OpenAPI boolean success shape should be accepted',
+);
+
+assertEqual(
+  await verificationShapeClient.verifyAnonymousKey({ anonymousKey: 'invalid-boolean-key' }),
+  false,
+  'the OpenAPI boolean false shape should reject the identity without a parser error',
+);
+
+assertEqual(
+  await verificationShapeClient.verifyAnonymousKey({ anonymousKey: 'invalid-string-key' }),
+  false,
+  'the legacy string false shape should reject the identity without a parser error',
+);
+
 const prefixedCalls: string[] = [];
 const prefixedClient = createAppsInTossPartnerApiClient({
   mtls: {
@@ -120,7 +155,7 @@ assertDeepEqual(
   'message requests should contain only the approved template and context',
 );
 
-responses.push(jsonResponse({ resultType: 'SUCCESS', success: false }));
+responses.push(jsonResponse({ resultType: 'SUCCESS', success: null }));
 await assertRejects(
   () => client.verifyAnonymousKey({ anonymousKey: 'malformed-key' }),
   'invalid anonymous-key verification response',

@@ -1,5 +1,6 @@
 import {
   getTossShareLink,
+  getUserKeyForGame,
   grantPromotionRewardForGame as grantPromotionReward,
   IAP,
   isMinVersionSupported,
@@ -11,7 +12,6 @@ import {
   Storage,
   submitGameCenterLeaderBoardScore,
   TossAds,
-  User,
   type IapProductListItem,
 } from '@apps-in-toss/web-framework';
 
@@ -86,10 +86,10 @@ const launchEntries = new Set<LaunchEntry>([
 
 export type AitIdentityProvider = () => Promise<unknown>;
 
-const defaultAitIdentityProvider: AitIdentityProvider = () => User.getAnonymousKey();
+const defaultAitIdentityProvider: AitIdentityProvider = () => getUserKeyForGame();
 
 /**
- * Shares one platform-anonymous identity read across a wrapper session.
+ * Shares one game identity hash read across a wrapper session.
  * Rejected reads are evicted so a resumed mobile host can retry after login or
  * WebView state has recovered.
  */
