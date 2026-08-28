@@ -1,5 +1,12 @@
 # @mpgd/game-services
 
+## 0.13.1 — 2026-08-29
+
+### Patch changes
+
+- [d8f8578](https://github.com/imjlk/mpgd-kit/commit/d8f8578c9d32c5fdea63d16e7c738387fbf7b7ee) Use the documented Apps in Toss game identity API for AIT game wrappers and accept both the current OpenAPI boolean and legacy string anonymous-key verification response shapes. — Thanks @imjlk!
+- Updated dependencies: analytics@0.3.11, catalog@0.7.1, platform@0.11.0
+
 ## 0.13.0 — 2026-08-27
 
 ### Minor changes
