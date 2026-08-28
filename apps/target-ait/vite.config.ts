@@ -6,7 +6,7 @@ import {
   type AitAdBridgeConfig,
 } from '@mpgd/adapter-ait/ad-config';
 import ttsc from '@ttsc/unplugin/vite';
-import { defineConfig } from 'vite';
+import { defineConfig, type Plugin } from 'vite';
 
 const aitAppName = process.env.MPGD_AIT_APP_NAME?.trim() || 'mpgd-kit';
 const aitAdConfig = readAitAdConfig(process.env.MPGD_AD_PLACEMENTS_FILE);
@@ -20,11 +20,6 @@ export default defineConfig(({ command, isPreview }) => {
     && process.env.MPGD_AIT_LOCAL_MOCK !== '0';
 
   return {
-    define: {
-      __MPGD_AIT_APP_NAME__: JSON.stringify(aitAppName),
-      __MPGD_AIT_AD_GROUP_IDS__: JSON.stringify(aitAdConfig.adGroupIds),
-      __MPGD_AIT_AD_PLACEMENT_TYPES__: JSON.stringify(aitAdConfig.adPlacementTypes),
-    },
     // Browser-only local development must not pretend that native rewards or
     // purchases are available. Production and console builds use the real SDK.
     ...(enableLocalAitMock
@@ -39,10 +34,19 @@ export default defineConfig(({ command, isPreview }) => {
         }
       : {}),
     plugins: [
-      ttsc({
-        project: 'tsconfig.bundle.json',
-        plugins: false,
+      createAitRuntimeConfigPlugin({
+        appName: aitAppName,
+        adGroupIds: aitAdConfig.adGroupIds,
+        adPlacementTypes: aitAdConfig.adPlacementTypes,
       }),
+      ...(command === 'build'
+        ? [
+          ttsc({
+            project: 'tsconfig.bundle.json',
+            plugins: false,
+          }),
+        ]
+        : []),
     ],
     build: {
       target: 'es2022',
@@ -51,6 +55,26 @@ export default defineConfig(({ command, isPreview }) => {
     },
   };
 });
+
+function createAitRuntimeConfigPlugin(input: Readonly<{
+  readonly appName: string;
+  readonly adGroupIds: Readonly<Record<string, string>>;
+  readonly adPlacementTypes: AitAdBridgeConfig['adPlacementTypes'];
+}>): Plugin {
+  const publicId = 'virtual:mpgd-ait-runtime-config';
+  const resolvedId = `\0${publicId}`;
+  return {
+    name: 'mpgd-ait-runtime-config',
+    resolveId(id) {
+      return id === publicId ? resolvedId : null;
+    },
+    load(id) {
+      return id === resolvedId
+        ? `export default Object.freeze(${JSON.stringify(input)});\n`
+        : null;
+    },
+  };
+}
 
 function readAitAdConfig(path: string | undefined): AitAdBridgeConfig {
   if (path === undefined || path.trim().length === 0) {

@@ -26,6 +26,12 @@ into a test checkout. The host environment selects the behavior:
   sandbox-only authority, isolate it to a staging backend and keep production
   grants fail-closed.
 
+Generated wrappers expose `pnpm ait:wrapper:dev:sandbox`. Unlike the ordinary
+browser playtest, this command sets `MPGD_AIT_LOCAL_MOCK=0` and
+`VITE_MPGD_AIT_MOCK_IDENTITY=0`; the Sandbox host must provide the native SDK.
+Pass game-owned staging endpoints and SKU/authority settings to the process.
+Never use the command as evidence that a plain desktop browser supports IAP.
+
 `@mpgd/adapter-ait` preserves bridge rejection metadata as a
 `PlatformOperationError`. Game UI can report a safe code without importing the
 Apps in Toss SDK or parsing a localized provider message:

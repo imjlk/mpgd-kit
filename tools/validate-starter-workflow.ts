@@ -1187,6 +1187,11 @@ function validatePhaserTemplateAITWrapper(): void {
         'vite build && ait build',
         `${wrapperPackagePath}: build`,
       );
+      assertEqual(
+        packageJson.scripts?.['dev:sandbox'],
+        'MPGD_AIT_LOCAL_MOCK=0 VITE_MPGD_AIT_MOCK_IDENTITY=0 vite --host 0.0.0.0',
+        `${wrapperPackagePath}: dev:sandbox`,
+      );
     }
   }
 
@@ -1195,6 +1200,7 @@ function validatePhaserTemplateAITWrapper(): void {
     for (const requiredText of [
       "from '@mpgd/adapter-ait/host'",
       "from '@mpgd/adapter-ait/wrapper'",
+      "from 'virtual:mpgd-ait-runtime-config'",
       ...aitSafeAreaWrapperRequiredTexts,
       'installAitHostBridge({',
       'mountAitGameBundle(app)',
@@ -1213,8 +1219,9 @@ function validatePhaserTemplateAITWrapper(): void {
       "from '@mpgd/adapter-ait/ad-config'",
       "'@apps-in-toss/web-framework': '@mpgd/adapter-ait/local-mock'",
       'MPGD_AIT_LOCAL_MOCK',
-      '__MPGD_AIT_AD_GROUP_IDS__',
-      '__MPGD_AIT_AD_PLACEMENT_TYPES__',
+      "command === 'build'",
+      'createAitRuntimeConfigPlugin({',
+      'virtual:mpgd-ait-runtime-config',
     ]) {
       assertIncludesText(content, requiredText, wrapperVitePath);
     }
@@ -1304,6 +1311,7 @@ function validatePhaserTemplateAITWrapper(): void {
           "APP_TARGET=ait MPGD_CONFIG_TARGET=ait MPGD_PLATFORM_TARGETS_FILE=./mpgd.targets.json APP_VERSION=0.0.0-dev BUILD_ID=ait-sandbox sh -c '__WORKSPACE_I18N_BUILD_PREFIX__vite --host 0.0.0.0'",
         'ait:wrapper:dev': 'pnpm --dir apps/target-ait run dev',
         'ait:wrapper:dev:plain': 'pnpm --dir apps/target-ait run dev:plain',
+        'ait:wrapper:dev:sandbox': 'pnpm --dir apps/target-ait run dev:sandbox',
       })) {
         assertEqual(
           packageJson.scripts?.[scriptName],
