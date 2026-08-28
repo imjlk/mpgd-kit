@@ -51,7 +51,11 @@ export function createAitPlatformGateway(input: {
     const bridge = input.bridge ?? getBridge() ?? input.fallbackBridge;
 
     if (bridge === undefined) {
-      throw new Error('AIT bridge is not installed.');
+      throw new PlatformOperationError({
+        code: 'AIT_BRIDGE_NOT_INSTALLED',
+        message: 'AIT bridge is not installed.',
+        retryable: false,
+      });
     }
 
     const response = await bridge.request({

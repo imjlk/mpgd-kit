@@ -61,14 +61,19 @@ export class PlatformOperationError extends Error implements PlatformOperationFa
   readonly code: string;
   readonly retryable: boolean;
 
-  constructor(input: Readonly<{
-    readonly code: string;
-    readonly message: string;
-    readonly retryable: boolean;
+  constructor(input?: Readonly<{
+    readonly code?: unknown;
+    readonly message?: unknown;
+    readonly retryable?: unknown;
   }>) {
-    super(input.message);
-    this.code = normalizePlatformOperationCode(input.code);
-    this.retryable = input.retryable;
+    const diagnostics = input ?? {};
+    super(
+      typeof diagnostics.message === 'string'
+        ? diagnostics.message
+        : 'The platform operation failed.',
+    );
+    this.code = normalizePlatformOperationCode(diagnostics.code);
+    this.retryable = diagnostics.retryable === true;
   }
 }
 
@@ -87,12 +92,13 @@ export function readPlatformOperationFailure(error: unknown): PlatformOperationF
       : null;
 }
 
-function normalizePlatformOperationCode(code: string): string {
+function normalizePlatformOperationCode(code: unknown): string {
   return isPlatformOperationCode(code) ? code : 'PLATFORM_OPERATION_FAILED';
 }
 
-function isPlatformOperationCode(code: string): boolean {
-  return code.length > 0
+function isPlatformOperationCode(code: unknown): code is string {
+  return typeof code === 'string'
+    && code.length > 0
     && code.length <= 128
     && /^[A-Z][A-Z0-9_:-]*$/u.test(code);
 }

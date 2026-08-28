@@ -86,13 +86,15 @@ const launchEntries = new Set<LaunchEntry>([
 
 export type AitIdentityProvider = () => Promise<unknown>;
 
+const defaultAitIdentityProvider: AitIdentityProvider = () => User.getAnonymousKey();
+
 /**
  * Shares one platform-anonymous identity read across a wrapper session.
  * Rejected reads are evicted so a resumed mobile host can retry after login or
  * WebView state has recovered.
  */
 export function createAitSessionIdentityProvider(
-  provider: AitIdentityProvider = () => User.getAnonymousKey(),
+  provider: AitIdentityProvider = defaultAitIdentityProvider,
 ): AitIdentityProvider {
   let pending: Promise<unknown> | undefined;
   return () => {
@@ -287,7 +289,7 @@ export interface InstallAitHostBridgeOptions {
 }
 
 const defaultDependencies: AitHostDependencies = {
-  identityProvider: () => User.getAnonymousKey(),
+  identityProvider: defaultAitIdentityProvider,
   storage: Storage,
   getTossShareLink,
   share,

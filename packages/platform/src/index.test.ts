@@ -77,5 +77,22 @@ describe('platform operation failures', () => {
       retryable: false,
     });
     expect(normalized.code).toBe('PLATFORM_OPERATION_FAILED');
+
+    const malformed = new PlatformOperationError({
+      code: undefined,
+      message: 'An older bridge omitted diagnostics.',
+      retryable: undefined,
+    });
+    expect(readPlatformOperationFailure(malformed)).toEqual({
+      code: 'PLATFORM_OPERATION_FAILED',
+      retryable: false,
+    });
+
+    const missing = new PlatformOperationError();
+    expect(missing).toMatchObject({
+      code: 'PLATFORM_OPERATION_FAILED',
+      message: 'The platform operation failed.',
+      retryable: false,
+    });
   });
 });

@@ -6,7 +6,7 @@ Current scope:
 
 - SDK 3 `apps-in-toss.config.ts`
 - `ait build` script
-- SDK-backed anonymous game identity through `getUserKeyForGame`
+- SDK-backed anonymous game identity through `User.getAnonymousKey()`
 - persistent progress through the native `Storage` API
 - SDK-backed sharing and Ads 2.0 callbacks
 - Game Center leaderboard bridge methods
@@ -31,7 +31,7 @@ The 52px navigation band and 10px edge gap match the current game navigation
 treatment; wrappers with measured custom host geometry can override both
 values through the installer options.
 
-The production bridge maps the stable game-scoped `getUserKeyForGame()` hash
+The production bridge maps the stable anonymous `User.getAnonymousKey()` hash
 to `PlatformGateway.identity.getPlayer()` and serializes gateway storage values
 through the native `Storage` API. `dev:plain` installs a deliberately limited
 local SDK mock for browser layout work only; it does not validate native identity,

@@ -73,6 +73,31 @@ describe('adapter-ait', () => {
     });
   });
 
+  it('classifies a missing bridge as a non-retryable configuration failure', async () => {
+    const previousBridge = (globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge })
+      .__GAME_PLATFORM_BRIDGE__;
+    delete (globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge })
+      .__GAME_PLATFORM_BRIDGE__;
+
+    try {
+      const gateway = createAitPlatformGateway({
+        appVersion: '1.2.3',
+        buildId: 'build-ait',
+      });
+
+      await expect(gateway.getCapabilities()).rejects.toMatchObject({
+        name: 'PlatformOperationError',
+        code: 'AIT_BRIDGE_NOT_INSTALLED',
+        retryable: false,
+      });
+    } finally {
+      if (previousBridge !== undefined) {
+        (globalThis as { __GAME_PLATFORM_BRIDGE__?: GamePlatformBridge })
+          .__GAME_PLATFORM_BRIDGE__ = previousBridge;
+      }
+    }
+  });
+
   it('uses fallback sandbox bridge only when no bridge is installed', async () => {
     const explicitBridge: GamePlatformBridge = {
       async request(input) {
