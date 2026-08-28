@@ -152,13 +152,19 @@ export function createAppsInTossPartnerApiClient(
         return false;
       }
       const envelope = requireSuccessEnvelope(response);
-      if (envelope.success !== 'true') {
-        throw new AppsInTossPartnerApiError(
-          'Apps in Toss returned an invalid anonymous-key verification response.',
-          response.status,
-        );
+      // The OpenAPI schema uses a boolean while older Apps in Toss examples use
+      // strings. Both false forms are ordinary rejections; every other shape
+      // remains malformed and fails closed below.
+      if (envelope.success === true || envelope.success === 'true') {
+        return true;
       }
-      return true;
+      if (envelope.success === false || envelope.success === 'false') {
+        return false;
+      }
+      throw new AppsInTossPartnerApiError(
+        'Apps in Toss returned an invalid anonymous-key verification response.',
+        response.status,
+      );
     },
 
     async sendFunctionalMessage(request) {
