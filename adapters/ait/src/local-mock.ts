@@ -42,8 +42,14 @@ export const Storage = {
   },
 };
 
+export const User = {
+  async getAnonymousKey(): Promise<{ readonly type: 'HASH'; readonly hash: string }> {
+    return { type: 'HASH', hash: 'ait-local-player' };
+  },
+};
+
 export async function getUserKeyForGame(): Promise<{ readonly type: 'HASH'; readonly hash: string }> {
-  return { type: 'HASH', hash: 'ait-local-player' };
+  return User.getAnonymousKey();
 }
 
 export async function getTossShareLink(): Promise<string> {
