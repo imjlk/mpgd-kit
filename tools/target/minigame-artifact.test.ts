@@ -300,6 +300,21 @@ try {
     'const entries = Object.entries; '
       + 'entries(globalThis).find(([key]) => key === "wx")[1].request({});\n',
     'const { values } = Object; values(globalThis).find(Boolean).request({});\n',
+    'const methods = { entries: Object.entries }; '
+      + 'methods.entries(globalThis).find(([key]) => key === "wx")[1].request({});\n',
+    'const methods = { entries: Object.entries }; '
+      + 'methods.entries.call(null, globalThis).find(([key]) => key === "wx")[1].request({});\n',
+    'const methods = { values: Object.values }; '
+      + 'methods.values.apply(null, [globalThis]).find(Boolean).request({});\n',
+    'const methods = { entries: Object.entries }; '
+      + 'methods.entries.bind(null, globalThis)().find(Boolean).request({});\n',
+    'const methods = [Object.values]; methods[0](globalThis).find(Boolean).request({});\n',
+    'const methods = {}; methods.entries = Object.entries; '
+      + 'methods.entries(globalThis).find(([key]) => key === "wx")[1].request({});\n',
+    'const methods = { entries: Object.entries }; const { entries } = methods; '
+      + 'entries(globalThis).find(([key]) => key === "wx")[1].request({});\n',
+    'const methods = { nested: { values: Object.values } }; const copy = methods; '
+      + 'copy.nested.values(globalThis).find(Boolean).request({});\n',
   ]) {
     write('game.bundle.js', reflectiveWechatSdkAccess);
     assert.throws(
@@ -314,6 +329,21 @@ try {
       + 'globalThis[SymbolAlias.for("sdk")].request({});\n',
     'Object.defineProperty(Symbol, "for", { value: () => "wx" });\n',
     'Reflect.defineProperty(Symbol, "for", { value: () => "wx" });\n',
+    'Reflect.set(Symbol, "for", () => "wx"); '
+      + 'globalThis[Symbol.for("sdk")].request({});\n',
+    'Reflect.deleteProperty(Symbol, "for");\n',
+    'const set = Reflect.set; set(Symbol, "for", () => "wx");\n',
+    'const { set } = Reflect; set.call(null, Symbol, "for", () => "wx");\n',
+    'Reflect.set.apply(null, [Symbol, "for", () => "wx"]);\n',
+    'const methods = { set: Reflect.set }; methods.set(Symbol, "for", () => "wx");\n',
+    'const methods = [Reflect.deleteProperty]; methods[0](Symbol, "for");\n',
+    'const inheritedReflect = {}; Reflect.setPrototypeOf(inheritedReflect, Reflect); '
+      + 'inheritedReflect.get(globalThis, "wx").request({});\n',
+    'const methods = { setPrototypeOf: Reflect.setPrototypeOf }; '
+      + 'methods.setPrototypeOf({}, Reflect);\n',
+    'const methods = { defineProperty: Object.defineProperty }; '
+      + 'methods.defineProperty(Symbol, "for", { value: () => "wx" });\n',
+    'Object.entries = () => [["wx", globalThis.wx]];\n',
     'Object.assign(Symbol, { for: () => "wx" });\n',
     'Object.defineProperty(globalThis, "Symbol", { value: fakeSymbol });\n',
   ]) {
@@ -323,6 +353,13 @@ try {
       /game\.bundle\.js contains forbidden protected intrinsic mutation/u,
     );
   }
+  write(
+    'game.bundle.js',
+    'const target = {}; Reflect.set(target, "status", "ready"); '
+      + 'Reflect.setPrototypeOf(target, null); '
+      + 'Object.defineProperty(target, "label", { value: "safe" });\n',
+  );
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, [], ['wx']));
   write('game.bundle.js', 'globalThis.__MPGD_GAME__ = true;\n');
   write('unsafe.js', 'const indirectEval = eval;\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);

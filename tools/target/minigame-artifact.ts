@@ -125,6 +125,11 @@ type MiniGameObjectIntrinsicMethod =
   | 'preventExtensions'
   | 'seal'
   | 'setPrototypeOf';
+type MiniGameReflectIntrinsicMethod =
+  | 'defineProperty'
+  | 'deleteProperty'
+  | 'set'
+  | 'setPrototypeOf';
 type MiniGameReflectiveGlobalReadKind = 'property' | 'descriptors' | 'values';
 const miniGameObjectIntrinsicMethods = new Set<MiniGameObjectIntrinsicMethod>([
   'assign',
@@ -142,9 +147,19 @@ const miniGameObjectMutatingMethods = new Set<MiniGameObjectIntrinsicMethod>([
   'defineProperty',
   'setPrototypeOf',
 ]);
+const miniGameReflectMutatingMethods = new Set<MiniGameReflectIntrinsicMethod>([
+  'defineProperty',
+  'deleteProperty',
+  'set',
+  'setPrototypeOf',
+]);
 
 function isMiniGameObjectIntrinsicMethod(name: string): name is MiniGameObjectIntrinsicMethod {
   return miniGameObjectIntrinsicMethods.has(name as MiniGameObjectIntrinsicMethod);
+}
+
+function isMiniGameReflectIntrinsicMethod(name: string): name is MiniGameReflectIntrinsicMethod {
+  return miniGameReflectMutatingMethods.has(name as MiniGameReflectIntrinsicMethod);
 }
 const miniGameWellKnownSymbolProperties = new Set([
   'asyncDispose',
@@ -178,7 +193,23 @@ interface MiniGameScopeAnalysis {
     MiniGameLexicalBinding,
     ReadonlySet<MiniGameObjectIntrinsicMethod>
   >;
+  readonly objectIntrinsicMethodContainers: ReadonlyMap<
+    MiniGameLexicalBinding,
+    ReadonlySet<MiniGameObjectIntrinsicMethod>
+  >;
+  readonly reflectIntrinsicMethodAliases: ReadonlyMap<
+    MiniGameLexicalBinding,
+    ReadonlySet<MiniGameReflectIntrinsicMethod>
+  >;
+  readonly reflectIntrinsicMethodContainers: ReadonlyMap<
+    MiniGameLexicalBinding,
+    ReadonlySet<MiniGameReflectIntrinsicMethod>
+  >;
   readonly reflectiveGlobalReadAliases: ReadonlyMap<
+    MiniGameLexicalBinding,
+    ReadonlySet<MiniGameReflectiveGlobalReadKind>
+  >;
+  readonly reflectiveGlobalReadContainers: ReadonlyMap<
     MiniGameLexicalBinding,
     ReadonlySet<MiniGameReflectiveGlobalReadKind>
   >;
@@ -1277,6 +1308,7 @@ function isMiniGameProtectedIntrinsicMutation(
     if (
       isMiniGameSymbolConstructorReference(target, ancestors, analysis)
       || isGlobalObjectAliasSource(target, ancestors, analysis)
+      || getGlobalIntrinsicKinds(target, ancestors, analysis).size > 0
     ) {
       return true;
     }
@@ -1293,16 +1325,31 @@ function isMiniGameProtectedIntrinsicMutation(
     }
   }
 
-  if (node.callee.type === 'MemberExpression') {
-    const methods = readMiniGameMemberNames(node.callee, ancestors, analysis);
-    const intrinsicKinds = getGlobalIntrinsicKinds(node.callee.object, ancestors, analysis);
+  const reflectInvocation = resolveReflectIntrinsicInvocation(node, ancestors, analysis);
 
+  if (
+    reflectInvocation !== undefined
+    && [...reflectInvocation.methods].some((method) => {
+      return miniGameReflectMutatingMethods.has(method);
+    })
+  ) {
+    if (reflectInvocation.arguments === undefined) {
+      return true;
+    }
+    const target = reflectInvocation.arguments[0];
     if (
-      intrinsicKinds.has('Reflect')
-      && (methods.has('defineProperty') || methods.has('setPrototypeOf'))
+      isMiniGameSymbolConstructorReference(target, ancestors, analysis)
+      || isGlobalObjectAliasSource(target, ancestors, analysis)
+      || getGlobalIntrinsicKinds(target, ancestors, analysis).size > 0
+    ) {
+      return true;
+    }
+    const prototype = reflectInvocation.arguments[1];
+    if (
+      reflectInvocation.methods.has('setPrototypeOf')
       && (
-        isMiniGameSymbolConstructorReference(node.arguments[0], ancestors, analysis)
-        || isGlobalObjectAliasSource(node.arguments[0], ancestors, analysis)
+        isGlobalObjectAliasSource(prototype, ancestors, analysis)
+        || getGlobalIntrinsicKinds(prototype, ancestors, analysis).size > 0
       )
     ) {
       return true;
@@ -1317,12 +1364,14 @@ function isMiniGameProtectedIntrinsicMutation(
     }
     if (input.type === 'Identifier' && typeof input.name === 'string') {
       const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
-      return input.name === 'Symbol' && resolveMiniGameBinding(input.name, scope) === undefined;
+      return ['Object', 'Reflect', 'Symbol'].includes(input.name)
+        && resolveMiniGameBinding(input.name, scope) === undefined;
     }
     if (input.type !== 'MemberExpression') {
       return false;
     }
     return isMiniGameSymbolConstructorReference(input.object, ancestors, analysis)
+      || getGlobalIntrinsicKinds(input.object, ancestors, analysis).size > 0
       || (
         readMiniGameMemberNames(input, ancestors, analysis).has('Symbol')
         && isGlobalObjectAliasSource(input.object, ancestors, analysis)
@@ -1421,7 +1470,23 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
     MiniGameLexicalBinding,
     Set<MiniGameObjectIntrinsicMethod>
   >();
+  const objectIntrinsicMethodContainers = new Map<
+    MiniGameLexicalBinding,
+    Set<MiniGameObjectIntrinsicMethod>
+  >();
+  const reflectIntrinsicMethodAliases = new Map<
+    MiniGameLexicalBinding,
+    Set<MiniGameReflectIntrinsicMethod>
+  >();
+  const reflectIntrinsicMethodContainers = new Map<
+    MiniGameLexicalBinding,
+    Set<MiniGameReflectIntrinsicMethod>
+  >();
   const reflectiveGlobalReadAliases = new Map<
+    MiniGameLexicalBinding,
+    Set<MiniGameReflectiveGlobalReadKind>
+  >();
+  const reflectiveGlobalReadContainers = new Map<
     MiniGameLexicalBinding,
     Set<MiniGameReflectiveGlobalReadKind>
   >();
@@ -1437,7 +1502,11 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
     globalObjectAliases,
     globalIntrinsicAliases,
     objectIntrinsicMethodAliases,
+    objectIntrinsicMethodContainers,
+    reflectIntrinsicMethodAliases,
+    reflectIntrinsicMethodContainers,
     reflectiveGlobalReadAliases,
+    reflectiveGlobalReadContainers,
     dynamicCodeConstructorAliases,
     dynamicCodeConstructorContainers,
     dynamicCodeConstructorFactories,
@@ -1461,12 +1530,25 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
       ast,
       analysis,
       objectIntrinsicMethodAliases,
+      objectIntrinsicMethodContainers,
+    );
+    const reflectMethodAliasesChanged = collectReflectIntrinsicMethodAliases(
+      ast,
+      analysis,
+      reflectIntrinsicMethodAliases,
+      reflectIntrinsicMethodContainers,
     );
     globalAliasChanged = objectAliasesChanged
       || intrinsicAliasesChanged
-      || objectMethodAliasesChanged;
+      || objectMethodAliasesChanged
+      || reflectMethodAliasesChanged;
   }
-  collectReflectiveGlobalReadAliases(ast, analysis, reflectiveGlobalReadAliases);
+  collectReflectiveGlobalReadAliases(
+    ast,
+    analysis,
+    reflectiveGlobalReadAliases,
+    reflectiveGlobalReadContainers,
+  );
   collectDynamicCodeConstructorFlow(
     ast,
     analysis,
@@ -1840,10 +1922,13 @@ function getGlobalIntrinsicKinds(
   return kinds;
 }
 
+// Intrinsic methods can be copied through aliases, aggregate literals, and later member writes.
+// Track both callable bindings and containers to keep protected-global checks sound after bundling.
 function collectObjectIntrinsicMethodAliases(
   ast: unknown,
   analysis: MiniGameScopeAnalysis,
   aliases: Map<MiniGameLexicalBinding, Set<MiniGameObjectIntrinsicMethod>>,
+  containers: Map<MiniGameLexicalBinding, Set<MiniGameObjectIntrinsicMethod>>,
 ): boolean {
   return collectMiniGameAliases(ast, addAliases);
 
@@ -1852,7 +1937,26 @@ function collectObjectIntrinsicMethodAliases(
     source: unknown,
     ancestors: readonly MiniGameAstAncestor[],
   ): boolean {
-    return addObjectIntrinsicMethodAliasBindings(pattern, source, ancestors, analysis, aliases);
+    const aliasChanged = addObjectIntrinsicMethodAliasBindings(
+      pattern,
+      source,
+      ancestors,
+      analysis,
+      aliases,
+    );
+    const sourceMethods = getObjectIntrinsicMethodKinds(source, ancestors, analysis);
+    const sourceContainers = getObjectIntrinsicMethodContainerKinds(source, ancestors, analysis);
+    const containerKinds = new Set(sourceMethods);
+    addSetValues(containerKinds, sourceContainers);
+    const containerChanged = addMiniGameMethodContainerBindings(
+      pattern,
+      sourceContainers,
+      containerKinds,
+      analysis,
+      aliases,
+      containers,
+    );
+    return aliasChanged || containerChanged;
   }
 }
 
@@ -1869,8 +1973,13 @@ function addObjectIntrinsicMethodAliasBindings(
   if (
     pattern.type === 'ObjectPattern'
     && Array.isArray(pattern.properties)
-    && getGlobalIntrinsicKinds(source, ancestors, analysis).has('Object')
   ) {
+    const sourceIsObject = getGlobalIntrinsicKinds(source, ancestors, analysis).has('Object');
+    const containerKinds = getObjectIntrinsicMethodContainerKinds(source, ancestors, analysis);
+
+    if (!sourceIsObject && containerKinds.size === 0) {
+      return false;
+    }
     let changed = false;
 
     for (const property of pattern.properties) {
@@ -1879,11 +1988,14 @@ function addObjectIntrinsicMethodAliasBindings(
       }
       const methods = new Set<MiniGameObjectIntrinsicMethod>();
 
-      for (const name of readMiniGameStaticPropertyNames(property, ancestors, analysis)) {
-        if (isMiniGameObjectIntrinsicMethod(name)) {
-          methods.add(name);
+      if (sourceIsObject) {
+        for (const name of readMiniGameStaticPropertyNames(property, ancestors, analysis)) {
+          if (isMiniGameObjectIntrinsicMethod(name)) {
+            methods.add(name);
+          }
         }
       }
+      addSetValues(methods, containerKinds);
       const added = addMiniGameBindingKinds(property.value, methods, analysis, aliases);
       changed = added || changed;
     }
@@ -1963,9 +2075,27 @@ function getObjectIntrinsicMethodKinds(
         }
       }
     }
+    addSetValues(
+      methods,
+      getObjectIntrinsicMethodContainerKinds(input.object, ancestors, analysis),
+    );
   }
 
   return methods;
+}
+
+function getObjectIntrinsicMethodContainerKinds(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Set<MiniGameObjectIntrinsicMethod> {
+  return getMiniGameMethodContainerKinds(
+    input,
+    ancestors,
+    analysis,
+    analysis.objectIntrinsicMethodContainers,
+    (value) => getObjectIntrinsicMethodKinds(value, ancestors, analysis),
+  );
 }
 
 function resolveObjectIntrinsicInvocation(
@@ -2018,13 +2148,448 @@ function resolveObjectIntrinsicInvocation(
   };
 }
 
+function collectReflectIntrinsicMethodAliases(
+  ast: unknown,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<MiniGameReflectIntrinsicMethod>>,
+  containers: Map<MiniGameLexicalBinding, Set<MiniGameReflectIntrinsicMethod>>,
+): boolean {
+  return collectMiniGameAliases(ast, (pattern, source, ancestors) => {
+    const aliasChanged = addReflectIntrinsicMethodAliasBindings(
+      pattern,
+      source,
+      ancestors,
+      analysis,
+      aliases,
+    );
+    const sourceMethods = getReflectIntrinsicMethodKinds(source, ancestors, analysis);
+    const sourceContainers = getReflectIntrinsicMethodContainerKinds(
+      source,
+      ancestors,
+      analysis,
+    );
+    const containerKinds = new Set(sourceMethods);
+    addSetValues(containerKinds, sourceContainers);
+    const containerChanged = addMiniGameMethodContainerBindings(
+      pattern,
+      sourceContainers,
+      containerKinds,
+      analysis,
+      aliases,
+      containers,
+    );
+    return aliasChanged || containerChanged;
+  });
+}
+
+function addReflectIntrinsicMethodAliasBindings(
+  pattern: unknown,
+  source: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<MiniGameReflectIntrinsicMethod>>,
+): boolean {
+  if (!isAstRecord(pattern)) {
+    return false;
+  }
+  if (pattern.type === 'ObjectPattern' && Array.isArray(pattern.properties)) {
+    const sourceIsReflect = getGlobalIntrinsicKinds(source, ancestors, analysis).has('Reflect');
+    const containerKinds = getReflectIntrinsicMethodContainerKinds(source, ancestors, analysis);
+
+    if (!sourceIsReflect && containerKinds.size === 0) {
+      return false;
+    }
+    let changed = false;
+
+    for (const property of pattern.properties) {
+      if (!isAstRecord(property) || property.type !== 'Property') {
+        continue;
+      }
+      const methods = new Set<MiniGameReflectIntrinsicMethod>();
+
+      if (sourceIsReflect) {
+        for (const name of readMiniGameStaticPropertyNames(property, ancestors, analysis)) {
+          if (isMiniGameReflectIntrinsicMethod(name)) {
+            methods.add(name);
+          }
+        }
+      }
+      addSetValues(methods, containerKinds);
+      const added = addMiniGameBindingKinds(property.value, methods, analysis, aliases);
+      changed = added || changed;
+    }
+
+    return changed;
+  }
+
+  return addMiniGameBindingKinds(
+    pattern,
+    getReflectIntrinsicMethodKinds(source, ancestors, analysis),
+    analysis,
+    aliases,
+  );
+}
+
+function getReflectIntrinsicMethodKinds(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Set<MiniGameReflectIntrinsicMethod> {
+  const methods = new Set<MiniGameReflectIntrinsicMethod>();
+
+  if (!isAstRecord(input)) {
+    return methods;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(input.name, scope);
+    addSetValues(
+      methods,
+      binding === undefined ? undefined : analysis.reflectIntrinsicMethodAliases.get(binding),
+    );
+    return methods;
+  }
+  if (input.type === 'ChainExpression') {
+    return getReflectIntrinsicMethodKinds(input.expression, ancestors, analysis);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return getReflectIntrinsicMethodKinds(input.expressions.at(-1), ancestors, analysis);
+  }
+  if (input.type === 'ConditionalExpression') {
+    addSetValues(methods, getReflectIntrinsicMethodKinds(input.consequent, ancestors, analysis));
+    addSetValues(methods, getReflectIntrinsicMethodKinds(input.alternate, ancestors, analysis));
+    return methods;
+  }
+  if (input.type === 'LogicalExpression') {
+    addSetValues(methods, getReflectIntrinsicMethodKinds(input.left, ancestors, analysis));
+    addSetValues(methods, getReflectIntrinsicMethodKinds(input.right, ancestors, analysis));
+    return methods;
+  }
+  if (input.type === 'CallExpression' && isAstRecord(input.callee)) {
+    if (
+      input.callee.type === 'MemberExpression'
+      && readMiniGameMemberNames(input.callee, ancestors, analysis).has('bind')
+    ) {
+      return getReflectIntrinsicMethodKinds(input.callee.object, ancestors, analysis);
+    }
+    return methods;
+  }
+  if (input.type === 'MemberExpression') {
+    const memberNames = readMiniGameMemberNames(input, ancestors, analysis);
+
+    if (memberNames.has('call') || memberNames.has('apply') || memberNames.has('bind')) {
+      addSetValues(methods, getReflectIntrinsicMethodKinds(input.object, ancestors, analysis));
+    }
+    if (getGlobalIntrinsicKinds(input.object, ancestors, analysis).has('Reflect')) {
+      for (const name of memberNames) {
+        if (isMiniGameReflectIntrinsicMethod(name)) {
+          methods.add(name);
+        }
+      }
+    }
+    addSetValues(
+      methods,
+      getReflectIntrinsicMethodContainerKinds(input.object, ancestors, analysis),
+    );
+  }
+
+  return methods;
+}
+
+function getReflectIntrinsicMethodContainerKinds(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Set<MiniGameReflectIntrinsicMethod> {
+  return getMiniGameMethodContainerKinds(
+    input,
+    ancestors,
+    analysis,
+    analysis.reflectIntrinsicMethodContainers,
+    (value) => getReflectIntrinsicMethodKinds(value, ancestors, analysis),
+  );
+}
+
+function resolveReflectIntrinsicInvocation(
+  input: Record<string, unknown>,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Readonly<{
+  readonly methods: ReadonlySet<MiniGameReflectIntrinsicMethod>;
+  readonly arguments?: readonly unknown[];
+}> | undefined {
+  if (
+    input.type !== 'CallExpression'
+    || !isAstRecord(input.callee)
+    || !Array.isArray(input.arguments)
+  ) {
+    return undefined;
+  }
+  if (input.callee.type === 'MemberExpression') {
+    const invocationMethods = readMiniGameMemberNames(input.callee, ancestors, analysis);
+    const receiverMethods = getReflectIntrinsicMethodKinds(
+      input.callee.object,
+      ancestors,
+      analysis,
+    );
+
+    if (receiverMethods.size > 0 && invocationMethods.has('bind')) {
+      return undefined;
+    }
+    if (receiverMethods.size > 0 && invocationMethods.has('call')) {
+      return { methods: receiverMethods, arguments: input.arguments.slice(1) };
+    }
+    if (receiverMethods.size > 0 && invocationMethods.has('apply')) {
+      const appliedArguments = input.arguments[1];
+
+      if (!isAstRecord(appliedArguments) || appliedArguments.type !== 'ArrayExpression') {
+        return { methods: receiverMethods };
+      }
+      const elements = Array.isArray(appliedArguments.elements) ? appliedArguments.elements : [];
+
+      if (elements.some((element) => isAstRecord(element) && element.type === 'SpreadElement')) {
+        return { methods: receiverMethods };
+      }
+      return { methods: receiverMethods, arguments: elements };
+    }
+  }
+
+  const methods = getReflectIntrinsicMethodKinds(input.callee, ancestors, analysis);
+  if (methods.size === 0) {
+    return undefined;
+  }
+  return {
+    methods,
+    ...(input.arguments.length === 0 ? {} : { arguments: input.arguments }),
+  };
+}
+
+function addMiniGameMethodContainerBindings<T>(
+  pattern: unknown,
+  sourceContainers: ReadonlySet<T>,
+  containerKinds: ReadonlySet<T>,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<T>>,
+  containers: Map<MiniGameLexicalBinding, Set<T>>,
+): boolean {
+  if (!isAstRecord(pattern) || containerKinds.size === 0) {
+    return false;
+  }
+  if (pattern.type === 'MemberExpression') {
+    return addMiniGameContainerBindingKinds(pattern.object, containerKinds, analysis, containers);
+  }
+
+  const aliasesChanged = sourceContainers.size > 0
+    && (pattern.type === 'ObjectPattern' || pattern.type === 'ArrayPattern')
+    && addMiniGamePatternBindingKinds(pattern, sourceContainers, analysis, aliases);
+  const containersChanged = sourceContainers.size > 0
+    && addMiniGameBindingKinds(pattern, sourceContainers, analysis, containers);
+  return aliasesChanged || containersChanged;
+}
+
+function addMiniGamePatternBindingKinds<T>(
+  pattern: unknown,
+  kinds: ReadonlySet<T>,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<T>>,
+): boolean {
+  if (!isAstRecord(pattern)) {
+    return false;
+  }
+  if (pattern.type === 'Identifier' || pattern.type === 'AssignmentPattern') {
+    return addMiniGameBindingKinds(pattern, kinds, analysis, aliases);
+  }
+  if (pattern.type === 'RestElement') {
+    return addMiniGamePatternBindingKinds(pattern.argument, kinds, analysis, aliases);
+  }
+  if (pattern.type === 'ArrayPattern' && Array.isArray(pattern.elements)) {
+    return pattern.elements.reduce((changed, element) => {
+      return addMiniGamePatternBindingKinds(element, kinds, analysis, aliases) || changed;
+    }, false);
+  }
+  if (pattern.type === 'ObjectPattern' && Array.isArray(pattern.properties)) {
+    return pattern.properties.reduce((changed, property) => {
+      if (!isAstRecord(property)) {
+        return changed;
+      }
+      const value = property.type === 'Property' ? property.value : property.argument;
+      return addMiniGamePatternBindingKinds(value, kinds, analysis, aliases) || changed;
+    }, false);
+  }
+
+  return false;
+}
+
+function addMiniGameContainerBindingKinds<T>(
+  input: unknown,
+  kinds: ReadonlySet<T>,
+  analysis: MiniGameScopeAnalysis,
+  containers: Map<MiniGameLexicalBinding, Set<T>>,
+): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'AssignmentPattern') {
+    return addMiniGameContainerBindingKinds(input.left, kinds, analysis, containers);
+  }
+  if (input.type === 'ChainExpression') {
+    return addMiniGameContainerBindingKinds(input.expression, kinds, analysis, containers);
+  }
+  if (input.type === 'MemberExpression') {
+    return addMiniGameContainerBindingKinds(input.object, kinds, analysis, containers);
+  }
+
+  return addMiniGameBindingKinds(input, kinds, analysis, containers);
+}
+
+function getMiniGameMethodContainerKinds<T>(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+  containers: ReadonlyMap<MiniGameLexicalBinding, ReadonlySet<T>>,
+  getMethodKinds: (value: unknown) => ReadonlySet<T>,
+): Set<T> {
+  const kinds = new Set<T>();
+
+  if (!isAstRecord(input)) {
+    return kinds;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(input.name, scope);
+    addSetValues(kinds, binding === undefined ? undefined : containers.get(binding));
+    return kinds;
+  }
+  if (input.type === 'ChainExpression') {
+    return getMiniGameMethodContainerKinds(
+      input.expression,
+      ancestors,
+      analysis,
+      containers,
+      getMethodKinds,
+    );
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return getMiniGameMethodContainerKinds(
+      input.expressions.at(-1),
+      ancestors,
+      analysis,
+      containers,
+      getMethodKinds,
+    );
+  }
+  if (input.type === 'ConditionalExpression') {
+    addSetValues(
+      kinds,
+      getMiniGameMethodContainerKinds(
+        input.consequent,
+        ancestors,
+        analysis,
+        containers,
+        getMethodKinds,
+      ),
+    );
+    addSetValues(
+      kinds,
+      getMiniGameMethodContainerKinds(
+        input.alternate,
+        ancestors,
+        analysis,
+        containers,
+        getMethodKinds,
+      ),
+    );
+    return kinds;
+  }
+  if (input.type === 'LogicalExpression') {
+    const leftKinds = getMiniGameMethodContainerKinds(
+      input.left,
+      ancestors,
+      analysis,
+      containers,
+      getMethodKinds,
+    );
+    const rightKinds = getMiniGameMethodContainerKinds(
+      input.right,
+      ancestors,
+      analysis,
+      containers,
+      getMethodKinds,
+    );
+    addSetValues(kinds, leftKinds);
+    addSetValues(kinds, rightKinds);
+    return kinds;
+  }
+  if (input.type === 'MemberExpression') {
+    return getMiniGameMethodContainerKinds(
+      input.object,
+      ancestors,
+      analysis,
+      containers,
+      getMethodKinds,
+    );
+  }
+  if (input.type === 'ObjectExpression' && Array.isArray(input.properties)) {
+    for (const property of input.properties) {
+      if (!isAstRecord(property)) {
+        continue;
+      }
+      const value = property.type === 'Property' ? property.value : property.argument;
+      addSetValues(kinds, getMethodKinds(value));
+      addSetValues(
+        kinds,
+        getMiniGameMethodContainerKinds(value, ancestors, analysis, containers, getMethodKinds),
+      );
+    }
+    return kinds;
+  }
+  if (input.type === 'ArrayExpression' && Array.isArray(input.elements)) {
+    for (const element of input.elements) {
+      const value = isAstRecord(element) && element.type === 'SpreadElement'
+        ? element.argument
+        : element;
+      addSetValues(kinds, getMethodKinds(value));
+      addSetValues(
+        kinds,
+        getMiniGameMethodContainerKinds(value, ancestors, analysis, containers, getMethodKinds),
+      );
+    }
+  }
+
+  return kinds;
+}
+
 function collectReflectiveGlobalReadAliases(
   ast: unknown,
   analysis: MiniGameScopeAnalysis,
   aliases: Map<MiniGameLexicalBinding, Set<MiniGameReflectiveGlobalReadKind>>,
+  containers: Map<MiniGameLexicalBinding, Set<MiniGameReflectiveGlobalReadKind>>,
 ): void {
   collectMiniGameAliases(ast, (pattern, source, ancestors) => {
-    return addReflectiveGlobalReadAliasBindings(pattern, source, ancestors, analysis, aliases);
+    const aliasChanged = addReflectiveGlobalReadAliasBindings(
+      pattern,
+      source,
+      ancestors,
+      analysis,
+      aliases,
+    );
+    const sourceMethods = getReflectiveGlobalReadKinds(source, ancestors, analysis);
+    const sourceContainers = getReflectiveGlobalReadContainerKinds(
+      source,
+      ancestors,
+      analysis,
+    );
+    const containerKinds = new Set(sourceMethods);
+    addSetValues(containerKinds, sourceContainers);
+    const containerChanged = addMiniGameMethodContainerBindings(
+      pattern,
+      sourceContainers,
+      containerKinds,
+      analysis,
+      aliases,
+      containers,
+    );
+    return aliasChanged || containerChanged;
   });
 }
 
@@ -2040,6 +2605,7 @@ function addReflectiveGlobalReadAliasBindings(
   }
   if (pattern.type === 'ObjectPattern' && Array.isArray(pattern.properties)) {
     const intrinsicKinds = getGlobalIntrinsicKinds(source, ancestors, analysis);
+    const containerKinds = getReflectiveGlobalReadContainerKinds(source, ancestors, analysis);
     let changed = false;
 
     for (const property of pattern.properties) {
@@ -2052,6 +2618,7 @@ function addReflectiveGlobalReadAliasBindings(
       for (const methodName of methodNames) {
         addSetValues(readKinds, getReflectiveMethodKinds(intrinsicKinds, methodName));
       }
+      addSetValues(readKinds, containerKinds);
 
       const added = addMiniGameBindingKinds(property.value, readKinds, analysis, aliases);
       changed = added || changed;
@@ -2105,13 +2672,31 @@ function getReflectiveGlobalReadKinds(
   }
   if (input.type === 'MemberExpression') {
     const intrinsicKinds = getGlobalIntrinsicKinds(input.object, ancestors, analysis);
+    const memberNames = readMiniGameMemberNames(input, ancestors, analysis);
 
-    for (const methodName of readMiniGameMemberNames(input, ancestors, analysis)) {
+    for (const methodName of memberNames) {
       addSetValues(kinds, getReflectiveMethodKinds(intrinsicKinds, methodName));
+    }
+    if (![...memberNames].some((name) => ['apply', 'bind', 'call'].includes(name))) {
+      addSetValues(kinds, getReflectiveGlobalReadContainerKinds(input.object, ancestors, analysis));
     }
   }
 
   return kinds;
+}
+
+function getReflectiveGlobalReadContainerKinds(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Set<MiniGameReflectiveGlobalReadKind> {
+  return getMiniGameMethodContainerKinds(
+    input,
+    ancestors,
+    analysis,
+    analysis.reflectiveGlobalReadContainers,
+    (value) => getReflectiveGlobalReadKinds(value, ancestors, analysis),
+  );
 }
 
 function getReflectiveMethodKinds(
