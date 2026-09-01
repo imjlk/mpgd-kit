@@ -229,6 +229,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     if (
       this.readyState === MiniGameXMLHttpRequest.UNSENT
       || this.readyState === MiniGameXMLHttpRequest.DONE
+      || !this.#sendStarted
     ) {
       return;
     }

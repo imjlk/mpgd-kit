@@ -61,6 +61,10 @@ export interface MiniGamePhaserConfigOverrides {
 }
 
 const installedGames = new WeakMap<object, MiniGamePhaserRuntimeInstallationImpl>();
+const installedGlobals = new WeakMap<
+  MiniGameGlobalInstallation,
+  MiniGamePhaserRuntimeInstallationImpl
+>();
 
 class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInstallation {
   readonly game: MiniGamePhaserGame;
@@ -214,6 +218,11 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     }
 
     installedGames.delete(this.game as object);
+
+    if (installedGlobals.get(this.#globals) === this) {
+      installedGlobals.delete(this.#globals);
+    }
+
     this.#releaseGlobalsDisposalGuard();
   }
 
@@ -350,12 +359,22 @@ export function installPhaserMiniGameRuntime(
     );
   }
 
+  const globalsInstallation = installedGlobals.get(globals);
+
+  if (globalsInstallation !== undefined && !globalsInstallation.disposed) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_MULTIPLE_PHASER_GAMES_UNSUPPORTED',
+      'Mini-game globals can host only one active Phaser game runtime at a time.',
+    );
+  }
+
   const installation = new MiniGamePhaserRuntimeInstallationImpl(
     game,
     globals,
     options.onFrameError ?? reportPhaserFrameError,
   );
   installedGames.set(game as object, installation);
+  installedGlobals.set(globals, installation);
   return installation;
 }
 

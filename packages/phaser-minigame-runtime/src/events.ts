@@ -112,6 +112,10 @@ export class MiniGameEventTarget {
     event.currentTarget = this.#eventTarget;
 
     for (const registration of [...(this.#listeners.get(event.type) ?? [])]) {
+      if (!this.#listeners.get(event.type)?.includes(registration)) {
+        continue;
+      }
+
       if (registration.once) {
         this.removeEventListener(event.type, registration.listener);
       }

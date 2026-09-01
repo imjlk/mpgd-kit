@@ -310,6 +310,23 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(reported).toEqual([{ error: listenerError, type: 'load' }]);
   });
 
+  it('skips a listener removed before its turn in the current dispatch', () => {
+    const eventTarget = new MiniGameEventTarget();
+    const calls: string[] = [];
+    const removedListener = (): void => {
+      calls.push('removed');
+    };
+    eventTarget.addEventListener('touchstart', () => {
+      calls.push('remover');
+      eventTarget.removeEventListener('touchstart', removedListener);
+    });
+    eventTarget.addEventListener('touchstart', removedListener);
+
+    eventTarget.dispatchEvent(new MiniGameEvent('touchstart'));
+
+    expect(calls).toEqual(['remover']);
+  });
+
   it('forwards touch start, move, end, and cancel and removes listeners on dispose', () => {
     const host = new FakeMiniGameHost();
     const installation = installMiniGameGlobals(host);
@@ -473,6 +490,21 @@ describe('mini-game requestAnimationFrame and transport', () => {
 
   it('honors aborts raised by XHR lifecycle callbacks without starting transport', async () => {
     const host = new FakeMiniGameHost();
+    const stagedRequest = new MiniGameXMLHttpRequest(host);
+    let stagedAborts = 0;
+    let stagedLoadEnds = 0;
+    stagedRequest.onabort = () => {
+      stagedAborts += 1;
+    };
+    stagedRequest.onloadend = () => {
+      stagedLoadEnds += 1;
+    };
+    stagedRequest.open('GET', 'assets/staged.json');
+    stagedRequest.abort();
+    expect(stagedRequest.readyState).toBe(stagedRequest.OPENED);
+    expect(stagedAborts).toBe(0);
+    expect(stagedLoadEnds).toBe(0);
+
     const readLocalFile = vi.spyOn(host, 'readLocalFile');
     const request = new MiniGameXMLHttpRequest(host);
     request.open('GET', 'assets/aborted.json');
@@ -820,6 +852,39 @@ describe('Phaser mini-game runtime patch', () => {
     expect(game.isPaused).toBe(initiallyPaused);
 
     installation.dispose();
+  });
+
+  it('rejects multiple active Phaser games on the same mini-game globals', () => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    const createGame = (): MiniGamePhaserGame => {
+      const raf = createFakePhaserRaf(() => undefined);
+
+      return {
+        config: { renderType: 1 },
+        renderer: { type: 1 },
+        loop: {
+          started: false,
+          running: false,
+          forceSetTimeOut: false,
+          raf,
+          sleep: () => undefined,
+          wake: () => undefined,
+        },
+      };
+    };
+    const firstGame = createGame();
+    const secondGame = createGame();
+    const firstInstallation = installPhaserMiniGameRuntime(firstGame, { globals });
+
+    expect(() => installPhaserMiniGameRuntime(secondGame, { globals })).toThrow(
+      'only one active Phaser game runtime',
+    );
+
+    firstInstallation.dispose();
+    const secondInstallation = installPhaserMiniGameRuntime(secondGame, { globals });
+    expect(secondInstallation.disposed).toBe(false);
+    secondInstallation.dispose();
   });
 
   it('does not apply pause after a visibility listener disposes the runtime', () => {
