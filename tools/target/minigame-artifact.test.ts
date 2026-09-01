@@ -100,6 +100,29 @@ try {
     );
     rmSync(join(root, 'unsafe.js'));
   }
+  for (const derivedConstructor of [
+    'const F = (() => {}).constructor; F("return 1")();\n',
+    'const first = (() => {}).constructor; const second = first; second("return 1")();\n',
+    'const { constructor: F } = (() => {}); F("return 1")();\n',
+    '(() => {}).constructor("return 1")();\n',
+    'new (() => {}).constructor("return 1");\n',
+    '(() => {}).constructor`return 1`;\n',
+    '(() => {}).constructor.call(null, "return 1")();\n',
+    'Reflect.apply((() => {}).constructor, null, ["return 1"])();\n',
+    'Reflect.get(() => {}, "constructor")("return 1")();\n',
+    'Object.getOwnPropertyDescriptor(Object.getPrototypeOf(() => {}), "constructor")'
+      + '.value("return 1")();\n',
+  ]) {
+    write('unsafe.js', derivedConstructor);
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, []),
+      /contains forbidden dynamic-code constructor/u,
+    );
+    rmSync(join(root, 'unsafe.js'));
+  }
+  write('safe-constructor-metadata.js', 'const name = value.constructor.name; void name;\n');
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-constructor-metadata.js'));
   write('unsafe.js', 'const indirectEval = eval;\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
   rmSync(join(root, 'unsafe.js'));

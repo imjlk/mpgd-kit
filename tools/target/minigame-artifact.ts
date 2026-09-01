@@ -129,6 +129,7 @@ interface MiniGameScopeAnalysis {
     MiniGameLexicalBinding,
     ReadonlySet<MiniGameReflectiveGlobalReadKind>
   >;
+  readonly dynamicCodeConstructorAliases: ReadonlySet<MiniGameLexicalBinding>;
 }
 
 export function assembleMiniGameArtifact(
@@ -708,6 +709,15 @@ function assertSafeNode(
     && typeof node.name === 'string'
     && isExecutableIdentifierReference(ancestors)
   ) {
+    const scope = scopeAnalysis.scopeByNode.get(node) ?? scopeAnalysis.programScope;
+    const binding = resolveMiniGameBinding(node.name, scope);
+
+    if (
+      binding !== undefined
+      && scopeAnalysis.dynamicCodeConstructorAliases.has(binding)
+    ) {
+      throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
+    }
     if (node.name === 'eval') {
       throw new Error(`Mini-game ${path} contains forbidden eval.`);
     }
@@ -756,8 +766,12 @@ function assertSafeNode(
 
   if (node.type === 'CallExpression' && isAstRecord(node.callee)) {
     const calleeName = readMemberName(node.callee);
-    const firstArgument = Array.isArray(node.arguments) ? node.arguments[0] : undefined;
+    const arguments_ = Array.isArray(node.arguments) ? node.arguments : [];
+    const firstArgument = arguments_[0];
 
+    if (isDynamicCodeConstructorInvocation(node.callee, arguments_, ancestors, scopeAnalysis)) {
+      throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
+    }
     if (isUnknownComputedGlobalMember(node.callee, ancestors, scopeAnalysis)) {
       throw new Error(`Mini-game ${path} contains forbidden computed global call.`);
     }
@@ -773,6 +787,9 @@ function assertSafeNode(
   if (node.type === 'NewExpression' && isAstRecord(node.callee)) {
     const calleeName = readMemberName(node.callee);
 
+    if (isDynamicCodeConstructorSource(node.callee, ancestors, scopeAnalysis)) {
+      throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
+    }
     if (isUnknownComputedGlobalMember(node.callee, ancestors, scopeAnalysis)) {
       throw new Error(`Mini-game ${path} contains forbidden computed global construction.`);
     }
@@ -780,6 +797,13 @@ function assertSafeNode(
     if (calleeName === 'Worker' || calleeName === 'SharedWorker') {
       throw new Error(`Mini-game ${path} contains forbidden ${calleeName} construction.`);
     }
+  }
+
+  if (
+    node.type === 'TaggedTemplateExpression'
+    && isDynamicCodeConstructorSource(node.tag, ancestors, scopeAnalysis)
+  ) {
+    throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
   }
 }
 
@@ -925,16 +949,19 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
     MiniGameLexicalBinding,
     Set<MiniGameReflectiveGlobalReadKind>
   >();
+  const dynamicCodeConstructorAliases = new Set<MiniGameLexicalBinding>();
   const analysis: MiniGameScopeAnalysis = {
     programScope,
     scopeByNode,
     globalObjectAliases,
     globalIntrinsicAliases,
     reflectiveGlobalReadAliases,
+    dynamicCodeConstructorAliases,
   };
   collectDynamicCodeGlobalObjectAliases(ast, analysis, globalObjectAliases);
   collectGlobalIntrinsicAliases(ast, analysis, globalIntrinsicAliases);
   collectReflectiveGlobalReadAliases(ast, analysis, reflectiveGlobalReadAliases);
+  collectDynamicCodeConstructorAliases(ast, analysis, dynamicCodeConstructorAliases);
   return analysis;
 }
 
@@ -1342,6 +1369,150 @@ function getReflectiveMethodKinds(
   return kinds;
 }
 
+function collectDynamicCodeConstructorAliases(
+  ast: unknown,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Set<MiniGameLexicalBinding>,
+): void {
+  collectMiniGameAliases(ast, (pattern, source, ancestors) => {
+    if (!isAstRecord(pattern)) {
+      return false;
+    }
+    if (pattern.type === 'ObjectPattern' && Array.isArray(pattern.properties)) {
+      let changed = false;
+
+      for (const property of pattern.properties) {
+        if (
+          isAstRecord(property)
+          && property.type === 'Property'
+          && readStaticPropertyName(property) === 'constructor'
+        ) {
+          changed = addDynamicCodeConstructorAlias(property.value, analysis, aliases) || changed;
+        }
+      }
+
+      return changed;
+    }
+    return isDynamicCodeConstructorSource(source, ancestors, analysis)
+      && addDynamicCodeConstructorAlias(pattern, analysis, aliases);
+  });
+}
+
+function addDynamicCodeConstructorAlias(
+  pattern: unknown,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Set<MiniGameLexicalBinding>,
+): boolean {
+  if (!isAstRecord(pattern)) {
+    return false;
+  }
+  if (pattern.type === 'AssignmentPattern') {
+    return addDynamicCodeConstructorAlias(pattern.left, analysis, aliases);
+  }
+  if (pattern.type !== 'Identifier' || typeof pattern.name !== 'string') {
+    return false;
+  }
+
+  const scope = analysis.scopeByNode.get(pattern) ?? analysis.programScope;
+  const binding = resolveMiniGameBinding(pattern.name, scope)
+    ?? ensureMiniGameBinding(pattern.name, analysis.programScope);
+  const size = aliases.size;
+  aliases.add(binding);
+  return aliases.size !== size;
+}
+
+function isDynamicCodeConstructorInvocation(
+  callee: Record<string, unknown>,
+  arguments_: readonly unknown[],
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): boolean {
+  if (isDynamicCodeConstructorSource(callee, ancestors, analysis)) {
+    return true;
+  }
+  if (callee.type !== 'MemberExpression') {
+    return false;
+  }
+
+  const method = readMemberName(callee);
+
+  return (method === 'apply' || method === 'construct')
+    && getGlobalIntrinsicKinds(callee.object, ancestors, analysis).has('Reflect')
+    && isDynamicCodeConstructorSource(arguments_[0], ancestors, analysis);
+}
+
+function isDynamicCodeConstructorSource(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(input.name, scope);
+    return binding !== undefined && analysis.dynamicCodeConstructorAliases.has(binding);
+  }
+  if (input.type === 'ChainExpression') {
+    return isDynamicCodeConstructorSource(input.expression, ancestors, analysis);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return isDynamicCodeConstructorSource(input.expressions.at(-1), ancestors, analysis);
+  }
+  if (input.type === 'ConditionalExpression') {
+    return isDynamicCodeConstructorSource(input.consequent, ancestors, analysis)
+      || isDynamicCodeConstructorSource(input.alternate, ancestors, analysis);
+  }
+  if (input.type === 'LogicalExpression') {
+    return isDynamicCodeConstructorSource(input.left, ancestors, analysis)
+      || isDynamicCodeConstructorSource(input.right, ancestors, analysis);
+  }
+  if (input.type === 'MemberExpression') {
+    const memberName = readMemberName(input);
+
+    if (memberName === 'constructor') {
+      return true;
+    }
+    if (
+      (memberName === 'call' || memberName === 'apply' || memberName === 'bind')
+      && isDynamicCodeConstructorSource(input.object, ancestors, analysis)
+    ) {
+      return true;
+    }
+    return memberName === 'value'
+      && isReflectiveConstructorDescriptorRead(input.object, ancestors, analysis);
+  }
+  if (
+    input.type === 'CallExpression'
+    && isAstRecord(input.callee)
+    && Array.isArray(input.arguments)
+  ) {
+    const kinds = getReflectiveGlobalReadKinds(input.callee, ancestors, analysis);
+    return kinds.has('property') && evaluateStaticString(input.arguments[1]) === 'constructor';
+  }
+
+  return false;
+}
+
+function isReflectiveConstructorDescriptorRead(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): boolean {
+  if (
+    !isAstRecord(input)
+    || input.type !== 'CallExpression'
+    || !isAstRecord(input.callee)
+    || !Array.isArray(input.arguments)
+  ) {
+    return false;
+  }
+
+  const kinds = getReflectiveGlobalReadKinds(input.callee, ancestors, analysis);
+  return kinds.has('property') && evaluateStaticString(input.arguments[1]) === 'constructor';
+}
+
 function collectMiniGameAliases(
   ast: unknown,
   addAliases: (
@@ -1372,7 +1543,11 @@ function collectMiniGameAliases(
         changed = addAliases(input.id, input.init, ancestors) || changed;
       } else if (input.type === 'AssignmentPattern') {
         changed = addAliases(input.left, input.right, ancestors) || changed;
-      } else if (input.type === 'AssignmentExpression' && input.operator === '=') {
+      } else if (
+        input.type === 'AssignmentExpression'
+        && typeof input.operator === 'string'
+        && ['=', '&&=', '||=', '??='].includes(input.operator)
+      ) {
         changed = addAliases(input.left, input.right, ancestors) || changed;
       }
 

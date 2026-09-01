@@ -10,6 +10,7 @@ import {
 } from '@mpgd/phaser-minigame-runtime';
 
 import type { StarterMiniGameRuntimeBridge } from '../minigameBridge';
+import { StarterMiniGameBridgeLifecycle } from '../minigameBridgeLifecycle';
 
 type WechatMiniGameRuntimeScope = typeof globalThis & {
   readonly __MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__?: readonly string[];
@@ -33,8 +34,7 @@ const globals = installMiniGameGlobals(host, {
   transport: { allowedRemoteOrigins: remoteAssetOrigins },
 });
 const attachedGames = new WeakSet<object>();
-let disposed = false;
-let disposing = false;
+const bridgeLifecycle = new StarterMiniGameBridgeLifecycle(() => globals.dispose());
 const bridge: StarterMiniGameRuntimeBridge = {
   target: 'wechat',
   gateway: createWechatPlatformGateway({ api }),
@@ -62,21 +62,7 @@ const bridge: StarterMiniGameRuntimeBridge = {
     });
   },
   dispose() {
-    if (disposed || disposing) {
-      return;
-    }
-    disposing = true;
-
-    try {
-      globals.dispose();
-      disposed = true;
-
-      if (scope.__MPGD_MINIGAME_RUNTIME__ === bridge) {
-        Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME__');
-      }
-    } finally {
-      disposing = false;
-    }
+    bridgeLifecycle.dispose(scope, bridge);
   },
 };
 
