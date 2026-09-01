@@ -63,7 +63,8 @@ export function createWechatStorageAdapter(
       let serializedValue: string | undefined;
 
       try {
-        serializedValue = JSON.stringify(value, rejectLossyJsonValue);
+        assertJsonRoundTripValue(value);
+        serializedValue = JSON.stringify(value);
       } catch {
         throw storageError(
           'WECHAT_STORAGE_VALUE_NOT_SERIALIZABLE',
@@ -91,7 +92,7 @@ export function createWechatStorageAdapter(
   };
 }
 
-function rejectLossyJsonValue(_key: string, value: unknown): unknown {
+function assertJsonRoundTripValue(value: unknown, ancestors = new Set<object>()): void {
   if (
     value === undefined
     || typeof value === 'function'
@@ -102,7 +103,84 @@ function rejectLossyJsonValue(_key: string, value: unknown): unknown {
     throw new Error('Value cannot round-trip through JSON storage.');
   }
 
-  return value;
+  if (value === null || typeof value !== 'object') {
+    return;
+  }
+  if (ancestors.has(value)) {
+    throw new Error('Cyclic values cannot round-trip through JSON storage.');
+  }
+
+  const prototype = Object.getPrototypeOf(value) as unknown;
+
+  if (Array.isArray(value)) {
+    if (prototype !== Array.prototype) {
+      throw new Error('Array subclasses cannot round-trip through JSON storage.');
+    }
+  } else if (prototype !== Object.prototype && prototype !== null) {
+    throw new Error('Only plain objects can round-trip through JSON storage.');
+  }
+
+  ancestors.add(value);
+
+  try {
+    if (Array.isArray(value)) {
+      assertJsonArray(value, ancestors);
+    } else {
+      assertJsonObject(value, ancestors);
+    }
+  } finally {
+    ancestors.delete(value);
+  }
+}
+
+function assertJsonArray(value: readonly unknown[], ancestors: Set<object>): void {
+  let indexedValues = 0;
+
+  for (const key of Reflect.ownKeys(value)) {
+    if (key === 'length') {
+      continue;
+    }
+    if (typeof key !== 'string' || !isCanonicalArrayIndex(key, value.length)) {
+      throw new Error('Arrays with custom properties cannot round-trip through JSON storage.');
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+
+    if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+      throw new Error('Array accessors cannot round-trip through JSON storage.');
+    }
+    indexedValues += 1;
+    assertJsonRoundTripValue(descriptor.value, ancestors);
+  }
+
+  if (indexedValues !== value.length) {
+    throw new Error('Sparse arrays cannot round-trip through JSON storage.');
+  }
+}
+
+function assertJsonObject(value: object, ancestors: Set<object>): void {
+  for (const key of Reflect.ownKeys(value)) {
+    if (typeof key !== 'string') {
+      throw new Error('Symbol properties cannot round-trip through JSON storage.');
+    }
+
+    const descriptor = Object.getOwnPropertyDescriptor(value, key);
+
+    if (descriptor === undefined || !descriptor.enumerable || !('value' in descriptor)) {
+      throw new Error('Object accessors cannot round-trip through JSON storage.');
+    }
+    assertJsonRoundTripValue(descriptor.value, ancestors);
+  }
+}
+
+function isCanonicalArrayIndex(key: string, length: number): boolean {
+  if (!/^(?:0|[1-9][0-9]*)$/u.test(key)) {
+    return false;
+  }
+
+  const index = Number(key);
+
+  return Number.isSafeInteger(index) && index >= 0 && index < length && String(index) === key;
 }
 
 function toStorageKey(prefix: string, key: string): string {

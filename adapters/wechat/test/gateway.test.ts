@@ -42,6 +42,7 @@ describe('WeChat platform gateway', () => {
       Number.POSITIVE_INFINITY,
       { nested: undefined },
       [undefined],
+      new Date('2026-09-01T00:00:00.000Z'),
     ]) {
       await expect(storage.save({ key: 'save', value: lossyValue })).rejects.toMatchObject({
         code: 'WECHAT_STORAGE_VALUE_NOT_SERIALIZABLE',
