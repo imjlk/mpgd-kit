@@ -714,6 +714,27 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(calls).toEqual(['normal-first', 'normal-second', 'immediate-first']);
   });
 
+  it('updates event target on redispatch and clears currentTarget afterward', () => {
+    const firstTarget = new MiniGameEventTarget();
+    const secondTarget = new MiniGameEventTarget();
+    const event = new MiniGameEvent('redispatch');
+    const observedTargets: unknown[] = [];
+    firstTarget.addEventListener('redispatch', (currentEvent) => {
+      observedTargets.push(currentEvent.target);
+    });
+    secondTarget.addEventListener('redispatch', (currentEvent) => {
+      observedTargets.push(currentEvent.target);
+    });
+
+    firstTarget.dispatchEvent(event);
+    expect(event.currentTarget).toBeNull();
+    secondTarget.dispatchEvent(event);
+
+    expect(observedTargets).toEqual([firstTarget, secondTarget]);
+    expect(event.target).toBe(secondTarget);
+    expect(event.currentTarget).toBeNull();
+  });
+
   it('continues event dispatch after reporting a listener exception', () => {
     const listenerError = new Error('listener failed');
     const reported: Array<Readonly<{ readonly error: unknown; readonly type: string }>> = [];

@@ -108,7 +108,7 @@ export class MiniGameEventTarget {
   }
 
   dispatchEvent(event: MiniGameEvent): boolean {
-    event.target ??= this.#eventTarget;
+    event.target = this.#eventTarget;
     event.currentTarget = this.#eventTarget;
 
     try {
