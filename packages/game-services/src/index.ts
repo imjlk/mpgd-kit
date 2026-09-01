@@ -7,6 +7,7 @@ export * from './contract';
 export * from './evidence-verification';
 export * from './google-play-purchase';
 export * from './microsoft-store-purchase';
+export * from './microsoft-store-identity';
 export * from './notification-delivery';
 export * from './platform-order';
 export * from './progress-link';
