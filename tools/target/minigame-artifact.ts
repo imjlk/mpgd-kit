@@ -743,6 +743,9 @@ function isGlobalObjectDestructuring(
   if (container.type === 'VariableDeclarator' && container.id === pattern) {
     return isGlobalObjectAliasSource(container.init, ancestors, scopeAnalysis);
   }
+  if (container.type === 'AssignmentPattern' && container.left === pattern) {
+    return isGlobalObjectAliasSource(container.right, ancestors, scopeAnalysis);
+  }
 
   return container.type === 'AssignmentExpression'
     && container.left === pattern
@@ -834,9 +837,7 @@ function isReflectiveDynamicCodeGlobalRead(
   }
 
   const property = evaluateStaticString(node.arguments[1]);
-  return property === undefined
-    ? method === 'get'
-    : ['eval', 'Function', 'importScripts'].includes(property);
+  return property === undefined || ['eval', 'Function', 'importScripts'].includes(property);
 }
 
 function isGlobalIntrinsicReference(

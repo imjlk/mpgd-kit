@@ -200,12 +200,24 @@ try {
   );
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
   rmSync(join(root, 'unsafe.js'));
+  write(
+    'unsafe.js',
+    'function run({ Function: DynamicFunction } = globalThis) { '
+      + 'DynamicFunction("return 1")(); } run();\n',
+  );
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, []),
+    /contains forbidden Function destructuring/u,
+  );
+  rmSync(join(root, 'unsafe.js'));
   for (const reflectiveGlobalRead of [
     'Reflect.get(globalThis, "Function")("return 1")();\n',
     'const g = globalThis; Object.getOwnPropertyDescriptor(g, "eval").value("x");\n',
     'globalThis.Reflect.getOwnPropertyDescriptor(globalThis, "importScripts").value("x");\n',
     'Object.getOwnPropertyDescriptors(globalThis).Function.value("return 1")();\n',
     'Reflect.get(globalThis, getRuntimeKey())("return 1")();\n',
+    'const key = "Function"; Object.getOwnPropertyDescriptor(globalThis, key)'
+      + '.value("return 1")();\n',
   ]) {
     write('unsafe.js', reflectiveGlobalRead);
     assert.throws(

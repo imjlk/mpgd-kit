@@ -4,7 +4,6 @@ import { resolve } from 'node:path';
 import ttsc from '@ttsc/unplugin/vite';
 import type { PluginOption } from 'vite';
 
-import { normalizeMiniGameHttpsOrigin } from '../../packages/phaser-minigame-runtime/src/url';
 import {
   assertRuntimeTargetConfigMatrix,
   type TargetConfigMatrix,
@@ -300,7 +299,7 @@ function readMiniGameRemoteAssetOrigins(
     let normalized: string;
 
     try {
-      normalized = normalizeMiniGameHttpsOrigin(origin);
+      normalized = normalizeRuntimeCompatibleMiniGameHttpsOrigin(origin);
     } catch {
       throw new Error(
         `Platform target ${target} remoteAssetOrigins[${String(index)}] must be an exact HTTPS origin.`,
@@ -319,6 +318,48 @@ function readMiniGameRemoteAssetOrigins(
   }
 
   return [...origins];
+}
+
+// This file is also copied into the public starter, which intentionally has no private runtime
+// dependency. Platform-target validation uses the runtime parser directly; this mirrors its exact
+// ASCII authority grammar as a template-local defense in depth.
+function normalizeRuntimeCompatibleMiniGameHttpsOrigin(value: string): string {
+  const match = /^https:\/\/([A-Za-z\d](?:[A-Za-z\d.-]*[A-Za-z\d])?)(?::(\d{1,5}))?$/u.exec(
+    value,
+  );
+
+  if (match === null) {
+    throw new TypeError('Mini-game remote origin is invalid.');
+  }
+  const hostname = (match[1] ?? '').toLowerCase();
+  const labels = hostname.split('.');
+
+  if (
+    hostname.length === 0
+    || hostname.length > 253
+    || hostname.includes('..')
+    || labels.some((label) => (
+      label.length === 0
+      || label.length > 63
+      || label.startsWith('-')
+      || label.endsWith('-')
+    ))
+  ) {
+    throw new TypeError('Mini-game remote origin is invalid.');
+  }
+
+  const portText = match[2];
+
+  if (portText === undefined) {
+    return `https://${hostname}`;
+  }
+  const port = Number(portText);
+
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new TypeError('Mini-game remote origin is invalid.');
+  }
+
+  return `https://${hostname}${port === 443 ? '' : `:${String(port)}`}`;
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {
