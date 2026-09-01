@@ -159,6 +159,13 @@ try {
   write('safe-method.js', 'function invoke(member) { this[member](); }\n');
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-method.js'));
+  write(
+    'safe-shadowed-alias.js',
+    'const globalAlias = globalThis; function invoke(member) { '
+      + 'const globalAlias = { run() {} }; globalAlias[member](); }\n',
+  );
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-shadowed-alias.js'));
   write('unsafe.js', 'const member = getRuntimeKey(); this[member]();\n');
   assert.throws(
     () => assertMiniGameJavaScriptSafety(root, []),

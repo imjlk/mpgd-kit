@@ -102,6 +102,23 @@ interface MiniGameAstAncestor {
   readonly childKey: string;
 }
 
+interface MiniGameLexicalBinding {
+  readonly name: string;
+  readonly scope: MiniGameLexicalScope;
+}
+
+interface MiniGameLexicalScope {
+  readonly kind: 'program' | 'function' | 'block';
+  readonly parent?: MiniGameLexicalScope;
+  readonly bindings: Map<string, MiniGameLexicalBinding>;
+}
+
+interface MiniGameScopeAnalysis {
+  readonly programScope: MiniGameLexicalScope;
+  readonly scopeByNode: WeakMap<Record<string, unknown>, MiniGameLexicalScope>;
+  readonly globalObjectAliases: ReadonlySet<MiniGameLexicalBinding>;
+}
+
 export function assembleMiniGameArtifact(
   input: AssembleMiniGameArtifactInput,
 ): MiniGameArtifactEvidence {
@@ -597,7 +614,7 @@ function assertMiniGameJavaScriptAstSafety(source: string, path: string): void {
     throw new Error(`Mini-game ${path} is not valid JavaScript: ${formatError(error)}`);
   }
 
-  const globalObjectAliases = collectDynamicCodeGlobalObjectAliases(ast);
+  const scopeAnalysis = createMiniGameScopeAnalysis(ast);
   const ancestors: MiniGameAstAncestor[] = [];
   visit(ast);
 
@@ -612,7 +629,7 @@ function assertMiniGameJavaScriptAstSafety(source: string, path: string): void {
       return;
     }
 
-    assertSafeNode(input, ancestors, path, globalObjectAliases);
+    assertSafeNode(input, ancestors, path, scopeAnalysis);
     for (const [key, value] of Object.entries(input)) {
       if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
         ancestors.push({ node: input, childKey: key });
@@ -627,7 +644,7 @@ function assertSafeNode(
   node: Record<string, unknown>,
   ancestors: readonly MiniGameAstAncestor[],
   path: string,
-  globalObjectAliases: ReadonlySet<string>,
+  scopeAnalysis: MiniGameScopeAnalysis,
 ): void {
   if (node.type === 'ImportExpression') {
     throw new Error(`Mini-game ${path} contains forbidden dynamic import.`);
@@ -659,7 +676,7 @@ function assertSafeNode(
       && ['eval', 'Function', 'importScripts'].includes(propertyName)
       && (
         node.computed === true
-        || isDynamicCodeGlobalObject(node.object, ancestors, globalObjectAliases)
+        || isDynamicCodeGlobalObject(node.object, ancestors, scopeAnalysis)
       )
       && !isTypeofReference(node, ancestors)
     ) {
@@ -669,7 +686,7 @@ function assertSafeNode(
 
   if (
     node.type === 'Property'
-    && isGlobalObjectDestructuring(ancestors, globalObjectAliases)
+    && isGlobalObjectDestructuring(ancestors, scopeAnalysis)
   ) {
     const propertyName = readStaticPropertyName(node);
 
@@ -688,7 +705,7 @@ function assertSafeNode(
     const calleeName = readMemberName(node.callee);
     const firstArgument = Array.isArray(node.arguments) ? node.arguments[0] : undefined;
 
-    if (isUnknownComputedGlobalMember(node.callee, ancestors, globalObjectAliases)) {
+    if (isUnknownComputedGlobalMember(node.callee, ancestors, scopeAnalysis)) {
       throw new Error(`Mini-game ${path} contains forbidden computed global call.`);
     }
 
@@ -700,7 +717,7 @@ function assertSafeNode(
   if (node.type === 'NewExpression' && isAstRecord(node.callee)) {
     const calleeName = readMemberName(node.callee);
 
-    if (isUnknownComputedGlobalMember(node.callee, ancestors, globalObjectAliases)) {
+    if (isUnknownComputedGlobalMember(node.callee, ancestors, scopeAnalysis)) {
       throw new Error(`Mini-game ${path} contains forbidden computed global construction.`);
     }
 
@@ -712,7 +729,7 @@ function assertSafeNode(
 
 function isGlobalObjectDestructuring(
   ancestors: readonly MiniGameAstAncestor[],
-  globalObjectAliases: ReadonlySet<string>,
+  scopeAnalysis: MiniGameScopeAnalysis,
 ): boolean {
   const pattern = ancestors.at(-1)?.node;
   const container = ancestors.at(-2)?.node;
@@ -721,38 +738,32 @@ function isGlobalObjectDestructuring(
     return false;
   }
   if (container.type === 'VariableDeclarator' && container.id === pattern) {
-    return isGlobalObjectAliasSource(container.init, ancestors, globalObjectAliases);
+    return isGlobalObjectAliasSource(container.init, ancestors, scopeAnalysis);
   }
 
   return container.type === 'AssignmentExpression'
     && container.left === pattern
-    && isGlobalObjectAliasSource(container.right, ancestors, globalObjectAliases);
-}
-
-function isGlobalObjectIdentifier(input: unknown): boolean {
-  return isAstRecord(input)
-    && input.type === 'Identifier'
-    && typeof input.name === 'string'
-    && ['globalThis', 'self', 'window'].includes(input.name);
+    && isGlobalObjectAliasSource(container.right, ancestors, scopeAnalysis);
 }
 
 function isDynamicCodeGlobalObject(
   input: unknown,
   ancestors: readonly MiniGameAstAncestor[],
-  globalObjectAliases: ReadonlySet<string>,
+  scopeAnalysis: MiniGameScopeAnalysis,
 ): boolean {
-  return isGlobalObjectIdentifier(input)
-    || (
-      isAstRecord(input)
-      && input.type === 'Identifier'
-      && typeof input.name === 'string'
-      && globalObjectAliases.has(input.name)
-    )
-    || (
-      isAstRecord(input)
-      && input.type === 'ThisExpression'
-      && isProgramThisReference(ancestors)
-    );
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    const scope = scopeAnalysis.scopeByNode.get(input) ?? scopeAnalysis.programScope;
+    const binding = resolveMiniGameBinding(input.name, scope);
+
+    return binding === undefined
+      ? ['globalThis', 'self', 'window'].includes(input.name)
+      : scopeAnalysis.globalObjectAliases.has(binding);
+  }
+
+  return input.type === 'ThisExpression' && isProgramThisReference(ancestors);
 }
 
 function isProgramThisReference(ancestors: readonly MiniGameAstAncestor[]): boolean {
@@ -767,16 +778,204 @@ function isProgramThisReference(ancestors: readonly MiniGameAstAncestor[]): bool
 function isUnknownComputedGlobalMember(
   node: Record<string, unknown>,
   ancestors: readonly MiniGameAstAncestor[],
-  globalObjectAliases: ReadonlySet<string>,
+  scopeAnalysis: MiniGameScopeAnalysis,
 ): boolean {
   return node.type === 'MemberExpression'
     && node.computed === true
     && readMemberName(node) === undefined
-    && isDynamicCodeGlobalObject(node.object, ancestors, globalObjectAliases);
+    && isDynamicCodeGlobalObject(node.object, ancestors, scopeAnalysis);
 }
 
-function collectDynamicCodeGlobalObjectAliases(ast: unknown): ReadonlySet<string> {
-  const aliases = new Set<string>();
+function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
+  const programScope = createMiniGameLexicalScope('program');
+  const scopeByNode = new WeakMap<Record<string, unknown>, MiniGameLexicalScope>();
+  buildMiniGameScopes(ast, programScope, scopeByNode);
+  const globalObjectAliases = new Set<MiniGameLexicalBinding>();
+  const analysis: MiniGameScopeAnalysis = {
+    programScope,
+    scopeByNode,
+    globalObjectAliases,
+  };
+  collectDynamicCodeGlobalObjectAliases(ast, analysis, globalObjectAliases);
+  return analysis;
+}
+
+function buildMiniGameScopes(
+  input: unknown,
+  currentScope: MiniGameLexicalScope,
+  scopeByNode: WeakMap<Record<string, unknown>, MiniGameLexicalScope>,
+): void {
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      buildMiniGameScopes(item, currentScope, scopeByNode);
+    }
+    return;
+  }
+  if (!isAstRecord(input)) {
+    return;
+  }
+
+  let nodeScope = currentScope;
+
+  if (isMiniGameFunctionNode(input)) {
+    if (input.type === 'FunctionDeclaration') {
+      declareMiniGamePattern(input.id, currentScope);
+    }
+    nodeScope = createMiniGameLexicalScope('function', currentScope);
+    if (input.type === 'FunctionExpression') {
+      declareMiniGamePattern(input.id, nodeScope);
+    }
+    if (Array.isArray(input.params)) {
+      for (const parameter of input.params) {
+        declareMiniGamePattern(parameter, nodeScope);
+      }
+    }
+  } else if (input.type === 'ClassDeclaration') {
+    declareMiniGamePattern(input.id, currentScope);
+  } else if (input.type === 'ClassExpression') {
+    nodeScope = createMiniGameLexicalScope('block', currentScope);
+    declareMiniGamePattern(input.id, nodeScope);
+  } else if (createsMiniGameBlockScope(input)) {
+    nodeScope = createMiniGameLexicalScope('block', currentScope);
+  }
+
+  scopeByNode.set(input, nodeScope);
+
+  if (input.type === 'VariableDeclaration' && Array.isArray(input.declarations)) {
+    const declarationScope = input.kind === 'var' ? nearestMiniGameVarScope(nodeScope) : nodeScope;
+
+    for (const declaration of input.declarations) {
+      if (isAstRecord(declaration)) {
+        declareMiniGamePattern(declaration.id, declarationScope);
+      }
+    }
+  } else if (input.type === 'CatchClause') {
+    declareMiniGamePattern(input.param, nodeScope);
+  } else if (input.type === 'ImportDeclaration' && Array.isArray(input.specifiers)) {
+    for (const specifier of input.specifiers) {
+      if (isAstRecord(specifier)) {
+        declareMiniGamePattern(specifier.local, nodeScope);
+      }
+    }
+  }
+
+  for (const [key, value] of Object.entries(input)) {
+    if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
+      buildMiniGameScopes(value, nodeScope, scopeByNode);
+    }
+  }
+}
+
+function createMiniGameLexicalScope(
+  kind: MiniGameLexicalScope['kind'],
+  parent?: MiniGameLexicalScope,
+): MiniGameLexicalScope {
+  return {
+    kind,
+    ...(parent === undefined ? {} : { parent }),
+    bindings: new Map(),
+  };
+}
+
+function isMiniGameFunctionNode(node: Record<string, unknown>): boolean {
+  return node.type === 'FunctionDeclaration'
+    || node.type === 'FunctionExpression'
+    || node.type === 'ArrowFunctionExpression';
+}
+
+function createsMiniGameBlockScope(node: Record<string, unknown>): boolean {
+  return node.type === 'BlockStatement'
+    || node.type === 'CatchClause'
+    || node.type === 'ClassBody'
+    || node.type === 'StaticBlock'
+    || node.type === 'ForStatement'
+    || node.type === 'ForInStatement'
+    || node.type === 'ForOfStatement'
+    || node.type === 'SwitchStatement';
+}
+
+function nearestMiniGameVarScope(scope: MiniGameLexicalScope): MiniGameLexicalScope {
+  let candidate = scope;
+
+  while (candidate.kind === 'block' && candidate.parent !== undefined) {
+    candidate = candidate.parent;
+  }
+
+  return candidate;
+}
+
+function declareMiniGamePattern(input: unknown, scope: MiniGameLexicalScope): void {
+  if (!isAstRecord(input)) {
+    return;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    ensureMiniGameBinding(input.name, scope);
+    return;
+  }
+  if (input.type === 'RestElement') {
+    declareMiniGamePattern(input.argument, scope);
+    return;
+  }
+  if (input.type === 'AssignmentPattern') {
+    declareMiniGamePattern(input.left, scope);
+    return;
+  }
+  if (input.type === 'ArrayPattern' && Array.isArray(input.elements)) {
+    for (const element of input.elements) {
+      declareMiniGamePattern(element, scope);
+    }
+    return;
+  }
+  if (input.type === 'ObjectPattern' && Array.isArray(input.properties)) {
+    for (const property of input.properties) {
+      if (!isAstRecord(property)) {
+        continue;
+      }
+      declareMiniGamePattern(
+        property.type === 'Property' ? property.value : property.argument,
+        scope,
+      );
+    }
+  }
+}
+
+function ensureMiniGameBinding(
+  name: string,
+  scope: MiniGameLexicalScope,
+): MiniGameLexicalBinding {
+  const existing = scope.bindings.get(name);
+
+  if (existing !== undefined) {
+    return existing;
+  }
+  const binding = { name, scope };
+  scope.bindings.set(name, binding);
+  return binding;
+}
+
+function resolveMiniGameBinding(
+  name: string,
+  scope: MiniGameLexicalScope,
+): MiniGameLexicalBinding | undefined {
+  let candidate: MiniGameLexicalScope | undefined = scope;
+
+  while (candidate !== undefined) {
+    const binding = candidate.bindings.get(name);
+
+    if (binding !== undefined) {
+      return binding;
+    }
+    candidate = candidate.parent;
+  }
+
+  return undefined;
+}
+
+function collectDynamicCodeGlobalObjectAliases(
+  ast: unknown,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Set<MiniGameLexicalBinding>,
+): void {
   let changed = true;
 
   while (changed) {
@@ -796,10 +995,22 @@ function collectDynamicCodeGlobalObjectAliases(ast: unknown): ReadonlySet<string
       }
 
       if (input.type === 'VariableDeclarator') {
-        const added = addGlobalObjectAliasBindings(input.id, input.init, ancestors, aliases);
+        const added = addGlobalObjectAliasBindings(
+          input.id,
+          input.init,
+          ancestors,
+          analysis,
+          aliases,
+        );
         changed = added || changed;
       } else if (input.type === 'AssignmentExpression' && input.operator === '=') {
-        const added = addGlobalObjectAliasBindings(input.left, input.right, ancestors, aliases);
+        const added = addGlobalObjectAliasBindings(
+          input.left,
+          input.right,
+          ancestors,
+          analysis,
+          aliases,
+        );
         changed = added || changed;
       }
 
@@ -812,26 +1023,28 @@ function collectDynamicCodeGlobalObjectAliases(ast: unknown): ReadonlySet<string
       }
     }
   }
-
-  return aliases;
 }
 
 function addGlobalObjectAliasBindings(
   pattern: unknown,
   source: unknown,
   ancestors: readonly MiniGameAstAncestor[],
-  aliases: Set<string>,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Set<MiniGameLexicalBinding>,
 ): boolean {
-  if (!isGlobalObjectAliasSource(source, ancestors, aliases) || !isAstRecord(pattern)) {
+  if (!isGlobalObjectAliasSource(source, ancestors, analysis) || !isAstRecord(pattern)) {
     return false;
   }
   if (pattern.type === 'Identifier' && typeof pattern.name === 'string') {
+    const scope = analysis.scopeByNode.get(pattern) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(pattern.name, scope)
+      ?? ensureMiniGameBinding(pattern.name, analysis.programScope);
     const size = aliases.size;
-    aliases.add(pattern.name);
+    aliases.add(binding);
     return aliases.size !== size;
   }
   if (pattern.type === 'AssignmentPattern') {
-    return addGlobalObjectAliasBindings(pattern.left, source, ancestors, aliases);
+    return addGlobalObjectAliasBindings(pattern.left, source, ancestors, analysis, aliases);
   }
   if (pattern.type !== 'ObjectPattern' || !Array.isArray(pattern.properties)) {
     return false;
@@ -849,24 +1062,31 @@ function addGlobalObjectAliasBindings(
       name !== undefined
       && ['globalThis', 'self', 'window', 'top', 'parent'].includes(name)
     ) {
-      changed = addKnownGlobalObjectAlias(property.value, aliases) || changed;
+      changed = addKnownGlobalObjectAlias(property.value, analysis, aliases) || changed;
     }
   }
 
   return changed;
 }
 
-function addKnownGlobalObjectAlias(pattern: unknown, aliases: Set<string>): boolean {
+function addKnownGlobalObjectAlias(
+  pattern: unknown,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Set<MiniGameLexicalBinding>,
+): boolean {
   if (!isAstRecord(pattern)) {
     return false;
   }
   if (pattern.type === 'Identifier' && typeof pattern.name === 'string') {
+    const scope = analysis.scopeByNode.get(pattern) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(pattern.name, scope)
+      ?? ensureMiniGameBinding(pattern.name, analysis.programScope);
     const size = aliases.size;
-    aliases.add(pattern.name);
+    aliases.add(binding);
     return aliases.size !== size;
   }
   if (pattern.type === 'AssignmentPattern') {
-    return addKnownGlobalObjectAlias(pattern.left, aliases);
+    return addKnownGlobalObjectAlias(pattern.left, analysis, aliases);
   }
 
   return false;
@@ -875,34 +1095,34 @@ function addKnownGlobalObjectAlias(pattern: unknown, aliases: Set<string>): bool
 function isGlobalObjectAliasSource(
   input: unknown,
   ancestors: readonly MiniGameAstAncestor[],
-  aliases: ReadonlySet<string>,
+  analysis: MiniGameScopeAnalysis,
 ): boolean {
-  if (isDynamicCodeGlobalObject(input, ancestors, aliases)) {
+  if (isDynamicCodeGlobalObject(input, ancestors, analysis)) {
     return true;
   }
   if (!isAstRecord(input)) {
     return false;
   }
   if (input.type === 'ChainExpression') {
-    return isGlobalObjectAliasSource(input.expression, ancestors, aliases);
+    return isGlobalObjectAliasSource(input.expression, ancestors, analysis);
   }
   if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
-    return isGlobalObjectAliasSource(input.expressions.at(-1), ancestors, aliases);
+    return isGlobalObjectAliasSource(input.expressions.at(-1), ancestors, analysis);
   }
   if (input.type === 'ConditionalExpression') {
-    return isGlobalObjectAliasSource(input.consequent, ancestors, aliases)
-      || isGlobalObjectAliasSource(input.alternate, ancestors, aliases);
+    return isGlobalObjectAliasSource(input.consequent, ancestors, analysis)
+      || isGlobalObjectAliasSource(input.alternate, ancestors, analysis);
   }
   if (input.type === 'LogicalExpression') {
-    return isGlobalObjectAliasSource(input.left, ancestors, aliases)
-      || isGlobalObjectAliasSource(input.right, ancestors, aliases);
+    return isGlobalObjectAliasSource(input.left, ancestors, analysis)
+      || isGlobalObjectAliasSource(input.right, ancestors, analysis);
   }
   if (input.type === 'MemberExpression') {
     const name = readMemberName(input);
 
     return name !== undefined
       && ['globalThis', 'self', 'window', 'top', 'parent'].includes(name)
-      && isGlobalObjectAliasSource(input.object, ancestors, aliases);
+      && isGlobalObjectAliasSource(input.object, ancestors, analysis);
   }
 
   return false;
