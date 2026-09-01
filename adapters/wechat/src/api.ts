@@ -38,8 +38,6 @@ export interface WechatMiniGameRequestResult {
   readonly statusCode: number;
   readonly data: unknown;
   readonly header?: Readonly<Record<string, unknown>>;
-  /** Final URL after redirects. Remote responses without this evidence are rejected. */
-  readonly url?: string;
 }
 
 export interface WechatMiniGameRequestTask {
@@ -63,6 +61,7 @@ export interface WechatMiniGameApi {
     readonly method: 'GET';
     readonly header: Readonly<Record<string, string>>;
     readonly dataType: 'text';
+    readonly redirect: 'manual';
     readonly responseType: 'text' | 'arraybuffer';
     readonly success: (result: WechatMiniGameRequestResult) => void;
     readonly fail: (error: unknown) => void;

@@ -225,10 +225,16 @@ describe('WeChat Mini Game host', () => {
     })).rejects.toMatchObject({ code: 'WECHAT_REQUEST_FAILED' });
   });
 
-  it('rejects remote responses without a verifiable final URL', async () => {
+  it('disables automatic redirects and preserves the requested URL as evidence', async () => {
+    let redirectPolicy: 'manual' | undefined;
     const fake = createFakeWechatMiniGameApi({
       request(input) {
-        input.success({ statusCode: 200, data: '{}', header: {} });
+        redirectPolicy = input.redirect;
+        input.success({
+          statusCode: 302,
+          data: '',
+          header: { location: 'https://redirected.example.net/asset.json' },
+        });
         return { abort() {} };
       },
     });
@@ -239,7 +245,11 @@ describe('WeChat Mini Game host', () => {
       method: 'GET',
       headers: {},
       responseType: 'json',
-    })).rejects.toMatchObject({ code: 'WECHAT_REQUEST_FINAL_URL_UNAVAILABLE' });
+    })).resolves.toMatchObject({
+      status: 302,
+      url: 'https://assets.example.test/redirected.json',
+    });
+    expect(redirectPolicy).toBe('manual');
   });
 
   it('rejects malformed startup state and non-binary packaged-file responses', async () => {

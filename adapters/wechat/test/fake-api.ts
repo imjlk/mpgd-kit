@@ -72,7 +72,6 @@ export function createFakeWechatMiniGameApi(
           ? new Uint8Array([4, 5]).buffer
           : '{"ok":true}',
         header: { 'content-type': 'application/json', ignored: 123 },
-        url: input.url,
       };
       input.success(result);
       return { abort() {} };

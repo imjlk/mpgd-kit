@@ -332,13 +332,14 @@ function requestWechatResource(
         method: 'GET',
         header: input.headers,
         dataType: 'text',
+        redirect: 'manual',
         responseType: input.responseType === 'arraybuffer' ? 'arraybuffer' : 'text',
         success(result) {
           try {
             const response = {
               status: assertStatusCode(result.statusCode),
               data: normalizeResponseData(result.data),
-              url: requireWechatResponseUrl(result.url),
+              url: input.url,
               ...(result.header === undefined ? {} : { headers: normalizeHeaders(result.header) }),
             };
             settle(() => resolve(response));
@@ -367,17 +368,6 @@ function requestWechatResource(
       )));
     }
   });
-}
-
-function requireWechatResponseUrl(url: string | undefined): string {
-  if (typeof url !== 'string' || url.trim().length === 0) {
-    throw new MiniGameRuntimeError(
-      'WECHAT_REQUEST_FINAL_URL_UNAVAILABLE',
-      'WeChat Mini Game remote responses must report their final URL after redirects.',
-    );
-  }
-
-  return url;
 }
 
 function isMiniGameRequestAborted(input: MiniGameRequest): boolean {
