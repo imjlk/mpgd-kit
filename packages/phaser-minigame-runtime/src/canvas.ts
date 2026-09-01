@@ -277,7 +277,7 @@ export class MiniGameCanvasElement extends MiniGameHTMLElement {
       return cached;
     }
 
-    const wrapped = wrapCanvasContext(context);
+    const wrapped = wrapCanvasContext(context, this);
     this.#contexts.set(context, wrapped);
     return wrapped;
   }
@@ -313,9 +313,13 @@ export function unwrapMiniGameNativeObject(value: unknown): unknown {
   return value;
 }
 
-function wrapCanvasContext(context: object): unknown {
+function wrapCanvasContext(context: object, canvas: MiniGameCanvasElement): unknown {
   return new Proxy(context, {
     get(target, property, receiver) {
+      if (property === 'canvas') {
+        return canvas;
+      }
+
       const value = Reflect.get(target, property, target);
 
       if (typeof value !== 'function') {

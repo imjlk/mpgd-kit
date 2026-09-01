@@ -76,6 +76,8 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
   readonly #unsubscribers: Array<() => void> = [];
   readonly #onDestroy: () => void;
   #releaseGlobalsDisposalGuard: () => void = () => undefined;
+  #installing = true;
+  #destroyedDuringInstallation = false;
   #disposed = false;
   #pausedByHost = false;
   #gamePausedByHost = false;
@@ -143,7 +145,15 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       raf.start(callback, false, delay);
     }
 
-    this.#onDestroy = () => this.dispose();
+    this.#onDestroy = () => {
+      if (this.#installing) {
+        this.#destroyedDuringInstallation = true;
+        this.#disposed = true;
+        return;
+      }
+
+      this.dispose();
+    };
 
     try {
       this.#releaseGlobalsDisposalGuard = globals.registerDisposalGuard(() => {
@@ -152,35 +162,49 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
           'Dispose the Phaser mini-game runtime before disposing mini-game globals.',
         );
       });
+      game.events?.once('destroy', this.#onDestroy);
+      this.#assertInstallationAlive();
 
       if (this.host.onPause !== undefined) {
         const unsubscribePause = this.host.onPause(() => this.#pause());
         this.#unsubscribers.push(assertUnsubscribe(unsubscribePause, 'onPause'));
+        this.#assertInstallationAlive();
       }
 
       if (this.host.onResume !== undefined) {
         const unsubscribeResume = this.host.onResume(() => this.#resume());
         this.#unsubscribers.push(assertUnsubscribe(unsubscribeResume, 'onResume'));
+        this.#assertInstallationAlive();
       }
 
-      game.events?.once('destroy', this.#onDestroy);
+      this.#installing = false;
     } catch (error) {
+      this.#installing = false;
       this.#disposed = true;
+      const cleanup = runCleanupSteps([
+        () => {
+          if (this.#hasHostPauseState()) {
+            this.#restoreHostPauseState(true);
+          }
+        },
+        () => runLifecycleUnsubscribers(this.#unsubscribers.splice(0)),
+        () => {
+          this.game.events?.off?.('destroy', this.#onDestroy);
+        },
+        () => {
+          raf.stop();
+          raf.step = this.#originalStep;
 
-      if (this.#hasHostPauseState()) {
-        this.#restoreHostPauseState(true);
+          if (wasRunning && this.game.loop.raf === raf) {
+            raf.start(callback, false, delay);
+          }
+        },
+        () => this.#releaseGlobalsDisposalGuard(),
+      ]);
+
+      if (!cleanup.ok) {
+        reportCleanupError(cleanup.error);
       }
-
-      runLifecycleUnsubscribers(this.#unsubscribers.splice(0));
-
-      raf.stop();
-      raf.step = this.#originalStep;
-
-      if (wasRunning) {
-        raf.start(callback, false, delay);
-      }
-
-      this.#releaseGlobalsDisposalGuard();
 
       throw error;
     }
@@ -196,27 +220,33 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     }
 
     this.#disposed = true;
+    const cleanup = runCleanupSteps([
+      () => {
+        if (this.#hasHostPauseState()) {
+          this.#restoreHostPauseState(true);
+        }
+      },
+      () => runLifecycleUnsubscribers(this.#unsubscribers.splice(0)),
+      () => {
+        this.game.events?.off?.('destroy', this.#onDestroy);
+      },
+      () => {
+        const raf = this.game.loop.raf;
 
-    if (this.#hasHostPauseState()) {
-      this.#restoreHostPauseState(true);
-    }
+        if (raf === this.#raf && raf.step === this.#patchedStep) {
+          const wasRunning = raf.isRunning;
+          const callback = raf.callback;
+          const delay = raf.delay;
+          raf.stop();
+          raf.step = this.#originalStep;
 
-    runLifecycleUnsubscribers(this.#unsubscribers.splice(0));
-
-    this.game.events?.off?.('destroy', this.#onDestroy);
-    const raf = this.game.loop.raf;
-
-    if (raf === this.#raf && raf.step === this.#patchedStep) {
-      const wasRunning = raf.isRunning;
-      const callback = raf.callback;
-      const delay = raf.delay;
-      raf.stop();
-      raf.step = this.#originalStep;
-
-      if (wasRunning) {
-        raf.start(callback, false, delay);
-      }
-    }
+          if (wasRunning) {
+            raf.start(callback, false, delay);
+          }
+        }
+      },
+      () => this.#releaseGlobalsDisposalGuard(),
+    ]);
 
     installedGames.delete(this.game as object);
 
@@ -224,7 +254,9 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       installedGlobals.delete(this.#globals);
     }
 
-    this.#releaseGlobalsDisposalGuard();
+    if (!cleanup.ok) {
+      throw cleanup.error;
+    }
   }
 
   #pause(): void {
@@ -315,6 +347,15 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
 
   #hasHostPauseState(): boolean {
     return this.#pausedByHost || this.#gamePausedByHost || this.#loopSleptByHost;
+  }
+
+  #assertInstallationAlive(): void {
+    if (this.#destroyedDuringInstallation) {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_PHASER_DESTROYED_DURING_INSTALL',
+        'Phaser game was destroyed while the mini-game runtime was installing.',
+      );
+    }
   }
 }
 
@@ -441,6 +482,37 @@ function runLifecycleUnsubscribers(unsubscribers: readonly (() => void)[]): void
         // Cleanup must continue even when host logging is unavailable.
       }
     }
+  }
+}
+
+type CleanupResult = Readonly<{ readonly ok: true }> | Readonly<{
+  readonly ok: false;
+  readonly error: unknown;
+}>;
+
+function runCleanupSteps(steps: readonly (() => void)[]): CleanupResult {
+  let failed = false;
+  let failure: unknown;
+
+  for (const step of steps) {
+    try {
+      step();
+    } catch (error) {
+      if (!failed) {
+        failed = true;
+        failure = error;
+      }
+    }
+  }
+
+  return failed ? { ok: false, error: failure } : { ok: true };
+}
+
+function reportCleanupError(error: unknown): void {
+  try {
+    console.error('Mini-game runtime rollback encountered a cleanup error.', error);
+  } catch {
+    // The original installation failure remains authoritative.
   }
 }
 

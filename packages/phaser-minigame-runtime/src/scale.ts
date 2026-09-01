@@ -39,9 +39,9 @@ export function getMiniGameCanvasBounds(
   const width = resolveCssLength(style.width, info.width, info.width, false);
   const height = resolveCssLength(style.height, info.height, info.height, false);
   const left = resolveCssLength(style.left, 0, info.width, true)
-    + resolveCssLength(style.marginLeft, 0, info.width, true);
+    + resolveCssMargin(style.marginLeft, info.width, width, info.width);
   const top = resolveCssLength(style.top, 0, info.height, true)
-    + resolveCssLength(style.marginTop, 0, info.width, true);
+    + resolveCssMargin(style.marginTop, info.height, height, info.width);
   const values = {
     x: left,
     y: top,
@@ -57,6 +57,19 @@ export function getMiniGameCanvasBounds(
     ...values,
     toJSON: () => values,
   };
+}
+
+function resolveCssMargin(
+  input: unknown,
+  containerSize: number,
+  elementSize: number,
+  percentBase: number,
+): number {
+  if (typeof input === 'string' && input.trim().toLowerCase() === 'auto') {
+    return Math.floor((containerSize - elementSize) / 2);
+  }
+
+  return resolveCssLength(input, 0, percentBase, true);
 }
 
 function resolveCssLength(
