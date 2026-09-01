@@ -676,7 +676,7 @@ function assertSafeNode(
       && ['eval', 'Function', 'importScripts'].includes(propertyName)
       && (
         node.computed === true
-        || isDynamicCodeGlobalObject(node.object, ancestors, scopeAnalysis)
+        || isGlobalObjectAliasSource(node.object, ancestors, scopeAnalysis)
       )
       && !isTypeofReference(node, ancestors)
     ) {
@@ -783,7 +783,7 @@ function isUnknownComputedGlobalMember(
   return node.type === 'MemberExpression'
     && node.computed === true
     && readMemberName(node) === undefined
-    && isDynamicCodeGlobalObject(node.object, ancestors, scopeAnalysis);
+    && isGlobalObjectAliasSource(node.object, ancestors, scopeAnalysis);
 }
 
 function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {

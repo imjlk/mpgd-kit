@@ -218,6 +218,19 @@ try {
   write('unsafe.js', 'globalThis.eval("untrusted");\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
   rmSync(join(root, 'unsafe.js'));
+  for (const wrappedGlobalMember of [
+    '(0, globalThis).Function("return 1")();\n',
+    '(globalThis || {}).eval("untrusted");\n',
+    '(useGlobal ? globalThis : {}).importScripts("remote.js");\n',
+    '(0, globalThis)[getRuntimeKey()]();\n',
+  ]) {
+    write('unsafe.js', wrappedGlobalMember);
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, []),
+      /contains forbidden (?:Function|eval|importScripts|computed global call)/u,
+    );
+    rmSync(join(root, 'unsafe.js'));
+  }
   write('unsafe.js', 'this.Function("return 1")();\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden Function/u);
   rmSync(join(root, 'unsafe.js'));
