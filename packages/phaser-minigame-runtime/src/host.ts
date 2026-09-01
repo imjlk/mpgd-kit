@@ -21,7 +21,6 @@ export interface MiniGameRequest {
   readonly method: 'GET';
   readonly headers: Readonly<Record<string, string>>;
   readonly responseType: MiniGameRequestResponseType;
-  readonly timeoutMs?: number;
 }
 
 export interface MiniGameResponse {

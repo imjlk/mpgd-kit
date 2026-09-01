@@ -925,7 +925,7 @@ describe('mini-game requestAnimationFrame and transport', () => {
     };
     stagedRequest.open('GET', 'assets/staged.json');
     stagedRequest.abort();
-    expect(stagedRequest.readyState).toBe(stagedRequest.OPENED);
+    expect(stagedRequest.readyState).toBe(stagedRequest.UNSENT);
     expect(stagedAborts).toBe(0);
     expect(stagedLoadEnds).toBe(0);
 
@@ -957,6 +957,32 @@ describe('mini-game requestAnimationFrame and transport', () => {
     expect(completedRequest.readyState).toBe(completedRequest.UNSENT);
     expect(completedRequest.status).toBe(0);
     expect(completedRequest.response).toBeNull();
+  });
+
+  it('uses one wrapper-owned timeout for remote requests', async () => {
+    class PendingRequestHost extends FakeMiniGameHost {
+      override request(
+        input: Parameters<FakeMiniGameHost['request']>[0],
+      ): ReturnType<FakeMiniGameHost['request']> {
+        this.remoteRequests.push(input);
+        return new Promise(() => undefined);
+      }
+    }
+
+    const host = new PendingRequestHost();
+    const request = new MiniGameXMLHttpRequest(host, {
+      allowedRemoteOrigins: ['https://cdn.example.com'],
+    });
+    request.open('GET', 'https://cdn.example.com/slow.json');
+    request.timeout = 5;
+
+    await expect(sendRequest(request)).rejects.toMatchObject({
+      event: { type: 'timeout' },
+    });
+    expect(request.readyState).toBe(request.DONE);
+    expect(request.status).toBe(0);
+    expect(host.remoteRequests).toHaveLength(1);
+    expect(host.remoteRequests[0]).not.toHaveProperty('timeoutMs');
   });
 
   it('clears response metadata when aborting after response headers arrive', async () => {
@@ -1688,7 +1714,7 @@ describe('Phaser mini-game runtime patch', () => {
     installation.dispose();
   });
 
-  it('restores host-owned pause state when wake disposes the runtime', () => {
+  it('preserves restored state when wake disposes the runtime before throwing', () => {
     const host = new FakeMiniGameHost();
     const globals = installMiniGameGlobals(host);
     const raf = createFakePhaserRaf(() => undefined);
@@ -1708,6 +1734,7 @@ describe('Phaser mini-game runtime patch', () => {
         raf.start(raf.callback, false, raf.delay);
         this.running = true;
         installation.dispose();
+        throw new Error('late wake observer failed');
       },
     };
     raf.start(raf.callback, false, raf.delay);
@@ -1729,7 +1756,7 @@ describe('Phaser mini-game runtime patch', () => {
     installation = installPhaserMiniGameRuntime(game, { globals });
 
     host.emitPause();
-    host.emitResume();
+    expect(() => host.emitResume()).toThrow('late wake observer failed');
 
     expect(installation.disposed).toBe(true);
     expect(pauses).toBe(1);

@@ -359,10 +359,13 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
         this.game.loop.wake();
       } catch (error) {
         if (!allowDisposed) {
-          this.#pausedByHost = true;
-          this.#loopSleptByHost = true;
-          this.#globals.document.hidden = true;
-          this.#globals.document.visibilityState = 'hidden';
+          if (!this.#disposed) {
+            this.#pausedByHost = true;
+            this.#loopSleptByHost = true;
+            this.#globals.document.hidden = true;
+            this.#globals.document.visibilityState = 'hidden';
+          }
+
           throw error;
         }
 

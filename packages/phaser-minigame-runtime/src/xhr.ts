@@ -287,6 +287,9 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     }
 
     if (!this.#sendStarted) {
+      this.#generation += 1;
+      this.#resetResponseState();
+      this.#resetRequestToUnsent();
       return;
     }
 
@@ -315,7 +318,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
 
   async #send(generation: number, timeoutMs: number | undefined): Promise<void> {
     try {
-      const response = await withTimeout(this.#load(timeoutMs), timeoutMs);
+      const response = await withTimeout(this.#load(), timeoutMs);
 
       if (generation !== this.#generation) {
         return;
@@ -400,7 +403,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     }
   }
 
-  async #load(timeoutMs: number | undefined): Promise<MiniGameResponse> {
+  async #load(): Promise<MiniGameResponse> {
     const classified = classifyMiniGameRequestUrl(this.#url, this.#options.allowedRemoteOrigins);
 
     if (classified.kind === 'local') {
@@ -429,7 +432,6 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       method: this.#method ?? 'GET',
       headers: Object.fromEntries(this.#requestHeaders),
       responseType: this.responseType === '' ? 'text' : this.responseType,
-      ...(timeoutMs === undefined ? {} : { timeoutMs }),
     });
   }
 
