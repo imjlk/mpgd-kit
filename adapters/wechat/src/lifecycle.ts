@@ -19,17 +19,29 @@ function subscribeLifecycle(
   callback: () => void,
   event: 'hide' | 'show',
 ): () => void {
+  let active = true;
+  const listener = () => {
+    if (active) {
+      callback();
+    }
+  };
+
   try {
-    subscribe(callback);
+    subscribe(listener);
   } catch {
+    active = false;
+
+    try {
+      unsubscribe(listener);
+    } catch {
+      // A partially registered native listener remains inert through the active guard.
+    }
     throw new PlatformOperationError({
       code: 'WECHAT_LIFECYCLE_SUBSCRIBE_FAILED',
       message: `Failed to subscribe to the WeChat Mini Game ${event} event.`,
       retryable: false,
     });
   }
-
-  let active = true;
 
   return () => {
     if (!active) {
@@ -38,7 +50,7 @@ function subscribeLifecycle(
     active = false;
 
     try {
-      unsubscribe(callback);
+      unsubscribe(listener);
     } catch (error) {
       try {
         console.error(`Failed to unsubscribe from the WeChat Mini Game ${event} event.`, error);

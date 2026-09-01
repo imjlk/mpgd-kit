@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { PlatformOperationError } from '@mpgd/platform';
 
@@ -80,6 +80,36 @@ describe('WeChat platform gateway', () => {
     expect(calls).toEqual(['pause', 'resume']);
     expect(fake.lifecycleListeners.hide.size).toBe(0);
     expect(fake.lifecycleListeners.show.size).toBe(0);
+  });
+
+  it('suppresses retained native lifecycle listeners after unsubscription fails', () => {
+    const fake = createFakeWechatMiniGameApi({
+      offHide() {
+        throw new Error('native cleanup failed');
+      },
+    });
+    const gateway = createWechatPlatformGateway({ api: fake.api });
+    const errorLog = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let calls = 0;
+
+    try {
+      const dispose = gateway.lifecycle.onPause(() => {
+        calls += 1;
+      });
+      const [retainedListener] = fake.lifecycleListeners.hide;
+
+      expect(retainedListener).toBeDefined();
+      retainedListener?.();
+      dispose();
+      retainedListener?.();
+      dispose();
+
+      expect(calls).toBe(1);
+      expect(fake.lifecycleListeners.hide.size).toBe(1);
+      expect(errorLog).toHaveBeenCalledTimes(1);
+    } finally {
+      errorLog.mockRestore();
+    }
   });
 
   it('normalizes sharing to presented and never invents authenticated identity or grants', async () => {

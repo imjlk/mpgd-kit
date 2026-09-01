@@ -120,6 +120,84 @@ describe('WeChat Mini Game host', () => {
     expect(fake.touchListeners.end.size).toBe(0);
   });
 
+  it('suppresses retained host input and lifecycle listeners after native cleanup fails', () => {
+    const fake = createFakeWechatMiniGameApi({
+      offTouchEnd() {
+        throw new Error('touch cleanup failed');
+      },
+      offHide() {
+        throw new Error('lifecycle cleanup failed');
+      },
+    });
+    const host = createWechatMiniGameHost(fake.api, { requestAnimationFrame: () => 1 });
+    let touchCalls = 0;
+    let lifecycleCalls = 0;
+    const disposeTouch = host.onTouchEnd(() => {
+      touchCalls += 1;
+    });
+    const dispose = host.onPause?.(() => {
+      lifecycleCalls += 1;
+    });
+    const [retainedTouchListener] = fake.touchListeners.end;
+    const [retainedLifecycleListener] = fake.lifecycleListeners.hide;
+
+    retainedTouchListener?.({
+      changedTouches: [{ identifier: 3, clientX: 14, clientY: 15 }],
+    });
+    retainedLifecycleListener?.();
+    expect(touchCalls).toBe(1);
+    expect(lifecycleCalls).toBe(1);
+    expect(() => disposeTouch()).toThrowError('touch cleanup failed');
+    expect(() => dispose?.()).toThrowError('lifecycle cleanup failed');
+    retainedTouchListener?.({
+      changedTouches: [{ identifier: 3, clientX: 14, clientY: 15 }],
+    });
+    retainedLifecycleListener?.();
+    expect(() => disposeTouch()).not.toThrow();
+    expect(() => dispose?.()).not.toThrow();
+    expect(touchCalls).toBe(1);
+    expect(lifecycleCalls).toBe(1);
+    expect(fake.touchListeners.end.size).toBe(1);
+    expect(fake.lifecycleListeners.hide.size).toBe(1);
+  });
+
+  it('deactivates partially registered host listeners when native subscription throws', () => {
+    let retainedTouchListener: Parameters<WechatMiniGameApi['onTouchEnd']>[0] | undefined;
+    let retainedLifecycleListener: Parameters<WechatMiniGameApi['onHide']>[0] | undefined;
+    const fake = createFakeWechatMiniGameApi({
+      onTouchEnd(listener) {
+        retainedTouchListener = listener;
+        throw new Error('touch subscription failed');
+      },
+      offTouchEnd() {
+        throw new Error('touch cleanup failed');
+      },
+      onHide(listener) {
+        retainedLifecycleListener = listener;
+        throw new Error('lifecycle subscription failed');
+      },
+      offHide() {
+        throw new Error('lifecycle cleanup failed');
+      },
+    });
+    const host = createWechatMiniGameHost(fake.api, { requestAnimationFrame: () => 1 });
+    let touchCalls = 0;
+    let lifecycleCalls = 0;
+
+    expect(() => host.onTouchEnd(() => {
+      touchCalls += 1;
+    })).toThrowError('touch subscription failed');
+    expect(() => host.onPause?.(() => {
+      lifecycleCalls += 1;
+    })).toThrowError('lifecycle subscription failed');
+    retainedTouchListener?.({
+      changedTouches: [{ identifier: 3, clientX: 14, clientY: 15 }],
+    });
+    retainedLifecycleListener?.();
+    expect(touchCalls).toBe(0);
+    expect(lifecycleCalls).toBe(0);
+  });
+
   it('loads packaged bytes and normalizes remote text and binary responses', async () => {
     const fake = createFakeWechatMiniGameApi();
     const host = createWechatMiniGameHost(fake.api, {

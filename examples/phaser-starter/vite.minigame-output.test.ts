@@ -1,10 +1,11 @@
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { createContext, runInContext } from 'node:vm';
 
 import {
+  assertMiniGameGameBundleModules,
   createRuntimeAssetOriginsBootstrap,
   resolveMiniGameBundleOutput,
 } from './vite.minigame-output';
@@ -74,6 +75,232 @@ try {
       stagingRoot,
     }),
     /dedicated child/u,
+  );
+
+  const moduleBoundary = {
+    gameRoot: '/workspace/examples/phaser-starter',
+    workspaceRoot: '/workspace',
+  };
+  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
+    [
+      '/workspace/examples/phaser-starter/src/minigameEntry.ts',
+      '/workspace/examples/phaser-starter/src/platform/buildGateways/wechat.ts',
+      '/workspace/packages/platform/src/index.ts',
+      '/workspace/node_modules/phaser/dist/phaser.esm.js',
+      '/workspace/node_modules/@orpc/client/dist/adapters/fetch/index.mjs',
+    ],
+    moduleBoundary,
+  ));
+  for (const forbiddenModule of [
+    '/workspace/adapters/wechat/src/index.ts',
+    '/workspace/native-plugins/example/src/index.ts',
+    '/workspace/apps/target-ait/src/main.ts',
+    '/workspace/node_modules/@mpgd/adapter-wechat/dist/index.js',
+    '/workspace/packages/phaser-minigame-runtime/src/index.ts',
+    '/workspace/node_modules/@mpgd/phaser-minigame-runtime/dist/index.js',
+    '/workspace/examples/phaser-starter/src/platform/minigameRuntime/wechat.ts?used',
+  ]) {
+    assert.throws(
+      () => assertMiniGameGameBundleModules([forbiddenModule], moduleBoundary),
+      /must not include platform runtime module/u,
+    );
+  }
+  const linkedAdapterRoot = join(fixtureRoot, 'linked-kit', 'wechat');
+  mkdirSync(join(linkedAdapterRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(linkedAdapterRoot, 'package.json'),
+    '{"name":"@mpgd/adapter-wechat"}\n',
+  );
+  writeFileSync(join(linkedAdapterRoot, 'dist', 'package.json'), '{"type":"module"}\n');
+  const standaloneBoundary = {
+    gameRoot: join(fixtureRoot, 'standalone-game'),
+    workspaceRoot: join(fixtureRoot, 'unrelated-workspace'),
+  };
+  assert.throws(
+    () => assertMiniGameGameBundleModules(
+      [join(linkedAdapterRoot, 'dist', 'index.js')],
+      standaloneBoundary,
+    ),
+    /must not include platform runtime module/u,
+  );
+  const linkedTargetConfigRoot = join(fixtureRoot, 'linked-kit', 'target-config');
+  mkdirSync(join(linkedTargetConfigRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(linkedTargetConfigRoot, 'package.json'),
+    '{"name":"@mpgd/target-config"}\n',
+  );
+  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
+    [join(linkedTargetConfigRoot, 'dist', 'runtime.js')],
+    standaloneBoundary,
+  ));
+  const linkedMpgdKitRoot = join(fixtureRoot, 'linked-mpgd-kit');
+  const linkedRepositoryPackageRoot = join(linkedMpgdKitRoot, 'adapters', 'wechat');
+  mkdirSync(join(linkedRepositoryPackageRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(linkedMpgdKitRoot, 'package.json'),
+    JSON.stringify({
+      repository: 'imjlk/mpgd-kit',
+    }),
+  );
+  writeFileSync(
+    join(linkedRepositoryPackageRoot, 'package.json'),
+    JSON.stringify({
+      name: 'linked-adapter-boundary',
+      repository: {
+        directory: './adapters/wechat/',
+      },
+    }),
+  );
+  writeFileSync(
+    join(linkedRepositoryPackageRoot, 'dist', 'package.json'),
+    '{"type":"module"}\n',
+  );
+  assert.throws(
+    () => assertMiniGameGameBundleModules(
+      [join(linkedRepositoryPackageRoot, 'dist', 'index.js')],
+      standaloneBoundary,
+    ),
+    /must not include platform runtime module/u,
+  );
+  const thirdPartyWorkspaceRoot = join(linkedMpgdKitRoot, 'third-party-workspace');
+  mkdirSync(join(thirdPartyWorkspaceRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(thirdPartyWorkspaceRoot, 'package.json'),
+    JSON.stringify({
+      name: '@third-party/workspace-runtime',
+      repository: {
+        url: 'https://evilgithub.com/imjlk/mpgd-kit.git',
+        directory: 'adapters/workspace-runtime',
+      },
+    }),
+  );
+  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
+    [join(thirdPartyWorkspaceRoot, 'dist', 'index.js')],
+    standaloneBoundary,
+  ));
+  const thirdPartyVendorRoot = join(linkedMpgdKitRoot, 'vendor');
+  const genericThirdPartyRoot = join(thirdPartyVendorRoot, 'adapters', 'fetch');
+  mkdirSync(join(genericThirdPartyRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(thirdPartyVendorRoot, 'package.json'),
+    JSON.stringify({ repository: 'https://github.com/third-party/vendor.git' }),
+  );
+  writeFileSync(
+    join(genericThirdPartyRoot, 'package.json'),
+    JSON.stringify({
+      name: '@third-party/generic-runtime',
+      repository: { directory: 'adapters/fetch' },
+    }),
+  );
+  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
+    [join(genericThirdPartyRoot, 'dist', 'index.js')],
+    standaloneBoundary,
+  ));
+  writeFileSync(join(gameRoot, 'package.json'), '{"name":"@mpgd/example-phaser-starter"}\n');
+  const thirdPartyAdapterRoot = join(gameRoot, 'node_modules', 'third-party-adapter');
+  mkdirSync(join(thirdPartyAdapterRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(thirdPartyAdapterRoot, 'package.json'),
+    JSON.stringify({
+      name: '@third-party/runtime-tools',
+      repository: {
+        url: 'https://evilgithub.com/imjlk/mpgd-kit.git',
+        directory: 'adapters/fetch',
+      },
+    }),
+  );
+  writeFileSync(
+    join(thirdPartyAdapterRoot, 'dist', 'package.json'),
+    JSON.stringify({
+      name: 'third-party-dist-metadata',
+      type: 'module',
+      repository: 'imjlk/mpgd-kit',
+    }),
+  );
+  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
+    [join(thirdPartyAdapterRoot, 'dist', 'index.js')],
+    standaloneBoundary,
+  ));
+  const installedRenamedAdapterRoot = join(gameRoot, 'node_modules', 'linked-runtime');
+  mkdirSync(join(installedRenamedAdapterRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(installedRenamedAdapterRoot, 'package.json'),
+    JSON.stringify({
+      name: 'linked-runtime',
+      repository: {
+        url: 'imjlk/mpgd-kit',
+        directory: 'adapters/wechat',
+      },
+    }),
+  );
+  writeFileSync(
+    join(installedRenamedAdapterRoot, 'dist', 'package.json'),
+    '{"type":"module"}\n',
+  );
+  assert.throws(
+    () => assertMiniGameGameBundleModules(
+      [join(installedRenamedAdapterRoot, 'dist', 'index.js')],
+      standaloneBoundary,
+    ),
+    /must not include platform runtime module/u,
+  );
+  const linkedTargetAppRoot = join(fixtureRoot, 'linked-kit', 'target-devvit');
+  mkdirSync(join(linkedTargetAppRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(linkedTargetAppRoot, 'package.json'),
+    '{"name":"@mpgd/target-devvit"}\n',
+  );
+  assert.throws(
+    () => assertMiniGameGameBundleModules(
+      [join(linkedTargetAppRoot, 'dist', 'index.js')],
+      standaloneBoundary,
+    ),
+    /must not include platform runtime module/u,
+  );
+  for (const [index, platformSdkPackage] of [
+    '@apps-in-toss/web-framework',
+    '@capacitor/core',
+    '@devvit/web',
+    '@tauri-apps/api',
+    '@telegram-apps/sdk',
+    '@tiktok/mini-game-sdk',
+    '@ttmg/cli',
+    '@verse8/platform',
+  ].entries()) {
+    const platformSdkRoot = join(fixtureRoot, 'linked-kit', `platform-sdk-${String(index)}`);
+    mkdirSync(join(platformSdkRoot, 'dist'), { recursive: true });
+    writeFileSync(
+      join(platformSdkRoot, 'package.json'),
+      `${JSON.stringify({ name: platformSdkPackage })}\n`,
+    );
+    assert.throws(
+      () => assertMiniGameGameBundleModules(
+        [join(platformSdkRoot, 'dist', 'index.js')],
+        standaloneBoundary,
+      ),
+      /must not include platform runtime module/u,
+    );
+  }
+  const pnpmLinkedAdapterRoot = join(
+    fixtureRoot,
+    'store',
+    '.pnpm',
+    '@mpgd+adapter-wechat@0.0.0',
+    'node_modules',
+    '@mpgd',
+    'adapter-wechat',
+  );
+  mkdirSync(join(pnpmLinkedAdapterRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(pnpmLinkedAdapterRoot, 'package.json'),
+    '{"name":"@mpgd/adapter-wechat"}\n',
+  );
+  assert.throws(
+    () => assertMiniGameGameBundleModules(
+      [join(pnpmLinkedAdapterRoot, 'dist', 'index.js')],
+      standaloneBoundary,
+    ),
+    /must not include platform runtime module/u,
   );
 
   const phaserFallback = "return this || new Function('return this')();";

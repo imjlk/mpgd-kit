@@ -4,6 +4,7 @@ import { defineConfig } from 'vite';
 
 import { createGameViteSharedConfig } from './vite.shared';
 import {
+  createMiniGameGameModuleBoundaryPlugin,
   createRuntimeAssetOriginsBootstrap,
   resolveMiniGameBundleOutput,
 } from './vite.minigame-output';
@@ -59,7 +60,14 @@ export default defineConfig(({ mode }) => {
   return {
     ...sharedConfig,
     plugins: bundleKind === 'game'
-      ? [...sharedConfig.plugins, createPhaserMiniGameDynamicCodePlugin()]
+      ? [
+        ...sharedConfig.plugins,
+        createPhaserMiniGameDynamicCodePlugin(),
+        createMiniGameGameModuleBoundaryPlugin({
+          gameRoot,
+          workspaceRoot: resolve(gameRoot, '../..'),
+        }),
+      ]
       : sharedConfig.plugins,
     build: {
       target: 'es2020',

@@ -720,6 +720,11 @@ function assertMiniGameRequiredFiles(artifactRoot: string): void {
   }
 }
 
+/**
+ * Validates executable artifact conformance for trusted game sources and dependencies.
+ * Adapter isolation is enforced from the emitted Vite module graph; this AST pass catches
+ * prohibited output constructs and accidental direct SDK access, but is not a JavaScript sandbox.
+ */
 export function assertMiniGameJavaScriptSafety(
   artifactRoot: string,
   forbiddenMarkers: readonly Readonly<{ readonly marker: string; readonly owner: string }>[],

@@ -232,12 +232,16 @@ function subscribeTouch(
   unsubscribe: (listener: WechatMiniGameTouchListener) => void,
   callback: (touches: readonly MiniGameTouch[]) => void,
 ): () => void {
+  let active = true;
   const listener = (event: WechatMiniGameTouchEvent) => {
-    callback((event.changedTouches ?? event.touches ?? []).map(normalizeTouch));
+    if (active) {
+      callback((event.changedTouches ?? event.touches ?? []).map(normalizeTouch));
+    }
   };
 
-  subscribe(listener);
-  return createIdempotentUnsubscribe(() => unsubscribe(listener));
+  return createGuardedSubscription(subscribe, unsubscribe, listener, () => {
+    active = false;
+  });
 }
 
 function subscribeLifecycle(
@@ -245,8 +249,41 @@ function subscribeLifecycle(
   unsubscribe: (listener: () => void) => void,
   callback: () => void,
 ): () => void {
-  subscribe(callback);
-  return createIdempotentUnsubscribe(() => unsubscribe(callback));
+  let active = true;
+  const listener = () => {
+    if (active) {
+      callback();
+    }
+  };
+
+  return createGuardedSubscription(subscribe, unsubscribe, listener, () => {
+    active = false;
+  });
+}
+
+function createGuardedSubscription<Listener>(
+  subscribe: (listener: Listener) => void,
+  unsubscribe: (listener: Listener) => void,
+  listener: Listener,
+  deactivate: () => void,
+): () => void {
+  try {
+    subscribe(listener);
+  } catch (error) {
+    deactivate();
+
+    try {
+      unsubscribe(listener);
+    } catch {
+      // A partially registered native listener remains inert through the active guard.
+    }
+    throw error;
+  }
+
+  return createIdempotentUnsubscribe(() => {
+    deactivate();
+    unsubscribe(listener);
+  });
 }
 
 function createIdempotentUnsubscribe(unsubscribe: () => void): () => void {
