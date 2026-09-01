@@ -31,6 +31,10 @@ export function assertMiniGamePackageBudget(input: Readonly<{
 
   const subpackages = readMiniGameSubpackages(input.gameConfig);
   assertSubpackageRoots(subpackages);
+  const portableSubpackages = subpackages.map((subpackage) => ({
+    subpackage,
+    root: miniGamePortablePathKey(subpackage.root),
+  }));
   const files = listMiniGameArtifactFiles(artifactRoot);
   const bytesByRoot = new Map(subpackages.map((subpackage) => [subpackage.root, 0]));
   let mainBytes = 0;
@@ -38,7 +42,11 @@ export function assertMiniGamePackageBudget(input: Readonly<{
 
   for (const file of files) {
     totalBytes += file.bytes;
-    const subpackage = subpackages.find((candidate) => isInsideRoot(file.path, candidate.root));
+    const portableFilePath = miniGamePortablePathKey(file.path);
+    const matched = portableSubpackages.find((candidate) => {
+      return isInsideRoot(portableFilePath, candidate.root);
+    });
+    const subpackage = matched?.subpackage;
 
     if (subpackage === undefined) {
       mainBytes += file.bytes;
@@ -132,7 +140,9 @@ export function listMiniGameArtifactFiles(artifactRoot: string): readonly MiniGa
   }
 
   assertMiniGameArtifactPathsPortable(artifactPaths);
-  return files.sort((left, right) => left.path.localeCompare(right.path));
+  return files.sort((left, right) => {
+    return left.path < right.path ? -1 : left.path > right.path ? 1 : 0;
+  });
 }
 
 export function assertMiniGameArtifactRelativePath(path: string, label: string): void {
@@ -148,7 +158,7 @@ export function assertMiniGameArtifactRelativePath(path: string, label: string):
     || segments.some((segment) => (
       /[. ]$/u.test(segment)
       || /[<>:"|?*\u0000-\u001f]/u.test(segment)
-      || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(segment)
+      || /^(?:con|prn|aux|nul|clock\$|conin\$|conout\$|com[1-9\u00b9\u00b2\u00b3]|lpt[1-9\u00b9\u00b2\u00b3])(?:\..*)?$/iu.test(segment)
     ))
   ) {
     throw new Error(`${label} must be a safe artifact-relative path: ${path}`);
@@ -160,7 +170,7 @@ export function assertMiniGameArtifactPathsPortable(paths: readonly string[]): v
 
   for (const path of paths) {
     assertMiniGameArtifactRelativePath(path, 'Mini-game artifact path');
-    const portableKey = path.normalize('NFC').toLowerCase();
+    const portableKey = miniGamePortablePathKey(path);
     const previous = seen.get(portableKey);
 
     if (previous !== undefined) {
@@ -203,15 +213,21 @@ function readMiniGameSubpackages(
 function assertSubpackageRoots(
   subpackages: readonly Readonly<{ readonly root: string }>[],
 ): void {
-  for (const [index, left] of subpackages.entries()) {
-    for (const right of subpackages.slice(index + 1)) {
+  const portableSubpackages = subpackages.map((subpackage) => ({
+    subpackage,
+    root: miniGamePortablePathKey(subpackage.root),
+  }));
+
+  for (const [index, left] of portableSubpackages.entries()) {
+    for (const right of portableSubpackages.slice(index + 1)) {
       if (
         left.root === right.root
         || isInsideRoot(left.root, right.root)
         || isInsideRoot(right.root, left.root)
       ) {
         throw new Error(
-          `Mini-game subpackage roots must be unique and non-overlapping: ${left.root}, ${right.root}`,
+          'Mini-game subpackage roots must be unique and non-overlapping: '
+            + `${left.subpackage.root}, ${right.subpackage.root}`,
         );
       }
     }
@@ -252,6 +268,10 @@ function toArtifactRelativePath(root: string, path: string): string {
 
 function isInsideRoot(path: string, root: string): boolean {
   return path === root || path.startsWith(`${root}/`);
+}
+
+function miniGamePortablePathKey(path: string): string {
+  return path.normalize('NFC').toLowerCase();
 }
 
 function assertWithinBudget(actual: number, maximum: number, label: string): void {

@@ -145,6 +145,7 @@
     "@ttsc/strip": "0.18.4",
     "@ttsc/unplugin": "0.18.4",
     "@types/node": "^24.0.0",
+    "acorn": "8.17.0",
     "sharp": "^0.35.3",
     "ttsc": "0.18.4",
     "typescript": "7.0.2",

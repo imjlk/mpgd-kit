@@ -15,6 +15,8 @@ import {
 } from 'node:fs';
 import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
+import { parse } from 'acorn';
+
 import type { GeneratedTargetIcons } from '../icons/types';
 import {
   assertMiniGameArtifactRelativePath,
@@ -29,9 +31,6 @@ export const miniGameEffectiveTargetConfigFileName = 'mpgd-effective-target-conf
 export const miniGameIconManifestFileName = 'mpgd-icon-manifest.json';
 const forbiddenJavaScriptPatterns = [
   { pattern: /\bimport\s*\(/u, label: 'dynamic import' },
-  { pattern: /\beval\b/u, label: 'eval' },
-  { pattern: /\bFunction\b/u, label: 'Function constructor' },
-  { pattern: /(?<!typeof\s)\bimportScripts\b/u, label: 'importScripts' },
   {
     pattern: /https?:\/\/[^\s"'`]+\.[cm]?js(?:[?#][^\s"'`]*)?/iu,
     label: 'remote executable code reference',
@@ -544,6 +543,7 @@ export function assertMiniGameJavaScriptSafety(
 
   for (const file of javascript) {
     const source = readFileSync(join(artifactRoot, file.path), 'utf8');
+    assertMiniGameJavaScriptAstSafety(source, file.path);
 
     for (const { pattern, label } of forbiddenJavaScriptPatterns) {
       if (pattern.test(source)) {
@@ -557,6 +557,192 @@ export function assertMiniGameJavaScriptSafety(
       }
     }
   }
+}
+
+function assertMiniGameJavaScriptAstSafety(source: string, path: string): void {
+  let ast: unknown;
+
+  try {
+    ast = parse(source, {
+      ecmaVersion: 'latest',
+      sourceType: path.toLowerCase().endsWith('.mjs') ? 'module' : 'script',
+      allowHashBang: true,
+      allowReturnOutsideFunction: true,
+    });
+  } catch (error) {
+    throw new Error(`Mini-game ${path} is not valid JavaScript: ${formatError(error)}`);
+  }
+
+  const ancestors: Record<string, unknown>[] = [];
+  visit(ast);
+
+  function visit(input: unknown): void {
+    if (Array.isArray(input)) {
+      for (const item of input) {
+        visit(item);
+      }
+      return;
+    }
+    if (!isAstRecord(input)) {
+      return;
+    }
+
+    assertSafeNode(input, ancestors, path);
+    ancestors.push(input);
+    for (const [key, value] of Object.entries(input)) {
+      if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
+        visit(value);
+      }
+    }
+    ancestors.pop();
+  }
+}
+
+function assertSafeNode(
+  node: Record<string, unknown>,
+  ancestors: readonly Record<string, unknown>[],
+  path: string,
+): void {
+  if (node.type === 'ImportExpression') {
+    throw new Error(`Mini-game ${path} contains forbidden dynamic import.`);
+  }
+
+  if (node.type === 'Identifier' && typeof node.name === 'string') {
+    if (node.name === 'eval') {
+      throw new Error(`Mini-game ${path} contains forbidden eval.`);
+    }
+    if (node.name === 'Function') {
+      throw new Error(`Mini-game ${path} contains forbidden Function constructor.`);
+    }
+    if (node.name === 'importScripts' && !isTypeofReference(node, ancestors)) {
+      throw new Error(`Mini-game ${path} contains forbidden importScripts.`);
+    }
+  }
+
+  if (node.type === 'MemberExpression' && node.computed === true) {
+    const propertyName = evaluateStaticString(node.property);
+
+    if (
+      propertyName !== undefined
+      && ['eval', 'Function', 'importScripts'].includes(propertyName)
+      && !isTypeofReference(node, ancestors)
+    ) {
+      throw new Error(`Mini-game ${path} contains forbidden ${propertyName}.`);
+    }
+  }
+
+  if (node.type === 'CallExpression' && isAstRecord(node.callee)) {
+    const calleeName = readMemberName(node.callee);
+    const firstArgument = Array.isArray(node.arguments) ? node.arguments[0] : undefined;
+
+    if (calleeName === 'createElement' && evaluateStaticString(firstArgument) === 'script') {
+      throw new Error(`Mini-game ${path} contains forbidden script element creation.`);
+    }
+  }
+
+  if (node.type === 'NewExpression' && isAstRecord(node.callee)) {
+    const calleeName = readMemberName(node.callee);
+
+    if (calleeName === 'Worker' || calleeName === 'SharedWorker') {
+      throw new Error(`Mini-game ${path} contains forbidden ${calleeName} construction.`);
+    }
+  }
+}
+
+function isTypeofReference(
+  node: Record<string, unknown>,
+  ancestors: readonly Record<string, unknown>[],
+): boolean {
+  let expression: Record<string, unknown> = node;
+
+  for (let index = ancestors.length - 1; index >= 0; index -= 1) {
+    const parent = ancestors[index];
+
+    if (parent === undefined) {
+      return false;
+    }
+    if (
+      (parent.type === 'MemberExpression' || parent.type === 'ChainExpression')
+      && (parent.object === expression
+        || parent.property === expression
+        || parent.expression === expression)
+    ) {
+      expression = parent;
+      continue;
+    }
+
+    return parent.type === 'UnaryExpression'
+      && parent.operator === 'typeof'
+      && parent.argument === expression;
+  }
+
+  return false;
+}
+
+function evaluateStaticString(input: unknown): string | undefined {
+  if (!isAstRecord(input)) {
+    return undefined;
+  }
+  if (input.type === 'Literal' && typeof input.value === 'string') {
+    return input.value;
+  }
+  if (input.type === 'BinaryExpression' && input.operator === '+') {
+    const left = evaluateStaticString(input.left);
+    const right = evaluateStaticString(input.right);
+    return left === undefined || right === undefined ? undefined : left + right;
+  }
+  if (
+    input.type === 'TemplateLiteral'
+    && Array.isArray(input.expressions)
+    && Array.isArray(input.quasis)
+    && input.quasis.length === input.expressions.length + 1
+  ) {
+    let result = '';
+
+    for (const [index, quasi] of input.quasis.entries()) {
+      if (
+        !isAstRecord(quasi)
+        || !isAstRecord(quasi.value)
+        || typeof quasi.value.cooked !== 'string'
+      ) {
+        return undefined;
+      }
+      result += quasi.value.cooked;
+
+      const expression = input.expressions[index];
+      if (expression !== undefined) {
+        const value = evaluateStaticString(expression);
+        if (value === undefined) {
+          return undefined;
+        }
+        result += value;
+      }
+    }
+
+    return result;
+  }
+
+  return undefined;
+}
+
+function readMemberName(node: Record<string, unknown>): string | undefined {
+  if (node.type === 'Identifier' && typeof node.name === 'string') {
+    return node.name;
+  }
+  if (node.type !== 'MemberExpression' || !isAstRecord(node.property)) {
+    return undefined;
+  }
+  if (node.computed === true) {
+    return evaluateStaticString(node.property);
+  }
+
+  return node.property.type === 'Identifier' && typeof node.property.name === 'string'
+    ? node.property.name
+    : undefined;
+}
+
+function isAstRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === 'object' && input !== null && !Array.isArray(input);
 }
 
 function createEvidence(

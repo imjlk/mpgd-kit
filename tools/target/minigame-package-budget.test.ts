@@ -7,6 +7,7 @@ import {
   assertMiniGameArtifactPathsPortable,
   assertMiniGameArtifactRelativePath,
   assertMiniGamePackageBudget,
+  listMiniGameArtifactFiles,
 } from './minigame-package-budget';
 
 const root = mkdtempSync(join(tmpdir(), 'mpgd-minigame-budget-'));
@@ -57,6 +58,14 @@ try {
     () => assertMiniGamePackageBudget({
       artifactRoot: root,
       gameConfig: { subpackages: [{ root: 'feature' }, { root: 'feature/nested' }] },
+      budget: { mainBytes: 100, totalBytes: 100 },
+    }),
+    /unique and non-overlapping/u,
+  );
+  assert.throws(
+    () => assertMiniGamePackageBudget({
+      artifactRoot: root,
+      gameConfig: { subpackages: [{ root: 'feature' }, { root: 'FEATURE' }] },
       budget: { mainBytes: 100, totalBytes: 100 },
     }),
     /unique and non-overlapping/u,
@@ -142,6 +151,9 @@ try {
     'assets/trailing ',
     'assets/invalid?.png',
     'assets/CON.png',
+    'assets/CONIN$.txt',
+    'assets/COM\u00b9.png',
+    'assets/LPT\u00b2.bin',
   ]) {
     assert.throws(
       () => assertMiniGameArtifactRelativePath(unsafe, 'fixture'),
@@ -152,6 +164,16 @@ try {
     () => assertMiniGameArtifactPathsPortable(['assets/Foo.js', 'assets/foo.js']),
     /collide on portable filesystems/u,
   );
+
+  writeBytes('order/z.png', 1);
+  writeBytes('order/\u00e4.png', 1);
+  assert.deepEqual(
+    listMiniGameArtifactFiles(root)
+      .map((file) => file.path)
+      .filter((path) => path.startsWith('order/')),
+    ['order/z.png', 'order/\u00e4.png'],
+  );
+  rmSync(join(root, 'order'), { force: true, recursive: true });
   assert.throws(
     () => assertMiniGameArtifactPathsPortable(['assets/caf\u00e9.png', 'assets/cafe\u0301.png']),
     /collide on portable filesystems/u,

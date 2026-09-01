@@ -111,6 +111,32 @@ try {
     /contains forbidden importScripts/u,
   );
   rmSync(join(root, 'unsafe.js'));
+  const computedImportScripts = "globalThis['import' + 'Scripts']"
+    + "('https://cdn.example/code' + '.js');\n";
+  write('unsafe.js', computedImportScripts);
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, []),
+    /contains forbidden importScripts/u,
+  );
+  rmSync(join(root, 'unsafe.js'));
+  write('unsafe.js', "globalThis['Fun' + 'ction']('return 1')();\n");
+  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden Function/u);
+  rmSync(join(root, 'unsafe.js'));
+  write('safe-canvas.js', "document.createElement('canvas');\n");
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-canvas.js'));
+  write('unsafe.js', "document['create' + 'Element']('script');\n");
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, []),
+    /contains forbidden script element creation/u,
+  );
+  rmSync(join(root, 'unsafe.js'));
+  write('unsafe.js', "new globalThis['Wor' + 'ker']('worker-entry' + '.js');\n");
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, []),
+    /contains forbidden Worker construction/u,
+  );
+  rmSync(join(root, 'unsafe.js'));
 
   const parsed = JSON.parse(
     readFileSync(join(root, miniGameArtifactEvidenceFileName), 'utf8'),

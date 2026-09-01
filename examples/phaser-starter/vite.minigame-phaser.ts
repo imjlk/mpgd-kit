@@ -6,8 +6,11 @@ const staticGlobalFallback = 'return globalThis;';
 const dynamicSceneEvaluation = /var eval2 = eval;\r?\n\s*this\.loader\.sceneManager\.add\(this\.key, eval2\(code\)\);/gu;
 const disabledSceneEvaluation =
   "throw new Error('Phaser SceneFile loader is disabled in mini-game artifacts.');";
+const dynamicScriptInjection = /(file|this)\.data = document\.createElement\('script'\);[\s\S]*?document\.head\.appendChild\(\1\.data\);/gu;
+const disabledScriptInjection =
+  "throw new Error('Phaser executable script loaders are disabled in mini-game artifacts.');";
 
-/** Removes the two known dynamic-code paths from the pinned Phaser 4.2.0 ESM bundle. */
+/** Removes known dynamic-code paths from the pinned Phaser 4.2.0 ESM bundle. */
 export function createPhaserMiniGameDynamicCodePlugin(): Plugin {
   return {
     name: 'mpgd-phaser-minigame-static-global',
@@ -42,8 +45,16 @@ export function rewritePhaserMiniGameDynamicCode(source: string): string {
       `Expected exactly one Phaser 4.2.0 dynamic SceneFile evaluation, found ${String(sceneEvaluationCount)}.`,
     );
   }
+  const scriptInjectionCount = source.match(dynamicScriptInjection)?.length ?? 0;
+
+  if (scriptInjectionCount !== 4) {
+    throw new Error(
+      `Expected exactly four Phaser 4.2.0 script injection paths, found ${String(scriptInjectionCount)}.`,
+    );
+  }
 
   return source
     .replace(dynamicGlobalFallback, staticGlobalFallback)
-    .replace(dynamicSceneEvaluation, disabledSceneEvaluation);
+    .replace(dynamicSceneEvaluation, disabledSceneEvaluation)
+    .replace(dynamicScriptInjection, disabledScriptInjection);
 }

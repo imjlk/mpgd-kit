@@ -50,25 +50,38 @@ try {
   const phaserFallback = "return this || new Function('return this')();";
   const sceneEvaluation = 'var eval2 = eval;\n'
     + '        this.loader.sceneManager.add(this.key, eval2(code));';
+  const scriptInjection = "this.data = document.createElement('script');\n"
+    + 'this.data.text = source;\n'
+    + 'document.head.appendChild(this.data);';
+  const scriptInjections = Array.from({ length: 4 }, () => scriptInjection).join('\n');
   assert.equal(
     rewritePhaserMiniGameDynamicCode(
-      `before ${phaserFallback}\n${sceneEvaluation} after`,
+      `before ${phaserFallback}\n${sceneEvaluation}\n${scriptInjections} after`,
     ),
-    "before return globalThis;\nthrow new Error('Phaser SceneFile loader is disabled in mini-game artifacts.'); after",
+    "before return globalThis;\nthrow new Error('Phaser SceneFile loader is disabled in mini-game artifacts.');\n"
+      + Array.from(
+        { length: 4 },
+        () => "throw new Error('Phaser executable script loaders are disabled in mini-game artifacts.');",
+      ).join('\n')
+      + ' after',
   );
   assert.throws(
-    () => rewritePhaserMiniGameDynamicCode(sceneEvaluation),
+    () => rewritePhaserMiniGameDynamicCode(`${sceneEvaluation}\n${scriptInjections}`),
     /Expected exactly one Phaser 4\.2\.0 dynamic global fallback, found 0/u,
   );
   assert.throws(
     () => rewritePhaserMiniGameDynamicCode(
-      `${phaserFallback}\n${phaserFallback}\n${sceneEvaluation}`,
+      `${phaserFallback}\n${phaserFallback}\n${sceneEvaluation}\n${scriptInjections}`,
     ),
     /Expected exactly one Phaser 4\.2\.0 dynamic global fallback, found 2/u,
   );
   assert.throws(
-    () => rewritePhaserMiniGameDynamicCode(phaserFallback),
+    () => rewritePhaserMiniGameDynamicCode(`${phaserFallback}\n${scriptInjections}`),
     /Expected exactly one Phaser 4\.2\.0 dynamic SceneFile evaluation, found 0/u,
+  );
+  assert.throws(
+    () => rewritePhaserMiniGameDynamicCode(`${phaserFallback}\n${sceneEvaluation}`),
+    /Expected exactly four Phaser 4\.2\.0 script injection paths, found 0/u,
   );
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });
