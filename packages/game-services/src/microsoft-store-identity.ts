@@ -326,6 +326,9 @@ async function readBoundedJson(
   } finally {
     await reader.cancel().catch(() => undefined);
     reader.releaseLock();
+    if (signal.aborted) {
+      throw signal.reason;
+    }
   }
   const bytes = new Uint8Array(total);
   let offset = 0;

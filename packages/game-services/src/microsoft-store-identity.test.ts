@@ -244,6 +244,27 @@ await assertRejectsSame(
   wrappedBodyAbortReason,
 );
 
+const oversizedBodyCleanupAbort = new AbortController();
+const oversizedBodyCleanupAbortReason = new Error('caller stopped oversized-body cleanup');
+await assertRejectsSame(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () => Promise.resolve(new Response(new ReadableStream({
+        pull(controller) {
+          controller.enqueue(new Uint8Array(16 * 1_024 + 1));
+        },
+        cancel() {
+          oversizedBodyCleanupAbort.abort(oversizedBodyCleanupAbortReason);
+        },
+      }))),
+    },
+    gameId: request.gameId,
+    playerId: request.playerId,
+    signal: oversizedBodyCleanupAbort.signal,
+  }),
+  oversizedBodyCleanupAbortReason,
+);
+
 await assertRejects(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
