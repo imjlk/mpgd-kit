@@ -146,8 +146,8 @@ export async function resolveMicrosoftStoreIdentityCredentials(input: {
         signal: abort.signal,
       });
     } catch (cause) {
-      if (abort.signal.aborted && cause === abort.signal.reason) {
-        throw cause;
+      if (isAbortCause(abort.signal, cause)) {
+        throw abort.signal.reason;
       }
       throw unavailable(cause);
     }
@@ -170,11 +170,11 @@ export async function resolveMicrosoftStoreIdentityCredentials(input: {
         request,
       );
     } catch (cause) {
-      if (
-        cause instanceof MicrosoftStoreIdentityAuthorityError
-        || (abort.signal.aborted && cause === abort.signal.reason)
-      ) {
+      if (cause instanceof MicrosoftStoreIdentityAuthorityError) {
         throw cause;
+      }
+      if (isAbortCause(abort.signal, cause)) {
+        throw abort.signal.reason;
       }
       throw invalidResponse(cause);
     }
@@ -332,4 +332,12 @@ function authorityHttpStatusError(status: number): Error {
 
 async function discardResponseBody(response: Response): Promise<void> {
   await response.body?.cancel().catch(() => undefined);
+}
+
+function isAbortCause(signal: AbortSignal, cause: unknown): boolean {
+  return signal.aborted
+    && (
+      cause === signal.reason
+      || (cause instanceof Error && cause.name === 'AbortError')
+    );
 }

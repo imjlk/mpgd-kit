@@ -133,6 +133,18 @@ await assertRejectsSame(
   callerAbortReason,
 );
 
+await assertRejectsSame(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () => Promise.reject(new DOMException('wrapped abort', 'AbortError')),
+    },
+    gameId: 'ttokdoku',
+    playerId: 'microsoft.0123456789abcdef',
+    signal: callerAbort.signal,
+  }),
+  callerAbortReason,
+);
+
 await assertRejects(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
@@ -165,6 +177,25 @@ const timeoutError = await captureRejection(resolveMicrosoftStoreIdentityCredent
 }));
 assertMatch(timeoutError, /timed out/u);
 
+const wrappedBodyAbort = new AbortController();
+const wrappedBodyAbortReason = new Error('caller stopped response streaming');
+await assertRejectsSame(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () => Promise.resolve(new Response(new ReadableStream({
+        pull(controller) {
+          wrappedBodyAbort.abort(wrappedBodyAbortReason);
+          controller.error(new DOMException('wrapped body abort', 'AbortError'));
+        },
+      }))),
+    },
+    gameId: 'ttokdoku',
+    playerId: 'microsoft.0123456789abcdef',
+    signal: wrappedBodyAbort.signal,
+  }),
+  wrappedBodyAbortReason,
+);
+
 await assertRejects(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
@@ -178,7 +209,14 @@ await assertRejects(
   'MICROSOFT_STORE_IDENTITY_RESPONSE_INVALID',
 );
 
-for (const contentLength of ['1e3', '0x10', ' 42 ', '']) {
+for (const contentLength of [
+  '1e3',
+  '0x10',
+  ' 42 ',
+  '',
+  '99999',
+  '999999999999999999999999999999',
+]) {
   await assertRejects(
     resolveMicrosoftStoreIdentityCredentials({
       authority: {
