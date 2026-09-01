@@ -746,6 +746,12 @@ function assertSafeNode(
     ) {
       throw new Error(`Mini-game ${path} contains forbidden ${propertyName}.`);
     }
+    if (
+      isInvocationArgument(ancestors)
+      && isDynamicCodeConstructorSource(node, ancestors, scopeAnalysis)
+    ) {
+      throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
+    }
   }
 
   if (
@@ -806,6 +812,12 @@ function assertSafeNode(
   ) {
     throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
   }
+}
+
+function isInvocationArgument(ancestors: readonly MiniGameAstAncestor[]): boolean {
+  const parent = ancestors.at(-1);
+  return parent?.childKey === 'arguments'
+    && (parent.node.type === 'CallExpression' || parent.node.type === 'NewExpression');
 }
 
 function isGlobalObjectDestructuring(

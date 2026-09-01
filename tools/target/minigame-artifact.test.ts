@@ -109,6 +109,14 @@ try {
     '(() => {}).constructor`return 1`;\n',
     '(() => {}).constructor.call(null, "return 1")();\n',
     'Reflect.apply((() => {}).constructor, null, ["return 1"])();\n',
+    'const apply = Reflect.apply; '
+      + 'apply((() => {}).constructor, null, ["return 1"])();\n',
+    'const { apply } = Reflect; '
+      + 'apply((() => {}).constructor, null, ["return 1"])();\n',
+    'const construct = Reflect.construct; '
+      + 'construct((() => {}).constructor, ["return 1"])();\n',
+    'const { construct } = Reflect; '
+      + 'construct((() => {}).constructor, ["return 1"])();\n',
     'Reflect.get(() => {}, "constructor")("return 1")();\n',
     'Object.getOwnPropertyDescriptor(Object.getPrototypeOf(() => {}), "constructor")'
       + '.value("return 1")();\n',

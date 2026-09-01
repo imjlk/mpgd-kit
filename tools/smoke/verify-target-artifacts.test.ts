@@ -52,15 +52,15 @@ assert.throws(
 assert.throws(
   () => assertMiniGameRuntimeAssetOrigins(
     '(() => { const Object = { defineProperty() {} }; '
-      + `${createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'Object', 'Object')} })();`,
+      + `${createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'Object', 'Object')}; })();`,
     expectedMiniGameOrigins,
   ),
   /exactly one executable asset-origin declaration/u,
 );
 assert.throws(
   () => assertMiniGameRuntimeAssetOrigins(
-    `${exactMiniGameOriginDeclaration}\n(() => { `
-      + `${createMiniGameOriginDeclaration(['https://unexpected.example.test'])} })();`,
+    `${exactMiniGameOriginDeclaration};\n(() => { `
+      + `${createMiniGameOriginDeclaration(['https://unexpected.example.test'])}; })();`,
     expectedMiniGameOrigins,
   ),
   /exactly one executable asset-origin declaration/u,
@@ -237,7 +237,7 @@ function createMiniGameOriginDeclaration(
   return `${definePropertyOwner}.defineProperty(globalThis,`
     + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
     + '{configurable:false,enumerable:false,writable:false,'
-    + `value:${freezeOwner}.freeze(${JSON.stringify(origins)})});`;
+    + `value:${freezeOwner}.freeze(${JSON.stringify(origins)})})`;
 }
 
 function createMiniGameOriginDeclarationFromDescriptor(descriptor: string): string {
