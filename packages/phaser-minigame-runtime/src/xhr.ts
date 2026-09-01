@@ -323,8 +323,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
         return;
       }
 
-      this.status = 0;
-      this.statusText = '';
+      this.#resetResponseState();
       this.#setReadyState(MiniGameXMLHttpRequest.DONE);
 
       if (generation !== this.#generation) {

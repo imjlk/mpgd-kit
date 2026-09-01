@@ -663,6 +663,9 @@ function validatePhaserTemplateBuildGateways(): void {
       "'src/platform/buildGateways/redditSandbox.ts'",
       "'src/platform/buildGateways/verse8.ts'",
       "'src/platform/buildGateways/microsoftStore.ts'",
+      "case 'wechat':",
+      "case 'tiktok':",
+      'Direct APP_TARGET=',
     ]) {
       assertIncludesText(readText(vitePath), requiredText, `${vitePath}: build gateway isolation.`);
     }

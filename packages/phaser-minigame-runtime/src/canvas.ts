@@ -15,6 +15,7 @@ export class MiniGameHTMLElement extends MiniGameEventTarget {
   readonly nodeName: string;
   readonly tagName: string;
   readonly style: MiniGameStyleDeclaration;
+  readonly dataset: DOMStringMap;
   readonly children: unknown[] = [];
   parentNode: MiniGameHTMLElement | null = null;
   ownerDocument: unknown = null;
@@ -31,6 +32,7 @@ export class MiniGameHTMLElement extends MiniGameEventTarget {
     this.tagName = tagName.toUpperCase();
     this.nodeName = this.tagName;
     this.style = createMiniGameStyle();
+    this.dataset = createMiniGameDataset(this.#attributes);
     this.#bounds = bounds;
   }
 
@@ -152,27 +154,29 @@ export class MiniGameHTMLElement extends MiniGameEventTarget {
   }
 
   setAttribute(name: string, value: string): void {
-    this.#attributes.set(name, String(value));
+    const normalizedName = name.toLowerCase();
+    this.#attributes.set(normalizedName, String(value));
 
-    if (name === 'id') {
+    if (normalizedName === 'id') {
       this.id = String(value);
     }
   }
 
   getAttribute(name: string): string | null {
-    return this.#attributes.get(name) ?? null;
+    return this.#attributes.get(name.toLowerCase()) ?? null;
   }
 
   removeAttribute(name: string): void {
-    this.#attributes.delete(name);
+    const normalizedName = name.toLowerCase();
+    this.#attributes.delete(normalizedName);
 
-    if (name === 'id') {
+    if (normalizedName === 'id') {
       this.id = '';
     }
   }
 
   hasAttribute(name: string): boolean {
-    return this.#attributes.has(name);
+    return this.#attributes.has(name.toLowerCase());
   }
 
   getBoundingClientRect(): MiniGameCanvasBounds {
@@ -369,6 +373,70 @@ function assertValidMiniGameHierarchy(parent: MiniGameHTMLElement, child: unknow
       'Mini-game DOM nodes cannot be appended to themselves or their descendants.',
     );
   }
+}
+
+function createMiniGameDataset(attributes: Map<string, string>): DOMStringMap {
+  return new Proxy(Object.create(null) as DOMStringMap, {
+    deleteProperty(_target, property) {
+      if (typeof property === 'string') {
+        attributes.delete(datasetPropertyToAttribute(property));
+      }
+
+      return true;
+    },
+    get(_target, property) {
+      if (property === Symbol.toStringTag) {
+        return 'DOMStringMap';
+      }
+
+      return typeof property === 'string'
+        ? attributes.get(datasetPropertyToAttribute(property))
+        : undefined;
+    },
+    getOwnPropertyDescriptor(_target, property) {
+      if (typeof property !== 'string') {
+        return undefined;
+      }
+
+      const value = attributes.get(datasetPropertyToAttribute(property));
+
+      return value === undefined
+        ? undefined
+        : { configurable: true, enumerable: true, value, writable: true };
+    },
+    has(_target, property) {
+      return typeof property === 'string'
+        && attributes.has(datasetPropertyToAttribute(property));
+    },
+    ownKeys() {
+      return [...new Set([...attributes.keys()]
+        .map(dataAttributeToDatasetProperty)
+        .filter((property): property is string => property !== undefined))];
+    },
+    set(_target, property, value) {
+      if (typeof property !== 'string') {
+        return false;
+      }
+
+      attributes.set(datasetPropertyToAttribute(property), String(value));
+      return true;
+    },
+  });
+}
+
+function datasetPropertyToAttribute(property: string): string {
+  return `data-${property.replace(/[A-Z]/gu, (character) => `-${character.toLowerCase()}`)}`;
+}
+
+function dataAttributeToDatasetProperty(attribute: string): string | undefined {
+  if (!attribute.startsWith('data-') || attribute.length === 5) {
+    return undefined;
+  }
+
+  return attribute.slice(5).replace(
+    /-([a-z])/gu,
+    (_match, character: string) => character.toUpperCase(),
+  );
 }
 
 function wrapCanvasContext(context: object, canvas: MiniGameCanvasElement): unknown {

@@ -65,6 +65,8 @@ const installedGlobals = new WeakMap<
   MiniGameGlobalInstallation,
   MiniGamePhaserRuntimeInstallationImpl
 >();
+const installingGames = new WeakSet<object>();
+const installingGlobals = new WeakSet<MiniGameGlobalInstallation>();
 
 function readGamePausedState(game: MiniGamePhaserGame): boolean {
   return game.isPaused === true;
@@ -78,6 +80,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
   readonly game: MiniGamePhaserGame;
   readonly host: MiniGameHost;
   readonly #globals: MiniGameGlobalInstallation;
+  readonly #onFrameError: (error: unknown) => void;
   readonly #raf: PhaserAnimationFrameController;
   readonly #originalStep: (time: number) => void;
   readonly #patchedStep: (time: number) => void;
@@ -99,6 +102,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.game = game;
     this.host = globals.host;
     this.#globals = globals;
+    this.#onFrameError = onFrameError;
     assertCanvasRenderer(game);
     assertLifecycleHookPair(this.host);
 
@@ -140,7 +144,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       }
 
       if (failed) {
-        onFrameError(failure);
+        this.#onFrameError(failure);
       }
     };
 
@@ -229,6 +233,13 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
 
   get disposed(): boolean {
     return this.#disposed;
+  }
+
+  hasCompatibleOptions(
+    globals: MiniGameGlobalInstallation,
+    onFrameError: (error: unknown) => void,
+  ): boolean {
+    return this.#globals === globals && this.#onFrameError === onFrameError;
   }
 
   dispose(): void {
@@ -339,16 +350,23 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.#loopSleptByHost = false;
     this.#globals.document.hidden = false;
     this.#globals.document.visibilityState = 'visible';
+    let restorationFailure: unknown;
+    let restorationFailed = false;
 
     if (shouldWakeLoop && this.game.loop.started && !this.game.loop.running) {
       try {
         this.game.loop.wake();
       } catch (error) {
-        this.#pausedByHost = true;
-        this.#loopSleptByHost = true;
-        this.#globals.document.hidden = true;
-        this.#globals.document.visibilityState = 'hidden';
-        throw error;
+        if (!allowDisposed) {
+          this.#pausedByHost = true;
+          this.#loopSleptByHost = true;
+          this.#globals.document.hidden = true;
+          this.#globals.document.visibilityState = 'hidden';
+          throw error;
+        }
+
+        restorationFailed = true;
+        restorationFailure = error;
       }
     }
 
@@ -365,13 +383,22 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       } catch (error) {
         this.#gamePausedByHost = readGamePausedState(this.game);
 
-        if (this.#gamePausedByHost) {
+        if (!allowDisposed && this.#gamePausedByHost) {
           this.#pausedByHost = true;
           this.#globals.document.hidden = true;
           this.#globals.document.visibilityState = 'hidden';
         }
 
-        throw error;
+        if (!allowDisposed) {
+          throw error;
+        }
+
+        if (!restorationFailed) {
+          restorationFailed = true;
+          restorationFailure = error;
+        }
+
+        this.#gamePausedByHost = false;
       }
     }
 
@@ -380,6 +407,10 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     }
 
     this.#globals.document.dispatchEvent(new MiniGameEvent('visibilitychange'));
+
+    if (restorationFailed) {
+      throw restorationFailure;
+    }
   }
 
   #hasHostPauseState(): boolean {
@@ -436,13 +467,20 @@ export function installPhaserMiniGameRuntime(
   game: MiniGamePhaserGame,
   options: MiniGamePhaserRuntimeOptions = {},
 ): MiniGamePhaserRuntimeInstallation {
+  const globals = options.globals ?? getInstalledMiniGameGlobals();
+  const onFrameError = options.onFrameError ?? reportPhaserFrameError;
   const existing = installedGames.get(game as object);
 
   if (existing !== undefined && !existing.disposed) {
+    if (globals === undefined || !existing.hasCompatibleOptions(globals, onFrameError)) {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_PHASER_OPTIONS_MISMATCH',
+        'Phaser mini-game runtime is already installed with different runtime options.',
+      );
+    }
+
     return existing;
   }
-
-  const globals = options.globals ?? getInstalledMiniGameGlobals();
 
   if (globals === undefined || globals.disposed) {
     throw new MiniGameRuntimeError(
@@ -460,14 +498,27 @@ export function installPhaserMiniGameRuntime(
     );
   }
 
-  const installation = new MiniGamePhaserRuntimeInstallationImpl(
-    game,
-    globals,
-    options.onFrameError ?? reportPhaserFrameError,
-  );
-  installedGames.set(game as object, installation);
-  installedGlobals.set(globals, installation);
-  return installation;
+  const gameIdentity = game as object;
+
+  if (installingGames.has(gameIdentity) || installingGlobals.has(globals)) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_PHASER_INSTALL_REENTRANT',
+      'Phaser mini-game runtime installation cannot reenter lifecycle setup.',
+    );
+  }
+
+  installingGames.add(gameIdentity);
+  installingGlobals.add(globals);
+
+  try {
+    const installation = new MiniGamePhaserRuntimeInstallationImpl(game, globals, onFrameError);
+    installedGames.set(gameIdentity, installation);
+    installedGlobals.set(globals, installation);
+    return installation;
+  } finally {
+    installingGames.delete(gameIdentity);
+    installingGlobals.delete(globals);
+  }
 }
 
 function assertCanvasRenderer(game: MiniGamePhaserGame): void {
