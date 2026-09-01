@@ -9,6 +9,7 @@ import {
   type PresentationMode,
 } from '../../packages/target-config/src/runtime';
 import { readJsonFile } from '../io';
+import { miniGameMainPackageLimitBytes } from './minigame-package-budget';
 import {
   assertPlatformTargetsConfig,
   type PlatformTargetConfig,
@@ -73,14 +74,18 @@ export function appTargetForPlatformTarget(
   target: Pick<PlatformTargetConfig, 'adapter' | 'kind'>,
   targetName: string,
 ): string {
-  return target.kind === 'web' ? target.adapter : targetName;
+  return target.kind === 'web'
+    || target.kind === 'wechat-minigame'
+    || target.kind === 'tiktok-minigame'
+      ? target.adapter
+      : targetName;
 }
 
 export function assertPlatformTargetBuildEmitterAvailable(
   target: Pick<PlatformTargetConfig, 'kind'>,
   targetName: string,
 ): void {
-  if (target.kind === 'wechat-minigame' || target.kind === 'tiktok-minigame') {
+  if (target.kind === 'tiktok-minigame') {
     throw new Error(
       `Mini-game target ${targetName} cannot be built until its native artifact emitter is installed. Configuration validation remains available.`,
     );
@@ -182,6 +187,12 @@ function assertMiniGameTarget(input: Record<string, unknown>, target: string): v
 
   if (input.packageBudget.mainBytes > input.packageBudget.totalBytes) {
     throw new Error(`${target}.packageBudget.mainBytes must not exceed totalBytes.`);
+  }
+
+  if (input.packageBudget.mainBytes > miniGameMainPackageLimitBytes) {
+    throw new Error(
+      `${target}.packageBudget.mainBytes must not exceed ${String(miniGameMainPackageLimitBytes)} bytes.`,
+    );
   }
 
   if (input.packageBudget.independentSubpackageBytes !== undefined) {

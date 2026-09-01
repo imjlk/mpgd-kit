@@ -14,6 +14,7 @@ export const supportedBuildTargets = [
   'ait',
   'devvit',
   'reddit',
+  'wechat',
 ] as const;
 
 const canonicalBuildTargets = new Set([
@@ -24,6 +25,7 @@ const canonicalBuildTargets = new Set([
   'ios',
   'ait',
   'reddit',
+  'wechat',
 ]);
 
 export function normalizeBuildTarget(

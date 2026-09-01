@@ -11,6 +11,7 @@ import {
   createMicrosoftStorePwaRevision,
   readMicrosoftStorePwaReleaseEvidence,
 } from '../target/microsoft-store-pwa';
+import { miniGameEffectiveTargetConfigFileName } from '../target/minigame-artifact';
 import { platformTargetsFilePath } from '../target/platform-targets';
 import {
   assertInstallableWebArtifact,
@@ -26,9 +27,21 @@ import {
   readEmbeddedTargetConfigFromZip,
   type EmbeddedTargetConfigEvidence,
 } from './embedded-target-config';
+import {
+  requiredMiniGameArtifactFiles,
+  verifyMiniGameTargetArtifact,
+  type SmokeMiniGameTargetConfig,
+} from './minigame-artifact';
 
 interface SmokePlatformTargetConfig {
-  readonly kind: 'web' | 'capacitor-android' | 'capacitor-ios' | 'apps-in-toss' | 'devvit-web';
+  readonly kind:
+    | 'web'
+    | 'capacitor-android'
+    | 'capacitor-ios'
+    | 'apps-in-toss'
+    | 'devvit-web'
+    | 'wechat-minigame'
+    | 'tiktok-minigame';
   readonly gameApp: string;
   readonly adapter: string;
   readonly installable?: boolean;
@@ -37,6 +50,10 @@ interface SmokePlatformTargetConfig {
   readonly wrapperApp?: string;
   readonly webDir?: string;
   readonly artifact?: string;
+  readonly renderer?: 'canvas';
+  readonly orientation?: 'portrait' | 'landscape';
+  readonly experimental?: true;
+  readonly packageBudget?: SmokeMiniGameTargetConfig['packageBudget'];
 }
 
 interface SmokePlatformTargetsConfig {
@@ -112,6 +129,16 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
 
     if (targetConfig.kind === 'devvit-web') {
       verifyDevvitWebManifest(target, targetConfig, artifactPath, effectiveConfigPath);
+    }
+
+    if (isSmokeMiniGameTargetConfig(targetConfig)) {
+      verifyMiniGameTargetArtifact({
+        target,
+        targetConfig,
+        artifactPath,
+        releaseManifest: manifest,
+        releaseEntry: entry,
+      });
     }
 
     assertEmbeddedTargetConfig(
@@ -347,6 +374,13 @@ function readReleaseIconManifest(
         iconManifestPath,
         `${target} Devvit artifact`,
       );
+    case 'wechat-minigame':
+    case 'tiktok-minigame':
+      return readArtifactTextFromDirectory(
+        artifactPath,
+        iconManifestPath,
+        `${target} mini-game artifact`,
+      );
   }
 }
 
@@ -408,6 +442,12 @@ function readReleaseEmbeddedTargetConfig(
       return readEmbeddedTargetConfigFromDirectory(
         `${artifactPath}/client`,
         `${target} Devvit client artifact`,
+      );
+    case 'wechat-minigame':
+    case 'tiktok-minigame':
+      return readEmbeddedTargetConfigFromFile(
+        `${artifactPath}/${miniGameEffectiveTargetConfigFileName}`,
+        `${target} mini-game artifact`,
       );
   }
 }
@@ -493,6 +533,9 @@ function requiredFilesForTarget(
     case 'capacitor-android':
     case 'capacitor-ios':
       return [];
+    case 'wechat-minigame':
+    case 'tiktok-minigame':
+      return requiredMiniGameArtifactFiles(artifactPath);
   }
 }
 
@@ -1067,6 +1110,12 @@ function loadSmokePlatformTargetsConfig(): {
     if (targetConfig.kind === 'web') {
       assertOptionalBoolean(targetConfig.installable, `${target}.installable`);
     }
+    if (
+      (targetConfig.kind === 'wechat-minigame' || targetConfig.kind === 'tiktok-minigame')
+      && !isSmokeMiniGameTargetConfig(targetConfig)
+    ) {
+      throw new Error(`Platform target ${target} has an invalid mini-game configuration.`);
+    }
   }
 
   return {
@@ -1215,9 +1264,26 @@ function assertTargetKind(
     && input !== 'capacitor-ios'
     && input !== 'apps-in-toss'
     && input !== 'devvit-web'
+    && input !== 'wechat-minigame'
+    && input !== 'tiktok-minigame'
   ) {
     throw new Error(`Target ${target} has unsupported kind: ${String(input)}`);
   }
+}
+
+function isSmokeMiniGameTargetConfig(
+  input: SmokePlatformTargetConfig,
+): input is SmokePlatformTargetConfig & SmokeMiniGameTargetConfig {
+  return (
+    (input.kind === 'wechat-minigame' || input.kind === 'tiktok-minigame')
+    && input.renderer === 'canvas'
+    && (input.orientation === 'portrait' || input.orientation === 'landscape')
+    && input.experimental === true
+    && typeof input.packageBudget === 'object'
+    && input.packageBudget !== null
+    && Number.isSafeInteger(input.packageBudget.mainBytes)
+    && Number.isSafeInteger(input.packageBudget.totalBytes)
+  );
 }
 
 function readRequestedTargets(args: readonly string[]): readonly string[] {

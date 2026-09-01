@@ -551,8 +551,10 @@ function validatePhaserTemplateMicrosoftStorePwa(): void {
 
   for (const root of [exampleRoot, templateRoot]) {
     const mainPath = `${root}/src/main.ts`;
+    const bootstrapPath = `${root}/src/bootstrap.ts`;
+    const registrationPath = existsSync(bootstrapPath) ? bootstrapPath : mainPath;
     const pwaManifestPath = `${root}/public/manifest.webmanifest`;
-    const main = readText(mainPath);
+    const registration = readText(registrationPath);
     const pwaManifest = readJson(pwaManifestPath) as {
       readonly id?: unknown;
       readonly scope?: unknown;
@@ -560,14 +562,14 @@ function validatePhaserTemplateMicrosoftStorePwa(): void {
     } | null;
 
     assertIncludesText(
-      main,
+      registration,
       "import { installMicrosoftStorePwa } from './platform/microsoftStorePwa'",
-      `${mainPath}: Microsoft Store PWA registration.`,
+      `${registrationPath}: Microsoft Store PWA registration.`,
     );
     assertIncludesText(
-      main,
+      registration,
       'installMicrosoftStorePwa(runtimeConfig)',
-      `${mainPath}: Microsoft Store PWA registration.`,
+      `${registrationPath}: Microsoft Store PWA registration.`,
     );
 
     if (pwaManifest !== null) {
@@ -1459,6 +1461,7 @@ function validatePhaserTemplateDevvitViewModes(): void {
     const gameEntryPath = `${root}/src/gameEntry.ts`;
     const entryFailurePath = `${root}/src/runtime/renderEntryFailure.ts`;
     const mainPath = `${root}/src/main.ts`;
+    const bootstrapPath = `${root}/src/bootstrap.ts`;
     const createGamePath = `${root}/src/runtime/createGame.ts`;
     const devvitEntryPath = `${root}/src/platform/devvitEntrypoint.ts`;
     const devvitStylePath = `${root}/src/platform/devvitInlineMode.css`;
@@ -1566,10 +1569,11 @@ function validatePhaserTemplateDevvitViewModes(): void {
     }
 
     if (existsSync(mainPath)) {
+      const touchPolicyPath = existsSync(bootstrapPath) ? bootstrapPath : mainPath;
       assertIncludesText(
-        readText(mainPath),
+        readText(touchPolicyPath),
         'document.body.dataset.mpgdPreserveBrowserTouchGestures',
-        `${mainPath}: inline mode touch policy.`,
+        `${touchPolicyPath}: inline mode touch policy.`,
       );
     }
 

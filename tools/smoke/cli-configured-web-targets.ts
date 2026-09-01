@@ -25,6 +25,7 @@ assert.equal(normalizeBuildTarget('web', configuredTargets), 'web-preview');
 assert.equal(normalizeBuildTarget('browser', configuredTargets), 'web-preview');
 assert.equal(normalizeBuildTarget('storefront', configuredTargets), 'storefront');
 assert.equal(normalizeBuildTarget('web', { web: { kind: 'web' } }), 'web');
+assert.equal(normalizeBuildTarget('wechat', configuredTargets), 'wechat');
 const configuredBuildTargets = normalizeConfiguredBuildTargets(configuredTargets);
 assert.deepEqual(configuredBuildTargets, ['web-preview', 'storefront']);
 assert.throws(

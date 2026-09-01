@@ -366,6 +366,9 @@ importers:
       '@mpgd/adapter-verse8':
         specifier: workspace:*
         version: link:../../adapters/verse8
+      '@mpgd/adapter-wechat':
+        specifier: workspace:*
+        version: link:../../adapters/wechat
       '@mpgd/catalog':
         specifier: workspace:*
         version: link:../../packages/catalog
@@ -378,6 +381,9 @@ importers:
       '@mpgd/platform':
         specifier: workspace:*
         version: link:../../packages/platform
+      '@mpgd/phaser-minigame-runtime':
+        specifier: workspace:*
+        version: link:../../packages/phaser-minigame-runtime
       '@mpgd/target-config':
         specifier: workspace:*
         version: link:../../packages/target-config

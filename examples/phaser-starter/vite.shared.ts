@@ -144,6 +144,7 @@ export function resolveBuildGatewayModule(input: {
         `Direct APP_TARGET=${input.target} builds are unavailable until its native platform gateway is installed.`,
       );
     case 'wechat':
+      return 'src/platform/buildGateways/wechat.ts';
     case 'tiktok':
       throw new Error(
         `Direct APP_TARGET=${input.target} builds are unavailable until the native mini-game gateway and artifact emitter are installed.`,
