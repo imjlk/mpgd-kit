@@ -77,6 +77,22 @@ for (const shadow of [
     /must not shadow the globalThis or Object intrinsic binding/u,
   );
 }
+for (const unsafeDescriptor of [
+  '{configurable:true,enumerable:false,writable:false,'
+    + `value:globalThis.Object.freeze(${JSON.stringify(expectedMiniGameOrigins)}),`
+    + 'value:globalThis.Object.freeze(["https://unexpected.example.test"])}',
+  '{configurable:true,enumerable:false,writable:false,'
+    + `value:globalThis.Object.freeze(${JSON.stringify(expectedMiniGameOrigins)}),`
+    + '...{value:globalThis.Object.freeze(["https://unexpected.example.test"])}}',
+]) {
+  assert.throws(
+    () => assertMiniGameRuntimeAssetOrigins(
+      createMiniGameOriginDeclarationFromDescriptor(unsafeDescriptor),
+      expectedMiniGameOrigins,
+    ),
+    /exactly one executable asset-origin declaration/u,
+  );
+}
 
 try {
   writeFileSync(join(webArtifactRoot, 'manifest.webmanifest'), '{}\n');
@@ -209,5 +225,12 @@ function createMiniGameOriginDeclaration(
 ): string {
   return `${definePropertyOwner}.defineProperty(globalThis,`
     + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
-    + `{value:${freezeOwner}.freeze(${JSON.stringify(origins)})});`;
+    + '{configurable:true,enumerable:false,writable:false,'
+    + `value:${freezeOwner}.freeze(${JSON.stringify(origins)})});`;
+}
+
+function createMiniGameOriginDeclarationFromDescriptor(descriptor: string): string {
+  return 'globalThis.Object.defineProperty(globalThis,'
+    + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
+    + `${descriptor});`;
 }

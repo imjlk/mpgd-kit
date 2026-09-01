@@ -294,13 +294,74 @@ function readRuntimeAssetOriginsDeclaration(
     return undefined;
   }
 
-  const valueProperty = descriptor.properties.find((candidate) => {
-    return isAstRecord(candidate)
-      && candidate.type === 'Property'
-      && readStaticPropertyName(candidate) === 'value';
-  });
+  const properties = readRuntimeAssetOriginsDescriptor(descriptor.properties);
 
-  return isAstRecord(valueProperty) ? readStaticStringArray(valueProperty.value) : undefined;
+  return properties === undefined ? undefined : readStaticStringArray(properties.value.value);
+}
+
+function readRuntimeAssetOriginsDescriptor(
+  input: readonly unknown[],
+): Readonly<Record<'configurable' | 'enumerable' | 'writable' | 'value', Record<string, unknown>>>
+  | undefined {
+  const properties = new Map<string, Record<string, unknown>>();
+
+  for (const candidate of input) {
+    if (
+      !isAstRecord(candidate)
+      || candidate.type !== 'Property'
+      || candidate.kind !== 'init'
+      || candidate.method !== false
+      || candidate.computed !== false
+    ) {
+      return undefined;
+    }
+    const name = readStaticPropertyName(candidate);
+
+    if (name === undefined || properties.has(name)) {
+      return undefined;
+    }
+    properties.set(name, candidate);
+  }
+
+  const configurable = properties.get('configurable');
+  const enumerable = properties.get('enumerable');
+  const writable = properties.get('writable');
+  const value = properties.get('value');
+
+  if (
+    properties.size !== 4
+    || configurable === undefined
+    || enumerable === undefined
+    || writable === undefined
+    || value === undefined
+    || readStaticBoolean(configurable.value) !== true
+    || readStaticBoolean(enumerable.value) !== false
+    || readStaticBoolean(writable.value) !== false
+  ) {
+    return undefined;
+  }
+
+  return { configurable, enumerable, writable, value };
+}
+
+function readStaticBoolean(input: unknown): boolean | undefined {
+  if (!isAstRecord(input)) {
+    return undefined;
+  }
+  if (input.type === 'Literal' && typeof input.value === 'boolean') {
+    return input.value;
+  }
+  if (
+    input.type === 'UnaryExpression'
+    && input.operator === '!'
+    && isAstRecord(input.argument)
+    && input.argument.type === 'Literal'
+    && (input.argument.value === 0 || input.argument.value === 1)
+  ) {
+    return input.argument.value === 0;
+  }
+
+  return undefined;
 }
 
 function readStaticStringArray(input: unknown): string[] | undefined {
