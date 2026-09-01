@@ -117,6 +117,9 @@ try {
       + 'construct((() => {}).constructor, ["return 1"])();\n',
     'const { construct } = Reflect; '
       + 'construct((() => {}).constructor, ["return 1"])();\n',
+    'Reflect.apply(...[(() => {}).constructor, null, ["return 1"]])();\n',
+    'const invoke = Reflect.apply; const args = '
+      + '[(() => {}).constructor, null, ["return 1"]]; invoke(...args)();\n',
     'Reflect.get(() => {}, "constructor")("return 1")();\n',
     'Object.getOwnPropertyDescriptor(Object.getPrototypeOf(() => {}), "constructor")'
       + '.value("return 1")();\n',
@@ -143,6 +146,12 @@ try {
   write('safe-function-container.js', 'const box = { F() { return 1; } }; box.F();\n');
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-function-container.js'));
+  write(
+    'safe-constructor-prototype.js',
+    'function inspect(value) { return value; } inspect(value.constructor.prototype);\n',
+  );
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-constructor-prototype.js'));
   write('unsafe.js', 'const indirectEval = eval;\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
   rmSync(join(root, 'unsafe.js'));

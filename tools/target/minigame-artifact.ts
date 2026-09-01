@@ -715,7 +715,13 @@ function assertSafeNode(
 
     if (
       binding !== undefined
-      && scopeAnalysis.dynamicCodeConstructorAliases.has(binding)
+      && (
+        scopeAnalysis.dynamicCodeConstructorAliases.has(binding)
+        || (
+          isInvocationArgument(node, ancestors)
+          && scopeAnalysis.dynamicCodeConstructorContainers.has(binding)
+        )
+      )
     ) {
       throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
     }
@@ -747,7 +753,7 @@ function assertSafeNode(
       throw new Error(`Mini-game ${path} contains forbidden ${propertyName}.`);
     }
     if (
-      isInvocationArgument(ancestors)
+      isInvocationArgument(node, ancestors)
       && isDynamicCodeConstructorSource(node, ancestors, scopeAnalysis)
     ) {
       throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
@@ -814,10 +820,75 @@ function assertSafeNode(
   }
 }
 
-function isInvocationArgument(ancestors: readonly MiniGameAstAncestor[]): boolean {
-  const parent = ancestors.at(-1);
-  return parent?.childKey === 'arguments'
-    && (parent.node.type === 'CallExpression' || parent.node.type === 'NewExpression');
+function isInvocationArgument(
+  node: Record<string, unknown>,
+  ancestors: readonly MiniGameAstAncestor[],
+): boolean {
+  let value = node;
+
+  for (let index = ancestors.length - 1; index >= 0; index -= 1) {
+    const parent = ancestors[index];
+
+    if (parent === undefined) {
+      return false;
+    }
+    if (
+      isMiniGameFunctionNode(parent.node)
+      || parent.node.type === 'ClassBody'
+      || parent.node.type === 'StaticBlock'
+    ) {
+      return false;
+    }
+    if (
+      parent.childKey === 'arguments'
+      && (parent.node.type === 'CallExpression' || parent.node.type === 'NewExpression')
+    ) {
+      return true;
+    }
+    if (!parentPreservesDynamicCodeConstructorValue(parent.node, value)) {
+      return false;
+    }
+    value = parent.node;
+  }
+
+  return false;
+}
+
+function parentPreservesDynamicCodeConstructorValue(
+  parent: Record<string, unknown>,
+  value: Record<string, unknown>,
+): boolean {
+  // Follow only value-preserving wrappers and containers. Metadata transforms such as
+  // constructor.prototype and comparisons produce a different value and end the taint path.
+  if (
+    parent.type === 'ArrayExpression'
+    || parent.type === 'ObjectExpression'
+    || parent.type === 'SpreadElement'
+    || parent.type === 'ChainExpression'
+    || parent.type === 'AwaitExpression'
+    || parent.type === 'YieldExpression'
+    || parent.type === 'LogicalExpression'
+  ) {
+    return true;
+  }
+  if (parent.type === 'Property') {
+    return parent.value === value;
+  }
+  if (parent.type === 'ConditionalExpression') {
+    return parent.consequent === value || parent.alternate === value;
+  }
+  if (parent.type === 'SequenceExpression' && Array.isArray(parent.expressions)) {
+    return parent.expressions.at(-1) === value;
+  }
+  if (parent.type === 'AssignmentExpression' || parent.type === 'AssignmentPattern') {
+    return parent.right === value;
+  }
+  if (parent.type === 'MemberExpression' && parent.object === value) {
+    const memberName = readMemberName(parent);
+    return memberName === 'call' || memberName === 'apply' || memberName === 'bind';
+  }
+
+  return false;
 }
 
 function isGlobalObjectDestructuring(
