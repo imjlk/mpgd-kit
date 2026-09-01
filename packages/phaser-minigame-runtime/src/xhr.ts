@@ -10,6 +10,9 @@ import { normalizeMiniGameHttpsOrigin, parseMiniGameHttpsUrl } from './url.js';
 
 export type MiniGameXMLHttpRequestResponseType = '' | MiniGameRequestResponseType;
 
+const forbiddenResponseHeaders = new Set(['set-cookie', 'set-cookie2']);
+const forbiddenRequestHeaders = new Set(['cookie', 'cookie2']);
+
 export class MiniGameProgressEvent extends MiniGameEvent {
   readonly lengthComputable: boolean;
   readonly loaded: number;
@@ -153,6 +156,13 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       );
     }
 
+    if (forbiddenRequestHeaders.has(normalizedName)) {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_XHR_FORBIDDEN_HEADER',
+        `Mini-game XMLHttpRequest cannot set forbidden request header ${name}.`,
+      );
+    }
+
     const existing = this.#requestHeaders.get(normalizedName);
     this.#requestHeaders.set(
       normalizedName,
@@ -267,7 +277,11 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       this.#responseHeaders.clear();
 
       for (const [name, value] of Object.entries(response.headers ?? {})) {
-        this.#responseHeaders.set(name.toLowerCase(), value);
+        const normalizedName = name.toLowerCase();
+
+        if (!forbiddenResponseHeaders.has(normalizedName)) {
+          this.#responseHeaders.set(normalizedName, value);
+        }
       }
 
       if (this.#mimeType !== undefined && !this.#responseHeaders.has('content-type')) {

@@ -66,6 +66,10 @@ const installedGlobals = new WeakMap<
   MiniGamePhaserRuntimeInstallationImpl
 >();
 
+function readGamePausedState(game: MiniGamePhaserGame): boolean {
+  return game.isPaused === true;
+}
+
 class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInstallation {
   readonly game: MiniGamePhaserGame;
   readonly host: MiniGameHost;
@@ -279,7 +283,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       try {
         this.game.pause();
       } catch (error) {
-        this.#gamePausedByHost = false;
+        this.#gamePausedByHost = readGamePausedState(this.game);
         throw error;
       }
 
@@ -324,7 +328,15 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.#globals.document.visibilityState = 'visible';
 
     if (shouldWakeLoop && this.game.loop.started && !this.game.loop.running) {
-      this.game.loop.wake();
+      try {
+        this.game.loop.wake();
+      } catch (error) {
+        this.#pausedByHost = true;
+        this.#loopSleptByHost = true;
+        this.#globals.document.hidden = true;
+        this.#globals.document.visibilityState = 'hidden';
+        throw error;
+      }
     }
 
     if ((!allowDisposed && this.#disposed) || this.#pausedByHost) {

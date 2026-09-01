@@ -67,6 +67,13 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(offscreen).toBeInstanceOf(MiniGameCanvasElement);
     expect(offscreen).not.toBe(installation.canvas);
     expect(host.createdCanvasTypes).toEqual(['primary', 'offscreen']);
+    offscreen.setAttribute('width', '320');
+    offscreen.setAttribute('height', '180');
+    expect(offscreen.width).toBe(320);
+    expect(offscreen.height).toBe(180);
+    expect(() => offscreen.setAttribute('width', '-1')).toThrow(
+      'canvas width must be a non-negative finite number',
+    );
 
     installation.canvas.style.width = '600px';
     installation.canvas.style.height = '300px';
@@ -663,7 +670,11 @@ describe('mini-game requestAnimationFrame and transport', () => {
     host.remoteResponse = {
       status: 200,
       data: '{"remote":true}',
-      headers: { 'content-type': 'application/json' },
+      headers: {
+        'content-type': 'application/json',
+        'Set-Cookie': 'session=secret',
+        'SET-COOKIE2': 'legacy=secret',
+      },
     };
     const request = new MiniGameXMLHttpRequest(host, {
       allowedRemoteOrigins: ['https://cdn.example.com'],
@@ -674,6 +685,9 @@ describe('mini-game requestAnimationFrame and transport', () => {
 
     expect(request.responseText).toBe('{"remote":true}');
     expect(request.getResponseHeader('Content-Type')).toBe('application/json');
+    expect(request.getResponseHeader('Set-Cookie')).toBeNull();
+    expect(request.getResponseHeader('Set-Cookie2')).toBeNull();
+    expect(request.getAllResponseHeaders()).not.toContain('secret');
     expect(host.remoteRequests).toHaveLength(1);
     expect(classifyMiniGameRequestUrl(
       'HTTPS://CDN.EXAMPLE.COM:443/game/data.json#ignored',
@@ -710,6 +724,9 @@ describe('mini-game requestAnimationFrame and transport', () => {
     invalidHeader.open('GET', 'https://cdn.example.com/file.json');
     expect(() => invalidHeader.setRequestHeader('x-test', 'ok\r\ninjected: true')).toThrow(
       'header value contains a line break',
+    );
+    expect(() => invalidHeader.setRequestHeader('Cookie', 'session=secret')).toThrow(
+      'cannot set forbidden request header',
     );
   });
 });
@@ -1027,6 +1044,52 @@ describe('Phaser mini-game runtime patch', () => {
     expect(host.pendingFrameCount).toBe(1);
   });
 
+  it('retains pause ownership when Phaser pause throws after mutating state', () => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    let resumes = 0;
+    const loop = {
+      started: true,
+      running: true,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        this.running = false;
+      },
+      wake() {
+        this.running = true;
+      },
+    };
+    raf.start(raf.callback, false, raf.delay);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      loop,
+      isPaused: false,
+      pause() {
+        this.isPaused = true;
+        throw new Error('pause listener failed');
+      },
+      resume() {
+        resumes += 1;
+        this.isPaused = false;
+      },
+    } satisfies MiniGamePhaserGame;
+    const installation = installPhaserMiniGameRuntime(game, { globals });
+
+    expect(() => host.emitPause()).toThrow('pause listener failed');
+    expect(game.isPaused).toBe(true);
+    expect(globals.document.visibilityState).toBe('hidden');
+
+    host.emitResume();
+    expect(resumes).toBe(1);
+    expect(game.isPaused).toBe(false);
+    expect(globals.document.visibilityState).toBe('visible');
+
+    installation.dispose();
+  });
+
   it('restores host-owned pause state when wake disposes the runtime', () => {
     const host = new FakeMiniGameHost();
     const globals = installMiniGameGlobals(host);
@@ -1129,6 +1192,63 @@ describe('Phaser mini-game runtime patch', () => {
     expect(pauses).toBe(1);
     expect(resumes).toBe(0);
     expect(sleeps).toBe(2);
+    expect(game.isPaused).toBe(true);
+    expect(loop.running).toBe(false);
+    expect(globals.document.visibilityState).toBe('hidden');
+
+    host.emitResume();
+    expect(resumes).toBe(1);
+    expect(game.isPaused).toBe(false);
+    expect(loop.running).toBe(true);
+    expect(globals.document.visibilityState).toBe('visible');
+
+    installation.dispose();
+  });
+
+  it('retains host resume state when loop wake throws and allows retry', () => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    let failWake = true;
+    let resumes = 0;
+    const loop = {
+      started: true,
+      running: true,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        raf.stop();
+        this.running = false;
+      },
+      wake() {
+        if (failWake) {
+          failWake = false;
+          throw new Error('wake listener failed');
+        }
+
+        raf.start(raf.callback, false, raf.delay);
+        this.running = true;
+      },
+    };
+    raf.start(raf.callback, false, raf.delay);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      loop,
+      isPaused: false,
+      pause() {
+        this.isPaused = true;
+      },
+      resume() {
+        resumes += 1;
+        this.isPaused = false;
+      },
+    } satisfies MiniGamePhaserGame;
+    const installation = installPhaserMiniGameRuntime(game, { globals });
+    host.emitPause();
+
+    expect(() => host.emitResume()).toThrow('wake listener failed');
+    expect(resumes).toBe(0);
     expect(game.isPaused).toBe(true);
     expect(loop.running).toBe(false);
     expect(globals.document.visibilityState).toBe('hidden');

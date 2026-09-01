@@ -235,6 +235,27 @@ export class MiniGameCanvasElement extends MiniGameHTMLElement {
     });
   }
 
+  override setAttribute(name: string, value: string): void {
+    const normalizedName = name.toLowerCase();
+
+    if (normalizedName === 'width' || normalizedName === 'height') {
+      const dimension = Number(value);
+
+      if (!Number.isFinite(dimension) || dimension < 0) {
+        throw new MiniGameRuntimeError(
+          'MINIGAME_CANVAS_DIMENSION_INVALID',
+          `Mini-game canvas ${normalizedName} must be a non-negative finite number.`,
+        );
+      }
+
+      this[normalizedName] = Math.floor(dimension);
+      super.setAttribute(normalizedName, String(value));
+      return;
+    }
+
+    super.setAttribute(name, value);
+  }
+
   get width(): number {
     return readFiniteNumber(this[miniGameNativeObjectSymbol], 'width', 1);
   }
