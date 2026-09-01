@@ -117,6 +117,8 @@ try {
       + 'construct((() => {}).constructor, ["return 1"])();\n',
     'const { construct } = Reflect; '
       + 'construct((() => {}).constructor, ["return 1"])();\n',
+    'const method = "apply"; '
+      + 'Reflect[method]((() => {}).constructor, null, ["return 1"])();\n',
     'Reflect.apply(...[(() => {}).constructor, null, ["return 1"]])();\n',
     'const invoke = Reflect.apply; const args = '
       + '[(() => {}).constructor, null, ["return 1"]]; invoke(...args)();\n',
@@ -144,6 +146,9 @@ try {
     'function getBox() { return { F: (() => {}).constructor }; } '
       + 'getBox().F("return 1")();\n',
     'function read(key) { return globalThis[key]; } read("Function")("return 1")();\n',
+    'const member = "constructor"; const F = (() => {})[member]; F("return 1")();\n',
+    'const property = "constructor"; '
+      + 'Reflect.get(() => {}, property)("return 1")();\n',
     'class Box { static getF() { return (() => {}).constructor; } } '
       + 'Box.getF()("return 1")();\n',
     'class Box { getF() { return (() => {}).constructor; } } '
@@ -199,6 +204,11 @@ try {
     'let sdk; ({ wx: sdk } = Object.create(globalThis)); sdk.request({});\n',
     'const { ["w" + "x"]: sdk } = getRuntimeConfig(); sdk.createCanvas();\n',
     'const { nested: { wx: sdk } } = getRuntimeConfig(); sdk.getWindowInfo();\n',
+    'const key = "wx"; globalThis[key].request({});\n',
+    'let key; key = "wx"; globalThis[key].createImage();\n',
+    'const prefix = "w"; const key = `${prefix}x`; globalThis[key].createCanvas();\n',
+    'const key = usePrimary ? "wx" : "safe"; globalThis[key].getWindowInfo();\n',
+    'const key = "wx"; const { [key]: sdk } = Object.create(globalThis); sdk.request({});\n',
   ]) {
     write('game.bundle.js', directWechatSdkAccess);
     assert.throws(
@@ -216,6 +226,10 @@ try {
     'Reflect.get(globalThis, "wx").request({});\n',
     'const get = Reflect.get; get(globalThis, "wx").createImage();\n',
     'Object.getOwnPropertyDescriptor(globalThis, "wx").value.createCanvas();\n',
+    'const method = "get"; const key = "wx"; '
+      + 'Reflect[method](globalThis, key).request({});\n',
+    'const method = "get"; const key = "wx"; const get = Reflect[method]; '
+      + 'get(globalThis, key).createImage();\n',
   ]) {
     write('game.bundle.js', reflectiveWechatSdkAccess);
     assert.throws(
@@ -351,6 +365,8 @@ try {
     'Reflect.get(globalThis, getRuntimeKey())("return 1")();\n',
     'const key = "Function"; Object.getOwnPropertyDescriptor(globalThis, key)'
       + '.value("return 1")();\n',
+    'const method = "get"; const key = "Function"; '
+      + 'Reflect[method](globalThis, key)("return 1")();\n',
   ]) {
     write('unsafe.js', reflectiveGlobalRead);
     assert.throws(
@@ -422,18 +438,28 @@ try {
   write('safe-canvas.js', "document.createElement('canvas');\n");
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-canvas.js'));
-  write('unsafe.js', "document['create' + 'Element']('script');\n");
-  assert.throws(
-    () => assertMiniGameJavaScriptSafety(root, []),
-    /contains forbidden script element creation/u,
-  );
-  rmSync(join(root, 'unsafe.js'));
-  write('unsafe.js', "new globalThis['Wor' + 'ker']('worker-entry' + '.js');\n");
-  assert.throws(
-    () => assertMiniGameJavaScriptSafety(root, []),
-    /contains forbidden Worker construction/u,
-  );
-  rmSync(join(root, 'unsafe.js'));
+  for (const scriptElementCreation of [
+    "document['create' + 'Element']('script');\n",
+    'const method = "createElement"; const tag = "script"; document[method](tag);\n',
+  ]) {
+    write('unsafe.js', scriptElementCreation);
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, []),
+      /contains forbidden script element creation/u,
+    );
+    rmSync(join(root, 'unsafe.js'));
+  }
+  for (const workerConstruction of [
+    "new globalThis['Wor' + 'ker']('worker-entry' + '.js');\n",
+    'const constructorName = "Worker"; new globalThis[constructorName]("worker-entry.js");\n',
+  ]) {
+    write('unsafe.js', workerConstruction);
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, []),
+      /contains forbidden Worker construction/u,
+    );
+    rmSync(join(root, 'unsafe.js'));
+  }
 
   const parsed = JSON.parse(
     readFileSync(join(root, miniGameArtifactEvidenceFileName), 'utf8'),

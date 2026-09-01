@@ -121,6 +121,8 @@ type MiniGameReflectiveGlobalReadKind = 'property' | 'descriptors';
 interface MiniGameScopeAnalysis {
   readonly programScope: MiniGameLexicalScope;
   readonly scopeByNode: WeakMap<Record<string, unknown>, MiniGameLexicalScope>;
+  readonly staticStringSources: ReadonlyMap<MiniGameLexicalBinding, readonly unknown[]>;
+  readonly staticStringValues: Map<MiniGameLexicalBinding, ReadonlySet<string>>;
   readonly globalObjectAliases: ReadonlySet<MiniGameLexicalBinding>;
   readonly globalIntrinsicAliases: ReadonlyMap<
     MiniGameLexicalBinding,
@@ -775,27 +777,29 @@ function assertSafeNode(
   }
 
   if (node.type === 'MemberExpression') {
-    const propertyName = node.computed === true
-      ? evaluateStaticString(node.property)
-      : readMemberName(node);
+    const propertyNames = readMiniGameMemberNames(node, ancestors, scopeAnalysis);
+    const forbiddenPlatformGlobal = [...propertyNames].find((propertyName) => {
+      return forbiddenGlobals.has(propertyName);
+    });
 
-    if (
-      propertyName !== undefined
-      && forbiddenGlobals.has(propertyName)
-    ) {
-      throw new Error(`Mini-game ${path} contains forbidden platform global ${propertyName}.`);
+    if (forbiddenPlatformGlobal !== undefined) {
+      throw new Error(
+        `Mini-game ${path} contains forbidden platform global ${forbiddenPlatformGlobal}.`,
+      );
     }
 
+    const forbiddenDynamicCodeProperty = [...propertyNames].find((propertyName) => {
+      return ['eval', 'Function', 'importScripts'].includes(propertyName);
+    });
     if (
-      propertyName !== undefined
-      && ['eval', 'Function', 'importScripts'].includes(propertyName)
+      forbiddenDynamicCodeProperty !== undefined
       && (
         node.computed === true
         || isGlobalObjectAliasSource(node.object, ancestors, scopeAnalysis)
       )
       && !isTypeofReference(node, ancestors)
     ) {
-      throw new Error(`Mini-game ${path} contains forbidden ${propertyName}.`);
+      throw new Error(`Mini-game ${path} contains forbidden ${forbiddenDynamicCodeProperty}.`);
     }
     if (
       isInvocationArgument(node, ancestors)
@@ -806,35 +810,41 @@ function assertSafeNode(
   }
 
   if (node.type === 'Property') {
-    const propertyName = readStaticPropertyName(node);
+    const propertyNames = readMiniGameStaticPropertyNames(node, ancestors, scopeAnalysis);
     const isObjectPatternProperty = ancestors.at(-1)?.node.type === 'ObjectPattern';
+    const forbiddenPlatformGlobal = [...propertyNames].find((propertyName) => {
+      return forbiddenGlobals.has(propertyName);
+    });
 
     // Member access is already fail-closed for platform SDK names regardless of the
     // receiver. Apply the same boundary to destructuring so prototype-derived or
     // factory-returned global objects cannot hide a direct wx/tt/TTMinis binding.
     if (
       isObjectPatternProperty
-      && propertyName !== undefined
-      && forbiddenGlobals.has(propertyName)
+      && forbiddenPlatformGlobal !== undefined
     ) {
-      throw new Error(`Mini-game ${path} contains forbidden platform global ${propertyName}.`);
+      throw new Error(
+        `Mini-game ${path} contains forbidden platform global ${forbiddenPlatformGlobal}.`,
+      );
     }
 
     if (isGlobalObjectDestructuring(ancestors, scopeAnalysis)) {
       if (node.computed === true) {
         throw new Error(`Mini-game ${path} contains forbidden computed destructuring.`);
       }
-      if (
-        propertyName !== undefined
-        && ['eval', 'Function', 'importScripts'].includes(propertyName)
-      ) {
-        throw new Error(`Mini-game ${path} contains forbidden ${propertyName} destructuring.`);
+      const forbiddenDynamicCodeProperty = [...propertyNames].find((propertyName) => {
+        return ['eval', 'Function', 'importScripts'].includes(propertyName);
+      });
+      if (forbiddenDynamicCodeProperty !== undefined) {
+        throw new Error(
+          `Mini-game ${path} contains forbidden ${forbiddenDynamicCodeProperty} destructuring.`,
+        );
       }
     }
   }
 
   if (node.type === 'CallExpression' && isAstRecord(node.callee)) {
-    const calleeName = readMemberName(node.callee);
+    const calleeNames = readMiniGameMemberNames(node.callee, ancestors, scopeAnalysis);
     const arguments_ = Array.isArray(node.arguments) ? node.arguments : [];
     const firstArgument = arguments_[0];
 
@@ -848,13 +858,16 @@ function assertSafeNode(
       throw new Error(`Mini-game ${path} contains forbidden reflective global lookup.`);
     }
 
-    if (calleeName === 'createElement' && evaluateStaticString(firstArgument) === 'script') {
+    if (
+      calleeNames.has('createElement')
+      && resolveMiniGameStaticStrings(firstArgument, ancestors, scopeAnalysis).has('script')
+    ) {
       throw new Error(`Mini-game ${path} contains forbidden script element creation.`);
     }
   }
 
   if (node.type === 'NewExpression' && isAstRecord(node.callee)) {
-    const calleeName = readMemberName(node.callee);
+    const calleeNames = readMiniGameMemberNames(node.callee, ancestors, scopeAnalysis);
 
     if (isDynamicCodeConstructorSource(node.callee, ancestors, scopeAnalysis)) {
       throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
@@ -863,8 +876,11 @@ function assertSafeNode(
       throw new Error(`Mini-game ${path} contains forbidden computed global construction.`);
     }
 
-    if (calleeName === 'Worker' || calleeName === 'SharedWorker') {
-      throw new Error(`Mini-game ${path} contains forbidden ${calleeName} construction.`);
+    const forbiddenWorker = [...calleeNames].find((calleeName) => {
+      return calleeName === 'Worker' || calleeName === 'SharedWorker';
+    });
+    if (forbiddenWorker !== undefined) {
+      throw new Error(`Mini-game ${path} contains forbidden ${forbiddenWorker} construction.`);
     }
   }
 
@@ -1005,7 +1021,7 @@ function isUnknownComputedGlobalMember(
 ): boolean {
   return node.type === 'MemberExpression'
     && node.computed === true
-    && readMemberName(node) === undefined
+    && readMiniGameMemberNames(node, ancestors, scopeAnalysis).size === 0
     && isGlobalObjectAliasSource(node.object, ancestors, scopeAnalysis);
 }
 
@@ -1028,7 +1044,7 @@ function isReflectiveDynamicCodeGlobalRead(
   let property = node.arguments[1];
 
   if (kinds.size === 0 && node.callee.type === 'MemberExpression') {
-    const invocationMethod = readMemberName(node.callee);
+    const invocationMethods = readMiniGameMemberNames(node.callee, ancestors, scopeAnalysis);
     const receiverKinds = getReflectiveGlobalReadKinds(
       node.callee.object,
       ancestors,
@@ -1038,6 +1054,11 @@ function isReflectiveDynamicCodeGlobalRead(
     if (receiverKinds.size === 0) {
       return false;
     }
+    if (invocationMethods.size !== 1) {
+      return true;
+    }
+    const invocationMethod = [...invocationMethods][0];
+
     if (invocationMethod === 'bind') {
       return true;
     }
@@ -1071,17 +1092,21 @@ function isReflectiveDynamicCodeGlobalRead(
     return true;
   }
 
-  const propertyName = evaluateStaticString(property);
+  const propertyNames = resolveMiniGameStaticStrings(property, ancestors, scopeAnalysis);
   return kinds.has('property')
-    && (propertyName === undefined
-      || ['eval', 'Function', 'importScripts'].includes(propertyName)
-      || forbiddenGlobals.has(propertyName));
+    && (propertyNames.size === 0
+      || [...propertyNames].some((propertyName) => {
+        return ['eval', 'Function', 'importScripts'].includes(propertyName)
+          || forbiddenGlobals.has(propertyName);
+      }));
 }
 
 function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
   const programScope = createMiniGameLexicalScope('program');
   const scopeByNode = new WeakMap<Record<string, unknown>, MiniGameLexicalScope>();
   buildMiniGameScopes(ast, programScope, scopeByNode);
+  const staticStringSources = new Map<MiniGameLexicalBinding, unknown[]>();
+  const staticStringValues = new Map<MiniGameLexicalBinding, ReadonlySet<string>>();
   const globalObjectAliases = new Set<MiniGameLexicalBinding>();
   const globalIntrinsicAliases = new Map<
     MiniGameLexicalBinding,
@@ -1098,6 +1123,8 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
   const analysis: MiniGameScopeAnalysis = {
     programScope,
     scopeByNode,
+    staticStringSources,
+    staticStringValues,
     globalObjectAliases,
     globalIntrinsicAliases,
     reflectiveGlobalReadAliases,
@@ -1106,8 +1133,22 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
     dynamicCodeConstructorFactories,
     dynamicCodeConstructorContainerFactories,
   };
-  collectDynamicCodeGlobalObjectAliases(ast, analysis, globalObjectAliases);
-  collectGlobalIntrinsicAliases(ast, analysis, globalIntrinsicAliases);
+  collectMiniGameStaticStringSources(ast, analysis, staticStringSources);
+  let globalAliasChanged = true;
+
+  while (globalAliasChanged) {
+    const objectAliasesChanged = collectDynamicCodeGlobalObjectAliases(
+      ast,
+      analysis,
+      globalObjectAliases,
+    );
+    const intrinsicAliasesChanged = collectGlobalIntrinsicAliases(
+      ast,
+      analysis,
+      globalIntrinsicAliases,
+    );
+    globalAliasChanged = objectAliasesChanged || intrinsicAliasesChanged;
+  }
   collectReflectiveGlobalReadAliases(ast, analysis, reflectiveGlobalReadAliases);
   collectDynamicCodeConstructorFlow(
     ast,
@@ -1291,12 +1332,50 @@ function resolveMiniGameBinding(
   return undefined;
 }
 
+function collectMiniGameStaticStringSources(
+  ast: unknown,
+  analysis: MiniGameScopeAnalysis,
+  sources: Map<MiniGameLexicalBinding, unknown[]>,
+): void {
+  collectMiniGameAssignments(ast, (pattern, source) => {
+    addMiniGameBindingSource(pattern, source, analysis, sources);
+  });
+}
+
+function addMiniGameBindingSource(
+  pattern: unknown,
+  source: unknown,
+  analysis: MiniGameScopeAnalysis,
+  sources: Map<MiniGameLexicalBinding, unknown[]>,
+): void {
+  if (!isAstRecord(pattern) || source === undefined || source === null) {
+    return;
+  }
+  if (pattern.type === 'AssignmentPattern') {
+    addMiniGameBindingSource(pattern.left, source, analysis, sources);
+    return;
+  }
+  if (pattern.type !== 'Identifier' || typeof pattern.name !== 'string') {
+    return;
+  }
+
+  const scope = analysis.scopeByNode.get(pattern) ?? analysis.programScope;
+  const binding = resolveMiniGameBinding(pattern.name, scope)
+    ?? ensureMiniGameBinding(pattern.name, analysis.programScope);
+  const bindingSources = sources.get(binding) ?? [];
+
+  if (!bindingSources.includes(source)) {
+    bindingSources.push(source);
+    sources.set(binding, bindingSources);
+  }
+}
+
 function collectDynamicCodeGlobalObjectAliases(
   ast: unknown,
   analysis: MiniGameScopeAnalysis,
   aliases: Set<MiniGameLexicalBinding>,
-): void {
-  collectMiniGameAliases(ast, (pattern, source, ancestors) => {
+): boolean {
+  return collectMiniGameAliases(ast, (pattern, source, ancestors) => {
     return addGlobalObjectAliasBindings(pattern, source, ancestors, analysis, aliases);
   });
 }
@@ -1305,8 +1384,8 @@ function collectGlobalIntrinsicAliases(
   ast: unknown,
   analysis: MiniGameScopeAnalysis,
   aliases: Map<MiniGameLexicalBinding, Set<MiniGameGlobalIntrinsic>>,
-): void {
-  collectMiniGameAliases(ast, (pattern, source, ancestors) => {
+): boolean {
+  return collectMiniGameAliases(ast, (pattern, source, ancestors) => {
     return addGlobalIntrinsicAliasBindings(pattern, source, ancestors, analysis, aliases);
   });
 }
@@ -1332,9 +1411,12 @@ function addGlobalIntrinsicAliasBindings(
       if (!isAstRecord(property) || property.type !== 'Property') {
         continue;
       }
-      const name = readStaticPropertyName(property);
+      const names = readMiniGameStaticPropertyNames(property, ancestors, analysis);
 
-      if (name === 'Object' || name === 'Reflect') {
+      for (const name of names) {
+        if (name !== 'Object' && name !== 'Reflect') {
+          continue;
+        }
         changed = addMiniGameBindingKinds(
           property.value,
           new Set([name]),
@@ -1398,10 +1480,13 @@ function getGlobalIntrinsicKinds(
     input.type === 'MemberExpression'
     && isGlobalObjectAliasSource(input.object, ancestors, analysis)
   ) {
-    const name = readMemberName(input);
+    const names = readMiniGameMemberNames(input, ancestors, analysis);
 
-    if (name === 'Object' || name === 'Reflect') {
-      kinds.add(name);
+    if (names.has('Object')) {
+      kinds.add('Object');
+    }
+    if (names.has('Reflect')) {
+      kinds.add('Reflect');
     }
   }
 
@@ -1436,8 +1521,12 @@ function addReflectiveGlobalReadAliasBindings(
       if (!isAstRecord(property) || property.type !== 'Property') {
         continue;
       }
-      const methodName = readStaticPropertyName(property);
-      const readKinds = getReflectiveMethodKinds(intrinsicKinds, methodName);
+      const methodNames = readMiniGameStaticPropertyNames(property, ancestors, analysis);
+      const readKinds = new Set<MiniGameReflectiveGlobalReadKind>();
+
+      for (const methodName of methodNames) {
+        addSetValues(readKinds, getReflectiveMethodKinds(intrinsicKinds, methodName));
+      }
 
       const added = addMiniGameBindingKinds(property.value, readKinds, analysis, aliases);
       changed = added || changed;
@@ -1490,13 +1579,11 @@ function getReflectiveGlobalReadKinds(
     return kinds;
   }
   if (input.type === 'MemberExpression') {
-    addSetValues(
-      kinds,
-      getReflectiveMethodKinds(
-        getGlobalIntrinsicKinds(input.object, ancestors, analysis),
-        readMemberName(input),
-      ),
-    );
+    const intrinsicKinds = getGlobalIntrinsicKinds(input.object, ancestors, analysis);
+
+    for (const methodName of readMiniGameMemberNames(input, ancestors, analysis)) {
+      addSetValues(kinds, getReflectiveMethodKinds(intrinsicKinds, methodName));
+    }
   }
 
   return kinds;
@@ -1946,9 +2033,9 @@ function isDynamicCodeConstructorInvocation(
     return false;
   }
 
-  const method = readMemberName(callee);
+  const methods = readMiniGameMemberNames(callee, ancestors, analysis);
 
-  return (method === 'apply' || method === 'construct')
+  return (methods.has('apply') || methods.has('construct'))
     && getGlobalIntrinsicKinds(callee.object, ancestors, analysis).has('Reflect')
     && isDynamicCodeConstructorSource(arguments_[0], ancestors, analysis);
 }
@@ -1981,21 +2068,21 @@ function isDynamicCodeConstructorSource(
       || isDynamicCodeConstructorSource(input.right, ancestors, analysis);
   }
   if (input.type === 'MemberExpression') {
-    const memberName = readMemberName(input);
+    const memberNames = readMiniGameMemberNames(input, ancestors, analysis);
 
     if (isDynamicCodeConstructorContainerSource(input.object, ancestors, analysis)) {
       return true;
     }
-    if (memberName === 'constructor') {
+    if (memberNames.has('constructor')) {
       return true;
     }
     if (
-      (memberName === 'call' || memberName === 'apply' || memberName === 'bind')
+      (memberNames.has('call') || memberNames.has('apply') || memberNames.has('bind'))
       && isDynamicCodeConstructorSource(input.object, ancestors, analysis)
     ) {
       return true;
     }
-    return memberName === 'value'
+    return memberNames.has('value')
       && isReflectiveConstructorDescriptorRead(input.object, ancestors, analysis);
   }
   if (
@@ -2007,7 +2094,8 @@ function isDynamicCodeConstructorSource(
       return true;
     }
     const kinds = getReflectiveGlobalReadKinds(input.callee, ancestors, analysis);
-    return kinds.has('property') && evaluateStaticString(input.arguments[1]) === 'constructor';
+    return kinds.has('property')
+      && resolveMiniGameStaticStrings(input.arguments[1], ancestors, analysis).has('constructor');
   }
 
   return false;
@@ -2220,7 +2308,8 @@ function isReflectiveConstructorDescriptorRead(
   }
 
   const kinds = getReflectiveGlobalReadKinds(input.callee, ancestors, analysis);
-  return kinds.has('property') && evaluateStaticString(input.arguments[1]) === 'constructor';
+  return kinds.has('property')
+    && resolveMiniGameStaticStrings(input.arguments[1], ancestors, analysis).has('constructor');
 }
 
 function collectMiniGameAliases(
@@ -2230,43 +2319,61 @@ function collectMiniGameAliases(
     source: unknown,
     ancestors: readonly MiniGameAstAncestor[],
   ) => boolean,
-): void {
+): boolean {
+  let changedAtLeastOnce = false;
   let changed = true;
 
   while (changed) {
     changed = false;
-    const ancestors: MiniGameAstAncestor[] = [];
-    visit(ast);
+    collectMiniGameAssignments(ast, (pattern, source, ancestors) => {
+      const added = addAliases(pattern, source, ancestors);
+      changed = added || changed;
+      changedAtLeastOnce = added || changedAtLeastOnce;
+    });
+  }
 
-    function visit(input: unknown): void {
-      if (Array.isArray(input)) {
-        for (const item of input) {
-          visit(item);
-        }
-        return;
-      }
-      if (!isAstRecord(input)) {
-        return;
-      }
+  return changedAtLeastOnce;
+}
 
-      if (input.type === 'VariableDeclarator') {
-        changed = addAliases(input.id, input.init, ancestors) || changed;
-      } else if (input.type === 'AssignmentPattern') {
-        changed = addAliases(input.left, input.right, ancestors) || changed;
-      } else if (
-        input.type === 'AssignmentExpression'
-        && typeof input.operator === 'string'
-        && ['=', '&&=', '||=', '??='].includes(input.operator)
-      ) {
-        changed = addAliases(input.left, input.right, ancestors) || changed;
-      }
+function collectMiniGameAssignments(
+  ast: unknown,
+  onAssignment: (
+    pattern: unknown,
+    source: unknown,
+    ancestors: readonly MiniGameAstAncestor[],
+  ) => void,
+): void {
+  const ancestors: MiniGameAstAncestor[] = [];
+  visit(ast);
 
-      for (const [key, value] of Object.entries(input)) {
-        if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
-          ancestors.push({ node: input, childKey: key });
-          visit(value);
-          ancestors.pop();
-        }
+  function visit(input: unknown): void {
+    if (Array.isArray(input)) {
+      for (const item of input) {
+        visit(item);
+      }
+      return;
+    }
+    if (!isAstRecord(input)) {
+      return;
+    }
+
+    if (input.type === 'VariableDeclarator') {
+      onAssignment(input.id, input.init, ancestors);
+    } else if (input.type === 'AssignmentPattern') {
+      onAssignment(input.left, input.right, ancestors);
+    } else if (
+      input.type === 'AssignmentExpression'
+      && typeof input.operator === 'string'
+      && ['=', '&&=', '||=', '??='].includes(input.operator)
+    ) {
+      onAssignment(input.left, input.right, ancestors);
+    }
+
+    for (const [key, value] of Object.entries(input)) {
+      if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
+        ancestors.push({ node: input, childKey: key });
+        visit(value);
+        ancestors.pop();
       }
     }
   }
@@ -2338,12 +2445,11 @@ function addGlobalObjectAliasBindings(
     if (!isAstRecord(property) || property.type !== 'Property') {
       continue;
     }
-    const name = readStaticPropertyName(property);
+    const names = readMiniGameStaticPropertyNames(property, ancestors, analysis);
 
-    if (
-      name !== undefined
-      && ['globalThis', 'self', 'window', 'top', 'parent'].includes(name)
-    ) {
+    if ([...names].some((name) => {
+      return ['globalThis', 'self', 'window', 'top', 'parent'].includes(name);
+    })) {
       changed = addKnownGlobalObjectAlias(property.value, analysis, aliases) || changed;
     }
   }
@@ -2399,11 +2505,51 @@ function isGlobalObjectAliasSource(
     return isGlobalObjectAliasSource(input.left, ancestors, analysis)
       || isGlobalObjectAliasSource(input.right, ancestors, analysis);
   }
-  if (input.type === 'MemberExpression') {
-    const name = readMemberName(input);
+  if (
+    input.type === 'CallExpression'
+    && isAstRecord(input.callee)
+    && input.callee.type === 'MemberExpression'
+    && Array.isArray(input.arguments)
+    && getGlobalIntrinsicKinds(input.callee.object, ancestors, analysis).has('Object')
+  ) {
+    const methods = readMiniGameMemberNames(input.callee, ancestors, analysis);
+    const firstArgument = input.arguments[0];
 
-    return name !== undefined
-      && ['globalThis', 'self', 'window', 'top', 'parent'].includes(name)
+    if (
+      methods.has('create')
+      && isGlobalObjectAliasSource(firstArgument, ancestors, analysis)
+    ) {
+      return true;
+    }
+    if (
+      methods.has('setPrototypeOf')
+      && (
+        isGlobalObjectAliasSource(firstArgument, ancestors, analysis)
+        || isGlobalObjectAliasSource(input.arguments[1], ancestors, analysis)
+      )
+    ) {
+      return true;
+    }
+    if (
+      [
+        'assign',
+        'defineProperties',
+        'defineProperty',
+        'freeze',
+        'preventExtensions',
+        'seal',
+      ].some((method) => methods.has(method))
+      && isGlobalObjectAliasSource(firstArgument, ancestors, analysis)
+    ) {
+      return true;
+    }
+  }
+  if (input.type === 'MemberExpression') {
+    const names = readMiniGameMemberNames(input, ancestors, analysis);
+
+    return [...names].some((name) => {
+      return ['globalThis', 'self', 'window', 'top', 'parent'].includes(name);
+    })
       && isGlobalObjectAliasSource(input.object, ancestors, analysis);
   }
 
@@ -2586,6 +2732,170 @@ function evaluateStaticString(input: unknown): string | undefined {
   }
 
   return undefined;
+}
+
+function resolveMiniGameStaticStrings(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Set<string> {
+  const ancestorNode = ancestors.at(-1)?.node;
+  const fallbackScope = ancestorNode === undefined
+    ? analysis.programScope
+    : (analysis.scopeByNode.get(ancestorNode) ?? analysis.programScope);
+  const bindingStack: MiniGameLexicalBinding[] = [];
+  const cyclicBindings = new Set<MiniGameLexicalBinding>();
+  return resolve(input);
+
+  function resolve(value: unknown): Set<string> {
+    const values = new Set<string>();
+    const direct = evaluateStaticString(value);
+
+    if (direct !== undefined) {
+      values.add(direct);
+      return values;
+    }
+    if (!isAstRecord(value)) {
+      return values;
+    }
+    if (value.type === 'Identifier' && typeof value.name === 'string') {
+      const scope = analysis.scopeByNode.get(value) ?? fallbackScope;
+      const binding = resolveMiniGameBinding(value.name, scope);
+
+      if (binding === undefined) {
+        return values;
+      }
+      const cycleStart = bindingStack.indexOf(binding);
+
+      if (cycleStart >= 0) {
+        for (const cyclicBinding of bindingStack.slice(cycleStart)) {
+          cyclicBindings.add(cyclicBinding);
+        }
+        return values;
+      }
+      const cached = analysis.staticStringValues.get(binding);
+
+      if (cached !== undefined) {
+        addSetValues(values, cached);
+        return values;
+      }
+      bindingStack.push(binding);
+      for (const source of analysis.staticStringSources.get(binding) ?? []) {
+        addSetValues(values, resolve(source));
+      }
+      bindingStack.pop();
+      if (!cyclicBindings.has(binding)) {
+        analysis.staticStringValues.set(binding, values);
+      }
+      return values;
+    }
+    if (value.type === 'ChainExpression') {
+      return resolve(value.expression);
+    }
+    if (value.type === 'SequenceExpression' && Array.isArray(value.expressions)) {
+      return resolve(value.expressions.at(-1));
+    }
+    if (value.type === 'ConditionalExpression') {
+      addSetValues(values, resolve(value.consequent));
+      addSetValues(values, resolve(value.alternate));
+      return values;
+    }
+    if (value.type === 'LogicalExpression') {
+      addSetValues(values, resolve(value.left));
+      addSetValues(values, resolve(value.right));
+      return values;
+    }
+    if (
+      (value.type === 'AssignmentExpression' || value.type === 'AssignmentPattern')
+      && value.right !== undefined
+    ) {
+      return resolve(value.right);
+    }
+    if (value.type === 'BinaryExpression' && value.operator === '+') {
+      return concatenateMiniGameStaticStrings(resolve(value.left), resolve(value.right));
+    }
+    if (
+      value.type === 'TemplateLiteral'
+      && Array.isArray(value.expressions)
+      && Array.isArray(value.quasis)
+      && value.quasis.length === value.expressions.length + 1
+    ) {
+      let combinations = new Set(['']);
+
+      for (const [index, quasi] of value.quasis.entries()) {
+        if (
+          !isAstRecord(quasi)
+          || !isAstRecord(quasi.value)
+          || typeof quasi.value.cooked !== 'string'
+        ) {
+          return new Set();
+        }
+        combinations = concatenateMiniGameStaticStrings(
+          combinations,
+          new Set([quasi.value.cooked]),
+        );
+
+        const expression = value.expressions[index];
+        if (expression !== undefined) {
+          combinations = concatenateMiniGameStaticStrings(combinations, resolve(expression));
+        }
+      }
+
+      return combinations;
+    }
+
+    return values;
+  }
+}
+
+function concatenateMiniGameStaticStrings(
+  left: ReadonlySet<string>,
+  right: ReadonlySet<string>,
+): Set<string> {
+  const values = new Set<string>();
+
+  for (const leftValue of left) {
+    for (const rightValue of right) {
+      values.add(leftValue + rightValue);
+    }
+  }
+
+  return values;
+}
+
+function readMiniGameMemberNames(
+  node: Record<string, unknown>,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Set<string> {
+  if (node.type === 'Identifier' && typeof node.name === 'string') {
+    return new Set([node.name]);
+  }
+  if (node.type !== 'MemberExpression' || !isAstRecord(node.property)) {
+    return new Set();
+  }
+  if (node.computed === true) {
+    return resolveMiniGameStaticStrings(node.property, ancestors, analysis);
+  }
+
+  return node.property.type === 'Identifier' && typeof node.property.name === 'string'
+    ? new Set([node.property.name])
+    : new Set();
+}
+
+function readMiniGameStaticPropertyNames(
+  node: Record<string, unknown>,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Set<string> {
+  if (!isAstRecord(node.key)) {
+    return new Set();
+  }
+  if (node.computed === false && node.key.type === 'Identifier') {
+    return typeof node.key.name === 'string' ? new Set([node.key.name]) : new Set();
+  }
+
+  return resolveMiniGameStaticStrings(node.key, ancestors, analysis);
 }
 
 function readMemberName(node: Record<string, unknown>): string | undefined {
