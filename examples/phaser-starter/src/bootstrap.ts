@@ -1,5 +1,10 @@
 import { resolveTargetMpgdLocale } from '@mpgd/i18n';
-import type { IdentitySession, LaunchIntent, PlatformGateway } from '@mpgd/platform';
+import type {
+  IdentitySession,
+  LaunchIntent,
+  PlatformGateway,
+  PlatformTarget,
+} from '@mpgd/platform';
 import {
   resolveTargetViewportSnapshot,
   type TargetViewportOrientationPolicy,
@@ -14,10 +19,13 @@ import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
 
 /** Install target services, resolve viewport state, and start the example game. */
 export async function bootstrapStarter(): Promise<void> {
-  const runtimeConfig = detectRuntime();
-  const disposeMicrosoftStorePwa = installMicrosoftStorePwa(runtimeConfig);
+  let runtimeTarget: PlatformTarget | undefined;
+  let disposeMicrosoftStorePwa: () => void = () => undefined;
 
   try {
+    const runtimeConfig = detectRuntime();
+    runtimeTarget = runtimeConfig.target;
+    disposeMicrosoftStorePwa = installMicrosoftStorePwa(runtimeConfig);
     const platform = await installStarterPlatform(runtimeConfig);
     const runtime = await platform.getTargetRuntime();
     const orientationPolicy = {
@@ -65,9 +73,21 @@ export async function bootstrapStarter(): Promise<void> {
       },
     });
   } catch (error) {
-    disposeStarterMiniGameBridgeAfterBootstrapFailure(runtimeConfig.target);
-    disposeMicrosoftStorePwa();
+    disposeStarterMiniGameBridgeAfterBootstrapFailure(runtimeTarget);
+    try {
+      disposeMicrosoftStorePwa();
+    } catch (cleanupError) {
+      reportStarterBootstrapCleanupError(cleanupError);
+    }
     throw error;
+  }
+}
+
+function reportStarterBootstrapCleanupError(error: unknown): void {
+  try {
+    console.error('Failed starter bootstrap cleanup encountered an error.', error);
+  } catch {
+    // Preserve the authoritative bootstrap error when host logging is unavailable.
   }
 }
 

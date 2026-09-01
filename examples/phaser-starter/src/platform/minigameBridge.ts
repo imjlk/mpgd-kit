@@ -31,8 +31,8 @@ export function requireStarterMiniGameRuntimeBridge(
   return bridge;
 }
 
-export function disposeStarterMiniGameBridgeAfterBootstrapFailure(target: PlatformTarget): void {
-  if (target !== 'wechat' && target !== 'tiktok') {
+export function disposeStarterMiniGameBridgeAfterBootstrapFailure(target?: PlatformTarget): void {
+  if (target !== undefined && target !== 'wechat' && target !== 'tiktok') {
     return;
   }
 

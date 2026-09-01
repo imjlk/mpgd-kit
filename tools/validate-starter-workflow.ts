@@ -1612,7 +1612,7 @@ function validatePhaserTemplateDevvitViewModes(): void {
     if (existsSync(bootstrapPath)) {
       assertIncludesText(
         readText(bootstrapPath),
-        'disposeStarterMiniGameBridgeAfterBootstrapFailure(runtimeConfig.target)',
+        'disposeStarterMiniGameBridgeAfterBootstrapFailure(runtimeTarget)',
         `${bootstrapPath}: failed mini-game bootstrap cleanup.`,
       );
     }

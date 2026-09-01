@@ -103,10 +103,16 @@ try {
     configurable: true,
     value: bootstrapBridge,
   });
-  disposeStarterMiniGameBridgeAfterBootstrapFailure('browser');
-  assert.equal(bootstrapDisposalCalls, 0);
-  disposeStarterMiniGameBridgeAfterBootstrapFailure('wechat');
+  disposeStarterMiniGameBridgeAfterBootstrapFailure();
   assert.equal(bootstrapDisposalCalls, 1);
+  Object.defineProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__', {
+    configurable: true,
+    value: bootstrapBridge,
+  });
+  disposeStarterMiniGameBridgeAfterBootstrapFailure('browser');
+  assert.equal(bootstrapDisposalCalls, 1);
+  disposeStarterMiniGameBridgeAfterBootstrapFailure('wechat');
+  assert.equal(bootstrapDisposalCalls, 2);
   assert.equal(globalScope.__MPGD_MINIGAME_RUNTIME__, undefined);
 
   const cleanupFailure = new Error('bridge cleanup failed');
