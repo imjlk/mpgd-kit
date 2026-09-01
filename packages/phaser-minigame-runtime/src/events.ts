@@ -112,6 +112,10 @@ export class MiniGameEventTarget {
     event.currentTarget = this.#eventTarget;
 
     for (const registration of [...(this.#listeners.get(event.type) ?? [])]) {
+      if (event.immediatePropagationStopped) {
+        break;
+      }
+
       if (!this.#listeners.get(event.type)?.includes(registration)) {
         continue;
       }
@@ -130,9 +134,6 @@ export class MiniGameEventTarget {
         this.#reportListenerError(error, event);
       }
 
-      if (event.immediatePropagationStopped) {
-        break;
-      }
     }
 
     return !event.defaultPrevented;

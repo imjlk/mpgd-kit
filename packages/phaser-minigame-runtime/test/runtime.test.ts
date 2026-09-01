@@ -95,6 +95,7 @@ describe('mini-game globals and Canvas compatibility', () => {
     secondMount.appendChild(offscreen);
     expect(firstMount.contains(offscreen)).toBe(false);
     expect(secondMount.contains(offscreen)).toBe(true);
+    expect(offscreen.contains(offscreen)).toBe(true);
     firstMount.insertBefore(offscreen, null);
     expect(firstMount.contains(offscreen)).toBe(true);
     expect(secondMount.contains(offscreen)).toBe(false);
@@ -629,9 +630,13 @@ describe('mini-game globals and Canvas compatibility', () => {
       event.stopImmediatePropagation();
     });
     eventTarget.addEventListener('immediate', () => calls.push('immediate-second'));
+    eventTarget.addEventListener('pre-stopped', () => calls.push('pre-stopped'));
 
     eventTarget.dispatchEvent(new MiniGameEvent('normal'));
     eventTarget.dispatchEvent(new MiniGameEvent('immediate'));
+    const preStopped = new MiniGameEvent('pre-stopped');
+    preStopped.stopImmediatePropagation();
+    eventTarget.dispatchEvent(preStopped);
 
     expect(calls).toEqual(['normal-first', 'normal-second', 'immediate-first']);
   });
@@ -906,16 +911,32 @@ describe('mini-game requestAnimationFrame and transport', () => {
 
     const readLocalFile = vi.spyOn(host, 'readLocalFile');
     const request = new MiniGameXMLHttpRequest(host);
+    let abortEventReadyState: number | undefined;
     request.open('GET', 'assets/aborted.json');
     const aborted = new Promise<void>((resolve) => {
-      request.onabort = () => resolve();
+      request.onabort = () => {
+        abortEventReadyState = request.readyState;
+        resolve();
+      };
     });
     request.onloadstart = () => request.abort();
     request.send();
 
     await aborted;
-    expect(request.readyState).toBe(request.DONE);
+    expect(abortEventReadyState).toBe(request.DONE);
+    expect(request.readyState).toBe(request.UNSENT);
     expect(readLocalFile).not.toHaveBeenCalled();
+
+    host.localFiles.set('assets/completed.json', encodeText('{"ok":true}'));
+    const completedRequest = new MiniGameXMLHttpRequest(host);
+    completedRequest.open('GET', 'assets/completed.json');
+    completedRequest.responseType = 'json';
+    await sendRequest(completedRequest);
+    expect(completedRequest.readyState).toBe(completedRequest.DONE);
+    completedRequest.abort();
+    expect(completedRequest.readyState).toBe(completedRequest.UNSENT);
+    expect(completedRequest.status).toBe(0);
+    expect(completedRequest.response).toBeNull();
   });
 
   it('clears response metadata when aborting after response headers arrive', async () => {
@@ -959,10 +980,12 @@ describe('mini-game requestAnimationFrame and transport', () => {
     const request = new MiniGameXMLHttpRequest(host);
     request.open('GET', 'assets/first.txt');
     request.overrideMimeType('text/custom');
+    request.responseType = 'text';
     await sendRequest(request);
     expect(request.getResponseHeader('content-type')).toBe('text/custom');
 
     request.open('GET', 'assets/second.txt');
+    expect(request.responseType).toBe('');
     await sendRequest(request);
     expect(request.responseText).toBe('second');
     expect(request.getResponseHeader('content-type')).toBeNull();
@@ -1053,6 +1076,7 @@ describe('mini-game requestAnimationFrame and transport', () => {
       const startReplacement = (): void => {
         replacementStarted = true;
         request.open('GET', 'assets/replacement.json');
+        request.responseType = 'json';
         request.send();
       };
       request.onload = () => {

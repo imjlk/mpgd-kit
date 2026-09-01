@@ -163,6 +163,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     this.#url = String(url);
     this.#requestHeaders.clear();
     this.#mimeType = undefined;
+    this.#responseType = '';
     this.#resetResponseState();
     this.#sendStarted = false;
     this.#setReadyState(MiniGameXMLHttpRequest.OPENED);
@@ -274,11 +275,18 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
   }
 
   abort(): void {
-    if (
-      this.readyState === MiniGameXMLHttpRequest.UNSENT
-      || this.readyState === MiniGameXMLHttpRequest.DONE
-      || !this.#sendStarted
-    ) {
+    if (this.readyState === MiniGameXMLHttpRequest.UNSENT) {
+      return;
+    }
+
+    if (this.readyState === MiniGameXMLHttpRequest.DONE) {
+      this.#generation += 1;
+      this.#resetResponseState();
+      this.#resetRequestToUnsent();
+      return;
+    }
+
+    if (!this.#sendStarted) {
       return;
     }
 
@@ -297,6 +305,12 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     }
 
     this.#emitProgress('loadend');
+
+    if (generation !== this.#generation) {
+      return;
+    }
+
+    this.#resetRequestToUnsent();
   }
 
   async #send(generation: number, timeoutMs: number | undefined): Promise<void> {
@@ -450,6 +464,13 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     this.responseURL = '';
     this.status = 0;
     this.statusText = '';
+  }
+
+  #resetRequestToUnsent(): void {
+    this.readyState = MiniGameXMLHttpRequest.UNSENT;
+    this.#method = undefined;
+    this.#url = '';
+    this.#sendStarted = false;
   }
 
   #assertOpened(): void {

@@ -144,6 +144,10 @@ export class MiniGameHTMLElement extends MiniGameEventTarget {
   }
 
   contains(child: unknown): boolean {
+    if (child === this) {
+      return true;
+    }
+
     if (this.children.includes(child)) {
       return true;
     }
