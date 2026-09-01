@@ -221,6 +221,45 @@ try {
     [join(thirdPartyAdapterRoot, 'dist', 'index.js')],
     standaloneBoundary,
   ));
+  const relocatedLinkedAdapterRoot = join(fixtureRoot, 'relocated', 'renamed-wechat');
+  mkdirSync(join(relocatedLinkedAdapterRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(relocatedLinkedAdapterRoot, 'package.json'),
+    JSON.stringify({
+      name: 'renamed-wechat',
+      repository: {
+        url: 'imjlk/mpgd-kit',
+        directory: 'adapters/wechat/',
+      },
+    }),
+  );
+  writeFileSync(
+    join(relocatedLinkedAdapterRoot, 'dist', 'package.json'),
+    '{"type":"module"}\n',
+  );
+  assert.throws(
+    () => assertMiniGameGameBundleModules(
+      [join(relocatedLinkedAdapterRoot, 'dist', 'index.js')],
+      standaloneBoundary,
+    ),
+    /must not include platform runtime module/u,
+  );
+  const relocatedThirdPartyRoot = join(fixtureRoot, 'relocated', 'third-party-runtime');
+  mkdirSync(join(relocatedThirdPartyRoot, 'dist'), { recursive: true });
+  writeFileSync(
+    join(relocatedThirdPartyRoot, 'package.json'),
+    JSON.stringify({
+      name: 'third-party-runtime',
+      repository: {
+        url: 'imjlk/unrelated-repository',
+        directory: 'adapters/wechat/',
+      },
+    }),
+  );
+  assert.doesNotThrow(() => assertMiniGameGameBundleModules(
+    [join(relocatedThirdPartyRoot, 'dist', 'index.js')],
+    standaloneBoundary,
+  ));
   const installedRenamedAdapterRoot = join(gameRoot, 'node_modules', 'linked-runtime');
   mkdirSync(join(installedRenamedAdapterRoot, 'dist'), { recursive: true });
   writeFileSync(

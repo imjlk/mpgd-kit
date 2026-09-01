@@ -275,6 +275,15 @@ function isForbiddenMiniGameModulePackageChain(
     if (!isForbiddenMpgdKitRepositoryDirectory(packageMetadata)) {
       return false;
     }
+    // A single manifest that carries both the canonical repository identity and a
+    // forbidden directory classifies relocated linked packages without a physical
+    // checkout layout; split ancestor metadata still requires the physical root.
+    if (
+      packageMetadata.name?.startsWith('@mpgd/') === true
+      || isMpgdKitRepositoryUrl(packageMetadata.repositoryUrl)
+    ) {
+      return true;
+    }
     const repositoryRoot = resolveDeclaredRepositoryRoot(packageMetadata);
 
     if (repositoryRoot === undefined) {
@@ -284,9 +293,7 @@ function isForbiddenMiniGameModulePackageChain(
       return normalizeModuleId(resolve(candidate.manifestDirectory))
         === normalizeModuleId(repositoryRoot);
     });
-    return packageMetadata.name?.startsWith('@mpgd/') === true
-      || rootMetadata?.name?.startsWith('@mpgd/') === true
-      || isMpgdKitRepositoryUrl(packageMetadata.repositoryUrl)
+    return rootMetadata?.name?.startsWith('@mpgd/') === true
       || isMpgdKitRepositoryUrl(rootMetadata?.repositoryUrl);
   });
 }
