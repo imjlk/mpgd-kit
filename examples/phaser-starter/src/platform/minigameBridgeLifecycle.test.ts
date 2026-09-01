@@ -5,10 +5,22 @@ import {
   type StarterMiniGameRuntimeBridge,
 } from './minigameBridge';
 import {
+  assertStarterMiniGameBridgeSlotAvailable,
   requireStarterMiniGameRuntimeAssetOrigins,
   runStarterMiniGameBootstrapStep,
   StarterMiniGameBridgeLifecycle,
 } from './minigameBridgeLifecycle';
+
+assert.doesNotThrow(() => assertStarterMiniGameBridgeSlotAvailable({}));
+const occupiedUndefinedBridgeSlot = {};
+Object.defineProperty(occupiedUndefinedBridgeSlot, '__MPGD_MINIGAME_RUNTIME__', {
+  configurable: false,
+  value: undefined,
+});
+assert.throws(
+  () => assertStarterMiniGameBridgeSlotAvailable(occupiedUndefinedBridgeSlot),
+  /runtime bridge is already installed/u,
+);
 
 const expectedOrigins = ['https://assets.example.test'];
 const metadataScope = {};

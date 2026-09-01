@@ -6,6 +6,14 @@ export interface StarterMiniGameRuntimeMetadataScope {
   readonly __MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__?: unknown;
 }
 
+export function assertStarterMiniGameBridgeSlotAvailable(
+  scope: StarterMiniGameBridgeScope,
+): void {
+  if (Object.getOwnPropertyDescriptor(scope, '__MPGD_MINIGAME_RUNTIME__') !== undefined) {
+    throw new Error('Mini-game runtime bridge is already installed.');
+  }
+}
+
 export function requireStarterMiniGameRuntimeAssetOrigins(
   scope: StarterMiniGameRuntimeMetadataScope,
   expectedOrigins: readonly string[],

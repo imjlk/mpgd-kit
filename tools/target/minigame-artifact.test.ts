@@ -187,6 +187,13 @@ try {
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-computed-global-metadata.js'));
   write(
+    'safe-symbol-alias.js',
+    'const SymbolAlias = Symbol; const key = SymbolAlias.for("telemetry"); '
+      + 'globalThis[key] ??= {};\n',
+  );
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-symbol-alias.js'));
+  write(
     'safe-constructor-return-metadata.js',
     'function readConstructor(value) { return Object.getPrototypeOf(value)?.constructor ?? null; } '
       + 'const name = readConstructor({})?.name; void name;\n',
@@ -221,7 +228,32 @@ try {
   write('game.bundle.js', 'globalThis.__MPGD_GAME__ = true;\n');
   write('runtime.js', 'wx.createImage();\n');
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, [], ['wx']));
+  write('payload.js', 'wx.request({});\n');
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, [], ['wx']),
+    /payload\.js contains forbidden platform global wx/u,
+  );
+  rmSync(join(root, 'payload.js'));
   write('runtime.js', 'globalThis.__MPGD_MINIGAME__ = true;\n');
+  for (const escapedComputedGlobal of [
+    'const sdk = globalThis[getPlatformName()]; sdk.request({});\n',
+    'consume(globalThis[getPlatformName()]);\n',
+  ]) {
+    write('game.bundle.js', escapedComputedGlobal);
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, [], ['wx']),
+      /game\.bundle\.js contains forbidden computed global read/u,
+    );
+  }
+  write(
+    'game.bundle.js',
+    'const { [getPlatformName()]: sdk } = Object.create(globalThis); sdk.request({});\n',
+  );
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, [], ['wx']),
+    /game\.bundle\.js contains forbidden computed destructuring/u,
+  );
+  write('game.bundle.js', 'globalThis.__MPGD_GAME__ = true;\n');
   for (const reflectiveWechatSdkAccess of [
     'Reflect.get(globalThis, "wx").request({});\n',
     'const get = Reflect.get; get(globalThis, "wx").createImage();\n',
@@ -230,6 +262,9 @@ try {
       + 'Reflect[method](globalThis, key).request({});\n',
     'const method = "get"; const key = "wx"; const get = Reflect[method]; '
       + 'get(globalThis, key).createImage();\n',
+    'Object.create(Reflect).get(globalThis, "wx").request({});\n',
+    'const inheritedReflect = Object.create(Reflect); '
+      + 'inheritedReflect.get(globalThis, "wx").createImage();\n',
   ]) {
     write('game.bundle.js', reflectiveWechatSdkAccess);
     assert.throws(
