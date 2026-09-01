@@ -60,11 +60,15 @@ function resolveBuildTarget(
   configuredTargets: ConfiguredBuildTargets,
 ): string | undefined {
   const configuredWebTarget = isConfiguredWebTarget(target, configuredTargets);
-  if (configuredWebTarget) {
+  const configuredMiniGameTarget = isConfiguredMiniGameTarget(target, configuredTargets);
+  if (configuredWebTarget || configuredMiniGameTarget) {
     assertDeploymentTargetName(target);
   }
 
   if (target === 'web' && configuredWebTarget) {
+    return target;
+  }
+  if (configuredMiniGameTarget) {
     return target;
   }
 
@@ -78,6 +82,23 @@ function resolveBuildTarget(
   }
 
   return undefined;
+}
+
+function isConfiguredMiniGameTarget(
+  target: string,
+  configuredTargets: ConfiguredBuildTargets,
+): boolean {
+  if (!Object.prototype.hasOwnProperty.call(configuredTargets, target)) {
+    return false;
+  }
+
+  const configuredTarget = configuredTargets[target];
+
+  return typeof configuredTarget === 'object'
+    && configuredTarget !== null
+    && !Array.isArray(configuredTarget)
+    && 'kind' in configuredTarget
+    && configuredTarget.kind === 'wechat-minigame';
 }
 
 function normalizeBuiltInBuildTarget(target: string): string | undefined {

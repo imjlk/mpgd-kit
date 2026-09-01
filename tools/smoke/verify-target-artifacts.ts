@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { Script } from 'node:vm';
 
@@ -11,6 +11,7 @@ import {
   createMicrosoftStorePwaRevision,
   readMicrosoftStorePwaReleaseEvidence,
 } from '../target/microsoft-store-pwa';
+import { miniGameEffectiveTargetConfigFileName } from '../target/minigame-artifact';
 import { platformTargetsFilePath } from '../target/platform-targets';
 import {
   assertInstallableWebArtifact,
@@ -26,9 +27,21 @@ import {
   readEmbeddedTargetConfigFromZip,
   type EmbeddedTargetConfigEvidence,
 } from './embedded-target-config';
+import {
+  requiredMiniGameArtifactFiles,
+  verifyMiniGameTargetArtifact,
+  type SmokeMiniGameTargetConfig,
+} from './minigame-artifact';
 
 interface SmokePlatformTargetConfig {
-  readonly kind: 'web' | 'capacitor-android' | 'capacitor-ios' | 'apps-in-toss' | 'devvit-web';
+  readonly kind:
+    | 'web'
+    | 'capacitor-android'
+    | 'capacitor-ios'
+    | 'apps-in-toss'
+    | 'devvit-web'
+    | 'wechat-minigame'
+    | 'tiktok-minigame';
   readonly gameApp: string;
   readonly adapter: string;
   readonly installable?: boolean;
@@ -37,6 +50,10 @@ interface SmokePlatformTargetConfig {
   readonly wrapperApp?: string;
   readonly webDir?: string;
   readonly artifact?: string;
+  readonly renderer?: 'canvas';
+  readonly orientation?: 'portrait' | 'landscape';
+  readonly experimental?: true;
+  readonly packageBudget?: SmokeMiniGameTargetConfig['packageBudget'];
 }
 
 interface SmokePlatformTargetsConfig {
@@ -50,8 +67,11 @@ const loadedPlatformTargets = loadSmokePlatformTargetsConfig();
 const configuredTargets = Object.keys(loadedPlatformTargets.config.targets);
 const knownTargets = new Set<string>(configuredTargets);
 
-export function verifyTargetArtifacts(targets: readonly string[] = configuredTargets): void {
+export function verifyTargetArtifacts(
+  targets: readonly string[] = configuredTargets,
+): ReadonlyMap<string, string> {
   const manifest = readSmokeReleaseManifest(releaseManifestPath(loadedPlatformTargets.baseDir));
+  const verifiedArtifacts = new Map<string, string>();
 
   for (const target of targets) {
     const entry = manifest.targets[target];
@@ -114,6 +134,16 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
       verifyDevvitWebManifest(target, targetConfig, artifactPath, effectiveConfigPath);
     }
 
+    if (isSmokeMiniGameTargetConfig(targetConfig)) {
+      verifyMiniGameTargetArtifact({
+        target,
+        targetConfig,
+        artifactPath,
+        releaseManifest: manifest,
+        releaseEntry: entry,
+      });
+    }
+
     assertEmbeddedTargetConfig(
       readEmbeddedTargetConfigFromFile(
         effectiveConfigPath,
@@ -136,9 +166,11 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
         digest: entry.effectiveConfig.digest,
       },
     );
+    verifiedArtifacts.set(target, artifactPath);
   }
 
   console.log(`Target smoke passed: ${targets.join(', ')}`);
+  return verifiedArtifacts;
 }
 
 export function assertWebArtifactInstallability(
@@ -347,6 +379,13 @@ function readReleaseIconManifest(
         iconManifestPath,
         `${target} Devvit artifact`,
       );
+    case 'wechat-minigame':
+    case 'tiktok-minigame':
+      return readArtifactTextFromDirectory(
+        artifactPath,
+        iconManifestPath,
+        `${target} mini-game artifact`,
+      );
   }
 }
 
@@ -408,6 +447,12 @@ function readReleaseEmbeddedTargetConfig(
       return readEmbeddedTargetConfigFromDirectory(
         `${artifactPath}/client`,
         `${target} Devvit client artifact`,
+      );
+    case 'wechat-minigame':
+    case 'tiktok-minigame':
+      return readEmbeddedTargetConfigFromFile(
+        `${artifactPath}/${miniGameEffectiveTargetConfigFileName}`,
+        `${target} mini-game artifact`,
       );
   }
 }
@@ -493,6 +538,9 @@ function requiredFilesForTarget(
     case 'capacitor-android':
     case 'capacitor-ios':
       return [];
+    case 'wechat-minigame':
+    case 'tiktok-minigame':
+      return requiredMiniGameArtifactFiles(artifactPath);
   }
 }
 
@@ -999,6 +1047,20 @@ function assertArtifactPathAllowed(
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
 ): void {
+  if (targetConfig.kind === 'wechat-minigame' || targetConfig.kind === 'tiktok-minigame') {
+    const configuredOutput = requireStringMatch(targetConfig.output, `${target}.output`);
+    const expectedArtifactPath = resolveFromPlatformTargetsBase(
+      loadedPlatformTargets.baseDir,
+      configuredOutput,
+    );
+
+    assertPathEqual(
+      artifactPath,
+      expectedArtifactPath,
+      `${target} release manifest artifact must match its configured output`,
+    );
+  }
+
   if (targetConfig.kind !== 'devvit-web') {
     assertPathInsideTargetBase(artifactPath, `${target} artifact`);
     return;
@@ -1018,7 +1080,11 @@ function resolveWrapperApp(target: string, targetConfig: SmokePlatformTargetConf
 function assertPathInside(path: string, baseDir: string, label: string): void {
   const relativePath = relative(baseDir, path);
 
-  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+  if (
+    relativePath === '..'
+    || relativePath.startsWith(`..${sep}`)
+    || isAbsolute(relativePath)
+  ) {
     throw new Error(`${label}: ${path}`);
   }
 }
@@ -1066,6 +1132,12 @@ function loadSmokePlatformTargetsConfig(): {
     assertString(targetConfig.adapter, `${target}.adapter`);
     if (targetConfig.kind === 'web') {
       assertOptionalBoolean(targetConfig.installable, `${target}.installable`);
+    }
+    if (
+      (targetConfig.kind === 'wechat-minigame' || targetConfig.kind === 'tiktok-minigame')
+      && !isSmokeMiniGameTargetConfig(targetConfig)
+    ) {
+      throw new Error(`Platform target ${target} has an invalid mini-game configuration.`);
     }
   }
 
@@ -1215,9 +1287,26 @@ function assertTargetKind(
     && input !== 'capacitor-ios'
     && input !== 'apps-in-toss'
     && input !== 'devvit-web'
+    && input !== 'wechat-minigame'
+    && input !== 'tiktok-minigame'
   ) {
     throw new Error(`Target ${target} has unsupported kind: ${String(input)}`);
   }
+}
+
+function isSmokeMiniGameTargetConfig(
+  input: SmokePlatformTargetConfig,
+): input is SmokePlatformTargetConfig & SmokeMiniGameTargetConfig {
+  return (
+    (input.kind === 'wechat-minigame' || input.kind === 'tiktok-minigame')
+    && input.renderer === 'canvas'
+    && (input.orientation === 'portrait' || input.orientation === 'landscape')
+    && input.experimental === true
+    && typeof input.packageBudget === 'object'
+    && input.packageBudget !== null
+    && Number.isSafeInteger(input.packageBudget.mainBytes)
+    && Number.isSafeInteger(input.packageBudget.totalBytes)
+  );
 }
 
 function readRequestedTargets(args: readonly string[]): readonly string[] {

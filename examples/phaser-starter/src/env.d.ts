@@ -5,6 +5,7 @@ declare const __MPGD_CONFIG_TARGET__: string;
 declare const __MPGD_PLATFORM_TARGET__:
   | import('@mpgd/target-config').EffectivePlatformTargetMetadata
   | undefined;
+declare const __MPGD_MINIGAME_REMOTE_ASSET_ORIGINS__: readonly string[];
 declare const __MPGD_TARGET_CONFIG_MATRIX__:
   | import('@mpgd/target-config').TargetConfigMatrix
   | undefined;

@@ -1,0 +1,42 @@
+{
+  "name": "@mpgd/adapter-wechat",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Experimental WeChat Mini Game host and platform adapter for mpgd games.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "adapters/wechat"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/adapter-wechat",
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "test": "pnpm build && vitest run && node test/dist-import.mjs",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "dependencies": {
+    "@mpgd/phaser-minigame-runtime": "workspace:*",
+    "@mpgd/platform": "workspace:*"
+  },
+  "devDependencies": {
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
+    "vitest": "^4.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts"
+}

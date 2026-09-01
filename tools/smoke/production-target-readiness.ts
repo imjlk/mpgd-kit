@@ -65,6 +65,74 @@ try {
     'requires a target policy',
   );
 
+  const wechatPolicy = {
+    runtime: 'wechat-minigame',
+    features: { iap: false, rewardedAds: false, interstitialAds: false },
+    monetization: { iap: false, rewardedAds: false, interstitialAds: false },
+  } as const;
+  writeTargets({
+    wechat: {
+      kind: 'wechat-minigame',
+      gameApp: '.',
+      output: 'artifacts/wechat',
+      experimental: true,
+    },
+  });
+  expectReadinessError(
+    { target: 'wechat', profile: 'production', targetPolicy: wechatPolicy },
+    'Production build for experimental target wechat is blocked',
+  );
+  expectReadinessError(
+    {
+      target: 'wechat',
+      profile: 'production',
+      targetPolicy: wechatPolicy,
+      environment: { MPGD_ALLOW_EXPERIMENTAL_TARGET: '1' },
+    },
+    'requires MPGD_WECHAT_APP_ID',
+  );
+  expectReadinessError(
+    {
+      target: 'wechat',
+      profile: 'production',
+      targetPolicy: wechatPolicy,
+      environment: {
+        MPGD_ALLOW_EXPERIMENTAL_TARGET: '1',
+        MPGD_WECHAT_APP_ID: 'wx0000000000000000',
+      },
+    },
+    'requires MPGD_WECHAT_APP_ID',
+  );
+  expectReadinessError(
+    {
+      target: 'wechat',
+      profile: 'production',
+      targetPolicy: wechatPolicy,
+      environment: {
+        MPGD_ALLOW_EXPERIMENTAL_TARGET: '1',
+        MPGD_WECHAT_APP_ID: 'WX0123456789ABCDEF',
+      },
+    },
+    'requires MPGD_WECHAT_APP_ID',
+  );
+  assertProductionTargetReadiness({
+    target: 'wechat',
+    profile: 'production',
+    targetsFile,
+    gameRoot,
+    targetPolicy: wechatPolicy,
+    environment: {
+      MPGD_ALLOW_EXPERIMENTAL_TARGET: '1',
+      MPGD_WECHAT_APP_ID: 'wx0123456789abcdef',
+    },
+  });
+  assertProductionTargetReadiness({
+    target: 'wechat',
+    profile: 'staging',
+    targetsFile: join(gameRoot, 'does-not-exist.json'),
+    gameRoot,
+  });
+
   const verse8RewardPolicy = {
     runtime: 'verse8-web',
     features: { iap: false, rewardedAds: true, interstitialAds: false },
@@ -335,6 +403,7 @@ interface ReadinessOverrides {
   readonly profile: string;
   readonly gameServicesUrl?: string;
   readonly targetPolicy?: Parameters<typeof assertProductionTargetReadiness>[0]['targetPolicy'];
+  readonly environment?: NodeJS.ProcessEnv;
 }
 
 function expectReadinessError(overrides: ReadinessOverrides, message: string): void {
@@ -351,6 +420,9 @@ function expectReadinessError(overrides: ReadinessOverrides, message: string): v
         ...(overrides.targetPolicy === undefined
           ? {}
           : { targetPolicy: overrides.targetPolicy }),
+        ...(overrides.environment === undefined
+          ? {}
+          : { environment: overrides.environment }),
       });
     },
     (error: unknown) => error instanceof Error && error.message.includes(message),

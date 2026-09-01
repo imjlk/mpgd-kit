@@ -14,6 +14,7 @@ interface RuntimePlatformTargetMetadata {
   readonly adapter: string;
   readonly authoritativeGameServices?: boolean;
   readonly integrations?: Record<string, unknown>;
+  readonly remoteAssetOrigins?: readonly string[];
 }
 
 const devvitSandboxBuildId = 'devvit-sandbox';
@@ -82,7 +83,12 @@ export function createGameViteSharedConfig<SharedPluginOption = PluginOption>(
       __APP_TARGET__: JSON.stringify(appTarget),
       __MPGD_CONFIG_TARGET__: JSON.stringify(configTarget),
       __MPGD_PLATFORM_TARGET__:
-        platformTarget === undefined ? 'undefined' : JSON.stringify(platformTarget),
+        platformTarget === undefined
+          ? 'undefined'
+          : JSON.stringify(toEffectivePlatformTargetMetadata(platformTarget)),
+      __MPGD_MINIGAME_REMOTE_ASSET_ORIGINS__: JSON.stringify(
+        platformTarget?.remoteAssetOrigins ?? [],
+      ),
       __MPGD_TARGET_CONFIG_MATRIX__:
         runtimeTargetConfigMatrix === undefined
           ? 'undefined'
@@ -144,6 +150,7 @@ export function resolveBuildGatewayModule(input: {
         `Direct APP_TARGET=${input.target} builds are unavailable until its native platform gateway is installed.`,
       );
     case 'wechat':
+      return 'src/platform/buildGateways/wechat.ts';
     case 'tiktok':
       throw new Error(
         `Direct APP_TARGET=${input.target} builds are unavailable until the native mini-game gateway and artifact emitter are installed.`,
@@ -240,6 +247,10 @@ function readRuntimePlatformTarget(
       `Platform target ${configTarget} authoritativeGameServices must be a boolean.`,
     );
   }
+  const remoteAssetOrigins = readMiniGameRemoteAssetOrigins(
+    target.remoteAssetOrigins,
+    configTarget,
+  );
 
   return {
     kind: target.kind,
@@ -248,7 +259,107 @@ function readRuntimePlatformTarget(
       ? {}
       : { authoritativeGameServices: target.authoritativeGameServices }),
     ...(target.integrations === undefined ? {} : { integrations: target.integrations }),
+    ...(remoteAssetOrigins === undefined ? {} : { remoteAssetOrigins }),
   };
+}
+
+function toEffectivePlatformTargetMetadata(
+  input: RuntimePlatformTargetMetadata,
+): Omit<RuntimePlatformTargetMetadata, 'remoteAssetOrigins'> {
+  return {
+    kind: input.kind,
+    adapter: input.adapter,
+    ...(input.authoritativeGameServices === undefined
+      ? {}
+      : { authoritativeGameServices: input.authoritativeGameServices }),
+    ...(input.integrations === undefined ? {} : { integrations: input.integrations }),
+  };
+}
+
+function readMiniGameRemoteAssetOrigins(
+  input: unknown,
+  target: string,
+): readonly string[] | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(input)) {
+    throw new Error(`Platform target ${target} remoteAssetOrigins must be an array.`);
+  }
+
+  const origins = new Set<string>();
+
+  for (const [index, origin] of input.entries()) {
+    if (typeof origin !== 'string') {
+      throw new Error(
+        `Platform target ${target} remoteAssetOrigins[${String(index)}] must be a string.`,
+      );
+    }
+
+    let normalized: string;
+
+    try {
+      normalized = normalizeRuntimeCompatibleMiniGameHttpsOrigin(origin);
+    } catch {
+      throw new Error(
+        `Platform target ${target} remoteAssetOrigins[${String(index)}] must be an exact HTTPS origin.`,
+      );
+    }
+
+    if (
+      normalized !== origin
+      || origins.has(origin)
+    ) {
+      throw new Error(
+        `Platform target ${target} remoteAssetOrigins[${String(index)}] must be a unique exact HTTPS origin.`,
+      );
+    }
+    origins.add(origin);
+  }
+
+  return [...origins];
+}
+
+// This file is also copied into the public starter, which intentionally has no private runtime
+// dependency. Platform-target validation uses the runtime parser directly; this mirrors its exact
+// ASCII authority grammar as a template-local defense in depth.
+function normalizeRuntimeCompatibleMiniGameHttpsOrigin(value: string): string {
+  const match = /^https:\/\/([A-Za-z\d](?:[A-Za-z\d.-]*[A-Za-z\d])?)(?::(\d{1,5}))?$/u.exec(
+    value,
+  );
+
+  if (match === null) {
+    throw new TypeError('Mini-game remote origin is invalid.');
+  }
+  const hostname = (match[1] ?? '').toLowerCase();
+  const labels = hostname.split('.');
+
+  if (
+    hostname.length === 0
+    || hostname.length > 253
+    || hostname.includes('..')
+    || labels.some((label) => (
+      label.length === 0
+      || label.length > 63
+      || label.startsWith('-')
+      || label.endsWith('-')
+    ))
+  ) {
+    throw new TypeError('Mini-game remote origin is invalid.');
+  }
+
+  const portText = match[2];
+
+  if (portText === undefined) {
+    return `https://${hostname}`;
+  }
+  const port = Number(portText);
+
+  if (!Number.isInteger(port) || port <= 0 || port > 65_535) {
+    throw new TypeError('Mini-game remote origin is invalid.');
+  }
+
+  return `https://${hostname}${port === 443 ? '' : `:${String(port)}`}`;
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

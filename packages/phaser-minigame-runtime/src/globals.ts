@@ -178,6 +178,76 @@ interface SavedGlobalProperty {
   readonly descriptor: PropertyDescriptor | undefined;
 }
 
+function snapshotMiniGameGlobalProperties(): ReadonlyMap<
+  PropertyKey,
+  PropertyDescriptor | undefined
+> {
+  const properties = new Map<PropertyKey, PropertyDescriptor | undefined>();
+  properties.set('window', Object.getOwnPropertyDescriptor(globalThis, 'window'));
+  properties.set('self', Object.getOwnPropertyDescriptor(globalThis, 'self'));
+  properties.set('top', Object.getOwnPropertyDescriptor(globalThis, 'top'));
+  properties.set('parent', Object.getOwnPropertyDescriptor(globalThis, 'parent'));
+  properties.set('document', Object.getOwnPropertyDescriptor(globalThis, 'document'));
+  properties.set('navigator', Object.getOwnPropertyDescriptor(globalThis, 'navigator'));
+  properties.set('location', Object.getOwnPropertyDescriptor(globalThis, 'location'));
+  properties.set('screen', Object.getOwnPropertyDescriptor(globalThis, 'screen'));
+  properties.set('performance', Object.getOwnPropertyDescriptor(globalThis, 'performance'));
+  properties.set('innerWidth', Object.getOwnPropertyDescriptor(globalThis, 'innerWidth'));
+  properties.set('innerHeight', Object.getOwnPropertyDescriptor(globalThis, 'innerHeight'));
+  properties.set('outerWidth', Object.getOwnPropertyDescriptor(globalThis, 'outerWidth'));
+  properties.set('outerHeight', Object.getOwnPropertyDescriptor(globalThis, 'outerHeight'));
+  properties.set(
+    'devicePixelRatio',
+    Object.getOwnPropertyDescriptor(globalThis, 'devicePixelRatio'),
+  );
+  properties.set('pageXOffset', Object.getOwnPropertyDescriptor(globalThis, 'pageXOffset'));
+  properties.set('pageYOffset', Object.getOwnPropertyDescriptor(globalThis, 'pageYOffset'));
+  properties.set('scrollX', Object.getOwnPropertyDescriptor(globalThis, 'scrollX'));
+  properties.set('scrollY', Object.getOwnPropertyDescriptor(globalThis, 'scrollY'));
+  properties.set('orientation', Object.getOwnPropertyDescriptor(globalThis, 'orientation'));
+  properties.set('Event', Object.getOwnPropertyDescriptor(globalThis, 'Event'));
+  properties.set('EventTarget', Object.getOwnPropertyDescriptor(globalThis, 'EventTarget'));
+  properties.set('HTMLElement', Object.getOwnPropertyDescriptor(globalThis, 'HTMLElement'));
+  properties.set('Element', Object.getOwnPropertyDescriptor(globalThis, 'Element'));
+  properties.set(
+    'HTMLCanvasElement',
+    Object.getOwnPropertyDescriptor(globalThis, 'HTMLCanvasElement'),
+  );
+  properties.set(
+    'HTMLImageElement',
+    Object.getOwnPropertyDescriptor(globalThis, 'HTMLImageElement'),
+  );
+  properties.set('Image', Object.getOwnPropertyDescriptor(globalThis, 'Image'));
+  properties.set('ProgressEvent', Object.getOwnPropertyDescriptor(globalThis, 'ProgressEvent'));
+  properties.set('TouchEvent', Object.getOwnPropertyDescriptor(globalThis, 'TouchEvent'));
+  properties.set('XMLHttpRequest', Object.getOwnPropertyDescriptor(globalThis, 'XMLHttpRequest'));
+  properties.set(
+    'requestAnimationFrame',
+    Object.getOwnPropertyDescriptor(globalThis, 'requestAnimationFrame'),
+  );
+  properties.set(
+    'cancelAnimationFrame',
+    Object.getOwnPropertyDescriptor(globalThis, 'cancelAnimationFrame'),
+  );
+  properties.set(
+    'addEventListener',
+    Object.getOwnPropertyDescriptor(globalThis, 'addEventListener'),
+  );
+  properties.set(
+    'removeEventListener',
+    Object.getOwnPropertyDescriptor(globalThis, 'removeEventListener'),
+  );
+  properties.set('dispatchEvent', Object.getOwnPropertyDescriptor(globalThis, 'dispatchEvent'));
+  properties.set('focus', Object.getOwnPropertyDescriptor(globalThis, 'focus'));
+  properties.set('scrollTo', Object.getOwnPropertyDescriptor(globalThis, 'scrollTo'));
+  properties.set('matchMedia', Object.getOwnPropertyDescriptor(globalThis, 'matchMedia'));
+  properties.set(
+    'getComputedStyle',
+    Object.getOwnPropertyDescriptor(globalThis, 'getComputedStyle'),
+  );
+  return properties;
+}
+
 let activeInstallation: MiniGameGlobalInstallationImpl | undefined;
 let installingGlobals = false;
 
@@ -186,6 +256,7 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
   readonly canvas: MiniGameCanvasElement;
   readonly document: MiniGameDocument;
   readonly window: object = globalThis;
+  readonly #originalGlobalProperties = snapshotMiniGameGlobalProperties();
   readonly #savedProperties: SavedGlobalProperty[] = [];
   readonly #scheduler: MiniGameAnimationFrameScheduler;
   readonly #options: MiniGameRuntimeOptions;
@@ -420,7 +491,7 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
   #define(key: PropertyKey, value: unknown): void {
     this.#savedProperties.push({
       key,
-      descriptor: Object.getOwnPropertyDescriptor(globalThis, key),
+      descriptor: this.#readOriginalGlobalProperty(key),
     });
 
     try {
@@ -441,7 +512,7 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
   #defineNavigationGlobal(key: PropertyKey, value: unknown): void {
     this.#savedProperties.push({
       key,
-      descriptor: Object.getOwnPropertyDescriptor(globalThis, key),
+      descriptor: this.#readOriginalGlobalProperty(key),
     });
 
     try {
@@ -457,6 +528,17 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
         `Unable to install required mini-game global ${String(key)}: ${String(error)}`,
       );
     }
+  }
+
+  #readOriginalGlobalProperty(key: PropertyKey): PropertyDescriptor | undefined {
+    if (!this.#originalGlobalProperties.has(key)) {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_GLOBAL_SNAPSHOT_MISSING',
+        `No original descriptor was captured for mini-game global ${String(key)}.`,
+      );
+    }
+
+    return this.#originalGlobalProperties.get(key);
   }
 }
 

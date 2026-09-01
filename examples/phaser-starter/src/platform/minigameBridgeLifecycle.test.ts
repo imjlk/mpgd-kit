@@ -1,0 +1,154 @@
+import assert from 'node:assert/strict';
+
+import {
+  disposeStarterMiniGameBridgeAfterBootstrapFailure,
+  type StarterMiniGameRuntimeBridge,
+} from './minigameBridge';
+import {
+  assertStarterMiniGameBridgeSlotAvailable,
+  requireStarterMiniGameRuntimeAssetOrigins,
+  runStarterMiniGameBootstrapStep,
+  StarterMiniGameBridgeLifecycle,
+} from './minigameBridgeLifecycle';
+
+assert.doesNotThrow(() => assertStarterMiniGameBridgeSlotAvailable({}));
+const occupiedUndefinedBridgeSlot = {};
+Object.defineProperty(occupiedUndefinedBridgeSlot, '__MPGD_MINIGAME_RUNTIME__', {
+  configurable: false,
+  value: undefined,
+});
+assert.throws(
+  () => assertStarterMiniGameBridgeSlotAvailable(occupiedUndefinedBridgeSlot),
+  /runtime bridge is already installed/u,
+);
+
+const expectedOrigins = ['https://assets.example.test'];
+const metadataScope = {};
+Object.defineProperty(metadataScope, '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__', {
+  configurable: false,
+  enumerable: false,
+  writable: false,
+  value: Object.freeze([...expectedOrigins]),
+});
+assert.deepEqual(
+  requireStarterMiniGameRuntimeAssetOrigins(metadataScope, expectedOrigins),
+  expectedOrigins,
+);
+assert.throws(
+  () => requireStarterMiniGameRuntimeAssetOrigins(metadataScope, []),
+  /differs from target configuration/u,
+);
+assert.throws(
+  () => requireStarterMiniGameRuntimeAssetOrigins(
+    { __MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__: [...expectedOrigins] },
+    expectedOrigins,
+  ),
+  /unavailable or mutable/u,
+);
+
+const constructionFailure = new Error('Phaser construction failed');
+const constructionCleanupFailure = new Error('runtime cleanup failed');
+let constructionCleanupCalls = 0;
+const reportedConstructionCleanupErrors: unknown[] = [];
+assert.throws(
+  () => runStarterMiniGameBootstrapStep({
+    run() {
+      throw constructionFailure;
+    },
+    cleanup() {
+      constructionCleanupCalls += 1;
+      throw constructionCleanupFailure;
+    },
+    reportCleanupError(error) {
+      reportedConstructionCleanupErrors.push(error);
+    },
+  }),
+  (error) => error === constructionFailure,
+);
+assert.equal(constructionCleanupCalls, 1);
+assert.deepEqual(reportedConstructionCleanupErrors, [constructionCleanupFailure]);
+
+const bridge = {};
+const scope = { __MPGD_MINIGAME_RUNTIME__: bridge };
+const restorationFailure = new Error('global restoration failed');
+let disposalCalls = 0;
+const lifecycle = new StarterMiniGameBridgeLifecycle(() => {
+  disposalCalls += 1;
+  throw restorationFailure;
+});
+
+assert.throws(
+  () => lifecycle.dispose(scope, bridge),
+  (error) => error === restorationFailure,
+);
+assert.equal(scope.__MPGD_MINIGAME_RUNTIME__, undefined);
+assert.doesNotThrow(() => lifecycle.dispose(scope, bridge));
+assert.equal(disposalCalls, 1);
+
+const activeBridge = {};
+const replacementScope = { __MPGD_MINIGAME_RUNTIME__: activeBridge };
+const staleLifecycle = new StarterMiniGameBridgeLifecycle(() => undefined);
+assert.doesNotThrow(() => staleLifecycle.dispose(replacementScope, bridge));
+assert.equal(replacementScope.__MPGD_MINIGAME_RUNTIME__, activeBridge);
+
+const globalScope = globalThis as typeof globalThis & {
+  __MPGD_MINIGAME_RUNTIME__?: StarterMiniGameRuntimeBridge;
+};
+const priorBridgeDescriptor = Object.getOwnPropertyDescriptor(
+  globalScope,
+  '__MPGD_MINIGAME_RUNTIME__',
+);
+
+try {
+  let bootstrapDisposalCalls = 0;
+  const bootstrapBridge = {
+    target: 'wechat',
+    gateway: {},
+    createPhaserConfig: (config: unknown) => config,
+    attachGame() {},
+    dispose() {
+      bootstrapDisposalCalls += 1;
+      Reflect.deleteProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__');
+    },
+  } as unknown as StarterMiniGameRuntimeBridge;
+  Object.defineProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__', {
+    configurable: true,
+    value: bootstrapBridge,
+  });
+  disposeStarterMiniGameBridgeAfterBootstrapFailure();
+  assert.equal(bootstrapDisposalCalls, 1);
+  Object.defineProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__', {
+    configurable: true,
+    value: bootstrapBridge,
+  });
+  disposeStarterMiniGameBridgeAfterBootstrapFailure('browser');
+  assert.equal(bootstrapDisposalCalls, 1);
+  disposeStarterMiniGameBridgeAfterBootstrapFailure('wechat');
+  assert.equal(bootstrapDisposalCalls, 2);
+  assert.equal(globalScope.__MPGD_MINIGAME_RUNTIME__, undefined);
+
+  const cleanupFailure = new Error('bridge cleanup failed');
+  Object.defineProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__', {
+    configurable: true,
+    value: {
+      ...bootstrapBridge,
+      dispose() {
+        throw cleanupFailure;
+      },
+    },
+  });
+  const originalConsoleError = console.error;
+  console.error = () => undefined;
+  try {
+    assert.doesNotThrow(() => disposeStarterMiniGameBridgeAfterBootstrapFailure('wechat'));
+  } finally {
+    console.error = originalConsoleError;
+  }
+} finally {
+  Reflect.deleteProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__');
+  if (priorBridgeDescriptor !== undefined) {
+    Object.defineProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__', priorBridgeDescriptor);
+  }
+}
+
+console.log('Mini-game bridge lifecycle tests passed.');

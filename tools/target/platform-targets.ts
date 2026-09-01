@@ -1,6 +1,7 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
+import { normalizeMiniGameHttpsOrigin } from '../../packages/phaser-minigame-runtime/src/url';
 import {
   integrationAvailabilityStates,
   presentationModes,
@@ -9,6 +10,7 @@ import {
   type PresentationMode,
 } from '../../packages/target-config/src/runtime';
 import { readJsonFile } from '../io';
+import { miniGameMainPackageLimitBytes } from './minigame-package-budget';
 import {
   assertPlatformTargetsConfig,
   type PlatformTargetConfig,
@@ -73,14 +75,18 @@ export function appTargetForPlatformTarget(
   target: Pick<PlatformTargetConfig, 'adapter' | 'kind'>,
   targetName: string,
 ): string {
-  return target.kind === 'web' ? target.adapter : targetName;
+  return target.kind === 'web'
+    || target.kind === 'wechat-minigame'
+    || target.kind === 'tiktok-minigame'
+      ? target.adapter
+      : targetName;
 }
 
 export function assertPlatformTargetBuildEmitterAvailable(
   target: Pick<PlatformTargetConfig, 'kind'>,
   targetName: string,
 ): void {
-  if (target.kind === 'wechat-minigame' || target.kind === 'tiktok-minigame') {
+  if (target.kind === 'tiktok-minigame') {
     throw new Error(
       `Mini-game target ${targetName} cannot be built until its native artifact emitter is installed. Configuration validation remains available.`,
     );
@@ -176,12 +182,20 @@ function assertMiniGameTarget(input: Record<string, unknown>, target: string): v
     throw new Error(`${target}.adapter must be ${expectedAdapter} for ${String(input.kind)}.`);
   }
 
+  assertMiniGameRemoteAssetOrigins(input.remoteAssetOrigins, target);
+
   assertRecord(input.packageBudget, `${target}.packageBudget`);
   assertPositiveSafeInteger(input.packageBudget.mainBytes, `${target}.packageBudget.mainBytes`);
   assertPositiveSafeInteger(input.packageBudget.totalBytes, `${target}.packageBudget.totalBytes`);
 
   if (input.packageBudget.mainBytes > input.packageBudget.totalBytes) {
     throw new Error(`${target}.packageBudget.mainBytes must not exceed totalBytes.`);
+  }
+
+  if (input.packageBudget.mainBytes > miniGameMainPackageLimitBytes) {
+    throw new Error(
+      `${target}.packageBudget.mainBytes must not exceed ${String(miniGameMainPackageLimitBytes)} bytes.`,
+    );
   }
 
   if (input.packageBudget.independentSubpackageBytes !== undefined) {
@@ -195,6 +209,43 @@ function assertMiniGameTarget(input: Record<string, unknown>, target: string): v
         `${target}.packageBudget.independentSubpackageBytes must not exceed totalBytes.`,
       );
     }
+  }
+}
+
+function assertMiniGameRemoteAssetOrigins(input: unknown, target: string): void {
+  if (input === undefined) {
+    return;
+  }
+  if (!Array.isArray(input)) {
+    throw new Error(`${target}.remoteAssetOrigins must be an array of exact HTTPS origins.`);
+  }
+
+  const origins = new Set<string>();
+
+  for (const [index, origin] of input.entries()) {
+    if (typeof origin !== 'string') {
+      throw new Error(`${target}.remoteAssetOrigins[${String(index)}] must be a string.`);
+    }
+
+    let normalized: string;
+
+    try {
+      normalized = normalizeMiniGameHttpsOrigin(origin);
+    } catch {
+      throw new Error(
+        `${target}.remoteAssetOrigins[${String(index)}] must be an exact HTTPS origin.`,
+      );
+    }
+
+    if (normalized !== origin) {
+      throw new Error(
+        `${target}.remoteAssetOrigins[${String(index)}] must be an exact HTTPS origin.`,
+      );
+    }
+    if (origins.has(origin)) {
+      throw new Error(`${target}.remoteAssetOrigins must not contain duplicate origins.`);
+    }
+    origins.add(origin);
   }
 }
 

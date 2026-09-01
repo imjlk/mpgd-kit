@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { assertMiniGameRuntimeAssetOrigins } from './minigame-artifact';
 import {
   assertDevvitInternalEndpoint,
   assertDevvitPaymentsReadiness,
@@ -11,6 +12,98 @@ import {
 } from './verify-target-artifacts';
 
 const webArtifactRoot = mkdtempSync(join(tmpdir(), 'mpgd-target-smoke-installability-'));
+
+const expectedMiniGameOrigins = ['https://assets.example.test'];
+const exactMiniGameOriginDeclaration = createMiniGameOriginDeclaration(expectedMiniGameOrigins);
+assert.doesNotThrow(
+  () => assertMiniGameRuntimeAssetOrigins(
+    `${exactMiniGameOriginDeclaration},globalThis.runtime = true;\n`,
+    expectedMiniGameOrigins,
+  ),
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    `${createMiniGameOriginDeclaration([
+      ...expectedMiniGameOrigins,
+      'https://unexpected.example.test',
+    ])}\n`,
+    expectedMiniGameOrigins,
+  ),
+  /asset origins differ from target configuration/u,
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins('globalThis.runtime = true;\n', []),
+  /exactly one executable asset-origin declaration/u,
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'metadata'),
+    expectedMiniGameOrigins,
+  ),
+  /exactly one executable asset-origin declaration/u,
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'globalThis.Object', 'metadata'),
+    expectedMiniGameOrigins,
+  ),
+  /exactly one executable asset-origin declaration/u,
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    '(() => { const Object = { defineProperty() {} }; '
+      + `${createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'Object', 'Object')}; })();`,
+    expectedMiniGameOrigins,
+  ),
+  /exactly one executable asset-origin declaration/u,
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    `${exactMiniGameOriginDeclaration};\n(() => { `
+      + `${createMiniGameOriginDeclaration(['https://unexpected.example.test'])}; })();`,
+    expectedMiniGameOrigins,
+  ),
+  /exactly one executable asset-origin declaration/u,
+);
+for (const shadow of [
+  'const globalThis = { Object: { defineProperty() {}, freeze(value) { return value; } } };',
+  'const Object = { defineProperty() {}, freeze(value) { return value; } };',
+]) {
+  assert.throws(
+    () => assertMiniGameRuntimeAssetOrigins(
+      `${shadow}\n${exactMiniGameOriginDeclaration}`,
+      expectedMiniGameOrigins,
+    ),
+    /must not shadow the globalThis or Object intrinsic binding/u,
+  );
+}
+for (const unsafeDescriptor of [
+  '{configurable:true,enumerable:false,writable:false,'
+    + `value:globalThis.Object.freeze(${JSON.stringify(expectedMiniGameOrigins)})}`,
+  '{configurable:false,enumerable:false,writable:false,'
+    + `value:globalThis.Object.freeze(${JSON.stringify(expectedMiniGameOrigins)}),`
+    + 'value:globalThis.Object.freeze(["https://unexpected.example.test"])}',
+  '{configurable:false,enumerable:false,writable:false,'
+    + `value:globalThis.Object.freeze(${JSON.stringify(expectedMiniGameOrigins)}),`
+    + '...{value:globalThis.Object.freeze(["https://unexpected.example.test"])}}',
+]) {
+  assert.throws(
+    () => assertMiniGameRuntimeAssetOrigins(
+      createMiniGameOriginDeclarationFromDescriptor(unsafeDescriptor),
+      expectedMiniGameOrigins,
+    ),
+    /exactly one executable asset-origin declaration/u,
+  );
+}
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    'globalThis.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__ = '
+      + '["https://unexpected.example.test"];\n'
+      + exactMiniGameOriginDeclaration,
+    expectedMiniGameOrigins,
+  ),
+  /exactly one executable asset-origin declaration/u,
+);
 
 try {
   writeFileSync(join(webArtifactRoot, 'manifest.webmanifest'), '{}\n');
@@ -135,3 +228,22 @@ assert.throws(
 );
 
 console.log('Target artifact readiness tests passed.');
+
+function createMiniGameOriginDeclaration(
+  origins: readonly string[],
+  definePropertyOwner = 'globalThis.Object',
+  freezeOwner = 'globalThis.Object',
+): string {
+  return `${definePropertyOwner}.defineProperty(globalThis,`
+    + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
+    + '{configurable:false,enumerable:false,writable:false,'
+    + `value:${freezeOwner}.freeze(`
+    + 'globalThis.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__??'
+    + `${JSON.stringify(origins)})})`;
+}
+
+function createMiniGameOriginDeclarationFromDescriptor(descriptor: string): string {
+  return 'globalThis.Object.defineProperty(globalThis,'
+    + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
+    + `${descriptor});`;
+}

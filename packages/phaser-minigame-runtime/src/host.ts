@@ -16,11 +16,17 @@ export interface MiniGameTouch {
 
 export type MiniGameRequestResponseType = 'text' | 'arraybuffer' | 'json';
 
+export interface MiniGameRequestSignal {
+  readonly aborted: boolean;
+  onAbort(callback: () => void): () => void;
+}
+
 export interface MiniGameRequest {
   readonly url: string;
   readonly method: 'GET';
   readonly headers: Readonly<Record<string, string>>;
   readonly responseType: MiniGameRequestResponseType;
+  readonly signal?: MiniGameRequestSignal;
 }
 
 export interface MiniGameResponse {

@@ -703,6 +703,7 @@ describe('mini-game globals and Canvas compatibility', () => {
       ['blob:minigame-image', 'MINIGAME_IMAGE_PROTOCOL_BLOCKED'],
       ['//untrusted.example/image.png', 'MINIGAME_IMAGE_PROTOCOL_BLOCKED'],
       [String.raw`\\untrusted.example\image.png`, 'MINIGAME_IMAGE_PROTOCOL_BLOCKED'],
+      ['https://untrusted.example/image.png', 'MINIGAME_IMAGE_ORIGIN_BLOCKED'],
       ['../secret.png', 'MINIGAME_IMAGE_LOCAL_PATH_INVALID'],
     ] as const) {
       const image = new globalThis.Image();
@@ -722,6 +723,20 @@ describe('mini-game globals and Canvas compatibility', () => {
         error: { code },
       });
     }
+
+    getInstalledMiniGameGlobals()?.dispose();
+    installMiniGameGlobals(host, {
+      image: { allowedRemoteOrigins: ['https://images.example.com'] },
+    });
+    const remoteImage = new globalThis.Image();
+    const unverifiableRedirectError = new Promise<unknown>((resolve) => {
+      remoteImage.onerror = (event) => resolve(event);
+    });
+    remoteImage.src = 'https://images.example.com/marker.png';
+    await expect(unverifiableRedirectError).resolves.toMatchObject({
+      type: 'error',
+      error: { code: 'MINIGAME_IMAGE_REMOTE_REDIRECT_UNVERIFIABLE' },
+    });
   });
 
   it('keeps same-target listeners after stopPropagation and honors stopImmediatePropagation', () => {
@@ -1072,11 +1087,18 @@ describe('mini-game requestAnimationFrame and transport', () => {
 
   it('uses one wrapper-owned timeout for remote requests', async () => {
     class PendingRequestHost extends FakeMiniGameHost {
+      abortCalls = 0;
+
       override request(
         input: Parameters<FakeMiniGameHost['request']>[0],
       ): ReturnType<FakeMiniGameHost['request']> {
         this.remoteRequests.push(input);
-        return new Promise(() => undefined);
+        return new Promise((_resolve, reject) => {
+          input.signal?.onAbort(() => {
+            this.abortCalls += 1;
+            reject(new Error('host request aborted'));
+          });
+        });
       }
     }
 
@@ -1094,6 +1116,19 @@ describe('mini-game requestAnimationFrame and transport', () => {
     expect(request.status).toBe(0);
     expect(host.remoteRequests).toHaveLength(1);
     expect(host.remoteRequests[0]).not.toHaveProperty('timeoutMs');
+    expect(host.remoteRequests[0]?.signal?.aborted).toBe(true);
+    expect(host.abortCalls).toBe(1);
+
+    const explicitlyAbortedRequest = new MiniGameXMLHttpRequest(host, {
+      allowedRemoteOrigins: ['https://cdn.example.com'],
+    });
+    explicitlyAbortedRequest.open('GET', 'https://cdn.example.com/cancelled.json');
+    explicitlyAbortedRequest.send();
+    explicitlyAbortedRequest.abort();
+    await Promise.resolve();
+    expect(host.remoteRequests[1]?.signal?.aborted).toBe(true);
+    expect(host.abortCalls).toBe(2);
+    expect(explicitlyAbortedRequest.readyState).toBe(explicitlyAbortedRequest.UNSENT);
   });
 
   it('clears response metadata when aborting after response headers arrive', async () => {
@@ -1317,6 +1352,21 @@ describe('mini-game requestAnimationFrame and transport', () => {
     expect(request.getAllResponseHeaders()).not.toContain('secret');
     expect(host.remoteRequests).toHaveLength(1);
     expect(host.remoteRequests[0]?.url).toBe('https://cdn.example.com/game/config.json');
+
+    host.remoteResponse = {
+      status: 200,
+      data: '{}',
+      url: 'https://redirected.example.net/game/config.json',
+    };
+    const redirected = new MiniGameXMLHttpRequest(host, {
+      allowedRemoteOrigins: ['https://cdn.example.com'],
+    });
+    redirected.open('GET', 'https://cdn.example.com/game/config.json');
+    await expect(sendRequest(redirected)).rejects.toMatchObject({
+      event: { type: 'error' },
+    });
+    expect(redirected.responseURL).toBe('');
+
     expect(classifyMiniGameRequestUrl(
       'HTTPS://CDN.EXAMPLE.COM:443/game/data.json#ignored',
       ['https://cdn.example.com/'],
@@ -2202,6 +2252,7 @@ describe('Phaser mini-game runtime patch', () => {
     const raf = createFakePhaserRaf(() => undefined);
     const originalStep = raf.step;
     let resumes = 0;
+    let disposalCallbacks = 0;
     const loop = {
       started: true,
       running: true,
@@ -2230,7 +2281,13 @@ describe('Phaser mini-game runtime patch', () => {
         this.isPaused = false;
       },
     } satisfies MiniGamePhaserGame;
-    const installation = installPhaserMiniGameRuntime(game, { globals });
+    const installation = installPhaserMiniGameRuntime(game, {
+      globals,
+      onDispose() {
+        disposalCallbacks += 1;
+        globals.dispose();
+      },
+    });
     host.emitPause();
 
     expect(() => installation.dispose()).toThrow('wake failed');
@@ -2241,8 +2298,9 @@ describe('Phaser mini-game runtime patch', () => {
     expect(globals.document.visibilityState).toBe('visible');
     expect(host.lifecycleListenerCount).toBe(0);
     expect(raf.step).toBe(originalStep);
-    expect(() => globals.dispose()).not.toThrow();
+    expect(disposalCallbacks).toBe(1);
     expect(globals.disposed).toBe(true);
+    expect(() => globals.dispose()).not.toThrow();
   });
 
   it('keeps one RAF chain when the runtime is disposed inside a frame callback', () => {

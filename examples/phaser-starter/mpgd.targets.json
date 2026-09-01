@@ -71,6 +71,21 @@
       "icon": { "profile": "devvit" },
       "webDir": "../../apps/target-devvit/dist/client",
       "artifact": "devvit"
+    },
+    "wechat": {
+      "kind": "wechat-minigame",
+      "gameApp": ".",
+      "adapter": "wechat",
+      "icon": { "profile": "minigame-experimental" },
+      "output": "artifacts/wechat",
+      "renderer": "canvas",
+      "orientation": "landscape",
+      "experimental": true,
+      "remoteAssetOrigins": ["https://assets.example.test"],
+      "packageBudget": {
+        "mainBytes": 4194304,
+        "totalBytes": 20971520
+      }
     }
   }
 }

@@ -15,6 +15,7 @@ const validConfig = {
       renderer: 'canvas',
       orientation: 'landscape',
       experimental: true,
+      remoteAssetOrigins: ['https://assets.example.test'],
       packageBudget: {
         mainBytes: 4_194_304,
         totalBytes: 20_971_520,
@@ -38,10 +39,8 @@ const validConfig = {
 } as const;
 
 assert.deepEqual(assertPlatformTargetsConfigShape(validConfig), validConfig);
-assert.throws(
-  () => assertPlatformTargetBuildEmitterAvailable(validConfig.targets.wechat, 'wechat'),
-  /cannot be built until its native artifact emitter is installed/u,
-);
+assert.doesNotThrow(() =>
+  assertPlatformTargetBuildEmitterAvailable(validConfig.targets.wechat, 'wechat'));
 assert.throws(
   () => assertPlatformTargetBuildEmitterAvailable(validConfig.targets.tiktok, 'tiktok'),
   /cannot be built until its native artifact emitter is installed/u,
@@ -59,6 +58,35 @@ assert.throws(
   () => assertPlatformTargetsConfigShape(withWechatOverride({ adapter: 'browser' })),
   /wechat\.adapter must be wechat/u,
 );
+const insecureWechatOrigins = withWechatOverride({
+  remoteAssetOrigins: ['http://assets.example.test'],
+});
+const nonOriginWechatUrl = withWechatOverride({
+  remoteAssetOrigins: ['https://assets.example.test/path'],
+});
+const duplicateWechatOrigins = withWechatOverride({
+  remoteAssetOrigins: ['https://assets.example.test', 'https://assets.example.test'],
+});
+const runtimeIncompatibleWechatOrigins = ['https://[::1]', 'https://assets.example.test.'];
+assert.throws(
+  () => assertPlatformTargetsConfigShape(insecureWechatOrigins),
+  /must be an exact HTTPS origin/u,
+);
+assert.throws(
+  () => assertPlatformTargetsConfigShape(nonOriginWechatUrl),
+  /must be an exact HTTPS origin/u,
+);
+assert.throws(
+  () => assertPlatformTargetsConfigShape(duplicateWechatOrigins),
+  /must not contain duplicate origins/u,
+);
+for (const origin of runtimeIncompatibleWechatOrigins) {
+  const runtimeIncompatibleWechatOrigin = withWechatOverride({ remoteAssetOrigins: [origin] });
+  assert.throws(
+    () => assertPlatformTargetsConfigShape(runtimeIncompatibleWechatOrigin),
+    /must be an exact HTTPS origin/u,
+  );
+}
 assert.throws(
   () => assertPlatformTargetsConfigShape(withWechatBudget({ mainBytes: 20_971_521 })),
   /mainBytes must not exceed totalBytes/u,
@@ -66,6 +94,10 @@ assert.throws(
 assert.throws(
   () => assertPlatformTargetsConfigShape(withWechatBudget({ mainBytes: 1.5 })),
   /mainBytes must be a positive safe integer/u,
+);
+assert.throws(
+  () => assertPlatformTargetsConfigShape(withWechatBudget({ mainBytes: 4_194_305 })),
+  /mainBytes must not exceed 4194304 bytes/u,
 );
 assert.throws(
   () => assertPlatformTargetsConfigShape(

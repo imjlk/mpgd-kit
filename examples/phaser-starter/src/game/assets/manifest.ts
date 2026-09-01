@@ -6,6 +6,7 @@ export interface StarterImageAsset {
 export const starterImageAssets = [
   {
     key: 'starter-logo',
-    path: '/assets/starter-logo.svg',
+    path: starterLogoUrl,
   },
 ] as const satisfies readonly StarterImageAsset[];
+import starterLogoUrl from '../../assets/starter-logo.png?url';

@@ -2,6 +2,8 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
 
+const wechatStagingAppId = 'wx0000000000000000';
+
 const ownerPathByTarget = {
   ait: 'wrapperApp',
   android: 'shellApp',
@@ -15,6 +17,7 @@ export interface ProductionTargetReadinessInput {
   readonly gameRoot: string;
   readonly gameServicesUrl?: string;
   readonly targetPolicy?: ProductionTargetPolicy;
+  readonly environment?: NodeJS.ProcessEnv;
 }
 
 export interface ProductionTargetPolicy {
@@ -60,6 +63,8 @@ export function assertProductionTargetReadiness(
   if (!isRecord(targetConfig)) {
     throw new Error(`Missing target configuration for ${input.target}.`);
   }
+
+  assertExperimentalTargetReadiness(input, targetConfig);
 
   const targetPolicy = targetConfig.authoritativeGameServices === false
     ? disableMonetization(input.targetPolicy)
@@ -153,6 +158,36 @@ export function assertProductionTargetReadiness(
 
   if (targetConfig.authoritativeGameServices !== false) {
     assertAuthoritativeGameServicesUrl(input.gameServicesUrl, input.target);
+  }
+}
+
+function assertExperimentalTargetReadiness(
+  input: ProductionTargetReadinessInput,
+  targetConfig: Record<string, unknown>,
+): void {
+  if (targetConfig.experimental !== true) {
+    return;
+  }
+
+  const environment = input.environment ?? process.env;
+
+  if (environment.MPGD_ALLOW_EXPERIMENTAL_TARGET !== '1') {
+    throw new Error(
+      `Production build for experimental target ${input.target} is blocked.\n`
+        + 'Set MPGD_ALLOW_EXPERIMENTAL_TARGET=1 only for platform validation builds.',
+    );
+  }
+
+  if (targetConfig.kind === 'wechat-minigame') {
+    const appId = environment.MPGD_WECHAT_APP_ID?.trim();
+
+    if (
+      appId === undefined
+      || appId === wechatStagingAppId
+      || !/^wx[0-9a-f]{16}$/u.test(appId)
+    ) {
+      throw new Error('Production WeChat Mini Game builds require MPGD_WECHAT_APP_ID.');
+    }
   }
 }
 

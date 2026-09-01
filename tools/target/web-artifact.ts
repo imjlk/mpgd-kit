@@ -9,7 +9,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import { generatedIconCacheDirectory } from '../icons/types';
 import type { PlatformTargetConfig } from './schemas';
@@ -801,7 +801,7 @@ function assertExistingWebOutputsAreGeneratedArtifacts(
 
 function isPathWithin(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
-  return path === '' || (!path.startsWith('..') && !isAbsolute(path));
+  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }
 
 function pathsOverlap(first: string, second: string): boolean {

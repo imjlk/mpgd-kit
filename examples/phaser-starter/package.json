@@ -18,10 +18,12 @@
     "@mpgd/adapter-capacitor": "workspace:*",
     "@mpgd/adapter-devvit": "workspace:*",
     "@mpgd/adapter-verse8": "workspace:*",
+    "@mpgd/adapter-wechat": "workspace:*",
     "@mpgd/catalog": "workspace:*",
     "@mpgd/game-services": "workspace:*",
     "@mpgd/i18n": "workspace:*",
     "@mpgd/platform": "workspace:*",
+    "@mpgd/phaser-minigame-runtime": "workspace:*",
     "@mpgd/target-config": "workspace:*",
     "phaser": "4.2.0"
   },

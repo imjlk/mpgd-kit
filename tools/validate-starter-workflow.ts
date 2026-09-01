@@ -197,6 +197,7 @@ if (manifest !== null) {
   assertIncludes(manifest.targets, 'microsoft-store', `${manifestPath}: targets`);
   assertIncludes(manifest.targets, 'verse8', `${manifestPath}: targets`);
   assertIncludes(manifest.targets, 'reddit', `${manifestPath}: targets`);
+  assertIncludes(manifest.targets, 'wechat', `${manifestPath}: targets`);
   assertStringArray(manifest.futureTargets, `${manifestPath}: futureTargets`);
   assertIncludes(manifest.futureTargets, 'telegram', `${manifestPath}: futureTargets`);
 
@@ -233,6 +234,27 @@ if (manifest !== null) {
       );
     }
   }
+  const miniGameRuntimeBlock = findAgentBlockById<StarterBlock>(
+    manifest.blocks,
+    'runtime.minigame.canvas-artifact',
+  );
+
+  if (miniGameRuntimeBlock === undefined) {
+    failures.push(`${manifestPath}: blocks must include runtime.minigame.canvas-artifact.`);
+  } else {
+    for (const capability of [
+      'canvas-renderer',
+      'runtime-before-game-bundle',
+      'static-artifact-evidence',
+      'remote-asset-origin-allowlist',
+    ]) {
+      assertIncludes(
+        miniGameRuntimeBlock.capabilities,
+        capability,
+        `${manifestPath}: runtime.minigame.canvas-artifact capabilities`,
+      );
+    }
+  }
   assertStringArray(manifest.acceptance?.commands, `${manifestPath}: acceptance.commands`);
   assertIncludes(
     manifest.acceptance?.commands,
@@ -242,6 +264,16 @@ if (manifest !== null) {
   assertIncludes(
     manifest.acceptance?.commands,
     'pnpm check',
+    `${manifestPath}: acceptance.commands`,
+  );
+  assertIncludes(
+    manifest.acceptance?.commands,
+    'pnpm build:wechat',
+    `${manifestPath}: acceptance.commands`,
+  );
+  assertIncludes(
+    manifest.acceptance?.commands,
+    'pnpm smoke:wechat',
     `${manifestPath}: acceptance.commands`,
   );
 }
@@ -551,8 +583,10 @@ function validatePhaserTemplateMicrosoftStorePwa(): void {
 
   for (const root of [exampleRoot, templateRoot]) {
     const mainPath = `${root}/src/main.ts`;
+    const bootstrapPath = `${root}/src/bootstrap.ts`;
+    const registrationPath = existsSync(bootstrapPath) ? bootstrapPath : mainPath;
     const pwaManifestPath = `${root}/public/manifest.webmanifest`;
-    const main = readText(mainPath);
+    const registration = readText(registrationPath);
     const pwaManifest = readJson(pwaManifestPath) as {
       readonly id?: unknown;
       readonly scope?: unknown;
@@ -560,14 +594,14 @@ function validatePhaserTemplateMicrosoftStorePwa(): void {
     } | null;
 
     assertIncludesText(
-      main,
+      registration,
       "import { installMicrosoftStorePwa } from './platform/microsoftStorePwa'",
-      `${mainPath}: Microsoft Store PWA registration.`,
+      `${registrationPath}: Microsoft Store PWA registration.`,
     );
     assertIncludesText(
-      main,
+      registration,
       'installMicrosoftStorePwa(runtimeConfig)',
-      `${mainPath}: Microsoft Store PWA registration.`,
+      `${registrationPath}: Microsoft Store PWA registration.`,
     );
 
     if (pwaManifest !== null) {
@@ -1459,6 +1493,7 @@ function validatePhaserTemplateDevvitViewModes(): void {
     const gameEntryPath = `${root}/src/gameEntry.ts`;
     const entryFailurePath = `${root}/src/runtime/renderEntryFailure.ts`;
     const mainPath = `${root}/src/main.ts`;
+    const bootstrapPath = `${root}/src/bootstrap.ts`;
     const createGamePath = `${root}/src/runtime/createGame.ts`;
     const devvitEntryPath = `${root}/src/platform/devvitEntrypoint.ts`;
     const devvitStylePath = `${root}/src/platform/devvitInlineMode.css`;
@@ -1566,10 +1601,19 @@ function validatePhaserTemplateDevvitViewModes(): void {
     }
 
     if (existsSync(mainPath)) {
+      const touchPolicyPath = existsSync(bootstrapPath) ? bootstrapPath : mainPath;
       assertIncludesText(
-        readText(mainPath),
+        readText(touchPolicyPath),
         'document.body.dataset.mpgdPreserveBrowserTouchGestures',
-        `${mainPath}: inline mode touch policy.`,
+        `${touchPolicyPath}: inline mode touch policy.`,
+      );
+    }
+
+    if (existsSync(bootstrapPath)) {
+      assertIncludesText(
+        readText(bootstrapPath),
+        'disposeStarterMiniGameBridgeAfterBootstrapFailure(runtimeTarget)',
+        `${bootstrapPath}: failed mini-game bootstrap cleanup.`,
       );
     }
 
@@ -2069,7 +2113,7 @@ function validatePhaserTemplateSafeAreaContract(): void {
   assertStarterAgentBlockContract(
     starterManifest.blocks,
     'runtime.viewport.safe-area-contract',
-    'src/main.ts',
+    'src/bootstrap.ts',
     ['viewport-safe-area-snapshot', 'viewport-safe-content-bounds'],
     ['exactly once', 'safeArea.contentBounds', 'full-bleed', 'CSS-padded'],
     `${starterManifestPath}: blocks`,

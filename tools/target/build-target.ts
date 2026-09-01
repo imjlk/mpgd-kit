@@ -36,6 +36,8 @@ import {
   assertMicrosoftStorePwaProvenance,
   writeMicrosoftStorePwaArtifacts,
 } from './microsoft-store-pwa';
+import { assembleMiniGameArtifact, assertDisjointMiniGameTargetOutputs } from './minigame-artifact';
+import { wechatStagingAppId, writeWechatMiniGameProjectFiles } from './minigame-project-files';
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
 import { assertNativeReleaseIdentity } from './native-release-identity';
 import {
@@ -46,7 +48,7 @@ import {
   releaseManifestPath,
   resolveFromPlatformTargetsBase,
 } from './platform-targets';
-import type { PlatformTargetConfig, WebTargetConfig } from './schemas';
+import type { MiniGameTargetConfig, PlatformTargetConfig, WebTargetConfig } from './schemas';
 import { loadTargetConfigMatrix } from './target-config-matrix';
 import {
   assertDisjointWebTargetOutputs,
@@ -90,6 +92,13 @@ if (target === undefined) {
 
 assertPlatformTargetBuildEmitterAvailable(target, targetName);
 assertDisjointWebTargetOutputs(config.targets, targetPath, [
+  { name: 'release manifest', path: releaseManifestPath(configBaseDir) },
+  {
+    name: 'effective target config output',
+    path: effectiveTargetConfigOutputDir(configBaseDir),
+  },
+]);
+assertDisjointMiniGameTargetOutputs(config.targets, targetPath, [
   { name: 'release manifest', path: releaseManifestPath(configBaseDir) },
   {
     name: 'effective target config output',
@@ -185,7 +194,7 @@ try {
     });
   }
 
-  if (target.kind !== 'devvit-web') {
+  if (target.kind !== 'devvit-web' && !isMiniGameTarget(target)) {
     run('pnpm', ['--dir', gameApp, 'exec', 'vite', 'build', '--mode', profile], env);
     embedEffectiveTargetConfig(targetName, `${gameApp}/dist`, env);
     if (target.kind !== 'web') {
@@ -194,6 +203,60 @@ try {
   }
 
   switch (target.kind) {
+    case 'wechat-minigame': {
+      const outputConfigPath = requireString(target.output, `${targetName}.output`);
+      const output = targetPath(outputConfigPath);
+      const bundleRoot = mkdtempSync(join(tmpdir(), 'mpgd-wechat-bundles-'));
+
+      try {
+        const runtimeBundleRoot = join(bundleRoot, 'runtime');
+        const gameBundleRoot = join(bundleRoot, 'game');
+        buildMiniGameBundle('runtime', runtimeBundleRoot, bundleRoot, gameApp, profile, env);
+        buildMiniGameBundle('game', gameBundleRoot, bundleRoot, gameApp, profile, env);
+        const effectiveTargetConfig = generateEffectiveTargetConfigArtifact(targetName, env);
+        const appId = env.MPGD_WECHAT_APP_ID?.trim() || wechatStagingAppId;
+
+        assembleMiniGameArtifact({
+          projectRoot: configBaseDir,
+          artifactRoot: output,
+          runtimeBundleRoot,
+          gameBundleRoot,
+          effectiveTargetConfigSource: effectiveTargetConfig.path,
+          generatedIcons,
+          target: targetName,
+          runtime: target.kind,
+          appVersion: requireString(env.APP_VERSION, 'APP_VERSION'),
+          buildId: requireString(env.BUILD_ID, 'BUILD_ID'),
+          sourceGitSha: releaseProvenance.sourceGitSha,
+          kitGitSha: releaseProvenance.kitGitSha,
+          budget: target.packageBudget,
+          writeProjectFiles(artifactRoot) {
+            writeWechatMiniGameProjectFiles({
+              artifactRoot,
+              targetName,
+              orientation: target.orientation,
+              appId,
+              production: profile === 'production',
+            });
+          },
+          forbiddenJavaScriptMarkers: [
+            { marker: 'TTMinis.game', owner: 'TikTok' },
+            { marker: 'createTikTokPlatformGateway', owner: 'TikTok' },
+          ],
+          forbiddenGameBundleGlobals: ['wx'],
+        });
+        writeManifest(targetName, profile, outputConfigPath, env);
+      } finally {
+        rmSync(bundleRoot, { force: true, recursive: true });
+      }
+      break;
+    }
+
+    case 'tiktok-minigame':
+      throw new Error(
+        `Mini-game target ${targetName} cannot be built until its native artifact emitter is installed.`,
+      );
+
     case 'web': {
       if (webTargetPaths === undefined) {
         throw new Error(`Failed to resolve web target paths for ${targetName}.`);
@@ -677,6 +740,15 @@ function embedEffectiveTargetConfig(
   destination: string,
   commandEnv: NodeJS.ProcessEnv,
 ): void {
+  const artifact = generateEffectiveTargetConfigArtifact(target, commandEnv);
+
+  copyFile(artifact.path, `${destination}/${embeddedTargetConfigFileName}`);
+}
+
+function generateEffectiveTargetConfigArtifact(
+  target: string,
+  commandEnv: NodeJS.ProcessEnv,
+) {
   const artifact = withProcessEnv(commandEnv, [
     'MPGD_PRODUCT_CATALOG_FILE',
     'MPGD_AD_PLACEMENTS_FILE',
@@ -689,7 +761,40 @@ function embedEffectiveTargetConfig(
     throw new Error(`Failed to generate effective target config for ${target}.`);
   }
 
-  copyFile(artifact.path, `${destination}/${embeddedTargetConfigFileName}`);
+  return artifact;
+}
+
+function isMiniGameTarget(target: PlatformTargetConfig): target is MiniGameTargetConfig {
+  return target.kind === 'wechat-minigame' || target.kind === 'tiktok-minigame';
+}
+
+function buildMiniGameBundle(
+  bundleKind: 'runtime' | 'game',
+  outputDir: string,
+  stagingRoot: string,
+  gameApp: string,
+  profile: string,
+  commandEnv: NodeJS.ProcessEnv,
+): void {
+  const viteConfig = join(gameApp, 'vite.minigame.config.ts');
+
+  if (!existsSync(viteConfig)) {
+    throw new Error(
+      `Mini-game target requires a game-owned vite.minigame.config.ts: ${viteConfig}`,
+    );
+  }
+
+  run(
+    'pnpm',
+    ['exec', 'vite', 'build', '--config', 'vite.minigame.config.ts', '--mode', profile],
+    {
+      ...commandEnv,
+      MPGD_MINIGAME_BUNDLE_KIND: bundleKind,
+      MPGD_MINIGAME_BUNDLE_OUTPUT_DIR: outputDir,
+      MPGD_MINIGAME_BUNDLE_STAGING_ROOT: stagingRoot,
+    },
+    gameApp,
+  );
 }
 
 function withProcessEnv<T>(

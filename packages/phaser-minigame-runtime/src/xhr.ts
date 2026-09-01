@@ -3,6 +3,7 @@ import {
   MiniGameRuntimeError,
   type MiniGameHost,
   type MiniGameRequestResponseType,
+  type MiniGameRequestSignal,
   type MiniGameResponse,
   type MiniGameTransportOptions,
 } from './host.js';
@@ -113,6 +114,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
   #generation = 0;
   #mimeType: string | undefined;
   #sendStarted = false;
+  #activeRequestCancellation: MiniGameRequestCancellation | undefined;
 
   constructor(host: MiniGameHost, options: MiniGameTransportOptions = {}) {
     super();
@@ -163,6 +165,8 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       );
     }
 
+    this.#activeRequestCancellation?.abort();
+    this.#activeRequestCancellation = undefined;
     this.#generation += 1;
     this.#method = 'GET';
     this.#url = String(url);
@@ -308,6 +312,8 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       return;
     }
 
+    this.#activeRequestCancellation?.abort();
+    this.#activeRequestCancellation = undefined;
     const generation = ++this.#generation;
     this.#resetResponseState();
     this.#setReadyState(MiniGameXMLHttpRequest.DONE);
@@ -332,8 +338,15 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
   }
 
   async #send(generation: number, timeoutMs: number | undefined): Promise<void> {
+    const cancellation = new MiniGameRequestCancellation();
+    this.#activeRequestCancellation = cancellation;
+
     try {
-      const loaded = await withTimeout(this.#load(), timeoutMs);
+      const loaded = await withTimeout(
+        this.#load(cancellation),
+        timeoutMs,
+        () => cancellation.abort(),
+      );
 
       if (generation !== this.#generation) {
         return;
@@ -418,10 +431,14 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       }
 
       this.#emitProgress('loadend');
+    } finally {
+      if (this.#activeRequestCancellation === cancellation) {
+        this.#activeRequestCancellation = undefined;
+      }
     }
   }
 
-  async #load(): Promise<LoadedMiniGameResponse> {
+  async #load(signal: MiniGameRequestSignal): Promise<LoadedMiniGameResponse> {
     const classified = classifyMiniGameRequestUrl(this.#url, this.#options.allowedRemoteOrigins);
 
     if (classified.kind === 'local') {
@@ -454,6 +471,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
         method: this.#method ?? 'GET',
         headers: Object.fromEntries(this.#requestHeaders),
         responseType: this.responseType === '' ? 'text' : this.responseType,
+        signal,
       }),
       requestURL: classified.url,
     };
@@ -645,7 +663,11 @@ export function classifyMiniGameRequestUrl(
   return { kind: 'local', path: decoded };
 }
 
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number | undefined): Promise<T> {
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number | undefined,
+  onTimeout: () => void,
+): Promise<T> {
   if (timeoutMs === undefined || timeoutMs <= 0) {
     return promise;
   }
@@ -656,7 +678,10 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number | undefined
     return await Promise.race([
       promise,
       new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new MiniGameRequestTimeoutError()), timeoutMs);
+        timer = setTimeout(() => {
+          reject(new MiniGameRequestTimeoutError());
+          onTimeout();
+        }, timeoutMs);
       }),
     ]);
   } finally {
@@ -667,6 +692,45 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number | undefined
 }
 
 class MiniGameRequestTimeoutError extends Error {}
+
+class MiniGameRequestCancellation implements MiniGameRequestSignal {
+  readonly #listeners = new Set<() => void>();
+  #aborted = false;
+
+  get aborted(): boolean {
+    return this.#aborted;
+  }
+
+  onAbort(callback: () => void): () => void {
+    if (this.#aborted) {
+      invokeCancellationCallback(callback);
+      return () => undefined;
+    }
+
+    this.#listeners.add(callback);
+    return () => this.#listeners.delete(callback);
+  }
+
+  abort(): void {
+    if (this.#aborted) {
+      return;
+    }
+    this.#aborted = true;
+
+    for (const callback of this.#listeners) {
+      invokeCancellationCallback(callback);
+    }
+    this.#listeners.clear();
+  }
+}
+
+function invokeCancellationCallback(callback: () => void): void {
+  try {
+    callback();
+  } catch {
+    // Cancellation remains authoritative even when a host abort hook fails.
+  }
+}
 
 function resolveRequestTimeout(
   requestTimeout: number,
