@@ -312,6 +312,43 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(getInstalledMiniGameGlobals()).toBe(nextInstallation);
   });
 
+  it('continues restoring globals after one descriptor restoration fails', () => {
+    const originalPerformance = Object.getOwnPropertyDescriptor(globalThis, 'performance');
+    const originalDocument = Object.getOwnPropertyDescriptor(globalThis, 'document');
+    const originalDefineProperty = Object.defineProperty;
+    const installation = installMiniGameGlobals(new FakeMiniGameHost());
+    let injectedFailure = false;
+
+    Object.defineProperty = function defineProperty<T>(
+      target: T,
+      property: PropertyKey,
+      attributes: PropertyDescriptor & ThisType<unknown>,
+    ): T {
+      if (target === globalThis && property === 'performance' && !injectedFailure) {
+        injectedFailure = true;
+        throw new Error('simulated global restoration failure');
+      }
+
+      return originalDefineProperty(target, property, attributes);
+    };
+
+    try {
+      expect(() => installation.dispose()).toThrow('simulated global restoration failure');
+    } finally {
+      Object.defineProperty = originalDefineProperty;
+
+      if (originalPerformance === undefined) {
+        Reflect.deleteProperty(globalThis, 'performance');
+      } else {
+        originalDefineProperty(globalThis, 'performance', originalPerformance);
+      }
+    }
+
+    expect(injectedFailure).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(globalThis, 'document')).toEqual(originalDocument);
+    expect(getInstalledMiniGameGlobals()).toBeUndefined();
+  });
+
   it('unwraps mini-game image wrappers passed to drawImage', async () => {
     const host = new FakeMiniGameHost();
     const installation = installMiniGameGlobals(host);
@@ -1109,6 +1146,22 @@ describe('mini-game requestAnimationFrame and transport', () => {
     await sendRequest(request);
     expect(request.responseText).toBe('second');
     expect(request.getResponseHeader('content-type')).toBeNull();
+  });
+
+  it('rejects MIME overrides that require unsupported text decoding', () => {
+    const request = new MiniGameXMLHttpRequest(new FakeMiniGameHost());
+    request.open('GET', 'assets/text.txt');
+
+    expect(() => request.overrideMimeType('text/plain; charset=iso-8859-1')).toThrowError(
+      expect.objectContaining({ code: 'MINIGAME_XHR_CHARSET_UNSUPPORTED' }),
+    );
+    expect(() => request.overrideMimeType('text/plain; charset=x-user-defined')).toThrowError(
+      expect.objectContaining({ code: 'MINIGAME_XHR_CHARSET_UNSUPPORTED' }),
+    );
+    expect(() => request.overrideMimeType('not-a-mime-type')).toThrowError(
+      expect.objectContaining({ code: 'MINIGAME_XHR_MIME_TYPE_INVALID' }),
+    );
+    expect(() => request.overrideMimeType('text/plain; charset=UTF-8')).not.toThrow();
   });
 
   it('reports invalid host response status through the XHR error path', async () => {

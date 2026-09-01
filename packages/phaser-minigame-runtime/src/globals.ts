@@ -289,14 +289,29 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
   }
 
   #restoreGlobals(): void {
+    let firstFailure: unknown;
+
     for (const saved of [...this.#savedProperties].reverse()) {
-      if (saved.descriptor === undefined) {
-        Reflect.deleteProperty(globalThis, saved.key);
-      } else {
-        Object.defineProperty(globalThis, saved.key, saved.descriptor);
+      try {
+        if (saved.descriptor === undefined) {
+          if (!Reflect.deleteProperty(globalThis, saved.key)) {
+            throw new MiniGameRuntimeError(
+              'MINIGAME_GLOBAL_RESTORE_FAILED',
+              `Unable to remove installed mini-game global ${String(saved.key)}.`,
+            );
+          }
+        } else {
+          Object.defineProperty(globalThis, saved.key, saved.descriptor);
+        }
+      } catch (error) {
+        firstFailure ??= error;
       }
     }
     this.#savedProperties.length = 0;
+
+    if (firstFailure !== undefined) {
+      throw firstFailure;
+    }
   }
 
   #installGlobals(

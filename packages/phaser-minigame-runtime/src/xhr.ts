@@ -215,7 +215,17 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
   }
 
   overrideMimeType(mimeType: string): void {
-    this.#mimeType = mimeType;
+    const normalized = normalizeMimeTypeOverride(mimeType);
+    const charset = readMimeTypeCharset(normalized);
+
+    if (charset !== undefined && charset !== 'utf-8' && charset !== 'utf8') {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_XHR_CHARSET_UNSUPPORTED',
+        `Mini-game XMLHttpRequest only supports UTF-8 text decoding; received charset ${charset}.`,
+      );
+    }
+
+    this.#mimeType = normalized;
   }
 
   getAllResponseHeaders(): string {
@@ -847,6 +857,37 @@ function decodeUtf8(value: ArrayBuffer): string {
   }
 
   return output;
+}
+
+function normalizeMimeTypeOverride(input: string): string {
+  const normalized = String(input).trim();
+
+  if (
+    normalized.length === 0
+    || /[\u0000-\u001f\u007f]/u.test(normalized)
+    || !/^[^\s/;]+\/[^\s/;]+(?:\s*;\s*[^=;\s]+\s*=\s*(?:"[^"]*"|[^;\s]+))*$/u.test(normalized)
+  ) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_XHR_MIME_TYPE_INVALID',
+      'Mini-game XMLHttpRequest overrideMimeType() requires a valid MIME type.',
+    );
+  }
+
+  return normalized;
+}
+
+function readMimeTypeCharset(mimeType: string): string | undefined {
+  const charsets = [...mimeType.matchAll(/(?:^|;)\s*charset\s*=\s*(?:"([^"]*)"|([^;\s]+))/giu)]
+    .map((match) => (match[1] ?? match[2] ?? '').trim().toLowerCase());
+
+  if (charsets.length > 1 || charsets[0] === '') {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_XHR_MIME_TYPE_INVALID',
+      'Mini-game XMLHttpRequest overrideMimeType() must declare at most one non-empty charset.',
+    );
+  }
+
+  return charsets[0];
 }
 
 function statusTextFor(status: number): string {

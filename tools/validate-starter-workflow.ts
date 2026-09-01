@@ -663,6 +663,8 @@ function validatePhaserTemplateBuildGateways(): void {
       "'src/platform/buildGateways/redditSandbox.ts'",
       "'src/platform/buildGateways/verse8.ts'",
       "'src/platform/buildGateways/microsoftStore.ts'",
+      "case 'telegram':",
+      "case 'tauri':",
       "case 'wechat':",
       "case 'tiktok':",
       'Direct APP_TARGET=',
