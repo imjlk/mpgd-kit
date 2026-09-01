@@ -3,7 +3,10 @@ import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
 import { createGameViteSharedConfig } from './vite.shared';
-import { resolveMiniGameBundleOutput } from './vite.minigame-output';
+import {
+  createRuntimeAssetOriginsBootstrap,
+  resolveMiniGameBundleOutput,
+} from './vite.minigame-output';
 import { createPhaserMiniGameDynamicCodePlugin } from './vite.minigame-phaser';
 
 const gameRoot = process.cwd();
@@ -81,10 +84,3 @@ export default defineConfig(({ mode }) => {
     },
   };
 });
-
-function createRuntimeAssetOriginsBootstrap(serializedOrigins: string): string {
-  return 'globalThis.Object.defineProperty(globalThis,'
-    + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
-    + '{configurable:false,enumerable:false,writable:false,'
-    + `value:globalThis.Object.freeze(${serializedOrigins})});`;
-}

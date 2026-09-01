@@ -10,22 +10,21 @@ import {
 } from '@mpgd/phaser-minigame-runtime';
 
 import type { StarterMiniGameRuntimeBridge } from '../minigameBridge';
-import { StarterMiniGameBridgeLifecycle } from '../minigameBridgeLifecycle';
+import {
+  requireStarterMiniGameRuntimeAssetOrigins,
+  StarterMiniGameBridgeLifecycle,
+} from '../minigameBridgeLifecycle';
 
 type WechatMiniGameRuntimeScope = typeof globalThis & {
-  readonly __MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__?: readonly string[];
+  readonly __MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__?: unknown;
   __MPGD_MINIGAME_RUNTIME__?: StarterMiniGameRuntimeBridge;
 };
 
 const scope = globalThis as WechatMiniGameRuntimeScope;
-const remoteAssetOrigins = scope.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__;
-
-if (
-  !Array.isArray(remoteAssetOrigins)
-  || !remoteAssetOrigins.every((origin) => typeof origin === 'string')
-) {
-  throw new Error('Mini-game runtime asset-origin metadata is unavailable.');
-}
+const remoteAssetOrigins = requireStarterMiniGameRuntimeAssetOrigins(
+  scope,
+  __MPGD_MINIGAME_REMOTE_ASSET_ORIGINS__,
+);
 
 const api = resolveWechatMiniGameApi(globalThis);
 const host = createWechatMiniGameHostFromGlobal(globalThis);

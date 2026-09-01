@@ -1,6 +1,17 @@
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
+const runtimeAssetOriginsProperty = '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__';
+
+export function createRuntimeAssetOriginsBootstrap(serializedOrigins: string): string {
+  return 'globalThis.Object.defineProperty(globalThis,'
+    + `"${runtimeAssetOriginsProperty}",`
+    + '{configurable:false,enumerable:false,writable:false,'
+    + 'value:globalThis.Object.freeze('
+    + `globalThis.${runtimeAssetOriginsProperty}??${serializedOrigins}`
+    + ')});';
+}
+
 export function resolveMiniGameBundleOutput(input: Readonly<{
   readonly gameRoot: string;
   readonly outputDir: string;

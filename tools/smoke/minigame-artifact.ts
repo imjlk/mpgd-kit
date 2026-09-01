@@ -377,6 +377,13 @@ function readStaticStringArray(input: unknown): string[] | undefined {
   ) {
     return readStaticStringArray(input.arguments[0]);
   }
+  if (
+    input.type === 'LogicalExpression'
+    && input.operator === '??'
+    && isRuntimeAssetOriginsMember(input.left)
+  ) {
+    return readStaticStringArray(input.right);
+  }
   if (input.type !== 'ArrayExpression' || !Array.isArray(input.elements)) {
     return undefined;
   }
@@ -384,6 +391,13 @@ function readStaticStringArray(input: unknown): string[] | undefined {
   const values = input.elements.map(readStaticString);
 
   return values.every((value): value is string => value !== undefined) ? values : undefined;
+}
+
+function isRuntimeAssetOriginsMember(input: unknown): boolean {
+  return isAstRecord(input)
+    && input.type === 'MemberExpression'
+    && isIdentifier(input.object, 'globalThis')
+    && readMemberName(input) === runtimeAssetOriginsProperty;
 }
 
 function readMemberName(node: Record<string, unknown>): string | undefined {

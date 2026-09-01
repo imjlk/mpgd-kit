@@ -3,6 +3,7 @@ import Phaser from 'phaser';
 import { isMiniGameRuntime } from '@mpgd/target-config';
 
 import { requireStarterMiniGameRuntimeBridge } from '../platform/minigameBridge';
+import { runStarterMiniGameBootstrapStep } from '../platform/minigameBridgeLifecycle';
 import { sceneRegistry } from './sceneRegistry';
 import type { StarterContext } from './starterContext';
 
@@ -44,9 +45,13 @@ export function createStarterGame(input: CreateStarterGameInput): Phaser.Game {
         input.context.runtime.config.runtime === 'wechat-minigame' ? 'wechat' : 'tiktok',
       )
     : undefined;
-  const game = new Phaser.Game(
-    miniGameBridge === undefined ? config : miniGameBridge.createPhaserConfig(config),
-  );
+  const game = miniGameBridge === undefined
+    ? new Phaser.Game(config)
+    : runStarterMiniGameBootstrapStep({
+        run: () => new Phaser.Game(miniGameBridge.createPhaserConfig(config)),
+        cleanup: () => miniGameBridge.dispose(),
+        reportCleanupError: reportFailedMiniGameCleanup,
+      });
 
   if (miniGameBridge !== undefined) {
     try {

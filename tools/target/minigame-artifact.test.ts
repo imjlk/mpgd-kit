@@ -132,6 +132,21 @@ try {
     'const box = {}; box.F = (() => {}).constructor; box.F("return 1")();\n',
     'const box = {}; box.F ??= (() => {}).constructor; box.F("return 1")();\n',
     'const box = { F: (() => {}).constructor }; const { F } = box; F("return 1")();\n',
+    'function getF() { return (() => {}).constructor; } getF()("return 1")();\n',
+    'const getF = () => (() => {}).constructor; getF()("return 1")();\n',
+    'function getF() { return (() => {}).constructor; } const get = getF; '
+      + 'get()("return 1")();\n',
+    'function getF() { return (() => {}).constructor; } const box = { getF }; '
+      + 'box.getF()("return 1")();\n',
+    'function getF() { return (() => {}).constructor; } '
+      + 'function invoke(factory) { return factory(); } invoke(getF)("return 1")();\n',
+    '(() => (() => {}).constructor)()("return 1")();\n',
+    'function getBox() { return { F: (() => {}).constructor }; } '
+      + 'getBox().F("return 1")();\n',
+    'function read(key) { return globalThis[key]; } read("Function")("return 1")();\n',
+    'const key = "Fun" + "ction"; const F = globalThis[key]; F("return 1")();\n',
+    'const key = getRuntimeKey(); const box = { F: globalThis[key] }; '
+      + 'box.F("return 1")();\n',
   ]) {
     write('unsafe.js', derivedConstructor);
     assert.throws(
@@ -152,6 +167,19 @@ try {
   );
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-constructor-prototype.js'));
+  write(
+    'safe-computed-global-metadata.js',
+    'const key = Symbol.for("telemetry"); function read() { return globalThis[key]; } void read;\n',
+  );
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-computed-global-metadata.js'));
+  write(
+    'safe-constructor-return-metadata.js',
+    'function readConstructor(value) { return Object.getPrototypeOf(value)?.constructor ?? null; } '
+      + 'const name = readConstructor({})?.name; void name;\n',
+  );
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-constructor-return-metadata.js'));
   write('unsafe.js', 'const indirectEval = eval;\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
   rmSync(join(root, 'unsafe.js'));

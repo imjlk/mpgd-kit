@@ -131,6 +131,8 @@ interface MiniGameScopeAnalysis {
   >;
   readonly dynamicCodeConstructorAliases: ReadonlySet<MiniGameLexicalBinding>;
   readonly dynamicCodeConstructorContainers: ReadonlySet<MiniGameLexicalBinding>;
+  readonly dynamicCodeConstructorFactories: ReadonlySet<MiniGameLexicalBinding>;
+  readonly dynamicCodeConstructorContainerFactories: ReadonlySet<MiniGameLexicalBinding>;
 }
 
 export function assembleMiniGameArtifact(
@@ -715,12 +717,12 @@ function assertSafeNode(
 
     if (
       binding !== undefined
+      && isInvocationArgument(node, ancestors)
       && (
         scopeAnalysis.dynamicCodeConstructorAliases.has(binding)
-        || (
-          isInvocationArgument(node, ancestors)
-          && scopeAnalysis.dynamicCodeConstructorContainers.has(binding)
-        )
+        || scopeAnalysis.dynamicCodeConstructorContainers.has(binding)
+        || scopeAnalysis.dynamicCodeConstructorFactories.has(binding)
+        || scopeAnalysis.dynamicCodeConstructorContainerFactories.has(binding)
       )
     ) {
       throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
@@ -1035,6 +1037,8 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
   >();
   const dynamicCodeConstructorAliases = new Set<MiniGameLexicalBinding>();
   const dynamicCodeConstructorContainers = new Set<MiniGameLexicalBinding>();
+  const dynamicCodeConstructorFactories = new Set<MiniGameLexicalBinding>();
+  const dynamicCodeConstructorContainerFactories = new Set<MiniGameLexicalBinding>();
   const analysis: MiniGameScopeAnalysis = {
     programScope,
     scopeByNode,
@@ -1043,6 +1047,8 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
     reflectiveGlobalReadAliases,
     dynamicCodeConstructorAliases,
     dynamicCodeConstructorContainers,
+    dynamicCodeConstructorFactories,
+    dynamicCodeConstructorContainerFactories,
   };
   collectDynamicCodeGlobalObjectAliases(ast, analysis, globalObjectAliases);
   collectGlobalIntrinsicAliases(ast, analysis, globalIntrinsicAliases);
@@ -1052,6 +1058,8 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
     analysis,
     dynamicCodeConstructorAliases,
     dynamicCodeConstructorContainers,
+    dynamicCodeConstructorFactories,
+    dynamicCodeConstructorContainerFactories,
   );
   return analysis;
 }
@@ -1460,57 +1468,329 @@ function getReflectiveMethodKinds(
   return kinds;
 }
 
-// Constructor values can cross direct aliases or be hidden in object/array containers. Container
-// bindings are intentionally tainted as a whole so unknown/computed member reads fail closed.
+// Constructor values can cross aliases, containers, and helper return values. Iterate to a fixed
+// point because a factory discovered in one pass can taint a later alias or container assignment.
 function collectDynamicCodeConstructorFlow(
   ast: unknown,
   analysis: MiniGameScopeAnalysis,
   aliases: Set<MiniGameLexicalBinding>,
   containers: Set<MiniGameLexicalBinding>,
+  factories: Set<MiniGameLexicalBinding>,
+  containerFactories: Set<MiniGameLexicalBinding>,
 ): void {
-  collectMiniGameAliases(ast, (pattern, source, ancestors) => {
-    if (!isAstRecord(pattern)) {
-      return false;
-    }
-    const sourceIsConstructor = isDynamicCodeConstructorSource(source, ancestors, analysis);
-    const sourceIsContainer = isDynamicCodeConstructorContainerSource(
-      source,
-      ancestors,
-      analysis,
-    );
+  let changed = true;
 
-    if (pattern.type === 'MemberExpression') {
-      return (sourceIsConstructor || sourceIsContainer)
-        && addDynamicCodeConstructorContainerReference(pattern.object, analysis, containers);
-    }
-    if (
-      (pattern.type === 'ObjectPattern' || pattern.type === 'ArrayPattern')
-      && sourceIsContainer
-    ) {
-      return addDynamicCodeConstructorPattern(pattern, analysis, aliases);
-    }
-    if (pattern.type === 'ObjectPattern' && Array.isArray(pattern.properties)) {
-      let changed = false;
+  while (changed) {
+    const sizes = [aliases.size, containers.size, factories.size, containerFactories.size] as const;
 
-      for (const property of pattern.properties) {
-        if (
-          isAstRecord(property)
-          && property.type === 'Property'
-          && readStaticPropertyName(property) === 'constructor'
-        ) {
-          changed = addDynamicCodeConstructorAlias(property.value, analysis, aliases) || changed;
+    collectMiniGameAliases(ast, (pattern, source, ancestors) => {
+      if (!isAstRecord(pattern)) {
+        return false;
+      }
+      const sourceIsConstructor = isPotentialDynamicCodeConstructorSource(
+        source,
+        ancestors,
+        analysis,
+      );
+      const sourceIsContainer = isDynamicCodeConstructorContainerSource(
+        source,
+        ancestors,
+        analysis,
+      );
+      const sourceIsFactory = isDynamicCodeConstructorFactoryReference(
+        source,
+        ancestors,
+        analysis,
+      );
+      const sourceIsContainerFactory = isDynamicCodeConstructorContainerFactoryReference(
+        source,
+        ancestors,
+        analysis,
+      );
+
+      if (pattern.type === 'MemberExpression') {
+        return (
+          sourceIsConstructor
+          || sourceIsContainer
+          || sourceIsFactory
+          || sourceIsContainerFactory
+        )
+          && addDynamicCodeConstructorContainerReference(pattern.object, analysis, containers);
+      }
+      if (
+        (pattern.type === 'ObjectPattern' || pattern.type === 'ArrayPattern')
+        && sourceIsContainer
+      ) {
+        return addDynamicCodeConstructorPattern(pattern, analysis, aliases);
+      }
+      if (pattern.type === 'ObjectPattern' && Array.isArray(pattern.properties)) {
+        let patternChanged = false;
+
+        for (const property of pattern.properties) {
+          if (
+            isAstRecord(property)
+            && property.type === 'Property'
+            && readStaticPropertyName(property) === 'constructor'
+          ) {
+            patternChanged = addDynamicCodeConstructorAlias(
+              property.value,
+              analysis,
+              aliases,
+            ) || patternChanged;
+          }
         }
+
+        return patternChanged;
       }
 
-      return changed;
+      const constructorChanged = sourceIsConstructor
+        && addDynamicCodeConstructorAlias(pattern, analysis, aliases);
+      const containerChanged = sourceIsContainer
+        && addDynamicCodeConstructorContainerReference(pattern, analysis, containers);
+      const factoryChanged = sourceIsFactory
+        && addDynamicCodeConstructorAlias(pattern, analysis, factories);
+      const containerFactoryChanged = sourceIsContainerFactory
+        && addDynamicCodeConstructorAlias(pattern, analysis, containerFactories);
+      return constructorChanged
+        || containerChanged
+        || factoryChanged
+        || containerFactoryChanged;
+    });
+    const discoveredFactory = collectDynamicCodeConstructorFactories(
+      ast,
+      analysis,
+      factories,
+      containerFactories,
+    );
+    changed = discoveredFactory
+      || aliases.size !== sizes[0]
+      || containers.size !== sizes[1]
+      || factories.size !== sizes[2]
+      || containerFactories.size !== sizes[3];
+  }
+}
+
+function collectDynamicCodeConstructorFactories(
+  ast: unknown,
+  analysis: MiniGameScopeAnalysis,
+  factories: Set<MiniGameLexicalBinding>,
+  containerFactories: Set<MiniGameLexicalBinding>,
+): boolean {
+  let changed = false;
+  const ancestors: MiniGameAstAncestor[] = [];
+  visit(ast);
+  return changed;
+
+  function visit(input: unknown): void {
+    if (Array.isArray(input)) {
+      for (const item of input) {
+        visit(item);
+      }
+      return;
+    }
+    if (!isAstRecord(input)) {
+      return;
     }
 
-    const constructorChanged = sourceIsConstructor
-      && addDynamicCodeConstructorAlias(pattern, analysis, aliases);
-    const containerChanged = sourceIsContainer
-      && addDynamicCodeConstructorContainerReference(pattern, analysis, containers);
-    return constructorChanged || containerChanged;
-  });
+    if (isMiniGameFunctionNode(input)) {
+      const returnValues = readMiniGameFunctionReturnValues(input);
+
+      if (
+        returnValues.some((value) => {
+          return isReturnedDynamicCodeConstructorSource(value, ancestors, analysis);
+        })
+      ) {
+        changed = addDynamicCodeConstructorFactoryBinding(
+          input,
+          ancestors,
+          analysis,
+          factories,
+        ) || changed;
+      }
+      if (
+        returnValues.some((value) => {
+          return isDynamicCodeConstructorContainerSource(value, ancestors, analysis);
+        })
+      ) {
+        changed = addDynamicCodeConstructorFactoryBinding(
+          input,
+          ancestors,
+          analysis,
+          containerFactories,
+        ) || changed;
+      }
+    }
+
+    for (const [key, value] of Object.entries(input)) {
+      if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
+        ancestors.push({ node: input, childKey: key });
+        visit(value);
+        ancestors.pop();
+      }
+    }
+  }
+}
+
+function isReturnedDynamicCodeConstructorSource(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'ChainExpression') {
+    return isReturnedDynamicCodeConstructorSource(input.expression, ancestors, analysis);
+  }
+  if (
+    (input.type === 'AwaitExpression' || input.type === 'YieldExpression')
+    && input.argument !== null
+  ) {
+    return isReturnedDynamicCodeConstructorSource(input.argument, ancestors, analysis);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return isReturnedDynamicCodeConstructorSource(input.expressions.at(-1), ancestors, analysis);
+  }
+  if (input.type === 'ConditionalExpression') {
+    return isReturnedDynamicCodeConstructorSource(input.consequent, ancestors, analysis)
+      || isReturnedDynamicCodeConstructorSource(input.alternate, ancestors, analysis);
+  }
+  if (input.type === 'LogicalExpression') {
+    return isReturnedDynamicCodeConstructorSource(input.left, ancestors, analysis)
+      || isReturnedDynamicCodeConstructorSource(input.right, ancestors, analysis);
+  }
+  // Libraries may return an arbitrary value's constructor for identity checks. Treat a constructor
+  // return as executable only when its receiver is already tainted or is syntactically callable.
+  if (input.type === 'MemberExpression' && readMemberName(input) === 'constructor') {
+    return isDynamicCodeConstructorSource(input.object, ancestors, analysis)
+      || isDynamicCodeConstructorContainerSource(input.object, ancestors, analysis)
+      || isSyntacticallyCallableValue(input.object, ancestors, analysis);
+  }
+
+  return isDynamicCodeConstructorSource(input, ancestors, analysis)
+    || isUnknownComputedGlobalMember(input, ancestors, analysis);
+}
+
+function isSyntacticallyCallableValue(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (
+    input.type === 'FunctionDeclaration'
+    || input.type === 'FunctionExpression'
+    || input.type === 'ArrowFunctionExpression'
+    || input.type === 'ClassDeclaration'
+    || input.type === 'ClassExpression'
+  ) {
+    return true;
+  }
+  if (input.type === 'ChainExpression') {
+    return isSyntacticallyCallableValue(input.expression, ancestors, analysis);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return isSyntacticallyCallableValue(input.expressions.at(-1), ancestors, analysis);
+  }
+  if (input.type === 'ConditionalExpression') {
+    return isSyntacticallyCallableValue(input.consequent, ancestors, analysis)
+      || isSyntacticallyCallableValue(input.alternate, ancestors, analysis);
+  }
+  if (input.type === 'LogicalExpression') {
+    return isSyntacticallyCallableValue(input.left, ancestors, analysis)
+      || isSyntacticallyCallableValue(input.right, ancestors, analysis);
+  }
+  if (
+    input.type === 'CallExpression'
+    && isAstRecord(input.callee)
+    && readMemberName(input.callee) === 'getPrototypeOf'
+    && getGlobalIntrinsicKinds(input.callee.object, ancestors, analysis).has('Object')
+    && Array.isArray(input.arguments)
+  ) {
+    return isSyntacticallyCallableValue(input.arguments[0], ancestors, analysis);
+  }
+
+  return false;
+}
+
+function readMiniGameFunctionReturnValues(
+  functionNode: Record<string, unknown>,
+): readonly unknown[] {
+  if (
+    functionNode.type === 'ArrowFunctionExpression'
+    && isAstRecord(functionNode.body)
+    && functionNode.body.type !== 'BlockStatement'
+  ) {
+    return [functionNode.body];
+  }
+
+  const values: unknown[] = [];
+  visit(functionNode.body);
+  return values;
+
+  function visit(input: unknown): void {
+    if (Array.isArray(input)) {
+      for (const item of input) {
+        visit(item);
+      }
+      return;
+    }
+    if (!isAstRecord(input)) {
+      return;
+    }
+    if (
+      isMiniGameFunctionNode(input)
+      || input.type === 'ClassDeclaration'
+      || input.type === 'ClassExpression'
+      || input.type === 'StaticBlock'
+    ) {
+      return;
+    }
+    if (input.type === 'ReturnStatement') {
+      if (input.argument !== null && input.argument !== undefined) {
+        values.push(input.argument);
+      }
+      return;
+    }
+
+    for (const [key, value] of Object.entries(input)) {
+      if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
+        visit(value);
+      }
+    }
+  }
+}
+
+function addDynamicCodeConstructorFactoryBinding(
+  functionNode: Record<string, unknown>,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+  factories: Set<MiniGameLexicalBinding>,
+): boolean {
+  let changed = false;
+
+  if (
+    (functionNode.type === 'FunctionDeclaration' || functionNode.type === 'FunctionExpression')
+    && functionNode.id !== null
+    && functionNode.id !== undefined
+  ) {
+    changed = addDynamicCodeConstructorAlias(functionNode.id, analysis, factories) || changed;
+  }
+
+  const parent = ancestors.at(-1)?.node;
+
+  if (parent?.type === 'VariableDeclarator' && parent.init === functionNode) {
+    changed = addDynamicCodeConstructorAlias(parent.id, analysis, factories) || changed;
+  } else if (
+    (parent?.type === 'AssignmentExpression' || parent?.type === 'AssignmentPattern')
+    && parent.right === functionNode
+  ) {
+    changed = addDynamicCodeConstructorAlias(parent.left, analysis, factories) || changed;
+  }
+
+  return changed;
 }
 
 function addDynamicCodeConstructorPattern(
@@ -1667,8 +1947,142 @@ function isDynamicCodeConstructorSource(
     && isAstRecord(input.callee)
     && Array.isArray(input.arguments)
   ) {
+    if (isDynamicCodeConstructorFactoryReference(input.callee, ancestors, analysis)) {
+      return true;
+    }
     const kinds = getReflectiveGlobalReadKinds(input.callee, ancestors, analysis);
     return kinds.has('property') && evaluateStaticString(input.arguments[1]) === 'constructor';
+  }
+
+  return false;
+}
+
+function isPotentialDynamicCodeConstructorSource(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'ChainExpression') {
+    return isPotentialDynamicCodeConstructorSource(input.expression, ancestors, analysis);
+  }
+  if (
+    (input.type === 'AwaitExpression' || input.type === 'YieldExpression')
+    && input.argument !== null
+  ) {
+    return isPotentialDynamicCodeConstructorSource(input.argument, ancestors, analysis);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return isPotentialDynamicCodeConstructorSource(input.expressions.at(-1), ancestors, analysis);
+  }
+  if (input.type === 'ConditionalExpression') {
+    return isPotentialDynamicCodeConstructorSource(input.consequent, ancestors, analysis)
+      || isPotentialDynamicCodeConstructorSource(input.alternate, ancestors, analysis);
+  }
+  if (input.type === 'LogicalExpression') {
+    return isPotentialDynamicCodeConstructorSource(input.left, ancestors, analysis)
+      || isPotentialDynamicCodeConstructorSource(input.right, ancestors, analysis);
+  }
+
+  return isDynamicCodeConstructorSource(input, ancestors, analysis)
+    || isUnknownComputedGlobalMember(input, ancestors, analysis);
+}
+
+function isDynamicCodeConstructorFactoryReference(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): boolean {
+  return isMiniGameFactoryReference(
+    input,
+    ancestors,
+    analysis,
+    analysis.dynamicCodeConstructorFactories,
+    (value) => isReturnedDynamicCodeConstructorSource(value, ancestors, analysis),
+  );
+}
+
+function isDynamicCodeConstructorContainerFactoryReference(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): boolean {
+  return isMiniGameFactoryReference(
+    input,
+    ancestors,
+    analysis,
+    analysis.dynamicCodeConstructorContainerFactories,
+    (value) => isDynamicCodeConstructorContainerSource(value, ancestors, analysis),
+  );
+}
+
+function isMiniGameFactoryReference(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+  factories: ReadonlySet<MiniGameLexicalBinding>,
+  returnsFactoryValue: (value: unknown) => boolean,
+): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(input.name, scope);
+    return binding !== undefined && factories.has(binding);
+  }
+  if (isMiniGameFunctionNode(input)) {
+    return readMiniGameFunctionReturnValues(input).some(returnsFactoryValue);
+  }
+  if (input.type === 'ChainExpression') {
+    return isMiniGameFactoryReference(
+      input.expression,
+      ancestors,
+      analysis,
+      factories,
+      returnsFactoryValue,
+    );
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return isMiniGameFactoryReference(
+      input.expressions.at(-1),
+      ancestors,
+      analysis,
+      factories,
+      returnsFactoryValue,
+    );
+  }
+  if (input.type === 'ConditionalExpression') {
+    return isMiniGameFactoryReference(
+      input.consequent,
+      ancestors,
+      analysis,
+      factories,
+      returnsFactoryValue,
+    ) || isMiniGameFactoryReference(
+      input.alternate,
+      ancestors,
+      analysis,
+      factories,
+      returnsFactoryValue,
+    );
+  }
+  if (input.type === 'LogicalExpression') {
+    return isMiniGameFactoryReference(
+      input.left,
+      ancestors,
+      analysis,
+      factories,
+      returnsFactoryValue,
+    ) || isMiniGameFactoryReference(
+      input.right,
+      ancestors,
+      analysis,
+      factories,
+      returnsFactoryValue,
+    );
   }
 
   return false;
@@ -1701,6 +2115,13 @@ function isDynamicCodeConstructorContainerSource(
     return isDynamicCodeConstructorContainerSource(input.left, ancestors, analysis)
       || isDynamicCodeConstructorContainerSource(input.right, ancestors, analysis);
   }
+  if (
+    input.type === 'CallExpression'
+    && isAstRecord(input.callee)
+    && isDynamicCodeConstructorContainerFactoryReference(input.callee, ancestors, analysis)
+  ) {
+    return true;
+  }
   if (input.type === 'MemberExpression') {
     return isDynamicCodeConstructorContainerSource(input.object, ancestors, analysis);
   }
@@ -1710,14 +2131,18 @@ function isDynamicCodeConstructorContainerSource(
         return false;
       }
       const value = property.type === 'Property' ? property.value : property.argument;
-      return isDynamicCodeConstructorSource(value, ancestors, analysis)
-        || isDynamicCodeConstructorContainerSource(value, ancestors, analysis);
+      return isPotentialDynamicCodeConstructorSource(value, ancestors, analysis)
+        || isDynamicCodeConstructorContainerSource(value, ancestors, analysis)
+        || isDynamicCodeConstructorFactoryReference(value, ancestors, analysis)
+        || isDynamicCodeConstructorContainerFactoryReference(value, ancestors, analysis);
     });
   }
   if (input.type === 'ArrayExpression' && Array.isArray(input.elements)) {
     return input.elements.some((element) => {
-      return isDynamicCodeConstructorSource(element, ancestors, analysis)
-        || isDynamicCodeConstructorContainerSource(element, ancestors, analysis);
+      return isPotentialDynamicCodeConstructorSource(element, ancestors, analysis)
+        || isDynamicCodeConstructorContainerSource(element, ancestors, analysis)
+        || isDynamicCodeConstructorFactoryReference(element, ancestors, analysis)
+        || isDynamicCodeConstructorContainerFactoryReference(element, ancestors, analysis);
     });
   }
 

@@ -1,6 +1,56 @@
 import assert from 'node:assert/strict';
 
-import { StarterMiniGameBridgeLifecycle } from './minigameBridgeLifecycle';
+import {
+  requireStarterMiniGameRuntimeAssetOrigins,
+  runStarterMiniGameBootstrapStep,
+  StarterMiniGameBridgeLifecycle,
+} from './minigameBridgeLifecycle';
+
+const expectedOrigins = ['https://assets.example.test'];
+const metadataScope = {};
+Object.defineProperty(metadataScope, '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__', {
+  configurable: false,
+  enumerable: false,
+  writable: false,
+  value: Object.freeze([...expectedOrigins]),
+});
+assert.deepEqual(
+  requireStarterMiniGameRuntimeAssetOrigins(metadataScope, expectedOrigins),
+  expectedOrigins,
+);
+assert.throws(
+  () => requireStarterMiniGameRuntimeAssetOrigins(metadataScope, []),
+  /differs from target configuration/u,
+);
+assert.throws(
+  () => requireStarterMiniGameRuntimeAssetOrigins(
+    { __MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__: [...expectedOrigins] },
+    expectedOrigins,
+  ),
+  /unavailable or mutable/u,
+);
+
+const constructionFailure = new Error('Phaser construction failed');
+const constructionCleanupFailure = new Error('runtime cleanup failed');
+let constructionCleanupCalls = 0;
+const reportedConstructionCleanupErrors: unknown[] = [];
+assert.throws(
+  () => runStarterMiniGameBootstrapStep({
+    run() {
+      throw constructionFailure;
+    },
+    cleanup() {
+      constructionCleanupCalls += 1;
+      throw constructionCleanupFailure;
+    },
+    reportCleanupError(error) {
+      reportedConstructionCleanupErrors.push(error);
+    },
+  }),
+  (error) => error === constructionFailure,
+);
+assert.equal(constructionCleanupCalls, 1);
+assert.deepEqual(reportedConstructionCleanupErrors, [constructionCleanupFailure]);
 
 const bridge = {};
 const scope = { __MPGD_MINIGAME_RUNTIME__: bridge };

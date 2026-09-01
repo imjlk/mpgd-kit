@@ -2,8 +2,12 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { createContext, runInContext } from 'node:vm';
 
-import { resolveMiniGameBundleOutput } from './vite.minigame-output';
+import {
+  createRuntimeAssetOriginsBootstrap,
+  resolveMiniGameBundleOutput,
+} from './vite.minigame-output';
 import { rewritePhaserMiniGameDynamicCode } from './vite.minigame-phaser';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-minigame-vite-output-'));
@@ -13,6 +17,31 @@ const stagingRoot = join(fixtureRoot, 'staging');
 try {
   mkdirSync(join(gameRoot, 'src'), { recursive: true });
   mkdirSync(stagingRoot, { recursive: true });
+
+  const runtimeScope = createContext({}) as typeof globalThis & {
+    readonly __MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__?: readonly string[];
+  };
+  const runtimeOriginsBootstrap = createRuntimeAssetOriginsBootstrap(
+    JSON.stringify(['https://assets.example.test']),
+  );
+  runInContext(runtimeOriginsBootstrap, runtimeScope);
+  const firstRuntimeOrigins = runtimeScope.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__;
+  const firstRuntimeOriginsDescriptor = Object.getOwnPropertyDescriptor(
+    runtimeScope,
+    '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__',
+  );
+  runInContext(runtimeOriginsBootstrap, runtimeScope);
+  assert.equal(runtimeScope.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__, firstRuntimeOrigins);
+  assert.deepEqual([...(firstRuntimeOrigins ?? [])], ['https://assets.example.test']);
+  assert.equal(Object.isFrozen(firstRuntimeOrigins), true);
+  assert.deepEqual(
+    {
+      configurable: firstRuntimeOriginsDescriptor?.configurable,
+      enumerable: firstRuntimeOriginsDescriptor?.enumerable,
+      writable: firstRuntimeOriginsDescriptor?.writable,
+    },
+    { configurable: false, enumerable: false, writable: false },
+  );
 
   assert.equal(
     resolveMiniGameBundleOutput({

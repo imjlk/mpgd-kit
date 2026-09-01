@@ -237,7 +237,9 @@ function createMiniGameOriginDeclaration(
   return `${definePropertyOwner}.defineProperty(globalThis,`
     + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
     + '{configurable:false,enumerable:false,writable:false,'
-    + `value:${freezeOwner}.freeze(${JSON.stringify(origins)})})`;
+    + `value:${freezeOwner}.freeze(`
+    + 'globalThis.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__??'
+    + `${JSON.stringify(origins)})})`;
 }
 
 function createMiniGameOriginDeclarationFromDescriptor(descriptor: string): string {
