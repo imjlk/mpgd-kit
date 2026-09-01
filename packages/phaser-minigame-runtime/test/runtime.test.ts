@@ -79,9 +79,9 @@ describe('mini-game globals and Canvas compatibility', () => {
     const clearedNativeImage = context.__state.drawImageSources[1];
 
     expect(image.src).toBe('');
-    expect(image.complete).toBe(false);
     expect(Reflect.get(clearedNativeImage as object, 'src')).toBe('');
     expect(Reflect.get(clearedNativeImage as object, 'width')).toBe(0);
+    expect(image.complete).toBe(true);
   });
 
   it('uses bounded image polling when native callbacks are absent', async () => {
@@ -129,7 +129,7 @@ describe('mini-game globals and Canvas compatibility', () => {
     await expect(timeoutError).resolves.toMatchObject({ type: 'error' });
   });
 
-  it('rejects invalid image timing and unsupported blob URLs', () => {
+  it('rejects invalid image timing and reports unsupported blob URLs asynchronously', async () => {
     const host = new FakeMiniGameHost();
     installMiniGameGlobals(host, {
       image: { pollIntervalMs: 0 },
@@ -139,9 +139,23 @@ describe('mini-game globals and Canvas compatibility', () => {
     getInstalledMiniGameGlobals()?.dispose();
     installMiniGameGlobals(host);
     const image = new globalThis.Image();
-    expect(() => {
-      image.src = 'blob:minigame-image';
-    }).toThrow('package paths, data URLs, or allowed HTTPS origins');
+    let assignmentReturned = false;
+    const blockedSourceError = new Promise<unknown>((resolve) => {
+      image.onerror = (event) => {
+        expect(assignmentReturned).toBe(true);
+        resolve(event);
+      };
+    });
+
+    image.src = 'blob:minigame-image';
+    assignmentReturned = true;
+
+    await expect(blockedSourceError).resolves.toMatchObject({
+      type: 'error',
+      error: {
+        code: 'MINIGAME_IMAGE_PROTOCOL_BLOCKED',
+      },
+    });
   });
 
   it('keeps same-target listeners after stopPropagation and honors stopImmediatePropagation', () => {
@@ -423,6 +437,7 @@ describe('Phaser mini-game runtime patch', () => {
         throw new Error('scene frame failed');
       }
     });
+    const originalStep = raf.step;
     const loop = {
       started: true,
       running: true,
@@ -478,7 +493,11 @@ describe('Phaser mini-game runtime patch', () => {
 
     installation.dispose();
     expect(host.lifecycleListenerCount).toBe(0);
-    expect(host.pendingFrameCount).toBe(0);
+    expect(raf.step).toBe(originalStep);
+    expect(host.pendingFrameCount).toBe(1);
+    host.flushFrame(48);
+    expect(frames).toBe(3);
+    expect(host.pendingFrameCount).toBe(1);
   });
 
   it.each([

@@ -184,8 +184,15 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     const raf = this.game.loop.raf;
 
     if (raf === this.#raf) {
+      const wasRunning = raf.isRunning;
+      const callback = raf.callback;
+      const delay = raf.delay;
       raf.stop();
       raf.step = this.#originalStep;
+
+      if (wasRunning) {
+        raf.start(callback, false, delay);
+      }
     }
 
     installedGames.delete(this.game as object);

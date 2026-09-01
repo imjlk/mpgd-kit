@@ -100,10 +100,6 @@ export class MiniGameImageElement extends MiniGameEventTarget {
   }
 
   #beginLoad(source: string): void {
-    if (source.length > 0) {
-      assertImageSourceAllowed(source, this.#options.allowedRemoteOrigins);
-    }
-
     this.#generation += 1;
     const generation = this.#generation;
     this.#clearTimer();
@@ -112,32 +108,40 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     const nativeImage = this[miniGameNativeObjectSymbol];
 
     if (source.length === 0) {
-      Reflect.set(nativeImage, 'onload', null);
-      Reflect.set(nativeImage, 'onerror', null);
-
-      try {
-        if (!Reflect.set(nativeImage, 'src', '')) {
-          throw new Error('The native image source is not writable.');
-        }
-      } catch {
-        throw new MiniGameRuntimeError(
-          'MINIGAME_IMAGE_CLEAR_FAILED',
-          'The mini-game native image could not clear its source.',
+      if (!this.#clearNativeSource(nativeImage)) {
+        this.#scheduleFailure(
+          generation,
+          new MiniGameRuntimeError(
+            'MINIGAME_IMAGE_CLEAR_FAILED',
+            'The mini-game native image could not clear its source.',
+          ),
         );
+        return;
       }
 
+      this.complete = true;
+      return;
+    }
+
+    try {
+      assertImageSourceAllowed(source, this.#options.allowedRemoteOrigins);
+    } catch (error) {
+      this.#clearNativeSource(nativeImage);
+      this.#scheduleFailure(generation, error);
       return;
     }
 
     const startedAt = Date.now();
 
-    Reflect.set(nativeImage, 'onload', () => this.#settle(generation, true));
-    Reflect.set(nativeImage, 'onerror', () => this.#settle(generation, false));
-
     try {
-      Reflect.set(nativeImage, 'src', source);
+      Reflect.set(nativeImage, 'onload', () => this.#settle(generation, true));
+      Reflect.set(nativeImage, 'onerror', () => this.#settle(generation, false));
+
+      if (!Reflect.set(nativeImage, 'src', source)) {
+        throw new Error('The native image source is not writable.');
+      }
     } catch (error) {
-      this.#settle(generation, false, error);
+      this.#scheduleFailure(generation, error);
       return;
     }
 
@@ -171,6 +175,20 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     };
 
     this.#timer = setTimeout(poll, this.#options.pollIntervalMs);
+  }
+
+  #clearNativeSource(nativeImage: object): boolean {
+    try {
+      Reflect.set(nativeImage, 'onload', null);
+      Reflect.set(nativeImage, 'onerror', null);
+      return Reflect.set(nativeImage, 'src', '');
+    } catch {
+      return false;
+    }
+  }
+
+  #scheduleFailure(generation: number, cause: unknown): void {
+    this.#timer = setTimeout(() => this.#settle(generation, false, cause), 0);
   }
 
   #settle(generation: number, succeeded: boolean, cause?: unknown): void {
