@@ -34,31 +34,33 @@ const globals = installMiniGameGlobals(host, {
 });
 const attachedGames = new WeakSet<object>();
 const bridgeLifecycle = new StarterMiniGameBridgeLifecycle(() => globals.dispose());
-const bridge: StarterMiniGameRuntimeBridge = {
+let bridge: StarterMiniGameRuntimeBridge;
+const disposeBridgeAfterGame = () => bridge.dispose();
+bridge = {
   target: 'wechat',
   gateway: createWechatPlatformGateway({ api }),
   createPhaserConfig(config) {
     return createMiniGamePhaserConfig(config, globals);
   },
   attachGame(game) {
-    if (attachedGames.has(game as object)) {
-      installPhaserMiniGameRuntime(game, { globals });
-      return;
-    }
-
-    const installation = installPhaserMiniGameRuntime(game, { globals });
     const events = game.events;
 
     if (events?.once === undefined) {
-      installation.dispose();
       throw new Error('Mini-game Phaser game must expose a destroy event.');
     }
+    if (attachedGames.has(game as object)) {
+      installPhaserMiniGameRuntime(game, {
+        globals,
+        onDispose: disposeBridgeAfterGame,
+      });
+      return;
+    }
 
-    attachedGames.add(game as object);
-    events.once('destroy', () => {
-      installation.dispose();
-      bridge.dispose();
+    installPhaserMiniGameRuntime(game, {
+      globals,
+      onDispose: disposeBridgeAfterGame,
     });
+    attachedGames.add(game as object);
   },
   dispose() {
     bridgeLifecycle.dispose(scope, bridge);

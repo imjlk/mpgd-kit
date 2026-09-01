@@ -838,7 +838,7 @@ function assertSafeNode(
     if (isUnknownComputedGlobalMember(node.callee, ancestors, scopeAnalysis)) {
       throw new Error(`Mini-game ${path} contains forbidden computed global call.`);
     }
-    if (isReflectiveDynamicCodeGlobalRead(node, ancestors, scopeAnalysis)) {
+    if (isReflectiveDynamicCodeGlobalRead(node, ancestors, scopeAnalysis, forbiddenGlobals)) {
       throw new Error(`Mini-game ${path} contains forbidden reflective global lookup.`);
     }
 
@@ -1007,6 +1007,7 @@ function isReflectiveDynamicCodeGlobalRead(
   node: Record<string, unknown>,
   ancestors: readonly MiniGameAstAncestor[],
   scopeAnalysis: MiniGameScopeAnalysis,
+  forbiddenGlobals: ReadonlySet<string>,
 ): boolean {
   if (
     node.type !== 'CallExpression'
@@ -1067,7 +1068,8 @@ function isReflectiveDynamicCodeGlobalRead(
   const propertyName = evaluateStaticString(property);
   return kinds.has('property')
     && (propertyName === undefined
-      || ['eval', 'Function', 'importScripts'].includes(propertyName));
+      || ['eval', 'Function', 'importScripts'].includes(propertyName)
+      || forbiddenGlobals.has(propertyName));
 }
 
 function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {

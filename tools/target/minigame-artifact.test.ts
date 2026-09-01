@@ -207,6 +207,18 @@ try {
   write('runtime.js', 'wx.createImage();\n');
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, [], ['wx']));
   write('runtime.js', 'globalThis.__MPGD_MINIGAME__ = true;\n');
+  for (const reflectiveWechatSdkAccess of [
+    'Reflect.get(globalThis, "wx").request({});\n',
+    'const get = Reflect.get; get(globalThis, "wx").createImage();\n',
+    'Object.getOwnPropertyDescriptor(globalThis, "wx").value.createCanvas();\n',
+  ]) {
+    write('game.bundle.js', reflectiveWechatSdkAccess);
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, [], ['wx']),
+      /game\.bundle\.js contains forbidden reflective global lookup/u,
+    );
+  }
+  write('game.bundle.js', 'globalThis.__MPGD_GAME__ = true;\n');
   write('unsafe.js', 'const indirectEval = eval;\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
   rmSync(join(root, 'unsafe.js'));

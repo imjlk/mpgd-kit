@@ -44,6 +44,7 @@ export interface MiniGamePhaserGame {
 export interface MiniGamePhaserRuntimeOptions {
   readonly globals?: MiniGameGlobalInstallation;
   readonly onFrameError?: (error: unknown) => void;
+  readonly onDispose?: () => void;
 }
 
 export interface MiniGamePhaserRuntimeInstallation {
@@ -82,6 +83,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
   readonly host: MiniGameHost;
   readonly #globals: MiniGameGlobalInstallation;
   readonly #onFrameError: (error: unknown) => void;
+  readonly #onDispose: () => void;
   readonly #raf: PhaserAnimationFrameController;
   readonly #originalStep: (time: number) => void;
   readonly #patchedStep: (time: number) => void;
@@ -99,11 +101,13 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     game: MiniGamePhaserGame,
     globals: MiniGameGlobalInstallation,
     onFrameError: (error: unknown) => void,
+    onDispose: () => void,
   ) {
     this.game = game;
     this.host = globals.host;
     this.#globals = globals;
     this.#onFrameError = onFrameError;
+    this.#onDispose = onDispose;
     assertCanvasRenderer(game, globals.canvas);
     assertLifecycleHookPair(this.host);
 
@@ -222,6 +226,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
           }
         },
         () => this.#releaseGlobalsDisposalGuard(),
+        this.#onDispose,
       ]);
 
       if (!cleanup.ok) {
@@ -239,8 +244,11 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
   hasCompatibleOptions(
     globals: MiniGameGlobalInstallation,
     onFrameError: (error: unknown) => void,
+    onDispose: () => void,
   ): boolean {
-    return this.#globals === globals && this.#onFrameError === onFrameError;
+    return this.#globals === globals
+      && this.#onFrameError === onFrameError
+      && this.#onDispose === onDispose;
   }
 
   dispose(): void {
@@ -280,6 +288,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
           }
         },
         () => this.#releaseGlobalsDisposalGuard(),
+        this.#onDispose,
       ]);
 
       installedGames.delete(gameIdentity);
@@ -481,10 +490,14 @@ export function installPhaserMiniGameRuntime(
 ): MiniGamePhaserRuntimeInstallation {
   const globals = options.globals ?? getInstalledMiniGameGlobals();
   const onFrameError = options.onFrameError ?? reportPhaserFrameError;
+  const onDispose = options.onDispose ?? ignorePhaserRuntimeDisposal;
   const existing = installedGames.get(game as object);
 
   if (existing !== undefined && !existing.disposed) {
-    if (globals === undefined || !existing.hasCompatibleOptions(globals, onFrameError)) {
+    if (
+      globals === undefined
+      || !existing.hasCompatibleOptions(globals, onFrameError, onDispose)
+    ) {
       throw new MiniGameRuntimeError(
         'MINIGAME_PHASER_OPTIONS_MISMATCH',
         'Phaser mini-game runtime is already installed with different runtime options.',
@@ -523,7 +536,12 @@ export function installPhaserMiniGameRuntime(
   installingGlobals.add(globals);
 
   try {
-    const installation = new MiniGamePhaserRuntimeInstallationImpl(game, globals, onFrameError);
+    const installation = new MiniGamePhaserRuntimeInstallationImpl(
+      game,
+      globals,
+      onFrameError,
+      onDispose,
+    );
     installedGames.set(gameIdentity, installation);
     installedGlobals.set(globals, installation);
     return installation;
@@ -532,6 +550,8 @@ export function installPhaserMiniGameRuntime(
     installingGlobals.delete(globals);
   }
 }
+
+function ignorePhaserRuntimeDisposal(): void {}
 
 function assertCanvasRenderer(
   game: MiniGamePhaserGame,

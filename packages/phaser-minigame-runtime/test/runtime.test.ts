@@ -2222,6 +2222,7 @@ describe('Phaser mini-game runtime patch', () => {
     const raf = createFakePhaserRaf(() => undefined);
     const originalStep = raf.step;
     let resumes = 0;
+    let disposalCallbacks = 0;
     const loop = {
       started: true,
       running: true,
@@ -2250,7 +2251,13 @@ describe('Phaser mini-game runtime patch', () => {
         this.isPaused = false;
       },
     } satisfies MiniGamePhaserGame;
-    const installation = installPhaserMiniGameRuntime(game, { globals });
+    const installation = installPhaserMiniGameRuntime(game, {
+      globals,
+      onDispose() {
+        disposalCallbacks += 1;
+        globals.dispose();
+      },
+    });
     host.emitPause();
 
     expect(() => installation.dispose()).toThrow('wake failed');
@@ -2261,8 +2268,9 @@ describe('Phaser mini-game runtime patch', () => {
     expect(globals.document.visibilityState).toBe('visible');
     expect(host.lifecycleListenerCount).toBe(0);
     expect(raf.step).toBe(originalStep);
-    expect(() => globals.dispose()).not.toThrow();
+    expect(disposalCallbacks).toBe(1);
     expect(globals.disposed).toBe(true);
+    expect(() => globals.dispose()).not.toThrow();
   });
 
   it('keeps one RAF chain when the runtime is disposed inside a frame callback', () => {
