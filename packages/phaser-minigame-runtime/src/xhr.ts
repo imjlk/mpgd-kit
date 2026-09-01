@@ -366,7 +366,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     const event = new MiniGameEvent('readystatechange');
     event.target = this;
     event.currentTarget = this;
-    this.onreadystatechange?.call(this, event);
+    this.invokeEventCallback(this.onreadystatechange, event);
     this.dispatchEvent(event);
   }
 
@@ -385,25 +385,25 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
 
     switch (type) {
       case 'abort':
-        this.onabort?.call(this, event);
+        this.invokeEventCallback(this.onabort, event);
         break;
       case 'error':
-        this.onerror?.call(this, event);
+        this.invokeEventCallback(this.onerror, event);
         break;
       case 'load':
-        this.onload?.call(this, event);
+        this.invokeEventCallback(this.onload, event);
         break;
       case 'loadend':
-        this.onloadend?.call(this, event);
+        this.invokeEventCallback(this.onloadend, event);
         break;
       case 'loadstart':
-        this.onloadstart?.call(this, event);
+        this.invokeEventCallback(this.onloadstart, event);
         break;
       case 'progress':
-        this.onprogress?.call(this, event);
+        this.invokeEventCallback(this.onprogress, event);
         break;
       case 'timeout':
-        this.ontimeout?.call(this, event);
+        this.invokeEventCallback(this.ontimeout, event);
         break;
     }
 

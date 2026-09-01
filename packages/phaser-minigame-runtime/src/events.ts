@@ -42,6 +42,10 @@ export interface MiniGameEventListenerObject {
 }
 
 export type MiniGameEventListenerLike = MiniGameEventListener | MiniGameEventListenerObject;
+export type MiniGameEventListenerErrorReporter = (
+  error: unknown,
+  event: MiniGameEvent,
+) => void;
 
 interface ListenerRegistration {
   readonly listener: MiniGameEventListenerLike;
@@ -50,6 +54,11 @@ interface ListenerRegistration {
 
 export class MiniGameEventTarget {
   readonly #listeners = new Map<string, ListenerRegistration[]>();
+  readonly #onListenerError: MiniGameEventListenerErrorReporter;
+
+  constructor(onListenerError: MiniGameEventListenerErrorReporter = reportListenerError) {
+    this.#onListenerError = onListenerError;
+  }
 
   addEventListener(
     type: string,
@@ -102,10 +111,14 @@ export class MiniGameEventTarget {
         this.removeEventListener(event.type, registration.listener);
       }
 
-      if (typeof registration.listener === 'function') {
-        registration.listener.call(this, event);
-      } else {
-        registration.listener.handleEvent(event);
+      try {
+        if (typeof registration.listener === 'function') {
+          registration.listener.call(this, event);
+        } else {
+          registration.listener.handleEvent(event);
+        }
+      } catch (error) {
+        this.#reportListenerError(error, event);
       }
 
       if (event.immediatePropagationStopped) {
@@ -123,4 +136,35 @@ export class MiniGameEventTarget {
   removeAllEventListeners(): void {
     this.#listeners.clear();
   }
+
+  protected invokeEventCallback<TEvent extends MiniGameEvent>(
+    callback: ((event: TEvent) => void) | null,
+    event: TEvent,
+  ): void {
+    if (callback === null) {
+      return;
+    }
+
+    try {
+      callback.call(this, event);
+    } catch (error) {
+      this.#reportListenerError(error, event);
+    }
+  }
+
+  #reportListenerError(error: unknown, event: MiniGameEvent): void {
+    try {
+      this.#onListenerError(error, event);
+    } catch (reporterError) {
+      try {
+        console.error('Mini-game event error reporter failed.', reporterError);
+      } catch {
+        // Error reporting must not change event dispatch or transport outcomes.
+      }
+    }
+  }
+}
+
+function reportListenerError(error: unknown, event: MiniGameEvent): void {
+  console.error(`Mini-game ${event.type} event listener failed; dispatch continues.`, error);
 }

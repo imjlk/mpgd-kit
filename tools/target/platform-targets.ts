@@ -76,6 +76,17 @@ export function appTargetForPlatformTarget(
   return target.kind === 'web' ? target.adapter : targetName;
 }
 
+export function assertPlatformTargetBuildEmitterAvailable(
+  target: Pick<PlatformTargetConfig, 'kind'>,
+  targetName: string,
+): void {
+  if (target.kind === 'wechat-minigame' || target.kind === 'tiktok-minigame') {
+    throw new Error(
+      `Mini-game target ${targetName} cannot be built until its native artifact emitter is installed. Configuration validation remains available.`,
+    );
+  }
+}
+
 export function assertPlatformTargetsConfigShape(input: unknown): PlatformTargetsConfig {
   assertRecord(input, 'platform targets config');
   const targets = input.targets;

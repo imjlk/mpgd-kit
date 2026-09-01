@@ -10,6 +10,7 @@ import {
   MiniGameAnimationFrameScheduler,
   MiniGameCanvasElement,
   MiniGameEvent,
+  MiniGameEventTarget,
   MiniGameImageElement,
   miniGamePhaserCanvasRenderer,
   MiniGameTouchEvent,
@@ -43,6 +44,29 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(offscreen).toBeInstanceOf(MiniGameCanvasElement);
     expect(offscreen).not.toBe(installation.canvas);
     expect(host.createdCanvasTypes).toEqual(['primary', 'offscreen']);
+
+    installation.canvas.style.width = '600px';
+    installation.canvas.style.height = '300px';
+    installation.canvas.style.setProperty('margin-left', '100px');
+    installation.canvas.style.marginTop = '75px';
+    expect(installation.canvas.getBoundingClientRect()).toMatchObject({
+      x: 100,
+      y: 75,
+      left: 100,
+      top: 75,
+      right: 700,
+      bottom: 375,
+      width: 600,
+      height: 300,
+    });
+    expect(installation.canvas.clientWidth).toBe(600);
+    expect(installation.canvas.clientHeight).toBe(300);
+    expect(mapMiniGameTouchToDesign(
+      { identifier: 1, clientX: 400, clientY: 225 },
+      host.getWindowInfo(),
+      { width: 1200, height: 600 },
+      installation.canvas.getBoundingClientRect(),
+    )).toEqual({ x: 600, y: 300 });
     expect(() => globalThis.document.createElement('section')).toThrow(
       "does not implement document.createElement('section')",
     );
@@ -74,9 +98,20 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(context.__state.drawImageSources).toHaveLength(1);
     expect(context.__state.drawImageSources[0]).not.toBe(image);
 
+    const reloaded = new Promise<void>((resolve) => {
+      image.onload = () => resolve();
+    });
+    image.src = 'assets/marker-2.png';
+    context.drawImage(image, 0, 0);
+    const reloadingNativeImage = context.__state.drawImageSources[1];
+
+    expect(Reflect.get(reloadingNativeImage as object, 'src')).toBe('assets/marker-2.png');
+    expect(Reflect.get(reloadingNativeImage as object, 'complete')).toBe(false);
+    await reloaded;
+
     image.src = '';
     context.drawImage(image, 0, 0);
-    const clearedNativeImage = context.__state.drawImageSources[1];
+    const clearedNativeImage = context.__state.drawImageSources[2];
 
     expect(image.src).toBe('');
     expect(Reflect.get(clearedNativeImage as object, 'src')).toBe('');
@@ -129,7 +164,7 @@ describe('mini-game globals and Canvas compatibility', () => {
     await expect(timeoutError).resolves.toMatchObject({ type: 'error' });
   });
 
-  it('rejects invalid image timing and reports unsupported blob URLs asynchronously', async () => {
+  it('rejects invalid image timing and reports unsafe image sources asynchronously', async () => {
     const host = new FakeMiniGameHost();
     installMiniGameGlobals(host, {
       image: { pollIntervalMs: 0 },
@@ -138,24 +173,30 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(() => new globalThis.Image()).toThrow('pollIntervalMs must be a positive');
     getInstalledMiniGameGlobals()?.dispose();
     installMiniGameGlobals(host);
-    const image = new globalThis.Image();
-    let assignmentReturned = false;
-    const blockedSourceError = new Promise<unknown>((resolve) => {
-      image.onerror = (event) => {
-        expect(assignmentReturned).toBe(true);
-        resolve(event);
-      };
-    });
 
-    image.src = 'blob:minigame-image';
-    assignmentReturned = true;
+    for (const [source, code] of [
+      ['blob:minigame-image', 'MINIGAME_IMAGE_PROTOCOL_BLOCKED'],
+      ['//untrusted.example/image.png', 'MINIGAME_IMAGE_PROTOCOL_BLOCKED'],
+      [String.raw`\\untrusted.example\image.png`, 'MINIGAME_IMAGE_PROTOCOL_BLOCKED'],
+      ['../secret.png', 'MINIGAME_IMAGE_LOCAL_PATH_INVALID'],
+    ] as const) {
+      const image = new globalThis.Image();
+      let assignmentReturned = false;
+      const blockedSourceError = new Promise<unknown>((resolve) => {
+        image.onerror = (event) => {
+          expect(assignmentReturned).toBe(true);
+          resolve(event);
+        };
+      });
 
-    await expect(blockedSourceError).resolves.toMatchObject({
-      type: 'error',
-      error: {
-        code: 'MINIGAME_IMAGE_PROTOCOL_BLOCKED',
-      },
-    });
+      image.src = source;
+      assignmentReturned = true;
+
+      await expect(blockedSourceError).resolves.toMatchObject({
+        type: 'error',
+        error: { code },
+      });
+    }
   });
 
   it('keeps same-target listeners after stopPropagation and honors stopImmediatePropagation', () => {
@@ -179,6 +220,24 @@ describe('mini-game globals and Canvas compatibility', () => {
     eventTarget.dispatchEvent(new MiniGameEvent('immediate'));
 
     expect(calls).toEqual(['normal-first', 'normal-second', 'immediate-first']);
+  });
+
+  it('continues event dispatch after reporting a listener exception', () => {
+    const listenerError = new Error('listener failed');
+    const reported: Array<Readonly<{ readonly error: unknown; readonly type: string }>> = [];
+    const eventTarget = new MiniGameEventTarget((error, event) => {
+      reported.push({ error, type: event.type });
+    });
+    const calls: string[] = [];
+    eventTarget.addEventListener('load', () => {
+      calls.push('failing');
+      throw listenerError;
+    });
+    eventTarget.addEventListener('load', () => calls.push('remaining'));
+
+    expect(() => eventTarget.dispatchEvent(new MiniGameEvent('load'))).not.toThrow();
+    expect(calls).toEqual(['failing', 'remaining']);
+    expect(reported).toEqual([{ error: listenerError, type: 'load' }]);
   });
 
   it('forwards touch start, move, end, and cancel and removes listeners on dispose', () => {
@@ -339,6 +398,37 @@ describe('mini-game requestAnimationFrame and transport', () => {
       event: { type: 'error' },
     });
     expect(request.status).toBe(0);
+  });
+
+  it('does not reclassify a successful XHR when its load callback throws', async () => {
+    const host = new FakeMiniGameHost();
+    host.localFiles.set('assets/value.json', encodeText('{"ok":true}'));
+    const listenerError = new Error('consumer load callback failed');
+    const reported = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const request = new MiniGameXMLHttpRequest(host);
+    let errorEvents = 0;
+    request.open('GET', 'assets/value.json');
+    request.responseType = 'json';
+    request.onload = () => {
+      throw listenerError;
+    };
+    request.onerror = () => {
+      errorEvents += 1;
+    };
+    const completed = new Promise<void>((resolve) => {
+      request.onloadend = () => resolve();
+    });
+
+    request.send();
+    await completed;
+
+    expect(request.status).toBe(200);
+    expect(request.response).toEqual({ ok: true });
+    expect(errorEvents).toBe(0);
+    expect(reported).toHaveBeenCalledWith(
+      expect.stringContaining('load event listener failed'),
+      listenerError,
+    );
   });
 
   it('allows only configured HTTPS origins for remote assets', async () => {

@@ -22,17 +22,35 @@ export interface MiniGameDesignPoint {
   readonly y: number;
 }
 
-export function getMiniGameCanvasBounds(info: MiniGameWindowInfo): MiniGameCanvasBounds {
+export interface MiniGameCanvasDisplayStyle {
+  readonly width?: unknown;
+  readonly height?: unknown;
+  readonly left?: unknown;
+  readonly top?: unknown;
+  readonly marginLeft?: unknown;
+  readonly marginTop?: unknown;
+}
+
+export function getMiniGameCanvasBounds(
+  info: MiniGameWindowInfo,
+  style: MiniGameCanvasDisplayStyle = {},
+): MiniGameCanvasBounds {
   assertMiniGameWindowInfo(info);
+  const width = resolveCssLength(style.width, info.width, info.width, false);
+  const height = resolveCssLength(style.height, info.height, info.height, false);
+  const left = resolveCssLength(style.left, 0, info.width, true)
+    + resolveCssLength(style.marginLeft, 0, info.width, true);
+  const top = resolveCssLength(style.top, 0, info.height, true)
+    + resolveCssLength(style.marginTop, 0, info.height, true);
   const values = {
-    x: 0,
-    y: 0,
-    left: 0,
-    top: 0,
-    right: info.width,
-    bottom: info.height,
-    width: info.width,
-    height: info.height,
+    x: left,
+    y: top,
+    left,
+    top,
+    right: left + width,
+    bottom: top + height,
+    width,
+    height,
   } as const;
 
   return {
@@ -41,10 +59,43 @@ export function getMiniGameCanvasBounds(info: MiniGameWindowInfo): MiniGameCanva
   };
 }
 
+function resolveCssLength(
+  input: unknown,
+  fallback: number,
+  percentBase: number,
+  allowNegative: boolean,
+): number {
+  if (input === undefined || input === null || input === '') {
+    return fallback;
+  }
+
+  if (typeof input === 'number') {
+    return Number.isFinite(input) && (allowNegative || input >= 0) ? input : fallback;
+  }
+
+  if (typeof input !== 'string') {
+    return fallback;
+  }
+
+  const match = /^(-?(?:\d+(?:\.\d+)?|\.\d+))(px|%)?$/iu.exec(input.trim());
+
+  if (match === null) {
+    return fallback;
+  }
+
+  const numeric = Number(match[1]);
+  const value = match[2] === '%' ? numeric * percentBase / 100 : numeric;
+
+  return Number.isFinite(value) && (allowNegative || value >= 0) ? value : fallback;
+}
+
 export function mapMiniGameTouchToDesign(
   touch: MiniGameTouch,
   windowInfo: MiniGameWindowInfo,
   designSize: Readonly<{ readonly width: number; readonly height: number }>,
+  canvasBounds: Pick<MiniGameCanvasBounds, 'left' | 'top' | 'width' | 'height'> = (
+    getMiniGameCanvasBounds(windowInfo)
+  ),
 ): MiniGameDesignPoint {
   assertMiniGameWindowInfo(windowInfo);
 
@@ -60,8 +111,22 @@ export function mapMiniGameTouchToDesign(
     );
   }
 
+  if (
+    !Number.isFinite(canvasBounds.left)
+    || !Number.isFinite(canvasBounds.top)
+    || !Number.isFinite(canvasBounds.width)
+    || canvasBounds.width <= 0
+    || !Number.isFinite(canvasBounds.height)
+    || canvasBounds.height <= 0
+  ) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_INVALID_CANVAS_BOUNDS',
+      'Mini-game canvas bounds must contain finite offsets and positive dimensions.',
+    );
+  }
+
   return {
-    x: touch.clientX * designSize.width / windowInfo.width,
-    y: touch.clientY * designSize.height / windowInfo.height,
+    x: (touch.clientX - canvasBounds.left) * designSize.width / canvasBounds.width,
+    y: (touch.clientY - canvasBounds.top) * designSize.height / canvasBounds.height,
   };
 }

@@ -40,6 +40,7 @@ import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
 import { assertNativeReleaseIdentity } from './native-release-identity';
 import {
   appTargetForPlatformTarget,
+  assertPlatformTargetBuildEmitterAvailable,
   effectiveTargetConfigOutputDir,
   loadPlatformTargetsConfig,
   releaseManifestPath,
@@ -81,6 +82,13 @@ const releaseManifestEnvKeys = [
 const platformTargets = loadPlatformTargetsConfig();
 const configBaseDir = platformTargets.baseDir;
 const config = platformTargets.config;
+const target = config.targets[targetName];
+
+if (target === undefined) {
+  throw new Error(`Unknown target: ${targetName}`);
+}
+
+assertPlatformTargetBuildEmitterAvailable(target, targetName);
 assertDisjointWebTargetOutputs(config.targets, targetPath, [
   { name: 'release manifest', path: releaseManifestPath(configBaseDir) },
   {
@@ -103,12 +111,6 @@ if (process.env.MPGD_SKIP_BUILD_TARGET_PREFLIGHT !== '1') {
   run('pnpm', ['validate:effective-config'], targetScopedEnv);
   run('pnpm', ['validate:targets'], targetScopedEnv);
   run('node', ['tools/run-ttsx.mjs', 'tools/package/build-packages.ts'], process.env);
-}
-
-const target = config.targets[targetName];
-
-if (target === undefined) {
-  throw new Error(`Unknown target: ${targetName}`);
 }
 
 const gameApp = targetPath(target.gameApp);

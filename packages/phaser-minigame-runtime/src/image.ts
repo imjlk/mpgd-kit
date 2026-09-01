@@ -18,6 +18,7 @@ export class MiniGameImageElement extends MiniGameEventTarget {
   complete = false;
   #source = '';
   #generation = 0;
+  #hasAssignedNativeSource = false;
   #timer: ReturnType<typeof setTimeout> | undefined;
   readonly #options: Required<Pick<MiniGameImageOptions, 'pollIntervalMs' | 'loadTimeoutMs'>>
     & Pick<MiniGameImageOptions, 'allowedRemoteOrigins'>;
@@ -119,6 +120,7 @@ export class MiniGameImageElement extends MiniGameEventTarget {
         return;
       }
 
+      this.#hasAssignedNativeSource = false;
       this.complete = true;
       return;
     }
@@ -126,10 +128,25 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     try {
       assertImageSourceAllowed(source, this.#options.allowedRemoteOrigins);
     } catch (error) {
-      this.#clearNativeSource(nativeImage);
+      if (this.#hasAssignedNativeSource && this.#clearNativeSource(nativeImage)) {
+        this.#hasAssignedNativeSource = false;
+      }
       this.#scheduleFailure(generation, error);
       return;
     }
+
+    if (this.#hasAssignedNativeSource && !this.#clearNativeSource(nativeImage)) {
+      this.#scheduleFailure(
+        generation,
+        new MiniGameRuntimeError(
+          'MINIGAME_IMAGE_RESET_FAILED',
+          'The mini-game native image could not reset before loading a new source.',
+        ),
+      );
+      return;
+    }
+
+    this.#hasAssignedNativeSource = false;
 
     const startedAt = Date.now();
 
@@ -140,6 +157,8 @@ export class MiniGameImageElement extends MiniGameEventTarget {
       if (!Reflect.set(nativeImage, 'src', source)) {
         throw new Error('The native image source is not writable.');
       }
+
+      this.#hasAssignedNativeSource = true;
     } catch (error) {
       this.#scheduleFailure(generation, error);
       return;
@@ -207,9 +226,9 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     }
 
     if (succeeded) {
-      this.onload?.call(this, event);
+      this.invokeEventCallback(this.onload, event);
     } else {
-      this.onerror?.call(this, event);
+      this.invokeEventCallback(this.onerror, event);
     }
 
     this.dispatchEvent(event);
@@ -246,7 +265,20 @@ function assertImageSourceAllowed(
   source: string,
   allowedRemoteOrigins: readonly string[] | undefined,
 ): void {
+  if (
+    source.startsWith('//')
+    || source.startsWith('\\\\')
+    || source.startsWith('/\\')
+    || source.startsWith('\\/')
+  ) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_IMAGE_PROTOCOL_BLOCKED',
+      `Protocol-relative mini-game image URLs are not supported: ${source}`,
+    );
+  }
+
   if (!/^[A-Za-z][A-Za-z\d+.-]*:/u.test(source)) {
+    assertLocalImagePath(source);
     return;
   }
 
@@ -272,6 +304,34 @@ function assertImageSourceAllowed(
     throw new MiniGameRuntimeError(
       'MINIGAME_IMAGE_ORIGIN_BLOCKED',
       `Remote mini-game image origin is not allowed: ${parsed.origin}`,
+    );
+  }
+}
+
+function assertLocalImagePath(source: string): void {
+  const withoutQuery = source.split(/[?#]/u, 1)[0] ?? '';
+  let decoded: string;
+
+  try {
+    decoded = decodeURIComponent(withoutQuery).replace(/^\/+|^(?:\.\/)+/u, '');
+  } catch {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_IMAGE_LOCAL_PATH_INVALID',
+      `Mini-game image path contains invalid encoding: ${source}`,
+    );
+  }
+
+  const segments = decoded.split('/');
+
+  if (
+    decoded.length === 0
+    || decoded.includes('\\')
+    || decoded.includes('\0')
+    || segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')
+  ) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_IMAGE_LOCAL_PATH_INVALID',
+      `Mini-game image path must remain inside the package: ${source}`,
     );
   }
 }

@@ -208,10 +208,31 @@ export class MiniGameHTMLElement extends MiniGameEventTarget {
 export class MiniGameCanvasElement extends MiniGameHTMLElement {
   readonly [miniGameNativeObjectSymbol]: object;
   readonly #contexts = new WeakMap<object, unknown>();
+  readonly #windowInfo: () => MiniGameWindowInfo;
 
   constructor(nativeCanvas: unknown, windowInfo: () => MiniGameWindowInfo) {
     super('canvas', () => getMiniGameCanvasBounds(windowInfo()));
     this[miniGameNativeObjectSymbol] = assertNativeObject(nativeCanvas, 'canvas');
+    this.#windowInfo = windowInfo;
+  }
+
+  override get clientWidth(): number {
+    return this.getBoundingClientRect().width;
+  }
+
+  override get clientHeight(): number {
+    return this.getBoundingClientRect().height;
+  }
+
+  override getBoundingClientRect(): MiniGameCanvasBounds {
+    return getMiniGameCanvasBounds(this.#windowInfo(), {
+      width: readStyleValue(this.style, 'width', 'width'),
+      height: readStyleValue(this.style, 'height', 'height'),
+      left: readStyleValue(this.style, 'left', 'left'),
+      top: readStyleValue(this.style, 'top', 'top'),
+      marginLeft: readStyleValue(this.style, 'marginLeft', 'margin-left'),
+      marginTop: readStyleValue(this.style, 'marginTop', 'margin-top'),
+    });
   }
 
   get width(): number {
@@ -350,6 +371,15 @@ function createMiniGameStyle(): MiniGameStyleDeclaration {
       return Reflect.set(target, property, value, receiver);
     },
   });
+}
+
+function readStyleValue(
+  style: MiniGameStyleDeclaration,
+  property: string,
+  cssProperty: string,
+): unknown {
+  const direct = style[property];
+  return direct === undefined || direct === '' ? style.getPropertyValue(cssProperty) : direct;
 }
 
 function assertNativeObject(input: unknown, kind: string): object {

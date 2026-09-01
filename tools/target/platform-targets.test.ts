@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 
-import { assertPlatformTargetsConfigShape } from './platform-targets';
+import {
+  assertPlatformTargetBuildEmitterAvailable,
+  assertPlatformTargetsConfigShape,
+} from './platform-targets';
 
 const validConfig = {
   targets: {
@@ -35,6 +38,14 @@ const validConfig = {
 } as const;
 
 assert.deepEqual(assertPlatformTargetsConfigShape(validConfig), validConfig);
+assert.throws(
+  () => assertPlatformTargetBuildEmitterAvailable(validConfig.targets.wechat, 'wechat'),
+  /cannot be built until its native artifact emitter is installed/u,
+);
+assert.throws(
+  () => assertPlatformTargetBuildEmitterAvailable(validConfig.targets.tiktok, 'tiktok'),
+  /cannot be built until its native artifact emitter is installed/u,
+);
 
 assert.throws(
   () => assertPlatformTargetsConfigShape(withWechatOverride({ renderer: 'webgl' })),
