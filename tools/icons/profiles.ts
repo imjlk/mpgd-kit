@@ -87,6 +87,14 @@ const profiles = {
       opaque: true,
     })],
   },
+  'minigame-experimental': {
+    id: 'minigame-experimental',
+    version: '1.0.0',
+    outputs: [png('static-artifact-evidence', 'validation-icon-512.png', 512, {
+      safeZone: 0.9,
+      opaque: false,
+    })],
+  },
 } as const satisfies Record<string, TargetIconProfile>;
 
 export type BuiltInIconProfileName = keyof typeof profiles;
@@ -97,6 +105,8 @@ const compatibleProfilesByTargetKind = {
   'capacitor-ios': new Set<BuiltInIconProfileName>(['ios']),
   'apps-in-toss': new Set<BuiltInIconProfileName>(['ait']),
   'devvit-web': new Set<BuiltInIconProfileName>(['devvit']),
+  'wechat-minigame': new Set<BuiltInIconProfileName>(['minigame-experimental']),
+  'tiktok-minigame': new Set<BuiltInIconProfileName>(['minigame-experimental']),
 } satisfies Record<PlatformTargetConfig['kind'], ReadonlySet<BuiltInIconProfileName>>;
 
 export function resolveTargetIconProfile(
@@ -141,6 +151,9 @@ function inferProfileName(
       return 'ait';
     case 'devvit-web':
       return 'devvit';
+    case 'wechat-minigame':
+    case 'tiktok-minigame':
+      return 'minigame-experimental';
   }
 }
 

@@ -1,5 +1,5 @@
 {
-  "version": "2026-08-12",
+  "version": "2026-09-01",
   "targets": {
     "web-preview": {
       "runtime": "web-preview",
@@ -301,6 +301,92 @@
         "remoteExecutableCodeAllowed": false,
         "installOtherAppCTAAllowed": false,
         "requiresStoreReview": false,
+        "requiresAitReview": false
+      }
+    },
+    "wechat": {
+      "runtime": "wechat-minigame",
+      "features": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false,
+        "leaderboard": false,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "native",
+        "localization": true
+      },
+      "localization": {
+        "fallbackLocale": "en"
+      },
+      "monetization": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false
+      },
+      "leaderboard": {
+        "native": false
+      },
+      "release": {
+        "profile": "wechat-minigame"
+      },
+      "integrations": {
+        "identityUpgrade": "unsupported",
+        "presentation": "available",
+        "sharing": "available",
+        "inboundShare": "unsupported",
+        "notifications": "unsupported",
+        "presentationMode": "fullscreen"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": true,
+        "requiresAitReview": false
+      }
+    },
+    "tiktok": {
+      "runtime": "tiktok-minigame",
+      "features": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false,
+        "leaderboard": false,
+        "localization": true
+      },
+      "capabilities": {
+        "storage": "native",
+        "localization": true
+      },
+      "localization": {
+        "fallbackLocale": "en"
+      },
+      "monetization": {
+        "iap": false,
+        "rewardedAds": false,
+        "interstitialAds": false
+      },
+      "leaderboard": {
+        "native": false
+      },
+      "release": {
+        "profile": "tiktok-minigame"
+      },
+      "integrations": {
+        "identityUpgrade": "unsupported",
+        "presentation": "available",
+        "sharing": "configuration-required",
+        "inboundShare": "unsupported",
+        "notifications": "unsupported",
+        "presentationMode": "fullscreen"
+      },
+      "policy": {
+        "externalPaymentAllowed": false,
+        "remoteExecutableCodeAllowed": false,
+        "installOtherAppCTAAllowed": false,
+        "requiresStoreReview": true,
         "requiresAitReview": false
       }
     }

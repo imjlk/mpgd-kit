@@ -631,6 +631,9 @@ function configuredProtectedBuildOutputs(
             path: resolvePath(join(target.wrapperApp, 'dist')),
           },
         ];
+      case 'wechat-minigame':
+      case 'tiktok-minigame':
+        return [{ name: `${name} mini-game artifact output`, path: resolvePath(target.output) }];
     }
   });
 }

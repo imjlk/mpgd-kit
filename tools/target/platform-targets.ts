@@ -137,6 +137,53 @@ function assertPlatformTargetConfigShape(
       assertString(input.webDir, `${target}.webDir`);
       assertString(input.artifact, `${target}.artifact`);
       break;
+    case 'wechat-minigame':
+    case 'tiktok-minigame':
+      assertMiniGameTarget(input, target);
+      break;
+  }
+}
+
+function assertMiniGameTarget(input: Record<string, unknown>, target: string): void {
+  assertString(input.output, `${target}.output`);
+
+  if (input.renderer !== 'canvas') {
+    throw new Error(`${target}.renderer must be canvas.`);
+  }
+
+  if (input.orientation !== 'portrait' && input.orientation !== 'landscape') {
+    throw new Error(`${target}.orientation must be portrait or landscape.`);
+  }
+
+  if (input.experimental !== true) {
+    throw new Error(`${target}.experimental must be true.`);
+  }
+
+  const expectedAdapter = input.kind === 'wechat-minigame' ? 'wechat' : 'tiktok';
+
+  if (input.adapter !== expectedAdapter) {
+    throw new Error(`${target}.adapter must be ${expectedAdapter} for ${String(input.kind)}.`);
+  }
+
+  assertRecord(input.packageBudget, `${target}.packageBudget`);
+  assertPositiveSafeInteger(input.packageBudget.mainBytes, `${target}.packageBudget.mainBytes`);
+  assertPositiveSafeInteger(input.packageBudget.totalBytes, `${target}.packageBudget.totalBytes`);
+
+  if (input.packageBudget.mainBytes > input.packageBudget.totalBytes) {
+    throw new Error(`${target}.packageBudget.mainBytes must not exceed totalBytes.`);
+  }
+
+  if (input.packageBudget.independentSubpackageBytes !== undefined) {
+    assertPositiveSafeInteger(
+      input.packageBudget.independentSubpackageBytes,
+      `${target}.packageBudget.independentSubpackageBytes`,
+    );
+
+    if (input.packageBudget.independentSubpackageBytes > input.packageBudget.totalBytes) {
+      throw new Error(
+        `${target}.packageBudget.independentSubpackageBytes must not exceed totalBytes.`,
+      );
+    }
   }
 }
 
@@ -275,6 +322,12 @@ function assertOptionalBoolean(input: unknown, label: string): void {
   }
 }
 
+function assertPositiveSafeInteger(input: unknown, label: string): asserts input is number {
+  if (typeof input !== 'number' || !Number.isSafeInteger(input) || input <= 0) {
+    throw new Error(`${label} must be a positive safe integer.`);
+  }
+}
+
 function assertTargetKind(input: unknown, target: string): asserts input is PlatformTargetConfig['kind'] {
   if (
     input !== 'web'
@@ -282,6 +335,8 @@ function assertTargetKind(input: unknown, target: string): asserts input is Plat
     && input !== 'capacitor-ios'
     && input !== 'apps-in-toss'
     && input !== 'devvit-web'
+    && input !== 'wechat-minigame'
+    && input !== 'tiktok-minigame'
   ) {
     throw new Error(`Target ${target} has unsupported kind: ${String(input)}`);
   }

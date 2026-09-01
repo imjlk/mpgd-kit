@@ -267,6 +267,12 @@ function toEffectivePlatformTargetMetadata(
         artifact: config.artifact,
         webDir: config.webDir,
       };
+    case 'wechat-minigame':
+    case 'tiktok-minigame':
+      return {
+        ...base,
+        output: config.output,
+      };
   }
 }
 
@@ -286,6 +292,10 @@ function platformKindForRuntime(runtime: EffectiveTargetConfig['runtime']): stri
       return 'devvit-web';
     case 'verse8-web':
       return 'web';
+    case 'wechat-minigame':
+      return 'wechat-minigame';
+    case 'tiktok-minigame':
+      return 'tiktok-minigame';
   }
 }
 
@@ -305,6 +315,10 @@ function platformAdapterForRuntime(runtime: EffectiveTargetConfig['runtime']): s
       return 'devvit';
     case 'verse8-web':
       return 'verse8';
+    case 'wechat-minigame':
+      return 'wechat';
+    case 'tiktok-minigame':
+      return 'tiktok';
   }
 }
 

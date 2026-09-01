@@ -20,6 +20,8 @@ const runtimeKinds = valueSet({
   'apps-in-toss': true,
   'devvit-web': true,
   'verse8-web': true,
+  'wechat-minigame': true,
+  'tiktok-minigame': true,
 } satisfies Record<TargetRuntimeKind, true>);
 const releaseProfiles = valueSet({
   web: true,
@@ -30,6 +32,8 @@ const releaseProfiles = valueSet({
   'apps-in-toss': true,
   'devvit': true,
   'verse8': true,
+  'wechat-minigame': true,
+  'tiktok-minigame': true,
 } satisfies Record<ReleaseProfile, true>);
 const storageSupportValues = valueSet({
   local: true,
