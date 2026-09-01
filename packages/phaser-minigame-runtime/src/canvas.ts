@@ -3,6 +3,8 @@ import { MiniGameRuntimeError, type MiniGameHost, type MiniGameWindowInfo } from
 import { getMiniGameCanvasBounds, type MiniGameCanvasBounds } from './scale.js';
 
 export const miniGameNativeObjectSymbol = Symbol.for('mpgd.minigame.nativeObject');
+const defaultCanvasWidth = 300;
+const defaultCanvasHeight = 150;
 
 export interface MiniGameStyleDeclaration extends Record<string, unknown> {
   getPropertyValue(name: string): string;
@@ -290,6 +292,20 @@ export class MiniGameCanvasElement extends MiniGameHTMLElement {
     }
 
     super.setAttribute(name, value);
+  }
+
+  override removeAttribute(name: string): void {
+    const normalizedName = name.toLowerCase();
+
+    if (this.hasAttribute(normalizedName)) {
+      if (normalizedName === 'width') {
+        this.width = defaultCanvasWidth;
+      } else if (normalizedName === 'height') {
+        this.height = defaultCanvasHeight;
+      }
+    }
+
+    super.removeAttribute(normalizedName);
   }
 
   get width(): number {

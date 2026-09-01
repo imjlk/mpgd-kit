@@ -87,6 +87,12 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(() => offscreen.setAttribute('width', '-1')).toThrow(
       'canvas width must be a non-negative finite number',
     );
+    offscreen.removeAttribute('WIDTH');
+    offscreen.removeAttribute('height');
+    expect(offscreen.width).toBe(300);
+    expect(offscreen.height).toBe(150);
+    expect(offscreen.getAttribute('width')).toBeNull();
+    expect(offscreen.getAttribute('height')).toBeNull();
     const firstMount = globalThis.document.createElement('div');
     const secondMount = globalThis.document.createElement('div');
     installation.document.body.appendChild(firstMount);
