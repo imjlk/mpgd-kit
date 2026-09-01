@@ -335,8 +335,10 @@ export function unwrapMiniGameNativeObject(value: unknown): unknown {
 }
 
 function wrapCanvasContext(context: object, canvas: MiniGameCanvasElement): unknown {
+  const wrappedMethods = new Map<PropertyKey, unknown>();
+
   return new Proxy(context, {
-    get(target, property, receiver) {
+    get(target, property) {
       if (property === 'canvas') {
         return canvas;
       }
@@ -347,17 +349,26 @@ function wrapCanvasContext(context: object, canvas: MiniGameCanvasElement): unkn
         return value;
       }
 
+      if (wrappedMethods.has(property)) {
+        return wrappedMethods.get(property);
+      }
+
       if (property === 'drawImage' || property === 'createPattern') {
-        return (source: unknown, ...args: readonly unknown[]) => Reflect.apply(
+        const wrapped = (source: unknown, ...args: readonly unknown[]) => Reflect.apply(
           value,
           target,
           [unwrapMiniGameNativeObject(source), ...args],
         );
+        wrappedMethods.set(property, wrapped);
+        return wrapped;
       }
 
-      return value.bind(target);
+      const bound = value.bind(target);
+      wrappedMethods.set(property, bound);
+      return bound;
     },
     set(target, property, value) {
+      wrappedMethods.delete(property);
       return Reflect.set(target, property, value, target);
     },
   });

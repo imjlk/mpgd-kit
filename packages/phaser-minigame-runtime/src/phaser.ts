@@ -70,6 +70,10 @@ function readGamePausedState(game: MiniGamePhaserGame): boolean {
   return game.isPaused === true;
 }
 
+function readLoopRunningState(loop: PhaserTimeStep): boolean {
+  return loop.running;
+}
+
 class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInstallation {
   readonly game: MiniGamePhaserGame;
   readonly host: MiniGameHost;
@@ -120,10 +124,6 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     const callback = raf.callback;
     const delay = raf.delay;
 
-    if (wasRunning) {
-      raf.stop();
-    }
-
     this.#patchedStep = (time: number) => {
       let failed = false;
       let failure: unknown;
@@ -143,11 +143,6 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
         onFrameError(failure);
       }
     };
-    raf.step = this.#patchedStep;
-
-    if (wasRunning) {
-      raf.start(callback, false, delay);
-    }
 
     this.#onDestroy = () => {
       if (this.#installing) {
@@ -158,6 +153,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
 
       this.dispose();
     };
+    let rafPatchAttempted = false;
 
     try {
       this.#releaseGlobalsDisposalGuard = globals.registerDisposalGuard(() => {
@@ -168,6 +164,19 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       });
       game.events?.once('destroy', this.#onDestroy);
       this.#assertInstallationAlive();
+      rafPatchAttempted = true;
+
+      if (wasRunning) {
+        raf.stop();
+        this.#assertInstallationAlive();
+      }
+
+      raf.step = this.#patchedStep;
+
+      if (wasRunning) {
+        raf.start(callback, false, delay);
+        this.#assertInstallationAlive();
+      }
 
       if (this.host.onPause !== undefined) {
         const unsubscribePause = this.host.onPause(() => this.#pause());
@@ -196,10 +205,14 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
           this.game.events?.off?.('destroy', this.#onDestroy);
         },
         () => {
+          if (!rafPatchAttempted || this.game.loop.raf !== raf) {
+            return;
+          }
+
           raf.stop();
           raf.step = this.#originalStep;
 
-          if (wasRunning && this.game.loop.raf === raf) {
+          if (wasRunning) {
             raf.start(callback, false, delay);
           }
         },
@@ -298,7 +311,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       try {
         this.game.loop.sleep();
       } catch (error) {
-        this.#loopSleptByHost = false;
+        this.#loopSleptByHost = !readLoopRunningState(this.game.loop);
         throw error;
       }
 
@@ -347,7 +360,19 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.#gamePausedByHost = false;
 
     if (shouldResumeGame) {
-      this.game.resume?.();
+      try {
+        this.game.resume?.();
+      } catch (error) {
+        this.#gamePausedByHost = readGamePausedState(this.game);
+
+        if (this.#gamePausedByHost) {
+          this.#pausedByHost = true;
+          this.#globals.document.hidden = true;
+          this.#globals.document.visibilityState = 'hidden';
+        }
+
+        throw error;
+      }
     }
 
     if ((!allowDisposed && this.#disposed) || this.#pausedByHost) {

@@ -1,7 +1,8 @@
 import type PhaserType from 'phaser';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { definePhaserAssetManifest, loadPhaserAssets } from '../../phaser-assets/src/index.js';
+import { definePhaserAssetManifest, loadPhaserAssets } from '@mpgd/phaser-assets';
+
 import {
   createMiniGamePhaserConfig,
   getInstalledMiniGameGlobals,
@@ -127,9 +128,13 @@ describe('Phaser 4.2 mini-game integration', () => {
       },
     }, globals) satisfies PhaserType.Types.Core.GameConfig;
     const game = new Phaser.Game(config);
-    const runtime = installPhaserMiniGameRuntime(game, { globals });
+    const runtime = installPhaserMiniGameRuntime(game, {
+      globals,
+      onFrameError: (error) => host.frameErrors.push(error),
+    });
 
     await driveGameUntil(host, () => sceneState.playCreated && sceneState.frames >= 2);
+    expect(host.frameErrors).toEqual([]);
     expect(sceneState.bootCreated).toBe(true);
     expect(sceneState.playCreated).toBe(true);
     expect(sceneState.frames).toBeGreaterThanOrEqual(2);
@@ -165,6 +170,12 @@ async function driveGameUntil(
   for (let index = 0; index < attempts; index += 1) {
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
     host.flushFrame(index * 16);
+
+    const frameError = host.frameErrors[0];
+
+    if (frameError !== undefined) {
+      throw frameError;
+    }
 
     if (predicate()) {
       return;

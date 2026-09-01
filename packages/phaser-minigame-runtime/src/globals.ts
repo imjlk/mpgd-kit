@@ -8,7 +8,9 @@ import {
   assertMiniGameWindowInfo,
   MiniGameRuntimeError,
   type MiniGameHost,
+  type MiniGameImageOptions,
   type MiniGameRuntimeOptions,
+  type MiniGameTransportOptions,
   type MiniGameWindowInfo,
 } from './host.js';
 import {
@@ -185,6 +187,7 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
   readonly window: object = globalThis;
   readonly #savedProperties: SavedGlobalProperty[] = [];
   readonly #scheduler: MiniGameAnimationFrameScheduler;
+  readonly #options: MiniGameRuntimeOptions;
   readonly #windowEvents = new MiniGameEventTarget(undefined, globalThis);
   readonly #disposalGuards = new Set<() => void>();
   #disposeInput: () => void = () => undefined;
@@ -193,17 +196,21 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
 
   constructor(host: MiniGameHost, options: MiniGameRuntimeOptions) {
     this.host = host;
+    this.#options = snapshotMiniGameRuntimeOptions(options);
     const windowInfo = host.getWindowInfo();
     assertMiniGameWindowInfo(windowInfo);
     this.canvas = createMiniGameCanvasElement(host, 'primary');
-    const ImageConstructor = createMiniGameImageConstructor(host, options.image);
+    const ImageConstructor = createMiniGameImageConstructor(host, this.#options.image);
     const XMLHttpRequestConstructor = createMiniGameXMLHttpRequestConstructor(
       host,
-      options.transport,
+      this.#options.transport,
     );
     this.document = new MiniGameDocument(host, this.canvas, ImageConstructor);
     this.document.defaultView = globalThis;
-    this.#scheduler = new MiniGameAnimationFrameScheduler(host, options.onAnimationFrameError);
+    this.#scheduler = new MiniGameAnimationFrameScheduler(
+      host,
+      this.#options.onAnimationFrameError,
+    );
     try {
       this.#installGlobals(windowInfo, ImageConstructor, XMLHttpRequestConstructor);
       this.#disposeInput = installMiniGameTouchInput(host, this.canvas).dispose;
@@ -216,6 +223,13 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
 
   get disposed(): boolean {
     return this.#disposed;
+  }
+
+  hasCompatibleOptions(options: MiniGameRuntimeOptions): boolean {
+    return haveEquivalentMiniGameRuntimeOptions(
+      this.#options,
+      snapshotMiniGameRuntimeOptions(options),
+    );
   }
 
   registerDisposalGuard(guard: () => void): () => void {
@@ -426,6 +440,13 @@ export function installMiniGameGlobals(
 ): MiniGameGlobalInstallation {
   if (activeInstallation !== undefined && !activeInstallation.disposed) {
     if (activeInstallation.host === host) {
+      if (!activeInstallation.hasCompatibleOptions(options)) {
+        throw new MiniGameRuntimeError(
+          'MINIGAME_GLOBALS_OPTIONS_MISMATCH',
+          'Mini-game globals are already installed with different runtime options.',
+        );
+      }
+
       return activeInstallation;
     }
 
@@ -441,6 +462,72 @@ export function installMiniGameGlobals(
 
 export function getInstalledMiniGameGlobals(): MiniGameGlobalInstallation | undefined {
   return activeInstallation?.disposed === false ? activeInstallation : undefined;
+}
+
+function snapshotMiniGameRuntimeOptions(options: MiniGameRuntimeOptions): MiniGameRuntimeOptions {
+  return Object.freeze({
+    ...(options.image === undefined ? {} : { image: snapshotImageOptions(options.image) }),
+    ...(options.transport === undefined
+      ? {}
+      : { transport: snapshotTransportOptions(options.transport) }),
+    ...(options.onAnimationFrameError === undefined
+      ? {}
+      : { onAnimationFrameError: options.onAnimationFrameError }),
+  });
+}
+
+function snapshotImageOptions(options: MiniGameImageOptions): MiniGameImageOptions {
+  return Object.freeze({
+    ...(options.pollIntervalMs === undefined ? {} : { pollIntervalMs: options.pollIntervalMs }),
+    ...(options.loadTimeoutMs === undefined ? {} : { loadTimeoutMs: options.loadTimeoutMs }),
+    ...(options.allowedRemoteOrigins === undefined
+      ? {}
+      : { allowedRemoteOrigins: snapshotOriginList(options.allowedRemoteOrigins) }),
+  });
+}
+
+function snapshotTransportOptions(options: MiniGameTransportOptions): MiniGameTransportOptions {
+  return Object.freeze({
+    ...(options.requestTimeoutMs === undefined
+      ? {}
+      : { requestTimeoutMs: options.requestTimeoutMs }),
+    ...(options.allowedRemoteOrigins === undefined
+      ? {}
+      : { allowedRemoteOrigins: snapshotOriginList(options.allowedRemoteOrigins) }),
+  });
+}
+
+function snapshotOriginList(origins: readonly string[]): readonly string[] {
+  return Object.freeze([...new Set(origins)].sort());
+}
+
+function haveEquivalentMiniGameRuntimeOptions(
+  left: MiniGameRuntimeOptions,
+  right: MiniGameRuntimeOptions,
+): boolean {
+  return left.onAnimationFrameError === right.onAnimationFrameError
+    && Object.is(left.image?.pollIntervalMs, right.image?.pollIntervalMs)
+    && Object.is(left.image?.loadTimeoutMs, right.image?.loadTimeoutMs)
+    && haveEquivalentOriginLists(
+      left.image?.allowedRemoteOrigins,
+      right.image?.allowedRemoteOrigins,
+    )
+    && Object.is(left.transport?.requestTimeoutMs, right.transport?.requestTimeoutMs)
+    && haveEquivalentOriginLists(
+      left.transport?.allowedRemoteOrigins,
+      right.transport?.allowedRemoteOrigins,
+    );
+}
+
+function haveEquivalentOriginLists(
+  left: readonly string[] | undefined,
+  right: readonly string[] | undefined,
+): boolean {
+  const leftOrigins = left ?? [];
+  const rightOrigins = right ?? [];
+
+  return leftOrigins.length === rightOrigins.length
+    && leftOrigins.every((origin, index) => origin === rightOrigins[index]);
 }
 
 function unsupportedNavigation(): never {

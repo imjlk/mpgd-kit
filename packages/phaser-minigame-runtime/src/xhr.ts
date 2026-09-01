@@ -302,7 +302,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
 
       const byteLength = response.data instanceof ArrayBuffer
         ? response.data.byteLength
-        : encodeUtf8(response.data).byteLength;
+        : utf8ByteLength(response.data);
       this.#emitProgress('progress', byteLength);
 
       if (generation !== this.#generation) {
@@ -398,7 +398,11 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
         break;
       case 'json':
         this.responseText = text;
-        this.response = JSON.parse(text) as unknown;
+        try {
+          this.response = text.length === 0 ? null : JSON.parse(text) as unknown;
+        } catch {
+          this.response = null;
+        }
         break;
     }
   }
@@ -610,6 +614,28 @@ function assertMiniGameResponse(response: MiniGameResponse): void {
       'Mini-game host response data must be a string or ArrayBuffer.',
     );
   }
+}
+
+function utf8ByteLength(value: string): number {
+  let byteLength = 0;
+
+  for (const character of value) {
+    const codePoint = character.codePointAt(0) ?? 0xfffd;
+
+    if (codePoint >= 0xd800 && codePoint <= 0xdfff) {
+      byteLength += 3;
+    } else if (codePoint <= 0x7f) {
+      byteLength += 1;
+    } else if (codePoint <= 0x7ff) {
+      byteLength += 2;
+    } else if (codePoint <= 0xffff) {
+      byteLength += 3;
+    } else {
+      byteLength += 4;
+    }
+  }
+
+  return byteLength;
 }
 
 function encodeUtf8(value: string): Uint8Array {
