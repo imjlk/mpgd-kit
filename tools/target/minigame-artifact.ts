@@ -655,7 +655,7 @@ function assertSafeNode(
     if (
       propertyName !== undefined
       && ['eval', 'Function', 'importScripts'].includes(propertyName)
-      && (node.computed === true || isDynamicCodeGlobalObject(node.object))
+      && (node.computed === true || isDynamicCodeGlobalObject(node.object, ancestors))
       && !isTypeofReference(node, ancestors)
     ) {
       throw new Error(`Mini-game ${path} contains forbidden ${propertyName}.`);
@@ -674,7 +674,7 @@ function assertSafeNode(
     const calleeName = readMemberName(node.callee);
     const firstArgument = Array.isArray(node.arguments) ? node.arguments[0] : undefined;
 
-    if (isUnknownComputedGlobalMember(node.callee)) {
+    if (isUnknownComputedGlobalMember(node.callee, ancestors)) {
       throw new Error(`Mini-game ${path} contains forbidden computed global call.`);
     }
 
@@ -686,7 +686,7 @@ function assertSafeNode(
   if (node.type === 'NewExpression' && isAstRecord(node.callee)) {
     const calleeName = readMemberName(node.callee);
 
-    if (isUnknownComputedGlobalMember(node.callee)) {
+    if (isUnknownComputedGlobalMember(node.callee, ancestors)) {
       throw new Error(`Mini-game ${path} contains forbidden computed global construction.`);
     }
 
@@ -721,16 +721,35 @@ function isGlobalObjectIdentifier(input: unknown): boolean {
     && ['globalThis', 'self', 'window'].includes(input.name);
 }
 
-function isDynamicCodeGlobalObject(input: unknown): boolean {
+function isDynamicCodeGlobalObject(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+): boolean {
   return isGlobalObjectIdentifier(input)
-    || (isAstRecord(input) && input.type === 'ThisExpression');
+    || (
+      isAstRecord(input)
+      && input.type === 'ThisExpression'
+      && isProgramThisReference(ancestors)
+    );
 }
 
-function isUnknownComputedGlobalMember(node: Record<string, unknown>): boolean {
+function isProgramThisReference(ancestors: readonly MiniGameAstAncestor[]): boolean {
+  return !ancestors.some(({ node }) => {
+    return node.type === 'FunctionDeclaration'
+      || node.type === 'FunctionExpression'
+      || node.type === 'ClassBody'
+      || node.type === 'StaticBlock';
+  });
+}
+
+function isUnknownComputedGlobalMember(
+  node: Record<string, unknown>,
+  ancestors: readonly MiniGameAstAncestor[],
+): boolean {
   return node.type === 'MemberExpression'
     && node.computed === true
     && readMemberName(node) === undefined
-    && isDynamicCodeGlobalObject(node.object);
+    && isDynamicCodeGlobalObject(node.object, ancestors);
 }
 
 function isTypeofReference(

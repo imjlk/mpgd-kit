@@ -141,6 +141,9 @@ try {
     /contains forbidden computed global call/u,
   );
   rmSync(join(root, 'unsafe.js'));
+  write('safe-method.js', 'function invoke(member) { this[member](); }\n');
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-method.js'));
   write('unsafe.js', 'const member = getRuntimeKey(); this[member]();\n');
   assert.throws(
     () => assertMiniGameJavaScriptSafety(root, []),
