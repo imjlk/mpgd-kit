@@ -782,7 +782,6 @@ function assertSafeNode(
     if (
       propertyName !== undefined
       && forbiddenGlobals.has(propertyName)
-      && isGlobalObjectAliasSource(node.object, ancestors, scopeAnalysis)
     ) {
       throw new Error(`Mini-game ${path} contains forbidden platform global ${propertyName}.`);
     }

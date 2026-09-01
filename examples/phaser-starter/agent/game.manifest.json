@@ -146,6 +146,7 @@
         "Keep WeChat SDK access in the adapter and runtime host; scenes continue to use PlatformGateway.",
         "Canvas is the only enabled renderer, and audio remains blocked by artifact preflight.",
         "Declare every remote non-code asset origin in the target allowlist and configure the same domain in the WeChat Developer Portal.",
+        "Remote WeChat transport must expose the final response URL after redirects; responses without final-URL evidence fail closed.",
         "Treat static artifact verification as experimental evidence, not DevTools or real-device approval."
       ]
     },

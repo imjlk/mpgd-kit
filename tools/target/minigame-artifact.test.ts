@@ -193,6 +193,7 @@ try {
     'globalThis.wx.request({});\n',
     'globalThis["w" + "x"].createCanvas();\n',
     'const globalAlias = globalThis; globalAlias.wx.getWindowInfo();\n',
+    'const inheritedGlobal = Object.create(globalThis); inheritedGlobal.wx.request({});\n',
     'const { wx: sdk } = globalThis; sdk.createImage();\n',
   ]) {
     write('game.bundle.js', directWechatSdkAccess);

@@ -137,6 +137,7 @@ describe('WeChat Mini Game host', () => {
       status: 200,
       data: '{"ok":true}',
       headers: { 'content-type': 'application/json' },
+      url: 'https://assets.example.test/config.json',
     });
     const binary = await host.request?.({
       url: 'https://assets.example.test/logo.bin',
@@ -222,6 +223,23 @@ describe('WeChat Mini Game host', () => {
       headers: {},
       responseType: 'json',
     })).rejects.toMatchObject({ code: 'WECHAT_REQUEST_FAILED' });
+  });
+
+  it('rejects remote responses without a verifiable final URL', async () => {
+    const fake = createFakeWechatMiniGameApi({
+      request(input) {
+        input.success({ statusCode: 200, data: '{}', header: {} });
+        return { abort() {} };
+      },
+    });
+    const host = createWechatMiniGameHost(fake.api, { requestAnimationFrame: () => 1 });
+
+    await expect(host.request?.({
+      url: 'https://assets.example.test/redirected.json',
+      method: 'GET',
+      headers: {},
+      responseType: 'json',
+    })).rejects.toMatchObject({ code: 'WECHAT_REQUEST_FINAL_URL_UNAVAILABLE' });
   });
 
   it('rejects malformed startup state and non-binary packaged-file responses', async () => {

@@ -6,6 +6,7 @@ import {
 } from '@mpgd/target-config';
 
 import { createStarterGame } from './runtime/createGame';
+import { disposeStarterMiniGameBridgeAfterBootstrapFailure } from './platform/minigameBridge';
 import { detectRuntime } from './platform/runtimeDetector';
 import { createStarterGameServices } from './platform/gameServices';
 import { installStarterPlatform } from './platform/installStarterPlatform';
@@ -64,6 +65,7 @@ export async function bootstrapStarter(): Promise<void> {
       },
     });
   } catch (error) {
+    disposeStarterMiniGameBridgeAfterBootstrapFailure(runtimeConfig.target);
     disposeMicrosoftStorePwa();
     throw error;
   }

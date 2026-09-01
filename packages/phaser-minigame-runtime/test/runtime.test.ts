@@ -1337,6 +1337,21 @@ describe('mini-game requestAnimationFrame and transport', () => {
     expect(request.getAllResponseHeaders()).not.toContain('secret');
     expect(host.remoteRequests).toHaveLength(1);
     expect(host.remoteRequests[0]?.url).toBe('https://cdn.example.com/game/config.json');
+
+    host.remoteResponse = {
+      status: 200,
+      data: '{}',
+      url: 'https://redirected.example.net/game/config.json',
+    };
+    const redirected = new MiniGameXMLHttpRequest(host, {
+      allowedRemoteOrigins: ['https://cdn.example.com'],
+    });
+    redirected.open('GET', 'https://cdn.example.com/game/config.json');
+    await expect(sendRequest(redirected)).rejects.toMatchObject({
+      event: { type: 'error' },
+    });
+    expect(redirected.responseURL).toBe('');
+
     expect(classifyMiniGameRequestUrl(
       'HTTPS://CDN.EXAMPLE.COM:443/game/data.json#ignored',
       ['https://cdn.example.com/'],

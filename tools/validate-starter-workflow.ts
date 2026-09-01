@@ -1609,6 +1609,14 @@ function validatePhaserTemplateDevvitViewModes(): void {
       );
     }
 
+    if (existsSync(bootstrapPath)) {
+      assertIncludesText(
+        readText(bootstrapPath),
+        'disposeStarterMiniGameBridgeAfterBootstrapFailure(runtimeConfig.target)',
+        `${bootstrapPath}: failed mini-game bootstrap cleanup.`,
+      );
+    }
+
     if (existsSync(createGamePath)) {
       const source = readText(createGamePath);
 

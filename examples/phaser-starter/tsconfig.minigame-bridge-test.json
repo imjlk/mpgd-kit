@@ -2,10 +2,11 @@
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": ".",
+    "rootDir": "../..",
     "types": ["node"]
   },
   "include": [
+    "src/platform/minigameBridge.ts",
     "src/platform/minigameBridgeLifecycle.ts",
     "src/platform/minigameBridgeLifecycle.test.ts"
   ]

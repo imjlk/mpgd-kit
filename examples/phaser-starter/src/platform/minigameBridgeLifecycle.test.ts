@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 
 import {
+  disposeStarterMiniGameBridgeAfterBootstrapFailure,
+  type StarterMiniGameRuntimeBridge,
+} from './minigameBridge';
+import {
   requireStarterMiniGameRuntimeAssetOrigins,
   runStarterMiniGameBootstrapStep,
   StarterMiniGameBridgeLifecycle,
@@ -74,5 +78,59 @@ const replacementScope = { __MPGD_MINIGAME_RUNTIME__: activeBridge };
 const staleLifecycle = new StarterMiniGameBridgeLifecycle(() => undefined);
 assert.doesNotThrow(() => staleLifecycle.dispose(replacementScope, bridge));
 assert.equal(replacementScope.__MPGD_MINIGAME_RUNTIME__, activeBridge);
+
+const globalScope = globalThis as typeof globalThis & {
+  __MPGD_MINIGAME_RUNTIME__?: StarterMiniGameRuntimeBridge;
+};
+const priorBridgeDescriptor = Object.getOwnPropertyDescriptor(
+  globalScope,
+  '__MPGD_MINIGAME_RUNTIME__',
+);
+
+try {
+  let bootstrapDisposalCalls = 0;
+  const bootstrapBridge = {
+    target: 'wechat',
+    gateway: {},
+    createPhaserConfig: (config: unknown) => config,
+    attachGame() {},
+    dispose() {
+      bootstrapDisposalCalls += 1;
+      Reflect.deleteProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__');
+    },
+  } as unknown as StarterMiniGameRuntimeBridge;
+  Object.defineProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__', {
+    configurable: true,
+    value: bootstrapBridge,
+  });
+  disposeStarterMiniGameBridgeAfterBootstrapFailure('browser');
+  assert.equal(bootstrapDisposalCalls, 0);
+  disposeStarterMiniGameBridgeAfterBootstrapFailure('wechat');
+  assert.equal(bootstrapDisposalCalls, 1);
+  assert.equal(globalScope.__MPGD_MINIGAME_RUNTIME__, undefined);
+
+  const cleanupFailure = new Error('bridge cleanup failed');
+  Object.defineProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__', {
+    configurable: true,
+    value: {
+      ...bootstrapBridge,
+      dispose() {
+        throw cleanupFailure;
+      },
+    },
+  });
+  const originalConsoleError = console.error;
+  console.error = () => undefined;
+  try {
+    assert.doesNotThrow(() => disposeStarterMiniGameBridgeAfterBootstrapFailure('wechat'));
+  } finally {
+    console.error = originalConsoleError;
+  }
+} finally {
+  Reflect.deleteProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__');
+  if (priorBridgeDescriptor !== undefined) {
+    Object.defineProperty(globalScope, '__MPGD_MINIGAME_RUNTIME__', priorBridgeDescriptor);
+  }
+}
 
 console.log('Mini-game bridge lifecycle tests passed.');
