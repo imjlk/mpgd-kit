@@ -603,15 +603,6 @@ function assertSafeNode(
   ancestors: readonly Record<string, unknown>[],
   path: string,
 ): void {
-  const staticallyEvaluatedString = evaluateStaticString(node);
-
-  if (
-    staticallyEvaluatedString !== undefined
-    && ['eval', 'Function', 'importScripts'].includes(staticallyEvaluatedString)
-  ) {
-    throw new Error(`Mini-game ${path} contains forbidden ${staticallyEvaluatedString}.`);
-  }
-
   if (node.type === 'ImportExpression') {
     throw new Error(`Mini-game ${path} contains forbidden dynamic import.`);
   }
@@ -643,7 +634,7 @@ function assertSafeNode(
   if (
     node.type === 'Property'
     && node.computed === true
-    && ancestors.at(-1)?.type === 'ObjectPattern'
+    && isComputedGlobalDestructuring(ancestors)
   ) {
     throw new Error(`Mini-game ${path} contains forbidden computed destructuring.`);
   }
@@ -672,6 +663,31 @@ function assertSafeNode(
       throw new Error(`Mini-game ${path} contains forbidden ${calleeName} construction.`);
     }
   }
+}
+
+function isComputedGlobalDestructuring(
+  ancestors: readonly Record<string, unknown>[],
+): boolean {
+  const pattern = ancestors.at(-1);
+  const container = ancestors.at(-2);
+
+  if (!isAstRecord(pattern) || pattern.type !== 'ObjectPattern' || !isAstRecord(container)) {
+    return false;
+  }
+  if (container.type === 'VariableDeclarator' && container.id === pattern) {
+    return isGlobalObjectIdentifier(container.init);
+  }
+
+  return container.type === 'AssignmentExpression'
+    && container.left === pattern
+    && isGlobalObjectIdentifier(container.right);
+}
+
+function isGlobalObjectIdentifier(input: unknown): boolean {
+  return isAstRecord(input)
+    && input.type === 'Identifier'
+    && typeof input.name === 'string'
+    && ['globalThis', 'self', 'window'].includes(input.name);
 }
 
 function isUnknownComputedGlobalMember(node: Record<string, unknown>): boolean {

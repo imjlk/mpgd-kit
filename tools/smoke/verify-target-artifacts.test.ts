@@ -35,6 +35,20 @@ assert.throws(
   () => assertMiniGameRuntimeAssetOrigins('globalThis.runtime = true;\n', []),
   /exactly one executable asset-origin declaration/u,
 );
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'metadata'),
+    expectedMiniGameOrigins,
+  ),
+  /exactly one executable asset-origin declaration/u,
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'Object', 'metadata'),
+    expectedMiniGameOrigins,
+  ),
+  /exactly one executable asset-origin declaration/u,
+);
 
 try {
   writeFileSync(join(webArtifactRoot, 'manifest.webmanifest'), '{}\n');
@@ -160,7 +174,12 @@ assert.throws(
 
 console.log('Target artifact readiness tests passed.');
 
-function createMiniGameOriginDeclaration(origins: readonly string[]): string {
-  return 'Object.defineProperty(globalThis,"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
-    + `{value:Object.freeze(${JSON.stringify(origins)})});`;
+function createMiniGameOriginDeclaration(
+  origins: readonly string[],
+  definePropertyOwner = 'Object',
+  freezeOwner = 'Object',
+): string {
+  return `${definePropertyOwner}.defineProperty(globalThis,`
+    + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
+    + `{value:${freezeOwner}.freeze(${JSON.stringify(origins)})});`;
 }

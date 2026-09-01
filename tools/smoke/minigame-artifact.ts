@@ -130,7 +130,7 @@ function readRuntimeAssetOriginsDeclaration(
   if (
     node.type !== 'CallExpression'
     || !isAstRecord(node.callee)
-    || readMemberName(node.callee) !== 'defineProperty'
+    || !isNamedMember(node.callee, 'Object', 'defineProperty')
     || !Array.isArray(node.arguments)
   ) {
     return undefined;
@@ -164,7 +164,7 @@ function readStaticStringArray(input: unknown): string[] | undefined {
   if (
     input.type === 'CallExpression'
     && isAstRecord(input.callee)
-    && readMemberName(input.callee) === 'freeze'
+    && isNamedMember(input.callee, 'Object', 'freeze')
     && Array.isArray(input.arguments)
     && input.arguments.length === 1
   ) {
@@ -183,24 +183,37 @@ function readMemberName(node: Record<string, unknown>): string | undefined {
   if (node.type !== 'MemberExpression' || !isAstRecord(node.property)) {
     return undefined;
   }
+  if (node.computed === true) {
+    return readStaticString(node.property);
+  }
 
-  return node.computed === true
-    ? readStaticString(node.property)
-    : node.property.type === 'Identifier' && typeof node.property.name === 'string'
-      ? node.property.name
-      : undefined;
+  return node.property.type === 'Identifier' && typeof node.property.name === 'string'
+    ? node.property.name
+    : undefined;
+}
+
+function isNamedMember(
+  node: Record<string, unknown>,
+  objectName: string,
+  memberName: string,
+): boolean {
+  return node.type === 'MemberExpression'
+    && isIdentifier(node.object, objectName)
+    && readMemberName(node) === memberName;
 }
 
 function readStaticPropertyName(node: Record<string, unknown>): string | undefined {
   if (!isAstRecord(node.key)) {
     return undefined;
   }
+  if (node.computed === true) {
+    return readStaticString(node.key);
+  }
+  if (node.key.type === 'Identifier' && typeof node.key.name === 'string') {
+    return node.key.name;
+  }
 
-  return node.computed === true
-    ? readStaticString(node.key)
-    : node.key.type === 'Identifier' && typeof node.key.name === 'string'
-      ? node.key.name
-      : readStaticString(node.key);
+  return readStaticString(node.key);
 }
 
 function readStaticString(input: unknown): string | undefined {

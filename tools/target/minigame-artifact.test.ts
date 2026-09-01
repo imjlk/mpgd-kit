@@ -135,7 +135,10 @@ try {
     'unsafe.js',
     "const constructorName = 'Function'; globalThis[constructorName]('return 1')();\n",
   );
-  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden Function/u);
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, []),
+    /contains forbidden computed global call/u,
+  );
   rmSync(join(root, 'unsafe.js'));
   write('unsafe.js', 'globalThis[getRuntimeKey()]();\n');
   assert.throws(
@@ -143,6 +146,15 @@ try {
     /contains forbidden computed global call/u,
   );
   rmSync(join(root, 'unsafe.js'));
+  write('safe-label.js', "globalThis.label = 'Function';\n");
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-label.js'));
+  write(
+    'safe-destructuring.js',
+    "const input = { value: 1 }; const key = 'value'; const { [key]: value } = input; void value;\n",
+  );
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-destructuring.js'));
   write('safe-canvas.js', "document.createElement('canvas');\n");
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-canvas.js'));
