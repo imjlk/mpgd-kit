@@ -73,6 +73,9 @@ assert.doesNotMatch(worker, /\bcaches\.match\s*\(/u);
 assert.match(worker, /name\.startsWith\(CACHE_PREFIX\)/u);
 assert.match(worker, /CACHE_SCOPE = encodeURIComponent\(self\.registration\.scope\)/u);
 assert.match(worker, /cache\.match\(request, \{ ignoreSearch: true \}\)/u);
+assert.match(worker, /if \(!response\.redirected\)/u);
+assert.match(worker, /new Response\(response\.body,/u);
+assert.doesNotMatch(worker, /return await cache\.match\(INDEX_URL\)/u);
 assert.throws(
   () => createMicrosoftStorePwaReleaseEvidence({
     ...provenance,

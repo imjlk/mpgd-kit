@@ -148,6 +148,22 @@ const CACHE_NAME = ${JSON.stringify(cacheNamePattern)}.replace('{scope}', CACHE_
 const PRECACHE_URLS = ${JSON.stringify(precacheUrls, null, 2)};
 const INDEX_URL = new URL('./index.html', self.registration.scope).href;
 
+function normalizeCachedNavigationResponse(response) {
+  if (!response.redirected) {
+    return response;
+  }
+
+  // Static hosts commonly canonicalize /index.html to /. A redirected response
+  // can be stored by Cache API, but Chromium rejects it when a service worker
+  // later returns it for a navigation whose URL is different. Reconstruct the
+  // response so the cached document remains a valid same-origin app shell.
+  return new Response(response.body, {
+    headers: response.headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
     const cache = await caches.open(CACHE_NAME);
@@ -197,7 +213,10 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate') {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE_NAME);
-      return await cache.match(INDEX_URL) ?? fetch(request);
+      const cachedIndex = await cache.match(INDEX_URL);
+      return cachedIndex === undefined
+        ? fetch(request)
+        : normalizeCachedNavigationResponse(cachedIndex);
     })());
     return;
   }
