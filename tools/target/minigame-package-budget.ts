@@ -96,6 +96,7 @@ export interface MiniGameArtifactFile {
 export function listMiniGameArtifactFiles(artifactRoot: string): readonly MiniGameArtifactFile[] {
   const root = resolve(artifactRoot);
   const files: MiniGameArtifactFile[] = [];
+  const artifactPaths: string[] = [];
   const pending = [root];
 
   while (pending.length > 0) {
@@ -113,6 +114,10 @@ export function listMiniGameArtifactFiles(artifactRoot: string): readonly MiniGa
         throw new Error(`Mini-game artifacts must not contain symbolic links: ${path}`);
       }
 
+      const artifactPath = toArtifactRelativePath(root, path);
+      assertMiniGameArtifactPathAllowed(artifactPath);
+      artifactPaths.push(artifactPath);
+
       if (stat.isDirectory()) {
         pending.push(path);
         continue;
@@ -122,27 +127,48 @@ export function listMiniGameArtifactFiles(artifactRoot: string): readonly MiniGa
         throw new Error(`Mini-game artifacts must contain regular files only: ${path}`);
       }
 
-      const artifactPath = toArtifactRelativePath(root, path);
-      assertMiniGameArtifactFileAllowed(artifactPath);
       files.push({ path: artifactPath, bytes: stat.size });
     }
   }
 
+  assertMiniGameArtifactPathsPortable(artifactPaths);
   return files.sort((left, right) => left.path.localeCompare(right.path));
 }
 
 export function assertMiniGameArtifactRelativePath(path: string, label: string): void {
+  const segments = path.split('/');
+
   if (
     path.length === 0
     || path.includes('\\')
     || path.startsWith('/')
     || /^[A-Za-z]:/u.test(path)
     || isAbsolute(path)
-    || path.split('/').some(
-      (segment) => segment.length === 0 || segment === '.' || segment === '..',
-    )
+    || segments.some((segment) => segment.length === 0 || segment === '.' || segment === '..')
+    || segments.some((segment) => (
+      /[. ]$/u.test(segment)
+      || /[<>:"|?*\u0000-\u001f]/u.test(segment)
+      || /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(segment)
+    ))
   ) {
     throw new Error(`${label} must be a safe artifact-relative path: ${path}`);
+  }
+}
+
+export function assertMiniGameArtifactPathsPortable(paths: readonly string[]): void {
+  const seen = new Map<string, string>();
+
+  for (const path of paths) {
+    assertMiniGameArtifactRelativePath(path, 'Mini-game artifact path');
+    const portableKey = path.normalize('NFC').toLowerCase();
+    const previous = seen.get(portableKey);
+
+    if (previous !== undefined) {
+      throw new Error(
+        `Mini-game artifact paths collide on portable filesystems: ${previous}, ${path}.`,
+      );
+    }
+    seen.set(portableKey, path);
   }
 }
 
@@ -236,7 +262,7 @@ function assertWithinBudget(actual: number, maximum: number, label: string): voi
   }
 }
 
-function assertMiniGameArtifactFileAllowed(path: string): void {
+function assertMiniGameArtifactPathAllowed(path: string): void {
   const segments = path.split('/');
   const fileName = segments.at(-1) ?? '';
   const normalizedFileName = fileName.toLowerCase();

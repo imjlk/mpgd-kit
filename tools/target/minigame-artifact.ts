@@ -27,6 +27,18 @@ import type { MiniGamePackageBudget, MiniGameTargetConfig, PlatformTargetConfig 
 export const miniGameArtifactEvidenceFileName = 'mpgd-minigame-artifact.json';
 export const miniGameEffectiveTargetConfigFileName = 'mpgd-effective-target-config.json';
 export const miniGameIconManifestFileName = 'mpgd-icon-manifest.json';
+const forbiddenJavaScriptPatterns = [
+  { pattern: /\bimport\s*\(/u, label: 'dynamic import' },
+  { pattern: /\beval\b/u, label: 'eval' },
+  { pattern: /\bFunction\b/u, label: 'Function constructor' },
+  { pattern: /(?<!typeof\s)\bimportScripts\b/u, label: 'importScripts' },
+  {
+    pattern: /https?:\/\/[^\s"'`]+\.[cm]?js(?:[?#][^\s"'`]*)?/iu,
+    label: 'remote executable code reference',
+  },
+  { pattern: /\bindex\.html\b/u, label: 'HTML entry dependency' },
+  { pattern: /["'`]\.?\/?[^"'`]*\.css(?:[?"'`])/u, label: 'CSS runtime dependency' },
+];
 
 export interface MiniGameArtifactFileEvidence {
   readonly path: string;
@@ -128,7 +140,8 @@ export function assertMiniGameArtifactOutputDirectory(
   const project = resolve(projectRoot);
   const artifact = resolve(artifactRoot);
   const projectRelativePath = relative(project, artifact);
-  const segments = projectRelativePath.split(/[\\/]+/u);
+  const portableProjectRelativePath = projectRelativePath.replaceAll(sep, '/');
+  const segments = portableProjectRelativePath.split('/');
 
   if (
     projectRelativePath.length === 0
@@ -143,6 +156,7 @@ export function assertMiniGameArtifactOutputDirectory(
       `Mini-game artifact output must be a dedicated artifacts/ child: ${artifactRoot}`,
     );
   }
+  assertMiniGameArtifactRelativePath(portableProjectRelativePath, 'Mini-game artifact output');
 
   let candidate = artifact;
 
@@ -182,11 +196,7 @@ export function assertDisjointMiniGameTargetOutputs(
     if (target.kind !== 'wechat-minigame' && target.kind !== 'tiktok-minigame') {
       return [];
     }
-    if (target.output.includes('\\')) {
-      throw new Error(
-        `Mini-game artifact output must use portable forward slashes: ${name} (${target.output}).`,
-      );
-    }
+    assertMiniGameArtifactRelativePath(target.output, `Mini-game artifact output ${name}`);
 
     return [{ name, path: resolvePath(target.output) }];
   });
@@ -421,7 +431,13 @@ function isPathWithin(root: string, candidate: string): boolean {
 }
 
 function portablePathComparisonKey(path: string): string {
-  return canonicalizeThroughExistingAncestor(path.replaceAll('\\', '/'))
+  const portablePath = path.replaceAll('\\', '/').split('/').map((segment) => {
+    return segment === '.' || segment === '..'
+      ? segment
+      : segment.replace(/[. ]+$/u, '');
+  }).join('/');
+
+  return canonicalizeThroughExistingAncestor(portablePath)
     .normalize('NFC')
     .toLowerCase();
 }
@@ -529,17 +545,7 @@ export function assertMiniGameJavaScriptSafety(
   for (const file of javascript) {
     const source = readFileSync(join(artifactRoot, file.path), 'utf8');
 
-    for (const [pattern, label] of [
-      [/\bimport\s*\(/u, 'dynamic import'],
-      [/\beval\b/u, 'eval'],
-      [/\bFunction\b/u, 'Function constructor'],
-      [
-        /(?:\bimportScripts\s*\(\s*["'`]https?:\/\/|https?:\/\/[^\s"'`]+\.[cm]?js(?:[?#][^\s"'`]*)?)/iu,
-        'remote executable code reference',
-      ],
-      [/\bindex\.html\b/u, 'HTML entry dependency'],
-      [/["'`]\.?\/?[^"'`]*\.css(?:[?"'`])/u, 'CSS runtime dependency'],
-    ] as const) {
+    for (const { pattern, label } of forbiddenJavaScriptPatterns) {
       if (pattern.test(source)) {
         throw new Error(`Mini-game ${file.path} contains forbidden ${label}.`);
       }

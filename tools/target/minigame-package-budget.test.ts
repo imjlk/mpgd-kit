@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 import {
+  assertMiniGameArtifactPathsPortable,
   assertMiniGameArtifactRelativePath,
   assertMiniGamePackageBudget,
 } from './minigame-package-budget';
@@ -137,12 +138,24 @@ try {
     '../game.js',
     'assets//game.js',
     'assets\\game.js',
+    'assets/trailing.',
+    'assets/trailing ',
+    'assets/invalid?.png',
+    'assets/CON.png',
   ]) {
     assert.throws(
       () => assertMiniGameArtifactRelativePath(unsafe, 'fixture'),
       /safe artifact-relative path/u,
     );
   }
+  assert.throws(
+    () => assertMiniGameArtifactPathsPortable(['assets/Foo.js', 'assets/foo.js']),
+    /collide on portable filesystems/u,
+  );
+  assert.throws(
+    () => assertMiniGameArtifactPathsPortable(['assets/caf\u00e9.png', 'assets/cafe\u0301.png']),
+    /collide on portable filesystems/u,
+  );
 } finally {
   rmSync(root, { force: true, recursive: true });
 }

@@ -88,6 +88,7 @@ try {
   for (const functionConstructor of [
     'Function("return 1")()\n',
     '(Function)("return 1")()\n',
+    'Function.call(null, "return 1")()\n',
     'new Function("return 1")()\n',
     'Function`return 1`\n',
   ]) {
@@ -100,6 +101,15 @@ try {
   }
   write('unsafe.js', 'const indirectEval = eval;\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
+  rmSync(join(root, 'unsafe.js'));
+  write('safe-worker-check.js', "if (typeof importScripts === 'function') {}\n");
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-worker-check.js'));
+  write('unsafe.js', "importScripts('https://cdn.example/code' + '.js');\n");
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, []),
+    /contains forbidden importScripts/u,
+  );
   rmSync(join(root, 'unsafe.js'));
 
   const parsed = JSON.parse(
@@ -237,7 +247,7 @@ try {
         output: 'artifacts\\wechat',
       },
     }, resolveValidationPath),
-    /must use portable forward slashes/u,
+    /must be a safe artifact-relative path/u,
   );
   if (sep === '/') {
     assert.throws(
@@ -253,6 +263,29 @@ try {
       {
         name: 'foreign-separator protected output',
         path: resolveValidationPath('artifacts\\wechat'),
+      },
+    ]),
+    /Mini-game artifact output must not overlap generated output/u,
+  );
+  assert.throws(
+    () => assertDisjointMiniGameTargetOutputs({
+      wechat: {
+        ...miniGameTarget,
+        output: 'artifacts/target-config.',
+      },
+    }, resolveValidationPath),
+    /must be a safe artifact-relative path/u,
+  );
+  assert.throws(
+    () => assertDisjointMiniGameTargetOutputs({
+      wechat: {
+        ...miniGameTarget,
+        output: 'artifacts/target-config',
+      },
+    }, resolveValidationPath, [
+      {
+        name: 'Windows-trimmed protected output',
+        path: resolveValidationPath('artifacts/target-config.'),
       },
     ]),
     /Mini-game artifact output must not overlap generated output/u,
