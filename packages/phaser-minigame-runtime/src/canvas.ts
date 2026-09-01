@@ -277,17 +277,7 @@ export class MiniGameCanvasElement extends MiniGameHTMLElement {
     const normalizedName = name.toLowerCase();
 
     if (normalizedName === 'width' || normalizedName === 'height') {
-      const dimension = Number(value);
-
-      if (!Number.isFinite(dimension) || dimension < 0) {
-        throw new MiniGameRuntimeError(
-          'MINIGAME_CANVAS_DIMENSION_INVALID',
-          `Mini-game canvas ${normalizedName} must be a non-negative finite number.`,
-        );
-      }
-
-      this[normalizedName] = Math.floor(dimension);
-      super.setAttribute(normalizedName, String(value));
+      this[normalizedName] = normalizeCanvasDimension(Number(value), normalizedName);
       return;
     }
 
@@ -313,7 +303,9 @@ export class MiniGameCanvasElement extends MiniGameHTMLElement {
   }
 
   set width(value: number) {
-    Reflect.set(this[miniGameNativeObjectSymbol], 'width', value);
+    const dimension = normalizeCanvasDimension(value, 'width');
+    Reflect.set(this[miniGameNativeObjectSymbol], 'width', dimension);
+    super.setAttribute('width', String(dimension));
   }
 
   get height(): number {
@@ -321,7 +313,9 @@ export class MiniGameCanvasElement extends MiniGameHTMLElement {
   }
 
   set height(value: number) {
-    Reflect.set(this[miniGameNativeObjectSymbol], 'height', value);
+    const dimension = normalizeCanvasDimension(value, 'height');
+    Reflect.set(this[miniGameNativeObjectSymbol], 'height', dimension);
+    super.setAttribute('height', String(dimension));
   }
 
   getContext(type: string, ...args: readonly unknown[]): unknown {
@@ -557,4 +551,15 @@ function assertNativeObject(input: unknown, kind: string): object {
 function readFiniteNumber(object: object, property: string, fallback: number): number {
   const value = Reflect.get(object, property);
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function normalizeCanvasDimension(value: number, property: 'width' | 'height'): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_CANVAS_DIMENSION_INVALID',
+      `Mini-game canvas ${property} must be a non-negative finite number.`,
+    );
+  }
+
+  return Math.floor(value);
 }

@@ -10,6 +10,11 @@ import { normalizeMiniGameHttpsOrigin, parseMiniGameHttpsUrl } from './url.js';
 
 export type MiniGameXMLHttpRequestResponseType = '' | MiniGameRequestResponseType;
 
+interface LoadedMiniGameResponse {
+  readonly response: MiniGameResponse;
+  readonly requestURL: string;
+}
+
 const forbiddenResponseHeaders = new Set(['set-cookie', 'set-cookie2']);
 const forbiddenRequestHeaders = new Set([
   'accept-charset',
@@ -318,16 +323,19 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
 
   async #send(generation: number, timeoutMs: number | undefined): Promise<void> {
     try {
-      const response = await withTimeout(this.#load(), timeoutMs);
+      const loaded = await withTimeout(this.#load(), timeoutMs);
 
       if (generation !== this.#generation) {
         return;
       }
 
+      const response = loaded.response;
       assertMiniGameResponse(response);
       this.status = response.status;
       this.statusText = statusTextFor(response.status);
-      this.responseURL = this.#url;
+      this.responseURL = response.url === undefined
+        ? loaded.requestURL
+        : normalizeMiniGameResponseUrl(response.url, this.#options.allowedRemoteOrigins);
       this.#responseHeaders.clear();
 
       for (const [name, value] of Object.entries(response.headers ?? {})) {
@@ -403,7 +411,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     }
   }
 
-  async #load(): Promise<MiniGameResponse> {
+  async #load(): Promise<LoadedMiniGameResponse> {
     const classified = classifyMiniGameRequestUrl(this.#url, this.#options.allowedRemoteOrigins);
 
     if (classified.kind === 'local') {
@@ -415,8 +423,11 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       }
 
       return {
-        status: 200,
-        data: await this.#host.readLocalFile(classified.path),
+        response: {
+          status: 200,
+          data: await this.#host.readLocalFile(classified.path),
+        },
+        requestURL: `minigame://game/${classified.path}`,
       };
     }
 
@@ -427,12 +438,15 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       );
     }
 
-    return this.#host.request({
-      url: classified.url,
-      method: this.#method ?? 'GET',
-      headers: Object.fromEntries(this.#requestHeaders),
-      responseType: this.responseType === '' ? 'text' : this.responseType,
-    });
+    return {
+      response: await this.#host.request({
+        url: classified.url,
+        method: this.#method ?? 'GET',
+        headers: Object.fromEntries(this.#requestHeaders),
+        responseType: this.responseType === '' ? 'text' : this.responseType,
+      }),
+      requestURL: classified.url,
+    };
   }
 
   #assignResponse(data: string | ArrayBuffer): void {
@@ -688,6 +702,29 @@ function assertMiniGameResponse(response: MiniGameResponse): void {
       'Mini-game host response data must be a string or ArrayBuffer.',
     );
   }
+
+  if (response.url !== undefined && typeof response.url !== 'string') {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_RESPONSE_URL_INVALID',
+      'Mini-game host response URL must be a string when provided.',
+    );
+  }
+}
+
+function normalizeMiniGameResponseUrl(
+  input: string,
+  allowedRemoteOrigins: readonly string[] | undefined,
+): string {
+  const classified = classifyMiniGameRequestUrl(input, allowedRemoteOrigins);
+
+  if (classified.kind !== 'remote') {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_RESPONSE_URL_INVALID',
+      'Mini-game host response URL must be an allowed HTTPS URL.',
+    );
+  }
+
+  return classified.url;
 }
 
 function utf8ByteLength(value: string): number {

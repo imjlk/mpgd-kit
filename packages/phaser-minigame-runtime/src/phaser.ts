@@ -249,42 +249,51 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     }
 
     this.#disposed = true;
-    const cleanup = runCleanupSteps([
-      () => {
-        if (this.#hasHostPauseState()) {
-          this.#restoreHostPauseState(true);
-        }
-      },
-      () => runLifecycleUnsubscribers(this.#unsubscribers.splice(0)),
-      () => {
-        this.game.events?.off?.('destroy', this.#onDestroy);
-      },
-      () => {
-        const raf = this.game.loop.raf;
+    const gameIdentity = this.game as object;
+    installingGames.add(gameIdentity);
+    installingGlobals.add(this.#globals);
 
-        if (raf === this.#raf && raf.step === this.#patchedStep) {
-          const wasRunning = raf.isRunning;
-          const callback = raf.callback;
-          const delay = raf.delay;
-          raf.stop();
-          raf.step = this.#originalStep;
-
-          if (wasRunning) {
-            raf.start(callback, false, delay);
+    try {
+      const cleanup = runCleanupSteps([
+        () => {
+          if (this.#hasHostPauseState()) {
+            this.#restoreHostPauseState(true);
           }
-        }
-      },
-      () => this.#releaseGlobalsDisposalGuard(),
-    ]);
+        },
+        () => runLifecycleUnsubscribers(this.#unsubscribers.splice(0)),
+        () => {
+          this.game.events?.off?.('destroy', this.#onDestroy);
+        },
+        () => {
+          const raf = this.game.loop.raf;
 
-    installedGames.delete(this.game as object);
+          if (raf === this.#raf && raf.step === this.#patchedStep) {
+            const wasRunning = raf.isRunning;
+            const callback = raf.callback;
+            const delay = raf.delay;
+            raf.stop();
+            raf.step = this.#originalStep;
 
-    if (installedGlobals.get(this.#globals) === this) {
-      installedGlobals.delete(this.#globals);
-    }
+            if (wasRunning) {
+              raf.start(callback, false, delay);
+            }
+          }
+        },
+        () => this.#releaseGlobalsDisposalGuard(),
+      ]);
 
-    if (!cleanup.ok) {
-      throw cleanup.error;
+      installedGames.delete(gameIdentity);
+
+      if (installedGlobals.get(this.#globals) === this) {
+        installedGlobals.delete(this.#globals);
+      }
+
+      if (!cleanup.ok) {
+        throw cleanup.error;
+      }
+    } finally {
+      installingGames.delete(gameIdentity);
+      installingGlobals.delete(this.#globals);
     }
   }
 

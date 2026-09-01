@@ -36,6 +36,15 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(duplicate).toBe(installation);
     expect(globalThis.window).toBe(globalThis);
     expect(globalThis.document).toBe(installation.document);
+    const miniGameLocation = globalThis.location;
+    expect(miniGameLocation.href).toBe('minigame://game/');
+    expect(() => Reflect.set(miniGameLocation, 'href', 'https://example.com')).toThrow(
+      'Browser navigation is not available',
+    );
+    expect(() => Reflect.set(globalThis, 'location', { href: 'https://example.com' })).toThrow(
+      'Browser navigation is not available',
+    );
+    expect(globalThis.location).toBe(miniGameLocation);
     expect(globalThis.document.getElementById('game')).toBe(installation.document.body);
     expect(globalThis.document.getElementById('mpgd-game-canvas')).toBe(installation.canvas);
     expect(installation.document.body.dataset.mpgdPreserveBrowserTouchGestures).toBeUndefined();
@@ -96,6 +105,14 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(offscreen.height).toBe(150);
     expect(offscreen.getAttribute('width')).toBeNull();
     expect(offscreen.getAttribute('height')).toBeNull();
+    offscreen.width = 512;
+    offscreen.height = 256;
+    expect(offscreen.getAttribute('width')).toBe('512');
+    expect(offscreen.getAttribute('height')).toBe('256');
+    offscreen.removeAttribute('width');
+    offscreen.removeAttribute('height');
+    expect(offscreen.width).toBe(300);
+    expect(offscreen.height).toBe(150);
     const firstMount = globalThis.document.createElement('div');
     const secondMount = globalThis.document.createElement('div');
     installation.document.body.appendChild(firstMount);
@@ -257,6 +274,42 @@ describe('mini-game globals and Canvas compatibility', () => {
 
     const recoveredInstallation = installMiniGameGlobals(new FakeMiniGameHost());
     expect(getInstalledMiniGameGlobals()).toBe(recoveredInstallation);
+  });
+
+  it('reserves global installation until touch teardown restores globals', () => {
+    class ReentrantTouchTeardownHost extends FakeMiniGameHost {
+      reentryError: unknown;
+
+      override onTouchStart(
+        callback: Parameters<FakeMiniGameHost['onTouchStart']>[0],
+      ): () => void {
+        const unsubscribe = super.onTouchStart(callback);
+
+        return () => {
+          unsubscribe();
+
+          try {
+            installMiniGameGlobals(this);
+          } catch (error) {
+            this.reentryError = error;
+          }
+        };
+      }
+    }
+
+    const host = new ReentrantTouchTeardownHost();
+    const installation = installMiniGameGlobals(host);
+    installation.dispose();
+
+    expect(host.reentryError).toMatchObject({
+      code: 'MINIGAME_GLOBALS_INSTALL_REENTRANT',
+    });
+    expect(host.touchListenerCount).toBe(0);
+    expect(getInstalledMiniGameGlobals()).toBeUndefined();
+    expect(Reflect.get(globalThis, 'document')).not.toBe(installation.document);
+
+    const nextInstallation = installMiniGameGlobals(new FakeMiniGameHost());
+    expect(getInstalledMiniGameGlobals()).toBe(nextInstallation);
   });
 
   it('unwraps mini-game image wrappers passed to drawImage', async () => {
@@ -1163,6 +1216,7 @@ describe('mini-game requestAnimationFrame and transport', () => {
     host.remoteResponse = {
       status: 200,
       data: 'a😀한',
+      url: 'HTTPS://CDN.EXAMPLE.COM:443/game/final.json#ignored',
       headers: {
         'content-type': 'application/json',
         'Set-Cookie': 'session=secret',
@@ -1172,7 +1226,7 @@ describe('mini-game requestAnimationFrame and transport', () => {
     const request = new MiniGameXMLHttpRequest(host, {
       allowedRemoteOrigins: ['https://cdn.example.com'],
     });
-    request.open('GET', 'https://cdn.example.com/game/config.json');
+    request.open('GET', 'HTTPS://CDN.EXAMPLE.COM:443/game/config.json#ignored');
     request.responseType = 'text';
     let progressBytes = 0;
     request.onprogress = (event) => {
@@ -1181,12 +1235,14 @@ describe('mini-game requestAnimationFrame and transport', () => {
     await sendRequest(request);
 
     expect(request.responseText).toBe('a😀한');
+    expect(request.responseURL).toBe('https://cdn.example.com/game/final.json');
     expect(progressBytes).toBe(8);
     expect(request.getResponseHeader('Content-Type')).toBe('application/json');
     expect(request.getResponseHeader('Set-Cookie')).toBeNull();
     expect(request.getResponseHeader('Set-Cookie2')).toBeNull();
     expect(request.getAllResponseHeaders()).not.toContain('secret');
     expect(host.remoteRequests).toHaveLength(1);
+    expect(host.remoteRequests[0]?.url).toBe('https://cdn.example.com/game/config.json');
     expect(classifyMiniGameRequestUrl(
       'HTTPS://CDN.EXAMPLE.COM:443/game/data.json#ignored',
       ['https://cdn.example.com/'],
@@ -1512,6 +1568,69 @@ describe('Phaser mini-game runtime patch', () => {
     const secondInstallation = installPhaserMiniGameRuntime(secondGame, { globals });
     expect(secondInstallation.disposed).toBe(false);
     secondInstallation.dispose();
+  });
+
+  it('reserves Phaser identities until lifecycle teardown restores the RAF', () => {
+    class ReentrantLifecycleTeardownHost extends FakeMiniGameHost {
+      onPauseTeardown: (() => void) | undefined;
+
+      override onPause(callback: () => void): () => void {
+        const unsubscribe = super.onPause(callback);
+
+        return () => {
+          unsubscribe();
+          this.onPauseTeardown?.();
+        };
+      }
+    }
+
+    const host = new ReentrantLifecycleTeardownHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    const originalStep = raf.step;
+    const loop = {
+      started: true,
+      running: true,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        raf.stop();
+        this.running = false;
+      },
+      wake() {
+        raf.start(raf.callback, false, raf.delay);
+        this.running = true;
+      },
+    };
+    raf.start(raf.callback, false, raf.delay);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      canvas: globals.canvas,
+      loop,
+    } satisfies MiniGamePhaserGame;
+    const installation = installPhaserMiniGameRuntime(game, { globals });
+    let reentryError: unknown;
+    host.onPauseTeardown = () => {
+      try {
+        installPhaserMiniGameRuntime(game, { globals });
+      } catch (error) {
+        reentryError = error;
+      }
+    };
+
+    installation.dispose();
+
+    expect(reentryError).toMatchObject({ code: 'MINIGAME_PHASER_INSTALL_REENTRANT' });
+    expect(host.lifecycleListenerCount).toBe(0);
+    expect(raf.step).toBe(originalStep);
+    expect(host.pendingFrameCount).toBe(1);
+
+    host.onPauseTeardown = undefined;
+    const nextInstallation = installPhaserMiniGameRuntime(game, { globals });
+    expect(nextInstallation.disposed).toBe(false);
+    nextInstallation.dispose();
+    expect(raf.step).toBe(originalStep);
   });
 
   it('does not apply pause after a visibility listener disposes the runtime', () => {

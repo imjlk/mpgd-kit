@@ -268,18 +268,23 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
       throw error;
     }
 
-    this.#disposed = true;
-    this.#disposing = false;
-    this.#disposeInput();
-    this.#scheduler.dispose();
-    this.#windowEvents.removeAllEventListeners();
-    this.document.removeAllEventListeners();
-    this.#disposalGuards.clear();
+    installingGlobals = true;
 
-    this.#restoreGlobals();
+    try {
+      this.#disposed = true;
+      this.#disposing = false;
+      this.#disposeInput();
+      this.#scheduler.dispose();
+      this.#windowEvents.removeAllEventListeners();
+      this.document.removeAllEventListeners();
+      this.#disposalGuards.clear();
+      this.#restoreGlobals();
+    } finally {
+      if (activeInstallation === this) {
+        activeInstallation = undefined;
+      }
 
-    if (activeInstallation === this) {
-      activeInstallation = undefined;
+      installingGlobals = false;
     }
   }
 
@@ -303,23 +308,7 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
       ? globalThis.performance
       : { now: () => Date.now() };
     const language = windowInfo.language ?? 'en';
-    const location = {
-      href: 'minigame://game/',
-      origin: 'minigame://game',
-      protocol: 'minigame:',
-      host: 'game',
-      hostname: 'game',
-      port: '',
-      pathname: '/',
-      search: '',
-      hash: '',
-      assign: unsupportedNavigation,
-      replace: unsupportedNavigation,
-      reload: unsupportedNavigation,
-      toString() {
-        return this.href;
-      },
-    };
+    const location = createMiniGameLocation();
     const screen = {
       width: windowInfo.width,
       height: windowInfo.height,
@@ -365,7 +354,7 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
     this.#define('parent', globalThis);
     this.#define('document', this.document);
     this.#define('navigator', navigator);
-    this.#define('location', location);
+    this.#defineNavigationGlobal('location', location);
     this.#define('screen', screen);
     this.#define('performance', performanceValue);
     this.#define('innerWidth', windowInfo.width);
@@ -425,6 +414,27 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
         enumerable: false,
         writable: true,
         value,
+      });
+    } catch (error) {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_GLOBAL_INSTALL_FAILED',
+        `Unable to install required mini-game global ${String(key)}: ${String(error)}`,
+      );
+    }
+  }
+
+  #defineNavigationGlobal(key: PropertyKey, value: unknown): void {
+    this.#savedProperties.push({
+      key,
+      descriptor: Object.getOwnPropertyDescriptor(globalThis, key),
+    });
+
+    try {
+      Object.defineProperty(globalThis, key, {
+        configurable: true,
+        enumerable: false,
+        get: () => value,
+        set: () => unsupportedNavigation(),
       });
     } catch (error) {
       throw new MiniGameRuntimeError(
@@ -550,4 +560,35 @@ function unsupportedNavigation(): never {
     'MINIGAME_NAVIGATION_UNSUPPORTED',
     'Browser navigation is not available in a native mini-game runtime.',
   );
+}
+
+function createMiniGameLocation(): object {
+  const values = {
+    href: 'minigame://game/',
+    origin: 'minigame://game',
+    protocol: 'minigame:',
+    host: 'game',
+    hostname: 'game',
+    port: '',
+    pathname: '/',
+    search: '',
+    hash: '',
+  } as const;
+  const location: Record<string, unknown> = {
+    assign: unsupportedNavigation,
+    replace: unsupportedNavigation,
+    reload: unsupportedNavigation,
+    toString: () => values.href,
+  };
+
+  for (const [property, value] of Object.entries(values)) {
+    Object.defineProperty(location, property, {
+      configurable: false,
+      enumerable: true,
+      get: () => value,
+      set: () => unsupportedNavigation(),
+    });
+  }
+
+  return location;
 }

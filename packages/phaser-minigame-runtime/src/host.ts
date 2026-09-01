@@ -27,6 +27,8 @@ export interface MiniGameResponse {
   readonly status: number;
   readonly data: string | ArrayBuffer;
   readonly headers?: Readonly<Record<string, string>>;
+  /** Final transport URL after redirects, when the host can report it. */
+  readonly url?: string;
 }
 
 export interface MiniGameHost {
