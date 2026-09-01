@@ -71,6 +71,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
   readonly #patchedStep: (time: number) => void;
   readonly #unsubscribers: Array<() => void> = [];
   readonly #onDestroy: () => void;
+  #releaseGlobalsDisposalGuard: () => void = () => undefined;
   #disposed = false;
   #pausedByHost = false;
   #gamePausedByHost = false;
@@ -140,6 +141,13 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.#onDestroy = () => this.dispose();
 
     try {
+      this.#releaseGlobalsDisposalGuard = globals.registerDisposalGuard(() => {
+        throw new MiniGameRuntimeError(
+          'MINIGAME_PHASER_RUNTIME_ACTIVE',
+          'Dispose the Phaser mini-game runtime before disposing mini-game globals.',
+        );
+      });
+
       if (this.host.onPause !== undefined) {
         const unsubscribePause = this.host.onPause(() => this.#pause());
         this.#unsubscribers.push(assertUnsubscribe(unsubscribePause, 'onPause'));
@@ -158,9 +166,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
         this.#restoreHostPauseState();
       }
 
-      for (const unsubscribe of this.#unsubscribers.splice(0)) {
-        unsubscribe();
-      }
+      runLifecycleUnsubscribers(this.#unsubscribers.splice(0));
 
       raf.stop();
       raf.step = this.#originalStep;
@@ -168,6 +174,8 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       if (wasRunning) {
         raf.start(callback, false, delay);
       }
+
+      this.#releaseGlobalsDisposalGuard();
 
       throw error;
     }
@@ -188,9 +196,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       this.#restoreHostPauseState();
     }
 
-    for (const unsubscribe of this.#unsubscribers.splice(0)) {
-      unsubscribe();
-    }
+    runLifecycleUnsubscribers(this.#unsubscribers.splice(0));
 
     this.game.events?.off?.('destroy', this.#onDestroy);
     const raf = this.game.loop.raf;
@@ -208,6 +214,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     }
 
     installedGames.delete(this.game as object);
+    this.#releaseGlobalsDisposalGuard();
   }
 
   #pause(): void {
@@ -225,13 +232,37 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     }
 
     if (this.game.isPaused !== true && this.game.pause !== undefined) {
-      this.game.pause();
       this.#gamePausedByHost = true;
+
+      try {
+        this.game.pause();
+      } catch (error) {
+        this.#gamePausedByHost = false;
+        throw error;
+      }
+
+      if (this.#disposed || !this.#pausedByHost) {
+        return;
+      }
     }
 
     if (this.game.loop.started && this.game.loop.running) {
-      this.game.loop.sleep();
       this.#loopSleptByHost = true;
+
+      try {
+        this.game.loop.sleep();
+      } catch (error) {
+        this.#loopSleptByHost = false;
+        throw error;
+      }
+
+      if (this.#disposed || !this.#pausedByHost) {
+        this.#loopSleptByHost = false;
+
+        if (!this.game.loop.running) {
+          this.game.loop.wake();
+        }
+      }
     }
   }
 
@@ -352,6 +383,20 @@ function assertUnsubscribe(input: unknown, source: string): () => void {
   }
 
   return input as () => void;
+}
+
+function runLifecycleUnsubscribers(unsubscribers: readonly (() => void)[]): void {
+  for (const unsubscribe of unsubscribers) {
+    try {
+      unsubscribe();
+    } catch (error) {
+      try {
+        console.error('Mini-game lifecycle unsubscription failed; cleanup continues.', error);
+      } catch {
+        // Cleanup must continue even when host logging is unavailable.
+      }
+    }
+  }
 }
 
 function assertOptionalConfigRecord(

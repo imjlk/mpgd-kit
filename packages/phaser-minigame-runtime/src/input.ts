@@ -1,6 +1,6 @@
 import type { MiniGameCanvasElement } from './canvas.js';
 import { MiniGameEvent } from './events.js';
-import type { MiniGameHost, MiniGameTouch } from './host.js';
+import { MiniGameRuntimeError, type MiniGameHost, type MiniGameTouch } from './host.js';
 
 export interface MiniGameTouchPoint extends MiniGameTouch {
   readonly target: MiniGameCanvasElement;
@@ -45,9 +45,14 @@ export function installMiniGameTouchInput(
 ): MiniGameInputInstallation {
   const activeTouches = new Map<number, MiniGameTouchPoint>();
   const unsubscribers: Array<() => void> = [];
+  let active = true;
 
   try {
-    unsubscribers.push(host.onTouchStart((touches) => {
+    unsubscribers.push(assertTouchUnsubscribe(host.onTouchStart((touches) => {
+      if (!active) {
+        return;
+      }
+
       const changed = touches.map((touch) => createTouchPoint(touch, canvas));
 
       for (const touch of changed) {
@@ -55,8 +60,12 @@ export function installMiniGameTouchInput(
       }
 
       dispatch('touchstart', changed);
-    }));
-    unsubscribers.push(host.onTouchMove((touches) => {
+    }), 'onTouchStart'));
+    unsubscribers.push(assertTouchUnsubscribe(host.onTouchMove((touches) => {
+      if (!active) {
+        return;
+      }
+
       const changed = touches.map((touch) => createTouchPoint(touch, canvas));
 
       for (const touch of changed) {
@@ -64,8 +73,12 @@ export function installMiniGameTouchInput(
       }
 
       dispatch('touchmove', changed);
-    }));
-    unsubscribers.push(host.onTouchEnd((touches) => {
+    }), 'onTouchMove'));
+    unsubscribers.push(assertTouchUnsubscribe(host.onTouchEnd((touches) => {
+      if (!active) {
+        return;
+      }
+
       const changed = touches.map((touch) => createTouchPoint(touch, canvas));
 
       for (const touch of changed) {
@@ -73,8 +86,12 @@ export function installMiniGameTouchInput(
       }
 
       dispatch('touchend', changed);
-    }));
-    unsubscribers.push(host.onTouchCancel((touches) => {
+    }), 'onTouchEnd'));
+    unsubscribers.push(assertTouchUnsubscribe(host.onTouchCancel((touches) => {
+      if (!active) {
+        return;
+      }
+
       const changed = touches.map((touch) => createTouchPoint(touch, canvas));
 
       for (const touch of changed) {
@@ -82,11 +99,10 @@ export function installMiniGameTouchInput(
       }
 
       dispatch('touchcancel', changed);
-    }));
+    }), 'onTouchCancel'));
   } catch (error) {
-    for (const unsubscribe of unsubscribers) {
-      unsubscribe();
-    }
+    active = false;
+    runTouchUnsubscribers(unsubscribers);
 
     throw error;
   }
@@ -100,11 +116,9 @@ export function installMiniGameTouchInput(
       }
 
       disposed = true;
+      active = false;
       activeTouches.clear();
-
-      for (const unsubscribe of unsubscribers) {
-        unsubscribe();
-      }
+      runTouchUnsubscribers(unsubscribers);
     },
   };
 
@@ -114,6 +128,31 @@ export function installMiniGameTouchInput(
   ): void {
     const event = new MiniGameTouchEvent(type, [...activeTouches.values()], changedTouches);
     canvas.dispatchEvent(event);
+  }
+}
+
+function assertTouchUnsubscribe(input: unknown, source: string): () => void {
+  if (typeof input !== 'function') {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_INVALID_TOUCH_SUBSCRIPTION',
+      `Mini-game host ${source} must return an unsubscribe function.`,
+    );
+  }
+
+  return input as () => void;
+}
+
+function runTouchUnsubscribers(unsubscribers: readonly (() => void)[]): void {
+  for (const unsubscribe of unsubscribers) {
+    try {
+      unsubscribe();
+    } catch (error) {
+      try {
+        console.error('Mini-game touch unsubscription failed; cleanup continues.', error);
+      } catch {
+        // Cleanup must continue even when host logging is unavailable.
+      }
+    }
   }
 }
 

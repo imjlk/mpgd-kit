@@ -254,6 +254,7 @@ validatePhaserTemplateDevvitPostOperations();
 validatePhaserTemplateDevvitViewModes();
 validatePhaserTemplateDevvitVitePlugin();
 validatePhaserTemplateBuildGateways();
+validatePhaserTemplateRuntimeTargets();
 validatePhaserTemplateMicrosoftStorePwa();
 validatePhaserTemplateOrientationPolicy();
 validatePhaserTemplateSafeAreaContract();
@@ -671,6 +672,23 @@ function validatePhaserTemplateBuildGateways(): void {
       "import { createBuildGateway } from '#mpgd-platform-gateway'",
       `${installPath}: build-selected gateway.`,
     );
+  }
+}
+
+function validatePhaserTemplateRuntimeTargets(): void {
+  for (const root of ['packages/cli/templates/phaser-game', 'examples/phaser-starter']) {
+    const path = `${root}/src/platform/runtimeDetector.ts`;
+
+    if (!existsSync(path)) {
+      failures.push(`${path}: required for platform runtime detection.`);
+      continue;
+    }
+
+    const source = readText(path);
+
+    for (const target of ['wechat', 'tiktok']) {
+      assertIncludesText(source, `'${target}'`, `${path}: ${target} runtime target.`);
+    }
   }
 }
 

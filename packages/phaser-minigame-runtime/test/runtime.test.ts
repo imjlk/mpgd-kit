@@ -5,6 +5,7 @@ import {
   createMiniGamePhaserConfig,
   getInstalledMiniGameGlobals,
   installMiniGameGlobals,
+  installMiniGameTouchInput,
   installPhaserMiniGameRuntime,
   mapMiniGameTouchToDesign,
   MiniGameAnimationFrameScheduler,
@@ -309,6 +310,34 @@ describe('mini-game globals and Canvas compatibility', () => {
     host.emitTouch('start', touch);
     expect(eventTypes).toHaveLength(5);
   });
+
+  it('rolls back touch subscriptions and deactivates an invalid leaked callback', () => {
+    class InvalidTouchHost extends FakeMiniGameHost {
+      override onTouchMove(
+        callback: Parameters<FakeMiniGameHost['onTouchMove']>[0],
+      ): () => void {
+        super.onTouchMove(callback);
+        return undefined as never;
+      }
+    }
+
+    const host = new InvalidTouchHost();
+    const canvas = new MiniGameCanvasElement(
+      host.createCanvas({ type: 'primary' }),
+      () => host.getWindowInfo(),
+    );
+    let moves = 0;
+    canvas.addEventListener('touchmove', () => {
+      moves += 1;
+    });
+
+    expect(() => installMiniGameTouchInput(host, canvas)).toThrow(
+      'onTouchMove must return an unsubscribe function',
+    );
+    expect(host.touchListenerCount).toBe(1);
+    host.emitTouch('move', [{ identifier: 1, clientX: 10, clientY: 10 }]);
+    expect(moves).toBe(0);
+  });
 });
 
 describe('mini-game requestAnimationFrame and transport', () => {
@@ -377,6 +406,9 @@ describe('mini-game requestAnimationFrame and transport', () => {
     const request = new MiniGameXMLHttpRequest(host);
     request.open('GET', 'assets/value.json');
     const loaded = sendRequest(request);
+    expect(() => request.setRequestHeader('x-late', 'ignored')).toThrow(
+      'headers cannot change after send() starts',
+    );
     expect(() => request.send()).toThrow('only be called once per open');
     await loaded;
 
@@ -638,6 +670,11 @@ describe('Phaser mini-game runtime patch', () => {
     const duplicate = installPhaserMiniGameRuntime(game, { globals });
 
     expect(duplicate).toBe(installation);
+    expect(() => globals.dispose()).toThrow(
+      'Dispose the Phaser mini-game runtime before disposing mini-game globals',
+    );
+    expect(globals.disposed).toBe(false);
+    expect(getInstalledMiniGameGlobals()).toBe(globals);
     expect(host.pendingFrameCount).toBe(1);
     expect(host.lifecycleListenerCount).toBe(2);
     host.flushFrame(16);
@@ -783,6 +820,57 @@ describe('Phaser mini-game runtime patch', () => {
     expect(loop.running).toBe(true);
     expect(globals.document.visibilityState).toBe('visible');
     expect(host.lifecycleListenerCount).toBe(0);
+    expect(host.pendingFrameCount).toBe(1);
+  });
+
+  it('restores a game pause when the pause callback disposes the runtime', () => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    let pauses = 0;
+    let resumes = 0;
+    let sleeps = 0;
+    let installation: ReturnType<typeof installPhaserMiniGameRuntime>;
+    const loop = {
+      started: true,
+      running: true,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        sleeps += 1;
+        this.running = false;
+      },
+      wake() {
+        this.running = true;
+      },
+    };
+    raf.start(raf.callback, false, raf.delay);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      loop,
+      isPaused: false,
+      pause() {
+        pauses += 1;
+        this.isPaused = true;
+        installation.dispose();
+      },
+      resume() {
+        resumes += 1;
+        this.isPaused = false;
+      },
+    } satisfies MiniGamePhaserGame;
+    installation = installPhaserMiniGameRuntime(game, { globals });
+
+    host.emitPause();
+
+    expect(installation.disposed).toBe(true);
+    expect(pauses).toBe(1);
+    expect(resumes).toBe(1);
+    expect(sleeps).toBe(0);
+    expect(game.isPaused).toBe(false);
+    expect(loop.running).toBe(true);
+    expect(globals.document.visibilityState).toBe('visible');
     expect(host.pendingFrameCount).toBe(1);
   });
 

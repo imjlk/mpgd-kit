@@ -129,6 +129,14 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
 
   setRequestHeader(name: string, value: string): void {
     this.#assertOpened();
+
+    if (this.#sendStarted) {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_XHR_INVALID_STATE',
+        'Mini-game XMLHttpRequest headers cannot change after send() starts.',
+      );
+    }
+
     const normalizedName = name.trim().toLowerCase();
 
     if (!/^[!#$%&'*+\-.^_`|~\dA-Za-z]+$/u.test(normalizedName)) {

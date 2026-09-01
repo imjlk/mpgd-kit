@@ -167,6 +167,7 @@ export interface MiniGameGlobalInstallation {
   readonly document: MiniGameDocument;
   readonly window: object;
   readonly disposed: boolean;
+  registerDisposalGuard(guard: () => void): () => void;
   dispose(): void;
 }
 
@@ -185,6 +186,7 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
   readonly #savedProperties: SavedGlobalProperty[] = [];
   readonly #scheduler: MiniGameAnimationFrameScheduler;
   readonly #windowEvents = new MiniGameEventTarget(undefined, globalThis);
+  readonly #disposalGuards = new Set<() => void>();
   #disposeInput: () => void = () => undefined;
   #disposed = false;
 
@@ -215,9 +217,32 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
     return this.#disposed;
   }
 
+  registerDisposalGuard(guard: () => void): () => void {
+    if (this.#disposed) {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_GLOBALS_DISPOSED',
+        'Cannot register a dependency on disposed mini-game globals.',
+      );
+    }
+
+    if (typeof guard !== 'function') {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_GLOBAL_DISPOSAL_GUARD_INVALID',
+        'Mini-game global disposal guards must be functions.',
+      );
+    }
+
+    this.#disposalGuards.add(guard);
+    return () => this.#disposalGuards.delete(guard);
+  }
+
   dispose(): void {
     if (this.#disposed) {
       return;
+    }
+
+    for (const guard of this.#disposalGuards) {
+      guard();
     }
 
     this.#disposed = true;
@@ -225,6 +250,7 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
     this.#scheduler.dispose();
     this.#windowEvents.removeAllEventListeners();
     this.document.removeAllEventListeners();
+    this.#disposalGuards.clear();
 
     this.#restoreGlobals();
 
