@@ -116,6 +116,65 @@ await assertRejects(
   'MICROSOFT_STORE_IDENTITY_RESPONSE_INVALID',
 );
 
+const callerAbortReason = new Error('caller stopped Store checkout');
+const callerAbort = new AbortController();
+callerAbort.abort(callerAbortReason);
+await assertRejectsSame(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch(_input, init) {
+        return Promise.reject(init?.signal?.reason);
+      },
+    },
+    gameId: 'ttokdoku',
+    playerId: 'microsoft.0123456789abcdef',
+    signal: callerAbort.signal,
+  }),
+  callerAbortReason,
+);
+
+const timeoutError = await captureRejection(resolveMicrosoftStoreIdentityCredentials({
+  authority: {
+    fetch(_input, init) {
+      return Promise.resolve(new Response(new ReadableStream({
+        start(controller) {
+          init?.signal?.addEventListener(
+            'abort',
+            () => controller.error(init.signal?.reason),
+            { once: true },
+          );
+        },
+      })));
+    },
+  },
+  gameId: 'ttokdoku',
+  playerId: 'microsoft.0123456789abcdef',
+  timeoutMs: 1,
+}));
+assertMatch(timeoutError, /timed out/u);
+
+await assertRejects(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () => Promise.resolve(new Response('{}', {
+        headers: { 'Content-Length': 'not-a-number' },
+      })),
+    },
+    gameId: 'ttokdoku',
+    playerId: 'microsoft.0123456789abcdef',
+  }),
+  'MICROSOFT_STORE_IDENTITY_RESPONSE_INVALID',
+);
+
+const forbidden = await captureRejection(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: { fetch: () => Promise.resolve(new Response(null, { status: 403 })) },
+    gameId: 'ttokdoku',
+    playerId: 'microsoft.0123456789abcdef',
+  }),
+);
+assertMatch(forbidden.cause, /HTTP 403/u);
+
 console.log('Microsoft Store identity authority tests passed.');
 
 function assertDeepEqual(actual: unknown, expected: unknown): void {
@@ -146,4 +205,29 @@ async function assertRejects(promise: Promise<unknown>, message: string): Promis
     throw error;
   }
   throw new Error(`Expected promise to reject with ${message}.`);
+}
+
+async function assertRejectsSame(promise: Promise<unknown>, expected: unknown): Promise<void> {
+  const error = await captureRejection(promise);
+  if (error !== expected) {
+    throw new Error('Expected promise to preserve the original rejection.');
+  }
+}
+
+async function captureRejection(promise: Promise<unknown>): Promise<Error> {
+  try {
+    await promise;
+  } catch (error) {
+    if (error instanceof Error) {
+      return error;
+    }
+    throw error;
+  }
+  throw new Error('Expected promise to reject.');
+}
+
+function assertMatch(value: unknown, pattern: RegExp): void {
+  if (!(value instanceof Error) || !pattern.test(value.message)) {
+    throw new Error(`Expected ${String(value)} to match ${String(pattern)}.`);
+  }
 }

@@ -73,13 +73,13 @@
       "types": "./dist/google-play-purchase.d.ts",
       "default": "./dist/google-play-purchase.js"
     },
-    "./microsoft-store-purchase": {
-      "types": "./dist/microsoft-store-purchase.d.ts",
-      "default": "./dist/microsoft-store-purchase.js"
-    },
     "./microsoft-store-identity": {
       "types": "./dist/microsoft-store-identity.d.ts",
       "default": "./dist/microsoft-store-identity.js"
+    },
+    "./microsoft-store-purchase": {
+      "types": "./dist/microsoft-store-purchase.d.ts",
+      "default": "./dist/microsoft-store-purchase.js"
     },
     "./google-play-purchase-conformance": {
       "types": "./dist/google-play-purchase-conformance.d.ts",

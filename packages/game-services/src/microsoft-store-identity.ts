@@ -146,16 +146,22 @@ export async function resolveMicrosoftStoreIdentityCredentials(input: {
         signal: abort.signal,
       });
     } catch (cause) {
+      if (abort.signal.aborted) {
+        throw cause;
+      }
       throw unavailable(cause);
     }
 
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
-      throw new MicrosoftStoreIdentityAuthorityError(
-        response.status === 404 || response.status === 409
-          ? 'MICROSOFT_STORE_ACCOUNT_LINK_REQUIRED'
-          : 'MICROSOFT_STORE_IDENTITY_UNAVAILABLE',
-      );
+      const accountLinkRequired = response.status === 404 || response.status === 409;
+      const code = accountLinkRequired
+        ? 'MICROSOFT_STORE_ACCOUNT_LINK_REQUIRED'
+        : 'MICROSOFT_STORE_IDENTITY_UNAVAILABLE';
+      const options = accountLinkRequired
+        ? undefined
+        : { cause: authorityHttpStatusError(response.status) };
+      throw new MicrosoftStoreIdentityAuthorityError(code, options);
     }
 
     try {
@@ -164,7 +170,7 @@ export async function resolveMicrosoftStoreIdentityCredentials(input: {
         request,
       );
     } catch (cause) {
-      if (cause instanceof MicrosoftStoreIdentityAuthorityError) {
+      if (cause instanceof MicrosoftStoreIdentityAuthorityError || abort.signal.aborted) {
         throw cause;
       }
       throw invalidResponse(cause);
@@ -250,10 +256,17 @@ async function readBoundedJson(
   maximumBytes: number,
   signal: AbortSignal,
 ): Promise<unknown> {
-  const contentLength = response.headers.get('content-length');
-  if (contentLength !== null && Number(contentLength) > maximumBytes) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new TypeError('Microsoft Store identity response is too large.');
+  const contentLengthHeader = response.headers.get('content-length');
+  if (contentLengthHeader !== null) {
+    const contentLength = Number(contentLengthHeader);
+    if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new TypeError('Microsoft Store identity response content length is invalid.');
+    }
+    if (contentLength > maximumBytes) {
+      await response.body?.cancel().catch(() => undefined);
+      throw new TypeError('Microsoft Store identity response is too large.');
+    }
   }
   if (response.body === null) {
     throw new TypeError('Microsoft Store identity response body is missing.');
@@ -269,6 +282,9 @@ async function readBoundedJson(
       const result = await reader.read();
       if (result.done) {
         break;
+      }
+      if (!(result.value instanceof Uint8Array)) {
+        throw new TypeError('Microsoft Store identity response chunk is invalid.');
       }
       total += result.value.byteLength;
       if (total > maximumBytes) {
@@ -301,4 +317,8 @@ function invalidResponse(cause?: unknown): MicrosoftStoreIdentityAuthorityError 
     'MICROSOFT_STORE_IDENTITY_RESPONSE_INVALID',
     cause === undefined ? undefined : { cause },
   );
+}
+
+function authorityHttpStatusError(status: number): Error {
+  return new Error(`Microsoft Store identity authority returned HTTP ${String(status)}.`);
 }
