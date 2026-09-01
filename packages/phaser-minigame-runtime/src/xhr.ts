@@ -120,12 +120,8 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     this.#method = 'GET';
     this.#url = String(url);
     this.#requestHeaders.clear();
-    this.#responseHeaders.clear();
-    this.response = null;
-    this.responseText = '';
-    this.responseURL = '';
-    this.status = 0;
-    this.statusText = '';
+    this.#mimeType = undefined;
+    this.#resetResponseState();
     this.#sendStarted = false;
     this.#setReadyState(MiniGameXMLHttpRequest.OPENED);
   }
@@ -245,8 +241,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     }
 
     const generation = ++this.#generation;
-    this.status = 0;
-    this.statusText = '';
+    this.#resetResponseState();
     this.#setReadyState(MiniGameXMLHttpRequest.DONE);
 
     if (generation !== this.#generation) {
@@ -405,6 +400,15 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
         }
         break;
     }
+  }
+
+  #resetResponseState(): void {
+    this.#responseHeaders.clear();
+    this.response = null;
+    this.responseText = '';
+    this.responseURL = '';
+    this.status = 0;
+    this.statusText = '';
   }
 
   #assertOpened(): void {

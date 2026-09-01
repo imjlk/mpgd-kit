@@ -59,9 +59,19 @@ export class MiniGameHTMLElement extends MiniGameEventTarget {
   }
 
   appendChild<T>(child: T): T {
-    if (!this.children.includes(child)) {
-      this.children.push(child);
+    assertValidMiniGameHierarchy(this, child);
+
+    if (child instanceof MiniGameHTMLElement && child.parentNode !== null) {
+      child.parentNode.removeChild(child);
+    } else {
+      const currentIndex = this.children.indexOf(child);
+
+      if (currentIndex >= 0) {
+        this.children.splice(currentIndex, 1);
+      }
     }
+
+    this.children.push(child);
 
     if (child instanceof MiniGameHTMLElement) {
       child.parentNode = this;
@@ -72,15 +82,33 @@ export class MiniGameHTMLElement extends MiniGameEventTarget {
   }
 
   insertBefore<T>(child: T, reference: unknown | null): T {
+    assertValidMiniGameHierarchy(this, child);
+
+    if (reference !== null && !this.children.includes(reference)) {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_DOM_REFERENCE_NOT_FOUND',
+        `Cannot insert before a node that is not attached to <${this.tagName.toLowerCase()}>.`,
+      );
+    }
+
+    if (child === reference) {
+      return child;
+    }
+
+    if (child instanceof MiniGameHTMLElement && child.parentNode !== null) {
+      child.parentNode.removeChild(child);
+    }
+
     const currentIndex = this.children.indexOf(child);
 
     if (currentIndex >= 0) {
       this.children.splice(currentIndex, 1);
     }
 
-    const referenceIndex = reference === null ? -1 : this.children.indexOf(reference);
-    const insertionIndex = referenceIndex < 0 ? this.children.length : referenceIndex;
-    this.children.splice(insertionIndex, 0, child);
+    const referenceIndex = reference === null
+      ? this.children.length
+      : this.children.indexOf(reference);
+    this.children.splice(referenceIndex, 0, child);
 
     if (child instanceof MiniGameHTMLElement) {
       child.parentNode = this;
@@ -332,6 +360,15 @@ export function unwrapMiniGameNativeObject(value: unknown): unknown {
   }
 
   return value;
+}
+
+function assertValidMiniGameHierarchy(parent: MiniGameHTMLElement, child: unknown): void {
+  if (child === parent || (child instanceof MiniGameHTMLElement && child.contains(parent))) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_DOM_HIERARCHY_INVALID',
+      'Mini-game DOM nodes cannot be appended to themselves or their descendants.',
+    );
+  }
 }
 
 function wrapCanvasContext(context: object, canvas: MiniGameCanvasElement): unknown {

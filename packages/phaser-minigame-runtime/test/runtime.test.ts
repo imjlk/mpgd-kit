@@ -74,6 +74,20 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(() => offscreen.setAttribute('width', '-1')).toThrow(
       'canvas width must be a non-negative finite number',
     );
+    const firstMount = globalThis.document.createElement('div');
+    const secondMount = globalThis.document.createElement('div');
+    installation.document.body.appendChild(firstMount);
+    installation.document.body.appendChild(secondMount);
+    firstMount.appendChild(offscreen);
+    secondMount.appendChild(offscreen);
+    expect(firstMount.contains(offscreen)).toBe(false);
+    expect(secondMount.contains(offscreen)).toBe(true);
+    firstMount.insertBefore(offscreen, null);
+    expect(firstMount.contains(offscreen)).toBe(true);
+    expect(secondMount.contains(offscreen)).toBe(false);
+    expect(() => offscreen.appendChild(firstMount)).toThrow(
+      'cannot be appended to themselves or their descendants',
+    );
 
     installation.canvas.style.width = '600px';
     installation.canvas.style.height = '300px';
@@ -639,6 +653,56 @@ describe('mini-game requestAnimationFrame and transport', () => {
     await aborted;
     expect(request.readyState).toBe(request.DONE);
     expect(readLocalFile).not.toHaveBeenCalled();
+  });
+
+  it('clears response metadata when aborting after response headers arrive', async () => {
+    const host = new FakeMiniGameHost();
+    host.remoteResponse = {
+      status: 200,
+      data: 'partial response',
+      headers: { 'content-type': 'text/plain', 'x-request-id': 'request-1' },
+    };
+    const request = new MiniGameXMLHttpRequest(host, {
+      allowedRemoteOrigins: ['https://cdn.example.com'],
+    });
+    let sawHeaders = false;
+    request.onreadystatechange = () => {
+      if (request.readyState === request.HEADERS_RECEIVED) {
+        sawHeaders = request.getResponseHeader('x-request-id') === 'request-1';
+        request.abort();
+      }
+    };
+    const aborted = new Promise<void>((resolve) => {
+      request.onabort = () => resolve();
+    });
+    request.open('GET', 'https://cdn.example.com/partial.txt');
+    request.send();
+
+    await aborted;
+    expect(sawHeaders).toBe(true);
+    expect(request.status).toBe(0);
+    expect(request.statusText).toBe('');
+    expect(request.responseURL).toBe('');
+    expect(request.response).toBeNull();
+    expect(request.responseText).toBe('');
+    expect(request.getResponseHeader('x-request-id')).toBeNull();
+    expect(request.getAllResponseHeaders()).toBe('');
+  });
+
+  it('does not carry a MIME override across open calls', async () => {
+    const host = new FakeMiniGameHost();
+    host.localFiles.set('assets/first.txt', encodeText('first'));
+    host.localFiles.set('assets/second.txt', encodeText('second'));
+    const request = new MiniGameXMLHttpRequest(host);
+    request.open('GET', 'assets/first.txt');
+    request.overrideMimeType('text/custom');
+    await sendRequest(request);
+    expect(request.getResponseHeader('content-type')).toBe('text/custom');
+
+    request.open('GET', 'assets/second.txt');
+    await sendRequest(request);
+    expect(request.responseText).toBe('second');
+    expect(request.getResponseHeader('content-type')).toBeNull();
   });
 
   it('reports invalid host response status through the XHR error path', async () => {
