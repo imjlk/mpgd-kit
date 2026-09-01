@@ -130,6 +130,7 @@ interface MiniGameScopeAnalysis {
     ReadonlySet<MiniGameReflectiveGlobalReadKind>
   >;
   readonly dynamicCodeConstructorAliases: ReadonlySet<MiniGameLexicalBinding>;
+  readonly dynamicCodeConstructorContainers: ReadonlySet<MiniGameLexicalBinding>;
 }
 
 export function assembleMiniGameArtifact(
@@ -950,6 +951,7 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
     Set<MiniGameReflectiveGlobalReadKind>
   >();
   const dynamicCodeConstructorAliases = new Set<MiniGameLexicalBinding>();
+  const dynamicCodeConstructorContainers = new Set<MiniGameLexicalBinding>();
   const analysis: MiniGameScopeAnalysis = {
     programScope,
     scopeByNode,
@@ -957,11 +959,17 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
     globalIntrinsicAliases,
     reflectiveGlobalReadAliases,
     dynamicCodeConstructorAliases,
+    dynamicCodeConstructorContainers,
   };
   collectDynamicCodeGlobalObjectAliases(ast, analysis, globalObjectAliases);
   collectGlobalIntrinsicAliases(ast, analysis, globalIntrinsicAliases);
   collectReflectiveGlobalReadAliases(ast, analysis, reflectiveGlobalReadAliases);
-  collectDynamicCodeConstructorAliases(ast, analysis, dynamicCodeConstructorAliases);
+  collectDynamicCodeConstructorFlow(
+    ast,
+    analysis,
+    dynamicCodeConstructorAliases,
+    dynamicCodeConstructorContainers,
+  );
   return analysis;
 }
 
@@ -1369,14 +1377,34 @@ function getReflectiveMethodKinds(
   return kinds;
 }
 
-function collectDynamicCodeConstructorAliases(
+// Constructor values can cross direct aliases or be hidden in object/array containers. Container
+// bindings are intentionally tainted as a whole so unknown/computed member reads fail closed.
+function collectDynamicCodeConstructorFlow(
   ast: unknown,
   analysis: MiniGameScopeAnalysis,
   aliases: Set<MiniGameLexicalBinding>,
+  containers: Set<MiniGameLexicalBinding>,
 ): void {
   collectMiniGameAliases(ast, (pattern, source, ancestors) => {
     if (!isAstRecord(pattern)) {
       return false;
+    }
+    const sourceIsConstructor = isDynamicCodeConstructorSource(source, ancestors, analysis);
+    const sourceIsContainer = isDynamicCodeConstructorContainerSource(
+      source,
+      ancestors,
+      analysis,
+    );
+
+    if (pattern.type === 'MemberExpression') {
+      return (sourceIsConstructor || sourceIsContainer)
+        && addDynamicCodeConstructorContainerReference(pattern.object, analysis, containers);
+    }
+    if (
+      (pattern.type === 'ObjectPattern' || pattern.type === 'ArrayPattern')
+      && sourceIsContainer
+    ) {
+      return addDynamicCodeConstructorPattern(pattern, analysis, aliases);
     }
     if (pattern.type === 'ObjectPattern' && Array.isArray(pattern.properties)) {
       let changed = false;
@@ -1393,9 +1421,74 @@ function collectDynamicCodeConstructorAliases(
 
       return changed;
     }
-    return isDynamicCodeConstructorSource(source, ancestors, analysis)
+
+    const constructorChanged = sourceIsConstructor
       && addDynamicCodeConstructorAlias(pattern, analysis, aliases);
+    const containerChanged = sourceIsContainer
+      && addDynamicCodeConstructorContainerReference(pattern, analysis, containers);
+    return constructorChanged || containerChanged;
   });
+}
+
+function addDynamicCodeConstructorPattern(
+  pattern: unknown,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Set<MiniGameLexicalBinding>,
+): boolean {
+  if (!isAstRecord(pattern)) {
+    return false;
+  }
+  if (pattern.type === 'Identifier' || pattern.type === 'AssignmentPattern') {
+    return addDynamicCodeConstructorAlias(pattern, analysis, aliases);
+  }
+  if (pattern.type === 'RestElement') {
+    return addDynamicCodeConstructorPattern(pattern.argument, analysis, aliases);
+  }
+  if (pattern.type === 'ArrayPattern' && Array.isArray(pattern.elements)) {
+    return pattern.elements.reduce((changed, element) => {
+      return addDynamicCodeConstructorPattern(element, analysis, aliases) || changed;
+    }, false);
+  }
+  if (pattern.type === 'ObjectPattern' && Array.isArray(pattern.properties)) {
+    return pattern.properties.reduce((changed, property) => {
+      if (!isAstRecord(property)) {
+        return changed;
+      }
+      const value = property.type === 'Property' ? property.value : property.argument;
+      return addDynamicCodeConstructorPattern(value, analysis, aliases) || changed;
+    }, false);
+  }
+
+  return false;
+}
+
+function addDynamicCodeConstructorContainerReference(
+  input: unknown,
+  analysis: MiniGameScopeAnalysis,
+  containers: Set<MiniGameLexicalBinding>,
+): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'AssignmentPattern') {
+    return addDynamicCodeConstructorContainerReference(input.left, analysis, containers);
+  }
+  if (input.type === 'ChainExpression') {
+    return addDynamicCodeConstructorContainerReference(input.expression, analysis, containers);
+  }
+  if (input.type === 'MemberExpression') {
+    return addDynamicCodeConstructorContainerReference(input.object, analysis, containers);
+  }
+  if (input.type !== 'Identifier' || typeof input.name !== 'string') {
+    return false;
+  }
+
+  const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+  const binding = resolveMiniGameBinding(input.name, scope)
+    ?? ensureMiniGameBinding(input.name, analysis.programScope);
+  const size = containers.size;
+  containers.add(binding);
+  return containers.size !== size;
 }
 
 function addDynamicCodeConstructorAlias(
@@ -1471,6 +1564,9 @@ function isDynamicCodeConstructorSource(
   if (input.type === 'MemberExpression') {
     const memberName = readMemberName(input);
 
+    if (isDynamicCodeConstructorContainerSource(input.object, ancestors, analysis)) {
+      return true;
+    }
     if (memberName === 'constructor') {
       return true;
     }
@@ -1490,6 +1586,56 @@ function isDynamicCodeConstructorSource(
   ) {
     const kinds = getReflectiveGlobalReadKinds(input.callee, ancestors, analysis);
     return kinds.has('property') && evaluateStaticString(input.arguments[1]) === 'constructor';
+  }
+
+  return false;
+}
+
+function isDynamicCodeConstructorContainerSource(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(input.name, scope);
+    return binding !== undefined && analysis.dynamicCodeConstructorContainers.has(binding);
+  }
+  if (input.type === 'ChainExpression') {
+    return isDynamicCodeConstructorContainerSource(input.expression, ancestors, analysis);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return isDynamicCodeConstructorContainerSource(input.expressions.at(-1), ancestors, analysis);
+  }
+  if (input.type === 'ConditionalExpression') {
+    return isDynamicCodeConstructorContainerSource(input.consequent, ancestors, analysis)
+      || isDynamicCodeConstructorContainerSource(input.alternate, ancestors, analysis);
+  }
+  if (input.type === 'LogicalExpression') {
+    return isDynamicCodeConstructorContainerSource(input.left, ancestors, analysis)
+      || isDynamicCodeConstructorContainerSource(input.right, ancestors, analysis);
+  }
+  if (input.type === 'MemberExpression') {
+    return isDynamicCodeConstructorContainerSource(input.object, ancestors, analysis);
+  }
+  if (input.type === 'ObjectExpression' && Array.isArray(input.properties)) {
+    return input.properties.some((property) => {
+      if (!isAstRecord(property)) {
+        return false;
+      }
+      const value = property.type === 'Property' ? property.value : property.argument;
+      return isDynamicCodeConstructorSource(value, ancestors, analysis)
+        || isDynamicCodeConstructorContainerSource(value, ancestors, analysis);
+    });
+  }
+  if (input.type === 'ArrayExpression' && Array.isArray(input.elements)) {
+    return input.elements.some((element) => {
+      return isDynamicCodeConstructorSource(element, ancestors, analysis)
+        || isDynamicCodeConstructorContainerSource(element, ancestors, analysis);
+    });
   }
 
   return false;

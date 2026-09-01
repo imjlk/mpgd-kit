@@ -112,6 +112,15 @@ try {
     'Reflect.get(() => {}, "constructor")("return 1")();\n',
     'Object.getOwnPropertyDescriptor(Object.getPrototypeOf(() => {}), "constructor")'
       + '.value("return 1")();\n',
+    'const box = { F: (() => {}).constructor }; box.F("return 1")();\n',
+    'const box = { nested: { F: (() => {}).constructor } }; '
+      + 'box.nested.F("return 1")();\n',
+    'const constructors = [(() => {}).constructor]; constructors[0]("return 1")();\n',
+    'const box = { F: (() => {}).constructor }; const alias = box; '
+      + 'alias.F("return 1")();\n',
+    'const box = {}; box.F = (() => {}).constructor; box.F("return 1")();\n',
+    'const box = {}; box.F ??= (() => {}).constructor; box.F("return 1")();\n',
+    'const box = { F: (() => {}).constructor }; const { F } = box; F("return 1")();\n',
   ]) {
     write('unsafe.js', derivedConstructor);
     assert.throws(
@@ -123,6 +132,9 @@ try {
   write('safe-constructor-metadata.js', 'const name = value.constructor.name; void name;\n');
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-constructor-metadata.js'));
+  write('safe-function-container.js', 'const box = { F() { return 1; } }; box.F();\n');
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-function-container.js'));
   write('unsafe.js', 'const indirectEval = eval;\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
   rmSync(join(root, 'unsafe.js'));
