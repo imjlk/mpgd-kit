@@ -1,7 +1,7 @@
 {
   "brand": {
     "appIcon": {
-      "source": "public/assets/starter-logo.svg",
+      "source": "public/assets/starter-logo.png",
       "backgroundColor": "#0d1117"
     }
   },
