@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { resolveMiniGameBundleOutput } from './vite.minigame-output';
+import { rewritePhaserMiniGameGlobalFallback } from './vite.minigame-phaser';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-minigame-vite-output-'));
 const gameRoot = join(fixtureRoot, 'game');
@@ -44,6 +45,20 @@ try {
       stagingRoot,
     }),
     /dedicated child/u,
+  );
+
+  const phaserFallback = "return this || new Function('return this')();";
+  assert.equal(
+    rewritePhaserMiniGameGlobalFallback(`before ${phaserFallback} after`),
+    'before return globalThis; after',
+  );
+  assert.throws(
+    () => rewritePhaserMiniGameGlobalFallback('return globalThis;'),
+    /Expected exactly one Phaser 4\.2\.0 dynamic global fallback, found 0/u,
+  );
+  assert.throws(
+    () => rewritePhaserMiniGameGlobalFallback(`${phaserFallback}\n${phaserFallback}`),
+    /Expected exactly one Phaser 4\.2\.0 dynamic global fallback, found 2/u,
   );
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });

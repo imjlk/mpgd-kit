@@ -88,7 +88,13 @@ try {
   );
   rmSync(join(root, 'game.js.map'));
 
-  for (const developmentFile of ['.npmrc', 'project.private.config.json', 'source.jsx']) {
+  for (const developmentFile of [
+    '.NPMRC',
+    '.env.LOCAL',
+    'Credentials.JSON',
+    'Project.Private.Config.JSON',
+    'source.jsx',
+  ]) {
     writeBytes(developmentFile, 1);
     assert.throws(
       () => assertMiniGamePackageBudget({
@@ -99,6 +105,19 @@ try {
       /forbidden development or credential file/u,
     );
     rmSync(join(root, developmentFile));
+  }
+
+  for (const forbiddenDirectory of ['Node_Modules', 'TEST', '__macosx']) {
+    writeBytes(`${forbiddenDirectory}/payload.js`, 1);
+    assert.throws(
+      () => assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: {},
+        budget: { mainBytes: 100, totalBytes: 100 },
+      }),
+      /forbidden development path/u,
+    );
+    rmSync(join(root, forbiddenDirectory), { force: true, recursive: true });
   }
 
   symlinkSync(join(root, 'game.js'), join(root, 'linked.js'));

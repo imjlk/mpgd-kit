@@ -239,9 +239,11 @@ function assertWithinBudget(actual: number, maximum: number, label: string): voi
 function assertMiniGameArtifactFileAllowed(path: string): void {
   const segments = path.split('/');
   const fileName = segments.at(-1) ?? '';
+  const normalizedFileName = fileName.toLowerCase();
+  const normalizedSegments = segments.map((segment) => segment.toLowerCase());
   const forbiddenSegments = new Set([
     '.git',
-    '__MACOSX',
+    '__macosx',
     '__fixtures__',
     'fixtures',
     'node_modules',
@@ -249,17 +251,17 @@ function assertMiniGameArtifactFileAllowed(path: string): void {
     'tests',
   ]);
 
-  if (segments.some((segment) => forbiddenSegments.has(segment))) {
+  if (normalizedSegments.some((segment) => forbiddenSegments.has(segment))) {
     throw new Error(`Mini-game artifact contains a forbidden development path: ${path}`);
   }
 
   if (
-    fileName === '.DS_Store'
-    || fileName === '.env'
-    || fileName.startsWith('.env.')
-    || fileName === '.npmrc'
-    || fileName === 'credentials.json'
-    || fileName === 'project.private.config.json'
+    normalizedFileName === '.ds_store'
+    || normalizedFileName === '.env'
+    || normalizedFileName.startsWith('.env.')
+    || normalizedFileName === '.npmrc'
+    || normalizedFileName === 'credentials.json'
+    || normalizedFileName === 'project.private.config.json'
     || /^service-account.*\.json$/iu.test(fileName)
     || /\.(?:map|jsx|ts|tsx|mts|cts|pem|key|p12|pfx)$/iu.test(fileName)
   ) {

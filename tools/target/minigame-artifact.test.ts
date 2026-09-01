@@ -85,6 +85,19 @@ try {
     rmSync(join(root, unsafeFile));
   }
 
+  for (const functionConstructor of [
+    'Function("return 1")()\n',
+    'new Function("return 1")()\n',
+    'Function`return 1`\n',
+  ]) {
+    write('unsafe.js', functionConstructor);
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, []),
+      /contains forbidden Function constructor/u,
+    );
+    rmSync(join(root, 'unsafe.js'));
+  }
+
   const parsed = JSON.parse(
     readFileSync(join(root, miniGameArtifactEvidenceFileName), 'utf8'),
   ) as Record<string, unknown>;
@@ -209,6 +222,24 @@ try {
       {
         name: 'effective target config output',
         path: resolveValidationPath('artifacts/target-config'),
+      },
+    ]),
+    /Mini-game artifact output must not overlap generated output/u,
+  );
+  assert.throws(
+    () => assertDisjointMiniGameTargetOutputs({
+      wechat: {
+        ...miniGameTarget,
+        output: 'artifacts\\wechat',
+      },
+    }, resolveValidationPath),
+    /must use portable forward slashes/u,
+  );
+  assert.throws(
+    () => assertDisjointMiniGameTargetOutputs({ wechat: miniGameTarget }, resolveValidationPath, [
+      {
+        name: 'foreign-separator protected output',
+        path: resolveValidationPath('artifacts\\wechat'),
       },
     ]),
     /Mini-game artifact output must not overlap generated output/u,

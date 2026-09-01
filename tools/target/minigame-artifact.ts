@@ -178,9 +178,16 @@ export function assertDisjointMiniGameTargetOutputs(
   protectedOutputs: readonly NamedMiniGameProtectedOutput[] = [],
 ): void {
   const outputs = Object.entries(targets).flatMap(([name, target]) => {
-    return target.kind === 'wechat-minigame' || target.kind === 'tiktok-minigame'
-      ? [{ name, path: resolvePath(target.output) }]
-      : [];
+    if (target.kind !== 'wechat-minigame' && target.kind !== 'tiktok-minigame') {
+      return [];
+    }
+    if (target.output.includes('\\')) {
+      throw new Error(
+        `Mini-game artifact output must use portable forward slashes: ${name} (${target.output}).`,
+      );
+    }
+
+    return [{ name, path: resolvePath(target.output) }];
   });
   const projectRoot = resolvePath('.');
 
@@ -413,7 +420,9 @@ function isPathWithin(root: string, candidate: string): boolean {
 }
 
 function portablePathComparisonKey(path: string): string {
-  return canonicalizeThroughExistingAncestor(path).toLowerCase();
+  return canonicalizeThroughExistingAncestor(path.replaceAll('\\', '/'))
+    .normalize('NFC')
+    .toLowerCase();
 }
 
 function canonicalizeThroughExistingAncestor(path: string): string {
@@ -522,7 +531,7 @@ export function assertMiniGameJavaScriptSafety(
     for (const [pattern, label] of [
       [/\bimport\s*\(/u, 'dynamic import'],
       [/\beval\s*\(/u, 'eval'],
-      [/\bnew\s+Function\b/u, 'new Function'],
+      [/\bFunction\s*(?:\(|`)/u, 'Function constructor'],
       [
         /(?:\bimportScripts\s*\(\s*["'`]https?:\/\/|https?:\/\/[^\s"'`]+\.[cm]?js(?:[?#][^\s"'`]*)?)/iu,
         'remote executable code reference',

@@ -4,6 +4,7 @@ import { defineConfig } from 'vite';
 
 import { createGameViteSharedConfig } from './vite.shared';
 import { resolveMiniGameBundleOutput } from './vite.minigame-output';
+import { createPhaserMiniGameStaticGlobalPlugin } from './vite.minigame-phaser';
 
 const gameRoot = process.cwd();
 
@@ -35,14 +36,18 @@ export default defineConfig(({ mode }) => {
     ? resolve(gameRoot, 'src/platform/minigameRuntime/wechat.ts')
     : resolve(gameRoot, 'src/minigameEntry.ts');
   const fileName = bundleKind === 'runtime' ? 'runtime.js' : 'game.bundle.js';
+  const sharedConfig = createGameViteSharedConfig({
+    appTarget,
+    gameRoot,
+    mode,
+    project: resolve(gameRoot, 'tsconfig.json'),
+  });
 
   return {
-    ...createGameViteSharedConfig({
-      appTarget,
-      gameRoot,
-      mode,
-      project: resolve(gameRoot, 'tsconfig.json'),
-    }),
+    ...sharedConfig,
+    plugins: bundleKind === 'game'
+      ? [...sharedConfig.plugins, createPhaserMiniGameStaticGlobalPlugin()]
+      : sharedConfig.plugins,
     build: {
       target: 'es2020',
       outDir: resolvedOutDir,
