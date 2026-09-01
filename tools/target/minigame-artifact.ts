@@ -662,12 +662,18 @@ function assertSafeNode(
     }
   }
 
-  if (
-    node.type === 'Property'
-    && node.computed === true
-    && isComputedGlobalDestructuring(ancestors)
-  ) {
-    throw new Error(`Mini-game ${path} contains forbidden computed destructuring.`);
+  if (node.type === 'Property' && isGlobalObjectDestructuring(ancestors)) {
+    const propertyName = readStaticPropertyName(node);
+
+    if (node.computed === true) {
+      throw new Error(`Mini-game ${path} contains forbidden computed destructuring.`);
+    }
+    if (
+      propertyName !== undefined
+      && ['eval', 'Function', 'importScripts'].includes(propertyName)
+    ) {
+      throw new Error(`Mini-game ${path} contains forbidden ${propertyName} destructuring.`);
+    }
   }
 
   if (node.type === 'CallExpression' && isAstRecord(node.callee)) {
@@ -696,7 +702,7 @@ function assertSafeNode(
   }
 }
 
-function isComputedGlobalDestructuring(
+function isGlobalObjectDestructuring(
   ancestors: readonly MiniGameAstAncestor[],
 ): boolean {
   const pattern = ancestors.at(-1)?.node;
@@ -871,6 +877,17 @@ function isBindingIdentifier(ancestors: readonly MiniGameAstAncestor[]): boolean
   }
 
   return false;
+}
+
+function readStaticPropertyName(node: Record<string, unknown>): string | undefined {
+  if (!isAstRecord(node.key)) {
+    return undefined;
+  }
+  if (node.computed === false && node.key.type === 'Identifier') {
+    return typeof node.key.name === 'string' ? node.key.name : undefined;
+  }
+
+  return evaluateStaticString(node.key);
 }
 
 function evaluateStaticString(input: unknown): string | undefined {

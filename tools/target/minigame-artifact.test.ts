@@ -134,6 +134,15 @@ try {
   rmSync(join(root, 'unsafe.js'));
   write(
     'unsafe.js',
+    "const { Function: DynamicFunction } = globalThis; DynamicFunction('return 1')();\n",
+  );
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, []),
+    /contains forbidden Function destructuring/u,
+  );
+  rmSync(join(root, 'unsafe.js'));
+  write(
+    'unsafe.js',
     "const constructorName = 'Function'; globalThis[constructorName]('return 1')();\n",
   );
   assert.throws(
