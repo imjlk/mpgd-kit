@@ -1,6 +1,7 @@
 import { dirname, isAbsolute, resolve } from 'node:path';
 
 import { assertDeploymentTargetName } from '../../packages/cli/src/target-name';
+import { normalizeMiniGameHttpsOrigin } from '../../packages/phaser-minigame-runtime/src/url';
 import {
   integrationAvailabilityStates,
   presentationModes,
@@ -226,22 +227,17 @@ function assertMiniGameRemoteAssetOrigins(input: unknown, target: string): void 
       throw new Error(`${target}.remoteAssetOrigins[${String(index)}] must be a string.`);
     }
 
-    let parsed: URL;
+    let normalized: string;
 
     try {
-      parsed = new URL(origin);
+      normalized = normalizeMiniGameHttpsOrigin(origin);
     } catch {
       throw new Error(
         `${target}.remoteAssetOrigins[${String(index)}] must be an exact HTTPS origin.`,
       );
     }
 
-    if (
-      parsed.protocol !== 'https:'
-      || parsed.username.length > 0
-      || parsed.password.length > 0
-      || parsed.origin !== origin
-    ) {
+    if (normalized !== origin) {
       throw new Error(
         `${target}.remoteAssetOrigins[${String(index)}] must be an exact HTTPS origin.`,
       );

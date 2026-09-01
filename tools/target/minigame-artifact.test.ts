@@ -190,6 +190,40 @@ try {
   rmSync(join(root, 'unsafe.js'));
   write(
     'unsafe.js',
+    'function run(globalAlias = globalThis) { globalAlias.Function("return 1")(); } run();\n',
+  );
+  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden Function/u);
+  rmSync(join(root, 'unsafe.js'));
+  write(
+    'unsafe.js',
+    'function run({ globalAlias = globalThis } = {}) { globalAlias.eval("x"); } run();\n',
+  );
+  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
+  rmSync(join(root, 'unsafe.js'));
+  for (const reflectiveGlobalRead of [
+    'Reflect.get(globalThis, "Function")("return 1")();\n',
+    'const g = globalThis; Object.getOwnPropertyDescriptor(g, "eval").value("x");\n',
+    'globalThis.Reflect.getOwnPropertyDescriptor(globalThis, "importScripts").value("x");\n',
+    'Object.getOwnPropertyDescriptors(globalThis).Function.value("return 1")();\n',
+    'Reflect.get(globalThis, getRuntimeKey())("return 1")();\n',
+  ]) {
+    write('unsafe.js', reflectiveGlobalRead);
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, []),
+      /contains forbidden reflective global lookup/u,
+    );
+    rmSync(join(root, 'unsafe.js'));
+  }
+  write(
+    'safe-reflective-read.js',
+    'const record = { Function: "label" }; Reflect.get(record, "Function"); '
+      + 'function read(scope) { const Reflect = { get() { return "safe"; } }; '
+      + 'return Reflect.get(scope, "safe"); } read({});\n',
+  );
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-reflective-read.js'));
+  write(
+    'unsafe.js',
     'const globalAlias = window; const { Function: DynamicFunction } = globalAlias; '
       + 'DynamicFunction("return 1")();\n',
   );

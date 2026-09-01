@@ -708,6 +708,9 @@ function assertSafeNode(
     if (isUnknownComputedGlobalMember(node.callee, ancestors, scopeAnalysis)) {
       throw new Error(`Mini-game ${path} contains forbidden computed global call.`);
     }
+    if (isReflectiveDynamicCodeGlobalRead(node, ancestors, scopeAnalysis)) {
+      throw new Error(`Mini-game ${path} contains forbidden reflective global lookup.`);
+    }
 
     if (calleeName === 'createElement' && evaluateStaticString(firstArgument) === 'script') {
       throw new Error(`Mini-game ${path} contains forbidden script element creation.`);
@@ -784,6 +787,89 @@ function isUnknownComputedGlobalMember(
     && node.computed === true
     && readMemberName(node) === undefined
     && isGlobalObjectAliasSource(node.object, ancestors, scopeAnalysis);
+}
+
+function isReflectiveDynamicCodeGlobalRead(
+  node: Record<string, unknown>,
+  ancestors: readonly MiniGameAstAncestor[],
+  scopeAnalysis: MiniGameScopeAnalysis,
+): boolean {
+  if (
+    node.type !== 'CallExpression'
+    || !isAstRecord(node.callee)
+    || node.callee.type !== 'MemberExpression'
+    || !Array.isArray(node.arguments)
+  ) {
+    return false;
+  }
+
+  const method = readMemberName(node.callee);
+  const isReflectMethod = isGlobalIntrinsicReference(
+    node.callee.object,
+    'Reflect',
+    ancestors,
+    scopeAnalysis,
+  );
+  const isObjectMethod = isGlobalIntrinsicReference(
+    node.callee.object,
+    'Object',
+    ancestors,
+    scopeAnalysis,
+  );
+
+  if (
+    !isGlobalObjectAliasSource(node.arguments[0], ancestors, scopeAnalysis)
+    || (
+      !(isReflectMethod && (method === 'get' || method === 'getOwnPropertyDescriptor'))
+      && !(isObjectMethod && (
+        method === 'getOwnPropertyDescriptor'
+        || method === 'getOwnPropertyDescriptors'
+      ))
+    )
+  ) {
+    return false;
+  }
+  if (method === 'getOwnPropertyDescriptors') {
+    return true;
+  }
+
+  const property = evaluateStaticString(node.arguments[1]);
+  return property === undefined
+    ? method === 'get'
+    : ['eval', 'Function', 'importScripts'].includes(property);
+}
+
+function isGlobalIntrinsicReference(
+  input: unknown,
+  name: 'Object' | 'Reflect',
+  ancestors: readonly MiniGameAstAncestor[],
+  scopeAnalysis: MiniGameScopeAnalysis,
+): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'Identifier' && input.name === name) {
+    const scope = scopeAnalysis.scopeByNode.get(input) ?? scopeAnalysis.programScope;
+    return resolveMiniGameBinding(name, scope) === undefined;
+  }
+  if (input.type === 'ChainExpression') {
+    return isGlobalIntrinsicReference(input.expression, name, ancestors, scopeAnalysis);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return isGlobalIntrinsicReference(input.expressions.at(-1), name, ancestors, scopeAnalysis);
+  }
+  if (input.type === 'ConditionalExpression') {
+    return isGlobalIntrinsicReference(input.consequent, name, ancestors, scopeAnalysis)
+      || isGlobalIntrinsicReference(input.alternate, name, ancestors, scopeAnalysis);
+  }
+  if (input.type === 'LogicalExpression') {
+    return isGlobalIntrinsicReference(input.left, name, ancestors, scopeAnalysis)
+      || isGlobalIntrinsicReference(input.right, name, ancestors, scopeAnalysis);
+  }
+
+  return input.type === 'MemberExpression'
+    && readMemberName(input) === name
+    && isGlobalObjectAliasSource(input.object, ancestors, scopeAnalysis);
 }
 
 function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
@@ -998,6 +1084,15 @@ function collectDynamicCodeGlobalObjectAliases(
         const added = addGlobalObjectAliasBindings(
           input.id,
           input.init,
+          ancestors,
+          analysis,
+          aliases,
+        );
+        changed = added || changed;
+      } else if (input.type === 'AssignmentPattern') {
+        const added = addGlobalObjectAliasBindings(
+          input.left,
+          input.right,
           ancestors,
           analysis,
           aliases,

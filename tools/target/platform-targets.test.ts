@@ -67,6 +67,7 @@ const nonOriginWechatUrl = withWechatOverride({
 const duplicateWechatOrigins = withWechatOverride({
   remoteAssetOrigins: ['https://assets.example.test', 'https://assets.example.test'],
 });
+const runtimeIncompatibleWechatOrigins = ['https://[::1]', 'https://assets.example.test.'];
 assert.throws(
   () => assertPlatformTargetsConfigShape(insecureWechatOrigins),
   /must be an exact HTTPS origin/u,
@@ -79,6 +80,13 @@ assert.throws(
   () => assertPlatformTargetsConfigShape(duplicateWechatOrigins),
   /must not contain duplicate origins/u,
 );
+for (const origin of runtimeIncompatibleWechatOrigins) {
+  const runtimeIncompatibleWechatOrigin = withWechatOverride({ remoteAssetOrigins: [origin] });
+  assert.throws(
+    () => assertPlatformTargetsConfigShape(runtimeIncompatibleWechatOrigin),
+    /must be an exact HTTPS origin/u,
+  );
+}
 assert.throws(
   () => assertPlatformTargetsConfigShape(withWechatBudget({ mainBytes: 20_971_521 })),
   /mainBytes must not exceed totalBytes/u,

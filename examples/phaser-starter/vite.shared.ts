@@ -4,6 +4,7 @@ import { resolve } from 'node:path';
 import ttsc from '@ttsc/unplugin/vite';
 import type { PluginOption } from 'vite';
 
+import { normalizeMiniGameHttpsOrigin } from '../../packages/phaser-minigame-runtime/src/url';
 import {
   assertRuntimeTargetConfigMatrix,
   type TargetConfigMatrix,
@@ -296,10 +297,10 @@ function readMiniGameRemoteAssetOrigins(
       );
     }
 
-    let parsed: URL;
+    let normalized: string;
 
     try {
-      parsed = new URL(origin);
+      normalized = normalizeMiniGameHttpsOrigin(origin);
     } catch {
       throw new Error(
         `Platform target ${target} remoteAssetOrigins[${String(index)}] must be an exact HTTPS origin.`,
@@ -307,10 +308,7 @@ function readMiniGameRemoteAssetOrigins(
     }
 
     if (
-      parsed.protocol !== 'https:'
-      || parsed.username.length > 0
-      || parsed.password.length > 0
-      || parsed.origin !== origin
+      normalized !== origin
       || origins.has(origin)
     ) {
       throw new Error(
