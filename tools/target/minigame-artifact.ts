@@ -13,7 +13,7 @@ import {
   rmSync,
   writeFileSync,
 } from 'node:fs';
-import { basename, dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { basename, dirname, extname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import type { GeneratedTargetIcons } from '../icons/types';
 import {
@@ -133,7 +133,7 @@ export function assertMiniGameArtifactOutputDirectory(
   if (
     projectRelativePath.length === 0
     || projectRelativePath === '..'
-    || projectRelativePath.startsWith('../')
+    || projectRelativePath.startsWith(`..${sep}`)
     || isAbsolute(projectRelativePath)
     || segments[0] !== 'artifacts'
     || segments.length < 2
@@ -190,7 +190,7 @@ export function assertDisjointMiniGameTargetOutputs(
 
   const canonicalOutputs = outputs.map((output) => ({
     ...output,
-    canonicalPath: canonicalizeThroughExistingAncestor(output.path),
+    canonicalPath: portablePathComparisonKey(output.path),
   }));
 
   for (const [index, output] of canonicalOutputs.entries()) {
@@ -210,7 +210,7 @@ export function assertDisjointMiniGameTargetOutputs(
     ...protectedOutputs,
   ].map((output) => ({
     ...output,
-    canonicalPath: canonicalizeThroughExistingAncestor(output.path),
+    canonicalPath: portablePathComparisonKey(output.path),
   }));
 
   for (const output of canonicalOutputs) {
@@ -409,7 +409,11 @@ function pathsOverlap(first: string, second: string): boolean {
 
 function isPathWithin(root: string, candidate: string): boolean {
   const path = relative(root, candidate);
-  return path === '' || (!path.startsWith('..') && !isAbsolute(path));
+  return path === '' || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
+}
+
+function portablePathComparisonKey(path: string): string {
+  return canonicalizeThroughExistingAncestor(path).toLowerCase();
 }
 
 function canonicalizeThroughExistingAncestor(path: string): string {
@@ -510,7 +514,7 @@ export function assertMiniGameJavaScriptSafety(
   forbiddenMarkers: readonly Readonly<{ readonly marker: string; readonly owner: string }>[],
 ): void {
   const javascript = listMiniGameArtifactFiles(artifactRoot)
-    .filter((file) => file.path.endsWith('.js'));
+    .filter((file) => ['.cjs', '.js', '.mjs'].includes(extname(file.path).toLowerCase()));
 
   for (const file of javascript) {
     const source = readFileSync(join(artifactRoot, file.path), 'utf8');
@@ -520,7 +524,7 @@ export function assertMiniGameJavaScriptSafety(
       [/\beval\s*\(/u, 'eval'],
       [/\bnew\s+Function\b/u, 'new Function'],
       [
-        /(?:\bimportScripts\s*\(\s*["'`]https?:\/\/|https?:\/\/[^\s"'`]+\.m?js(?:[?#][^\s"'`]*)?)/iu,
+        /(?:\bimportScripts\s*\(\s*["'`]https?:\/\/|https?:\/\/[^\s"'`]+\.[cm]?js(?:[?#][^\s"'`]*)?)/iu,
         'remote executable code reference',
       ],
       [/\bindex\.html\b/u, 'HTML entry dependency'],

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { basename, dirname, isAbsolute, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { Script } from 'node:vm';
 
@@ -1080,7 +1080,11 @@ function resolveWrapperApp(target: string, targetConfig: SmokePlatformTargetConf
 function assertPathInside(path: string, baseDir: string, label: string): void {
   const relativePath = relative(baseDir, path);
 
-  if (relativePath.startsWith('..') || isAbsolute(relativePath)) {
+  if (
+    relativePath === '..'
+    || relativePath.startsWith(`..${sep}`)
+    || isAbsolute(relativePath)
+  ) {
     throw new Error(`${label}: ${path}`);
   }
 }

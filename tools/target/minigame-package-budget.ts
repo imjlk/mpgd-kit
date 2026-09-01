@@ -1,5 +1,5 @@
 import { lstatSync, readdirSync } from 'node:fs';
-import { isAbsolute, relative, resolve } from 'node:path';
+import { isAbsolute, relative, resolve, sep } from 'node:path';
 
 import type { MiniGamePackageBudget } from './schemas';
 
@@ -199,7 +199,7 @@ function resolveArtifactPath(root: string, path: string): string {
   if (
     relativePath.length === 0
     || relativePath === '..'
-    || relativePath.startsWith('../')
+    || relativePath.startsWith(`..${sep}`)
     || isAbsolute(relativePath)
   ) {
     throw new Error(`Mini-game path escapes its artifact root: ${path}`);
@@ -261,7 +261,7 @@ function assertMiniGameArtifactFileAllowed(path: string): void {
     || fileName === 'credentials.json'
     || fileName === 'project.private.config.json'
     || /^service-account.*\.json$/iu.test(fileName)
-    || /\.(?:map|ts|tsx|mts|cts|pem|key|p12|pfx)$/iu.test(fileName)
+    || /\.(?:map|jsx|ts|tsx|mts|cts|pem|key|p12|pfx)$/iu.test(fileName)
   ) {
     throw new Error(
       `Mini-game artifact contains a forbidden development or credential file: ${path}`,

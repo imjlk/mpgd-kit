@@ -1,5 +1,5 @@
 import { existsSync, lstatSync, realpathSync } from 'node:fs';
-import { dirname, isAbsolute, relative, resolve } from 'node:path';
+import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 
 export function resolveMiniGameBundleOutput(input: Readonly<{
   readonly gameRoot: string;
@@ -65,7 +65,7 @@ function assertNoSymbolicLink(output: string, stagingRoot: string): void {
 function isDedicatedChildPath(path: string): boolean {
   return path.length > 0
     && path !== '..'
-    && !path.startsWith('../')
+    && !path.startsWith(`..${sep}`)
     && !isAbsolute(path);
 }
 
@@ -75,5 +75,6 @@ function pathsOverlap(left: string, right: string): boolean {
 
 function isInsideOrEqual(parent: string, candidate: string): boolean {
   const path = relative(parent, candidate);
-  return path.length === 0 || (path !== '..' && !path.startsWith('../') && !isAbsolute(path));
+  return path.length === 0
+    || (path !== '..' && !path.startsWith(`..${sep}`) && !isAbsolute(path));
 }

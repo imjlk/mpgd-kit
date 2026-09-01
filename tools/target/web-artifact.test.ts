@@ -212,6 +212,13 @@ try {
     ]),
     /artifact outputs must not overlap: storefront .* and archive /u,
   );
+  assert.throws(
+    () => assertDisjointWebArtifactOutputs([
+      { name: 'storefront', path: artifact },
+      { name: 'archive', path: join(artifact, '..backup') },
+    ]),
+    /artifact outputs must not overlap: storefront .* and archive /u,
+  );
 
   const realStaticDir = join(root, 'real-static');
   const linkedStaticDir = join(root, 'linked-static');

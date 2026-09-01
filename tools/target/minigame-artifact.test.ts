@@ -75,6 +75,16 @@ try {
   );
   rmSync(join(root, 'remote.js'));
 
+  for (const extension of ['JS', 'cjs', 'mjs']) {
+    const unsafeFile = `unsafe.${extension}`;
+    write(unsafeFile, 'eval("untrusted")\n');
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, []),
+      new RegExp(`Mini-game unsafe\\.${extension} contains forbidden eval`, 'u'),
+    );
+    rmSync(join(root, unsafeFile));
+  }
+
   const parsed = JSON.parse(
     readFileSync(join(root, miniGameArtifactEvidenceFileName), 'utf8'),
   ) as Record<string, unknown>;
@@ -176,6 +186,32 @@ try {
       },
     }, resolveValidationPath),
     /Mini-game artifact outputs must not overlap/u,
+  );
+  assert.throws(
+    () => assertDisjointMiniGameTargetOutputs({
+      wechat: miniGameTarget,
+      tiktok: {
+        ...miniGameTarget,
+        kind: 'tiktok-minigame',
+        adapter: 'tiktok',
+        output: 'artifacts/wechat/..backup',
+      },
+    }, resolveValidationPath),
+    /Mini-game artifact outputs must not overlap/u,
+  );
+  assert.throws(
+    () => assertDisjointMiniGameTargetOutputs({
+      wechat: {
+        ...miniGameTarget,
+        output: 'artifacts/TARGET-CONFIG',
+      },
+    }, resolveValidationPath, [
+      {
+        name: 'effective target config output',
+        path: resolveValidationPath('artifacts/target-config'),
+      },
+    ]),
+    /Mini-game artifact output must not overlap generated output/u,
   );
 
   const fileOutput = join(validationRoot, 'artifacts', 'file-output');
