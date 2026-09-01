@@ -17,7 +17,7 @@ const expectedMiniGameOrigins = ['https://assets.example.test'];
 const exactMiniGameOriginDeclaration = createMiniGameOriginDeclaration(expectedMiniGameOrigins);
 assert.doesNotThrow(
   () => assertMiniGameRuntimeAssetOrigins(
-    `${exactMiniGameOriginDeclaration}\nglobalThis.runtime = true;\n`,
+    `${exactMiniGameOriginDeclaration},globalThis.runtime = true;\n`,
     expectedMiniGameOrigins,
   ),
 );

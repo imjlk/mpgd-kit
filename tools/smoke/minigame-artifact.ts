@@ -157,9 +157,24 @@ function readTopLevelRuntimeAssetOriginDeclarations(ast: unknown): string[][] {
     ) {
       return [];
     }
-    const origins = readRuntimeAssetOriginsDeclaration(statement.expression);
+    return readTopLevelRuntimeAssetOriginExpression(statement.expression);
+  });
+}
 
-    return origins === undefined ? [] : [origins];
+function readTopLevelRuntimeAssetOriginExpression(
+  expression: Record<string, unknown>,
+): string[][] {
+  const origins = readRuntimeAssetOriginsDeclaration(expression);
+
+  if (origins !== undefined) {
+    return [origins];
+  }
+  if (expression.type !== 'SequenceExpression' || !Array.isArray(expression.expressions)) {
+    return [];
+  }
+
+  return expression.expressions.flatMap((candidate) => {
+    return isAstRecord(candidate) ? readTopLevelRuntimeAssetOriginExpression(candidate) : [];
   });
 }
 
