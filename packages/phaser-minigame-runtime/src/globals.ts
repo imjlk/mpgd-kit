@@ -179,6 +179,7 @@ interface SavedGlobalProperty {
 }
 
 let activeInstallation: MiniGameGlobalInstallationImpl | undefined;
+let installingGlobals = false;
 
 class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
   readonly host: MiniGameHost;
@@ -456,8 +457,22 @@ export function installMiniGameGlobals(
     );
   }
 
-  activeInstallation = new MiniGameGlobalInstallationImpl(host, options);
-  return activeInstallation;
+  if (installingGlobals) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_GLOBALS_INSTALL_REENTRANT',
+      'Mini-game globals cannot be installed reentrantly while another installation is starting.',
+    );
+  }
+
+  installingGlobals = true;
+
+  try {
+    const installation = new MiniGameGlobalInstallationImpl(host, options);
+    activeInstallation = installation;
+    return installation;
+  } finally {
+    installingGlobals = false;
+  }
 }
 
 export function getInstalledMiniGameGlobals(): MiniGameGlobalInstallation | undefined {

@@ -185,6 +185,70 @@ describe('mini-game globals and Canvas compatibility', () => {
     })).toThrow('already installed with different runtime options');
   });
 
+  it('reserves global installation across synchronous host reentry', () => {
+    class ReentrantGlobalsHost extends FakeMiniGameHost {
+      attemptedReentry = false;
+      reentryError: unknown;
+
+      override getWindowInfo(): ReturnType<FakeMiniGameHost['getWindowInfo']> {
+        if (!this.attemptedReentry) {
+          this.attemptedReentry = true;
+
+          try {
+            installMiniGameGlobals(this);
+          } catch (error) {
+            this.reentryError = error;
+          }
+        }
+
+        return super.getWindowInfo();
+      }
+    }
+
+    const host = new ReentrantGlobalsHost();
+    const installation = installMiniGameGlobals(host);
+
+    expect(host.reentryError).toMatchObject({
+      code: 'MINIGAME_GLOBALS_INSTALL_REENTRANT',
+    });
+    expect(getInstalledMiniGameGlobals()).toBe(installation);
+    expect(host.createdCanvasTypes).toEqual(['primary']);
+    expect(host.touchListenerCount).toBe(4);
+  });
+
+  it('releases the global installation reservation after constructor failure', () => {
+    class FailingReentrantGlobalsHost extends FakeMiniGameHost {
+      attemptedReentry = false;
+      reentryError: unknown;
+
+      override getWindowInfo(): ReturnType<FakeMiniGameHost['getWindowInfo']> {
+        if (!this.attemptedReentry) {
+          this.attemptedReentry = true;
+
+          try {
+            installMiniGameGlobals(this);
+          } catch (error) {
+            this.reentryError = error;
+          }
+
+          throw new Error('outer installation failed');
+        }
+
+        return super.getWindowInfo();
+      }
+    }
+
+    const failedHost = new FailingReentrantGlobalsHost();
+    expect(() => installMiniGameGlobals(failedHost)).toThrow('outer installation failed');
+    expect(failedHost.reentryError).toMatchObject({
+      code: 'MINIGAME_GLOBALS_INSTALL_REENTRANT',
+    });
+    expect(getInstalledMiniGameGlobals()).toBeUndefined();
+
+    const recoveredInstallation = installMiniGameGlobals(new FakeMiniGameHost());
+    expect(getInstalledMiniGameGlobals()).toBe(recoveredInstallation);
+  });
+
   it('unwraps mini-game image wrappers passed to drawImage', async () => {
     const host = new FakeMiniGameHost();
     const installation = installMiniGameGlobals(host);
@@ -237,6 +301,75 @@ describe('mini-game globals and Canvas compatibility', () => {
     Reflect.set(context, 'drawImage', () => undefined);
     expect(context.drawImage).not.toBe(originalDrawImage);
     expect(context.drawImage).toBe(context.drawImage);
+  });
+
+  it('isolates native image callbacks across source generations', () => {
+    class ControlledImageHost extends FakeMiniGameHost {
+      readonly completeImageLoads: Array<() => void> = [];
+
+      override createImage(): object {
+        const image: Record<string, unknown> = {
+          width: 0,
+          height: 0,
+          complete: false,
+          onload: null,
+          onerror: null,
+        };
+
+        Object.defineProperty(image, 'src', {
+          configurable: true,
+          get: () => image.__src ?? '',
+          set: (value: string) => {
+            image.__src = value;
+
+            if (value.length === 0) {
+              image.width = 0;
+              image.height = 0;
+              image.complete = false;
+              return;
+            }
+
+            const dimension = value.includes('second') ? 2 : 1;
+            this.completeImageLoads.push(() => {
+              image.width = dimension;
+              image.height = dimension;
+              image.complete = true;
+              const onload = image.onload;
+
+              if (typeof onload === 'function') {
+                Reflect.apply(onload, image, []);
+              }
+            });
+          },
+        });
+
+        return image;
+      }
+    }
+
+    const host = new ControlledImageHost();
+    installMiniGameGlobals(host, {
+      image: { pollIntervalMs: 100, loadTimeoutMs: 1_000 },
+    });
+    const image = new globalThis.Image();
+    let loadEvents = 0;
+    image.onload = () => {
+      loadEvents += 1;
+    };
+
+    image.src = 'assets/first.png';
+    image.src = 'assets/second.png';
+
+    expect(host.completeImageLoads).toHaveLength(2);
+    host.completeImageLoads[0]?.();
+    expect(loadEvents).toBe(0);
+    expect(image.complete).toBe(false);
+    expect(image.width).toBe(0);
+
+    host.completeImageLoads[1]?.();
+    expect(loadEvents).toBe(1);
+    expect(image.complete).toBe(true);
+    expect(image.width).toBe(2);
   });
 
   it('resolves percentage vertical margins against the containing width', () => {

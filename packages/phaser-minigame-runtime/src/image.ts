@@ -11,29 +11,27 @@ export interface MiniGameImageElementConstructor {
 }
 
 export class MiniGameImageElement extends MiniGameEventTarget {
-  readonly [miniGameNativeObjectSymbol]: object;
   onload: ((event: MiniGameEvent) => void) | null = null;
   onerror: ((event: MiniGameEvent) => void) | null = null;
   crossOrigin: string | null = null;
   complete = false;
+  #nativeImage: object;
+  readonly #createNativeImage: (() => unknown) | undefined;
   #source = '';
   #generation = 0;
-  #hasAssignedNativeSource = false;
+  #replaceBeforeNextLoad = false;
   #timer: ReturnType<typeof setTimeout> | undefined;
   readonly #options: Required<Pick<MiniGameImageOptions, 'pollIntervalMs' | 'loadTimeoutMs'>>
     & Pick<MiniGameImageOptions, 'allowedRemoteOrigins'>;
 
-  constructor(nativeImage: unknown, options: MiniGameImageOptions = {}) {
+  constructor(
+    nativeImage: unknown,
+    options: MiniGameImageOptions = {},
+    createNativeImage?: () => unknown,
+  ) {
     super();
-
-    if (nativeImage === null || (typeof nativeImage !== 'object' && typeof nativeImage !== 'function')) {
-      throw new MiniGameRuntimeError(
-        'MINIGAME_INVALID_NATIVE_IMAGE',
-        'The mini-game host returned an invalid native image object.',
-      );
-    }
-
-    this[miniGameNativeObjectSymbol] = nativeImage;
+    this.#nativeImage = assertNativeImage(nativeImage);
+    this.#createNativeImage = createNativeImage;
     this.#options = {
       pollIntervalMs: normalizePositiveDuration(
         options.pollIntervalMs,
@@ -51,6 +49,10 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     };
   }
 
+  get [miniGameNativeObjectSymbol](): object {
+    return this.#nativeImage;
+  }
+
   get src(): string {
     return this.#source;
   }
@@ -60,27 +62,27 @@ export class MiniGameImageElement extends MiniGameEventTarget {
   }
 
   get width(): number {
-    return readImageDimension(this[miniGameNativeObjectSymbol], 'width');
+    return readImageDimension(this.#nativeImage, 'width');
   }
 
   set width(value: number) {
-    Reflect.set(this[miniGameNativeObjectSymbol], 'width', value);
+    Reflect.set(this.#nativeImage, 'width', value);
   }
 
   get height(): number {
-    return readImageDimension(this[miniGameNativeObjectSymbol], 'height');
+    return readImageDimension(this.#nativeImage, 'height');
   }
 
   set height(value: number) {
-    Reflect.set(this[miniGameNativeObjectSymbol], 'height', value);
+    Reflect.set(this.#nativeImage, 'height', value);
   }
 
   get naturalWidth(): number {
-    return readImageDimension(this[miniGameNativeObjectSymbol], 'naturalWidth') || this.width;
+    return readImageDimension(this.#nativeImage, 'naturalWidth') || this.width;
   }
 
   get naturalHeight(): number {
-    return readImageDimension(this[miniGameNativeObjectSymbol], 'naturalHeight') || this.height;
+    return readImageDimension(this.#nativeImage, 'naturalHeight') || this.height;
   }
 
   removeAttribute(name: string): void {
@@ -106,7 +108,7 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     this.#clearTimer();
     this.complete = false;
     this.#source = source;
-    const nativeImage = this[miniGameNativeObjectSymbol];
+    let nativeImage = this.#nativeImage;
 
     if (source.length === 0) {
       if (!this.#clearNativeSource(nativeImage)) {
@@ -120,7 +122,6 @@ export class MiniGameImageElement extends MiniGameEventTarget {
         return;
       }
 
-      this.#hasAssignedNativeSource = false;
       this.complete = true;
       return;
     }
@@ -128,25 +129,32 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     try {
       assertImageSourceAllowed(source, this.#options.allowedRemoteOrigins);
     } catch (error) {
-      if (this.#hasAssignedNativeSource && this.#clearNativeSource(nativeImage)) {
-        this.#hasAssignedNativeSource = false;
+      if (this.#replaceBeforeNextLoad) {
+        this.#clearNativeSource(nativeImage);
       }
       this.#scheduleFailure(generation, error);
       return;
     }
 
-    if (this.#hasAssignedNativeSource && !this.#clearNativeSource(nativeImage)) {
-      this.#scheduleFailure(
-        generation,
-        new MiniGameRuntimeError(
-          'MINIGAME_IMAGE_RESET_FAILED',
-          'The mini-game native image could not reset before loading a new source.',
-        ),
-      );
-      return;
-    }
+    if (this.#replaceBeforeNextLoad) {
+      if (!this.#clearNativeSource(nativeImage)) {
+        this.#scheduleFailure(
+          generation,
+          new MiniGameRuntimeError(
+            'MINIGAME_IMAGE_RESET_FAILED',
+            'The mini-game native image could not reset before loading a new source.',
+          ),
+        );
+        return;
+      }
 
-    this.#hasAssignedNativeSource = false;
+      try {
+        nativeImage = this.#replaceNativeImage();
+      } catch (error) {
+        this.#scheduleFailure(generation, error);
+        return;
+      }
+    }
 
     const startedAt = Date.now();
     const pollingBaseline = readNativeImageDimensions(nativeImage);
@@ -154,12 +162,11 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     try {
       Reflect.set(nativeImage, 'onload', () => this.#settle(generation, true));
       Reflect.set(nativeImage, 'onerror', () => this.#settle(generation, false));
+      this.#replaceBeforeNextLoad = true;
 
       if (!Reflect.set(nativeImage, 'src', source)) {
         throw new Error('The native image source is not writable.');
       }
-
-      this.#hasAssignedNativeSource = true;
     } catch (error) {
       this.#scheduleFailure(generation, error);
       return;
@@ -195,6 +202,20 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     };
 
     this.#timer = setTimeout(poll, this.#options.pollIntervalMs);
+  }
+
+  #replaceNativeImage(): object {
+    if (this.#createNativeImage === undefined) {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_IMAGE_RELOAD_UNAVAILABLE',
+        'Mini-game image source reassignment requires a native image factory.',
+      );
+    }
+
+    const replacement = assertNativeImage(this.#createNativeImage());
+    this.#nativeImage = replacement;
+    this.#replaceBeforeNextLoad = false;
+    return replacement;
   }
 
   #clearNativeSource(nativeImage: object): boolean {
@@ -249,7 +270,7 @@ export function createMiniGameImageConstructor(
 ): MiniGameImageElementConstructor {
   return class HostMiniGameImageElement extends MiniGameImageElement {
     constructor() {
-      super(host.createImage(), options);
+      super(host.createImage(), options, () => host.createImage());
     }
   };
 }
@@ -352,6 +373,17 @@ function normalizePositiveDuration(
   }
 
   return resolved;
+}
+
+function assertNativeImage(image: unknown): object {
+  if (image === null || (typeof image !== 'object' && typeof image !== 'function')) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_INVALID_NATIVE_IMAGE',
+      'The mini-game host returned an invalid native image object.',
+    );
+  }
+
+  return image;
 }
 
 function isNativeImageComplete(
