@@ -74,9 +74,6 @@ const bridge: StarterMiniGameRuntimeBridge = {
       if (scope.__MPGD_MINIGAME_RUNTIME__ === bridge) {
         Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME__');
       }
-      if (scope.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__ === remoteAssetOrigins) {
-        Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__');
-      }
     } finally {
       disposing = false;
     }
@@ -85,9 +82,6 @@ const bridge: StarterMiniGameRuntimeBridge = {
 
 if (scope.__MPGD_MINIGAME_RUNTIME__ !== undefined) {
   globals.dispose();
-  if (scope.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__ === remoteAssetOrigins) {
-    Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__');
-  }
   throw new Error('Mini-game runtime bridge is already installed.');
 }
 

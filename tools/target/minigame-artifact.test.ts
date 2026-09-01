@@ -103,6 +103,12 @@ try {
   write('unsafe.js', 'const indirectEval = eval;\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
   rmSync(join(root, 'unsafe.js'));
+  write('unsafe.js', 'const globalAlias = globalThis; globalAlias[getRuntimeKey()]();\n');
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, []),
+    /contains forbidden computed global call/u,
+  );
+  rmSync(join(root, 'unsafe.js'));
   write('safe-worker-check.js', "if (typeof importScripts === 'function') {}\n");
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-worker-check.js'));
@@ -163,6 +169,26 @@ try {
   assert.throws(
     () => assertMiniGameJavaScriptSafety(root, []),
     /contains forbidden computed global call/u,
+  );
+  rmSync(join(root, 'unsafe.js'));
+  write('unsafe.js', "const globalAlias = globalThis; globalAlias.Function('return 1')();\n");
+  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden Function/u);
+  rmSync(join(root, 'unsafe.js'));
+  write(
+    'unsafe.js',
+    'const firstAlias = globalThis; const secondAlias = firstAlias; '
+      + 'secondAlias.eval("untrusted");\n',
+  );
+  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
+  rmSync(join(root, 'unsafe.js'));
+  write(
+    'unsafe.js',
+    'const globalAlias = window; const { Function: DynamicFunction } = globalAlias; '
+      + 'DynamicFunction("return 1")();\n',
+  );
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, []),
+    /contains forbidden Function destructuring/u,
   );
   rmSync(join(root, 'unsafe.js'));
   write('safe-label.js', "globalThis.label = 'Function';\n");

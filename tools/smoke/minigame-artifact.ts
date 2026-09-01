@@ -240,34 +240,34 @@ function readTopLevelRuntimeAssetOriginDeclarations(ast: unknown): string[][] {
   if (!isAstRecord(ast) || ast.type !== 'Program' || !Array.isArray(ast.body)) {
     return [];
   }
+  const statement = ast.body[0];
 
-  return ast.body.flatMap((statement) => {
-    if (
-      !isAstRecord(statement)
-      || statement.type !== 'ExpressionStatement'
-      || !isAstRecord(statement.expression)
-    ) {
-      return [];
-    }
-    return readTopLevelRuntimeAssetOriginExpression(statement.expression);
-  });
+  if (
+    !isAstRecord(statement)
+    || statement.type !== 'ExpressionStatement'
+    || !isAstRecord(statement.expression)
+  ) {
+    return [];
+  }
+  const origins = readLeadingRuntimeAssetOriginExpression(statement.expression);
+
+  return origins === undefined ? [] : [origins];
 }
 
-function readTopLevelRuntimeAssetOriginExpression(
+function readLeadingRuntimeAssetOriginExpression(
   expression: Record<string, unknown>,
-): string[][] {
+): string[] | undefined {
   const origins = readRuntimeAssetOriginsDeclaration(expression);
 
   if (origins !== undefined) {
-    return [origins];
+    return origins;
   }
   if (expression.type !== 'SequenceExpression' || !Array.isArray(expression.expressions)) {
-    return [];
+    return undefined;
   }
+  const first = expression.expressions[0];
 
-  return expression.expressions.flatMap((candidate) => {
-    return isAstRecord(candidate) ? readTopLevelRuntimeAssetOriginExpression(candidate) : [];
-  });
+  return isAstRecord(first) ? readLeadingRuntimeAssetOriginExpression(first) : undefined;
 }
 
 function readRuntimeAssetOriginsDeclaration(
@@ -334,7 +334,7 @@ function readRuntimeAssetOriginsDescriptor(
     || enumerable === undefined
     || writable === undefined
     || value === undefined
-    || readStaticBoolean(configurable.value) !== true
+    || readStaticBoolean(configurable.value) !== false
     || readStaticBoolean(enumerable.value) !== false
     || readStaticBoolean(writable.value) !== false
   ) {

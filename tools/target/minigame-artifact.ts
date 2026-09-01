@@ -597,6 +597,7 @@ function assertMiniGameJavaScriptAstSafety(source: string, path: string): void {
     throw new Error(`Mini-game ${path} is not valid JavaScript: ${formatError(error)}`);
   }
 
+  const globalObjectAliases = collectDynamicCodeGlobalObjectAliases(ast);
   const ancestors: MiniGameAstAncestor[] = [];
   visit(ast);
 
@@ -611,7 +612,7 @@ function assertMiniGameJavaScriptAstSafety(source: string, path: string): void {
       return;
     }
 
-    assertSafeNode(input, ancestors, path);
+    assertSafeNode(input, ancestors, path, globalObjectAliases);
     for (const [key, value] of Object.entries(input)) {
       if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
         ancestors.push({ node: input, childKey: key });
@@ -626,6 +627,7 @@ function assertSafeNode(
   node: Record<string, unknown>,
   ancestors: readonly MiniGameAstAncestor[],
   path: string,
+  globalObjectAliases: ReadonlySet<string>,
 ): void {
   if (node.type === 'ImportExpression') {
     throw new Error(`Mini-game ${path} contains forbidden dynamic import.`);
@@ -655,14 +657,20 @@ function assertSafeNode(
     if (
       propertyName !== undefined
       && ['eval', 'Function', 'importScripts'].includes(propertyName)
-      && (node.computed === true || isDynamicCodeGlobalObject(node.object, ancestors))
+      && (
+        node.computed === true
+        || isDynamicCodeGlobalObject(node.object, ancestors, globalObjectAliases)
+      )
       && !isTypeofReference(node, ancestors)
     ) {
       throw new Error(`Mini-game ${path} contains forbidden ${propertyName}.`);
     }
   }
 
-  if (node.type === 'Property' && isGlobalObjectDestructuring(ancestors)) {
+  if (
+    node.type === 'Property'
+    && isGlobalObjectDestructuring(ancestors, globalObjectAliases)
+  ) {
     const propertyName = readStaticPropertyName(node);
 
     if (node.computed === true) {
@@ -680,7 +688,7 @@ function assertSafeNode(
     const calleeName = readMemberName(node.callee);
     const firstArgument = Array.isArray(node.arguments) ? node.arguments[0] : undefined;
 
-    if (isUnknownComputedGlobalMember(node.callee, ancestors)) {
+    if (isUnknownComputedGlobalMember(node.callee, ancestors, globalObjectAliases)) {
       throw new Error(`Mini-game ${path} contains forbidden computed global call.`);
     }
 
@@ -692,7 +700,7 @@ function assertSafeNode(
   if (node.type === 'NewExpression' && isAstRecord(node.callee)) {
     const calleeName = readMemberName(node.callee);
 
-    if (isUnknownComputedGlobalMember(node.callee, ancestors)) {
+    if (isUnknownComputedGlobalMember(node.callee, ancestors, globalObjectAliases)) {
       throw new Error(`Mini-game ${path} contains forbidden computed global construction.`);
     }
 
@@ -704,6 +712,7 @@ function assertSafeNode(
 
 function isGlobalObjectDestructuring(
   ancestors: readonly MiniGameAstAncestor[],
+  globalObjectAliases: ReadonlySet<string>,
 ): boolean {
   const pattern = ancestors.at(-1)?.node;
   const container = ancestors.at(-2)?.node;
@@ -712,12 +721,12 @@ function isGlobalObjectDestructuring(
     return false;
   }
   if (container.type === 'VariableDeclarator' && container.id === pattern) {
-    return isGlobalObjectIdentifier(container.init);
+    return isGlobalObjectAliasSource(container.init, ancestors, globalObjectAliases);
   }
 
   return container.type === 'AssignmentExpression'
     && container.left === pattern
-    && isGlobalObjectIdentifier(container.right);
+    && isGlobalObjectAliasSource(container.right, ancestors, globalObjectAliases);
 }
 
 function isGlobalObjectIdentifier(input: unknown): boolean {
@@ -730,8 +739,15 @@ function isGlobalObjectIdentifier(input: unknown): boolean {
 function isDynamicCodeGlobalObject(
   input: unknown,
   ancestors: readonly MiniGameAstAncestor[],
+  globalObjectAliases: ReadonlySet<string>,
 ): boolean {
   return isGlobalObjectIdentifier(input)
+    || (
+      isAstRecord(input)
+      && input.type === 'Identifier'
+      && typeof input.name === 'string'
+      && globalObjectAliases.has(input.name)
+    )
     || (
       isAstRecord(input)
       && input.type === 'ThisExpression'
@@ -751,11 +767,145 @@ function isProgramThisReference(ancestors: readonly MiniGameAstAncestor[]): bool
 function isUnknownComputedGlobalMember(
   node: Record<string, unknown>,
   ancestors: readonly MiniGameAstAncestor[],
+  globalObjectAliases: ReadonlySet<string>,
 ): boolean {
   return node.type === 'MemberExpression'
     && node.computed === true
     && readMemberName(node) === undefined
-    && isDynamicCodeGlobalObject(node.object, ancestors);
+    && isDynamicCodeGlobalObject(node.object, ancestors, globalObjectAliases);
+}
+
+function collectDynamicCodeGlobalObjectAliases(ast: unknown): ReadonlySet<string> {
+  const aliases = new Set<string>();
+  let changed = true;
+
+  while (changed) {
+    changed = false;
+    const ancestors: MiniGameAstAncestor[] = [];
+    visit(ast);
+
+    function visit(input: unknown): void {
+      if (Array.isArray(input)) {
+        for (const item of input) {
+          visit(item);
+        }
+        return;
+      }
+      if (!isAstRecord(input)) {
+        return;
+      }
+
+      if (input.type === 'VariableDeclarator') {
+        const added = addGlobalObjectAliasBindings(input.id, input.init, ancestors, aliases);
+        changed = added || changed;
+      } else if (input.type === 'AssignmentExpression' && input.operator === '=') {
+        const added = addGlobalObjectAliasBindings(input.left, input.right, ancestors, aliases);
+        changed = added || changed;
+      }
+
+      for (const [key, value] of Object.entries(input)) {
+        if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
+          ancestors.push({ node: input, childKey: key });
+          visit(value);
+          ancestors.pop();
+        }
+      }
+    }
+  }
+
+  return aliases;
+}
+
+function addGlobalObjectAliasBindings(
+  pattern: unknown,
+  source: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  aliases: Set<string>,
+): boolean {
+  if (!isGlobalObjectAliasSource(source, ancestors, aliases) || !isAstRecord(pattern)) {
+    return false;
+  }
+  if (pattern.type === 'Identifier' && typeof pattern.name === 'string') {
+    const size = aliases.size;
+    aliases.add(pattern.name);
+    return aliases.size !== size;
+  }
+  if (pattern.type === 'AssignmentPattern') {
+    return addGlobalObjectAliasBindings(pattern.left, source, ancestors, aliases);
+  }
+  if (pattern.type !== 'ObjectPattern' || !Array.isArray(pattern.properties)) {
+    return false;
+  }
+
+  let changed = false;
+
+  for (const property of pattern.properties) {
+    if (!isAstRecord(property) || property.type !== 'Property') {
+      continue;
+    }
+    const name = readStaticPropertyName(property);
+
+    if (
+      name !== undefined
+      && ['globalThis', 'self', 'window', 'top', 'parent'].includes(name)
+    ) {
+      changed = addKnownGlobalObjectAlias(property.value, aliases) || changed;
+    }
+  }
+
+  return changed;
+}
+
+function addKnownGlobalObjectAlias(pattern: unknown, aliases: Set<string>): boolean {
+  if (!isAstRecord(pattern)) {
+    return false;
+  }
+  if (pattern.type === 'Identifier' && typeof pattern.name === 'string') {
+    const size = aliases.size;
+    aliases.add(pattern.name);
+    return aliases.size !== size;
+  }
+  if (pattern.type === 'AssignmentPattern') {
+    return addKnownGlobalObjectAlias(pattern.left, aliases);
+  }
+
+  return false;
+}
+
+function isGlobalObjectAliasSource(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  aliases: ReadonlySet<string>,
+): boolean {
+  if (isDynamicCodeGlobalObject(input, ancestors, aliases)) {
+    return true;
+  }
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'ChainExpression') {
+    return isGlobalObjectAliasSource(input.expression, ancestors, aliases);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return isGlobalObjectAliasSource(input.expressions.at(-1), ancestors, aliases);
+  }
+  if (input.type === 'ConditionalExpression') {
+    return isGlobalObjectAliasSource(input.consequent, ancestors, aliases)
+      || isGlobalObjectAliasSource(input.alternate, ancestors, aliases);
+  }
+  if (input.type === 'LogicalExpression') {
+    return isGlobalObjectAliasSource(input.left, ancestors, aliases)
+      || isGlobalObjectAliasSource(input.right, ancestors, aliases);
+  }
+  if (input.type === 'MemberExpression') {
+    const name = readMemberName(input);
+
+    return name !== undefined
+      && ['globalThis', 'self', 'window', 'top', 'parent'].includes(name)
+      && isGlobalObjectAliasSource(input.object, ancestors, aliases);
+  }
+
+  return false;
 }
 
 function isTypeofReference(
