@@ -85,7 +85,9 @@ const bridge: StarterMiniGameRuntimeBridge = {
 
 if (scope.__MPGD_MINIGAME_RUNTIME__ !== undefined) {
   globals.dispose();
-  Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__');
+  if (scope.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__ === remoteAssetOrigins) {
+    Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__');
+  }
   throw new Error('Mini-game runtime bridge is already installed.');
 }
 

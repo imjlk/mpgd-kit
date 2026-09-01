@@ -730,10 +730,7 @@ function isUnknownComputedGlobalMember(node: Record<string, unknown>): boolean {
   return node.type === 'MemberExpression'
     && node.computed === true
     && readMemberName(node) === undefined
-    && isAstRecord(node.object)
-    && node.object.type === 'Identifier'
-    && typeof node.object.name === 'string'
-    && ['globalThis', 'self', 'window'].includes(node.object.name);
+    && isDynamicCodeGlobalObject(node.object);
 }
 
 function isTypeofReference(

@@ -65,6 +65,18 @@ assert.throws(
   ),
   /exactly one executable asset-origin declaration/u,
 );
+for (const shadow of [
+  'const globalThis = { Object: { defineProperty() {}, freeze(value) { return value; } } };',
+  'const Object = { defineProperty() {}, freeze(value) { return value; } };',
+]) {
+  assert.throws(
+    () => assertMiniGameRuntimeAssetOrigins(
+      `${shadow}\n${exactMiniGameOriginDeclaration}`,
+      expectedMiniGameOrigins,
+    ),
+    /must not shadow the globalThis or Object intrinsic binding/u,
+  );
+}
 
 try {
   writeFileSync(join(webArtifactRoot, 'manifest.webmanifest'), '{}\n');

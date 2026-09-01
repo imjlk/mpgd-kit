@@ -109,6 +109,11 @@ export function assertMiniGameRuntimeAssetOrigins(
   } catch (error) {
     throw new Error(`Mini-game runtime.js is not valid JavaScript: ${formatError(error)}`);
   }
+  if (hasProgramScopeIntrinsicShadow(ast)) {
+    throw new Error(
+      'Mini-game runtime.js must not shadow the globalThis or Object intrinsic binding.',
+    );
+  }
 
   const declarations = readTopLevelRuntimeAssetOriginDeclarations(ast);
   const candidateCount = countRuntimeAssetOriginCandidates(ast);
@@ -121,6 +126,93 @@ export function assertMiniGameRuntimeAssetOrigins(
   if (JSON.stringify(declarations[0]) !== JSON.stringify(expectedOrigins)) {
     throw new Error('Mini-game runtime.js asset origins differ from target configuration.');
   }
+}
+
+function hasProgramScopeIntrinsicShadow(ast: unknown): boolean {
+  let shadowed = false;
+
+  visitAst(ast, [], (node, ancestors) => {
+    if (shadowed || !declaresProgramScopeBinding(node, ancestors)) {
+      return;
+    }
+    shadowed = declarationPatterns(node).some(patternBindsRuntimeIntrinsic);
+  });
+  return shadowed;
+}
+
+function declaresProgramScopeBinding(
+  node: Record<string, unknown>,
+  ancestors: readonly SmokeAstAncestor[],
+): boolean {
+  const parent = ancestors.at(-1)?.node;
+
+  if (node.type === 'VariableDeclaration') {
+    return (node.kind === 'var' && !hasProgramScopeBarrier(ancestors))
+      || parent?.type === 'Program';
+  }
+  if (node.type === 'FunctionDeclaration') {
+    return !hasProgramScopeBarrier(ancestors);
+  }
+
+  return (node.type === 'ClassDeclaration' || node.type === 'ImportDeclaration')
+    && parent?.type === 'Program';
+}
+
+function hasProgramScopeBarrier(ancestors: readonly SmokeAstAncestor[]): boolean {
+  return ancestors.some(({ node }) => {
+    return node.type === 'FunctionDeclaration'
+      || node.type === 'FunctionExpression'
+      || node.type === 'ArrowFunctionExpression'
+      || node.type === 'StaticBlock';
+  });
+}
+
+function declarationPatterns(node: Record<string, unknown>): readonly unknown[] {
+  if (node.type === 'VariableDeclaration' && Array.isArray(node.declarations)) {
+    return node.declarations.flatMap((declaration) => {
+      return isAstRecord(declaration) ? [declaration.id] : [];
+    });
+  }
+  if (node.type === 'FunctionDeclaration' || node.type === 'ClassDeclaration') {
+    return [node.id];
+  }
+  if (node.type === 'ImportDeclaration' && Array.isArray(node.specifiers)) {
+    return node.specifiers.flatMap((specifier) => {
+      return isAstRecord(specifier) ? [specifier.local] : [];
+    });
+  }
+
+  return [];
+}
+
+function patternBindsRuntimeIntrinsic(input: unknown): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'Identifier') {
+    return input.name === 'globalThis' || input.name === 'Object';
+  }
+  if (input.type === 'RestElement') {
+    return patternBindsRuntimeIntrinsic(input.argument);
+  }
+  if (input.type === 'AssignmentPattern') {
+    return patternBindsRuntimeIntrinsic(input.left);
+  }
+  if (input.type === 'ArrayPattern' && Array.isArray(input.elements)) {
+    return input.elements.some(patternBindsRuntimeIntrinsic);
+  }
+  if (input.type === 'ObjectPattern' && Array.isArray(input.properties)) {
+    return input.properties.some((property) => {
+      if (!isAstRecord(property)) {
+        return false;
+      }
+      return property.type === 'Property'
+        ? patternBindsRuntimeIntrinsic(property.value)
+        : patternBindsRuntimeIntrinsic(property.argument);
+    });
+  }
+
+  return false;
 }
 
 function countRuntimeAssetOriginCandidates(ast: unknown): number {
