@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
 import { resolveMiniGameBundleOutput } from './vite.minigame-output';
-import { rewritePhaserMiniGameGlobalFallback } from './vite.minigame-phaser';
+import { rewritePhaserMiniGameDynamicCode } from './vite.minigame-phaser';
 
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-minigame-vite-output-'));
 const gameRoot = join(fixtureRoot, 'game');
@@ -48,17 +48,27 @@ try {
   );
 
   const phaserFallback = "return this || new Function('return this')();";
+  const sceneEvaluation = 'var eval2 = eval;\n'
+    + '        this.loader.sceneManager.add(this.key, eval2(code));';
   assert.equal(
-    rewritePhaserMiniGameGlobalFallback(`before ${phaserFallback} after`),
-    'before return globalThis; after',
+    rewritePhaserMiniGameDynamicCode(
+      `before ${phaserFallback}\n${sceneEvaluation} after`,
+    ),
+    "before return globalThis;\nthrow new Error('Phaser SceneFile loader is disabled in mini-game artifacts.'); after",
   );
   assert.throws(
-    () => rewritePhaserMiniGameGlobalFallback('return globalThis;'),
+    () => rewritePhaserMiniGameDynamicCode(sceneEvaluation),
     /Expected exactly one Phaser 4\.2\.0 dynamic global fallback, found 0/u,
   );
   assert.throws(
-    () => rewritePhaserMiniGameGlobalFallback(`${phaserFallback}\n${phaserFallback}`),
+    () => rewritePhaserMiniGameDynamicCode(
+      `${phaserFallback}\n${phaserFallback}\n${sceneEvaluation}`,
+    ),
     /Expected exactly one Phaser 4\.2\.0 dynamic global fallback, found 2/u,
+  );
+  assert.throws(
+    () => rewritePhaserMiniGameDynamicCode(phaserFallback),
+    /Expected exactly one Phaser 4\.2\.0 dynamic SceneFile evaluation, found 0/u,
   );
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });

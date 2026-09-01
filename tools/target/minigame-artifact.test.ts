@@ -87,6 +87,7 @@ try {
 
   for (const functionConstructor of [
     'Function("return 1")()\n',
+    '(Function)("return 1")()\n',
     'new Function("return 1")()\n',
     'Function`return 1`\n',
   ]) {
@@ -97,6 +98,9 @@ try {
     );
     rmSync(join(root, 'unsafe.js'));
   }
+  write('unsafe.js', 'const indirectEval = eval;\n');
+  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
+  rmSync(join(root, 'unsafe.js'));
 
   const parsed = JSON.parse(
     readFileSync(join(root, miniGameArtifactEvidenceFileName), 'utf8'),

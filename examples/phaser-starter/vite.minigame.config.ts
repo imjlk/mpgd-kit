@@ -4,7 +4,7 @@ import { defineConfig } from 'vite';
 
 import { createGameViteSharedConfig } from './vite.shared';
 import { resolveMiniGameBundleOutput } from './vite.minigame-output';
-import { createPhaserMiniGameStaticGlobalPlugin } from './vite.minigame-phaser';
+import { createPhaserMiniGameDynamicCodePlugin } from './vite.minigame-phaser';
 
 const gameRoot = process.cwd();
 
@@ -46,7 +46,7 @@ export default defineConfig(({ mode }) => {
   return {
     ...sharedConfig,
     plugins: bundleKind === 'game'
-      ? [...sharedConfig.plugins, createPhaserMiniGameStaticGlobalPlugin()]
+      ? [...sharedConfig.plugins, createPhaserMiniGameDynamicCodePlugin()]
       : sharedConfig.plugins,
     build: {
       target: 'es2020',

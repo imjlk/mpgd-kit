@@ -530,8 +530,8 @@ export function assertMiniGameJavaScriptSafety(
 
     for (const [pattern, label] of [
       [/\bimport\s*\(/u, 'dynamic import'],
-      [/\beval\s*\(/u, 'eval'],
-      [/\bFunction\s*(?:\(|`)/u, 'Function constructor'],
+      [/\beval\b/u, 'eval'],
+      [/\bFunction\b/u, 'Function constructor'],
       [
         /(?:\bimportScripts\s*\(\s*["'`]https?:\/\/|https?:\/\/[^\s"'`]+\.[cm]?js(?:[?#][^\s"'`]*)?)/iu,
         'remote executable code reference',
