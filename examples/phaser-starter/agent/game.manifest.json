@@ -147,6 +147,7 @@
         "Canvas is the only enabled renderer, and audio remains blocked by artifact preflight.",
         "Declare every remote non-code asset origin in the target allowlist and configure the same domain in the WeChat Developer Portal.",
         "Remote WeChat transport requires base library 3.2.2 or newer and disables automatic redirects with the native manual redirect policy so an allowlisted origin cannot silently redirect asset loading elsewhere.",
+        "Keep image, spritesheet, and atlas textures package-local because native HTTPS Image redirects cannot be verified and are blocked by the experimental runtime.",
         "Treat static artifact verification as experimental evidence, not DevTools or real-device approval."
       ]
     },

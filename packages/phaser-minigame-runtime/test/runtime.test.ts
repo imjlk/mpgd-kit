@@ -703,6 +703,7 @@ describe('mini-game globals and Canvas compatibility', () => {
       ['blob:minigame-image', 'MINIGAME_IMAGE_PROTOCOL_BLOCKED'],
       ['//untrusted.example/image.png', 'MINIGAME_IMAGE_PROTOCOL_BLOCKED'],
       [String.raw`\\untrusted.example\image.png`, 'MINIGAME_IMAGE_PROTOCOL_BLOCKED'],
+      ['https://untrusted.example/image.png', 'MINIGAME_IMAGE_ORIGIN_BLOCKED'],
       ['../secret.png', 'MINIGAME_IMAGE_LOCAL_PATH_INVALID'],
     ] as const) {
       const image = new globalThis.Image();
@@ -722,6 +723,20 @@ describe('mini-game globals and Canvas compatibility', () => {
         error: { code },
       });
     }
+
+    getInstalledMiniGameGlobals()?.dispose();
+    installMiniGameGlobals(host, {
+      image: { allowedRemoteOrigins: ['https://images.example.com'] },
+    });
+    const remoteImage = new globalThis.Image();
+    const unverifiableRedirectError = new Promise<unknown>((resolve) => {
+      remoteImage.onerror = (event) => resolve(event);
+    });
+    remoteImage.src = 'https://images.example.com/marker.png';
+    await expect(unverifiableRedirectError).resolves.toMatchObject({
+      type: 'error',
+      error: { code: 'MINIGAME_IMAGE_REMOTE_REDIRECT_UNVERIFIABLE' },
+    });
   });
 
   it('keeps same-target listeners after stopPropagation and honors stopImmediatePropagation', () => {

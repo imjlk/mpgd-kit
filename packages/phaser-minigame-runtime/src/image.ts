@@ -362,6 +362,12 @@ function assertImageSourceAllowed(
       `Remote mini-game image origin is not allowed: ${parsed.origin}`,
     );
   }
+
+  throw new MiniGameRuntimeError(
+    'MINIGAME_IMAGE_REMOTE_REDIRECT_UNVERIFIABLE',
+    'Native mini-game HTTPS image loading is blocked because redirect origins cannot be verified. '
+      + 'Package image assets locally until a host-verified remote image transport is available.',
+  );
 }
 
 function assertLocalImagePath(source: string): void {

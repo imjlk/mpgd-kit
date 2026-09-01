@@ -125,7 +125,7 @@ type MiniGameObjectIntrinsicMethod =
   | 'preventExtensions'
   | 'seal'
   | 'setPrototypeOf';
-type MiniGameReflectiveGlobalReadKind = 'property' | 'descriptors';
+type MiniGameReflectiveGlobalReadKind = 'property' | 'descriptors' | 'values';
 const miniGameObjectIntrinsicMethods = new Set<MiniGameObjectIntrinsicMethod>([
   'assign',
   'create',
@@ -134,6 +134,12 @@ const miniGameObjectIntrinsicMethods = new Set<MiniGameObjectIntrinsicMethod>([
   'freeze',
   'preventExtensions',
   'seal',
+  'setPrototypeOf',
+]);
+const miniGameObjectMutatingMethods = new Set<MiniGameObjectIntrinsicMethod>([
+  'assign',
+  'defineProperties',
+  'defineProperty',
   'setPrototypeOf',
 ]);
 
@@ -772,6 +778,13 @@ function assertSafeNode(
   const parent = ancestors.at(-1)?.node;
 
   if (
+    forbiddenGlobals.size > 0
+    && isMiniGameProtectedIntrinsicMutation(node, ancestors, scopeAnalysis)
+  ) {
+    throw new Error(`Mini-game ${path} contains forbidden protected intrinsic mutation.`);
+  }
+
+  if (
     isMiniGameFunctionNode(node)
     && (
       (parent?.type === 'MethodDefinition' && parent.value === node)
@@ -1084,7 +1097,6 @@ function isMiniGameSymbolValue(
   analysis: MiniGameScopeAnalysis,
 ): boolean {
   const bindingStack = new Set<MiniGameLexicalBinding>();
-  const constructorStack = new Set<MiniGameLexicalBinding>();
   return isSymbol(input);
 
   function isSymbol(value: unknown): boolean {
@@ -1127,66 +1139,194 @@ function isMiniGameSymbolValue(
       return isSymbol(value.right);
     }
     if (value.type === 'CallExpression' && isAstRecord(value.callee)) {
-      if (isSymbolConstructor(value.callee)) {
+      if (isMiniGameSymbolConstructorReference(value.callee, ancestors, analysis)) {
         return true;
       }
       return value.callee.type === 'MemberExpression'
         && readMiniGameMemberNames(value.callee, ancestors, analysis).has('for')
-        && isSymbolConstructor(value.callee.object);
+        && isMiniGameSymbolConstructorReference(value.callee.object, ancestors, analysis);
     }
     if (value.type === 'MemberExpression') {
       const memberNames = readMiniGameMemberNames(value, ancestors, analysis);
       return memberNames.size > 0
         && [...memberNames].every((name) => miniGameWellKnownSymbolProperties.has(name))
-        && isSymbolConstructor(value.object);
+        && isMiniGameSymbolConstructorReference(value.object, ancestors, analysis);
     }
 
     return false;
   }
+}
 
-  function isSymbolConstructor(value: unknown): boolean {
-    if (!isAstRecord(value)) {
+function isMiniGameSymbolConstructorReference(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+  bindingStack: Set<MiniGameLexicalBinding> = new Set(),
+): boolean {
+  if (!isAstRecord(input)) {
+    return false;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(input.name, scope);
+
+    if (binding === undefined) {
+      return input.name === 'Symbol';
+    }
+    if (bindingStack.has(binding)) {
       return false;
     }
-    if (value.type === 'Identifier' && typeof value.name === 'string') {
-      const scope = analysis.scopeByNode.get(value) ?? analysis.programScope;
-      const binding = resolveMiniGameBinding(value.name, scope);
+    const sources = analysis.bindingSources.get(binding) ?? [];
 
-      if (binding === undefined) {
-        return value.name === 'Symbol';
-      }
-      if (constructorStack.has(binding)) {
-        return false;
-      }
-      const sources = analysis.bindingSources.get(binding) ?? [];
+    if (sources.length === 0) {
+      return false;
+    }
+    bindingStack.add(binding);
+    const result = sources.every((source) => {
+      return isMiniGameSymbolConstructorReference(source, ancestors, analysis, bindingStack);
+    });
+    bindingStack.delete(binding);
+    return result;
+  }
+  if (input.type === 'ChainExpression') {
+    return isMiniGameSymbolConstructorReference(
+      input.expression,
+      ancestors,
+      analysis,
+      bindingStack,
+    );
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return isMiniGameSymbolConstructorReference(
+      input.expressions.at(-1),
+      ancestors,
+      analysis,
+      bindingStack,
+    );
+  }
+  if (input.type === 'ConditionalExpression') {
+    const consequentIsSymbol = isMiniGameSymbolConstructorReference(
+      input.consequent,
+      ancestors,
+      analysis,
+      bindingStack,
+    );
+    const alternateIsSymbol = isMiniGameSymbolConstructorReference(
+      input.alternate,
+      ancestors,
+      analysis,
+      bindingStack,
+    );
+    return consequentIsSymbol && alternateIsSymbol;
+  }
+  if (input.type === 'LogicalExpression') {
+    const leftIsSymbol = isMiniGameSymbolConstructorReference(
+      input.left,
+      ancestors,
+      analysis,
+      bindingStack,
+    );
+    const rightIsSymbol = isMiniGameSymbolConstructorReference(
+      input.right,
+      ancestors,
+      analysis,
+      bindingStack,
+    );
+    return leftIsSymbol && rightIsSymbol;
+  }
+  if (input.type === 'MemberExpression') {
+    return readMiniGameMemberNames(input, ancestors, analysis).has('Symbol')
+      && isGlobalObjectAliasSource(input.object, ancestors, analysis);
+  }
 
-      if (sources.length === 0) {
-        return false;
-      }
-      constructorStack.add(binding);
-      const result = sources.every(isSymbolConstructor);
-      constructorStack.delete(binding);
-      return result;
-    }
-    if (value.type === 'ChainExpression') {
-      return isSymbolConstructor(value.expression);
-    }
-    if (value.type === 'SequenceExpression' && Array.isArray(value.expressions)) {
-      return isSymbolConstructor(value.expressions.at(-1));
-    }
-    if (value.type === 'ConditionalExpression') {
-      return isSymbolConstructor(value.consequent)
-        && isSymbolConstructor(value.alternate);
-    }
-    if (value.type === 'LogicalExpression') {
-      return isSymbolConstructor(value.left) && isSymbolConstructor(value.right);
-    }
-    if (value.type === 'MemberExpression') {
-      return readMiniGameMemberNames(value, ancestors, analysis).has('Symbol')
-        && isGlobalObjectAliasSource(value.object, ancestors, analysis);
-    }
+  return false;
+}
 
+function isMiniGameProtectedIntrinsicMutation(
+  node: Record<string, unknown>,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): boolean {
+  if (node.type === 'AssignmentExpression') {
+    return isProtectedMutationTarget(node.left);
+  }
+  if (node.type === 'UpdateExpression' || node.type === 'UnaryExpression') {
+    return (node.type === 'UpdateExpression' || node.operator === 'delete')
+      && isProtectedMutationTarget(node.argument);
+  }
+  if (
+    node.type !== 'CallExpression'
+    || !isAstRecord(node.callee)
+    || !Array.isArray(node.arguments)
+  ) {
     return false;
+  }
+
+  const objectInvocation = resolveObjectIntrinsicInvocation(node, ancestors, analysis);
+
+  if (
+    objectInvocation !== undefined
+    && [...objectInvocation.methods].some((method) => {
+      return miniGameObjectMutatingMethods.has(method);
+    })
+  ) {
+    if (objectInvocation.arguments === undefined) {
+      return true;
+    }
+    const target = objectInvocation.arguments[0];
+    if (
+      isMiniGameSymbolConstructorReference(target, ancestors, analysis)
+      || isGlobalObjectAliasSource(target, ancestors, analysis)
+    ) {
+      return true;
+    }
+    const prototype = objectInvocation.arguments[1];
+    const prototypeIsIntrinsic = getGlobalIntrinsicKinds(prototype, ancestors, analysis).size > 0;
+    if (
+      objectInvocation.methods.has('setPrototypeOf')
+      && (
+        isGlobalObjectAliasSource(prototype, ancestors, analysis)
+        || prototypeIsIntrinsic
+      )
+    ) {
+      return true;
+    }
+  }
+
+  if (node.callee.type === 'MemberExpression') {
+    const methods = readMiniGameMemberNames(node.callee, ancestors, analysis);
+    const intrinsicKinds = getGlobalIntrinsicKinds(node.callee.object, ancestors, analysis);
+
+    if (
+      intrinsicKinds.has('Reflect')
+      && (methods.has('defineProperty') || methods.has('setPrototypeOf'))
+      && (
+        isMiniGameSymbolConstructorReference(node.arguments[0], ancestors, analysis)
+        || isGlobalObjectAliasSource(node.arguments[0], ancestors, analysis)
+      )
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+
+  function isProtectedMutationTarget(input: unknown): boolean {
+    if (!isAstRecord(input)) {
+      return false;
+    }
+    if (input.type === 'Identifier' && typeof input.name === 'string') {
+      const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+      return input.name === 'Symbol' && resolveMiniGameBinding(input.name, scope) === undefined;
+    }
+    if (input.type !== 'MemberExpression') {
+      return false;
+    }
+    return isMiniGameSymbolConstructorReference(input.object, ancestors, analysis)
+      || (
+        readMiniGameMemberNames(input, ancestors, analysis).has('Symbol')
+        && isGlobalObjectAliasSource(input.object, ancestors, analysis)
+      );
   }
 }
 
@@ -1253,7 +1393,7 @@ function isReflectiveDynamicCodeGlobalRead(
   if (!isGlobalObjectAliasSource(target, ancestors, scopeAnalysis)) {
     return false;
   }
-  if (kinds.has('descriptors')) {
+  if (kinds.has('descriptors') || kinds.has('values')) {
     return true;
   }
 
@@ -1991,6 +2131,12 @@ function getReflectiveMethodKinds(
   }
   if (intrinsics.has('Object') && methodName === 'getOwnPropertyDescriptors') {
     kinds.add('descriptors');
+  }
+  if (
+    intrinsics.has('Object')
+    && (methodName === 'entries' || methodName === 'values')
+  ) {
+    kinds.add('values');
   }
 
   return kinds;

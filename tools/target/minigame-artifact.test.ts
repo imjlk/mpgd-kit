@@ -294,11 +294,33 @@ try {
       + 'setPrototypeOf({}, Reflect).get(globalThis, "wx").request({});\n',
     'const { setPrototypeOf } = Object; '
       + 'setPrototypeOf({}, Reflect).get(globalThis, "wx").request({});\n',
+    'const inheritedReflect = {}; Object.setPrototypeOf(inheritedReflect, Reflect); '
+      + 'inheritedReflect.get(globalThis, "wx").request({});\n',
+    'Object.entries(globalThis).find(([key]) => key === "wx")[1].request({});\n',
+    'const entries = Object.entries; '
+      + 'entries(globalThis).find(([key]) => key === "wx")[1].request({});\n',
+    'const { values } = Object; values(globalThis).find(Boolean).request({});\n',
   ]) {
     write('game.bundle.js', reflectiveWechatSdkAccess);
     assert.throws(
       () => assertMiniGameJavaScriptSafety(root, [], ['wx']),
-      /game\.bundle\.js contains forbidden reflective global lookup/u,
+      /game\.bundle\.js contains forbidden (?:reflective global lookup|protected intrinsic mutation)/u,
+    );
+  }
+  write('game.bundle.js', 'globalThis.__MPGD_GAME__ = true;\n');
+  for (const symbolMutation of [
+    'Symbol.for = () => "wx"; globalThis[Symbol.for("sdk")].request({});\n',
+    'const SymbolAlias = Symbol; SymbolAlias.for = () => "wx"; '
+      + 'globalThis[SymbolAlias.for("sdk")].request({});\n',
+    'Object.defineProperty(Symbol, "for", { value: () => "wx" });\n',
+    'Reflect.defineProperty(Symbol, "for", { value: () => "wx" });\n',
+    'Object.assign(Symbol, { for: () => "wx" });\n',
+    'Object.defineProperty(globalThis, "Symbol", { value: fakeSymbol });\n',
+  ]) {
+    write('game.bundle.js', symbolMutation);
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, [], ['wx']),
+      /game\.bundle\.js contains forbidden protected intrinsic mutation/u,
     );
   }
   write('game.bundle.js', 'globalThis.__MPGD_GAME__ = true;\n');
