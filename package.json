@@ -69,6 +69,7 @@
     "pack:packages:prepared": "node tools/run-ttsx.mjs tools/package/pack-packages.ts && pnpm smoke:tutorial:package",
     "smoke:target": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/smoke/verify-target-artifacts.ts",
     "smoke:wechat": "pnpm smoke:target wechat",
+    "smoke:wechat:devtool": "node tools/run-ttsx.mjs tools/smoke/wechat-devtool.ts",
     "smoke:targets": "MPGD_PLATFORM_TARGETS_FILE=${MPGD_PLATFORM_TARGETS_FILE:-examples/phaser-starter/mpgd.targets.json} node tools/run-ttsx.mjs tools/smoke/verify-target-artifacts.ts",
     "smoke:i18n": "pnpm --dir packages/i18n test",
     "smoke:target-config": "node tools/run-ttsx.mjs tools/smoke/target-config-runtime.ts",
