@@ -75,6 +75,14 @@ const expectedIntegrations: Record<string, TargetIntegrationConfig> = {
     notifications: 'approval-required',
     presentationMode: 'inline-expanded',
   },
+  wechat: {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'available',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+    presentationMode: 'fullscreen',
+  },
 };
 
 for (const [target, config] of Object.entries(matrix.targets)) {
@@ -472,6 +480,24 @@ function verifyEffectiveConfig(target: string, config: EffectiveTargetConfig): v
       'ait leaderboard id should be stable',
     );
     assertEqual(config.storage.support, 'native', 'ait should use native Storage');
+    return;
+  }
+
+  if (target === 'wechat') {
+    assertEqual(
+      config.monetization.products.every((product) => !product.enabled),
+      true,
+      'wechat products should remain disabled',
+    );
+    assertEqual(
+      config.ads.placements.every((placement) => !placement.enabled),
+      true,
+      'wechat ads should remain disabled',
+    );
+    assertEqual(config.leaderboard.enabled, false, 'wechat leaderboard should be disabled');
+    assertEqual(config.leaderboard.native, false, 'wechat native leaderboard should be disabled');
+    assertEqual(config.localization.enabled, true, 'wechat localization should be enabled');
+    assertEqual(config.storage.support, 'native', 'wechat should use native storage');
     return;
   }
 
