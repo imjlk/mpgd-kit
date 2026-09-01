@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { assertMiniGameRuntimeAssetOrigins } from './minigame-artifact';
 import {
   assertDevvitInternalEndpoint,
   assertDevvitPaymentsReadiness,
@@ -11,6 +12,29 @@ import {
 } from './verify-target-artifacts';
 
 const webArtifactRoot = mkdtempSync(join(tmpdir(), 'mpgd-target-smoke-installability-'));
+
+const expectedMiniGameOrigins = ['https://assets.example.test'];
+const exactMiniGameOriginDeclaration = createMiniGameOriginDeclaration(expectedMiniGameOrigins);
+assert.doesNotThrow(
+  () => assertMiniGameRuntimeAssetOrigins(
+    `${exactMiniGameOriginDeclaration}\nglobalThis.runtime = true;\n`,
+    expectedMiniGameOrigins,
+  ),
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    `${createMiniGameOriginDeclaration([
+      ...expectedMiniGameOrigins,
+      'https://unexpected.example.test',
+    ])}\n`,
+    expectedMiniGameOrigins,
+  ),
+  /asset origins differ from target configuration/u,
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins('globalThis.runtime = true;\n', []),
+  /exactly one executable asset-origin declaration/u,
+);
 
 try {
   writeFileSync(join(webArtifactRoot, 'manifest.webmanifest'), '{}\n');
@@ -135,3 +159,8 @@ assert.throws(
 );
 
 console.log('Target artifact readiness tests passed.');
+
+function createMiniGameOriginDeclaration(origins: readonly string[]): string {
+  return 'Object.defineProperty(globalThis,"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
+    + `{value:Object.freeze(${JSON.stringify(origins)})});`;
+}

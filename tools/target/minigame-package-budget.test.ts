@@ -166,12 +166,12 @@ try {
   );
 
   writeBytes('order/z.png', 1);
-  writeBytes('order/\u00e4.png', 1);
+  writeBytes('order/\u00df.png', 1);
   assert.deepEqual(
     listMiniGameArtifactFiles(root)
       .map((file) => file.path)
       .filter((path) => path.startsWith('order/')),
-    ['order/z.png', 'order/\u00e4.png'],
+    ['order/z.png', 'order/\u00df.png'],
   );
   rmSync(join(root, 'order'), { force: true, recursive: true });
   assert.throws(

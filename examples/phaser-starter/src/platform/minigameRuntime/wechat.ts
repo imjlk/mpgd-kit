@@ -11,9 +11,23 @@ import {
 
 import type { StarterMiniGameRuntimeBridge } from '../minigameBridge';
 
+type WechatMiniGameRuntimeScope = typeof globalThis & {
+  readonly __MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__?: readonly string[];
+  __MPGD_MINIGAME_RUNTIME__?: StarterMiniGameRuntimeBridge;
+};
+
+const scope = globalThis as WechatMiniGameRuntimeScope;
+const remoteAssetOrigins = scope.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__;
+
+if (
+  !Array.isArray(remoteAssetOrigins)
+  || !remoteAssetOrigins.every((origin) => typeof origin === 'string')
+) {
+  throw new Error('Mini-game runtime asset-origin metadata is unavailable.');
+}
+
 const api = resolveWechatMiniGameApi(globalThis);
 const host = createWechatMiniGameHostFromGlobal(globalThis);
-const remoteAssetOrigins = __MPGD_MINIGAME_REMOTE_ASSET_ORIGINS__;
 const globals = installMiniGameGlobals(host, {
   image: { allowedRemoteOrigins: remoteAssetOrigins },
   transport: { allowedRemoteOrigins: remoteAssetOrigins },
@@ -56,24 +70,22 @@ const bridge: StarterMiniGameRuntimeBridge = {
     try {
       globals.dispose();
       disposed = true;
-      const scope = globalThis as typeof globalThis & {
-        __MPGD_MINIGAME_RUNTIME__?: StarterMiniGameRuntimeBridge;
-      };
 
       if (scope.__MPGD_MINIGAME_RUNTIME__ === bridge) {
         Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME__');
+      }
+      if (scope.__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__ === remoteAssetOrigins) {
+        Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__');
       }
     } finally {
       disposing = false;
     }
   },
 };
-const scope = globalThis as typeof globalThis & {
-  __MPGD_MINIGAME_RUNTIME__?: StarterMiniGameRuntimeBridge;
-};
 
 if (scope.__MPGD_MINIGAME_RUNTIME__ !== undefined) {
   globals.dispose();
+  Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__');
   throw new Error('Mini-game runtime bridge is already installed.');
 }
 

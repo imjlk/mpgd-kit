@@ -42,6 +42,16 @@ export default defineConfig(({ mode }) => {
     mode,
     project: resolve(gameRoot, 'tsconfig.json'),
   });
+  const serializedRuntimeAssetOrigins = sharedConfig.define[
+    '__MPGD_MINIGAME_REMOTE_ASSET_ORIGINS__'
+  ];
+
+  if (serializedRuntimeAssetOrigins === undefined) {
+    throw new Error('Mini Game runtime asset origins were not defined.');
+  }
+  const runtimeAssetOriginsBootstrap = createRuntimeAssetOriginsBootstrap(
+    serializedRuntimeAssetOrigins,
+  );
 
   return {
     ...sharedConfig,
@@ -65,8 +75,14 @@ export default defineConfig(({ mode }) => {
           entryFileNames: fileName,
           chunkFileNames: 'forbidden-[name].js',
           assetFileNames: 'assets/[name]-[hash][extname]',
+          ...(bundleKind === 'runtime' ? { banner: runtimeAssetOriginsBootstrap } : {}),
         },
       },
     },
   };
 });
+
+function createRuntimeAssetOriginsBootstrap(serializedOrigins: string): string {
+  return 'Object.defineProperty(globalThis,"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
+    + `{configurable:true,enumerable:false,writable:false,value:Object.freeze(${serializedOrigins})});`;
+}

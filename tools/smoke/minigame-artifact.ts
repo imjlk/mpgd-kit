@@ -1,6 +1,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { parse } from 'acorn';
+
 import type { ReleaseManifest } from '@mpgd/release-manifest';
 
 import {
@@ -12,6 +14,8 @@ import {
 } from '../target/minigame-artifact';
 import { wechatStagingAppId } from '../target/minigame-project-files';
 import type { MiniGamePackageBudget, MiniGameTargetConfig } from '../target/schemas';
+
+const runtimeAssetOriginsProperty = '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__';
 
 export interface SmokeMiniGameTargetConfig {
   readonly kind: MiniGameTargetConfig['kind'];
@@ -56,12 +60,7 @@ export function verifyMiniGameTargetArtifact(input: Readonly<{
     throw new Error('Mini-game game.js must synchronously load runtime.js before game.bundle.js.');
   }
   const runtimeSource = readFileSync(join(input.artifactPath, 'runtime.js'), 'utf8');
-
-  for (const origin of input.targetConfig.remoteAssetOrigins ?? []) {
-    if (!runtimeSource.includes(origin)) {
-      throw new Error(`Mini-game runtime.js is missing remote asset origin ${origin}.`);
-    }
-  }
+  assertMiniGameRuntimeAssetOrigins(runtimeSource, input.targetConfig.remoteAssetOrigins ?? []);
 
   const gameConfig = readJson(join(input.artifactPath, 'game.json'), 'Mini-game game.json');
   assertRecord(gameConfig, 'Mini-game game.json');
@@ -87,6 +86,171 @@ export function verifyMiniGameTargetArtifact(input: Readonly<{
   if (existsSync(join(input.artifactPath, 'index.html'))) {
     throw new Error('Native mini-game artifacts must not contain index.html.');
   }
+}
+
+export function assertMiniGameRuntimeAssetOrigins(
+  runtimeSource: string,
+  expectedOrigins: readonly string[],
+): void {
+  let ast: unknown;
+
+  try {
+    ast = parse(runtimeSource, {
+      ecmaVersion: 'latest',
+      sourceType: 'script',
+      allowHashBang: true,
+      allowReturnOutsideFunction: true,
+    });
+  } catch (error) {
+    throw new Error(`Mini-game runtime.js is not valid JavaScript: ${formatError(error)}`);
+  }
+
+  const declarations: string[][] = [];
+  visitAst(ast, (node) => {
+    const origins = readRuntimeAssetOriginsDeclaration(node);
+
+    if (origins !== undefined) {
+      declarations.push(origins);
+    }
+  });
+
+  if (declarations.length !== 1) {
+    throw new Error(
+      'Mini-game runtime.js must contain exactly one executable asset-origin declaration.',
+    );
+  }
+  if (JSON.stringify(declarations[0]) !== JSON.stringify(expectedOrigins)) {
+    throw new Error('Mini-game runtime.js asset origins differ from target configuration.');
+  }
+}
+
+function readRuntimeAssetOriginsDeclaration(
+  node: Record<string, unknown>,
+): string[] | undefined {
+  if (
+    node.type !== 'CallExpression'
+    || !isAstRecord(node.callee)
+    || readMemberName(node.callee) !== 'defineProperty'
+    || !Array.isArray(node.arguments)
+  ) {
+    return undefined;
+  }
+
+  const [target, property, descriptor] = node.arguments;
+
+  if (
+    !isIdentifier(target, 'globalThis')
+    || readStaticString(property) !== runtimeAssetOriginsProperty
+    || !isAstRecord(descriptor)
+    || descriptor.type !== 'ObjectExpression'
+    || !Array.isArray(descriptor.properties)
+  ) {
+    return undefined;
+  }
+
+  const valueProperty = descriptor.properties.find((candidate) => {
+    return isAstRecord(candidate)
+      && candidate.type === 'Property'
+      && readStaticPropertyName(candidate) === 'value';
+  });
+
+  return isAstRecord(valueProperty) ? readStaticStringArray(valueProperty.value) : undefined;
+}
+
+function readStaticStringArray(input: unknown): string[] | undefined {
+  if (!isAstRecord(input)) {
+    return undefined;
+  }
+  if (
+    input.type === 'CallExpression'
+    && isAstRecord(input.callee)
+    && readMemberName(input.callee) === 'freeze'
+    && Array.isArray(input.arguments)
+    && input.arguments.length === 1
+  ) {
+    return readStaticStringArray(input.arguments[0]);
+  }
+  if (input.type !== 'ArrayExpression' || !Array.isArray(input.elements)) {
+    return undefined;
+  }
+
+  const values = input.elements.map(readStaticString);
+
+  return values.every((value): value is string => value !== undefined) ? values : undefined;
+}
+
+function readMemberName(node: Record<string, unknown>): string | undefined {
+  if (node.type !== 'MemberExpression' || !isAstRecord(node.property)) {
+    return undefined;
+  }
+
+  return node.computed === true
+    ? readStaticString(node.property)
+    : node.property.type === 'Identifier' && typeof node.property.name === 'string'
+      ? node.property.name
+      : undefined;
+}
+
+function readStaticPropertyName(node: Record<string, unknown>): string | undefined {
+  if (!isAstRecord(node.key)) {
+    return undefined;
+  }
+
+  return node.computed === true
+    ? readStaticString(node.key)
+    : node.key.type === 'Identifier' && typeof node.key.name === 'string'
+      ? node.key.name
+      : readStaticString(node.key);
+}
+
+function readStaticString(input: unknown): string | undefined {
+  if (!isAstRecord(input)) {
+    return undefined;
+  }
+  if (input.type === 'Literal' && typeof input.value === 'string') {
+    return input.value;
+  }
+  if (
+    input.type === 'TemplateLiteral'
+    && Array.isArray(input.expressions)
+    && input.expressions.length === 0
+    && Array.isArray(input.quasis)
+    && input.quasis.length === 1
+    && isAstRecord(input.quasis[0])
+    && isAstRecord(input.quasis[0].value)
+    && typeof input.quasis[0].value.cooked === 'string'
+  ) {
+    return input.quasis[0].value.cooked;
+  }
+
+  return undefined;
+}
+
+function visitAst(input: unknown, visitor: (node: Record<string, unknown>) => void): void {
+  if (Array.isArray(input)) {
+    for (const item of input) {
+      visitAst(item, visitor);
+    }
+    return;
+  }
+  if (!isAstRecord(input)) {
+    return;
+  }
+
+  visitor(input);
+  for (const [key, value] of Object.entries(input)) {
+    if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
+      visitAst(value, visitor);
+    }
+  }
+}
+
+function isIdentifier(input: unknown, name: string): boolean {
+  return isAstRecord(input) && input.type === 'Identifier' && input.name === name;
+}
+
+function isAstRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === 'object' && input !== null && !Array.isArray(input);
 }
 
 export function requiredMiniGameArtifactFiles(artifactPath: string): readonly string[] {

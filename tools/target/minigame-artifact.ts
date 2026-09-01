@@ -603,6 +603,15 @@ function assertSafeNode(
   ancestors: readonly Record<string, unknown>[],
   path: string,
 ): void {
+  const staticallyEvaluatedString = evaluateStaticString(node);
+
+  if (
+    staticallyEvaluatedString !== undefined
+    && ['eval', 'Function', 'importScripts'].includes(staticallyEvaluatedString)
+  ) {
+    throw new Error(`Mini-game ${path} contains forbidden ${staticallyEvaluatedString}.`);
+  }
+
   if (node.type === 'ImportExpression') {
     throw new Error(`Mini-game ${path} contains forbidden dynamic import.`);
   }
@@ -631,9 +640,21 @@ function assertSafeNode(
     }
   }
 
+  if (
+    node.type === 'Property'
+    && node.computed === true
+    && ancestors.at(-1)?.type === 'ObjectPattern'
+  ) {
+    throw new Error(`Mini-game ${path} contains forbidden computed destructuring.`);
+  }
+
   if (node.type === 'CallExpression' && isAstRecord(node.callee)) {
     const calleeName = readMemberName(node.callee);
     const firstArgument = Array.isArray(node.arguments) ? node.arguments[0] : undefined;
+
+    if (isUnknownComputedGlobalMember(node.callee)) {
+      throw new Error(`Mini-game ${path} contains forbidden computed global call.`);
+    }
 
     if (calleeName === 'createElement' && evaluateStaticString(firstArgument) === 'script') {
       throw new Error(`Mini-game ${path} contains forbidden script element creation.`);
@@ -643,10 +664,24 @@ function assertSafeNode(
   if (node.type === 'NewExpression' && isAstRecord(node.callee)) {
     const calleeName = readMemberName(node.callee);
 
+    if (isUnknownComputedGlobalMember(node.callee)) {
+      throw new Error(`Mini-game ${path} contains forbidden computed global construction.`);
+    }
+
     if (calleeName === 'Worker' || calleeName === 'SharedWorker') {
       throw new Error(`Mini-game ${path} contains forbidden ${calleeName} construction.`);
     }
   }
+}
+
+function isUnknownComputedGlobalMember(node: Record<string, unknown>): boolean {
+  return node.type === 'MemberExpression'
+    && node.computed === true
+    && readMemberName(node) === undefined
+    && isAstRecord(node.object)
+    && node.object.type === 'Identifier'
+    && typeof node.object.name === 'string'
+    && ['globalThis', 'self', 'window'].includes(node.object.name);
 }
 
 function isTypeofReference(
