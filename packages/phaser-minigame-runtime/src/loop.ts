@@ -35,7 +35,7 @@ export class MiniGameAnimationFrameScheduler {
         try {
           callback(time);
         } catch (error) {
-          this.#onError(error);
+          this.#reportError(error);
         }
       });
 
@@ -60,7 +60,11 @@ export class MiniGameAnimationFrameScheduler {
     this.#scheduled.delete(id);
 
     if (frame.nativeId !== undefined) {
-      this.#host.cancelAnimationFrame?.(frame.nativeId);
+      try {
+        this.#host.cancelAnimationFrame?.(frame.nativeId);
+      } catch (error) {
+        this.#reportError(error);
+      }
     }
   }
 
@@ -73,6 +77,18 @@ export class MiniGameAnimationFrameScheduler {
 
     for (const [id] of this.#scheduled) {
       this.cancel(id);
+    }
+  }
+
+  #reportError(error: unknown): void {
+    try {
+      this.#onError(error);
+    } catch (reporterError) {
+      try {
+        console.error('Mini-game animation frame error reporter failed.', reporterError);
+      } catch {
+        // Scheduler cleanup and future frames must not depend on host logging.
+      }
     }
   }
 }

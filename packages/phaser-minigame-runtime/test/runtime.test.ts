@@ -431,6 +431,36 @@ describe('mini-game requestAnimationFrame and transport', () => {
     expect(host.pendingFrameCount).toBe(0);
   });
 
+  it('continues global cleanup when host frame cancellation throws', () => {
+    class ThrowingCancelHost extends FakeMiniGameHost {
+      override cancelAnimationFrame(_id: number): void {
+        throw new Error('cancel failed');
+      }
+    }
+
+    const host = new ThrowingCancelHost();
+    const errors: unknown[] = [];
+    const globals = installMiniGameGlobals(host, {
+      onAnimationFrameError: (error) => errors.push(error),
+    });
+    let frames = 0;
+    globalThis.requestAnimationFrame(() => {
+      frames += 1;
+    });
+    globalThis.requestAnimationFrame(() => {
+      frames += 1;
+    });
+    expect(host.pendingFrameCount).toBe(2);
+
+    expect(() => globals.dispose()).not.toThrow();
+    expect(globals.disposed).toBe(true);
+    expect(getInstalledMiniGameGlobals()).toBeUndefined();
+    expect(errors).toHaveLength(2);
+
+    host.flushFrame(16);
+    expect(frames).toBe(0);
+  });
+
   it('loads local JSON and binary responses with the Phaser XHR surface', async () => {
     const host = new FakeMiniGameHost();
     host.localFiles.set('assets/config.json', encodeText('{"level":3}'));
@@ -987,6 +1017,121 @@ describe('Phaser mini-game runtime patch', () => {
     expect(host.pendingFrameCount).toBe(1);
   });
 
+  it('restores host-owned pause state when wake disposes the runtime', () => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    let pauses = 0;
+    let resumes = 0;
+    let installation: ReturnType<typeof installPhaserMiniGameRuntime>;
+    const loop = {
+      started: true,
+      running: true,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        raf.stop();
+        this.running = false;
+      },
+      wake() {
+        raf.start(raf.callback, false, raf.delay);
+        this.running = true;
+        installation.dispose();
+      },
+    };
+    raf.start(raf.callback, false, raf.delay);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      loop,
+      isPaused: false,
+      pause() {
+        pauses += 1;
+        this.isPaused = true;
+      },
+      resume() {
+        resumes += 1;
+        this.isPaused = false;
+      },
+    } satisfies MiniGamePhaserGame;
+    installation = installPhaserMiniGameRuntime(game, { globals });
+
+    host.emitPause();
+    host.emitResume();
+
+    expect(installation.disposed).toBe(true);
+    expect(pauses).toBe(1);
+    expect(resumes).toBe(1);
+    expect(game.isPaused).toBe(false);
+    expect(loop.running).toBe(true);
+    expect(globals.document.visibilityState).toBe('visible');
+    expect(host.pendingFrameCount).toBe(1);
+  });
+
+  it('retains pause ownership when the host pauses again during wake', () => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    let pauses = 0;
+    let resumes = 0;
+    let sleeps = 0;
+    let rePauseOnWake = true;
+    const loop = {
+      started: true,
+      running: true,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        sleeps += 1;
+        raf.stop();
+        this.running = false;
+      },
+      wake() {
+        raf.start(raf.callback, false, raf.delay);
+        this.running = true;
+
+        if (rePauseOnWake) {
+          rePauseOnWake = false;
+          host.emitPause();
+        }
+      },
+    };
+    raf.start(raf.callback, false, raf.delay);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      loop,
+      isPaused: false,
+      pause() {
+        pauses += 1;
+        this.isPaused = true;
+      },
+      resume() {
+        resumes += 1;
+        this.isPaused = false;
+      },
+    } satisfies MiniGamePhaserGame;
+    const installation = installPhaserMiniGameRuntime(game, { globals });
+
+    host.emitPause();
+    host.emitResume();
+
+    expect(pauses).toBe(1);
+    expect(resumes).toBe(0);
+    expect(sleeps).toBe(2);
+    expect(game.isPaused).toBe(true);
+    expect(loop.running).toBe(false);
+    expect(globals.document.visibilityState).toBe('hidden');
+
+    host.emitResume();
+    expect(resumes).toBe(1);
+    expect(game.isPaused).toBe(false);
+    expect(loop.running).toBe(true);
+    expect(globals.document.visibilityState).toBe('visible');
+
+    installation.dispose();
+  });
+
   it('keeps one RAF chain when the runtime is disposed inside a frame callback', () => {
     const host = new FakeMiniGameHost();
     const globals = installMiniGameGlobals(host);
@@ -1044,6 +1189,32 @@ describe('Phaser mini-game runtime patch', () => {
     expect(() => installPhaserMiniGameRuntime(gameWithoutRendererConfig, { globals })).toThrow(
       'explicit Canvas renderer',
     );
+  });
+
+  it('requires lifecycle pause and resume hooks as a pair', () => {
+    const host = new FakeMiniGameHost();
+    Reflect.set(host, 'onResume', undefined);
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    const originalStep = raf.step;
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      loop: {
+        started: false,
+        running: false,
+        forceSetTimeOut: false,
+        raf,
+        sleep: () => undefined,
+        wake: () => undefined,
+      },
+    } satisfies MiniGamePhaserGame;
+
+    expect(() => installPhaserMiniGameRuntime(game, { globals })).toThrow(
+      'must provide onPause and onResume together',
+    );
+    expect(raf.step).toBe(originalStep);
+    expect(host.lifecycleListenerCount).toBe(0);
   });
 
   it('rolls back the RAF patch when lifecycle subscription fails', () => {

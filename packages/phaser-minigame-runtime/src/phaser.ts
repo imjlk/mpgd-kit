@@ -90,6 +90,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.host = globals.host;
     this.#globals = globals;
     assertCanvasRenderer(game);
+    assertLifecycleHookPair(this.host);
 
     if (game.loop.forceSetTimeOut) {
       throw new MiniGameRuntimeError(
@@ -166,8 +167,8 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     } catch (error) {
       this.#disposed = true;
 
-      if (this.#pausedByHost) {
-        this.#restoreHostPauseState();
+      if (this.#hasHostPauseState()) {
+        this.#restoreHostPauseState(true);
       }
 
       runLifecycleUnsubscribers(this.#unsubscribers.splice(0));
@@ -196,8 +197,8 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
 
     this.#disposed = true;
 
-    if (this.#pausedByHost) {
-      this.#restoreHostPauseState();
+    if (this.#hasHostPauseState()) {
+      this.#restoreHostPauseState(true);
     }
 
     runLifecycleUnsubscribers(this.#unsubscribers.splice(0));
@@ -280,15 +281,13 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       return;
     }
 
-    this.#restoreHostPauseState();
+    this.#restoreHostPauseState(false);
   }
 
-  #restoreHostPauseState(): void {
+  #restoreHostPauseState(allowDisposed: boolean): void {
     this.#pausedByHost = false;
     const shouldWakeLoop = this.#loopSleptByHost;
-    const shouldResumeGame = this.#gamePausedByHost;
     this.#loopSleptByHost = false;
-    this.#gamePausedByHost = false;
     this.#globals.document.hidden = false;
     this.#globals.document.visibilityState = 'visible';
 
@@ -296,11 +295,26 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       this.game.loop.wake();
     }
 
+    if ((!allowDisposed && this.#disposed) || this.#pausedByHost) {
+      return;
+    }
+
+    const shouldResumeGame = this.#gamePausedByHost;
+    this.#gamePausedByHost = false;
+
     if (shouldResumeGame) {
       this.game.resume?.();
     }
 
+    if ((!allowDisposed && this.#disposed) || this.#pausedByHost) {
+      return;
+    }
+
     this.#globals.document.dispatchEvent(new MiniGameEvent('visibilitychange'));
+  }
+
+  #hasHostPauseState(): boolean {
+    return this.#pausedByHost || this.#gamePausedByHost || this.#loopSleptByHost;
   }
 }
 
@@ -402,6 +416,18 @@ function assertUnsubscribe(input: unknown, source: string): () => void {
   }
 
   return input as () => void;
+}
+
+function assertLifecycleHookPair(host: MiniGameHost): void {
+  const hasPause = host.onPause !== undefined;
+  const hasResume = host.onResume !== undefined;
+
+  if (hasPause !== hasResume) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_INCOMPLETE_LIFECYCLE_HOOKS',
+      'Mini-game hosts must provide onPause and onResume together.',
+    );
+  }
 }
 
 function runLifecycleUnsubscribers(unsubscribers: readonly (() => void)[]): void {
