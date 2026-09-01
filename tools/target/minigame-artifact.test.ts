@@ -195,6 +195,10 @@ try {
     'const globalAlias = globalThis; globalAlias.wx.getWindowInfo();\n',
     'const inheritedGlobal = Object.create(globalThis); inheritedGlobal.wx.request({});\n',
     'const { wx: sdk } = globalThis; sdk.createImage();\n',
+    'const { wx: sdk } = Object.create(globalThis); sdk.createImage();\n',
+    'let sdk; ({ wx: sdk } = Object.create(globalThis)); sdk.request({});\n',
+    'const { ["w" + "x"]: sdk } = getRuntimeConfig(); sdk.createCanvas();\n',
+    'const { nested: { wx: sdk } } = getRuntimeConfig(); sdk.getWindowInfo();\n',
   ]) {
     write('game.bundle.js', directWechatSdkAccess);
     assert.throws(

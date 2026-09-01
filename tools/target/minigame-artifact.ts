@@ -805,24 +805,31 @@ function assertSafeNode(
     }
   }
 
-  if (
-    node.type === 'Property'
-    && isGlobalObjectDestructuring(ancestors, scopeAnalysis)
-  ) {
+  if (node.type === 'Property') {
     const propertyName = readStaticPropertyName(node);
+    const isObjectPatternProperty = ancestors.at(-1)?.node.type === 'ObjectPattern';
 
-    if (propertyName !== undefined && forbiddenGlobals.has(propertyName)) {
+    // Member access is already fail-closed for platform SDK names regardless of the
+    // receiver. Apply the same boundary to destructuring so prototype-derived or
+    // factory-returned global objects cannot hide a direct wx/tt/TTMinis binding.
+    if (
+      isObjectPatternProperty
+      && propertyName !== undefined
+      && forbiddenGlobals.has(propertyName)
+    ) {
       throw new Error(`Mini-game ${path} contains forbidden platform global ${propertyName}.`);
     }
 
-    if (node.computed === true) {
-      throw new Error(`Mini-game ${path} contains forbidden computed destructuring.`);
-    }
-    if (
-      propertyName !== undefined
-      && ['eval', 'Function', 'importScripts'].includes(propertyName)
-    ) {
-      throw new Error(`Mini-game ${path} contains forbidden ${propertyName} destructuring.`);
+    if (isGlobalObjectDestructuring(ancestors, scopeAnalysis)) {
+      if (node.computed === true) {
+        throw new Error(`Mini-game ${path} contains forbidden computed destructuring.`);
+      }
+      if (
+        propertyName !== undefined
+        && ['eval', 'Function', 'importScripts'].includes(propertyName)
+      ) {
+        throw new Error(`Mini-game ${path} contains forbidden ${propertyName} destructuring.`);
+      }
     }
   }
 
