@@ -82,10 +82,14 @@ export function verifyMiniGameTargetArtifact(input: Readonly<{
 
   if (input.targetConfig.kind === 'wechat-minigame') {
     verifyWechatProjectConfig(projectConfig, input.releaseEntry.profile === 'production');
-    assertMiniGameJavaScriptSafety(input.artifactPath, [
-      { marker: 'TTMinis.game', owner: 'TikTok' },
-      { marker: 'createTikTokPlatformGateway', owner: 'TikTok' },
-    ]);
+    assertMiniGameJavaScriptSafety(
+      input.artifactPath,
+      [
+        { marker: 'TTMinis.game', owner: 'TikTok' },
+        { marker: 'createTikTokPlatformGateway', owner: 'TikTok' },
+      ],
+      ['wx'],
+    );
   }
 
   if (existsSync(join(input.artifactPath, 'index.html'))) {

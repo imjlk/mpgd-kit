@@ -1072,11 +1072,18 @@ describe('mini-game requestAnimationFrame and transport', () => {
 
   it('uses one wrapper-owned timeout for remote requests', async () => {
     class PendingRequestHost extends FakeMiniGameHost {
+      abortCalls = 0;
+
       override request(
         input: Parameters<FakeMiniGameHost['request']>[0],
       ): ReturnType<FakeMiniGameHost['request']> {
         this.remoteRequests.push(input);
-        return new Promise(() => undefined);
+        return new Promise((_resolve, reject) => {
+          input.signal?.onAbort(() => {
+            this.abortCalls += 1;
+            reject(new Error('host request aborted'));
+          });
+        });
       }
     }
 
@@ -1094,6 +1101,19 @@ describe('mini-game requestAnimationFrame and transport', () => {
     expect(request.status).toBe(0);
     expect(host.remoteRequests).toHaveLength(1);
     expect(host.remoteRequests[0]).not.toHaveProperty('timeoutMs');
+    expect(host.remoteRequests[0]?.signal?.aborted).toBe(true);
+    expect(host.abortCalls).toBe(1);
+
+    const explicitlyAbortedRequest = new MiniGameXMLHttpRequest(host, {
+      allowedRemoteOrigins: ['https://cdn.example.com'],
+    });
+    explicitlyAbortedRequest.open('GET', 'https://cdn.example.com/cancelled.json');
+    explicitlyAbortedRequest.send();
+    explicitlyAbortedRequest.abort();
+    await Promise.resolve();
+    expect(host.remoteRequests[1]?.signal?.aborted).toBe(true);
+    expect(host.abortCalls).toBe(2);
+    expect(explicitlyAbortedRequest.readyState).toBe(explicitlyAbortedRequest.UNSENT);
   });
 
   it('clears response metadata when aborting after response headers arrive', async () => {

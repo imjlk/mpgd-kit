@@ -74,6 +74,7 @@ export function createFakeWechatMiniGameApi(
         header: { 'content-type': 'application/json', ignored: 123 },
       };
       input.success(result);
+      return { abort() {} };
     },
     onTouchStart: (listener) => add(touchListeners.start, listener),
     offTouchStart: (listener) => remove(touchListeners.start, listener),

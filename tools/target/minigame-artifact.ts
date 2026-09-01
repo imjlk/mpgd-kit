@@ -91,6 +91,7 @@ export interface AssembleMiniGameArtifactInput extends WriteMiniGameArtifactEvid
     readonly marker: string;
     readonly owner: string;
   }>[];
+  readonly forbiddenGameBundleGlobals?: readonly string[];
 }
 
 export interface NamedMiniGameProtectedOutput {
@@ -161,7 +162,11 @@ export function assembleMiniGameArtifact(
     input.writeProjectFiles(projectFilesRoot);
     copyMiniGameBundleOutput(projectFilesRoot, stagingRoot);
     assertMiniGameRequiredFiles(stagingRoot);
-    assertMiniGameJavaScriptSafety(stagingRoot, input.forbiddenJavaScriptMarkers ?? []);
+    assertMiniGameJavaScriptSafety(
+      stagingRoot,
+      input.forbiddenJavaScriptMarkers ?? [],
+      input.forbiddenGameBundleGlobals ?? [],
+    );
     const evidence = writeMiniGameArtifactEvidence(stagingInput);
 
     verifyMiniGameArtifactEvidence({
@@ -635,13 +640,20 @@ function assertMiniGameRequiredFiles(artifactRoot: string): void {
 export function assertMiniGameJavaScriptSafety(
   artifactRoot: string,
   forbiddenMarkers: readonly Readonly<{ readonly marker: string; readonly owner: string }>[],
+  forbiddenGameBundleGlobals: readonly string[] = [],
 ): void {
   const javascript = listMiniGameArtifactFiles(artifactRoot)
     .filter((file) => ['.cjs', '.js', '.mjs'].includes(extname(file.path).toLowerCase()));
+  const gameBundleGlobals = new Set(forbiddenGameBundleGlobals);
+  const noForbiddenGlobals = new Set<string>();
 
   for (const file of javascript) {
     const source = readFileSync(join(artifactRoot, file.path), 'utf8');
-    assertMiniGameJavaScriptAstSafety(source, file.path);
+    assertMiniGameJavaScriptAstSafety(
+      source,
+      file.path,
+      file.path === 'game.bundle.js' ? gameBundleGlobals : noForbiddenGlobals,
+    );
 
     for (const { pattern, label } of forbiddenJavaScriptPatterns) {
       if (pattern.test(source)) {
@@ -657,7 +669,11 @@ export function assertMiniGameJavaScriptSafety(
   }
 }
 
-function assertMiniGameJavaScriptAstSafety(source: string, path: string): void {
+function assertMiniGameJavaScriptAstSafety(
+  source: string,
+  path: string,
+  forbiddenGlobals: ReadonlySet<string>,
+): void {
   let ast: unknown;
 
   try {
@@ -686,7 +702,7 @@ function assertMiniGameJavaScriptAstSafety(source: string, path: string): void {
       return;
     }
 
-    assertSafeNode(input, ancestors, path, scopeAnalysis);
+    assertSafeNode(input, ancestors, path, scopeAnalysis, forbiddenGlobals);
     for (const [key, value] of Object.entries(input)) {
       if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
         ancestors.push({ node: input, childKey: key });
@@ -702,9 +718,25 @@ function assertSafeNode(
   ancestors: readonly MiniGameAstAncestor[],
   path: string,
   scopeAnalysis: MiniGameScopeAnalysis,
+  forbiddenGlobals: ReadonlySet<string>,
 ): void {
   if (node.type === 'ImportExpression') {
     throw new Error(`Mini-game ${path} contains forbidden dynamic import.`);
+  }
+  const parent = ancestors.at(-1)?.node;
+
+  if (
+    isMiniGameFunctionNode(node)
+    && (
+      (parent?.type === 'MethodDefinition' && parent.value === node)
+      || (parent?.type === 'PropertyDefinition' && parent.value === node)
+      || (parent?.type === 'Property' && parent.value === node)
+    )
+    && readMiniGameFunctionReturnValues(node).some((value) => {
+      return isReturnedDynamicCodeConstructorSource(value, ancestors, scopeAnalysis);
+    })
+  ) {
+    throw new Error(`Mini-game ${path} contains forbidden dynamic-code constructor.`);
   }
 
   if (
@@ -714,6 +746,10 @@ function assertSafeNode(
   ) {
     const scope = scopeAnalysis.scopeByNode.get(node) ?? scopeAnalysis.programScope;
     const binding = resolveMiniGameBinding(node.name, scope);
+
+    if (binding === undefined && forbiddenGlobals.has(node.name)) {
+      throw new Error(`Mini-game ${path} contains forbidden platform global ${node.name}.`);
+    }
 
     if (
       binding !== undefined
@@ -745,6 +781,14 @@ function assertSafeNode(
 
     if (
       propertyName !== undefined
+      && forbiddenGlobals.has(propertyName)
+      && isGlobalObjectAliasSource(node.object, ancestors, scopeAnalysis)
+    ) {
+      throw new Error(`Mini-game ${path} contains forbidden platform global ${propertyName}.`);
+    }
+
+    if (
+      propertyName !== undefined
       && ['eval', 'Function', 'importScripts'].includes(propertyName)
       && (
         node.computed === true
@@ -767,6 +811,10 @@ function assertSafeNode(
     && isGlobalObjectDestructuring(ancestors, scopeAnalysis)
   ) {
     const propertyName = readStaticPropertyName(node);
+
+    if (propertyName !== undefined && forbiddenGlobals.has(propertyName)) {
+      throw new Error(`Mini-game ${path} contains forbidden platform global ${propertyName}.`);
+    }
 
     if (node.computed === true) {
       throw new Error(`Mini-game ${path} contains forbidden computed destructuring.`);

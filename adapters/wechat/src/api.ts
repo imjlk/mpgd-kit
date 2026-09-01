@@ -40,6 +40,10 @@ export interface WechatMiniGameRequestResult {
   readonly header?: Readonly<Record<string, unknown>>;
 }
 
+export interface WechatMiniGameRequestTask {
+  abort(): void;
+}
+
 export interface WechatMiniGameShareOptions {
   readonly title?: string;
   readonly query?: string;
@@ -60,7 +64,7 @@ export interface WechatMiniGameApi {
     readonly responseType: 'text' | 'arraybuffer';
     readonly success: (result: WechatMiniGameRequestResult) => void;
     readonly fail: (error: unknown) => void;
-  }>): void;
+  }>): WechatMiniGameRequestTask;
   onTouchStart(listener: WechatMiniGameTouchListener): void;
   offTouchStart(listener: WechatMiniGameTouchListener): void;
   onTouchMove(listener: WechatMiniGameTouchListener): void;

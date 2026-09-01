@@ -243,6 +243,7 @@ try {
             { marker: 'TTMinis.game', owner: 'TikTok' },
             { marker: 'createTikTokPlatformGateway', owner: 'TikTok' },
           ],
+          forbiddenGameBundleGlobals: ['wx'],
         });
         writeManifest(targetName, profile, outputConfigPath, env);
       } finally {

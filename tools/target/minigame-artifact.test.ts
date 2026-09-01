@@ -144,6 +144,14 @@ try {
     'function getBox() { return { F: (() => {}).constructor }; } '
       + 'getBox().F("return 1")();\n',
     'function read(key) { return globalThis[key]; } read("Function")("return 1")();\n',
+    'class Box { static getF() { return (() => {}).constructor; } } '
+      + 'Box.getF()("return 1")();\n',
+    'class Box { getF() { return (() => {}).constructor; } } '
+      + 'new Box().getF()("return 1")();\n',
+    'class Box { static getF = () => (() => {}).constructor; } '
+      + 'Box.getF()("return 1")();\n',
+    'const box = { getF() { return (() => {}).constructor; } }; '
+      + 'box.getF()("return 1")();\n',
     'const key = "Fun" + "ction"; const F = globalThis[key]; F("return 1")();\n',
     'const key = getRuntimeKey(); const box = { F: globalThis[key] }; '
       + 'box.F("return 1")();\n',
@@ -180,6 +188,25 @@ try {
   );
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-constructor-return-metadata.js'));
+  for (const directWechatSdkAccess of [
+    'wx.createImage();\n',
+    'globalThis.wx.request({});\n',
+    'globalThis["w" + "x"].createCanvas();\n',
+    'const globalAlias = globalThis; globalAlias.wx.getWindowInfo();\n',
+    'const { wx: sdk } = globalThis; sdk.createImage();\n',
+  ]) {
+    write('game.bundle.js', directWechatSdkAccess);
+    assert.throws(
+      () => assertMiniGameJavaScriptSafety(root, [], ['wx']),
+      /game\.bundle\.js contains forbidden platform global wx/u,
+    );
+  }
+  write('game.bundle.js', 'const wx = { createImage() { return {}; } }; wx.createImage();\n');
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, [], ['wx']));
+  write('game.bundle.js', 'globalThis.__MPGD_GAME__ = true;\n');
+  write('runtime.js', 'wx.createImage();\n');
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, [], ['wx']));
+  write('runtime.js', 'globalThis.__MPGD_MINIGAME__ = true;\n');
   write('unsafe.js', 'const indirectEval = eval;\n');
   assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
   rmSync(join(root, 'unsafe.js'));

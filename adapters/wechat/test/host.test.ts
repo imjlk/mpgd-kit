@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { MiniGameRuntimeError } from '@mpgd/phaser-minigame-runtime';
+import { MiniGameRuntimeError, type MiniGameRequestSignal } from '@mpgd/phaser-minigame-runtime';
 import { PlatformOperationError } from '@mpgd/platform';
 
 import {
@@ -147,6 +147,50 @@ describe('WeChat Mini Game host', () => {
     expect([...new Uint8Array(binary?.data as ArrayBuffer)]).toEqual([4, 5]);
   });
 
+  it('aborts the native request task when shared transport cancellation fires', async () => {
+    let nativeAbortCalls = 0;
+    let abortListener: (() => void) | undefined;
+    let aborted = false;
+    let unsubscribeCalls = 0;
+    const fake = createFakeWechatMiniGameApi({
+      request(input) {
+        return {
+          abort() {
+            nativeAbortCalls += 1;
+            input.fail(new Error('native request aborted'));
+          },
+        };
+      },
+    });
+    const signal: MiniGameRequestSignal = {
+      get aborted() {
+        return aborted;
+      },
+      onAbort(callback) {
+        abortListener = callback;
+        return () => {
+          unsubscribeCalls += 1;
+          abortListener = undefined;
+        };
+      },
+    };
+    const host = createWechatMiniGameHost(fake.api, { requestAnimationFrame: () => 1 });
+    const response = host.request?.({
+      url: 'https://assets.example.test/slow.json',
+      method: 'GET',
+      headers: {},
+      responseType: 'json',
+      signal,
+    });
+
+    aborted = true;
+    abortListener?.();
+
+    await expect(response).rejects.toMatchObject({ code: 'WECHAT_REQUEST_ABORTED' });
+    expect(nativeAbortCalls).toBe(1);
+    expect(unsubscribeCalls).toBe(1);
+  });
+
   it('surfaces malformed touch and host transport failures', async () => {
     const fake = createFakeWechatMiniGameApi({
       getFileSystemManager() {
@@ -158,6 +202,7 @@ describe('WeChat Mini Game host', () => {
       },
       request(input) {
         input.fail(new Error('offline'));
+        return { abort() {} };
       },
     });
     const host = createWechatMiniGameHost(fake.api, { requestAnimationFrame: () => 1 });

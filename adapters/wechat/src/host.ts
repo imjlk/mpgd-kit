@@ -300,8 +300,34 @@ function requestWechatResource(
   input: MiniGameRequest,
 ): Promise<MiniGameResponse> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    let requestTask: ReturnType<WechatMiniGameApi['request']> | undefined;
+    let unsubscribeAbort: () => void = () => undefined;
+    const settle = (callback: () => void) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      unsubscribeAbort();
+      callback();
+    };
+
+    if (isMiniGameRequestAborted(input)) {
+      settle(() => reject(createWechatRequestAbortedError(input.url)));
+      return;
+    }
+    unsubscribeAbort = input.signal?.onAbort(() => {
+      const activeRequestTask = requestTask;
+      settle(() => reject(createWechatRequestAbortedError(input.url)));
+      try {
+        activeRequestTask?.abort();
+      } catch {
+        // The host promise still settles as aborted when native cancellation throws.
+      }
+    }) ?? unsubscribeAbort;
+
     try {
-      api.request({
+      requestTask = api.request({
         url: input.url,
         method: 'GET',
         header: input.headers,
@@ -309,29 +335,48 @@ function requestWechatResource(
         responseType: input.responseType === 'arraybuffer' ? 'arraybuffer' : 'text',
         success(result) {
           try {
-            resolve({
+            const response = {
               status: assertStatusCode(result.statusCode),
               data: normalizeResponseData(result.data),
               ...(result.header === undefined ? {} : { headers: normalizeHeaders(result.header) }),
-            });
+            };
+            settle(() => resolve(response));
           } catch (error) {
-            reject(error);
+            settle(() => reject(error));
           }
         },
         fail() {
-          reject(new MiniGameRuntimeError(
+          settle(() => reject(new MiniGameRuntimeError(
             'WECHAT_REQUEST_FAILED',
             `WeChat Mini Game request failed: ${input.url}`,
-          ));
+          )));
         },
       });
+      if (isMiniGameRequestAborted(input)) {
+        try {
+          requestTask.abort();
+        } catch {
+          // The cancellation listener has already settled the host promise.
+        }
+      }
     } catch {
-      reject(new MiniGameRuntimeError(
+      settle(() => reject(new MiniGameRuntimeError(
         'WECHAT_REQUEST_FAILED',
         `WeChat Mini Game request failed: ${input.url}`,
-      ));
+      )));
     }
   });
+}
+
+function isMiniGameRequestAborted(input: MiniGameRequest): boolean {
+  return input.signal?.aborted === true;
+}
+
+function createWechatRequestAbortedError(url: string): MiniGameRuntimeError {
+  return new MiniGameRuntimeError(
+    'WECHAT_REQUEST_ABORTED',
+    `WeChat Mini Game request was aborted: ${url}`,
+  );
 }
 
 function assertStatusCode(status: number): number {
