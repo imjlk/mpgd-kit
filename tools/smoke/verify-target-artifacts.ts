@@ -1042,6 +1042,20 @@ function assertArtifactPathAllowed(
   targetConfig: SmokePlatformTargetConfig,
   artifactPath: string,
 ): void {
+  if (targetConfig.kind === 'wechat-minigame' || targetConfig.kind === 'tiktok-minigame') {
+    const configuredOutput = requireStringMatch(targetConfig.output, `${target}.output`);
+    const expectedArtifactPath = resolveFromPlatformTargetsBase(
+      loadedPlatformTargets.baseDir,
+      configuredOutput,
+    );
+
+    assertPathEqual(
+      artifactPath,
+      expectedArtifactPath,
+      `${target} release manifest artifact must match its configured output`,
+    );
+  }
+
   if (targetConfig.kind !== 'devvit-web') {
     assertPathInsideTargetBase(artifactPath, `${target} artifact`);
     return;

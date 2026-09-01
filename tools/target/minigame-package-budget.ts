@@ -257,7 +257,9 @@ function assertMiniGameArtifactFileAllowed(path: string): void {
     fileName === '.DS_Store'
     || fileName === '.env'
     || fileName.startsWith('.env.')
+    || fileName === '.npmrc'
     || fileName === 'credentials.json'
+    || fileName === 'project.private.config.json'
     || /^service-account.*\.json$/iu.test(fileName)
     || /\.(?:map|ts|tsx|mts|cts|pem|key|p12|pfx)$/iu.test(fileName)
   ) {

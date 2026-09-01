@@ -4,7 +4,7 @@ import {
   type PlatformGateway,
 } from '@mpgd/platform';
 
-import type { WechatMiniGameApi } from './api.js';
+import { resolveWechatMiniGameApi, type WechatMiniGameApi } from './api.js';
 import { createWechatLifecycleAdapter } from './lifecycle.js';
 import { createWechatSharingAdapter } from './sharing.js';
 import { createWechatStorageAdapter } from './storage.js';
@@ -17,7 +17,8 @@ export interface CreateWechatPlatformGatewayOptions {
 export function createWechatPlatformGateway(
   options: CreateWechatPlatformGatewayOptions,
 ): PlatformGateway {
-  const sharing = createWechatSharingAdapter(options.api);
+  const api = resolveWechatMiniGameApi({ wx: options.api });
+  const sharing = createWechatSharingAdapter(api);
 
   return {
     target: 'wechat',
@@ -92,8 +93,8 @@ export function createWechatPlatformGateway(
         );
       },
     },
-    lifecycle: createWechatLifecycleAdapter(options.api),
-    storage: createWechatStorageAdapter(options.api, options.storageKeyPrefix),
+    lifecycle: createWechatLifecycleAdapter(api),
+    storage: createWechatStorageAdapter(api, options.storageKeyPrefix),
   };
 }
 

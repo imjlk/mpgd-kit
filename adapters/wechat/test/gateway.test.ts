@@ -2,10 +2,22 @@ import { describe, expect, it } from 'vitest';
 
 import { PlatformOperationError } from '@mpgd/platform';
 
-import { createWechatPlatformGateway, createWechatStorageAdapter } from '../src/index.js';
+import {
+  createWechatPlatformGateway,
+  createWechatStorageAdapter,
+  type WechatMiniGameApi,
+} from '../src/index.js';
 import { createFakeWechatMiniGameApi } from './fake-api.js';
 
 describe('WeChat platform gateway', () => {
+  it('validates directly injected APIs before exposing gateway operations', () => {
+    expect(() => createWechatPlatformGateway({ api: {} as WechatMiniGameApi }))
+      .toThrowError(expect.objectContaining({
+        code: 'WECHAT_API_METHOD_UNAVAILABLE',
+        retryable: false,
+      }));
+  });
+
   it('serializes native storage without overwriting on invalid values or quota failures', async () => {
     const fake = createFakeWechatMiniGameApi();
     const storage = createWechatStorageAdapter(fake.api);
@@ -59,6 +71,10 @@ describe('WeChat platform gateway', () => {
   it('normalizes sharing to presented and never invents authenticated identity or grants', async () => {
     const fake = createFakeWechatMiniGameApi();
     const gateway = createWechatPlatformGateway({ api: fake.api });
+    Object.defineProperty(fake.api, 'shareAppMessage', {
+      configurable: true,
+      value: undefined,
+    });
 
     await expect(gateway.sharing?.share?.({
       kind: 'friend-challenge',

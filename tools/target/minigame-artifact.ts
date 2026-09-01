@@ -379,8 +379,8 @@ export function assertMiniGameJavaScriptSafety(
       [/\beval\s*\(/u, 'eval'],
       [/\bnew\s+Function\b/u, 'new Function'],
       [
-        /(?:\bimportScripts\s*\(\s*["'`]http:\/\/|http:\/\/[^\s"'`]+\.m?js(?:[?#][^\s"'`]*)?)/iu,
-        'insecure remote code reference',
+        /(?:\bimportScripts\s*\(\s*["'`]https?:\/\/|https?:\/\/[^\s"'`]+\.m?js(?:[?#][^\s"'`]*)?)/iu,
+        'remote executable code reference',
       ],
       [/\bindex\.html\b/u, 'HTML entry dependency'],
       [/["'`]\.?\/?[^"'`]*\.css(?:[?"'`])/u, 'CSS runtime dependency'],

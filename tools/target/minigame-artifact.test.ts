@@ -14,6 +14,7 @@ import { dirname, join } from 'node:path';
 import type { GeneratedTargetIcons } from '../icons/types';
 import {
   assembleMiniGameArtifact,
+  assertMiniGameJavaScriptSafety,
   miniGameArtifactEvidenceFileName,
   miniGameEffectiveTargetConfigFileName,
   miniGameIconManifestFileName,
@@ -63,6 +64,13 @@ try {
   assert.throws(() => verifyMiniGameArtifactEvidence(expected), /digest mismatch/u);
   write('assets/logo.png', Buffer.from([1, 2, 3]));
   assert.deepEqual(verifyMiniGameArtifactEvidence(expected), evidence);
+
+  write('remote.js', "importScripts('https://cdn.example.test/remote.js');\n");
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, []),
+    /remote executable code reference/u,
+  );
+  rmSync(join(root, 'remote.js'));
 
   const parsed = JSON.parse(
     readFileSync(join(root, miniGameArtifactEvidenceFileName), 'utf8'),

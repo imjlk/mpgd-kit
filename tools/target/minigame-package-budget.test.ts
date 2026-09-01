@@ -88,6 +88,19 @@ try {
   );
   rmSync(join(root, 'game.js.map'));
 
+  for (const credential of ['.npmrc', 'project.private.config.json']) {
+    writeBytes(credential, 1);
+    assert.throws(
+      () => assertMiniGamePackageBudget({
+        artifactRoot: root,
+        gameConfig: {},
+        budget: { mainBytes: 100, totalBytes: 100 },
+      }),
+      /forbidden development or credential file/u,
+    );
+    rmSync(join(root, credential));
+  }
+
   symlinkSync(join(root, 'game.js'), join(root, 'linked.js'));
   assert.throws(
     () => assertMiniGamePackageBudget({

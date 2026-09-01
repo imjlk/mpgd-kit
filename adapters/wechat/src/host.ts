@@ -26,6 +26,7 @@ export function createWechatMiniGameHost(
   api: WechatMiniGameApi,
   options: CreateWechatMiniGameHostOptions = resolveWechatAnimationFrameOptions(globalThis),
 ): MiniGameHost {
+  resolveWechatMiniGameApi({ wx: api });
   const requestFrame = options.requestAnimationFrame;
 
   if (requestFrame === undefined) {

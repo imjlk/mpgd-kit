@@ -3,7 +3,9 @@ import { PlatformOperationError, type ShareAdapter, type ShareIntent } from '@mp
 import type { WechatMiniGameApi, WechatMiniGameShareOptions } from './api.js';
 
 export function createWechatSharingAdapter(api: WechatMiniGameApi): ShareAdapter | undefined {
-  if (api.shareAppMessage === undefined) {
+  const shareAppMessage = api.shareAppMessage?.bind(api);
+
+  if (shareAppMessage === undefined) {
     return undefined;
   }
 
@@ -12,7 +14,7 @@ export function createWechatSharingAdapter(api: WechatMiniGameApi): ShareAdapter
       const options = createWechatShareOptions(intent);
 
       try {
-        api.shareAppMessage?.(options);
+        shareAppMessage(options);
       } catch {
         throw new PlatformOperationError({
           code: 'WECHAT_SHARE_PRESENTATION_FAILED',
