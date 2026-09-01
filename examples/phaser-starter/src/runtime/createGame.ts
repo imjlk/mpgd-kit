@@ -38,7 +38,7 @@ export function createStarterGame(input: CreateStarterGameInput): Phaser.Game {
         game.registry.set('starterContext', input.context);
       },
     },
-  };
+  } satisfies Phaser.Types.Core.GameConfig;
   const miniGameBridge = isMiniGameRuntime(input.context.runtime.config.runtime)
     ? requireStarterMiniGameRuntimeBridge(
         input.context.runtime.config.runtime === 'wechat-minigame' ? 'wechat' : 'tiktok',

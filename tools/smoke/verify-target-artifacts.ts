@@ -67,8 +67,11 @@ const loadedPlatformTargets = loadSmokePlatformTargetsConfig();
 const configuredTargets = Object.keys(loadedPlatformTargets.config.targets);
 const knownTargets = new Set<string>(configuredTargets);
 
-export function verifyTargetArtifacts(targets: readonly string[] = configuredTargets): void {
+export function verifyTargetArtifacts(
+  targets: readonly string[] = configuredTargets,
+): ReadonlyMap<string, string> {
   const manifest = readSmokeReleaseManifest(releaseManifestPath(loadedPlatformTargets.baseDir));
+  const verifiedArtifacts = new Map<string, string>();
 
   for (const target of targets) {
     const entry = manifest.targets[target];
@@ -163,9 +166,11 @@ export function verifyTargetArtifacts(targets: readonly string[] = configuredTar
         digest: entry.effectiveConfig.digest,
       },
     );
+    verifiedArtifacts.set(target, artifactPath);
   }
 
   console.log(`Target smoke passed: ${targets.join(', ')}`);
+  return verifiedArtifacts;
 }
 
 export function assertWebArtifactInstallability(

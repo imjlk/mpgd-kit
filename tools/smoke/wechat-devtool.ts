@@ -7,9 +7,12 @@ if (process.env.MPGD_RUN_WECHAT_DEVTOOL !== '1') {
 } else {
   process.env.MPGD_PLATFORM_TARGETS_FILE ??= 'examples/phaser-starter/mpgd.targets.json';
   const { verifyTargetArtifacts } = await import('./verify-target-artifacts');
-  verifyTargetArtifacts(['wechat']);
+  const artifactRoot = verifyTargetArtifacts(['wechat']).get('wechat');
+
+  if (artifactRoot === undefined) {
+    throw new Error('WeChat artifact verification did not return an artifact path.');
+  }
   const cli = resolveWechatDevtoolCli();
-  const artifactRoot = resolve('examples/phaser-starter/artifacts/wechat');
   const result = spawnSync(cli, ['open', '--project', artifactRoot], {
     cwd: process.cwd(),
     env: process.env,
