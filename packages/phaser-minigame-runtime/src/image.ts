@@ -149,6 +149,7 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     this.#hasAssignedNativeSource = false;
 
     const startedAt = Date.now();
+    const pollingBaseline = readNativeImageDimensions(nativeImage);
 
     try {
       Reflect.set(nativeImage, 'onload', () => this.#settle(generation, true));
@@ -173,7 +174,7 @@ export class MiniGameImageElement extends MiniGameEventTarget {
         return;
       }
 
-      if (isNativeImageComplete(nativeImage)) {
+      if (isNativeImageComplete(nativeImage, pollingBaseline)) {
         this.#settle(generation, true);
         return;
       }
@@ -353,9 +354,33 @@ function normalizePositiveDuration(
   return resolved;
 }
 
-function isNativeImageComplete(image: object): boolean {
-  return Reflect.get(image, 'complete') === true
-    || (readImageDimension(image, 'width') > 0 && readImageDimension(image, 'height') > 0);
+function isNativeImageComplete(
+  image: object,
+  baseline: Readonly<{ readonly width: number; readonly height: number }>,
+): boolean {
+  const complete = Reflect.get(image, 'complete');
+
+  if (complete === true) {
+    return true;
+  }
+
+  if (complete === false) {
+    return false;
+  }
+
+  const dimensions = readNativeImageDimensions(image);
+  return dimensions.width > 0
+    && dimensions.height > 0
+    && (dimensions.width !== baseline.width || dimensions.height !== baseline.height);
+}
+
+function readNativeImageDimensions(
+  image: object,
+): Readonly<{ readonly width: number; readonly height: number }> {
+  return {
+    width: readImageDimension(image, 'width'),
+    height: readImageDimension(image, 'height'),
+  };
 }
 
 function readImageDimension(image: object, property: string): number {

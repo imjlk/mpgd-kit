@@ -11,7 +11,34 @@ import { normalizeMiniGameHttpsOrigin, parseMiniGameHttpsUrl } from './url.js';
 export type MiniGameXMLHttpRequestResponseType = '' | MiniGameRequestResponseType;
 
 const forbiddenResponseHeaders = new Set(['set-cookie', 'set-cookie2']);
-const forbiddenRequestHeaders = new Set(['cookie', 'cookie2']);
+const forbiddenRequestHeaders = new Set([
+  'accept-charset',
+  'accept-encoding',
+  'access-control-request-headers',
+  'access-control-request-method',
+  'connection',
+  'content-length',
+  'cookie',
+  'cookie2',
+  'date',
+  'dnt',
+  'expect',
+  'host',
+  'keep-alive',
+  'origin',
+  'permissions-policy',
+  'referer',
+  'set-cookie',
+  'set-cookie2',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+  'via',
+  'x-http-method',
+  'x-http-method-override',
+  'x-method-override',
+]);
 
 export class MiniGameProgressEvent extends MiniGameEvent {
   readonly lengthComputable: boolean;
@@ -58,7 +85,6 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
   readyState: 0 | 1 | 2 | 3 | 4 = MiniGameXMLHttpRequest.UNSENT;
   response: unknown = null;
   responseText = '';
-  responseType: MiniGameXMLHttpRequestResponseType = '';
   responseURL = '';
   status = 0;
   statusText = '';
@@ -77,6 +103,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
   readonly #requestHeaders = new Map<string, string>();
   readonly #responseHeaders = new Map<string, string>();
   #method: 'GET' | undefined;
+  #responseType: MiniGameXMLHttpRequestResponseType = '';
   #url = '';
   #generation = 0;
   #mimeType: string | undefined;
@@ -86,6 +113,21 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
     super();
     this.#host = host;
     this.#options = options;
+  }
+
+  get responseType(): MiniGameXMLHttpRequestResponseType {
+    return this.#responseType;
+  }
+
+  set responseType(value: MiniGameXMLHttpRequestResponseType) {
+    if (this.#sendStarted) {
+      throw new MiniGameRuntimeError(
+        'MINIGAME_XHR_INVALID_STATE',
+        'Mini-game XMLHttpRequest responseType cannot change after send() starts.',
+      );
+    }
+
+    this.#responseType = value;
   }
 
   open(
@@ -152,7 +194,7 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       );
     }
 
-    if (forbiddenRequestHeaders.has(normalizedName)) {
+    if (isForbiddenRequestHeader(normalizedName)) {
       throw new MiniGameRuntimeError(
         'MINIGAME_XHR_FORBIDDEN_HEADER',
         `Mini-game XMLHttpRequest cannot set forbidden request header ${name}.`,
@@ -601,6 +643,12 @@ function resolveRequestTimeout(
 
 function isSupportedResponseType(value: unknown): value is MiniGameXMLHttpRequestResponseType {
   return value === '' || value === 'text' || value === 'arraybuffer' || value === 'json';
+}
+
+function isForbiddenRequestHeader(name: string): boolean {
+  return forbiddenRequestHeaders.has(name)
+    || name.startsWith('proxy-')
+    || name.startsWith('sec-');
 }
 
 function assertMiniGameResponse(response: MiniGameResponse): void {

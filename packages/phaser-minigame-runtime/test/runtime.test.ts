@@ -304,6 +304,109 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(image.width).toBe(2);
   });
 
+  it('treats an explicit incomplete image signal as authoritative during polling', async () => {
+    class ExplicitlyIncompleteImageHost extends FakeMiniGameHost {
+      override createImage(): object {
+        const image: Record<string, unknown> = {
+          width: 0,
+          height: 0,
+          complete: false,
+          onload: null,
+          onerror: null,
+        };
+
+        Object.defineProperty(image, 'src', {
+          configurable: true,
+          get: () => image.__src ?? '',
+          set: (value: string) => {
+            image.__src = value;
+
+            if (value.length === 0) {
+              image.width = 0;
+              image.height = 0;
+              return;
+            }
+
+            queueMicrotask(() => {
+              image.width = 2;
+              image.height = 2;
+            });
+          },
+        });
+
+        return image;
+      }
+    }
+
+    installMiniGameGlobals(new ExplicitlyIncompleteImageHost(), {
+      image: { pollIntervalMs: 1, loadTimeoutMs: 5 },
+    });
+    const image = new globalThis.Image();
+    let loadEvents = 0;
+    image.onload = () => {
+      loadEvents += 1;
+    };
+    const timeoutError = new Promise<unknown>((resolve) => {
+      image.onerror = (event) => resolve(event);
+    });
+    image.src = 'assets/incomplete.png';
+
+    await expect(timeoutError).resolves.toMatchObject({
+      type: 'error',
+      error: { code: 'MINIGAME_IMAGE_LOAD_TIMEOUT' },
+    });
+    expect(loadEvents).toBe(0);
+  });
+
+  it('uses a dimension transition only when the native completion signal is absent', async () => {
+    class DimensionOnlyImageHost extends FakeMiniGameHost {
+      override createImage(): object {
+        const image: Record<string, unknown> = {
+          width: 0,
+          height: 0,
+          onload: null,
+          onerror: null,
+        };
+
+        Object.defineProperty(image, 'src', {
+          configurable: true,
+          get: () => image.__src ?? '',
+          set: (value: string) => {
+            image.__src = value;
+
+            if (value.length === 0) {
+              image.width = 0;
+              image.height = 0;
+              return;
+            }
+
+            queueMicrotask(() => {
+              image.width = 2;
+              image.height = 2;
+            });
+          },
+        });
+
+        return image;
+      }
+    }
+
+    installMiniGameGlobals(new DimensionOnlyImageHost(), {
+      image: { pollIntervalMs: 1, loadTimeoutMs: 50 },
+    });
+    const image = new globalThis.Image();
+    const loaded = new Promise<void>((resolve, reject) => {
+      image.onload = () => resolve();
+      image.onerror = () => reject(new Error('Unexpected image error'));
+    });
+    image.src = 'assets/dimension-only.png';
+
+    await loaded;
+    expect(image.complete).toBe(true);
+    expect(image.width).toBe(2);
+    expect(image.height).toBe(2);
+  });
+
   it('reports native image errors and bounded polling timeouts', async () => {
     const failedHost = new FakeMiniGameHost();
     failedHost.imageBehavior = 'error';
@@ -620,6 +723,9 @@ describe('mini-game requestAnimationFrame and transport', () => {
     const request = new MiniGameXMLHttpRequest(host);
     request.open('GET', 'assets/value.json');
     const loaded = sendRequest(request);
+    expect(() => {
+      request.responseType = 'arraybuffer';
+    }).toThrow('responseType cannot change after send() starts');
     expect(() => request.setRequestHeader('x-late', 'ignored')).toThrow(
       'headers cannot change after send() starts',
     );
@@ -903,9 +1009,19 @@ describe('mini-game requestAnimationFrame and transport', () => {
     expect(() => invalidHeader.setRequestHeader('x-test', 'ok\r\ninjected: true')).toThrow(
       'header value contains a line break',
     );
-    expect(() => invalidHeader.setRequestHeader('Cookie', 'session=secret')).toThrow(
-      'cannot set forbidden request header',
-    );
+    for (const name of [
+      'Cookie',
+      'Host',
+      'Origin',
+      'Content-Length',
+      'Connection',
+      'Proxy-Authorization',
+      'Sec-Fetch-Site',
+    ]) {
+      expect(() => invalidHeader.setRequestHeader(name, 'blocked')).toThrow(
+        'cannot set forbidden request header',
+      );
+    }
   });
 });
 
