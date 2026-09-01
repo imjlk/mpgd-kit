@@ -41,7 +41,7 @@ export function getMiniGameCanvasBounds(
   const left = resolveCssLength(style.left, 0, info.width, true)
     + resolveCssLength(style.marginLeft, 0, info.width, true);
   const top = resolveCssLength(style.top, 0, info.height, true)
-    + resolveCssLength(style.marginTop, 0, info.height, true);
+    + resolveCssLength(style.marginTop, 0, info.width, true);
   const values = {
     x: left,
     y: top,

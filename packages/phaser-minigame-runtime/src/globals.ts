@@ -188,6 +188,7 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
   readonly #windowEvents = new MiniGameEventTarget(undefined, globalThis);
   readonly #disposalGuards = new Set<() => void>();
   #disposeInput: () => void = () => undefined;
+  #disposing = false;
   #disposed = false;
 
   constructor(host: MiniGameHost, options: MiniGameRuntimeOptions) {
@@ -237,15 +238,23 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
   }
 
   dispose(): void {
-    if (this.#disposed) {
+    if (this.#disposed || this.#disposing) {
       return;
     }
 
-    for (const guard of this.#disposalGuards) {
-      guard();
+    this.#disposing = true;
+
+    try {
+      for (const guard of this.#disposalGuards) {
+        guard();
+      }
+    } catch (error) {
+      this.#disposing = false;
+      throw error;
     }
 
     this.#disposed = true;
+    this.#disposing = false;
     this.#disposeInput();
     this.#scheduler.dispose();
     this.#windowEvents.removeAllEventListeners();

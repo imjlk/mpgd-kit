@@ -4,6 +4,7 @@ import {
   classifyMiniGameRequestUrl,
   createMiniGamePhaserConfig,
   getInstalledMiniGameGlobals,
+  getMiniGameCanvasBounds,
   installMiniGameGlobals,
   installMiniGameTouchInput,
   installPhaserMiniGameRuntime,
@@ -139,6 +140,53 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(Reflect.get(clearedNativeImage as object, 'src')).toBe('');
     expect(Reflect.get(clearedNativeImage as object, 'width')).toBe(0);
     expect(image.complete).toBe(true);
+  });
+
+  it('resolves percentage vertical margins against the containing width', () => {
+    const windowInfo = { width: 360, height: 640, pixelRatio: 2 } as const;
+    const bounds = getMiniGameCanvasBounds(windowInfo, {
+      width: '100%',
+      height: '50%',
+      marginTop: '10%',
+    });
+
+    expect(bounds).toMatchObject({
+      left: 0,
+      top: 36,
+      width: 360,
+      height: 320,
+      bottom: 356,
+    });
+    expect(mapMiniGameTouchToDesign(
+      { identifier: 1, clientX: 180, clientY: 196 },
+      windowInfo,
+      { width: 720, height: 640 },
+      bounds,
+    )).toEqual({ x: 360, y: 320 });
+  });
+
+  it('prevents recursive global disposal and permits retry after a guard rejects', () => {
+    const globals = installMiniGameGlobals(new FakeMiniGameHost());
+    let rejectDisposal = true;
+    let recursiveCalls = 0;
+    globals.registerDisposalGuard(() => {
+      recursiveCalls += 1;
+      globals.dispose();
+    });
+    globals.registerDisposalGuard(() => {
+      if (rejectDisposal) {
+        throw new Error('not ready');
+      }
+    });
+
+    expect(() => globals.dispose()).toThrow('not ready');
+    expect(globals.disposed).toBe(false);
+    expect(recursiveCalls).toBe(1);
+
+    rejectDisposal = false;
+    globals.dispose();
+    expect(globals.disposed).toBe(true);
+    expect(recursiveCalls).toBe(2);
   });
 
   it('uses bounded image polling when native callbacks are absent', async () => {
