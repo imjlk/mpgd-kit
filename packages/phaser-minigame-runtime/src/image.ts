@@ -17,6 +17,8 @@ export class MiniGameImageElement extends MiniGameEventTarget {
   complete = false;
   #nativeImage: object;
   readonly #createNativeImage: (() => unknown) | undefined;
+  #configuredWidth: number | undefined;
+  #configuredHeight: number | undefined;
   #source = '';
   #generation = 0;
   #replaceBeforeNextLoad = false;
@@ -62,18 +64,20 @@ export class MiniGameImageElement extends MiniGameEventTarget {
   }
 
   get width(): number {
-    return readImageDimension(this.#nativeImage, 'width');
+    return this.#configuredWidth ?? readImageDimension(this.#nativeImage, 'width');
   }
 
   set width(value: number) {
+    this.#configuredWidth = Number.isFinite(value) ? value : 0;
     Reflect.set(this.#nativeImage, 'width', value);
   }
 
   get height(): number {
-    return readImageDimension(this.#nativeImage, 'height');
+    return this.#configuredHeight ?? readImageDimension(this.#nativeImage, 'height');
   }
 
   set height(value: number) {
+    this.#configuredHeight = Number.isFinite(value) ? value : 0;
     Reflect.set(this.#nativeImage, 'height', value);
   }
 
@@ -232,8 +236,19 @@ export class MiniGameImageElement extends MiniGameEventTarget {
 
     const replacement = assertNativeImage(this.#createNativeImage());
     this.#nativeImage = replacement;
+    this.#applyConfiguredDimensions(replacement);
     this.#replaceBeforeNextLoad = false;
     return replacement;
+  }
+
+  #applyConfiguredDimensions(nativeImage: object): void {
+    if (this.#configuredWidth !== undefined) {
+      Reflect.set(nativeImage, 'width', this.#configuredWidth);
+    }
+
+    if (this.#configuredHeight !== undefined) {
+      Reflect.set(nativeImage, 'height', this.#configuredHeight);
+    }
   }
 
   #clearNativeSource(nativeImage: object): boolean {
@@ -266,6 +281,7 @@ export class MiniGameImageElement extends MiniGameEventTarget {
     }
 
     if (succeeded) {
+      this.#applyConfiguredDimensions(this.#nativeImage);
       this.invokeEventCallback(this.onload, event);
     } else {
       this.invokeEventCallback(this.onerror, event);

@@ -55,9 +55,11 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(host.createdCanvasTypes).toEqual(['primary']);
     let windowListenerThis: unknown;
     let windowEvent: MiniGameEvent | undefined;
+    let windowEventCurrentTarget: unknown;
     const windowListener = function listener(this: unknown, event: MiniGameEvent): void {
       windowListenerThis = this;
       windowEvent = event;
+      windowEventCurrentTarget = event.currentTarget;
     };
     const addWindowListener = Reflect.get(globalThis, 'addEventListener');
     const focusWindow = Reflect.get(globalThis, 'focus');
@@ -73,7 +75,8 @@ describe('mini-game globals and Canvas compatibility', () => {
     Reflect.apply(focusWindow, globalThis, []);
     expect(windowListenerThis).toBe(globalThis);
     expect(windowEvent?.target).toBe(globalThis);
-    expect(windowEvent?.currentTarget).toBe(globalThis);
+    expect(windowEventCurrentTarget).toBe(globalThis);
+    expect(windowEvent?.currentTarget).toBeNull();
 
     const offscreen = globalThis.document.createElement('canvas');
 
@@ -284,6 +287,8 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(context.__state.drawImageSources).toHaveLength(1);
     expect(context.__state.drawImageSources[0]).not.toBe(image);
 
+    image.width = 64;
+    image.height = 32;
     const reloaded = new Promise<void>((resolve) => {
       image.onload = () => resolve();
     });
@@ -293,7 +298,13 @@ describe('mini-game globals and Canvas compatibility', () => {
 
     expect(Reflect.get(reloadingNativeImage as object, 'src')).toBe('assets/marker-2.png');
     expect(Reflect.get(reloadingNativeImage as object, 'complete')).toBe(false);
+    expect(Reflect.get(reloadingNativeImage as object, 'width')).toBe(64);
+    expect(Reflect.get(reloadingNativeImage as object, 'height')).toBe(32);
     await reloaded;
+    expect(image.width).toBe(64);
+    expect(image.height).toBe(32);
+    expect(Reflect.get(reloadingNativeImage as object, 'width')).toBe(64);
+    expect(Reflect.get(reloadingNativeImage as object, 'height')).toBe(32);
 
     image.src = '';
     context.drawImage(image, 0, 0);
@@ -301,7 +312,10 @@ describe('mini-game globals and Canvas compatibility', () => {
 
     expect(image.src).toBe('');
     expect(Reflect.get(clearedNativeImage as object, 'src')).toBe('');
-    expect(Reflect.get(clearedNativeImage as object, 'width')).toBe(0);
+    expect(Reflect.get(clearedNativeImage as object, 'width')).toBe(64);
+    expect(Reflect.get(clearedNativeImage as object, 'height')).toBe(32);
+    expect(image.width).toBe(64);
+    expect(image.height).toBe(32);
     expect(image.complete).toBe(true);
 
     const originalDrawImage = context.drawImage;
@@ -1905,6 +1919,60 @@ describe('Phaser mini-game runtime patch', () => {
     expect(loop.running).toBe(true);
     expect(globals.document.visibilityState).toBe('visible');
 
+    installation.dispose();
+  });
+
+  it('finishes visibility restoration when resume mutates state before throwing', () => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    const visibilityStates: string[] = [];
+    let resumes = 0;
+    const loop = {
+      started: true,
+      running: true,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        raf.stop();
+        this.running = false;
+      },
+      wake() {
+        raf.start(raf.callback, false, raf.delay);
+        this.running = true;
+      },
+    };
+    raf.start(raf.callback, false, raf.delay);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      canvas: globals.canvas,
+      loop,
+      isPaused: false,
+      pause() {
+        this.isPaused = true;
+      },
+      resume() {
+        resumes += 1;
+        this.isPaused = false;
+        throw new Error('resume observer failed');
+      },
+    } satisfies MiniGamePhaserGame;
+    globals.document.addEventListener('visibilitychange', () => {
+      visibilityStates.push(globals.document.visibilityState);
+    });
+    const installation = installPhaserMiniGameRuntime(game, { globals });
+    host.emitPause();
+
+    expect(() => host.emitResume()).toThrow('resume observer failed');
+    expect(resumes).toBe(1);
+    expect(game.isPaused).toBe(false);
+    expect(loop.running).toBe(true);
+    expect(globals.document.visibilityState).toBe('visible');
+    expect(visibilityStates).toEqual(['hidden', 'visible']);
+
+    host.emitResume();
+    expect(resumes).toBe(1);
     installation.dispose();
   });
 

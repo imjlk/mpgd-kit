@@ -388,9 +388,6 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
           this.#pausedByHost = true;
           this.#globals.document.hidden = true;
           this.#globals.document.visibilityState = 'hidden';
-        }
-
-        if (!allowDisposed) {
           throw error;
         }
 
@@ -399,7 +396,9 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
           restorationFailure = error;
         }
 
-        this.#gamePausedByHost = false;
+        if (allowDisposed) {
+          this.#gamePausedByHost = false;
+        }
       }
     }
 

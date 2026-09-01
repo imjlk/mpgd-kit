@@ -111,29 +111,32 @@ export class MiniGameEventTarget {
     event.target ??= this.#eventTarget;
     event.currentTarget = this.#eventTarget;
 
-    for (const registration of [...(this.#listeners.get(event.type) ?? [])]) {
-      if (event.immediatePropagationStopped) {
-        break;
-      }
-
-      if (!this.#listeners.get(event.type)?.includes(registration)) {
-        continue;
-      }
-
-      if (registration.once) {
-        this.removeEventListener(event.type, registration.listener);
-      }
-
-      try {
-        if (typeof registration.listener === 'function') {
-          registration.listener.call(this.#eventTarget, event);
-        } else {
-          registration.listener.handleEvent(event);
+    try {
+      for (const registration of [...(this.#listeners.get(event.type) ?? [])]) {
+        if (event.immediatePropagationStopped) {
+          break;
         }
-      } catch (error) {
-        this.#reportListenerError(error, event);
-      }
 
+        if (!this.#listeners.get(event.type)?.includes(registration)) {
+          continue;
+        }
+
+        if (registration.once) {
+          this.removeEventListener(event.type, registration.listener);
+        }
+
+        try {
+          if (typeof registration.listener === 'function') {
+            registration.listener.call(this.#eventTarget, event);
+          } else {
+            registration.listener.handleEvent(event);
+          }
+        } catch (error) {
+          this.#reportListenerError(error, event);
+        }
+      }
+    } finally {
+      event.currentTarget = null;
     }
 
     return !event.defaultPrevented;
