@@ -68,6 +68,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
   readonly #globals: MiniGameGlobalInstallation;
   readonly #raf: PhaserAnimationFrameController;
   readonly #originalStep: (time: number) => void;
+  readonly #patchedStep: (time: number) => void;
   readonly #unsubscribers: Array<() => void> = [];
   readonly #onDestroy: () => void;
   #disposed = false;
@@ -111,7 +112,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       raf.stop();
     }
 
-    raf.step = (time: number) => {
+    this.#patchedStep = (time: number) => {
       let failed = false;
       let failure: unknown;
 
@@ -122,14 +123,15 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
         failure = error;
       }
 
-      if (raf.isRunning) {
-        raf.timeOutID = globalThis.requestAnimationFrame(raf.step);
+      if (raf.isRunning && raf.step === this.#patchedStep) {
+        raf.timeOutID = globalThis.requestAnimationFrame(this.#patchedStep);
       }
 
       if (failed) {
         onFrameError(failure);
       }
     };
+    raf.step = this.#patchedStep;
 
     if (wasRunning) {
       raf.start(callback, false, delay);
@@ -193,7 +195,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.game.events?.off?.('destroy', this.#onDestroy);
     const raf = this.game.loop.raf;
 
-    if (raf === this.#raf) {
+    if (raf === this.#raf && raf.step === this.#patchedStep) {
       const wasRunning = raf.isRunning;
       const callback = raf.callback;
       const delay = raf.delay;
@@ -217,6 +219,10 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.#globals.document.hidden = true;
     this.#globals.document.visibilityState = 'hidden';
     this.#globals.document.dispatchEvent(new MiniGameEvent('visibilitychange'));
+
+    if (this.#disposed || !this.#pausedByHost) {
+      return;
+    }
 
     if (this.game.isPaused !== true && this.game.pause !== undefined) {
       this.game.pause();

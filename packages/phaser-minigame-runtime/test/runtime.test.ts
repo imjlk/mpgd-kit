@@ -737,6 +737,94 @@ describe('Phaser mini-game runtime patch', () => {
     installation.dispose();
   });
 
+  it('does not apply pause after a visibility listener disposes the runtime', () => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    let pauses = 0;
+    const loop = {
+      started: true,
+      running: true,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        this.running = false;
+      },
+      wake() {
+        this.running = true;
+      },
+    };
+    raf.start(raf.callback, false, raf.delay);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      loop,
+      isPaused: false,
+      pause() {
+        pauses += 1;
+        this.isPaused = true;
+      },
+      resume() {
+        this.isPaused = false;
+      },
+    } satisfies MiniGamePhaserGame;
+    const installation = installPhaserMiniGameRuntime(game, { globals });
+    globals.document.addEventListener('visibilitychange', () => {
+      if (globals.document.hidden) {
+        installation.dispose();
+      }
+    });
+
+    host.emitPause();
+
+    expect(installation.disposed).toBe(true);
+    expect(pauses).toBe(0);
+    expect(game.isPaused).toBe(false);
+    expect(loop.running).toBe(true);
+    expect(globals.document.visibilityState).toBe('visible');
+    expect(host.lifecycleListenerCount).toBe(0);
+    expect(host.pendingFrameCount).toBe(1);
+  });
+
+  it('keeps one RAF chain when the runtime is disposed inside a frame callback', () => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    let frames = 0;
+    let installation: ReturnType<typeof installPhaserMiniGameRuntime>;
+    const raf = createFakePhaserRaf(() => {
+      frames += 1;
+      installation.dispose();
+    });
+    const loop = {
+      started: true,
+      running: true,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        this.running = false;
+      },
+      wake() {
+        this.running = true;
+      },
+    };
+    raf.start(raf.callback, false, raf.delay);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      loop,
+    } satisfies MiniGamePhaserGame;
+    installation = installPhaserMiniGameRuntime(game, { globals });
+
+    host.flushFrame(16);
+    expect(installation.disposed).toBe(true);
+    expect(frames).toBe(1);
+    expect(host.pendingFrameCount).toBe(1);
+
+    host.flushFrame(32);
+    expect(frames).toBe(2);
+    expect(host.pendingFrameCount).toBe(1);
+  });
+
   it('requires an explicitly configured Canvas renderer', () => {
     const host = new FakeMiniGameHost();
     const globals = installMiniGameGlobals(host);
