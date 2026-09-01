@@ -3,6 +3,7 @@ import {
   copyFileSync,
   cpSync,
   existsSync,
+  constants as fsConstants,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -138,12 +139,13 @@ export function assembleMiniGameArtifact(
   const artifactParent = dirname(artifactRoot);
   mkdirSync(artifactParent, { recursive: true });
   const stagingRoot = mkdtempSync(join(artifactParent, `.${basename(artifactRoot)}-staging-`));
-  const projectFilesRoot = mkdtempSync(
-    join(artifactParent, `.${basename(artifactRoot)}-project-files-`),
-  );
+  let projectFilesRoot: string | undefined;
   const stagingInput = { ...input, artifactRoot: stagingRoot };
 
   try {
+    projectFilesRoot = mkdtempSync(
+      join(artifactParent, `.${basename(artifactRoot)}-project-files-`),
+    );
     copyMiniGameBundleOutput(input.runtimeBundleRoot, stagingRoot);
     copyMiniGameBundleOutput(input.gameBundleRoot, stagingRoot);
     copyMiniGameArtifactFile(
@@ -167,7 +169,9 @@ export function assembleMiniGameArtifact(
     return evidence;
   } finally {
     rmSync(stagingRoot, { force: true, recursive: true });
-    rmSync(projectFilesRoot, { force: true, recursive: true });
+    if (projectFilesRoot !== undefined) {
+      rmSync(projectFilesRoot, { force: true, recursive: true });
+    }
   }
 }
 
@@ -446,7 +450,7 @@ function copyMiniGameArtifactFile(source: string, destination: string, relativeP
     throw new Error(`Mini-game artifact files collide at ${relativePath}.`);
   }
   mkdirSync(dirname(destination), { recursive: true });
-  copyFileSync(source, destination);
+  copyFileSync(source, destination, fsConstants.COPYFILE_EXCL);
 }
 
 function configuredNonMiniGameOutputs(
@@ -883,6 +887,10 @@ function isReflectiveDynamicCodeGlobalRead(
         return true;
       }
       const elements = Array.isArray(appliedArguments.elements) ? appliedArguments.elements : [];
+
+      if (elements.some((element) => isAstRecord(element) && element.type === 'SpreadElement')) {
+        return true;
+      }
       kinds = receiverKinds;
       target = elements[0];
       property = elements[1];
