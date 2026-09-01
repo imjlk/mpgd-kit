@@ -44,7 +44,23 @@ assert.throws(
 );
 assert.throws(
   () => assertMiniGameRuntimeAssetOrigins(
-    createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'Object', 'metadata'),
+    createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'globalThis.Object', 'metadata'),
+    expectedMiniGameOrigins,
+  ),
+  /exactly one executable asset-origin declaration/u,
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    '(() => { const Object = { defineProperty() {} }; '
+      + `${createMiniGameOriginDeclaration(expectedMiniGameOrigins, 'Object', 'Object')} })();`,
+    expectedMiniGameOrigins,
+  ),
+  /exactly one executable asset-origin declaration/u,
+);
+assert.throws(
+  () => assertMiniGameRuntimeAssetOrigins(
+    `${exactMiniGameOriginDeclaration}\n(() => { `
+      + `${createMiniGameOriginDeclaration(['https://unexpected.example.test'])} })();`,
     expectedMiniGameOrigins,
   ),
   /exactly one executable asset-origin declaration/u,
@@ -176,8 +192,8 @@ console.log('Target artifact readiness tests passed.');
 
 function createMiniGameOriginDeclaration(
   origins: readonly string[],
-  definePropertyOwner = 'Object',
-  freezeOwner = 'Object',
+  definePropertyOwner = 'globalThis.Object',
+  freezeOwner = 'globalThis.Object',
 ): string {
   return `${definePropertyOwner}.defineProperty(globalThis,`
     + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'

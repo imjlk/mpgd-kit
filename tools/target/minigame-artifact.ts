@@ -97,6 +97,11 @@ export interface NamedMiniGameProtectedOutput {
   readonly path: string;
 }
 
+interface MiniGameAstAncestor {
+  readonly node: Record<string, unknown>;
+  readonly childKey: string;
+}
+
 export function assembleMiniGameArtifact(
   input: AssembleMiniGameArtifactInput,
 ): MiniGameArtifactEvidence {
@@ -508,8 +513,27 @@ function replaceMiniGameArtifact(stagingRoot: string, artifactRoot: string): voi
   }
 
   if (backupRoot !== undefined) {
-    rmSync(backupRoot, { force: true, recursive: true });
+    cleanupMiniGameArtifactBackup(backupRoot);
   }
+}
+
+export function cleanupMiniGameArtifactBackup(
+  backupRoot: string,
+  removeDirectory: (path: string) => void = removeMiniGameArtifactBackupDirectory,
+  reportWarning: (message: string) => void = console.warn,
+): void {
+  try {
+    removeDirectory(backupRoot);
+  } catch (error) {
+    reportWarning(
+      `The new mini-game artifact is active, but its prior backup could not be removed: `
+        + `${backupRoot} (${formatError(error)}). Remove this backup manually.`,
+    );
+  }
+}
+
+function removeMiniGameArtifactBackupDirectory(path: string): void {
+  rmSync(path, { force: true, maxRetries: 3, recursive: true, retryDelay: 100 });
 }
 
 function assertMiniGameRequiredFiles(artifactRoot: string): void {
@@ -573,7 +597,7 @@ function assertMiniGameJavaScriptAstSafety(source: string, path: string): void {
     throw new Error(`Mini-game ${path} is not valid JavaScript: ${formatError(error)}`);
   }
 
-  const ancestors: Record<string, unknown>[] = [];
+  const ancestors: MiniGameAstAncestor[] = [];
   visit(ast);
 
   function visit(input: unknown): void {
@@ -588,26 +612,30 @@ function assertMiniGameJavaScriptAstSafety(source: string, path: string): void {
     }
 
     assertSafeNode(input, ancestors, path);
-    ancestors.push(input);
     for (const [key, value] of Object.entries(input)) {
       if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
+        ancestors.push({ node: input, childKey: key });
         visit(value);
+        ancestors.pop();
       }
     }
-    ancestors.pop();
   }
 }
 
 function assertSafeNode(
   node: Record<string, unknown>,
-  ancestors: readonly Record<string, unknown>[],
+  ancestors: readonly MiniGameAstAncestor[],
   path: string,
 ): void {
   if (node.type === 'ImportExpression') {
     throw new Error(`Mini-game ${path} contains forbidden dynamic import.`);
   }
 
-  if (node.type === 'Identifier' && typeof node.name === 'string') {
+  if (
+    node.type === 'Identifier'
+    && typeof node.name === 'string'
+    && isExecutableIdentifierReference(ancestors)
+  ) {
     if (node.name === 'eval') {
       throw new Error(`Mini-game ${path} contains forbidden eval.`);
     }
@@ -619,12 +647,15 @@ function assertSafeNode(
     }
   }
 
-  if (node.type === 'MemberExpression' && node.computed === true) {
-    const propertyName = evaluateStaticString(node.property);
+  if (node.type === 'MemberExpression') {
+    const propertyName = node.computed === true
+      ? evaluateStaticString(node.property)
+      : readMemberName(node);
 
     if (
       propertyName !== undefined
       && ['eval', 'Function', 'importScripts'].includes(propertyName)
+      && (node.computed === true || isDynamicCodeGlobalObject(node.object))
       && !isTypeofReference(node, ancestors)
     ) {
       throw new Error(`Mini-game ${path} contains forbidden ${propertyName}.`);
@@ -666,10 +697,10 @@ function assertSafeNode(
 }
 
 function isComputedGlobalDestructuring(
-  ancestors: readonly Record<string, unknown>[],
+  ancestors: readonly MiniGameAstAncestor[],
 ): boolean {
-  const pattern = ancestors.at(-1);
-  const container = ancestors.at(-2);
+  const pattern = ancestors.at(-1)?.node;
+  const container = ancestors.at(-2)?.node;
 
   if (!isAstRecord(pattern) || pattern.type !== 'ObjectPattern' || !isAstRecord(container)) {
     return false;
@@ -690,6 +721,11 @@ function isGlobalObjectIdentifier(input: unknown): boolean {
     && ['globalThis', 'self', 'window'].includes(input.name);
 }
 
+function isDynamicCodeGlobalObject(input: unknown): boolean {
+  return isGlobalObjectIdentifier(input)
+    || (isAstRecord(input) && input.type === 'ThisExpression');
+}
+
 function isUnknownComputedGlobalMember(node: Record<string, unknown>): boolean {
   return node.type === 'MemberExpression'
     && node.computed === true
@@ -702,12 +738,12 @@ function isUnknownComputedGlobalMember(node: Record<string, unknown>): boolean {
 
 function isTypeofReference(
   node: Record<string, unknown>,
-  ancestors: readonly Record<string, unknown>[],
+  ancestors: readonly MiniGameAstAncestor[],
 ): boolean {
   let expression: Record<string, unknown> = node;
 
   for (let index = ancestors.length - 1; index >= 0; index -= 1) {
-    const parent = ancestors[index];
+    const parent = ancestors[index]?.node;
 
     if (parent === undefined) {
       return false;
@@ -725,6 +761,97 @@ function isTypeofReference(
     return parent.type === 'UnaryExpression'
       && parent.operator === 'typeof'
       && parent.argument === expression;
+  }
+
+  return false;
+}
+
+function isExecutableIdentifierReference(
+  ancestors: readonly MiniGameAstAncestor[],
+): boolean {
+  const immediate = ancestors.at(-1);
+
+  if (immediate === undefined) {
+    return true;
+  }
+  const parent = immediate.node;
+  const childKey = immediate.childKey;
+
+  if (
+    parent.type === 'MemberExpression'
+    && parent.computed === false
+    && childKey === 'property'
+  ) {
+    return false;
+  }
+  if (
+    ['Property', 'MethodDefinition', 'PropertyDefinition'].includes(String(parent.type))
+    && parent.computed === false
+    && childKey === 'key'
+  ) {
+    return false;
+  }
+  if (
+    (parent.type === 'LabeledStatement' && childKey === 'label')
+    || ((parent.type === 'BreakStatement' || parent.type === 'ContinueStatement')
+      && childKey === 'label')
+    || (parent.type === 'MetaProperty' && (childKey === 'meta' || childKey === 'property'))
+  ) {
+    return false;
+  }
+
+  return !isBindingIdentifier(ancestors);
+}
+
+function isBindingIdentifier(ancestors: readonly MiniGameAstAncestor[]): boolean {
+  for (let index = ancestors.length - 1; index >= 0; index -= 1) {
+    const ancestor = ancestors[index];
+
+    if (ancestor === undefined) {
+      return false;
+    }
+    const { node: parent, childKey } = ancestor;
+
+    if (
+      (parent.type === 'RestElement' && childKey === 'argument')
+      || (parent.type === 'AssignmentPattern' && childKey === 'left')
+      || (parent.type === 'ArrayPattern' && childKey === 'elements')
+      || (parent.type === 'ObjectPattern' && childKey === 'properties')
+    ) {
+      continue;
+    }
+    if (parent.type === 'Property' && childKey === 'value') {
+      const container = ancestors[index - 1]?.node;
+
+      if (container?.type === 'ObjectPattern') {
+        continue;
+      }
+    }
+    if (parent.type === 'VariableDeclarator') {
+      return childKey === 'id';
+    }
+    if (
+      parent.type === 'FunctionDeclaration'
+      || parent.type === 'FunctionExpression'
+      || parent.type === 'ArrowFunctionExpression'
+    ) {
+      return childKey === 'id' || childKey === 'params';
+    }
+    if (parent.type === 'ClassDeclaration' || parent.type === 'ClassExpression') {
+      return childKey === 'id';
+    }
+    if (parent.type === 'CatchClause') {
+      return childKey === 'param';
+    }
+    if (
+      parent.type === 'ImportSpecifier'
+      || parent.type === 'ImportDefaultSpecifier'
+      || parent.type === 'ImportNamespaceSpecifier'
+    ) {
+      return childKey === 'local';
+    }
+
+    return false;
   }
 
   return false;

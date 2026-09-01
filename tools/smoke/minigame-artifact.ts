@@ -17,6 +17,11 @@ import type { MiniGamePackageBudget, MiniGameTargetConfig } from '../target/sche
 
 const runtimeAssetOriginsProperty = '__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__';
 
+interface SmokeAstAncestor {
+  readonly node: Record<string, unknown>;
+  readonly childKey: string;
+}
+
 export interface SmokeMiniGameTargetConfig {
   readonly kind: MiniGameTargetConfig['kind'];
   readonly renderer: 'canvas';
@@ -105,16 +110,10 @@ export function assertMiniGameRuntimeAssetOrigins(
     throw new Error(`Mini-game runtime.js is not valid JavaScript: ${formatError(error)}`);
   }
 
-  const declarations: string[][] = [];
-  visitAst(ast, (node) => {
-    const origins = readRuntimeAssetOriginsDeclaration(node);
+  const declarations = readTopLevelRuntimeAssetOriginDeclarations(ast);
+  const candidateCount = countRuntimeAssetOriginCandidates(ast);
 
-    if (origins !== undefined) {
-      declarations.push(origins);
-    }
-  });
-
-  if (declarations.length !== 1) {
+  if (candidateCount !== 1 || declarations.length !== 1) {
     throw new Error(
       'Mini-game runtime.js must contain exactly one executable asset-origin declaration.',
     );
@@ -124,13 +123,53 @@ export function assertMiniGameRuntimeAssetOrigins(
   }
 }
 
+function countRuntimeAssetOriginCandidates(ast: unknown): number {
+  let count = 0;
+
+  visitAst(ast, [], (node) => {
+    if (isRuntimeAssetOriginCandidate(node)) {
+      count += 1;
+    }
+  });
+  return count;
+}
+
+function isRuntimeAssetOriginCandidate(node: Record<string, unknown>): boolean {
+  if (node.type !== 'CallExpression' || !Array.isArray(node.arguments)) {
+    return false;
+  }
+  const [target, property] = node.arguments;
+
+  return isIdentifier(target, 'globalThis')
+    && readStaticString(property) === runtimeAssetOriginsProperty;
+}
+
+function readTopLevelRuntimeAssetOriginDeclarations(ast: unknown): string[][] {
+  if (!isAstRecord(ast) || ast.type !== 'Program' || !Array.isArray(ast.body)) {
+    return [];
+  }
+
+  return ast.body.flatMap((statement) => {
+    if (
+      !isAstRecord(statement)
+      || statement.type !== 'ExpressionStatement'
+      || !isAstRecord(statement.expression)
+    ) {
+      return [];
+    }
+    const origins = readRuntimeAssetOriginsDeclaration(statement.expression);
+
+    return origins === undefined ? [] : [origins];
+  });
+}
+
 function readRuntimeAssetOriginsDeclaration(
   node: Record<string, unknown>,
 ): string[] | undefined {
   if (
     node.type !== 'CallExpression'
     || !isAstRecord(node.callee)
-    || !isNamedMember(node.callee, 'Object', 'defineProperty')
+    || !isGlobalObjectIntrinsicMember(node.callee, 'defineProperty')
     || !Array.isArray(node.arguments)
   ) {
     return undefined;
@@ -164,7 +203,7 @@ function readStaticStringArray(input: unknown): string[] | undefined {
   if (
     input.type === 'CallExpression'
     && isAstRecord(input.callee)
-    && isNamedMember(input.callee, 'Object', 'freeze')
+    && isGlobalObjectIntrinsicMember(input.callee, 'freeze')
     && Array.isArray(input.arguments)
     && input.arguments.length === 1
   ) {
@@ -192,13 +231,17 @@ function readMemberName(node: Record<string, unknown>): string | undefined {
     : undefined;
 }
 
-function isNamedMember(
+function isGlobalObjectIntrinsicMember(
   node: Record<string, unknown>,
-  objectName: string,
   memberName: string,
 ): boolean {
   return node.type === 'MemberExpression'
-    && isIdentifier(node.object, objectName)
+    && node.computed === false
+    && isAstRecord(node.object)
+    && node.object.type === 'MemberExpression'
+    && node.object.computed === false
+    && isIdentifier(node.object.object, 'globalThis')
+    && isIdentifier(node.object.property, 'Object')
     && readMemberName(node) === memberName;
 }
 
@@ -239,10 +282,17 @@ function readStaticString(input: unknown): string | undefined {
   return undefined;
 }
 
-function visitAst(input: unknown, visitor: (node: Record<string, unknown>) => void): void {
+function visitAst(
+  input: unknown,
+  ancestors: SmokeAstAncestor[],
+  visitor: (
+    node: Record<string, unknown>,
+    ancestors: readonly SmokeAstAncestor[],
+  ) => void,
+): void {
   if (Array.isArray(input)) {
     for (const item of input) {
-      visitAst(item, visitor);
+      visitAst(item, ancestors, visitor);
     }
     return;
   }
@@ -250,10 +300,12 @@ function visitAst(input: unknown, visitor: (node: Record<string, unknown>) => vo
     return;
   }
 
-  visitor(input);
+  visitor(input, ancestors);
   for (const [key, value] of Object.entries(input)) {
     if (key !== 'start' && key !== 'end' && key !== 'loc' && key !== 'range') {
-      visitAst(value, visitor);
+      ancestors.push({ node: input, childKey: key });
+      visitAst(value, ancestors, visitor);
+      ancestors.pop();
     }
   }
 }

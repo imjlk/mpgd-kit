@@ -83,6 +83,8 @@ export default defineConfig(({ mode }) => {
 });
 
 function createRuntimeAssetOriginsBootstrap(serializedOrigins: string): string {
-  return 'Object.defineProperty(globalThis,"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
-    + `{configurable:true,enumerable:false,writable:false,value:Object.freeze(${serializedOrigins})});`;
+  return 'globalThis.Object.defineProperty(globalThis,'
+    + '"__MPGD_MINIGAME_RUNTIME_ASSET_ORIGINS__",'
+    + '{configurable:true,enumerable:false,writable:false,'
+    + `value:globalThis.Object.freeze(${serializedOrigins})});`;
 }

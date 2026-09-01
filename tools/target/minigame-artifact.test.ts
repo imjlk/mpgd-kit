@@ -17,6 +17,7 @@ import {
   assertDisjointMiniGameTargetOutputs,
   assertMiniGameArtifactOutputDirectory,
   assertMiniGameJavaScriptSafety,
+  cleanupMiniGameArtifactBackup,
   miniGameArtifactEvidenceFileName,
   miniGameEffectiveTargetConfigFileName,
   miniGameIconManifestFileName,
@@ -150,6 +151,26 @@ try {
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-label.js'));
   write(
+    'safe-property-names.js',
+    'const record = { eval: false, Function: "label", importScripts() {} }; '
+      + 'record.Function; Object.Function;\n',
+  );
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-property-names.js'));
+  write(
+    'safe-bindings.js',
+    'const { eval: localEval, Function: LocalFunction } = { eval: 1, Function: 2 }; '
+      + 'void localEval; void LocalFunction;\n',
+  );
+  assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
+  rmSync(join(root, 'safe-bindings.js'));
+  write('unsafe.js', 'globalThis.eval("untrusted");\n');
+  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden eval/u);
+  rmSync(join(root, 'unsafe.js'));
+  write('unsafe.js', 'this.Function("return 1")();\n');
+  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden Function/u);
+  rmSync(join(root, 'unsafe.js'));
+  write(
     'safe-destructuring.js',
     "const input = { value: 1 }; const key = 'value'; const { [key]: value } = input; void value;\n",
   );
@@ -223,6 +244,21 @@ try {
   );
   assert.equal(readFileSync(join(artifactRoot, 'sentinel.txt'), 'utf8'), 'prior verified artifact');
   assert.deepEqual(readdirSync(join(projectRoot, 'artifacts')), ['wechat']);
+
+  const backupWarnings: string[] = [];
+  assert.doesNotThrow(
+    () => cleanupMiniGameArtifactBackup(
+      '/artifact-backup',
+      () => {
+        throw new Error('locked by scanner');
+      },
+      (message) => backupWarnings.push(message),
+    ),
+  );
+  assert.deepEqual(backupWarnings, [
+    'The new mini-game artifact is active, but its prior backup could not be removed: '
+      + '/artifact-backup (locked by scanner). Remove this backup manually.',
+  ]);
 
   const validationRoot = join(transactionRoot, 'target-validation');
   const validationGameApp = join(validationRoot, 'game-app');
