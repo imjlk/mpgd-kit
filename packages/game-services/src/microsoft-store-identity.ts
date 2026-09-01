@@ -136,15 +136,18 @@ export async function resolveMicrosoftStoreIdentityCredentials(input: {
   try {
     let response: Response;
     try {
-      response = await input.authority.fetch(microsoftStoreIdentityCredentialsRequestUrl, {
-        method: 'POST',
-        headers: {
-          Accept: 'application/json',
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(request),
-        signal: abort.signal,
-      });
+      response = await raceWithAbort(
+        input.authority.fetch(microsoftStoreIdentityCredentialsRequestUrl, {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(request),
+          signal: abort.signal,
+        }),
+        abort.signal,
+      );
     } catch (cause) {
       if (isAbortCause(abort.signal, cause)) {
         throw abort.signal.reason;
@@ -313,7 +316,7 @@ async function readBoundedJson(
       if (signal.aborted) {
         throw signal.reason;
       }
-      const result = await reader.read();
+      const result = await raceWithAbort(reader.read(), signal);
       if (result.done) {
         break;
       }
@@ -327,8 +330,14 @@ async function readBoundedJson(
       chunks.push(result.value);
     }
   } finally {
-    await reader.cancel().catch(() => undefined);
-    reader.releaseLock();
+    await raceWithAbort(reader.cancel(), signal).catch(() => undefined);
+    try {
+      reader.releaseLock();
+    } catch (cause) {
+      if (!signal.aborted) {
+        throw cause;
+      }
+    }
     if (signal.aborted) {
       throw signal.reason;
     }
@@ -361,10 +370,36 @@ function authorityHttpStatusError(status: number): Error {
 }
 
 async function discardResponseBody(response: Response, signal: AbortSignal): Promise<void> {
-  await response.body?.cancel().catch(() => undefined);
+  if (response.body !== null) {
+    await raceWithAbort(response.body.cancel(), signal).catch(() => undefined);
+  }
   if (signal.aborted) {
     throw signal.reason;
   }
+}
+
+function raceWithAbort<T>(operation: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) {
+    return Promise.race([operation, Promise.reject(signal.reason)]);
+  }
+
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => {
+      signal.removeEventListener('abort', onAbort);
+      reject(signal.reason);
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+    operation.then(
+      (value) => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(value);
+      },
+      (cause: unknown) => {
+        signal.removeEventListener('abort', onAbort);
+        reject(cause);
+      },
+    );
+  });
 }
 
 function isAbortCause(signal: AbortSignal, cause: unknown): boolean {

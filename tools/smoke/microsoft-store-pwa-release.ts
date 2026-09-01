@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { resolve } from 'node:path';
+import { runInNewContext } from 'node:vm';
 
 import {
   assertMicrosoftStorePwaProvenance,
@@ -74,8 +75,71 @@ assert.match(worker, /name\.startsWith\(CACHE_PREFIX\)/u);
 assert.match(worker, /CACHE_SCOPE = encodeURIComponent\(self\.registration\.scope\)/u);
 assert.match(worker, /cache\.match\(request, \{ ignoreSearch: true \}\)/u);
 assert.match(worker, /if \(!response\.redirected\)/u);
-assert.match(worker, /new Response\(response\.body,/u);
+assert.match(worker, /const APP_BASE_URL = self\.registration\.scope/u);
+assert.match(worker, /<base href=/u);
+assert.match(worker, /headers\.delete\('content-length'\)/u);
 assert.doesNotMatch(worker, /return await cache\.match\(INDEX_URL\)/u);
+
+const workerListeners = new Map<string, (event: unknown) => void>();
+const redirectedIndex = new Response(
+  '<!doctype html><html><head data-shell="true"></head><body></body></html>',
+  {
+    headers: {
+      'Content-Encoding': 'gzip',
+      'Content-Length': '999',
+      'Content-Type': 'text/html; charset=utf-8',
+    },
+  },
+);
+Object.defineProperty(redirectedIndex, 'redirected', { value: true });
+runInNewContext(worker, {
+  Headers,
+  Request,
+  Response,
+  URL,
+  caches: {
+    async keys() {
+      return [];
+    },
+    async open() {
+      return {
+        async match() {
+          return redirectedIndex;
+        },
+      };
+    },
+  },
+  fetch,
+  self: {
+    addEventListener(type: string, listener: (event: unknown) => void) {
+      workerListeners.set(type, listener);
+    },
+    clients: { claim: () => Promise.resolve() },
+    location: { origin: 'https://example.test' },
+    registration: { scope: 'https://example.test/game/' },
+  },
+});
+let nestedNavigationResponse: Promise<Response> | undefined;
+const fetchListener = workerListeners.get('fetch');
+assert(fetchListener !== undefined);
+fetchListener({
+  request: {
+    method: 'GET',
+    mode: 'navigate',
+    url: 'https://example.test/game/level/',
+  },
+  respondWith(response: Promise<Response>) {
+    void (nestedNavigationResponse = response);
+  },
+});
+assert(nestedNavigationResponse !== undefined);
+const normalizedNavigation = await nestedNavigationResponse;
+assert.match(
+  await normalizedNavigation.text(),
+  /<head data-shell="true"><base href="https:\/\/example\.test\/game\/">/u,
+);
+assert.equal(normalizedNavigation.headers.get('content-encoding'), null);
+assert.equal(normalizedNavigation.headers.get('content-length'), null);
 assert.throws(
   () => createMicrosoftStorePwaReleaseEvidence({
     ...provenance,

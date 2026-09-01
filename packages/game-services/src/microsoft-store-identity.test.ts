@@ -224,16 +224,8 @@ await assertRejects(
 
 const timeoutError = await captureRejection(resolveMicrosoftStoreIdentityCredentials({
   authority: {
-    fetch(_input, init) {
-      return Promise.resolve(new Response(new ReadableStream({
-        start(controller) {
-          init?.signal?.addEventListener(
-            'abort',
-            () => controller.error(init.signal?.reason),
-            { once: true },
-          );
-        },
-      })));
+    fetch() {
+      return new Promise<Response>(() => undefined);
     },
   },
   gameId: 'ttokdoku',
@@ -241,6 +233,31 @@ const timeoutError = await captureRejection(resolveMicrosoftStoreIdentityCredent
   timeoutMs: 1,
 }));
 assertMatch(timeoutError, /timed out/u);
+
+const stalledFetchAbort = new AbortController();
+const stalledFetchAbortReason = new Error('caller stopped a stalled authority');
+const stalledFetch = resolveMicrosoftStoreIdentityCredentials({
+  authority: {
+    fetch: () => new Promise<Response>(() => undefined),
+  },
+  gameId: request.gameId,
+  playerId: request.playerId,
+  signal: stalledFetchAbort.signal,
+});
+stalledFetchAbort.abort(stalledFetchAbortReason);
+await assertRejectsSame(stalledFetch, stalledFetchAbortReason);
+
+const stalledBodyTimeout = await captureRejection(resolveMicrosoftStoreIdentityCredentials({
+  authority: {
+    fetch: () => Promise.resolve(new Response(new ReadableStream({
+      pull: () => new Promise<void>(() => undefined),
+    }))),
+  },
+  gameId: request.gameId,
+  playerId: request.playerId,
+  timeoutMs: 1,
+}));
+assertMatch(stalledBodyTimeout, /timed out/u);
 
 const wrappedBodyAbort = new AbortController();
 const wrappedBodyAbortReason = new Error('caller stopped response streaming');
