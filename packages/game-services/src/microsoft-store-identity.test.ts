@@ -61,6 +61,18 @@ assertThrows(
   /scope does not match/u,
 );
 
+assertThrows(
+  () => parseMicrosoftStoreIdentityCredentialsResponse({
+    schema: microsoftStoreIdentityCredentialsSchema,
+    gameId: request.gameId,
+    playerId: request.playerId,
+    accessToken: 'x'.repeat(4_097),
+    userStoreId: 'user-store-id',
+    accountBindingId: 'account-binding-id',
+  }),
+  /access token is invalid/u,
+);
+
 let capturedRequest: unknown;
 const credentials = await resolveMicrosoftStoreIdentityCredentials({
   authority: {
@@ -96,6 +108,24 @@ await assertRejects(
     playerId: 'microsoft.0123456789abcdef',
   }),
   'MICROSOFT_STORE_ACCOUNT_LINK_REQUIRED',
+);
+
+const errorResponseAbort = new AbortController();
+const errorResponseAbortReason = new Error('caller stopped error response cleanup');
+await assertRejectsSame(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () => Promise.resolve(new Response(new ReadableStream({
+        cancel() {
+          errorResponseAbort.abort(errorResponseAbortReason);
+        },
+      }), { status: 404 })),
+    },
+    gameId: request.gameId,
+    playerId: request.playerId,
+    signal: errorResponseAbort.signal,
+  }),
+  errorResponseAbortReason,
 );
 
 await assertRejects(
@@ -230,6 +260,30 @@ for (const contentLength of [
     'MICROSOFT_STORE_IDENTITY_RESPONSE_INVALID',
   );
 }
+
+const malformedUtf8Prefix = new TextEncoder().encode(
+  `{"schema":"${microsoftStoreIdentityCredentialsSchema}",`
+    + `"gameId":"${request.gameId}","playerId":"${request.playerId}",`
+    + '"accessToken":"',
+);
+const malformedUtf8Suffix = new TextEncoder().encode(
+  '","userStoreId":"user-store-id","accountBindingId":"account-binding-id"}',
+);
+await assertRejects(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () => Promise.resolve(new Response(new Uint8Array([
+        ...malformedUtf8Prefix,
+        0xc3,
+        0x28,
+        ...malformedUtf8Suffix,
+      ]))),
+    },
+    gameId: request.gameId,
+    playerId: request.playerId,
+  }),
+  'MICROSOFT_STORE_IDENTITY_RESPONSE_INVALID',
+);
 
 const forbidden = await captureRejection(
   resolveMicrosoftStoreIdentityCredentials({

@@ -88,7 +88,7 @@ export function parseMicrosoftStoreIdentityCredentialsResponse(
     schema: microsoftStoreIdentityCredentialsSchema,
     gameId: requireGameId(record.gameId),
     playerId: requireText(record.playerId, 'response playerId', 256),
-    accessToken: requireToken(record.accessToken, 'Microsoft Store access token', 8_192),
+    accessToken: requireToken(record.accessToken, 'Microsoft Store access token', 4_096),
     userStoreId: requireToken(record.userStoreId, 'Microsoft Store User Store ID', 4_096),
     accountBindingId: requireText(
       record.accountBindingId,
@@ -154,6 +154,9 @@ export async function resolveMicrosoftStoreIdentityCredentials(input: {
 
     if (!response.ok) {
       await discardResponseBody(response);
+      if (abort.signal.aborted) {
+        throw abort.signal.reason;
+      }
       const accountLinkRequired = response.status === 404 || response.status === 409;
       const code = accountLinkRequired
         ? 'MICROSOFT_STORE_ACCOUNT_LINK_REQUIRED'
@@ -309,7 +312,7 @@ async function readBoundedJson(
     bytes.set(chunk, offset);
     offset += chunk.byteLength;
   }
-  return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
+  return JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)) as unknown;
 }
 
 function unavailable(cause?: unknown): MicrosoftStoreIdentityAuthorityError {

@@ -1,5 +1,5 @@
 ---
-npm/@mpgd/game-services: minor (Added)
+npm/@mpgd/game-services: minor
 ---
 
 Add a strict, game-scoped Microsoft Store identity authority protocol for sharing one private
