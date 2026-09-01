@@ -14,6 +14,8 @@ import { dirname, join } from 'node:path';
 import type { GeneratedTargetIcons } from '../icons/types';
 import {
   assembleMiniGameArtifact,
+  assertDisjointMiniGameTargetOutputs,
+  assertMiniGameArtifactOutputDirectory,
   assertMiniGameJavaScriptSafety,
   miniGameArtifactEvidenceFileName,
   miniGameEffectiveTargetConfigFileName,
@@ -21,6 +23,7 @@ import {
   verifyMiniGameArtifactEvidence,
   writeMiniGameArtifactEvidence,
 } from './minigame-artifact';
+import { validatePlatformTargetsFile } from './validate-platform-targets';
 
 const root = mkdtempSync(join(tmpdir(), 'mpgd-minigame-evidence-'));
 const transactionRoot = mkdtempSync(join(tmpdir(), 'mpgd-minigame-transaction-'));
@@ -124,6 +127,64 @@ try {
   );
   assert.equal(readFileSync(join(artifactRoot, 'sentinel.txt'), 'utf8'), 'prior verified artifact');
   assert.deepEqual(readdirSync(join(projectRoot, 'artifacts')), ['wechat']);
+
+  const validationRoot = join(transactionRoot, 'target-validation');
+  const validationGameApp = join(validationRoot, 'game-app');
+  const validationConfigPath = join(validationRoot, 'mpgd.targets.json');
+  mkdirSync(validationGameApp, { recursive: true });
+  writeFileSync(validationConfigPath, `${JSON.stringify({
+    targets: {
+      wechat: {
+        kind: 'wechat-minigame',
+        gameApp: 'game-app',
+        adapter: 'wechat',
+        output: 'artifacts/release-manifest.json',
+        renderer: 'canvas',
+        orientation: 'landscape',
+        experimental: true,
+        packageBudget: budget,
+      },
+    },
+  }, null, 2)}\n`);
+  assert.throws(
+    () => validatePlatformTargetsFile(validationConfigPath),
+    /Mini-game artifact output must not overlap generated output/u,
+  );
+
+  const resolveValidationPath = (path: string) => join(validationRoot, path);
+  const miniGameTarget = {
+    kind: 'wechat-minigame',
+    gameApp: 'game-app',
+    adapter: 'wechat',
+    output: 'artifacts/wechat',
+    renderer: 'canvas',
+    orientation: 'landscape',
+    experimental: true,
+    packageBudget: budget,
+  } as const;
+  assert.doesNotThrow(
+    () => assertDisjointMiniGameTargetOutputs({ wechat: miniGameTarget }, resolveValidationPath),
+  );
+  assert.throws(
+    () => assertDisjointMiniGameTargetOutputs({
+      wechat: miniGameTarget,
+      tiktok: {
+        ...miniGameTarget,
+        kind: 'tiktok-minigame',
+        adapter: 'tiktok',
+        output: 'artifacts/wechat/nested',
+      },
+    }, resolveValidationPath),
+    /Mini-game artifact outputs must not overlap/u,
+  );
+
+  const fileOutput = join(validationRoot, 'artifacts', 'file-output');
+  mkdirSync(dirname(fileOutput), { recursive: true });
+  writeFileSync(fileOutput, 'not a directory');
+  assert.throws(
+    () => assertMiniGameArtifactOutputDirectory(fileOutput, validationRoot),
+    /must only traverse directories/u,
+  );
 } finally {
   rmSync(root, { force: true, recursive: true });
   rmSync(transactionRoot, { force: true, recursive: true });

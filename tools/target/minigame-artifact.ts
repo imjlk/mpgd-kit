@@ -8,6 +8,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -21,7 +22,7 @@ import {
   listMiniGameArtifactFiles,
   type MiniGamePackageSizeResult,
 } from './minigame-package-budget';
-import type { MiniGamePackageBudget, MiniGameTargetConfig } from './schemas';
+import type { MiniGamePackageBudget, MiniGameTargetConfig, PlatformTargetConfig } from './schemas';
 
 export const miniGameArtifactEvidenceFileName = 'mpgd-minigame-artifact.json';
 export const miniGameEffectiveTargetConfigFileName = 'mpgd-effective-target-config.json';
@@ -78,6 +79,11 @@ export interface AssembleMiniGameArtifactInput extends WriteMiniGameArtifactEvid
     readonly marker: string;
     readonly owner: string;
   }>[];
+}
+
+export interface NamedMiniGameProtectedOutput {
+  readonly name: string;
+  readonly path: string;
 }
 
 export function assembleMiniGameArtifact(
@@ -140,8 +146,21 @@ export function assertMiniGameArtifactOutputDirectory(
   let candidate = artifact;
 
   while (candidate !== project) {
-    if (existsSync(candidate) && lstatSync(candidate).isSymbolicLink()) {
-      throw new Error(`Mini-game artifact output must not traverse a symbolic link: ${candidate}`);
+    if (existsSync(candidate)) {
+      const status = lstatSync(candidate);
+
+      if (status.isSymbolicLink()) {
+        throw new Error(
+          'Mini-game artifact output must not traverse a symbolic link: '
+            + candidate,
+        );
+      }
+      if (!status.isDirectory()) {
+        throw new Error(
+          'Mini-game artifact output must only traverse directories: '
+            + candidate,
+        );
+      }
     }
 
     const parent = dirname(candidate);
@@ -150,6 +169,58 @@ export function assertMiniGameArtifactOutputDirectory(
       throw new Error(`Mini-game artifact output is outside its project root: ${artifactRoot}`);
     }
     candidate = parent;
+  }
+}
+
+export function assertDisjointMiniGameTargetOutputs(
+  targets: Readonly<Record<string, PlatformTargetConfig>>,
+  resolvePath: (path: string) => string,
+  protectedOutputs: readonly NamedMiniGameProtectedOutput[] = [],
+): void {
+  const outputs = Object.entries(targets).flatMap(([name, target]) => {
+    return target.kind === 'wechat-minigame' || target.kind === 'tiktok-minigame'
+      ? [{ name, path: resolvePath(target.output) }]
+      : [];
+  });
+  const projectRoot = resolvePath('.');
+
+  for (const output of outputs) {
+    assertMiniGameArtifactOutputDirectory(output.path, projectRoot);
+  }
+
+  const canonicalOutputs = outputs.map((output) => ({
+    ...output,
+    canonicalPath: canonicalizeThroughExistingAncestor(output.path),
+  }));
+
+  for (const [index, output] of canonicalOutputs.entries()) {
+    for (const candidate of canonicalOutputs.slice(index + 1)) {
+      if (pathsOverlap(output.canonicalPath, candidate.canonicalPath)) {
+        throw new Error(
+          `Mini-game artifact outputs must not overlap: ${output.name} (${output.path}) and ${candidate.name} (${candidate.path}).`,
+        );
+      }
+    }
+  }
+
+  const generatedOutputs = [
+    { name: 'generated icon cache', path: resolvePath('.mpgd/generated/icons') },
+    { name: 'release output', path: resolvePath('release-output') },
+    ...configuredNonMiniGameOutputs(targets, resolvePath),
+    ...protectedOutputs,
+  ].map((output) => ({
+    ...output,
+    canonicalPath: canonicalizeThroughExistingAncestor(output.path),
+  }));
+
+  for (const output of canonicalOutputs) {
+    for (const generatedOutput of generatedOutputs) {
+      if (pathsOverlap(output.canonicalPath, generatedOutput.canonicalPath)) {
+        throw new Error(
+          `Mini-game artifact output must not overlap generated output: ${output.name} (${output.path}) and ${generatedOutput.name} (${generatedOutput.path}).`,
+        );
+      }
+    }
   }
 }
 
@@ -288,6 +359,76 @@ export function stageMiniGameIconEvidence(
     mkdirSync(dirname(destination), { recursive: true });
     copyFileSync(source, destination);
   }
+}
+
+function configuredNonMiniGameOutputs(
+  targets: Readonly<Record<string, PlatformTargetConfig>>,
+  resolvePath: (path: string) => string,
+): readonly NamedMiniGameProtectedOutput[] {
+  return Object.entries(targets).flatMap(([name, target]) => {
+    const viteOutput = {
+      name: `${name} Vite output`,
+      path: resolvePath(join(target.gameApp, 'dist')),
+    };
+
+    switch (target.kind) {
+      case 'web':
+        return [
+          viteOutput,
+          { name: `${name} web artifact output`, path: resolvePath(target.output) },
+          ...(target.staticDir === undefined
+            ? []
+            : [{ name: `${name} web staticDir`, path: resolvePath(target.staticDir) }]),
+        ];
+      case 'capacitor-android':
+      case 'capacitor-ios':
+        return [
+          viteOutput,
+          { name: `${name} web staging output`, path: resolvePath(target.webDir) },
+        ];
+      case 'apps-in-toss':
+      case 'devvit-web':
+        return [
+          viteOutput,
+          { name: `${name} web staging output`, path: resolvePath(target.webDir) },
+          {
+            name: `${name} wrapper build output`,
+            path: resolvePath(join(target.wrapperApp, 'dist')),
+          },
+        ];
+      case 'wechat-minigame':
+      case 'tiktok-minigame':
+        return [viteOutput];
+    }
+  });
+}
+
+function pathsOverlap(first: string, second: string): boolean {
+  return isPathWithin(first, second) || isPathWithin(second, first);
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const path = relative(root, candidate);
+  return path === '' || (!path.startsWith('..') && !isAbsolute(path));
+}
+
+function canonicalizeThroughExistingAncestor(path: string): string {
+  const normalizedPath = resolve(path);
+  const suffix: string[] = [];
+  let existingAncestor = normalizedPath;
+
+  while (!existsSync(existingAncestor)) {
+    const parent = dirname(existingAncestor);
+
+    if (parent === existingAncestor) {
+      throw new Error(`Cannot resolve an existing ancestor for mini-game output: ${path}`);
+    }
+
+    suffix.unshift(basename(existingAncestor));
+    existingAncestor = parent;
+  }
+
+  return resolve(realpathSync(existingAncestor), ...suffix);
 }
 
 function copyMiniGameBundleOutput(sourceRoot: string, artifactRoot: string): void {

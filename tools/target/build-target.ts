@@ -36,7 +36,7 @@ import {
   assertMicrosoftStorePwaProvenance,
   writeMicrosoftStorePwaArtifacts,
 } from './microsoft-store-pwa';
-import { assembleMiniGameArtifact } from './minigame-artifact';
+import { assembleMiniGameArtifact, assertDisjointMiniGameTargetOutputs } from './minigame-artifact';
 import { wechatStagingAppId, writeWechatMiniGameProjectFiles } from './minigame-project-files';
 import { normalizeMonetizationCatalogEnv } from './monetization-catalog-env';
 import { assertNativeReleaseIdentity } from './native-release-identity';
@@ -92,6 +92,13 @@ if (target === undefined) {
 
 assertPlatformTargetBuildEmitterAvailable(target, targetName);
 assertDisjointWebTargetOutputs(config.targets, targetPath, [
+  { name: 'release manifest', path: releaseManifestPath(configBaseDir) },
+  {
+    name: 'effective target config output',
+    path: effectiveTargetConfigOutputDir(configBaseDir),
+  },
+]);
+assertDisjointMiniGameTargetOutputs(config.targets, targetPath, [
   { name: 'release manifest', path: releaseManifestPath(configBaseDir) },
   {
     name: 'effective target config output',
