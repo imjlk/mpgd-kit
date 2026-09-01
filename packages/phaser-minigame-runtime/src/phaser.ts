@@ -33,6 +33,7 @@ interface PhaserEventEmitterLike {
 export interface MiniGamePhaserGame {
   readonly config?: Readonly<{ readonly renderType?: number }>;
   readonly renderer?: Readonly<{ readonly type?: number }> | null;
+  readonly canvas: unknown;
   readonly loop: PhaserTimeStep;
   readonly events?: PhaserEventEmitterLike;
   isPaused?: boolean;
@@ -103,7 +104,7 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.host = globals.host;
     this.#globals = globals;
     this.#onFrameError = onFrameError;
-    assertCanvasRenderer(game);
+    assertCanvasRenderer(game, globals.canvas);
     assertLifecycleHookPair(this.host);
 
     if (game.loop.forceSetTimeOut) {
@@ -521,7 +522,10 @@ export function installPhaserMiniGameRuntime(
   }
 }
 
-function assertCanvasRenderer(game: MiniGamePhaserGame): void {
+function assertCanvasRenderer(
+  game: MiniGamePhaserGame,
+  primaryCanvas: MiniGameGlobalInstallation['canvas'],
+): void {
   const configuredType = game.config?.renderType;
   const rendererType = game.renderer?.type;
 
@@ -532,6 +536,13 @@ function assertCanvasRenderer(game: MiniGamePhaserGame): void {
     throw new MiniGameRuntimeError(
       'MINIGAME_CANVAS_RENDERER_REQUIRED',
       'Mini-game Phaser runtime can only be installed on an explicit Canvas renderer game.',
+    );
+  }
+
+  if (game.canvas !== primaryCanvas) {
+    throw new MiniGameRuntimeError(
+      'MINIGAME_PHASER_CANVAS_MISMATCH',
+      'Mini-game Phaser runtime must use the globals installation primary canvas.',
     );
   }
 }

@@ -86,18 +86,27 @@ export class MiniGameImageElement extends MiniGameEventTarget {
   }
 
   removeAttribute(name: string): void {
-    if (name === 'crossOrigin') {
+    const normalizedName = name.toLowerCase();
+
+    if (normalizedName === 'crossorigin') {
       this.crossOrigin = null;
+      return;
+    }
+
+    if (normalizedName === 'src') {
+      this.src = '';
     }
   }
 
   setAttribute(name: string, value: string): void {
-    if (name === 'crossOrigin') {
+    const normalizedName = name.toLowerCase();
+
+    if (normalizedName === 'crossorigin') {
       this.crossOrigin = value;
       return;
     }
 
-    if (name === 'src') {
+    if (normalizedName === 'src') {
       this.src = value;
     }
   }
@@ -120,6 +129,15 @@ export class MiniGameImageElement extends MiniGameEventTarget {
           ),
         );
         return;
+      }
+
+      if (this.#replaceBeforeNextLoad && this.#createNativeImage !== undefined) {
+        try {
+          this.#replaceNativeImage();
+        } catch (error) {
+          this.#scheduleFailure(generation, error);
+          return;
+        }
       }
 
       this.complete = true;

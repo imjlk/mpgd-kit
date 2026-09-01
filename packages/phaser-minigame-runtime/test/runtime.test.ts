@@ -370,6 +370,17 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(loadEvents).toBe(1);
     expect(image.complete).toBe(true);
     expect(image.width).toBe(2);
+
+    image.src = 'assets/cancelled.png';
+    expect(host.completeImageLoads).toHaveLength(3);
+    image.removeAttribute('SRC');
+    expect(image.src).toBe('');
+    expect(image.complete).toBe(true);
+    expect(image.width).toBe(0);
+    host.completeImageLoads[2]?.();
+    expect(loadEvents).toBe(1);
+    expect(image.src).toBe('');
+    expect(image.width).toBe(0);
   });
 
   it('resolves percentage vertical margins against the containing width', () => {
@@ -1218,6 +1229,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
     } satisfies MiniGamePhaserGame;
     raf.start(raf.callback, false, raf.delay);
@@ -1270,6 +1282,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -1373,6 +1386,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: initiallyPaused,
       pause() {
@@ -1405,6 +1419,7 @@ describe('Phaser mini-game runtime patch', () => {
       return {
         config: { renderType: 1 },
         renderer: { type: 1 },
+        canvas: globals.canvas,
         loop: {
           started: false,
           running: false,
@@ -1450,6 +1465,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -1503,6 +1519,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -1550,6 +1567,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -1600,6 +1618,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -1651,6 +1670,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -1708,6 +1728,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -1769,6 +1790,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -1821,6 +1843,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -1878,6 +1901,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -1928,6 +1952,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
     } satisfies MiniGamePhaserGame;
     installation = installPhaserMiniGameRuntime(game, { globals });
@@ -1947,6 +1972,7 @@ describe('Phaser mini-game runtime patch', () => {
     const globals = installMiniGameGlobals(host);
     const raf = createFakePhaserRaf(() => undefined);
     const gameWithoutRendererConfig = {
+      canvas: globals.canvas,
       loop: {
         started: false,
         running: false,
@@ -1962,6 +1988,31 @@ describe('Phaser mini-game runtime patch', () => {
     );
   });
 
+  it('requires the Phaser game to use the globals primary canvas', () => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      canvas: globals.document.createElement('canvas'),
+      loop: {
+        started: false,
+        running: false,
+        forceSetTimeOut: false,
+        raf,
+        sleep: () => undefined,
+        wake: () => undefined,
+      },
+    } satisfies MiniGamePhaserGame;
+
+    expect(() => installPhaserMiniGameRuntime(game, { globals })).toThrow(
+      'must use the globals installation primary canvas',
+    );
+    expect(raf.isRunning).toBe(false);
+    expect(host.lifecycleListenerCount).toBe(0);
+  });
+
   it('requires lifecycle pause and resume hooks as a pair', () => {
     const host = new FakeMiniGameHost();
     Reflect.set(host, 'onResume', undefined);
@@ -1971,6 +2022,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop: {
         started: false,
         running: false,
@@ -2011,6 +2063,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
     } satisfies MiniGamePhaserGame;
 
@@ -2052,6 +2105,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
@@ -2123,6 +2177,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       events,
       isPaused: false,
@@ -2176,6 +2231,7 @@ describe('Phaser mini-game runtime patch', () => {
     const game = {
       config: { renderType: 1 },
       renderer: { type: 1 },
+      canvas: globals.canvas,
       loop,
       isPaused: false,
       pause() {
