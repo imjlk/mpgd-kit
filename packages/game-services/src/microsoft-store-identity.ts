@@ -300,6 +300,9 @@ async function readBoundedJson(
     }
   }
   if (response.body === null) {
+    if (signal.aborted) {
+      throw signal.reason;
+    }
     throw new TypeError('Microsoft Store identity response body is missing.');
   }
   const reader = response.body.getReader();

@@ -181,6 +181,23 @@ await assertRejectsSame(
   callerAbortReason,
 );
 
+const emptyBodyAbort = new AbortController();
+const emptyBodyAbortReason = new Error('caller stopped before the empty response body');
+await assertRejectsSame(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () => {
+        emptyBodyAbort.abort(emptyBodyAbortReason);
+        return Promise.resolve(new Response(null));
+      },
+    },
+    gameId: request.gameId,
+    playerId: request.playerId,
+    signal: emptyBodyAbort.signal,
+  }),
+  emptyBodyAbortReason,
+);
+
 await assertRejectsSame(
   resolveMicrosoftStoreIdentityCredentials({
     authority: {
