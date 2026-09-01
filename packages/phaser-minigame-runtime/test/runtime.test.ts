@@ -38,6 +38,27 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(globalThis.document.getElementById('mpgd-game-canvas')).toBe(installation.canvas);
     expect(installation.canvas).toBeInstanceOf(MiniGameCanvasElement);
     expect(host.createdCanvasTypes).toEqual(['primary']);
+    let windowListenerThis: unknown;
+    let windowEvent: MiniGameEvent | undefined;
+    const windowListener = function listener(this: unknown, event: MiniGameEvent): void {
+      windowListenerThis = this;
+      windowEvent = event;
+    };
+    const addWindowListener = Reflect.get(globalThis, 'addEventListener');
+    const focusWindow = Reflect.get(globalThis, 'focus');
+
+    expect(typeof addWindowListener).toBe('function');
+    expect(typeof focusWindow).toBe('function');
+
+    if (typeof addWindowListener !== 'function' || typeof focusWindow !== 'function') {
+      throw new Error('Mini-game window event globals were not installed.');
+    }
+
+    Reflect.apply(addWindowListener, globalThis, ['focus', windowListener]);
+    Reflect.apply(focusWindow, globalThis, []);
+    expect(windowListenerThis).toBe(globalThis);
+    expect(windowEvent?.target).toBe(globalThis);
+    expect(windowEvent?.currentTarget).toBe(globalThis);
 
     const offscreen = globalThis.document.createElement('canvas');
 
@@ -431,6 +452,59 @@ describe('mini-game requestAnimationFrame and transport', () => {
     );
   });
 
+  it.each(['load', 'error'] as const)(
+    'stops an old %s lifecycle when its terminal callback starts a replacement request',
+    async (terminal) => {
+      const host = new FakeMiniGameHost();
+      const initialPath = terminal === 'load'
+        ? 'assets/initial.json'
+        : 'assets/missing.json';
+      host.localFiles.set('assets/initial.json', encodeText('{"stage":"initial"}'));
+      host.localFiles.set('assets/replacement.json', encodeText('{"stage":"replacement"}'));
+      const request = new MiniGameXMLHttpRequest(host);
+      const loadendResponses: unknown[] = [];
+      let replacementStarted = false;
+      let completeReplacement: () => void = () => undefined;
+      const completed = new Promise<void>((resolve) => {
+        completeReplacement = resolve;
+      });
+      const startReplacement = (): void => {
+        replacementStarted = true;
+        request.open('GET', 'assets/replacement.json');
+        request.send();
+      };
+      request.onload = () => {
+        if (!replacementStarted && terminal === 'load') {
+          startReplacement();
+        }
+      };
+      request.onerror = () => {
+        if (!replacementStarted && terminal === 'error') {
+          startReplacement();
+        }
+      };
+      request.onloadend = () => {
+        loadendResponses.push(request.response);
+
+        if (
+          typeof request.response === 'object'
+          && request.response !== null
+          && Reflect.get(request.response, 'stage') === 'replacement'
+        ) {
+          completeReplacement();
+        }
+      };
+      request.open('GET', initialPath);
+      request.responseType = 'json';
+
+      request.send();
+      await completed;
+
+      expect(loadendResponses).toEqual([{ stage: 'replacement' }]);
+      expect(request.status).toBe(200);
+    },
+  );
+
   it('allows only configured HTTPS origins for remote assets', async () => {
     const host = new FakeMiniGameHost();
     vi.stubGlobal('URL', undefined);
@@ -581,8 +655,16 @@ describe('Phaser mini-game runtime patch', () => {
     expect(loop.running).toBe(true);
     expect(globals.document.visibilityState).toBe('visible');
 
+    host.emitPause();
+    expect(pauses).toBe(2);
+    expect(loop.running).toBe(false);
+    expect(globals.document.visibilityState).toBe('hidden');
     installation.dispose();
     expect(host.lifecycleListenerCount).toBe(0);
+    expect(resumes).toBe(2);
+    expect(game.isPaused).toBe(false);
+    expect(loop.running).toBe(true);
+    expect(globals.document.visibilityState).toBe('visible');
     expect(raf.step).toBe(originalStep);
     expect(host.pendingFrameCount).toBe(1);
     host.flushFrame(48);
@@ -706,6 +788,63 @@ describe('Phaser mini-game runtime patch', () => {
     );
     expect(raf.step).toBe(originalStep);
     expect(host.lifecycleListenerCount).toBe(0);
+    expect(host.pendingFrameCount).toBe(1);
+  });
+
+  it('deactivates an unremovable lifecycle callback after installation fails', () => {
+    class LeakyLifecycleHost extends FakeMiniGameHost {
+      override onPause(callback: () => void): () => void {
+        super.onPause(callback);
+        callback();
+        return undefined as never;
+      }
+    }
+
+    const host = new LeakyLifecycleHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    let pauses = 0;
+    let resumes = 0;
+    const loop = {
+      started: true,
+      running: true,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        this.running = false;
+      },
+      wake() {
+        this.running = true;
+      },
+    };
+    raf.start(raf.callback, false, raf.delay);
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      loop,
+      isPaused: false,
+      pause() {
+        pauses += 1;
+        this.isPaused = true;
+      },
+      resume() {
+        resumes += 1;
+        this.isPaused = false;
+      },
+    } satisfies MiniGamePhaserGame;
+
+    expect(() => installPhaserMiniGameRuntime(game, { globals })).toThrow(
+      'must return an unsubscribe function',
+    );
+    expect(host.lifecycleListenerCount).toBe(1);
+    expect(pauses).toBe(1);
+    expect(resumes).toBe(1);
+    expect(globals.document.visibilityState).toBe('visible');
+    host.emitPause();
+    expect(pauses).toBe(1);
+    expect(resumes).toBe(1);
+    expect(game.isPaused).toBe(false);
+    expect(loop.running).toBe(true);
     expect(host.pendingFrameCount).toBe(1);
   });
 });

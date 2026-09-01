@@ -225,11 +225,21 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       return;
     }
 
-    this.#generation += 1;
+    const generation = ++this.#generation;
     this.status = 0;
     this.statusText = '';
     this.#setReadyState(MiniGameXMLHttpRequest.DONE);
+
+    if (generation !== this.#generation) {
+      return;
+    }
+
     this.#emitProgress('abort');
+
+    if (generation !== this.#generation) {
+      return;
+    }
+
     this.#emitProgress('loadend');
   }
 
@@ -278,7 +288,17 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
 
       this.#assignResponse(response.data);
       this.#setReadyState(MiniGameXMLHttpRequest.DONE);
+
+      if (generation !== this.#generation) {
+        return;
+      }
+
       this.#emitProgress('load', byteLength);
+
+      if (generation !== this.#generation) {
+        return;
+      }
+
       this.#emitProgress('loadend', byteLength);
     } catch (error) {
       if (generation !== this.#generation) {
@@ -289,10 +309,18 @@ export class MiniGameXMLHttpRequest extends MiniGameEventTarget {
       this.statusText = '';
       this.#setReadyState(MiniGameXMLHttpRequest.DONE);
 
+      if (generation !== this.#generation) {
+        return;
+      }
+
       if (error instanceof MiniGameRequestTimeoutError) {
         this.#emitProgress('timeout', 0, error);
       } else {
         this.#emitProgress('error', 0, error);
+      }
+
+      if (generation !== this.#generation) {
+        return;
       }
 
       this.#emitProgress('loadend');

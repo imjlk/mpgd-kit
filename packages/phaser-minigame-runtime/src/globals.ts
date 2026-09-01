@@ -184,7 +184,7 @@ class MiniGameGlobalInstallationImpl implements MiniGameGlobalInstallation {
   readonly window: object = globalThis;
   readonly #savedProperties: SavedGlobalProperty[] = [];
   readonly #scheduler: MiniGameAnimationFrameScheduler;
-  readonly #windowEvents = new MiniGameEventTarget();
+  readonly #windowEvents = new MiniGameEventTarget(undefined, globalThis);
   #disposeInput: () => void = () => undefined;
   #disposed = false;
 

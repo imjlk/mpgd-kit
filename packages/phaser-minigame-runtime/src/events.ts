@@ -55,9 +55,14 @@ interface ListenerRegistration {
 export class MiniGameEventTarget {
   readonly #listeners = new Map<string, ListenerRegistration[]>();
   readonly #onListenerError: MiniGameEventListenerErrorReporter;
+  readonly #eventTarget: unknown;
 
-  constructor(onListenerError: MiniGameEventListenerErrorReporter = reportListenerError) {
+  constructor(
+    onListenerError: MiniGameEventListenerErrorReporter = reportListenerError,
+    eventTarget?: unknown,
+  ) {
     this.#onListenerError = onListenerError;
+    this.#eventTarget = eventTarget ?? this;
   }
 
   addEventListener(
@@ -103,8 +108,8 @@ export class MiniGameEventTarget {
   }
 
   dispatchEvent(event: MiniGameEvent): boolean {
-    event.target ??= this;
-    event.currentTarget = this;
+    event.target ??= this.#eventTarget;
+    event.currentTarget = this.#eventTarget;
 
     for (const registration of [...(this.#listeners.get(event.type) ?? [])]) {
       if (registration.once) {
@@ -113,7 +118,7 @@ export class MiniGameEventTarget {
 
       try {
         if (typeof registration.listener === 'function') {
-          registration.listener.call(this, event);
+          registration.listener.call(this.#eventTarget, event);
         } else {
           registration.listener.handleEvent(event);
         }

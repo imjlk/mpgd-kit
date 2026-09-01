@@ -150,6 +150,12 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
 
       game.events?.once('destroy', this.#onDestroy);
     } catch (error) {
+      this.#disposed = true;
+
+      if (this.#pausedByHost) {
+        this.#restoreHostPauseState();
+      }
+
       for (const unsubscribe of this.#unsubscribers.splice(0)) {
         unsubscribe();
       }
@@ -175,6 +181,10 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     }
 
     this.#disposed = true;
+
+    if (this.#pausedByHost) {
+      this.#restoreHostPauseState();
+    }
 
     for (const unsubscribe of this.#unsubscribers.splice(0)) {
       unsubscribe();
@@ -224,14 +234,17 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
       return;
     }
 
+    this.#restoreHostPauseState();
+  }
+
+  #restoreHostPauseState(): void {
     this.#pausedByHost = false;
-    this.#globals.document.hidden = false;
-    this.#globals.document.visibilityState = 'visible';
-    this.#globals.document.dispatchEvent(new MiniGameEvent('visibilitychange'));
     const shouldWakeLoop = this.#loopSleptByHost;
     const shouldResumeGame = this.#gamePausedByHost;
     this.#loopSleptByHost = false;
     this.#gamePausedByHost = false;
+    this.#globals.document.hidden = false;
+    this.#globals.document.visibilityState = 'visible';
 
     if (shouldWakeLoop && this.game.loop.started && !this.game.loop.running) {
       this.game.loop.wake();
@@ -240,6 +253,8 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     if (shouldResumeGame) {
       this.game.resume?.();
     }
+
+    this.#globals.document.dispatchEvent(new MiniGameEvent('visibilitychange'));
   }
 }
 
