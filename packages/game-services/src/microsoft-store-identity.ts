@@ -146,14 +146,14 @@ export async function resolveMicrosoftStoreIdentityCredentials(input: {
         signal: abort.signal,
       });
     } catch (cause) {
-      if (abort.signal.aborted) {
+      if (abort.signal.aborted && cause === abort.signal.reason) {
         throw cause;
       }
       throw unavailable(cause);
     }
 
     if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
+      await discardResponseBody(response);
       const accountLinkRequired = response.status === 404 || response.status === 409;
       const code = accountLinkRequired
         ? 'MICROSOFT_STORE_ACCOUNT_LINK_REQUIRED'
@@ -170,7 +170,10 @@ export async function resolveMicrosoftStoreIdentityCredentials(input: {
         request,
       );
     } catch (cause) {
-      if (cause instanceof MicrosoftStoreIdentityAuthorityError || abort.signal.aborted) {
+      if (
+        cause instanceof MicrosoftStoreIdentityAuthorityError
+        || (abort.signal.aborted && cause === abort.signal.reason)
+      ) {
         throw cause;
       }
       throw invalidResponse(cause);
@@ -258,13 +261,17 @@ async function readBoundedJson(
 ): Promise<unknown> {
   const contentLengthHeader = response.headers.get('content-length');
   if (contentLengthHeader !== null) {
+    if (!/^\d+$/u.test(contentLengthHeader)) {
+      await discardResponseBody(response);
+      throw new TypeError('Microsoft Store identity response content length is invalid.');
+    }
     const contentLength = Number(contentLengthHeader);
-    if (!Number.isSafeInteger(contentLength) || contentLength < 0) {
-      await response.body?.cancel().catch(() => undefined);
+    if (!Number.isSafeInteger(contentLength)) {
+      await discardResponseBody(response);
       throw new TypeError('Microsoft Store identity response content length is invalid.');
     }
     if (contentLength > maximumBytes) {
-      await response.body?.cancel().catch(() => undefined);
+      await discardResponseBody(response);
       throw new TypeError('Microsoft Store identity response is too large.');
     }
   }
@@ -321,4 +328,8 @@ function invalidResponse(cause?: unknown): MicrosoftStoreIdentityAuthorityError 
 
 function authorityHttpStatusError(status: number): Error {
   return new Error(`Microsoft Store identity authority returned HTTP ${String(status)}.`);
+}
+
+async function discardResponseBody(response: Response): Promise<void> {
+  await response.body?.cancel().catch(() => undefined);
 }

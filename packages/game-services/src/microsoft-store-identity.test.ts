@@ -133,6 +133,18 @@ await assertRejectsSame(
   callerAbortReason,
 );
 
+await assertRejects(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () => Promise.reject(new Error('transport failed while already aborted')),
+    },
+    gameId: 'ttokdoku',
+    playerId: 'microsoft.0123456789abcdef',
+    signal: callerAbort.signal,
+  }),
+  'MICROSOFT_STORE_IDENTITY_UNAVAILABLE',
+);
+
 const timeoutError = await captureRejection(resolveMicrosoftStoreIdentityCredentials({
   authority: {
     fetch(_input, init) {
@@ -165,6 +177,21 @@ await assertRejects(
   }),
   'MICROSOFT_STORE_IDENTITY_RESPONSE_INVALID',
 );
+
+for (const contentLength of ['1e3', '0x10', ' 42 ', '']) {
+  await assertRejects(
+    resolveMicrosoftStoreIdentityCredentials({
+      authority: {
+        fetch: () => Promise.resolve(new Response('{}', {
+          headers: { 'Content-Length': contentLength },
+        })),
+      },
+      gameId: 'ttokdoku',
+      playerId: 'microsoft.0123456789abcdef',
+    }),
+    'MICROSOFT_STORE_IDENTITY_RESPONSE_INVALID',
+  );
+}
 
 const forbidden = await captureRejection(
   resolveMicrosoftStoreIdentityCredentials({
