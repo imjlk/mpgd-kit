@@ -47,8 +47,8 @@ const disabledFallback = resolveTargetMpgdLocale({
   fallbackLocale: 'en',
 });
 const preferredLocales = readMpgdPreferredLocales({
-  language: 'ko-KR',
-  languages: ['ko-KR', 'en-US'],
+  language: 'en-us',
+  languages: ['ko-KR', 'en-US', 'KO-kr'],
 });
 
 assertEqual(ko, 'ko', 'Korean locale should resolve when localized content is available');

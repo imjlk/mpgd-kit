@@ -80,10 +80,20 @@ export function resolveTargetMpgdLocale(input: ResolveTargetMpgdLocaleInput): Mp
 export function readMpgdPreferredLocales(
   environment: MpgdLocaleEnvironment | undefined = globalThis.navigator,
 ): readonly string[] {
-  const preferredLocales = [
+  const candidates = [
     ...(environment?.languages ?? []),
     ...(environment?.language === undefined ? [] : [environment.language]),
-  ].filter((locale, index, locales) => locale.length > 0 && locales.indexOf(locale) === index);
+  ];
+  const seen = new Set<string>();
+  const preferredLocales = candidates.filter((locale) => {
+    const key = locale.toLowerCase();
+
+    if (locale.length === 0 || seen.has(key)) {
+      return false;
+    }
+    seen.add(key);
+    return true;
+  });
 
   return Object.freeze(preferredLocales);
 }
