@@ -253,6 +253,15 @@ try {
     () => assertMiniGameJavaScriptSafety(root, [], ['wx']),
     /game\.bundle\.js contains forbidden computed destructuring/u,
   );
+  write(
+    'game.bundle.js',
+    'const create = Object.create; '
+      + 'const { [getPlatformName()]: sdk } = create(globalThis); sdk.request({});\n',
+  );
+  assert.throws(
+    () => assertMiniGameJavaScriptSafety(root, [], ['wx']),
+    /game\.bundle\.js contains forbidden computed destructuring/u,
+  );
   write('game.bundle.js', 'globalThis.__MPGD_GAME__ = true;\n');
   for (const reflectiveWechatSdkAccess of [
     'Reflect.get(globalThis, "wx").request({});\n',
@@ -265,6 +274,26 @@ try {
     'Object.create(Reflect).get(globalThis, "wx").request({});\n',
     'const inheritedReflect = Object.create(Reflect); '
       + 'inheritedReflect.get(globalThis, "wx").createImage();\n',
+    'const create = Object.create; '
+      + 'create(Reflect).get(globalThis, "wx").request({});\n',
+    'const { create } = Object; '
+      + 'create(Reflect).get(globalThis, "wx").request({});\n',
+    'const ObjectAlias = Object; const create = ObjectAlias.create; '
+      + 'create(Reflect).get(globalThis, "wx").request({});\n',
+    'const create = Object.create.bind(Object); '
+      + 'create(Reflect).get(globalThis, "wx").request({});\n',
+    'const create = Object.create.bind(Object, Reflect); '
+      + 'create().get(globalThis, "wx").request({});\n',
+    'const create = Object.create; '
+      + 'create.call(Object, Reflect).get(globalThis, "wx").request({});\n',
+    'const create = Object.create; '
+      + 'create.apply(Object, [Reflect]).get(globalThis, "wx").request({});\n',
+    'Object.create.apply(Object, getPrototypeArguments())'
+      + '.get(globalThis, "wx").request({});\n',
+    'const setPrototypeOf = Object.setPrototypeOf; '
+      + 'setPrototypeOf({}, Reflect).get(globalThis, "wx").request({});\n',
+    'const { setPrototypeOf } = Object; '
+      + 'setPrototypeOf({}, Reflect).get(globalThis, "wx").request({});\n',
   ]) {
     write('game.bundle.js', reflectiveWechatSdkAccess);
     assert.throws(

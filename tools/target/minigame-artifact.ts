@@ -116,7 +116,30 @@ interface MiniGameLexicalScope {
 }
 
 type MiniGameGlobalIntrinsic = 'Object' | 'Reflect';
+type MiniGameObjectIntrinsicMethod =
+  | 'assign'
+  | 'create'
+  | 'defineProperties'
+  | 'defineProperty'
+  | 'freeze'
+  | 'preventExtensions'
+  | 'seal'
+  | 'setPrototypeOf';
 type MiniGameReflectiveGlobalReadKind = 'property' | 'descriptors';
+const miniGameObjectIntrinsicMethods = new Set<MiniGameObjectIntrinsicMethod>([
+  'assign',
+  'create',
+  'defineProperties',
+  'defineProperty',
+  'freeze',
+  'preventExtensions',
+  'seal',
+  'setPrototypeOf',
+]);
+
+function isMiniGameObjectIntrinsicMethod(name: string): name is MiniGameObjectIntrinsicMethod {
+  return miniGameObjectIntrinsicMethods.has(name as MiniGameObjectIntrinsicMethod);
+}
 const miniGameWellKnownSymbolProperties = new Set([
   'asyncDispose',
   'asyncIterator',
@@ -144,6 +167,10 @@ interface MiniGameScopeAnalysis {
   readonly globalIntrinsicAliases: ReadonlyMap<
     MiniGameLexicalBinding,
     ReadonlySet<MiniGameGlobalIntrinsic>
+  >;
+  readonly objectIntrinsicMethodAliases: ReadonlyMap<
+    MiniGameLexicalBinding,
+    ReadonlySet<MiniGameObjectIntrinsicMethod>
   >;
   readonly reflectiveGlobalReadAliases: ReadonlyMap<
     MiniGameLexicalBinding,
@@ -1250,6 +1277,10 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
     MiniGameLexicalBinding,
     Set<MiniGameGlobalIntrinsic>
   >();
+  const objectIntrinsicMethodAliases = new Map<
+    MiniGameLexicalBinding,
+    Set<MiniGameObjectIntrinsicMethod>
+  >();
   const reflectiveGlobalReadAliases = new Map<
     MiniGameLexicalBinding,
     Set<MiniGameReflectiveGlobalReadKind>
@@ -1265,6 +1296,7 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
     staticStringValues,
     globalObjectAliases,
     globalIntrinsicAliases,
+    objectIntrinsicMethodAliases,
     reflectiveGlobalReadAliases,
     dynamicCodeConstructorAliases,
     dynamicCodeConstructorContainers,
@@ -1285,7 +1317,14 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
       analysis,
       globalIntrinsicAliases,
     );
-    globalAliasChanged = objectAliasesChanged || intrinsicAliasesChanged;
+    const objectMethodAliasesChanged = collectObjectIntrinsicMethodAliases(
+      ast,
+      analysis,
+      objectIntrinsicMethodAliases,
+    );
+    globalAliasChanged = objectAliasesChanged
+      || intrinsicAliasesChanged
+      || objectMethodAliasesChanged;
   }
   collectReflectiveGlobalReadAliases(ast, analysis, reflectiveGlobalReadAliases);
   collectDynamicCodeConstructorFlow(
@@ -1614,33 +1653,33 @@ function getGlobalIntrinsicKinds(
     addSetValues(kinds, getGlobalIntrinsicKinds(input.right, ancestors, analysis));
     return kinds;
   }
-  if (
-    input.type === 'CallExpression'
-    && isAstRecord(input.callee)
-    && input.callee.type === 'MemberExpression'
-    && Array.isArray(input.arguments)
-    && getGlobalIntrinsicKinds(input.callee.object, ancestors, analysis).has('Object')
-  ) {
-    const methods = readMiniGameMemberNames(input.callee, ancestors, analysis);
+  if (input.type === 'CallExpression') {
+    const invocation = resolveObjectIntrinsicInvocation(input, ancestors, analysis);
 
-    if (methods.has('create')) {
-      addSetValues(kinds, getGlobalIntrinsicKinds(input.arguments[0], ancestors, analysis));
+    if (invocation === undefined) {
+      return kinds;
     }
-    if (methods.has('setPrototypeOf')) {
-      addSetValues(kinds, getGlobalIntrinsicKinds(input.arguments[0], ancestors, analysis));
-      addSetValues(kinds, getGlobalIntrinsicKinds(input.arguments[1], ancestors, analysis));
+    if (invocation.arguments === undefined) {
+      kinds.add('Object');
+      kinds.add('Reflect');
+      return kinds;
+    }
+    const firstArgument = invocation.arguments[0];
+
+    if (invocation.methods.has('create')) {
+      addSetValues(kinds, getGlobalIntrinsicKinds(firstArgument, ancestors, analysis));
+    }
+    if (invocation.methods.has('setPrototypeOf')) {
+      addSetValues(kinds, getGlobalIntrinsicKinds(firstArgument, ancestors, analysis));
+      const prototypeKinds = getGlobalIntrinsicKinds(invocation.arguments[1], ancestors, analysis);
+      addSetValues(kinds, prototypeKinds);
     }
     if (
-      [
-        'assign',
-        'defineProperties',
-        'defineProperty',
-        'freeze',
-        'preventExtensions',
-        'seal',
-      ].some((method) => methods.has(method))
+      [...invocation.methods].some((method) => {
+        return method !== 'create' && method !== 'setPrototypeOf';
+      })
     ) {
-      addSetValues(kinds, getGlobalIntrinsicKinds(input.arguments[0], ancestors, analysis));
+      addSetValues(kinds, getGlobalIntrinsicKinds(firstArgument, ancestors, analysis));
     }
     return kinds;
   }
@@ -1659,6 +1698,184 @@ function getGlobalIntrinsicKinds(
   }
 
   return kinds;
+}
+
+function collectObjectIntrinsicMethodAliases(
+  ast: unknown,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<MiniGameObjectIntrinsicMethod>>,
+): boolean {
+  return collectMiniGameAliases(ast, addAliases);
+
+  function addAliases(
+    pattern: unknown,
+    source: unknown,
+    ancestors: readonly MiniGameAstAncestor[],
+  ): boolean {
+    return addObjectIntrinsicMethodAliasBindings(pattern, source, ancestors, analysis, aliases);
+  }
+}
+
+function addObjectIntrinsicMethodAliasBindings(
+  pattern: unknown,
+  source: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<MiniGameObjectIntrinsicMethod>>,
+): boolean {
+  if (!isAstRecord(pattern)) {
+    return false;
+  }
+  if (
+    pattern.type === 'ObjectPattern'
+    && Array.isArray(pattern.properties)
+    && getGlobalIntrinsicKinds(source, ancestors, analysis).has('Object')
+  ) {
+    let changed = false;
+
+    for (const property of pattern.properties) {
+      if (!isAstRecord(property) || property.type !== 'Property') {
+        continue;
+      }
+      const methods = new Set<MiniGameObjectIntrinsicMethod>();
+
+      for (const name of readMiniGameStaticPropertyNames(property, ancestors, analysis)) {
+        if (isMiniGameObjectIntrinsicMethod(name)) {
+          methods.add(name);
+        }
+      }
+      const added = addMiniGameBindingKinds(property.value, methods, analysis, aliases);
+      changed = added || changed;
+    }
+
+    return changed;
+  }
+
+  return addMiniGameBindingKinds(
+    pattern,
+    getObjectIntrinsicMethodKinds(source, ancestors, analysis),
+    analysis,
+    aliases,
+  );
+}
+
+function getObjectIntrinsicMethodKinds(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Set<MiniGameObjectIntrinsicMethod> {
+  const methods = new Set<MiniGameObjectIntrinsicMethod>();
+
+  if (!isAstRecord(input)) {
+    return methods;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(input.name, scope);
+    addSetValues(
+      methods,
+      binding === undefined ? undefined : analysis.objectIntrinsicMethodAliases.get(binding),
+    );
+    return methods;
+  }
+  if (input.type === 'ChainExpression') {
+    return getObjectIntrinsicMethodKinds(input.expression, ancestors, analysis);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return getObjectIntrinsicMethodKinds(input.expressions.at(-1), ancestors, analysis);
+  }
+  if (input.type === 'ConditionalExpression') {
+    const consequentMethods = getObjectIntrinsicMethodKinds(input.consequent, ancestors, analysis);
+    const alternateMethods = getObjectIntrinsicMethodKinds(input.alternate, ancestors, analysis);
+    addSetValues(methods, consequentMethods);
+    addSetValues(methods, alternateMethods);
+    return methods;
+  }
+  if (input.type === 'LogicalExpression') {
+    addSetValues(methods, getObjectIntrinsicMethodKinds(input.left, ancestors, analysis));
+    addSetValues(methods, getObjectIntrinsicMethodKinds(input.right, ancestors, analysis));
+    return methods;
+  }
+  if (input.type === 'CallExpression' && isAstRecord(input.callee)) {
+    if (
+      input.callee.type === 'MemberExpression'
+      && readMiniGameMemberNames(input.callee, ancestors, analysis).has('bind')
+    ) {
+      return getObjectIntrinsicMethodKinds(input.callee.object, ancestors, analysis);
+    }
+    return methods;
+  }
+  if (input.type === 'MemberExpression') {
+    const memberNames = readMiniGameMemberNames(input, ancestors, analysis);
+
+    if (
+      memberNames.has('call')
+      || memberNames.has('apply')
+      || memberNames.has('bind')
+    ) {
+      const receiverMethods = getObjectIntrinsicMethodKinds(input.object, ancestors, analysis);
+      addSetValues(methods, receiverMethods);
+    }
+    if (getGlobalIntrinsicKinds(input.object, ancestors, analysis).has('Object')) {
+      for (const name of memberNames) {
+        if (isMiniGameObjectIntrinsicMethod(name)) {
+          methods.add(name);
+        }
+      }
+    }
+  }
+
+  return methods;
+}
+
+function resolveObjectIntrinsicInvocation(
+  input: Record<string, unknown>,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Readonly<{
+  readonly methods: ReadonlySet<MiniGameObjectIntrinsicMethod>;
+  readonly arguments?: readonly unknown[];
+}> | undefined {
+  if (
+    input.type !== 'CallExpression'
+    || !isAstRecord(input.callee)
+    || !Array.isArray(input.arguments)
+  ) {
+    return undefined;
+  }
+  if (input.callee.type === 'MemberExpression') {
+    const invocationMethods = readMiniGameMemberNames(input.callee, ancestors, analysis);
+    const receiverMethods = getObjectIntrinsicMethodKinds(input.callee.object, ancestors, analysis);
+
+    if (receiverMethods.size > 0 && invocationMethods.has('bind')) {
+      return undefined;
+    }
+    if (receiverMethods.size > 0 && invocationMethods.has('call')) {
+      return { methods: receiverMethods, arguments: input.arguments.slice(1) };
+    }
+    if (receiverMethods.size > 0 && invocationMethods.has('apply')) {
+      const appliedArguments = input.arguments[1];
+
+      if (!isAstRecord(appliedArguments) || appliedArguments.type !== 'ArrayExpression') {
+        return { methods: receiverMethods };
+      }
+      const elements = Array.isArray(appliedArguments.elements) ? appliedArguments.elements : [];
+
+      if (elements.some((element) => isAstRecord(element) && element.type === 'SpreadElement')) {
+        return { methods: receiverMethods };
+      }
+      return { methods: receiverMethods, arguments: elements };
+    }
+  }
+
+  const methods = getObjectIntrinsicMethodKinds(input.callee, ancestors, analysis);
+  if (methods.size === 0) {
+    return undefined;
+  }
+  return {
+    methods,
+    ...(input.arguments.length === 0 ? {} : { arguments: input.arguments }),
+  };
 }
 
 function collectReflectiveGlobalReadAliases(
@@ -2673,40 +2890,36 @@ function isGlobalObjectAliasSource(
     return isGlobalObjectAliasSource(input.left, ancestors, analysis)
       || isGlobalObjectAliasSource(input.right, ancestors, analysis);
   }
-  if (
-    input.type === 'CallExpression'
-    && isAstRecord(input.callee)
-    && input.callee.type === 'MemberExpression'
-    && Array.isArray(input.arguments)
-    && getGlobalIntrinsicKinds(input.callee.object, ancestors, analysis).has('Object')
-  ) {
-    const methods = readMiniGameMemberNames(input.callee, ancestors, analysis);
-    const firstArgument = input.arguments[0];
+  if (input.type === 'CallExpression') {
+    const invocation = resolveObjectIntrinsicInvocation(input, ancestors, analysis);
+
+    if (invocation === undefined) {
+      return false;
+    }
+    if (invocation.arguments === undefined) {
+      return true;
+    }
+    const firstArgument = invocation.arguments[0];
 
     if (
-      methods.has('create')
+      invocation.methods.has('create')
       && isGlobalObjectAliasSource(firstArgument, ancestors, analysis)
     ) {
       return true;
     }
     if (
-      methods.has('setPrototypeOf')
+      invocation.methods.has('setPrototypeOf')
       && (
         isGlobalObjectAliasSource(firstArgument, ancestors, analysis)
-        || isGlobalObjectAliasSource(input.arguments[1], ancestors, analysis)
+        || isGlobalObjectAliasSource(invocation.arguments[1], ancestors, analysis)
       )
     ) {
       return true;
     }
     if (
-      [
-        'assign',
-        'defineProperties',
-        'defineProperty',
-        'freeze',
-        'preventExtensions',
-        'seal',
-      ].some((method) => methods.has(method))
+      [...invocation.methods].some((method) => {
+        return method !== 'create' && method !== 'setPrototypeOf';
+      })
       && isGlobalObjectAliasSource(firstArgument, ancestors, analysis)
     ) {
       return true;
