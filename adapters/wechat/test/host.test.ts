@@ -58,6 +58,34 @@ describe('WeChat Mini Game host', () => {
     });
   });
 
+  it('merges modern window geometry with legacy locale metadata', () => {
+    const fake = createFakeWechatMiniGameApi({
+      getWindowInfo() {
+        return { windowWidth: 960, windowHeight: 540, pixelRatio: 2 };
+      },
+      getSystemInfoSync() {
+        return {
+          windowWidth: 960,
+          windowHeight: 540,
+          pixelRatio: 2,
+          platform: 'ios',
+          language: 'zh_CN',
+        };
+      },
+    });
+    const host = createWechatMiniGameHost(fake.api, {
+      requestAnimationFrame: () => 1,
+    });
+
+    expect(host.getWindowInfo()).toEqual({
+      width: 960,
+      height: 540,
+      pixelRatio: 2,
+      platform: 'ios',
+      language: 'zh_CN',
+    });
+  });
+
   it('uses the runtime-global RAF and maps changed touches with idempotent cleanup', () => {
     const fake = createFakeWechatMiniGameApi();
     const frames: number[] = [];

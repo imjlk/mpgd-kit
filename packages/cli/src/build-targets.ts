@@ -14,7 +14,6 @@ export const supportedBuildTargets = [
   'ait',
   'devvit',
   'reddit',
-  'wechat',
 ] as const;
 
 const canonicalBuildTargets = new Set([
@@ -25,7 +24,6 @@ const canonicalBuildTargets = new Set([
   'ios',
   'ait',
   'reddit',
-  'wechat',
 ]);
 
 export function normalizeBuildTarget(
@@ -62,11 +60,15 @@ function resolveBuildTarget(
   configuredTargets: ConfiguredBuildTargets,
 ): string | undefined {
   const configuredWebTarget = isConfiguredWebTarget(target, configuredTargets);
-  if (configuredWebTarget) {
+  const configuredMiniGameTarget = isConfiguredMiniGameTarget(target, configuredTargets);
+  if (configuredWebTarget || configuredMiniGameTarget) {
     assertDeploymentTargetName(target);
   }
 
   if (target === 'web' && configuredWebTarget) {
+    return target;
+  }
+  if (configuredMiniGameTarget) {
     return target;
   }
 
@@ -80,6 +82,32 @@ function resolveBuildTarget(
   }
 
   return undefined;
+}
+
+function isConfiguredMiniGameTarget(
+  target: string,
+  configuredTargets: ConfiguredBuildTargets,
+): boolean {
+  const expectedKind = configuredMiniGameKind(target);
+
+  if (
+    expectedKind === undefined
+    || !Object.prototype.hasOwnProperty.call(configuredTargets, target)
+  ) {
+    return false;
+  }
+
+  const configuredTarget = configuredTargets[target];
+
+  return typeof configuredTarget === 'object'
+    && configuredTarget !== null
+    && !Array.isArray(configuredTarget)
+    && 'kind' in configuredTarget
+    && configuredTarget.kind === expectedKind;
+}
+
+function configuredMiniGameKind(target: string): string | undefined {
+  return target === 'wechat' ? 'wechat-minigame' : undefined;
 }
 
 function normalizeBuiltInBuildTarget(target: string): string | undefined {

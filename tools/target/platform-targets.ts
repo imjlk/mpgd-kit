@@ -181,6 +181,8 @@ function assertMiniGameTarget(input: Record<string, unknown>, target: string): v
     throw new Error(`${target}.adapter must be ${expectedAdapter} for ${String(input.kind)}.`);
   }
 
+  assertMiniGameRemoteAssetOrigins(input.remoteAssetOrigins, target);
+
   assertRecord(input.packageBudget, `${target}.packageBudget`);
   assertPositiveSafeInteger(input.packageBudget.mainBytes, `${target}.packageBudget.mainBytes`);
   assertPositiveSafeInteger(input.packageBudget.totalBytes, `${target}.packageBudget.totalBytes`);
@@ -206,6 +208,48 @@ function assertMiniGameTarget(input: Record<string, unknown>, target: string): v
         `${target}.packageBudget.independentSubpackageBytes must not exceed totalBytes.`,
       );
     }
+  }
+}
+
+function assertMiniGameRemoteAssetOrigins(input: unknown, target: string): void {
+  if (input === undefined) {
+    return;
+  }
+  if (!Array.isArray(input)) {
+    throw new Error(`${target}.remoteAssetOrigins must be an array of exact HTTPS origins.`);
+  }
+
+  const origins = new Set<string>();
+
+  for (const [index, origin] of input.entries()) {
+    if (typeof origin !== 'string') {
+      throw new Error(`${target}.remoteAssetOrigins[${String(index)}] must be a string.`);
+    }
+
+    let parsed: URL;
+
+    try {
+      parsed = new URL(origin);
+    } catch {
+      throw new Error(
+        `${target}.remoteAssetOrigins[${String(index)}] must be an exact HTTPS origin.`,
+      );
+    }
+
+    if (
+      parsed.protocol !== 'https:'
+      || parsed.username.length > 0
+      || parsed.password.length > 0
+      || parsed.origin !== origin
+    ) {
+      throw new Error(
+        `${target}.remoteAssetOrigins[${String(index)}] must be an exact HTTPS origin.`,
+      );
+    }
+    if (origins.has(origin)) {
+      throw new Error(`${target}.remoteAssetOrigins must not contain duplicate origins.`);
+    }
+    origins.add(origin);
   }
 }
 

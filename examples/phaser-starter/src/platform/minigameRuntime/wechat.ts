@@ -13,7 +13,11 @@ import type { StarterMiniGameRuntimeBridge } from '../minigameBridge';
 
 const api = resolveWechatMiniGameApi(globalThis);
 const host = createWechatMiniGameHostFromGlobal(globalThis);
-const globals = installMiniGameGlobals(host);
+const remoteAssetOrigins = __MPGD_MINIGAME_REMOTE_ASSET_ORIGINS__;
+const globals = installMiniGameGlobals(host, {
+  image: { allowedRemoteOrigins: remoteAssetOrigins },
+  transport: { allowedRemoteOrigins: remoteAssetOrigins },
+});
 const attachedGames = new WeakSet<object>();
 let disposed = false;
 let disposing = false;

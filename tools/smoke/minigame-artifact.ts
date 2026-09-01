@@ -18,6 +18,7 @@ export interface SmokeMiniGameTargetConfig {
   readonly renderer: 'canvas';
   readonly orientation: MiniGameTargetConfig['orientation'];
   readonly experimental: true;
+  readonly remoteAssetOrigins?: readonly string[];
   readonly packageBudget: MiniGamePackageBudget;
 }
 
@@ -53,6 +54,13 @@ export function verifyMiniGameTargetArtifact(input: Readonly<{
 
   if (gameEntry !== "require('./runtime.js');\nrequire('./game.bundle.js');\n") {
     throw new Error('Mini-game game.js must synchronously load runtime.js before game.bundle.js.');
+  }
+  const runtimeSource = readFileSync(join(input.artifactPath, 'runtime.js'), 'utf8');
+
+  for (const origin of input.targetConfig.remoteAssetOrigins ?? []) {
+    if (!runtimeSource.includes(origin)) {
+      throw new Error(`Mini-game runtime.js is missing remote asset origin ${origin}.`);
+    }
   }
 
   const gameConfig = readJson(join(input.artifactPath, 'game.json'), 'Mini-game game.json');

@@ -150,38 +150,59 @@ function resolveWechatAnimationFrameOptions(
 }
 
 function readWindowInfo(api: WechatMiniGameApi) {
-  let info: unknown;
+  const windowInfo = readWechatInformation(api.getWindowInfo?.bind(api));
+  const systemInfo = readWechatInformation(api.getSystemInfoSync?.bind(api));
+  const geometry = [windowInfo, systemInfo].find(hasValidWindowGeometry);
 
-  try {
-    info = api.getWindowInfo?.() ?? api.getSystemInfoSync?.();
-  } catch {
+  if (geometry === undefined) {
+    const unavailable = windowInfo === undefined && systemInfo === undefined;
     throw createWechatConfigurationError(
-      'WECHAT_WINDOW_INFO_UNAVAILABLE',
-      'WeChat Mini Game window information is unavailable.',
+      unavailable ? 'WECHAT_WINDOW_INFO_UNAVAILABLE' : 'WECHAT_WINDOW_INFO_INVALID',
+      unavailable
+        ? 'WeChat Mini Game window information is unavailable.'
+        : 'WeChat Mini Game window information is invalid.',
     );
   }
 
-  if (
-    !isRecord(info)
-    || !isPositiveFiniteNumber(info.windowWidth)
-    || !isPositiveFiniteNumber(info.windowHeight)
-    || !isPositiveFiniteNumber(info.pixelRatio)
-    || (info.platform !== undefined && typeof info.platform !== 'string')
-    || (info.language !== undefined && typeof info.language !== 'string')
-  ) {
-    throw createWechatConfigurationError(
-      'WECHAT_WINDOW_INFO_INVALID',
-      'WeChat Mini Game window information is invalid.',
-    );
-  }
+  const platform = readOptionalString(windowInfo, 'platform')
+    ?? readOptionalString(systemInfo, 'platform');
+  const language = readOptionalString(windowInfo, 'language')
+    ?? readOptionalString(systemInfo, 'language');
 
   return {
-    windowWidth: info.windowWidth,
-    windowHeight: info.windowHeight,
-    pixelRatio: info.pixelRatio,
-    ...(info.platform === undefined ? {} : { platform: info.platform }),
-    ...(info.language === undefined ? {} : { language: info.language }),
+    windowWidth: geometry.windowWidth,
+    windowHeight: geometry.windowHeight,
+    pixelRatio: geometry.pixelRatio,
+    ...(platform === undefined ? {} : { platform }),
+    ...(language === undefined ? {} : { language }),
   };
+}
+
+function readWechatInformation(read: (() => unknown) | undefined): unknown {
+  if (read === undefined) {
+    return undefined;
+  }
+
+  try {
+    return read();
+  } catch {
+    return undefined;
+  }
+}
+
+function hasValidWindowGeometry(input: unknown): input is Readonly<{
+  readonly windowWidth: number;
+  readonly windowHeight: number;
+  readonly pixelRatio: number;
+}> {
+  return isRecord(input)
+    && isPositiveFiniteNumber(input.windowWidth)
+    && isPositiveFiniteNumber(input.windowHeight)
+    && isPositiveFiniteNumber(input.pixelRatio);
+}
+
+function readOptionalString(input: unknown, key: 'platform' | 'language'): string | undefined {
+  return isRecord(input) && typeof input[key] === 'string' ? input[key] : undefined;
 }
 
 function readFileSystemManager(api: WechatMiniGameApi): WechatMiniGameFileSystemManager {

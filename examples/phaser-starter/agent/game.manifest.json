@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "engine": "phaser-4",
   "intent": "Minimal mpgd starter showing platform, target-config, i18n, game-services, asset, and simulation boundaries.",
-  "targets": ["web-preview", "microsoft-store", "verse8", "android", "ios", "ait", "reddit"],
+  "targets": ["web-preview", "microsoft-store", "verse8", "android", "ios", "ait", "reddit", "wechat"],
   "futureTargets": ["telegram", "tauri"],
   "agentWorkflow": {
     "brief": "agent/brief.template.md",
@@ -93,7 +93,7 @@
     {
       "id": "platform.gateway.bootstrap-intents",
       "kind": "platform",
-      "entry": "src/main.ts",
+      "entry": "src/bootstrap.ts",
       "capabilities": ["identity-session", "launch-intent"],
       "gotchas": [
         "Fall back to a local guest and home intent when an older host does not implement additive methods.",
@@ -103,7 +103,7 @@
     {
       "id": "runtime.viewport.safe-area-contract",
       "kind": "runtime",
-      "entry": "src/main.ts",
+      "entry": "src/bootstrap.ts",
       "capabilities": [
         "viewport-safe-area-snapshot",
         "viewport-safe-content-bounds"
@@ -132,6 +132,24 @@
       ]
     },
     {
+      "id": "runtime.minigame.canvas-artifact",
+      "kind": "runtime",
+      "entry": "src/platform/minigameRuntime/wechat.ts",
+      "capabilities": [
+        "native-minigame-globals",
+        "canvas-renderer",
+        "runtime-before-game-bundle",
+        "static-artifact-evidence",
+        "remote-asset-origin-allowlist"
+      ],
+      "gotchas": [
+        "Keep WeChat SDK access in the adapter and runtime host; scenes continue to use PlatformGateway.",
+        "Canvas is the only enabled renderer, and audio remains blocked by artifact preflight.",
+        "Declare every remote non-code asset origin in the target allowlist and configure the same domain in the WeChat Developer Portal.",
+        "Treat static artifact verification as experimental evidence, not DevTools or real-device approval."
+      ]
+    },
+    {
       "id": "assets.manifest.stable-keys",
       "kind": "asset",
       "entry": "src/game/assets/manifest.ts",
@@ -149,7 +167,9 @@
       "pnpm game:icons:verify",
       "pnpm check",
       "pnpm --dir examples/phaser-starter check",
-      "pnpm --dir examples/phaser-starter build"
+      "pnpm --dir examples/phaser-starter build",
+      "pnpm build:wechat",
+      "pnpm smoke:wechat"
     ],
     "manual": [
       "Target, player, effective config, and backend mode render on the starter screen.",
@@ -157,7 +177,8 @@
       "Pointer or Enter starts the play scene.",
       "The play scene updates from serializable simulation state.",
       "Viewport orientation policy is visible and does not force unsafe WebView hard locks.",
-      "Safe-area geometry is reserved exactly once: CSS-padded containers do not also subtract safeArea.contentBounds, while full-bleed surfaces use the snapshot bounds."
+      "Safe-area geometry is reserved exactly once: CSS-padded containers do not also subtract safeArea.contentBounds, while full-bleed surfaces use the snapshot bounds.",
+      "WeChat DevTools and a physical device load runtime.js before game.bundle.js, enter the Phaser scene, load the PNG marker, and preserve touch coordinates."
     ]
   }
 }

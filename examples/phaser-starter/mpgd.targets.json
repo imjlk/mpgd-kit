@@ -81,6 +81,7 @@
       "renderer": "canvas",
       "orientation": "landscape",
       "experimental": true,
+      "remoteAssetOrigins": ["https://assets.example.test"],
       "packageBudget": {
         "mainBytes": 4194304,
         "totalBytes": 20971520

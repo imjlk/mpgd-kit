@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import {
   normalizeBuildTarget,
   normalizeConfiguredBuildTargets,
+  supportedBuildTargets,
 } from '../../packages/cli/src/build-targets';
 import { runMpgdCli } from '../../packages/cli/src/index';
 
@@ -25,9 +26,23 @@ assert.equal(normalizeBuildTarget('web', configuredTargets), 'web-preview');
 assert.equal(normalizeBuildTarget('browser', configuredTargets), 'web-preview');
 assert.equal(normalizeBuildTarget('storefront', configuredTargets), 'storefront');
 assert.equal(normalizeBuildTarget('web', { web: { kind: 'web' } }), 'web');
-assert.equal(normalizeBuildTarget('wechat', configuredTargets), 'wechat');
+assert.equal(new Set<string>(supportedBuildTargets).has('wechat'), false);
+assert.throws(
+  () => normalizeBuildTarget('wechat', configuredTargets),
+  /Unsupported target: wechat/u,
+);
+const configuredWechatTargets = {
+  ...configuredTargets,
+  wechat: { kind: 'wechat-minigame' },
+} as const;
+assert.equal(normalizeBuildTarget('wechat', configuredWechatTargets), 'wechat');
 const configuredBuildTargets = normalizeConfiguredBuildTargets(configuredTargets);
 assert.deepEqual(configuredBuildTargets, ['web-preview', 'storefront']);
+assert.deepEqual(normalizeConfiguredBuildTargets(configuredWechatTargets), [
+  'web-preview',
+  'storefront',
+  'wechat',
+]);
 assert.throws(
   () => normalizeBuildTarget('unsupportedCustomNative', configuredTargets),
   /Unsupported target: unsupportedCustomNative/u,

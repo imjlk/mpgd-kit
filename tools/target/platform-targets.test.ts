@@ -15,6 +15,7 @@ const validConfig = {
       renderer: 'canvas',
       orientation: 'landscape',
       experimental: true,
+      remoteAssetOrigins: ['https://assets.example.test'],
       packageBudget: {
         mainBytes: 4_194_304,
         totalBytes: 20_971_520,
@@ -56,6 +57,27 @@ assert.throws(
 assert.throws(
   () => assertPlatformTargetsConfigShape(withWechatOverride({ adapter: 'browser' })),
   /wechat\.adapter must be wechat/u,
+);
+const insecureWechatOrigins = withWechatOverride({
+  remoteAssetOrigins: ['http://assets.example.test'],
+});
+const nonOriginWechatUrl = withWechatOverride({
+  remoteAssetOrigins: ['https://assets.example.test/path'],
+});
+const duplicateWechatOrigins = withWechatOverride({
+  remoteAssetOrigins: ['https://assets.example.test', 'https://assets.example.test'],
+});
+assert.throws(
+  () => assertPlatformTargetsConfigShape(insecureWechatOrigins),
+  /must be an exact HTTPS origin/u,
+);
+assert.throws(
+  () => assertPlatformTargetsConfigShape(nonOriginWechatUrl),
+  /must be an exact HTTPS origin/u,
+);
+assert.throws(
+  () => assertPlatformTargetsConfigShape(duplicateWechatOrigins),
+  /must not contain duplicate origins/u,
 );
 assert.throws(
   () => assertPlatformTargetsConfigShape(withWechatBudget({ mainBytes: 20_971_521 })),

@@ -14,6 +14,7 @@ interface RuntimePlatformTargetMetadata {
   readonly adapter: string;
   readonly authoritativeGameServices?: boolean;
   readonly integrations?: Record<string, unknown>;
+  readonly remoteAssetOrigins?: readonly string[];
 }
 
 const devvitSandboxBuildId = 'devvit-sandbox';
@@ -82,7 +83,12 @@ export function createGameViteSharedConfig<SharedPluginOption = PluginOption>(
       __APP_TARGET__: JSON.stringify(appTarget),
       __MPGD_CONFIG_TARGET__: JSON.stringify(configTarget),
       __MPGD_PLATFORM_TARGET__:
-        platformTarget === undefined ? 'undefined' : JSON.stringify(platformTarget),
+        platformTarget === undefined
+          ? 'undefined'
+          : JSON.stringify(toEffectivePlatformTargetMetadata(platformTarget)),
+      __MPGD_MINIGAME_REMOTE_ASSET_ORIGINS__: JSON.stringify(
+        platformTarget?.remoteAssetOrigins ?? [],
+      ),
       __MPGD_TARGET_CONFIG_MATRIX__:
         runtimeTargetConfigMatrix === undefined
           ? 'undefined'
@@ -241,6 +247,10 @@ function readRuntimePlatformTarget(
       `Platform target ${configTarget} authoritativeGameServices must be a boolean.`,
     );
   }
+  const remoteAssetOrigins = readMiniGameRemoteAssetOrigins(
+    target.remoteAssetOrigins,
+    configTarget,
+  );
 
   return {
     kind: target.kind,
@@ -249,7 +259,68 @@ function readRuntimePlatformTarget(
       ? {}
       : { authoritativeGameServices: target.authoritativeGameServices }),
     ...(target.integrations === undefined ? {} : { integrations: target.integrations }),
+    ...(remoteAssetOrigins === undefined ? {} : { remoteAssetOrigins }),
   };
+}
+
+function toEffectivePlatformTargetMetadata(
+  input: RuntimePlatformTargetMetadata,
+): Omit<RuntimePlatformTargetMetadata, 'remoteAssetOrigins'> {
+  return {
+    kind: input.kind,
+    adapter: input.adapter,
+    ...(input.authoritativeGameServices === undefined
+      ? {}
+      : { authoritativeGameServices: input.authoritativeGameServices }),
+    ...(input.integrations === undefined ? {} : { integrations: input.integrations }),
+  };
+}
+
+function readMiniGameRemoteAssetOrigins(
+  input: unknown,
+  target: string,
+): readonly string[] | undefined {
+  if (input === undefined) {
+    return undefined;
+  }
+  if (!Array.isArray(input)) {
+    throw new Error(`Platform target ${target} remoteAssetOrigins must be an array.`);
+  }
+
+  const origins = new Set<string>();
+
+  for (const [index, origin] of input.entries()) {
+    if (typeof origin !== 'string') {
+      throw new Error(
+        `Platform target ${target} remoteAssetOrigins[${String(index)}] must be a string.`,
+      );
+    }
+
+    let parsed: URL;
+
+    try {
+      parsed = new URL(origin);
+    } catch {
+      throw new Error(
+        `Platform target ${target} remoteAssetOrigins[${String(index)}] must be an exact HTTPS origin.`,
+      );
+    }
+
+    if (
+      parsed.protocol !== 'https:'
+      || parsed.username.length > 0
+      || parsed.password.length > 0
+      || parsed.origin !== origin
+      || origins.has(origin)
+    ) {
+      throw new Error(
+        `Platform target ${target} remoteAssetOrigins[${String(index)}] must be a unique exact HTTPS origin.`,
+      );
+    }
+    origins.add(origin);
+  }
+
+  return [...origins];
 }
 
 function isRecord(input: unknown): input is Record<string, unknown> {

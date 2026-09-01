@@ -98,6 +98,8 @@ export interface MiniGameTargetConfig extends BaseTargetConfig {
   readonly renderer: 'canvas';
   readonly orientation: 'portrait' | 'landscape';
   readonly experimental: true;
+  /** Exact HTTPS origins allowed for remotely hosted non-code assets. */
+  readonly remoteAssetOrigins?: readonly string[];
   readonly packageBudget: MiniGamePackageBudget;
 }
 

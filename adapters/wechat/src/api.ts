@@ -100,6 +100,11 @@ export function resolveWechatMiniGameApi(scope: WechatMiniGameGlobalScope): Wech
       'WeChat Mini Game requires wx.getWindowInfo() or wx.getSystemInfoSync().',
     );
   }
+  for (const method of ['getWindowInfo', 'getSystemInfoSync'] as const) {
+    if (scope.wx[method] !== undefined) {
+      assertMethod(scope.wx, method);
+    }
+  }
   for (const method of [
     'getFileSystemManager',
     'request',
