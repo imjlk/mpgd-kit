@@ -16,8 +16,10 @@ import {
 } from '../src/releaseIdentity';
 import {
   applyTargetConfigToCapabilities,
+  assertTargetIntegrationRuntimeBounds,
   createTargetRuntimeSnapshot,
   getTargetConfig,
+  isMiniGameRuntime,
   normalizeTargetIntegrationConfig,
   targetConfigKeyForPlatform,
   withTargetAvailability,
@@ -207,6 +209,17 @@ const gateway = createGateway();
 assertEqual(targetConfigKeyForPlatform('browser'), 'web-preview');
 assertEqual(targetConfigKeyForPlatform('android'), 'android');
 assertEqual(targetConfigKeyForPlatform('verse8'), 'verse8');
+assertEqual(isMiniGameRuntime('wechat-minigame'), true);
+assertEqual(isMiniGameRuntime('tiktok-minigame'), true);
+assertEqual(isMiniGameRuntime('web-preview'), false);
+assertThrows(
+  () => assertTargetIntegrationRuntimeBounds(
+    'wechat-minigame',
+    { identityUpgrade: 'available' },
+    'test WeChat target',
+  ),
+  /cannot configure identityUpgrade as available/u,
+);
 assertViewportPlans();
 
 const webConfig = getTargetConfig(targetConfigMatrix, targetConfigKeyForPlatform('browser'));
@@ -1159,6 +1172,10 @@ function assertViewportPlans(): void {
     ...landscapePhoneBrowserDimensions,
     runtime: 'web-preview',
   });
+  const miniGame = resolveTargetViewportPlan({
+    ...desktopBrowserDimensions,
+    runtime: 'wechat-minigame',
+  });
 
   assertEqual(compactDevvit.layout.shell, 'embedded-webview');
   assertEqual(compactDevvit.layout.source, 'container');
@@ -1206,6 +1223,7 @@ function assertViewportPlans(): void {
   assertEqual(landscapePhoneBrowser.recommendation.primaryControls, 'side');
   assertEqual(landscapePhoneBrowser.recommendation.secondaryPanels, 'side');
   assertEqual(landscapePhoneBrowser.recommendation.safeAreaAware, true);
+  assertEqual(miniGame.layout.shell, 'native-minigame');
   assertDeepEqual(
     resolveTargetViewportOrientationPlan(compactDevvit.layout, {
       mode: 'lock-landscape',

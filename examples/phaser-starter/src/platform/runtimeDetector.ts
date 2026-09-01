@@ -1,5 +1,18 @@
 import type { PlatformTarget } from '@mpgd/platform';
 
+const validTargets = new Set<string>([
+  'android',
+  'ios',
+  'ait',
+  'microsoft-store',
+  'reddit',
+  'verse8',
+  'telegram',
+  'tauri',
+  'wechat',
+  'tiktok',
+] satisfies readonly PlatformTarget[]);
+
 export interface RuntimeConfig {
   readonly target: PlatformTarget;
   readonly configTarget: string;
@@ -21,18 +34,7 @@ export function detectRuntime(): RuntimeConfig {
 }
 
 export function normalizeTarget(value: string): PlatformTarget {
-  if (
-    value === 'android'
-    || value === 'ios'
-    || value === 'ait'
-    || value === 'microsoft-store'
-    || value === 'reddit'
-    || value === 'verse8'
-  ) {
-    return value;
-  }
-
-  return 'browser';
+  return validTargets.has(value) ? (value as PlatformTarget) : 'browser';
 }
 
 export function normalizeConfigTarget(value: string, target: PlatformTarget): string {

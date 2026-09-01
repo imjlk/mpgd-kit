@@ -17,7 +17,11 @@ export type TargetViewportOrientationMismatchBehavior =
 /** Responsive width class used by target-independent game layout. */
 export type TargetViewportSizeClass = 'compact' | 'medium' | 'expanded';
 /** Browser or embedded host shell that owns the game surface. */
-export type TargetViewportShell = 'browser' | 'mobile-webview' | 'embedded-webview';
+export type TargetViewportShell =
+  | 'browser'
+  | 'mobile-webview'
+  | 'embedded-webview'
+  | 'native-minigame';
 /** Browser measurement surface used to construct the viewport snapshot. */
 export type TargetViewportMeasurementSource = 'container' | 'visual-viewport' | 'window' | 'unknown';
 /** Recommended placement for primary game controls. */
@@ -276,6 +280,9 @@ export function targetViewportShellForRuntime(
     case 'devvit-web':
     case 'verse8-web':
       return 'embedded-webview';
+    case 'wechat-minigame':
+    case 'tiktok-minigame':
+      return 'native-minigame';
     case 'web':
     case 'web-preview':
     case 'microsoft-store-pwa':

@@ -27,7 +27,9 @@ export type TargetRuntimeKind =
   | 'capacitor-ios'
   | 'apps-in-toss'
   | 'devvit-web'
-  | 'verse8-web';
+  | 'verse8-web'
+  | 'wechat-minigame'
+  | 'tiktok-minigame';
 
 export type ReleaseProfile =
   | 'web'
@@ -37,7 +39,9 @@ export type ReleaseProfile =
   | 'app-store'
   | 'apps-in-toss'
   | 'devvit'
-  | 'verse8';
+  | 'verse8'
+  | 'wechat-minigame'
+  | 'tiktok-minigame';
 
 export type StorageSupport = 'local' | 'native' | 'none';
 
@@ -207,6 +211,13 @@ export const targetIntegrations = [
 
 type IntegrationUpperBound = 'available' | 'disabled' | 'unsupported';
 const integrationUpperBoundsByRuntime = {
+  'tiktok-minigame': {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'available',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+  },
   'verse8-web': {
     identityUpgrade: 'unsupported',
     presentation: 'available',
@@ -221,8 +232,15 @@ const integrationUpperBoundsByRuntime = {
     inboundShare: 'available',
     notifications: 'unsupported',
   },
+  'wechat-minigame': {
+    identityUpgrade: 'unsupported',
+    presentation: 'available',
+    sharing: 'available',
+    inboundShare: 'unsupported',
+    notifications: 'unsupported',
+  },
 } as const satisfies Record<
-  'verse8-web' | 'web-preview',
+  'tiktok-minigame' | 'verse8-web' | 'web-preview' | 'wechat-minigame',
   Record<TargetIntegration, IntegrationUpperBound>
 >;
 
@@ -303,7 +321,12 @@ export function assertTargetIntegrationRuntimeBounds(
 ): TargetIntegrationConfig {
   const integrations = normalizeTargetIntegrationConfig(config);
 
-  if (runtime !== 'verse8-web' && runtime !== 'web-preview') {
+  if (
+    runtime !== 'tiktok-minigame'
+    && runtime !== 'verse8-web'
+    && runtime !== 'web-preview'
+    && runtime !== 'wechat-minigame'
+  ) {
     return integrations;
   }
 
@@ -321,6 +344,12 @@ export function assertTargetIntegrationRuntimeBounds(
   }
 
   return integrations;
+}
+
+export function isMiniGameRuntime(
+  runtime: TargetRuntimeKind,
+): runtime is 'wechat-minigame' | 'tiktok-minigame' {
+  return runtime === 'wechat-minigame' || runtime === 'tiktok-minigame';
 }
 
 function isIntegrationStateWithinUpperBound(

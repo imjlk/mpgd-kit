@@ -1,0 +1,42 @@
+{
+  "name": "@mpgd/phaser-minigame-runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Experimental Canvas compatibility runtime for Phaser in native JavaScript mini-game hosts.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/phaser-minigame-runtime"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "lint": "ttsc --noEmit",
+    "test": "vitest run && node test/dist-import.mjs",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "peerDependencies": {
+    "phaser": "4.2.0"
+  },
+  "devDependencies": {
+    "@mpgd/phaser-assets": "workspace:*",
+    "phaser": "4.2.0",
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
+    "vitest": "^4.0.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts"
+}

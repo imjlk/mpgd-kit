@@ -138,6 +138,16 @@ export function resolveBuildGatewayModule(input: {
       return 'src/platform/buildGateways/verse8.ts';
     case 'microsoft-store':
       return 'src/platform/buildGateways/microsoftStore.ts';
+    case 'telegram':
+    case 'tauri':
+      throw new Error(
+        `Direct APP_TARGET=${input.target} builds are unavailable until its native platform gateway is installed.`,
+      );
+    case 'wechat':
+    case 'tiktok':
+      throw new Error(
+        `Direct APP_TARGET=${input.target} builds are unavailable until the native mini-game gateway and artifact emitter are installed.`,
+      );
     default:
       return 'src/platform/buildGateways/browser.ts';
   }

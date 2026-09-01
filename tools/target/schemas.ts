@@ -7,7 +7,9 @@ export type TargetKind =
   | 'capacitor-android'
   | 'capacitor-ios'
   | 'apps-in-toss'
-  | 'devvit-web';
+  | 'devvit-web'
+  | 'wechat-minigame'
+  | 'tiktok-minigame';
 
 export interface BaseTargetConfig {
   readonly kind: TargetKind;
@@ -84,11 +86,27 @@ export interface DevvitTargetConfig extends BaseTargetConfig {
   readonly artifact: 'devvit';
 }
 
+export interface MiniGamePackageBudget {
+  readonly mainBytes: number;
+  readonly totalBytes: number;
+  readonly independentSubpackageBytes?: number;
+}
+
+export interface MiniGameTargetConfig extends BaseTargetConfig {
+  readonly kind: 'wechat-minigame' | 'tiktok-minigame';
+  readonly output: string;
+  readonly renderer: 'canvas';
+  readonly orientation: 'portrait' | 'landscape';
+  readonly experimental: true;
+  readonly packageBudget: MiniGamePackageBudget;
+}
+
 export type PlatformTargetConfig =
   | WebTargetConfig
   | CapacitorTargetConfig
   | AppsInTossTargetConfig
-  | DevvitTargetConfig;
+  | DevvitTargetConfig
+  | MiniGameTargetConfig;
 
 export interface PlatformTargetsConfig {
   readonly targets: Record<string, PlatformTargetConfig>;

@@ -12,6 +12,8 @@ const platformTargets = new Set<PlatformTarget>([
   'telegram',
   'tauri',
   'microsoft-store',
+  'wechat',
+  'tiktok',
 ]);
 const notificationTopics = new Set<NotificationTopic>([
   'daily-ready',

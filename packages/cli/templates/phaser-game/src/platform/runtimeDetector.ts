@@ -9,6 +9,8 @@ const validTargets = new Set<string>([
   'verse8',
   'telegram',
   'tauri',
+  'wechat',
+  'tiktok',
 ] satisfies readonly PlatformTarget[]);
 
 export interface RuntimeConfig {

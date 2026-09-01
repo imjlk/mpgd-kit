@@ -7,7 +7,9 @@ export type PlatformTarget =
   | 'reddit'
   | 'verse8'
   | 'telegram'
-  | 'tauri';
+  | 'tauri'
+  | 'wechat'
+  | 'tiktok';
 
 export type StarterLogicalProductId = 'COINS_100' | 'COINS_500' | 'REMOVE_ADS';
 

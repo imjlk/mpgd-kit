@@ -735,6 +735,20 @@ assertEqual(
   'microsoft-store',
   'Microsoft Store should normalize as a supported notification target',
 );
+for (const target of ['wechat', 'tiktok'] as const) {
+  assertEqual(
+    normalizeNotificationDeliveryRequest(
+      {
+        ...androidRequest,
+        target,
+        idempotencyKey: `notification-${target}-target`,
+      },
+      gameDeepLinkPolicy,
+    ).target,
+    target,
+    `${target} should normalize as a supported notification target`,
+  );
+}
 await assertRejects(
   () => deliveryService.deliver({
     ...androidRequest,

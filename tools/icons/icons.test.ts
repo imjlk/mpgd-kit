@@ -807,6 +807,30 @@ function createTargets(_gameRoot: string): Record<string, PlatformTargetConfig> 
       webDir: 'apps/mobile/www',
       artifact: 'ipa',
     },
+    wechat: {
+      kind: 'wechat-minigame',
+      gameApp: '.',
+      adapter: 'wechat',
+      output: 'artifacts/wechat',
+      renderer: 'canvas',
+      orientation: 'landscape',
+      experimental: true,
+      packageBudget: { mainBytes: 4_194_304, totalBytes: 20_971_520 },
+    },
+    tiktok: {
+      kind: 'tiktok-minigame',
+      gameApp: '.',
+      adapter: 'tiktok',
+      output: 'artifacts/tiktok',
+      renderer: 'canvas',
+      orientation: 'landscape',
+      experimental: true,
+      packageBudget: {
+        mainBytes: 4_194_304,
+        totalBytes: 31_457_280,
+        independentSubpackageBytes: 4_194_304,
+      },
+    },
   };
 }
 
