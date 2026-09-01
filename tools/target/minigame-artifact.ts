@@ -134,6 +134,7 @@ export function assertMiniGameArtifactOutputDirectory(
     projectRelativePath.length === 0
     || projectRelativePath === '..'
     || projectRelativePath.startsWith(`..${sep}`)
+    || (sep === '/' && projectRelativePath.includes('\\'))
     || isAbsolute(projectRelativePath)
     || segments[0] !== 'artifacts'
     || segments.length < 2

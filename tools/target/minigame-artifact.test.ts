@@ -9,7 +9,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, sep } from 'node:path';
 
 import type { GeneratedTargetIcons } from '../icons/types';
 import {
@@ -239,6 +239,15 @@ try {
     }, resolveValidationPath),
     /must use portable forward slashes/u,
   );
+  if (sep === '/') {
+    assert.throws(
+      () => assertMiniGameArtifactOutputDirectory(
+        resolveValidationPath('artifacts\\wechat'),
+        validationRoot,
+      ),
+      /must be a dedicated artifacts\/ child/u,
+    );
+  }
   assert.throws(
     () => assertDisjointMiniGameTargetOutputs({ wechat: miniGameTarget }, resolveValidationPath, [
       {
