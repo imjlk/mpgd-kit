@@ -153,10 +153,7 @@ export async function resolveMicrosoftStoreIdentityCredentials(input: {
     }
 
     if (!response.ok) {
-      await discardResponseBody(response);
-      if (abort.signal.aborted) {
-        throw abort.signal.reason;
-      }
+      await discardResponseBody(response, abort.signal);
       const accountLinkRequired = response.status === 404 || response.status === 409;
       const code = accountLinkRequired
         ? 'MICROSOFT_STORE_ACCOUNT_LINK_REQUIRED'
@@ -219,6 +216,7 @@ function requireText(value: unknown, label: string, maximumLength: number): stri
     || value.length > maximumLength
     || value.trim() !== value
     || /[\p{Cc}\p{Cf}]/u.test(value)
+    || !isWellFormedUnicode(value)
   ) {
     throw new TypeError(`${label} is invalid.`);
   }
@@ -231,6 +229,29 @@ function requireToken(value: unknown, label: string, maximumLength: number): str
     throw new TypeError(`${label} is invalid.`);
   }
   return token;
+}
+
+function isWellFormedUnicode(input: string): boolean {
+  for (let index = 0; index < input.length; index += 1) {
+    const codeUnit = input.charCodeAt(index);
+
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const nextCodeUnit = input.charCodeAt(index + 1);
+
+      if (
+        index + 1 >= input.length
+        || nextCodeUnit < 0xdc00
+        || nextCodeUnit > 0xdfff
+      ) {
+        return false;
+      }
+      index += 1;
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 function createAbortScope(
@@ -265,16 +286,16 @@ async function readBoundedJson(
   const contentLengthHeader = response.headers.get('content-length');
   if (contentLengthHeader !== null) {
     if (!/^\d+$/u.test(contentLengthHeader)) {
-      await discardResponseBody(response);
+      await discardResponseBody(response, signal);
       throw new TypeError('Microsoft Store identity response content length is invalid.');
     }
     const contentLength = Number(contentLengthHeader);
     if (!Number.isSafeInteger(contentLength)) {
-      await discardResponseBody(response);
+      await discardResponseBody(response, signal);
       throw new TypeError('Microsoft Store identity response content length is invalid.');
     }
     if (contentLength > maximumBytes) {
-      await discardResponseBody(response);
+      await discardResponseBody(response, signal);
       throw new TypeError('Microsoft Store identity response is too large.');
     }
   }
@@ -333,8 +354,11 @@ function authorityHttpStatusError(status: number): Error {
   return new Error(`Microsoft Store identity authority returned HTTP ${String(status)}.`);
 }
 
-async function discardResponseBody(response: Response): Promise<void> {
+async function discardResponseBody(response: Response, signal: AbortSignal): Promise<void> {
   await response.body?.cancel().catch(() => undefined);
+  if (signal.aborted) {
+    throw signal.reason;
+  }
 }
 
 function isAbortCause(signal: AbortSignal, cause: unknown): boolean {

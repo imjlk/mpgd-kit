@@ -146,6 +146,24 @@ await assertRejects(
   'MICROSOFT_STORE_IDENTITY_RESPONSE_INVALID',
 );
 
+const invalidBodyCleanupAbort = new AbortController();
+const invalidBodyCleanupAbortReason = new Error('caller stopped invalid-body cleanup');
+await assertRejectsSame(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () => Promise.resolve(new Response(new ReadableStream({
+        cancel() {
+          invalidBodyCleanupAbort.abort(invalidBodyCleanupAbortReason);
+        },
+      }), { headers: { 'Content-Length': 'not-a-number' } })),
+    },
+    gameId: request.gameId,
+    playerId: request.playerId,
+    signal: invalidBodyCleanupAbort.signal,
+  }),
+  invalidBodyCleanupAbortReason,
+);
+
 const callerAbortReason = new Error('caller stopped Store checkout');
 const callerAbort = new AbortController();
 callerAbort.abort(callerAbortReason);
@@ -278,6 +296,24 @@ await assertRejects(
         0x28,
         ...malformedUtf8Suffix,
       ]))),
+    },
+    gameId: request.gameId,
+    playerId: request.playerId,
+  }),
+  'MICROSOFT_STORE_IDENTITY_RESPONSE_INVALID',
+);
+
+await assertRejects(
+  resolveMicrosoftStoreIdentityCredentials({
+    authority: {
+      fetch: () => Promise.resolve(Response.json({
+        schema: microsoftStoreIdentityCredentialsSchema,
+        gameId: request.gameId,
+        playerId: request.playerId,
+        accessToken: 'service-token',
+        userStoreId: 'user-store-id',
+        accountBindingId: '\ud800',
+      })),
     },
     gameId: request.gameId,
     playerId: request.playerId,
