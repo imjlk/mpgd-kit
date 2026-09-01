@@ -88,12 +88,7 @@ function isConfiguredMiniGameTarget(
   target: string,
   configuredTargets: ConfiguredBuildTargets,
 ): boolean {
-  const expectedKind = configuredMiniGameKind(target);
-
-  if (
-    expectedKind === undefined
-    || !Object.prototype.hasOwnProperty.call(configuredTargets, target)
-  ) {
+  if (!Object.prototype.hasOwnProperty.call(configuredTargets, target)) {
     return false;
   }
 
@@ -103,11 +98,7 @@ function isConfiguredMiniGameTarget(
     && configuredTarget !== null
     && !Array.isArray(configuredTarget)
     && 'kind' in configuredTarget
-    && configuredTarget.kind === expectedKind;
-}
-
-function configuredMiniGameKind(target: string): string | undefined {
-  return target === 'wechat' ? 'wechat-minigame' : undefined;
+    && configuredTarget.kind === 'wechat-minigame';
 }
 
 function normalizeBuiltInBuildTarget(target: string): string | undefined {

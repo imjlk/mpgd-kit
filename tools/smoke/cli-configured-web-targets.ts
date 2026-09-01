@@ -34,14 +34,17 @@ assert.throws(
 const configuredWechatTargets = {
   ...configuredTargets,
   wechat: { kind: 'wechat-minigame' },
+  'wechat-staging': { kind: 'wechat-minigame' },
 } as const;
 assert.equal(normalizeBuildTarget('wechat', configuredWechatTargets), 'wechat');
+assert.equal(normalizeBuildTarget('wechat-staging', configuredWechatTargets), 'wechat-staging');
 const configuredBuildTargets = normalizeConfiguredBuildTargets(configuredTargets);
 assert.deepEqual(configuredBuildTargets, ['web-preview', 'storefront']);
 assert.deepEqual(normalizeConfiguredBuildTargets(configuredWechatTargets), [
   'web-preview',
   'storefront',
   'wechat',
+  'wechat-staging',
 ]);
 assert.throws(
   () => normalizeBuildTarget('unsupportedCustomNative', configuredTargets),

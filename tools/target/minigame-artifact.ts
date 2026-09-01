@@ -113,10 +113,21 @@ interface MiniGameLexicalScope {
   readonly bindings: Map<string, MiniGameLexicalBinding>;
 }
 
+type MiniGameGlobalIntrinsic = 'Object' | 'Reflect';
+type MiniGameReflectiveGlobalReadKind = 'property' | 'descriptors';
+
 interface MiniGameScopeAnalysis {
   readonly programScope: MiniGameLexicalScope;
   readonly scopeByNode: WeakMap<Record<string, unknown>, MiniGameLexicalScope>;
   readonly globalObjectAliases: ReadonlySet<MiniGameLexicalBinding>;
+  readonly globalIntrinsicAliases: ReadonlyMap<
+    MiniGameLexicalBinding,
+    ReadonlySet<MiniGameGlobalIntrinsic>
+  >;
+  readonly reflectiveGlobalReadAliases: ReadonlyMap<
+    MiniGameLexicalBinding,
+    ReadonlySet<MiniGameReflectiveGlobalReadKind>
+  >;
 }
 
 export function assembleMiniGameArtifact(
@@ -127,17 +138,22 @@ export function assembleMiniGameArtifact(
   const artifactParent = dirname(artifactRoot);
   mkdirSync(artifactParent, { recursive: true });
   const stagingRoot = mkdtempSync(join(artifactParent, `.${basename(artifactRoot)}-staging-`));
+  const projectFilesRoot = mkdtempSync(
+    join(artifactParent, `.${basename(artifactRoot)}-project-files-`),
+  );
   const stagingInput = { ...input, artifactRoot: stagingRoot };
 
   try {
     copyMiniGameBundleOutput(input.runtimeBundleRoot, stagingRoot);
     copyMiniGameBundleOutput(input.gameBundleRoot, stagingRoot);
-    copyFileSync(
+    copyMiniGameArtifactFile(
       input.effectiveTargetConfigSource,
       join(stagingRoot, miniGameEffectiveTargetConfigFileName),
+      miniGameEffectiveTargetConfigFileName,
     );
     stageMiniGameIconEvidence(input.generatedIcons, stagingRoot);
-    input.writeProjectFiles(stagingRoot);
+    input.writeProjectFiles(projectFilesRoot);
+    copyMiniGameBundleOutput(projectFilesRoot, stagingRoot);
     assertMiniGameRequiredFiles(stagingRoot);
     assertMiniGameJavaScriptSafety(stagingRoot, input.forbiddenJavaScriptMarkers ?? []);
     const evidence = writeMiniGameArtifactEvidence(stagingInput);
@@ -151,6 +167,7 @@ export function assembleMiniGameArtifact(
     return evidence;
   } finally {
     rmSync(stagingRoot, { force: true, recursive: true });
+    rmSync(projectFilesRoot, { force: true, recursive: true });
   }
 }
 
@@ -390,14 +407,46 @@ export function stageMiniGameIconEvidence(
   artifactRoot: string,
 ): void {
   mkdirSync(artifactRoot, { recursive: true });
-  copyFileSync(generated.manifestPath, join(artifactRoot, miniGameIconManifestFileName));
+  const files = [
+    {
+      source: generated.manifestPath,
+      destination: join(artifactRoot, miniGameIconManifestFileName),
+      relativePath: miniGameIconManifestFileName,
+    },
+    ...generated.manifest.outputs.map((output) => {
+      assertMiniGameArtifactRelativePath(output.path, 'Mini-game icon output');
+      return {
+        source: join(generated.outputDir, basename(output.path)),
+        destination: join(artifactRoot, output.path),
+        relativePath: output.path,
+      };
+    }),
+  ];
+  const plannedPaths = new Set<string>();
 
-  for (const output of generated.manifest.outputs) {
-    const source = join(generated.outputDir, basename(output.path));
-    const destination = join(artifactRoot, output.path);
-    mkdirSync(dirname(destination), { recursive: true });
-    copyFileSync(source, destination);
+  for (const file of files) {
+    const comparisonKey = portablePathComparisonKey(file.destination);
+
+    if (plannedPaths.has(comparisonKey)) {
+      throw new Error(`Mini-game icon outputs collide at ${file.relativePath}.`);
+    }
+    plannedPaths.add(comparisonKey);
+    if (existsSync(file.destination)) {
+      throw new Error(`Mini-game artifact files collide at ${file.relativePath}.`);
+    }
   }
+
+  for (const file of files) {
+    copyMiniGameArtifactFile(file.source, file.destination, file.relativePath);
+  }
+}
+
+function copyMiniGameArtifactFile(source: string, destination: string, relativePath: string): void {
+  if (existsSync(destination)) {
+    throw new Error(`Mini-game artifact files collide at ${relativePath}.`);
+  }
+  mkdirSync(dirname(destination), { recursive: true });
+  copyFileSync(source, destination);
 }
 
 function configuredNonMiniGameOutputs(
@@ -800,77 +849,59 @@ function isReflectiveDynamicCodeGlobalRead(
   if (
     node.type !== 'CallExpression'
     || !isAstRecord(node.callee)
-    || node.callee.type !== 'MemberExpression'
     || !Array.isArray(node.arguments)
   ) {
     return false;
   }
 
-  const method = readMemberName(node.callee);
-  const isReflectMethod = isGlobalIntrinsicReference(
-    node.callee.object,
-    'Reflect',
-    ancestors,
-    scopeAnalysis,
-  );
-  const isObjectMethod = isGlobalIntrinsicReference(
-    node.callee.object,
-    'Object',
-    ancestors,
-    scopeAnalysis,
-  );
+  let kinds = getReflectiveGlobalReadKinds(node.callee, ancestors, scopeAnalysis);
+  let target = node.arguments[0];
+  let property = node.arguments[1];
 
-  if (
-    !isGlobalObjectAliasSource(node.arguments[0], ancestors, scopeAnalysis)
-    || (
-      !(isReflectMethod && (method === 'get' || method === 'getOwnPropertyDescriptor'))
-      && !(isObjectMethod && (
-        method === 'getOwnPropertyDescriptor'
-        || method === 'getOwnPropertyDescriptors'
-      ))
-    )
-  ) {
+  if (kinds.size === 0 && node.callee.type === 'MemberExpression') {
+    const invocationMethod = readMemberName(node.callee);
+    const receiverKinds = getReflectiveGlobalReadKinds(
+      node.callee.object,
+      ancestors,
+      scopeAnalysis,
+    );
+
+    if (receiverKinds.size === 0) {
+      return false;
+    }
+    if (invocationMethod === 'bind') {
+      return true;
+    }
+    if (invocationMethod === 'call') {
+      kinds = receiverKinds;
+      target = node.arguments[1];
+      property = node.arguments[2];
+    } else if (invocationMethod === 'apply') {
+      const appliedArguments = node.arguments[1];
+
+      if (!isAstRecord(appliedArguments) || appliedArguments.type !== 'ArrayExpression') {
+        return true;
+      }
+      const elements = Array.isArray(appliedArguments.elements) ? appliedArguments.elements : [];
+      kinds = receiverKinds;
+      target = elements[0];
+      property = elements[1];
+    } else {
+      return false;
+    }
+  }
+
+  if (!isGlobalObjectAliasSource(target, ancestors, scopeAnalysis)) {
     return false;
   }
-  if (method === 'getOwnPropertyDescriptors') {
+  if (kinds.has('descriptors')) {
     return true;
   }
 
-  const property = evaluateStaticString(node.arguments[1]);
-  return property === undefined || ['eval', 'Function', 'importScripts'].includes(property);
-}
-
-function isGlobalIntrinsicReference(
-  input: unknown,
-  name: 'Object' | 'Reflect',
-  ancestors: readonly MiniGameAstAncestor[],
-  scopeAnalysis: MiniGameScopeAnalysis,
-): boolean {
-  if (!isAstRecord(input)) {
-    return false;
-  }
-  if (input.type === 'Identifier' && input.name === name) {
-    const scope = scopeAnalysis.scopeByNode.get(input) ?? scopeAnalysis.programScope;
-    return resolveMiniGameBinding(name, scope) === undefined;
-  }
-  if (input.type === 'ChainExpression') {
-    return isGlobalIntrinsicReference(input.expression, name, ancestors, scopeAnalysis);
-  }
-  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
-    return isGlobalIntrinsicReference(input.expressions.at(-1), name, ancestors, scopeAnalysis);
-  }
-  if (input.type === 'ConditionalExpression') {
-    return isGlobalIntrinsicReference(input.consequent, name, ancestors, scopeAnalysis)
-      || isGlobalIntrinsicReference(input.alternate, name, ancestors, scopeAnalysis);
-  }
-  if (input.type === 'LogicalExpression') {
-    return isGlobalIntrinsicReference(input.left, name, ancestors, scopeAnalysis)
-      || isGlobalIntrinsicReference(input.right, name, ancestors, scopeAnalysis);
-  }
-
-  return input.type === 'MemberExpression'
-    && readMemberName(input) === name
-    && isGlobalObjectAliasSource(input.object, ancestors, scopeAnalysis);
+  const propertyName = evaluateStaticString(property);
+  return kinds.has('property')
+    && (propertyName === undefined
+      || ['eval', 'Function', 'importScripts'].includes(propertyName));
 }
 
 function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
@@ -878,12 +909,24 @@ function createMiniGameScopeAnalysis(ast: unknown): MiniGameScopeAnalysis {
   const scopeByNode = new WeakMap<Record<string, unknown>, MiniGameLexicalScope>();
   buildMiniGameScopes(ast, programScope, scopeByNode);
   const globalObjectAliases = new Set<MiniGameLexicalBinding>();
+  const globalIntrinsicAliases = new Map<
+    MiniGameLexicalBinding,
+    Set<MiniGameGlobalIntrinsic>
+  >();
+  const reflectiveGlobalReadAliases = new Map<
+    MiniGameLexicalBinding,
+    Set<MiniGameReflectiveGlobalReadKind>
+  >();
   const analysis: MiniGameScopeAnalysis = {
     programScope,
     scopeByNode,
     globalObjectAliases,
+    globalIntrinsicAliases,
+    reflectiveGlobalReadAliases,
   };
   collectDynamicCodeGlobalObjectAliases(ast, analysis, globalObjectAliases);
+  collectGlobalIntrinsicAliases(ast, analysis, globalIntrinsicAliases);
+  collectReflectiveGlobalReadAliases(ast, analysis, reflectiveGlobalReadAliases);
   return analysis;
 }
 
@@ -1063,6 +1106,242 @@ function collectDynamicCodeGlobalObjectAliases(
   analysis: MiniGameScopeAnalysis,
   aliases: Set<MiniGameLexicalBinding>,
 ): void {
+  collectMiniGameAliases(ast, (pattern, source, ancestors) => {
+    return addGlobalObjectAliasBindings(pattern, source, ancestors, analysis, aliases);
+  });
+}
+
+function collectGlobalIntrinsicAliases(
+  ast: unknown,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<MiniGameGlobalIntrinsic>>,
+): void {
+  collectMiniGameAliases(ast, (pattern, source, ancestors) => {
+    return addGlobalIntrinsicAliasBindings(pattern, source, ancestors, analysis, aliases);
+  });
+}
+
+function addGlobalIntrinsicAliasBindings(
+  pattern: unknown,
+  source: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<MiniGameGlobalIntrinsic>>,
+): boolean {
+  if (!isAstRecord(pattern)) {
+    return false;
+  }
+  if (
+    pattern.type === 'ObjectPattern'
+    && Array.isArray(pattern.properties)
+    && isGlobalObjectAliasSource(source, ancestors, analysis)
+  ) {
+    let changed = false;
+
+    for (const property of pattern.properties) {
+      if (!isAstRecord(property) || property.type !== 'Property') {
+        continue;
+      }
+      const name = readStaticPropertyName(property);
+
+      if (name === 'Object' || name === 'Reflect') {
+        changed = addMiniGameBindingKinds(
+          property.value,
+          new Set([name]),
+          analysis,
+          aliases,
+        ) || changed;
+      }
+    }
+
+    return changed;
+  }
+
+  return addMiniGameBindingKinds(
+    pattern,
+    getGlobalIntrinsicKinds(source, ancestors, analysis),
+    analysis,
+    aliases,
+  );
+}
+
+function getGlobalIntrinsicKinds(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Set<MiniGameGlobalIntrinsic> {
+  const kinds = new Set<MiniGameGlobalIntrinsic>();
+
+  if (!isAstRecord(input)) {
+    return kinds;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(input.name, scope);
+
+    if (binding === undefined) {
+      if (input.name === 'Object' || input.name === 'Reflect') {
+        kinds.add(input.name);
+      }
+    } else {
+      addSetValues(kinds, analysis.globalIntrinsicAliases.get(binding));
+    }
+    return kinds;
+  }
+  if (input.type === 'ChainExpression') {
+    return getGlobalIntrinsicKinds(input.expression, ancestors, analysis);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return getGlobalIntrinsicKinds(input.expressions.at(-1), ancestors, analysis);
+  }
+  if (input.type === 'ConditionalExpression') {
+    addSetValues(kinds, getGlobalIntrinsicKinds(input.consequent, ancestors, analysis));
+    addSetValues(kinds, getGlobalIntrinsicKinds(input.alternate, ancestors, analysis));
+    return kinds;
+  }
+  if (input.type === 'LogicalExpression') {
+    addSetValues(kinds, getGlobalIntrinsicKinds(input.left, ancestors, analysis));
+    addSetValues(kinds, getGlobalIntrinsicKinds(input.right, ancestors, analysis));
+    return kinds;
+  }
+  if (
+    input.type === 'MemberExpression'
+    && isGlobalObjectAliasSource(input.object, ancestors, analysis)
+  ) {
+    const name = readMemberName(input);
+
+    if (name === 'Object' || name === 'Reflect') {
+      kinds.add(name);
+    }
+  }
+
+  return kinds;
+}
+
+function collectReflectiveGlobalReadAliases(
+  ast: unknown,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<MiniGameReflectiveGlobalReadKind>>,
+): void {
+  collectMiniGameAliases(ast, (pattern, source, ancestors) => {
+    return addReflectiveGlobalReadAliasBindings(pattern, source, ancestors, analysis, aliases);
+  });
+}
+
+function addReflectiveGlobalReadAliasBindings(
+  pattern: unknown,
+  source: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<MiniGameReflectiveGlobalReadKind>>,
+): boolean {
+  if (!isAstRecord(pattern)) {
+    return false;
+  }
+  if (pattern.type === 'ObjectPattern' && Array.isArray(pattern.properties)) {
+    const intrinsicKinds = getGlobalIntrinsicKinds(source, ancestors, analysis);
+    let changed = false;
+
+    for (const property of pattern.properties) {
+      if (!isAstRecord(property) || property.type !== 'Property') {
+        continue;
+      }
+      const methodName = readStaticPropertyName(property);
+      const readKinds = getReflectiveMethodKinds(intrinsicKinds, methodName);
+
+      const added = addMiniGameBindingKinds(property.value, readKinds, analysis, aliases);
+      changed = added || changed;
+    }
+
+    return changed;
+  }
+
+  return addMiniGameBindingKinds(
+    pattern,
+    getReflectiveGlobalReadKinds(source, ancestors, analysis),
+    analysis,
+    aliases,
+  );
+}
+
+function getReflectiveGlobalReadKinds(
+  input: unknown,
+  ancestors: readonly MiniGameAstAncestor[],
+  analysis: MiniGameScopeAnalysis,
+): Set<MiniGameReflectiveGlobalReadKind> {
+  const kinds = new Set<MiniGameReflectiveGlobalReadKind>();
+
+  if (!isAstRecord(input)) {
+    return kinds;
+  }
+  if (input.type === 'Identifier' && typeof input.name === 'string') {
+    const scope = analysis.scopeByNode.get(input) ?? analysis.programScope;
+    const binding = resolveMiniGameBinding(input.name, scope);
+
+    if (binding !== undefined) {
+      addSetValues(kinds, analysis.reflectiveGlobalReadAliases.get(binding));
+    }
+    return kinds;
+  }
+  if (input.type === 'ChainExpression') {
+    return getReflectiveGlobalReadKinds(input.expression, ancestors, analysis);
+  }
+  if (input.type === 'SequenceExpression' && Array.isArray(input.expressions)) {
+    return getReflectiveGlobalReadKinds(input.expressions.at(-1), ancestors, analysis);
+  }
+  if (input.type === 'ConditionalExpression') {
+    addSetValues(kinds, getReflectiveGlobalReadKinds(input.consequent, ancestors, analysis));
+    addSetValues(kinds, getReflectiveGlobalReadKinds(input.alternate, ancestors, analysis));
+    return kinds;
+  }
+  if (input.type === 'LogicalExpression') {
+    addSetValues(kinds, getReflectiveGlobalReadKinds(input.left, ancestors, analysis));
+    addSetValues(kinds, getReflectiveGlobalReadKinds(input.right, ancestors, analysis));
+    return kinds;
+  }
+  if (input.type === 'MemberExpression') {
+    addSetValues(
+      kinds,
+      getReflectiveMethodKinds(
+        getGlobalIntrinsicKinds(input.object, ancestors, analysis),
+        readMemberName(input),
+      ),
+    );
+  }
+
+  return kinds;
+}
+
+function getReflectiveMethodKinds(
+  intrinsics: ReadonlySet<MiniGameGlobalIntrinsic>,
+  methodName: string | undefined,
+): Set<MiniGameReflectiveGlobalReadKind> {
+  const kinds = new Set<MiniGameReflectiveGlobalReadKind>();
+
+  if (
+    (
+      intrinsics.has('Reflect')
+      && (methodName === 'get' || methodName === 'getOwnPropertyDescriptor')
+    )
+    || (intrinsics.has('Object') && methodName === 'getOwnPropertyDescriptor')
+  ) {
+    kinds.add('property');
+  }
+  if (intrinsics.has('Object') && methodName === 'getOwnPropertyDescriptors') {
+    kinds.add('descriptors');
+  }
+
+  return kinds;
+}
+
+function collectMiniGameAliases(
+  ast: unknown,
+  addAliases: (
+    pattern: unknown,
+    source: unknown,
+    ancestors: readonly MiniGameAstAncestor[],
+  ) => boolean,
+): void {
   let changed = true;
 
   while (changed) {
@@ -1082,32 +1361,11 @@ function collectDynamicCodeGlobalObjectAliases(
       }
 
       if (input.type === 'VariableDeclarator') {
-        const added = addGlobalObjectAliasBindings(
-          input.id,
-          input.init,
-          ancestors,
-          analysis,
-          aliases,
-        );
-        changed = added || changed;
+        changed = addAliases(input.id, input.init, ancestors) || changed;
       } else if (input.type === 'AssignmentPattern') {
-        const added = addGlobalObjectAliasBindings(
-          input.left,
-          input.right,
-          ancestors,
-          analysis,
-          aliases,
-        );
-        changed = added || changed;
+        changed = addAliases(input.left, input.right, ancestors) || changed;
       } else if (input.type === 'AssignmentExpression' && input.operator === '=') {
-        const added = addGlobalObjectAliasBindings(
-          input.left,
-          input.right,
-          ancestors,
-          analysis,
-          aliases,
-        );
-        changed = added || changed;
+        changed = addAliases(input.left, input.right, ancestors) || changed;
       }
 
       for (const [key, value] of Object.entries(input)) {
@@ -1118,6 +1376,41 @@ function collectDynamicCodeGlobalObjectAliases(
         }
       }
     }
+  }
+}
+
+function addMiniGameBindingKinds<T>(
+  pattern: unknown,
+  kinds: ReadonlySet<T>,
+  analysis: MiniGameScopeAnalysis,
+  aliases: Map<MiniGameLexicalBinding, Set<T>>,
+): boolean {
+  if (kinds.size === 0 || !isAstRecord(pattern)) {
+    return false;
+  }
+  if (pattern.type === 'AssignmentPattern') {
+    return addMiniGameBindingKinds(pattern.left, kinds, analysis, aliases);
+  }
+  if (pattern.type !== 'Identifier' || typeof pattern.name !== 'string') {
+    return false;
+  }
+
+  const scope = analysis.scopeByNode.get(pattern) ?? analysis.programScope;
+  const binding = resolveMiniGameBinding(pattern.name, scope)
+    ?? ensureMiniGameBinding(pattern.name, analysis.programScope);
+  const existing = aliases.get(binding) ?? new Set<T>();
+  const size = existing.size;
+  addSetValues(existing, kinds);
+  aliases.set(binding, existing);
+  return existing.size !== size;
+}
+
+function addSetValues<T>(target: Set<T>, source: ReadonlySet<T> | undefined): void {
+  if (source === undefined) {
+    return;
+  }
+  for (const value of source) {
+    target.add(value);
   }
 }
 

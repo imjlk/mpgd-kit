@@ -212,6 +212,15 @@ try {
   rmSync(join(root, 'unsafe.js'));
   for (const reflectiveGlobalRead of [
     'Reflect.get(globalThis, "Function")("return 1")();\n',
+    'const get = Reflect.get; get(globalThis, "Function")("return 1")();\n',
+    'const ReflectAlias = Reflect; const get = ReflectAlias.get; '
+      + 'get(globalThis, "Function")("return 1")();\n',
+    'const { get: lookup } = Reflect; lookup(globalThis, "eval")("x");\n',
+    'const descriptors = Object.getOwnPropertyDescriptors; '
+      + 'descriptors(globalThis).Function.value("return 1")();\n',
+    'Reflect.get.call(null, globalThis, "Function")("return 1")();\n',
+    'Reflect.get.apply(null, [globalThis, "Function"])("return 1")();\n',
+    'Reflect.get.bind(null, globalThis, "Function")("return 1")();\n',
     'const g = globalThis; Object.getOwnPropertyDescriptor(g, "eval").value("x");\n',
     'globalThis.Reflect.getOwnPropertyDescriptor(globalThis, "importScripts").value("x");\n',
     'Object.getOwnPropertyDescriptors(globalThis).Function.value("return 1")();\n',
@@ -230,7 +239,7 @@ try {
     'safe-reflective-read.js',
     'const record = { Function: "label" }; Reflect.get(record, "Function"); '
       + 'function read(scope) { const Reflect = { get() { return "safe"; } }; '
-      + 'return Reflect.get(scope, "safe"); } read({});\n',
+      + 'const get = Reflect.get; return get(scope, "safe"); } read({});\n',
   );
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));
   rmSync(join(root, 'safe-reflective-read.js'));
@@ -325,6 +334,42 @@ try {
   writeFileSync(join(gameBundleRoot, 'game.bundle.js'), 'globalThis.game = true;\n');
   writeFileSync(iconManifestPath, '{"outputs":[]}\n');
   writeFileSync(effectiveTargetConfigSource, '{"target":"wechat"}\n');
+  const collidingIconPath = 'icons/collision.png';
+  mkdirSync(join(gameBundleRoot, dirname(collidingIconPath)), { recursive: true });
+  writeFileSync(join(gameBundleRoot, collidingIconPath), 'bundle icon');
+  writeFileSync(join(iconOutputRoot, 'collision.png'), 'generated icon');
+  assert.throws(
+    () => assembleMiniGameArtifact({
+      artifactRoot,
+      projectRoot,
+      runtimeBundleRoot,
+      gameBundleRoot,
+      effectiveTargetConfigSource,
+      generatedIcons: {
+        manifestPath: iconManifestPath,
+        outputDir: iconOutputRoot,
+        manifest: { outputs: [{ path: collidingIconPath }] },
+      } as unknown as GeneratedTargetIcons,
+      writeProjectFiles(projectFilesRoot) {
+        writeFileSync(
+          join(projectFilesRoot, 'game.js'),
+          "require('./runtime.js');\nrequire('./game.bundle.js');\n",
+        );
+        writeFileSync(join(projectFilesRoot, 'game.json'), '{}\n');
+        writeFileSync(join(projectFilesRoot, 'project.config.json'), '{}\n');
+      },
+      target: 'wechat',
+      runtime: 'wechat-minigame',
+      appVersion: '1.2.3',
+      buildId: 'build-1',
+      sourceGitSha: 'source-sha',
+      kitGitSha: 'kit-sha',
+      budget,
+    }),
+    /artifact files collide at icons\/collision\.png/u,
+  );
+  rmSync(join(gameBundleRoot, 'icons'), { force: true, recursive: true });
+  assert.equal(readFileSync(join(artifactRoot, 'sentinel.txt'), 'utf8'), 'prior verified artifact');
   assert.throws(
     () => assembleMiniGameArtifact({
       artifactRoot,
