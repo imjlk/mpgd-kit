@@ -10,6 +10,7 @@ import {
   createWechatConfigurationError,
   resolveWechatMiniGameApi,
   type WechatMiniGameApi,
+  type WechatMiniGameFileSystemManager,
   type WechatMiniGameGlobalScope,
   type WechatMiniGameTouch,
   type WechatMiniGameTouchEvent,
@@ -35,7 +36,7 @@ export function createWechatMiniGameHost(
   }
 
   readWindowInfo(api);
-  const fileSystem = api.getFileSystemManager();
+  const fileSystem = readFileSystemManager(api);
   let primaryCanvas: unknown;
 
   return {
@@ -148,16 +149,60 @@ function resolveWechatAnimationFrameOptions(
 }
 
 function readWindowInfo(api: WechatMiniGameApi) {
-  const info = api.getWindowInfo?.() ?? api.getSystemInfoSync?.();
+  let info: unknown;
 
-  if (info === undefined) {
+  try {
+    info = api.getWindowInfo?.() ?? api.getSystemInfoSync?.();
+  } catch {
     throw createWechatConfigurationError(
       'WECHAT_WINDOW_INFO_UNAVAILABLE',
       'WeChat Mini Game window information is unavailable.',
     );
   }
 
-  return info;
+  if (
+    !isRecord(info)
+    || !isPositiveFiniteNumber(info.windowWidth)
+    || !isPositiveFiniteNumber(info.windowHeight)
+    || !isPositiveFiniteNumber(info.pixelRatio)
+    || (info.platform !== undefined && typeof info.platform !== 'string')
+    || (info.language !== undefined && typeof info.language !== 'string')
+  ) {
+    throw createWechatConfigurationError(
+      'WECHAT_WINDOW_INFO_INVALID',
+      'WeChat Mini Game window information is invalid.',
+    );
+  }
+
+  return {
+    windowWidth: info.windowWidth,
+    windowHeight: info.windowHeight,
+    pixelRatio: info.pixelRatio,
+    ...(info.platform === undefined ? {} : { platform: info.platform }),
+    ...(info.language === undefined ? {} : { language: info.language }),
+  };
+}
+
+function readFileSystemManager(api: WechatMiniGameApi): WechatMiniGameFileSystemManager {
+  let fileSystem: unknown;
+
+  try {
+    fileSystem = api.getFileSystemManager();
+  } catch {
+    throw createWechatConfigurationError(
+      'WECHAT_FILE_SYSTEM_UNAVAILABLE',
+      'WeChat Mini Game packaged-file access is unavailable.',
+    );
+  }
+
+  if (!isRecord(fileSystem) || typeof fileSystem.readFile !== 'function') {
+    throw createWechatConfigurationError(
+      'WECHAT_FILE_SYSTEM_UNAVAILABLE',
+      'WeChat Mini Game packaged-file access is unavailable.',
+    );
+  }
+
+  return fileSystem as unknown as WechatMiniGameFileSystemManager;
 }
 
 function subscribeTouch(
@@ -219,7 +264,10 @@ function toArrayBuffer(data: string | ArrayBuffer | ArrayBufferView): ArrayBuffe
   }
 
   if (typeof data === 'string') {
-    return new TextEncoder().encode(data).buffer;
+    throw new MiniGameRuntimeError(
+      'WECHAT_FILE_RESPONSE_INVALID',
+      'WeChat Mini Game packaged-file reads must return binary data.',
+    );
   }
 
   return data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
@@ -302,4 +350,12 @@ function normalizeHeaders(
     Object.entries(headers).flatMap(([name, value]) =>
       typeof value === 'string' ? [[name, value] as const] : []),
   );
+}
+
+function isRecord(input: unknown): input is Record<string, unknown> {
+  return typeof input === 'object' && input !== null && !Array.isArray(input);
+}
+
+function isPositiveFiniteNumber(input: unknown): input is number {
+  return typeof input === 'number' && Number.isFinite(input) && input > 0;
 }

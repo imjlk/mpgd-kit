@@ -43,7 +43,10 @@ export function writeWechatMiniGameProjectFiles(
 }
 
 export function assertWechatAppId(appId: string, production: boolean): void {
-  if (production && !/^wx[0-9a-f]{16}$/iu.test(appId)) {
+  if (
+    production
+    && (appId === wechatStagingAppId || !/^wx[0-9a-f]{16}$/iu.test(appId))
+  ) {
     throw new Error('Production WeChat Mini Game builds require MPGD_WECHAT_APP_ID.');
   }
 

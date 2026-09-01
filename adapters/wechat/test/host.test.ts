@@ -1,11 +1,13 @@
 import { describe, expect, it } from 'vitest';
 
 import { MiniGameRuntimeError } from '@mpgd/phaser-minigame-runtime';
+import { PlatformOperationError } from '@mpgd/platform';
 
 import {
   createWechatMiniGameHost,
   createWechatMiniGameHostFromGlobal,
   resolveWechatMiniGameApi,
+  type WechatMiniGameApi,
 } from '../src/index.js';
 import { createFakeWechatMiniGameApi } from './fake-api.js';
 
@@ -20,6 +22,15 @@ describe('WeChat Mini Game host', () => {
     expect(() => resolveWechatMiniGameApi({ wx: { createCanvas() {} } })).toThrowError(
       expect.objectContaining({ code: 'WECHAT_API_METHOD_UNAVAILABLE' }),
     );
+    expect(() => resolveWechatMiniGameApi({
+      wx: { ...fake.api, shareAppMessage: 'not-a-function' },
+    })).toThrowError(PlatformOperationError);
+    expect(() => resolveWechatMiniGameApi({
+      wx: { ...fake.api, shareAppMessage: 'not-a-function' },
+    })).toThrowError(expect.objectContaining({
+      code: 'WECHAT_API_METHOD_UNAVAILABLE',
+      retryable: false,
+    }));
   });
 
   it('creates the primary canvas before offscreen canvases and reports window information', () => {
@@ -138,5 +149,40 @@ describe('WeChat Mini Game host', () => {
       headers: {},
       responseType: 'json',
     })).rejects.toMatchObject({ code: 'WECHAT_REQUEST_FAILED' });
+  });
+
+  it('rejects malformed startup state and non-binary packaged-file responses', async () => {
+    const fake = createFakeWechatMiniGameApi();
+    const malformedFileSystemApi = {
+      ...fake.api,
+      getFileSystemManager: () => ({}),
+    } as unknown as WechatMiniGameApi;
+
+    expect(() => createWechatMiniGameHost(malformedFileSystemApi, {
+      requestAnimationFrame: () => 1,
+    })).toThrowError(expect.objectContaining({ code: 'WECHAT_FILE_SYSTEM_UNAVAILABLE' }));
+    expect(() => createWechatMiniGameHost({
+      ...fake.api,
+      getWindowInfo: () => ({ windowWidth: 0, windowHeight: 540, pixelRatio: 2 }),
+    }, {
+      requestAnimationFrame: () => 1,
+    })).toThrowError(expect.objectContaining({ code: 'WECHAT_WINDOW_INFO_INVALID' }));
+
+    const stringFileApi = createFakeWechatMiniGameApi({
+      getFileSystemManager() {
+        return {
+          readFile(input) {
+            input.success({ data: 'unexpected text' });
+          },
+        };
+      },
+    });
+    const host = createWechatMiniGameHost(stringFileApi.api, {
+      requestAnimationFrame: () => 1,
+    });
+
+    await expect(host.readLocalFile?.('assets/logo.png')).rejects.toMatchObject({
+      code: 'WECHAT_FILE_RESPONSE_INVALID',
+    });
   });
 });

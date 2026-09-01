@@ -2,6 +2,8 @@ import { existsSync, readFileSync, realpathSync } from 'node:fs';
 import { isIP } from 'node:net';
 import path from 'node:path';
 
+const wechatStagingAppId = 'wx0000000000000000';
+
 const ownerPathByTarget = {
   ait: 'wrapperApp',
   android: 'shellApp',
@@ -179,7 +181,11 @@ function assertExperimentalTargetReadiness(
   if (targetConfig.kind === 'wechat-minigame') {
     const appId = environment.MPGD_WECHAT_APP_ID?.trim();
 
-    if (appId === undefined || !/^wx[0-9a-f]{16}$/iu.test(appId)) {
+    if (
+      appId === undefined
+      || appId === wechatStagingAppId
+      || !/^wx[0-9a-f]{16}$/iu.test(appId)
+    ) {
       throw new Error('Production WeChat Mini Game builds require MPGD_WECHAT_APP_ID.');
     }
   }

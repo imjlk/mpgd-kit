@@ -16,6 +16,7 @@ const host = createWechatMiniGameHostFromGlobal(globalThis);
 const globals = installMiniGameGlobals(host);
 const attachedGames = new WeakSet<object>();
 let disposed = false;
+let disposing = false;
 const bridge: StarterMiniGameRuntimeBridge = {
   target: 'wechat',
   gateway: createWechatPlatformGateway({ api }),
@@ -43,17 +44,23 @@ const bridge: StarterMiniGameRuntimeBridge = {
     });
   },
   dispose() {
-    if (disposed) {
+    if (disposed || disposing) {
       return;
     }
-    disposed = true;
-    globals.dispose();
-    const scope = globalThis as typeof globalThis & {
-      __MPGD_MINIGAME_RUNTIME__?: StarterMiniGameRuntimeBridge;
-    };
+    disposing = true;
 
-    if (scope.__MPGD_MINIGAME_RUNTIME__ === bridge) {
-      Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME__');
+    try {
+      globals.dispose();
+      disposed = true;
+      const scope = globalThis as typeof globalThis & {
+        __MPGD_MINIGAME_RUNTIME__?: StarterMiniGameRuntimeBridge;
+      };
+
+      if (scope.__MPGD_MINIGAME_RUNTIME__ === bridge) {
+        Reflect.deleteProperty(scope, '__MPGD_MINIGAME_RUNTIME__');
+      }
+    } finally {
+      disposing = false;
     }
   },
 };

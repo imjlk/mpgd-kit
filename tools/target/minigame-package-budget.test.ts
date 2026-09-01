@@ -98,7 +98,14 @@ try {
     /symbolic links/u,
   );
 
-  for (const unsafe of ['', '/game.js', '../game.js', 'assets//game.js', 'assets\\game.js']) {
+  for (const unsafe of [
+    '',
+    '/game.js',
+    'C:/game.js',
+    '../game.js',
+    'assets//game.js',
+    'assets\\game.js',
+  ]) {
     assert.throws(
       () => assertMiniGameArtifactRelativePath(unsafe, 'fixture'),
       /safe artifact-relative path/u,

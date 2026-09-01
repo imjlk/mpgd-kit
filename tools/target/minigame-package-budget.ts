@@ -136,6 +136,7 @@ export function assertMiniGameArtifactRelativePath(path: string, label: string):
     path.length === 0
     || path.includes('\\')
     || path.startsWith('/')
+    || /^[A-Za-z]:/u.test(path)
     || isAbsolute(path)
     || path.split('/').some(
       (segment) => segment.length === 0 || segment === '.' || segment === '..',

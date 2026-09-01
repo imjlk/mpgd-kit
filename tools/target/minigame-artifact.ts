@@ -5,8 +5,10 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs';
@@ -83,26 +85,34 @@ export function assembleMiniGameArtifact(
 ): MiniGameArtifactEvidence {
   const artifactRoot = resolve(input.artifactRoot);
   assertMiniGameArtifactOutputDirectory(artifactRoot, input.projectRoot);
-  rmSync(artifactRoot, { force: true, recursive: true });
-  mkdirSync(artifactRoot, { recursive: true });
-  copyMiniGameBundleOutput(input.runtimeBundleRoot, artifactRoot);
-  copyMiniGameBundleOutput(input.gameBundleRoot, artifactRoot);
-  copyFileSync(
-    input.effectiveTargetConfigSource,
-    join(artifactRoot, miniGameEffectiveTargetConfigFileName),
-  );
-  stageMiniGameIconEvidence(input.generatedIcons, artifactRoot);
-  input.writeProjectFiles(artifactRoot);
-  assertMiniGameRequiredFiles(artifactRoot);
-  assertMiniGameJavaScriptSafety(artifactRoot, input.forbiddenJavaScriptMarkers ?? []);
-  const evidence = writeMiniGameArtifactEvidence(input);
+  const artifactParent = dirname(artifactRoot);
+  mkdirSync(artifactParent, { recursive: true });
+  const stagingRoot = mkdtempSync(join(artifactParent, `.${basename(artifactRoot)}-staging-`));
+  const stagingInput = { ...input, artifactRoot: stagingRoot };
 
-  verifyMiniGameArtifactEvidence({
-    ...input,
-    renderer: 'canvas',
-    experimental: true,
-  });
-  return evidence;
+  try {
+    copyMiniGameBundleOutput(input.runtimeBundleRoot, stagingRoot);
+    copyMiniGameBundleOutput(input.gameBundleRoot, stagingRoot);
+    copyFileSync(
+      input.effectiveTargetConfigSource,
+      join(stagingRoot, miniGameEffectiveTargetConfigFileName),
+    );
+    stageMiniGameIconEvidence(input.generatedIcons, stagingRoot);
+    input.writeProjectFiles(stagingRoot);
+    assertMiniGameRequiredFiles(stagingRoot);
+    assertMiniGameJavaScriptSafety(stagingRoot, input.forbiddenJavaScriptMarkers ?? []);
+    const evidence = writeMiniGameArtifactEvidence(stagingInput);
+
+    verifyMiniGameArtifactEvidence({
+      ...stagingInput,
+      renderer: 'canvas',
+      experimental: true,
+    });
+    replaceMiniGameArtifact(stagingRoot, artifactRoot);
+    return evidence;
+  } finally {
+    rmSync(stagingRoot, { force: true, recursive: true });
+  }
 }
 
 export function assertMiniGameArtifactOutputDirectory(
@@ -298,6 +308,37 @@ function copyMiniGameBundleOutput(sourceRoot: string, artifactRoot: string): voi
       errorOnExist: true,
       force: false,
     });
+  }
+}
+
+function replaceMiniGameArtifact(stagingRoot: string, artifactRoot: string): void {
+  let backupRoot: string | undefined;
+
+  if (existsSync(artifactRoot)) {
+    backupRoot = mkdtempSync(join(dirname(artifactRoot), `.${basename(artifactRoot)}-backup-`));
+    rmSync(backupRoot, { force: true, recursive: true });
+    renameSync(artifactRoot, backupRoot);
+  }
+
+  try {
+    renameSync(stagingRoot, artifactRoot);
+  } catch (error) {
+    if (backupRoot !== undefined) {
+      try {
+        renameSync(backupRoot, artifactRoot);
+      } catch (restoreError) {
+        throw new Error(
+          `Failed to activate the new mini-game artifact and restore the prior artifact: `
+            + `${formatError(error)}; restore failed: ${formatError(restoreError)}. `
+            + `The prior artifact remains at ${backupRoot}.`,
+        );
+      }
+    }
+    throw error;
+  }
+
+  if (backupRoot !== undefined) {
+    rmSync(backupRoot, { force: true, recursive: true });
   }
 }
 

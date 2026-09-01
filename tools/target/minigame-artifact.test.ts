@@ -11,7 +11,9 @@ import {
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 
+import type { GeneratedTargetIcons } from '../icons/types';
 import {
+  assembleMiniGameArtifact,
   miniGameArtifactEvidenceFileName,
   miniGameEffectiveTargetConfigFileName,
   miniGameIconManifestFileName,
@@ -20,6 +22,7 @@ import {
 } from './minigame-artifact';
 
 const root = mkdtempSync(join(tmpdir(), 'mpgd-minigame-evidence-'));
+const transactionRoot = mkdtempSync(join(tmpdir(), 'mpgd-minigame-transaction-'));
 const budget = { mainBytes: 100_000, totalBytes: 100_000 } as const;
 const expected = {
   artifactRoot: root,
@@ -67,8 +70,55 @@ try {
   parsed.target = 'tiktok';
   write(miniGameArtifactEvidenceFileName, `${JSON.stringify(parsed, null, 2)}\n`);
   assert.throws(() => verifyMiniGameArtifactEvidence(expected), /target mismatch/u);
+
+  const projectRoot = join(transactionRoot, 'game');
+  const artifactRoot = join(projectRoot, 'artifacts', 'wechat');
+  const runtimeBundleRoot = join(transactionRoot, 'runtime-bundle');
+  const gameBundleRoot = join(transactionRoot, 'game-bundle');
+  const iconOutputRoot = join(transactionRoot, 'icons');
+  const iconManifestPath = join(transactionRoot, 'icon-manifest.json');
+  const effectiveTargetConfigSource = join(transactionRoot, 'effective-target.json');
+  mkdirSync(artifactRoot, { recursive: true });
+  mkdirSync(runtimeBundleRoot, { recursive: true });
+  mkdirSync(gameBundleRoot, { recursive: true });
+  mkdirSync(iconOutputRoot, { recursive: true });
+  writeFileSync(join(artifactRoot, 'sentinel.txt'), 'prior verified artifact');
+  writeFileSync(join(runtimeBundleRoot, 'runtime.js'), 'globalThis.runtime = true;\n');
+  writeFileSync(join(gameBundleRoot, 'game.bundle.js'), 'globalThis.game = true;\n');
+  writeFileSync(iconManifestPath, '{"outputs":[]}\n');
+  writeFileSync(effectiveTargetConfigSource, '{"target":"wechat"}\n');
+  assert.throws(
+    () => assembleMiniGameArtifact({
+      artifactRoot,
+      projectRoot,
+      runtimeBundleRoot,
+      gameBundleRoot,
+      effectiveTargetConfigSource,
+      generatedIcons: {
+        manifestPath: iconManifestPath,
+        outputDir: iconOutputRoot,
+        manifest: { outputs: [] },
+      } as unknown as GeneratedTargetIcons,
+      writeProjectFiles(stagingRoot) {
+        writeFileSync(join(stagingRoot, 'game.js'), "require('./game.bundle.js');\n");
+        writeFileSync(join(stagingRoot, 'game.json'), '{}\n');
+        writeFileSync(join(stagingRoot, 'project.config.json'), '{}\n');
+      },
+      target: 'wechat',
+      runtime: 'wechat-minigame',
+      appVersion: '1.2.3',
+      buildId: 'build-1',
+      sourceGitSha: 'source-sha',
+      kitGitSha: 'kit-sha',
+      budget,
+    }),
+    /must load runtime\.js before game\.bundle\.js/u,
+  );
+  assert.equal(readFileSync(join(artifactRoot, 'sentinel.txt'), 'utf8'), 'prior verified artifact');
+  assert.deepEqual(readdirSync(join(projectRoot, 'artifacts')), ['wechat']);
 } finally {
   rmSync(root, { force: true, recursive: true });
+  rmSync(transactionRoot, { force: true, recursive: true });
 }
 
 console.log('Mini-game artifact evidence tests passed.');

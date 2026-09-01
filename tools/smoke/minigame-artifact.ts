@@ -10,6 +10,7 @@ import {
   miniGameIconManifestFileName,
   verifyMiniGameArtifactEvidence,
 } from '../target/minigame-artifact';
+import { wechatStagingAppId } from '../target/minigame-project-files';
 import type { MiniGamePackageBudget, MiniGameTargetConfig } from '../target/schemas';
 
 export interface SmokeMiniGameTargetConfig {
@@ -103,7 +104,13 @@ function verifyWechatProjectConfig(
   if (typeof projectConfig.appid !== 'string') {
     throw new Error('WeChat project.config.json must declare an appid.');
   }
-  if (production && !/^wx[0-9a-f]{16}$/iu.test(projectConfig.appid)) {
+  if (
+    production
+    && (
+      projectConfig.appid === wechatStagingAppId
+      || !/^wx[0-9a-f]{16}$/iu.test(projectConfig.appid)
+    )
+  ) {
     throw new Error('Production WeChat project.config.json contains a placeholder appid.');
   }
 }

@@ -1,3 +1,5 @@
+import { PlatformOperationError } from '@mpgd/platform';
+
 export interface WechatMiniGameWindowInfoResult {
   readonly windowWidth: number;
   readonly windowHeight: number;
@@ -118,14 +120,18 @@ export function resolveWechatMiniGameApi(scope: WechatMiniGameGlobalScope): Wech
   ] as const) {
     assertMethod(scope.wx, method);
   }
+  if (scope.wx.shareAppMessage !== undefined) {
+    assertMethod(scope.wx, 'shareAppMessage');
+  }
 
   return scope.wx as unknown as WechatMiniGameApi;
 }
 
-export function createWechatConfigurationError(code: string, message: string): Error & {
-  readonly code: string;
-} {
-  return Object.assign(new Error(message), { code });
+export function createWechatConfigurationError(
+  code: string,
+  message: string,
+): PlatformOperationError {
+  return new PlatformOperationError({ code, message, retryable: false });
 }
 
 function assertMethod(input: Record<string, unknown>, name: string): void {

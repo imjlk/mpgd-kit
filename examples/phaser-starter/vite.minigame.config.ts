@@ -41,6 +41,7 @@ export default defineConfig(({ mode }) => {
       sourcemap: false,
       cssCodeSplit: false,
       assetsInlineLimit: 0,
+      chunkSizeWarningLimit: 2_000,
       rolldownOptions: {
         input: entry,
         output: {
