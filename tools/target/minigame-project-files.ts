@@ -45,12 +45,12 @@ export function writeWechatMiniGameProjectFiles(
 export function assertWechatAppId(appId: string, production: boolean): void {
   if (
     production
-    && (appId === wechatStagingAppId || !/^wx[0-9a-f]{16}$/iu.test(appId))
+    && (appId === wechatStagingAppId || !/^wx[0-9a-f]{16}$/u.test(appId))
   ) {
     throw new Error('Production WeChat Mini Game builds require MPGD_WECHAT_APP_ID.');
   }
 
-  if (!production && appId !== wechatStagingAppId && !/^wx[0-9a-f]{16}$/iu.test(appId)) {
+  if (!production && appId !== wechatStagingAppId && !/^wx[0-9a-f]{16}$/u.test(appId)) {
     throw new Error('WeChat Mini Game app id must be a valid AppID or the staging placeholder.');
   }
 }

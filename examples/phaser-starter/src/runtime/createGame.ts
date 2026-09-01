@@ -52,11 +52,45 @@ export function createStarterGame(input: CreateStarterGameInput): Phaser.Game {
     try {
       miniGameBridge.attachGame(game);
     } catch (error) {
-      game.destroy(true);
-      miniGameBridge.dispose();
+      destroyFailedMiniGame(game, miniGameBridge);
       throw error;
     }
   }
 
   return game;
+}
+
+function destroyFailedMiniGame(
+  game: Phaser.Game,
+  bridge: ReturnType<typeof requireStarterMiniGameRuntimeBridge>,
+): void {
+  try {
+    if (game.events?.once === undefined) {
+      throw new Error('Failed mini-game bootstrap cannot observe Phaser destruction.');
+    }
+
+    game.events.once('destroy', () => disposeBridgeAfterFailedBootstrap(bridge));
+    game.destroy(true);
+  } catch (cleanupError) {
+    disposeBridgeAfterFailedBootstrap(bridge);
+    reportFailedMiniGameCleanup(cleanupError);
+  }
+}
+
+function disposeBridgeAfterFailedBootstrap(
+  bridge: ReturnType<typeof requireStarterMiniGameRuntimeBridge>,
+): void {
+  try {
+    bridge.dispose();
+  } catch (error) {
+    reportFailedMiniGameCleanup(error);
+  }
+}
+
+function reportFailedMiniGameCleanup(error: unknown): void {
+  try {
+    console.error('Failed mini-game bootstrap cleanup encountered an error.', error);
+  } catch {
+    // Preserve the authoritative bootstrap error when host logging is unavailable.
+  }
 }

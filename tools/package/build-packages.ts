@@ -11,10 +11,14 @@ import {
 } from 'node:fs';
 import { basename, dirname, join, relative } from 'node:path';
 
-import { discoverBuildablePackages, sortByWorkspaceDependencies } from './workspace';
+import {
+  discoverBuildablePackages,
+  sortByWorkspaceDependencies,
+  type WorkspacePackage,
+} from './workspace';
 
 const cacheDir = join('node_modules', '.cache', 'mpgd-package-build');
-const packages = discoverBuildablePackages();
+const packages = selectBuildablePackages(discoverBuildablePackages(), process.argv.slice(2));
 const packagePaths = Object.fromEntries(
   packages.map((workspacePackage) => [
     workspacePackage.name,
@@ -77,6 +81,47 @@ for (const workspacePackage of sortByWorkspaceDependencies(packages)) {
   assertFile(join(distDir, 'index.js'));
   assertFile(join(distDir, 'index.d.ts'));
   console.log(`Built ${workspacePackage.name}`);
+}
+
+function selectBuildablePackages(
+  available: readonly WorkspacePackage[],
+  requestedNames: readonly string[],
+): WorkspacePackage[] {
+  if (requestedNames.length === 0) {
+    return [...available];
+  }
+
+  const byName = new Map(
+    available.map((workspacePackage) => [workspacePackage.name, workspacePackage]),
+  );
+  const selected = new Set<string>();
+
+  for (const name of requestedNames) {
+    select(name);
+  }
+
+  return available.filter((workspacePackage) => selected.has(workspacePackage.name));
+
+  function select(name: string): void {
+    if (selected.has(name)) {
+      return;
+    }
+
+    const workspacePackage = byName.get(name);
+
+    if (workspacePackage === undefined) {
+      throw new Error(`Unknown buildable workspace package: ${name}`);
+    }
+
+    selected.add(name);
+    for (const [dependency, version] of Object.entries(
+      workspacePackage.packageJson.dependencies ?? {},
+    )) {
+      if (version.startsWith('workspace:') && byName.has(dependency)) {
+        select(dependency);
+      }
+    }
+  }
 }
 
 function run(command: string, args: readonly string[]): void {

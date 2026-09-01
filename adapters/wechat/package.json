@@ -21,9 +21,10 @@
     "dist"
   ],
   "scripts": {
+    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/adapter-wechat",
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
-    "test": "vitest run && node test/dist-import.mjs",
+    "test": "pnpm build && vitest run && node test/dist-import.mjs",
     "format": "ttsc format",
     "fix": "ttsc fix"
   },

@@ -35,6 +35,19 @@ describe('WeChat platform gateway', () => {
     await expect(storage.save({ key: 'cyclic', value: cyclic })).rejects.toMatchObject({
       code: 'WECHAT_STORAGE_VALUE_NOT_SERIALIZABLE',
     });
+    const priorSave = fake.storage.get('mpgd:save');
+
+    for (const lossyValue of [
+      Number.NaN,
+      Number.POSITIVE_INFINITY,
+      { nested: undefined },
+      [undefined],
+    ]) {
+      await expect(storage.save({ key: 'save', value: lossyValue })).rejects.toMatchObject({
+        code: 'WECHAT_STORAGE_VALUE_NOT_SERIALIZABLE',
+      });
+      expect(fake.storage.get('mpgd:save')).toBe(priorSave);
+    }
 
     const quota = createFakeWechatMiniGameApi({
       setStorageSync() {

@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
 
 import { createGameViteSharedConfig } from './vite.shared';
+import { resolveMiniGameBundleOutput } from './vite.minigame-output';
 
 const gameRoot = process.cwd();
 
@@ -10,6 +11,7 @@ export default defineConfig(({ mode }) => {
   const appTarget = process.env.APP_TARGET;
   const bundleKind = process.env.MPGD_MINIGAME_BUNDLE_KIND;
   const outDir = process.env.MPGD_MINIGAME_BUNDLE_OUTPUT_DIR;
+  const stagingRoot = process.env.MPGD_MINIGAME_BUNDLE_STAGING_ROOT;
 
   if (appTarget !== 'wechat') {
     throw new Error(`Unsupported Mini Game bundle target: ${String(appTarget)}`);
@@ -20,6 +22,14 @@ export default defineConfig(({ mode }) => {
   if (outDir === undefined || outDir.trim().length === 0) {
     throw new Error('MPGD_MINIGAME_BUNDLE_OUTPUT_DIR is required.');
   }
+  if (stagingRoot === undefined || stagingRoot.trim().length === 0) {
+    throw new Error('MPGD_MINIGAME_BUNDLE_STAGING_ROOT is required.');
+  }
+  const resolvedOutDir = resolveMiniGameBundleOutput({
+    gameRoot,
+    outputDir: outDir,
+    stagingRoot,
+  });
 
   const entry = bundleKind === 'runtime'
     ? resolve(gameRoot, 'src/platform/minigameRuntime/wechat.ts')
@@ -35,7 +45,7 @@ export default defineConfig(({ mode }) => {
     }),
     build: {
       target: 'es2020',
-      outDir,
+      outDir: resolvedOutDir,
       emptyOutDir: true,
       copyPublicDir: false,
       sourcemap: false,

@@ -116,7 +116,7 @@ function verifyWechatProjectConfig(
     production
     && (
       projectConfig.appid === wechatStagingAppId
-      || !/^wx[0-9a-f]{16}$/iu.test(projectConfig.appid)
+      || !/^wx[0-9a-f]{16}$/u.test(projectConfig.appid)
     )
   ) {
     throw new Error('Production WeChat project.config.json contains a placeholder appid.');

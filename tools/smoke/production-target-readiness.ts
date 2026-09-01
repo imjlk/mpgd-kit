@@ -103,6 +103,18 @@ try {
     },
     'requires MPGD_WECHAT_APP_ID',
   );
+  expectReadinessError(
+    {
+      target: 'wechat',
+      profile: 'production',
+      targetPolicy: wechatPolicy,
+      environment: {
+        MPGD_ALLOW_EXPERIMENTAL_TARGET: '1',
+        MPGD_WECHAT_APP_ID: 'WX0123456789ABCDEF',
+      },
+    },
+    'requires MPGD_WECHAT_APP_ID',
+  );
   assertProductionTargetReadiness({
     target: 'wechat',
     profile: 'production',

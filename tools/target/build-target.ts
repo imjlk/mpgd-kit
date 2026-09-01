@@ -204,8 +204,8 @@ try {
       try {
         const runtimeBundleRoot = join(bundleRoot, 'runtime');
         const gameBundleRoot = join(bundleRoot, 'game');
-        buildMiniGameBundle('runtime', runtimeBundleRoot, gameApp, profile, env);
-        buildMiniGameBundle('game', gameBundleRoot, gameApp, profile, env);
+        buildMiniGameBundle('runtime', runtimeBundleRoot, bundleRoot, gameApp, profile, env);
+        buildMiniGameBundle('game', gameBundleRoot, bundleRoot, gameApp, profile, env);
         const effectiveTargetConfig = generateEffectiveTargetConfigArtifact(targetName, env);
         const appId = env.MPGD_WECHAT_APP_ID?.trim() || wechatStagingAppId;
 
@@ -763,6 +763,7 @@ function isMiniGameTarget(target: PlatformTargetConfig): target is MiniGameTarge
 function buildMiniGameBundle(
   bundleKind: 'runtime' | 'game',
   outputDir: string,
+  stagingRoot: string,
   gameApp: string,
   profile: string,
   commandEnv: NodeJS.ProcessEnv,
@@ -782,6 +783,7 @@ function buildMiniGameBundle(
       ...commandEnv,
       MPGD_MINIGAME_BUNDLE_KIND: bundleKind,
       MPGD_MINIGAME_BUNDLE_OUTPUT_DIR: outputDir,
+      MPGD_MINIGAME_BUNDLE_STAGING_ROOT: stagingRoot,
     },
     gameApp,
   );

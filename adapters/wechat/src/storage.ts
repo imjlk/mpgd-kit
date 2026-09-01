@@ -63,7 +63,7 @@ export function createWechatStorageAdapter(
       let serializedValue: string | undefined;
 
       try {
-        serializedValue = JSON.stringify(value);
+        serializedValue = JSON.stringify(value, rejectLossyJsonValue);
       } catch {
         throw storageError(
           'WECHAT_STORAGE_VALUE_NOT_SERIALIZABLE',
@@ -89,6 +89,20 @@ export function createWechatStorageAdapter(
       }
     },
   };
+}
+
+function rejectLossyJsonValue(_key: string, value: unknown): unknown {
+  if (
+    value === undefined
+    || typeof value === 'function'
+    || typeof value === 'symbol'
+    || typeof value === 'bigint'
+    || (typeof value === 'number' && (!Number.isFinite(value) || Object.is(value, -0)))
+  ) {
+    throw new Error('Value cannot round-trip through JSON storage.');
+  }
+
+  return value;
 }
 
 function toStorageKey(prefix: string, key: string): string {

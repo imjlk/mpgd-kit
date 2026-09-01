@@ -184,7 +184,7 @@ function assertExperimentalTargetReadiness(
     if (
       appId === undefined
       || appId === wechatStagingAppId
-      || !/^wx[0-9a-f]{16}$/iu.test(appId)
+      || !/^wx[0-9a-f]{16}$/u.test(appId)
     ) {
       throw new Error('Production WeChat Mini Game builds require MPGD_WECHAT_APP_ID.');
     }

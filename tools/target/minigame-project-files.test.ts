@@ -44,6 +44,7 @@ try {
   });
   assert.doesNotThrow(() => assertWechatAppId('wx0123456789abcdef', true));
   assert.throws(() => assertWechatAppId(wechatStagingAppId, true), /require MPGD_WECHAT_APP_ID/u);
+  assert.throws(() => assertWechatAppId('WX0123456789ABCDEF', true), /require MPGD_WECHAT_APP_ID/u);
   assert.throws(() => assertWechatAppId('placeholder', false), /valid AppID/u);
 } finally {
   rmSync(root, { force: true, recursive: true });
