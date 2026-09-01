@@ -35,6 +35,7 @@ export interface MiniGamePhaserGame {
   readonly renderer?: Readonly<{ readonly type?: number }> | null;
   readonly loop: PhaserTimeStep;
   readonly events?: PhaserEventEmitterLike;
+  isPaused?: boolean;
   pause?(): void;
   resume?(): void;
 }
@@ -71,6 +72,8 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
   readonly #onDestroy: () => void;
   #disposed = false;
   #pausedByHost = false;
+  #gamePausedByHost = false;
+  #loopSleptByHost = false;
 
   constructor(
     game: MiniGamePhaserGame,
@@ -197,10 +200,15 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.#globals.document.hidden = true;
     this.#globals.document.visibilityState = 'hidden';
     this.#globals.document.dispatchEvent(new MiniGameEvent('visibilitychange'));
-    this.game.pause?.();
 
-    if (this.game.loop.started) {
+    if (this.game.isPaused !== true && this.game.pause !== undefined) {
+      this.game.pause();
+      this.#gamePausedByHost = true;
+    }
+
+    if (this.game.loop.started && this.game.loop.running) {
       this.game.loop.sleep();
+      this.#loopSleptByHost = true;
     }
   }
 
@@ -213,12 +221,18 @@ class MiniGamePhaserRuntimeInstallationImpl implements MiniGamePhaserRuntimeInst
     this.#globals.document.hidden = false;
     this.#globals.document.visibilityState = 'visible';
     this.#globals.document.dispatchEvent(new MiniGameEvent('visibilitychange'));
+    const shouldWakeLoop = this.#loopSleptByHost;
+    const shouldResumeGame = this.#gamePausedByHost;
+    this.#loopSleptByHost = false;
+    this.#gamePausedByHost = false;
 
-    if (this.game.loop.started && !this.game.loop.running) {
+    if (shouldWakeLoop && this.game.loop.started && !this.game.loop.running) {
       this.game.loop.wake();
     }
 
-    this.game.resume?.();
+    if (shouldResumeGame) {
+      this.game.resume?.();
+    }
   }
 }
 

@@ -152,6 +152,13 @@ export class FakeMiniGameHost implements MiniGameHost {
       set: (value: string) => {
         image.__src = value;
 
+        if (value.length === 0) {
+          image.width = 0;
+          image.height = 0;
+          image.complete = false;
+          return;
+        }
+
         if (behavior === 'pending') {
           return;
         }

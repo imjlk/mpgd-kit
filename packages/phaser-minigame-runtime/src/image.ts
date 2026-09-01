@@ -100,18 +100,35 @@ export class MiniGameImageElement extends MiniGameEventTarget {
   }
 
   #beginLoad(source: string): void {
+    if (source.length > 0) {
+      assertImageSourceAllowed(source, this.#options.allowedRemoteOrigins);
+    }
+
     this.#generation += 1;
     const generation = this.#generation;
     this.#clearTimer();
     this.complete = false;
     this.#source = source;
+    const nativeImage = this[miniGameNativeObjectSymbol];
 
     if (source.length === 0) {
+      Reflect.set(nativeImage, 'onload', null);
+      Reflect.set(nativeImage, 'onerror', null);
+
+      try {
+        if (!Reflect.set(nativeImage, 'src', '')) {
+          throw new Error('The native image source is not writable.');
+        }
+      } catch {
+        throw new MiniGameRuntimeError(
+          'MINIGAME_IMAGE_CLEAR_FAILED',
+          'The mini-game native image could not clear its source.',
+        );
+      }
+
       return;
     }
 
-    assertImageSourceAllowed(source, this.#options.allowedRemoteOrigins);
-    const nativeImage = this[miniGameNativeObjectSymbol];
     const startedAt = Date.now();
 
     Reflect.set(nativeImage, 'onload', () => this.#settle(generation, true));

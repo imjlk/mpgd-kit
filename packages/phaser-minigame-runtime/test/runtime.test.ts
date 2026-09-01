@@ -73,6 +73,15 @@ describe('mini-game globals and Canvas compatibility', () => {
     expect(image).toBeInstanceOf(MiniGameImageElement);
     expect(context.__state.drawImageSources).toHaveLength(1);
     expect(context.__state.drawImageSources[0]).not.toBe(image);
+
+    image.src = '';
+    context.drawImage(image, 0, 0);
+    const clearedNativeImage = context.__state.drawImageSources[1];
+
+    expect(image.src).toBe('');
+    expect(image.complete).toBe(false);
+    expect(Reflect.get(clearedNativeImage as object, 'src')).toBe('');
+    expect(Reflect.get(clearedNativeImage as object, 'width')).toBe(0);
   });
 
   it('uses bounded image polling when native callbacks are absent', async () => {
@@ -433,10 +442,13 @@ describe('Phaser mini-game runtime patch', () => {
       config: { renderType: 1 },
       renderer: { type: 1 },
       loop,
+      isPaused: false,
       pause() {
+        this.isPaused = true;
         pauses += 1;
       },
       resume() {
+        this.isPaused = false;
         resumes += 1;
       },
     } satisfies MiniGamePhaserGame;
@@ -467,6 +479,71 @@ describe('Phaser mini-game runtime patch', () => {
     installation.dispose();
     expect(host.lifecycleListenerCount).toBe(0);
     expect(host.pendingFrameCount).toBe(0);
+  });
+
+  it.each([
+    {
+      priorState: 'manual game pause',
+      initiallyPaused: true,
+      initiallyRunning: true,
+      expected: { sleeps: 1, wakes: 1, pauses: 0, resumes: 0 },
+    },
+    {
+      priorState: 'sleeping loop',
+      initiallyPaused: false,
+      initiallyRunning: false,
+      expected: { sleeps: 0, wakes: 0, pauses: 1, resumes: 1 },
+    },
+  ])('preserves a pre-existing $priorState across host backgrounding', ({
+    initiallyPaused,
+    initiallyRunning,
+    expected,
+  }) => {
+    const host = new FakeMiniGameHost();
+    const globals = installMiniGameGlobals(host);
+    const raf = createFakePhaserRaf(() => undefined);
+    let sleeps = 0;
+    let wakes = 0;
+    let pauses = 0;
+    let resumes = 0;
+    const loop = {
+      started: true,
+      running: initiallyRunning,
+      forceSetTimeOut: false,
+      raf,
+      sleep() {
+        sleeps += 1;
+        this.running = false;
+      },
+      wake() {
+        wakes += 1;
+        this.running = true;
+      },
+    };
+    const game = {
+      config: { renderType: 1 },
+      renderer: { type: 1 },
+      loop,
+      isPaused: initiallyPaused,
+      pause() {
+        pauses += 1;
+        this.isPaused = true;
+      },
+      resume() {
+        resumes += 1;
+        this.isPaused = false;
+      },
+    } satisfies MiniGamePhaserGame;
+    const installation = installPhaserMiniGameRuntime(game, { globals });
+
+    host.emitPause();
+    host.emitResume();
+
+    expect({ sleeps, wakes, pauses, resumes }).toEqual(expected);
+    expect(loop.running).toBe(initiallyRunning);
+    expect(game.isPaused).toBe(initiallyPaused);
+
+    installation.dispose();
   });
 
   it('requires an explicitly configured Canvas renderer', () => {
