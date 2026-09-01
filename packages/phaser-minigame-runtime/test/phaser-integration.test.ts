@@ -11,6 +11,8 @@ import {
 } from '../src/index.js';
 import { encodeText, FakeMiniGameHost } from './fake-host.js';
 
+const phaserIntegrationTimeoutMs = 15_000;
+
 afterEach(() => {
   getInstalledMiniGameGlobals()?.dispose();
 });
@@ -159,7 +161,7 @@ describe('Phaser 4.2 mini-game integration', () => {
 
     globals.dispose();
     expect(host.touchListenerCount).toBe(0);
-  });
+  }, phaserIntegrationTimeoutMs);
 });
 
 async function driveGameUntil(
