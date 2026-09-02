@@ -147,6 +147,43 @@ const CACHE_PREFIX = CACHE_NAMESPACE + CACHE_SCOPE + '-';
 const CACHE_NAME = ${JSON.stringify(cacheNamePattern)}.replace('{scope}', CACHE_SCOPE);
 const PRECACHE_URLS = ${JSON.stringify(precacheUrls, null, 2)};
 const INDEX_URL = new URL('./index.html', self.registration.scope).href;
+const APP_BASE_URL = self.registration.scope;
+
+function escapeHtmlAttribute(value) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+async function normalizeCachedNavigationResponse(response) {
+  if (!response.redirected) {
+    return response;
+  }
+
+  // Static hosts commonly canonicalize /index.html to /. A redirected response
+  // can be stored by Cache API, but Chromium rejects it when a service worker
+  // later returns it for a navigation whose URL is different. Reconstructing
+  // clears Response.url, so inject an explicit deployment-scope base before
+  // returning the same-origin app shell for a nested SPA route.
+  const html = await response.text();
+  const headPattern = /<head(?:\\s[^>]*)?>/iu;
+
+  if (!headPattern.test(html)) {
+    throw new Error('Cached PWA app shell is missing a head element.');
+  }
+
+  const headers = new Headers(response.headers);
+  headers.delete('content-encoding');
+  headers.delete('content-length');
+  const base = '<base href="' + escapeHtmlAttribute(APP_BASE_URL) + '">';
+  return new Response(html.replace(headPattern, (head) => head + base), {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
 
 self.addEventListener('install', (event) => {
   event.waitUntil((async () => {
@@ -197,7 +234,10 @@ self.addEventListener('fetch', (event) => {
   if (request.mode === 'navigate') {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE_NAME);
-      return await cache.match(INDEX_URL) ?? fetch(request);
+      const cachedIndex = await cache.match(INDEX_URL);
+      return cachedIndex === undefined
+        ? fetch(request)
+        : normalizeCachedNavigationResponse(cachedIndex);
     })());
     return;
   }
