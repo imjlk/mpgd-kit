@@ -1,0 +1,18 @@
+{
+  "name": "i18n-locale-resolution",
+  "description": "Public target-aware locale resolution and injectable browser or WebView language collection.",
+  "expectedFiles": [
+    "packages/i18n/src/index.ts",
+    "packages/i18n/test/i18n-smoke.ts"
+  ],
+  "tsconfig": "tsconfig.graph.json",
+  "question": "How does @mpgd/i18n collect host language preferences and resolve saved, preferred, disabled, and fallback locales?",
+  "draft": "Tour the public locale collector and resolver together so browser and Capacitor consumers share ordering without target-name defaults.",
+  "review": "The graph should anchor the public host-language seam, target capability gate, normalization path, and smoke coverage.",
+  "request": {
+    "type": "tour",
+    "query": "readMpgdPreferredLocales resolveMpgdLocale resolveTargetMpgdLocale normalizeMpgdLocale MpgdLocaleEnvironment preferredLocales fallbackLocale localizedContent i18n-smoke",
+    "includeTests": true,
+    "limit": 20
+  }
+}
