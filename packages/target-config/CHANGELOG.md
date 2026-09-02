@@ -1,5 +1,15 @@
 # @mpgd/target-config
 
+## 0.14.0 — 2026-09-02
+
+### Minor changes
+
+- [916f648](https://github.com/imjlk/mpgd-kit/commit/916f648d113c975f8a2bf7074deb38d9506ce014) Add experimental WeChat and TikTok native mini-game target contracts, shared runtime classification, and notification target validation. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: catalog@0.7.2, i18n@0.6.0, platform@0.12.0
+
 ## 0.13.1 — 2026-08-29
 
 ### Patch changes

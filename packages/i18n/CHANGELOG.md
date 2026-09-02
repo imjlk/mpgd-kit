@@ -1,5 +1,16 @@
 # @mpgd/i18n
 
+## 0.6.0 — 2026-09-02
+
+### Minor changes
+
+- [cdc793f](https://github.com/imjlk/mpgd-kit/commit/cdc793ffa29c97337d3104dcd78a912bb63dc854) Export an injectable browser and WebView language-preference collector that preserves host order,
+  removes duplicate fallback tags, and can be reused by web and Capacitor game shells. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: platform@0.12.0
+
 ## 0.5.7 — 2026-08-29
 
 ### Patch changes
