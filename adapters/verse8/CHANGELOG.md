@@ -1,5 +1,11 @@
 # @mpgd/adapter-verse8
 
+## 0.3.4 — 2026-09-02
+
+### Patch changes
+
+- Updated dependencies: catalog@0.7.2, game-services@0.14.0, platform@0.12.0
+
 ## 0.3.3 — 2026-08-29
 
 ### Patch changes

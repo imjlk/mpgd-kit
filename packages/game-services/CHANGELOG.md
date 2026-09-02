@@ -1,5 +1,17 @@
 # @mpgd/game-services
 
+## 0.14.0 — 2026-09-02
+
+### Minor changes
+
+- [916f648](https://github.com/imjlk/mpgd-kit/commit/916f648d113c975f8a2bf7074deb38d9506ce014) Add experimental WeChat and TikTok native mini-game target contracts, shared runtime classification, and notification target validation. — Thanks @imjlk!
+- [0e04a4a](https://github.com/imjlk/mpgd-kit/commit/0e04a4a8ee8294bdf4a716fec34831e3af71106e) Add a strict, game-scoped Microsoft Store identity authority protocol for sharing one private
+  provider service across multiple game-service Workers without exposing Store credentials to clients. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: analytics@0.3.12, catalog@0.7.2, platform@0.12.0
+
 ## 0.13.1 — 2026-08-29
 
 ### Patch changes

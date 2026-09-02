@@ -1,5 +1,16 @@
 # @mpgd/cli
 
+## 0.28.0 — 2026-09-02
+
+### Minor changes
+
+- [95dde6f](https://github.com/imjlk/mpgd-kit/commit/95dde6f4f56a82c7d62d4e618e62f0bc1a309883) Add experimental WeChat Mini Game Canvas staging artifacts, static evidence and package-budget checks, and explicit production validation gates. — Thanks @imjlk!
+- [916f648](https://github.com/imjlk/mpgd-kit/commit/916f648d113c975f8a2bf7074deb38d9506ce014) Add experimental WeChat and TikTok native mini-game target contracts, shared runtime classification, and notification target validation. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: adapter-ait@0.12.1, adapter-browser@0.7.3, adapter-capacitor@0.4.9, adapter-devvit@0.9.6, adapter-verse8@0.3.4, analytics@0.3.12, catalog@0.7.2, game-services@0.14.0, i18n@0.6.0, platform@0.12.0, target-config@0.14.0
+
 ## 0.27.0 — 2026-08-29
 
 ### Minor changes

@@ -1,5 +1,11 @@
 # @mpgd/adapter-capacitor
 
+## 0.4.9 — 2026-09-02
+
+### Patch changes
+
+- Updated dependencies: platform@0.12.0
+
 ## 0.4.8 — 2026-08-29
 
 ### Patch changes

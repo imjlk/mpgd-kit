@@ -1,5 +1,11 @@
 # @mpgd/platform
 
+## 0.12.0 — 2026-09-02
+
+### Minor changes
+
+- [916f648](https://github.com/imjlk/mpgd-kit/commit/916f648d113c975f8a2bf7074deb38d9506ce014) Add experimental WeChat and TikTok native mini-game target contracts, shared runtime classification, and notification target validation. — Thanks @imjlk!
+
 ## 0.11.0 — 2026-08-29
 
 ### Minor changes

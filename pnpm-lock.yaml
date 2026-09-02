@@ -381,12 +381,12 @@ importers:
       '@mpgd/i18n':
         specifier: workspace:*
         version: link:../../packages/i18n
-      '@mpgd/platform':
-        specifier: workspace:*
-        version: link:../../packages/platform
       '@mpgd/phaser-minigame-runtime':
         specifier: workspace:*
         version: link:../../packages/phaser-minigame-runtime
+      '@mpgd/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
       '@mpgd/target-config':
         specifier: workspace:*
         version: link:../../packages/target-config
