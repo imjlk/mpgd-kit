@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.28.1 — 2026-09-03
+
+### Patch changes
+
+- Updated dependencies: adapter-capacitor@0.4.10
+
 ## 0.28.0 — 2026-09-02
 
 ### Minor changes
