@@ -1,5 +1,15 @@
 # @mpgd/capacitor-game-services
 
+## 0.5.2 — 2026-09-03
+
+### Patch changes
+
+- [a35d132](https://github.com/imjlk/mpgd-kit/commit/a35d13285100ce41a7d7d86392ba522bf8a64e14) Require Capacitor 8.5.1: the plugin's @capacitor/core dependency range and the
+  Swift Package Manager pin now target capacitor-swift-pm 8.5.1, picking up the
+  upstream fix that blocks navigation to the internal HTTP proxy path and the
+  core removeListener correction. Consumers must build against Capacitor 8.5.1,
+  which also adopts the iOS UIScene lifecycle required by Xcode 27. — Thanks @imjlk!
+
 ## 0.5.1 — 2026-08-26
 
 ### Patch changes
