@@ -28,7 +28,13 @@ export function resolveTextSelectionMode(uiConfig: unknown): TextSelectionMode {
   }
 
   if (typeof uiConfig !== 'object' || uiConfig === null || Array.isArray(uiConfig)) {
-    throw new Error("mpgd.game.json ui must be an object when present.");
+    throw new Error('mpgd.game.json ui must be an object when present.');
+  }
+
+  for (const key of Object.keys(uiConfig)) {
+    if (key !== 'textSelection') {
+      throw new Error(`mpgd.game.json ui.${key} is not supported.`);
+    }
   }
 
   const textSelection = (uiConfig as Record<string, unknown>).textSelection;
@@ -56,7 +62,9 @@ export function buildTextSelectionStylesheet(mode: TextSelectionMode): string {
     '  user-select: none;',
     '  -webkit-touch-callout: none;',
     '}',
-    'input, textarea, [contenteditable=""], [contenteditable="true"],',
+    'input, textarea,',
+    "[contenteditable]:not([contenteditable='false']),",
+    "[contenteditable]:not([contenteditable='false']) *,",
     `.${selectableElementClassName}, .${selectableElementClassName} * {`,
     '  -webkit-user-select: text;',
     '  user-select: text;',

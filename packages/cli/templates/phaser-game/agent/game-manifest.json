@@ -37,6 +37,10 @@
       "owner": "src/main.ts"
     },
     {
+      "id": "platform.ui.text-selection",
+      "owner": "src/platform/textSelection.ts"
+    },
+    {
       "id": "runtime.viewport.orientation-policy",
       "owner": "src/main.ts"
     },

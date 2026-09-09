@@ -45,6 +45,10 @@ assert.throws(
   /must be 'disabled' or 'enabled'/u,
 );
 assert.throws(
+  () => resolveTextSelectionMode({ textSeletion: 'enabled' }),
+  /ui\.textSeletion is not supported/u,
+);
+assert.throws(
   () => resolveTextSelectionMode('disabled'),
   /ui must be an object/u,
 );
@@ -59,7 +63,14 @@ assert.match(disabledStylesheet, /-webkit-user-select: none;/u);
 assert.match(disabledStylesheet, /user-select: none;/u);
 assert.match(disabledStylesheet, /-webkit-touch-callout: none;/u);
 assert.match(disabledStylesheet, /input, textarea/u);
-assert.match(disabledStylesheet, /\[contenteditable=""\], \[contenteditable="true"\]/u);
+assert.match(
+  disabledStylesheet,
+  /\[contenteditable\]:not\(\[contenteditable='false'\]\)/u,
+);
+assert.match(
+  disabledStylesheet,
+  /\[contenteditable\]:not\(\[contenteditable='false'\]\) \*/u,
+);
 assert.match(
   disabledStylesheet,
   new RegExp(`\\.${selectableElementClassName},`, 'u'),

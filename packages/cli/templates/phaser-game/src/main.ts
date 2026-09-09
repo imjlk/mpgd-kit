@@ -8,25 +8,13 @@ import {
   type TargetViewportOrientationPolicy,
 } from '@mpgd/target-config';
 
-import gameProjectConfig from '../mpgd.game.json';
-
 import { t } from './i18n/messages';
 import { createClientId } from './runtime/id';
 import { createStarterGame } from './runtime/createGame';
 import { detectRuntime } from './platform/runtimeDetector';
 import { createStarterGameServices } from './platform/gameServices';
 import { installPlatform } from './platform/installPlatform';
-import {
-  installTextSelectionPolicy,
-  resolveTextSelectionMode,
-} from './platform/textSelection';
 import { installMicrosoftStorePwa } from './platform/microsoftStorePwa';
-
-installTextSelectionPolicy(
-  resolveTextSelectionMode(
-    (gameProjectConfig as { readonly ui?: unknown }).ui,
-  ),
-);
 
 await bootstrap();
 
