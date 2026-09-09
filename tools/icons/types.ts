@@ -20,9 +20,13 @@ export interface GameBrandConfig {
   readonly appIcon: BrandAppIconConfig;
 }
 
+/** Game-wide UI policy from mpgd.game.json. Selection is disabled by default. */
+export type GameTextSelectionMode = 'disabled' | 'enabled';
+
 export interface LoadedGameBrandConfig {
   readonly appIcon: BrandAppIconConfig;
   readonly warnings: readonly string[];
+  readonly textSelection: GameTextSelectionMode;
 }
 
 export interface IconOutputProfile {

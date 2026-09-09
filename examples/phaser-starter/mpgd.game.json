@@ -5,6 +5,9 @@
       "backgroundColor": "#0d1117"
     }
   },
+  "ui": {
+    "textSelection": "disabled"
+  },
   "acceptance": {
     "gameplay": {
       "schemaVersion": 1,
