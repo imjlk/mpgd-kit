@@ -661,7 +661,7 @@ try {
       host: 'cloudflare-pages',
       profile: 'api-only',
     }),
-    /placeholders must be separated/u,
+    /at most one placeholder/u,
     'adjacent placeholders',
   );
 
@@ -839,20 +839,39 @@ try {
     profile: 'api-only',
   });
 
-  // 10r. Vite base64-style content hashes count as immutable names.
+  // 10r. Base64-style segments take the fail-safe revalidation policy.
   const base64HashSource = buildSourceArtifact(join(fixtureRoot, 'source-b64hash'), {
     nestedAsset: 'assets/index-BhYHK6AL.js',
   });
+  const base64FreshHeaders = validHeaders.replace(
+    '/assets/*\n  Cache-Control: public, max-age=31536000, immutable',
+    '/assets/app.a1b2c3d4.js\n  Cache-Control: public, max-age=31536000, immutable\n\n/assets/index-BhYHK6AL.js\n  Cache-Control: public, max-age=0, must-revalidate',
+  );
   verifyHostedPwaDeployment({
     sourceArtifactRoot: base64HashSource,
     deploymentRoot: buildDeployment(
       base64HashSource,
       join(fixtureRoot, 'deployment-b64hash'),
       'api-only',
+      { headersOverride: base64FreshHeaders },
     ),
     host: 'cloudflare-pages',
     profile: 'api-only',
   });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: base64HashSource,
+      deploymentRoot: buildDeployment(
+        base64HashSource,
+        join(fixtureRoot, 'deployment-b64hash-immutable'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /cache policy for stable-name assets\/index-BhYHK6AL\.js is wrong/u,
+    'immutable cache on a lexically ambiguous name',
+  );
 
   // 10s. A trailing-slash header path does not satisfy the exact policy.
   const trailingSlashDeployment = fixtureCopy(deploymentRoot, 'trailing-slash');
@@ -898,7 +917,7 @@ try {
       host: 'cloudflare-pages',
       profile: 'api-only',
     }),
-    /placeholders must be separated/u,
+    /at most one placeholder/u,
     'unrelated adjacent placeholders',
   );
 
@@ -1344,7 +1363,7 @@ try {
       host: 'cloudflare-pages',
       profile: 'api-only',
     }),
-    /placeholders must be separated/u,
+    /at most one placeholder/u,
     'adjacent redirect placeholders',
   );
 
@@ -1411,12 +1430,184 @@ try {
   );
 
   // 10ar. Splats inside path segments match like the Pages router.
-  const segmentSplatHeaders = `${validHeaders}/*.png\n  Cache-Control: public, max-age=0, must-revalidate\n`;
+  const segmentSplatHeaders = validHeaders.replace(
+    '/icons/*\n  Cache-Control: no-store, must-revalidate',
+    '/icons/*.png\n  Cache-Control: no-store, must-revalidate',
+  );
   const segmentSplatDeployment = fixtureCopy(deploymentRoot, 'segment-splat');
   writeFileSync(join(segmentSplatDeployment, '_headers'), segmentSplatHeaders);
   verifyHostedPwaDeployment({
     sourceArtifactRoot: sourceRoot,
     deploymentRoot: segmentSplatDeployment,
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10as. Mixed-case digit stems with lowercase stay stable.
+  const playerCaseSource = buildSourceArtifact(join(fixtureRoot, 'source-player-case'));
+  mkdirSync(join(playerCaseSource, 'assets'), { recursive: true });
+  writeFileSync(join(playerCaseSource, 'assets', 'game-Player2D.png'), 'mixedcase');
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: playerCaseSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: playerCaseSource,
+      deploymentRoot: buildDeployment(
+        playerCaseSource,
+        join(fixtureRoot, 'deployment-player-case'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /cache policy for stable-name assets\/game-Player2D\.png is wrong/u,
+    'mixed-case digit stem stays stable',
+  );
+
+  // 10at. A standalone splat does not cover the slashless exact path.
+  const zeroSplatHeaders = validHeaders.replace(
+    '/service-worker.js\n  Cache-Control: no-store, must-revalidate',
+    '/service-worker.js/*\n  Cache-Control: no-store, must-revalidate',
+  );
+  const zeroSplatDeployment = fixtureCopy(deploymentRoot, 'zero-splat');
+  writeFileSync(join(zeroSplatDeployment, '_headers'), zeroSplatHeaders);
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: zeroSplatDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /cache policy for service-worker\.js is missing/u,
+    'zero-length splat does not match the exact path',
+  );
+
+  // 10au. Relative and queried directory references are redirect-protected.
+  const relativeDocsSource = buildSourceArtifact(join(fixtureRoot, 'source-relative-docs'), {
+    withDirectoryRef: './docs/',
+  });
+  mkdirSync(join(relativeDocsSource, 'docs'), { recursive: true });
+  writeFileSync(join(relativeDocsSource, 'docs', 'index.html'), '<!doctype html>');
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: relativeDocsSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  const relativeDocsDeployment = buildDeployment(
+    relativeDocsSource,
+    join(fixtureRoot, 'deployment-relative-docs'),
+    'api-only',
+  );
+  const relativeDocsRedirect = fixtureCopy(relativeDocsDeployment, 'relative-docs-redirect');
+  writeFileSync(join(relativeDocsRedirect, '_redirects'), `${validRedirects}/docs/ /missing 302\n`);
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: relativeDocsSource,
+      deploymentRoot: relativeDocsRedirect,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /covers the protected PWA path \/docs\//u,
+    'relative directory reference redirect',
+  );
+
+  // 10av. Entity-encoded schemes decode before external classification.
+  const entitySchemeSource = buildSourceArtifact(join(fixtureRoot, 'source-entity-scheme'));
+  writeFileSync(
+    join(entitySchemeSource, 'index.html'),
+    readFileSync(join(entitySchemeSource, 'index.html'), 'utf8').replace(
+      '<script type="module" src="./assets/app.a1b2c3d4.js"></script>',
+      '<script type="module" src="&#104;ttps://cdn.example/app.js"></script>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: entitySchemeSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: entitySchemeSource,
+    deploymentRoot: buildDeployment(
+      entitySchemeSource,
+      join(fixtureRoot, 'deployment-entity-scheme'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10aw. legal-site.json links remain valid browser references.
+  const legalLinkSource = buildSourceArtifact(join(fixtureRoot, 'source-legal-link'));
+  writeFileSync(
+    join(legalLinkSource, 'index.html'),
+    readFileSync(join(legalLinkSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<a href="./legal-site.json">manifest</a></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: legalLinkSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: legalLinkSource,
+    deploymentRoot: buildDeployment(
+      legalLinkSource,
+      join(fixtureRoot, 'deployment-legal-link'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10ax. End tags with whitespace strip their bodies.
+  const looseEndTagSource = buildSourceArtifact(join(fixtureRoot, 'source-loose-end'));
+  writeFileSync(
+    join(looseEndTagSource, 'index.html'),
+    readFileSync(join(looseEndTagSource, 'index.html'), 'utf8').replace(
+      '<script>const ignored',
+      '<script>const template = \'<img src="./missing.png">\'; const ignored',
+    ).replace(
+      ';</script>',
+      ';</script >',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: looseEndTagSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: looseEndTagSource,
+    deploymentRoot: buildDeployment(
+      looseEndTagSource,
+      join(fixtureRoot, 'deployment-loose-end'),
+      'api-only',
+    ),
     host: 'cloudflare-pages',
     profile: 'api-only',
   });

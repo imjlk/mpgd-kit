@@ -44,6 +44,15 @@ const cloudflarePagesHostFileAllowlist = new Set([
   'legal-site.json',
 ]);
 
+/** Control artifacts Pages consumes instead of serving to browsers. */
+const pagesControlArtifactNames = new Set([
+  '_worker.js',
+  '_headers',
+  '_redirects',
+  '_routes.json',
+  'wrangler.jsonc',
+]);
+
 /** Request paths a redirect may never cover, matched as patterns. */
 const protectedPwaMetadataRequestPaths = [
   '/',
@@ -156,7 +165,17 @@ export function verifyHostedPwaDeployment(
   const workerRoutes = verifyCloudflarePagesRoutes(deploymentRoot, input.profile);
   assertNoSourceRoutesShadowed(workerRoutes, sourceFiles, input.profile);
   assertNoLegalRoutesShadowed(workerRoutes, [...readLegalSitePages(deploymentRoot)], input.profile);
-  verifyCloudflarePagesHeaders(deploymentRoot, sourceFiles, deploymentFiles);
+  const legalPages = [...readLegalSitePages(deploymentRoot)];
+  const declaredLegalDirectories = new Set(
+    legalPages.map((page) => page.slice(0, -'index.html'.length)),
+  );
+
+  verifyCloudflarePagesHeaders(
+    deploymentRoot,
+    sourceFiles,
+    deploymentFiles,
+    declaredLegalDirectories,
+  );
   const deploymentLegalPaths = [
     ...[...readLegalSitePages(deploymentRoot)].map(
       (page) => `/${page.slice(0, -'index.html'.length)}`,
@@ -559,24 +578,37 @@ function verifyIndexReferences(
     const srcset = attributes.match(/(?:^|\s)srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
     const candidates = srcset?.[1] ?? srcset?.[2] ?? srcset?.[3] ?? '';
 
-    // WHATWG srcset tokenizing: split on whitespace so data: URLs stay
-    // whole, trim candidate-edge commas, skip descriptors, and split any
-    // descriptor-URL glue ("1x,./b.png") at the separator comma.
+    // WHATWG srcset tokenizing: whitespace-split tokens alternate between a
+    // candidate URL and its descriptors; a numeric single-token value like
+    // srcset="404" stays a URL, while densities after a URL are skipped.
+    let holdingUrl = false;
+
     for (const token of candidates.split(/\s+/u)) {
       for (const piece of token.split(/(?<=\d[xw]),/u)) {
         const trimmed = piece.replace(/^[,]+|[,]+$/gu, '');
 
-        if (trimmed.length === 0 || /^[\d.]+[wx]?$/u.test(trimmed)) {
+        if (trimmed.length === 0) {
+          continue;
+        }
+
+        const isDescriptor = /^[\d.]+[wx]?$/u.test(trimmed);
+
+        if (holdingUrl && isDescriptor) {
           continue;
         }
 
         references.push(trimmed);
+        holdingUrl = !isDescriptor;
+      }
+
+      if (/^[\d.]+[wx],?$/u.test(token)) {
+        holdingUrl = false;
       }
     }
   }
 
-  for (const reference of references) {
-
+  for (const rawReference of references) {
+    const reference = decodeHtmlReferences(rawReference);
     const schemeSeparated = /^([a-z][a-z0-9+.-]*):/iu.exec(reference);
 
     if (
@@ -589,8 +621,7 @@ function verifyIndexReferences(
       continue;
     }
 
-    const decodedReference = decodeHtmlReferences(reference);
-    const withoutQuery = decodedReference.split(/[?#]/u)[0] ?? decodedReference;
+    const withoutQuery = reference.split(/[?#]/u)[0] ?? reference;
 
     if (withoutQuery.length === 0) {
       continue;
@@ -611,30 +642,31 @@ function verifyIndexReferences(
       );
     }
 
-    // Directory URLs resolve to their index document, matching how Pages
-    // serves '/' and '/legal/' from index.html files.
-    if (normalized === '.' || normalized.endsWith('/')) {
-      normalized = `${normalized === '.' ? '' : normalized}index.html`;
-    }
-
     if (normalized.startsWith('../') || normalized === '..' || posix.isAbsolute(normalized)) {
       throw new Error(
         `The deployment index.html references a path outside the artifact root: ${reference}`,
       );
     }
 
-    referenced.add(normalized);
-
-    if (reference.startsWith('/') && reference.endsWith('/')) {
-      referencedDirectoryUrls.add(reference);
-    } else if (!reference.startsWith('/') && !reference.includes('/')
-      && (withoutQuery === './' || withoutQuery === '.')) {
+    // Track the concrete directory request URL before resolving it to the
+    // index document, so redirect protection sees the URL browsers request.
+    if (normalized.endsWith('/')) {
+      referencedDirectoryUrls.add(`/${normalized.slice(0, -1)}/`);
+    } else if (normalized === '.') {
       referencedDirectoryUrls.add('/');
     }
+
+    // Directory URLs resolve to their index document, matching how Pages
+    // serves '/' and '/legal/' from index.html files.
+    if (normalized === '.' || normalized.endsWith('/')) {
+      normalized = `${normalized === '.' ? '' : normalized}index.html`;
+    }
+
+    referenced.add(normalized);
   }
 
   for (const reference of [...referenced].sort()) {
-    if (cloudflarePagesHostFileAllowlist.has(reference)) {
+    if (pagesControlArtifactNames.has(reference)) {
       throw new Error(
         `The deployment index.html references the Pages control file ${reference}; `
           + 'control artifacts are consumed by the host, not served to browsers.',
@@ -781,6 +813,7 @@ function verifyCloudflarePagesHeaders(
   deploymentRoot: string,
   sourceFiles: readonly ArtifactFile[],
   deploymentFiles: readonly ArtifactFile[],
+  declaredLegalDirectories: ReadonlySet<string>,
 ): void {
   const headersPath = `${deploymentRoot}/_headers`;
 
@@ -802,10 +835,6 @@ function verifyCloudflarePagesHeaders(
   // pages and ships legal-site.json, and stale privacy or terms pages after
   // an update are a compliance problem, so they carry revalidation policy.
   for (const file of deploymentFiles) {
-    if (sourcePaths.has(file.path)) {
-      continue;
-    }
-
     if (file.path === 'legal-site.json') {
       requirements.push({
         requestPath: '/legal-site.json',
@@ -814,7 +843,14 @@ function verifyCloudflarePagesHeaders(
       });
     }
 
-    if (file.path.endsWith('/index.html') && file.path.includes('/')) {
+    const declaredLegalPage = file.path.endsWith('/index.html')
+      && file.path.includes('/')
+      && declaredLegalDirectories.has(`${file.path.slice(0, -'index.html'.length - 1)}/`);
+
+    if (
+      (declaredLegalPage || (!sourcePaths.has(file.path) && file.path.includes('/')))
+      && file.path.endsWith('/index.html')
+    ) {
       const directoryUrl = `/${file.path.slice(0, -'index.html'.length)}`;
 
       requirements.push({
@@ -919,15 +955,12 @@ function verifyCloudflarePagesHeaders(
 function carriesContentHash(portablePath: string): boolean {
   const name = portablePath.split('/').pop() ?? '';
 
-  // Long hexadecimal segments accept start/dot/hyphen delimiters; Vite's
-  // URL-safe base64 hash segment is always hyphen-delimited and exactly
-  // eight characters, so stable names like "controls.png" stay stable.
-  const hashedBase64 = /-([A-Za-z0-9_-]{8})\.[a-z0-9]+$/iu.exec(name)?.[1];
-
-  return /(^|[/.-])[0-9a-f]{8,}\.[a-z0-9]+$/iu.test(name)
-    || (hashedBase64 !== undefined
-      && /[0-9]/u.test(hashedBase64)
-      && /[A-Z_]/u.test(hashedBase64));
+  // Only unambiguous hexadecimal segments earn the immutable policy. Vite's
+  // URL-safe base64 segments cannot be told apart from mixed-case words like
+  // "Player2D" lexically, so they take the fail-safe revalidation policy:
+  // a misclassified hash merely revalidates, while a misclassified stable
+  // name would serve stale release bytes for a year.
+  return /(^|[/.-])[0-9a-f]{8,}\.[a-z0-9]+$/iu.test(name);
 }
 
 function verifyCloudflarePagesRedirects(

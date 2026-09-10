@@ -227,7 +227,9 @@ function matchesFrom(patternParts: readonly string[], pathParts: readonly string
   const head = firstPart ?? '';
 
   if (head === '*') {
-    for (let skip = 0; skip <= pathParts.length; skip += 1) {
+    // A standalone splat carries its preceding slash, so it must consume at
+    // least one segment: /service-worker.js/* does not match /service-worker.js.
+    for (let skip = 1; skip <= pathParts.length; skip += 1) {
       if (matchesFrom(rest, pathParts.slice(skip))) {
         return true;
       }
@@ -270,10 +272,15 @@ function escapeRegExp(text: string): string {
 
 /** Reject placeholder shapes that would compile into ambiguous backtracking. */
 function assertSupportedPlaceholderShape(path: string): void {
-  if (/:[A-Za-z]\w*:[A-Za-z]\w*/u.test(path)) {
-    throw new Error(
-      `Cloudflare Pages _headers placeholders must be separated by a literal: ${path}`,
-    );
+  for (const segment of path.split('/')) {
+    const placeholders = [...segment.matchAll(/:[A-Za-z]\w*/gu)];
+
+    if (placeholders.length > 1) {
+      throw new Error(
+        'Cloudflare Pages path segments must contain at most one placeholder: '
+          + `${path} (${segment})`,
+      );
+    }
   }
 }
 
