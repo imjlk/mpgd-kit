@@ -43,7 +43,7 @@ const cloudflarePagesHostFileAllowlist = new Set([
 ]);
 
 /** Request paths a redirect may never cover, matched as patterns. */
-const protectedPwaRequestPaths = [
+const protectedPwaMetadataRequestPaths = [
   '/',
   '/index.html',
   '/manifest.webmanifest',
@@ -141,6 +141,7 @@ export function verifyHostedPwaDeployment(
 
   const sourceFiles = listArtifactFilesStrict(sourceRoot, 'source PWA artifact');
   const deploymentFiles = listArtifactFilesStrict(deploymentRoot, 'deployment');
+
   const evidence = verifySourceArtifactSelfConsistency(sourceRoot, sourceFiles);
   verifyDeploymentGameFiles(sourceRoot, sourceFiles, deploymentRoot, deploymentFiles);
   const hostFiles = verifyDeploymentFileClassification(
@@ -152,7 +153,7 @@ export function verifyHostedPwaDeployment(
   verifyIndexReferences(deploymentRoot, deploymentFiles);
   const workerRoutes = verifyCloudflarePagesRoutes(deploymentRoot, input.profile);
   verifyCloudflarePagesHeaders(deploymentRoot, sourceFiles);
-  verifyCloudflarePagesRedirects(deploymentRoot);
+  verifyCloudflarePagesRedirects(deploymentRoot, sourceFiles);
 
   return {
     host: input.host,
@@ -261,6 +262,18 @@ function verifySourceArtifactSelfConsistency(
     if (!sourceFiles.some((file) => file.path === required)) {
       throw new Error(`The source PWA artifact is missing ${required}.`);
     }
+  }
+
+  const manifest = JSON.parse(
+    readFileSync(`${sourceRoot}/manifest.webmanifest`, 'utf8'),
+  ) as { readonly id?: unknown };
+
+  if (manifest.id !== evidence.pwaId) {
+    throw new Error(
+      'The source PWA artifact manifest application id does not match the '
+        + 'release evidence; the manifest and pwa-release.json must identify '
+        + 'the same application.',
+    );
   }
 
   const precacheEntries = listPrecacheEntries(sourceRoot);
@@ -459,8 +472,25 @@ function verifyIndexReferences(
   const deploymentPaths = new Set(deploymentFiles.map((file) => file.path));
   const referenced = new Set<string>();
 
+  const references: string[] = [];
+
   for (const match of html.matchAll(/(?:href|src)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gu)) {
-    const reference = match[1] ?? match[2] ?? match[3] ?? '';
+    references.push(match[1] ?? match[2] ?? match[3] ?? '');
+  }
+
+  for (const match of html.matchAll(/srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gu)) {
+    const candidates = match[1] ?? match[2] ?? match[3] ?? '';
+
+    for (const candidate of candidates.split(',')) {
+      const url = candidate.trim().split(/\s+/u)[0] ?? '';
+
+      if (url.length > 0) {
+        references.push(url);
+      }
+    }
+  }
+
+  for (const reference of references) {
     const schemeSeparated = /^([a-z][a-z0-9+.-]*):/iu.exec(reference);
 
     if (
@@ -512,8 +542,8 @@ function verifyIndexReferences(
 function stripNonMarkupRanges(html: string): string {
   return html
     .replace(/<!--[\s\S]*?-->/gu, '')
-    .replace(/<script\b([^>]*)>[\s\S]*?<\/script>/giu, '<script$1></script>')
-    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/giu, '<style></style>');
+    .replace(/<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/script>/giu, '<script$1></script>')
+    .replace(/<style\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/style>/giu, '<style$1></style>');
 }
 
 function verifyCloudflarePagesRoutes(
@@ -688,7 +718,10 @@ function carriesContentHash(portablePath: string): boolean {
   return /(^|[/.-])[0-9a-f]{8,}\.[a-z0-9]+$/iu.test(portablePath.split('/').pop() ?? '');
 }
 
-function verifyCloudflarePagesRedirects(deploymentRoot: string): void {
+function verifyCloudflarePagesRedirects(
+  deploymentRoot: string,
+  sourceFiles: readonly ArtifactFile[],
+): void {
   const redirectsPath = `${deploymentRoot}/_redirects`;
 
   if (!existsSync(redirectsPath)) {
@@ -697,8 +730,13 @@ function verifyCloudflarePagesRedirects(deploymentRoot: string): void {
 
   const rules = parseCloudflarePagesRedirects(readFileSync(redirectsPath, 'utf8'));
 
+  const protectedPaths = [
+    ...protectedPwaMetadataRequestPaths,
+    ...sourceFiles.map((file) => `/${file.path}`),
+  ];
+
   for (const rule of rules) {
-    for (const protectedPath of protectedPwaRequestPaths) {
+    for (const protectedPath of protectedPaths) {
       if (cloudflarePagesPathMatches(rule.source, protectedPath)) {
         throw new Error(
           `The deployment _redirects rule ${rule.source} covers the protected PWA path `

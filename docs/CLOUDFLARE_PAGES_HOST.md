@@ -125,6 +125,17 @@ Pages deployment directory, `mpgd target verify-deployment` checks the merge
 before anything ships. The command is read-only: it never modifies the source
 artifact or the deployment directory.
 
+The deployment directory is expected to be assembled by a game-owned merge
+pipeline that combines the Microsoft Store PWA artifact with the reviewed host
+configuration: the Pages worker, `_routes.json` for one of the two reviewed
+profiles, and the PWA cache-policy `_headers`/`_redirects` files described
+below. The starter's `pnpm pages:build` output alone is **not** such a
+deployment: it contains only the legal-site copy, the generated legal
+`_redirects` (including its root redirect), a single generic `_headers` block,
+and no `_routes.json`, so running this command against it correctly fails.
+Games replicate the reviewed configuration in their wrapper repositories (as
+mpgd-games does) and verify that merged directory.
+
 ```sh
 mpgd target verify-deployment microsoft-store \
   --source-artifact-root artifacts/microsoft-store \

@@ -682,6 +682,84 @@ try {
     'symlinked report directory',
   );
 
+  // 10i. A wildcard redirect covering any source artifact URL is rejected.
+  const assetRedirectDeployment = fixtureCopy(deploymentRoot, 'asset-redirect');
+  writeFileSync(
+    join(assetRedirectDeployment, '_redirects'),
+    `${validRedirects}/assets/* /moved/:splat 302\n`,
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: assetRedirectDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /covers the protected PWA path \/assets\//u,
+    'wildcard asset redirect',
+  );
+
+  // 10j. Script attributes containing quoted angle brackets keep their src.
+  const quotedAngleSource = buildSourceArtifact(join(fixtureRoot, 'source-quoted-angle'), {
+    quotedAngleScript: './missing-quoted.js',
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: quotedAngleSource,
+      deploymentRoot: buildDeployment(
+        quotedAngleSource,
+        join(fixtureRoot, 'deployment-quoted-angle'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'quoted-angle script src',
+  );
+
+  // 10k. srcset URL candidates must resolve.
+  const srcsetSource = buildSourceArtifact(join(fixtureRoot, 'source-srcset'), {
+    extraSrcset: './missing-1x.png 1x, ./missing-2x.png 2x',
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: srcsetSource,
+      deploymentRoot: buildDeployment(
+        srcsetSource,
+        join(fixtureRoot, 'deployment-srcset'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'dangling srcset candidate',
+  );
+
+  // 10l. A manifest id that disagrees with the release evidence fails.
+  const mismatchedManifestSource = fixtureCopy(sourceRoot, 'source-manifest-mismatch');
+  const mismatchedManifestDeployment = fixtureCopy(deploymentRoot, 'deployment-manifest-mismatch');
+  for (const tree of [mismatchedManifestSource, mismatchedManifestDeployment]) {
+    writeFileSync(
+      join(tree, 'manifest.webmanifest'),
+      readFileSync(join(tree, 'manifest.webmanifest'), 'utf8').replace(
+        '"./index.html"',
+        '"./other-app/index.html"',
+      ),
+    );
+  }
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: mismatchedManifestSource,
+      deploymentRoot: mismatchedManifestDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /manifest application id does not match/u,
+    'manifest id mismatch',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
@@ -694,6 +772,49 @@ try {
     profile: 'api-only',
   });
   assertJsonEqual([...snapshotTree(sourceRoot, deploymentRoot)], [...before], 'read-only snapshot');
+
+  // 10m. Hostile metadata cannot inject Markdown into the evidence report.
+  const hostileSource = buildSourceArtifact(join(fixtureRoot, 'source-hostile'));
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: hostileSource,
+    provenance: {
+      appVersion: '1.0.0',
+      buildId: 'build`\n# injected heading',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  const hostileDeployment = buildDeployment(
+    hostileSource,
+    join(fixtureRoot, 'deployment-hostile'),
+    'api-only',
+  );
+  const hostileReportDir = join(fixtureRoot, 'hostile-report');
+  await runMpgdCli([
+    'target',
+    'verify-deployment',
+    'microsoft-store',
+    '--source-artifact-root',
+    hostileSource,
+    '--deployment-root',
+    hostileDeployment,
+    '--report-dir',
+    hostileReportDir,
+  ]);
+  const hostileMarkdown = readFileSync(
+    join(hostileReportDir, 'hosted-pwa-verification.md'),
+    'utf8',
+  );
+  assertTrue(
+    !hostileMarkdown.split('\n').some((line) => line.startsWith('# injected')),
+    'markdown injection cannot forge a heading line',
+  );
+  assertTrue(
+    hostileMarkdown.split('\n').some(
+      (line) => line.includes('build') && line.includes('injected heading'),
+    ),
+    'escaped build id stays readable',
+  );
 
   // CLI happy path writes structured evidence files outside the verified trees.
   const beforeCli = snapshotTree(sourceRoot, canonicalDeployment);
@@ -736,6 +857,9 @@ interface BuildSourceOptions {
   readonly extraIndexReferences?: readonly string[];
   readonly nestedAsset?: string;
   readonly extraScriptSrc?: string;
+  readonly quotedAngleScript?: string;
+  readonly extraSrcset?: string;
+  readonly manifestIdOverride?: string;
 }
 
 function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): string {
@@ -754,6 +878,13 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
     ? ''
     : `<script type="module" src="${options.extraScriptSrc}"></script>`;
 
+  const quotedScript = options.quotedAngleScript === undefined
+    ? ''
+    : `<script data-note=">" src="${options.quotedAngleScript}"></script>`;
+  const extraSrcset = options.extraSrcset === undefined
+    ? ''
+    : `<img srcset="${options.extraSrcset}">`;
+
   writeFileSync(
     join(root, 'index.html'),
     '<!doctype html><html><head>'
@@ -764,6 +895,8 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
       + '<!-- <img src="commented-out.png"> -->'
       + '<script type="module" src="./assets/app.a1b2c3d4.js"></script>'
       + extraScript
+      + quotedScript
+      + extraSrcset
       + '<img src="./icons/icon-512.png">'
       + extraReferences
       + '</body></html>\n',
@@ -772,7 +905,7 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
     join(root, 'manifest.webmanifest'),
     JSON.stringify(
       {
-        id: './index.html',
+        id: options.manifestIdOverride ?? './index.html',
         name: 'Fixture Game',
         start_url: './index.html',
         icons: [

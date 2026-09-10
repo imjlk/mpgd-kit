@@ -3249,19 +3249,26 @@ function realpathThroughExistingAncestor(candidate: string): string {
   }
 }
 
+function escapeMarkdownInline(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('`', '\\`').replaceAll('\n', ' ');
+}
+
 function renderHostedPwaVerificationMarkdown(
   verification: HostedPwaDeploymentVerification,
 ): string {
   return [
     '# Hosted PWA Deployment Verification',
     '',
-    `- Host: ${verification.host} (${verification.profile} profile)`,
-    `- Source artifact: ${verification.sourceArtifactRoot}`,
-    `- Deployment: ${verification.deploymentRoot}`,
-    `- Release: ${verification.appVersion} (build ${verification.buildId}, revision ${verification.revision})`,
+    `- Host: ${escapeMarkdownInline(verification.host)} (${escapeMarkdownInline(verification.profile)} profile)`,
+    `- Source artifact: ${escapeMarkdownInline(verification.sourceArtifactRoot)}`,
+    `- Deployment: ${escapeMarkdownInline(verification.deploymentRoot)}`,
+    '- Release: '
+      + `${escapeMarkdownInline(verification.appVersion)} (build `
+      + `${escapeMarkdownInline(verification.buildId)}, revision `
+      + `${escapeMarkdownInline(verification.revision)})`,
     `- Verified game files: ${verification.verifiedGameFileCount}`,
     `- Recognized host files: ${verification.hostFileCount}`,
-    `- Worker routes (include): ${verification.workerRoutes.include.join(', ')}`,
+    `- Worker routes (include): ${escapeMarkdownInline(verification.workerRoutes.include.join(', '))}`,
     '',
     '## Verified',
     '',
