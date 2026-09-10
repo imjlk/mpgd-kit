@@ -11,6 +11,7 @@ import {
 } from './cloudflare-pages-static.js';
 import {
   createMicrosoftStorePwaRevision,
+  createMicrosoftStorePwaServiceWorker,
   listPrecacheEntries,
   readMicrosoftStorePwaReleaseEvidence,
 } from './microsoft-store-pwa-release.js';
@@ -285,6 +286,20 @@ function verifySourceArtifactSelfConsistency(
     }
   }
 
+  const sourceWorker = sourceFiles.find((file) => file.path === 'service-worker.js');
+
+  if (
+    sourceWorker !== undefined
+    && sourceWorker.bytes.toString('utf8') !== createMicrosoftStorePwaServiceWorker(evidence)
+  ) {
+    throw new Error(
+      'The source PWA artifact service worker does not match the release '
+        + 'evidence; it must be the deterministic worker generated for the '
+        + 'recorded precache contract so its cache identity and precache list '
+        + 'cannot drift from pwa-release.json.',
+    );
+  }
+
   const recomputedRevision = createMicrosoftStorePwaRevision({
     appVersion: evidence.appVersion,
     buildId: evidence.buildId,
@@ -416,6 +431,17 @@ function readLegalSitePages(deploymentRoot: string): Set<string> {
     pages.add(relativePage);
   }
 
+  for (const page of pages) {
+    const pageFile = join(deploymentRoot, page);
+
+    if (!existsSync(pageFile) || !statSync(pageFile).isFile()) {
+      throw new Error(
+        'The deployment legal-site.json declares a page that is not present as a '
+          + `regular file: ${page}`,
+      );
+    }
+  }
+
   return pages;
 }
 
@@ -486,7 +512,7 @@ function verifyIndexReferences(
 function stripNonMarkupRanges(html: string): string {
   return html
     .replace(/<!--[\s\S]*?-->/gu, '')
-    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/giu, '<script></script>')
+    .replace(/<script\b([^>]*)>[\s\S]*?<\/script>/giu, '<script$1></script>')
     .replace(/<style\b[^>]*>[\s\S]*?<\/style>/giu, '<style></style>');
 }
 
@@ -588,7 +614,9 @@ function verifyCloudflarePagesHeaders(
 
   // Directory-scoped policies are evaluated against every actual file path so
   // placeholder-shaped blocks that do not cover the real URLs cannot satisfy
-  // the requirement by coincidence.
+  // the requirement by coincidence. Only filenames that carry a content
+  // hash may be cached immutably; stable names require revalidation so a
+  // later release at the same URL is served fresh.
   for (const file of sourceFiles) {
     const directory = file.path.includes('/') ? (file.path.split('/')[0] ?? '') : '';
 
@@ -597,10 +625,12 @@ function verifyCloudflarePagesHeaders(
     }
 
     if (immutableCacheControlDirectories.has(directory)) {
+      const hashed = carriesContentHash(file.path);
+
       requirements.push({
         requestPath: `/${file.path}`,
-        expected: immutableCacheControl,
-        label: `content-hashed ${file.path}`,
+        expected: hashed ? immutableCacheControl : freshCacheControl,
+        label: hashed ? `content-hashed ${file.path}` : `stable-name ${file.path}`,
       });
     } else if (noStoreCacheControlDirectories.has(directory)) {
       requirements.push({
@@ -651,6 +681,11 @@ function verifyCloudflarePagesHeaders(
       );
     }
   }
+}
+
+/** Whether a filename carries a Vite-style content hash segment. */
+function carriesContentHash(portablePath: string): boolean {
+  return /(^|[/.-])[0-9a-f]{8,}\.[a-z0-9]+$/iu.test(portablePath.split('/').pop() ?? '');
 }
 
 function verifyCloudflarePagesRedirects(deploymentRoot: string): void {

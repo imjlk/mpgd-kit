@@ -280,7 +280,7 @@ try {
 
   // 4b. A placeholder-only block cannot cover nested asset URLs.
   const placeholderSource = buildSourceArtifact(join(fixtureRoot, 'source-placeholder'), {
-    nestedAsset: 'assets/chunks/game.js',
+    nestedAsset: 'assets/chunks/game.1a2b3c4d.js',
   });
   const placeholderHeaders = validHeaders.replace(
     '/assets/*\n  Cache-Control: public, max-age=31536000, immutable',
@@ -299,7 +299,7 @@ try {
       host: 'cloudflare-pages',
       profile: 'api-only',
     }),
-    /cache policy for content-hashed assets\/chunks\/game\.js is missing/u,
+    /cache policy for content-hashed assets\/chunks\/game\.1a2b3c4d\.js is missing/u,
     'placeholder-only asset block',
   );
 
@@ -549,6 +549,139 @@ try {
     'broad wildcard redirect',
   );
 
+  // 10c. A script src that survives body stripping must still resolve.
+  const danglingScriptSource = buildSourceArtifact(join(fixtureRoot, 'source-dangling-script'), {
+    extraScriptSrc: './missing-module.js',
+  });
+  const danglingScriptDeployment = buildDeployment(
+    danglingScriptSource,
+    join(fixtureRoot, 'deployment-dangling-script'),
+    'api-only',
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: danglingScriptSource,
+      deploymentRoot: danglingScriptDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'dangling script src',
+  );
+
+  // 10d. A service worker that is not the evidence-matching build fails.
+  const staleWorkerSource = fixtureCopy(sourceRoot, 'stale-worker');
+  writeFileSync(
+    join(staleWorkerSource, 'service-worker.js'),
+    `${readFileSync(join(staleWorkerSource, 'service-worker.js'), 'utf8')}\n`,
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: staleWorkerSource,
+      deploymentRoot: fixtureCopy(deploymentRoot, 'stale-worker-deployment'),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /service worker does not match the release evidence/u,
+    'stale service worker',
+  );
+
+  // 10e. Stable-named assets require revalidation, hashed names require immutable.
+  const stableAssetSource = buildSourceArtifact(join(fixtureRoot, 'source-stable-asset'));
+  writeFileSync(join(stableAssetSource, 'assets', 'game.js'), 'export const stable = true;\n');
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: stableAssetSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  const stableHeaders = `${validHeaders.replace(
+    '/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n\n',
+    '',
+  )}/assets/app.a1b2c3d4.js\n  Cache-Control: public, max-age=31536000, immutable\n\n/assets/game.js\n  Cache-Control: public, max-age=0, must-revalidate\n`;
+  const stableDeployment = buildDeployment(
+    stableAssetSource,
+    join(fixtureRoot, 'deployment-stable-asset'),
+    'api-only',
+    { headersOverride: stableHeaders },
+  );
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: stableAssetSource,
+    deploymentRoot: stableDeployment,
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: stableAssetSource,
+      deploymentRoot: buildDeployment(
+        stableAssetSource,
+        join(fixtureRoot, 'deployment-stable-immutable'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /cache policy for stable-name assets\/game\.js is wrong/u,
+    'immutable cache on a stable asset name',
+  );
+
+  // 10f. A declared legal page that is missing from the deployment fails.
+  const missingLegalDeployment = fixtureCopy(deploymentRoot, 'missing-legal-page');
+  rmSync(join(missingLegalDeployment, 'privacy', 'index.html'));
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: missingLegalDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /declares a page that is not present/u,
+    'missing legal page',
+  );
+
+  // 10g. Adjacent placeholders in a header pattern are rejected.
+  const adjacentHeaders = validHeaders.replace(
+    '/assets/*\n  Cache-Control: public, max-age=31536000, immutable',
+    '/assets/:a:b\n  Cache-Control: public, max-age=31536000, immutable',
+  );
+  const adjacentDeployment = fixtureCopy(deploymentRoot, 'adjacent-placeholders');
+  writeFileSync(join(adjacentDeployment, '_headers'), adjacentHeaders);
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: adjacentDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /placeholders must be separated/u,
+    'adjacent placeholders',
+  );
+
+  // 10h. A symlinked report directory pointing into a verified tree is rejected.
+  const internalReports = join(deploymentRoot, '.reports');
+  mkdirSync(internalReports, { recursive: true });
+  const externalReports = join(fixtureRoot, 'external-reports-link');
+  symlinkSync(internalReports, externalReports);
+  await assertRejects(
+    () => runMpgdCli([
+      'target',
+      'verify-deployment',
+      'microsoft-store',
+      '--source-artifact-root',
+      sourceRoot,
+      '--deployment-root',
+      deploymentRoot,
+      '--report-dir',
+      externalReports,
+    ]),
+    (error) => String(error).includes('must stay outside'),
+    'symlinked report directory',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
@@ -563,6 +696,7 @@ try {
   assertJsonEqual([...snapshotTree(sourceRoot, deploymentRoot)], [...before], 'read-only snapshot');
 
   // CLI happy path writes structured evidence files outside the verified trees.
+  const beforeCli = snapshotTree(sourceRoot, canonicalDeployment);
   const reportDir = join(fixtureRoot, 'report');
   await runMpgdCli([
     'target',
@@ -589,9 +723,10 @@ try {
       .includes('Hosted PWA Deployment Verification'),
     'report markdown title',
   );
-  assertTrue(
-    !existsSync(join(deploymentRoot, 'hosted-pwa-verification.json')),
-    'deployment stays untouched by the CLI run',
+  assertJsonEqual(
+    [...snapshotTree(sourceRoot, canonicalDeployment)],
+    [...beforeCli],
+    'CLI read-only snapshot',
   );
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });
@@ -600,6 +735,7 @@ try {
 interface BuildSourceOptions {
   readonly extraIndexReferences?: readonly string[];
   readonly nestedAsset?: string;
+  readonly extraScriptSrc?: string;
 }
 
 function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): string {
@@ -614,6 +750,10 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
     writeFileSync(join(root, options.nestedAsset), 'export const nested = true;\n');
   }
 
+  const extraScript = options.extraScriptSrc === undefined
+    ? ''
+    : `<script type="module" src="${options.extraScriptSrc}"></script>`;
+
   writeFileSync(
     join(root, 'index.html'),
     '<!doctype html><html><head>'
@@ -623,6 +763,7 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
       + '<script>const ignored = \'src="not-a-real-attribute.png"\';</script>'
       + '<!-- <img src="commented-out.png"> -->'
       + '<script type="module" src="./assets/app.a1b2c3d4.js"></script>'
+      + extraScript
       + '<img src="./icons/icon-512.png">'
       + extraReferences
       + '</body></html>\n',

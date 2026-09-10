@@ -243,6 +243,8 @@ function partMatches(pattern: string, value: string): boolean {
     return pattern === value;
   }
 
+  assertSupportedPlaceholderShape(pattern);
+
   const literalPieces = pattern.split(/:[A-Za-z]\w*/gu);
   const expression = new RegExp(`^${literalPieces.map(escapeRegExp).join('([^/]+)')}$`, 'u');
 
@@ -251,6 +253,15 @@ function partMatches(pattern: string, value: string): boolean {
 
 function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+}
+
+/** Reject placeholder shapes that would compile into ambiguous backtracking. */
+function assertSupportedPlaceholderShape(path: string): void {
+  if (/:[A-Za-z]\w*:[A-Za-z]\w*/u.test(path)) {
+    throw new Error(
+      `Cloudflare Pages _headers placeholders must be separated by a literal: ${path}`,
+    );
+  }
 }
 
 function assertSupportedHeaderPathPattern(path: string): void {

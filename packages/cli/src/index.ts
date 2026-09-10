@@ -3211,12 +3211,14 @@ function assertReportDirectoryOutsideVerifiedTrees(
   sourceArtifactRoot: string,
   deploymentRoot: string,
 ): void {
+  const canonicalReportDir = realpathThroughExistingAncestor(reportDir);
+
   for (const [label, root] of [
     ['source artifact', sourceArtifactRoot],
     ['deployment', deploymentRoot],
   ] as const) {
-    const resolvedRoot = path.resolve(root);
-    const distance = path.relative(resolvedRoot, reportDir);
+    const resolvedRoot = realpathThroughExistingAncestor(root);
+    const distance = path.relative(resolvedRoot, canonicalReportDir);
 
     if (distance === '' || (!distance.startsWith('..') && !path.isAbsolute(distance))) {
       throw new Error(
@@ -3224,6 +3226,25 @@ function assertReportDirectoryOutsideVerifiedTrees(
           + `${reportDir} is inside ${resolvedRoot}, and writing evidence there would `
           + 'mutate a read-only verification input.',
       );
+    }
+  }
+}
+
+/** Canonicalize a possibly missing path through its nearest existing ancestor. */
+function realpathThroughExistingAncestor(candidate: string): string {
+  let absolute = path.resolve(candidate);
+
+  while (true) {
+    try {
+      return realpathSync(absolute);
+    } catch {
+      const parent = path.dirname(absolute);
+
+      if (parent === absolute) {
+        return absolute;
+      }
+
+      absolute = parent;
     }
   }
 }
