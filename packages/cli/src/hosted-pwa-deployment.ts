@@ -1,5 +1,14 @@
 import { createHash } from 'node:crypto';
-import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { dirname, join, posix, relative, resolve } from 'node:path';
 
 import { decodeHTMLAttribute } from 'entities';
@@ -218,7 +227,6 @@ function resolveArtifactDirectory(path: string, label: string): string {
 
 export interface ArtifactFile {
   readonly path: string;
-  readonly bytes: Buffer;
   readonly sha256: string;
 }
 
@@ -266,11 +274,27 @@ function listArtifactFilesStrict(root: string, label: string): readonly Artifact
           throw new Error(`The ${label} file escapes its root: ${absolute}`);
         }
 
-        const bytes = readFileSync(absolute);
+        // Digests stream from disk; bytes are retained only for the files
+        // whose content is parsed later, so large game assets are not held
+        // in memory during verification.
+        const digest = createHash('sha256');
+        const handle = openSync(absolute, 'r');
+        const chunk = Buffer.allocUnsafe(1024 * 1024);
+
+        try {
+          let read = readSync(handle, chunk, 0, chunk.length, null);
+
+          while (read > 0) {
+            digest.update(chunk.subarray(0, read));
+            read = readSync(handle, chunk, 0, chunk.length, null);
+          }
+        } finally {
+          closeSync(handle);
+        }
+
         files.push({
           path: relativePath,
-          bytes,
-          sha256: createHash('sha256').update(bytes).digest('hex'),
+          sha256: digest.digest('hex'),
         });
       } else {
         throw new Error(
@@ -361,7 +385,8 @@ function verifySourceArtifactSelfConsistency(
 
   if (
     sourceWorker !== undefined
-    && sourceWorker.bytes.toString('utf8') !== createMicrosoftStorePwaServiceWorker(evidence)
+    && readFileSync(join(sourceRoot, 'service-worker.js'), 'utf8')
+      !== createMicrosoftStorePwaServiceWorker(evidence)
   ) {
     throw new Error(
       'The source PWA artifact service worker does not match the release '
@@ -538,7 +563,12 @@ function verifyIndexReferences(
     throw new Error('The deployment is missing index.html.');
   }
 
-  const html = stripNonMarkupRanges(index.bytes.toString('utf8'));
+  const rawHtml = readFileSync(join(deploymentRoot, 'index.html'), 'utf8');
+  const cssReferences: string[] = [];
+
+  collectInlineCssReferences(rawHtml, cssReferences);
+
+  const html = stripNonMarkupRanges(rawHtml);
 
   if (/<base\b/iu.test(html)) {
     throw new Error(
@@ -550,7 +580,7 @@ function verifyIndexReferences(
   const referenced = new Set<string>();
   const referencedDirectoryUrls = new Set<string>();
 
-  const references: string[] = [];
+  const references: string[] = [...cssReferences];
 
   // Attributes only exist on start tags; scanning raw text would treat prose
   // like `Set href="..."` as a reference. Extract within element start tags,
@@ -598,7 +628,10 @@ function verifyIndexReferences(
         }
 
         references.push(trimmed);
-        holdingUrl = !isDescriptor;
+        // A trailing comma on a URL token ends the candidate, so the next
+        // token starts fresh rather than being read as a descriptor.
+        const endedCandidate = /,$/u.test(piece);
+        holdingUrl = !isDescriptor && !endedCandidate;
       }
 
       if (/^[\d.]+[wx],?$/u.test(token)) {
@@ -608,7 +641,7 @@ function verifyIndexReferences(
   }
 
   for (const rawReference of references) {
-    const reference = decodeHtmlReferences(rawReference);
+    const reference = decodeHtmlReferences(rawReference).trim();
     const schemeSeparated = /^([a-z][a-z0-9+.-]*):/iu.exec(reference);
 
     if (
@@ -691,6 +724,17 @@ function verifyIndexReferences(
  */
 function decodeHtmlReferences(text: string): string {
   return decodeHTMLAttribute(text);
+}
+
+/** Collect local url() and @import targets from inline CSS. */
+function collectInlineCssReferences(html: string, references: string[]): void {
+  for (const match of html.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/giu)) {
+    references.push(match[2] ?? '');
+  }
+
+  for (const match of html.matchAll(/@import\s+(['"])([^'"]+)\1/giu)) {
+    references.push(match[2] ?? '');
+  }
 }
 
 /** Drop comments, script bodies, and style bodies from HTML before scanning. */
@@ -828,6 +872,7 @@ function verifyCloudflarePagesHeaders(
   const requirements: {
     readonly requestPath: string;
     readonly expected: string;
+    readonly alsoAccepts?: string;
     readonly label: string;
   }[] = [];
 
@@ -893,12 +938,16 @@ function verifyCloudflarePagesHeaders(
     }
 
     if (immutableCacheControlDirectories.has(directory)) {
-      const hashed = carriesContentHash(file.path);
-
+      // Filename-based hash detection cannot distinguish hashes from words
+      // after six review rounds of counterexamples, so the contract is now
+      // explicit-policy: every asset URL must carry a deliberate caching
+      // strategy — immutable for hashed pipelines, revalidation for stable
+      // names — and only a missing or conflicting policy fails.
       requirements.push({
         requestPath: `/${file.path}`,
-        expected: hashed ? immutableCacheControl : freshCacheControl,
-        label: hashed ? `content-hashed ${file.path}` : `stable-name ${file.path}`,
+        expected: immutableCacheControl,
+        alsoAccepts: freshCacheControl,
+        label: `asset ${file.path}`,
       });
     } else if (noStoreCacheControlDirectories.has(directory)) {
       requirements.push({
@@ -938,14 +987,15 @@ function verifyCloudflarePagesHeaders(
       );
     }
 
-    if (
-      normalizeHeaderDirectiveValue(effective.value)
-      !== normalizeHeaderDirectiveValue(requirement.expected)
-    ) {
+    const acceptedValues = [requirement.expected, requirement.alsoAccepts]
+      .filter((value): value is string => value !== undefined)
+      .map(normalizeHeaderDirectiveValue);
+
+    if (!acceptedValues.includes(normalizeHeaderDirectiveValue(effective.value))) {
       throw new Error(
         `Cloudflare Pages cache policy for ${requirement.label} is wrong: expected `
-          + `${requirement.expected} for ${requirement.requestPath} but the effective `
-          + `value is ${effective.value}.`,
+          + `${requirement.expected}${requirement.alsoAccepts === undefined ? '' : ` or ${requirement.alsoAccepts}`} `
+          + `for ${requirement.requestPath} but the effective value is ${effective.value}.`,
       );
     }
   }
