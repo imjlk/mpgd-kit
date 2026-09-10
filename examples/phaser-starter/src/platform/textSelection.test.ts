@@ -65,22 +65,42 @@ assert.match(disabledStylesheet, /-webkit-touch-callout: none;/u);
 assert.match(disabledStylesheet, /input, textarea/u);
 assert.match(
   disabledStylesheet,
-  /\[contenteditable\]:not\(\[contenteditable='false'\]\)/u,
+  /:where\(\[contenteditable\]:not\(\[contenteditable='false'\]\)\)/u,
 );
 assert.match(
   disabledStylesheet,
-  /\[contenteditable\]:not\(\[contenteditable='false'\]\) \*/u,
+  /:where\(\[contenteditable\]:not\(\[contenteditable='false'\]\)\) \*/u,
 );
 assert.match(
   disabledStylesheet,
-  new RegExp(`\\.${selectableElementClassName},`, 'u'),
+  /:where\(\[contenteditable='false'\]\), :where\(\[contenteditable='false'\]\) \*/u,
 );
 assert.match(
   disabledStylesheet,
-  new RegExp(`\\.${selectableElementClassName} \\*`, 'u'),
+  new RegExp(`:where\\(input, textarea, \\.${selectableElementClassName}\\)`, 'u'),
+);
+assert.match(
+  disabledStylesheet,
+  new RegExp(`:where\\(input, textarea, \\.${selectableElementClassName}\\) \\*`, 'u'),
 );
 assert.match(disabledStylesheet, /-webkit-user-select: text;/u);
 assert.match(disabledStylesheet, /-webkit-touch-callout: default;/u);
+
+// Layer precedence is source order after :where() specificity normalization:
+// editable hosts < explicit non-editable islands < the selectable opt-in.
+const editableLayer = disabledStylesheet.indexOf(
+  ":where([contenteditable]:not([contenteditable='false']))",
+);
+const nonEditableIslandLayer = disabledStylesheet.indexOf(
+  ":where([contenteditable='false']),",
+);
+const selectableLayer = disabledStylesheet.indexOf(
+  `:where(input, textarea, .${selectableElementClassName}),`,
+);
+
+assert.ok(editableLayer >= 0, 'editable layer present');
+assert.ok(nonEditableIslandLayer > editableLayer, 'false islands override editable hosts');
+assert.ok(selectableLayer > nonEditableIslandLayer, 'opt-in overrides false islands');
 
 const enabledStylesheet = buildTextSelectionStylesheet('enabled');
 

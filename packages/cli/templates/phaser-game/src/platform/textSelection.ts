@@ -4,6 +4,13 @@
  * Games render tap targets, not documents, so text selection is disabled
  * globally by default and re-enabled only for input fields and elements that
  * explicitly opt in through {@link markSelectable}.
+ *
+ * Under the disabled policy the stylesheet layers, in ascending precedence:
+ * default suppression, editable contenteditable hosts (any value except
+ * explicit `false`, descendants included), explicit non-editable islands, and
+ * finally form fields plus the {@link selectableElementClassName} opt-in.
+ * All selectors are :where() normalized, so game CSS can still override the
+ * policy for bespoke elements.
  */
 
 export type TextSelectionMode = 'disabled' | 'enabled';
@@ -56,16 +63,29 @@ export function buildTextSelectionStylesheet(mode: TextSelectionMode): string {
     return '/* mpgd: text selection enabled; browser default applies. */\n';
   }
 
+  // Every selector is wrapped in :where() so all rules share zero specificity
+  // and source order defines the precedence:
+  // default suppression < editable hosts < explicit non-editable islands
+  // < form fields and the selectable opt-in utility.
   return [
     '*, *::before, *::after {',
     '  -webkit-user-select: none;',
     '  user-select: none;',
     '  -webkit-touch-callout: none;',
     '}',
-    'input, textarea,',
-    "[contenteditable]:not([contenteditable='false']),",
-    "[contenteditable]:not([contenteditable='false']) *,",
-    `.${selectableElementClassName}, .${selectableElementClassName} * {`,
+    ":where([contenteditable]:not([contenteditable='false'])),",
+    ":where([contenteditable]:not([contenteditable='false'])) * {",
+    '  -webkit-user-select: text;',
+    '  user-select: text;',
+    '  -webkit-touch-callout: default;',
+    '}',
+    ":where([contenteditable='false']), :where([contenteditable='false']) * {",
+    '  -webkit-user-select: none;',
+    '  user-select: none;',
+    '  -webkit-touch-callout: none;',
+    '}',
+    `:where(input, textarea, .${selectableElementClassName}),`,
+    `:where(input, textarea, .${selectableElementClassName}) * {`,
     '  -webkit-user-select: text;',
     '  user-select: text;',
     '  -webkit-touch-callout: default;',
