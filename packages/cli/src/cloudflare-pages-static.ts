@@ -130,6 +130,7 @@ export function parseCloudflarePagesRedirects(
 
     const [source, destination, codeText] = parts as [string, string, string | undefined];
     assertSupportedRedirectPattern(source, destination);
+    assertSupportedPlaceholderShape(source);
 
     let code: number | undefined;
 
@@ -247,20 +248,24 @@ function matchesFrom(patternParts: readonly string[], pathParts: readonly string
 }
 
 function partMatches(pattern: string, value: string): boolean {
-  if (!pattern.includes(':')) {
+  if (!pattern.includes(':') && !pattern.includes('*')) {
     return pattern === value;
   }
 
   assertSupportedPlaceholderShape(pattern);
 
-  const literalPieces = pattern.split(/:[A-Za-z]\w*/gu);
-  const expression = new RegExp(`^${literalPieces.map(escapeRegExp).join('([^/]+)')}$`, 'u');
+  // Placeholders match one non-separator run; a splat is greedy inside its
+  // segment, so /assets/*.js covers /assets/app.js like the Pages router.
+  const placeholderJoined = pattern
+    .split(/:[A-Za-z]\w*/gu)
+    .map(escapeRegExp)
+    .join('[^/]+');
 
-  return expression.test(value);
+  return new RegExp(`^${placeholderJoined.replaceAll('*', '.*')}$`, 'u').test(value);
 }
 
 function escapeRegExp(text: string): string {
-  return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
+  return text.replace(/[.+?^${}()|[\]\\]/gu, '\\$&');
 }
 
 /** Reject placeholder shapes that would compile into ambiguous backtracking. */

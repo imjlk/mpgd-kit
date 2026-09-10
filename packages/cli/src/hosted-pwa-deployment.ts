@@ -152,9 +152,10 @@ export function verifyHostedPwaDeployment(
     deploymentRoot,
     input.profile,
   );
-  verifyIndexReferences(deploymentRoot, deploymentFiles);
+  const referencedDirectoryUrls = verifyIndexReferences(deploymentRoot, deploymentFiles);
   const workerRoutes = verifyCloudflarePagesRoutes(deploymentRoot, input.profile);
   assertNoSourceRoutesShadowed(workerRoutes, sourceFiles, input.profile);
+  assertNoLegalRoutesShadowed(workerRoutes, [...readLegalSitePages(deploymentRoot)], input.profile);
   verifyCloudflarePagesHeaders(deploymentRoot, sourceFiles, deploymentFiles);
   const deploymentLegalPaths = [
     ...[...readLegalSitePages(deploymentRoot)].map(
@@ -165,7 +166,12 @@ export function verifyHostedPwaDeployment(
       : []),
   ];
 
-  verifyCloudflarePagesRedirects(deploymentRoot, sourceFiles, deploymentLegalPaths);
+  verifyCloudflarePagesRedirects(
+    deploymentRoot,
+    sourceFiles,
+    deploymentLegalPaths,
+    referencedDirectoryUrls,
+  );
 
   return {
     host: input.host,
@@ -461,8 +467,20 @@ function readLegalSitePages(deploymentRoot: string): Set<string> {
 
     const path = (page as Record<string, unknown>).path;
 
-    if (typeof path !== 'string' || !path.startsWith('/') || !path.endsWith('/')) {
-      throw new Error(`The deployment legal-site.json page path is malformed: ${String(path)}`);
+    const canonicalPath = typeof path === 'string'
+      && path.startsWith('/')
+      && path.endsWith('/')
+      && path !== '/'
+      && path
+        .slice(1, -1)
+        .split('/')
+        .every((segment) => /^[A-Za-z0-9_-]+$/u.test(segment));
+
+    if (!canonicalPath) {
+      throw new Error(
+        'The deployment legal-site.json page paths must be canonical slash-delimited '
+          + `URL pathnames without queries, fragments, dot segments, or escapes: ${String(path)}`,
+      );
     }
 
     const relativePage = `${path.slice(1)}index.html`;
@@ -494,7 +512,7 @@ function readLegalSitePages(deploymentRoot: string): Set<string> {
 function verifyIndexReferences(
   deploymentRoot: string,
   deploymentFiles: readonly ArtifactFile[],
-): void {
+): readonly string[] {
   const index = deploymentFiles.find((file) => file.path === 'index.html');
 
   if (index === undefined) {
@@ -511,20 +529,35 @@ function verifyIndexReferences(
   }
   const deploymentPaths = new Set(deploymentFiles.map((file) => file.path));
   const referenced = new Set<string>();
+  const referencedDirectoryUrls = new Set<string>();
 
   const references: string[] = [];
 
-  const attributePattern
-    = /(?:^|\s)(?:href|src|poster)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/giu;
+  // Attributes only exist on start tags; scanning raw text would treat prose
+  // like `Set href="..."` as a reference. Extract within element start tags,
+  // with object data URLs and srcset candidates handled per tag.
+  const startTagPattern = /<([A-Za-z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gu;
 
-  for (const match of html.matchAll(attributePattern)) {
-    references.push(match[1] ?? match[2] ?? match[3] ?? '');
-  }
+  for (const tag of html.matchAll(startTagPattern)) {
+    const tagName = (tag[1] ?? '').toLowerCase();
+    const attributes = tag[2] ?? '';
+    const resourceNames
+      = tagName === 'object' ? ['href', 'src', 'poster', 'data'] : ['href', 'src', 'poster'];
 
-  const srcsetPattern = /(?:^|\s)srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/giu;
+    for (const name of resourceNames) {
+      for (const match of attributes.matchAll(
+        new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^\\s>]+))`, 'giu'),
+      )) {
+        references.push(match[1] ?? match[2] ?? match[3] ?? '');
+      }
+    }
 
-  for (const match of html.matchAll(srcsetPattern)) {
-    const candidates = match[1] ?? match[2] ?? match[3] ?? '';
+    if (!/(?:^|\s)srcset\s*=/iu.test(attributes)) {
+      continue;
+    }
+
+    const srcset = attributes.match(/(?:^|\s)srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
+    const candidates = srcset?.[1] ?? srcset?.[2] ?? srcset?.[3] ?? '';
 
     // WHATWG srcset tokenizing: split on whitespace so data: URLs stay
     // whole, trim candidate-edge commas, skip descriptors, and split any
@@ -591,9 +624,23 @@ function verifyIndexReferences(
     }
 
     referenced.add(normalized);
+
+    if (reference.startsWith('/') && reference.endsWith('/')) {
+      referencedDirectoryUrls.add(reference);
+    } else if (!reference.startsWith('/') && !reference.includes('/')
+      && (withoutQuery === './' || withoutQuery === '.')) {
+      referencedDirectoryUrls.add('/');
+    }
   }
 
   for (const reference of [...referenced].sort()) {
+    if (cloudflarePagesHostFileAllowlist.has(reference)) {
+      throw new Error(
+        `The deployment index.html references the Pages control file ${reference}; `
+          + 'control artifacts are consumed by the host, not served to browsers.',
+      );
+    }
+
     if (!deploymentPaths.has(reference)) {
       throw new Error(
         `The deployment index.html references a missing file: ${reference} `
@@ -601,6 +648,8 @@ function verifyIndexReferences(
       );
     }
   }
+
+  return [...referencedDirectoryUrls];
 }
 
 /**
@@ -699,6 +748,29 @@ function assertNoSourceRoutesShadowed(
           `The source artifact file ${file.path} is served at ${requestPath}, which the `
           + `Pages worker route ${route} intercepts; the reviewed profiles route /api/* `
           + 'through the worker, so precached files must not live under those paths.',
+        );
+      }
+    }
+  }
+}
+
+/** Declared legal pages must be served statically, not intercepted by the worker. */
+function assertNoLegalRoutesShadowed(
+  routes: { readonly include: readonly string[] },
+  legalPages: readonly string[],
+  profile: CloudflarePagesDeploymentProfile,
+): void {
+  for (const page of legalPages) {
+    const requestPath = `/${page.slice(0, -'index.html'.length)}`;
+
+    for (const route of routes.include) {
+      if (
+        cloudflarePagesPathMatches(route, requestPath)
+        && !(profile === 'api-canonical-index' && route === '/index.html')
+      ) {
+        throw new Error(
+          `The declared legal page ${page} is served at ${requestPath}, which the `
+            + `Pages worker route ${route} intercepts instead of serving the file.`,
         );
       }
     }
@@ -855,13 +927,14 @@ function carriesContentHash(portablePath: string): boolean {
   return /(^|[/.-])[0-9a-f]{8,}\.[a-z0-9]+$/iu.test(name)
     || (hashedBase64 !== undefined
       && /[0-9]/u.test(hashedBase64)
-      && /[^a-z]/u.test(hashedBase64));
+      && /[A-Z_]/u.test(hashedBase64));
 }
 
 function verifyCloudflarePagesRedirects(
   deploymentRoot: string,
   sourceFiles: readonly ArtifactFile[],
   deploymentLegalPaths: readonly string[],
+  referencedDirectoryUrls: readonly string[],
 ): void {
   const redirectsPath = `${deploymentRoot}/_redirects`;
 
@@ -875,6 +948,7 @@ function verifyCloudflarePagesRedirects(
     ...protectedPwaMetadataRequestPaths,
     ...sourceFiles.map((file) => `/${file.path}`),
     ...deploymentLegalPaths,
+    ...referencedDirectoryUrls,
   ];
 
   for (const rule of rules) {

@@ -1221,6 +1221,206 @@ try {
     'legal manifest redirect',
   );
 
+  // 10aj. Mixed-case digit words without an uppercase signal stay stable.
+  const playerSource = buildSourceArtifact(join(fixtureRoot, 'source-player'));
+  mkdirSync(join(playerSource, 'assets'), { recursive: true });
+  writeFileSync(join(playerSource, 'assets', 'game-player2d.png'), 'player');
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: playerSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: playerSource,
+      deploymentRoot: buildDeployment(
+        playerSource,
+        join(fixtureRoot, 'deployment-player'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /cache policy for stable-name assets\/game-player2d\.png is wrong/u,
+    'digit word without uppercase stays stable',
+  );
+
+  // 10ak. Legal pages under a worker route are rejected.
+  const apiLegalDeployment = fixtureCopy(deploymentRoot, 'api-legal');
+  mkdirSync(join(apiLegalDeployment, 'api', 'game-services'), { recursive: true });
+  writeFileSync(join(apiLegalDeployment, 'api', 'game-services', 'index.html'), '<!doctype html>');
+  writeFileSync(
+    join(apiLegalDeployment, 'legal-site.json'),
+    JSON.stringify({
+      version: 1,
+      pages: [
+        { slug: 'privacy', path: '/privacy/', source: 'legal/privacy.html' },
+        { slug: 'api', path: '/api/game-services/', source: 'legal/api.html' },
+      ],
+    }),
+  );
+  writeFileSync(
+    join(apiLegalDeployment, '_headers'),
+    `${validHeaders}/api/game-services/*\n  Cache-Control: public, max-age=0, must-revalidate\n`,
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: apiLegalDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /legal page api\/game-services\/index\.html is served at \/api\/game-services\//u,
+    'legal page under worker route',
+  );
+
+  // 10al. References to Pages control files are rejected.
+  const workerRefSource = buildSourceArtifact(join(fixtureRoot, 'source-worker-ref'), {
+    withWorkerRef: true,
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: workerRefSource,
+      deploymentRoot: buildDeployment(
+        workerRefSource,
+        join(fixtureRoot, 'deployment-worker-ref'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /Pages control file _worker\.js/u,
+    'control file reference',
+  );
+
+  // 10am. Object data URLs are browser-loaded references.
+  const objectDataSource = buildSourceArtifact(join(fixtureRoot, 'source-object'), {
+    withObjectData: './missing-widget.html',
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: objectDataSource,
+      deploymentRoot: buildDeployment(
+        objectDataSource,
+        join(fixtureRoot, 'deployment-object'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'object data URL',
+  );
+
+  // 10an. Prose text mentioning href is not a reference.
+  const textHrefSource = buildSourceArtifact(join(fixtureRoot, 'source-text-href'), {
+    withTextHref: true,
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: textHrefSource,
+    deploymentRoot: buildDeployment(
+      textHrefSource,
+      join(fixtureRoot, 'deployment-text-href'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10ao. Redirect sources with adjacent placeholders fail at parse time.
+  const adjacentRedirectDeployment = fixtureCopy(deploymentRoot, 'adjacent-redirect');
+  writeFileSync(
+    join(adjacentRedirectDeployment, '_redirects'),
+    `${validRedirects}/unrelated/:first:second /target 302\n`,
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: adjacentRedirectDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /placeholders must be separated/u,
+    'adjacent redirect placeholders',
+  );
+
+  // 10ap. Directory-form references are redirect-protected.
+  const docsSource = buildSourceArtifact(join(fixtureRoot, 'source-docs'), {
+    withDirectoryRef: '/docs/',
+  });
+  mkdirSync(join(docsSource, 'docs'), { recursive: true });
+  writeFileSync(join(docsSource, 'docs', 'index.html'), '<!doctype html><p>docs</p>');
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: docsSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  const docsDeployment = buildDeployment(
+    docsSource,
+    join(fixtureRoot, 'deployment-docs'),
+    'api-only',
+  );
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: docsSource,
+    deploymentRoot: docsDeployment,
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+  const docsRedirectDeployment = fixtureCopy(docsDeployment, 'docs-redirect');
+  writeFileSync(
+    join(docsRedirectDeployment, '_redirects'),
+    `${validRedirects}/docs/ /missing 302\n`,
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: docsSource,
+      deploymentRoot: docsRedirectDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /covers the protected PWA path \/docs\//u,
+    'directory reference redirect',
+  );
+
+  // 10aq. Non-canonical legal manifest paths are rejected.
+  const queryManifestDeployment = fixtureCopy(deploymentRoot, 'query-manifest');
+  writeFileSync(
+    join(queryManifestDeployment, 'legal-site.json'),
+    JSON.stringify({
+      version: 1,
+      pages: [{ slug: 'privacy', path: '/privacy?version=1/', source: 'x' }],
+    }),
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: queryManifestDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /canonical slash-delimited/u,
+    'non-canonical legal path',
+  );
+
+  // 10ar. Splats inside path segments match like the Pages router.
+  const segmentSplatHeaders = `${validHeaders}/*.png\n  Cache-Control: public, max-age=0, must-revalidate\n`;
+  const segmentSplatDeployment = fixtureCopy(deploymentRoot, 'segment-splat');
+  writeFileSync(join(segmentSplatDeployment, '_headers'), segmentSplatHeaders);
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: sourceRoot,
+    deploymentRoot: segmentSplatDeployment,
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
@@ -1324,6 +1524,10 @@ interface BuildSourceOptions {
   readonly extraUpperSrc?: string;
   readonly withBaseTag?: boolean;
   readonly withPosterRef?: boolean;
+  readonly withObjectData?: string;
+  readonly withTextHref?: boolean;
+  readonly withWorkerRef?: boolean;
+  readonly withDirectoryRef?: string;
   readonly extraDataSrcset?: string;
   readonly extraEntityRef?: string;
 }
@@ -1361,6 +1565,17 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
     ? ''
     : `<img srcset="${options.extraSrcset}">`;
 
+  const objectData = options.withObjectData === undefined
+    ? ''
+    : `<object data="${options.withObjectData}"></object>`;
+  const textHref = options.withTextHref === true ? '<p>Set href="./missing.js"</p>' : '';
+  const workerRef = options.withWorkerRef === true
+    ? '<script type="module" src="./_worker.js"></script>'
+    : '';
+  const directoryRef = options.withDirectoryRef === undefined
+    ? ''
+    : `<a href="${options.withDirectoryRef}">docs</a>`;
+
   const baseTag = options.withBaseTag === true ? '<base href="/sub/">' : '';
 
   writeFileSync(
@@ -1380,6 +1595,10 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
       + extraUpperSrc
       + extraDataSrcset
       + extraEntityRef
+      + objectData
+      + textHref
+      + workerRef
+      + directoryRef
       + quotedScript
       + extraSrcset
       + '<img src="./icons/icon-512.png">'
