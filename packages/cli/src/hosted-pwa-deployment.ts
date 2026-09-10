@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto';
 import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { dirname, join, posix, relative, resolve } from 'node:path';
 
+import { decodeHTMLAttribute } from 'entities';
+
 import {
   cloudflarePagesPathMatches,
   evaluateCloudflarePagesHeader,
@@ -154,9 +156,14 @@ export function verifyHostedPwaDeployment(
   const workerRoutes = verifyCloudflarePagesRoutes(deploymentRoot, input.profile);
   assertNoSourceRoutesShadowed(workerRoutes, sourceFiles, input.profile);
   verifyCloudflarePagesHeaders(deploymentRoot, sourceFiles, deploymentFiles);
-  const deploymentLegalPaths = [...readLegalSitePages(deploymentRoot)].map(
-    (page) => `/${page.slice(0, -'index.html'.length)}`,
-  );
+  const deploymentLegalPaths = [
+    ...[...readLegalSitePages(deploymentRoot)].map(
+      (page) => `/${page.slice(0, -'index.html'.length)}`,
+    ),
+    ...(existsSync(join(deploymentRoot, 'legal-site.json'))
+      ? ['/legal-site.json']
+      : []),
+  ];
 
   verifyCloudflarePagesRedirects(deploymentRoot, sourceFiles, deploymentLegalPaths);
 
@@ -519,17 +526,19 @@ function verifyIndexReferences(
   for (const match of html.matchAll(srcsetPattern)) {
     const candidates = match[1] ?? match[2] ?? match[3] ?? '';
 
-    // WHATWG srcset tokenizing: split on whitespace, strip the leading and
-    // trailing commas of each token so commas inside data: URLs survive, and
-    // skip pure descriptor tokens (widths, pixel densities, stray commas).
+    // WHATWG srcset tokenizing: split on whitespace so data: URLs stay
+    // whole, trim candidate-edge commas, skip descriptors, and split any
+    // descriptor-URL glue ("1x,./b.png") at the separator comma.
     for (const token of candidates.split(/\s+/u)) {
-      const trimmedToken = token.replace(/^[,]+|[,]+$/gu, '');
+      for (const piece of token.split(/(?<=\d[xw]),/u)) {
+        const trimmed = piece.replace(/^[,]+|[,]+$/gu, '');
 
-      if (trimmedToken.length === 0 || /^[\d.]+[wx]?$/u.test(trimmedToken)) {
-        continue;
+        if (trimmed.length === 0 || /^[\d.]+[wx]?$/u.test(trimmed)) {
+          continue;
+        }
+
+        references.push(trimmed);
       }
-
-      references.push(trimmedToken);
     }
   }
 
@@ -594,26 +603,13 @@ function verifyIndexReferences(
   }
 }
 
-/** Decode the HTML character references that can appear in attribute URLs. */
+/**
+ * Decode attribute values with standards-compliant HTML semantics using the
+ * package's existing entities dependency (named references, numeric
+ * references, and U+FFFD replacement for invalid code points).
+ */
 function decodeHtmlReferences(text: string): string {
-  return text
-    .replace(/&amp;/gu, '&')
-    .replace(/&lt;/gu, '<')
-    .replace(/&gt;/gu, '>')
-    .replace(/&quot;/gu, '"')
-    .replace(/&apos;/gu, "'")
-    .replace(/&#x([0-9a-f]+);/giu, (_, hex: string) => safeCodePoint(Number.parseInt(hex, 16)))
-    .replace(/&#(\d+);/gu, (_, dec: string) => safeCodePoint(Number.parseInt(dec, 10)));
-}
-
-function safeCodePoint(code: number): string {
-  const valid = Number.isInteger(code)
-    && code > 0
-    && code <= 0x10ffff
-    && !(code >= 0xd800 && code <= 0xdfff);
-
-  // The HTML tokenizer emits U+FFFD for invalid references, not silence.
-  return valid ? String.fromCodePoint(code) : '\uFFFD';
+  return decodeHTMLAttribute(text);
 }
 
 /** Drop comments, script bodies, and style bodies from HTML before scanning. */
@@ -747,10 +743,12 @@ function verifyCloudflarePagesHeaders(
     }
 
     if (file.path.endsWith('/index.html') && file.path.includes('/')) {
+      const directoryUrl = `/${file.path.slice(0, -'index.html'.length)}`;
+
       requirements.push({
-        requestPath: `/${file.path.slice(0, -'index.html'.length)}*`,
+        requestPath: directoryUrl,
         expected: freshCacheControl,
-        label: `${file.path.slice(0, -'index.html'.length)} pages`,
+        label: `${file.path} directory URL`,
       });
     }
   }
@@ -852,8 +850,12 @@ function carriesContentHash(portablePath: string): boolean {
   // Long hexadecimal segments accept start/dot/hyphen delimiters; Vite's
   // URL-safe base64 hash segment is always hyphen-delimited and exactly
   // eight characters, so stable names like "controls.png" stay stable.
+  const hashedBase64 = /-([A-Za-z0-9_-]{8})\.[a-z0-9]+$/iu.exec(name)?.[1];
+
   return /(^|[/.-])[0-9a-f]{8,}\.[a-z0-9]+$/iu.test(name)
-    || /-[A-Za-z0-9_-]{8}\.[a-z0-9]+$/iu.test(name);
+    || (hashedBase64 !== undefined
+      && /[0-9]/u.test(hashedBase64)
+      && /[^a-z]/u.test(hashedBase64));
 }
 
 function verifyCloudflarePagesRedirects(

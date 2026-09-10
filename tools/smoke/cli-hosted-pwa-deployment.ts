@@ -1128,6 +1128,99 @@ try {
     'poster attribute',
   );
 
+  // 10af. Ordinary hyphenated words stay stable despite eight characters.
+  const wordySource = buildSourceArtifact(join(fixtureRoot, 'source-wordy'));
+  mkdirSync(join(wordySource, 'assets'), { recursive: true });
+  writeFileSync(join(wordySource, 'assets', 'game-controls.png'), 'words');
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: wordySource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: wordySource,
+      deploymentRoot: buildDeployment(
+        wordySource,
+        join(fixtureRoot, 'deployment-wordy'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /cache policy for stable-name assets\/game-controls\.png is wrong/u,
+    'ordinary hyphenated word stays stable',
+  );
+
+  // 10ag. The full named-entity set decodes (&sol; becomes a slash).
+  const solSource = buildSourceArtifact(join(fixtureRoot, 'source-sol'));
+  writeFileSync(
+    join(solSource, 'index.html'),
+    readFileSync(join(solSource, 'index.html'), 'utf8').replace(
+      '<img src="./icons/icon-512.png">',
+      '<img src="./icons/foo&sol;bar.png">',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: solSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: solSource,
+      deploymentRoot: buildDeployment(
+        solSource,
+        join(fixtureRoot, 'deployment-sol'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'named entity decodes to a path separator',
+  );
+
+  // 10ah. srcset separators without following whitespace still split.
+  const tightSrcsetSource = buildSourceArtifact(join(fixtureRoot, 'source-tight'), {
+    extraSrcset: './icons/icon-512.png 1x,./icons/icon-512.png 2x',
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: tightSrcsetSource,
+    deploymentRoot: buildDeployment(
+      tightSrcsetSource,
+      join(fixtureRoot, 'deployment-tight'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10ai. The legal manifest URL is redirect-protected.
+  const legalManifestRedirect = fixtureCopy(deploymentRoot, 'legal-manifest-redirect');
+  writeFileSync(
+    join(legalManifestRedirect, '_redirects'),
+    `${validRedirects}/legal-site.json /stale.json 302\n`,
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalManifestRedirect,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /covers the protected PWA path \/legal-site\.json/u,
+    'legal manifest redirect',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 

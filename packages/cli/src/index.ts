@@ -23,7 +23,10 @@ import {
   supportedBuildTargets,
   type ConfiguredBuildTargets,
 } from './build-targets.js';
-import { writeEvidenceReportFiles } from './evidence-io.js';
+import {
+  escapeMarkdownInline as escapeEvidenceMarkdownInline,
+  writeEvidenceReportFiles,
+} from './evidence-io.js';
 import {
   defaultGameAcceptanceCommandTimeoutMs,
   resolveGameAcceptanceReleaseManifestFile,
@@ -3286,16 +3289,9 @@ function realpathThroughExistingAncestor(candidate: string): string {
   }
 }
 
-function escapeMarkdownInline(value: string): string {
-  return value
-    .replaceAll('\\', '\\\\')
-    .replaceAll('`', '\\`')
-    .replaceAll('&', '&amp;')
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;')
-    .replaceAll('\r\n', ' ')
-    .replaceAll('\r', ' ')
-    .replaceAll('\n', ' ');
+/** Markdown-escape a verification value, normalizing CR line endings first. */
+function escapeVerificationMarkdown(value: string): string {
+  return escapeEvidenceMarkdownInline(value.replaceAll('\r\n', ' ').replaceAll('\r', ' '));
 }
 
 function renderHostedPwaVerificationMarkdown(
@@ -3304,16 +3300,16 @@ function renderHostedPwaVerificationMarkdown(
   return [
     '# Hosted PWA Deployment Verification',
     '',
-    `- Host: ${escapeMarkdownInline(verification.host)} (${escapeMarkdownInline(verification.profile)} profile)`,
-    `- Source artifact: ${escapeMarkdownInline(verification.sourceArtifactRoot)}`,
-    `- Deployment: ${escapeMarkdownInline(verification.deploymentRoot)}`,
+    `- Host: ${escapeVerificationMarkdown(verification.host)} (${escapeVerificationMarkdown(verification.profile)} profile)`,
+    `- Source artifact: ${escapeVerificationMarkdown(verification.sourceArtifactRoot)}`,
+    `- Deployment: ${escapeVerificationMarkdown(verification.deploymentRoot)}`,
     '- Release: '
-      + `${escapeMarkdownInline(verification.appVersion)} (build `
-      + `${escapeMarkdownInline(verification.buildId)}, revision `
-      + `${escapeMarkdownInline(verification.revision)})`,
+      + `${escapeVerificationMarkdown(verification.appVersion)} (build `
+      + `${escapeVerificationMarkdown(verification.buildId)}, revision `
+      + `${escapeVerificationMarkdown(verification.revision)})`,
     `- Verified game files: ${verification.verifiedGameFileCount}`,
     `- Recognized host files: ${verification.hostFileCount}`,
-    `- Worker routes (include): ${escapeMarkdownInline(verification.workerRoutes.include.join(', '))}`,
+    `- Worker routes (include): ${escapeVerificationMarkdown(verification.workerRoutes.include.join(', '))}`,
     '',
     '## Verified',
     '',
