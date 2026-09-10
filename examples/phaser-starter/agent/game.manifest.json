@@ -81,6 +81,19 @@
       ]
     },
     {
+      "id": "platform.ui.text-selection",
+      "kind": "platform",
+      "entry": "src/platform/textSelection.ts",
+      "capabilities": [
+        "text-selection-policy",
+        "selectable-opt-in"
+      ],
+      "gotchas": [
+        "Selection is disabled game-wide by default through mpgd.game.json ui.textSelection; input fields, textareas, and contenteditable hosts stay selectable automatically.",
+        "Re-enable selection per element with markSelectable; entry.ts and gameEntry.ts install the policy before any target UI renders."
+      ]
+    },
+    {
       "id": "services.backend.game-services",
       "kind": "service",
       "entry": "src/platform/gameServices.ts",

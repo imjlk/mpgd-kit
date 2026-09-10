@@ -18,6 +18,7 @@ import sharp from 'sharp';
 import { writeMicrosoftStorePwaArtifacts } from '../target/microsoft-store-pwa';
 import type { PlatformTargetConfig } from '../target/schemas';
 import { copyWebStaticDirectoryContents } from '../target/web-artifact';
+import { loadGameBrandConfig } from './config';
 import {
   generateTargetIcons,
   verifyExistingTargetIcons,
@@ -37,6 +38,7 @@ try {
   await testPngAndOverrides(root);
   await testInvalidInputs(root);
   await testPathEscapes(root);
+  await testGameUiConfig(root);
   console.log('Icon pipeline tests passed.');
 } finally {
   rmSync(root, { recursive: true, force: true });
@@ -851,6 +853,47 @@ function writeGame(gameRoot: string, source: string, contents: string): void {
       display: 'standalone',
     }),
   );
+}
+
+async function testGameUiConfig(parent: string): Promise<void> {
+  const gameRoot = join(parent, 'ui-game');
+  const appIcon = { source: 'assets/icon.svg' };
+
+  mkdirSync(gameRoot, { recursive: true });
+  writeGame(gameRoot, 'assets/icon.svg', simpleSvg('#2563eb'));
+
+  writeFileSync(join(gameRoot, 'mpgd.game.json'), JSON.stringify({ brand: { appIcon } }));
+  assert.equal(loadGameBrandConfig(gameRoot).textSelection, 'disabled');
+
+  writeFileSync(join(gameRoot, 'mpgd.game.json'), JSON.stringify({ brand: { appIcon }, ui: {} }));
+  assert.equal(loadGameBrandConfig(gameRoot).textSelection, 'disabled');
+
+  writeFileSync(
+    join(gameRoot, 'mpgd.game.json'),
+    JSON.stringify({ brand: { appIcon }, ui: { textSelection: 'enabled' } }),
+  );
+  assert.equal(loadGameBrandConfig(gameRoot).textSelection, 'enabled');
+
+  writeFileSync(
+    join(gameRoot, 'mpgd.game.json'),
+    JSON.stringify({ brand: { appIcon }, ui: { textSelection: 'sometimes' } }),
+  );
+  assert.throws(
+    () => loadGameBrandConfig(gameRoot),
+    /ui\.textSelection must be 'disabled' or 'enabled'/u,
+  );
+
+  writeFileSync(
+    join(gameRoot, 'mpgd.game.json'),
+    JSON.stringify({ brand: { appIcon }, ui: { textSelection: 'enabled', extra: 1 } }),
+  );
+  assert.throws(() => loadGameBrandConfig(gameRoot), /ui\.extra is not supported/u);
+
+  writeFileSync(
+    join(gameRoot, 'mpgd.game.json'),
+    JSON.stringify({ brand: { appIcon }, ui: 'disabled' }),
+  );
+  assert.throws(() => loadGameBrandConfig(gameRoot), /ui must be an object/u);
 }
 
 function writeGameConfig(gameRoot: string, source: string): void {

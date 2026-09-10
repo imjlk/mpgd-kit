@@ -42,7 +42,32 @@ export function loadGameBrandConfig(gameRoot: string): LoadedGameBrandConfig {
     };
   }
 
-  return { appIcon, warnings };
+  return { appIcon, warnings, textSelection: readGameTextSelection(parsed.ui) };
+}
+
+/** Read and validate the optional game-wide `ui.textSelection` policy. */
+function readGameTextSelection(ui: unknown): 'disabled' | 'enabled' {
+  if (ui === undefined) {
+    return 'disabled';
+  }
+
+  if (typeof ui !== 'object' || ui === null || Array.isArray(ui)) {
+    throw new Error('mpgd.game.json ui must be an object when present.');
+  }
+
+  assertSupportedKeys(ui as Record<string, unknown>, ['textSelection'], 'mpgd.game.json ui');
+
+  const textSelection = (ui as Record<string, unknown>).textSelection;
+
+  if (textSelection === undefined) {
+    return 'disabled';
+  }
+
+  if (textSelection !== 'disabled' && textSelection !== 'enabled') {
+    throw new Error("mpgd.game.json ui.textSelection must be 'disabled' or 'enabled'.");
+  }
+
+  return textSelection;
 }
 
 export function applyTargetIconOverride(

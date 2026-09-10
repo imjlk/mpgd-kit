@@ -1,5 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import ttsc from '@ttsc/unplugin/vite';
 import type { PluginOption } from 'vite';
@@ -8,6 +9,7 @@ import {
   assertRuntimeTargetConfigMatrix,
   type TargetConfigMatrix,
 } from './vite.runtime-target-config';
+import { resolveTextSelectionMode } from './src/platform/textSelection';
 
 interface RuntimePlatformTargetMetadata {
   readonly kind: string;
@@ -39,9 +41,20 @@ export interface GameViteSharedConfig<SharedPluginOption> {
   readonly define: Record<string, string>;
 }
 
+/** Fail ordinary Vite builds when mpgd.game.json declares an invalid ui policy. */
+function readGameTextSelectionPolicy(): 'disabled' | 'enabled' {
+  const gameRoot = dirname(fileURLToPath(import.meta.url));
+  const gameConfig = JSON.parse(
+    readFileSync(resolve(gameRoot, 'mpgd.game.json'), 'utf8'),
+  ) as { readonly ui?: unknown };
+
+  return resolveTextSelectionMode(gameConfig.ui);
+}
+
 export function createGameViteSharedConfig<SharedPluginOption = PluginOption>(
   input: CreateGameViteSharedConfigInput,
 ): GameViteSharedConfig<SharedPluginOption> {
+  readGameTextSelectionPolicy();
   const isProduction = input.mode === 'production';
   const appTarget = input.appTarget ?? process.env.APP_TARGET ?? 'browser';
   const configTarget = input.configTarget ?? process.env.MPGD_CONFIG_TARGET ?? '';
