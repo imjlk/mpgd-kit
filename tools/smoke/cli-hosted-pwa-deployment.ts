@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import {
   cpSync,
@@ -760,6 +761,212 @@ try {
     'manifest id mismatch',
   );
 
+  // 10n. data-srcset is not srcset: lazy-load candidates stay invisible.
+  const lazySource = buildSourceArtifact(join(fixtureRoot, 'source-lazy'), {
+    extraDataSrcset: './missing-lazy.png 1x',
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: lazySource,
+    deploymentRoot: buildDeployment(
+      lazySource,
+      join(fixtureRoot, 'deployment-lazy'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10o. Uppercase attribute names are scanned case-insensitively.
+  const upperSource = buildSourceArtifact(join(fixtureRoot, 'source-upper'), {
+    extraUpperSrc: './missing-upper.js',
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: upperSource,
+      deploymentRoot: buildDeployment(
+        upperSource,
+        join(fixtureRoot, 'deployment-upper'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'uppercase SRC attribute',
+  );
+
+  // 10p. HTML character references in URLs decode before resolution.
+  const entitySource = buildSourceArtifact(join(fixtureRoot, 'source-entity'), {
+    extraEntityRef: './icons/decoded&amp;icon.png',
+  });
+  mkdirSync(join(entitySource, 'icons'), { recursive: true });
+  writeFileSync(join(entitySource, 'icons', 'decoded&icon.png'), 'entity-icon');
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: entitySource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: entitySource,
+    deploymentRoot: buildDeployment(
+      entitySource,
+      join(fixtureRoot, 'deployment-entity'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10q. Commas inside srcset data URLs do not create bogus local candidates.
+  const dataUrlSource = buildSourceArtifact(join(fixtureRoot, 'source-data-url'), {
+    extraSrcset: 'data:image/png;base64,AAAA 1x, ./icons/icon-512.png 2x',
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: dataUrlSource,
+    deploymentRoot: buildDeployment(
+      dataUrlSource,
+      join(fixtureRoot, 'deployment-data-url'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10r. Vite base64-style content hashes count as immutable names.
+  const base64HashSource = buildSourceArtifact(join(fixtureRoot, 'source-b64hash'), {
+    nestedAsset: 'assets/index-BhYHK6AL.js',
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: base64HashSource,
+    deploymentRoot: buildDeployment(
+      base64HashSource,
+      join(fixtureRoot, 'deployment-b64hash'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10s. A trailing-slash header path does not satisfy the exact policy.
+  const trailingSlashDeployment = fixtureCopy(deploymentRoot, 'trailing-slash');
+  writeFileSync(
+    join(trailingSlashDeployment, '_headers'),
+    validHeaders.replace('/service-worker.js\n', '/service-worker.js/\n'),
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: trailingSlashDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /cache policy for service-worker\.js is missing/u,
+    'trailing slash header path',
+  );
+
+  // 10t. Backslash file names are rejected as non-portable.
+  const backslashDeployment = fixtureCopy(deploymentRoot, 'backslash-name');
+  writeFileSync(join(backslashDeployment, 'assets\\game.js'), 'shadow');
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: backslashDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /backslash/u,
+    'backslash file name',
+  );
+
+  // 10u. Unsupported placeholder shapes are rejected at parse time.
+  const unrelatedPlaceholderDeployment = fixtureCopy(deploymentRoot, 'unrelated-placeholder');
+  writeFileSync(
+    join(unrelatedPlaceholderDeployment, '_headers'),
+    `${validHeaders}/unrelated/:first:second\n  X-Test: 1\n`,
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: unrelatedPlaceholderDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /placeholders must be separated/u,
+    'unrelated adjacent placeholders',
+  );
+
+  // 10v. Special file entries are rejected during traversal.
+  const fifoDeployment = fixtureCopy(deploymentRoot, 'fifo-entry');
+  const fifoPath = join(fifoDeployment, 'assets', 'channel.pipe');
+  if (!existsSync(fifoPath)) {
+    spawnSync('mkfifo', [fifoPath]);
+  }
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: fifoDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /neither a directory nor a regular file/u,
+    'fifo entry',
+  );
+
+  // 10w. Source files under a worker route are rejected as shadowed.
+  const shadowedSource = buildSourceArtifact(join(fixtureRoot, 'source-shadowed'));
+  mkdirSync(join(shadowedSource, 'api', 'mpgd'), { recursive: true });
+  writeFileSync(join(shadowedSource, 'api', 'mpgd', 'bridge'), '{}');
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: shadowedSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: shadowedSource,
+      deploymentRoot: buildDeployment(
+        shadowedSource,
+        join(fixtureRoot, 'deployment-shadowed'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /intercepts/u,
+    'worker route shadowing',
+  );
+
+  // 10x. A symlinked report destination file is rejected before writing.
+  const linkedReportDir = join(fixtureRoot, 'linked-report');
+  mkdirSync(linkedReportDir, { recursive: true });
+  symlinkSync(
+    join(deploymentRoot, 'pwa-release.json'),
+    join(linkedReportDir, 'hosted-pwa-verification.json'),
+  );
+  await assertRejects(
+    () => runMpgdCli([
+      'target',
+      'verify-deployment',
+      'microsoft-store',
+      '--source-artifact-root',
+      sourceRoot,
+      '--deployment-root',
+      deploymentRoot,
+      '--report-dir',
+      linkedReportDir,
+    ]),
+    (error) => String(error).includes('symbolic link'),
+    'symlinked report file',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
@@ -860,6 +1067,9 @@ interface BuildSourceOptions {
   readonly quotedAngleScript?: string;
   readonly extraSrcset?: string;
   readonly manifestIdOverride?: string;
+  readonly extraUpperSrc?: string;
+  readonly extraDataSrcset?: string;
+  readonly extraEntityRef?: string;
 }
 
 function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): string {
@@ -881,6 +1091,16 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
   const quotedScript = options.quotedAngleScript === undefined
     ? ''
     : `<script data-note=">" src="${options.quotedAngleScript}"></script>`;
+  const extraUpperSrc = options.extraUpperSrc === undefined
+    ? ''
+    : `<script SRC="${options.extraUpperSrc}"></script>`;
+  const extraDataSrcset = options.extraDataSrcset === undefined
+    ? ''
+    : `<img data-srcset="${options.extraDataSrcset}">`;
+  const extraEntityRef = options.extraEntityRef === undefined
+    ? ''
+    : `<img src="${options.extraEntityRef}">`;
+
   const extraSrcset = options.extraSrcset === undefined
     ? ''
     : `<img srcset="${options.extraSrcset}">`;
@@ -895,6 +1115,9 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
       + '<!-- <img src="commented-out.png"> -->'
       + '<script type="module" src="./assets/app.a1b2c3d4.js"></script>'
       + extraScript
+      + extraUpperSrc
+      + extraDataSrcset
+      + extraEntityRef
       + quotedScript
       + extraSrcset
       + '<img src="./icons/icon-512.png">'

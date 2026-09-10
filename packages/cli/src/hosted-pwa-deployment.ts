@@ -152,6 +152,7 @@ export function verifyHostedPwaDeployment(
   );
   verifyIndexReferences(deploymentRoot, deploymentFiles);
   const workerRoutes = verifyCloudflarePagesRoutes(deploymentRoot, input.profile);
+  assertNoSourceRoutesShadowed(workerRoutes, sourceFiles, input.profile);
   verifyCloudflarePagesHeaders(deploymentRoot, sourceFiles);
   verifyCloudflarePagesRedirects(deploymentRoot, sourceFiles);
 
@@ -208,6 +209,12 @@ function listArtifactFilesStrict(root: string, label: string): readonly Artifact
         throw new Error(`The ${label} must not contain symbolic links: ${absolute}`);
       }
 
+      if (entry.name.includes('\\')) {
+        throw new Error(
+          `The ${label} contains a non-portable file name with a backslash: ${entry.name}`,
+        );
+      }
+
       if (entry.isDirectory()) {
         pendingDirectories.push(absolute);
       } else if (entry.isFile()) {
@@ -228,6 +235,11 @@ function listArtifactFilesStrict(root: string, label: string): readonly Artifact
           bytes,
           sha256: createHash('sha256').update(bytes).digest('hex'),
         });
+      } else {
+        throw new Error(
+          `The ${label} contains an entry that is neither a directory nor a regular `
+          + `file: ${absolute}`,
+        );
       }
     }
   }
@@ -474,23 +486,34 @@ function verifyIndexReferences(
 
   const references: string[] = [];
 
-  for (const match of html.matchAll(/(?:href|src)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gu)) {
+  const attributePattern
+    = /(?:^|\s)(?:href|src|srcset)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/giu;
+
+  for (const match of html.matchAll(attributePattern)) {
     references.push(match[1] ?? match[2] ?? match[3] ?? '');
   }
 
-  for (const match of html.matchAll(/srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gu)) {
+  const srcsetPattern = /(?:^|\s)srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/giu;
+
+  for (const match of html.matchAll(srcsetPattern)) {
     const candidates = match[1] ?? match[2] ?? match[3] ?? '';
 
-    for (const candidate of candidates.split(',')) {
-      const url = candidate.trim().split(/\s+/u)[0] ?? '';
+    // WHATWG srcset tokenizing: split on whitespace, strip the leading and
+    // trailing commas of each token so commas inside data: URLs survive, and
+    // skip pure descriptor tokens (widths, pixel densities, stray commas).
+    for (const token of candidates.split(/\s+/u)) {
+      const trimmedToken = token.replace(/^[,]+|[,]+$/gu, '');
 
-      if (url.length > 0) {
-        references.push(url);
+      if (trimmedToken.length === 0 || /^[\d.]+[wx]?$/u.test(trimmedToken)) {
+        continue;
       }
+
+      references.push(trimmedToken);
     }
   }
 
   for (const reference of references) {
+
     const schemeSeparated = /^([a-z][a-z0-9+.-]*):/iu.exec(reference);
 
     if (
@@ -503,7 +526,8 @@ function verifyIndexReferences(
       continue;
     }
 
-    const withoutQuery = reference.split(/[?#]/u)[0] ?? reference;
+    const decodedReference = decodeHtmlReferences(reference);
+    const withoutQuery = decodedReference.split(/[?#]/u)[0] ?? decodedReference;
 
     if (withoutQuery.length === 0) {
       continue;
@@ -536,6 +560,24 @@ function verifyIndexReferences(
       );
     }
   }
+}
+
+/** Decode the HTML character references that can appear in attribute URLs. */
+function decodeHtmlReferences(text: string): string {
+  return text
+    .replace(/&amp;/gu, '&')
+    .replace(/&lt;/gu, '<')
+    .replace(/&gt;/gu, '>')
+    .replace(/&quot;/gu, '"')
+    .replace(/&apos;/gu, "'")
+    .replace(/&#x([0-9a-f]+);/giu, (_, hex: string) => safeCodePoint(Number.parseInt(hex, 16)))
+    .replace(/&#(\d+);/gu, (_, dec: string) => safeCodePoint(Number.parseInt(dec, 10)));
+}
+
+function safeCodePoint(code: number): string {
+  const valid = Number.isInteger(code) && code > 0 && code <= 0x10ffff;
+
+  return valid ? String.fromCodePoint(code) : '';
 }
 
 /** Drop comments, script bodies, and style bodies from HTML before scanning. */
@@ -602,6 +644,33 @@ function verifyCloudflarePagesRoutes(
     include: actual.include.map(String),
     exclude: actual.exclude.map(String),
   };
+}
+
+function assertNoSourceRoutesShadowed(
+  routes: { readonly include: readonly string[] },
+  sourceFiles: readonly ArtifactFile[],
+  profile: CloudflarePagesDeploymentProfile,
+): void {
+  // The api-canonical-index profile deliberately routes /index.html through
+  // the worker, whose reviewed handler serves the canonical index bytes from
+  // the deployment assets; every other route collision is a real shadowing.
+  const shadowingRoutes = routes.include.filter(
+    (route) => !(profile === 'api-canonical-index' && route === '/index.html'),
+  );
+
+  for (const file of sourceFiles) {
+    const requestPath = `/${file.path}`;
+
+    for (const route of shadowingRoutes) {
+      if (cloudflarePagesPathMatches(route, requestPath)) {
+        throw new Error(
+          `The source artifact file ${file.path} is served at ${requestPath}, which the `
+          + `Pages worker route ${route} intercepts; the reviewed profiles route /api/* `
+          + 'through the worker, so precached files must not live under those paths.',
+        );
+      }
+    }
+  }
 }
 
 function verifyCloudflarePagesHeaders(
@@ -715,7 +784,9 @@ function verifyCloudflarePagesHeaders(
 
 /** Whether a filename carries a Vite-style content hash segment. */
 function carriesContentHash(portablePath: string): boolean {
-  return /(^|[/.-])[0-9a-f]{8,}\.[a-z0-9]+$/iu.test(portablePath.split('/').pop() ?? '');
+  return /(^|[/.-])(?:[0-9a-f]{8,}|[A-Za-z0-9_-]{8})\.[a-z0-9]+$/iu.test(
+    portablePath.split('/').pop() ?? '',
+  );
 }
 
 function verifyCloudflarePagesRedirects(

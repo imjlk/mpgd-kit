@@ -83,6 +83,7 @@ export function parseCloudflarePagesHeaders(input: string): readonly CloudflareP
     if (!indented) {
       flushBlock();
       assertSupportedHeaderPathPattern(trimmed);
+      assertSupportedPlaceholderShape(trimmed);
       currentPath = trimmed;
       continue;
     }
@@ -204,9 +205,16 @@ export function normalizeHeaderDirectiveValue(value: string): string {
 
 /** Match a supported `_headers` path pattern against a request path. */
 export function cloudflarePagesPathMatches(pattern: string, requestPath: string): boolean {
-  const patternParts = pattern.split('/').filter((part) => part.length > 0);
-  const pathParts = requestPath.split('/').filter((part) => part.length > 0);
-  return matchesFrom(patternParts, pathParts);
+  // Segments are compared without dropping empties: '/x/' and '/x' are
+  // distinct request paths, and only the root '/' is the empty pair.
+  const patternParts = pattern.split('/');
+  const pathParts = requestPath.split('/');
+
+  if (patternParts[0] === '' && pathParts[0] === '') {
+    return matchesFrom(patternParts.slice(1), pathParts.slice(1));
+  }
+
+  return false;
 }
 
 function matchesFrom(patternParts: readonly string[], pathParts: readonly string[]): boolean {

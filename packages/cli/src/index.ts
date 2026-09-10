@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -1442,6 +1443,7 @@ const targetCommand = defineI18n({
           sourceArtifactRoot,
           deploymentRoot,
         );
+        assertReportFilesSafeToWrite(reportDir);
         const verification = verifyHostedPwaDeployment({
           sourceArtifactRoot,
           deploymentRoot,
@@ -3206,6 +3208,34 @@ function readLocalPositionals(
   return positionals.slice(commandPath.length);
 }
 
+/** Reject existing evidence destinations that are links into verified trees. */
+function assertReportFilesSafeToWrite(reportDir: string): void {
+  for (const name of ['hosted-pwa-verification.json', 'hosted-pwa-verification.md']) {
+    const destination = path.join(reportDir, name);
+    let stat: { isSymbolicLink(): boolean; nlink: number } | undefined;
+
+    try {
+      stat = lstatSync(destination);
+    } catch {
+      continue;
+    }
+
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `The report destination ${destination} is a symbolic link; refusing to follow `
+          + 'it because the report write must stay outside the verified trees.',
+      );
+    }
+
+    if (stat.nlink > 1) {
+      throw new Error(
+        `The report destination ${destination} has ${String(stat.nlink)} hard links; `
+          + 'refusing to write through a shared inode into the verified trees.',
+      );
+    }
+  }
+}
+
 function assertReportDirectoryOutsideVerifiedTrees(
   reportDir: string,
   sourceArtifactRoot: string,
@@ -3250,7 +3280,12 @@ function realpathThroughExistingAncestor(candidate: string): string {
 }
 
 function escapeMarkdownInline(value: string): string {
-  return value.replaceAll('\\', '\\\\').replaceAll('`', '\\`').replaceAll('\n', ' ');
+  return value
+    .replaceAll('\\', '\\\\')
+    .replaceAll('`', '\\`')
+    .replaceAll('\r\n', ' ')
+    .replaceAll('\r', ' ')
+    .replaceAll('\n', ' ');
 }
 
 function renderHostedPwaVerificationMarkdown(
