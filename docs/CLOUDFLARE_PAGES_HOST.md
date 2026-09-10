@@ -117,3 +117,66 @@ Use stable URLs in game metadata, for example:
   }
 }
 ```
+
+## Verifying a hosted PWA deployment
+
+When a game merges its verified Microsoft Store PWA artifact into a Cloudflare
+Pages deployment directory, `mpgd target verify-deployment` checks the merge
+before anything ships. The command is read-only: it never modifies the source
+artifact or the deployment directory.
+
+```sh
+mpgd target verify-deployment microsoft-store \
+  --source-artifact-root artifacts/microsoft-store \
+  --deployment-root apps/target-cloudflare-pages/dist \
+  --host cloudflare-pages \
+  --profile api-only \
+  --report-dir release-output/cloudflare-pages
+```
+
+The verification:
+
+- re-validates the source artifact against its own `pwa-release.json` release
+  evidence by recomputing the precache revision from the actual file bytes;
+- requires every source artifact file to exist in the deployment directory
+  with an identical sha256 digest, so tampered or missing game files, service
+  workers, manifests, icons, and hashed assets fail loudly;
+- classifies deployment-only files: the Pages worker, `_headers`,
+  `_redirects`, `_routes.json`, `wrangler.jsonc`, and the pages declared by
+  `legal-site.json` are recognized host files, while anything else is rejected
+  as probable cross-build contamination;
+- resolves every local `index.html` reference inside the deployment root and
+  rejects path escapes and symlink escapes;
+- checks `_routes.json` against one of the two reviewed routing profiles:
+  `api-only` (worker handles `/api/*`) and `api-canonical-index` (worker also
+  handles `/index.html`). Broader worker routes are rejected;
+- parses `_headers` and `_redirects` (CRLF or LF, comments, duplicate blocks)
+  and evaluates the effective `Cache-Control` per path under the documented
+  Cloudflare semantics — matching blocks apply in file order, duplicate
+  headers comma-join, and `!` removal directives clear the header. Required
+  policies: immutable long cache for content-hashed `assets/*`, `no-store`
+  for `service-worker.js` and stable-name `icons/*`, and
+  `max-age=0, must-revalidate` for the index, manifest, release evidence, and
+  other fresh metadata files;
+- rejects redirects that move the game root or PWA-critical files.
+
+The command writes `hosted-pwa-verification.json` and
+`hosted-pwa-verification.md` evidence files and exits non-zero on any failure.
+
+### Verified and not verified
+
+This command verifies static deployment files only. It does not verify the
+Pages worker runtime behavior (exercise it with `wrangler pages dev` or the
+wrapper `pages:preview` script), does not deploy anything, and does not
+validate CDN or account-level cache settings outside the deployment directory.
+The two routing profiles are the reviewed mpgd configurations, not a claim
+about all Cloudflare Pages projects. The legal-only Pages starter carries no
+PWA files, so this command does not apply to it.
+
+### Hosted-PWA smoke
+
+`pnpm smoke:cli-hosted-pwa-deployment` runs the regression suite covering
+faithful merges, tampered JavaScript, missing files, wrong cache blocks,
+conflicting header combinations, CRLF equivalence, route mismatches, rejected
+options, path and symlink escapes, legal-only deployments, local static
+serving, and the read-only guarantee.

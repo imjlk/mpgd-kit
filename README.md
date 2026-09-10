@@ -265,6 +265,8 @@ Read:
 
 ## Cloudflare Pages Host and Legal Site
 
+Games that merge the verified Microsoft Store PWA artifact into a Pages deployment can gate the merge with `mpgd target verify-deployment` — see [docs/CLOUDFLARE_PAGES_HOST.md](docs/CLOUDFLARE_PAGES_HOST.md).
+
 `@mpgd/bridge/cloudflare-pages` exposes a reusable Pages advanced-mode host
 helper. New game starters include `legal/privacy.html`, `legal/support.html`,
 `legal/terms.html`, `mpgd legal build/check`, and
@@ -445,6 +447,7 @@ pnpm smoke:i18n
 pnpm smoke:target-config
 pnpm smoke:effective-config
 pnpm smoke:adapter-effective-config
+pnpm smoke:cli-hosted-pwa-deployment
 pnpm smoke:game-services
 pnpm smoke:game-services:worker
 pnpm graph:preflight
