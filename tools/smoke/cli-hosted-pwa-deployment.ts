@@ -110,6 +110,9 @@ const validHeaders = [
   '/icons/*',
   '  Cache-Control: no-store, must-revalidate',
   '',
+  '/legal-site.json',
+  '  Cache-Control: public, max-age=0, must-revalidate',
+  '',
   '/privacy/*',
   '  Cache-Control: public, max-age=0, must-revalidate',
   '',
@@ -967,6 +970,164 @@ try {
     'symlinked report file',
   );
 
+  // 10y. Stable eight-character basenames stay revalidating.
+  const controlsSource = buildSourceArtifact(join(fixtureRoot, 'source-controls'));
+  writeFileSync(join(controlsSource, 'assets', 'controls.png'), 'stable-eight');
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: controlsSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  const controlsHeaders = `${validHeaders.replace(
+    '/assets/*\n  Cache-Control: public, max-age=31536000, immutable\n\n',
+    '',
+  )}/assets/app.a1b2c3d4.js\n  Cache-Control: public, max-age=31536000, immutable\n\n/assets/controls.png\n  Cache-Control: public, max-age=0, must-revalidate\n`;
+  const controlsDeployment = buildDeployment(
+    controlsSource,
+    join(fixtureRoot, 'deployment-controls'),
+    'api-only',
+    { headersOverride: controlsHeaders },
+  );
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: controlsSource,
+    deploymentRoot: controlsDeployment,
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: controlsSource,
+      deploymentRoot: buildDeployment(
+        controlsSource,
+        join(fixtureRoot, 'deployment-controls-immutable'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /cache policy for stable-name assets\/controls\.png is wrong/u,
+    'immutable cache on a stable eight-character name',
+  );
+
+  // 10z. srcset values are scanned only as candidate lists.
+  const srcsetOnlySource = buildSourceArtifact(join(fixtureRoot, 'source-srcset-only'), {
+    extraSrcset: './icons/icon-512.png 1x, ./icons/icon-512.png 2x',
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: srcsetOnlySource,
+    deploymentRoot: buildDeployment(
+      srcsetOnlySource,
+      join(fixtureRoot, 'deployment-srcset-only'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10aa. Base elements are rejected as unsupported.
+  const baseSource = buildSourceArtifact(join(fixtureRoot, 'source-base'), {
+    withBaseTag: true,
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: baseSource,
+      deploymentRoot: buildDeployment(
+        baseSource,
+        join(fixtureRoot, 'deployment-base'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /base element/u,
+    'base element unsupported',
+  );
+
+  // 10ab. Percent-encoded references decode to real files.
+  const encodedSource = buildSourceArtifact(join(fixtureRoot, 'source-encoded'));
+  mkdirSync(join(encodedSource, 'icons'), { recursive: true });
+  writeFileSync(join(encodedSource, 'icons', 'my icon.png'), 'spacey');
+  writeFileSync(
+    join(encodedSource, 'index.html'),
+    readFileSync(join(encodedSource, 'index.html'), 'utf8').replace(
+      '<img src="./icons/icon-512.png">',
+      '<img src="./icons/my%20icon.png">',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: encodedSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: encodedSource,
+    deploymentRoot: buildDeployment(
+      encodedSource,
+      join(fixtureRoot, 'deployment-encoded'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10ac. Pages control files inside the source artifact are rejected.
+  const controlSource = fixtureCopy(sourceRoot, 'source-control-file');
+  writeFileSync(join(controlSource, '_redirects'), '/x /y 301\n');
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: controlSource,
+      deploymentRoot: fixtureCopy(deploymentRoot, 'deployment-control-file'),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /Pages control file _redirects/u,
+    'control file in source',
+  );
+
+  // 10ad. Legal URLs are protected from redirects and require fresh policy.
+  const legalRedirectDeployment = fixtureCopy(deploymentRoot, 'legal-redirect');
+  writeFileSync(
+    join(legalRedirectDeployment, '_redirects'),
+    `${validRedirects}/privacy/* /moved/:splat 302\n`,
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalRedirectDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /covers the protected PWA path \/privacy\//u,
+    'legal page redirect',
+  );
+
+  // 10ae. Poster attributes are local references.
+  const posterSource = buildSourceArtifact(join(fixtureRoot, 'source-poster'), {
+    withPosterRef: true,
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: posterSource,
+      deploymentRoot: buildDeployment(
+        posterSource,
+        join(fixtureRoot, 'deployment-poster'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'poster attribute',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
@@ -1068,6 +1229,8 @@ interface BuildSourceOptions {
   readonly extraSrcset?: string;
   readonly manifestIdOverride?: string;
   readonly extraUpperSrc?: string;
+  readonly withBaseTag?: boolean;
+  readonly withPosterRef?: boolean;
   readonly extraDataSrcset?: string;
   readonly extraEntityRef?: string;
 }
@@ -1105,14 +1268,20 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
     ? ''
     : `<img srcset="${options.extraSrcset}">`;
 
+  const baseTag = options.withBaseTag === true ? '<base href="/sub/">' : '';
+
   writeFileSync(
     join(root, 'index.html'),
     '<!doctype html><html><head>'
+      + baseTag
       + '<link rel="manifest" href="./manifest.webmanifest">'
       + '</head><body>'
       + '<a href="/">home</a><a href="/privacy/">privacy</a>'
       + '<script>const ignored = \'src="not-a-real-attribute.png"\';</script>'
       + '<!-- <img src="commented-out.png"> -->'
+      + (options.withPosterRef === true
+        ? '<video poster="./missing-poster.png"></video>'
+        : '')
       + '<script type="module" src="./assets/app.a1b2c3d4.js"></script>'
       + extraScript
       + extraUpperSrc

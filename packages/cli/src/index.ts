@@ -3212,7 +3212,7 @@ function readLocalPositionals(
 function assertReportFilesSafeToWrite(reportDir: string): void {
   for (const name of ['hosted-pwa-verification.json', 'hosted-pwa-verification.md']) {
     const destination = path.join(reportDir, name);
-    let stat: { isSymbolicLink(): boolean; nlink: number } | undefined;
+    let stat: ReturnType<typeof lstatSync> | undefined;
 
     try {
       stat = lstatSync(destination);
@@ -3224,6 +3224,13 @@ function assertReportFilesSafeToWrite(reportDir: string): void {
       throw new Error(
         `The report destination ${destination} is a symbolic link; refusing to follow `
           + 'it because the report write must stay outside the verified trees.',
+      );
+    }
+
+    if (!stat.isFile()) {
+      throw new Error(
+        `The report destination ${destination} is not a regular file; refusing to `
+          + 'write evidence through sockets, FIFOs, devices, or directories.',
       );
     }
 
@@ -3283,6 +3290,9 @@ function escapeMarkdownInline(value: string): string {
   return value
     .replaceAll('\\', '\\\\')
     .replaceAll('`', '\\`')
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
     .replaceAll('\r\n', ' ')
     .replaceAll('\r', ' ')
     .replaceAll('\n', ' ');

@@ -153,8 +153,12 @@ export function verifyHostedPwaDeployment(
   verifyIndexReferences(deploymentRoot, deploymentFiles);
   const workerRoutes = verifyCloudflarePagesRoutes(deploymentRoot, input.profile);
   assertNoSourceRoutesShadowed(workerRoutes, sourceFiles, input.profile);
-  verifyCloudflarePagesHeaders(deploymentRoot, sourceFiles);
-  verifyCloudflarePagesRedirects(deploymentRoot, sourceFiles);
+  verifyCloudflarePagesHeaders(deploymentRoot, sourceFiles, deploymentFiles);
+  const deploymentLegalPaths = [...readLegalSitePages(deploymentRoot)].map(
+    (page) => `/${page.slice(0, -'index.html'.length)}`,
+  );
+
+  verifyCloudflarePagesRedirects(deploymentRoot, sourceFiles, deploymentLegalPaths);
 
   return {
     host: input.host,
@@ -209,9 +213,10 @@ function listArtifactFilesStrict(root: string, label: string): readonly Artifact
         throw new Error(`The ${label} must not contain symbolic links: ${absolute}`);
       }
 
-      if (entry.name.includes('\\')) {
+      if (/[\\\t\n\r]/u.test(entry.name)) {
         throw new Error(
-          `The ${label} contains a non-portable file name with a backslash: ${entry.name}`,
+          `The ${label} contains a non-portable file name with a backslash or `
+            + `URL-stripped control character: ${JSON.stringify(entry.name)}`,
         );
       }
 
@@ -269,6 +274,15 @@ function verifySourceArtifactSelfConsistency(
   }
 
   const evidence = readMicrosoftStorePwaReleaseEvidence(evidencePath);
+
+  for (const reserved of cloudflarePagesHostFileAllowlist) {
+    if (sourceFiles.some((file) => file.path === reserved)) {
+      throw new Error(
+        `The source PWA artifact contains the Pages control file ${reserved}; `
+          + 'control files belong to the host deployment, not the game artifact.',
+      );
+    }
+  }
 
   for (const required of ['index.html', 'manifest.webmanifest', 'service-worker.js']) {
     if (!sourceFiles.some((file) => file.path === required)) {
@@ -481,13 +495,20 @@ function verifyIndexReferences(
   }
 
   const html = stripNonMarkupRanges(index.bytes.toString('utf8'));
+
+  if (/<base\b/iu.test(html)) {
+    throw new Error(
+      'The deployment index.html declares a base element; reference resolution '
+        + 'against a non-root document base is unsupported by this verifier.',
+    );
+  }
   const deploymentPaths = new Set(deploymentFiles.map((file) => file.path));
   const referenced = new Set<string>();
 
   const references: string[] = [];
 
   const attributePattern
-    = /(?:^|\s)(?:href|src|srcset)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/giu;
+    = /(?:^|\s)(?:href|src|poster)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/giu;
 
   for (const match of html.matchAll(attributePattern)) {
     references.push(match[1] ?? match[2] ?? match[3] ?? '');
@@ -537,6 +558,17 @@ function verifyIndexReferences(
       withoutQuery.startsWith('/') ? withoutQuery.slice(1) : `./${withoutQuery}`,
     );
 
+    try {
+      normalized = normalized
+        .split('/')
+        .map((segment) => decodeURIComponent(segment))
+        .join('/');
+    } catch {
+      throw new Error(
+        `The deployment index.html references a malformed percent-encoded URL: ${reference}`,
+      );
+    }
+
     // Directory URLs resolve to their index document, matching how Pages
     // serves '/' and '/legal/' from index.html files.
     if (normalized === '.' || normalized.endsWith('/')) {
@@ -575,9 +607,13 @@ function decodeHtmlReferences(text: string): string {
 }
 
 function safeCodePoint(code: number): string {
-  const valid = Number.isInteger(code) && code > 0 && code <= 0x10ffff;
+  const valid = Number.isInteger(code)
+    && code > 0
+    && code <= 0x10ffff
+    && !(code >= 0xd800 && code <= 0xdfff);
 
-  return valid ? String.fromCodePoint(code) : '';
+  // The HTML tokenizer emits U+FFFD for invalid references, not silence.
+  return valid ? String.fromCodePoint(code) : '\uFFFD';
 }
 
 /** Drop comments, script bodies, and style bodies from HTML before scanning. */
@@ -676,6 +712,7 @@ function assertNoSourceRoutesShadowed(
 function verifyCloudflarePagesHeaders(
   deploymentRoot: string,
   sourceFiles: readonly ArtifactFile[],
+  deploymentFiles: readonly ArtifactFile[],
 ): void {
   const headersPath = `${deploymentRoot}/_headers`;
 
@@ -685,12 +722,38 @@ function verifyCloudflarePagesHeaders(
 
   const blocks = parseCloudflarePagesHeaders(readFileSync(headersPath, 'utf8'));
   const sourcePaths = new Set(sourceFiles.map((file) => file.path));
+  const deploymentPaths = new Set(deploymentFiles.map((file) => file.path));
 
   const requirements: {
     readonly requestPath: string;
     readonly expected: string;
     readonly label: string;
   }[] = [];
+
+  // Host-owned legal content must stay fresh: the deployment declares the
+  // pages and ships legal-site.json, and stale privacy or terms pages after
+  // an update are a compliance problem, so they carry revalidation policy.
+  for (const file of deploymentFiles) {
+    if (sourcePaths.has(file.path)) {
+      continue;
+    }
+
+    if (file.path === 'legal-site.json') {
+      requirements.push({
+        requestPath: '/legal-site.json',
+        expected: freshCacheControl,
+        label: 'legal-site.json',
+      });
+    }
+
+    if (file.path.endsWith('/index.html') && file.path.includes('/')) {
+      requirements.push({
+        requestPath: `/${file.path.slice(0, -'index.html'.length)}*`,
+        expected: freshCacheControl,
+        label: `${file.path.slice(0, -'index.html'.length)} pages`,
+      });
+    }
+  }
 
   if (sourcePaths.has('index.html')) {
     requirements.push(
@@ -784,14 +847,19 @@ function verifyCloudflarePagesHeaders(
 
 /** Whether a filename carries a Vite-style content hash segment. */
 function carriesContentHash(portablePath: string): boolean {
-  return /(^|[/.-])(?:[0-9a-f]{8,}|[A-Za-z0-9_-]{8})\.[a-z0-9]+$/iu.test(
-    portablePath.split('/').pop() ?? '',
-  );
+  const name = portablePath.split('/').pop() ?? '';
+
+  // Long hexadecimal segments accept start/dot/hyphen delimiters; Vite's
+  // URL-safe base64 hash segment is always hyphen-delimited and exactly
+  // eight characters, so stable names like "controls.png" stay stable.
+  return /(^|[/.-])[0-9a-f]{8,}\.[a-z0-9]+$/iu.test(name)
+    || /-[A-Za-z0-9_-]{8}\.[a-z0-9]+$/iu.test(name);
 }
 
 function verifyCloudflarePagesRedirects(
   deploymentRoot: string,
   sourceFiles: readonly ArtifactFile[],
+  deploymentLegalPaths: readonly string[],
 ): void {
   const redirectsPath = `${deploymentRoot}/_redirects`;
 
@@ -804,6 +872,7 @@ function verifyCloudflarePagesRedirects(
   const protectedPaths = [
     ...protectedPwaMetadataRequestPaths,
     ...sourceFiles.map((file) => `/${file.path}`),
+    ...deploymentLegalPaths,
   ];
 
   for (const rule of rules) {
