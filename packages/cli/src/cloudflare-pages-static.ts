@@ -189,6 +189,19 @@ export function evaluateCloudflarePagesHeader(
   };
 }
 
+/**
+ * Normalize a comma-separated directive value for semantic comparison:
+ * whitespace-trimmed, lower-cased, empty segments dropped, order-insensitive.
+ */
+export function normalizeHeaderDirectiveValue(value: string): string {
+  return value
+    .split(',')
+    .map((directive) => directive.trim().toLowerCase())
+    .filter((directive) => directive.length > 0)
+    .sort()
+    .join(', ');
+}
+
 /** Match a supported `_headers` path pattern against a request path. */
 export function cloudflarePagesPathMatches(pattern: string, requestPath: string): boolean {
   const patternParts = pattern.split('/').filter((part) => part.length > 0);
@@ -230,9 +243,14 @@ function partMatches(pattern: string, value: string): boolean {
     return pattern === value;
   }
 
-  const expression = new RegExp(`^${pattern.replace(/:[A-Za-z]\w*/gu, '([^/]+)')}$`, 'u');
+  const literalPieces = pattern.split(/:[A-Za-z]\w*/gu);
+  const expression = new RegExp(`^${literalPieces.map(escapeRegExp).join('([^/]+)')}$`, 'u');
 
   return expression.test(value);
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&');
 }
 
 function assertSupportedHeaderPathPattern(path: string): void {

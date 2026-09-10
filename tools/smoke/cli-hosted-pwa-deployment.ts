@@ -1,4 +1,3 @@
-import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import {
   cpSync,
@@ -20,6 +19,65 @@ import { verifyHostedPwaDeployment } from '../../packages/cli/src/hosted-pwa-dep
 import { runMpgdCli } from '../../packages/cli/src/index';
 import { writeMicrosoftStorePwaArtifacts } from '../target/microsoft-store-pwa';
 
+// Local throwing helpers: node:assert calls are stripped by @ttsc/strip, so
+// smokes must validate by throwing plain errors (the repo-wide convention).
+function assertEqual(actual: unknown, expected: unknown, label: string): void {
+  if (actual !== expected) {
+    throw new Error(`${label}: expected ${String(expected)} but found ${String(actual)}.`);
+  }
+}
+
+function assertJsonEqual(actual: unknown, expected: unknown, label: string): void {
+  const actualJson = JSON.stringify(actual);
+  const expectedJson = JSON.stringify(expected);
+
+  if (actualJson !== expectedJson) {
+    throw new Error(`${label}: expected ${expectedJson} but found ${actualJson}.`);
+  }
+}
+
+function assertTrue(condition: boolean, label: string): void {
+  if (!condition) {
+    throw new Error(`${label}: expected true.`);
+  }
+}
+
+function assertThrows(run: () => void, pattern: RegExp, label: string): void {
+  try {
+    run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+
+    if (!pattern.test(message)) {
+      throw new Error(`${label} threw an unexpected error: ${message}`);
+    }
+
+    return;
+  }
+
+  throw new Error(`${label} did not throw.`);
+}
+
+async function assertRejects(
+  run: () => Promise<unknown>,
+  predicate: (error: unknown) => boolean,
+  label: string,
+): Promise<void> {
+  try {
+    await run();
+  } catch (error) {
+    if (!predicate(error)) {
+      const aggregate = error as AggregateError;
+      const description = String(aggregate.errors?.[0] ?? error);
+      throw new Error(`${label} rejected with an unexpected error: ${description}`);
+    }
+
+    return;
+  }
+
+  throw new Error(`${label} did not reject.`);
+}
+
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-hosted-pwa-verification-'));
 
 const validHeaders = [
@@ -31,7 +89,7 @@ const validHeaders = [
   '  Cache-Control: public, max-age=0, must-revalidate',
   '',
   '/index.html',
-  '  Cache-Control: public, max-age=0, must-revalidate',
+  '  Cache-Control: must-revalidate, public, max-age=0',
   '',
   '/manifest.webmanifest',
   '  Cache-Control: public, max-age=0, must-revalidate',
@@ -72,9 +130,7 @@ const legalSiteManifest = {
 
 try {
   const sourceRoot = buildSourceArtifact(join(fixtureRoot, 'source-pwa'));
-  const deploymentRoot = buildDeployment(sourceRoot, join(fixtureRoot, 'deployment'), {
-    profile: 'api-only',
-  });
+  const deploymentRoot = buildDeployment(sourceRoot, join(fixtureRoot, 'deployment'), 'api-only');
 
   // 1. A faithful source and deployment pair passes for both reviewed profiles.
   const verified = verifyHostedPwaDeployment({
@@ -84,17 +140,17 @@ try {
     profile: 'api-only',
   });
 
-  assert.equal(verified.host, 'cloudflare-pages');
-  assert.equal(verified.appVersion, '1.2.3');
-  assert.equal(verified.buildId, 'build-42');
-  assert.equal(verified.workerRoutes.include.join('|'), '/api/*');
-  assert.ok(verified.verifiedGameFileCount >= 6, 'game files counted');
-  assert.ok(verified.hostFileCount >= 6, 'host files counted');
+  assertEqual(verified.host, 'cloudflare-pages', 'verification host');
+  assertEqual(verified.appVersion, '1.2.3', 'app version');
+  assertEqual(verified.buildId, 'build-42', 'build id');
+  assertEqual(verified.workerRoutes.include.join('|'), '/api/*', 'api-only routes');
+  assertTrue(verified.verifiedGameFileCount >= 6, 'game files counted');
+  assertTrue(verified.hostFileCount >= 6, 'host files counted');
 
   const canonicalDeployment = buildDeployment(
     sourceRoot,
     join(fixtureRoot, 'deployment-canonical'),
-    { profile: 'api-canonical-index' },
+    'api-canonical-index',
   );
   const canonicalVerified = verifyHostedPwaDeployment({
     sourceArtifactRoot: sourceRoot,
@@ -102,7 +158,11 @@ try {
     host: 'cloudflare-pages',
     profile: 'api-canonical-index',
   });
-  assert.equal(canonicalVerified.workerRoutes.include.join('|'), '/api/*|/index.html');
+  assertEqual(
+    canonicalVerified.workerRoutes.include.join('|'),
+    '/api/*|/index.html',
+    'canonical routes',
+  );
 
   // 2. Matching release metadata with different JavaScript fails on the digest.
   const tamperedDeployment = fixtureCopy(deploymentRoot, 'tampered-js');
@@ -111,7 +171,7 @@ try {
     join(tamperedDeployment, hashedAsset),
     `${readFileSync(join(tamperedDeployment, hashedAsset), 'utf8')}\n// different build`,
   );
-  assert.throws(
+  assertThrows(
     () => verifyHostedPwaDeployment({
       sourceArtifactRoot: sourceRoot,
       deploymentRoot: tamperedDeployment,
@@ -119,13 +179,42 @@ try {
       profile: 'api-only',
     }),
     /does not match the source artifact/u,
+    'tampered deployment JavaScript',
+  );
+
+  // 2b. A recorded precache list that disagrees with the artifact files fails.
+  const staleContractSource = fixtureCopy(sourceRoot, 'stale-precache-contract');
+  const evidencePath = join(staleContractSource, 'pwa-release.json');
+  const staleEvidence = JSON.parse(readFileSync(evidencePath, 'utf8')) as {
+    precacheUrls: readonly string[];
+  };
+  writeFileSync(
+    evidencePath,
+    JSON.stringify(
+      {
+        ...staleEvidence,
+        precacheUrls: staleEvidence.precacheUrls.filter((url) => url !== './index.html'),
+      },
+      null,
+      2,
+    ),
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: staleContractSource,
+      deploymentRoot: fixtureCopy(deploymentRoot, 'stale-precache-deployment'),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /precache contract is inconsistent/u,
+    'stale precache contract',
   );
 
   // 3. Missing service worker, manifest, icon, and referenced assets fail.
   for (const missing of ['service-worker.js', 'manifest.webmanifest', 'icons/icon-512.png']) {
     const incompleteDeployment = fixtureCopy(deploymentRoot, `missing-${missing}`);
     rmSync(join(incompleteDeployment, missing));
-    assert.throws(
+    assertThrows(
       () => verifyHostedPwaDeployment({
         sourceArtifactRoot: sourceRoot,
         deploymentRoot: incompleteDeployment,
@@ -133,7 +222,7 @@ try {
         profile: 'api-only',
       }),
       /missing game file/u,
-      missing,
+      `missing ${missing}`,
     );
   }
 
@@ -144,9 +233,9 @@ try {
   const danglingReferenceDeployment = buildDeployment(
     danglingReferenceSource,
     join(fixtureRoot, 'deployment-dangling-reference'),
-    { profile: 'api-only' },
+    'api-only',
   );
-  assert.throws(
+  assertThrows(
     () => verifyHostedPwaDeployment({
       sourceArtifactRoot: danglingReferenceSource,
       deploymentRoot: danglingReferenceDeployment,
@@ -154,16 +243,31 @@ try {
       profile: 'api-only',
     }),
     /references a missing file/u,
+    'dangling index reference',
   );
 
-  // 4. A required cache directive on an unrelated path block does not satisfy the policy.
+  // 3b. A deployment without the Pages worker fails for routed profiles.
+  const workerlessDeployment = fixtureCopy(deploymentRoot, 'workerless');
+  rmSync(join(workerlessDeployment, '_worker.js'));
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: workerlessDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /missing _worker\.js/u,
+    'workerless deployment',
+  );
+
+  // 4. A required cache directive on an unrelated path block fails.
   const wrongBlockHeaders = validHeaders.replace(
     '/service-worker.js\n  Cache-Control: no-store, must-revalidate',
     '/unrelated/*\n  Cache-Control: no-store, must-revalidate',
   );
   const wrongBlockDeployment = fixtureCopy(deploymentRoot, 'wrong-block');
   writeFileSync(join(wrongBlockDeployment, '_headers'), wrongBlockHeaders);
-  assert.throws(
+  assertThrows(
     () => verifyHostedPwaDeployment({
       sourceArtifactRoot: sourceRoot,
       deploymentRoot: wrongBlockDeployment,
@@ -171,13 +275,39 @@ try {
       profile: 'api-only',
     }),
     /cache policy for service-worker\.js is missing/u,
+    'wrong cache block',
+  );
+
+  // 4b. A placeholder-only block cannot cover nested asset URLs.
+  const placeholderSource = buildSourceArtifact(join(fixtureRoot, 'source-placeholder'), {
+    nestedAsset: 'assets/chunks/game.js',
+  });
+  const placeholderHeaders = validHeaders.replace(
+    '/assets/*\n  Cache-Control: public, max-age=31536000, immutable',
+    '/assets/:file\n  Cache-Control: public, max-age=31536000, immutable',
+  );
+  const placeholderDeployment = buildDeployment(
+    placeholderSource,
+    join(fixtureRoot, 'deployment-placeholder'),
+    'api-only',
+    { headersOverride: placeholderHeaders },
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: placeholderSource,
+      deploymentRoot: placeholderDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /cache policy for content-hashed assets\/chunks\/game\.js is missing/u,
+    'placeholder-only asset block',
   );
 
   // 5. Conflicting duplicate adds and removal-after-add combinations are detected.
   const conflictingHeaders = `${validHeaders}/*\n  Cache-Control: public, max-age=0, must-revalidate\n`;
   const conflictingDeployment = fixtureCopy(deploymentRoot, 'conflicting');
   writeFileSync(join(conflictingDeployment, '_headers'), conflictingHeaders);
-  assert.throws(
+  assertThrows(
     () => verifyHostedPwaDeployment({
       sourceArtifactRoot: sourceRoot,
       deploymentRoot: conflictingDeployment,
@@ -185,12 +315,13 @@ try {
       profile: 'api-only',
     }),
     /comma-joined Cache-Control values/u,
+    'conflicting duplicate headers',
   );
 
   const removalAfterAddHeaders = `${validHeaders}/service-worker.js\n  ! Cache-Control\n`;
   const removalDeployment = fixtureCopy(deploymentRoot, 'removal-after-add');
   writeFileSync(join(removalDeployment, '_headers'), removalAfterAddHeaders);
-  assert.throws(
+  assertThrows(
     () => verifyHostedPwaDeployment({
       sourceArtifactRoot: sourceRoot,
       deploymentRoot: removalDeployment,
@@ -198,6 +329,7 @@ try {
       profile: 'api-only',
     }),
     /removal directive/u,
+    'removal after add',
   );
 
   // 6. CRLF endings, comments, and whitespace-only differences behave identically.
@@ -218,31 +350,38 @@ try {
   });
 
   // 7. Worker routes that disagree with the profile are rejected.
-  for (const [routes, label] of [
-    ['{"version":1,"include":["/*"],"exclude":[]}', 'broad include'],
+  const routeCases = [
+    ['{"version":1,"include":["/*"],"exclude":[]}', 'broad-include', /reviewed api-only profile/u],
     [
       '{"version":1,"include":["/api/*","/index.html"],"exclude":[]}',
-      'canonical include on api-only',
+      'canonical-on-api-only',
+      /reviewed api-only profile/u,
     ],
-    ['{"version":1,"include":["/api/*"],"exclude":["/assets/*"]}', 'non-empty exclude'],
-    ['{"version":2,"include":["/api/*"],"exclude":[]}', 'wrong version'],
-  ] as const) {
+    [
+      '{"version":1,"include":["/api/*"],"exclude":["/assets/*"]}',
+      'non-empty-exclude',
+      /reviewed api-only profile/u,
+    ],
+    ['{"version":2,"include":["/api/*"],"exclude":[]}', 'wrong-version', /version 1/u],
+  ] as const;
+
+  for (const [routes, label, pattern] of routeCases) {
     const mismatchedDeployment = fixtureCopy(deploymentRoot, `routes-${label}`);
     writeFileSync(join(mismatchedDeployment, '_routes.json'), routes);
-    assert.throws(
+    assertThrows(
       () => verifyHostedPwaDeployment({
         sourceArtifactRoot: sourceRoot,
         deploymentRoot: mismatchedDeployment,
         host: 'cloudflare-pages',
         profile: 'api-only',
       }),
-      /does not match the reviewed api-only profile/u,
-      label,
+      pattern,
+      `route mismatch: ${label}`,
     );
   }
 
   // 8. Unsupported hosts, profiles, targets, and missing options are rejected.
-  assert.throws(
+  assertThrows(
     () => verifyHostedPwaDeployment({
       sourceArtifactRoot: sourceRoot,
       deploymentRoot,
@@ -250,8 +389,9 @@ try {
       profile: 'api-only',
     } as unknown as Parameters<typeof verifyHostedPwaDeployment>[0]),
     /Unsupported hosted PWA deployment host/u,
+    'unsupported host',
   );
-  assert.throws(
+  assertThrows(
     () => verifyHostedPwaDeployment({
       sourceArtifactRoot: sourceRoot,
       deploymentRoot,
@@ -259,9 +399,10 @@ try {
       profile: 'edge-everything',
     } as unknown as Parameters<typeof verifyHostedPwaDeployment>[0]),
     /Unsupported Cloudflare Pages host profile/u,
+    'unsupported profile',
   );
-  await assert.rejects(
-    runMpgdCli([
+  await assertRejects(
+    () => runMpgdCli([
       'target',
       'verify-deployment',
       'android',
@@ -270,10 +411,11 @@ try {
       '--deployment-root',
       deploymentRoot,
     ]),
-    /not available for target: android/u,
+    (error) => String(error).includes('not available for target: android'),
+    'wrong target',
   );
-  await assert.rejects(
-    runMpgdCli([
+  await assertRejects(
+    () => runMpgdCli([
       'target',
       'verify-deployment',
       'microsoft-store',
@@ -284,10 +426,11 @@ try {
       '--profile',
       'bogus',
     ]),
-    /Unsupported cloudflare-pages deployment profile/u,
+    (error) => String(error).includes('Unsupported cloudflare-pages deployment profile'),
+    'CLI unsupported profile',
   );
-  await assert.rejects(
-    runMpgdCli([
+  await assertRejects(
+    () => runMpgdCli([
       'target',
       'verify-deployment',
       'microsoft-store',
@@ -298,20 +441,37 @@ try {
       '--host',
       'vercel',
     ]),
-    /Unsupported hosted PWA deployment host/u,
+    (error) => String(error).includes('Unsupported hosted PWA deployment host'),
+    'CLI unsupported host',
   );
-  await assert.rejects(
-    runMpgdCli([
+  await assertRejects(
+    () => runMpgdCli([
       'target',
       'verify-deployment',
       'microsoft-store',
       '--source-artifact-root',
       sourceRoot,
     ]),
-    (error: unknown) => {
+    (error) => {
       const aggregate = error as AggregateError;
       return String(aggregate.errors?.[0] ?? error).includes('deployment-root');
     },
+    'missing deployment option',
+  );
+  await assertRejects(
+    () => runMpgdCli([
+      'target',
+      'verify-deployment',
+      'microsoft-store',
+      '--source-artifact-root',
+      sourceRoot,
+      '--deployment-root',
+      deploymentRoot,
+      '--report-dir',
+      join(deploymentRoot, 'reports'),
+    ]),
+    (error) => String(error).includes('must stay outside'),
+    'report dir inside deployment',
   );
 
   // 9. Path escapes and symlink escapes are rejected.
@@ -320,7 +480,7 @@ try {
     join(fixtureRoot, 'outside-asset.txt'),
     join(symlinkDeployment, 'assets', 'linked.js'),
   );
-  assert.throws(
+  assertThrows(
     () => verifyHostedPwaDeployment({
       sourceArtifactRoot: sourceRoot,
       deploymentRoot: symlinkDeployment,
@@ -328,6 +488,7 @@ try {
       profile: 'api-only',
     }),
     /must not contain symbolic links/u,
+    'symlink escape',
   );
 
   const escapingSource = buildSourceArtifact(join(fixtureRoot, 'source-escape'), {
@@ -336,9 +497,9 @@ try {
   const escapingDeployment = buildDeployment(
     escapingSource,
     join(fixtureRoot, 'deployment-escape'),
-    { profile: 'api-only' },
+    'api-only',
   );
-  assert.throws(
+  assertThrows(
     () => verifyHostedPwaDeployment({
       sourceArtifactRoot: escapingSource,
       deploymentRoot: escapingDeployment,
@@ -346,11 +507,12 @@ try {
       profile: 'api-only',
     }),
     /outside the artifact root/u,
+    'index path escape',
   );
 
-  // 10. The legal-only Pages layout is not forced to carry PWA files: verifying
-  // one against a PWA profile fails on the missing source evidence with a
-  // precise diagnostic instead of touching anything.
+  // 10. The legal-only Pages layout is not forced to carry PWA files:
+  // verifying one as a PWA source fails on the missing release evidence with
+  // a precise diagnostic instead of touching anything.
   const legalOnlyRoot = join(fixtureRoot, 'legal-only');
   mkdirSync(join(legalOnlyRoot, 'privacy'), { recursive: true });
   writeFileSync(join(legalOnlyRoot, 'privacy', 'index.html'), '<!doctype html>');
@@ -362,14 +524,29 @@ try {
     '{"version":1,"include":["/api/*"],"exclude":[]}',
   );
   writeFileSync(join(legalOnlyRoot, 'legal-site.json'), JSON.stringify(legalSiteManifest));
-  assert.throws(
+  assertThrows(
     () => verifyHostedPwaDeployment({
       sourceArtifactRoot: legalOnlyRoot,
-      deploymentRoot: deploymentRoot,
+      deploymentRoot,
       host: 'cloudflare-pages',
       profile: 'api-only',
     }),
     /missing pwa-release\.json/u,
+    'legal-only source',
+  );
+
+  // 10b. A broad wildcard redirect covering protected PWA paths is rejected.
+  const broadRedirectDeployment = fixtureCopy(deploymentRoot, 'broad-redirect');
+  writeFileSync(join(broadRedirectDeployment, '_redirects'), '/* /maintenance 302\n');
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: broadRedirectDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /covers the protected PWA path/u,
+    'broad wildcard redirect',
   );
 
   // 11. A local static server serves the verified deployment paths and bytes.
@@ -383,9 +560,9 @@ try {
     host: 'cloudflare-pages',
     profile: 'api-only',
   });
-  assert.deepEqual(snapshotTree(sourceRoot, deploymentRoot), before);
+  assertJsonEqual([...snapshotTree(sourceRoot, deploymentRoot)], [...before], 'read-only snapshot');
 
-  // CLI happy path writes structured evidence files.
+  // CLI happy path writes structured evidence files outside the verified trees.
   const reportDir = join(fixtureRoot, 'report');
   await runMpgdCli([
     'target',
@@ -406,31 +583,45 @@ try {
       'utf8',
     ),
   ) as { readonly verifiedGameFileCount: number };
-  assert.ok(report.verifiedGameFileCount >= 6);
-  assert.ok(
+  assertTrue(report.verifiedGameFileCount >= 6, 'report game file count');
+  assertTrue(
     readFileSync(join(reportDir, 'hosted-pwa-verification.md'), 'utf8')
       .includes('Hosted PWA Deployment Verification'),
+    'report markdown title',
   );
-
-  console.log('Hosted PWA deployment verification tests passed.');
+  assertTrue(
+    !existsSync(join(deploymentRoot, 'hosted-pwa-verification.json')),
+    'deployment stays untouched by the CLI run',
+  );
 } finally {
   rmSync(fixtureRoot, { force: true, recursive: true });
 }
 
-function buildSourceArtifact(
-  root: string,
-  options: { readonly extraIndexReferences?: readonly string[] } = {},
-): string {
+interface BuildSourceOptions {
+  readonly extraIndexReferences?: readonly string[];
+  readonly nestedAsset?: string;
+}
+
+function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): string {
   mkdirSync(join(root, 'assets'), { recursive: true });
   mkdirSync(join(root, 'icons'), { recursive: true });
   const extraReferences = (options.extraIndexReferences ?? [])
     .map((reference) => `<img src="${reference}">`)
     .join('');
+
+  if (options.nestedAsset !== undefined) {
+    mkdirSync(join(root, dirnameOf(options.nestedAsset)), { recursive: true });
+    writeFileSync(join(root, options.nestedAsset), 'export const nested = true;\n');
+  }
+
   writeFileSync(
     join(root, 'index.html'),
     '<!doctype html><html><head>'
       + '<link rel="manifest" href="./manifest.webmanifest">'
       + '</head><body>'
+      + '<a href="/">home</a><a href="/privacy/">privacy</a>'
+      + '<script>const ignored = \'src="not-a-real-attribute.png"\';</script>'
+      + '<!-- <img src="commented-out.png"> -->'
       + '<script type="module" src="./assets/app.a1b2c3d4.js"></script>'
       + '<img src="./icons/icon-512.png">'
       + extraReferences
@@ -468,16 +659,21 @@ function buildSourceArtifact(
   return root;
 }
 
+interface BuildDeploymentOptions {
+  readonly headersOverride?: string;
+}
+
 function buildDeployment(
   sourceRoot: string,
   root: string,
-  options: { readonly profile: 'api-only' | 'api-canonical-index' },
+  profile: 'api-only' | 'api-canonical-index',
+  options: BuildDeploymentOptions = {},
 ): string {
   cpSync(sourceRoot, root, { recursive: true });
   mkdirSync(join(root, 'privacy'), { recursive: true });
   writeFileSync(join(root, 'privacy', 'index.html'), '<!doctype html><p>privacy</p>');
   writeFileSync(join(root, '_worker.js'), 'export default { fetch() {} };\n');
-  writeFileSync(join(root, '_headers'), validHeaders);
+  writeFileSync(join(root, '_headers'), options.headersOverride ?? validHeaders);
   writeFileSync(join(root, '_redirects'), validRedirects);
   writeFileSync(join(root, 'legal-site.json'), JSON.stringify(legalSiteManifest, null, 2));
   writeFileSync(
@@ -485,7 +681,7 @@ function buildDeployment(
     JSON.stringify(
       {
         version: 1,
-        include: options.profile === 'api-canonical-index'
+        include: profile === 'api-canonical-index'
           ? ['/api/*', '/index.html']
           : ['/api/*'],
         exclude: [],
@@ -496,6 +692,12 @@ function buildDeployment(
   );
 
   return root;
+}
+
+function dirnameOf(portablePath: string): string {
+  const separator = portablePath.lastIndexOf('/');
+
+  return separator === -1 ? '.' : portablePath.slice(0, separator);
 }
 
 function fixtureCopy(source: string, name: string): string {
@@ -512,9 +714,9 @@ function findFile(root: string, prefix: string): string {
       if (entry.isDirectory()) {
         walk(absolute);
       } else {
-        const relative = absolute.slice(root.length + 1);
-        if (relative.startsWith(prefix)) {
-          files.push(relative);
+        const relativePath = absolute.slice(root.length + 1);
+        if (relativePath.startsWith(prefix)) {
+          files.push(relativePath);
         }
       }
     }
@@ -535,9 +737,7 @@ interface FileSnapshot {
   readonly mtimeMs: number;
 }
 
-function snapshotTree(
-  ...roots: readonly string[]
-): Map<string, FileSnapshot> {
+function snapshotTree(...roots: readonly string[]): Map<string, FileSnapshot> {
   const snapshot = new Map<string, FileSnapshot>();
 
   for (const root of roots) {
@@ -565,10 +765,15 @@ function snapshotTree(
 async function verifyServedDeployment(deploymentRoot: string): Promise<void> {
   const server: Server = createServer((request, response) => {
     const url = new URL(request.url ?? '/', 'http://127.0.0.1');
-    const relative = url.pathname === '/'
+    const relativePath = url.pathname === '/'
       ? 'index.html'
       : decodeURIComponent(url.pathname.slice(1));
-    const file = safeJoin(deploymentRoot, relative);
+    const resolved = safeJoin(deploymentRoot, relativePath);
+    const file = resolved !== undefined
+      && existsSync(resolved)
+      && statSync(resolved).isDirectory()
+      ? join(resolved, 'index.html')
+      : resolved;
 
     if (file === undefined || !existsSync(file) || !statSync(file).isFile()) {
       response.statusCode = 404;
@@ -576,9 +781,8 @@ async function verifyServedDeployment(deploymentRoot: string): Promise<void> {
       return;
     }
 
-    const bytes = readFileSync(file);
     response.statusCode = 200;
-    response.end(bytes);
+    response.end(readFileSync(file));
   });
 
   try {
@@ -594,26 +798,26 @@ async function verifyServedDeployment(deploymentRoot: string): Promise<void> {
       ['/pwa-release.json', 'pwa-release.json'],
       [`/${hashedAsset}`, hashedAsset],
       ['/icons/icon-512.png', 'icons/icon-512.png'],
+      ['/privacy/', 'privacy/index.html'],
     ] as const) {
       const response = await fetch(`http://127.0.0.1:${String(port)}${path}`);
-      assert.equal(response.status, 200, path);
+      assertEqual(response.status, 200, `served status for ${path}`);
       const body = Buffer.from(await response.arrayBuffer());
-      assert.ok(
+      assertTrue(
         body.equals(readFileSync(join(deploymentRoot, file))),
         `${path} serves the verified bytes`,
       );
     }
 
     const missing = await fetch(`http://127.0.0.1:${String(port)}/assets/missing.js`);
-    assert.equal(missing.status, 404);
+    assertEqual(missing.status, 404, 'missing asset status');
   } finally {
     await close(server);
   }
-
 }
 
-function safeJoin(root: string, relative: string): string | undefined {
-  const resolved = resolve(root, relative);
+function safeJoin(root: string, relativePath: string): string | undefined {
+  const resolved = resolve(root, relativePath);
   const distance = toRelative(root, resolved);
 
   return distance.startsWith('..') || distance.length === 0 ? undefined : resolved;

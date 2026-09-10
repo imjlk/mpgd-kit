@@ -7,7 +7,7 @@ import {
   assertMicrosoftStorePwaReleaseEvidence,
   microsoftStorePwaCacheSchema,
   type MicrosoftStorePwaReleaseEvidence,
-} from './microsoft-store-pwa-e2e';
+} from './microsoft-store-pwa-e2e.js';
 
 /**
  * Release-evidence primitives shared by the build-time artifact writer and the

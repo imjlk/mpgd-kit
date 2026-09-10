@@ -3,15 +3,17 @@ import { existsSync, readdirSync, readFileSync, realpathSync, statSync } from 'n
 import { dirname, join, posix, relative, resolve } from 'node:path';
 
 import {
+  cloudflarePagesPathMatches,
   evaluateCloudflarePagesHeader,
+  normalizeHeaderDirectiveValue,
   parseCloudflarePagesHeaders,
   parseCloudflarePagesRedirects,
-} from './cloudflare-pages-static';
+} from './cloudflare-pages-static.js';
 import {
   createMicrosoftStorePwaRevision,
   listPrecacheEntries,
   readMicrosoftStorePwaReleaseEvidence,
-} from './microsoft-store-pwa-release';
+} from './microsoft-store-pwa-release.js';
 
 /**
  * Read-only verification that a hosted Cloudflare Pages deployment directory
@@ -39,15 +41,20 @@ const cloudflarePagesHostFileAllowlist = new Set([
   'legal-site.json',
 ]);
 
-/** Game files that must never be redirected away by the host. */
-const pwaEntryRedirectSources = new Set(['/', '/index.html']);
+/** Request paths a redirect may never cover, matched as patterns. */
+const protectedPwaRequestPaths = [
+  '/',
+  '/index.html',
+  '/manifest.webmanifest',
+  '/service-worker.js',
+  '/pwa-release.json',
+] as const;
 
 const freshCacheControl = 'public, max-age=0, must-revalidate';
 const noStoreCacheControl = 'no-store, must-revalidate';
 const immutableCacheControl = 'public, max-age=31536000, immutable';
 
 const freshCacheControlFiles = new Set([
-  '/index.html',
   '/manifest.webmanifest',
   '/pwa-release.json',
   '/mpgd-effective-target.json',
@@ -61,6 +68,13 @@ const noStoreCacheControlFiles = new Set(['/service-worker.js']);
 
 const immutableCacheControlDirectories = new Set(['assets']);
 const noStoreCacheControlDirectories = new Set(['icons']);
+
+/** Precache URLs the reviewed PWA contract always includes. */
+const requiredPrecacheUrls = new Set([
+  './index.html',
+  './manifest.webmanifest',
+  './pwa-release.json',
+]);
 
 export interface VerifyHostedPwaDeploymentInput {
   /** Directory of the already-verified source PWA artifact. */
@@ -87,10 +101,7 @@ export interface HostedPwaDeploymentVerification {
   };
 }
 
-export function isSupportedHostedPwaProfile(
-  host: string,
-  profile: string,
-): boolean {
+export function isSupportedHostedPwaProfile(host: string, profile: string): boolean {
   if (!hostedPwaDeploymentHosts.includes(host as HostedPwaDeploymentHost)) {
     return false;
   }
@@ -135,6 +146,7 @@ export function verifyHostedPwaDeployment(
     deploymentFiles,
     sourceFiles,
     deploymentRoot,
+    input.profile,
   );
   verifyIndexReferences(deploymentRoot, deploymentFiles);
   const workerRoutes = verifyCloudflarePagesRoutes(deploymentRoot, input.profile);
@@ -250,14 +262,26 @@ function verifySourceArtifactSelfConsistency(
     }
   }
 
-  const bytesByPath = new Map(sourceFiles.map((file) => [file.path, file.bytes] as const));
   const precacheEntries = listPrecacheEntries(sourceRoot);
+  const enumeratedUrls = [
+    ...precacheEntries.map((entry) => entry.url),
+    './pwa-release.json',
+  ].sort();
+  const recordedUrls = [...evidence.precacheUrls].sort();
 
-  for (const entry of precacheEntries) {
-    const file = entry.url.replace(/^\.\//u, '');
+  if (JSON.stringify(enumeratedUrls) !== JSON.stringify(recordedUrls)) {
+    throw new Error(
+      'The source PWA artifact precache contract is inconsistent: the recorded '
+        + 'pwa-release.json URLs do not match the files actually present in the '
+        + 'artifact, so the service worker precache list cannot be trusted.',
+    );
+  }
 
-    if (!bytesByPath.has(file)) {
-      throw new Error(`The source PWA artifact precache URL has no artifact file: ${entry.url}`);
+  for (const required of requiredPrecacheUrls) {
+    if (!evidence.precacheUrls.includes(required)) {
+      throw new Error(
+        `The source PWA artifact precache contract omits the required URL ${required}.`,
+      );
     }
   }
 
@@ -310,6 +334,7 @@ function verifyDeploymentFileClassification(
   deploymentFiles: readonly ArtifactFile[],
   sourceFiles: readonly ArtifactFile[],
   deploymentRoot: string,
+  profile: CloudflarePagesDeploymentProfile,
 ): readonly string[] {
   const sourcePaths = new Set(sourceFiles.map((file) => file.path));
   const legalPages = readLegalSitePages(deploymentRoot);
@@ -337,6 +362,16 @@ function verifyDeploymentFileClassification(
     );
   }
 
+  // Both reviewed profiles route /api/* through the Pages worker, so a
+  // deployment without the worker would verify statically while shipping
+  // broken API routes.
+  if (!hostFiles.includes('_worker.js')) {
+    throw new Error(
+      `The deployment is missing _worker.js; the reviewed ${profile} profile `
+        + 'routes /api/* through the Pages worker.',
+    );
+  }
+
   return hostFiles;
 }
 
@@ -350,9 +385,11 @@ function readLegalSitePages(deploymentRoot: string): Set<string> {
   const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown;
   const pages = new Set<string>();
 
-  if (typeof parsed !== 'object' || parsed === null || !Array.isArray(
-    (parsed as Record<string, unknown>).pages,
-  )) {
+  if (
+    typeof parsed !== 'object'
+    || parsed === null
+    || !Array.isArray((parsed as Record<string, unknown>).pages)
+  ) {
     throw new Error('The deployment legal-site.json must declare a pages array.');
   }
 
@@ -367,16 +404,16 @@ function readLegalSitePages(deploymentRoot: string): Set<string> {
       throw new Error(`The deployment legal-site.json page path is malformed: ${String(path)}`);
     }
 
-    const relative = `${path.replace(/^\//u, '')}index.html`;
-    const absolute = resolve(deploymentRoot, relative);
+    const relativePage = `${path.slice(1)}index.html`;
+    const distance = relative(deploymentRoot, resolve(deploymentRoot, relativePage));
 
-    if (dirname(absolute) === deploymentRoot || !absolute.startsWith(`${deploymentRoot}/`)) {
+    if (distance === '' || distance.startsWith('..') || posix.isAbsolute(distance)) {
       throw new Error(
         `The deployment legal-site.json page path escapes the deployment root: ${path}`,
       );
     }
 
-    pages.add(relative);
+    pages.add(relativePage);
   }
 
   return pages;
@@ -392,18 +429,19 @@ function verifyIndexReferences(
     throw new Error('The deployment is missing index.html.');
   }
 
-  const html = index.bytes.toString('utf8');
+  const html = stripNonMarkupRanges(index.bytes.toString('utf8'));
   const deploymentPaths = new Set(deploymentFiles.map((file) => file.path));
   const referenced = new Set<string>();
 
-  for (const match of html.matchAll(/(?:href|src)\s*=\s*["']([^"']+)["']/gu)) {
-    const reference = match[1] ?? '';
+  for (const match of html.matchAll(/(?:href|src)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/gu)) {
+    const reference = match[1] ?? match[2] ?? match[3] ?? '';
     const schemeSeparated = /^([a-z][a-z0-9+.-]*):/iu.exec(reference);
 
     if (
       reference.length === 0
       || reference.startsWith('#')
       || reference.startsWith('//')
+      || reference.startsWith('data:')
       || (schemeSeparated !== null && schemeSeparated[1] !== undefined)
     ) {
       continue;
@@ -415,9 +453,15 @@ function verifyIndexReferences(
       continue;
     }
 
-    const normalized = posix.normalize(
+    let normalized = posix.normalize(
       withoutQuery.startsWith('/') ? withoutQuery.slice(1) : `./${withoutQuery}`,
     );
+
+    // Directory URLs resolve to their index document, matching how Pages
+    // serves '/' and '/legal/' from index.html files.
+    if (normalized === '.' || normalized.endsWith('/')) {
+      normalized = `${normalized === '.' ? '' : normalized}index.html`;
+    }
 
     if (normalized.startsWith('../') || normalized === '..' || posix.isAbsolute(normalized)) {
       throw new Error(
@@ -436,6 +480,14 @@ function verifyIndexReferences(
       );
     }
   }
+}
+
+/** Drop comments, script bodies, and style bodies from HTML before scanning. */
+function stripNonMarkupRanges(html: string): string {
+  return html
+    .replace(/<!--[\s\S]*?-->/gu, '')
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/giu, '<script></script>')
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/giu, '<style></style>');
 }
 
 function verifyCloudflarePagesRoutes(
@@ -508,9 +560,6 @@ function verifyCloudflarePagesHeaders(
 
   const blocks = parseCloudflarePagesHeaders(readFileSync(headersPath, 'utf8'));
   const sourcePaths = new Set(sourceFiles.map((file) => file.path));
-  const topLevelDirectories = new Set(
-    sourceFiles.map((file) => (file.path.includes('/') ? file.path.split('/')[0] : '')),
-  );
 
   const requirements: {
     readonly requestPath: string;
@@ -537,17 +586,27 @@ function verifyCloudflarePagesHeaders(
     }
   }
 
-  for (const directory of [
-    ...immutableCacheControlDirectories,
-    ...noStoreCacheControlDirectories,
-  ]) {
-    if (topLevelDirectories.has(directory)) {
+  // Directory-scoped policies are evaluated against every actual file path so
+  // placeholder-shaped blocks that do not cover the real URLs cannot satisfy
+  // the requirement by coincidence.
+  for (const file of sourceFiles) {
+    const directory = file.path.includes('/') ? (file.path.split('/')[0] ?? '') : '';
+
+    if (directory.length === 0) {
+      continue;
+    }
+
+    if (immutableCacheControlDirectories.has(directory)) {
       requirements.push({
-        requestPath: `/${directory}/*`,
-        expected: immutableCacheControlDirectories.has(directory)
-          ? immutableCacheControl
-          : noStoreCacheControl,
-        label: `${directory} files`,
+        requestPath: `/${file.path}`,
+        expected: immutableCacheControl,
+        label: `content-hashed ${file.path}`,
+      });
+    } else if (noStoreCacheControlDirectories.has(directory)) {
+      requirements.push({
+        requestPath: `/${file.path}`,
+        expected: noStoreCacheControl,
+        label: `stable-name ${file.path}`,
       });
     }
   }
@@ -581,7 +640,10 @@ function verifyCloudflarePagesHeaders(
       );
     }
 
-    if (effective.value !== requirement.expected) {
+    if (
+      normalizeHeaderDirectiveValue(effective.value)
+      !== normalizeHeaderDirectiveValue(requirement.expected)
+    ) {
       throw new Error(
         `Cloudflare Pages cache policy for ${requirement.label} is wrong: expected `
           + `${requirement.expected} for ${requirement.requestPath} but the effective `
@@ -601,25 +663,14 @@ function verifyCloudflarePagesRedirects(deploymentRoot: string): void {
   const rules = parseCloudflarePagesRedirects(readFileSync(redirectsPath, 'utf8'));
 
   for (const rule of rules) {
-    if (pwaEntryRedirectSources.has(rule.source)) {
-      throw new Error(
-        `The deployment _redirects moves the PWA entry point ${rule.source} to `
-          + `${rule.destination}; the game root must serve the PWA index directly.`,
-      );
-    }
-
-    const protectedTargets = new Set([
-      '/manifest.webmanifest',
-      '/service-worker.js',
-      '/pwa-release.json',
-      '/index.html',
-    ]);
-
-    if (protectedTargets.has(rule.source)) {
-      throw new Error(
-        `The deployment _redirects moves the PWA-critical file ${rule.source}; `
-          + 'service worker, manifest, and release evidence must be served directly.',
-      );
+    for (const protectedPath of protectedPwaRequestPaths) {
+      if (cloudflarePagesPathMatches(rule.source, protectedPath)) {
+        throw new Error(
+          `The deployment _redirects rule ${rule.source} covers the protected PWA path `
+          + `${protectedPath} and moves it to ${rule.destination}; the game root and `
+          + 'PWA-critical files must be served directly.',
+        );
+      }
     }
   }
 }

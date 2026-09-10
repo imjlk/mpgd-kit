@@ -1433,15 +1433,21 @@ const targetCommand = defineI18n({
           );
         }
 
+        const reportDir = path.resolve(
+          readOptionalString(ctx.values['report-dir']) ?? process.cwd(),
+        );
+
+        assertReportDirectoryOutsideVerifiedTrees(
+          reportDir,
+          sourceArtifactRoot,
+          deploymentRoot,
+        );
         const verification = verifyHostedPwaDeployment({
           sourceArtifactRoot,
           deploymentRoot,
           host: host as (typeof hostedPwaDeploymentHosts)[number],
           profile: profile as (typeof cloudflarePagesDeploymentProfiles)[number],
         });
-        const reportDir = path.resolve(
-          readOptionalString(ctx.values['report-dir']) ?? process.cwd(),
-        );
 
         mkdirSync(reportDir, { recursive: true });
         writeEvidenceReportFiles({
@@ -3198,6 +3204,28 @@ function readLocalPositionals(
   }
 
   return positionals.slice(commandPath.length);
+}
+
+function assertReportDirectoryOutsideVerifiedTrees(
+  reportDir: string,
+  sourceArtifactRoot: string,
+  deploymentRoot: string,
+): void {
+  for (const [label, root] of [
+    ['source artifact', sourceArtifactRoot],
+    ['deployment', deploymentRoot],
+  ] as const) {
+    const resolvedRoot = path.resolve(root);
+    const distance = path.relative(resolvedRoot, reportDir);
+
+    if (distance === '' || (!distance.startsWith('..') && !path.isAbsolute(distance))) {
+      throw new Error(
+        `The --report-dir must stay outside the verified ${label} directory; `
+          + `${reportDir} is inside ${resolvedRoot}, and writing evidence there would `
+          + 'mutate a read-only verification input.',
+      );
+    }
+  }
 }
 
 function renderHostedPwaVerificationMarkdown(
