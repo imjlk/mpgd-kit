@@ -567,7 +567,9 @@ function verifyIndexReferences(
   const rawHtml = readFileSync(join(deploymentRoot, 'index.html'), 'utf8');
   const cssReferences: string[] = [];
 
-  for (const styleBody of rawHtml.matchAll(
+  const cssSourceHtml = stripScriptsAndComments(rawHtml);
+
+  for (const styleBody of cssSourceHtml.matchAll(
     /<style\b(?:(?:"[^"]*"|'[^']*'|[^>"])*)>([\s\S]*?)<\/style\s*>/giu,
   )) {
     collectInlineCssReferences(styleBody[1] ?? '', cssReferences);
@@ -787,7 +789,9 @@ function verifyIndexReferences(
     const rawPageHtml = readFileSync(join(deploymentRoot, page), 'utf8');
     const pageStyleReferences: string[] = [];
 
-    for (const styleBody of rawPageHtml.matchAll(
+    const pageCssSource = stripScriptsAndComments(rawPageHtml);
+
+    for (const styleBody of pageCssSource.matchAll(
       /<style\b(?:(?:"[^"]*"|'[^']*'|[^>"])*)>([\s\S]*?)<\/style\s*>/giu,
     )) {
       collectInlineCssReferences(styleBody[1] ?? '', pageStyleReferences);
@@ -872,7 +876,24 @@ function verifyIndexReferences(
           continue;
         }
 
-        if (!resourceNames.includes(name) && name !== 'srcset') {
+        if (!resourceNames.includes(name) && name !== 'srcset' && name !== 'srcdoc') {
+          continue;
+        }
+
+        if (name === 'srcdoc' && value.length > 0) {
+          const embeddedReferences: string[] = [];
+
+          collectEmbeddedDocumentReferences(decodeHtmlReferences(value), embeddedReferences);
+
+          for (const embeddedReference of embeddedReferences) {
+            assertLocalReferenceResolves(
+              embeddedReference,
+              page.slice(0, -'index.html'.length),
+              deploymentPaths,
+              page,
+            );
+          }
+
           continue;
         }
 
@@ -1022,11 +1043,22 @@ function collectEmbeddedDocumentReferences(
         ? ['href', 'src', 'poster', 'data']
         : ['href', 'src', 'poster', 'xlink:href'];
 
+    let embeddedMetaRefresh = false;
+    let embeddedMetaContent: string | undefined;
+
     for (const attribute of attributes.matchAll(
       /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
     )) {
       const name = (attribute[1] ?? '').toLowerCase();
       const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
+
+      if (tagName === 'meta' && name === 'http-equiv') {
+        embeddedMetaRefresh = value.trim().toLowerCase() === 'refresh';
+      }
+
+      if (tagName === 'meta' && name === 'content') {
+        embeddedMetaContent = value;
+      }
 
       if (name === 'style') {
         collectInlineCssReferences(value, references);
@@ -1044,6 +1076,17 @@ function collectEmbeddedDocumentReferences(
 
       if (name !== 'srcset' && value.length > 0) {
         references.push(value);
+      }
+    }
+
+    if (embeddedMetaRefresh && embeddedMetaContent !== undefined) {
+      const decodedContent = decodeHtmlReferences(embeddedMetaContent);
+      const target = /^[^;,]*[,;]\s*url\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;,\s]+))/iu.exec(
+        decodedContent,
+      );
+
+      if (target !== null) {
+        references.push(target[1] ?? target[2] ?? target[3] ?? '');
       }
     }
 
@@ -1098,6 +1141,14 @@ function collectInlineCssReferences(html: string, references: string[]): void {
 }
 
 /** Drop comments, script bodies, and style bodies from HTML before scanning. */
+/** Strip scripts and HTML comments while keeping style blocks intact. */
+function stripScriptsAndComments(html: string): string {
+  return html.replace(/<!--[\s\S]*?-->/gu, '').replace(
+    /<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/script\s*>/giu,
+    '',
+  );
+}
+
 function stripNonMarkupRanges(html: string): string {
   return html
     .replace(/<!--[\s\S]*?-->/gu, '')

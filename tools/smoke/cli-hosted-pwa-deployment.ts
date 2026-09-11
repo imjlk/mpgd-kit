@@ -2014,6 +2014,85 @@ try {
     'legal page base element',
   );
 
+  // 10bp. Style-looking text in scripts is not an active stylesheet.
+  const scriptStyleSource = buildSourceArtifact(join(fixtureRoot, 'source-script-style'));
+  writeFileSync(
+    join(scriptStyleSource, 'index.html'),
+    readFileSync(join(scriptStyleSource, 'index.html'), 'utf8').replace(
+      '<script>const ignored',
+      '<script>const template = "<style>body{background:url(./missing-script-style.png)}</style>"; const ignored',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: scriptStyleSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: scriptStyleSource,
+    deploymentRoot: buildDeployment(
+      scriptStyleSource,
+      join(fixtureRoot, 'deployment-script-style'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10bq. Legal-page srcdoc content is scanned.
+  const legalSrcdocDeployment = fixtureCopy(deploymentRoot, 'legal-srcdoc');
+  writeFileSync(
+    join(legalSrcdocDeployment, 'privacy', 'index.html'),
+    '<!doctype html><iframe srcdoc="&lt;img src=./missing-legal-doc.png&gt;"></iframe>',
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalSrcdocDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /legal page privacy\/index\.html references a missing file/u,
+    'legal page srcdoc reference',
+  );
+
+  // 10br. Meta refresh inside srcdoc navigates and is validated.
+  const docRefreshSource = buildSourceArtifact(join(fixtureRoot, 'source-doc-refresh'));
+  writeFileSync(
+    join(docRefreshSource, 'index.html'),
+    readFileSync(join(docRefreshSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<iframe srcdoc="&lt;meta http-equiv=&#39;refresh&#39; content=&#39;0; url=./missing-doc-refresh.html&#39;&gt;"></iframe></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: docRefreshSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: docRefreshSource,
+      deploymentRoot: buildDeployment(
+        docRefreshSource,
+        join(fixtureRoot, 'deployment-doc-refresh'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'srcdoc meta refresh',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
