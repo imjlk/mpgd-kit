@@ -1,5 +1,13 @@
 import { createHash, type Hash } from 'node:crypto';
-import { readdirSync, readFileSync } from 'node:fs';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from 'node:fs';
 import { relative, resolve, sep } from 'node:path';
 
 import {
@@ -62,6 +70,66 @@ export function createMicrosoftStorePwaRevision(input: {
   }
 
   return hash.digest('hex').slice(0, 16);
+}
+
+/**
+ * Recompute a release revision by streaming each precached file through the
+ * digest instead of materializing every payload in memory, for verifiers
+ * that only have the artifact root and the recorded URL list.
+ */
+export function createMicrosoftStorePwaRevisionFromFiles(input: {
+  readonly appVersion: string;
+  readonly buildId: string;
+  readonly sourceGitSha: string;
+  readonly kitGitSha: string;
+  readonly precacheUrls: readonly string[];
+  readonly artifactRoot: string;
+}): string {
+  const hash = createHash('sha256');
+  const release = {
+    appVersion: requireNonEmptyString(input.appVersion, 'PWA app version'),
+    buildId: requireNonEmptyString(input.buildId, 'PWA build ID'),
+    sourceGitSha: requireGitSha(input.sourceGitSha, 'PWA source Git SHA'),
+    kitGitSha: requireGitSha(input.kitGitSha, 'PWA kit Git SHA'),
+  };
+
+  updateRevisionField(hash, microsoftStorePwaCacheSchema);
+  updateRevisionField(hash, JSON.stringify(release));
+
+  const urls = [...input.precacheUrls]
+    .filter((url) => url !== './pwa-release.json' && !url.endsWith('.map'))
+    .map(assertMicrosoftStorePwaPrecacheUrl)
+    .sort(compareCodeUnits);
+
+  for (const url of urls) {
+    const file = resolve(input.artifactRoot, url.replace(/^\.\//u, ''));
+
+    if (!existsSync(file)) {
+      throw new Error(`PWA precache URL has no artifact file: ${url}`);
+    }
+
+    updateRevisionField(hash, url);
+    hash.update(`${String(statSync(file).size)}:`);
+    hashStreamInto(hash, file);
+  }
+
+  return hash.digest('hex').slice(0, 16);
+}
+
+function hashStreamInto(hash: Hash, file: string): void {
+  const handle = openSync(file, 'r');
+  const chunk = Buffer.allocUnsafe(1024 * 1024);
+
+  try {
+    let read = readSync(handle, chunk, 0, chunk.length, null);
+
+    while (read > 0) {
+      hash.update(chunk.subarray(0, read));
+      read = readSync(handle, chunk, 0, chunk.length, null);
+    }
+  } finally {
+    closeSync(handle);
+  }
 }
 
 export function createMicrosoftStorePwaReleaseEvidence(input: {

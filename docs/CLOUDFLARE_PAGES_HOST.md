@@ -165,10 +165,11 @@ The verification:
   and evaluates the effective `Cache-Control` per path under the documented
   Cloudflare semantics — matching blocks apply in file order, duplicate
   headers comma-join, and `!` removal directives clear the header. Required
-  policies: immutable long cache for content-hashed `assets/*`, `no-store`
-  for `service-worker.js` and stable-name `icons/*`, and
-  `max-age=0, must-revalidate` for the index, manifest, release evidence, and
-  other fresh metadata files;
+  policies: every `assets/*` URL must carry an explicit deliberate strategy —
+  immutable caching for content-hashed pipelines or revalidation for stable
+  names, either accepted — while `service-worker.js` and stable-name
+  `icons/*` use `no-store`, and the index, manifest, release evidence, and
+  other metadata files use `max-age=0, must-revalidate`;
 - rejects redirects that move the game root or PWA-critical files.
 
 The command writes `hosted-pwa-verification.json` and

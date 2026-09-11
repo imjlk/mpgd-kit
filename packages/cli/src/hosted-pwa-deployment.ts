@@ -21,7 +21,7 @@ import {
   parseCloudflarePagesRedirects,
 } from './cloudflare-pages-static.js';
 import {
-  createMicrosoftStorePwaRevision,
+  createMicrosoftStorePwaRevisionFromFiles,
   createMicrosoftStorePwaServiceWorker,
   listPrecacheEntries,
   readMicrosoftStorePwaReleaseEvidence,
@@ -358,9 +358,8 @@ function verifySourceArtifactSelfConsistency(
     );
   }
 
-  const precacheEntries = listPrecacheEntries(sourceRoot);
   const enumeratedUrls = [
-    ...precacheEntries.map((entry) => entry.url),
+    ...listPrecacheEntries(sourceRoot).map((entry) => entry.url),
     './pwa-release.json',
   ].sort();
   const recordedUrls = [...evidence.precacheUrls].sort();
@@ -396,12 +395,13 @@ function verifySourceArtifactSelfConsistency(
     );
   }
 
-  const recomputedRevision = createMicrosoftStorePwaRevision({
+  const recomputedRevision = createMicrosoftStorePwaRevisionFromFiles({
     appVersion: evidence.appVersion,
     buildId: evidence.buildId,
     sourceGitSha: evidence.sourceGitSha,
     kitGitSha: evidence.kitGitSha,
-    precacheEntries,
+    precacheUrls: evidence.precacheUrls,
+    artifactRoot: sourceRoot,
   });
 
   if (recomputedRevision !== evidence.revision) {
@@ -566,7 +566,15 @@ function verifyIndexReferences(
   const rawHtml = readFileSync(join(deploymentRoot, 'index.html'), 'utf8');
   const cssReferences: string[] = [];
 
-  collectInlineCssReferences(rawHtml, cssReferences);
+  for (const styleBody of rawHtml.matchAll(
+    /<style\b(?:(?:"[^"]*"|'[^']*'|[^>"])*)>([\s\S]*?)<\/style\s*>/giu,
+  )) {
+    collectInlineCssReferences(styleBody[1] ?? '', cssReferences);
+  }
+
+  for (const styleAttribute of rawHtml.matchAll(/\sstyle\s*=\s*"([^"]*)"/giu)) {
+    collectInlineCssReferences(styleAttribute[1] ?? '', cssReferences);
+  }
 
   const html = stripNonMarkupRanges(rawHtml);
 
@@ -581,6 +589,7 @@ function verifyIndexReferences(
   const referencedDirectoryUrls = new Set<string>();
 
   const references: string[] = [...cssReferences];
+  const metaRefreshContents: string[] = [];
 
   // Attributes only exist on start tags; scanning raw text would treat prose
   // like `Set href="..."` as a reference. Extract within element start tags,
@@ -593,11 +602,25 @@ function verifyIndexReferences(
     const resourceNames
       = tagName === 'object' ? ['href', 'src', 'poster', 'data'] : ['href', 'src', 'poster'];
 
-    for (const name of resourceNames) {
-      for (const match of attributes.matchAll(
-        new RegExp(`(?:^|\\s)${name}\\s*=\\s*(?:"([^"]+)"|'([^']+)'|([^\\s>]+))`, 'giu'),
-      )) {
-        references.push(match[1] ?? match[2] ?? match[3] ?? '');
+    // Tokenize real attribute name/value pairs first so quoted values of
+    // unrelated attributes (title='See href="..."') never leak references.
+    for (const attribute of attributes.matchAll(
+      /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
+    )) {
+      const name = (attribute[1] ?? '').toLowerCase();
+
+      if (!resourceNames.includes(name) && name !== 'srcset') {
+        continue;
+      }
+
+      const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
+
+      if (name !== 'srcset' && value.length > 0) {
+        references.push(value);
+      }
+
+      if (name === 'meta-refresh-content' || (tagName === 'meta' && name === 'content')) {
+        metaRefreshContents.push(value);
       }
     }
 
@@ -637,6 +660,16 @@ function verifyIndexReferences(
       if (/^[\d.]+[wx],?$/u.test(token)) {
         holdingUrl = false;
       }
+    }
+  }
+
+  // Meta-refresh targets navigate automatically; treat the URL part of the
+  // content directive as a browser-loaded local reference.
+  for (const content of metaRefreshContents) {
+    const target = /^[^;,]*[,;]\s*url\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;,\s]+))/iu.exec(content);
+
+    if (target !== null) {
+      references.push(target[1] ?? target[2] ?? target[3] ?? '');
     }
   }
 
@@ -741,8 +774,8 @@ function collectInlineCssReferences(html: string, references: string[]): void {
 function stripNonMarkupRanges(html: string): string {
   return html
     .replace(/<!--[\s\S]*?-->/gu, '')
-    .replace(/<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/script>/giu, '<script$1></script>')
-    .replace(/<style\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/style>/giu, '<style$1></style>');
+    .replace(/<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/script\s*>/giu, '<script$1></script>')
+    .replace(/<style\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/style\s*>/giu, '<style$1></style>');
 }
 
 function verifyCloudflarePagesRoutes(
