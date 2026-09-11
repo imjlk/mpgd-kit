@@ -630,7 +630,7 @@ function verifyIndexReferences(
       if (name === 'srcdoc' && value.length > 0) {
         // srcdoc embeds a document resolved relative to this one; scan its
         // content for the same resource attributes.
-        embeddedDocuments.push(value.replaceAll('&quot;', '"').replaceAll('&amp;', '&'));
+        embeddedDocuments.push(decodeHtmlReferences(value));
         continue;
       }
 
@@ -793,12 +793,28 @@ function verifyIndexReferences(
         /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
       )) {
         const name = (attribute[1] ?? '').toLowerCase();
+        const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
+
+        if (name === 'style') {
+          const pageCssReferences: string[] = [];
+
+          collectInlineCssReferences(value, pageCssReferences);
+
+          for (const cssReference of pageCssReferences) {
+            assertLocalReferenceResolves(
+              cssReference,
+              page.slice(0, -'index.html'.length),
+              deploymentPaths,
+              page,
+            );
+          }
+
+          continue;
+        }
 
         if (!resourceNames.includes(name) && name !== 'srcset') {
           continue;
         }
-
-        const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
 
         if (name === 'srcset') {
           const candidates: string[] = [];
@@ -907,6 +923,13 @@ function assertLocalReferenceResolves(
     );
   }
 
+  if (pagesControlArtifactNames.has(normalized)) {
+    throw new Error(
+      `The legal page ${page} references the Pages control file ${normalized}; `
+        + 'control artifacts are consumed by the host, not served to browsers.',
+    );
+  }
+
   if (!deploymentPaths.has(normalized)) {
     throw new Error(
       `The legal page ${page} references a missing file: ${reference} `
@@ -920,7 +943,7 @@ function collectEmbeddedDocumentReferences(
   document: string,
   references: string[],
 ): void {
-  const decoded = document.replaceAll('&quot;', '"').replaceAll('&amp;', '&');
+  const decoded = decodeHtmlReferences(document);
   const stripped = stripNonMarkupRanges(decoded);
 
   for (const tag of stripped.matchAll(/<([A-Za-z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gu)) {

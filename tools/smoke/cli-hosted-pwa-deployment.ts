@@ -1754,6 +1754,73 @@ try {
     'legal page srcset candidate',
   );
 
+  // 10be. Entity-encoded srcdoc markup decodes before scanning.
+  const entityDocSource = buildSourceArtifact(join(fixtureRoot, 'source-entity-doc'));
+  writeFileSync(
+    join(entityDocSource, 'index.html'),
+    readFileSync(join(entityDocSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<iframe srcdoc="&lt;img src=./missing-entity-doc.png&gt;"></iframe></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: entityDocSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: entityDocSource,
+      deploymentRoot: buildDeployment(
+        entityDocSource,
+        join(fixtureRoot, 'deployment-entity-doc'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'entity-encoded srcdoc markup',
+  );
+
+  // 10bf. Legal-page style attributes are validated.
+  const legalStyleDeployment = fixtureCopy(deploymentRoot, 'legal-style');
+  writeFileSync(
+    join(legalStyleDeployment, 'privacy', 'index.html'),
+    '<!doctype html><div style="background:url(./missing-legal-style.png)"></div>',
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalStyleDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /legal page privacy\/index\.html references a missing file/u,
+    'legal page style reference',
+  );
+
+  // 10bg. Legal pages cannot reference Pages control artifacts.
+  const legalControlDeployment = fixtureCopy(deploymentRoot, 'legal-control');
+  writeFileSync(
+    join(legalControlDeployment, 'privacy', 'index.html'),
+    '<!doctype html><img src="/_headers">',
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalControlDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /legal page privacy\/index\.html references the Pages control file/u,
+    'legal page control artifact reference',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
