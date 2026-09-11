@@ -1735,7 +1735,11 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
   const objectData = options.withObjectData === undefined
     ? ''
     : `<object data="${options.withObjectData}"></object>`;
-  const textHref = options.withTextHref === true ? '<p>Set href="./missing.js"</p>' : '';
+  const textHref = options.withTextHref === true
+    ? '<p>Set href="./missing.js" '
+      + "and <div title='See href=&quot;./missing.png&quot;'>note</div> "
+      + 'and url(./missing-css.png) in prose</p>'
+    : '';
   const workerRef = options.withWorkerRef === true
     ? '<script type="module" src="./_worker.js"></script>'
     : '';
@@ -1752,7 +1756,7 @@ function buildSourceArtifact(root: string, options: BuildSourceOptions = {}): st
       + '<link rel="manifest" href="./manifest.webmanifest">'
       + '</head><body>'
       + '<a href="/">home</a><a href="/privacy/">privacy</a>'
-      + '<script>const ignored = \'src="not-a-real-attribute.png"\';</script>'
+      + '<script>const css decoy = "url(./missing-script-css.png)"; const ignored = \'src="not-a-real-attribute.png"\';</script>'
       + '<!-- <img src="commented-out.png"> -->'
       + (options.withPosterRef === true
         ? '<video poster="./missing-poster.png"></video>'
