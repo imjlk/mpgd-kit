@@ -801,7 +801,19 @@ function verifyIndexReferences(
         const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
 
         if (name === 'srcset') {
-          pushSrcsetCandidates(value, []);
+          const candidates: string[] = [];
+
+          pushSrcsetCandidates(value, candidates);
+
+          for (const candidate of candidates) {
+            assertLocalReferenceResolves(
+              candidate,
+              page.slice(0, -'index.html'.length),
+              deploymentPaths,
+              page,
+            );
+          }
+
           continue;
         }
 
@@ -928,7 +940,7 @@ function collectEmbeddedDocumentReferences(
         continue;
       }
 
-      if (!resourceNames.includes(name) && name !== 'srcset') {
+      if (!resourceNames.includes(name) && name !== 'srcset' && name !== 'srcdoc') {
         continue;
       }
 

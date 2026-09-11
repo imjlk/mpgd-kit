@@ -1704,6 +1704,56 @@ try {
     'legal page broken reference',
   );
 
+  // 10bc. Nested srcdoc documents recurse through the full tokenizer.
+  const nestedDocSource = buildSourceArtifact(join(fixtureRoot, 'source-nested-doc'));
+  writeFileSync(
+    join(nestedDocSource, 'index.html'),
+    readFileSync(join(nestedDocSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<iframe srcdoc="<iframe srcdoc=\"<img src=./missing-nested.png>\"></iframe>"></iframe></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: nestedDocSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: nestedDocSource,
+      deploymentRoot: buildDeployment(
+        nestedDocSource,
+        join(fixtureRoot, 'deployment-nested-doc'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'nested srcdoc reference',
+  );
+
+  // 10bd. Legal-page srcset candidates are validated.
+  const legalSrcsetDeployment = fixtureCopy(deploymentRoot, 'legal-srcset');
+  writeFileSync(
+    join(legalSrcsetDeployment, 'privacy', 'index.html'),
+    '<!doctype html><img srcset="./missing-legal-srcset.png 1x">',
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalSrcsetDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /legal page privacy\/index\.html references a missing file/u,
+    'legal page srcset candidate',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
