@@ -1913,6 +1913,107 @@ try {
     'svg xlink:href reference',
   );
 
+  // 10bl. Nested entity-encoded srcdoc attributes decode once per level.
+  const nestedEntitySource = buildSourceArtifact(join(fixtureRoot, 'source-nested-entity'));
+  const nestedSrcdoc = '<iframe srcdoc="&lt;iframe srcdoc='
+    + "'&amp;lt;img src=./missing-nest.png&amp;gt;'"
+    + '&gt;&lt;/iframe&gt;"></iframe></body>';
+  writeFileSync(
+    join(nestedEntitySource, 'index.html'),
+    readFileSync(join(nestedEntitySource, 'index.html'), 'utf8')
+      .replaceAll('</body>', nestedSrcdoc),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: nestedEntitySource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: nestedEntitySource,
+      deploymentRoot: buildDeployment(
+        nestedEntitySource,
+        join(fixtureRoot, 'deployment-nested-entity'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'nested entity srcdoc',
+  );
+
+  // 10bm. Embedded srcdoc style blocks are collected.
+  const docStyleSource = buildSourceArtifact(join(fixtureRoot, 'source-doc-style'));
+  writeFileSync(
+    join(docStyleSource, 'index.html'),
+    readFileSync(join(docStyleSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<iframe srcdoc="&lt;style&gt;body{background:url(./missing-doc-style.png)}&lt;/style&gt;"></iframe></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: docStyleSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: docStyleSource,
+      deploymentRoot: buildDeployment(
+        docStyleSource,
+        join(fixtureRoot, 'deployment-doc-style'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'embedded srcdoc style block',
+  );
+
+  // 10bn. Legal-page meta-refresh targets are validated.
+  const legalRefreshDeployment = fixtureCopy(deploymentRoot, 'legal-refresh');
+  writeFileSync(
+    join(legalRefreshDeployment, 'privacy', 'index.html'),
+    '<!doctype html><meta http-equiv="refresh" content="0; url=/missing-legal-refresh.html">',
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalRefreshDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /legal page privacy\/index\.html references a missing file/u,
+    'legal page meta refresh',
+  );
+
+  // 10bo. Base elements on legal pages are rejected as unsupported.
+  const legalBaseDeployment = fixtureCopy(deploymentRoot, 'legal-base');
+  writeFileSync(
+    join(legalBaseDeployment, 'privacy', 'index.html'),
+    '<!doctype html><base href="/"><img src="icons/icon-512.png">',
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalBaseDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /legal page privacy\/index\.html declares a base element/u,
+    'legal page base element',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 

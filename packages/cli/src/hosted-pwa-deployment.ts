@@ -184,6 +184,7 @@ export function verifyHostedPwaDeployment(
     sourceFiles,
     deploymentFiles,
     declaredLegalDirectories,
+    workerRoutes,
   );
   const deploymentLegalPaths = [
     ...[...readLegalSitePages(deploymentRoot)].map(
@@ -801,6 +802,43 @@ function verifyIndexReferences(
       );
     }
 
+    if (/<base\b/iu.test(rawPageHtml)) {
+      throw new Error(
+        `The legal page ${page} declares a base element; reference resolution `
+          + 'against a legal-page base is unsupported by this verifier.',
+      );
+    }
+
+    const metaTagPattern = /<meta\b(?:(?:"[^"]*"|'[^']*'|[^>"]))*>/giu;
+
+    for (const meta of rawPageHtml.matchAll(metaTagPattern)) {
+      const metaTag = meta[0] ?? '';
+
+      if (!/http-equiv\s*=\s*["']?refresh/iu.test(metaTag)) {
+        continue;
+      }
+
+      const content = metaTag.match(/content\s*=\s*(?:"([^"]*)"|'([^']*)')/iu);
+
+      if (content === null) {
+        continue;
+      }
+
+      const decodedContent = decodeHtmlReferences(content[1] ?? '');
+      const target = /^[^;,]*[,;]\s*url\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;,\s]+))/iu.exec(
+        decodedContent,
+      );
+
+      if (target !== null) {
+        assertLocalReferenceResolves(
+          target[1] ?? target[2] ?? target[3] ?? '',
+          page.slice(0, -'index.html'.length),
+          deploymentPaths,
+          page,
+        );
+      }
+    }
+
     const pageHtml = stripNonMarkupRanges(rawPageHtml);
 
     for (const tag of pageHtml.matchAll(/<([A-Za-z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gu)) {
@@ -965,9 +1003,15 @@ function collectEmbeddedDocumentReferences(
   document: string,
   references: string[],
 ): void {
-  // The entry point already decoded the outer attribute once, matching the
-  // browser's single-pass attribute decoding; a second decode here would
-  // turn entity-escaped text into markup the browser never renders.
+  // The caller decoded this document's own attribute once, matching the
+  // browser's per-attribute decoding; style blocks are collected before
+  // stripping so their CSS references survive.
+  for (const styleBody of document.matchAll(
+    /<style\b(?:(?:"[^"]*"|'[^']*'|[^>"])*)>([\s\S]*?)<\/style\s*>/giu,
+  )) {
+    collectInlineCssReferences(styleBody[1] ?? '', references);
+  }
+
   const stripped = stripNonMarkupRanges(document);
 
   for (const tag of stripped.matchAll(/<([A-Za-z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gu)) {
@@ -994,7 +1038,7 @@ function collectEmbeddedDocumentReferences(
       }
 
       if (name === 'srcdoc' && value.length > 0) {
-        collectEmbeddedDocumentReferences(value, references);
+        collectEmbeddedDocumentReferences(decodeHtmlReferences(value), references);
         continue;
       }
 
@@ -1176,6 +1220,7 @@ function verifyCloudflarePagesHeaders(
   sourceFiles: readonly ArtifactFile[],
   deploymentFiles: readonly ArtifactFile[],
   declaredLegalDirectories: ReadonlySet<string>,
+  workerRoutes: { readonly include: readonly string[] },
 ): void {
   const headersPath = `${deploymentRoot}/_headers`;
 
@@ -1191,6 +1236,7 @@ function verifyCloudflarePagesHeaders(
     readonly requestPath: string;
     readonly expected: string;
     readonly alsoAccepts?: string;
+    readonly skip?: boolean;
     readonly label: string;
   }[] = [];
 
@@ -1225,10 +1271,25 @@ function verifyCloudflarePagesHeaders(
   }
 
   if (sourcePaths.has('index.html')) {
-    requirements.push(
-      { requestPath: '/', expected: freshCacheControl, label: 'the PWA root' },
-      { requestPath: '/index.html', expected: freshCacheControl, label: 'index.html' },
-    );
+    // Under api-canonical-index the worker serves /index.html and Pages
+    // _headers rules do not apply to function responses, so the index.html
+    // policy is only certifiable for the statically served root path.
+    requirements.push({ requestPath: '/', expected: freshCacheControl, label: 'the PWA root' });
+
+    if (workerRoutes.include.includes('/index.html')) {
+      requirements.push({
+        requestPath: '/index.html',
+        expected: freshCacheControl,
+        label: 'index.html (worker-served; static _headers policy not certified)',
+        skip: true,
+      });
+    } else {
+      requirements.push({
+        requestPath: '/index.html',
+        expected: freshCacheControl,
+        label: 'index.html',
+      });
+    }
   }
 
   for (const file of [...freshCacheControlFiles, ...noStoreCacheControlFiles]) {
@@ -1277,6 +1338,10 @@ function verifyCloudflarePagesHeaders(
   }
 
   for (const requirement of requirements) {
+    if (requirement.skip === true) {
+      continue;
+    }
+
     const effective = evaluateCloudflarePagesHeader(
       blocks,
       requirement.requestPath,
