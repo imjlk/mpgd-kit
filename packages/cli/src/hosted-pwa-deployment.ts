@@ -187,9 +187,11 @@ export function verifyHostedPwaDeployment(
     workerRoutes,
   );
   const deploymentLegalPaths = [
-    ...[...readLegalSitePages(deploymentRoot)].map(
-      (page) => `/${page.slice(0, -'index.html'.length)}`,
-    ),
+    ...[...readLegalSitePages(deploymentRoot)].flatMap((page) => {
+      const directoryUrl = `/${page.slice(0, -'index.html'.length)}`;
+
+      return [directoryUrl, `/${page}`];
+    }),
     ...(existsSync(join(deploymentRoot, 'legal-site.json'))
       ? ['/legal-site.json']
       : []),
@@ -770,6 +772,8 @@ function verifyIndexReferences(
       withoutQuery.startsWith('/') ? withoutQuery.slice(1) : `./${withoutQuery}`,
     );
 
+    normalized = normalized.split('\\').join('/');
+
     try {
       normalized = normalized
         .split('/')
@@ -843,7 +847,9 @@ function verifyIndexReferences(
       );
     }
 
-    if (/<base\b/iu.test(rawPageHtml)) {
+    const strippedPageHtml = stripNonMarkupRanges(rawPageHtml);
+
+    if (/<base\b/iu.test(strippedPageHtml)) {
       throw new Error(
         `The legal page ${page} declares a base element; reference resolution `
           + 'against a legal-page base is unsupported by this verifier.',
@@ -880,7 +886,7 @@ function verifyIndexReferences(
       }
     }
 
-    const pageHtml = stripNonMarkupRanges(rawPageHtml);
+    const pageHtml = strippedPageHtml;
 
     for (const tag of pageHtml.matchAll(/<([A-Za-z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gu)) {
       const tagName = (tag[1] ?? '').toLowerCase();
@@ -899,7 +905,7 @@ function verifyIndexReferences(
         if (name === 'style') {
           const pageCssReferences: string[] = [];
 
-          collectInlineCssReferences(value, pageCssReferences);
+          collectInlineCssReferences(decodeHtmlReferences(value), pageCssReferences);
 
           for (const cssReference of pageCssReferences) {
             assertLocalReferenceResolves(
@@ -937,7 +943,7 @@ function verifyIndexReferences(
         if (name === 'srcset') {
           const candidates: string[] = [];
 
-          pushSrcsetCandidates(value, candidates);
+          pushSrcsetCandidates(decodeHtmlReferences(value), candidates);
 
           for (const candidate of candidates) {
             assertLocalReferenceResolves(
@@ -1042,6 +1048,8 @@ function assertLocalReferenceResolves(
     return;
   }
 
+  withoutQuery = withoutQuery.split('\\').join('/');
+
   try {
     withoutQuery = withoutQuery
       .split('/')
@@ -1125,7 +1133,7 @@ function collectEmbeddedDocumentReferences(
       }
 
       if (name === 'style') {
-        collectInlineCssReferences(value, references);
+        collectInlineCssReferences(decodeHtmlReferences(value), references);
         continue;
       }
 
@@ -1157,7 +1165,9 @@ function collectEmbeddedDocumentReferences(
     const srcset = attributes.match(/(?:^|\s)srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
 
     if (srcset !== null) {
-      pushSrcsetCandidates(srcset[1] ?? srcset[2] ?? srcset[3] ?? '', references);
+      const rawCandidates = srcset[1] ?? srcset[2] ?? srcset[3] ?? '';
+
+      pushSrcsetCandidates(decodeHtmlReferences(rawCandidates), references);
     }
   }
 }
