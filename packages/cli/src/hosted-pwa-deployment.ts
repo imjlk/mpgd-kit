@@ -644,7 +644,7 @@ function verifyIndexReferences(
     }
 
     if (styleValue !== undefined) {
-      collectInlineCssReferences(styleValue, cssReferences);
+      collectInlineCssReferences(styleValue, references);
     }
 
     if (!/(?:^|\s)srcset\s*=/iu.test(attributes)) {
@@ -687,18 +687,16 @@ function verifyIndexReferences(
   }
 
   // Embedded srcdoc documents resolve their resources against this
-  // deployment; scan them with the same tokenizer.
+  // deployment; scan them with the full tokenizer (resource attributes,
+  // srcset candidates, object data, and inline CSS alike).
   for (const document of embeddedDocuments) {
-    for (const match of document.matchAll(
-      /(?:^|\s)(?:href|src|poster)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/giu,
-    )) {
-      references.push(match[1] ?? match[2] ?? match[3] ?? '');
-    }
+    collectEmbeddedDocumentReferences(document, references);
   }
 
   // Meta-refresh targets navigate automatically; treat the URL part of the
   // content directive as a browser-loaded local reference.
-  for (const content of metaRefreshContents) {
+  for (const rawContent of metaRefreshContents) {
+    const content = decodeHtmlReferences(rawContent);
     const target = /^[^;,]*[,;]\s*url\s*=\s*(?:"([^"]+)"|'([^']+)'|([^;,\s]+))/iu.exec(content);
 
     if (target !== null) {
@@ -780,6 +778,47 @@ function verifyIndexReferences(
     }
   }
 
+  // Declared legal pages are deployment-promised documents; their local
+  // references resolve against the page's own directory.
+  for (const page of declaredLegalPages(deploymentRoot)) {
+    const pageHtml = stripNonMarkupRanges(readFileSync(join(deploymentRoot, page), 'utf8'));
+
+    for (const tag of pageHtml.matchAll(/<([A-Za-z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gu)) {
+      const tagName = (tag[1] ?? '').toLowerCase();
+      const attributes = tag[2] ?? '';
+      const resourceNames
+        = tagName === 'object' ? ['href', 'src', 'poster', 'data'] : ['href', 'src', 'poster'];
+
+      for (const attribute of attributes.matchAll(
+        /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
+      )) {
+        const name = (attribute[1] ?? '').toLowerCase();
+
+        if (!resourceNames.includes(name) && name !== 'srcset') {
+          continue;
+        }
+
+        const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
+
+        if (name === 'srcset') {
+          pushSrcsetCandidates(value, []);
+          continue;
+        }
+
+        if (value.length === 0) {
+          continue;
+        }
+
+        assertLocalReferenceResolves(
+          value,
+          page.slice(0, -'index.html'.length),
+          deploymentPaths,
+          page,
+        );
+      }
+    }
+  }
+
   return [...referencedDirectoryUrls];
 }
 
@@ -790,6 +829,156 @@ function verifyIndexReferences(
  */
 function decodeHtmlReferences(text: string): string {
   return decodeHTMLAttribute(text);
+}
+
+/** List the deployment's declared legal page index files. */
+function declaredLegalPages(deploymentRoot: string): readonly string[] {
+  const manifestPath = join(deploymentRoot, 'legal-site.json');
+
+  if (!existsSync(manifestPath)) {
+    return [];
+  }
+
+  const parsed = JSON.parse(readFileSync(manifestPath, 'utf8')) as unknown;
+
+  if (
+    typeof parsed !== 'object'
+    || parsed === null
+    || !Array.isArray((parsed as Record<string, unknown>).pages)
+  ) {
+    return [];
+  }
+
+  return (parsed as { pages: readonly { path?: unknown }[] }).pages
+    .filter((page) => typeof page.path === 'string')
+    .map((page) => `${(page.path as string).slice(1)}index.html`);
+}
+
+/** Resolve a legal-page reference against its directory and require the file. */
+function assertLocalReferenceResolves(
+  reference: string,
+  pageDirectory: string,
+  deploymentPaths: ReadonlySet<string>,
+  page: string,
+): void {
+  const decoded = decodeHtmlReferences(reference).trim();
+  const schemeSeparated = /^([a-z][a-z0-9+.-]*):/iu.exec(decoded);
+
+  if (
+    decoded.length === 0
+    || decoded.startsWith('#')
+    || decoded.startsWith('//')
+    || decoded.startsWith('data:')
+    || (schemeSeparated !== null && schemeSeparated[1] !== undefined)
+  ) {
+    return;
+  }
+
+  const withoutQuery = decoded.split(/[?#]/u)[0] ?? decoded;
+
+  if (withoutQuery.length === 0) {
+    return;
+  }
+
+  const fromDirectory = pageDirectory.length > 0 ? `./${pageDirectory}` : '.';
+  let normalized = posix.normalize(
+    withoutQuery.startsWith('/') ? withoutQuery.slice(1) : `${fromDirectory}/${withoutQuery}`,
+  );
+
+  if (normalized.endsWith('/')) {
+    normalized += 'index.html';
+  }
+
+  if (normalized.startsWith('../') || normalized === '..' || posix.isAbsolute(normalized)) {
+    throw new Error(
+      `The legal page ${page} references a path outside the deployment root: ${reference}`,
+    );
+  }
+
+  if (!deploymentPaths.has(normalized)) {
+    throw new Error(
+      `The legal page ${page} references a missing file: ${reference} `
+        + `(resolved to ${normalized}).`,
+    );
+  }
+}
+
+/** Apply the full resource scanner to an embedded srcdoc document. */
+function collectEmbeddedDocumentReferences(
+  document: string,
+  references: string[],
+): void {
+  const decoded = document.replaceAll('&quot;', '"').replaceAll('&amp;', '&');
+  const stripped = stripNonMarkupRanges(decoded);
+
+  for (const tag of stripped.matchAll(/<([A-Za-z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gu)) {
+    const tagName = (tag[1] ?? '').toLowerCase();
+    const attributes = tag[2] ?? '';
+    const resourceNames
+      = tagName === 'object' ? ['href', 'src', 'poster', 'data'] : ['href', 'src', 'poster'];
+
+    for (const attribute of attributes.matchAll(
+      /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
+    )) {
+      const name = (attribute[1] ?? '').toLowerCase();
+      const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
+
+      if (name === 'style') {
+        collectInlineCssReferences(value, references);
+        continue;
+      }
+
+      if (!resourceNames.includes(name) && name !== 'srcset') {
+        continue;
+      }
+
+      if (name === 'srcdoc' && value.length > 0) {
+        collectEmbeddedDocumentReferences(value, references);
+        continue;
+      }
+
+      if (name !== 'srcset' && value.length > 0) {
+        references.push(value);
+      }
+    }
+
+    const srcset = attributes.match(/(?:^|\s)srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
+
+    if (srcset !== null) {
+      pushSrcsetCandidates(srcset[1] ?? srcset[2] ?? srcset[3] ?? '', references);
+    }
+  }
+}
+
+/** Tokenize srcset candidates into the reference list. */
+function pushSrcsetCandidates(candidates: string, references: string[]): void {
+  let holdingUrl = false;
+
+  for (const token of candidates.split(/\s+/u)) {
+    for (const piece of token.split(/(?<=\d[xw]),/u)) {
+      const trimmed = piece.replace(/^[,]+|[,]+$/gu, '');
+
+      if (trimmed.length === 0) {
+        continue;
+      }
+
+      const isDescriptor = /^[\d.]+[wx]?$/u.test(trimmed);
+
+      if (holdingUrl && isDescriptor) {
+        continue;
+      }
+
+      references.push(trimmed);
+
+      const endedCandidate = /,$/u.test(piece);
+
+      holdingUrl = !isDescriptor && !endedCandidate;
+    }
+
+    if (/^[\d.]+[wx],?$/u.test(token)) {
+      holdingUrl = false;
+    }
+  }
 }
 
 /** Collect local url() and @import targets from inline CSS. */

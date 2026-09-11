@@ -1588,6 +1588,122 @@ try {
     profile: 'api-only',
   });
 
+  // 10ay. Tokenized style-attribute URLs join the validated references.
+  const styleAttrSource = buildSourceArtifact(join(fixtureRoot, 'source-style-attr'));
+  writeFileSync(
+    join(styleAttrSource, 'index.html'),
+    readFileSync(join(styleAttrSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      `<div style='background:url("./missing-style.png")'></div></body>`,
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: styleAttrSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: styleAttrSource,
+      deploymentRoot: buildDeployment(
+        styleAttrSource,
+        join(fixtureRoot, 'deployment-style-attr'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'style-attribute URL validated',
+  );
+
+  // 10az. srcdoc srcset candidates are scanned by the full tokenizer.
+  const srcsetDocSource = buildSourceArtifact(join(fixtureRoot, 'source-srcset-doc'));
+  writeFileSync(
+    join(srcsetDocSource, 'index.html'),
+    readFileSync(join(srcsetDocSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      `<iframe srcdoc="<img srcset='./missing-doc.png 1x'>"></iframe></body>`,
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: srcsetDocSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: srcsetDocSource,
+      deploymentRoot: buildDeployment(
+        srcsetDocSource,
+        join(fixtureRoot, 'deployment-srcset-doc'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'srcdoc srcset candidate',
+  );
+
+  // 10ba. Entity-encoded meta-refresh separators decode before parsing.
+  const entityRefreshSource = buildSourceArtifact(join(fixtureRoot, 'source-entity-refresh'));
+  writeFileSync(
+    join(entityRefreshSource, 'index.html'),
+    readFileSync(join(entityRefreshSource, 'index.html'), 'utf8').replace(
+      '</head>',
+      '<meta http-equiv="refresh" content="0&#59; url=./missing-entity.html"></head>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: entityRefreshSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: entityRefreshSource,
+      deploymentRoot: buildDeployment(
+        entityRefreshSource,
+        join(fixtureRoot, 'deployment-entity-refresh'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'entity-encoded meta refresh',
+  );
+
+  // 10bb. Declared legal pages carry validated local references.
+  const brokenLegalDeployment = fixtureCopy(deploymentRoot, 'broken-legal-ref');
+  writeFileSync(
+    join(brokenLegalDeployment, 'privacy', 'index.html'),
+    '<!doctype html><img src="/missing-legal.png">',
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: brokenLegalDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /legal page privacy\/index\.html references a missing file/u,
+    'legal page broken reference',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
