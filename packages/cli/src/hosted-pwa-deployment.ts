@@ -609,6 +609,11 @@ function verifyIndexReferences(
     let isMetaRefresh = false;
     let metaContent: string | undefined;
     let styleValue: string | undefined;
+    // Detect srcdoc before iterating resource attributes so an iframe src
+    // appearing before its srcdoc is already known to be overridden.
+    const attributesHasSrcdoc
+      = tagName === 'iframe'
+        && /(?:^|\s)srcdoc\s*=\s*(?:"[^"]+"|'[^']+'|[^\s>]+)/iu.test(attributes);
 
     for (const attribute of attributes.matchAll(
       /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
@@ -640,6 +645,10 @@ function verifyIndexReferences(
       }
 
       if (name !== 'srcset' && value.length > 0) {
+        if (tagName === 'iframe' && name === 'src' && attributesHasSrcdoc) {
+          continue;
+        }
+
         references.push(value);
       }
     }
@@ -649,7 +658,7 @@ function verifyIndexReferences(
     }
 
     if (styleValue !== undefined) {
-      collectInlineCssReferences(styleValue, references);
+      collectInlineCssReferences(decodeHtmlReferences(styleValue), references);
     }
 
     if (!/(?:^|\s)srcset\s*=/iu.test(attributes)) {
@@ -713,17 +722,42 @@ function verifyIndexReferences(
     const reference = decodeHtmlReferences(rawReference).trim();
     const schemeSeparated = /^([a-z][a-z0-9+.-]*):/iu.exec(reference);
 
-    if (
-      reference.length === 0
-      || reference.startsWith('#')
-      || reference.startsWith('//')
-      || reference.startsWith('data:')
-      || (schemeSeparated !== null && schemeSeparated[1] !== undefined)
-    ) {
+    if (reference.length === 0 || reference.startsWith('#') || reference.startsWith('data:')) {
       continue;
     }
 
-    const withoutQuery = reference.split(/[?#]/u)[0] ?? reference;
+    // Scheme-relative (//host/path) and cross-origin URLs stay external;
+    // same-scheme references like "https:./file.png" resolve against the
+    // deployment like the browser does on an HTTPS page.
+    if (reference.startsWith('//')) {
+      continue;
+    }
+
+    let effectiveReference = reference;
+
+    if (schemeSeparated !== null && schemeSeparated[1] !== undefined) {
+      if (schemeSeparated[1] === 'https' || schemeSeparated[1] === 'http') {
+        const afterScheme = reference.slice(schemeSeparated[1].length + 1);
+
+        if (afterScheme.startsWith('//')) {
+          continue;
+        }
+
+        effectiveReference = afterScheme;
+      } else {
+        continue;
+      }
+    }
+
+    if (process.env.MPGD_DEBUG_SRCDOC === '1') {
+      console.error(
+        'DEBUG-REF',
+        JSON.stringify(reference.slice(0, 60)),
+        '->',
+        JSON.stringify(effectiveReference.slice(0, 60)),
+      );
+    }
+    const withoutQuery = effectiveReference.split(/[?#]/u)[0] ?? effectiveReference;
 
     if (withoutQuery.length === 0) {
       continue;

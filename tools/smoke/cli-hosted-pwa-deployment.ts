@@ -1706,12 +1706,14 @@ try {
 
   // 10bc. Nested srcdoc documents recurse through the full tokenizer.
   const nestedDocSource = buildSourceArtifact(join(fixtureRoot, 'source-nested-doc'));
+  const nestedDocSrcdoc = '<iframe srcdoc="&lt;iframe srcdoc='
+    + "'&amp;lt;img src=./missing-nested.png&amp;gt;'"
+    + '&gt;&lt;/iframe&gt;"></iframe></body>';
+
   writeFileSync(
     join(nestedDocSource, 'index.html'),
-    readFileSync(join(nestedDocSource, 'index.html'), 'utf8').replace(
-      '</body>',
-      '<iframe srcdoc="<iframe srcdoc=\"<img src=./missing-nested.png>\"></iframe>"></iframe></body>',
-    ),
+    readFileSync(join(nestedDocSource, 'index.html'), 'utf8')
+      .replaceAll('</body>', nestedDocSrcdoc),
   );
   writeMicrosoftStorePwaArtifacts({
     artifactRoot: nestedDocSource,
@@ -2091,6 +2093,99 @@ try {
     }),
     /references a missing file/u,
     'srcdoc meta refresh',
+  );
+
+  // 10bs. Entity-encoded style-attribute quotes decode before CSS parsing.
+  const styleQuoteSource = buildSourceArtifact(join(fixtureRoot, 'source-style-quote'));
+  mkdirSync(join(styleQuoteSource, 'assets'), { recursive: true });
+  writeFileSync(join(styleQuoteSource, 'assets', 'app.png'), 'png');
+  writeFileSync(
+    join(styleQuoteSource, 'index.html'),
+    readFileSync(join(styleQuoteSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<div style="background:url(&quot;./assets/app.png&quot;)"></div></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: styleQuoteSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: styleQuoteSource,
+    deploymentRoot: buildDeployment(
+      styleQuoteSource,
+      join(fixtureRoot, 'deployment-style-quote'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10bt. iframe src is ignored when srcdoc overrides it.
+  const iframeFallbackSource = buildSourceArtifact(join(fixtureRoot, 'source-iframe-fallback'));
+  writeFileSync(
+    join(iframeFallbackSource, 'index.html'),
+    readFileSync(join(iframeFallbackSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<iframe src="./missing-fallback.html" srcdoc="<p>inline</p>"></iframe></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: iframeFallbackSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: iframeFallbackSource,
+    deploymentRoot: buildDeployment(
+      iframeFallbackSource,
+      join(fixtureRoot, 'deployment-iframe-fallback'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10bu. Same-scheme references resolve against the deployment.
+  const sameSchemeSource = buildSourceArtifact(join(fixtureRoot, 'source-same-scheme'));
+  writeFileSync(
+    join(sameSchemeSource, 'index.html'),
+    readFileSync(join(sameSchemeSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<img src="https:./missing-same-scheme.png"></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: sameSchemeSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sameSchemeSource,
+      deploymentRoot: buildDeployment(
+        sameSchemeSource,
+        join(fixtureRoot, 'deployment-same-scheme'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'same-scheme reference',
   );
 
   // 11. A local static server serves the verified deployment paths and bytes.
