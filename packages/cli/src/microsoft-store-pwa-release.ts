@@ -299,6 +299,43 @@ export function readMicrosoftStorePwaReleaseEvidence(
  * release revision only covers the precached payload. Symbolic links are
  * rejected so callers cannot be tricked into hashing files outside the root.
  */
+/** Enumerate only precache URLs without reading any payload bytes. */
+export function listPrecacheUrls(artifactRoot: string): readonly string[] {
+  const files: string[] = [];
+  const pendingDirectories = [artifactRoot];
+
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop();
+
+    if (directory === undefined) {
+      throw new Error('PWA artifact traversal lost its directory.');
+    }
+
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = resolve(directory, entry.name);
+
+      if (entry.isSymbolicLink()) {
+        throw new Error(`PWA artifact must not contain symbolic links: ${path}`);
+      }
+
+      if (entry.isDirectory()) {
+        pendingDirectories.push(path);
+      } else if (entry.isFile()) {
+        files.push(path);
+      }
+    }
+  }
+
+  return files
+    .filter((path) =>
+      !path.endsWith('.map')
+      && !path.endsWith(`${sep}pwa-release.json`)
+      && !path.endsWith(`${sep}service-worker.js`),
+    )
+    .map((path) => toPrecacheUrl(artifactRoot, path))
+    .sort(compareCodeUnits);
+}
+
 export function listPrecacheEntries(artifactRoot: string): readonly PrecacheEntry[] {
   const files: string[] = [];
   const pendingDirectories = [artifactRoot];

@@ -23,7 +23,7 @@ import {
 import {
   createMicrosoftStorePwaRevisionFromFiles,
   createMicrosoftStorePwaServiceWorker,
-  listPrecacheEntries,
+  listPrecacheUrls,
   readMicrosoftStorePwaReleaseEvidence,
 } from './microsoft-store-pwa-release.js';
 
@@ -359,7 +359,7 @@ function verifySourceArtifactSelfConsistency(
   }
 
   const enumeratedUrls = [
-    ...listPrecacheEntries(sourceRoot).map((entry) => entry.url),
+    ...listPrecacheUrls(sourceRoot),
     './pwa-release.json',
   ].sort();
   const recordedUrls = [...evidence.precacheUrls].sort();
@@ -572,10 +572,6 @@ function verifyIndexReferences(
     collectInlineCssReferences(styleBody[1] ?? '', cssReferences);
   }
 
-  for (const styleAttribute of rawHtml.matchAll(/\sstyle\s*=\s*"([^"]*)"/giu)) {
-    collectInlineCssReferences(styleAttribute[1] ?? '', cssReferences);
-  }
-
   const html = stripNonMarkupRanges(rawHtml);
 
   if (/<base\b/iu.test(html)) {
@@ -590,6 +586,7 @@ function verifyIndexReferences(
 
   const references: string[] = [...cssReferences];
   const metaRefreshContents: string[] = [];
+  const embeddedDocuments: string[] = [];
 
   // Attributes only exist on start tags; scanning raw text would treat prose
   // like `Set href="..."` as a reference. Extract within element start tags,
@@ -604,24 +601,50 @@ function verifyIndexReferences(
 
     // Tokenize real attribute name/value pairs first so quoted values of
     // unrelated attributes (title='See href="..."') never leak references.
+    let isMetaRefresh = false;
+    let metaContent: string | undefined;
+    let styleValue: string | undefined;
+
     for (const attribute of attributes.matchAll(
       /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
     )) {
       const name = (attribute[1] ?? '').toLowerCase();
+      const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
 
-      if (!resourceNames.includes(name) && name !== 'srcset') {
+      if (tagName === 'meta' && name === 'http-equiv' && value.trim().toLowerCase() === 'refresh') {
+        isMetaRefresh = true;
+      }
+
+      if (tagName === 'meta' && name === 'content') {
+        metaContent = value;
+      }
+
+      if (name === 'style') {
+        styleValue = value;
+      }
+
+      if (!resourceNames.includes(name) && name !== 'srcset' && name !== 'srcdoc') {
         continue;
       }
 
-      const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
+      if (name === 'srcdoc' && value.length > 0) {
+        // srcdoc embeds a document resolved relative to this one; scan its
+        // content for the same resource attributes.
+        embeddedDocuments.push(value.replaceAll('&quot;', '"').replaceAll('&amp;', '&'));
+        continue;
+      }
 
       if (name !== 'srcset' && value.length > 0) {
         references.push(value);
       }
+    }
 
-      if (name === 'meta-refresh-content' || (tagName === 'meta' && name === 'content')) {
-        metaRefreshContents.push(value);
-      }
+    if (isMetaRefresh && metaContent !== undefined) {
+      metaRefreshContents.push(metaContent);
+    }
+
+    if (styleValue !== undefined) {
+      collectInlineCssReferences(styleValue, cssReferences);
     }
 
     if (!/(?:^|\s)srcset\s*=/iu.test(attributes)) {
@@ -660,6 +683,16 @@ function verifyIndexReferences(
       if (/^[\d.]+[wx],?$/u.test(token)) {
         holdingUrl = false;
       }
+    }
+  }
+
+  // Embedded srcdoc documents resolve their resources against this
+  // deployment; scan them with the same tokenizer.
+  for (const document of embeddedDocuments) {
+    for (const match of document.matchAll(
+      /(?:^|\s)(?:href|src|poster)\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/giu,
+    )) {
+      references.push(match[1] ?? match[2] ?? match[3] ?? '');
     }
   }
 
@@ -775,6 +808,8 @@ function stripNonMarkupRanges(html: string): string {
   return html
     .replace(/<!--[\s\S]*?-->/gu, '')
     .replace(/<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/script\s*>/giu, '<script$1></script>')
+    .replace(/<textarea\b[^>]*>[\s\S]*?<\/textarea\s*>/giu, '<textarea></textarea>')
+    .replace(/<title\b[^>]*>[\s\S]*?<\/title\s*>/giu, '<title></title>')
     .replace(/<style\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/style\s*>/giu, '<style$1></style>');
 }
 
