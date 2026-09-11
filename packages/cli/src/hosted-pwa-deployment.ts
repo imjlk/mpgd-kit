@@ -597,7 +597,9 @@ function verifyIndexReferences(
     const tagName = (tag[1] ?? '').toLowerCase();
     const attributes = tag[2] ?? '';
     const resourceNames
-      = tagName === 'object' ? ['href', 'src', 'poster', 'data'] : ['href', 'src', 'poster'];
+      = tagName === 'object'
+        ? ['href', 'src', 'poster', 'data']
+        : ['href', 'src', 'poster', 'xlink:href'];
 
     // Tokenize real attribute name/value pairs first so quoted values of
     // unrelated attributes (title='See href="..."') never leak references.
@@ -781,13 +783,33 @@ function verifyIndexReferences(
   // Declared legal pages are deployment-promised documents; their local
   // references resolve against the page's own directory.
   for (const page of declaredLegalPages(deploymentRoot)) {
-    const pageHtml = stripNonMarkupRanges(readFileSync(join(deploymentRoot, page), 'utf8'));
+    const rawPageHtml = readFileSync(join(deploymentRoot, page), 'utf8');
+    const pageStyleReferences: string[] = [];
+
+    for (const styleBody of rawPageHtml.matchAll(
+      /<style\b(?:(?:"[^"]*"|'[^']*'|[^>"])*)>([\s\S]*?)<\/style\s*>/giu,
+    )) {
+      collectInlineCssReferences(styleBody[1] ?? '', pageStyleReferences);
+    }
+
+    for (const cssReference of pageStyleReferences) {
+      assertLocalReferenceResolves(
+        cssReference,
+        page.slice(0, -'index.html'.length),
+        deploymentPaths,
+        page,
+      );
+    }
+
+    const pageHtml = stripNonMarkupRanges(rawPageHtml);
 
     for (const tag of pageHtml.matchAll(/<([A-Za-z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gu)) {
       const tagName = (tag[1] ?? '').toLowerCase();
       const attributes = tag[2] ?? '';
       const resourceNames
-        = tagName === 'object' ? ['href', 'src', 'poster', 'data'] : ['href', 'src', 'poster'];
+        = tagName === 'object'
+          ? ['href', 'src', 'poster', 'data']
+          : ['href', 'src', 'poster', 'xlink:href'];
 
       for (const attribute of attributes.matchAll(
         /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
@@ -913,8 +935,8 @@ function assertLocalReferenceResolves(
     withoutQuery.startsWith('/') ? withoutQuery.slice(1) : `${fromDirectory}/${withoutQuery}`,
   );
 
-  if (normalized.endsWith('/')) {
-    normalized += 'index.html';
+  if (normalized.endsWith('/') || normalized === '.') {
+    normalized = normalized === '.' ? 'index.html' : `${normalized}index.html`;
   }
 
   if (normalized.startsWith('../') || normalized === '..' || posix.isAbsolute(normalized)) {
@@ -943,14 +965,18 @@ function collectEmbeddedDocumentReferences(
   document: string,
   references: string[],
 ): void {
-  const decoded = decodeHtmlReferences(document);
-  const stripped = stripNonMarkupRanges(decoded);
+  // The entry point already decoded the outer attribute once, matching the
+  // browser's single-pass attribute decoding; a second decode here would
+  // turn entity-escaped text into markup the browser never renders.
+  const stripped = stripNonMarkupRanges(document);
 
   for (const tag of stripped.matchAll(/<([A-Za-z][^\s/>]*)((?:"[^"]*"|'[^']*'|[^>"'])*)>/gu)) {
     const tagName = (tag[1] ?? '').toLowerCase();
     const attributes = tag[2] ?? '';
     const resourceNames
-      = tagName === 'object' ? ['href', 'src', 'poster', 'data'] : ['href', 'src', 'poster'];
+      = tagName === 'object'
+        ? ['href', 'src', 'poster', 'data']
+        : ['href', 'src', 'poster', 'xlink:href'];
 
     for (const attribute of attributes.matchAll(
       /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,

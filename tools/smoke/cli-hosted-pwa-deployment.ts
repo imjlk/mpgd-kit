@@ -1821,6 +1821,98 @@ try {
     'legal page control artifact reference',
   );
 
+  // 10bh. Legal-page style blocks are validated.
+  const legalStyleBlockDeployment = fixtureCopy(deploymentRoot, 'legal-style-block');
+  writeFileSync(
+    join(legalStyleBlockDeployment, 'privacy', 'index.html'),
+    "<!doctype html><style>body { background: url('./missing-style-block.png') }</style>",
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalStyleBlockDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /legal page privacy\/index\.html references a missing file/u,
+    'legal page style block reference',
+  );
+
+  // 10bi. Doubly escaped srcdoc stays text, not markup.
+  const doubleEscapeSource = buildSourceArtifact(join(fixtureRoot, 'source-double-escape'));
+  writeFileSync(
+    join(doubleEscapeSource, 'index.html'),
+    readFileSync(join(doubleEscapeSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<iframe srcdoc="&amp;lt;img src=./missing.png&amp;gt;"></iframe></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: doubleEscapeSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: doubleEscapeSource,
+    deploymentRoot: buildDeployment(
+      doubleEscapeSource,
+      join(fixtureRoot, 'deployment-double-escape'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10bj. Root links from legal pages resolve to the root index.
+  const legalRootLinkDeployment = fixtureCopy(deploymentRoot, 'legal-root-link');
+  writeFileSync(
+    join(legalRootLinkDeployment, 'privacy', 'index.html'),
+    '<!doctype html><a href="/">home</a>',
+  );
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: sourceRoot,
+    deploymentRoot: legalRootLinkDeployment,
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10bk. SVG xlink:href references are load-bearing.
+  const xlinkSource = buildSourceArtifact(join(fixtureRoot, 'source-xlink'));
+  writeFileSync(
+    join(xlinkSource, 'index.html'),
+    readFileSync(join(xlinkSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<svg><image xlink:href="./missing-xlink.png"></image></svg></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: xlinkSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: xlinkSource,
+      deploymentRoot: buildDeployment(
+        xlinkSource,
+        join(fixtureRoot, 'deployment-xlink'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'svg xlink:href reference',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
