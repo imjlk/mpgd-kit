@@ -666,7 +666,8 @@ function verifyIndexReferences(
     }
 
     const srcset = attributes.match(/(?:^|\s)srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
-    const candidates = srcset?.[1] ?? srcset?.[2] ?? srcset?.[3] ?? '';
+    const rawCandidates = srcset?.[1] ?? srcset?.[2] ?? srcset?.[3] ?? '';
+    const candidates = decodeHtmlReferences(rawCandidates);
 
     // WHATWG srcset tokenizing: whitespace-split tokens alternate between a
     // candidate URL and its descriptors; a numeric single-token value like
@@ -736,7 +737,9 @@ function verifyIndexReferences(
     let effectiveReference = reference;
 
     if (schemeSeparated !== null && schemeSeparated[1] !== undefined) {
-      if (schemeSeparated[1] === 'https' || schemeSeparated[1] === 'http') {
+      const scheme = schemeSeparated[1].toLowerCase();
+
+      if (scheme === 'https' || scheme === 'http') {
         const afterScheme = reference.slice(schemeSeparated[1].length + 1);
 
         if (afterScheme.startsWith('//')) {
@@ -1007,20 +1010,47 @@ function assertLocalReferenceResolves(
   const decoded = decodeHtmlReferences(reference).trim();
   const schemeSeparated = /^([a-z][a-z0-9+.-]*):/iu.exec(decoded);
 
-  if (
-    decoded.length === 0
-    || decoded.startsWith('#')
-    || decoded.startsWith('//')
-    || decoded.startsWith('data:')
-    || (schemeSeparated !== null && schemeSeparated[1] !== undefined)
-  ) {
+  if (decoded.length === 0 || decoded.startsWith('#') || decoded.startsWith('data:')) {
     return;
   }
 
-  const withoutQuery = decoded.split(/[?#]/u)[0] ?? decoded;
+  if (decoded.startsWith('//')) {
+    return;
+  }
+
+  let effective = decoded;
+
+  if (schemeSeparated !== null && schemeSeparated[1] !== undefined) {
+    const scheme = schemeSeparated[1].toLowerCase();
+
+    if (scheme === 'https' || scheme === 'http') {
+      const afterScheme = decoded.slice(schemeSeparated[1].length + 1);
+
+      if (afterScheme.startsWith('//')) {
+        return;
+      }
+
+      effective = afterScheme;
+    } else {
+      return;
+    }
+  }
+
+  let withoutQuery = effective.split(/[?#]/u)[0] ?? effective;
 
   if (withoutQuery.length === 0) {
     return;
+  }
+
+  try {
+    withoutQuery = withoutQuery
+      .split('/')
+      .map((segment) => decodeURIComponent(segment))
+      .join('/');
+  } catch {
+    throw new Error(
+      `The legal page ${page} references a malformed percent-encoded URL: ${reference}`,
+    );
   }
 
   const fromDirectory = pageDirectory.length > 0 ? `./${pageDirectory}` : '.';
@@ -1351,6 +1381,11 @@ function verifyCloudflarePagesHeaders(
         requestPath: directoryUrl,
         expected: freshCacheControl,
         label: `${file.path} directory URL`,
+      });
+      requirements.push({
+        requestPath: `/${file.path}`,
+        expected: freshCacheControl,
+        label: `${file.path} index URL`,
       });
     }
   }

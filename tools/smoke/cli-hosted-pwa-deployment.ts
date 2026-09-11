@@ -2188,6 +2188,113 @@ try {
     'same-scheme reference',
   );
 
+  // 10bv. Uppercase schemes resolve as same-scheme.
+  const upperSchemeSource = buildSourceArtifact(join(fixtureRoot, 'source-upper-scheme'));
+  writeFileSync(
+    join(upperSchemeSource, 'index.html'),
+    readFileSync(join(upperSchemeSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<img src="HTTPS:./missing-upper-scheme.png"></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: upperSchemeSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: upperSchemeSource,
+      deploymentRoot: buildDeployment(
+        upperSchemeSource,
+        join(fixtureRoot, 'deployment-upper-scheme'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file/u,
+    'uppercase scheme reference',
+  );
+
+  // 10bw. Legal-page same-scheme and percent-encoded references resolve.
+  const legalEncodedDeployment = fixtureCopy(deploymentRoot, 'legal-encoded');
+  writeFileSync(
+    join(legalEncodedDeployment, 'privacy', 'index.html'),
+    '<!doctype html><img src="https:./missing-legal-scheme.png"><img src="/icons/icon%2D512.png">',
+  );
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalEncodedDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /legal page privacy\/index\.html references a missing file/u,
+    'legal page same-scheme reference',
+  );
+  writeFileSync(
+    join(legalEncodedDeployment, 'privacy', 'index.html'),
+    '<!doctype html><img src="/icons/icon%2D512.png">',
+  );
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: sourceRoot,
+    deploymentRoot: legalEncodedDeployment,
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10bx. Entity-encoded srcset separators decode before tokenizing.
+  const entitySrcsetSource = buildSourceArtifact(join(fixtureRoot, 'source-entity-srcset'));
+  writeFileSync(
+    join(entitySrcsetSource, 'index.html'),
+    readFileSync(join(entitySrcsetSource, 'index.html'), 'utf8').replace(
+      '</body>',
+      '<img srcset="./icons/icon-512.png&#32;1x"></body>',
+    ),
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: entitySrcsetSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-42',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: entitySrcsetSource,
+    deploymentRoot: buildDeployment(
+      entitySrcsetSource,
+      join(fixtureRoot, 'deployment-entity-srcset'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10by. Legal index URLs require fresh policy alongside directory URLs.
+  const legalIndexHeaders = validHeaders.replace(
+    '/privacy/*\n  Cache-Control: public, max-age=0, must-revalidate',
+    '/privacy/*\n  Cache-Control: public, max-age=0, must-revalidate\n\n/privacy/index.html\n  Cache-Control: public, max-age=31536000, immutable',
+  );
+  const legalIndexDeployment = fixtureCopy(deploymentRoot, 'legal-index-immutable');
+  writeFileSync(join(legalIndexDeployment, '_headers'), legalIndexHeaders);
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: sourceRoot,
+      deploymentRoot: legalIndexDeployment,
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /comma-joined Cache-Control values/u,
+    'legal index URL immutable policy',
+  );
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
