@@ -1469,6 +1469,145 @@ const targetCommand = defineI18n({
         );
       },
     }),
+    'preview-versions': defineI18n({
+      name: 'preview-versions',
+      description:
+        'Preview candidate platform version numbers for a release ledger without reserving them.',
+      resource: commandResource(
+        {
+          en: 'Preview candidate platform version numbers for a release ledger without reserving them.',
+          ko: '릴리스 원장에 대한 플랫폼 버전 번호 후보를 예약 없이 미리 확인합니다.',
+        },
+        {
+          'ledger-file': {
+            en: 'Path to the platform version ledger JSON file (read-only).',
+            ko: '플랫폼 버전 원장 JSON 파일 경로(읽기 전용).',
+          },
+          'plan-file': {
+            en: 'Optional prepared release plan JSON to revalidate and extend.',
+            ko: '재검증하고 확장할 선택적 준비된 릴리스 계획 JSON.',
+          },
+          'game-id': {
+            en: 'Game identifier used in the release buildId.',
+            ko: '릴리스 buildId에 사용할 게임 식별자.',
+          },
+          'game-version': {
+            en: 'Final game SemVer for the release.',
+            ko: '릴리스의 최종 게임 SemVer.',
+          },
+          'source-git-sha': {
+            en: 'Full 40-character Git SHA of the game source.',
+            ko: '게임 소스의 전체 40자 Git SHA.',
+          },
+          'kit-git-sha': {
+            en: 'Full 40-character Git SHA of the mpgd-kit checkout.',
+            ko: 'mpgd-kit 체크아웃의 전체 40자 Git SHA.',
+          },
+          'target-config-digest': {
+            en: '64-character SHA-256 digest of the game-owned target configuration.',
+            ko: '게임 소유 타깃 설정의 64자 SHA-256 다이제스트.',
+          },
+          targets: {
+            en: 'Comma-separated targets, optionally "name:hosted-content-only" for microsoft-store.',
+            ko: '쉼표로 구분된 타깃. microsoft-store는 "name:hosted-content-only" 지정 가능.',
+          },
+          json: {
+            en: 'Emit the candidate allocation as JSON.',
+            ko: '후보 할당을 JSON으로 출력합니다.',
+          },
+          'kit-path': {
+            en: 'Path to the mpgd-kit checkout.',
+            ko: 'mpgd-kit 체크아웃 경로.',
+          },
+        },
+      ),
+      args: {
+        'ledger-file': {
+          type: 'string',
+          required: true,
+          description: 'Path to the platform version ledger JSON file (read-only).',
+        },
+        'plan-file': {
+          type: 'string',
+          required: false,
+          description: 'Optional prepared release plan JSON to revalidate and extend.',
+        },
+        'game-id': {
+          type: 'string',
+          required: true,
+          description: 'Game identifier used in the release buildId.',
+        },
+        'game-version': {
+          type: 'string',
+          required: true,
+          description: 'Final game SemVer for the release.',
+        },
+        'source-git-sha': {
+          type: 'string',
+          required: true,
+          description: 'Full 40-character Git SHA of the game source.',
+        },
+        'kit-git-sha': {
+          type: 'string',
+          required: true,
+          description: 'Full 40-character Git SHA of the mpgd-kit checkout.',
+        },
+        'target-config-digest': {
+          type: 'string',
+          required: true,
+          description: '64-character SHA-256 digest of the game-owned target configuration.',
+        },
+        targets: {
+          type: 'string',
+          required: true,
+          description: 'Comma-separated targets, optionally "name:hosted-content-only" for microsoft-store.',
+        },
+        json: {
+          type: 'boolean',
+          required: false,
+          description: 'Emit the candidate allocation as JSON.',
+        },
+        'kit-path': {
+          type: 'string',
+          required: false,
+          description: 'Path to the mpgd-kit checkout.',
+        },
+      },
+      run: (ctx) => {
+        const kitPath = resolveKitPathForTarget(ctx.values);
+        const planFile = readOptionalString(ctx.values['plan-file']);
+        const env: NodeJS.ProcessEnv = {
+          ...process.env,
+          MPGD_KIT_PATH: kitPath,
+          MPGD_PREVIEW_LEDGER_FILE: path.resolve(
+            readRequiredCliOption(ctx.values['ledger-file'], '--ledger-file'),
+          ),
+          MPGD_PREVIEW_GAME_ID: readRequiredCliOption(ctx.values['game-id'], '--game-id'),
+          MPGD_PREVIEW_GAME_VERSION: readRequiredCliOption(ctx.values['game-version'], '--game-version'),
+          MPGD_PREVIEW_SOURCE_GIT_SHA: readRequiredCliOption(
+            ctx.values['source-git-sha'],
+            '--source-git-sha',
+          ),
+          MPGD_PREVIEW_KIT_GIT_SHA: readRequiredCliOption(ctx.values['kit-git-sha'], '--kit-git-sha'),
+          MPGD_PREVIEW_TARGET_CONFIG_DIGEST: readRequiredCliOption(
+            ctx.values['target-config-digest'],
+            '--target-config-digest',
+          ),
+          MPGD_PREVIEW_TARGETS: readRequiredCliOption(ctx.values.targets, '--targets'),
+          // Always define the optional toggles so ambient values from the
+          // caller's environment cannot override absent flags.
+          MPGD_PREVIEW_PLAN_FILE: planFile === undefined ? '' : path.resolve(planFile),
+          MPGD_PREVIEW_JSON: ctx.values.json === true ? '1' : '',
+        };
+
+        if (ctx.values.json !== true) {
+          console.log('[mpgd] target preview-versions (read-only candidates, not reservations)');
+        }
+        // --silent keeps pnpm's script echo out of stdout so the JSON document
+        // is machine-readable apart from the framework banner.
+        runPnpm(['--silent', 'preview:platform-versions'], env);
+      },
+    }),
     'generate-package': defineI18n({
       name: 'generate-package',
       description: 'Generate a packaged target artifact with an external platform service.',

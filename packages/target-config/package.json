@@ -40,7 +40,7 @@
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix",
-    "test": "cd ../.. && node tools/run-ttsx.mjs packages/target-config/test/target-config-smoke.ts"
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/target-config/test/target-config-smoke.ts && node tools/run-ttsx.mjs packages/target-config/test/platform-version-allocation-smoke.ts"
   },
   "dependencies": {
     "@mpgd/catalog": "workspace:*",
