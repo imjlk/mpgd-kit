@@ -53,6 +53,18 @@ const cloudflarePagesHostFileAllowlist = new Set([
   'legal-site.json',
 ]);
 
+/** SVG presentation attributes whose url() values load external resources. */
+const svgUrlAttributeNames = new Set([
+  'fill',
+  'stroke',
+  'filter',
+  'clip-path',
+  'mask',
+  'marker-start',
+  'marker-mid',
+  'marker-end',
+]);
+
 /** Control artifacts Pages consumes instead of serving to browsers. */
 const pagesControlArtifactNames = new Set([
   '_worker.js',
@@ -721,6 +733,62 @@ function verifyIndexReferences(
     }
   }
 
+  // Referenced local stylesheets carry their own url()/@import targets;
+  // resolve them relative to each stylesheet's directory.
+  const stylesheetReferences: string[] = [];
+
+  for (const reference of [...referenced]) {
+    if (!reference.endsWith('.css') || !deploymentPaths.has(reference)) {
+      continue;
+    }
+
+    const cssContent = readFileSync(join(deploymentRoot, reference), 'utf8');
+    const cssDir = reference.includes('/')
+      ? `./${reference.slice(0, reference.lastIndexOf('/'))}`
+      : '.';
+
+    for (const cssUrl of cssContent.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/giu)) {
+      const raw = (cssUrl[2] ?? '').trim();
+
+      if (raw.length === 0 || raw.startsWith('data:') || raw.startsWith('#')) {
+        continue;
+      }
+
+      const scheme = /^([a-z][a-z0-9+.-]*):/iu.exec(raw);
+
+      if (scheme !== null && scheme[1] !== undefined && scheme[1].toLowerCase() !== 'https' && scheme[1].toLowerCase() !== 'http') {
+        continue;
+      }
+
+      const schemeText = scheme?.[1] ?? '';
+      let cssPath = scheme !== null ? raw.slice(schemeText.length + 1) : raw;
+
+      if (cssPath.startsWith('//')) {
+        continue;
+      }
+
+      cssPath = cssPath.split('?')[0]?.split('#')[0] ?? cssPath;
+      const cssTarget = cssPath.startsWith('/') ? cssPath.slice(1) : `${cssDir}/${cssPath}`;
+      const resolved = posix.normalize(cssTarget);
+
+      if (!resolved.startsWith('../')) {
+        stylesheetReferences.push(resolved);
+      }
+    }
+
+    for (const importMatch of cssContent.matchAll(/@import\s+(['"])([^'"]+)\1/giu)) {
+      const raw = (importMatch[2] ?? '').trim();
+
+      if (raw.length > 0 && !raw.startsWith('/') && !raw.startsWith('data:')) {
+        stylesheetReferences.push(posix.normalize(`${cssDir}/${raw.split('?')[0] ?? raw}`));
+      }
+    }
+  }
+
+  for (const stylesheetReference of stylesheetReferences) {
+    referenced.add(stylesheetReference);
+  }
+
   for (const rawReference of references) {
     const reference = decodeHtmlReferences(rawReference).trim();
     const schemeSeparated = /^([a-z][a-z0-9+.-]*):/iu.exec(reference);
@@ -1137,6 +1205,11 @@ function collectEmbeddedDocumentReferences(
         continue;
       }
 
+      if (svgUrlAttributeNames.has(name) && value.includes('url(')) {
+        collectInlineCssReferences(decodeHtmlReferences(value), references);
+        continue;
+      }
+
       if (!resourceNames.includes(name) && name !== 'srcset' && name !== 'srcdoc') {
         continue;
       }
@@ -1217,10 +1290,16 @@ function collectInlineCssReferences(html: string, references: string[]): void {
 /** Drop comments, script bodies, and style bodies from HTML before scanning. */
 /** Strip scripts and HTML comments while keeping style blocks intact. */
 function stripScriptsAndComments(html: string): string {
-  return html.replace(/<!--[\s\S]*?-->/gu, '').replace(
-    /<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/script\s*>/giu,
-    '',
-  );
+  return html
+    .replace(/<!--[\s\S]*?-->/gu, '')
+    .replace(
+      /<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/script\s*>/giu,
+      '',
+    )
+    .replace(
+      /<template\b(?:(?:"[^"]*"|'[^']*'|[^>"]))*>[\s\S]*?<\/template\s*>/giu,
+      '',
+    );
 }
 
 function stripNonMarkupRanges(html: string): string {
@@ -1228,6 +1307,10 @@ function stripNonMarkupRanges(html: string): string {
     .replace(/<!--[\s\S]*?-->/gu, '')
     .replace(/<script\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/script\s*>/giu, '<script$1></script>')
     .replace(/<textarea\b[^>]*>[\s\S]*?<\/textarea\s*>/giu, '<textarea></textarea>')
+    .replace(
+      /<template\b(?:(?:"[^"]*"|'[^']*'|[^>"]))*>[\s\S]*?<\/template\s*>/giu,
+      '<template></template>',
+    )
     .replace(/<title\b[^>]*>[\s\S]*?<\/title\s*>/giu, '<title></title>')
     .replace(/<style\b((?:"[^"]*"|'[^']*'|[^>"'])*)>[\s\S]*?<\/style\s*>/giu, '<style$1></style>');
 }
