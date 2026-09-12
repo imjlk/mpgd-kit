@@ -25,7 +25,6 @@ fixed = [
 # dependency bumps changing their requested SemVer levels.
 linked = [
   ["npm/@mpgd/adapter-verse8"],
-  ["npm/@mpgd/input-controls"],
   ["npm/@mpgd/runtime-diagnostics"],
   ["npm/@mpgd/tutorial"],
 ]
