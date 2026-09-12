@@ -1,3 +1,4 @@
-export * from './random';
-export * from './scoring';
-export * from './session';
+export * from './joystick.js';
+export * from './random.js';
+export * from './scoring.js';
+export * from './session.js';

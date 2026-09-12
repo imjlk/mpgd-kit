@@ -1,4 +1,4 @@
-import { calculateScore, type ScoreBreakdown } from './scoring';
+import { calculateScore, type ScoreBreakdown } from './scoring.js';
 
 export interface GameSession {
   readonly id: string;
