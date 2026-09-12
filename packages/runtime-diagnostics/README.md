@@ -245,8 +245,8 @@ of diagnostic reports.
 
 ## Package status
 
-This package is currently `private: true` and not published. It becomes
-publishable when it has an initial local npm registration under the
-maintainer's auth, a `.sampo/config.toml` release-group entry, and npm
-Trusted Publishing/OIDC configured for the release workflow; until then it
-must not be listed as a required dependency of the generated game starter.
+Published to npm as `@mpgd/runtime-diagnostics@0.1.0` via an initial local
+registration under the maintainer's auth, with a `.sampo/config.toml`
+release-group entry for automated releases. Subsequent versions ship through
+Sampo changesets once the package's npm Trusted Publishing/OIDC entry for
+`.github/workflows/release.yml` is registered on npmjs.com.

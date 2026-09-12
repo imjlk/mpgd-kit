@@ -1,7 +1,6 @@
 {
   "name": "@mpgd/runtime-diagnostics",
   "version": "0.1.0",
-  "private": true,
   "description": "Engine-independent frame hitch recording, cause estimation, and bounded performance snapshots for headless game diagnostics.",
   "license": "MIT",
   "repository": {
@@ -33,6 +32,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "ttsc --noEmit",
     "test": "cd ../.. && node tools/run-ttsx.mjs packages/runtime-diagnostics/src/index.test.ts",
