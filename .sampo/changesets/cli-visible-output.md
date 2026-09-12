@@ -9,3 +9,5 @@ Make repeated offline-playtest packages byte-stable by minifying identifiers aft
 Restore offline inlining for assets assigned to native elements created with document.createElement, accounting for the code mask retaining a string literal opening quote while preserving native-receiver and static-argument checks.
 
 Remove only evidence files or symbolic links when cleaning failed Microsoft Store acceptance output. This avoids leaving stale reports when a directory link causes non-recursive rmSync to fail, while preserving the linked target.
+
+Resolve the existing game root canonically before deriving managed Microsoft Store script paths, so initialization through a linked parent remains idempotent with game creation.
