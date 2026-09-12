@@ -1,0 +1,47 @@
+{
+  "name": "@mpgd/runtime-diagnostics",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Engine-independent frame hitch recording, cause estimation, and bounded performance snapshots for headless game diagnostics.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/runtime-diagnostics"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "game-development",
+    "performance",
+    "diagnostics"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "test": "cd ../.. && node tools/run-ttsx.mjs packages/runtime-diagnostics/src/index.test.ts",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "devDependencies": {
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2"
+  }
+}
