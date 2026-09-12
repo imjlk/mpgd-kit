@@ -13,6 +13,8 @@ import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
+const packageManager = readJson(join(repoRoot, 'package.json')).packageManager;
+assert.equal(typeof packageManager, 'string');
 const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-tutorial-package-'));
 const consumerRoot = join(fixtureRoot, 'consumer');
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
@@ -74,6 +76,7 @@ try {
     name: 'mpgd-tutorial-package-smoke',
     private: true,
     type: 'module',
+    packageManager,
     dependencies: {
       '@mpgd/platform': platformDependency,
       '@mpgd/tutorial': fileDependency(tutorialTarball),
