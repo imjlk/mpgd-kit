@@ -75,6 +75,53 @@ function audioSink(initial = false) {
 const gameplayChannels = ['simulation', 'gameplay-input'] as const;
 
 describe('Phaser scene execution binding (headless fakes)', () => {
+  it.each(['dispose', 'shutdown'] as const)('retries an initial %s audio cleanup failure without retaining listeners', (mode) => {
+    const controller = createGameExecutionController();
+    const gameplay = fakeScene();
+    const audio = audioSink();
+    const binding = bindPhaserGameScene({
+      controller, scene: gameplay.scene, audio,
+      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+    });
+    controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
+    const setMuted = audio.setMuted.getMockImplementation();
+    audio.setMuted.mockImplementationOnce(() => {
+      throw new Error('cleanup failed'); });
+    if (mode === 'shutdown') {
+      gameplay.sys.events.emit('shutdown');
+    } else {
+      binding.dispose();
+    }
+    expect(audio.getMuted()).toBe(true);
+    expect(gameplay.sys.events.listenerCount('shutdown')).toBe(0);
+    audio.setMuted.mockImplementation((value) => {
+      setMuted?.(value); });
+    binding.dispose();
+    expect(audio.getMuted()).toBe(false);
+    const calls = audio.setMuted.mock.calls.length;
+    binding.dispose();
+    expect(audio.setMuted).toHaveBeenCalledTimes(calls);
+    expect(gameplay.sys.resume).not.toHaveBeenCalled();
+  });
+
+  it('never retries failed audio cleanup after terminal runtime destruction', () => {
+    const controller = createGameExecutionController();
+    const gameplay = fakeScene();
+    const audio = audioSink();
+    const binding = bindPhaserGameScene({
+      controller, scene: gameplay.scene, audio,
+      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+    });
+    controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
+    audio.setMuted.mockImplementationOnce(() => {
+      throw new Error('cleanup failed'); });
+    binding.dispose();
+    const calls = audio.setMuted.mock.calls.length;
+    controller.destroy();
+    binding.dispose();
+    expect(audio.setMuted).toHaveBeenCalledTimes(calls);
+  });
+
   it.each(['notification', 'dispose'] as const)('retries a failed owned unmute on %s', (retry) => {
     const controller = createGameExecutionController();
     const gameplay = fakeScene();
