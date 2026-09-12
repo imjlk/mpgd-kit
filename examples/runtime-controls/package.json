@@ -7,12 +7,14 @@
     "dev": "vite",
     "build": "ttsc --noEmit && vite build",
     "check": "ttsc --noEmit",
-    "test:browser": "node test/browser.mjs"
+    "test:browser": "node test/browser.mjs && node test/actions.mjs"
   },
   "dependencies": {
     "@mpgd/game-runtime": "workspace:*",
     "@mpgd/phaser-game-runtime": "workspace:*",
-    "phaser": "4.2.0"
+    "phaser": "4.2.0",
+    "@mpgd/game-services": "workspace:*",
+    "@mpgd/platform": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
