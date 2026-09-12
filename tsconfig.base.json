@@ -35,6 +35,7 @@
       "@mpgd/catalog/*": ["./packages/catalog/*"],
       "@mpgd/game-runtime/platform": ["./packages/game-runtime/src/platform/index.ts"],
       "@mpgd/game-runtime/ui": ["./packages/game-runtime/src/ui/index.ts"],
+      "@mpgd/game-runtime/actions": ["./packages/game-runtime/src/actions/index.ts"],
       "@mpgd/game-services/*": ["./packages/game-services/src/*"],
       "@mpgd/platform/*": ["./packages/platform/src/*"],
       "@mpgd/tutorial": ["./packages/tutorial/src/index.ts"],

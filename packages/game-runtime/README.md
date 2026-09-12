@@ -168,3 +168,112 @@ const lifecycleBinding = bindGameLifecycle({
 // A later source resume can release this binding's conservative startup block.
 lifecycleBinding.dispose();
 ```
+
+## Purchase and rewarded-ad actions
+
+`@mpgd/game-runtime/actions` provides `createGameActionCoordinator`,
+`createPurchaseActionController` and `createRewardedAdActionController`. Inject the
+existing `GameServicesClient` (or its DOM-free `GameServicesOperationClient` port).
+The controllers call only `purchase` and `claimRewardedAd`; they do not call an SDK,
+verify a receipt, retry a transaction or grant local currency.
+
+```ts
+import { createGameExecutionController } from '@mpgd/game-runtime';
+import { createGameActionCoordinator } from '@mpgd/game-runtime/actions';
+import { createGameUiBridge } from '@mpgd/game-runtime/ui';
+
+// Application lifetime: one coordinator per runtime/client/player context.
+const execution = createGameExecutionController();
+const coordinator = createGameActionCoordinator({ execution, client });
+const purchase = coordinator.createPurchaseController();
+const ui = createGameUiBridge<string, never, string>({ initialSnapshot: 'idle' });
+const screen = ui.createScope();
+const view = purchase.bindScope(screen, {
+  snapshot: (value) => value.status,
+  event: (value) => `purchase:${value.status}`,
+});
+const result = view.execute({ productId: 'example', source: 'shop', idempotencyKey: suppliedKey });
+screen.dispose(); // Detaches this screen; the service invocation and its block continue.
+await result; // The owner also retains its safe completion snapshot through getSnapshot().
+```
+
+```mermaid
+flowchart TD
+  App[Application / player context] --> Coordinator[Shared execution coordinator]
+  Coordinator --> Purchase[Purchase operation owner]
+  Coordinator --> Ad[Rewarded-ad operation owner]
+  Purchase --> A[Screen A scope]
+  Purchase --> B[Screen B scope]
+  Coordinator --> Client[Existing GameServicesClient]
+  Client --> Ledger[Existing platform and backend ledger flow]
+```
+
+An owner outlives its views. `subscribe` observes safe owner snapshots without an
+initial delivery. `bindScope` projects only operations explicitly executed or joined
+through that view; merely opening screen B never subscribes B to screen A's old
+completion. Scope disposal removes UI subscriptions and commit authority. It does
+not cancel the service promise. Owner `dispose` rejects new executions and removes
+owner UI listeners, but preserves the eventual snapshot of an already started
+operation. Coordinator disposal prevents new work across its owners. Neither
+kind of disposal claims to roll back an external purchase.
+
+| State | Meaning and handling |
+| --- | --- |
+| `idle` | No operation observed by this owner. |
+| `running` | Local service call in flight; optional `progress` is a real service observation. |
+| `granted` | Existing service result reports a grant. Read authoritative economy state through existing APIs. |
+| `cancelled` (purchase), `skipped` (ad) | Preserve the service outcome. No automatic retry. |
+| `pending` (purchase) | Unresolved transaction; local gameplay block ends, reconciliation is still required. |
+| `unavailable` (ad) | Service cannot provide this ad. |
+| `rejected` / `failed` | Preserve these distinct service outcomes; no local grant and no automatic retry. |
+| `exception` | Call threw; final transaction result is unknown. Original error rejects the returned Promise, not the UI snapshot. |
+
+Snapshots contain only kind, status, coordinator-local operation ID and whitelisted
+progress fields. They never contain receipt/evidence, raw server bodies, ledger
+objects, player identity or provider error text. Progress does not prove grant or
+native UI visibility/closure. A legacy client that ignores options stays `running`
+until its result settles. Listener and projection errors, including rejected async
+listeners, are isolated through `onObserverError`.
+
+Each local invocation owns a simulation/gameplay-input token from before the service
+call until settlement. Settings/background tokens remain independent. No timer,
+SDK-visibility guess, polling or `Promise.race` releases a block early. A `pending`
+result releases this local block but is not considered a cancelled transaction.
+
+The coordinator serializes purchases and ads for its injected client. Identical
+in-flight keys/inputs share the exact Promise across recreated owners. A key reused
+with a different kind, product, source or placement rejects with `key-conflict`.
+Different in-flight work rejects with `busy`. The most recent completed operation
+can be explicitly observed again through the retained Promise; earlier completed
+keys reject with `already-completed` and are never re-invoked.
+
+Only input fingerprints are remembered, at most `maxRememberedKeys` (default 1024,
+allowed 1–10000). Keys are never evicted silently: reaching the bound rejects new
+keys with `history-full`. The coordinator retains at most one completed result
+Promise, not an unbounded result/event log. It is scoped to the current process;
+server ledger idempotency remains authoritative. Creating another coordinator or
+restarting the process is outside this guarantee. Do not recreate it per screen or
+to bypass unresolved work, and do not generate a new key for each UI retry.
+
+After `pending` or an invoked operation exception, new keys reject with
+`reconciliation-required`. The current client has no recovery/requery port, so this
+version deliberately provides no reset/retry/polling API. Integrate the existing
+provider/backend recovery policy outside these UI actions before starting a new
+application coordination session. Do not treat a retryable hint as permission to
+repurchase. Input/preflight scheduling rejections occur before the service call and
+do not invent a business outcome.
+
+Packaging: `/actions` uses **type-only** imports from `@mpgd/game-services/operations`.
+The workspace dependency ensures declarations/build order; neither the basic
+runtime import nor actions import loads the service implementation, Phaser or DOM.
+Consumers use the repository-standard `skipLibCheck` for third-party typia
+ambient declarations; the headless consumer smoke supplies only ES2022 globals.
+This package remains private. Future publication requires initial npm registration,
+OIDC, and the game-services release containing `/operations` and progress options
+(planned 0.15.0). No generated game gains a dependency on this unpublished package.
+
+The owner that reserves an operation controls its pre-invocation startup permission.
+A reentrant same-key joiner cannot cancel that owner's startup by disposing itself.
+If owner/runtime disposal prevents any client invocation, the flight rejects with
+a scheduling error, resets its observed state to `idle`, and emits no business
+completion/exception event. An invoked client failure remains `exception`.

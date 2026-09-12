@@ -415,9 +415,15 @@ importers:
       '@mpgd/game-runtime':
         specifier: workspace:*
         version: link:../../packages/game-runtime
+      '@mpgd/game-services':
+        specifier: workspace:*
+        version: link:../../packages/game-services
       '@mpgd/phaser-game-runtime':
         specifier: workspace:*
         version: link:../../packages/phaser-game-runtime
+      '@mpgd/platform':
+        specifier: workspace:*
+        version: link:../../packages/platform
       phaser:
         specifier: 4.2.0
         version: 4.2.0
@@ -666,6 +672,10 @@ importers:
         version: 7.0.2
 
   packages/game-runtime:
+    dependencies:
+      '@mpgd/game-services':
+        specifier: workspace:*
+        version: link:../game-services
     devDependencies:
       ttsc:
         specifier: 0.18.4

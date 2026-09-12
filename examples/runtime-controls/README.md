@@ -34,3 +34,19 @@ The fixture exposes `render_game_to_text()` and `advanceTime(ms)` for the
 `develop-web-game` tool loop. Advancing manually stops automatic RAF and steps
 the engine; reload to return to ordinary live play. Business operations and
 their UI scopes are added by the later action-controller PR.
+
+The service-operation panel uses a fake gateway/backend injected into the existing
+`createGameServicesClient`. Outcomes are deterministic: choose granted/rejected/
+exception, start an operation, then click **Complete server response**. Pending
+returns locally without verification. The **New action key** button represents an
+explicit distinct intent and cannot bypass unresolved coordinator state.
+
+**Close UI / open new screen** disposes only the view scope. An in-flight backend
+response still completes, the operation owner retains the result, and the new
+screen remains idle without receiving the old event. Purchase/ad click counters
+show that duplicate clicks share one client/platform/server operation. Settings
+and background controls continue to exercise independent gameplay blocks.
+
+`pnpm test:browser` runs both the original lifecycle fixture and operation scenarios
+in Chromium. All endpoints, IDs and responses are local fixture values. This example
+does not open native payment/ad UI or grant any real or simulated game currency.

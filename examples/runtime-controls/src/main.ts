@@ -5,6 +5,8 @@ import { bindGameLifecycle, type GameLifecycleState } from '@mpgd/game-runtime/p
 import { createGameUiBridge } from '@mpgd/game-runtime/ui';
 import { bindPhaserGameScene } from '@mpgd/phaser-game-runtime';
 
+import { createMonetizationFixture } from './monetization';
+
 type Command = 'settings' | 'background' | 'foreground' | 'rendering' | 'input' | 'restart';
 const metrics = {
   gameplayUpdates: 0,
@@ -25,6 +27,7 @@ function report(error: unknown): void {
   }
 }
 const controller = createGameExecutionController({ onListenerError: report });
+const monetization = createMonetizationFixture(controller);
 const pauses = new Set<() => void>();
 const resumes = new Set<() => void>();
 let lifecycleState: GameLifecycleState = new URLSearchParams(location.search).has('inactive')
@@ -271,6 +274,7 @@ function state() {
   const gameplay = tornDown ? undefined : game.scene.getScene('Gameplay');
   return {
     ready,
+    monetization: monetization.state(),
     coordinateSystem: '1000x620 canvas, origin top-left, x right, y down',
     ...metrics,
     settingsOpen: bridge.getSnapshot().settingsOpen,
@@ -303,6 +307,7 @@ const fixture = {
     ready = false;
     // Terminate coordination before cleanup releases any lifecycle/settings blocks.
     controller.destroy();
+    monetization.dispose();
     lifecycle.dispose();
     bridge.destroy();
     game.destroy(true);

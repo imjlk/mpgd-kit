@@ -20,6 +20,10 @@
     "./platform": {
       "types": "./dist/platform/index.d.ts",
       "default": "./dist/platform/index.js"
+    },
+    "./actions": {
+      "types": "./dist/actions/index.d.ts",
+      "default": "./dist/actions/index.js"
     }
   },
   "files": [
@@ -37,5 +41,8 @@
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
     "vitest": "^4.0.0"
+  },
+  "dependencies": {
+    "@mpgd/game-services": "workspace:*"
   }
 }
