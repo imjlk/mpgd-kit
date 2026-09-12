@@ -80,6 +80,15 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
     }
   }
 
+  let terminalCleanup = false;
+  function restoreAudio(): void {
+    if (ownedAudio && audio !== undefined) {
+      // A throwing setter leaves cleanup ownership pending for an explicit retry.
+      audio.setMuted(false);
+      ownedAudio = false;
+    }
+  }
+
   function restore(resumeScene: boolean): void {
     const shouldResume = resumeScene && ownedPause;
     ownedPause = false;
@@ -95,10 +104,7 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
       });
     }
     ownedVisibility = false;
-    if (ownedAudio) {
-      attempt(() => audio?.setMuted(false));
-    }
-    ownedAudio = false;
+    attempt(restoreAudio);
     // Resume last: its listeners may synchronously restart the scene and install a new binding.
     if (shouldResume && !sceneEnded) {
       attempt(() => {
@@ -111,9 +117,18 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
 
   function dispose(mode: 'restore' | 'shutdown' | 'terminal' = 'restore'): void {
     if (disposed) {
+      // Retry only unresolved sink cleanup, never scene controls or terminal teardown.
+      if (mode === 'restore' && !terminalCleanup && ownedAudio) {
+        attempt(() => {
+          if (controller.getSnapshot().status === 'active') {
+            restoreAudio();
+          }
+        });
+      }
       return;
     }
     disposed = true;
+    terminalCleanup = mode === 'terminal';
     attempt(unsubscribe);
     // Keep shutdown observation installed while restoration calls into consumer/engine code.
     if (mode !== 'terminal') {

@@ -93,3 +93,10 @@ This package remains private pending initial npm registration and Trusted
 Publishing/OIDC setup. It is not a generated-game dependency and does not modify
 `phaser-minigame-runtime`'s native compatibility layer. No changeset is required
 for these private-only contracts.
+
+If the injected audio sink throws while unmuting during disposal/shutdown, scene
+listeners still detach. The handle retains only its failed audio cleanup and a
+subsequent explicit `dispose()` retries it while the runtime is active. Successful
+cleanup stays idempotent; terminal runtime destruction never retries an unmute.
+Complete this explicit cleanup before reusing the same sink for another binding,
+as required by the single-writer ownership contract. No retry timer is installed.
