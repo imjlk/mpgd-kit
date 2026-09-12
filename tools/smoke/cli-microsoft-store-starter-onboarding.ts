@@ -437,7 +437,7 @@ try {
       output: 'artifacts/microsoft-store',
     };
     writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
-  }, /must use the game root, Store artifact directory, browser adapter/u);
+  }, /must use the game root, Store artifact directory, a supported Store adapter/u);
 
   assertConflictIsAtomic('target-game-app-escape', (gameRoot) => {
     const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));
@@ -450,7 +450,7 @@ try {
       output: 'artifacts/microsoft-store',
     };
     writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
-  }, /must use the game root, Store artifact directory, browser adapter/u);
+  }, /must use the game root, Store artifact directory, a supported Store adapter/u);
 
   assertConflictIsAtomic('target-output-escape', (gameRoot) => {
     const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));
@@ -463,7 +463,7 @@ try {
       output: '/tmp/outside-store-artifacts',
     };
     writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
-  }, /must use the game root, Store artifact directory, browser adapter/u);
+  }, /must use the game root, Store artifact directory, a supported Store adapter/u);
 
   assertConflictIsAtomic('target-icon-conflict', (gameRoot) => {
     const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));
