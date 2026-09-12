@@ -107,9 +107,9 @@ const baseInput = {
     JSON.stringify(first.plan),
     'an identical existing plan is reused verbatim',
   );
-  assertEqual(
-    JSON.stringify(retry.ledger),
-    JSON.stringify(first.ledger),
+  assertDeepEqual(
+    retry.ledger,
+    first.ledger,
     're-running an existing plan does not advance the ledger',
   );
 }
@@ -679,6 +679,92 @@ const baseInput = {
         targets: [{ target: 'android' }],
       }),
     /releaseLabel .* must equal/u,
+  );
+}
+
+// First remote review round: ordering, ceilings, policy pairing, metadata.
+{
+  // classic must stay below modern in a legacy ledger.
+  assertThrows(
+    () =>
+      assertPlatformVersionLedger({
+        ...createLegacyLedger(),
+        platforms: {
+          ...createLegacyLedger().platforms,
+          'microsoft-store': { classicPackageVersion: '1.2.0.0', packageVersion: '1.1.0.0' },
+        },
+      }),
+    /must be lower than/u,
+  );
+
+  // Android counters above the documented maximum are invalid ledgers even
+  // when Android is not part of the current request.
+  assertThrows(
+    () =>
+      assertPlatformVersionLedger({
+        ...createLegacyLedger(),
+        platforms: {
+          ...createLegacyLedger().platforms,
+          android: { versionCode: ANDROID_VERSION_CODE_MAX + 1 },
+        },
+      }),
+    /documented maximum/u,
+  );
+
+  // Unmodeled releaseRevision metadata survives into candidates.
+  const withMetadata = assertPlatformVersionLedger({
+    ...createLegacyLedger(),
+    releaseRevision: { lastAllocated: 0, reservationQueue: 'external' },
+  } as unknown as PlatformVersionLedger);
+  const allocatedWithMetadata = allocatePlatformVersions({
+    ...baseInput,
+    ledger: withMetadata,
+    targets: [{ target: 'android' }],
+  });
+  assertDeepEqual(
+    (allocatedWithMetadata.ledger as unknown as { releaseRevision: Record<string, unknown> })
+      .releaseRevision,
+    { lastAllocated: 1, reservationQueue: 'external' },
+    'releaseRevision metadata is preserved',
+  );
+
+  // A hosted-policy plan cannot be reused against a legacy ledger.
+  const hostedPlan = allocatePlatformVersions({
+    ...baseInput,
+    ledger: createHostedPwaLedger(),
+    targets: [{ target: 'microsoft-store' }],
+  });
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        existingPlan: hostedPlan.plan,
+        ledger: {
+          ...createLegacyLedger(),
+          platforms: {
+            'microsoft-store': {
+              classicPackageVersion: '1.0.0.0',
+              packageVersion: '2.0.1.0',
+            },
+          },
+          releaseRevision: { lastAllocated: 1 },
+        },
+        targets: [{ target: 'microsoft-store' }],
+      }),
+    /cannot be reused against an independent four-part ledger/u,
+  );
+
+  // Mini-game label-only targets allocate shared identities.
+  const miniGame = allocatePlatformVersions({
+    ...baseInput,
+    ledger: createLegacyLedger(),
+    targets: [{ target: 'wechat' }, { target: 'tiktok' }],
+  });
+  assertEqual(miniGame.plan.targets.wechat?.version, '0.3.27', 'wechat allocates a label entry');
+  assertEqual(
+    miniGame.plan.targets.tiktok?.buildId,
+    miniGame.plan.buildId,
+    'tiktok shares the buildId',
   );
 }
 

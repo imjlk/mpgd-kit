@@ -32,7 +32,14 @@ export const MICROSOFT_STORE_VERSION_COMPONENT_MAX = 65_535;
 export const ANDROID_VERSION_CODE_MAX = 2_100_000_000;
 
 /** Targets whose plan entry only carries the shared release identity. */
-export const LABEL_ONLY_RELEASE_TARGETS = ['web-preview', 'reddit', 'ait', 'verse8'] as const;
+export const LABEL_ONLY_RELEASE_TARGETS = [
+  'web-preview',
+  'reddit',
+  'ait',
+  'verse8',
+  'wechat',
+  'tiktok',
+] as const;
 
 /** Every target supported by the allocation policies. */
 export const PLATFORM_VERSION_RELEASE_TARGETS = [
@@ -281,9 +288,18 @@ function cloneLedger(value: unknown): MutableLedger {
   if (platforms.android !== undefined) {
     const android = requireObject(platforms.android, 'Android ledger entry');
     rejectUnknownFields(android, ['versionCode'], 'Android ledger entry');
-    normalizedPlatforms.android = {
-      versionCode: requireNonNegativeInteger(android.versionCode, 'Android ledger versionCode'),
-    };
+    const versionCode = requireNonNegativeInteger(
+      android.versionCode,
+      'Android ledger versionCode',
+    );
+
+    if (versionCode > ANDROID_VERSION_CODE_MAX) {
+      throw new Error(
+        `Android ledger versionCode must not exceed the documented maximum ${String(ANDROID_VERSION_CODE_MAX)}: ${String(versionCode)}`,
+      );
+    }
+
+    normalizedPlatforms.android = { versionCode };
   }
 
   if (platforms.ios !== undefined) {
@@ -305,12 +321,20 @@ function cloneLedger(value: unknown): MutableLedger {
     throw new Error('Schema 3 platform version ledgers must carry a Microsoft Store entry.');
   }
 
+  // Preserve unmodeled releaseRevision metadata (reservation or audit data)
+  // the same way unknown top-level fields survive into candidates.
+  const releaseRevision = requireObject(
+    ledger.releaseRevision,
+    'platform version ledger releaseRevision',
+  );
+
   return {
     ...ledger,
     platforms: normalizedPlatforms,
     releaseRevision: {
+      ...releaseRevision,
       lastAllocated: requireNonNegativeInteger(
-        requireObject(ledger.releaseRevision, 'platform version ledger releaseRevision').lastAllocated,
+        releaseRevision.lastAllocated,
         'platform version ledger lastAllocated',
       ),
     },
@@ -357,13 +381,38 @@ function normalizeMicrosoftStoreLedgerEntry(
     );
   }
 
-  return {
-    packageVersion: requireFourPartVersion(entry.packageVersion, 'Microsoft Store package version'),
-    classicPackageVersion: requireFourPartVersion(
-      entry.classicPackageVersion,
-      'Microsoft Store classic package version',
-    ),
-  };
+  const packageVersion = requireFourPartVersion(
+    entry.packageVersion,
+    'Microsoft Store package version',
+  );
+  const classicPackageVersion = requireFourPartVersion(
+    entry.classicPackageVersion,
+    'Microsoft Store classic package version',
+  );
+
+  if (compareFourPartVersions(classicPackageVersion, packageVersion) >= 0) {
+    throw new Error(
+      `Microsoft Store classicPackageVersion ${classicPackageVersion} must be lower than packageVersion ${packageVersion}.`,
+    );
+  }
+
+  return { classicPackageVersion, packageVersion };
+}
+
+function compareFourPartVersions(left: string, right: string): number {
+  const leftParts = left.split('.').map((part) => Number.parseInt(part, 10));
+  const rightParts = right.split('.').map((part) => Number.parseInt(part, 10));
+
+  for (let index = 0; index < leftParts.length; index += 1) {
+    const leftPart = leftParts[index] ?? 0;
+    const rightPart = rightParts[index] ?? 0;
+
+    if (leftPart !== rightPart) {
+      return leftPart - rightPart;
+    }
+  }
+
+  return 0;
 }
 
 function clonePlan(value: unknown): MutablePlan {
@@ -744,6 +793,11 @@ function assertPlanPlatformVersions(plan: MutablePlan, ledger: MutableLedger): v
           'existing Microsoft Store classic package version',
         );
       } else {
+        if (actual.versionPolicy !== undefined) {
+          throw new Error(
+            `An existing ${String(actual.versionPolicy)} Microsoft Store plan cannot be reused against an independent four-part ledger.`,
+          );
+        }
         assertVersionNotAhead(
           actual.packageVersion,
           expected.packageVersion,
@@ -852,7 +906,8 @@ function recordAllocatedReleaseRevision(ledger: MutableLedger, releaseRevision: 
     );
   }
 
-  ledger.releaseRevision = { lastAllocated: releaseRevision };
+  // Keep unmodeled releaseRevision metadata when recording the allocation.
+  ledger.releaseRevision = { ...ledger.releaseRevision, lastAllocated: releaseRevision };
 }
 
 function requireFourPartVersion(value: unknown, label: string): string {
