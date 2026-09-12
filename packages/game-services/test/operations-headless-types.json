@@ -1,0 +1,1 @@
+{"extends":"../../../tsconfig.base.json","compilerOptions":{"paths":{},"noEmit":true,"lib":["ES2022"],"types":[],"skipLibCheck":true},"include":["./operations-headless-types.ts"]}

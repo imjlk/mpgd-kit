@@ -130,7 +130,7 @@
     "sampo:release": "sampo release",
     "sampo:publish": "sampo publish",
     "sampo:pre": "sampo pre",
-    "smoke:game-services:dist": "node packages/game-services/test/operation-progress-import.mjs && ttsc --noEmit -p packages/game-services/test/operation-progress-types.json"
+    "smoke:game-services:dist": "node packages/game-services/test/operation-progress-import.mjs && ttsc --noEmit -p packages/game-services/test/operation-progress-types.json && ttsc --noEmit -p packages/game-services/test/operations-headless-types.json"
   },
   "devDependencies": {
     "@mpgd/adapter-devvit": "workspace:*",

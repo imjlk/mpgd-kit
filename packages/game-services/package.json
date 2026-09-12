@@ -124,6 +124,10 @@
     "./verified-leaderboard-durability-conformance": {
       "types": "./dist/verified-leaderboard-durability-conformance.d.ts",
       "default": "./dist/verified-leaderboard-durability-conformance.js"
+    },
+    "./operations": {
+      "types": "./dist/operations.d.ts",
+      "default": "./dist/operations.js"
     }
   },
   "files": [

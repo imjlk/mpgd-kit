@@ -4,8 +4,6 @@ import { RPCLink } from '@orpc/client/fetch';
 import { createAnalyticsReporter, type AnalyticsSink } from '@mpgd/analytics';
 import type {
   LeaderboardScoreInput,
-  LogicalAdPlacementId,
-  LogicalProductId,
   PlatformGateway,
   PlatformTarget,
   PurchaseResult,
@@ -13,14 +11,23 @@ import type {
 } from '@mpgd/platform';
 
 import type {
+  GameServicesOperationClient,
+  GameServicesPurchaseInput,
+  GameServicesPurchaseResult,
+  GameServicesRewardedAdInput,
+  GameServicesRewardedAdResult,
+} from './operations.js';
+export type {
+  GameServicesOperationClient,
+  GameServicesPurchaseInput,
+  GameServicesPurchaseResult,
+  GameServicesRewardedAdInput,
+  GameServicesRewardedAdResult,
+} from './operations.js';
+import type {
   GameServicesContractClient,
 } from './contract.js';
-import {
-  observeGameServicesOperation,
-  type GameServicesOperationOptions,
-  type GameServicesPurchaseProgress,
-  type GameServicesRewardedAdProgress,
-} from './operation-progress.js';
+import { observeGameServicesOperation } from './operation-progress.js';
 import type {
   ClaimAdRewardRequest,
   ClaimAdRewardResponse,
@@ -131,15 +138,7 @@ export class GameServicesBackendError extends Error {
   }
 }
 
-export interface GameServicesClient {
-  purchase(
-    input: GameServicesPurchaseInput,
-    options?: GameServicesOperationOptions<GameServicesPurchaseProgress>,
-  ): Promise<GameServicesPurchaseResult>;
-  claimRewardedAd(
-    input: GameServicesRewardedAdInput,
-    options?: GameServicesOperationOptions<GameServicesRewardedAdProgress>,
-  ): Promise<GameServicesRewardedAdResult>;
+export interface GameServicesClient extends GameServicesOperationClient {
   submitLeaderboardScore(
     input: GameServicesLeaderboardInput,
   ): Promise<GameServicesLeaderboardResult>;
@@ -154,31 +153,6 @@ export interface CreateGameServicesClientInput {
   readonly analytics?: AnalyticsSink;
   readonly analyticsSessionId?: string;
   readonly now?: () => string;
-}
-
-export interface GameServicesPurchaseInput {
-  readonly productId: LogicalProductId;
-  readonly source: 'shop' | 'stage_fail' | 'result' | 'event';
-  readonly idempotencyKey: string;
-}
-
-export interface GameServicesPurchaseResult {
-  readonly status: 'granted' | 'cancelled' | 'pending' | 'failed' | 'rejected';
-  readonly purchase: PurchaseResult;
-  readonly verification?: VerifyPurchaseResponse;
-  readonly ledgerEntryId?: string;
-}
-
-export interface GameServicesRewardedAdInput {
-  readonly placementId: LogicalAdPlacementId;
-  readonly idempotencyKey: string;
-}
-
-export interface GameServicesRewardedAdResult {
-  readonly status: 'granted' | 'skipped' | 'unavailable' | 'failed' | 'rejected';
-  readonly reward: RewardedAdResult;
-  readonly claim?: ClaimAdRewardResponse;
-  readonly ledgerEntryId?: string;
 }
 
 export interface GameServicesLeaderboardInput extends LeaderboardScoreInput {}

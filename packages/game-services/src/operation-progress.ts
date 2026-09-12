@@ -1,6 +1,6 @@
 import type { PurchaseResult, RewardedAdResult } from '@mpgd/platform';
 
-import type { GameServicesPurchaseResult, GameServicesRewardedAdResult } from './client.js';
+import type { GameServicesPurchaseResult, GameServicesRewardedAdResult } from './operations.js';
 
 export type GameServicesOperationKind = 'purchase' | 'rewarded-ad';
 export type GameServicesOperationLocation = 'local' | 'platform' | 'server';
