@@ -194,12 +194,12 @@ if (failures.length > 0) {
   throw new Error(`Public readiness failed:\n- ${failures.join('\n- ')}`);
 }
 
-console.log(
+console.info(
   `Public readiness passed: ${discoverPublishablePackages().length} publishable packages`,
 );
 
 if (manualGates.length > 0) {
-  console.log(`Manual public release gates:\n- ${manualGates.join('\n- ')}`);
+  console.info(`Manual public release gates:\n- ${manualGates.join('\n- ')}`);
 }
 
 function readPackageJson(path: string): PackageMetadata {

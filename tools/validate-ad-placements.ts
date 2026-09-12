@@ -44,7 +44,7 @@ export function validateAdPlacementsFile(path = adPlacementsFilePath()) {
 
 if (isCliEntrypoint(import.meta.url)) {
   const adPlacements = validateAdPlacementsFile();
-  console.log(
+  console.info(
     `Ad placements ${adPlacements.version}: ${adPlacements.placements.length} placements`,
   );
 }

@@ -44,5 +44,5 @@ export function validateProductCatalogFile(path = productCatalogFilePath()) {
 
 if (isCliEntrypoint(import.meta.url)) {
   const catalog = validateProductCatalogFile();
-  console.log(`Product catalog ${catalog.version}: ${catalog.products.length} products`);
+  console.info(`Product catalog ${catalog.version}: ${catalog.products.length} products`);
 }
