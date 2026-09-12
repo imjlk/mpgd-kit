@@ -80,7 +80,7 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
     }
   }
 
-  let terminalCleanup = false;
+  let disposing = false;
   function restoreAudio(): void {
     if (ownedAudio && audio !== undefined) {
       // A throwing setter leaves cleanup ownership pending for an explicit retry.
@@ -116,50 +116,57 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
   }
 
   function dispose(mode: 'restore' | 'shutdown' | 'terminal' = 'restore'): void {
-    if (disposed) {
-      // Retry only unresolved sink cleanup, never scene controls or terminal teardown.
-      if (mode === 'restore' && !terminalCleanup && ownedAudio) {
+    if (disposing) {
+      return;
+    }
+    disposing = true;
+    try {
+      if (disposed) {
+        // Retry only unresolved sink cleanup, never scene controls or terminal teardown.
+        if (mode === 'restore' && ownedAudio) {
+          attempt(() => {
+            if (controller.getSnapshot().status === 'active') {
+              restoreAudio();
+            }
+          });
+        }
+        return;
+      }
+      disposed = true;
+      attempt(unsubscribe);
+      // Keep shutdown observation installed while restoration calls into consumer/engine code.
+      if (mode !== 'terminal') {
         attempt(() => {
           if (controller.getSnapshot().status === 'active') {
-            restoreAudio();
+            restore(mode === 'restore');
           }
         });
       }
-      return;
-    }
-    disposed = true;
-    terminalCleanup = mode === 'terminal';
-    attempt(unsubscribe);
-    // Keep shutdown observation installed while restoration calls into consumer/engine code.
-    if (mode !== 'terminal') {
+      for (const event of ['shutdown', 'destroy']) {
+        attempt(() => {
+          events.off(event, onShutdown);
+        });
+      }
       attempt(() => {
-        if (controller.getSnapshot().status === 'active') {
-          restore(mode === 'restore');
-        }
+        events.off('sleep', onSleep);
       });
-    }
-    for (const event of ['shutdown', 'destroy']) {
       attempt(() => {
-        events.off(event, onShutdown);
+        events.off('wake', onWake);
       });
+      attempt(() => {
+        events.off('pause', onPause);
+      });
+      attempt(() => {
+        events.off('resume', onResume);
+      });
+      attempt(() => {
+        events.off('create', apply);
+      });
+      attempt(() => uiScope?.dispose());
+      ownedInput.clear();
+    } finally {
+      disposing = false;
     }
-    attempt(() => {
-      events.off('sleep', onSleep);
-    });
-    attempt(() => {
-      events.off('wake', onWake);
-    });
-    attempt(() => {
-      events.off('pause', onPause);
-    });
-    attempt(() => {
-      events.off('resume', onResume);
-    });
-    attempt(() => {
-      events.off('create', apply);
-    });
-    attempt(() => uiScope?.dispose());
-    ownedInput.clear();
   }
 
   function onShutdown(): void {
@@ -230,8 +237,7 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
               ownedAudio = true;
               audio.setMuted(true);
             } else if (!blocked.audio && ownedAudio) {
-              audio.setMuted(false);
-              ownedAudio = false;
+              restoreAudio();
             }
           });
         }
