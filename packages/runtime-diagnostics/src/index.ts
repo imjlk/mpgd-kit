@@ -854,7 +854,9 @@ function cloneLongAnimationFrameSample(
   if (sample.scripts === undefined) {
     return { ...sample };
   }
-  return { ...sample, scripts: [...sample.scripts] };
+  // Script attributions are a package-defined structure bounded to eight
+  // entries, so shallow-copying each keeps snapshot isolation predictable.
+  return { ...sample, scripts: sample.scripts.map((script) => ({ ...script })) };
 }
 
 /**

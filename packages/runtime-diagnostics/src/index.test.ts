@@ -659,6 +659,57 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
   );
 }
 
+// Snapshot script attributions are isolated per-entry copies.
+{
+  const recorder = new FrameHitchRecorder<TestFrameSample>();
+  recorder.recordLongAnimationFrame({
+    atMs: 200,
+    blockingDurationMs: 150,
+    durationMs: 200,
+    hidden: false,
+    renderDurationMs: 20,
+    scriptDurationMs: 160,
+    scriptInvocations: 2,
+    scripts: [
+      {
+        durationMs: 120,
+        forcedStyleAndLayoutDurationMs: 5,
+        invoker: 'AnimationFrame',
+        invokerType: 'user',
+        pauseDurationMs: 0,
+        sourceFunctionName: 'updateWorld',
+        sourceUrl: 'https://cdn.example.test/assets/game.js',
+      },
+    ],
+    startAtMs: 0,
+    styleAndLayoutDurationMs: 15,
+  });
+
+  const first = recorder.snapshot();
+  const firstScript = first.lastLongAnimationFrame?.scripts?.[0];
+  const second = recorder.snapshot();
+  const snapshotScript = first.lastLongAnimationFrame?.scripts?.[0];
+
+  if (snapshotScript === undefined) {
+    throw new Error('expected the snapshot to carry script attributions');
+  }
+
+  (snapshotScript as { sourceUrl: string }).sourceUrl = 'tampered';
+  (firstScript as { durationMs: number }).durationMs = -1;
+
+  const third = recorder.snapshot();
+  assertEqual(
+    third.lastLongAnimationFrame?.scripts?.[0]?.sourceUrl ?? '',
+    'https://cdn.example.test/assets/game.js',
+    'mutating a snapshot script entry cannot reach internal state',
+  );
+  assertEqual(
+    third.lastLongAnimationFrame?.scripts?.[0]?.durationMs ?? 0,
+    second.lastLongAnimationFrame?.scripts?.[0]?.durationMs ?? 0,
+    'snapshot script durations stay isolated',
+  );
+}
+
 // historyLimit 0 is an explicit, consistent contract.
 {
   const recorder = new FrameHitchRecorder<TestFrameSample>({ historyLimit: 0 });
