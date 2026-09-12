@@ -12,9 +12,7 @@ import type {
 
 import type {
   GameServicesOperationClient,
-  GameServicesPurchaseInput,
   GameServicesPurchaseResult,
-  GameServicesRewardedAdInput,
   GameServicesRewardedAdResult,
 } from './operations.js';
 export type {

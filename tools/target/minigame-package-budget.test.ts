@@ -139,6 +139,7 @@ try {
     }),
     /symbolic links/u,
   );
+  rmSync(join(root, 'linked.js'));
 
   for (const unsafe of [
     '',

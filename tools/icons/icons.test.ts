@@ -229,7 +229,11 @@ async function testSvgAndTargetMatrix(parent: string): Promise<void> {
   const faviconIndex = scriptedFaviconHtml.lastIndexOf(embeddedFaviconMarkup);
 
   assert.ok(scriptedFaviconHtml.includes('<script>const closingHead = "</head>"; const markup ='));
-  assert.equal(scriptedFaviconHtml.split(embeddedFaviconMarkup).length - 1, 4);
+  // The script contains JSON-escaped quotes; only comment, template and injected link match raw markup.
+  assert.ok(
+    scriptedFaviconHtml.includes(`const markup = ${JSON.stringify(embeddedFaviconMarkup)};`),
+  );
+  assert.equal(scriptedFaviconHtml.split(embeddedFaviconMarkup).length - 1, 3);
   assert.ok(faviconIndex > scriptedFaviconHtml.indexOf('</template>'));
   assert.ok(faviconIndex < scriptedFaviconHtml.lastIndexOf('</head>'));
 
