@@ -116,8 +116,12 @@ export function createGameUiBridge<TSnapshot, TCommand, TEvent = never>(input: {
       equality: (left: TSelected, right: TSelected) => boolean = Object.is,
     ): () => void {
       assertActive();
-      if (typeof listener !== 'function' || typeof equality !== 'function') {
-        throw new TypeError('Selector listener and equality must be functions.');
+      if (
+        typeof selector !== 'function'
+        || typeof listener !== 'function'
+        || typeof equality !== 'function'
+      ) {
+        throw new TypeError('Selector, listener and equality must be functions.');
       }
       // Selectors and equality functions must be pure. An initial failure registers nothing.
       let selected = selector(snapshot);
