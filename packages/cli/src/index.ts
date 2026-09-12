@@ -1185,7 +1185,7 @@ const targetCommand = defineI18n({
           : assertKitRoot(path.resolve(configuredKitPath));
         const defaultKitPath = resolvedKitPath === undefined
           ? defaultMpgdKitPath
-          : toTemplatePath(path.relative(gameRoot, resolvedKitPath) || '.');
+          : toTemplatePath(path.relative(realpathSync(gameRoot), resolvedKitPath) || '.');
         const dryRun = ctx.values['dry-run'] === true;
         const adapterDependencyVersion = resolveMicrosoftStoreAdapterDependencyVersion(
           requireMpgdDependencyVersion(
