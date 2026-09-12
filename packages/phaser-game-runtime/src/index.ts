@@ -215,8 +215,8 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
               ownedAudio = true;
               audio.setMuted(true);
             } else if (!blocked.audio && ownedAudio) {
-              ownedAudio = false;
               audio.setMuted(false);
+              ownedAudio = false;
             }
           });
         }
