@@ -7,7 +7,6 @@ import {
   HOSTED_PWA_SHELL_VERSION_POLICY,
   MICROSOFT_STORE_VERSION_COMPONENT_MAX,
   type PlatformVersionLedger,
-  type PlatformVersionReleasePlan,
 } from '../src/platformVersionAllocation';
 
 const sourceSha = 'a'.repeat(40);
@@ -51,7 +50,7 @@ const baseInput = {
   targetConfigDigest: configDigest,
 };
 
-// 1. A new plan only increments the selected targets.
+// Required test 1: a new plan only increments the selected targets.
 {
   const ledger = createLegacyLedger();
   const { ledger: nextLedger, plan } = allocatePlatformVersions({
@@ -88,7 +87,7 @@ const baseInput = {
   assertEqual(nextLedger.releaseRevision.lastAllocated, 1, 'candidate ledger records the revision');
 }
 
-// 2. Re-running a valid existing plan consumes no new numbers.
+// Required test 2: re-running a valid existing plan consumes no new numbers.
 {
   const first = allocatePlatformVersions({
     ...baseInput,
@@ -115,7 +114,7 @@ const baseInput = {
   );
 }
 
-// 3. Provenance changes reject existing-plan reuse.
+// Required test 3: provenance changes reject existing-plan reuse.
 {
   const first = allocatePlatformVersions({
     ...baseInput,
@@ -149,7 +148,7 @@ const baseInput = {
     }), /targetConfigDigest/u);
 }
 
-// 4. The same game version with new provenance is a distinct release identity.
+// Required test 4: the same game version with new provenance is a distinct identity.
 {
   const first = allocatePlatformVersions({
     ...baseInput,
@@ -168,7 +167,7 @@ const baseInput = {
   assertEqual(second.plan.buildId !== first.plan.buildId, true, 'buildIds differ');
 }
 
-// 5. The legacy Store policy and the opt-in shell policy both allocate.
+// Required test 5: the legacy Store policy and the opt-in shell policy both allocate.
 {
   const legacy = allocatePlatformVersions({
     ...baseInput,
@@ -213,7 +212,7 @@ const baseInput = {
   );
 }
 
-// 6. Hosted-content-only work does not consume a Store shell revision.
+// Required test 6: hosted-content-only work consumes no Store shell revision.
 {
   const hosted = allocatePlatformVersions({
     ...baseInput,
@@ -234,7 +233,7 @@ const baseInput = {
   assertEqual(hosted.plan.targets.android?.versionCode, 1, 'android still allocates');
 }
 
-// 7. Modern/classic ordering and component ceilings hold.
+// Required test 7: modern/classic ordering and component ceilings hold.
 {
   for (const revision of [1, 2, 100, MICROSOFT_STORE_VERSION_COMPONENT_MAX]) {
     const { packageVersion, classicPackageVersion } = formatHostedPwaShellVersions(revision);
@@ -290,7 +289,7 @@ const baseInput = {
     }), /exhausted/u);
 }
 
-// 8. Android/iOS counter boundaries and overflow are explicit.
+// Required test 8: Android/iOS counter boundaries and overflow are explicit.
 {
   const androidMax: PlatformVersionLedger = {
     ...createLegacyLedger(),
@@ -329,7 +328,7 @@ const baseInput = {
     /safe integer/u);
 }
 
-// 9. Duplicate, unsupported, and malformed inputs are rejected.
+// Required test 9: duplicate, unsupported, and malformed inputs are rejected.
 {
   assertThrows(() =>
     allocatePlatformVersions({ ...baseInput, ledger: createLegacyLedger(), targets: [] as never[] }), /At least one/u);
@@ -446,7 +445,7 @@ const baseInput = {
   );
 }
 
-// 10. Failures never mutate the input ledger or existing plan.
+// Required test 10: failures never mutate the input ledger or existing plan.
 {
   const ledger = createLegacyLedger();
   const ledgerSnapshot = JSON.stringify(ledger);
@@ -479,7 +478,7 @@ const baseInput = {
   assertEqual(JSON.stringify(first.plan), planSnapshot, 'the existing plan object is unchanged');
 }
 
-// 11. Schema fixtures survive a JSON round trip through validation.
+// Required test 11: schema fixtures survive a JSON round trip through validation.
 {
   const legacyFixture: unknown = JSON.parse(JSON.stringify(createLegacyLedger()));
   const hostedFixture: unknown = JSON.parse(JSON.stringify(createHostedPwaLedger()));
@@ -487,7 +486,7 @@ const baseInput = {
   assertPlatformVersionLedger(hostedFixture);
 }
 
-// 12. Canonical labels stay consistent with the shared release identity format.
+// Required test 12: canonical labels match the shared release identity format.
 {
   assertEqual(
     formatPlatformVersionReleaseLabel('0.3.27', 41),
@@ -506,7 +505,7 @@ const baseInput = {
   assertEqual(plan.releaseLabel, label, 'the allocated plan carries the canonical label');
 }
 
-// 14. Identical inputs produce identical candidates.
+// Required test 14: identical inputs produce identical candidates.
 {
   const input = {
     ...baseInput,
@@ -518,7 +517,7 @@ const baseInput = {
   assertEqual(JSON.stringify(first), JSON.stringify(second), 'allocation is deterministic');
 }
 
-// Hardened validation from local review: bounds, preservation, plan shapes.
+// Hardened validation: bounds, preservation, and plan-shape cross-checks.
 {
   assertThrows(
     () =>
@@ -619,7 +618,71 @@ const baseInput = {
   );
 }
 
-// Existing plans may gain new targets without relabeling; ledger ties hold.
+// A hosted-content-only Store request needs no Store ledger entry at all.
+{
+  const noStoreLedger: PlatformVersionLedger = {
+    schemaVersion: 2,
+    platforms: { android: { versionCode: 3 } },
+    releaseRevision: { lastAllocated: 0 },
+  };
+  const { plan, ledger: nextLedger } = allocatePlatformVersions({
+    ...baseInput,
+    ledger: noStoreLedger,
+    targets: [{ target: 'microsoft-store', intent: 'hosted-content-only' }, { target: 'android' }],
+  });
+  assertEqual(
+    plan.targets['microsoft-store']?.intent,
+    'hosted-content-only',
+    'hosted-only work allocates without a Store ledger entry',
+  );
+  assertEqual(nextLedger.platforms['microsoft-store'], undefined, 'no Store entry appears');
+}
+
+// Canonical four-part versions reject leading zeroes and stray entry fields.
+{
+  assertThrows(
+    () =>
+      assertPlatformVersionLedger({
+        ...createLegacyLedger(),
+        platforms: {
+          ...createLegacyLedger().platforms,
+          'microsoft-store': { classicPackageVersion: '1.0.0.0', packageVersion: '1.1.01.0' },
+        },
+      }),
+    /leading zeroes/u,
+  );
+  assertThrows(
+    () =>
+      assertPlatformVersionLedger({
+        ...createLegacyLedger(),
+        platforms: {
+          ...createLegacyLedger().platforms,
+          android: { uploadedAt: 'yesterday', versionCode: 12 },
+        },
+      }),
+    /unsupported field/u,
+  );
+  const stale = allocatePlatformVersions({
+    ...baseInput,
+    ledger: createLegacyLedger(),
+    targets: [{ target: 'android' }],
+  });
+  assertThrows(
+    () =>
+      allocatePlatformVersions({
+        ...baseInput,
+        existingPlan: {
+          ...stale.plan,
+          targets: { android: { releaseLabel: '9.9.9-v999', versionCode: 13, versionName: '0.3.27' } },
+        },
+        ledger: stale.ledger,
+        targets: [{ target: 'android' }],
+      }),
+    /releaseLabel .* must equal/u,
+  );
+}
+
+// Contract: existing plans may gain targets without relabeling; ledger ties hold.
 {
   const first = allocatePlatformVersions({
     ...baseInput,

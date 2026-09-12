@@ -279,20 +279,18 @@ function cloneLedger(value: unknown): MutableLedger {
   const normalizedPlatforms = { ...platforms } as Record<string, unknown>;
 
   if (platforms.android !== undefined) {
+    const android = requireObject(platforms.android, 'Android ledger entry');
+    rejectUnknownFields(android, ['versionCode'], 'Android ledger entry');
     normalizedPlatforms.android = {
-      versionCode: requireNonNegativeInteger(
-        requireObject(platforms.android, 'Android ledger entry').versionCode,
-        'Android ledger versionCode',
-      ),
+      versionCode: requireNonNegativeInteger(android.versionCode, 'Android ledger versionCode'),
     };
   }
 
   if (platforms.ios !== undefined) {
+    const ios = requireObject(platforms.ios, 'iOS ledger entry');
+    rejectUnknownFields(ios, ['buildNumber'], 'iOS ledger entry');
     normalizedPlatforms.ios = {
-      buildNumber: requireNonNegativeInteger(
-        requireObject(platforms.ios, 'iOS ledger entry').buildNumber,
-        'iOS ledger buildNumber',
-      ),
+      buildNumber: requireNonNegativeInteger(ios.buildNumber, 'iOS ledger buildNumber'),
     };
   }
 
@@ -378,7 +376,7 @@ function clonePlan(value: unknown): MutablePlan {
   requireToken(plan.gameId, 'release plan gameId');
   requireFinalVersion(plan.gameVersion, 'release plan gameVersion');
   requirePositiveInteger(plan.releaseRevision, 'release plan releaseRevision');
-  validatePlanTargets(requireObject(plan.targets, 'release plan targets'));
+  validatePlanTargets(plan as unknown as MutablePlan);
   requireFullGitSha(plan.sourceGitSha, 'release plan sourceGitSha');
   requireFullGitSha(plan.kitGitSha, 'release plan kitGitSha');
   requireSha256Digest(plan.targetConfigDigest, 'release plan targetConfigDigest');
@@ -393,7 +391,9 @@ function clonePlan(value: unknown): MutablePlan {
  * exact form this module allocates so a hand-edited plan cannot smuggle
  * unvalidated numbers or unknown targets into a candidate release.
  */
-function validatePlanTargets(targets: Record<string, unknown>): void {
+function validatePlanTargets(plan: MutablePlan): void {
+  const targets = requireObject(plan.targets, 'release plan targets');
+
   for (const [target, value] of Object.entries(targets)) {
     if (!(PLATFORM_VERSION_RELEASE_TARGETS as readonly string[]).includes(target)) {
       throw new Error(`Release plan target ${target} is not supported by the allocation policies.`);
@@ -408,8 +408,15 @@ function validatePlanTargets(targets: Record<string, unknown>): void {
         `release plan target ${target}`,
       );
       requireString(entry.buildId, `release plan target ${target} buildId`);
+      assertEqual(entry.buildId, plan.buildId, `release plan target ${target} buildId`);
       requireString(entry.releaseLabel, `release plan target ${target} releaseLabel`);
+      assertEqual(
+        entry.releaseLabel,
+        plan.releaseLabel,
+        `release plan target ${target} releaseLabel`,
+      );
       requireFinalVersion(entry.version, `release plan target ${target} version`);
+      assertEqual(entry.version, plan.gameVersion, `release plan target ${target} version`);
       continue;
     }
 
@@ -420,8 +427,10 @@ function validatePlanTargets(targets: Record<string, unknown>): void {
         'release plan android target',
       );
       requireString(entry.releaseLabel, 'release plan android releaseLabel');
+      assertEqual(entry.releaseLabel, plan.releaseLabel, 'release plan android releaseLabel');
       requirePositiveInteger(entry.versionCode, 'release plan android versionCode');
       requireFinalVersion(entry.versionName, 'release plan android versionName');
+      assertEqual(entry.versionName, plan.gameVersion, 'release plan android versionName');
       continue;
     }
 
@@ -433,17 +442,21 @@ function validatePlanTargets(targets: Record<string, unknown>): void {
       );
       requirePositiveInteger(entry.buildNumber, 'release plan ios buildNumber');
       requireFinalVersion(entry.marketingVersion, 'release plan ios marketingVersion');
+      assertEqual(entry.marketingVersion, plan.gameVersion, 'release plan ios marketingVersion');
       requireString(entry.releaseLabel, 'release plan ios releaseLabel');
+      assertEqual(entry.releaseLabel, plan.releaseLabel, 'release plan ios releaseLabel');
       continue;
     }
 
+    if (entry.intent !== undefined && entry.intent !== 'hosted-content-only') {
+      throw new Error(
+        `Release plan microsoft-store intent must be hosted-content-only when present; `
+          + `received ${String(entry.intent)}.`,
+      );
+    }
+    assertEqual(entry.releaseLabel, plan.releaseLabel, `release plan ${target} releaseLabel`);
+
     if (entry.intent !== undefined) {
-      if (entry.intent !== 'hosted-content-only') {
-        throw new Error(
-          `Release plan microsoft-store intent must be hosted-content-only when present; `
-            + `received ${String(entry.intent)}.`,
-        );
-      }
       rejectUnknownFields(entry, ['intent', 'releaseLabel'], 'release plan microsoft-store target');
       requireString(entry.releaseLabel, 'release plan microsoft-store releaseLabel');
       continue;
@@ -558,16 +571,17 @@ function allocateTargetVersion(
 
   switch (target) {
     case 'microsoft-store': {
+      // Hosted web content that does not upload a Windows package must not
+      // consume a Store shell revision or four-part number; it needs no Store
+      // ledger entry at all.
+      if (intent === 'hosted-content-only') {
+        return { intent: 'hosted-content-only', releaseLabel };
+      }
+
       const current = requireObject(
         ledger.platforms['microsoft-store'],
         'Microsoft Store ledger entry',
       );
-
-      if (intent === 'hosted-content-only') {
-        // Hosted web content that does not upload a Windows package must not
-        // consume a Store shell revision or four-part number.
-        return { intent: 'hosted-content-only', releaseLabel };
-      }
 
       if (current.versionPolicy === HOSTED_PWA_SHELL_VERSION_POLICY) {
         // A fresh hosted-PWA ledger starts at shellRevision 0 (nothing
@@ -685,10 +699,6 @@ function assertPlanPlatformVersions(plan: MutablePlan, ledger: MutableLedger): v
   const microsoftStore = plan.targets['microsoft-store'];
 
   if (microsoftStore !== undefined) {
-    const expected = requireObject(
-      ledger.platforms['microsoft-store'],
-      'Microsoft Store ledger entry',
-    );
     const actual = requireObject(microsoftStore, 'existing Microsoft Store plan');
 
     if (actual.intent !== undefined) {
@@ -700,44 +710,51 @@ function assertPlanPlatformVersions(plan: MutablePlan, ledger: MutableLedger): v
           'A hosted-content-only Microsoft Store plan must not claim package versions.',
         );
       }
-    } else if (expected.versionPolicy === HOSTED_PWA_SHELL_VERSION_POLICY) {
-      if (actual.versionPolicy !== HOSTED_PWA_SHELL_VERSION_POLICY) {
-        throw new Error(
-          `Existing Microsoft Store plan versionPolicy must be ${HOSTED_PWA_SHELL_VERSION_POLICY}.`,
+    } else {
+      const expected = requireObject(
+        ledger.platforms['microsoft-store'],
+        'Microsoft Store ledger entry',
+      );
+
+      if (expected.versionPolicy === HOSTED_PWA_SHELL_VERSION_POLICY) {
+        if (actual.versionPolicy !== HOSTED_PWA_SHELL_VERSION_POLICY) {
+          throw new Error(
+            `Existing Microsoft Store plan versionPolicy must be ${HOSTED_PWA_SHELL_VERSION_POLICY}.`,
+          );
+        }
+        const shellRevision = requireShellRevision(
+          actual.shellRevision,
+          'existing Microsoft Store plan shellRevision',
+          false,
+        );
+        assertNumberNotAhead(
+          shellRevision,
+          requireShellRevision(expected.shellRevision, 'Microsoft Store ledger shellRevision', true),
+          'Microsoft Store shell revision',
+        );
+        const derived = formatHostedPwaShellVersions(shellRevision);
+        assertEqual(
+          actual.packageVersion,
+          derived.packageVersion,
+          'existing Microsoft Store package version',
+        );
+        assertEqual(
+          actual.classicPackageVersion,
+          derived.classicPackageVersion,
+          'existing Microsoft Store classic package version',
+        );
+      } else {
+        assertVersionNotAhead(
+          actual.packageVersion,
+          expected.packageVersion,
+          'Microsoft Store package version',
+        );
+        assertVersionNotAhead(
+          actual.classicPackageVersion,
+          expected.classicPackageVersion,
+          'Microsoft Store classic package version',
         );
       }
-      const shellRevision = requireShellRevision(
-        actual.shellRevision,
-        'existing Microsoft Store plan shellRevision',
-        false,
-      );
-      assertNumberNotAhead(
-        shellRevision,
-        requireShellRevision(expected.shellRevision, 'Microsoft Store ledger shellRevision', true),
-        'Microsoft Store shell revision',
-      );
-      const derived = formatHostedPwaShellVersions(shellRevision);
-      assertEqual(
-        actual.packageVersion,
-        derived.packageVersion,
-        'existing Microsoft Store package version',
-      );
-      assertEqual(
-        actual.classicPackageVersion,
-        derived.classicPackageVersion,
-        'existing Microsoft Store classic package version',
-      );
-    } else {
-      assertVersionNotAhead(
-        actual.packageVersion,
-        expected.packageVersion,
-        'Microsoft Store package version',
-      );
-      assertVersionNotAhead(
-        actual.classicPackageVersion,
-        expected.classicPackageVersion,
-        'Microsoft Store classic package version',
-      );
     }
   }
 
@@ -841,8 +858,10 @@ function recordAllocatedReleaseRevision(ledger: MutableLedger, releaseRevision: 
 function requireFourPartVersion(value: unknown, label: string): string {
   const version = requireString(value, label);
 
-  if (!/^\d+\.\d+\.\d+\.\d+$/u.test(version)) {
-    throw new Error(`${label} must be a four-part numeric version: ${version}`);
+  if (!/^(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)$/u.test(version)) {
+    throw new Error(
+      `${label} must be a four-part numeric version without leading zeroes: ${version}`,
+    );
   }
 
   for (const part of version.split('.')) {

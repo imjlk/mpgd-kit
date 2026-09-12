@@ -1594,12 +1594,18 @@ const targetCommand = defineI18n({
             '--target-config-digest',
           ),
           MPGD_PREVIEW_TARGETS: readRequiredCliOption(ctx.values.targets, '--targets'),
-          ...(planFile === undefined ? {} : { MPGD_PREVIEW_PLAN_FILE: path.resolve(planFile) }),
-          ...(ctx.values.json === true ? { MPGD_PREVIEW_JSON: '1' } : {}),
+          // Always define the optional toggles so ambient values from the
+          // caller's environment cannot override absent flags.
+          MPGD_PREVIEW_PLAN_FILE: planFile === undefined ? '' : path.resolve(planFile),
+          MPGD_PREVIEW_JSON: ctx.values.json === true ? '1' : '',
         };
 
-        console.log('[mpgd] target preview-versions (read-only candidates, not reservations)');
-        runPnpm(['preview:platform-versions'], env);
+        if (ctx.values.json !== true) {
+          console.log('[mpgd] target preview-versions (read-only candidates, not reservations)');
+        }
+        // --silent keeps pnpm's script echo out of stdout so the JSON document
+        // is machine-readable apart from the framework banner.
+        runPnpm(['--silent', 'preview:platform-versions'], env);
       },
     }),
     'generate-package': defineI18n({

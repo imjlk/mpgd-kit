@@ -146,7 +146,11 @@ assertEqual(
 
 rmSync(fixtureRoot, { force: true, recursive: true });
 
-function runPreview(args: readonly string[]): { stdout: string; status: number } {
+function runPreview(args: readonly string[]): {
+  combined: string;
+  stdout: string;
+  status: number;
+} {
   const result = spawnSync(
     process.execPath,
     ['tools/run-ttsx.mjs', '--mpgd-cli', 'packages/cli/src/bin.ts', ...args],
@@ -162,7 +166,11 @@ function runPreview(args: readonly string[]): { stdout: string; status: number }
     throw result.error;
   }
 
-  return { stdout: result.stdout, status: result.status ?? -1 };
+  return {
+    combined: `${result.stdout}\n${result.stderr}`,
+    stdout: result.stdout,
+    status: result.status ?? -1,
+  };
 }
 
 function extractJsonDocument(stdout: string): string {
@@ -178,6 +186,12 @@ function extractJsonDocument(stdout: string): string {
 
 function sha256(file: string): string {
   return createHash('sha256').update(readFileSync(file)).digest('hex');
+}
+
+function assertIncludes(haystack: string, needle: string, message: string): void {
+  if (!haystack.includes(needle)) {
+    throw new Error(`${message}: output did not contain "${needle}".`);
+  }
 }
 
 function assertEqual<T>(actual: T, expected: T, message: string): void {
