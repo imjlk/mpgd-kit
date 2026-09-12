@@ -65,6 +65,7 @@ try {
   );
   assertNoUnresolvedTemplatePlaceholders(selectedGame);
 
+  // A linked parent must derive the same managed kit path as the canonical creation path.
   const linkedGames = join(fixtureRoot, 'linked-games');
   symlinkSync(fixtureRoot, linkedGames, 'dir');
   const selectedBeforeAliasInit = snapshotTree(selectedGame);

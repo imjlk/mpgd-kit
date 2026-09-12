@@ -1183,9 +1183,10 @@ const targetCommand = defineI18n({
         const resolvedKitPath = configuredKitPath === undefined
           ? detectedKitRoot
           : assertKitRoot(path.resolve(configuredKitPath));
+        const canonicalGameRoot = existsSync(gameRoot) ? realpathSync(gameRoot) : gameRoot;
         const defaultKitPath = resolvedKitPath === undefined
           ? defaultMpgdKitPath
-          : toTemplatePath(path.relative(realpathSync(gameRoot), resolvedKitPath) || '.');
+          : toTemplatePath(path.relative(canonicalGameRoot, resolvedKitPath) || '.');
         const dryRun = ctx.values['dry-run'] === true;
         const adapterDependencyVersion = resolveMicrosoftStoreAdapterDependencyVersion(
           requireMpgdDependencyVersion(
