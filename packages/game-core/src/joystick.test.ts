@@ -213,7 +213,7 @@ describe('dynamic virtual joystick', () => {
 
   // 12. The browser wiring fixture zeroes movement on cancel, blur, and teardown.
   it('clears movement through the documented browser wiring', () => {
-    for (const teardownTrigger of ['pointercancel', 'blur', 'teardown'] as const) {
+    for (const teardownTrigger of ['pointercancel', 'lostpointercapture', 'blur', 'teardown'] as const) {
       const joystick = createDynamicJoystick({ deadZone: 10, radius: 50 });
       const binding = createBrowserJoystickFixture(joystick);
 
@@ -225,8 +225,8 @@ describe('dynamic virtual joystick', () => {
       binding.dispatch({ pointerId: 8, type: 'pointercancel' });
       expect(joystick.getSnapshot().active).toBe(true);
 
-      if (teardownTrigger === 'pointercancel') {
-        binding.dispatch({ pointerId: 3, type: 'pointercancel' });
+      if (teardownTrigger === 'pointercancel' || teardownTrigger === 'lostpointercapture') {
+        binding.dispatch({ pointerId: 3, type: teardownTrigger });
       } else if (teardownTrigger === 'blur') {
         binding.dispatch({ type: 'blur' });
       } else {
