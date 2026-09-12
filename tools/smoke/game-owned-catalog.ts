@@ -229,6 +229,19 @@ try {
   assertViteConfigsStayInSync();
   assertTargetBuildCatalogEnvUsesCallerBase();
 
+  // Catalog binding availability is exercised with an explicitly configured authoritative backend.
+  // The starter correctly disables monetization until that backend is configured.
+  const authoritativeTargets = JSON.parse(readFileSync(resolve(
+    process.env.MPGD_PLATFORM_TARGETS_FILE ?? 'examples/phaser-starter/mpgd.targets.json',
+  ), 'utf8')) as { targets: Record<string, { authoritativeGameServices?: boolean }> };
+  for (const target of ['microsoft-store', 'ait']) {
+    const metadata = authoritativeTargets.targets[target];
+    assert.ok(metadata, `Expected fixture target ${target}`);
+    metadata.authoritativeGameServices = true;
+  }
+  const authoritativeTargetsFile = join(tempDir, 'authoritative-platform-targets.json');
+  writeFileSync(authoritativeTargetsFile, JSON.stringify(authoritativeTargets));
+  process.env.MPGD_PLATFORM_TARGETS_FILE = authoritativeTargetsFile;
   const matrix = validateEffectiveTargetConfigMatrix(loadEffectiveTargetConfigMatrix());
 
   assert.match(matrix.version, /catalog\.game-v1/u);

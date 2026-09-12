@@ -62,6 +62,8 @@ pnpm --dir examples/my-game exec mpgd game accept . \
 - Do not introduce Cocos Creator or React Native as the mobile baseline.
 - Use `ttsx` through `node tools/run-ttsx.mjs` for TypeScript scripts.
 - Use `ttsc` and `@ttsc/lint`; do not add ESLint or Prettier for TypeScript.
+- Keep assertions enabled in tests and smoke scripts; `test:ttsx-assertions` verifies the runner preserves them.
+- Use `console.info` for CLI instructions and validation summaries. `console.log`, `console.debug`, and `console.trace` are removable debug calls under `strip.config.js`.
 - Run `pnpm graph:preflight` after changing broad TypeScript flows.
 
 ## Before Opening a Pull Request

@@ -94,7 +94,7 @@ function validateTargetConfigConsistency(target: string, config: TargetConfig): 
 
 if (isCliEntrypoint(import.meta.url)) {
   const configMatrix = validateTargetConfigMatrixFile();
-  console.log(
+  console.info(
     `Target config ${configMatrix.version}: ${Object.keys(configMatrix.targets).length} targets`,
   );
 }
