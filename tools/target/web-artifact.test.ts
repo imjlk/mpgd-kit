@@ -145,7 +145,7 @@ try {
 
   const implicitHeadManifestArtifact = join(root, 'implicit-head-manifest-artifact');
   mkdirSync(implicitHeadManifestArtifact);
-  writeFileSync(join(implicitHeadManifestArtifact, 'manifest.webmanifest'), '{}\n');
+  // Omit the file so this case specifically exercises detection of the implicit-head link.
   writeFileSync(
     join(implicitHeadManifestArtifact, 'index.html'),
     '<!doctype html><html><link rel="manifest" href="./manifest.webmanifest"><body></body></html>',
@@ -490,7 +490,7 @@ try {
   });
   assert.throws(
     () => validatePlatformTargetsFile(configPath),
-    /staticDir and output must not overlap/u,
+    /staticDir and Vite output must not overlap/u,
   );
 
   assert.throws(

@@ -303,7 +303,7 @@ if (failures.length > 0) {
   throw new Error(`Starter workflow validation failed:\n- ${failures.join('\n- ')}`);
 }
 
-console.log('Starter workflow validation passed.');
+console.info('Starter workflow validation passed.');
 
 function validateGeneratedConsumerWorkflow(): void {
   const templateRoot = 'packages/cli/templates/phaser-game';

@@ -11,8 +11,8 @@ import type {
   EvidenceVerificationDecision,
   GameServicesEvidenceVerifier,
   VerifyAdRewardEvidenceInput,
-} from './evidence-verification';
-import type { ClaimAdRewardRequest } from './types';
+} from './evidence-verification.js';
+import type { ClaimAdRewardRequest } from './types.js';
 
 export const adMobSsvConformanceChecks = [
   'verified callback emits one transaction authority identity',

@@ -1,4 +1,4 @@
-import type { NotificationTemplateData } from './notification-delivery';
+import type { NotificationTemplateData } from './notification-delivery.js';
 
 export const appsInTossPartnerApiBaseUrl = 'https://apps-in-toss-api.toss.im';
 export const defaultAppsInTossPartnerApiTimeoutMs = 10_000;

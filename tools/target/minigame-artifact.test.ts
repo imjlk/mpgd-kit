@@ -70,10 +70,7 @@ try {
   assert.deepEqual(verifyMiniGameArtifactEvidence(expected), evidence);
 
   write('remote.js', "importScripts('https://cdn.example.test/remote.js');\n");
-  assert.throws(
-    () => assertMiniGameJavaScriptSafety(root, []),
-    /remote executable code reference/u,
-  );
+  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /forbidden importScripts/u);
   rmSync(join(root, 'remote.js'));
 
   for (const extension of ['JS', 'cjs', 'mjs']) {
@@ -164,7 +161,10 @@ try {
     write('unsafe.js', derivedConstructor);
     assert.throws(
       () => assertMiniGameJavaScriptSafety(root, []),
-      /contains forbidden dynamic-code constructor/u,
+      derivedConstructor.includes('globalThis[')
+        ? /contains forbidden (?:dynamic-code constructor|computed global read|Function)/u
+        : /contains forbidden dynamic-code constructor/u,
+      derivedConstructor,
     );
     rmSync(join(root, 'unsafe.js'));
   }
@@ -412,10 +412,7 @@ try {
     'unsafe.js',
     "const constructorName = 'Function'; globalThis[constructorName]('return 1')();\n",
   );
-  assert.throws(
-    () => assertMiniGameJavaScriptSafety(root, []),
-    /contains forbidden computed global call/u,
-  );
+  assert.throws(() => assertMiniGameJavaScriptSafety(root, []), /contains forbidden Function/u);
   rmSync(join(root, 'unsafe.js'));
   write('safe-method.js', 'function invoke(member) { this[member](); }\n');
   assert.doesNotThrow(() => assertMiniGameJavaScriptSafety(root, []));

@@ -7,7 +7,7 @@ import type {
   RecordLeaderboardScoreResponse,
   VerifyPurchaseRequest,
   VerifyPurchaseResponse,
-} from './types';
+} from './types.js';
 
 export interface GameServicesHealthResponse {
   readonly ok: true;

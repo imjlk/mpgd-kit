@@ -112,7 +112,7 @@ try {
     },
   );
   const requestMockAgent = new MockAgent();
-  let observedRequestBody = '';
+  let observedRequestBody: Response | undefined;
   let observedRequestHeader = '';
   requestMockAgent.disableNetConnect();
   requestMockAgent
@@ -125,7 +125,8 @@ try {
         return true;
       },
       body: (body) => {
-        observedRequestBody = body;
+        // Undici may pass the Request body as a stream to the mock matcher.
+        observedRequestBody = new Response(body);
         return true;
       },
     })
@@ -142,7 +143,7 @@ try {
     );
     assert.equal(await requestResponse.text(), 'request preserved');
     assert.equal(observedRequestHeader, 'preserved');
-    assert.equal(observedRequestBody, 'request body');
+    assert.equal(await observedRequestBody?.text(), 'request body');
   } finally {
     await requestMockAgent.close();
   }

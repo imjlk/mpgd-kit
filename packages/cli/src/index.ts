@@ -325,8 +325,8 @@ const entryCommand = defineI18n({
     ko: 'mpgd-kit 스타터와 타깃 워크플로우를 관리합니다.',
   }),
   run: () => {
-    console.log('Use a sub-command: game, target, kit.');
-    console.log('Run "pnpm mpgd --help" for available commands.');
+    console.info('Use a sub-command: game, target, kit.');
+    console.info('Run "pnpm mpgd --help" for available commands.');
   },
 });
 
@@ -682,9 +682,9 @@ const gameCommand = defineI18n({
           maximumBytes,
         });
 
-        console.log(`Offline playtest (test only): ${result.entryFile}`);
-        console.log(`Evidence: ${result.evidenceFile}`);
-        console.log('Not a release target, deployment artifact, PWA, or store-submission package.');
+        console.info(`Offline playtest (test only): ${result.entryFile}`);
+        console.info(`Evidence: ${result.evidenceFile}`);
+        console.info('Not a release target, deployment artifact, PWA, or store-submission package.');
       },
     }),
     icons: defineI18n({
@@ -744,12 +744,12 @@ const gameCommand = defineI18n({
         ]),
       ),
       run: () => {
-        console.log('Use "mpgd game icons generate <game>", verify, or inspect.');
+        console.info('Use "mpgd game icons generate <game>", verify, or inspect.');
       },
     }),
   },
   run: () => {
-    console.log(
+    console.info(
       'Use "mpgd game create <directory>", "mpgd game accept <game>", "mpgd game offline-playtest <game>", or "mpgd game icons generate <game>".',
     );
   },
@@ -944,14 +944,14 @@ function acceptGame(input: AcceptGameInput): void {
     },
   });
 
-  console.log(`[mpgd:accept] JSON report: ${result.jsonFile}`);
-  console.log(`[mpgd:accept] Markdown report: ${result.markdownFile}`);
+  console.info(`[mpgd:accept] JSON report: ${result.jsonFile}`);
+  console.info(`[mpgd:accept] Markdown report: ${result.markdownFile}`);
 
   if (result.report.status === 'failed') {
     throw new Error(`Game acceptance failed. Report: ${result.markdownFile}`);
   }
 
-  console.log('[mpgd:accept] passed');
+  console.info('[mpgd:accept] passed');
 }
 
 function assertGameAcceptanceRoot(gameRoot: string): string {
@@ -1080,7 +1080,7 @@ const legalCommand = defineI18n({
           check: false,
         });
 
-        console.log(`Built legal site: ${result.outDir}`);
+        console.info(`Built legal site: ${result.outDir}`);
       },
     }),
     check: defineI18n({
@@ -1100,12 +1100,12 @@ const legalCommand = defineI18n({
           check: true,
         });
 
-        console.log(`Legal site checked: ${result.outDir}`);
+        console.info(`Legal site checked: ${result.outDir}`);
       },
     }),
   },
   run: () => {
-    console.log('Use "mpgd legal build" or "mpgd legal check".');
+    console.info('Use "mpgd legal build" or "mpgd legal check".');
   },
 });
 
@@ -1183,9 +1183,10 @@ const targetCommand = defineI18n({
         const resolvedKitPath = configuredKitPath === undefined
           ? detectedKitRoot
           : assertKitRoot(path.resolve(configuredKitPath));
+        const canonicalGameRoot = existsSync(gameRoot) ? realpathSync(gameRoot) : gameRoot;
         const defaultKitPath = resolvedKitPath === undefined
           ? defaultMpgdKitPath
-          : toTemplatePath(path.relative(gameRoot, resolvedKitPath) || '.');
+          : toTemplatePath(path.relative(canonicalGameRoot, resolvedKitPath) || '.');
         const dryRun = ctx.values['dry-run'] === true;
         const adapterDependencyVersion = resolveMicrosoftStoreAdapterDependencyVersion(
           requireMpgdDependencyVersion(
@@ -1204,12 +1205,12 @@ const targetCommand = defineI18n({
           dryRun,
         });
 
-        console.log(
+        console.info(
           `${dryRun ? 'Would update' : 'Updated'} Microsoft Store starter workflow: ${result.changedFiles.length} file(s).`,
         );
 
         for (const file of result.changedFiles) {
-          console.log(`- ${file}`);
+          console.info(`- ${file}`);
         }
       },
     }),
@@ -1461,7 +1462,7 @@ const targetCommand = defineI18n({
           report: verification,
           markdown: renderHostedPwaVerificationMarkdown(verification),
         });
-        console.log(
+        console.info(
           `Hosted PWA deployment verified: ${verification.verifiedGameFileCount} game `
             + `file(s) from revision ${verification.revision} under the `
             + `${verification.host}/${verification.profile} profile `
@@ -1601,7 +1602,7 @@ const targetCommand = defineI18n({
         };
 
         if (ctx.values.json !== true) {
-          console.log('[mpgd] target preview-versions (read-only candidates, not reservations)');
+          console.info('[mpgd] target preview-versions (read-only candidates, not reservations)');
         }
         // --silent keeps pnpm's script echo out of stdout so the JSON document
         // is machine-readable apart from the framework banner.
@@ -1747,7 +1748,7 @@ const targetCommand = defineI18n({
           markdownFile: path.join(outputDir, 'package-generation.md'),
         });
 
-        console.log(
+        console.info(
           `Microsoft Store package ZIP downloaded to ${evidence.archive.file}; package inspection remains required.`,
         );
       },
@@ -1847,7 +1848,7 @@ const targetCommand = defineI18n({
           markdownFile: path.join(outputDir, 'submission-preflight.md'),
         });
 
-        console.log(
+        console.info(
           `Microsoft Store submission preflight passed: ${Object.keys(evidence.listing.locales).length} listing locale(s), ${evidence.warnings.length} warning(s).`,
         );
       },
@@ -1988,7 +1989,7 @@ const targetCommand = defineI18n({
           }),
         );
 
-        console.log(
+        console.info(
           `Microsoft Store package acceptance passed: ${evidence.packages.length} package(s).`,
         );
       },
@@ -2103,7 +2104,7 @@ const targetCommand = defineI18n({
     }),
   },
   run: () => {
-    console.log(
+    console.info(
       'Use "mpgd target init <target>", "mpgd target build <target>", "mpgd target smoke <target>", "mpgd target generate-package <target>", "mpgd target preflight <target>", or "mpgd target accept-package <target> --packages <paths>".',
     );
   },
@@ -2125,17 +2126,17 @@ const kitCommand = defineI18n({
         ko: 'CLI, kit, template, target wrapper 상태를 출력합니다.',
       }),
       run: () => {
-        console.log(`cli package: ${packageRoot}`);
-        console.log(`mpgd-kit: ${detectedKitRoot ?? 'not detected'}`);
-        console.log(`cli template: ${existsSync(gameTemplateDir) ? 'ok' : 'missing'}`);
-        console.log(`mobile wrapper: ${kitFileStatus('apps/mobile-capacitor/package.json')}`);
-        console.log(`ait wrapper: ${kitFileStatus('apps/target-ait/package.json')}`);
-        console.log(`devvit wrapper: ${kitFileStatus('apps/target-devvit/package.json')}`);
+        console.info(`cli package: ${packageRoot}`);
+        console.info(`mpgd-kit: ${detectedKitRoot ?? 'not detected'}`);
+        console.info(`cli template: ${existsSync(gameTemplateDir) ? 'ok' : 'missing'}`);
+        console.info(`mobile wrapper: ${kitFileStatus('apps/mobile-capacitor/package.json')}`);
+        console.info(`ait wrapper: ${kitFileStatus('apps/target-ait/package.json')}`);
+        console.info(`devvit wrapper: ${kitFileStatus('apps/target-devvit/package.json')}`);
       },
     }),
   },
   run: () => {
-    console.log('Use "mpgd kit doctor".');
+    console.info('Use "mpgd kit doctor".');
   },
 });
 
@@ -2435,14 +2436,14 @@ function createGameApp(input: {
   });
 
   if (input.dryRun) {
-    console.log(`Would create ${path.relative(process.cwd(), appDir) || appDir}:`);
+    console.info(`Would create ${path.relative(process.cwd(), appDir) || appDir}:`);
 
     const plannedFiles = input.microsoftStore
       ? [...files.map((file) => file.relativePath), ...listMicrosoftStoreInitializerTemplateFiles()]
       : files.map((file) => file.relativePath);
 
     for (const relativePath of [...new Set(plannedFiles)].sort()) {
-      console.log(`- ${path.join(path.relative(process.cwd(), appDir), relativePath)}`);
+      console.info(`- ${path.join(path.relative(process.cwd(), appDir), relativePath)}`);
     }
 
     return;
@@ -2484,13 +2485,13 @@ function createGameApp(input: {
     throw error;
   }
 
-  console.log(`Created ${appDir}`);
-  console.log('Next steps:');
-  console.log(`  cd ${appDir}`);
-  console.log('  pnpm install -w');
-  console.log('  pnpm dev');
-  console.log('Target builds require an mpgd-kit checkout:');
-  console.log(
+  console.info(`Created ${appDir}`);
+  console.info('Next steps:');
+  console.info(`  cd ${appDir}`);
+  console.info('  pnpm install -w');
+  console.info('  pnpm dev');
+  console.info('Target builds require an mpgd-kit checkout:');
+  console.info(
     [
       '  mpgd target build-all',
       `--targets-file ${path.join(appDir, 'mpgd.targets.json')}`,
@@ -3070,7 +3071,7 @@ function runTargetCommand(input: {
     ? ['build:target', target, profile]
     : ['smoke:target', target];
 
-  console.log(`[mpgd] ${input.action} ${target}`);
+  console.info(`[mpgd] ${input.action} ${target}`);
   runPnpm(args, env);
 }
 

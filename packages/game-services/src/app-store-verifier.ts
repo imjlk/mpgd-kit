@@ -4,7 +4,7 @@ import type {
   EvidenceVerificationDecision,
   GameServicesEvidenceVerifier,
   VerifyPurchaseEvidenceInput,
-} from './evidence-verification';
+} from './evidence-verification.js';
 
 export type AppStoreEnvironment = 'Production' | 'Sandbox';
 

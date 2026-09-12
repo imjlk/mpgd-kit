@@ -8,6 +8,7 @@ import {
   readdirSync,
   readFileSync,
   readlinkSync,
+  realpathSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -23,8 +24,13 @@ import {
   resolveMicrosoftStoreAdapterDependencyVersion,
 } from '../../packages/cli/src/microsoft-store-starter';
 
-const fixtureRoot = mkdtempSync(join(tmpdir(), 'mpgd-cli-microsoft-store-starter-onboarding-'));
+const fixtureRoot = realpathSync(
+  mkdtempSync(join(tmpdir(), 'mpgd-cli-microsoft-store-starter-onboarding-')),
+);
 const kitRoot = resolve('.');
+const currentAdapterDependency = resolveMicrosoftStoreAdapterDependencyVersion(
+  `^${String(readJson(join(kitRoot, 'adapters/browser/package.json')).version)}`,
+);
 const templateRoot = resolve('packages/cli/templates/phaser-game');
 const binaryFixtureFile = /\.(?:avif|gif|ico|jpe?g|otf|png|ttf|wasm|webp|woff2?)$/iu;
 const unresolvedTemplatePlaceholder = /__(?:CAMEL_NAME|DEFAULT_KIT_PATH|DEVVIT_APP_NAME|GAME_NAME|GAME_TITLE(?:_TS_LITERAL)?|LEGAL_LAST_UPDATED|MPGD_DEPENDENCY_VERSION(?:_[A-Z0-9_]+)?|PACKAGE_NAME|PASCAL_NAME|PNPM_WORKSPACE_KIT_PACKAGES|RECOMMENDED_MATRIX_TARGETS|TSCONFIG_(?:EXTENDS_LINE|WORKSPACE_(?:EXCLUDES|INCLUDES))|WORKSPACE_I18N_BUILD_PREFIX)__/u;
@@ -54,10 +60,17 @@ try {
       readJson(join(selectedGame, 'package.json')).dependencies,
       'selected game dependencies',
     )['@mpgd/adapter-browser'],
-    '^0.6.0',
-    'source-checkout game creation must use the first adapter release with Store exports',
+    currentAdapterDependency,
+    'source-checkout game creation must use the current adapter release with Store exports',
   );
   assertNoUnresolvedTemplatePlaceholders(selectedGame);
+
+  // A linked parent must derive the same managed kit path as the canonical creation path.
+  const linkedGames = join(fixtureRoot, 'linked-games');
+  symlinkSync(fixtureRoot, linkedGames, 'dir');
+  const selectedBeforeAliasInit = snapshotTree(selectedGame);
+  initializeGame(join(linkedGames, 'with-store'));
+  assert.deepEqual(snapshotTree(selectedGame), selectedBeforeAliasInit);
 
   const nestedGame = createGame('nested/with-store', ['--microsoft-store']);
   assertGenericAgentWorkflow(nestedGame);
@@ -211,7 +224,7 @@ try {
       readJson(join(legacyRegistryGame, 'package.json')).dependencies,
       'migrated registry package dependencies',
     )['@mpgd/adapter-browser'],
-    '0.6.0',
+    currentAdapterDependency,
   );
   assert.match(readFileSync(legacyRuntimeFile, 'utf8'), /'microsoft-store'/u);
 
@@ -234,7 +247,7 @@ try {
       readJson(join(prereleaseAdapterGame, 'package.json')).dependencies,
       'migrated prerelease registry package dependencies',
     )['@mpgd/adapter-browser'],
-    '^0.6.0',
+    '0.6.0',
   );
 
   const compatiblePrereleaseRangeGame = createGame('compatible-prerelease-range-adapter');
@@ -425,7 +438,7 @@ try {
       output: 'artifacts/microsoft-store',
     };
     writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
-  }, /must use the game root, Store artifact directory, browser adapter/u);
+  }, /must use the game root, Store artifact directory, a supported Store adapter/u);
 
   assertConflictIsAtomic('target-game-app-escape', (gameRoot) => {
     const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));
@@ -438,7 +451,7 @@ try {
       output: 'artifacts/microsoft-store',
     };
     writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
-  }, /must use the game root, Store artifact directory, browser adapter/u);
+  }, /must use the game root, Store artifact directory, a supported Store adapter/u);
 
   assertConflictIsAtomic('target-output-escape', (gameRoot) => {
     const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));
@@ -451,7 +464,7 @@ try {
       output: '/tmp/outside-store-artifacts',
     };
     writeJson(join(gameRoot, 'mpgd.targets.json'), targetsJson);
-  }, /must use the game root, Store artifact directory, browser adapter/u);
+  }, /must use the game root, Store artifact directory, a supported Store adapter/u);
 
   assertConflictIsAtomic('target-icon-conflict', (gameRoot) => {
     const targetsJson = readJson(join(gameRoot, 'mpgd.targets.json'));

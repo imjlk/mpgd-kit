@@ -10,7 +10,7 @@ export function validateEffectiveTargetConfig() {
 
 if (isCliEntrypoint(import.meta.url)) {
   const matrix = validateEffectiveTargetConfig();
-  console.log(
+  console.info(
     `Effective target config ${matrix.version}: ${Object.keys(matrix.targets).length} targets`,
   );
 }

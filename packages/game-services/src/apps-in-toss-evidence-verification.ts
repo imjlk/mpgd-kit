@@ -5,8 +5,8 @@ import type {
   GameServicesEvidenceVerifier,
   VerifyAdRewardEvidenceInput,
   VerifyPurchaseEvidenceInput,
-} from './evidence-verification';
-import type { VerifyPurchaseRequest, VerifyPurchaseResponse } from './types';
+} from './evidence-verification.js';
+import type { VerifyPurchaseRequest, VerifyPurchaseResponse } from './types.js';
 
 export const appsInTossPurchaseCallbackEvidenceSchema =
   'apps-in-toss.iap.callback.v1';
