@@ -1,5 +1,32 @@
 # @mpgd/cli
 
+## 0.29.0 — 2026-09-12
+
+### Minor changes
+
+- [6b3d3c6](https://github.com/imjlk/mpgd-kit/commit/6b3d3c62cb4e1c1a585291d8b2d10f71e2a8500a) Add `mpgd target verify-deployment` for hosted Cloudflare Pages PWA
+  deployments. The command verifies that a deployment directory serves an
+  already-verified PWA artifact unchanged: every source file must exist with an
+  identical sha256 digest, the release evidence revision must recompute from
+  the real bytes, unrecognized files are rejected as cross-build contamination,
+  `_routes.json` must match one of the reviewed routing profiles
+  (`api-only` or `api-canonical-index`), and `_headers`/`_redirects` are parsed
+  and evaluated under the documented Cloudflare semantics (matching blocks apply
+  in order, duplicate headers comma-join, `!` removals clear the header) to
+  enforce the reviewed cache policy. Verification is read-only, writes JSON and
+  Markdown evidence, and exits non-zero on failure. PWA release primitives moved
+  from repo tooling into the package so the command works without a kit checkout. — Thanks @imjlk!
+- [56dea12](https://github.com/imjlk/mpgd-kit/commit/56dea1260706a00ee2e641eba6663597c958e74a) Generated Phaser games now disable text selection game-wide by default.
+  `mpgd.game.json` accepts a `ui.textSelection` setting (`'disabled'` default or
+  `'enabled'` to restore the browser default), validated with the rest of the
+  game config at build time. Input fields, textareas, and contenteditable
+  elements remain selectable, and `markSelectable`/`unmarkSelectable` utilities
+  re-enable selection for individual UI elements. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: i18n@0.6.1, target-config@0.14.1
+
 ## 0.28.1 — 2026-09-03
 
 ### Patch changes
