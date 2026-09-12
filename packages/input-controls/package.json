@@ -1,0 +1,51 @@
+{
+  "name": "@mpgd/input-controls",
+  "version": "0.1.0",
+  "description": "Headless virtual joystick state core: dynamic eight-way touch input with pointer ownership, dead zone, and clamped handle geometry.",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/input-controls"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "game-development",
+    "joystick",
+    "touch-input",
+    "input"
+  ],
+  "type": "module",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "check": "ttsc --noEmit",
+    "test": "vitest run",
+    "lint": "ttsc --noEmit",
+    "format": "ttsc format",
+    "fix": "ttsc fix"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
+    "vitest": "^4.0.0"
+  }
+}
