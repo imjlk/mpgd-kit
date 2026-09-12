@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import {
   existsSync,
+  lstatSync,
   mkdirSync,
   readdirSync,
   readFileSync,
@@ -23,12 +24,22 @@ import {
   type ConfiguredBuildTargets,
 } from './build-targets.js';
 import {
+  escapeMarkdownInline as escapeEvidenceMarkdownInline,
+  writeEvidenceReportFiles,
+} from './evidence-io.js';
+import {
   defaultGameAcceptanceCommandTimeoutMs,
   resolveGameAcceptanceReleaseManifestFile,
   runGameAcceptance,
   type GameAcceptanceStep,
 } from './game-acceptance.js';
 import { resolveGameplayE2EReportFile } from './gameplay-e2e.js';
+import {
+  cloudflarePagesDeploymentProfiles,
+  hostedPwaDeploymentHosts,
+  verifyHostedPwaDeployment,
+  type HostedPwaDeploymentVerification,
+} from './hosted-pwa-deployment.js';
 import {
   createMicrosoftStorePackageAcceptanceRuntime,
   runMicrosoftStorePackageAcceptance,
@@ -102,6 +113,17 @@ export {
   type RunGameplayE2EInput,
   type RunGameplayE2EResult,
 } from './gameplay-e2e.js';
+
+export {
+  cloudflarePagesDeploymentProfiles,
+  hostedPwaDeploymentHosts,
+  isSupportedHostedPwaProfile,
+  verifyHostedPwaDeployment,
+  type CloudflarePagesDeploymentProfile,
+  type HostedPwaDeploymentHost,
+  type HostedPwaDeploymentVerification,
+  type VerifyHostedPwaDeploymentInput,
+} from './hosted-pwa-deployment.js';
 
 export {
   defaultOfflinePlaytestArtifactDir,
@@ -1298,6 +1320,153 @@ const targetCommand = defineI18n({
           target,
           env: createTargetCommandEnv(ctx.values),
         });
+      },
+    }),
+    'verify-deployment': defineI18n({
+      name: 'verify-deployment',
+      description:
+        'Verify that a hosted deployment directory serves a verified PWA artifact unchanged.',
+      resource: commandResource(
+        {
+          en: 'Verify that a hosted deployment directory serves a verified PWA artifact unchanged.',
+          ko: '호스트 배포 디렉터리가 검증된 PWA 산출물을 변조 없이 서비스하는지 검증합니다.',
+        },
+        {
+          target: {
+            en: 'Target that produced the source PWA artifact (microsoft-store).',
+            ko: '원본 PWA 산출물을 생성한 타깃(microsoft-store).',
+          },
+          'deployment-root': {
+            en: 'Host deployment directory to verify.',
+            ko: '검증할 호스트 배포 디렉터리.',
+          },
+          'source-artifact-root': {
+            en: 'Directory of the verified source PWA artifact.',
+            ko: '검증된 원본 PWA 산출물 디렉터리.',
+          },
+          host: {
+            en: `Hosting profile (${hostedPwaDeploymentHosts.join(', ')}).`,
+            ko: `호스팅 프로필(${hostedPwaDeploymentHosts.join(', ')}).`,
+          },
+          profile: {
+            en: `Host routing profile (${cloudflarePagesDeploymentProfiles.join(', ')}).`,
+            ko: `호스트 라우팅 프로필(${cloudflarePagesDeploymentProfiles.join(', ')}).`,
+          },
+          'report-dir': {
+            en: 'Directory for verification evidence files (defaults to the working directory).',
+            ko: '검증 결과 파일을 기록할 디렉터리(기본값은 작업 디렉터리).',
+          },
+        },
+      ),
+      args: {
+        target: {
+          type: 'positional',
+          required: true,
+          description: 'Target that produced the source PWA artifact (microsoft-store)',
+        },
+        'deployment-root': {
+          type: 'string',
+          required: true,
+          description: 'Host deployment directory to verify.',
+        },
+        'source-artifact-root': {
+          type: 'string',
+          required: true,
+          description: 'Directory of the verified source PWA artifact.',
+        },
+        host: {
+          type: 'string',
+          required: false,
+          default: 'cloudflare-pages',
+          description: `Hosting profile (${hostedPwaDeploymentHosts.join(', ')}).`,
+        },
+        profile: {
+          type: 'string',
+          required: false,
+          default: 'api-only',
+          description: `Host routing profile (${cloudflarePagesDeploymentProfiles.join(', ')}).`,
+        },
+        'report-dir': {
+          type: 'string',
+          required: false,
+          description:
+            'Directory for verification evidence files (defaults to the working directory).',
+        },
+      },
+      run: (ctx) => {
+        const positionals = readLocalPositionals(ctx.positionals, [
+          'target',
+          'verify-deployment',
+        ]);
+        const target = normalizeConfiguredTargetName(
+          readRequiredPositional(positionals, 0, 'target'),
+        );
+
+        if (target !== 'microsoft-store') {
+          throw new Error(
+            `Hosted deployment verification is not available for target: ${target}`,
+          );
+        }
+
+        const deploymentRoot = readRequiredCliOption(
+          ctx.values['deployment-root'],
+          '--deployment-root',
+        );
+        const sourceArtifactRoot = readRequiredCliOption(
+          ctx.values['source-artifact-root'],
+          '--source-artifact-root',
+        );
+        const host = readOptionalString(ctx.values.host) ?? 'cloudflare-pages';
+        const profile = readOptionalString(ctx.values.profile) ?? 'api-only';
+
+        if (!hostedPwaDeploymentHosts.includes(host as (typeof hostedPwaDeploymentHosts)[number])) {
+          throw new Error(
+            `Unsupported hosted PWA deployment host: ${host} `
+              + `(supported: ${hostedPwaDeploymentHosts.join(', ')}).`,
+          );
+        }
+
+        if (
+          !cloudflarePagesDeploymentProfiles.includes(
+            profile as (typeof cloudflarePagesDeploymentProfiles)[number],
+          )
+        ) {
+          throw new Error(
+            `Unsupported ${host} deployment profile: ${profile} `
+              + `(supported: ${cloudflarePagesDeploymentProfiles.join(', ')}).`,
+          );
+        }
+
+        const reportDir = path.resolve(
+          readOptionalString(ctx.values['report-dir']) ?? process.cwd(),
+        );
+
+        assertReportDirectoryOutsideVerifiedTrees(
+          reportDir,
+          sourceArtifactRoot,
+          deploymentRoot,
+        );
+        assertReportFilesSafeToWrite(reportDir);
+        const verification = verifyHostedPwaDeployment({
+          sourceArtifactRoot,
+          deploymentRoot,
+          host: host as (typeof hostedPwaDeploymentHosts)[number],
+          profile: profile as (typeof cloudflarePagesDeploymentProfiles)[number],
+        });
+
+        mkdirSync(reportDir, { recursive: true });
+        writeEvidenceReportFiles({
+          jsonFile: path.join(reportDir, 'hosted-pwa-verification.json'),
+          markdownFile: path.join(reportDir, 'hosted-pwa-verification.md'),
+          report: verification,
+          markdown: renderHostedPwaVerificationMarkdown(verification),
+        });
+        console.log(
+          `Hosted PWA deployment verified: ${verification.verifiedGameFileCount} game `
+            + `file(s) from revision ${verification.revision} under the `
+            + `${verification.host}/${verification.profile} profile `
+            + `(routes: ${verification.workerRoutes.include.join(', ')}).`,
+        );
       },
     }),
     'generate-package': defineI18n({
@@ -3040,6 +3209,138 @@ function readLocalPositionals(
   }
 
   return positionals.slice(commandPath.length);
+}
+
+/** Reject existing evidence destinations that are links into verified trees. */
+function assertReportFilesSafeToWrite(reportDir: string): void {
+  for (const name of ['hosted-pwa-verification.json', 'hosted-pwa-verification.md']) {
+    const destination = path.join(reportDir, name);
+    let stat: ReturnType<typeof lstatSync> | undefined;
+
+    try {
+      stat = lstatSync(destination);
+    } catch {
+      continue;
+    }
+
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `The report destination ${destination} is a symbolic link; refusing to follow `
+          + 'it because the report write must stay outside the verified trees.',
+      );
+    }
+
+    if (!stat.isFile()) {
+      throw new Error(
+        `The report destination ${destination} is not a regular file; refusing to `
+          + 'write evidence through sockets, FIFOs, devices, or directories.',
+      );
+    }
+
+    if (stat.nlink > 1) {
+      throw new Error(
+        `The report destination ${destination} has ${String(stat.nlink)} hard links; `
+          + 'refusing to write through a shared inode into the verified trees.',
+      );
+    }
+  }
+}
+
+function assertReportDirectoryOutsideVerifiedTrees(
+  reportDir: string,
+  sourceArtifactRoot: string,
+  deploymentRoot: string,
+): void {
+  const canonicalReportDir = realpathThroughExistingAncestor(reportDir);
+
+  for (const [label, root] of [
+    ['source artifact', sourceArtifactRoot],
+    ['deployment', deploymentRoot],
+  ] as const) {
+    const resolvedRoot = realpathThroughExistingAncestor(root);
+    const distance = path.relative(resolvedRoot, canonicalReportDir);
+
+    if (distance === '' || (!distance.startsWith('..') && !path.isAbsolute(distance))) {
+      throw new Error(
+        `The --report-dir must stay outside the verified ${label} directory; `
+          + `${reportDir} is inside ${resolvedRoot}, and writing evidence there would `
+          + 'mutate a read-only verification input.',
+      );
+    }
+  }
+}
+
+/** Canonicalize a possibly missing path through its nearest existing ancestor. */
+function realpathThroughExistingAncestor(candidate: string): string {
+  let absolute = path.resolve(candidate);
+
+  while (true) {
+    try {
+      return realpathSync(absolute);
+    } catch {
+      const parent = path.dirname(absolute);
+
+      if (parent === absolute) {
+        return absolute;
+      }
+
+      absolute = parent;
+    }
+  }
+}
+
+/** Markdown-escape a verification value, normalizing CR line endings first. */
+function escapeVerificationMarkdown(value: string): string {
+  return escapeEvidenceMarkdownInline(value.replaceAll('\r\n', ' ').replaceAll('\r', ' '));
+}
+
+function renderHostedPwaVerificationMarkdown(
+  verification: HostedPwaDeploymentVerification,
+): string {
+  return [
+    '# Hosted PWA Deployment Verification',
+    '',
+    `- Host: ${escapeVerificationMarkdown(verification.host)} (${escapeVerificationMarkdown(verification.profile)} profile)`,
+    `- Source artifact: ${escapeVerificationMarkdown(verification.sourceArtifactRoot)}`,
+    `- Deployment: ${escapeVerificationMarkdown(verification.deploymentRoot)}`,
+    '- Release: '
+      + `${escapeVerificationMarkdown(verification.appVersion)} (build `
+      + `${escapeVerificationMarkdown(verification.buildId)}, revision `
+      + `${escapeVerificationMarkdown(verification.revision)})`,
+    `- Verified game files: ${verification.verifiedGameFileCount}`,
+    `- Recognized host files: ${verification.hostFileCount}`,
+    `- Worker routes (include): ${escapeVerificationMarkdown(verification.workerRoutes.include.join(', '))}`,
+    '',
+    '## Verified',
+    '',
+    '- Every source artifact file is present in the deployment with an identical sha256 digest.',
+    '- The source artifact release evidence revision recomputes from its own files.',
+    '- All local index.html references resolve inside the deployment.',
+    '- The `_routes.json` worker routing matches the reviewed profile exactly.',
+    '- Cache-Control policies are explicit for every asset URL: immutable',
+    '  (content-hashed pipelines) or revalidation (stable names) both satisfy',
+    '  the contract; missing or conflicting policies fail. The service worker',
+    '  and stable-name icons use no-store; the index, manifest, release',
+    '  evidence, and legal pages use revalidation.',
+    '- No redirect moves the PWA entry point or PWA-critical files.',
+    '',
+    '## Not verified',
+    '',
+    '- The Pages worker runtime behavior; exercise it with the host preview',
+    '  (for example `wrangler pages dev`) before deploying.',
+    '- CDN or account-level cache settings outside the deployment directory.',
+    '',
+  ].join('\n');
+}
+
+function readRequiredCliOption(value: unknown, label: string): string {
+  const read = readOptionalString(value);
+
+  if (read === undefined) {
+    throw new Error(`${label} is required.`);
+  }
+
+  return read;
 }
 
 function readOptionalString(value: unknown): string | undefined {

@@ -1,0 +1,466 @@
+import { createHash, type Hash } from 'node:crypto';
+import {
+  closeSync,
+  existsSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  statSync,
+} from 'node:fs';
+import { relative, resolve, sep } from 'node:path';
+
+import {
+  assertMicrosoftStorePwaPrecacheUrl,
+  assertMicrosoftStorePwaReleaseEvidence,
+  microsoftStorePwaCacheSchema,
+  type MicrosoftStorePwaReleaseEvidence,
+} from './microsoft-store-pwa-e2e.js';
+
+/**
+ * Release-evidence primitives shared by the build-time artifact writer and the
+ * hosted-deployment verifier. Kept free of repo-internal imports so the public
+ * CLI can verify deployments without the mpgd-kit checkout.
+ */
+
+export interface PrecacheEntry {
+  readonly url: string;
+  readonly source: string | Uint8Array;
+}
+
+export interface MicrosoftStorePwaProvenance {
+  readonly appVersion: string;
+  readonly buildId: string;
+  readonly sourceGitSha: string;
+  readonly kitGitSha: string;
+}
+
+export function assertMicrosoftStorePwaProvenance(
+  input: MicrosoftStorePwaProvenance,
+): MicrosoftStorePwaProvenance {
+  return {
+    appVersion: requireNonEmptyString(input.appVersion, 'PWA app version'),
+    buildId: requireNonEmptyString(input.buildId, 'PWA build ID'),
+    sourceGitSha: requireGitSha(input.sourceGitSha, 'PWA source Git SHA'),
+    kitGitSha: requireGitSha(input.kitGitSha, 'PWA kit Git SHA'),
+  };
+}
+
+export function createMicrosoftStorePwaRevision(input: {
+  readonly appVersion: string;
+  readonly buildId: string;
+  readonly sourceGitSha: string;
+  readonly kitGitSha: string;
+  readonly precacheEntries: readonly PrecacheEntry[];
+}): string {
+  const hash = createHash('sha256');
+  const release = {
+    appVersion: requireNonEmptyString(input.appVersion, 'PWA app version'),
+    buildId: requireNonEmptyString(input.buildId, 'PWA build ID'),
+    sourceGitSha: requireGitSha(input.sourceGitSha, 'PWA source Git SHA'),
+    kitGitSha: requireGitSha(input.kitGitSha, 'PWA kit Git SHA'),
+  };
+
+  updateRevisionField(hash, microsoftStorePwaCacheSchema);
+  updateRevisionField(hash, JSON.stringify(release));
+
+  for (const entry of normalizePrecacheEntries(input.precacheEntries)) {
+    updateRevisionField(hash, entry.url);
+    updateRevisionField(hash, entry.source);
+  }
+
+  return hash.digest('hex').slice(0, 16);
+}
+
+/**
+ * Recompute a release revision by streaming each precached file through the
+ * digest instead of materializing every payload in memory, for verifiers
+ * that only have the artifact root and the recorded URL list.
+ */
+export function createMicrosoftStorePwaRevisionFromFiles(input: {
+  readonly appVersion: string;
+  readonly buildId: string;
+  readonly sourceGitSha: string;
+  readonly kitGitSha: string;
+  readonly precacheUrls: readonly string[];
+  readonly artifactRoot: string;
+}): string {
+  const hash = createHash('sha256');
+  const release = {
+    appVersion: requireNonEmptyString(input.appVersion, 'PWA app version'),
+    buildId: requireNonEmptyString(input.buildId, 'PWA build ID'),
+    sourceGitSha: requireGitSha(input.sourceGitSha, 'PWA source Git SHA'),
+    kitGitSha: requireGitSha(input.kitGitSha, 'PWA kit Git SHA'),
+  };
+
+  updateRevisionField(hash, microsoftStorePwaCacheSchema);
+  updateRevisionField(hash, JSON.stringify(release));
+
+  const urls = [...input.precacheUrls]
+    .filter((url) => url !== './pwa-release.json' && !url.endsWith('.map'))
+    .map(assertMicrosoftStorePwaPrecacheUrl)
+    .sort(compareCodeUnits);
+
+  for (const url of urls) {
+    const file = resolve(input.artifactRoot, url.replace(/^\.\//u, ''));
+
+    if (!existsSync(file)) {
+      throw new Error(`PWA precache URL has no artifact file: ${url}`);
+    }
+
+    updateRevisionField(hash, url);
+    hash.update(`${String(statSync(file).size)}:`);
+    hashStreamInto(hash, file);
+  }
+
+  return hash.digest('hex').slice(0, 16);
+}
+
+function hashStreamInto(hash: Hash, file: string): void {
+  const handle = openSync(file, 'r');
+  const chunk = Buffer.allocUnsafe(1024 * 1024);
+
+  try {
+    let read = readSync(handle, chunk, 0, chunk.length, null);
+
+    while (read > 0) {
+      hash.update(chunk.subarray(0, read));
+      read = readSync(handle, chunk, 0, chunk.length, null);
+    }
+  } finally {
+    closeSync(handle);
+  }
+}
+
+export function createMicrosoftStorePwaReleaseEvidence(input: {
+  readonly pwaId: string;
+  readonly appVersion: string;
+  readonly buildId: string;
+  readonly sourceGitSha: string;
+  readonly kitGitSha: string;
+  readonly revision: string;
+  readonly precacheUrls: readonly string[];
+}): MicrosoftStorePwaReleaseEvidence {
+  const pwaId = requireGameSpecificPwaId(input.pwaId);
+  const revision = requireRevision(input.revision);
+  const cachePrefix = `mpgd-pwa-${createHash('sha256').update(pwaId).digest('hex').slice(0, 12)}-`;
+
+  return {
+    schemaVersion: 1,
+    cacheSchema: microsoftStorePwaCacheSchema,
+    pwaId,
+    appVersion: requireNonEmptyString(input.appVersion, 'PWA app version'),
+    buildId: requireNonEmptyString(input.buildId, 'PWA build ID'),
+    sourceGitSha: requireGitSha(input.sourceGitSha, 'PWA source Git SHA'),
+    kitGitSha: requireGitSha(input.kitGitSha, 'PWA kit Git SHA'),
+    configTarget: 'microsoft-store',
+    revision,
+    cachePrefix,
+    cacheNamePattern: `${cachePrefix}{scope}-${revision}`,
+    precacheUrls: normalizePrecacheUrls(input.precacheUrls),
+  };
+}
+
+export function createMicrosoftStorePwaServiceWorker(
+  evidence: MicrosoftStorePwaReleaseEvidence,
+): string {
+  const revision = requireRevision(evidence.revision);
+  const cachePrefix = requireNonEmptyString(evidence.cachePrefix, 'PWA cache prefix');
+  const cacheNamePattern = requireNonEmptyString(
+    evidence.cacheNamePattern,
+    'PWA cache name pattern',
+  );
+  const precacheUrls = normalizePrecacheUrls(evidence.precacheUrls);
+
+  if (cacheNamePattern !== `${cachePrefix}{scope}-${revision}`) {
+    throw new Error('PWA cache name pattern is inconsistent.');
+  }
+
+  return `'use strict';
+
+const CACHE_NAMESPACE = ${JSON.stringify(cachePrefix)};
+const CACHE_SCOPE = encodeURIComponent(self.registration.scope);
+const CACHE_PREFIX = CACHE_NAMESPACE + CACHE_SCOPE + '-';
+const CACHE_NAME = ${JSON.stringify(cacheNamePattern)}.replace('{scope}', CACHE_SCOPE);
+const PRECACHE_URLS = ${JSON.stringify(precacheUrls, null, 2)};
+const INDEX_URL = new URL('./index.html', self.registration.scope).href;
+const APP_BASE_URL = self.registration.scope;
+
+function escapeHtmlAttribute(value) {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('"', '&quot;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;');
+}
+
+async function normalizeCachedNavigationResponse(response) {
+  if (!response.redirected) {
+    return response;
+  }
+
+  // Static hosts commonly canonicalize /index.html to /. A redirected response
+  // can be stored by Cache API, but Chromium rejects it when a service worker
+  // later returns it for a navigation whose URL is different. Reconstructing
+  // clears Response.url, so inject an explicit deployment-scope base before
+  // returning the same-origin app shell for a nested SPA route.
+  const html = await response.text();
+  const headPattern = /<head(?:\\s[^>]*)?>/iu;
+
+  if (!headPattern.test(html)) {
+    throw new Error('Cached PWA app shell is missing a head element.');
+  }
+
+  const headers = new Headers(response.headers);
+  headers.delete('content-encoding');
+  headers.delete('content-length');
+  const base = '<base href="' + escapeHtmlAttribute(APP_BASE_URL) + '">';
+  return new Response(html.replace(headPattern, (head) => head + base), {
+    headers,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
+self.addEventListener('install', (event) => {
+  event.waitUntil((async () => {
+    const cache = await caches.open(CACHE_NAME);
+
+    try {
+      const requests = PRECACHE_URLS.map((url) => new Request(
+        new URL(url, self.registration.scope),
+        { cache: 'reload' },
+      ));
+      await cache.addAll(requests);
+    } catch (error) {
+      try {
+        await caches.delete(CACHE_NAME);
+      } catch {
+        // Preserve the original installation error when cleanup also fails.
+      }
+      throw error;
+    }
+  })());
+});
+
+self.addEventListener('activate', (event) => {
+  event.waitUntil((async () => {
+    const cacheNames = await caches.keys();
+    await Promise.all(
+      cacheNames
+        .filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME)
+        .map((name) => caches.delete(name)),
+    );
+    await self.clients.claim();
+  })());
+});
+
+self.addEventListener('fetch', (event) => {
+  const request = event.request;
+
+  if (request.method !== 'GET') {
+    return;
+  }
+
+  const url = new URL(request.url);
+
+  if (url.origin !== self.location.origin) {
+    return;
+  }
+
+  if (request.mode === 'navigate') {
+    event.respondWith((async () => {
+      const cache = await caches.open(CACHE_NAME);
+      const cachedIndex = await cache.match(INDEX_URL);
+      return cachedIndex === undefined
+        ? fetch(request)
+        : normalizeCachedNavigationResponse(cachedIndex);
+    })());
+    return;
+  }
+
+  event.respondWith((async () => {
+    const cache = await caches.open(CACHE_NAME);
+    return await cache.match(request, { ignoreSearch: true }) ?? fetch(request);
+  })());
+});
+`;
+}
+
+export function readMicrosoftStorePwaReleaseEvidence(
+  path: string,
+): MicrosoftStorePwaReleaseEvidence {
+  return assertMicrosoftStorePwaReleaseEvidence(readJsonFile(path));
+}
+
+/**
+ * Enumerate the precacheable files of a PWA artifact. Sourcemaps, the release
+ * evidence document, and the service worker itself are excluded because the
+ * release revision only covers the precached payload. Symbolic links are
+ * rejected so callers cannot be tricked into hashing files outside the root.
+ */
+/** Enumerate only precache URLs without reading any payload bytes. */
+export function listPrecacheUrls(artifactRoot: string): readonly string[] {
+  const files: string[] = [];
+  const pendingDirectories = [artifactRoot];
+
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop();
+
+    if (directory === undefined) {
+      throw new Error('PWA artifact traversal lost its directory.');
+    }
+
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = resolve(directory, entry.name);
+
+      if (entry.isSymbolicLink()) {
+        throw new Error(`PWA artifact must not contain symbolic links: ${path}`);
+      }
+
+      if (entry.isDirectory()) {
+        pendingDirectories.push(path);
+      } else if (entry.isFile()) {
+        files.push(path);
+      }
+    }
+  }
+
+  return files
+    .filter((path) =>
+      !path.endsWith('.map')
+      && !path.endsWith(`${sep}pwa-release.json`)
+      && !path.endsWith(`${sep}service-worker.js`),
+    )
+    .map((path) => toPrecacheUrl(artifactRoot, path))
+    .sort(compareCodeUnits);
+}
+
+export function listPrecacheEntries(artifactRoot: string): readonly PrecacheEntry[] {
+  const files: string[] = [];
+  const pendingDirectories = [artifactRoot];
+
+  while (pendingDirectories.length > 0) {
+    const directory = pendingDirectories.pop();
+
+    if (directory === undefined) {
+      throw new Error('PWA artifact traversal lost its directory.');
+    }
+
+    for (const entry of readdirSync(directory, { withFileTypes: true })) {
+      const path = resolve(directory, entry.name);
+
+      if (entry.isSymbolicLink()) {
+        throw new Error(`PWA artifact must not contain symbolic links: ${path}`);
+      }
+
+      if (entry.isDirectory()) {
+        pendingDirectories.push(path);
+      } else if (entry.isFile()) {
+        files.push(path);
+      }
+    }
+  }
+
+  return files
+    .filter((path) =>
+      !path.endsWith('.map')
+      && !path.endsWith(`${sep}pwa-release.json`)
+      && !path.endsWith(`${sep}service-worker.js`),
+    )
+    .map((path) => ({
+      url: toPrecacheUrl(artifactRoot, path),
+      source: readFileSync(path),
+    }))
+    .sort((left, right) => compareCodeUnits(left.url, right.url));
+}
+
+function normalizePrecacheEntries(entries: readonly PrecacheEntry[]): readonly PrecacheEntry[] {
+  const entriesByUrl = new Map<string, string | Uint8Array>();
+
+  for (const entry of entries) {
+    const url = assertMicrosoftStorePwaPrecacheUrl(entry.url);
+
+    if (entriesByUrl.has(url)) {
+      throw new Error(`Duplicate PWA precache URL: ${url}`);
+    }
+
+    if (typeof entry.source !== 'string' && !(entry.source instanceof Uint8Array)) {
+      throw new Error(`PWA precache source must be bytes or text: ${url}`);
+    }
+
+    entriesByUrl.set(url, entry.source);
+  }
+
+  return [...entriesByUrl.entries()]
+    .sort(([left], [right]) => compareCodeUnits(left, right))
+    .map(([url, source]) => ({ url, source }));
+}
+
+function normalizePrecacheUrls(urls: readonly string[]): readonly string[] {
+  const normalized = urls.map(assertMicrosoftStorePwaPrecacheUrl);
+
+  if (new Set(normalized).size !== normalized.length) {
+    throw new Error('PWA precache URLs must be unique.');
+  }
+
+  return normalized.sort(compareCodeUnits);
+}
+
+function toPrecacheUrl(root: string, path: string): string {
+  const portablePath = relative(root, path).split(sep).join('/');
+  return assertMicrosoftStorePwaPrecacheUrl(`./${portablePath}`);
+}
+
+export function requireGameSpecificPwaId(value: unknown): string {
+  const pwaId = requireNonEmptyString(value, 'Microsoft Store PWA manifest id');
+
+  if (pwaId === '.' || pwaId === './' || pwaId === '/') {
+    throw new Error('Microsoft Store PWA manifest id must be game-specific.');
+  }
+
+  return pwaId;
+}
+
+function updateRevisionField(hash: Hash, value: string | Uint8Array): void {
+  const bytes = typeof value === 'string' ? Buffer.from(value, 'utf8') : value;
+
+  hash.update(`${String(bytes.byteLength)}:`);
+  hash.update(bytes);
+}
+
+function requireGitSha(value: unknown, label: string): string {
+  const sha = requireNonEmptyString(value, label);
+
+  if (!/^[0-9a-f]{40}$/u.test(sha)) {
+    throw new Error(`${label} must be a full 40-character hexadecimal SHA.`);
+  }
+
+  return sha;
+}
+
+function requireRevision(value: unknown): string {
+  const revision = requireNonEmptyString(value, 'PWA revision');
+
+  if (!/^[0-9a-f]{16}$/u.test(revision)) {
+    throw new Error('PWA revision must be a 16-character hexadecimal digest.');
+  }
+
+  return revision;
+}
+
+function requireNonEmptyString(value: unknown, label: string): string {
+  if (typeof value !== 'string' || value.trim().length === 0) {
+    throw new Error(`${label} must be a non-empty string.`);
+  }
+
+  return value.trim();
+}
+
+function compareCodeUnits(left: string, right: string): number {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function readJsonFile(path: string): unknown {
+  return JSON.parse(readFileSync(path, 'utf8')) as unknown;
+}
