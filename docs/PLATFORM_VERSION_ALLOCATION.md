@@ -66,10 +66,10 @@ accepted.
 - **hosted-content-only** (`microsoft-store` target intent): a web-content
   release that does not upload a new Windows package records the intent in
   the plan and consumes **no** Store number — and building other targets
-  never consumes the Store number as a side effect. Passing
-  `microsoft-store` as a target alone changes nothing until a package upload
-  is allocated; the CLI expresses the split as `microsoft-store` versus
-  `microsoft-store:hosted-content-only`.
+  never consumes the Store number as a side effect. A plain
+  `microsoft-store` request does allocate a package-upload candidate when
+  the plan has no Store entry yet; the CLI expresses the split as
+  `microsoft-store` versus `microsoft-store:hosted-content-only`.
 
 Ledger schema 1 is rejected with an explicit message: converting an
 operational legacy ledger is a deliberate migration this module never

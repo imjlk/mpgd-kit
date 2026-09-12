@@ -108,7 +108,9 @@ const baseArgs = [
 
 // Required test 13: the read-only CLI leaves input files byte-identical.
 const firstRun = runPreview([...baseArgs, '--json']);
+assertEqual(firstRun.status, 0, 'the first JSON preview run succeeds');
 const secondRun = runPreview([...baseArgs, '--json']);
+assertEqual(secondRun.status, 0, 'the second JSON preview run succeeds');
 assertEqual(sha256(ledgerFile), ledgerHashBefore, 'the CLI preview must not modify the ledger');
 assertEqual(sha256(planFile), planHashBefore, 'the CLI preview must not modify the existing plan');
 
@@ -126,6 +128,7 @@ if (!parsed.note.includes('not reserved')) {
 }
 
 const summaryRun = runPreview(baseArgs);
+assertEqual(summaryRun.status, 0, 'the summary preview run succeeds');
 if (!summaryRun.stdout.includes('not reserved')) {
   throw new Error('Summary output must state the numbers are not reserved.');
 }

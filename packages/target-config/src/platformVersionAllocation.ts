@@ -919,7 +919,15 @@ function requireFourPartVersion(value: unknown, label: string): string {
     );
   }
 
-  for (const part of version.split('.')) {
+  const parts = version.split('.');
+
+  // The package-generation input contract rejects a zero major component, so
+  // ledgers carrying it must fail here instead of allocating unusable plans.
+  if (Number.parseInt(parts[0] ?? '0', 10) === 0) {
+    throw new Error(`${label} must have a non-zero first component: ${version}`);
+  }
+
+  for (const part of parts) {
     if (Number.parseInt(part, 10) > MICROSOFT_STORE_VERSION_COMPONENT_MAX) {
       throw new Error(
         `${label} components must fit 0-${String(MICROSOFT_STORE_VERSION_COMPONENT_MAX)}: ${version}`,

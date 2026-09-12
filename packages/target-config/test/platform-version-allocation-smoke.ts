@@ -684,6 +684,20 @@ const baseInput = {
 
 // First remote review round: ordering, ceilings, policy pairing, metadata.
 {
+  // Zero-major Store package versions match the package-generation contract
+  // rejection and must fail ledger validation.
+  assertThrows(
+    () =>
+      assertPlatformVersionLedger({
+        ...createLegacyLedger(),
+        platforms: {
+          ...createLegacyLedger().platforms,
+          'microsoft-store': { classicPackageVersion: '0.0.0.0', packageVersion: '0.1.0.0' },
+        },
+      }),
+    /non-zero first component/u,
+  );
+
   // classic must stay below modern in a legacy ledger.
   assertThrows(
     () =>
