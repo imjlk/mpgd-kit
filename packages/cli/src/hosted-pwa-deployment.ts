@@ -604,6 +604,8 @@ function verifyIndexReferences(
   const references: string[] = [...cssReferences];
   const metaRefreshContents: string[] = [];
   const embeddedDocuments: string[] = [];
+  const stylesheetHrefs = new Set<string>();
+  const activeStylesheets = new Set<string>();
 
   // Attributes only exist on start tags; scanning raw text would treat prose
   // like `Set href="..."` as a reference. Extract within element start tags,
@@ -618,23 +620,40 @@ function verifyIndexReferences(
         ? ['href', 'src', 'poster', 'data']
         : ['href', 'src', 'poster', 'xlink:href'];
 
-    // Tokenize real attribute name/value pairs first so quoted values of
-    // unrelated attributes (title='See href="..."') never leak references.
-    let isMetaRefresh = false;
-    let metaContent: string | undefined;
-    let styleValue: string | undefined;
-    // Detect srcdoc before iterating resource attributes so an iframe src
-    // appearing before its srcdoc is already known to be overridden.
-    const attributesHasSrcdoc
-      = tagName === 'iframe'
-        && /(?:^|\s)srcdoc\s*=\s*(?:"[^"]+"|'[^']+'|[^\s>]+)/iu.test(attributes);
+    // Tokenize real attribute name/value pairs exactly once so every
+    // attribute-driven check (resource names, srcset, style, srcdoc, meta)
+    // shares one parse. Quoted values of unrelated attributes
+    // (title='See srcset="./missing.png"') can never leak references, and
+    // duplicate attributes keep their first occurrence like HTML parsing.
+    const seenAttributeNames = new Set<string>();
+    const attributePairs: { name: string; value: string }[] = [];
 
     for (const attribute of attributes.matchAll(
       /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
     )) {
       const name = (attribute[1] ?? '').toLowerCase();
-      const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
 
+      if (seenAttributeNames.has(name)) {
+        continue;
+      }
+
+      seenAttributeNames.add(name);
+      attributePairs.push({ name, value: attribute[2] ?? attribute[3] ?? attribute[4] ?? '' });
+    }
+
+    // An iframe srcdoc overrides src even when its value is empty.
+    const attributesHasSrcdoc
+      = tagName === 'iframe'
+        && attributePairs.some(({ name }) => name === 'srcdoc');
+
+    let isMetaRefresh = false;
+    let metaContent: string | undefined;
+    let styleValue: string | undefined;
+    let srcsetValue: string | undefined;
+    let linkRel: string | undefined;
+    let linkHref: string | undefined;
+
+    for (const { name, value } of attributePairs) {
       if (tagName === 'meta' && name === 'http-equiv' && value.trim().toLowerCase() === 'refresh') {
         isMetaRefresh = true;
       }
@@ -647,7 +666,19 @@ function verifyIndexReferences(
         styleValue = value;
       }
 
-      if (!resourceNames.includes(name) && name !== 'srcset' && name !== 'srcdoc') {
+      if (name === 'srcset') {
+        srcsetValue = value;
+      }
+
+      if (tagName === 'link' && name === 'rel') {
+        linkRel = value.trim().toLowerCase();
+      }
+
+      if (tagName === 'link' && name === 'href') {
+        linkHref = value;
+      }
+
+      if (!resourceNames.includes(name) && name !== 'srcdoc') {
         continue;
       }
 
@@ -658,13 +689,20 @@ function verifyIndexReferences(
         continue;
       }
 
-      if (name !== 'srcset' && value.length > 0) {
+      if (value.length > 0) {
         if (tagName === 'iframe' && name === 'src' && attributesHasSrcdoc) {
           continue;
         }
 
         references.push(value);
       }
+    }
+
+    // Remember stylesheet links by their raw href so only files the browser
+    // actually applies as CSS join the stylesheet scan; a plain anchor to a
+    // .css file is just a downloadable reference. rel/href order-agnostic.
+    if (tagName === 'link' && linkHref !== undefined && isStylesheetRel(linkRel)) {
+      stylesheetHrefs.add(linkHref);
     }
 
     if (isMetaRefresh && metaContent !== undefined) {
@@ -675,44 +713,12 @@ function verifyIndexReferences(
       collectInlineCssReferences(decodeHtmlReferences(styleValue), references);
     }
 
-    if (!/(?:^|\s)srcset\s*=/iu.test(attributes)) {
+    if (srcsetValue === undefined) {
       continue;
     }
 
-    const srcset = attributes.match(/(?:^|\s)srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
-    const rawCandidates = srcset?.[1] ?? srcset?.[2] ?? srcset?.[3] ?? '';
-    const candidates = decodeHtmlReferences(rawCandidates);
-
-    // WHATWG srcset tokenizing: whitespace-split tokens alternate between a
-    // candidate URL and its descriptors; a numeric single-token value like
-    // srcset="404" stays a URL, while densities after a URL are skipped.
-    let holdingUrl = false;
-
-    for (const token of candidates.split(/\s+/u)) {
-      for (const piece of token.split(/(?<=\d[xw]),/u)) {
-        const trimmed = piece.replace(/^[,]+|[,]+$/gu, '');
-
-        if (trimmed.length === 0) {
-          continue;
-        }
-
-        const isDescriptor = /^[\d.]+[wx]?$/u.test(trimmed);
-
-        if (holdingUrl && isDescriptor) {
-          continue;
-        }
-
-        references.push(trimmed);
-        // A trailing comma on a URL token ends the candidate, so the next
-        // token starts fresh rather than being read as a descriptor.
-        const endedCandidate = /,$/u.test(piece);
-        holdingUrl = !isDescriptor && !endedCandidate;
-      }
-
-      if (/^[\d.]+[wx],?$/u.test(token)) {
-        holdingUrl = false;
-      }
-    }
+    // Shared WHATWG srcset tokenizer (also used by the legal-page pass).
+    pushSrcsetCandidates(decodeHtmlReferences(srcsetValue), references);
   }
 
   // Embedded srcdoc documents resolve their resources against this
@@ -731,62 +737,6 @@ function verifyIndexReferences(
     if (target !== null) {
       references.push(target[1] ?? target[2] ?? target[3] ?? '');
     }
-  }
-
-  // Referenced local stylesheets carry their own url()/@import targets;
-  // resolve them relative to each stylesheet's directory.
-  const stylesheetReferences: string[] = [];
-
-  for (const reference of [...referenced]) {
-    if (!reference.endsWith('.css') || !deploymentPaths.has(reference)) {
-      continue;
-    }
-
-    const cssContent = readFileSync(join(deploymentRoot, reference), 'utf8');
-    const cssDir = reference.includes('/')
-      ? `./${reference.slice(0, reference.lastIndexOf('/'))}`
-      : '.';
-
-    for (const cssUrl of cssContent.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/giu)) {
-      const raw = (cssUrl[2] ?? '').trim();
-
-      if (raw.length === 0 || raw.startsWith('data:') || raw.startsWith('#')) {
-        continue;
-      }
-
-      const scheme = /^([a-z][a-z0-9+.-]*):/iu.exec(raw);
-
-      if (scheme !== null && scheme[1] !== undefined && scheme[1].toLowerCase() !== 'https' && scheme[1].toLowerCase() !== 'http') {
-        continue;
-      }
-
-      const schemeText = scheme?.[1] ?? '';
-      let cssPath = scheme !== null ? raw.slice(schemeText.length + 1) : raw;
-
-      if (cssPath.startsWith('//')) {
-        continue;
-      }
-
-      cssPath = cssPath.split('?')[0]?.split('#')[0] ?? cssPath;
-      const cssTarget = cssPath.startsWith('/') ? cssPath.slice(1) : `${cssDir}/${cssPath}`;
-      const resolved = posix.normalize(cssTarget);
-
-      if (!resolved.startsWith('../')) {
-        stylesheetReferences.push(resolved);
-      }
-    }
-
-    for (const importMatch of cssContent.matchAll(/@import\s+(['"])([^'"]+)\1/giu)) {
-      const raw = (importMatch[2] ?? '').trim();
-
-      if (raw.length > 0 && !raw.startsWith('/') && !raw.startsWith('data:')) {
-        stylesheetReferences.push(posix.normalize(`${cssDir}/${raw.split('?')[0] ?? raw}`));
-      }
-    }
-  }
-
-  for (const stylesheetReference of stylesheetReferences) {
-    referenced.add(stylesheetReference);
   }
 
   for (const rawReference of references) {
@@ -822,14 +772,6 @@ function verifyIndexReferences(
       }
     }
 
-    if (process.env.MPGD_DEBUG_SRCDOC === '1') {
-      console.error(
-        'DEBUG-REF',
-        JSON.stringify(reference.slice(0, 60)),
-        '->',
-        JSON.stringify(effectiveReference.slice(0, 60)),
-      );
-    }
     const withoutQuery = effectiveReference.split(/[?#]/u)[0] ?? effectiveReference;
 
     if (withoutQuery.length === 0) {
@@ -873,7 +815,110 @@ function verifyIndexReferences(
       normalized = `${normalized === '.' ? '' : normalized}index.html`;
     }
 
+    if (stylesheetHrefs.has(rawReference)) {
+      activeStylesheets.add(normalized);
+    }
+
     referenced.add(normalized);
+  }
+
+  // Stylesheet links (and the @import chain they start) carry their own
+  // url()/@import targets, resolved relative to each stylesheet's directory.
+  // Comments are stripped first, external URLs are skipped, root-relative
+  // targets resolve from the deployment root, percent-encoded segments
+  // decode, escaping targets are rejected, and chained imports follow with a
+  // visited set so circular imports cannot loop forever.
+  const visitedStylesheets = new Set<string>();
+  const stylesheetQueue = [...activeStylesheets];
+
+  while (stylesheetQueue.length > 0) {
+    const stylesheet = stylesheetQueue.shift();
+
+    if (stylesheet === undefined || visitedStylesheets.has(stylesheet)) {
+      continue;
+    }
+
+    visitedStylesheets.add(stylesheet);
+    const { cssUrls, cssImports } = extractStylesheetTargets(
+      readFileSync(join(deploymentRoot, stylesheet), 'utf8'),
+    );
+    const cssDir = stylesheet.includes('/')
+      ? `./${stylesheet.slice(0, stylesheet.lastIndexOf('/'))}`
+      : '.';
+    const resolvedUrls: string[] = [];
+    const resolvedImports: string[] = [];
+    const collectCssTarget = (rawTarget: string, sink: string[]): void => {
+      const raw = decodeCssEscapes(rawTarget.trim());
+
+      if (raw.length === 0 || raw.startsWith('data:') || raw.startsWith('#')) {
+        return;
+      }
+
+      const scheme = /^([a-z][a-z0-9+.-]*):/iu.exec(raw);
+
+      if (
+        scheme !== null
+        && scheme[1] !== undefined
+        && scheme[1].toLowerCase() !== 'https'
+        && scheme[1].toLowerCase() !== 'http'
+      ) {
+        return;
+      }
+
+      const schemeText = scheme?.[1] ?? '';
+      let cssPath = scheme !== null ? raw.slice(schemeText.length + 1) : raw;
+
+      // Cross-scheme authority URLs (https://host/x, http:/host/x) are
+      // external; only same-scheme relative forms like https:./file.png
+      // resolve against the deployment.
+      if (scheme !== null && cssPath.startsWith('/')) {
+        return;
+      }
+
+      // Scheme-relative URLs without a scheme token (//host/x) are external.
+      if (scheme === null && cssPath.startsWith('//')) {
+        return;
+      }
+
+      cssPath = cssPath.split('?')[0]?.split('#')[0] ?? cssPath;
+      const cssTarget = cssPath.startsWith('/') ? cssPath.slice(1) : `${cssDir}/${cssPath}`;
+      const resolved = posix.normalize(cssTarget);
+
+      if (resolved.startsWith('../') || resolved === '..' || posix.isAbsolute(resolved)) {
+        throw new Error(
+          `The stylesheet ${stylesheet} references a path outside the artifact root: ${raw}`,
+        );
+      }
+
+      sink.push(decodeReferenceSegments(resolved, `stylesheet ${stylesheet}`));
+    };
+
+    for (const cssUrl of cssUrls) {
+      collectCssTarget(cssUrl, resolvedUrls);
+    }
+
+    for (const cssImport of cssImports) {
+      collectCssTarget(cssImport, resolvedImports);
+    }
+
+    for (const resolvedUrl of resolvedUrls) {
+      referenced.add(resolvedUrl);
+    }
+
+    for (const resolvedImport of resolvedImports) {
+      referenced.add(resolvedImport);
+
+      // Imports are stylesheets by syntax whatever their URL looks like, and
+      // deduplication against earlier references must not suppress
+      // traversal: the browser still applies the imported file as CSS.
+      if (
+        deploymentPaths.has(resolvedImport)
+        && !visitedStylesheets.has(resolvedImport)
+        && !stylesheetQueue.includes(resolvedImport)
+      ) {
+        stylesheetQueue.push(resolvedImport);
+      }
+    }
   }
 
   for (const reference of [...referenced].sort()) {
@@ -1246,6 +1291,185 @@ function collectEmbeddedDocumentReferences(
 }
 
 /** Tokenize srcset candidates into the reference list. */
+/** Whether a link rel token list applies the target as a stylesheet. */
+function isStylesheetRel(rel: string | undefined): boolean {
+  return rel !== undefined && rel.split(/\s+/u).includes('stylesheet');
+}
+
+/**
+ * Extract live url() targets and @import targets from a stylesheet with a
+ * small string-aware tokenizer:
+ *
+ * - comments are skipped;
+ * - url()/@import text inside quoted strings is inert content, so a
+ *   `content: "url(./missing.png)"` rule never becomes a reference;
+ * - @import is honored only before the first top-level style block, because
+ *   CSS parsing makes later imports inert;
+ * - @import supports both quoted-string and url() forms.
+ */
+function extractStylesheetTargets(css: string): {
+  readonly cssUrls: string[];
+  readonly cssImports: string[];
+} {
+  const cssUrls: string[] = [];
+  const cssImports: string[] = [];
+  let index = 0;
+  let sawTopLevelBlock = false;
+
+  const skipString = (): void => {
+    const quote = css[index] ?? '';
+    index += 1;
+
+    while (index < css.length) {
+      const inner = css[index] ?? '';
+      index += 1;
+
+      if (inner === '\\') {
+        index += 1;
+        continue;
+      }
+
+      if (inner === quote) {
+        return;
+      }
+    }
+  };
+
+  while (index < css.length) {
+    const char = css[index] ?? '';
+
+    if (char === '"' || char === "'") {
+      skipString();
+      continue;
+    }
+
+    if (char === '/' && (css[index + 1] ?? '') === '*') {
+      const end = css.indexOf('*/', index + 2);
+      index = end === -1 ? css.length : end + 2;
+      continue;
+    }
+
+    if (char === '{') {
+      sawTopLevelBlock = true;
+      index += 1;
+      continue;
+    }
+
+    const rest = css.slice(index);
+    const urlMatch = /^url\(/iu.exec(rest);
+
+    if (urlMatch !== null) {
+      index += urlMatch[0].length;
+      let quote = '';
+      let argument = '';
+
+      while (index < css.length) {
+        const inner = css[index] ?? '';
+
+        if (quote === '' && (inner === '"' || inner === "'")) {
+          quote = inner;
+          index += 1;
+          continue;
+        }
+
+        if (quote !== '' && inner === quote) {
+          quote = '';
+          index += 1;
+          continue;
+        }
+
+        if (quote !== '' && inner === '\\') {
+          argument += inner + (css[index + 1] ?? '');
+          index += 2;
+          continue;
+        }
+
+        if (quote === '' && inner === ')') {
+          index += 1;
+          break;
+        }
+
+        argument += inner;
+        index += 1;
+      }
+
+      cssUrls.push(argument.trim());
+      continue;
+    }
+
+    const importMatch = !sawTopLevelBlock ? /^@import\b/iu.exec(rest) : null;
+
+    if (importMatch !== null) {
+      index += importMatch[0].length;
+      let captured = '';
+
+      while (index < css.length) {
+        const inner = css[index] ?? '';
+
+        if (inner === ';') {
+          index += 1;
+          break;
+        }
+
+        captured += inner;
+        index += 1;
+      }
+
+      const trimmed = captured.trim();
+      const quotedForm = /^(['"])([\s\S]*)\1$/u.exec(trimmed);
+
+      if (quotedForm !== null) {
+        cssImports.push((quotedForm[2] ?? '').trim());
+      } else {
+        const urlForm = /^url\(\s*(['"]?)([^'")]*)\1\s*\)$/iu.exec(trimmed);
+
+        if (urlForm !== null) {
+          cssImports.push((urlForm[2] ?? '').trim());
+        }
+      }
+      continue;
+    }
+
+    index += 1;
+  }
+
+  return { cssUrls, cssImports };
+}
+
+/** Decode CSS string escapes (backslash-character and hex forms) like browsers do. */
+function decodeCssEscapes(value: string): string {
+  if (!value.includes('\\')) {
+    return value;
+  }
+
+  return value.replace(
+    /\\(?:([0-9a-fA-F]{1,6})\s?|(.))/gu,
+    (_match, hex: string | undefined, plain: string | undefined) => {
+      if (hex === undefined) {
+        return plain ?? '';
+      }
+
+      const codePoint = Number.parseInt(hex, 16);
+
+      return codePoint > 0x10_ffff || Number.isNaN(codePoint)
+        ? '\uFFFD'
+        : String.fromCodePoint(codePoint);
+    },
+  );
+}
+
+/** Percent-decode each path segment, mirroring the HTML reference handling. */
+function decodeReferenceSegments(path: string, label: string): string {
+  try {
+    return path
+      .split('/')
+      .map((segment) => decodeURIComponent(segment))
+      .join('/');
+  } catch {
+    throw new Error(`${label} references a malformed percent-encoded URL: ${path}`);
+  }
+}
+
 function pushSrcsetCandidates(candidates: string, references: string[]): void {
   let holdingUrl = false;
 
