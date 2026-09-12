@@ -35,7 +35,7 @@ Phaser's paused scenes cannot accept input even when the plugin `enabled` flag
 is true. The core retains independent channels, but this binding cannot preserve
 input during simulation pause. The required unsupported-state observer makes
 this engine limitation explicit; it receives the requested snapshot and a safe
-reason code. Observation errors/rejected promises go to optional `onError`
+reason code. Each condition is reported once until it clears. Observation errors/rejected promises go to optional `onError`
 without interrupting other cleanup. Its own failures are consumed.
 
 `resetInput` must synchronously clear game-owned pressed keys, touch/joystick
@@ -56,7 +56,10 @@ contract, not automatic arbitration of unrelated direct scene writes.
 The binding records only changes it starts. A previously paused scene is never
 resumed by block release or disposal. Sleeping/stopped scenes are not resumed;
 an external wake reapplies remaining blocks. External sleep revokes the binding's
-pause/visibility ownership. It does not claim to detect an external pause that
+pause/visibility ownership. Observable external pause/resume events update ownership;
+a resume while blocked is reconciled immediately. Restoration resumes last so
+resume callbacks can restart a scene without old cleanup overwriting its new binding.
+It does not claim to detect an external pause that
 overlaps an already-owned pause without an observable state transition.
 
 `shutdown` and `destroy` remove binding listeners and dispose the supplied view

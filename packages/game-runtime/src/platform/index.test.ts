@@ -24,6 +24,30 @@ function source() {
 }
 
 describe('platform-neutral lifecycle binding', () => {
+  it('uses explicitly selected channels without blocking other channels', () => {
+    const controller = createGameExecutionController();
+    const binding = bindGameLifecycle({
+      controller, source: source(), initialState: 'inactive', reason: 'audio-only', channels: ['audio'],
+    });
+    expect(controller.getSnapshot().blocked).toEqual({
+      simulation: false, 'gameplay-input': false, rendering: false, audio: true,
+    });
+    binding.dispose();
+  });
+
+  it.each([
+    { reason: '' }, { channels: [] }, { channels: ['invalid'] },
+    { initialState: 'invalid' }, { readState: 1 }, { readState: () => 'invalid' },
+  ])('rejects malformed lifecycle options and releases partial registration', (invalid) => {
+    const controller = createGameExecutionController();
+    const lifecycle = source();
+    expect(() => bindGameLifecycle({
+      controller, source: lifecycle, initialState: 'active', ...invalid,
+    } as unknown as Parameters<typeof bindGameLifecycle>[0])).toThrow();
+    expect(lifecycle.count()).toBe(0);
+    expect(controller.getSnapshot().blocks).toEqual([]);
+  });
+
   it('deduplicates events and releases only its own block across multiple sources', () => {
     const controller = createGameExecutionController();
     const settings = controller.acquireBlock({ reason: 'settings', channels: ['simulation'] });

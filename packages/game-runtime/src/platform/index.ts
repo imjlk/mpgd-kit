@@ -26,15 +26,11 @@ export function bindGameLifecycle(input: LifecycleInitialization & {
 }): GameLifecycleBinding {
   const { controller, source, onError } = input;
   const reason = input.reason ?? 'lifecycle';
-  const channels: ExecutionChannel[] = [
-    ...(input.channels ?? ['simulation', 'gameplay-input', 'rendering', 'audio']),
-  ];
+  const channels: ExecutionChannel[] = [...(input.channels ?? executionChannels)];
   if (typeof reason !== 'string' || reason.trim().length === 0 || channels.length === 0) {
     throw new TypeError('Lifecycle reason and channels must be non-empty.');
   }
-  if (channels.some(
-    (channel) => !['simulation', 'gameplay-input', 'rendering', 'audio'].includes(channel),
-  )) {
+  if (channels.some((channel) => !executionChannels.includes(channel))) {
     throw new TypeError('Unknown lifecycle execution channel.');
   }
   const readState = input.readState;
@@ -145,3 +141,4 @@ function validateState(state: unknown): GameLifecycleState {
   }
   return state;
 }
+import { executionChannels } from '../channels.js';

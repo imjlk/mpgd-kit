@@ -9,6 +9,7 @@ type Command = 'settings' | 'background' | 'foreground' | 'rendering' | 'input' 
 const metrics = {
   gameplayUpdates: 0,
   gameplayRenders: 0,
+  gameplayResumes: 0,
   uiUpdates: 0,
   gameplayClicks: 0,
   keyMoves: 0,
@@ -54,6 +55,7 @@ let renderingBlock: ExecutionBlock | undefined;
 let inputBlock: ExecutionBlock | undefined;
 let muted = false;
 let ready = false;
+let tornDown = false;
 
 class Gameplay extends Phaser.Scene {
   private pressed = false;
@@ -99,10 +101,16 @@ class Gameplay extends Phaser.Scene {
       metrics.scopeCleanups += 1;
     });
     const rendered = (): void => {
-      metrics.gameplayRenders += 1; };
+      metrics.gameplayRenders += 1;
+    };
+    const resumed = (): void => {
+      metrics.gameplayResumes += 1;
+    };
     this.sys.events.on('render', rendered);
+    this.sys.events.on('resume', resumed);
     scope.own(() => {
       this.sys.events.off('render', rendered);
+      this.sys.events.off('resume', resumed);
     });
     bindPhaserGameScene({
       controller,
@@ -260,7 +268,7 @@ function command(value: Command): void {
 bridge.onCommand(command);
 
 function state() {
-  const gameplay = game.scene.getScene('Gameplay');
+  const gameplay = tornDown ? undefined : game.scene.getScene('Gameplay');
   return {
     ready,
     coordinateSystem: '1000x620 canvas, origin top-left, x right, y down',
@@ -269,6 +277,7 @@ function state() {
     lifecycleState,
     muted,
     blocked: controller.getSnapshot().blocked,
+    controllerStatus: controller.getSnapshot().status,
     gameplayStatus: gameplay?.sys.getStatus(),
     gameplayActive: gameplay?.sys.isActive(),
     gameplayVisible: gameplay?.sys.isVisible(),
@@ -287,10 +296,18 @@ const fixture = {
   sleepGameplay: () => game.scene.sleep('Gameplay'),
   wakeGameplay: () => game.scene.wake('Gameplay'),
   destroy(): void {
-    lifecycle.dispose();
+    if (tornDown) {
+      return;
+    }
+    tornDown = true;
+    ready = false;
+    // Terminate coordination before cleanup releases any lifecycle/settings blocks.
     controller.destroy();
+    lifecycle.dispose();
     bridge.destroy();
     game.destroy(true);
+    // Manual test stepping stopped RAF; flush Phaser's deferred destruction explicitly.
+    game.step(virtualTime, 0);
   },
 };
 

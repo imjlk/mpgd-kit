@@ -45,6 +45,9 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
     throw new Error('Cannot bind a destroyed game execution controller.');
   }
   let disposed = false;
+  let sceneEnded = false;
+  let reportedSimulation = false;
+  let reportedAudio = false;
   let applying = false;
   let dirty = false;
   let ownedPause = false;
@@ -77,18 +80,15 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
   }
 
   function restore(resumeScene: boolean): void {
-    // Resume is intentionally guarded: Phaser's raw resume can also awaken inactive scenes.
-    if (resumeScene && ownedPause && scene.sys.isPaused()) {
-      attempt(() => {
-        scene.sys.resume();
-      });
-    }
+    const shouldResume = resumeScene && ownedPause;
     ownedPause = false;
     for (const plugin of ownedInput) {
-      plugin.enabled = true;
+      attempt(() => {
+        plugin.enabled = true;
+      });
     }
     ownedInput.clear();
-    if (resumeScene && ownedVisibility && (scene.sys.isActive() || scene.sys.isPaused())) {
+    if (resumeScene && !sceneEnded && ownedVisibility && (scene.sys.isActive() || scene.sys.isPaused())) {
       attempt(() => {
         scene.sys.setVisible(true);
       });
@@ -98,6 +98,12 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
       attempt(() => audio?.setMuted(false));
     }
     ownedAudio = false;
+    // Resume last: its listeners may synchronously restart the scene and install a new binding.
+    if (shouldResume && !sceneEnded && controller.getSnapshot().status === 'active' && scene.sys.isPaused()) {
+      attempt(() => {
+        scene.sys.resume();
+      });
+    }
   }
 
   function dispose(mode: 'restore' | 'shutdown' | 'terminal' = 'restore'): void {
@@ -106,21 +112,38 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
     }
     disposed = true;
     unsubscribe();
+    // Keep shutdown observation installed while restoration calls into consumer/engine code.
+    if (mode !== 'terminal' && controller.getSnapshot().status === 'active') {
+      restore(mode === 'restore');
+    }
     for (const event of ['shutdown', 'destroy']) {
       scene.sys.events.off(event, onShutdown);
     }
     scene.sys.events.off('sleep', onSleep);
     scene.sys.events.off('wake', onWake);
+    scene.sys.events.off('pause', onPause);
+    scene.sys.events.off('resume', onResume);
     scene.sys.events.off('create', apply);
-    if (mode !== 'terminal' && controller.getSnapshot().status === 'active') {
-      restore(mode === 'restore');
-    }
     attempt(() => uiScope?.dispose());
     ownedInput.clear();
   }
 
   function onShutdown(): void {
+    sceneEnded = true;
     dispose('shutdown');
+  }
+
+  function onPause(): void {
+    if (!disposed && !applying) {
+      ownedPause = false;
+    }
+  }
+
+  function onResume(): void {
+    if (!disposed && !applying) {
+      ownedPause = false;
+      apply();
+    }
   }
 
   function onSleep(): void {
@@ -152,12 +175,20 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
           break;
         }
         const blocked = snapshot.blocked;
-        if (blocked.simulation && !blocked['gameplay-input']) {
+        const simulationUnsupported = blocked.simulation && !blocked['gameplay-input'];
+        const audioUnsupported = blocked.audio && audio === undefined;
+        const notifySimulation = simulationUnsupported && !reportedSimulation;
+        const notifyAudio = audioUnsupported && !reportedAudio;
+        reportedSimulation = simulationUnsupported;
+        reportedAudio = audioUnsupported;
+        if (notifySimulation) {
           attempt(() => onUnsupportedState(snapshot, 'simulation-requires-input-block'));
-          continue;
         }
-        if (blocked.audio && audio === undefined) {
+        if (notifyAudio) {
           attempt(() => onUnsupportedState(snapshot, 'audio-sink-missing'));
+        }
+        if (simulationUnsupported) {
+          continue;
         }
         if (audio !== undefined) {
           attempt(() => {
@@ -173,7 +204,7 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
         if (disposed) {
           break;
         }
-        if (controller.getSnapshot() !== snapshot) {
+        if (controller.getSnapshot().version !== snapshot.version) {
           dirty = true;
           continue;
         }
@@ -186,21 +217,25 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
           for (const plugin of [scene.input, scene.input.keyboard, scene.input.gamepad]) {
             if (plugin !== null && plugin !== undefined && plugin.enabled) {
               ownedInput.add(plugin);
-              plugin.enabled = false;
+              attempt(() => {
+                plugin.enabled = false;
+              });
             }
           }
           attempt(resetInput);
           if (disposed) {
             break;
           }
-          if (controller.getSnapshot() !== snapshot) {
+          if (controller.getSnapshot().version !== snapshot.version) {
             dirty = true;
             continue;
           }
         } else if (!blocked['gameplay-input'] && inputBlocked) {
           inputBlocked = false;
           for (const plugin of ownedInput) {
-            plugin.enabled = true;
+            attempt(() => {
+              plugin.enabled = true;
+            });
           }
           ownedInput.clear();
         }
@@ -234,6 +269,8 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
     }
     scene.sys.events.on('sleep', onSleep);
     scene.sys.events.on('wake', onWake);
+    scene.sys.events.on('pause', onPause);
+    scene.sys.events.on('resume', onResume);
     // SceneManager sets RUNNING after scene.create() returns; apply before its first update.
     scene.sys.events.on('create', apply);
     unsubscribe = controller.subscribe(apply);

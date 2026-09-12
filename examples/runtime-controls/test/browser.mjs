@@ -138,6 +138,18 @@ try {
   assert.deepEqual(errors, []);
   await screenshot('final-resumed');
   await writeFile(`${artifacts}/state.json`, JSON.stringify(current, null, 2));
+  await click(795, 218);
+  const beforeDestroy = await state();
+  const afterDestroy = await page.evaluate(() => {
+    window.fixture.destroy();
+    window.fixture.destroy();
+    return window.fixture.state();
+  });
+  await page.waitForFunction(() => document.querySelector('canvas') === null);
+  assert.equal(afterDestroy.controllerStatus, 'destroyed');
+  assert.equal(afterDestroy.gameplayResumes, beforeDestroy.gameplayResumes);
+  assert.equal(afterDestroy.gameplayUpdates, beforeDestroy.gameplayUpdates);
+  assert.deepEqual(errors, [], 'Application teardown must not introduce browser errors');
   console.log('Real Phaser browser fixture passed: initial inactive, overlap, UI input, stale-key reset, rendering, shutdown/restart, external sleep/stop.');
 } finally {
   await browser?.close();
