@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { createGameExecutionController } from '@mpgd/game-runtime';
+import { createGameUiBridge } from '@mpgd/game-runtime/ui';
 
 assert.equal(typeof globalThis.document, 'undefined');
 assert.equal(typeof globalThis.Phaser, 'undefined');
@@ -10,4 +11,11 @@ assert.equal(runtime.getSnapshot().blocked.simulation, true);
 block.release();
 assert.equal(runtime.getSnapshot().blocked.simulation, false);
 runtime.destroy();
+const bridge = createGameUiBridge({ initialSnapshot: 0 });
+const screen = bridge.createScope();
+screen.setSnapshot(1);
+screen.dispose();
+assert.equal(screen.setSnapshot(2), false);
+assert.equal(bridge.getSnapshot(), 1);
+bridge.destroy();
 console.log('game-runtime compiled ESM import passed');
