@@ -456,7 +456,7 @@ function assertViteRuntimeMatrix(
         mode: 'production',
         project: path.resolve('examples/phaser-starter/tsconfig.json'),
       }),
-      /validate its shape/u,
+      /target config matrix must be an object/u,
     );
 
     writeFileSync(matrixFile, '{invalid');
