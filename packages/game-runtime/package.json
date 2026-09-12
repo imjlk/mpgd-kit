@@ -13,8 +13,9 @@
   },
   "files": ["dist"],
   "scripts": {
+    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/game-runtime",
     "check": "ttsc --noEmit",
-    "test": "vitest run",
+    "test": "pnpm build && vitest run && node test/dist-import.mjs && ttsc --noEmit -p test/tsconfig.json",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix"

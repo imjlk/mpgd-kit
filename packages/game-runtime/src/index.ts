@@ -2,7 +2,9 @@ import { observe, type ObserverErrorHandler } from './observers.js';
 
 export type { ObserverErrorHandler } from './observers.js';
 
-export type ExecutionChannel = 'simulation' | 'gameplay-input' | 'rendering' | 'audio';
+const channels = ['simulation', 'gameplay-input', 'rendering', 'audio'] as const;
+
+export type ExecutionChannel = (typeof channels)[number];
 
 export interface ExecutionBlockInput {
   readonly reason: string;
@@ -21,6 +23,7 @@ export interface ExecutionBlock {
 
 export interface GameExecutionSnapshot {
   readonly status: 'active' | 'destroyed';
+  /** Increments once per acquisition, first release, or first destruction, including diagnostic-only changes. */
   readonly version: number;
   /** True means blocked. Destroyed snapshots fail closed on every channel. */
   readonly blocked: Readonly<Record<ExecutionChannel, boolean>>;
@@ -41,13 +44,6 @@ interface Subscription {
   readonly listener: ExecutionListener;
   active: boolean;
 }
-
-const channels: readonly ExecutionChannel[] = [
-  'simulation',
-  'gameplay-input',
-  'rendering',
-  'audio',
-];
 
 export function createGameExecutionController(
   options: { readonly onListenerError?: ObserverErrorHandler } = {},
