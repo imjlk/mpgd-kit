@@ -66,3 +66,105 @@ game dependency. These private-only changes require no Sampo changeset.
 Contributor validation: `pnpm --dir packages/game-runtime test`,
 `node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/game-runtime`,
 and `node packages/game-runtime/test/dist-import.mjs`.
+
+## Scoped UI bridge
+
+`@mpgd/game-runtime/ui` is a separate, headless entrypoint. Importing the root
+execution controller does not load the UI bridge. The bridge separates persistent
+snapshots, user-intent commands, and one-time events. Multiple command handlers
+are allowed and run in registration order; dispatch is not a success result or
+proof that a purchase or reward was granted. Events have no replay or history.
+
+```ts
+import { createGameUiBridge } from '@mpgd/game-runtime/ui';
+
+const bridge = createGameUiBridge<
+  { count: number }, { type: 'refresh' }, { type: 'refreshed' }
+>({ initialSnapshot: { count: 0 }, onListenerError: reportError });
+const screen = bridge.createScope();
+screen.subscribeSelector((state) => state.count, renderCount);
+renderCount(bridge.getSnapshot().count); // Subscriptions do not emit initially.
+screen.onCommand(async () => {
+  const count = await readCount();
+  screen.setSnapshot({ count });
+  screen.emit({ type: 'refreshed' });
+});
+screen.dispatch({ type: 'refresh' });
+screen.dispose(); // A later readCount result cannot update this or a new screen.
+```
+
+`getSnapshot()` remains referentially stable until `setSnapshot` receives a value
+that differs under `Object.is`. Snapshots and command/event payloads belong to the
+consumer: publish immutable values and replace changed state. The bridge neither
+deep-clones nor freezes arbitrary consumer or engine objects. Only bridge and
+scope API containers are frozen; listener lists and pending deliveries stay
+private. There is no frame-based copying, timer, or global singleton.
+
+`subscribeSelector(selector, listener, equality = Object.is)` evaluates its
+initial selection without notifying. Unchanged selected values suppress delivery.
+Selectors and equality functions must be pure. Initial selector failures reject
+registration; subsequent selector, equality, or listener failures are isolated
+and reported through `onListenerError`. A failed selection leaves the previous
+selection intact. An invoked listener receives the new selection even if another
+listener changed current state reentrantly.
+
+All notifications share one FIFO delivery queue. Each dispatch captures its
+value and recipients. Reentrant mutations update current state immediately, but
+their notifications run after the current round. Unsubscribed recipients are
+skipped and new registrations wait for future dispatches. Duplicate registrations
+are independent. As with the execution controller, synchronous exceptions and
+rejected promises are observed without awaiting; errors from the optional error
+hook are consumed. Observation failure never converts a business operation into
+failure. Avoid self-sustaining dispatch cycles.
+
+Scopes own subscriptions and cleanup via `own(cleanup)`. Its returned function
+releases that resource once, and removes it from the scope's retained cleanup
+set. Disposal first revokes callback and commit permission, then runs registered
+cleanups in registration order. Cleanup errors do not prevent remaining cleanup.
+An asynchronously acquired resource passed to `own` after disposal is immediately
+released. This is the one deliberately supported late registration; ordinary new
+subscriptions on a disposed scope throw.
+
+After disposal, scoped `setSnapshot`, `emit`, and `dispatch` return `false`.
+They cannot affect another screen scope. Raw bridge methods are application-owner
+APIs; passing those directly to a screen's asynchronous work bypasses this guard.
+Scope disposal does not cancel a request, server verification, or reward claim.
+Such business operations need an owner whose lifetime exceeds the screen.
+
+Bridge destruction disposes all scopes, removes listeners and queued deliveries,
+and rejects new registration, dispatch, emit, or setSnapshot calls. The final
+snapshot remains readable. Disposal, destruction, and unsubscribe are idempotent;
+late scoped commits still return `false` after bridge destruction.
+
+The UI subpath shares the private package's publication prerequisites. No Sampo
+changeset or generated-game dependency is added for this private-only extension.
+
+## Platform lifecycle binding
+
+Import `bindGameLifecycle` from `@mpgd/game-runtime/platform`. Supply a controller,
+a minimal `source` with `onPause`/`onResume` subscriptions (compatible with
+`PlatformGateway.lifecycle`), and either an explicit `initialState` or a
+`readState()` callback. States are `active`, `inactive`, and `unknown`; unknown
+conservatively blocks. Default channels are all four execution channels.
+
+Subscriptions install before reading current state. Events received during
+installation override an explicit initial state; an event during `readState`
+overrides that read's return value. A readable source should return its current
+state synchronously. No DOM or SDK is imported and LifecycleAdapter is unchanged.
+
+Each binding owns at most one token. Duplicate pause/resume events are idempotent;
+a resume cannot release settings or another source's block. `dispose()` removes
+subscriptions and releases only its own token. Source callbacks captured before
+disposal become harmless, and controller destruction automatically detaches the
+binding. Setup failures clean installed subscriptions; optional `onError` observes
+cleanup errors without preventing remaining cleanup.
+
+```ts
+const lifecycleBinding = bindGameLifecycle({
+  controller: runtime,
+  source: gateway.lifecycle,
+  initialState: 'unknown',
+});
+// A later source resume can release this binding's conservative startup block.
+lifecycleBinding.dispose();
+```

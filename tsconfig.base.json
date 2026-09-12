@@ -33,6 +33,8 @@
       "@mpgd/adapter-verse8/agent8": ["./adapters/verse8/src/agent8.ts"],
       "@mpgd/adapter-verse8/server": ["./adapters/verse8/src/server.ts"],
       "@mpgd/catalog/*": ["./packages/catalog/*"],
+      "@mpgd/game-runtime/platform": ["./packages/game-runtime/src/platform/index.ts"],
+      "@mpgd/game-runtime/ui": ["./packages/game-runtime/src/ui/index.ts"],
       "@mpgd/game-services/*": ["./packages/game-services/src/*"],
       "@mpgd/platform/*": ["./packages/platform/src/*"],
       "@mpgd/tutorial": ["./packages/tutorial/src/index.ts"],

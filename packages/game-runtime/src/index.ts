@@ -1,10 +1,8 @@
+import { executionChannels, type ExecutionChannel } from './channels.js';
 import { observe, type ObserverErrorHandler } from './observers.js';
 
+export type { ExecutionChannel } from './channels.js';
 export type { ObserverErrorHandler } from './observers.js';
-
-const channels = ['simulation', 'gameplay-input', 'rendering', 'audio'] as const;
-
-export type ExecutionChannel = (typeof channels)[number];
 
 export interface ExecutionBlockInput {
   readonly reason: string;
@@ -125,7 +123,7 @@ export function createGameExecutionController(
         throw new TypeError('At least one execution channel is required.');
       }
       const selected = [...new Set(requested)];
-      if (selected.some((channel) => !channels.includes(channel))) {
+      if (selected.some((channel) => !executionChannels.includes(channel))) {
         throw new TypeError('Unknown execution channel.');
       }
       // Input getters/iterators may have reentered the controller.

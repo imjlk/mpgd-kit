@@ -3,6 +3,8 @@ import {
   type ExecutionChannel,
   type GameExecutionSnapshot,
 } from '@mpgd/game-runtime';
+import { bindGameLifecycle } from '@mpgd/game-runtime/platform';
+import { createGameUiBridge, type GameUiScope } from '@mpgd/game-runtime/ui';
 
 const channel: ExecutionChannel = 'simulation';
 const controller = createGameExecutionController();
@@ -14,3 +16,23 @@ snapshot.blocked.simulation = false;
 snapshot.blocks.push(token.info);
 token.release();
 controller.destroy();
+
+const bridge = createGameUiBridge<number, 'refresh', 'done'>({ initialSnapshot: 0 });
+const scope: GameUiScope<number, 'refresh', 'done'> = bridge.createScope();
+scope.subscribeSelector(
+  (value) => String(value),
+  (value: string) => {
+    void value;
+  },
+);
+scope.dispatch('refresh');
+scope.emit('done');
+// @ts-expect-error Commands and events are separate contracts.
+scope.dispatch('done');
+scope.dispose();
+
+bindGameLifecycle({
+  controller: createGameExecutionController(),
+  initialState: 'inactive',
+  source: { onPause: () => () => {}, onResume: () => () => {} },
+}).dispose();
