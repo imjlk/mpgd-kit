@@ -3,7 +3,7 @@ import {
   assertVerifiedLeaderboardSnapshot,
   type RecordVerifiedLeaderboardAttemptRequest,
   type VerifiedLeaderboardService,
-} from './verified-leaderboard';
+} from './verified-leaderboard.js';
 
 export const verifiedLeaderboardDurabilityConformanceScenarios = [
   'replacement-after-interrupted-retained-write',

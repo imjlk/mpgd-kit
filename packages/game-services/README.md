@@ -64,3 +64,6 @@ and retry policy are not redesigned by this observer API.
 
 The root `pnpm test` pipeline includes compiled client JS and public declaration
 consumption checks alongside the client and target conformance suites.
+
+All published entrypoints use explicit internal ESM module paths and are smoke-tested
+with native Node imports, without a bundler or TypeScript runtime loader.

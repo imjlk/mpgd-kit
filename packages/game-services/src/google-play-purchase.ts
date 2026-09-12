@@ -3,8 +3,8 @@ import type {
   GameServicesEvidenceVerifier,
   GameServicesPurchaseGrantFinalizer,
   VerifyPurchaseEvidenceInput,
-} from './evidence-verification';
-import type { EntitlementLedgerPayload, PurchaseGrantFinalization } from './types';
+} from './evidence-verification.js';
+import type { EntitlementLedgerPayload, PurchaseGrantFinalization } from './types.js';
 
 export const googlePlayProductPurchaseEvidenceSchema = 'google-play.product-purchase.v2';
 

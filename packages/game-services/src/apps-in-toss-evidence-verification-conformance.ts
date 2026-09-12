@@ -15,20 +15,20 @@ import {
   type AppsInTossRewardAuthorityInput,
   type AppsInTossRewardAuthorityResult,
   type CreateAppsInTossProductionEvidenceVerifierInput,
-} from './apps-in-toss-evidence-verification';
-import type { GameServicesEvidenceVerifier } from './evidence-verification';
+} from './apps-in-toss-evidence-verification.js';
+import type { GameServicesEvidenceVerifier } from './evidence-verification.js';
 import {
   createGameServicesBackend,
   createInMemoryGameServicesStore,
   InMemoryGameServicesStore,
-} from './server';
+} from './server.js';
 import type {
   ClaimAdRewardRequest,
   EntitlementLedgerGrant,
   EntitlementLedgerResult,
   VerifyPurchaseRequest,
   VerifyPurchaseResponse,
-} from './types';
+} from './types.js';
 
 export const appsInTossProductionEvidenceConformanceScenarios = [
   'callback-only-fail-closed',

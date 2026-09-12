@@ -1,4 +1,4 @@
-import { assertOwnEnumerablePropertyLimit } from './validation';
+import { assertOwnEnumerablePropertyLimit } from './validation.js';
 
 export type GameProgressValue =
   | null

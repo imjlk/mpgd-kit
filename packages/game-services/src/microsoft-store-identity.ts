@@ -1,4 +1,4 @@
-import type { MicrosoftStoreCollectionsCredentials } from './microsoft-store-purchase';
+import type { MicrosoftStoreCollectionsCredentials } from './microsoft-store-purchase.js';
 
 export const microsoftStoreIdentityCredentialsSchema =
   'mpgd.microsoft-store.identity-credentials.v1' as const;

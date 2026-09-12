@@ -2,7 +2,7 @@ import type {
   AppStoreEnvironment,
   AppStoreInAppPurchaseType,
   AppStoreTransactionPayload,
-} from './app-store-verifier';
+} from './app-store-verifier.js';
 
 export interface CreateAppStoreTransactionConformanceFixtureInput {
   readonly transactionId?: string;

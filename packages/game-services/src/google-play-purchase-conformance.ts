@@ -3,7 +3,7 @@ import {
   type GooglePlayAcknowledgementState,
   type GooglePlayConsumptionState,
   type GooglePlayPurchaseState,
-} from './google-play-purchase';
+} from './google-play-purchase.js';
 
 export const googlePlayProductPurchaseConformanceEvidence = Object.freeze({
   schema: googlePlayProductPurchaseEvidenceSchema,

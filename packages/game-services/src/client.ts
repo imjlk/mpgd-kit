@@ -14,13 +14,13 @@ import type {
 
 import type {
   GameServicesContractClient,
-} from './contract';
+} from './contract.js';
 import {
   observeGameServicesOperation,
   type GameServicesOperationOptions,
   type GameServicesPurchaseProgress,
   type GameServicesRewardedAdProgress,
-} from './operation-progress';
+} from './operation-progress.js';
 import type {
   ClaimAdRewardRequest,
   ClaimAdRewardResponse,
@@ -32,7 +32,7 @@ import type {
   RecordLeaderboardScoreResponse,
   VerifyPurchaseRequest,
   VerifyPurchaseResponse,
-} from './types';
+} from './types.js';
 
 export type {
   GameServicesOperationKind,
@@ -41,7 +41,7 @@ export type {
   GameServicesOperationProgress,
   GameServicesPurchaseProgress,
   GameServicesRewardedAdProgress,
-} from './operation-progress';
+} from './operation-progress.js';
 
 export interface PurchaseVerificationApi {
   verifyPurchase(input: VerifyPurchaseRequest): Promise<VerifyPurchaseResponse>;

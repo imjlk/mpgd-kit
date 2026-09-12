@@ -1,6 +1,6 @@
 import type { NotificationTopic, PlatformTarget } from '@mpgd/platform';
 
-import { assertOwnEnumerablePropertyLimit } from './validation';
+import { assertOwnEnumerablePropertyLimit } from './validation.js';
 
 const platformTargets = new Set<PlatformTarget>([
   'browser',
