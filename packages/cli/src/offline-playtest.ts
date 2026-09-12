@@ -15,7 +15,7 @@ import {
 import path from 'node:path';
 
 import { decodeHTMLAttribute } from 'entities';
-import { build, type Metafile, type Plugin } from 'esbuild';
+import { build, transform, type Metafile, type Plugin } from 'esbuild';
 
 export const defaultOfflinePlaytestArtifactDir = 'artifacts/web-preview';
 export const defaultOfflinePlaytestOutputDir = 'artifacts/offline-playtest';
@@ -841,7 +841,11 @@ async function bundleEntry(entryFile: string, context: InliningContext): Promise
     platform: 'browser',
     target: 'es2022',
     keepNames: true,
-    minify: true,
+    minifyWhitespace: true,
+    minifySyntax: true,
+    // Random deferred markers must not influence esbuild's short identifier choices.
+    // Keep their collision resistance; rename identifiers after resolving the markers.
+    minifyIdentifiers: false,
     metafile: true,
     sourcemap: false,
     legalComments: 'none',
@@ -855,7 +859,22 @@ async function bundleEntry(entryFile: string, context: InliningContext): Promise
   }
 
   recordRetainedBundledAssets(result.metafile, context);
-  const script = resolveDeferredJavaScriptAssets(scriptOutput.text, deferredAssets, context);
+  const resolvedScript = resolveDeferredJavaScriptAssets(
+    scriptOutput.text,
+    deferredAssets,
+    context,
+  );
+  const { code: script } = await transform(resolvedScript, {
+    loader: 'js',
+    format: 'esm',
+    target: 'es2022',
+    keepNames: true,
+    minifyIdentifiers: true,
+    minifyWhitespace: true,
+    minifySyntax: false,
+    legalComments: 'none',
+    sourcemap: false,
+  });
   const stylesheetOutput = result.outputFiles.find((file) => file.path.endsWith('.css'));
   assertNoEntryImportMetaUrl(script);
   assertSupportedBundledRuntime(script);
@@ -2220,7 +2239,8 @@ function parseStaticElementConstructor(
       rawInitializer,
       initializerCodePositions,
     ).trim();
-    const createdElement = /^(?:(globalThis|self|window)\s*\.\s*)?document\s*\.\s*createElement\s*\(\s*\)\s*$/u.exec(
+    // The code mask retains the opening quote of a literal so token boundaries survive.
+    const createdElement = /^(?:(globalThis|self|window)\s*\.\s*)?document\s*\.\s*createElement\s*\(\s*["'`]\s*\)\s*$/u.exec(
       normalizedInitializer,
     );
     let openingParenthesis = -1;
