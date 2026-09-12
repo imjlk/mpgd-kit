@@ -276,4 +276,43 @@ describe('monetization action ownership', () => {
     expect(() => aborted.subscribe(() => {})).toThrow('Game action cannot start: disposed');
   });
 
+  it('keeps startup authority with the reserving owner when a reentrant joiner disposes', async () => {
+    const call = vi.fn(async () => purchaseResult('granted'));
+    const { purchase, coordinator, execution } = setup({ purchase: call, claimRewardedAd: async () => adResult('skipped') });
+    const joiner = coordinator.createPurchaseController();
+    joiner.subscribe(() => joiner.dispose());
+    let joined: Promise<GameServicesPurchaseResult> | undefined;
+    purchase.subscribe((value) => {
+      if (value.status === 'running') {
+        void (joined = joiner.execute(purchaseInput));
+      }
+    });
+    const original = purchase.execute(purchaseInput);
+    expect(joined).toBe(original);
+    expect((await original).status).toBe('granted');
+    expect(call).toHaveBeenCalledTimes(1);
+    expect(joiner.getSnapshot().status).toBe('granted');
+    expect(execution.getSnapshot().blocks).toHaveLength(0);
+  });
+
+  it.each(['owner', 'runtime'] as const)('publishes no business exception when %s disposal prevents invocation', async (kind) => {
+    const call = vi.fn(async () => purchaseResult('granted'));
+    const { purchase, execution } = setup({ purchase: call, claimRewardedAd: async () => adResult('skipped') });
+    const ui = createGameUiBridge<string, never, string>({ initialSnapshot: 'idle' });
+    const scope = ui.createScope();
+    const events = vi.fn();
+    scope.onEvent(events);
+    const view = purchase.bindScope(scope, { snapshot: (value) => value.status, event: (value) => value.status });
+    if (kind === 'owner') {
+      purchase.subscribe(() => purchase.dispose());
+    } else {
+      execution.subscribe(() => execution.destroy());
+    }
+    await expect(view.execute(purchaseInput)).rejects.toMatchObject({ code: 'disposed' });
+    expect(call).not.toHaveBeenCalled();
+    expect(purchase.getSnapshot()).toEqual({ kind: 'purchase', status: 'idle' });
+    expect(ui.getSnapshot()).toBe('idle');
+    expect(events).not.toHaveBeenCalled();
+  });
+
 });

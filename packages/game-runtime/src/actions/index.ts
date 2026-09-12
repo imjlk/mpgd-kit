@@ -72,7 +72,7 @@ interface Flight<K extends GameActionKind> {
   readonly promise: Promise<Results[K]>;
   readonly bridge: GameUiBridge<GameActionSnapshot<K>, never, never>;
   settled: boolean;
-  start(canStart: () => boolean): void;
+  start(): void;
 }
 
 type AnyFlight = Flight<'purchase'> | Flight<'rewarded-ad'>;
@@ -107,7 +107,7 @@ export function createGameActionCoordinator(options: {
     return disposed || execution.getSnapshot().status === 'destroyed';
   }
 
-  function reserve<K extends GameActionKind>(kind: K, supplied: Inputs[K]): Flight<K> {
+  function reserve<K extends GameActionKind>(kind: K, supplied: Inputs[K], canStart: () => boolean): Flight<K> {
     if (isDisposed()) {
       throw new GameActionExecutionError('disposed');
     }
@@ -182,7 +182,11 @@ export function createGameActionCoordinator(options: {
         history.delete(key);
       }
       // Reentrant release observers can start another operation; only this flight is touched below.
-      bridge.setSnapshot(Object.freeze({ kind, status, operationId: id }));
+      bridge.setSnapshot(
+        invoked
+          ? Object.freeze({ kind, status, operationId: id })
+          : Object.freeze({ kind, status: 'idle' }),
+      );
       observe(() => block?.release(), onObserverError);
       bridge.destroy();
     }
@@ -227,7 +231,7 @@ export function createGameActionCoordinator(options: {
 
     const flight: Flight<K> = {
       id, key, promise, bridge, settled: false,
-      start(canStart): void {
+      start(): void {
         if (started) {
           return;
         }
@@ -277,7 +281,7 @@ export function createGameActionCoordinator(options: {
         if (ownerDisposed) {
           throw new GameActionExecutionError('disposed');
         }
-        const flight = reserve(kind, input);
+        const flight = reserve(kind, input, () => !ownerDisposed);
         if (trackedId !== flight.id) {
           detach();
           trackedId = flight.id;
@@ -286,7 +290,7 @@ export function createGameActionCoordinator(options: {
               return;
             }
             snapshot = value;
-            if (value.status !== 'running' && value.status !== 'idle') {
+            if (flight.settled) {
               detach();
               detach = () => {};
             }
@@ -300,7 +304,7 @@ export function createGameActionCoordinator(options: {
           update(flight.bridge.getSnapshot());
         }
         observe(() => attach?.(flight), onObserverError);
-        flight.start(() => !ownerDisposed);
+        flight.start();
         return flight.promise;
       } catch (error) {
         return Promise.reject(error);
@@ -353,7 +357,7 @@ export function createGameActionCoordinator(options: {
                 if (viewDisposed || scope.isDisposed() || viewId !== flight.id) {
                   return;
                 }
-                if (value.status !== 'running' && value.status !== 'idle') {
+                if (flight.settled) {
                   detachView();
                   detachView = () => {};
                 }

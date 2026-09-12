@@ -271,3 +271,9 @@ ambient declarations; the headless consumer smoke supplies only ES2022 globals.
 This package remains private. Future publication requires initial npm registration,
 OIDC, and the game-services release containing `/operations` and progress options
 (planned 0.15.0). No generated game gains a dependency on this unpublished package.
+
+The owner that reserves an operation controls its pre-invocation startup permission.
+A reentrant same-key joiner cannot cancel that owner's startup by disposing itself.
+If owner/runtime disposal prevents any client invocation, the flight rejects with
+a scheduling error, resets its observed state to `idle`, and emits no business
+completion/exception event. An invoked client failure remains `exception`.
