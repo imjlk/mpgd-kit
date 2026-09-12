@@ -698,6 +698,20 @@ const baseInput = {
     /non-zero first component/u,
   );
 
+  // Nonzero fourth components match the package-generation contract rejection
+  // and must fail ledger validation.
+  assertThrows(
+    () =>
+      assertPlatformVersionLedger({
+        ...createLegacyLedger(),
+        platforms: {
+          ...createLegacyLedger().platforms,
+          'microsoft-store': { classicPackageVersion: '1.0.0.0', packageVersion: '2.0.0.1' },
+        },
+      }),
+    /fourth component as 0/u,
+  );
+
   // classic must stay below modern in a legacy ledger.
   assertThrows(
     () =>

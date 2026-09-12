@@ -921,10 +921,15 @@ function requireFourPartVersion(value: unknown, label: string): string {
 
   const parts = version.split('.');
 
-  // The package-generation input contract rejects a zero major component, so
-  // ledgers carrying it must fail here instead of allocating unusable plans.
+  // The package-generation input contract rejects a zero major component and
+  // any nonzero fourth component, so ledgers carrying them must fail here
+  // instead of allocating unusable plans.
   if (Number.parseInt(parts[0] ?? '0', 10) === 0) {
     throw new Error(`${label} must have a non-zero first component: ${version}`);
+  }
+
+  if (Number.parseInt(parts[3] ?? '0', 10) !== 0) {
+    throw new Error(`${label} must reserve the fourth component as 0: ${version}`);
   }
 
   for (const part of parts) {
