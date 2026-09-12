@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/runtime-diagnostics",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Engine-independent frame hitch recording, cause estimation, and bounded performance snapshots for headless game diagnostics.",
   "license": "MIT",
   "repository": {
