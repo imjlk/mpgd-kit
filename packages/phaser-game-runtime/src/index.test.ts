@@ -75,6 +75,38 @@ function audioSink(initial = false) {
 const gameplayChannels = ['simulation', 'gameplay-input'] as const;
 
 describe('Phaser scene execution binding (headless fakes)', () => {
+  it.each(['notification', 'dispose'] as const)('retries a failed owned unmute on %s', (retry) => {
+    const controller = createGameExecutionController();
+    const gameplay = fakeScene();
+    const audio = audioSink();
+    const onError = vi.fn();
+    const binding = bindPhaserGameScene({
+      controller, scene: gameplay.scene, audio, onError,
+      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+    });
+    const block = controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
+    const setMuted = audio.setMuted.getMockImplementation();
+    let failOnce = true;
+    audio.setMuted.mockImplementation((value) => {
+      if (!value && failOnce) {
+        failOnce = false;
+        throw new Error('transient sink failure');
+      }
+      setMuted?.(value);
+    });
+    block.release();
+    expect(audio.getMuted()).toBe(true);
+    expect(onError).toHaveBeenCalledTimes(1);
+    if (retry === 'dispose') {
+      binding.dispose();
+    } else {
+      const other = controller.acquireBlock({ reason: 'diagnostic', channels: ['rendering'] });
+      other.release();
+    }
+    expect(audio.getMuted()).toBe(false);
+    binding.dispose();
+  });
+
   it('still detaches listeners and scope when a custom controller throws during disposal', () => {
     const runtime = createGameExecutionController();
     let throwOnRead = false;
