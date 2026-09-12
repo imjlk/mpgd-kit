@@ -618,23 +618,28 @@ function verifyIndexReferences(
         ? ['href', 'src', 'poster', 'data']
         : ['href', 'src', 'poster', 'xlink:href'];
 
-    // Tokenize real attribute name/value pairs first so quoted values of
-    // unrelated attributes (title='See href="..."') never leak references.
+    // Tokenize real attribute name/value pairs exactly once so every
+    // attribute-driven check (resource names, srcset, style, srcdoc, meta)
+    // shares one parse. Quoted values of unrelated attributes
+    // (title='See srcset="./missing.png"') can never leak references.
+    const attributePairs = [...attributes.matchAll(
+      /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
+    )].map((attribute) => ({
+      name: (attribute[1] ?? '').toLowerCase(),
+      value: attribute[2] ?? attribute[3] ?? attribute[4] ?? '',
+    }));
+    // Detect srcdoc from the tokenized pairs so an iframe src appearing
+    // before its srcdoc is already known to be overridden.
+    const attributesHasSrcdoc
+      = tagName === 'iframe'
+        && attributePairs.some(({ name, value }) => name === 'srcdoc' && value.length > 0);
+
     let isMetaRefresh = false;
     let metaContent: string | undefined;
     let styleValue: string | undefined;
-    // Detect srcdoc before iterating resource attributes so an iframe src
-    // appearing before its srcdoc is already known to be overridden.
-    const attributesHasSrcdoc
-      = tagName === 'iframe'
-        && /(?:^|\s)srcdoc\s*=\s*(?:"[^"]+"|'[^']+'|[^\s>]+)/iu.test(attributes);
+    let srcsetValue: string | undefined;
 
-    for (const attribute of attributes.matchAll(
-      /([A-Za-z_:][-A-Za-z0-9_:.]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/gu,
-    )) {
-      const name = (attribute[1] ?? '').toLowerCase();
-      const value = attribute[2] ?? attribute[3] ?? attribute[4] ?? '';
-
+    for (const { name, value } of attributePairs) {
       if (tagName === 'meta' && name === 'http-equiv' && value.trim().toLowerCase() === 'refresh') {
         isMetaRefresh = true;
       }
@@ -647,7 +652,11 @@ function verifyIndexReferences(
         styleValue = value;
       }
 
-      if (!resourceNames.includes(name) && name !== 'srcset' && name !== 'srcdoc') {
+      if (name === 'srcset') {
+        srcsetValue = value;
+      }
+
+      if (!resourceNames.includes(name) && name !== 'srcdoc') {
         continue;
       }
 
@@ -658,7 +667,7 @@ function verifyIndexReferences(
         continue;
       }
 
-      if (name !== 'srcset' && value.length > 0) {
+      if (value.length > 0) {
         if (tagName === 'iframe' && name === 'src' && attributesHasSrcdoc) {
           continue;
         }
@@ -675,44 +684,12 @@ function verifyIndexReferences(
       collectInlineCssReferences(decodeHtmlReferences(styleValue), references);
     }
 
-    if (!/(?:^|\s)srcset\s*=/iu.test(attributes)) {
+    if (srcsetValue === undefined) {
       continue;
     }
 
-    const srcset = attributes.match(/(?:^|\s)srcset\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
-    const rawCandidates = srcset?.[1] ?? srcset?.[2] ?? srcset?.[3] ?? '';
-    const candidates = decodeHtmlReferences(rawCandidates);
-
-    // WHATWG srcset tokenizing: whitespace-split tokens alternate between a
-    // candidate URL and its descriptors; a numeric single-token value like
-    // srcset="404" stays a URL, while densities after a URL are skipped.
-    let holdingUrl = false;
-
-    for (const token of candidates.split(/\s+/u)) {
-      for (const piece of token.split(/(?<=\d[xw]),/u)) {
-        const trimmed = piece.replace(/^[,]+|[,]+$/gu, '');
-
-        if (trimmed.length === 0) {
-          continue;
-        }
-
-        const isDescriptor = /^[\d.]+[wx]?$/u.test(trimmed);
-
-        if (holdingUrl && isDescriptor) {
-          continue;
-        }
-
-        references.push(trimmed);
-        // A trailing comma on a URL token ends the candidate, so the next
-        // token starts fresh rather than being read as a descriptor.
-        const endedCandidate = /,$/u.test(piece);
-        holdingUrl = !isDescriptor && !endedCandidate;
-      }
-
-      if (/^[\d.]+[wx],?$/u.test(token)) {
-        holdingUrl = false;
-      }
-    }
+    // Shared WHATWG srcset tokenizer (also used by the legal-page pass).
+    pushSrcsetCandidates(decodeHtmlReferences(srcsetValue), references);
   }
 
   // Embedded srcdoc documents resolve their resources against this
@@ -731,62 +708,6 @@ function verifyIndexReferences(
     if (target !== null) {
       references.push(target[1] ?? target[2] ?? target[3] ?? '');
     }
-  }
-
-  // Referenced local stylesheets carry their own url()/@import targets;
-  // resolve them relative to each stylesheet's directory.
-  const stylesheetReferences: string[] = [];
-
-  for (const reference of [...referenced]) {
-    if (!reference.endsWith('.css') || !deploymentPaths.has(reference)) {
-      continue;
-    }
-
-    const cssContent = readFileSync(join(deploymentRoot, reference), 'utf8');
-    const cssDir = reference.includes('/')
-      ? `./${reference.slice(0, reference.lastIndexOf('/'))}`
-      : '.';
-
-    for (const cssUrl of cssContent.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/giu)) {
-      const raw = (cssUrl[2] ?? '').trim();
-
-      if (raw.length === 0 || raw.startsWith('data:') || raw.startsWith('#')) {
-        continue;
-      }
-
-      const scheme = /^([a-z][a-z0-9+.-]*):/iu.exec(raw);
-
-      if (scheme !== null && scheme[1] !== undefined && scheme[1].toLowerCase() !== 'https' && scheme[1].toLowerCase() !== 'http') {
-        continue;
-      }
-
-      const schemeText = scheme?.[1] ?? '';
-      let cssPath = scheme !== null ? raw.slice(schemeText.length + 1) : raw;
-
-      if (cssPath.startsWith('//')) {
-        continue;
-      }
-
-      cssPath = cssPath.split('?')[0]?.split('#')[0] ?? cssPath;
-      const cssTarget = cssPath.startsWith('/') ? cssPath.slice(1) : `${cssDir}/${cssPath}`;
-      const resolved = posix.normalize(cssTarget);
-
-      if (!resolved.startsWith('../')) {
-        stylesheetReferences.push(resolved);
-      }
-    }
-
-    for (const importMatch of cssContent.matchAll(/@import\s+(['"])([^'"]+)\1/giu)) {
-      const raw = (importMatch[2] ?? '').trim();
-
-      if (raw.length > 0 && !raw.startsWith('/') && !raw.startsWith('data:')) {
-        stylesheetReferences.push(posix.normalize(`${cssDir}/${raw.split('?')[0] ?? raw}`));
-      }
-    }
-  }
-
-  for (const stylesheetReference of stylesheetReferences) {
-    referenced.add(stylesheetReference);
   }
 
   for (const rawReference of references) {
@@ -822,14 +743,6 @@ function verifyIndexReferences(
       }
     }
 
-    if (process.env.MPGD_DEBUG_SRCDOC === '1') {
-      console.error(
-        'DEBUG-REF',
-        JSON.stringify(reference.slice(0, 60)),
-        '->',
-        JSON.stringify(effectiveReference.slice(0, 60)),
-      );
-    }
     const withoutQuery = effectiveReference.split(/[?#]/u)[0] ?? effectiveReference;
 
     if (withoutQuery.length === 0) {
@@ -874,6 +787,86 @@ function verifyIndexReferences(
     }
 
     referenced.add(normalized);
+  }
+
+  // Referenced local stylesheets carry their own url()/@import targets;
+  // resolve them relative to each stylesheet's directory, following chained
+  // imports with a visited set so circular imports cannot loop forever.
+  const visitedStylesheets = new Set<string>();
+  const stylesheetQueue = [...referenced].filter(
+    (reference) => reference.endsWith('.css') && deploymentPaths.has(reference),
+  );
+
+  while (stylesheetQueue.length > 0) {
+    const stylesheet = stylesheetQueue.shift();
+
+    if (stylesheet === undefined || visitedStylesheets.has(stylesheet)) {
+      continue;
+    }
+
+    visitedStylesheets.add(stylesheet);
+    const cssContent = readFileSync(join(deploymentRoot, stylesheet), 'utf8');
+    const cssDir = stylesheet.includes('/')
+      ? `./${stylesheet.slice(0, stylesheet.lastIndexOf('/'))}`
+      : '.';
+    const stylesheetReferences: string[] = [];
+
+    for (const cssUrl of cssContent.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/giu)) {
+      const raw = (cssUrl[2] ?? '').trim();
+
+      if (raw.length === 0 || raw.startsWith('data:') || raw.startsWith('#')) {
+        continue;
+      }
+
+      const scheme = /^([a-z][a-z0-9+.-]*):/iu.exec(raw);
+
+      if (scheme !== null && scheme[1] !== undefined && scheme[1].toLowerCase() !== 'https' && scheme[1].toLowerCase() !== 'http') {
+        continue;
+      }
+
+      const schemeText = scheme?.[1] ?? '';
+      let cssPath = scheme !== null ? raw.slice(schemeText.length + 1) : raw;
+
+      if (cssPath.startsWith('//')) {
+        continue;
+      }
+
+      cssPath = cssPath.split('?')[0]?.split('#')[0] ?? cssPath;
+      const cssTarget = cssPath.startsWith('/') ? cssPath.slice(1) : `${cssDir}/${cssPath}`;
+      const resolved = posix.normalize(cssTarget);
+
+      if (!resolved.startsWith('../')) {
+        stylesheetReferences.push(resolved);
+      }
+    }
+
+    for (const importMatch of cssContent.matchAll(/@import\s+(['"])([^'"]+)\1/giu)) {
+      const raw = (importMatch[2] ?? '').trim();
+
+      if (raw.length > 0 && !raw.startsWith('/') && !raw.startsWith('data:')) {
+        const resolved = posix.normalize(`${cssDir}/${raw.split('?')[0] ?? raw}`);
+
+        if (!resolved.startsWith('../')) {
+          stylesheetReferences.push(resolved);
+        }
+      }
+    }
+
+    for (const stylesheetReference of stylesheetReferences) {
+      if (referenced.has(stylesheetReference)) {
+        continue;
+      }
+
+      referenced.add(stylesheetReference);
+
+      if (
+        stylesheetReference.endsWith('.css')
+        && deploymentPaths.has(stylesheetReference)
+        && !visitedStylesheets.has(stylesheetReference)
+      ) {
+        stylesheetQueue.push(stylesheetReference);
+      }
+    }
   }
 
   for (const reference of [...referenced].sort()) {
