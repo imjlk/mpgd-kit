@@ -138,3 +138,33 @@ late scoped commits still return `false` after bridge destruction.
 
 The UI subpath shares the private package's publication prerequisites. No Sampo
 changeset or generated-game dependency is added for this private-only extension.
+
+## Platform lifecycle binding
+
+Import `bindGameLifecycle` from `@mpgd/game-runtime/platform`. Supply a controller,
+a minimal `source` with `onPause`/`onResume` subscriptions (compatible with
+`PlatformGateway.lifecycle`), and either an explicit `initialState` or a
+`readState()` callback. States are `active`, `inactive`, and `unknown`; unknown
+conservatively blocks. Default channels are all four execution channels.
+
+Subscriptions install before reading current state. Events received during
+installation override an explicit initial state; an event during `readState`
+overrides that read's return value. A readable source should return its current
+state synchronously. No DOM or SDK is imported and LifecycleAdapter is unchanged.
+
+Each binding owns at most one token. Duplicate pause/resume events are idempotent;
+a resume cannot release settings or another source's block. `dispose()` removes
+subscriptions and releases only its own token. Source callbacks captured before
+disposal become harmless, and controller destruction automatically detaches the
+binding. Setup failures clean installed subscriptions; optional `onError` observes
+cleanup errors without preventing remaining cleanup.
+
+```ts
+const lifecycleBinding = bindGameLifecycle({
+  controller: runtime,
+  source: gateway.lifecycle,
+  initialState: 'unknown',
+});
+// A later source resume can release this binding's conservative startup block.
+lifecycleBinding.dispose();
+```

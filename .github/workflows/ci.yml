@@ -19,6 +19,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     outputs:
       release_pr_metadata_only: ${{ steps.release-pr-meta.outputs.enabled }}
     env:
@@ -61,6 +62,21 @@ jobs:
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm build:packages
         if: ${{ env.IS_RELEASE_PR != 'true' }}
+      - name: Cache runtime fixture browser
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-runtime-playwright-${{ hashFiles('examples/runtime-controls/package.json') }}
+          restore-keys: ${{ runner.os }}-runtime-playwright-
+      - name: Install runtime fixture browser
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        timeout-minutes: 10
+        run: pnpm --dir examples/runtime-controls exec playwright install --with-deps chromium
+      - name: Verify Phaser runtime controls in Chromium
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        timeout-minutes: 5
+        run: pnpm --dir examples/runtime-controls build && pnpm --dir examples/runtime-controls test:browser
       - run: pnpm smoke:apps-in-toss-production-evidence:prepared
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist native-plugins/*/dist

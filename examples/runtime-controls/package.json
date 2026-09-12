@@ -1,0 +1,24 @@
+{
+  "name": "@mpgd/example-runtime-controls",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "ttsc --noEmit && vite build",
+    "check": "ttsc --noEmit",
+    "test:browser": "node test/browser.mjs"
+  },
+  "dependencies": {
+    "@mpgd/game-runtime": "workspace:*",
+    "@mpgd/phaser-game-runtime": "workspace:*",
+    "phaser": "4.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "playwright": "1.62.1",
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
+    "vite": "^8.1.3"
+  }
+}

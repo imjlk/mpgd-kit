@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 
 import { createGameExecutionController } from '@mpgd/game-runtime';
+import { bindGameLifecycle } from '@mpgd/game-runtime/platform';
 import { createGameUiBridge } from '@mpgd/game-runtime/ui';
 
 assert.equal(typeof globalThis.document, 'undefined');
@@ -18,4 +19,14 @@ screen.dispose();
 assert.equal(screen.setSnapshot(2), false);
 assert.equal(bridge.getSnapshot(), 1);
 bridge.destroy();
+const lifecycleRuntime = createGameExecutionController();
+const lifecycle = bindGameLifecycle({
+  controller: lifecycleRuntime,
+  initialState: 'unknown',
+  source: { onPause: () => () => {}, onResume: () => () => {} },
+});
+assert.equal(lifecycleRuntime.getSnapshot().blocked.simulation, true);
+lifecycle.dispose();
+assert.equal(lifecycleRuntime.getSnapshot().blocked.simulation, false);
+lifecycleRuntime.destroy();
 console.log('game-runtime compiled ESM import passed');
