@@ -22,8 +22,14 @@ export type {
 
 /** DOM-free public operation port, implemented by GameServicesClient. */
 export interface GameServicesOperationClient {
-  purchase(input: GameServicesPurchaseInput, options?: GameServicesOperationOptions<GameServicesPurchaseProgress>): Promise<GameServicesPurchaseResult>;
-  claimRewardedAd(input: GameServicesRewardedAdInput, options?: GameServicesOperationOptions<GameServicesRewardedAdProgress>): Promise<GameServicesRewardedAdResult>;
+  purchase(
+    input: GameServicesPurchaseInput,
+    options?: GameServicesOperationOptions<GameServicesPurchaseProgress>,
+  ): Promise<GameServicesPurchaseResult>;
+  claimRewardedAd(
+    input: GameServicesRewardedAdInput,
+    options?: GameServicesOperationOptions<GameServicesRewardedAdProgress>,
+  ): Promise<GameServicesRewardedAdResult>;
 }
 
 export interface GameServicesPurchaseInput {
