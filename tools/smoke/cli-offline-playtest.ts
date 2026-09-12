@@ -2852,7 +2852,9 @@ try {
   assert.doesNotMatch(imageSetHtml, /\/assets\/icon(?:@2x)?\.png/u);
   const imageSetStyles = imageSetHtml.match(/<style>[\s\S]*?<\/style>/gu)?.join('\n');
   assert.ok(imageSetStyles);
-  assert.equal(imageSetStyles.match(/data:image\/png;base64,/gu)?.length, 2);
+  const imageSetDeclaration = /image-set\(([^)]*)\)/u.exec(imageSetStyles)?.[1];
+  assert.ok(imageSetDeclaration);
+  assert.equal(imageSetDeclaration.match(/data:image\/png;base64,/gu)?.length, 2);
 
   const commentedImageSetFiles: readonly PreviewFixtureFile[] = [
     [
@@ -2871,7 +2873,9 @@ try {
     '\n',
   );
   assert.ok(commentedImageSetStyles);
-  assert.equal(commentedImageSetStyles.match(/data:image\/png;base64,/gu)?.length, 2);
+  const commentedImageSetDeclaration = /image-set\(([^)]*)\)/u.exec(commentedImageSetStyles)?.[1];
+  assert.ok(commentedImageSetDeclaration);
+  assert.equal(commentedImageSetDeclaration.match(/data:image\/png;base64,/gu)?.length, 2);
 
   const parenthesizedAssetDirectoryHtml = await packageAndReadFixture(
     'parenthesized-asset-directory',
