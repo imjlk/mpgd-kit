@@ -171,7 +171,7 @@ try {
     },
   );
   assert.equal(evidenceWithoutWack.packages[0]?.certification.result, 'NOT_RUN');
-  assert.equal(existsSync(wackReportFile), false);
+  assert.equal(existsSync(wackReportFile), false, 'NOT_RUN must remove the stale WACK report');
 
   blockEvidenceWrite = true;
   assert.throws(
@@ -180,9 +180,21 @@ try {
       runtime,
     ),
   );
-  assert.equal(existsSync(join(outputDir, 'package-acceptance.json')), false);
-  assert.equal(existsSync(join(outputDir, 'package-acceptance.md')), false);
-  assert.equal(existsSync(wackReportFile), false);
+  assert.equal(
+    existsSync(join(outputDir, 'package-acceptance.json')),
+    false,
+    'Failed evidence write must remove JSON',
+  );
+  assert.equal(
+    existsSync(join(outputDir, 'package-acceptance.md')),
+    false,
+    'Failed evidence write must remove Markdown',
+  );
+  assert.equal(existsSync(wackReportFile), false, 'Failed evidence write must remove WACK report');
+  assert.equal(
+    readFileSync(join(fixtureRoot, 'blocked-evidence-target', 'sentinel.txt'), 'utf8'),
+    'preserve target',
+  );
   blockEvidenceWrite = false;
 
   emittedPackageId = packageId.toLowerCase();
@@ -413,6 +425,7 @@ function runCommand(command: string, args: readonly string[]): void {
       if (blockEvidenceWrite) {
         const blockedEvidenceTarget = join(fixtureRoot, 'blocked-evidence-target');
         mkdirSync(blockedEvidenceTarget, { recursive: true });
+        writeFileSync(join(blockedEvidenceTarget, 'sentinel.txt'), 'preserve target');
         symlinkSync(blockedEvidenceTarget, join(outputDir, 'package-acceptance.md'), 'dir');
       }
       return;

@@ -54,8 +54,10 @@ try {
       readJson(join(selectedGame, 'package.json')).dependencies,
       'selected game dependencies',
     )['@mpgd/adapter-browser'],
-    '^0.6.0',
-    'source-checkout game creation must use the first adapter release with Store exports',
+    resolveMicrosoftStoreAdapterDependencyVersion(
+      `^${String(readJson(join(kitRoot, 'adapters/browser/package.json')).version)}`,
+    ),
+    'source-checkout game creation must use the current adapter release with Store exports',
   );
   assertNoUnresolvedTemplatePlaceholders(selectedGame);
 
