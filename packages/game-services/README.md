@@ -67,3 +67,8 @@ consumption checks alongside the client and target conformance suites.
 
 All published entrypoints use explicit internal ESM module paths and are smoke-tested
 with native Node imports, without a bundler or TypeScript runtime loader.
+
+Headless consumers can import operation input/result/progress types and the two-method
+`GameServicesOperationClient` port from `@mpgd/game-services/operations`. This entrypoint
+has no runtime implementation and its declarations require no DOM or fetch globals.
+The full client continues to re-export the same operation types for compatibility.
