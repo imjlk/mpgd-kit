@@ -19,6 +19,7 @@ permissions:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    timeout-minutes: 120
     outputs:
       release_pr_metadata_only: ${{ steps.release-pr-meta.outputs.enabled }}
     env:
@@ -67,6 +68,7 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-runtime-playwright-${{ hashFiles('examples/runtime-controls/package.json') }}
+          restore-keys: ${{ runner.os }}-runtime-playwright-
       - name: Install runtime fixture browser
         if: ${{ env.IS_RELEASE_PR != 'true' }}
         timeout-minutes: 10

@@ -75,6 +75,33 @@ function audioSink(initial = false) {
 const gameplayChannels = ['simulation', 'gameplay-input'] as const;
 
 describe('Phaser scene execution binding (headless fakes)', () => {
+  it('still detaches listeners and scope when a custom controller throws during disposal', () => {
+    const runtime = createGameExecutionController();
+    let throwOnRead = false;
+    const controller = {
+      ...runtime,
+      getSnapshot: () => {
+        if (throwOnRead) {
+          throw new Error('controller unavailable');
+        }
+        return runtime.getSnapshot();
+      },
+    };
+    const gameplay = fakeScene();
+    const scope = { dispose: vi.fn() };
+    const onError = vi.fn();
+    const binding = bindPhaserGameScene({
+      controller, scene: gameplay.scene, uiScope: scope, onError,
+      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+    });
+    runtime.acquireBlock({ reason: 'settings', channels: gameplayChannels });
+    throwOnRead = true;
+    expect(() => binding.dispose()).not.toThrow();
+    expect(gameplay.listenerCount()).toBe(0);
+    expect(scope.dispose).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledTimes(1);
+  });
+
   it('uses snapshot versions when an injected controller returns fresh snapshot objects', () => {
     const runtime = createGameExecutionController();
     const controller = { ...runtime, getSnapshot: () => ({ ...runtime.getSnapshot() }) };

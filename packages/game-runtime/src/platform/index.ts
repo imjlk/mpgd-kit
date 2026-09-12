@@ -1,3 +1,4 @@
+import { executionChannels } from '../channels.js';
 import type { ExecutionBlock, ExecutionChannel, GameExecutionController } from '../index.js';
 import { observe, type ObserverErrorHandler } from '../observers.js';
 
@@ -141,4 +142,3 @@ function validateState(state: unknown): GameLifecycleState {
   }
   return state;
 }
-import { executionChannels } from '../channels.js';

@@ -149,6 +149,9 @@ try {
   assert.equal(afterDestroy.controllerStatus, 'destroyed');
   assert.equal(afterDestroy.gameplayResumes, beforeDestroy.gameplayResumes);
   assert.equal(afterDestroy.gameplayUpdates, beforeDestroy.gameplayUpdates);
+  assert.equal(beforeDestroy.muted, true);
+  assert.equal(afterDestroy.muted, true, 'Terminal teardown must not unmute gameplay');
+  assert.deepEqual(afterDestroy.errors, [], 'Isolated observer errors must also fail teardown acceptance');
   assert.deepEqual(errors, [], 'Application teardown must not introduce browser errors');
   console.log('Real Phaser browser fixture passed: initial inactive, overlap, UI input, stale-key reset, rendering, shutdown/restart, external sleep/stop.');
 } finally {

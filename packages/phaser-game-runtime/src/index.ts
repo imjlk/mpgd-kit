@@ -44,6 +44,7 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
   if (controller.getSnapshot().status === 'destroyed') {
     throw new Error('Cannot bind a destroyed game execution controller.');
   }
+  const events = scene.sys.events;
   let disposed = false;
   let sceneEnded = false;
   let reportedSimulation = false;
@@ -99,9 +100,11 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
     }
     ownedAudio = false;
     // Resume last: its listeners may synchronously restart the scene and install a new binding.
-    if (shouldResume && !sceneEnded && controller.getSnapshot().status === 'active' && scene.sys.isPaused()) {
+    if (shouldResume && !sceneEnded) {
       attempt(() => {
-        scene.sys.resume();
+        if (controller.getSnapshot().status === 'active' && scene.sys.isPaused()) {
+          scene.sys.resume();
+        }
       });
     }
   }
@@ -111,19 +114,35 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
       return;
     }
     disposed = true;
-    unsubscribe();
+    attempt(unsubscribe);
     // Keep shutdown observation installed while restoration calls into consumer/engine code.
-    if (mode !== 'terminal' && controller.getSnapshot().status === 'active') {
-      restore(mode === 'restore');
+    if (mode !== 'terminal') {
+      attempt(() => {
+        if (controller.getSnapshot().status === 'active') {
+          restore(mode === 'restore');
+        }
+      });
     }
     for (const event of ['shutdown', 'destroy']) {
-      scene.sys.events.off(event, onShutdown);
+      attempt(() => {
+        events.off(event, onShutdown);
+      });
     }
-    scene.sys.events.off('sleep', onSleep);
-    scene.sys.events.off('wake', onWake);
-    scene.sys.events.off('pause', onPause);
-    scene.sys.events.off('resume', onResume);
-    scene.sys.events.off('create', apply);
+    attempt(() => {
+      events.off('sleep', onSleep);
+    });
+    attempt(() => {
+      events.off('wake', onWake);
+    });
+    attempt(() => {
+      events.off('pause', onPause);
+    });
+    attempt(() => {
+      events.off('resume', onResume);
+    });
+    attempt(() => {
+      events.off('create', apply);
+    });
     attempt(() => uiScope?.dispose());
     ownedInput.clear();
   }
@@ -265,14 +284,14 @@ export function bindPhaserGameScene(input: BindPhaserGameSceneInput): PhaserGame
 
   try {
     for (const event of ['shutdown', 'destroy']) {
-      scene.sys.events.on(event, onShutdown);
+      events.on(event, onShutdown);
     }
-    scene.sys.events.on('sleep', onSleep);
-    scene.sys.events.on('wake', onWake);
-    scene.sys.events.on('pause', onPause);
-    scene.sys.events.on('resume', onResume);
+    events.on('sleep', onSleep);
+    events.on('wake', onWake);
+    events.on('pause', onPause);
+    events.on('resume', onResume);
     // SceneManager sets RUNNING after scene.create() returns; apply before its first update.
-    scene.sys.events.on('create', apply);
+    events.on('create', apply);
     unsubscribe = controller.subscribe(apply);
     apply();
   } catch (error) {
