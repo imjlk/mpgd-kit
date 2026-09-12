@@ -1,8 +1,8 @@
 {
-  "name": "@mpgd/game-runtime",
+  "name": "@mpgd/phaser-game-runtime",
   "version": "0.1.0",
   "private": true,
-  "description": "Headless, reason-scoped gameplay execution controls.",
+  "description": "Optional Phaser scene bindings for the headless gameplay execution controller.",
   "license": "MIT",
   "type": "module",
   "sideEffects": false,
@@ -12,21 +12,13 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./ui": {
-      "types": "./dist/ui/index.d.ts",
-      "default": "./dist/ui/index.js"
-    },
-    "./platform": {
-      "types": "./dist/platform/index.d.ts",
-      "default": "./dist/platform/index.js"
     }
   },
   "files": [
     "dist"
   ],
   "scripts": {
-    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/game-runtime",
+    "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/phaser-game-runtime",
     "check": "ttsc --noEmit",
     "test": "pnpm build && vitest run && node test/dist-import.mjs && ttsc --noEmit -p test/tsconfig.json",
     "lint": "ttsc --noEmit",
@@ -36,6 +28,14 @@
   "devDependencies": {
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
-    "vitest": "^4.0.0"
+    "vitest": "^4.0.0",
+    "phaser": "^4.2.0",
+    "@types/node": "^24.0.0"
+  },
+  "dependencies": {
+    "@mpgd/game-runtime": "workspace:*"
+  },
+  "peerDependencies": {
+    "phaser": "^4.2.0"
   }
 }
