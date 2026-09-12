@@ -20,9 +20,9 @@ import {
 } from './microsoft-store-purchase';
 
 const assert = {
-  equal(actual: unknown, expected: unknown): void {
+  equal(actual: unknown, expected: unknown, context = ''): void {
     if (actual !== expected) {
-      throw new Error(`Expected ${String(expected)}, received ${String(actual)}.`);
+      throw new Error(`Expected ${String(expected)}, received ${String(actual)}. ${context}`);
     }
   },
   deepEqual(actual: unknown, expected: unknown): void {
@@ -394,7 +394,11 @@ const claimedRecoveryResult = await ownershipHarness.backend.purchases.verifyPur
   createRequest({ idempotencyKey: 'claimed-recovery' }),
 );
 assert.equal(claimedRecoveryResult.verified, true);
-assert.equal(claimedRecoveryResult.finalization?.status, 'completed');
+assert.equal(
+  claimedRecoveryResult.finalization?.status,
+  'completed',
+  'claimedRecoveryResult: ' + JSON.stringify(claimedRecoveryResult.finalization),
+);
 assert.deepEqual(
   await ownershipHarness.boundary.hasRecoveryOwnership(
     createRecoveryOwnershipInput(
@@ -519,7 +523,11 @@ assert.equal(advancedOwnershipHarness.events.includes('ledger:fresh-generation')
 const completed = createHarness();
 const completedResult = await completed.backend.purchases.verifyPurchase(createRequest());
 assert.equal(completedResult.verified, true);
-assert.equal(completedResult.finalization?.status, 'completed');
+assert.equal(
+  completedResult.finalization?.status,
+  'completed',
+  'completedResult: ' + JSON.stringify(completedResult.finalization),
+);
 assert.equal(completedResult.finalization?.action, 'consume');
 assert.deepEqual(completed.events, [
   `provider:query:${storeId}`,
@@ -622,7 +630,11 @@ const historicalMappingResult = await historicalMapping.backend.purchases.verify
   }),
 );
 assert.equal(historicalMappingResult.verified, true);
-assert.equal(historicalMappingResult.finalization?.status, 'completed');
+assert.equal(
+  historicalMappingResult.finalization?.status,
+  'completed',
+  'historicalMappingResult: ' + JSON.stringify(historicalMappingResult.finalization),
+);
 assert.deepEqual(historicalMapping.events, [
   `provider:query:${historicalStoreId}`,
   'ledger:historical-product-mapping',
@@ -798,7 +810,11 @@ const renewedUserStoreIdResult = await renewedUserStoreId.backend.purchases.veri
   createRequest({ idempotencyKey: 'renewed-user-store-id' }),
 );
 assert.equal(renewedUserStoreIdResult.verified, true);
-assert.equal(renewedUserStoreIdResult.finalization?.status, 'completed');
+assert.equal(
+  renewedUserStoreIdResult.finalization?.status,
+  'completed',
+  'renewedUserStoreIdResult: ' + JSON.stringify(renewedUserStoreIdResult.finalization),
+);
 assert.deepEqual(renewedUserStoreId.events, [
   `provider:query:${storeId}`,
   'ledger:renewed-user-store-id',
@@ -821,7 +837,11 @@ assert.equal(pendingConsume.verified, true);
 assert.equal(pendingConsume.finalization?.status, 'pending');
 assert.equal(recoveredConsume.verified, true);
 assert.equal(recoveredConsume.alreadyProcessed, true);
-assert.equal(recoveredConsume.finalization?.status, 'completed');
+assert.equal(
+  recoveredConsume.finalization?.status,
+  'completed',
+  'recoveredConsume: ' + JSON.stringify(recoveredConsume.finalization),
+);
 assert.deepEqual(consumeRecovery.events, [
   `provider:query:${storeId}`,
   'ledger:consume-recovery-original',
@@ -851,7 +871,11 @@ const afterStoreIdMigrationResult = await afterStoreIdMigration.backend.purchase
 assert.equal(beforeStoreIdMigrationResult.finalization?.status, 'pending');
 assert.equal(afterStoreIdMigrationResult.verified, true);
 assert.equal(afterStoreIdMigrationResult.alreadyProcessed, true);
-assert.equal(afterStoreIdMigrationResult.finalization?.status, 'completed');
+assert.equal(
+  afterStoreIdMigrationResult.finalization?.status,
+  'completed',
+  'afterStoreIdMigrationResult: ' + JSON.stringify(afterStoreIdMigrationResult.finalization),
+);
 assert.deepEqual(migratedStoreEvents, [
   `provider:query:${storeId}`,
   'ledger:store-id-migration',
@@ -923,7 +947,11 @@ const afterOfferTokenMigrationResult =
 assert.equal(beforeOfferTokenMigrationResult.finalization?.status, 'pending');
 assert.equal(afterOfferTokenMigrationResult.verified, true);
 assert.equal(afterOfferTokenMigrationResult.alreadyProcessed, true);
-assert.equal(afterOfferTokenMigrationResult.finalization?.status, 'completed');
+assert.equal(
+  afterOfferTokenMigrationResult.finalization?.status,
+  'completed',
+  'afterOfferTokenMigrationResult: ' + JSON.stringify(afterOfferTokenMigrationResult.finalization),
+);
 assert.deepEqual(offerTokenMigrationEvents, [
   `provider:query:${historicalStoreId}`,
   'ledger:offer-token-migration-original',
