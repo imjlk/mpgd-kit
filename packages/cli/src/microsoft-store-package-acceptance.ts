@@ -13,6 +13,7 @@ import {
   realpathSync,
   rmSync,
   statSync,
+  unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -227,10 +228,10 @@ export function runMicrosoftStorePackageAcceptance(
     ],
   );
   for (const reportFile of reportFiles) {
-    rmSync(reportFile, { force: true });
+    removeEvidenceFile(reportFile);
   }
-  rmSync(jsonFile, { force: true });
-  rmSync(markdownFile, { force: true });
+  removeEvidenceFile(jsonFile);
+  removeEvidenceFile(markdownFile);
 
   const tempRoot = mkdtempSync(path.join(tmpdir(), 'mpgd-microsoft-store-package-'));
 
@@ -289,10 +290,10 @@ export function runMicrosoftStorePackageAcceptance(
       writeFileSync(jsonFile, `${JSON.stringify(evidence, null, 2)}\n`);
       writeFileSync(markdownFile, renderMicrosoftStorePackageAcceptanceMarkdown(evidence));
     } catch (error) {
-      rmSync(jsonFile, { force: true });
-      rmSync(markdownFile, { force: true });
+      removeEvidenceFile(jsonFile);
+      removeEvidenceFile(markdownFile);
       for (const reportFile of reportFiles) {
-        rmSync(reportFile, { force: true });
+        removeEvidenceFile(reportFile);
       }
       throw error;
     }
@@ -339,7 +340,7 @@ function runOptionalWindowsAppCertification(input: {
     throw new Error('Windows App Certification Kit report path was not prepared.');
   }
 
-  rmSync(reportFile, { force: true });
+  removeEvidenceFile(reportFile);
   input.runtime.runCommand(appCertExecutable, ['reset']);
   input.runtime.runCommand(appCertExecutable, [
     'test',
@@ -1143,6 +1144,17 @@ function sameFile(left: string, right: string): boolean {
     }
 
     return false;
+  }
+}
+
+/** Remove only the file or link, never traverse a replacement directory link. */
+function removeEvidenceFile(file: string): void {
+  try {
+    unlinkSync(file);
+  } catch (error) {
+    if (!isMissingFileError(error)) {
+      throw error;
+    }
   }
 }
 

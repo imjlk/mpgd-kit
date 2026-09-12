@@ -120,8 +120,13 @@ try {
   assert.match(String(evidence.sha256), /^[a-f\d]{64}$/u);
   assert.equal(Number(evidence.inlinedAssetCount), 5);
   assert.equal(result.evidence.bytes, Buffer.byteLength(html));
+  assert.doesNotMatch(html, /data:application\/x-mpgd-deferred/u);
   const repeatedResult = await runOfflinePlaytestPackaging({ gameRoot });
   assert.equal(repeatedResult.evidence.sha256, result.evidence.sha256);
+  for (let attempt = 0; attempt < 6; attempt += 1) {
+    const repeated = await runOfflinePlaytestPackaging({ gameRoot });
+    assert.equal(repeated.evidence.sha256, result.evidence.sha256);
+  }
 
   await assert.rejects(
     () => runOfflinePlaytestPackaging({
@@ -1003,7 +1008,10 @@ try {
   const shadowedDynamicMetaHtml = await packageAndReadFixture('shadowed-dynamic-meta', {
     mainJs: 'function make(document) { return document.createElement("meta"); } document.body.dataset.value = String(make({ createElement: (tag) => tag }));',
   });
-  assert.match(shadowedDynamicMetaHtml, /document\.createElement\("meta"\)/u);
+  const shadowedMetaContext = executeBundledFixtureModule(shadowedDynamicMetaHtml, {
+    document: { body: { dataset: { value: '' } } },
+  });
+  assert.equal(shadowedMetaContext.document.body.dataset.value, 'meta');
 
   const memberOwnedDynamicMetaHtml = await packageAndReadFixture('member-owned-dynamic-meta', {
     mainJs: 'const wrapper = { document: { createElement: (tag) => tag } }; const spaced = wrapper . document.createElement?.("meta"); const commented = wrapper /* owner */ . /* member */ document?.createElement?.("meta"); document.body.dataset.value = `${spaced}:${commented}`;',
@@ -2084,7 +2092,7 @@ try {
   const internalNamedFunctionFetchHtml = await packageAndReadFixture(
     'internal-named-function-fetch-binding',
     {
-      mainJs: 'const helper = function fetch() { return fetch("/assets/not-an-asset.json"); }; void helper;',
+      mainJs: 'const helper = function fetch() { return fetch("/assets/not-an-asset.json"); }; document.body.helper = helper;',
     },
   );
   assert.match(internalNamedFunctionFetchHtml, /\/assets\/not-an-asset\.json/u);
@@ -2177,7 +2185,22 @@ try {
     [['artifacts/web-preview/assets/game.woff2', fontFaceAsset]],
   );
   assert.match(identifiedFontFaceHtml, /\/assets\/game\.woff2/u);
-  assert.match(identifiedFontFaceHtml, /new FontFace\(["']Game["'],["']data:font\/woff2;base64,/u);
+  let capturedFontSource = '';
+  const fontContext = {
+    document: { body: { dataset: { source: '' } } },
+    FontFace: class {
+      constructor(_family: string, source: string) {
+        capturedFontSource = source;
+      }
+      load(): void {}
+    },
+  };
+  executeBundledFixtureModule(identifiedFontFaceHtml, fontContext);
+  assert.equal(
+    capturedFontSource,
+    `url("data:font/woff2;base64,${fontFaceAsset.toString('base64')}")`,
+  );
+  assert.equal(fontContext.document.body.dataset.source, 'url("/assets/game.woff2")');
 
   const assignedBrowserAudioHtml = await packageAndReadFixture(
     'assigned-browser-audio-asset',
@@ -2248,7 +2271,11 @@ try {
   const comparedBrowserImageHtml = await packageAndReadFixture('compared-browser-image-src', {
     mainJs: 'const image = new Image(); const expected = ""; document.body.dataset.equal = String(image.src === expected);',
   });
-  assert.match(comparedBrowserImageHtml, /image\.src\s*===\s*expected/u);
+  const imageComparisonContext = executeBundledFixtureModule(comparedBrowserImageHtml, {
+    document: { body: { dataset: { equal: '' } } },
+    Image: class { readonly src = ''; },
+  });
+  assert.equal(imageComparisonContext.document.body.dataset.equal, 'true');
 
   const commentedBrowserImageHtml = await packageAndReadFixture(
     'commented-browser-image-source-assignments',
@@ -2301,8 +2328,17 @@ try {
   const identifiedBrowserImageHtml = await packageAndReadFixture('identified-browser-image-asset', {
     mainJs: 'const source = "/assets/pixel.png"; const splash = new Image(); splash.src = source; document.body.append(splash);',
   });
-  assert.doesNotMatch(identifiedBrowserImageHtml, /splash\.src\s*=\s*source/u);
-  assert.match(identifiedBrowserImageHtml, /splash\.src\s*=\s*["']data:image\/png;base64,/u);
+  const appendedImages: { src: string }[] = [];
+  executeBundledFixtureModule(identifiedBrowserImageHtml, {
+    document: { body: { append(image: { src: string }) {
+      appendedImages.push(image);
+    } } },
+    Image: class { src = ''; },
+  });
+  assert.equal(appendedImages.length, 1);
+  const appendedImage = appendedImages[0];
+  assert.ok(appendedImage);
+  assert.match(appendedImage.src, /^data:image\/png;base64,/u);
 
   const attributedBrowserImageHtml = await packageAndReadFixture('attributed-browser-image-asset', {
     mainJs: 'const splash = document.createElement("img"); splash.setAttribute("src", "/assets/pixel.png"); document.body.append(splash);',
@@ -2740,7 +2776,7 @@ try {
       indexHtml: '<!doctype html><html><head><link rel="stylesheet" media="(width > 600px)" href="/assets/main.css"></head><body><main id="game"></main><script type="module" src="/assets/main.js"></script></body></html>',
     },
   );
-  assert.match(quotedGreaterThanStylesheetHtml, /<style media="\(width &gt; 600px\)">/u);
+  assert.match(quotedGreaterThanStylesheetHtml, /<style media="\(width > 600px\)">/u);
 
   const webVttHtml = await packageAndReadFixture(
     'webvtt-track',
@@ -2814,7 +2850,11 @@ try {
   ];
   const imageSetHtml = await packageAndReadFixture('css-image-set', {}, imageSetFiles);
   assert.doesNotMatch(imageSetHtml, /\/assets\/icon(?:@2x)?\.png/u);
-  assert.equal(imageSetHtml.match(/data:image\/png;base64,/gu)?.length, 2);
+  const imageSetStyles = imageSetHtml.match(/<style>[\s\S]*?<\/style>/gu)?.join('\n');
+  assert.ok(imageSetStyles);
+  const imageSetDeclaration = /image-set\(([^)]*)\)/u.exec(imageSetStyles)?.[1];
+  assert.ok(imageSetDeclaration);
+  assert.equal(imageSetDeclaration.match(/data:image\/png;base64,/gu)?.length, 2);
 
   const commentedImageSetFiles: readonly PreviewFixtureFile[] = [
     [
@@ -2829,7 +2869,13 @@ try {
     commentedImageSetFiles,
   );
   assert.doesNotMatch(commentedImageSetHtml, /\/assets\/icon(?:@2x)?\.png/u);
-  assert.equal(commentedImageSetHtml.match(/data:image\/png;base64,/gu)?.length, 2);
+  const commentedImageSetStyles = commentedImageSetHtml.match(/<style>[\s\S]*?<\/style>/gu)?.join(
+    '\n',
+  );
+  assert.ok(commentedImageSetStyles);
+  const commentedImageSetDeclaration = /image-set\(([^)]*)\)/u.exec(commentedImageSetStyles)?.[1];
+  assert.ok(commentedImageSetDeclaration);
+  assert.equal(commentedImageSetDeclaration.match(/data:image\/png;base64,/gu)?.length, 2);
 
   const parenthesizedAssetDirectoryHtml = await packageAndReadFixture(
     'parenthesized-asset-directory',
@@ -3430,7 +3476,10 @@ try {
   const importMethodHtml = await packageAndReadFixture('ordinary-import-methods', {
     mainJs: 'const loader = { import() { return "local"; } }; class ClassLoader { import() { return "class-local"; } } const classLoader = new ClassLoader(); document.body.dataset.value = [loader.import(), loader["import"](), loader. /* retained */ import(), classLoader.import()].join("|");',
   });
-  assert.match(importMethodHtml, /loader\.import\(\)/u);
+  const importMethodContext = executeBundledFixtureModule(importMethodHtml, {
+    document: { body: { dataset: { value: '' } } },
+  });
+  assert.equal(importMethodContext.document.body.dataset.value, 'local|local|local|class-local');
 
   const interpolatedTemplateAssetGame = createPreviewFixture('interpolated-template-asset', {
     mainJs: 'const mask = "mask"; document.body.dataset.asset = new URL(`./icons.svg#${mask}`, import.meta.url).href;',
@@ -3463,7 +3512,10 @@ try {
   const objectFetchHtml = await packageAndReadFixture('object-fetch-method', {
     mainJs: 'const client = { fetch: (value) => value }; document.body.dataset.value = client.fetch("/assets/pixel.png");',
   });
-  assert.match(objectFetchHtml, /client\.fetch\(["']\/assets\/pixel\.png["']\)/u);
+  const objectFetchContext = executeBundledFixtureModule(objectFetchHtml, {
+    document: { body: { dataset: { value: '' } } },
+  });
+  assert.equal(objectFetchContext.document.body.dataset.value, '/assets/pixel.png');
 
   const shadowedQualifiedFetchHtml = await packageAndReadFixture('shadowed-qualified-fetch', {
     mainJs: 'function route(window) { return window.fetch("/assets/helper.json"); } document.body.dataset.route = route({ fetch: (value) => value });',
@@ -3567,6 +3619,14 @@ async function packageAndReadFixture(
 
   const result = await runOfflinePlaytestPackaging({ gameRoot });
   return fs.readFileSync(result.entryFile, 'utf8');
+}
+
+/** Execute only these synchronous, export-free fixture entries, independently of minified names. */
+function executeBundledFixtureModule<T extends Record<string, unknown>>(html: string, context: T): T {
+  const entry = /<script type="module">([\s\S]*?)<\/script>/u.exec(html)?.[1];
+  assert.ok(entry, 'Expected a retained fixture entry module.');
+  new Script(entry).runInNewContext(context);
+  return context;
 }
 
 function createPreviewFixture(name: string, options: PreviewFixtureOptions = {}): string {

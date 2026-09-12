@@ -301,7 +301,7 @@ try {
       jsonFile: join(outputDir, 'commerce-stale-token.json'),
       markdownFile: join(outputDir, 'commerce-stale-token.md'),
     }),
-    /InAppOfferToken does not match built artifact platformProductId/u,
+    /InAppOfferToken ttokdoku_hint_pack_20 does not match built artifact platformProductId stale_hint_pack_20/u,
   );
   writeJson(
     effectiveTargetFile,
