@@ -14,7 +14,13 @@ import type {
 
 import type {
   GameServicesContractClient,
-} from './contract';
+} from './contract.js';
+import {
+  observeGameServicesOperation,
+  type GameServicesOperationOptions,
+  type GameServicesPurchaseProgress,
+  type GameServicesRewardedAdProgress,
+} from './operation-progress.js';
 import type {
   ClaimAdRewardRequest,
   ClaimAdRewardResponse,
@@ -26,7 +32,16 @@ import type {
   RecordLeaderboardScoreResponse,
   VerifyPurchaseRequest,
   VerifyPurchaseResponse,
-} from './types';
+} from './types.js';
+
+export type {
+  GameServicesOperationKind,
+  GameServicesOperationLocation,
+  GameServicesOperationOptions,
+  GameServicesOperationProgress,
+  GameServicesPurchaseProgress,
+  GameServicesRewardedAdProgress,
+} from './operation-progress.js';
 
 export interface PurchaseVerificationApi {
   verifyPurchase(input: VerifyPurchaseRequest): Promise<VerifyPurchaseResponse>;
@@ -117,8 +132,14 @@ export class GameServicesBackendError extends Error {
 }
 
 export interface GameServicesClient {
-  purchase(input: GameServicesPurchaseInput): Promise<GameServicesPurchaseResult>;
-  claimRewardedAd(input: GameServicesRewardedAdInput): Promise<GameServicesRewardedAdResult>;
+  purchase(
+    input: GameServicesPurchaseInput,
+    options?: GameServicesOperationOptions<GameServicesPurchaseProgress>,
+  ): Promise<GameServicesPurchaseResult>;
+  claimRewardedAd(
+    input: GameServicesRewardedAdInput,
+    options?: GameServicesOperationOptions<GameServicesRewardedAdProgress>,
+  ): Promise<GameServicesRewardedAdResult>;
   submitLeaderboardScore(
     input: GameServicesLeaderboardInput,
   ): Promise<GameServicesLeaderboardResult>;
@@ -180,203 +201,217 @@ export function createGameServicesClient(input: CreateGameServicesClientInput): 
   });
 
   return {
-    async purchase(purchaseInput) {
-      const target = input.target;
+    async purchase(purchaseInput, options) {
+      return observeGameServicesOperation('purchase', options, async (progress): Promise<GameServicesPurchaseResult> => {
+        const target = input.target;
 
-      if (!isGameServicesCommerceTarget(target)) {
-        const purchase = {
-          status: 'failed',
-          entitlementIds: [],
-        } satisfies PurchaseResult;
+        if (!isGameServicesCommerceTarget(target)) {
+          const purchase = {
+            status: 'failed',
+            entitlementIds: [],
+          } satisfies PurchaseResult;
 
-        await analytics.track({
-          name: 'purchase_rejected',
-          properties: {
-            productId: purchaseInput.productId,
-            status: purchase.status,
-            reason: 'unsupported_target',
-          },
-        });
+          await analytics.track({
+            name: 'purchase_rejected',
+            properties: {
+              productId: purchaseInput.productId,
+              status: purchase.status,
+              reason: 'unsupported_target',
+            },
+          });
 
-        return {
-          status: 'rejected',
-          purchase,
-        };
-      }
+          return {
+            status: 'rejected',
+            purchase,
+          };
+        }
 
-      const purchase = await input.gateway.commerce.purchase(purchaseInput);
+        progress.platformRequested();
+        const purchase = await input.gateway.commerce.purchase(purchaseInput);
+        progress.platformResult(purchase.status);
 
-      if (target === 'verse8') {
-        const status = purchase.status === 'completed' ? 'rejected' : purchase.status;
+        if (target === 'verse8') {
+          const status = purchase.status === 'completed' ? 'rejected' : purchase.status;
 
-        await analytics.track({
-          name: 'purchase_rejected',
-          properties: {
-            productId: purchaseInput.productId,
+          await analytics.track({
+            name: 'purchase_rejected',
+            properties: {
+              productId: purchaseInput.productId,
+              status,
+              reason: purchase.status === 'completed'
+                ? 'verse8_grants_require_agent8_purchase_event'
+                : purchase.status === 'pending'
+                  ? 'agent8_purchase_event_pending'
+                  : undefined,
+            },
+          });
+
+          return {
             status,
-            reason: purchase.status === 'completed'
-              ? 'verse8_grants_require_agent8_purchase_event'
-              : purchase.status === 'pending'
-                ? 'agent8_purchase_event_pending'
-                : undefined,
-          },
-        });
+            purchase,
+          };
+        }
 
-        return {
-          status,
-          purchase,
+        if (isAuthoritativeMicrosoftStoreCompletion(target, purchase)) {
+          const result = {
+            status: 'granted',
+            purchase,
+            ledgerEntryId: purchase.transactionId,
+          } satisfies GameServicesPurchaseResult;
+
+          await analytics.track({
+            name: 'purchase_granted',
+            properties: {
+              productId: purchaseInput.productId,
+              status: result.status,
+              ledgerEntryId: purchase.transactionId,
+              alreadyProcessed: purchase.authoritativeGrant?.alreadyProcessed,
+            },
+          });
+
+          return result;
+        }
+
+        if (purchase.status !== 'completed' || purchase.transactionId === undefined) {
+          await analytics.track({
+            name: 'purchase_rejected',
+            properties: {
+              productId: purchaseInput.productId,
+              status: purchase.status,
+              reason: purchaseRejectionReason(purchase),
+            },
+          });
+
+          return {
+            status: purchase.status === 'completed' ? 'rejected' : purchase.status,
+            purchase,
+          };
+        }
+
+        const verificationRequest: VerifyPurchaseRequest = {
+          target,
+          ...(input.deploymentTarget === undefined || input.deploymentTarget === target
+            ? {}
+            : { deploymentTarget: input.deploymentTarget }),
+          playerId: input.playerId,
+          productId: purchaseInput.productId,
+          platformTransactionId: purchase.transactionId,
+          idempotencyKey: purchaseInput.idempotencyKey,
+          purchasedAt: now(),
+          ...(purchase.evidence === undefined ? {} : { evidence: purchase.evidence }),
         };
-      }
+        progress.serverRequested();
+        const verification = await input.backend.purchases.verifyPurchase(verificationRequest);
+        progress.serverResult(verification.verified);
 
-      if (isAuthoritativeMicrosoftStoreCompletion(target, purchase)) {
         const result = {
-          status: 'granted',
+          status: verification.verified ? 'granted' : 'rejected',
           purchase,
-          ledgerEntryId: purchase.transactionId,
+          verification,
+          ...(verification.ledgerEntryId === undefined
+            ? {}
+            : { ledgerEntryId: verification.ledgerEntryId }),
         } satisfies GameServicesPurchaseResult;
 
         await analytics.track({
-          name: 'purchase_granted',
+          name: verification.verified ? 'purchase_granted' : 'purchase_rejected',
           properties: {
             productId: purchaseInput.productId,
             status: result.status,
-            ledgerEntryId: purchase.transactionId,
-            alreadyProcessed: purchase.authoritativeGrant?.alreadyProcessed,
+            ledgerEntryId: verification.ledgerEntryId,
+            alreadyProcessed: verification.alreadyProcessed,
+            reason: verification.reason,
           },
         });
 
         return result;
-      }
-
-      if (purchase.status !== 'completed' || purchase.transactionId === undefined) {
-        await analytics.track({
-          name: 'purchase_rejected',
-          properties: {
-            productId: purchaseInput.productId,
-            status: purchase.status,
-            reason: purchaseRejectionReason(purchase),
-          },
-        });
-
-        return {
-          status: purchase.status === 'completed' ? 'rejected' : purchase.status,
-          purchase,
-        };
-      }
-
-      const verification = await input.backend.purchases.verifyPurchase({
-        target,
-        ...(input.deploymentTarget === undefined || input.deploymentTarget === target
-          ? {}
-          : { deploymentTarget: input.deploymentTarget }),
-        playerId: input.playerId,
-        productId: purchaseInput.productId,
-        platformTransactionId: purchase.transactionId,
-        idempotencyKey: purchaseInput.idempotencyKey,
-        purchasedAt: now(),
-        ...(purchase.evidence === undefined ? {} : { evidence: purchase.evidence }),
       });
-
-      const result = {
-        status: verification.verified ? 'granted' : 'rejected',
-        purchase,
-        verification,
-        ...(verification.ledgerEntryId === undefined
-          ? {}
-          : { ledgerEntryId: verification.ledgerEntryId }),
-      } satisfies GameServicesPurchaseResult;
-
-      await analytics.track({
-        name: verification.verified ? 'purchase_granted' : 'purchase_rejected',
-        properties: {
-          productId: purchaseInput.productId,
-          status: result.status,
-          ledgerEntryId: verification.ledgerEntryId,
-          alreadyProcessed: verification.alreadyProcessed,
-          reason: verification.reason,
-        },
-      });
-
-      return result;
     },
 
-    async claimRewardedAd(rewardInput) {
-      const target = input.target;
+    async claimRewardedAd(rewardInput, options) {
+      return observeGameServicesOperation('rewarded-ad', options, async (progress): Promise<GameServicesRewardedAdResult> => {
+        const target = input.target;
 
-      if (!isGameServicesAdRewardTarget(target)) {
-        const reward = {
-          status: 'unavailable',
-          rewardGranted: false,
-        } satisfies RewardedAdResult;
+        if (!isGameServicesAdRewardTarget(target)) {
+          const reward = {
+            status: 'unavailable',
+            rewardGranted: false,
+          } satisfies RewardedAdResult;
 
-        await analytics.track({
-          name: 'rewarded_ad_rejected',
-          properties: {
-            placementId: rewardInput.placementId,
-            status: reward.status,
-            rewardGranted: reward.rewardGranted,
-            reason: 'unsupported_target',
-          },
-        });
+          await analytics.track({
+            name: 'rewarded_ad_rejected',
+            properties: {
+              placementId: rewardInput.placementId,
+              status: reward.status,
+              rewardGranted: reward.rewardGranted,
+              reason: 'unsupported_target',
+            },
+          });
 
-        return {
-          status: 'rejected',
-          reward,
-        };
-      }
+          return {
+            status: 'rejected',
+            reward,
+          };
+        }
 
-      const reward = await input.gateway.ads.showRewarded(rewardInput);
+        progress.platformRequested();
+        const reward = await input.gateway.ads.showRewarded(rewardInput);
+        progress.platformResult(reward.status);
 
-      if (reward.status !== 'completed' || !reward.rewardGranted) {
-        await analytics.track({
-          name: 'rewarded_ad_rejected',
-          properties: {
-            placementId: rewardInput.placementId,
-            status: reward.status,
-            rewardGranted: reward.rewardGranted,
-          },
-        });
+        if (reward.status !== 'completed' || !reward.rewardGranted) {
+          await analytics.track({
+            name: 'rewarded_ad_rejected',
+            properties: {
+              placementId: rewardInput.placementId,
+              status: reward.status,
+              rewardGranted: reward.rewardGranted,
+            },
+          });
 
-        return {
-          status: reward.status === 'completed' ? 'rejected' : reward.status,
-          reward,
-        };
-      }
+          return {
+            status: reward.status === 'completed' ? 'rejected' : reward.status,
+            reward,
+          };
+        }
 
-      const claim = await input.backend.adRewards.claimAdReward({
-        target,
-        ...(input.deploymentTarget === undefined || input.deploymentTarget === target
-          ? {}
-          : { deploymentTarget: input.deploymentTarget }),
-        playerId: input.playerId,
-        placementId: rewardInput.placementId,
-        ...(reward.ledgerEntryId === undefined
-          ? {}
-          : { platformImpressionId: reward.ledgerEntryId }),
-        idempotencyKey: rewardInput.idempotencyKey,
-        completedAt: now(),
-        ...(reward.evidence === undefined ? {} : { evidence: reward.evidence }),
-      });
-
-      const result = {
-        status: claim.granted ? 'granted' : 'rejected',
-        reward,
-        claim,
-        ...(claim.ledgerEntryId === undefined ? {} : { ledgerEntryId: claim.ledgerEntryId }),
-      } satisfies GameServicesRewardedAdResult;
-
-      await analytics.track({
-        name: claim.granted ? 'rewarded_ad_granted' : 'rewarded_ad_rejected',
-        properties: {
+        const claimRequest: ClaimAdRewardRequest = {
+          target,
+          ...(input.deploymentTarget === undefined || input.deploymentTarget === target
+            ? {}
+            : { deploymentTarget: input.deploymentTarget }),
+          playerId: input.playerId,
           placementId: rewardInput.placementId,
-          status: result.status,
-          ledgerEntryId: claim.ledgerEntryId,
-          alreadyProcessed: claim.alreadyProcessed,
-          reason: claim.reason,
-        },
-      });
+          ...(reward.ledgerEntryId === undefined
+            ? {}
+            : { platformImpressionId: reward.ledgerEntryId }),
+          idempotencyKey: rewardInput.idempotencyKey,
+          completedAt: now(),
+          ...(reward.evidence === undefined ? {} : { evidence: reward.evidence }),
+        };
+        progress.serverRequested();
+        const claim = await input.backend.adRewards.claimAdReward(claimRequest);
+        progress.serverResult(claim.granted);
 
-      return result;
+        const result = {
+          status: claim.granted ? 'granted' : 'rejected',
+          reward,
+          claim,
+          ...(claim.ledgerEntryId === undefined ? {} : { ledgerEntryId: claim.ledgerEntryId }),
+        } satisfies GameServicesRewardedAdResult;
+
+        await analytics.track({
+          name: claim.granted ? 'rewarded_ad_granted' : 'rewarded_ad_rejected',
+          properties: {
+            placementId: rewardInput.placementId,
+            status: result.status,
+            ledgerEntryId: claim.ledgerEntryId,
+            alreadyProcessed: claim.alreadyProcessed,
+            reason: claim.reason,
+          },
+        });
+
+        return result;
+      });
     },
 
     async submitLeaderboardScore(scoreInput) {

@@ -6,8 +6,8 @@ import type {
   EvidenceVerificationDecision,
   GameServicesEvidenceVerifier,
   VerifyAdRewardEvidenceInput,
-} from './evidence-verification';
-import type { ClaimAdRewardRequest } from './types';
+} from './evidence-verification.js';
+import type { ClaimAdRewardRequest } from './types.js';
 
 export const admobSsvCustomDataSchema = 'mpgd.admob.ssv.binding.v1';
 export const defaultAdMobSsvMaximumCallbackAgeMs = 86_400_000;

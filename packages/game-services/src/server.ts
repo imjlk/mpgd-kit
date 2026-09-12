@@ -16,15 +16,15 @@ import {
   type GameServicesBackendTransport,
   type GameServicesBackendTransportRequest,
   type GameServicesBackendTransportResponse,
-} from './client';
-import { gameServicesContract, type GameServicesHealthResponse } from './contract';
+} from './client.js';
+import { gameServicesContract, type GameServicesHealthResponse } from './contract.js';
 import {
   createRejectingGameServicesEvidenceVerifier,
   type EvidenceVerificationDecision,
   type FinalizePurchaseGrantInput,
   type GameServicesEvidenceVerifier,
   type GameServicesPurchaseGrantFinalizer,
-} from './evidence-verification';
+} from './evidence-verification.js';
 import {
   assertClaimAdRewardRequest,
   assertClaimAdRewardResponse,
@@ -52,7 +52,7 @@ import {
   type RecordLeaderboardScoreResponse,
   type VerifyPurchaseRequest,
   type VerifyPurchaseResponse,
-} from './types';
+} from './types.js';
 
 type CorsHeaders = Record<string, string>;
 
@@ -1741,5 +1741,5 @@ function applyCorsHeaders(headers: Headers, corsHeaders: CorsHeaders | undefined
   }
 }
 
-export * from './notification-delivery';
-export * from './progress-link';
+export * from './notification-delivery.js';
+export * from './progress-link.js';

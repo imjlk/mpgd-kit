@@ -5,7 +5,7 @@ import type {
   EntitlementLedgerPayload,
   PurchaseGrantFinalization,
   VerifyPurchaseRequest,
-} from './types';
+} from './types.js';
 
 export type EvidenceVerificationDecision =
   | {
