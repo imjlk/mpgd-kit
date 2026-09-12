@@ -976,6 +976,9 @@ function createStoredPurchaseRequest(
 
   return {
     ...request,
+    // Evidence recovery can arrive with another request key. Consume/release must use the
+    // original durable grant generation, never the retry's newly supplied key.
+    idempotencyKey: transaction.idempotencyKey,
     ...(typeof platformTransactionId === 'string' && platformTransactionId.length > 0
       ? { platformTransactionId }
       : {}),
