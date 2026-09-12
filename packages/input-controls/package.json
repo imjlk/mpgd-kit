@@ -31,6 +31,9 @@
   "files": [
     "dist"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "scripts": {
     "check": "ttsc --noEmit",
     "test": "vitest run",
