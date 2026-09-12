@@ -4,7 +4,7 @@ import {
   createDynamicJoystick,
   quantizeEightWayDirection,
   type DynamicJoystickController,
-} from './joystick';
+} from './index';
 
 const halfSectorSlope = Math.tan(Math.PI / 8);
 

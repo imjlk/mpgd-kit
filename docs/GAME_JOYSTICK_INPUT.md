@@ -1,6 +1,6 @@
 # Headless Dynamic Joystick Input
 
-`@mpgd/game-core` provides `createDynamicJoystick()` and
+`@mpgd/input-controls` provides `createDynamicJoystick()` and
 `quantizeEightWayDirection()`: an eight-way virtual joystick state core that
 consumes pointer IDs and plain coordinates. It is deliberately headless — the
 same core can be wired from a browser canvas, a Phaser input plugin, or a
@@ -70,7 +70,7 @@ works unchanged: feed `begin`/`move`/`end` from the platform's touch
 callbacks and keep the cancel triggers below.
 
 ```ts
-import { createDynamicJoystick, type DynamicJoystickController } from '@mpgd/game-core';
+import { createDynamicJoystick, type DynamicJoystickController } from '@mpgd/input-controls';
 
 const joystick: DynamicJoystickController = createDynamicJoystick({
   deadZone: 18,
@@ -145,7 +145,7 @@ Notes:
 - Scope `touch-action`, `preventDefault`, and selection policy to the
   joystick area element only; do not add document-wide input policies.
 
-The integration test in `packages/game-core/src/joystick.test.ts` runs this
+The integration test in `packages/input-controls/src/index.test.ts` runs this
 exact wiring headlessly against a structural event target, including
 unrelated-pointer cancel events, `blur`, and teardown.
 
