@@ -839,13 +839,16 @@ function verifyIndexReferences(
     }
 
     visitedStylesheets.add(stylesheet);
-    const cssContent = stripCssComments(readFileSync(join(deploymentRoot, stylesheet), 'utf8'));
+    const { cssUrls, cssImports } = extractStylesheetTargets(
+      readFileSync(join(deploymentRoot, stylesheet), 'utf8'),
+    );
     const cssDir = stylesheet.includes('/')
       ? `./${stylesheet.slice(0, stylesheet.lastIndexOf('/'))}`
       : '.';
-    const stylesheetReferences: string[] = [];
-    const collectCssTarget = (rawTarget: string): void => {
-      const raw = rawTarget.trim();
+    const resolvedUrls: string[] = [];
+    const resolvedImports: string[] = [];
+    const collectCssTarget = (rawTarget: string, sink: string[]): void => {
+      const raw = decodeCssEscapes(rawTarget.trim());
 
       if (raw.length === 0 || raw.startsWith('data:') || raw.startsWith('#')) {
         return;
@@ -865,7 +868,15 @@ function verifyIndexReferences(
       const schemeText = scheme?.[1] ?? '';
       let cssPath = scheme !== null ? raw.slice(schemeText.length + 1) : raw;
 
-      if (cssPath.startsWith('//')) {
+      // Cross-scheme authority URLs (https://host/x, http:/host/x) are
+      // external; only same-scheme relative forms like https:./file.png
+      // resolve against the deployment.
+      if (scheme !== null && cssPath.startsWith('/')) {
+        return;
+      }
+
+      // Scheme-relative URLs without a scheme token (//host/x) are external.
+      if (scheme === null && cssPath.startsWith('//')) {
         return;
       }
 
@@ -879,30 +890,33 @@ function verifyIndexReferences(
         );
       }
 
-      stylesheetReferences.push(decodeReferenceSegments(resolved, `stylesheet ${stylesheet}`));
+      sink.push(decodeReferenceSegments(resolved, `stylesheet ${stylesheet}`));
     };
 
-    for (const cssUrl of cssContent.matchAll(/url\(\s*(['"]?)([^'")]+)\1\s*\)/giu)) {
-      collectCssTarget(cssUrl[2] ?? '');
+    for (const cssUrl of cssUrls) {
+      collectCssTarget(cssUrl, resolvedUrls);
     }
 
-    for (const importMatch of cssContent.matchAll(/@import\s+(['"])([^'"]+)\1/giu)) {
-      collectCssTarget(importMatch[2] ?? '');
+    for (const cssImport of cssImports) {
+      collectCssTarget(cssImport, resolvedImports);
     }
 
-    for (const stylesheetReference of stylesheetReferences) {
-      if (referenced.has(stylesheetReference)) {
-        continue;
-      }
+    for (const resolvedUrl of resolvedUrls) {
+      referenced.add(resolvedUrl);
+    }
 
-      referenced.add(stylesheetReference);
+    for (const resolvedImport of resolvedImports) {
+      referenced.add(resolvedImport);
 
+      // Imports are stylesheets by syntax whatever their URL looks like, and
+      // deduplication against earlier references must not suppress
+      // traversal: the browser still applies the imported file as CSS.
       if (
-        stylesheetReference.endsWith('.css')
-        && deploymentPaths.has(stylesheetReference)
-        && !visitedStylesheets.has(stylesheetReference)
+        deploymentPaths.has(resolvedImport)
+        && !visitedStylesheets.has(resolvedImport)
+        && !stylesheetQueue.includes(resolvedImport)
       ) {
-        stylesheetQueue.push(stylesheetReference);
+        stylesheetQueue.push(resolvedImport);
       }
     }
   }
@@ -1283,37 +1297,49 @@ function isStylesheetRel(rel: string | undefined): boolean {
 }
 
 /**
- * Remove CSS comments without touching quoted strings, so commented-out
- * url()/@import declarations are never mistaken for live references.
+ * Extract live url() targets and @import targets from a stylesheet with a
+ * small string-aware tokenizer:
+ *
+ * - comments are skipped;
+ * - url()/@import text inside quoted strings is inert content, so a
+ *   `content: "url(./missing.png)"` rule never becomes a reference;
+ * - @import is honored only before the first top-level style block, because
+ *   CSS parsing makes later imports inert;
+ * - @import supports both quoted-string and url() forms.
  */
-function stripCssComments(css: string): string {
-  let result = '';
+function extractStylesheetTargets(css: string): {
+  readonly cssUrls: string[];
+  readonly cssImports: string[];
+} {
+  const cssUrls: string[] = [];
+  const cssImports: string[] = [];
   let index = 0;
+  let sawTopLevelBlock = false;
+
+  const skipString = (): void => {
+    const quote = css[index] ?? '';
+    index += 1;
+
+    while (index < css.length) {
+      const inner = css[index] ?? '';
+      index += 1;
+
+      if (inner === '\\') {
+        index += 1;
+        continue;
+      }
+
+      if (inner === quote) {
+        return;
+      }
+    }
+  };
 
   while (index < css.length) {
     const char = css[index] ?? '';
 
     if (char === '"' || char === "'") {
-      const quote = char;
-      result += char;
-      index += 1;
-
-      while (index < css.length) {
-        const inner = css[index] ?? '';
-        result += inner;
-        index += 1;
-
-        if (inner === '\\' && index < css.length) {
-          result += css[index] ?? '';
-          index += 1;
-          continue;
-        }
-
-        if (inner === quote) {
-          break;
-        }
-      }
-
+      skipString();
       continue;
     }
 
@@ -1323,11 +1349,113 @@ function stripCssComments(css: string): string {
       continue;
     }
 
-    result += char;
+    if (char === '{') {
+      sawTopLevelBlock = true;
+      index += 1;
+      continue;
+    }
+
+    const rest = css.slice(index);
+    const urlMatch = /^url\(/iu.exec(rest);
+
+    if (urlMatch !== null) {
+      index += urlMatch[0].length;
+      let quote = '';
+      let argument = '';
+
+      while (index < css.length) {
+        const inner = css[index] ?? '';
+
+        if (quote === '' && (inner === '"' || inner === "'")) {
+          quote = inner;
+          index += 1;
+          continue;
+        }
+
+        if (quote !== '' && inner === quote) {
+          quote = '';
+          index += 1;
+          continue;
+        }
+
+        if (quote !== '' && inner === '\\') {
+          argument += inner + (css[index + 1] ?? '');
+          index += 2;
+          continue;
+        }
+
+        if (quote === '' && inner === ')') {
+          index += 1;
+          break;
+        }
+
+        argument += inner;
+        index += 1;
+      }
+
+      cssUrls.push(argument.trim());
+      continue;
+    }
+
+    const importMatch = !sawTopLevelBlock ? /^@import\b/iu.exec(rest) : null;
+
+    if (importMatch !== null) {
+      index += importMatch[0].length;
+      let captured = '';
+
+      while (index < css.length) {
+        const inner = css[index] ?? '';
+
+        if (inner === ';') {
+          index += 1;
+          break;
+        }
+
+        captured += inner;
+        index += 1;
+      }
+
+      const trimmed = captured.trim();
+      const quotedForm = /^(['"])([\s\S]*)\1$/u.exec(trimmed);
+
+      if (quotedForm !== null) {
+        cssImports.push((quotedForm[2] ?? '').trim());
+      } else {
+        const urlForm = /^url\(\s*(['"]?)([^'")]*)\1\s*\)$/iu.exec(trimmed);
+
+        if (urlForm !== null) {
+          cssImports.push((urlForm[2] ?? '').trim());
+        }
+      }
+      continue;
+    }
+
     index += 1;
   }
 
-  return result;
+  return { cssUrls, cssImports };
+}
+
+/** Decode CSS string escapes (backslash-character and hex forms) like browsers do. */
+function decodeCssEscapes(value: string): string {
+  if (!value.includes('\\')) {
+    return value;
+  }
+
+  return value.replace(
+    /\\(?:([0-9a-fA-F]{1,6})\s?|(.))/gu,
+    (_match, hex: string | undefined, plain: string | undefined) => {
+      if (hex === undefined) {
+        return plain ?? '';
+      }
+
+      const codePoint = Number.parseInt(hex, 16);
+
+      return codePoint > 0x10_ffff || Number.isNaN(codePoint)
+        ? '\uFFFD'
+        : String.fromCodePoint(codePoint);
+    },
+  );
 }
 
 /** Percent-decode each path segment, mirroring the HTML reference handling. */

@@ -2655,6 +2655,224 @@ try {
     profile: 'api-only',
   });
 
+  // 10cj. url()-shaped text inside CSS strings is inert content.
+  const cssStringSource = buildSourceArtifact(join(fixtureRoot, 'source-css-string'));
+  writeFileSync(
+    join(cssStringSource, 'index.html'),
+    readFileSync(join(cssStringSource, 'index.html'), 'utf8').replace(
+      '<link rel="manifest" href="./manifest.webmanifest">',
+      '<link rel="manifest" href="./manifest.webmanifest">'
+        + '<link rel="stylesheet" href="./assets/strings.css">',
+    ),
+  );
+  writeFileSync(join(cssStringSource, 'assets', 'present-target.png'), 'png');
+  writeFileSync(
+    join(cssStringSource, 'assets', 'strings.css'),
+    '.example::before{content:"url(\'./missing-in-string.png\')"}\n'
+      + '.live{background:url("./present-target.png")}',
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: cssStringSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-css-string',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: cssStringSource,
+    deploymentRoot: buildDeployment(
+      cssStringSource,
+      join(fixtureRoot, 'deployment-css-string'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10ck. Imports traverse even when their file was already referenced.
+  const importTraversalSource = buildSourceArtifact(join(fixtureRoot, 'source-import-traversal'));
+  writeFileSync(
+    join(importTraversalSource, 'index.html'),
+    readFileSync(join(importTraversalSource, 'index.html'), 'utf8').replace(
+      '<link rel="manifest" href="./manifest.webmanifest">',
+      '<link rel="manifest" href="./manifest.webmanifest">'
+        + '<link rel="preload" href="./assets/theme.css" as="style">'
+        + '<link rel="stylesheet" href="./assets/main.css">',
+    ),
+  );
+  writeFileSync(join(importTraversalSource, 'assets', 'main.css'), '@import "./theme.css";');
+  writeFileSync(
+    join(importTraversalSource, 'assets', 'theme.css'),
+    '.x{background:url("./missing-in-theme.png")}',
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: importTraversalSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-import-traversal',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: importTraversalSource,
+      deploymentRoot: buildDeployment(
+        importTraversalSource,
+        join(fixtureRoot, 'deployment-import-traversal'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file: assets\/missing-in-theme\.png/u,
+    'stylesheet import traversal despite a prior reference',
+  );
+
+  // 10cl. Extension-less local imports are scanned as stylesheets.
+  const unsuffixedImportSource = buildSourceArtifact(join(fixtureRoot, 'source-unsuffixed-import'));
+  writeFileSync(
+    join(unsuffixedImportSource, 'index.html'),
+    readFileSync(join(unsuffixedImportSource, 'index.html'), 'utf8').replace(
+      '<link rel="manifest" href="./manifest.webmanifest">',
+      '<link rel="manifest" href="./manifest.webmanifest">'
+        + '<link rel="stylesheet" href="./assets/entry.css">',
+    ),
+  );
+  writeFileSync(join(unsuffixedImportSource, 'assets', 'entry.css'), '@import "./theme";');
+  writeFileSync(
+    join(unsuffixedImportSource, 'assets', 'theme'),
+    '.x{background:url("./missing-unsuffixed.png")}',
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: unsuffixedImportSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-unsuffixed-import',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  assertThrows(
+    () => verifyHostedPwaDeployment({
+      sourceArtifactRoot: unsuffixedImportSource,
+      deploymentRoot: buildDeployment(
+        unsuffixedImportSource,
+        join(fixtureRoot, 'deployment-unsuffixed-import'),
+        'api-only',
+      ),
+      host: 'cloudflare-pages',
+      profile: 'api-only',
+    }),
+    /references a missing file: assets\/missing-unsuffixed\.png/u,
+    'extension-less stylesheet import traversal',
+  );
+
+  // 10cm. Cross-scheme single-slash imports stay external.
+  const crossSchemeSource = buildSourceArtifact(join(fixtureRoot, 'source-cross-scheme'));
+  writeFileSync(
+    join(crossSchemeSource, 'index.html'),
+    readFileSync(join(crossSchemeSource, 'index.html'), 'utf8').replace(
+      '<link rel="manifest" href="./manifest.webmanifest">',
+      '<link rel="manifest" href="./manifest.webmanifest">'
+        + '<link rel="stylesheet" href="./assets/cross.css">',
+    ),
+  );
+  writeFileSync(
+    join(crossSchemeSource, 'assets', 'cross.css'),
+    '@import "http:/cdn.example.test/theme.css";',
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: crossSchemeSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-cross-scheme',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: crossSchemeSource,
+    deploymentRoot: buildDeployment(
+      crossSchemeSource,
+      join(fixtureRoot, 'deployment-cross-scheme'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10cn. CSS string escapes decode before resolving resource paths.
+  const cssEscapePathSource = buildSourceArtifact(join(fixtureRoot, 'source-css-escape-path'));
+  writeFileSync(
+    join(cssEscapePathSource, 'index.html'),
+    readFileSync(join(cssEscapePathSource, 'index.html'), 'utf8').replace(
+      '<link rel="manifest" href="./manifest.webmanifest">',
+      '<link rel="manifest" href="./manifest.webmanifest">'
+        + '<link rel="stylesheet" href="./assets/escaped.css">',
+    ),
+  );
+  writeFileSync(join(cssEscapePathSource, 'assets', 'icon large.png'), 'png');
+  writeFileSync(
+    join(cssEscapePathSource, 'assets', 'escaped.css'),
+    '.x{background:url("./icon\\ large.png")}',
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: cssEscapePathSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-css-escape-path',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: cssEscapePathSource,
+    deploymentRoot: buildDeployment(
+      cssEscapePathSource,
+      join(fixtureRoot, 'deployment-css-escape-path'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
+  // 10co. @import after a style rule is inert.
+  const lateImportSource = buildSourceArtifact(join(fixtureRoot, 'source-late-import'));
+  writeFileSync(
+    join(lateImportSource, 'index.html'),
+    readFileSync(join(lateImportSource, 'index.html'), 'utf8').replace(
+      '<link rel="manifest" href="./manifest.webmanifest">',
+      '<link rel="manifest" href="./manifest.webmanifest">'
+        + '<link rel="stylesheet" href="./assets/late.css">',
+    ),
+  );
+  writeFileSync(
+    join(lateImportSource, 'assets', 'late.css'),
+    '.a{color:red}\n@import "./late-missing.css";',
+  );
+  writeMicrosoftStorePwaArtifacts({
+    artifactRoot: lateImportSource,
+    provenance: {
+      appVersion: '1.2.3',
+      buildId: 'build-late-import',
+      sourceGitSha: 'a'.repeat(40),
+      kitGitSha: 'b'.repeat(40),
+    },
+  });
+  verifyHostedPwaDeployment({
+    sourceArtifactRoot: lateImportSource,
+    deploymentRoot: buildDeployment(
+      lateImportSource,
+      join(fixtureRoot, 'deployment-late-import'),
+      'api-only',
+    ),
+    host: 'cloudflare-pages',
+    profile: 'api-only',
+  });
+
   // 11. A local static server serves the verified deployment paths and bytes.
   await verifyServedDeployment(deploymentRoot);
 
