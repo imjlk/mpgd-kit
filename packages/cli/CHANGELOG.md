@@ -1,5 +1,54 @@
 # @mpgd/cli
 
+## 0.30.0 — 2026-09-13
+
+### Minor changes
+
+- [4f8c816](https://github.com/imjlk/mpgd-kit/commit/4f8c8161d05a6e01cf6d7e5483c6f6783b87222d) Add opt-in platform version allocation policies and a read-only preview
+  command.
+  
+  `@mpgd/target-config` gains `allocatePlatformVersions`,
+  `assertPlatformVersionLedger`, and `formatHostedPwaShellVersions`: pure
+  computations that separate the game SemVer, the shared release revision
+  label, Android/iOS upload counters, and the Microsoft Store numbers — either
+  the legacy independent four-part policy or the opt-in
+  `hosted-pwa-shell-revision-v1` schema where one shell revision derives both
+  package numbers (`2.0.<r>.0` / `1.0.<r>.0`, third component bounded to
+  65535). Existing immutable plans are revalidated and reused without
+  consuming numbers; provenance changes allocate the next revision instead of
+  mutating a plan; hosted-content-only Store work consumes no Store number.
+  Inputs are validated up front (final SemVer, full Git SHAs, SHA-256 config
+  digests, counter ceilings including the documented Android maximum of
+  2100000000), and failures never partially update inputs. Results are
+  candidates, not reservations.
+  
+  `mpgd target preview-versions` previews a ledger allocation as JSON or a
+  human summary, exits non-zero on validation failure, and never modifies its
+  input files. Ledger schema 1 is rejected rather than auto-migrated, and
+  unknown version policies fail instead of falling back to a default. — Thanks @imjlk!
+
+### Patch changes
+
+- [c3a1bc3](https://github.com/imjlk/mpgd-kit/commit/c3a1bc37f44e6dbf2fc21ffd9306e154f8fe7c3b) Fix two correctness bugs in the hosted PWA deployment verifier's
+  `mpgd target verify-deployment` reference scan:
+  
+  - External stylesheet checking never ran: the url()/@import pass iterated
+    the normalized reference set before it was populated. Reference
+    collection, normalization, stylesheet scanning, and the final existence
+    check now run in that order, and chained `@import` files are followed
+    with a visited set so circular imports terminate.
+  - `srcset` extraction re-scanned the raw attribute string and could read
+    `srcset`-looking text out of unrelated attribute values such as
+    `title='See srcset="./missing.png"'`, rejecting valid deployments.
+    Attributes are now tokenized once per start tag and every attribute-
+    driven check (resource names, srcset, style, srcdoc, meta refresh)
+    shares that single parse, including the iframe srcdoc override guard.
+  
+  Both regressions are covered by deployment smoke tests, including a
+  passing control case proving the failure comes from the stylesheet
+  reference check rather than stale release evidence. — Thanks @imjlk!
+- Updated dependencies: target-config@0.15.0
+
 ## 0.29.0 — 2026-09-12
 
 ### Minor changes
