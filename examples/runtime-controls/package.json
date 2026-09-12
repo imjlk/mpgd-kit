@@ -11,10 +11,10 @@
   },
   "dependencies": {
     "@mpgd/game-runtime": "workspace:*",
-    "@mpgd/phaser-game-runtime": "workspace:*",
-    "phaser": "4.2.0",
     "@mpgd/game-services": "workspace:*",
-    "@mpgd/platform": "workspace:*"
+    "@mpgd/phaser-game-runtime": "workspace:*",
+    "@mpgd/platform": "workspace:*",
+    "phaser": "4.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

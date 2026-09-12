@@ -68,9 +68,7 @@ export interface GameActionCoordinator {
 
 interface Flight<K extends GameActionKind> {
   readonly id: number;
-  readonly kind: K;
   readonly key: string;
-  readonly fingerprint: string;
   readonly promise: Promise<Results[K]>;
   readonly bridge: GameUiBridge<GameActionSnapshot<K>, never, never>;
   settled: boolean;
@@ -78,6 +76,12 @@ interface Flight<K extends GameActionKind> {
 }
 
 type AnyFlight = Flight<'purchase'> | Flight<'rewarded-ad'>;
+const purchaseSources: Readonly<Record<GameServicesPurchaseInput['source'], true>> = {
+  shop: true,
+  stage_fail: true,
+  result: true,
+  event: true,
+};
 
 /** Bind one coordinator to one runtime/client (including its player identity), above all screens. */
 export function createGameActionCoordinator(options: {
@@ -115,7 +119,7 @@ export function createGameActionCoordinator(options: {
       : undefined;
     if (typeof key !== 'string' || key.trim() === ''
       || (kind === 'purchase' && (typeof productId !== 'string' || productId.trim() === ''
-        || !['shop', 'stage_fail', 'result', 'event'].includes(source ?? '')))
+        || !Object.hasOwn(purchaseSources, source ?? '')))
       || (kind === 'rewarded-ad' && (typeof placementId !== 'string' || placementId.trim() === ''))) {
       throw new GameActionExecutionError('invalid-input');
     }
@@ -130,9 +134,11 @@ export function createGameActionCoordinator(options: {
     if (prior !== undefined && prior !== fingerprint) {
       throw new GameActionExecutionError('key-conflict');
     }
-    const retained = current?.key === key ? current : last?.key === key ? last : undefined;
-    if (retained !== undefined) {
-      return retained as Flight<K>;
+    if (current !== undefined && current.key === key) {
+      return current as Flight<K>;
+    }
+    if (last !== undefined && last.key === key) {
+      return last as Flight<K>;
     }
     if (prior !== undefined) {
       throw new GameActionExecutionError('already-completed');
@@ -170,10 +176,10 @@ export function createGameActionCoordinator(options: {
         needsReconciliation = true;
       }
       current = undefined;
-      last = flight as AnyFlight;
-      if (!invoked) {
+      if (invoked) {
+        last = flight as AnyFlight;
+      } else {
         history.delete(key);
-        last = undefined;
       }
       // Reentrant release observers can start another operation; only this flight is touched below.
       bridge.setSnapshot(Object.freeze({ kind, status, operationId: id }));
@@ -220,7 +226,7 @@ export function createGameActionCoordinator(options: {
     }
 
     const flight: Flight<K> = {
-      id, kind, key, fingerprint, promise, bridge, settled: false,
+      id, key, promise, bridge, settled: false,
       start(canStart): void {
         if (started) {
           return;
@@ -280,6 +286,10 @@ export function createGameActionCoordinator(options: {
               return;
             }
             snapshot = value;
+            if (value.status !== 'running' && value.status !== 'idle') {
+              detach();
+              detach = () => {};
+            }
             if (!ownerDisposed) {
               bridge.setSnapshot(value);
             }
@@ -300,7 +310,12 @@ export function createGameActionCoordinator(options: {
     return Object.freeze({
       execute,
       getSnapshot: () => snapshot,
-      subscribe: bridge.subscribeSnapshot,
+      subscribe(listener: UiListener<GameActionSnapshot<K>>): () => void {
+        if (ownerDisposed) {
+          throw new GameActionExecutionError('disposed');
+        }
+        return bridge.subscribeSnapshot(listener);
+      },
       isDisposed: () => ownerDisposed,
       dispose(): void {
         ownerDisposed = true;
@@ -338,6 +353,10 @@ export function createGameActionCoordinator(options: {
                 if (viewDisposed || scope.isDisposed() || viewId !== flight.id) {
                   return;
                 }
+                if (value.status !== 'running' && value.status !== 'idle') {
+                  detachView();
+                  detachView = () => {};
+                }
                 observe(() => {
                   scope.setSnapshot(projection.snapshot(value)); }, onObserverError);
                 const projectEvent = projection.event;
@@ -374,7 +393,8 @@ export function createGameActionCoordinator(options: {
       return history.size >= capacity ? 'history-full' : 'ready';
     },
     dispose(): void {
-      disposed = true; },
+      disposed = true;
+    },
   });
 }
 

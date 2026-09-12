@@ -16,7 +16,9 @@ try {
   const errors = [];
   page.on('pageerror', (error) => errors.push(error.message));
   page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
-  const url = `http://127.0.0.1:${server.httpServer.address().port}`;
+  const address = server.httpServer.address();
+  assert.ok(address && typeof address === 'object');
+  const url = `http://127.0.0.1:${address.port}`;
   const open = async () => {
     await page.goto(url);
     await page.waitForFunction(() => window.fixture?.state().ready);
@@ -26,6 +28,7 @@ try {
   const step = () => page.evaluate(() => window.advanceTime(200));
   const clickCanvas = async (y) => {
     const bounds = await page.locator('canvas').boundingBox();
+    assert.ok(bounds, 'gameplay canvas must be rendered');
     await page.mouse.click(bounds.x + 795 * bounds.width / 1000, bounds.y + y * bounds.height / 620);
     await step();
   };
@@ -75,6 +78,7 @@ try {
   assert.equal(current.monetization.ui.status, 'idle');
   assert.equal(current.monetization.events, oldEvents);
   assert.equal(current.monetization.purchaseOwner.status, 'granted');
+  assert.equal(current.monetization.ownerResults, 2);
   assert.equal(current.blocked.simulation, false);
   await page.screenshot({ path: `${artifacts}/new-screen-old-operation-complete.png` });
 
@@ -93,18 +97,23 @@ try {
   assert.equal(current.blocked.simulation, false);
   await page.screenshot({ path: `${artifacts}/pending-no-repurchase.png` });
 
-  for (const outcome of ['rejected', 'exception']) {
-    await open();
-    await page.locator('#action-mode').selectOption(outcome);
-    await page.locator('#purchase').click();
-    await waitServer();
-    await page.locator('#settle').click();
-    await waitOwner('purchaseOwner', outcome);
-    current = await state();
-    assert.equal(current.blocked.simulation, false);
-    assert.equal(current.monetization.verify, 1);
-    assert.equal(current.monetization.ui.status, outcome);
-    assert.equal(current.monetization.availability, outcome === 'exception' ? 'reconciliation-required' : 'ready');
+  for (const [button, owner, counter] of [
+    ['purchase', 'purchaseOwner', 'verify'], ['rewarded-ad', 'adOwner', 'claim'],
+  ]) {
+    for (const outcome of ['rejected', 'exception']) {
+      await open();
+      await page.locator('#action-mode').selectOption(outcome);
+      await page.locator(`#${button}`).click();
+      await waitServer();
+      await page.locator('#settle').click();
+      await waitOwner(owner, outcome);
+      current = await state();
+      assert.equal(current.blocked.simulation, false);
+      assert.equal(current.monetization[counter], 1);
+      assert.equal(current.monetization.ownerResults, 1);
+      assert.equal(current.monetization.ui.status, outcome);
+      assert.equal(current.monetization.availability, outcome === 'exception' ? 'reconciliation-required' : 'ready');
+    }
   }
   assert.deepEqual(errors, []);
   console.log('Real browser action fixture passed: shared calls, settings/background overlap, stale UI isolation, owner completion, pending, rejection and exception.');

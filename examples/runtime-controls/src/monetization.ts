@@ -2,7 +2,7 @@ import type { GameExecutionController } from '@mpgd/game-runtime';
 import { createGameActionCoordinator, type GameActionKind } from '@mpgd/game-runtime/actions';
 import { createGameUiBridge } from '@mpgd/game-runtime/ui';
 import { createGameServicesClient, type GameServicesBackendApi } from '@mpgd/game-services/client';
-import type { PlatformGateway } from '@mpgd/platform';
+import type { PlatformGateway, PurchaseResult, RewardedAdResult } from '@mpgd/platform';
 
 type Mode = 'granted' | 'pending' | 'rejected' | 'exception';
 
@@ -16,7 +16,7 @@ export function createMonetizationFixture(execution: GameExecutionController) {
   });
   const gateway = {
     commerce: {
-      async purchase() {
+      async purchase(): Promise<PurchaseResult> {
         calls.purchase += 1;
         if (mode === 'pending') {
           return { status: 'pending', entitlementIds: [] };
@@ -25,7 +25,7 @@ export function createMonetizationFixture(execution: GameExecutionController) {
       },
     },
     ads: {
-      async showRewarded() {
+      async showRewarded(): Promise<RewardedAdResult> {
         calls.ad += 1;
         return { status: 'completed', rewardGranted: true, ledgerEntryId: 'fixture-impression' };
       },
@@ -77,7 +77,14 @@ export function createMonetizationFixture(execution: GameExecutionController) {
   let ownerResults = 0;
   let lastCompletedOperation = 0;
   let lastError: string | undefined;
-  const output = document.querySelector<HTMLOutputElement>('#action-state')!;
+  function requireElement<T extends HTMLElement>(selector: string): T {
+    const element = document.querySelector<T>(selector);
+    if (element === null) {
+      throw new Error(`Monetization fixture markup is missing ${selector}.`);
+    }
+    return element;
+  }
+  const output = requireElement<HTMLOutputElement>('#action-state');
   function views() {
     const ownScreen = screen;
     return {
@@ -155,7 +162,7 @@ export function createMonetizationFixture(execution: GameExecutionController) {
   }
   const listeners: (() => void)[] = [];
   function button(id: string, handler: () => void): void {
-    const element = document.querySelector<HTMLButtonElement>(`#${id}`)!;
+    const element = requireElement<HTMLButtonElement>(`#${id}`);
     element.addEventListener('click', handler);
     listeners.push(() => element.removeEventListener('click', handler));
   }
@@ -171,7 +178,7 @@ export function createMonetizationFixture(execution: GameExecutionController) {
     key += 1;
     render();
   });
-  const select = document.querySelector<HTMLSelectElement>('#action-mode')!;
+  const select = requireElement<HTMLSelectElement>('#action-mode');
   const change = (): void => {
     mode = select.value as Mode;
     render(); };

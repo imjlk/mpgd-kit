@@ -263,4 +263,17 @@ describe('monetization action ownership', () => {
     expect(errors).toHaveLength(2);
   });
 
+  it('keeps the last completed Promise when a later reservation fails before the client call', async () => {
+    const { purchase, coordinator, execution } = setup();
+    const first = purchase.execute(purchaseInput);
+    await first;
+    const aborted = coordinator.createPurchaseController();
+    aborted.subscribe(() => aborted.dispose());
+    await expect(aborted.execute({ ...purchaseInput, idempotencyKey: 'aborted' })).rejects.toMatchObject({ code: 'disposed' });
+    expect(purchase.execute(purchaseInput)).toBe(first);
+    expect(coordinator.getAvailability()).toBe('ready');
+    expect(execution.getSnapshot().blocks).toHaveLength(0);
+    expect(() => aborted.subscribe(() => {})).toThrow('Game action cannot start: disposed');
+  });
+
 });
