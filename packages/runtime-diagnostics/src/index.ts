@@ -101,8 +101,8 @@ export const HEAP_RECLAMATION_THRESHOLD_BYTES = -10 * 1024 * 1024;
 export const SCHEDULER_INTERRUPTION_THRESHOLD_MS = 1_000;
 /** Default retained history length per sample list. */
 export const FRAME_HITCH_HISTORY_LIMIT = 12;
-/** Upper bound accepted for `historyLimit`. */
-export const MAX_FRAME_HITCH_HISTORY_LIMIT = 10_000;
+/** Upper bound accepted for `historyLimit`. `snapshot()` cost grows with retained hitches times retained observations, so the bound caps the worst case rather than the defaults. */
+export const MAX_FRAME_HITCH_HISTORY_LIMIT = 1_000;
 
 export interface LongTaskSample {
   /** Completion time of the task, in milliseconds. Must not precede `startAtMs`. */
@@ -195,6 +195,7 @@ export function createLongAnimationFrameScriptSamples(
     throw new Error(`sourceLabel must be a function (received ${describeValue(sourceLabel)}).`);
   }
   for (const script of scripts) {
+    assertScriptTimingShape(script);
     if (script.duration !== undefined) {
       assertFiniteNonNegativeNumber(script.duration, 'LongAnimationFrameScriptTiming.duration');
     }
@@ -425,7 +426,10 @@ export class FrameHitchRecorder<TSample extends FrameHitchSample = FrameHitchSam
    * estimated scheduler interruptions are counted in `interruptionCount`
    * (with their time in `interruptedFrameMs`) and excluded from foreground
    * averages, hitches, and foreground worsts — they are never silently
-   * dropped.
+   * dropped. The scheduler estimate is decided at record time from the
+   * observations retained at that moment and is final: unlike retained
+   * hitches, an observation arriving later does not reclassify it, so the
+   * excluded gap stays visible through the interruption counters.
    */
   record(sample: TSample): void {
     validateFrameHitchSample(sample);
@@ -485,19 +489,19 @@ export class FrameHitchRecorder<TSample extends FrameHitchSample = FrameHitchSam
     }
 
     this.hitches.push(sample);
-    this.hitches.sort((left, right) => left.atMs - right.atMs);
-
-    if (this.hitches.length > this.historyLimit) {
-      this.hitches.splice(0, this.hitches.length - this.historyLimit);
-    }
+    this.trimHistoryByAtMs(this.hitches);
   }
 
   /**
    * Record one long animation frame observation. Hidden samples are validated
-   * and then ignored. Because diagnoses are recomputed at `snapshot()` time
-   * from the observations still retained, a sample arriving after a frame can
-   * retroactively change that frame's cause label until either sample is
-   * evicted.
+   * and then ignored. Out-of-order samples are accepted: counts, worsts, and
+   * histories account for them, `last*` keeps the newest sample by `atMs`, and
+   * eviction drops the oldest by `atMs` so a late buffered sample cannot evict
+   * newer evidence. Because diagnoses are recomputed at `snapshot()` time from
+   * the observations still retained, a sample arriving after a retained hitch
+   * can retroactively change that hitch's cause label until either sample is
+   * evicted. Estimated scheduler interruptions, however, are decided at record
+   * time and are not re-examined later.
    */
   recordLongAnimationFrame(sample: LongAnimationFrameSample): void {
     validateLongAnimationFrameSample(sample);
@@ -506,11 +510,16 @@ export class FrameHitchRecorder<TSample extends FrameHitchSample = FrameHitchSam
       return;
     }
 
-    this.lastLongAnimationFrame = sample;
+    if (
+      this.lastLongAnimationFrame === undefined
+      || sample.atMs >= this.lastLongAnimationFrame.atMs
+    ) {
+      this.lastLongAnimationFrame = sample;
+    }
     this.longAnimationFrameCount += 1;
     this.worstLongAnimationFrameMs = Math.max(this.worstLongAnimationFrameMs, sample.durationMs);
     this.longAnimationFrames.push(sample);
-    this.trimHistory(this.longAnimationFrames);
+    this.trimHistoryByAtMs(this.longAnimationFrames);
   }
 
   /** Record one long task observation. Hidden samples are validated and then ignored. */
@@ -521,11 +530,13 @@ export class FrameHitchRecorder<TSample extends FrameHitchSample = FrameHitchSam
       return;
     }
 
-    this.lastLongTask = sample;
+    if (this.lastLongTask === undefined || sample.atMs >= this.lastLongTask.atMs) {
+      this.lastLongTask = sample;
+    }
     this.longTaskCount += 1;
     this.worstLongTaskMs = Math.max(this.worstLongTaskMs, sample.durationMs);
     this.longTasks.push(sample);
-    this.trimHistory(this.longTasks);
+    this.trimHistoryByAtMs(this.longTasks);
   }
 
   /** Record one resource load observation. Hidden samples are validated and then ignored. */
@@ -536,11 +547,13 @@ export class FrameHitchRecorder<TSample extends FrameHitchSample = FrameHitchSam
       return;
     }
 
-    this.lastResourceLoad = sample;
+    if (this.lastResourceLoad === undefined || sample.atMs >= this.lastResourceLoad.atMs) {
+      this.lastResourceLoad = sample;
+    }
     this.resourceLoadCount += 1;
     this.worstResourceLoadMs = Math.max(this.worstResourceLoadMs, sample.durationMs);
     this.resourceLoads.push(sample);
-    this.trimHistory(this.resourceLoads);
+    this.trimHistoryByAtMs(this.resourceLoads);
   }
 
   /**
@@ -760,6 +773,18 @@ export class FrameHitchRecorder<TSample extends FrameHitchSample = FrameHitchSam
     };
   }
 
+  /**
+   * Find the most explanatory observation overlapping a frame's gap window.
+   *
+   * The window is `[updateStart - frameDeltaMs, updateStart]`, where
+   * `updateStart = atMs - updateWorkMs` is where this frame's update callback
+   * began. Work inside the update callback itself is deliberately excluded:
+   * it is already measured by `updateWorkMs` and diagnosed as `game-update`,
+   * and work after `atMs` belongs to the next frame. Anchoring the gap at the
+   * update start rather than at `atMs` keeps the previous frame's render and
+   * any pre-update blocking associated with this gap without absorbing
+   * neighboring frames' work.
+   */
   private findRelated<TObservation extends {
     readonly atMs: number;
     readonly durationMs: number;
@@ -797,7 +822,20 @@ export class FrameHitchRecorder<TSample extends FrameHitchSample = FrameHitchSam
       && (sample.heapDeltaBytes ?? 0) <= HEAP_RECLAMATION_THRESHOLD_BYTES;
   }
 
-  private trimHistory<TSample>(samples: TSample[]): void {
+  /**
+   * Keep a retained sample history ordered by `atMs` and bounded, so eviction
+   * always drops the oldest sample by event time rather than by arrival
+   * order. Mostly-sorted pushes make the sort near-linear; the sort runs only
+   * when a sample is actually recorded, never per frame.
+   */
+  private trimHistoryByAtMs<TObservation extends { readonly atMs: number }>(
+    samples: TObservation[],
+  ): void {
+    const previous = samples.at(-2);
+
+    if (previous !== undefined && previous.atMs > (samples.at(-1) as TObservation).atMs) {
+      samples.sort((left, right) => left.atMs - right.atMs);
+    }
     if (samples.length > this.historyLimit) {
       samples.splice(0, samples.length - this.historyLimit);
     }
@@ -900,8 +938,27 @@ function validateLongAnimationFrameSample(sample: LongAnimationFrameSample): voi
       );
     }
     for (const script of sample.scripts) {
+      assertScriptSampleShape(script);
       validateLongAnimationFrameScriptSample(script);
     }
+  }
+}
+
+/** Reject non-object entries before field validation dereferences them. */
+function assertScriptTimingShape(script: LongAnimationFrameScriptTiming): void {
+  if (typeof script !== 'object' || script === null) {
+    throw new Error(
+      `LongAnimationFrameScriptTiming entry must be an object (received ${describeValue(script)}).`,
+    );
+  }
+}
+
+/** Reject non-object entries before field validation dereferences them. */
+function assertScriptSampleShape(script: LongAnimationFrameScriptSample): void {
+  if (typeof script !== 'object' || script === null) {
+    throw new Error(
+      `LongAnimationFrameScriptSample entry must be an object (received ${describeValue(script)}).`,
+    );
   }
 }
 

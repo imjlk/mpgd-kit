@@ -62,11 +62,19 @@ timer, DOM, or network side effects, which is why the tests run in plain Node.
   retained hitches only — after eviction it shrinks while `hitchCount` does
   not.
 - Diagnoses are recomputed at `snapshot()` time from the observations still
-  retained, so an observation arriving after a frame can relabel that frame's
-  cause until either sample is evicted. `reset()` clears every aggregate and
-  every retained sample — pre-reset observations cannot leak into the next
-  window — except `resetCount`, which increments monotonically so consumers
-  can observe an accepted reset without timing guesses.
+  retained, so an observation arriving after a **retained hitch** can relabel
+  that hitch's cause until either sample is evicted. Estimated scheduler
+  interruptions are the exception: the estimate is decided at record time from
+  the evidence available then and is final — the excluded gap stays visible
+  through `interruptionCount`, `schedulerInterruptionCount`, and
+  `interruptedFrameMs` instead of being silently reclassified. Out-of-order
+  observations are accepted: counts and worsts are order-independent, `last*`
+  fields keep the newest sample by `atMs`, and eviction drops the oldest by
+  event time so a late buffered sample cannot evict newer evidence.
+- `reset()` clears every aggregate and every retained sample — pre-reset
+  observations cannot leak into the next window — except `resetCount`, which
+  increments monotonically so consumers can observe an accepted reset without
+  timing guesses.
 
 ## Causes are estimates
 
@@ -100,7 +108,7 @@ recorder throws `Error` with a field-qualified message when it receives:
 - non-finite, negative, or NaN/Infinity durations and timestamps;
 - thresholds that are not finite positive numbers;
 - a `historyLimit` that is not an integer in
-  `[0, MAX_FRAME_HITCH_HISTORY_LIMIT]` (10 000); `0` is valid and retains no
+  `[0, MAX_FRAME_HITCH_HISTORY_LIMIT]` (1 000); `0` is valid and retains no
   samples while every counter keeps working;
 - observation intervals where `atMs` precedes `startAtMs`;
 - script attribution arrays longer than
@@ -224,8 +232,12 @@ every object inside a snapshot as read-only from that point on.
 
 ## Memory bounds
 
-Every retained list is capped at `historyLimit` (default 12, at most 10 000).
-Worst values and averages are running accumulators, not lists. Long
+Every retained list is capped at `historyLimit` (default 12, at most
+`MAX_FRAME_HITCH_HISTORY_LIMIT` = 1 000). Worst values and averages are
+running accumulators, not lists. `snapshot()` correlates each retained hitch
+against each retained observation, so its cost grows with
+`hitches × observations`; the 1 000 cap bounds the worst case to a few
+million comparisons while the default configuration stays trivial. Long
 animation frame samples carry at most eight sanitized script attributions,
 and raw observer attribution objects are never stored — `sourceLabel` is the
 explicit sanitization boundary that keeps URLs, query strings, and tokens out

@@ -258,6 +258,68 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
   assertEqual(orderSnapshot.lastFrame?.atMs ?? 0, 200, 'last frame keeps the newest atMs');
   assertEqual(orderSnapshot.hitchCount, 0, 'quiet out-of-order frames add no hitches');
 
+  // Out-of-order observations keep last*/histories anchored to event time.
+  const observationOrderRecorder = new FrameHitchRecorder<TestFrameSample>({ historyLimit: 2 });
+  observationOrderRecorder.recordLongTask(
+    createLongTask({ atMs: 500, durationMs: 40, startAtMs: 460 }),
+  );
+  observationOrderRecorder.recordLongTask(
+    createLongTask({ atMs: 900, durationMs: 60, startAtMs: 840 }),
+  );
+  // A buffered oldest task arrives last; it must not replace the newest or evict newer evidence.
+  observationOrderRecorder.recordLongTask(
+    createLongTask({ atMs: 400, durationMs: 30, startAtMs: 370 }),
+  );
+  observationOrderRecorder.recordResourceLoad({
+    atMs: 800,
+    durationMs: 50,
+    hidden: false,
+    name: 'newest.png',
+    startAtMs: 750,
+  });
+  observationOrderRecorder.recordResourceLoad({
+    atMs: 700,
+    durationMs: 50,
+    hidden: false,
+    name: 'older.png',
+    startAtMs: 650,
+  });
+
+  const observationOrder = observationOrderRecorder.snapshot();
+  assertEqual(
+    observationOrder.lastLongTask?.atMs ?? 0,
+    900,
+    'last long task keeps the newest atMs',
+  );
+  assertEqual(
+    observationOrder.lastResourceLoad?.name ?? '',
+    'newest.png',
+    'last resource load keeps the newest atMs',
+  );
+  assertEqual(observationOrder.longTaskCount, 3, 'out-of-order observations still count');
+  assertEqual(observationOrder.worstLongTaskMs, 60, 'worsts ignore arrival order');
+  assertEqual(
+    observationOrderRecorder.diagnose(createFrame(560, 100)).cause,
+    'main-thread-long-task',
+    'eviction drops the oldest by event time, not the newest by arrival',
+  );
+
+  // The scheduler estimate is decided at record time and stays final.
+  const finalityRecorder = new FrameHitchRecorder<TestFrameSample>();
+  finalityRecorder.record(createFrame(2_016, 2_000));
+  finalityRecorder.recordLongTask(
+    createLongTask({
+      atMs: 2_016,
+      durationMs: 1_900,
+      startAtMs: 116,
+    }),
+  );
+
+  const finality = finalityRecorder.snapshot();
+  assertEqual(finality.schedulerInterruptionCount, 1, 'the recorded estimate is not reclassified');
+  assertEqual(finality.interruptionCount, 1, 'the exclusion stays visible');
+  assertEqual(finality.hitchCount, 0, 'the frame was not retained as a hitch');
+
   const windowRecorder = new FrameHitchRecorder<TestFrameSample>();
   windowRecorder.recordLongTask(createLongTask({ atMs: 900, durationMs: 20, startAtMs: 880 }));
   assertNotEqual(
@@ -397,7 +459,7 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
   assertThrows(() => new FrameHitchRecorder({ workThresholdMs: -1 }));
   assertThrows(() => new FrameHitchRecorder({ historyLimit: -1 }));
   assertThrows(() => new FrameHitchRecorder({ historyLimit: 1.5 }));
-  assertThrows(() => new FrameHitchRecorder({ historyLimit: 10_001 }));
+  assertThrows(() => new FrameHitchRecorder({ historyLimit: 1_001 }));
   assertThrows(() => new FrameHitchRecorder({ historyLimit: Number.NaN }));
 
   const recorder = new FrameHitchRecorder<TestFrameSample>();
@@ -461,6 +523,27 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
         sourceFunctionName: '',
         sourceUrl: '',
       })),
+      startAtMs: 0,
+      styleAndLayoutDurationMs: 1,
+    }));
+  assertThrows(() =>
+    recorder.recordLongAnimationFrame({
+      atMs: 100,
+      blockingDurationMs: 1,
+      durationMs: 100,
+      hidden: false,
+      renderDurationMs: 1,
+      scriptDurationMs: 1,
+      scriptInvocations: 1,
+      scripts: [null as unknown as {
+        durationMs: number;
+        forcedStyleAndLayoutDurationMs: number;
+        invoker: string;
+        invokerType: string;
+        pauseDurationMs: number;
+        sourceFunctionName: string;
+        sourceUrl: string;
+      }],
       startAtMs: 0,
       styleAndLayoutDurationMs: 1,
     }));
@@ -550,6 +633,11 @@ const createLongTask = (input: Partial<LongTaskSample> = {}): LongTaskSample => 
     ));
   assertThrows(() =>
     createLongAnimationFrameScriptSamples([{ duration: 1 }], undefined as unknown as (url: string) => string));
+  assertThrows(() =>
+    createLongAnimationFrameScriptSamples(
+      [null as unknown as { duration?: number }],
+      (url) => url,
+    ));
 
   const unlabeled = createLongAnimationFrameScriptSamples([{ duration: 5 }], (url) => url);
   assertEqual(unlabeled[0]?.sourceUrl ?? 'missing', '', 'missing source URLs stay empty');
