@@ -75,6 +75,36 @@ function audioSink(initial = false) {
 const gameplayChannels = ['simulation', 'gameplay-input'] as const;
 
 describe('Phaser scene execution binding (headless fakes)', () => {
+  it.each(['error-observer', 'sink'] as const)('guards disposal retry reentry from %s', (origin) => {
+    const controller = createGameExecutionController();
+    const gameplay = fakeScene();
+    const audio = audioSink();
+    let cleanup = (): void => {};
+    const onError = vi.fn(() => {
+      if (origin === 'error-observer') {
+        cleanup();
+      }
+    });
+    const binding = bindPhaserGameScene({
+      controller, scene: gameplay.scene, audio, onError,
+      renderingPolicy: 'visibility', resetInput: vi.fn(), onUnsupportedState: vi.fn(),
+    });
+    cleanup = binding.dispose;
+    controller.acquireBlock({ reason: 'audio', channels: ['audio'] });
+    audio.setMuted.mockImplementation(() => {
+      if (origin === 'sink') {
+        cleanup();
+      }
+      throw new Error('persistent unmute failure');
+    });
+    binding.dispose();
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(gameplay.listenerCount()).toBe(0);
+    binding.dispose();
+    expect(onError).toHaveBeenCalledTimes(2);
+    expect(audio.getMuted()).toBe(true);
+  });
+
   it.each(['dispose', 'shutdown'] as const)('retries an initial %s audio cleanup failure without retaining listeners', (mode) => {
     const controller = createGameExecutionController();
     const gameplay = fakeScene();
