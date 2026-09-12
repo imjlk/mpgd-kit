@@ -1,5 +1,17 @@
 # @mpgd/game-services
 
+## 0.15.0 — 2026-09-13
+
+### Added
+
+- [bf2b493](https://github.com/imjlk/mpgd-kit/commit/bf2b4933567bf6d63f809c9f601db5a9e27d363a) Expose optional, invocation-scoped purchase and rewarded-ad progress observers through the client entrypoint. Report actual platform and backend request/result stages without exposing evidence or changing grants, pending results, authoritative completion, or observer-free calls. Isolate observer exceptions and promise rejections from business results.
+  
+  Repair extensionless internal imports and re-exports so every existing game-services public entrypoint loads directly in Node ESM, and validate those compiled entrypoints during tests.
+  
+  Expose a DOM-free operations type entrypoint for headless service consumers.
+  
+  Restore the durable grant idempotency key when finalizing evidence-based purchase recovery, so Microsoft Store offer-token migration can finish consumption without creating a second grant. — Thanks @imjlk!
+
 ## 0.14.0 — 2026-09-02
 
 ### Minor changes
