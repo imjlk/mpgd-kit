@@ -1,5 +1,13 @@
 # @mpgd/game-services
 
+## 0.15.1 — 2026-09-13
+
+### Patch changes
+
+- [bd4de7b](https://github.com/imjlk/mpgd-kit/commit/bd4de7b086d19b6d9ede5ace460baf97c07f2f01) Keep the operation client declarations independent of catalog schema and DOM
+  types. Headless TypeScript consumers can check `@mpgd/game-services/operations`
+  with `lib: ["ES2022"]`, no ambient Node types, and `skipLibCheck: false`. — Thanks @imjlk!
+
 ## 0.15.0 — 2026-09-13
 
 ### Added

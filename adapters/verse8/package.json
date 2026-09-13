@@ -1,6 +1,6 @@
 {
   "name": "@mpgd/adapter-verse8",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "description": "Verse8 iframe platform adapter for mpgd games.",
   "license": "MIT",
   "repository": {
