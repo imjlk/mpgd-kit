@@ -1,7 +1,7 @@
-# Game runtime (private preview)
+# Game runtime
 
 `@mpgd/game-runtime` coordinates gameplay execution with owned block tokens.
-It has no Phaser, DOM, network, platform SDK, timer, or polling dependency.
+Its headless entrypoints have no Phaser, DOM, network, platform SDK, timer, or polling imports.
 It does not change engine state, replace score-oriented `GameSession`, or alter
 `PlatformGateway`. Engine and UI consumers apply the requested state separately.
 
@@ -59,13 +59,42 @@ notification after shutdown. Late token releases are no-ops; new acquisitions
 and subscriptions throw. Destroying this coordination object does not terminate
 the game process. Consumers must check `status` before applying engine controls.
 
-This package remains `private: true` until an initial local npm publish and
-Trusted Publishing/OIDC setup are explicitly completed. It is not a generated
-game dependency. These private-only changes require no Sampo changeset.
+## Installation and entrypoints
+
+```sh
+pnpm add @mpgd/game-runtime
+# Only when using the Phaser binding:
+pnpm add phaser@^4.2.0
+```
+
+| Import | Purpose |
+| --- | --- |
+| `@mpgd/game-runtime` | Reason-scoped execution controller |
+| `@mpgd/game-runtime/ui` | Scoped snapshots, commands and events |
+| `@mpgd/game-runtime/platform` | Injected lifecycle source binding |
+| `@mpgd/game-runtime/actions` | Purchase and rewarded-ad coordination |
+| `@mpgd/game-runtime/phaser` | Optional gameplay scene binding |
+
+Phaser is an optional peer dependency. The root and headless subpaths do not
+re-export the Phaser binding or reference its declarations, so headless consumers
+can use them without installing Phaser or enabling DOM types. The action subpath
+uses the published `@mpgd/game-services/operations` types; it does not load the
+service implementation. Supply the existing game-services client explicitly.
+
+The [Phaser binding guide](./docs/phaser.md) describes scene ownership and cleanup.
+This package replaces the kit's two unpublished runtime previews with one public
+package. Internal users of `@mpgd/phaser-game-runtime` should switch to
+`@mpgd/game-runtime/phaser`. Existing generated games do not gain a dependency or
+require migration automatically.
+
+Releases use Sampo changesets and npm Trusted Publishing from
+`imjlk/mpgd-kit`'s `.github/workflows/release.yml` after initial npm registration.
 
 Contributor validation: `pnpm --dir packages/game-runtime test`,
 `node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/game-runtime`,
-and `node packages/game-runtime/test/dist-import.mjs`.
+and `node packages/game-runtime/test/dist-import.mjs`. The package test also
+installs packed tarballs in an isolated consumer, checks headless declarations
+without DOM types, and checks the optional binding with Phaser declarations.
 
 ## Scoped UI bridge
 

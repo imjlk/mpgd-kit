@@ -1,12 +1,12 @@
-# Phaser game runtime (private preview)
+# Phaser scene binding
 
-`@mpgd/phaser-game-runtime` applies headless execution requests to one explicitly
+`@mpgd/game-runtime/phaser` applies headless execution requests to one explicitly
 selected gameplay scene. Keep pause/resume controls in a separate UI scene.
 The adapter never pauses `Phaser.Game`, installs browser lifecycle listeners,
 replaces scene methods, or grants purchases/rewards.
 
 ```ts
-import { bindPhaserGameScene } from '@mpgd/phaser-game-runtime';
+import { bindPhaserGameScene } from '@mpgd/game-runtime/phaser';
 
 // Inside gameplayScene.create(); the binding also applies at the CREATE event,
 // after SceneManager has finished initializing the scene's running status.
@@ -86,13 +86,17 @@ not covered by that browser result.
 
 The implementation was checked against the installed Phaser 4.2.0 source and
 the official [Systems API](https://docs.phaser.io/api-documentation/4.0.0/class/scenes-systems).
-The separate package keeps Phaser outside headless runtime imports; its peer
-range starts at the tested 4.2.0 version.
+The separate entrypoint keeps Phaser outside headless runtime imports and
+declarations; its optional peer range starts at the tested 4.2.0 version.
 
-This package remains private pending initial npm registration and Trusted
-Publishing/OIDC setup. It is not a generated-game dependency and does not modify
-`phaser-minigame-runtime`'s native compatibility layer. No changeset is required
-for these private-only contracts.
+Install `@mpgd/game-runtime` and `phaser@^4.2.0` to use this binding. It is shipped
+in the same npm tarball as the headless controller. It does not modify
+`phaser-minigame-runtime`'s native compatibility layer or automatically add a
+dependency to generated games.
+
+For TypeScript 7 with Phaser 4.2.0, use the starter's `skipLibCheck: true` setting
+for Phaser's existing declaration errors. The headless entrypoints are separately
+tested with `skipLibCheck: false` and no DOM declarations.
 
 If the injected audio sink throws while unmuting during disposal/shutdown, scene
 listeners still detach. The handle retains only its failed audio cleanup and a

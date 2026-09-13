@@ -3,7 +3,7 @@ import Phaser from 'phaser';
 import { createGameExecutionController, type ExecutionBlock } from '@mpgd/game-runtime';
 import { bindGameLifecycle, type GameLifecycleState } from '@mpgd/game-runtime/platform';
 import { createGameUiBridge } from '@mpgd/game-runtime/ui';
-import { bindPhaserGameScene } from '@mpgd/phaser-game-runtime';
+import { bindPhaserGameScene } from '@mpgd/game-runtime/phaser';
 
 import { createMonetizationFixture } from './monetization';
 

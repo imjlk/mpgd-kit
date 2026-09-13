@@ -1,9 +1,9 @@
 {
   "name": "@mpgd/game-runtime",
   "version": "0.1.0",
-  "private": true,
-  "description": "Headless, reason-scoped gameplay execution controls.",
+  "description": "Gameplay execution, scoped UI and action coordination with optional Phaser scene bindings.",
   "license": "MIT",
+  "keywords": ["mpgd", "phaser", "game-development", "runtime", "lifecycle"],
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.js",
@@ -24,15 +24,20 @@
     "./actions": {
       "types": "./dist/actions/index.d.ts",
       "default": "./dist/actions/index.js"
+    },
+    "./phaser": {
+      "types": "./dist/phaser/index.d.ts",
+      "default": "./dist/phaser/index.js"
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "docs"
   ],
   "scripts": {
     "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/game-runtime",
     "check": "ttsc --noEmit",
-    "test": "pnpm build && vitest run && node test/dist-import.mjs && ttsc --noEmit -p test/tsconfig.json",
+    "test": "pnpm build && vitest run && node test/dist-import.mjs && node test/phaser-dist-import.mjs && ttsc --noEmit -p test/tsconfig.json && ttsc --noEmit -p test/tsconfig.phaser.json && node test/package-import.mjs",
     "lint": "ttsc --noEmit",
     "format": "ttsc format",
     "fix": "ttsc fix"
@@ -40,9 +45,31 @@
   "devDependencies": {
     "ttsc": "0.18.4",
     "typescript": "7.0.2",
-    "vitest": "^4.0.0"
+    "vitest": "^4.0.0",
+    "phaser": "^4.2.0",
+    "@types/node": "^24.0.0"
   },
   "dependencies": {
     "@mpgd/game-services": "workspace:*"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/game-runtime"
+  },
+  "bugs": {
+    "url": "https://github.com/imjlk/mpgd-kit/issues"
+  },
+  "homepage": "https://github.com/imjlk/mpgd-kit/tree/main/packages/game-runtime#readme",
+  "publishConfig": {
+    "access": "public"
+  },
+  "peerDependencies": {
+    "phaser": "^4.2.0"
+  },
+  "peerDependenciesMeta": {
+    "phaser": {
+      "optional": true
+    }
   }
 }

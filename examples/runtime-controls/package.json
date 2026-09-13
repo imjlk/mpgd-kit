@@ -12,7 +12,6 @@
   "dependencies": {
     "@mpgd/game-runtime": "workspace:*",
     "@mpgd/game-services": "workspace:*",
-    "@mpgd/phaser-game-runtime": "workspace:*",
     "@mpgd/platform": "workspace:*",
     "phaser": "4.2.0"
   },

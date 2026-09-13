@@ -418,9 +418,6 @@ importers:
       '@mpgd/game-services':
         specifier: workspace:*
         version: link:../../packages/game-services
-      '@mpgd/phaser-game-runtime':
-        specifier: workspace:*
-        version: link:../../packages/phaser-game-runtime
       '@mpgd/platform':
         specifier: workspace:*
         version: link:../../packages/platform
@@ -677,6 +674,12 @@ importers:
         specifier: workspace:*
         version: link:../game-services
     devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.13.3
+      phaser:
+        specifier: ^4.2.0
+        version: 4.2.0
       ttsc:
         specifier: 0.18.4
         version: 0.18.4
@@ -779,28 +782,6 @@ importers:
       vitest:
         specifier: ^4.0.0
         version: 4.1.9(@types/node@24.13.2)(jsdom@24.1.0)(vite@8.1.3(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
-
-  packages/phaser-game-runtime:
-    dependencies:
-      '@mpgd/game-runtime':
-        specifier: workspace:*
-        version: link:../game-runtime
-    devDependencies:
-      '@types/node':
-        specifier: ^24.0.0
-        version: 24.13.3
-      phaser:
-        specifier: ^4.2.0
-        version: 4.2.0
-      ttsc:
-        specifier: 0.18.4
-        version: 0.18.4
-      typescript:
-        specifier: 7.0.2
-        version: 7.0.2
-      vitest:
-        specifier: ^4.0.0
-        version: 4.1.9(@types/node@24.13.3)(jsdom@24.1.0)(vite@8.1.3(@types/node@24.13.3)(esbuild@0.28.1)(jiti@2.7.0)(terser@5.48.0)(yaml@2.9.0))
 
   packages/phaser-minigame-runtime:
     devDependencies:
