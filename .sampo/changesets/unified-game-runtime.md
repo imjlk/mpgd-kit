@@ -1,5 +1,5 @@
 ---
-npm/@mpgd/game-runtime: patch (Added)
+npm/@mpgd/game-runtime: patch
 ---
 
 Distribute gameplay execution, scoped UI, lifecycle and action coordination in

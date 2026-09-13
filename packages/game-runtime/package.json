@@ -36,9 +36,9 @@
   ],
   "scripts": {
     "build": "cd ../.. && node tools/run-ttsx.mjs tools/package/build-packages.ts @mpgd/game-runtime",
-    "check": "ttsc --noEmit",
+    "check": "ttsc --noEmit && ttsc --noEmit -p tsconfig.headless.json",
     "test": "pnpm build && vitest run && node test/dist-import.mjs && node test/phaser-dist-import.mjs && ttsc --noEmit -p test/tsconfig.json && ttsc --noEmit -p test/tsconfig.phaser.json && node test/package-import.mjs",
-    "lint": "ttsc --noEmit",
+    "lint": "pnpm check",
     "format": "ttsc format",
     "fix": "ttsc fix"
   },
