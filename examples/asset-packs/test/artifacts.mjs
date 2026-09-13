@@ -41,5 +41,5 @@ export async function auditArtifacts(outputRoot = join(root, 'dist')) {
 }
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const reports = await auditArtifacts();
-  console.log(JSON.stringify(reports.map(({ mode, packagedAssetBytes }) => ({ mode, packagedAssetBytes })), null, 2));
+  console.info(JSON.stringify(reports.map(({ mode, packagedAssetBytes }) => ({ mode, packagedAssetBytes })), null, 2));
 }

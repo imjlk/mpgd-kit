@@ -48,7 +48,7 @@ export async function staticServer(directory, { cors = false, port = 0 } = {}) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const server = await staticServer(resolve(process.argv[2] ?? 'artifacts/origin'), { cors: true, port: Number(process.argv[3] ?? 5196) });
-  console.log(`Static asset origin: ${server.url}`);
+  console.info(`Static asset origin: ${server.url}`);
   process.once('SIGINT', () => { void server.close(); });
   process.once('SIGTERM', () => { void server.close(); });
 }

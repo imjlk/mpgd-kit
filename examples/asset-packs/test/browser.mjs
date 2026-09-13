@@ -165,7 +165,7 @@ try {
   }
   // Real Phaser must reject a prepared but incorrectly named theme image without
   // falling back to its missing texture or sacrificing the existing level's lease.
-  const invalidCatalog = structuredClone(reports[0].packs);
+  const invalidCatalog = structuredClone(reports.find((report) => report.mode === 'bundled').packs);
   invalidCatalog.find((pack) => pack.id === 'dunes').images[0].id = 'wrong-ground';
   const invalidBuild = join(builds, 'invalid-theme');
   await build({ root, configFile: join(root, 'vite.config.ts'), mode: 'bundled',
@@ -198,7 +198,7 @@ try {
   await invalidContext.close();
   evidence.push({ invalidTheme: afterInvalid });
   await writeFile(join(artifacts, 'evidence.json'), JSON.stringify(evidence, null, 2));
-  console.log('Asset pack browser checks passed: bundled/hybrid, exclusion, sharing, readiness, retries, integrity, offline failure, cancellation, release and invalid level rollback.');
+  console.info('Asset pack browser checks passed: bundled/hybrid, exclusion, sharing, readiness, retries, integrity, offline failure, cancellation, release and invalid level rollback.');
 } finally {
   if (previousOrigin === undefined) delete process.env.ASSET_PACK_REMOTE_ORIGIN;
   else process.env.ASSET_PACK_REMOTE_ORIGIN = previousOrigin;

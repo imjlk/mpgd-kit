@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { defineConfig, type Plugin } from 'vite';
@@ -14,6 +14,11 @@ const sources = [
   { id: 'dunes', dependsOn: ['shared'], image: { id: 'ground', file: 'dunes.svg', width: 160, height: 96 } },
 ];
 
+function sourceMediaType(file: string): string {
+  if (extname(file) === '.svg') return 'image/svg+xml';
+  throw new Error(`Unsupported sample source image format: ${file}`);
+}
+
 export default defineConfig(({ mode }) => {
   const hybrid = mode === 'hybrid';
   const origin = new URL(process.env.ASSET_PACK_REMOTE_ORIGIN ?? 'http://127.0.0.1:5196/');
@@ -25,6 +30,7 @@ export default defineConfig(({ mode }) => {
   if (!origin.pathname.endsWith('/')) origin.pathname += '/';
   const payloads = new Map<string, Buffer>();
   const catalog: DeliveryPack[] = sources.map((pack) => {
+    const mediaType = sourceMediaType(pack.image.file);
     const bytes = readFileSync(join(root, 'asset-source', pack.image.file));
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const revision = createHash('sha256').update(JSON.stringify({ ...pack, sha256 })).digest('hex');
@@ -32,7 +38,7 @@ export default defineConfig(({ mode }) => {
     payloads.set(path, bytes);
     return {
       id: pack.id, revision, dependsOn: pack.dependsOn, packaged: !hybrid || pack.id === 'shared',
-      images: [{ id: pack.image.id, width: pack.image.width, height: pack.image.height, path, sha256, bytes: bytes.length, mediaType: 'image/svg+xml' }],
+      images: [{ id: pack.image.id, width: pack.image.width, height: pack.image.height, path, sha256, bytes: bytes.length, mediaType }],
     };
   });
   const report = {
@@ -48,10 +54,10 @@ export default defineConfig(({ mode }) => {
       server.middlewares.use((request, response, next) => {
         const path = new URL(request.url ?? '/', 'http://localhost').pathname.slice(1);
         if (!path.startsWith('packs/')) return next();
-        const allowed = catalog.some((pack) => pack.packaged && pack.images.some((image) => image.path === path));
-        const bytes = allowed ? payloads.get(path) : undefined;
+        const image = catalog.flatMap((pack) => pack.packaged ? pack.images : []).find((entry) => entry.path === path);
+        const bytes = image ? payloads.get(path) : undefined;
         response.statusCode = bytes ? 200 : 404;
-        response.setHeader('Content-Type', 'image/svg+xml');
+        response.setHeader('Content-Type', image?.mediaType ?? 'text/plain');
         response.end(bytes);
       });
     },
