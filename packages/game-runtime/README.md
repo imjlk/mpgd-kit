@@ -165,8 +165,8 @@ and rejects new registration, dispatch, emit, or setSnapshot calls. The final
 snapshot remains readable. Disposal, destruction, and unsubscribe are idempotent;
 late scoped commits still return `false` after bridge destruction.
 
-The UI subpath shares the private package's publication prerequisites. No Sampo
-changeset or generated-game dependency is added for this private-only extension.
+The UI subpath is part of the published package. Changes to its public contract
+or runtime behavior require a Sampo changeset for `@mpgd/game-runtime`.
 
 ## Platform lifecycle binding
 
@@ -295,11 +295,11 @@ do not invent a business outcome.
 Packaging: `/actions` uses **type-only** imports from `@mpgd/game-services/operations`.
 The workspace dependency ensures declarations/build order; neither the basic
 runtime import nor actions import loads the service implementation, Phaser or DOM.
-Consumers use the repository-standard `skipLibCheck` for third-party typia
-ambient declarations; the headless consumer smoke supplies only ES2022 globals.
-This package remains private. Future publication requires initial npm registration,
-OIDC, and the game-services release containing `/operations` and progress options
-(planned 0.15.0). No generated game gains a dependency on this unpublished package.
+The headless consumer checks declarations with `skipLibCheck: false` and only
+ES2022 globals. The published service dependency supplies the `/operations` port
+and progress options without requiring DOM types. Changes to the public action
+contract or runtime behavior require a Sampo changeset for `@mpgd/game-runtime`.
+Generated games opt into this package explicitly.
 
 The owner that reserves an operation controls its pre-invocation startup permission.
 A reentrant same-key joiner cannot cancel that owner's startup by disposing itself.
