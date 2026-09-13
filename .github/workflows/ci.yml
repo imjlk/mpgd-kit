@@ -77,6 +77,17 @@ jobs:
         if: ${{ env.IS_RELEASE_PR != 'true' }}
         timeout-minutes: 5
         run: pnpm --dir examples/runtime-controls build && pnpm --dir examples/runtime-controls test:browser
+      - name: Verify asset pack delivery and lifetime in Chromium
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        timeout-minutes: 5
+        run: pnpm --dir examples/asset-packs test:browser
+      - name: Upload asset pack browser evidence
+        if: ${{ always() && env.IS_RELEASE_PR != 'true' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: asset-pack-browser-evidence
+          path: examples/asset-packs/artifacts/browser/
+          if-no-files-found: ignore
       - run: pnpm smoke:apps-in-toss-production-evidence:prepared
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: tar -czf "$RUNNER_TEMP/package-dist.tgz" packages/*/dist adapters/*/dist native-plugins/*/dist

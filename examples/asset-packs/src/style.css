@@ -1,0 +1,25 @@
+:root { font-family: system-ui, sans-serif; color: #dce6df; background: #102226; font-synthesis: none; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { width: min(960px, calc(100% - 40px)); margin: 36px auto 48px; }
+header { margin-bottom: 24px; }
+.eyebrow { display: block; color: #9ab6ab; font-size: 11px; font-weight: 700; letter-spacing: .14em; }
+h1 { font-size: clamp(28px, 4vw, 42px); margin: 9px 0 8px; font-weight: 650; letter-spacing: -.035em; }
+p { color: #a8c0b7; line-height: 1.6; margin: 0; }
+.toolbar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 16px; }
+button { appearance: none; border: 1px solid #466257; background: #183237; color: #e3ece5; padding: 10px 17px; border-radius: 5px; font: inherit; font-size: 13px; cursor: pointer; }
+button:first-child, button:nth-child(2) { background: #d9e6ba; border-color: #d9e6ba; color: #193333; font-weight: 650; }
+button:hover:not(:disabled) { filter: brightness(1.15); }
+button:disabled { opacity: .4; cursor: default; }
+button:focus-visible { outline: 2px solid #f2c877; outline-offset: 3px; }
+#game { overflow: hidden; border: 1px solid #456253; border-radius: 6px; background: #142c31; aspect-ratio: 16 / 9; }
+#game canvas { display: block; max-width: 100%; width: 100%; height: auto; }
+.readout { display: grid; grid-template-columns: 1fr 230px; gap: 28px; padding: 20px 0; border-bottom: 1px solid #345046; }
+.readout strong { display: block; font-size: 18px; margin: 6px 0; }
+#memory { color: #9ab6ab; font-size: 12px; }
+progress { width: min(100%, 360px); height: 5px; accent-color: #dfc071; }
+.footnote { max-width: 740px; margin: 17px 0; font-size: 13px; }
+details { font-size: 13px; color: #a8c0b7; }
+summary { cursor: pointer; color: #dce6df; }
+details p { padding-top: 10px; max-width: 760px; }
+@media (max-width: 580px) { main { width: calc(100% - 24px); margin-top: 24px; } .readout { grid-template-columns: 1fr; gap: 18px; } }

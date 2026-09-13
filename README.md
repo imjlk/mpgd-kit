@@ -163,6 +163,9 @@ Settings action, or expose no replay action. See [Tutorial Engine](docs/TUTORIAL
 - `examples/phaser-starter` is a private, non-publishable reference fixture.
   Kit contributors use it to validate generated-game wiring and root target
   scripts; downstream games do not depend on it.
+- `examples/asset-packs` is a private [asset-pack design sample](docs/asset-packs-design.md)
+  for staged bundled/static-origin loading, preparation and resident ownership.
+  It adds no public package API or generated-game dependency.
 - Generated games own their own `mpgd.targets.json`. The CLI resolves that file
   into a local generated target config before invoking the kit target tools.
 
