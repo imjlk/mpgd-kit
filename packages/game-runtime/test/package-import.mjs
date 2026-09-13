@@ -5,11 +5,17 @@ import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+// This contributor smoke fixture requires Unix tar and symlink semantics.
+// Run it on macOS, Linux, or WSL; this does not constrain the runtime package.
+if (process.platform === 'win32') {
+  throw new Error('The packed consumer smoke test requires a Unix environment (macOS, Linux, or WSL).');
+}
+
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const fixture = mkdtempSync(join(tmpdir(), 'mpgd-game-runtime-package-'));
 const consumer = join(fixture, 'consumer');
-const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-const compiler = join(repoRoot, 'node_modules/.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
+const pnpm = 'pnpm';
+const compiler = join(repoRoot, 'node_modules/.bin/tsc');
 
 try {
   const packages = new Map();
@@ -59,7 +65,9 @@ try {
   run(compiler, ['-p', 'tsconfig.json'], consumer);
 
   // Opting into the binding adds Phaser; the emitted declarations must accept a real Scene.
-  manifest.dependencies.phaser = packInstalledPackage(join(repoRoot, 'packages/game-runtime/node_modules/phaser')).tarball;
+  const phaserDirectory = findInstalledDependency(join(repoRoot, 'packages/game-runtime'), 'phaser');
+  assert.ok(phaserDirectory, 'Missing installed dev dependency phaser');
+  manifest.dependencies.phaser = packInstalledPackage(phaserDirectory).tarball;
   writeJson(join(consumer, 'package.json'), manifest);
   writeOverrides();
   install();
