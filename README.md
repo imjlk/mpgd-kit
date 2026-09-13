@@ -184,6 +184,8 @@ starter manifests, and Apps in Toss MCP guidance.
 - `@mpgd/analytics`: typed analytics events and sink helpers for platform integrations.
 - `@mpgd/tutorial`: headless tutorial director,
   platform-backed progress, optional Driver.js presentation, and debug helpers.
+- `@mpgd/game-runtime`: execution controls, scoped UI, lifecycle and action
+  coordination, with an optional `/phaser` scene binding in the same package.
 - `@mpgd/game-services`: client orchestration, oRPC v2 beta contract, HTTP/oRPC handlers,
   memory/D1 store integration points, authenticated cursor-paginated verified
   leaderboard reads, and backend service assembly.

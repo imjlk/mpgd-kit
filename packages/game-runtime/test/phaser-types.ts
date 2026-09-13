@@ -1,7 +1,7 @@
 import type Phaser from 'phaser';
 
 import { createGameExecutionController } from '@mpgd/game-runtime';
-import { bindPhaserGameScene } from '@mpgd/phaser-game-runtime';
+import { bindPhaserGameScene } from '@mpgd/game-runtime/phaser';
 
 declare const scene: Phaser.Scene;
 const binding = bindPhaserGameScene({

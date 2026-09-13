@@ -2,7 +2,7 @@ import { EventEmitter } from 'node:events';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { createGameExecutionController } from '../../game-runtime/src/index.js';
+import { createGameExecutionController } from '../index.js';
 import { bindPhaserGameScene, type GameplayScene } from './index.js';
 
 function fakeScene(initial: 'creating' | 'running' | 'paused' | 'sleeping' | 'stopped' = 'running') {

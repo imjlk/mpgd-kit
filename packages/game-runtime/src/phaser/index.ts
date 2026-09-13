@@ -1,6 +1,6 @@
 import type Phaser from 'phaser';
 
-import type { GameExecutionController, GameExecutionSnapshot } from '@mpgd/game-runtime';
+import type { GameExecutionController, GameExecutionSnapshot } from '../index.js';
 
 export interface GameplayAudioSink {
   getMuted(): boolean;

@@ -1,7 +1,7 @@
 # Runtime controls fixture
 
 A small kit-only Phaser fixture with a gameplay counter and an independent UI
-scene. It exercises the private execution controller, scoped UI bridge, lifecycle
+scene. It exercises the execution controller, scoped UI bridge, lifecycle
 binding, and Phaser scene binding. It is not a starter template or a migrated game.
 
 ```sh
@@ -33,7 +33,7 @@ errors fail the test. Screenshots and final state are written to ignored
 The fixture exposes `render_game_to_text()` and `advanceTime(ms)` for the
 `develop-web-game` tool loop. Advancing manually stops automatic RAF and steps
 the engine; reload to return to ordinary live play. Business operations and
-their UI scopes are added by the later action-controller PR.
+their UI scopes are exercised by the service-operation panel below.
 
 The service-operation panel uses a fake gateway/backend injected into the existing
 `createGameServicesClient`. Outcomes are deterministic: choose granted/rejected/
