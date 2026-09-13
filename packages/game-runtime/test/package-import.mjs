@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,7 +9,6 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const fixture = mkdtempSync(join(tmpdir(), 'mpgd-game-runtime-package-'));
 const consumer = join(fixture, 'consumer');
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
-const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const compiler = join(repoRoot, 'node_modules/.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
 
 try {
@@ -79,14 +78,25 @@ try {
     const metadata = readJson(join(directory, 'package.json'));
     const id = `${metadata.name}@${metadata.version}`;
     if (packages.has(id)) return packages.get(id);
-    const workspace = metadata.name.startsWith('@mpgd/');
-    const output = JSON.parse(run(workspace ? pnpm : npm, [
-      'pack', '--json', '--pack-destination', fixture,
-      ...workspace ? [] : ['--ignore-scripts'],
-    ], directory, true).stdout);
-    const packed = Array.isArray(output) ? output[0] : output;
-    assert.equal(typeof packed.filename, 'string');
-    const entry = { name: metadata.name, tarball: `file:${resolve(fixture, packed.filename)}` };
+    let archive;
+    if (metadata.name.startsWith('@mpgd/')) {
+      const packed = JSON.parse(run(pnpm, ['pack', '--json', '--pack-destination', fixture], directory, true).stdout);
+      assert.equal(typeof packed.filename, 'string');
+      archive = resolve(fixture, packed.filename);
+    } else {
+      // These are already-published files installed by the locked workspace.
+      // Archive them verbatim without invoking npm's publisher-side validation
+      // or lifecycle hooks on third-party package manifests.
+      archive = join(fixture, `dependency-${packages.size}.tgz`);
+      const staging = mkdtempSync(join(fixture, 'dependency-'));
+      try {
+        cpSync(directory, join(staging, 'package'), { recursive: true, verbatimSymlinks: true });
+        run('tar', ['-czf', archive, '-C', staging, 'package'], staging, true);
+      } finally {
+        rmSync(staging, { recursive: true, force: true });
+      }
+    }
+    const entry = { name: metadata.name, tarball: `file:${archive}` };
     packages.set(id, entry);
     for (const dependency of Object.keys({
       ...metadata.dependencies, ...metadata.optionalDependencies, ...metadata.peerDependencies,
@@ -151,7 +161,7 @@ function run(command, args, cwd, capture = false) {
   });
   if (result.error) throw result.error;
   if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(' ')} failed: ${result.stdout ?? ''}${result.stderr ?? ''}`);
+    throw new Error(`${command} ${args.join(' ')} failed in ${cwd}: ${result.stdout ?? ''}${result.stderr ?? ''}`);
   }
   return result;
 }
