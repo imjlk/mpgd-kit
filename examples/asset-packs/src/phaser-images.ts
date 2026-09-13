@@ -5,6 +5,8 @@ import { cancelled, type PreparedImage } from './leases.js';
 import type { PlannedImage } from './packs.js';
 import { verifiedImage } from './verified-fetch.js';
 
+export const PACK_TEXTURE_PREFIX = 'pack:';
+
 /** Owns this sample's loader queue. Fetches can overlap; Phaser decoding is serialized. */
 export function createImagePreparer(scene: Phaser.Scene, locate: (image: PlannedImage) => URL) {
   let queue = Promise.resolve();
@@ -13,7 +15,7 @@ export function createImagePreparer(scene: Phaser.Scene, locate: (image: Planned
   async function decode(blob: Blob, image: PlannedImage, signal: AbortSignal): Promise<PreparedImage> {
     if (signal.aborted) throw cancelled();
     // A late, cancelled decoder must never delete a replacement generation's texture.
-    const textureKey = `pack:${image.packId}:${image.id}:${++generation}`;
+    const textureKey = `${PACK_TEXTURE_PREFIX}${image.packId}:${image.id}:${++generation}`;
     const url = URL.createObjectURL(blob);
     try {
       await new Promise<void>((resolve, reject) => {

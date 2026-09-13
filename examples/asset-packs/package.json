@@ -8,7 +8,7 @@
     "dev:hybrid": "vite --mode hybrid",
     "build": "ttsc --noEmit && vite build --mode bundled && vite build --mode hybrid && node test/artifacts.mjs",
     "check": "ttsc --noEmit",
-    "test": "vitest run test/leases.test.ts",
+    "test": "vitest run",
     "test:browser": "node test/browser.mjs",
     "serve:assets": "node test/static-server.mjs artifacts/origin 5196"
   },

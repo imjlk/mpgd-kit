@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { createPackLeases, type PreparedImage } from '../src/leases.js';
 import { planImages, type AssetPack } from '../src/packs.js';
 
-const image = { id: 'image', path: 'packs/image.svg', sha256: 'a'.repeat(64), bytes: 8, width: 2, height: 2 };
+const image = { id: 'image', path: 'packs/image.svg', mediaType: 'image/svg+xml', sha256: 'a'.repeat(64), bytes: 8, width: 2, height: 2 };
 const catalog: AssetPack[] = [
   { id: 'shared', revision: 'shared-v1', dependsOn: [], images: [image] },
   { id: 'grove', revision: 'grove-v1', dependsOn: ['shared'], images: [image] },

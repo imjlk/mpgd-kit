@@ -62,12 +62,12 @@ jobs:
         if: ${{ env.IS_RELEASE_PR != 'true' }}
       - run: pnpm build:packages
         if: ${{ env.IS_RELEASE_PR != 'true' }}
-      - name: Cache runtime fixture browser
+      - name: Cache example browsers
         if: ${{ env.IS_RELEASE_PR != 'true' }}
         uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-runtime-playwright-${{ hashFiles('examples/runtime-controls/package.json') }}
+          key: ${{ runner.os }}-runtime-playwright-${{ hashFiles('examples/runtime-controls/package.json', 'examples/asset-packs/package.json') }}
           restore-keys: ${{ runner.os }}-runtime-playwright-
       - name: Install runtime fixture browser
         if: ${{ env.IS_RELEASE_PR != 'true' }}
@@ -77,6 +77,10 @@ jobs:
         if: ${{ env.IS_RELEASE_PR != 'true' }}
         timeout-minutes: 5
         run: pnpm --dir examples/runtime-controls build && pnpm --dir examples/runtime-controls test:browser
+      - name: Install asset pack example browser
+        if: ${{ env.IS_RELEASE_PR != 'true' }}
+        timeout-minutes: 10
+        run: pnpm --dir examples/asset-packs exec playwright install --with-deps chromium
       - name: Verify asset pack delivery and lifetime in Chromium
         if: ${{ env.IS_RELEASE_PR != 'true' }}
         timeout-minutes: 5

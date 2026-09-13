@@ -49,12 +49,12 @@ pnpm --dir examples/asset-packs build
 pnpm --dir examples/asset-packs test:browser
 ```
 
-Browser tests use Chromium from the repository's existing Playwright installation
-(`pnpm --dir examples/runtime-controls exec playwright install chromium` when
+Browser tests use Chromium matched to this example's Playwright version
+(`pnpm --dir examples/asset-packs exec playwright install chromium` when
 needed). They build isolated fixtures under `artifacts/browser-build`, use an
 ephemeral cross-origin server, and exercise both delivery modes, exclusion,
 readiness, sharing, HTTP errors/retries, size/digest failures, cold offline entry,
-cancel/replacement and unload. Screenshots and state evidence go to
+cancel/replacement, unload and invalid level rollback. Screenshots and state evidence go to
 `artifacts/browser`. No production origin or credentials are needed.
 
 This is a first design slice. Persistent cache/quota behavior, audio/WebGL

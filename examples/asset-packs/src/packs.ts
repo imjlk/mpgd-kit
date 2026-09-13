@@ -2,6 +2,7 @@
 export interface PackImage {
   readonly id: string;
   readonly path: string;
+  readonly mediaType: string;
   readonly sha256: string;
   readonly bytes: number;
   readonly width: number;
@@ -13,6 +14,10 @@ export interface AssetPack {
   readonly revision: string;
   readonly dependsOn: readonly string[];
   readonly images: readonly PackImage[];
+}
+
+export interface DeliveryPack extends AssetPack {
+  readonly packaged: boolean;
 }
 
 export interface PlannedImage extends PackImage {

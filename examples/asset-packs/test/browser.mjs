@@ -39,7 +39,7 @@ try {
     const state = () => page.evaluate(() => JSON.parse(window.render_game_to_text()));
     const wait = async (phase) => page.waitForFunction((expected) => typeof window.render_game_to_text === 'function' && JSON.parse(window.render_game_to_text()).phase === expected, phase);
     const imagePath = (id) => '/' + report.packs.find((pack) => pack.id === id).images[0].path;
-    const target = (id) => report.mode === 'hybrid' && id !== 'shared' ? remote : app;
+    const target = (id) => report.packs.find((pack) => pack.id === id).packaged ? app : remote;
     const count = (id) => target(id).requests.filter((path) => path === imagePath(id)).length;
     const empty = async () => {
       await page.click('#unload');
@@ -163,8 +163,42 @@ try {
     assert.deepEqual(errors, []);
     await context.close();
   }
+  // Real Phaser must reject a prepared but incorrectly named theme image without
+  // falling back to its missing texture or sacrificing the existing level's lease.
+  const invalidCatalog = structuredClone(reports[0].packs);
+  invalidCatalog.find((pack) => pack.id === 'dunes').images[0].id = 'wrong-ground';
+  const invalidBuild = join(builds, 'invalid-theme');
+  await build({ root, configFile: join(root, 'vite.config.ts'), mode: 'bundled',
+    build: { outDir: invalidBuild }, define: { __ASSET_PACK_CATALOG__: JSON.stringify(invalidCatalog) }, logLevel: 'warn' });
+  const invalidApp = await staticServer(invalidBuild);
+  servers.push(invalidApp);
+  const invalidContext = await browser.newContext();
+  const invalidPage = await invalidContext.newPage();
+  const invalidErrors = [];
+  invalidPage.on('pageerror', (error) => invalidErrors.push(error.message));
+  invalidPage.on('console', (message) => { if (message.type() === 'error') invalidErrors.push(message.text()); });
+  const invalidState = () => invalidPage.evaluate(() => JSON.parse(window.render_game_to_text()));
+  await invalidPage.goto(invalidApp.url);
+  await invalidPage.waitForFunction(() => typeof window.render_game_to_text === 'function' && JSON.parse(window.render_game_to_text()).phase === 'idle');
+  await invalidPage.click('#grove');
+  await invalidPage.waitForFunction(() => JSON.parse(window.render_game_to_text()).phase === 'playing');
+  const beforeInvalid = await invalidState();
+  await invalidPage.click('#dunes');
+  await invalidPage.waitForFunction(() => JSON.parse(window.render_game_to_text()).phase === 'error');
+  const afterInvalid = await invalidState();
+  assert.match(afterInvalid.error, /Missing prepared image: dunes\/ground/);
+  assert.equal(afterInvalid.current, 'grove');
+  assert.deepEqual(afterInvalid.resources, beforeInvalid.resources);
+  assert.deepEqual(afterInvalid.player, beforeInvalid.player);
+  assert.equal(afterInvalid.textureCount, 2);
+  await invalidPage.click('#unload');
+  assert.deepEqual((await invalidState()).resources, []);
+  assert.equal((await invalidState()).textureCount, 0);
+  assert.deepEqual(invalidErrors, []);
+  await invalidContext.close();
+  evidence.push({ invalidTheme: afterInvalid });
   await writeFile(join(artifacts, 'evidence.json'), JSON.stringify(evidence, null, 2));
-  console.log('Asset pack browser checks passed: bundled/hybrid, exclusion, sharing, readiness, retries, integrity, offline failure, cancellation and release.');
+  console.log('Asset pack browser checks passed: bundled/hybrid, exclusion, sharing, readiness, retries, integrity, offline failure, cancellation, release and invalid level rollback.');
 } finally {
   if (previousOrigin === undefined) delete process.env.ASSET_PACK_REMOTE_ORIGIN;
   else process.env.ASSET_PACK_REMOTE_ORIGIN = previousOrigin;

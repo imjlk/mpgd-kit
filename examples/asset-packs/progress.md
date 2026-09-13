@@ -9,17 +9,19 @@ failure/retry UI, artifact exclusion checks, unit and real-browser validation.
 Disk caching/quota, audio/WebGL preparation, publication adapters and protected
 delivery remain design follow-ups. Keep issue #173 open after this first PR.
 
-Validation pending: unit tests, both builds, browser fault/lifetime cases,
-bundled game-client screenshots/state, root checks, pre-push OCR, GitHub review.
-
 Implemented the private catalog/planner, shared cancellable leases, bounded
 verified image fetch, serialized Phaser decode and Canvas preparation, and level
 selection/recovery UI. Bundled and hybrid builds emit different actual payloads;
 browser tests use separate output directories and an ephemeral CORS origin.
 
-Validation so far: 8 ownership/planning tests and sample typecheck pass. Both
+Validation: 11 ownership/planning and stream-failure tests and sample typecheck pass. Both
 browser passes cover bundled/hybrid, payload exclusion, prepared entry, shared
 image reuse, HTTP 404 and bounded 500 retry, digest/size rejection, cold offline
 failure, cancellation/replacement, and last-owner texture removal. The bundled
 game client exercised movement in both themes; screenshots/state inspected.
-Root checks, final review and PR submission remain pending.
+Root `pnpm check` and existing phaser-assets tests passed. OCR review findings
+were applied for shared delivery metadata, transactional level entry, MIME-aware
+verified blobs, secure-context diagnostics and CI browser version isolation.
+An errored-stream cleanup regression was reproduced and fixed; browser checks
+also verify that an invalid prepared theme leaves the prior level intact.
+Corrective pre-push review and GitHub PR review are the remaining submission steps.

@@ -1,11 +1,11 @@
 import Phaser from 'phaser';
 
 import { createPackLeases, type PackLease } from './leases.js';
-import type { AssetPack } from './packs.js';
-import { createImagePreparer } from './phaser-images.js';
+import type { DeliveryPack } from './packs.js';
+import { createImagePreparer, PACK_TEXTURE_PREFIX } from './phaser-images.js';
 import './style.css';
 
-declare const __ASSET_PACK_CATALOG__: readonly AssetPack[];
+declare const __ASSET_PACK_CATALOG__: readonly DeliveryPack[];
 declare const __ASSET_PACK_MODE__: 'bundled' | 'hybrid';
 declare const __ASSET_PACK_ORIGIN__: string;
 
@@ -33,25 +33,47 @@ class Board extends Phaser.Scene {
     this.layer = this.add.container();
     this.cursors = this.input.keyboard!.createCursorKeys();
     const localBase = new URL(import.meta.env.BASE_URL, window.location.href);
+    const bundled = new Set(__ASSET_PACK_CATALOG__.filter((pack) => pack.packaged).map((pack) => pack.id));
     packs = createPackLeases(__ASSET_PACK_CATALOG__, createImagePreparer(this, (image) =>
-      new URL(image.path, __ASSET_PACK_MODE__ === 'hybrid' && image.packId !== 'shared' ? __ASSET_PACK_ORIGIN__ : localBase)));
+      new URL(image.path, bundled.has(image.packId) ? localBase : __ASSET_PACK_ORIGIN__)));
     model.phase = 'idle';
     this.showEmpty();
     renderStatus();
   }
   enter(lease: PackLease, theme: Theme): void {
-    this.clear();
-    this.lease = lease;
-    const ground = lease.textures.get(`${theme}/ground`)!;
-    const frame = this.textures.get(ground).get();
-    // Use the prepared images directly, without a first-frame TileSprite pattern cache.
-    for (let y = 0; y < 540; y += frame.height) {
-      for (let x = 0; x < 960; x += frame.width) this.layer.add(this.add.image(x, y, ground).setOrigin(0));
+    let nextLayer: Phaser.GameObjects.Container | undefined;
+    let nextHero: Phaser.GameObjects.Image;
+    try {
+      const required = (id: string): string => {
+        const key = lease.textures.get(id);
+        if (!key || !this.textures.exists(key)) throw new Error(`Missing prepared image: ${id}`);
+        return key;
+      };
+      const ground = required(`${theme}/ground`);
+      const pilot = required('shared/pilot');
+      const frame = this.textures.get(ground).get();
+      if (frame.width <= 0 || frame.height <= 0) throw new Error('Invalid prepared ground dimensions');
+      nextLayer = this.add.container().setVisible(false);
+      // Construct the replacement before destroying any users of the old lease.
+      // Prepared images avoid a first-frame TileSprite pattern cache.
+      for (let y = 0; y < 540; y += frame.height) {
+        for (let x = 0; x < 960; x += frame.width) nextLayer.add(this.add.image(x, y, ground).setOrigin(0));
+      }
+      nextLayer.add(this.add.rectangle(480, 488, 310, 42, 0x102226, .85));
+      nextLayer.add(this.add.text(480, 488, theme === 'grove' ? 'THE GROVE' : 'THE DUNES', { fontFamily: 'monospace', fontSize: '16px', color: '#eef1d6' }).setOrigin(.5));
+      nextHero = this.add.image(480, 270, pilot).setScale(2);
+      nextLayer.add(nextHero);
+    } catch (error) {
+      nextLayer?.destroy();
+      lease.release();
+      throw error;
     }
-    this.layer.add(this.add.rectangle(480, 488, 310, 42, 0x102226, .85));
-    this.layer.add(this.add.text(480, 488, theme === 'grove' ? 'THE GROVE' : 'THE DUNES', { fontFamily: 'monospace', fontSize: '16px', color: '#eef1d6' }).setOrigin(.5));
-    this.hero = this.add.image(480, 270, lease.textures.get('shared/pilot')!).setScale(2);
-    this.layer.add(this.hero);
+    this.clear();
+    this.layer.destroy();
+    this.layer = nextLayer;
+    this.hero = nextHero;
+    this.lease = lease;
+    this.layer.setVisible(true);
   }
   clear(): void {
     // Destroy all image users before returning their resident resource lease.
@@ -79,15 +101,20 @@ const game = new Phaser.Game({
   loader: { imageLoadType: 'HTMLImageElement' },
 });
 
+function statusText(): string {
+  if (model.phase === 'error') return model.error;
+  if (model.phase === 'preparing') return `Preparing ${model.requested}: ${model.ready} / ${model.total} images`;
+  if (model.phase === 'playing') return `${model.current} ready — explore with arrow keys`;
+  return 'No level entered';
+}
+
 function renderStatus(): void {
   controls.grove!.disabled = controls.dunes!.disabled = model.phase === 'booting';
   controls.cancel!.disabled = model.phase !== 'preparing';
   controls.retry!.disabled = model.phase !== 'error';
   controls.unload!.disabled = model.phase === 'booting' || (model.phase === 'idle' && !model.current);
   element('delivery').textContent = __ASSET_PACK_MODE__ === 'bundled' ? 'ALL PACKS BUNDLED' : 'SHARED BUNDLED / THEMES ON STATIC ORIGIN';
-  element('status').textContent = model.phase === 'error' ? model.error : model.phase === 'preparing'
-    ? `Preparing ${model.requested}: ${model.ready} / ${model.total} images`
-    : model.phase === 'playing' ? `${model.current} ready — explore with arrow keys` : 'No level entered';
+  element('status').textContent = statusText();
   const progress = element<HTMLProgressElement>('progress');
   progress.max = Math.max(1, model.total);
   progress.value = model.ready;
@@ -147,7 +174,7 @@ controls.unload!.onclick = () => {
 function state() {
   return { ...model, mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
     player: model.phase === 'booting' ? null : board.player(), resources: packs?.snapshot() ?? [],
-    textureCount: model.phase === 'booting' ? 0 : board.textures.getTextureKeys().filter((key) => key.startsWith('pack:')).length };
+    textureCount: model.phase === 'booting' ? 0 : board.textures.getTextureKeys().filter((key) => key.startsWith(PACK_TEXTURE_PREFIX)).length };
 }
 declare global {
   interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; }

@@ -16,6 +16,7 @@ export async function auditArtifacts(outputRoot = join(root, 'dist')) {
     const directory = join(outputRoot, mode);
     const report = JSON.parse(await readFile(join(directory, 'asset-pack-report.json'), 'utf8'));
     const payloadFiles = await files(join(directory, 'packs'));
+    // Independently assert this fixture's intended policy, rather than trusting the emitted flags.
     const expectedFiles = report.packs.filter((pack) => mode === 'bundled' || pack.id === 'shared').flatMap((pack) => pack.images.map((image) => join(directory, image.path)));
     assert.deepEqual(payloadFiles.sort(), expectedFiles.sort(), 'Actual packaged files must follow the selected policy');
     let packagedBytes = 0;

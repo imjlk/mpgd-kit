@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 
 import { defineConfig, type Plugin } from 'vite';
 
-import type { AssetPack } from './src/packs.js';
+import type { DeliveryPack } from './src/packs.js';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const sources = [
@@ -24,23 +24,22 @@ export default defineConfig(({ mode }) => {
   }
   if (!origin.pathname.endsWith('/')) origin.pathname += '/';
   const payloads = new Map<string, Buffer>();
-  const catalog: AssetPack[] = sources.map((pack) => {
+  const catalog: DeliveryPack[] = sources.map((pack) => {
     const bytes = readFileSync(join(root, 'asset-source', pack.image.file));
     const sha256 = createHash('sha256').update(bytes).digest('hex');
     const revision = createHash('sha256').update(JSON.stringify({ ...pack, sha256 })).digest('hex');
     const path = `packs/${pack.id}/${revision}/${pack.image.file}`;
     payloads.set(path, bytes);
     return {
-      id: pack.id, revision, dependsOn: pack.dependsOn,
-      images: [{ id: pack.image.id, width: pack.image.width, height: pack.image.height, path, sha256, bytes: bytes.length }],
+      id: pack.id, revision, dependsOn: pack.dependsOn, packaged: !hybrid || pack.id === 'shared',
+      images: [{ id: pack.image.id, width: pack.image.width, height: pack.image.height, path, sha256, bytes: bytes.length, mediaType: 'image/svg+xml' }],
     };
   });
-  const packaged = (id: string): boolean => !hybrid || id === 'shared';
   const report = {
     mode: hybrid ? 'hybrid' : 'bundled', remoteOrigin: origin.href,
     // Encoded file bytes, NOT measured wire traffic or process/GPU memory.
-    packagedAssetBytes: catalog.filter((pack) => packaged(pack.id)).reduce((sum, pack) => sum + pack.images.reduce((n, image) => n + image.bytes, 0), 0),
-    packs: catalog.map((pack) => ({ ...pack, packaged: packaged(pack.id),
+    packagedAssetBytes: catalog.filter((pack) => pack.packaged).reduce((sum, pack) => sum + pack.images.reduce((n, image) => n + image.bytes, 0), 0),
+    packs: catalog.map((pack) => ({ ...pack,
       rgbaEstimate: pack.images.reduce((sum, image) => sum + image.width * image.height * 4, 0) })),
   };
   const plugin: Plugin = {
@@ -49,7 +48,7 @@ export default defineConfig(({ mode }) => {
       server.middlewares.use((request, response, next) => {
         const path = new URL(request.url ?? '/', 'http://localhost').pathname.slice(1);
         if (!path.startsWith('packs/')) return next();
-        const allowed = catalog.some((pack) => packaged(pack.id) && pack.images.some((image) => image.path === path));
+        const allowed = catalog.some((pack) => pack.packaged && pack.images.some((image) => image.path === path));
         const bytes = allowed ? payloads.get(path) : undefined;
         response.statusCode = bytes ? 200 : 404;
         response.setHeader('Content-Type', 'image/svg+xml');
@@ -57,7 +56,7 @@ export default defineConfig(({ mode }) => {
       });
     },
     generateBundle() {
-      for (const pack of catalog.filter((entry) => packaged(entry.id))) {
+      for (const pack of catalog.filter((entry) => entry.packaged)) {
         for (const image of pack.images) this.emitFile({ type: 'asset', fileName: image.path, source: payloads.get(image.path)! });
       }
       this.emitFile({ type: 'asset', fileName: 'asset-pack-report.json', source: JSON.stringify(report, null, 2) });
@@ -65,7 +64,7 @@ export default defineConfig(({ mode }) => {
     writeBundle() {
       if (!hybrid) return;
       // A separate, append-only local origin fixture. Never put remote packs in public/.
-      for (const pack of catalog.filter((entry) => !packaged(entry.id))) {
+      for (const pack of catalog.filter((entry) => !entry.packaged)) {
         for (const image of pack.images) {
           const destination = join(root, 'artifacts/origin', image.path);
           const bytes = payloads.get(image.path)!;
