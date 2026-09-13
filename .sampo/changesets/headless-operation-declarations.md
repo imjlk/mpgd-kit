@@ -1,5 +1,5 @@
 ---
-npm/@mpgd/game-services: patch (Fixed)
+npm/@mpgd/game-services: patch
 ---
 
 Keep the operation client declarations independent of catalog schema and DOM
