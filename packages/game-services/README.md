@@ -11,6 +11,12 @@ verification and ledger boundaries.
 compatible. Types are available from `@mpgd/game-services/client` and the package
 root. No UI runtime or Phaser dependency is added.
 
+Headless consumers can import `GameServicesOperationClient` and operation types
+from `@mpgd/game-services/operations`. This entrypoint's declarations support
+`lib: ["ES2022"]`, `types: []`, and `skipLibCheck: false`; they do not require
+catalog validators, transport declarations, or DOM globals. Existing response
+type exports from `@mpgd/game-services/types` remain compatible.
+
 ```ts
 await client.purchase(input, {
   correlationId: 'view-operation-42',
