@@ -7,6 +7,20 @@ import type {
   PlatformTarget,
 } from '@mpgd/platform';
 
+import type {
+  ClaimAdRewardResponse,
+  PurchaseGrantFinalization,
+  PurchaseGrantFinalizationAction,
+  VerifyPurchaseResponse,
+} from './operation-results.js';
+
+export type {
+  ClaimAdRewardResponse,
+  PurchaseGrantFinalization,
+  PurchaseGrantFinalizationAction,
+  VerifyPurchaseResponse,
+} from './operation-results.js';
+
 export type { PlatformEvidenceEnvelope } from '@mpgd/platform';
 
 export type GameServicesStoreTarget = Extract<
@@ -45,27 +59,6 @@ export interface VerifyPurchaseRequest {
   readonly evidence?: PlatformEvidenceEnvelope;
 }
 
-export interface VerifyPurchaseResponse {
-  readonly verified: boolean;
-  readonly ledgerEntryId?: string;
-  readonly alreadyProcessed: boolean;
-  readonly reason?: string;
-  readonly finalization?: PurchaseGrantFinalization;
-}
-
-export type PurchaseGrantFinalizationAction =
-  | 'acknowledge'
-  | 'consume'
-  | 'finish'
-  | 'complete';
-
-export interface PurchaseGrantFinalization {
-  readonly status: 'completed' | 'pending';
-  readonly action?: PurchaseGrantFinalizationAction;
-  readonly alreadyCompleted: boolean;
-  readonly reason?: string;
-}
-
 export interface ClaimAdRewardRequest {
   readonly target: GameServicesAdRewardTarget;
   /** Deployment config key used to resolve game-owned platform placement identifiers. */
@@ -77,13 +70,6 @@ export interface ClaimAdRewardRequest {
   readonly idempotencyKey: AdRewardIdempotencyKey;
   readonly completedAt: string;
   readonly evidence?: PlatformEvidenceEnvelope;
-}
-
-export interface ClaimAdRewardResponse {
-  readonly granted: boolean;
-  readonly ledgerEntryId?: string;
-  readonly alreadyProcessed: boolean;
-  readonly reason?: string;
 }
 
 export interface RecordLeaderboardScoreRequest extends LeaderboardScoreInput {

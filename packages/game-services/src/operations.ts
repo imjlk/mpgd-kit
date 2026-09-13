@@ -10,7 +10,7 @@ import type {
   GameServicesPurchaseProgress,
   GameServicesRewardedAdProgress,
 } from './operation-progress.js';
-import type { ClaimAdRewardResponse, VerifyPurchaseResponse } from './types.js';
+import type { ClaimAdRewardResponse, VerifyPurchaseResponse } from './operation-results.js';
 export type {
   GameServicesOperationKind,
   GameServicesOperationLocation,
