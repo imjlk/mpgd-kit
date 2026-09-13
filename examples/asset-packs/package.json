@@ -1,0 +1,27 @@
+{
+  "name": "@mpgd/example-asset-packs",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --mode bundled",
+    "dev:hybrid": "vite --mode hybrid",
+    "build": "ttsc --noEmit && vite build --mode bundled && vite build --mode hybrid && node test/artifacts.mjs",
+    "check": "ttsc --noEmit",
+    "test": "vitest run",
+    "test:browser": "node test/browser.mjs",
+    "serve:assets": "node test/static-server.mjs artifacts/origin 5196"
+  },
+  "dependencies": {
+    "@mpgd/phaser-assets": "workspace:*",
+    "phaser": "4.2.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "playwright": "1.62.1",
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
+    "vite": "^8.1.3",
+    "vitest": "^4.0.0"
+  }
+}
