@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -9,11 +9,14 @@ const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 const fixture = mkdtempSync(join(tmpdir(), 'mpgd-game-runtime-package-'));
 const consumer = join(fixture, 'consumer');
 const pnpm = process.platform === 'win32' ? 'pnpm.cmd' : 'pnpm';
+const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 const compiler = join(repoRoot, 'node_modules/.bin', process.platform === 'win32' ? 'tsc.cmd' : 'tsc');
 
 try {
-  const tarballs = new Map();
-  packWorkspacePackage('@mpgd/game-runtime');
+  const packages = new Map();
+  const edges = new Map();
+  const runtime = packInstalledPackage(join(repoRoot, 'packages/game-runtime'));
+  const services = packInstalledPackage(join(repoRoot, 'packages/game-services'));
   mkdirSync(consumer);
   const manifest = {
     name: 'mpgd-game-runtime-package-smoke',
@@ -21,17 +24,12 @@ try {
     type: 'module',
     packageManager: readJson(join(repoRoot, 'package.json')).packageManager,
     dependencies: {
-      '@mpgd/game-runtime': tarballs.get('@mpgd/game-runtime'),
-      '@mpgd/game-services': tarballs.get('@mpgd/game-services'),
+      '@mpgd/game-runtime': runtime.tarball,
+      '@mpgd/game-services': services.tarball,
     },
   };
   writeJson(join(consumer, 'package.json'), manifest);
-  writeFileSync(join(consumer, 'pnpm-workspace.yaml'), [
-    'packages: []',
-    'overrides:',
-    ...[...tarballs].map(([name, tarball]) => `  '${name}': ${JSON.stringify(tarball)}`),
-    '',
-  ].join('\n'));
+  writeOverrides();
   install();
 
   const installed = readJson(join(consumer, 'node_modules/@mpgd/game-runtime/package.json'));
@@ -62,8 +60,9 @@ try {
   run(compiler, ['-p', 'tsconfig.json'], consumer);
 
   // Opting into the binding adds Phaser; the emitted declarations must accept a real Scene.
-  manifest.dependencies.phaser = readJson(join(repoRoot, 'packages/game-runtime/node_modules/phaser/package.json')).version;
+  manifest.dependencies.phaser = packInstalledPackage(join(repoRoot, 'packages/game-runtime/node_modules/phaser')).tarball;
   writeJson(join(consumer, 'package.json'), manifest);
+  writeOverrides();
   install();
   copyFileSync(join(repoRoot, 'packages/game-runtime/test/phaser-types.ts'), join(consumer, 'phaser-types.ts'));
   config.compilerOptions.lib.push('DOM');
@@ -75,24 +74,66 @@ try {
   run(compiler, ['-p', 'tsconfig.json'], consumer);
   console.info('@mpgd/game-runtime packed consumer passed with and without the optional Phaser peer.');
 
-  function packWorkspacePackage(name) {
-    if (tarballs.has(name)) return;
-    const directory = join(repoRoot, 'packages', name.slice('@mpgd/'.length));
+  function packInstalledPackage(inputDirectory) {
+    const directory = realpathSync(inputDirectory);
     const metadata = readJson(join(directory, 'package.json'));
-    const packed = JSON.parse(run(pnpm, ['pack', '--json', '--pack-destination', fixture], directory, true).stdout);
+    const id = `${metadata.name}@${metadata.version}`;
+    if (packages.has(id)) return packages.get(id);
+    const workspace = metadata.name.startsWith('@mpgd/');
+    const output = JSON.parse(run(workspace ? pnpm : npm, [
+      'pack', '--json', '--pack-destination', fixture,
+      ...workspace ? [] : ['--ignore-scripts'],
+    ], directory, true).stdout);
+    const packed = Array.isArray(output) ? output[0] : output;
     assert.equal(typeof packed.filename, 'string');
-    tarballs.set(name, `file:${packed.filename}`);
-    for (const [dependency, version] of Object.entries(metadata.dependencies ?? {})) {
-      if (version.startsWith('workspace:')) packWorkspacePackage(dependency);
+    const entry = { name: metadata.name, tarball: `file:${resolve(fixture, packed.filename)}` };
+    packages.set(id, entry);
+    for (const dependency of Object.keys({
+      ...metadata.dependencies, ...metadata.optionalDependencies, ...metadata.peerDependencies,
+    })) {
+      // Optional peers are opt-ins; in particular do not add Phaser to the headless case.
+      if (metadata.peerDependenciesMeta?.[dependency]?.optional && !metadata.dependencies?.[dependency]) continue;
+      const installed = findInstalledDependency(directory, dependency);
+      if (!installed && metadata.optionalDependencies?.[dependency]) continue;
+      assert.ok(installed, `Missing installed dependency ${id} > ${dependency}`);
+      edges.set(`${id}>${dependency}`, packInstalledPackage(installed).tarball);
     }
+    return entry;
+  }
+
+  function writeOverrides() {
+    // Snapshot the installed dependency closure as tarballs, including multiple
+    // versions via parent-specific overrides. CI's frozen install does not need
+    // registry metadata and therefore does not populate an offline metadata cache.
+    const byName = Map.groupBy(packages.values(), (entry) => entry.name);
+    const overrides = new Map([...byName].filter(([, entries]) => entries.length === 1)
+      .map(([name, entries]) => [name, entries[0].tarball]));
+    for (const edge of edges) overrides.set(...edge);
+    writeFileSync(join(consumer, 'pnpm-workspace.yaml'), [
+      'packages: []', 'overrides:',
+      ...[...overrides].map(([selector, tarball]) => `  '${selector}': ${JSON.stringify(tarball)}`), '',
+    ].join('\n'));
   }
 } finally {
   rmSync(fixture, { recursive: true, force: true });
 }
 
 function install() {
-  // pnpm install at the repo root already populated the store. No registry is needed.
-  run(pnpm, ['install', '--offline', '--ignore-scripts', '--no-frozen-lockfile'], consumer);
+  run(pnpm, [
+    'install', '--offline', '--ignore-scripts', '--no-frozen-lockfile',
+    '--store-dir', join(fixture, 'store'), '--cache-dir', join(fixture, 'cache'),
+  ], consumer);
+}
+
+function findInstalledDependency(from, name) {
+  let directory = from;
+  while (true) {
+    const candidate = join(directory, 'node_modules', name);
+    if (existsSync(join(candidate, 'package.json'))) return realpathSync(candidate);
+    const parent = dirname(directory);
+    if (parent === directory) return;
+    directory = parent;
+  }
 }
 
 function readJson(path) {
