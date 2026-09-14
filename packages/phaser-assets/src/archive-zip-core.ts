@@ -225,8 +225,14 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     }
     seenNames.add(name);
     foldedNames.add(foldedName);
-    if (localOffset < dataLimit || localOffset + 30 > centralDirectoryOffset) {
-      fail('invalid-structure', `ZIP local header offset is out of order: ${name}`);
+    if (localOffset !== dataLimit) {
+      fail(
+        'invalid-structure',
+        `ZIP local header offset is not contiguous with the previous record: ${name}`,
+      );
+    }
+    if (localOffset + 30 > centralDirectoryOffset) {
+      fail('invalid-structure', `ZIP local header offset is out of bounds: ${name}`);
     }
     if (zip.u32(localOffset) !== 0x04034b50) {
       fail('invalid-structure', `ZIP local header missing for entry: ${name}`);
@@ -280,6 +286,9 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
   }
   if (cursor !== endOffset) {
     fail('invalid-structure', 'ZIP central directory has trailing data');
+  }
+  if (dataLimit !== centralDirectoryOffset) {
+    fail('invalid-structure', 'ZIP entries leave unreferenced bytes before the central directory');
   }
   for (let index = 0; index < planned.length; index++) {
     const entry = planned[index]!;

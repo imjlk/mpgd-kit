@@ -270,9 +270,12 @@ describe('bounded ZIP decode core', () => {
   });
 
   it('decodes multi-megabyte incompressible deflate entries promptly', async () => {
+    // A nonrepeating LCG stream so DEFLATE cannot shrink it.
     const payload = new Uint8Array(4 * 1024 * 1024);
+    let state = 0x2f6e2b1 >>> 0;
     for (let index = 0; index < payload.length; index++) {
-      payload[index] = (index * 131 + 7) & 0xff;
+      state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+      payload[index] = (state >>> 23) & 0xff;
     }
     const fixture = buildV1Zip([{ path: 'big.bin', data: payload, method: 'deflate' }]);
     const started = Date.now();

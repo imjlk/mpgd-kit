@@ -436,6 +436,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           return;
         }
         try {
+          // Mark ownership before posting: an in-process worker may transfer
+          // the buffer and reply synchronously from inside postMessage, and a
+          // reentrant failure must already count the buffer as gone.
+          decodePosted = true;
           worker.postMessage({
             type: 'decode',
             jobId,
@@ -446,14 +450,15 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             limits,
           }, transfer ? [archivePayload] : []);
         } catch (error) {
-          finalize({
-            status: 'worker-error',
-            code: 'worker-error',
-            detail: `Could not post the decode request: ${String(error)}`,
-          });
+          if (!finished) {
+            finalize({
+              status: 'worker-error',
+              code: 'worker-error',
+              detail: `Could not post the decode request: ${String(error)}`,
+            });
+          }
           return;
         }
-        decodePosted = true;
       };
       void start().catch((error) => {
         finalize({
