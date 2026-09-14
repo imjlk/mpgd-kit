@@ -275,6 +275,11 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               return;
             }
             if (message.seq !== outstandingSeq + 1) {
+              finalize({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: `The archive decode worker skipped entry sequence ${outstandingSeq + 1}`,
+              });
               return;
             }
             if (outstandingSeq > releasedSeq) {
@@ -313,9 +318,39 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             }
             return;
           }
+          if (
+            message.type === 'done' && message.status === 'completed'
+            && outstandingSeq > releasedSeq
+          ) {
+            finalize({
+              status: 'worker-error',
+              code: 'worker-error',
+              detail: 'The archive decode worker completed with an unreleased entry outstanding',
+            });
+            return;
+          }
+          if (message.type === 'done') {
+            const doneShapeValid = typeof message.status === 'string'
+              && (message.status === 'completed'
+                || message.status === 'cancelled'
+                || message.status === 'deadline'
+                || message.status === 'error')
+              && typeof message.stats === 'object'
+              && message.stats !== null;
+            if (!doneShapeValid) {
+              finalize({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: 'The archive decode worker posted a malformed done message',
+              });
+              return;
+            }
+          }
           // A cancellation answering this client's own deadline timer is a
-          // deadline, not a user cancellation.
-          const translated = message.status === 'cancelled' && deadlineInitiated
+          // deadline, unless the user asked to cancel first.
+          const translated = message.status === 'cancelled'
+            && deadlineInitiated
+            && !cancelRequested
             ? {
               status: 'deadline' as const,
               code: 'deadline',

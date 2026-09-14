@@ -325,14 +325,20 @@ function inflateBounded(
     chunks.push(chunk);
   });
   const compressed = archive.subarray(entry.dataStart, entry.dataEnd);
-  for (let offset = 0; offset < compressed.length; offset += DECODE_CHUNK_BYTES) {
+  // A whole push decodes before the callback can reject, so each input slice
+  // is capped so even maximal expansion cannot exceed the smaller of the
+  // declared entry size or the remaining total allowance.
+  const ceiling = Math.min(declaredBytes, remainingTotalBytes);
+  const worstExpansion = Math.max(1, compressed.length * 1032);
+  const maxStep = Math.max(1, Math.floor(DECODE_CHUNK_BYTES * (ceiling / worstExpansion)));
+  for (let offset = 0; offset < compressed.length; offset += maxStep) {
     assertControl(control, clock, deadlineAt);
     if (overshot) {
       break;
     }
-    const final = offset + DECODE_CHUNK_BYTES >= compressed.length;
+    const final = offset + maxStep >= compressed.length;
     try {
-      inflate.push(compressed.subarray(offset, offset + DECODE_CHUNK_BYTES), final);
+      inflate.push(compressed.subarray(offset, offset + maxStep), final);
     } catch (error) {
       throw new ZipDecodeError(
         'decode',

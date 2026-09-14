@@ -543,6 +543,41 @@ describe('bounded ZIP decode client', () => {
     expect((done as { archive?: ArrayBuffer }).archive?.byteLength).toBe(zip.archive.length);
   });
 
+  it('fails workers that skip entry sequences', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(3);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 5,
+      path: 'grove/skip.png',
+      method: 'store',
+      bytes: new Uint8Array(4).slice().buffer as ArrayBuffer,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('skipped entry sequence 2');
+  });
+
+  it('fails malformed done messages', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(2);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'celebration',
+    } as never);
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('malformed done message');
+  });
+
   it('cancels a job before its worker posts the decode', async () => {
     let created = 0;
     const decoder = createBoundedZipDecoder({
