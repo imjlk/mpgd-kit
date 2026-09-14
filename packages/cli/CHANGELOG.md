@@ -1,5 +1,11 @@
 # @mpgd/cli
 
+## 0.31.0 — 2026-09-14
+
+### Patch changes
+
+- Updated dependencies: phaser-assets@0.5.0
+
 ## 0.30.1 — 2026-09-13
 
 ### Patch changes
