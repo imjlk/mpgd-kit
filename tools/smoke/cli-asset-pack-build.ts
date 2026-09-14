@@ -56,6 +56,10 @@ const groveJson = Buffer.from(
 );
 const dunesPng = incompressible(64, 33);
 const tinyJson = incompressible(24, 44);
+const tinyPng = Buffer.concat([
+  Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+  incompressible(24, 55),
+]);
 
 const basePacks = [
   {
@@ -212,6 +216,7 @@ try {
   writeFileSync(join(sourceRoot, 'grove/grove.json'), groveJson);
   writeFileSync(join(sourceRoot, 'dunes/dunes.png'), dunesPng);
   writeFileSync(join(sourceRoot, 'tiny/tiny.json'), tinyJson);
+  writeFileSync(join(sourceRoot, 'tiny/tiny.png'), tinyPng);
   const mainConfig = join(fixtureRoot, 'packs.config.json');
   writeJson(mainConfig, { root: 'src', packs: basePacks });
 
@@ -302,7 +307,7 @@ try {
     }],
   });
   const zipSharedOut = join(fixtureRoot, 'out-zip-shared');
-  assert.equal(runBuildCli(zipSharedConfig, zipSharedOut).status, 0);
+  assert.equal(runBuildCli(zipSharedConfig, zipSharedOut).status, 0, 'zipShared');
   const zipShared = readZipEntries(readFileSync(join(zipSharedOut, 'packs/shared@1.zip')));
   assert.ok(
     zipShared[0]!.data.equals(firstTree.get(join(firstOut, 'packs/shared@1/shared/pilot.png'))!),
@@ -317,40 +322,52 @@ try {
     packs: [
       {
         id: 'tiny-forced', revision: '1', delivery: 'zip', assets: [{
-          kind: 'image', key: 'blob', file: 'tiny/tiny.json', compression: 'deflate',
+          kind: 'atlas', key: 'blob', texture: 'tiny/tiny.png', atlas: 'tiny/tiny.json', compression: 'deflate',
         }],
       },
       {
         id: 'tiny-auto', revision: '1', delivery: 'zip', assets: [{
-          kind: 'image', key: 'blob', file: 'tiny/tiny.json',
+          kind: 'atlas', key: 'blob', texture: 'tiny/tiny.png', atlas: 'tiny/tiny.json',
         }],
       },
     ],
   });
   const tinyOut = join(fixtureRoot, 'out-tiny');
-  assert.equal(runBuildCli(tinyConfig, tinyOut).status, 0);
+  assert.equal(runBuildCli(tinyConfig, tinyOut).status, 0, 'tiny');
   const tinyManifest = JSON.parse(readFileSync(join(tinyOut, 'asset-pack-delivery.json'), 'utf8'));
+  const tinyForced = tinyManifest.packs.find(
+    (pack: { packId: string }) => pack.packId === 'tiny-forced',
+  )!;
   assert.equal(
-    tinyManifest.packs.find((pack: { packId: string }) => pack.packId === 'tiny-forced')!.assets[0]!.files[0]!.method,
+    tinyForced.assets[0]!.files[0]!.method,
     'deflate',
-    'explicit override forces deflate even when it does not shrink',
+    'override forces deflate on the texture',
   );
   assert.equal(
-    tinyManifest.packs.find((pack: { packId: string }) => pack.packId === 'tiny-auto')!.assets[0]!.files[0]!.method,
+    tinyForced.assets[0]!.files[1]!.method,
+    'deflate',
+    'override forces deflate on incompressible JSON',
+  );
+  const tinyAuto = tinyManifest.packs.find(
+    (pack: { packId: string }) => pack.packId === 'tiny-auto',
+  )!;
+  assert.equal(tinyAuto.assets[0]!.files[0]!.method, 'store', 'texture media defaults to store');
+  assert.equal(
+    tinyAuto.assets[0]!.files[1]!.method,
     'store',
-    'default policy falls back to store for incompressible entries',
+    'default policy falls back to store for incompressible JSON',
   );
 
   // 5. Determinism: fresh builds are byte-identical; mtimes do not matter.
   const secondOut = join(fixtureRoot, 'out-second');
-  assert.equal(runBuildCli(mainConfig, secondOut).status, 0);
+  assert.equal(runBuildCli(mainConfig, secondOut).status, 0, 'second');
   assertSameTree(secondOut, outputTree(secondOut), firstOut, firstTree, 'fresh rebuild');
   const later = new Date(Date.now() + 3_600_000);
   for (const file of ['shared/pilot.png', 'grove/grove.png', 'grove/grove.json']) {
     utimesSync(join(sourceRoot, file), later, later);
   }
   const thirdOut = join(fixtureRoot, 'out-third');
-  assert.equal(runBuildCli(mainConfig, thirdOut).status, 0);
+  assert.equal(runBuildCli(mainConfig, thirdOut).status, 0, 'third');
   assert.ok(
     readFileSync(join(thirdOut, 'packs/grove@3.zip')).equals(archive),
     'mtime changes do not alter the archive',
@@ -599,6 +616,41 @@ try {
     }),
     /case-colliding pack id/u,
   );
+  const swappedAtlasConfig = join(fixtureRoot, 'swapped-atlas.config.json');
+  writeJson(swappedAtlasConfig, {
+    root: 'src',
+    packs: [{
+      id: 'swapped', revision: '1', delivery: 'zip', assets: [{
+        kind: 'atlas', key: 'ground', texture: 'grove/grove.json', atlas: 'grove/grove.png',
+      }],
+    }],
+  });
+  assert.throws(
+    () => buildAssetPacks({
+      configPath: swappedAtlasConfig,
+      outDir: join(fixtureRoot, 'out-swapped'),
+      cwd: repoRoot,
+    }),
+    /Texture sources must be images/u,
+  );
+  mkdirSync(join(sourceRoot, '..dots'), { recursive: true });
+  writeFileSync(join(sourceRoot, '..dots/hero.png'), pilotPng);
+  const dottedConfig = join(fixtureRoot, 'dotted.config.json');
+  writeJson(dottedConfig, {
+    root: 'src',
+    packs: [{
+      id: 'dotted', revision: '1', delivery: 'files', assets: [{
+        kind: 'image', key: 'hero', file: '..dots/hero.png',
+      }],
+    }],
+  });
+  const dottedOut = join(fixtureRoot, 'out-dotted');
+  assert.equal(runBuildCli(dottedConfig, dottedOut).status, 0, 'dotted');
+  assert.ok(
+    existsSync(join(dottedOut, 'packs/dotted@1/..dots/hero.png')),
+    'dot-prefixed names stay addressable',
+  );
+
   const casePathConfig = join(fixtureRoot, 'case-path.config.json');
   writeJson(casePathConfig, {
     root: 'src',

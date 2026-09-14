@@ -151,6 +151,19 @@ export function parsePhaserPackEntryPath(input: string): string {
   if (input.normalize('NFC') !== input) {
     throw new Error(`Invalid pack file path (must use Unicode NFC): ${JSON.stringify(input)}`);
   }
+  // Lone surrogates become U+FFFD when encoded as UTF-8 filesystem or ZIP
+  // names, folding distinct validated strings onto one byte sequence.
+  for (let index = 0; index < input.length; index++) {
+    const unit = input.charCodeAt(index);
+    const high = unit >= 0xd800 && unit <= 0xdbff;
+    const low = unit >= 0xdc00 && unit <= 0xdfff;
+    const paired = high && index + 1 < input.length
+      && input.charCodeAt(index + 1) >= 0xdc00
+      && input.charCodeAt(index + 1) <= 0xdfff;
+    if (low || (high && !paired)) {
+      throw new Error(`Invalid pack file path (lone surrogate): ${JSON.stringify(input)}`);
+    }
+  }
   const components = input.split('/');
   if (
     input.startsWith('/')
@@ -223,18 +236,19 @@ function parseFrameConfig(
   const frameHeight: unknown = source.frameHeight;
   if (typeof frameWidth !== 'number' || !Number.isSafeInteger(frameWidth) || frameWidth <= 0
     || typeof frameHeight !== 'number' || !Number.isSafeInteger(frameHeight) || frameHeight <= 0) {
-    throw new Error(
-      `Invalid asset pack build config: ${label} frame size must be positive integers`,
-    );
+    throw new Error(`${context}: ${label} frame size must be positive integers`);
   }
   const optional = (name: string): number | undefined => {
     const entry: unknown = source[name];
     if (entry === undefined) {
       return undefined;
     }
-    if (typeof entry !== 'number' || !Number.isSafeInteger(entry) || entry < 0) {
+    // Phaser treats endFrame -1 as "through the last frame"; other fields
+    // must stay non-negative.
+    const minimum = name === 'endFrame' ? -1 : 0;
+    if (typeof entry !== 'number' || !Number.isSafeInteger(entry) || entry < minimum) {
       throw new Error(
-        `Invalid asset pack build config: ${label} frameConfig.${name} must be a non-negative integer`,
+        `${context}: ${label} frameConfig.${name} must be an integer of at least ${minimum}`,
       );
     }
     return entry;
@@ -301,7 +315,7 @@ export function validatePhaserPackBuildConfig(input: unknown): PhaserPackBuildCo
     }
     const pack = value as Record<string, unknown>;
     const id = expectString(pack.id, `${label} id`);
-    const revision = expectString(pack.revision, `${label} revision`, deliveryManifestContext);
+    const revision = expectString(pack.revision, `${label} revision`);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(id)) {
       throw new Error(`Invalid asset pack build config: ${label} id must match [A-Za-z0-9][A-Za-z0-9._-]*`);
     }
@@ -495,9 +509,20 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
         if (pack.delivery === 'files' && method !== undefined) {
           throw new Error(`Invalid asset pack delivery manifest: ${fileLabel} method is inapplicable for files delivery`);
         }
+        const mediaType = expectString(file.mediaType, `${fileLabel} mediaType`, deliveryManifestContext);
+        if (role === 'texture' && !mediaType.startsWith('image/')) {
+          throw new Error(
+            `Invalid asset pack delivery manifest: ${fileLabel} texture role requires an image media type`,
+          );
+        }
+        if (role === 'atlas' && mediaType !== 'application/json') {
+          throw new Error(
+            `Invalid asset pack delivery manifest: ${fileLabel} atlas role requires application/json`,
+          );
+        }
         return {
           role,
-          mediaType: expectString(file.mediaType, `${fileLabel} mediaType`, deliveryManifestContext),
+          mediaType,
           bytes: expectPositiveInteger(file.bytes, `${fileLabel} bytes`),
           sha256: expectDigest(file.sha256, `${fileLabel} sha256`),
           path: parsePhaserPackEntryPath(expectString(file.path, `${fileLabel} path`, deliveryManifestContext)),
@@ -529,6 +554,18 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
         entryCount: expectPositiveInteger(archiveSource.entryCount, `${archiveLabel} entryCount`),
       };
     }
+    if (archive !== undefined) {
+      const describedEntries = pack.assets.reduce(
+        (total, asset) => total + asset.files.length,
+        0,
+      );
+      if (archive.entryCount !== describedEntries) {
+        throw new Error(
+          `Invalid asset pack delivery manifest: ${label} archive entryCount `
+            + `${archive.entryCount} does not match ${describedEntries} described files`,
+        );
+      }
+    }
     if (pack.delivery === 'zip' && archive === undefined) {
       throw new Error(`Invalid asset pack delivery manifest: ${label} zip delivery requires an archive`);
     }
@@ -540,6 +577,7 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
   const byId = new Map(packs.map((pack) => [pack.packId, pack]));
   const archivePaths = new Set<string>();
   const foldedArchivePaths = new Set<string>();
+  const filesArtifactPaths = new Set<string>();
   const seenPackIds = new Set<string>();
   const foldedPackIds = new Set<string>();
   const visitingPacks = new Set<string>();
@@ -597,6 +635,19 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
           ),
         );
         paths.add(file.path);
+        if (pack.delivery === 'files') {
+          if (filesArtifactPaths.has(file.path)) {
+            throw new Error(
+              `Invalid asset pack delivery manifest: duplicate artifact path across packs ${file.path}`,
+            );
+          }
+          if (archivePaths.has(file.path)) {
+            throw new Error(
+              `Invalid asset pack delivery manifest: artifact path collides with an archive ${file.path}`,
+            );
+          }
+          filesArtifactPaths.add(file.path);
+        }
       }
     }
     for (const dependency of pack.dependencies) {
@@ -625,6 +676,11 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
           `Invalid asset pack delivery manifest: case-colliding archive path ${duplicate}`,
         ),
       );
+      if (filesArtifactPaths.has(pack.archive.path)) {
+        throw new Error(
+          `Invalid asset pack delivery manifest: archive path collides with a file artifact ${pack.archive.path}`,
+        );
+      }
       archivePaths.add(pack.archive.path);
     }
   }

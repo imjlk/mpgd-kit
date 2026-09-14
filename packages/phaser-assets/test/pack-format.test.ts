@@ -105,6 +105,15 @@ describe('build config validation', () => {
     expect(validated.packs.map((pack) => pack.id)).toEqual(['shared', 'grove']);
     expect(validated.packs[1]!.assets[0]!.kind).toBe('atlas');
   });
+  it('accepts Phaser endFrame -1 sentinel and rejects negative values otherwise', () => {
+    const config = buildConfig() as Record<string, unknown>;
+    const pack = (config.packs as Record<string, unknown>[])[0]!;
+    const frameConfig = (pack.assets as Record<string, unknown>[])[0]!.frameConfig as Record<string, unknown>;
+    frameConfig.endFrame = -1;
+    expect(validatePhaserPackBuildConfig(config).packs[0]!.assets[0]!.kind).toBe('spritesheet');
+    frameConfig.frameWidth = -1;
+    expect(() => validatePhaserPackBuildConfig(config)).toThrow(/frame size/u);
+  });
   it.each([
     ['missing root', (config: Record<string, unknown>) => {
       delete config.root;
@@ -157,6 +166,14 @@ describe('build config validation', () => {
     ['zero frame width', (config: Record<string, unknown>) => {
       const pack = (config.packs as Record<string, unknown>[])[0]!;
       ((pack.assets as Record<string, unknown>[])[0]!.frameConfig as Record<string, unknown>).frameWidth = 0;
+    }],
+    ['negative frame fields other than the endFrame sentinel', (config: Record<string, unknown>) => {
+      const pack = (config.packs as Record<string, unknown>[])[0]!;
+      ((pack.assets as Record<string, unknown>[])[0]!.frameConfig as Record<string, unknown>).startFrame = -1;
+    }],
+    ['lone surrogate in a file path', (config: Record<string, unknown>) => {
+      const pack = (config.packs as Record<string, unknown>[])[0]!;
+      (pack.assets as Record<string, unknown>[])[0]!.file = 'shared/\ud800.png';
     }],
     ['escaping file path', (config: Record<string, unknown>) => {
       const pack = (config.packs as Record<string, unknown>[])[0]!;
@@ -262,6 +279,34 @@ describe('delivery manifest validation', () => {
     ['cyclic dependencies', (value: Record<string, unknown>) => {
       const pack = (value.packs as Record<string, unknown>[])[0]!;
       pack.dependencies = [{ packId: 'grove', revision: '3' }];
+    }],
+    ['archive entry count mismatch', (value: Record<string, unknown>) => {
+      const pack = (value.packs as Record<string, unknown>[])[1]!;
+      (pack.archive as Record<string, unknown>).entryCount = 3;
+    }],
+    ['texture role with a non-image media type', (value: Record<string, unknown>) => {
+      const pack = (value.packs as Record<string, unknown>[])[0]!;
+      ((pack.assets as Record<string, unknown>[])[0]!.files as Record<string, unknown>[])[0]!.mediaType = 'application/json';
+    }],
+    ['atlas role with a non-JSON media type', (value: Record<string, unknown>) => {
+      const pack = (value.packs as Record<string, unknown>[])[1]!;
+      const files = (pack.assets as Record<string, unknown>[])[0]!.files as Record<string, unknown>[];
+      files[1]!.mediaType = 'image/png';
+    }],
+    ['duplicate artifact path across files packs', (value: Record<string, unknown>) => {
+      const other = (value.packs as Record<string, unknown>[])[0]!;
+      const claimed = ((other.assets as Record<string, unknown>[])[0]!.files as Record<string, unknown>[])[0]!.path;
+      value.packs = [
+        ...(value.packs as object[]),
+        {
+          packId: 'dunes', revision: '1', dependencies: [], delivery: 'files',
+          assets: [{
+            assetKey: 'ground', kind: 'image', files: [{
+              role: 'texture', mediaType: 'image/png', bytes: 3, sha256: digest('f'), path: claimed,
+            }],
+          }],
+        },
+      ];
     }],
     ['case-colliding archive paths', (value: Record<string, unknown>) => {
       const pack = (value.packs as Record<string, unknown>[])[0]!;

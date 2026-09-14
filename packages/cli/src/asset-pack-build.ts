@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import {
   existsSync,
+  linkSync,
   lstatSync,
   mkdirSync,
   readFileSync,
@@ -146,7 +147,8 @@ function readSourceFile(rootPath: string, entryPath: string): Buffer {
     throw new Error(`Pack source path is not a regular file: ${entryPath}`);
   }
   const relativeToRoot = relative(realpathSync(rootPath), realpathSync(current));
-  if (relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
+  // Exact '..' components only: names like '..dots' stay inside the root.
+  if (relativeToRoot === '..' || relativeToRoot.startsWith('../') || isAbsolute(relativeToRoot)) {
     throw new Error(`Pack source path escapes the source root: ${entryPath}`);
   }
   const data = readFileSync(current);
@@ -171,6 +173,12 @@ function planAssetFiles(
     const media = phaserPackMediaTypeForPath(entryPath);
     if (media === null) {
       throw new Error(`Unsupported pack source extension: ${asset.key}/${entryPath}`);
+    }
+    if (role === 'texture' && !media.mediaType.startsWith('image/')) {
+      throw new Error(`Texture sources must be images: ${asset.key}/${entryPath}`);
+    }
+    if (role === 'atlas' && media.mediaType !== 'application/json') {
+      throw new Error(`Atlas metadata sources must be JSON: ${asset.key}/${entryPath}`);
     }
     const data = readSourceFile(rootPath, entryPath);
     let method: PhaserPackEntryMethod = asset.compression ?? media.defaultMethod;
@@ -238,16 +246,15 @@ export function buildAssetPacks(options: {
   // output ancestor could point back into the source root.
   const realOutPath = realpathBestEffort(outPath);
   const realRootPath = realpathSync(rootPath);
-  const rootRelativeToOut = relative(realOutPath, realRootPath);
-  const outRelativeToRoot = relative(realRootPath, realOutPath);
-  if (
-    rootRelativeToOut === ''
-    || outRelativeToRoot === ''
-    || isAbsolute(rootRelativeToOut)
-    || isAbsolute(outRelativeToRoot)
-    || !rootRelativeToOut.startsWith('..')
-    || !outRelativeToRoot.startsWith('..')
-  ) {
+  const overlaps = (from: string, to: string): boolean => {
+    const step = relative(from, to);
+    // Cross-volume paths are drive-qualified and can never be nested.
+    if (isAbsolute(step)) {
+      return false;
+    }
+    return step === '' || (step !== '..' && !step.startsWith('../'));
+  };
+  if (overlaps(realOutPath, realRootPath) || overlaps(realRootPath, realOutPath)) {
     throw new Error(
       `Output directory must be outside the pack source root: ${outPath} vs ${rootPath}`,
     );
@@ -416,7 +423,34 @@ export function buildAssetPacks(options: {
     const staging = join(outPath, stagingPath);
     try {
       writeFileSync(staging, record.data);
-      renameSync(staging, target);
+      if (record.path === manifestFileName) {
+        // The manifest is the replaceable summary of the latest build.
+        renameSync(staging, target);
+      } else {
+        // Pack artifacts are immutable: link fails atomically when another
+        // build already published this path, instead of replacing it.
+        try {
+          linkSync(staging, target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+            throw error;
+          }
+          let published: Buffer;
+          try {
+            published = readFileSync(target);
+          } catch {
+            throw new Error(`Output path is not a readable file: ${record.path}`);
+          }
+          if (!published.equals(record.data)) {
+            throw new Error(
+              `Output path already holds different bytes (immutable conflict): ${record.path}. `
+                + 'Change the pack content or revision, or build into a new directory.',
+            );
+          }
+        }
+        // The published artifact keeps the staging inode; drop the staging name.
+        rmSync(staging, { force: true });
+      }
     } catch (error) {
       // Best-effort cleanup: a locked or unreadable staging file must not
       // mask the original write or rename failure.
