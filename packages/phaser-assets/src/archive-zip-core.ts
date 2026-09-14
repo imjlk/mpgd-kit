@@ -300,7 +300,7 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
 }
 
 /** Inflate one entry while counting actually produced output bytes. */
-function inflateBounded(
+async function inflateBounded(
   archive: Uint8Array,
   entry: PlannedEntry,
   declaredBytes: number,
@@ -308,7 +308,7 @@ function inflateBounded(
   deadlineAt: number,
   control: Required<Pick<ZipDecodeControl, 'shouldStop'>>,
   remainingTotalBytes: number,
-): Uint8Array {
+): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
   let produced = 0;
   let overshot: 'declared' | 'total' | undefined;
@@ -329,22 +329,41 @@ function inflateBounded(
   // is capped so even maximal expansion cannot exceed the smaller of the
   // declared entry size or the remaining total allowance.
   const ceiling = Math.min(declaredBytes, remainingTotalBytes);
-  const worstExpansion = Math.max(1, compressed.length * 1032);
-  const maxStep = Math.max(1, Math.floor(DECODE_CHUNK_BYTES * (ceiling / worstExpansion)));
-  for (let offset = 0; offset < compressed.length; offset += maxStep) {
+  let allowance = ceiling;
+  let pushes = 0;
+  let offset = 0;
+  while (offset < compressed.length) {
+    // Each push decodes before the counting callback can reject it, so the
+    // input slice is sized against the remaining output allowance at the
+    // worst-case 1032x expansion assumption.
+    const step = Math.min(
+      Math.max(1, Math.floor(allowance / 1032)),
+      DECODE_CHUNK_BYTES,
+      compressed.length - offset,
+    );
+    if (pushes++ % 8 === 0) {
+      // Let the worker's message loop run so cancellation is observable
+      // during long inflates.
+      await new Promise((resolve) => {
+        setTimeout(resolve, 0);
+      });
+    }
     assertControl(control, clock, deadlineAt);
     if (overshot) {
       break;
     }
-    const final = offset + maxStep >= compressed.length;
+    const final = offset + step >= compressed.length;
+    const before = produced;
     try {
-      inflate.push(compressed.subarray(offset, offset + maxStep), final);
+      inflate.push(compressed.subarray(offset, offset + step), final);
     } catch (error) {
       throw new ZipDecodeError(
         'decode',
         `ZIP entry ${entry.path} failed to inflate: ${String(error)}`,
       );
     }
+    allowance -= produced - before;
+    offset += step;
     if (overshot) {
       break;
     }

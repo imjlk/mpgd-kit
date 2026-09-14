@@ -111,9 +111,23 @@ const exactArchiveBuffer = (
   if (archive.byteLength > limits.archiveBytes) {
     throw new ZipDecodeError('limit', 'ZIP archive exceeds the archive byte limit');
   }
-  const exact = archive.byteOffset === 0 && archive.byteLength === archive.buffer.byteLength;
+  const shared = typeof SharedArrayBuffer !== 'undefined'
+    && archive.buffer instanceof SharedArrayBuffer;
+  const exact = !shared && archive.byteOffset === 0
+    && archive.byteLength === archive.buffer.byteLength;
   if (exact) {
     return archive.buffer as ArrayBuffer;
+  }
+  if (shared) {
+    if (transfer) {
+      throw new ZipDecodeError(
+        'unsupported',
+        'transferArchive requires a non-shared buffer; copy the view first',
+      );
+    }
+    // Shared buffers cannot be digested or transferred as ordinary archives;
+    // the documented clone behavior requires a private copy anyway.
+    return archive.slice().buffer as ArrayBuffer;
   }
   if (transfer) {
     throw new ZipDecodeError(
@@ -144,9 +158,18 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
     }
     active++;
   };
+  let releasing = false;
   const releaseSlot = (): void => {
-    active--;
-    pending.shift()?.();
+    if (releasing) {
+      return;
+    }
+    releasing = true;
+    try {
+      active--;
+      pending.shift()?.();
+    } finally {
+      releasing = false;
+    }
   };
   return {
     decode(request) {

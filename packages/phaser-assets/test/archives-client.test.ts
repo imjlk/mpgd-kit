@@ -418,16 +418,21 @@ describe('bounded ZIP decode client', () => {
         decodeDeadlineMs: 5000,
       },
     });
-    await tick(3);
+    const settle = async (): Promise<void> => {
+      for (let round = 0; round < 12; round++) {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+      }
+    };
+    await settle();
     expect(posted.filter((message) => message.type === 'entry')).toHaveLength(1);
     dispatch({ type: 'release', jobId: 1, seq: 41 });
-    await tick(3);
+    await settle();
     expect(posted.filter((message) => message.type === 'entry')).toHaveLength(1);
     dispatch({ type: 'release', jobId: 1, seq: 1 });
-    await tick(3);
+    await settle();
     expect(posted.filter((message) => message.type === 'entry')).toHaveLength(2);
     dispatch({ type: 'release', jobId: 1, seq: 2 });
-    await tick(3);
+    await settle();
     expect(posted.filter((message) => message.type === 'done')).toHaveLength(1);
     expect(posted.find((message) => message.type === 'done')).toMatchObject({ status: 'completed' });
   });
