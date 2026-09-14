@@ -530,7 +530,7 @@ it('rejects misspelled and inapplicable integrity fields before starting work', 
   for (const field of ['textrue', 'atlas']) {
     expect(() => definePhaserAssetPacks([{ id: 'bad', revision: '1', assets: [{
       kind: 'image', key: 'image', url: '/image', integrity: { [field]: { bytes: 3, sha256: '0'.repeat(64) } },
-    }] }] as readonly PhaserAssetPack[])).toThrow('Unknown integrity entry');
+    }] }] as readonly PhaserAssetPack[])).toThrow('Unknown or inapplicable integrity entry');
   }
 });
 

@@ -8,6 +8,14 @@ class FileFailure extends Error {
     super(message);
   }
 }
+const MAX_DELAY_MS = 2_147_483_647;
+function parseRetryAfterMs(hint: string | null | undefined): number {
+  if (!hint) {
+    return 0;
+  }
+  const delay = /^\d+$/.test(hint) ? Number(hint) * 1000 : Date.parse(hint) - Date.now();
+  return Number.isFinite(delay) ? Math.max(0, Math.min(delay, MAX_DELAY_MS)) : 0;
+}
 /** Internal bounded transport. Never include URLs (possibly signed) in errors. */
 export async function fetchPackFile(url: string, options: {
   signal: AbortSignal;
@@ -45,16 +53,10 @@ export async function fetchPackFile(url: string, options: {
       });
       if (!response.ok) {
         await response.body?.cancel().catch(() => { });
-        const hint = response.headers?.get('retry-after');
-        const retryAfter = hint
-          ? /^\d+$/.test(hint)
-            ? Number(hint) * 1000
-            : Date.parse(hint) - Date.now()
-          : 0;
         throw new FileFailure(
           `Asset HTTP ${response.status}`,
           response.status === 429 || response.status >= 500,
-          Number.isFinite(retryAfter) ? Math.max(0, Math.min(retryAfter, 2147483647)) : 0,
+          parseRetryAfterMs(response.headers?.get('retry-after')),
         );
       }
       const reader = response.body?.getReader();

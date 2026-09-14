@@ -138,9 +138,10 @@ export function definePhaserAssetPacks<const T extends readonly PhaserAssetPack[
       ))) {
         throw new Error(`Invalid integrity: ${asset.key}`);
       }
+      const atlasEntryInapplicable = asset.kind !== 'atlas' && asset.integrity?.atlas !== undefined;
       for (const name of Object.keys(asset.integrity ?? {})) {
-        if (name !== 'texture' && (name !== 'atlas' || asset.kind !== 'atlas' && asset.integrity?.atlas !== undefined)) {
-          throw new Error(`Unknown integrity entry '${name}': ${asset.key}`);
+        if (name !== 'texture' && (name !== 'atlas' || atlasEntryInapplicable)) {
+          throw new Error(`Unknown or inapplicable integrity entry '${name}': ${asset.key}`);
         }
       }
       for (const value of Object.values(asset.integrity ?? {})) {
