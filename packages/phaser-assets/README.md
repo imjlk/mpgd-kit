@@ -134,7 +134,9 @@ transfer the body. Once the loader's byte-budget admission approves the asset,
 it calls `read()` exactly once, which resolves with `{ bytes, release() }`. The
 loader verifies the returned body, decodes and registers the texture, then
 returns the bytes via `release()`; `close()` returns source-side ownership once
-`read()` has settled. Requests carry `packId`, `revision`, `assetKey`, `role`
+`read()` has settled. Cancellation of an in-flight read flows through
+`context.signal`; the default URL source additionally aborts its own transfer
+when closed. Requests carry `packId`, `revision`, `assetKey`, `role`
 (`'texture'` or `'atlas'`), the original manifest `url` and the optional
 `integrity` the loader will enforce. An atlas's image and JSON are two files of
 one asset, distinguished by role. Sources that share work across files (an

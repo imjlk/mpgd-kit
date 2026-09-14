@@ -341,11 +341,18 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
     // Final integrity verification is the loader's job for every file source;
     // reject files it could not verify before any source work starts.
     for (const file of files) {
-      if (file.integrity && file.integrity.bytes > maxFileBytes) {
-        throw new Error('Declared file exceeds byte limit');
+      if (!file.integrity) {
+        continue;
       }
-      if (file.integrity && !globalThis.crypto?.subtle) {
-        throw new Error('Asset integrity requires HTTPS or localhost');
+      if (file.integrity.bytes > maxFileBytes) {
+        throw new Error(
+          `Asset ${pack.id}/${asset.key} ${file.role} declared file exceeds byte limit`,
+        );
+      }
+      if (!globalThis.crypto?.subtle) {
+        throw new Error(
+          `Asset ${pack.id}/${asset.key} ${file.role} integrity requires HTTPS or localhost`,
+        );
       }
     }
     const returnBytes = await buffered.acquire(reservation, signal);
@@ -354,7 +361,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
     const bodies: PhaserPackFileBody[] = [];
     let returnDecode: (() => void) | undefined;
     try {
-      const readFile = async (file: (typeof files)[number]): Promise<PhaserPackFileBody> => {
+      const readFile = async (file: PlannedFile): Promise<PhaserPackFileBody> => {
         const opened = await fileSource.open(
           {
             packId: pack.id,
@@ -372,7 +379,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         signal.throwIfAborted();
         if (file.integrity) {
           if (body.bytes.size !== file.integrity.bytes) {
-            throw new Error('Asset size mismatch');
+            throw new Error(`Asset ${pack.id}/${asset.key} ${file.role} size mismatch`);
           }
           const digest = new Uint8Array(
             await crypto.subtle.digest('SHA-256', await body.bytes.arrayBuffer()),
@@ -380,10 +387,10 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
           if ([...digest].map((n) => n.toString(16).padStart(2, '0')).join(
             '',
           ) !== file.integrity.sha256.toLowerCase()) {
-            throw new Error('Asset digest mismatch');
+            throw new Error(`Asset ${pack.id}/${asset.key} ${file.role} digest mismatch`);
           }
         } else if (body.bytes.size > maxFileBytes) {
-          throw new Error('Asset exceeds byte limit');
+          throw new Error(`Asset ${pack.id}/${asset.key} ${file.role} file exceeds byte limit`);
         }
         return body;
       };

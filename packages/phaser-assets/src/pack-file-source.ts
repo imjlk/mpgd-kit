@@ -45,7 +45,8 @@ export interface PhaserPackFileBody {
 export interface PhaserPackOpenedFile {
   /** Transfer the body. Runs only after the loader approved the byte budget. */
   read(): Promise<PhaserPackFileBody>;
-  /** Return source ownership once read settled or was abandoned. */
+  /** Return source ownership once read settled or was abandoned. Cancellation
+   * of an in-flight read flows through the context signal, not through close. */
   close(): void;
 }
 /**
@@ -73,16 +74,24 @@ export function createPackUrlFileSource(transport: {
   return {
     async open(request, context) {
       // Ownership is just the resolved request; the body transfer waits for read().
+      // Closing revokes that ownership even if a caller left a read in flight.
+      const closeController = new AbortController();
+      const signal = AbortSignal.any([context.signal, closeController.signal]);
+      let readStarted = false;
       return {
         async read() {
-          const releaseTransfer = await context.budgets.transfers.acquire(context.signal);
+          if (readStarted) {
+            throw new Error('Pack file body was already read');
+          }
+          readStarted = true;
+          const releaseTransfer = await context.budgets.transfers.acquire(signal);
           try {
             const blob = await fetchPackFile(
               resolveURL(request.url, {
                 packId: request.packId, revision: request.revision,
               }),
               {
-                signal: context.signal,
+                signal,
                 retries,
                 requestTimeoutMs,
                 maxFileBytes,
@@ -100,6 +109,7 @@ export function createPackUrlFileSource(transport: {
           }
         },
         close() {
+          closeController.abort();
         },
       };
     },

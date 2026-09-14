@@ -363,7 +363,7 @@ describe('injected file sources', () => {
         texture: { bytes: 9, sha256: sha256(png) },
       },
     }]), { fileSource: source, maxFileBytes: 8 });
-    await expect(oversizedLoader.acquire('shared')).rejects.toThrow('Declared file exceeds byte limit');
+    await expect(oversizedLoader.acquire('shared')).rejects.toThrow('declared file exceeds byte limit');
     expect(source.opens).toHaveLength(0);
     oversizedLoader.dispose();
   });
