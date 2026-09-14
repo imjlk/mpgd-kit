@@ -213,7 +213,7 @@ function state() {
     textureCount: model.phase === 'booting' ? 0 : board.textureCount() };
 }
 declare global {
-  interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; shutdownSample: () => void; }
+  interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; shutdownSample: () => number; }
 }
 window.render_game_to_text = () => JSON.stringify(state());
 window.advanceTime = (milliseconds) => {
@@ -225,4 +225,4 @@ window.advanceTime = (milliseconds) => {
   }
 };
 
-window.shutdownSample = () => game.scene.stop('board');
+window.shutdownSample = () => { game.scene.stop('board'); return board.textureCount(); };

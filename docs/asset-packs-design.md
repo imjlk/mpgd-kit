@@ -48,26 +48,11 @@ bytes, width × height × 4 estimates, transfer compression and measured memory 
 different quantities. Reports include the first two only, excluding Phaser/app code
 and transient buffers. Tests cover real frames, shared reuse, failure rollback,
 bounded retries, cancellation, integrity, cold offline failure and last-owner release.
-Unit tests cover deadlines, scene shutdown and progress callbacks that throw.
+Unit tests cover cleanup exceptions, body/preparation deadlines, queue admission,
+shutdown during download/decode and progress callbacks that throw. Browser checks
+include physical texture cleanup at shutdown and pending-entry cancellation.
 
-## Remaining work
-
-| Concern | Current behavior | Follow-up evidence needed |
-| --- | --- | --- |
-| Persistent storage | Resident leases; optional browser HTTP caching, no-store by default | Disk cache, quotas, eviction and offline cache hits |
-| Asset readiness | Image decode + texture/frame registration; Canvas/WebGL fixture | Audio unlock, context-loss recovery, measured shader/upload budgets |
-| Target configuration | Example build-time routing | Published per-target schema and installed/embedded target artifact tests |
-| Scheduling | Demand loading with bounded retry/deadline | Decode concurrency, prefetch priorities and gameplay contention measurements |
-| Rollout | Catalog snapshot and optional SHA-256 | Catalog authenticity, retention and rollback policy on a real host |
-| Publication | Ordinary HTTP fixture | Only the required upload/provider operations; protected delivery if justified |
-| Size/performance benefit | Actual fixture artifact exclusion | A real consumer's package bytes, entry latency and memory pressure |
-
-Public immutable assets do not require a service per game or pack. CORS, MIME,
-cache headers and immutable revision retention belong to deployment. Keep supported
-builds' revisions available. Promote additional API/storage features only with a
-concrete consumer and acceptance cases; issue #173 is not completed by this slice.
-
-### Follow-up lifetime and admission bounds
+## Lifetime and admission bounds
 
 The public helper isolates cleanup exceptions and exposes `takeCleanupErrors()`;
 owner returns and physical engine cleanup success are separate. The sample's
@@ -83,3 +68,20 @@ even if its caller has already cancelled. Defaults are configurable starting
 limits; there is no claim of measured production memory or frame-time bounds.
 The sample uses 2 downloads, 1 decode and 8 MiB of encoded reservations. See the
 package README for fallback reservations when integrity sizes are absent.
+
+## Remaining work
+
+| Concern | Current behavior | Follow-up evidence needed |
+| --- | --- | --- |
+| Persistent storage | Resident leases; optional browser HTTP caching, no-store by default | Disk cache, quotas, eviction and offline cache hits |
+| Asset readiness | Image decode + texture/frame registration; Canvas/WebGL fixture | Audio unlock, context-loss recovery, measured shader/upload budgets |
+| Target configuration | Example build-time routing | Published per-target schema and installed/embedded target artifact tests |
+| Scheduling | Separate download/decode permits, encoded reservations, body and preparation deadlines | Prefetch priorities and device-specific contention/latency measurements |
+| Rollout | Catalog snapshot and optional SHA-256 | Catalog authenticity, retention and rollback policy on a real host |
+| Publication | Ordinary HTTP fixture | Only the required upload/provider operations; protected delivery if justified |
+| Size/performance benefit | Actual fixture artifact exclusion | A real consumer's package bytes, entry latency and memory pressure |
+
+Public immutable assets do not require a service per game or pack. CORS, MIME,
+cache headers and immutable revision retention belong to deployment. Keep supported
+builds' revisions available. Promote additional API/storage features only with a
+concrete consumer and acceptance cases; issue #173 is not completed by this slice.

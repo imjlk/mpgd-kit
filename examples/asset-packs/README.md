@@ -62,7 +62,7 @@ Persistent/offline caching, audio, prefetch scheduling, target-config integratio
 and publication adapters remain follow-ups in issue #173. This PR has a changeset
 for the existing public package; the example itself remains private.
 
-### Follow-up lifetime and admission bounds
+## Lifetime and admission bounds
 
 The public helper isolates cleanup exceptions and exposes `takeCleanupErrors()`;
 owner returns and physical engine cleanup success are separate. The sample's

@@ -1,6 +1,6 @@
 Original prompt: 이슈 한번 pr 진행해보자 — issue #173, following the proposal to start with a design and a small local/static-HTTP sample.
 
-This private fixture explores pack ownership and preparation. It does not add a
+Initial #185 scope (historical): this private fixture explored pack ownership and preparation. It did not add a
 public API or npm package. Existing release PR #184 stays open and unmerged.
 
 Plan: shared image + two theme packs, bundled/hybrid builds, verified bytes,

@@ -37,7 +37,14 @@ try {
       errors.push(message.text());
     });
     const state = () => page.evaluate(() => JSON.parse(window.render_game_to_text()));
-    const wait = async (phase) => page.waitForFunction((expected) => typeof window.render_game_to_text === 'function' && JSON.parse(window.render_game_to_text()).phase === expected, phase);
+    const wait = async (phase) => {
+      try {
+        await page.waitForFunction((expected) => typeof window.render_game_to_text === 'function' && JSON.parse(window.render_game_to_text()).phase === expected, phase);
+      } catch (error) {
+        console.error('Asset scenario failed', { mode: report.mode, renderer, expected: phase, actual: await state(), errors });
+        throw error;
+      }
+    };
     const imagePath = (id) => '/' + report.packs.find((pack) => pack.id === id).files.find((file) => file.mediaType === 'image/png').path;
     const target = (id) => report.packs.find((pack) => pack.id === id).packaged ? app : remote;
     const count = (id) => target(id).requests.filter((path) => path === imagePath(id)).length;
@@ -184,12 +191,28 @@ try {
       assert.equal((await state()).textureCount, 2);
       await empty();
     }
-    assert.deepEqual(errors, []);
-    await page.evaluate(() => window.shutdownSample());
+    await page.click('#grove');
+    await wait('playing');
+    assert.equal((await state()).textureCount, 2);
+    assert.equal(await page.evaluate(() => window.shutdownSample()), 0, 'Shutdown removes resident physical textures');
     assert.equal((await state()).phase, 'booting');
     assert.deepEqual((await state()).resources, []);
     await page.waitForTimeout(50);
     assert.equal((await state()).current, null);
+    assert.deepEqual(errors, []);
+    if (report.mode === 'hybrid') {
+      await page.goto(app.url + '?renderer=' + renderer);
+      await wait('idle');
+      remote.delays.set(imagePath('grove'), 250);
+      await page.click('#grove');
+      await page.waitForTimeout(50);
+      assert.equal(await page.evaluate(() => window.shutdownSample()), 0);
+      await page.waitForTimeout(350);
+      assert.equal((await state()).phase, 'booting');
+      assert.equal((await state()).current, null);
+      assert.deepEqual(errors, []);
+      remote.delays.clear();
+    }
     await context.close();
   }
   // Real Phaser must reject a prepared but incorrectly named theme image without
