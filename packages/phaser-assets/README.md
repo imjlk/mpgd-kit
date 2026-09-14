@@ -118,6 +118,77 @@ upload service in this API. `snapshot()` reports owned textures and width × hei
 × 4 estimates, excluding engine overhead, GPU format, mipmaps and transient
 buffers. Games own catalog rollout, bundle membership and memory budgets.
 
+## File sources
+
+File delivery is a separate boundary from texture preparation. By default the
+loader uses an internal URL source that keeps the behavior described above:
+`resolveURL`, `requestCache`, per-attempt deadlines, bounded retries, streaming
+size caps, credential-free requests and shared download permits. Pass a custom
+`PhaserPackFileSource` through `fileSource` to deliver file bytes from another
+store without touching decoding, texture registration, leases or rollback.
+Sources never initialize `scene.load` and never create textures.
+
+The contract is a small lifecycle per file. The loader first calls
+`open(request, context)` to acquire source-side ownership — every file of the
+asset is opened before byte-budget admission, so shared source work survives
+admission batching; `open` must not transfer the body. Once admission approves
+the asset, the loader calls `read()` exactly once, which resolves with
+`{ bytes, release() }`. The
+loader verifies the returned body, decodes and registers the texture, then
+returns the bytes via `release()`; `close()` returns source-side ownership once
+`read()` has settled. Cancellation of an in-flight read flows through
+`context.signal`, not through `close()`. Requests carry `packId`, `revision`,
+`assetKey`, `role`
+(`'texture'` or `'atlas'`), the original manifest `url` and the optional
+`integrity` the loader will enforce. An atlas's image and JSON are two files of
+one asset, distinguished by role. Sources that share work across files (an
+archive, for example) must key that work on the logical request identity —
+`{ packId, revision, assetKey, role }` — never on temporary blob or expirable
+URLs; the `open`-before-`read` split exists so such sources are not forced to
+download or extract one archive per file.
+
+`context.signal` carries caller cancellation and the asset's preparation
+deadline; reads must observe it. `context.budgets` shares the loader's
+preparation budgets: `transfers.acquire(signal)` reserves one transfer permit
+(the default source holds one per HTTP file transfer), and
+`bytes.acquire(weight, signal)` reserves encoded bytes from the same budget the
+loader reserves declared asset sizes from. The loader already reserves each
+file's declared size (or `maxFileBytes`); sources reserve only additional
+transient bytes they buffer themselves.
+
+Which layer owns which concern:
+
+| Concern | Owner |
+| --- | --- |
+| File identification, location resolution, byte acquisition | File source |
+| Transport retries, per-attempt deadlines, HTTP cache policy, credential-free requests | Default URL source; custom sources own their transport |
+| Byte-budget admission for each asset, before any read | Loader |
+| Transfer permits and the encoded-byte budget | Shared: loader for declared files, source for extra transient bytes |
+| Final integrity verification (declared size equality and SHA-256) and the `maxFileBytes` cap | Loader, for every source |
+| Streaming size caps during transfers | Default URL source |
+| Image decoding, atlas parsing, texture/frame registration, leases, cancellation, rollback | Loader |
+
+Replacing the source never disables verification or limits. Injected bytes are
+still checked against declared sizes and digests, capped at `maxFileBytes`,
+admitted against `maxBufferedBytes`, and decoded under `maxDecodedPixels` and
+`timeoutMs`. Transport-only options (`resolveURL`, `retries`,
+`requestTimeoutMs`, `requestCache`) apply to the default URL source and are
+ignored when `fileSource` is provided.
+
+File bytes and textures have different lifetimes. Bytes return with
+`release()` once decoding/parsing finishes; textures stay resident until their
+last lease owner releases. Returning bytes never removes a registered texture,
+and decode slots and byte reservations stay held until native decoding actually
+settles. Bytes arriving after shutdown or cancellation are returned but never
+registered as textures. `release()` and `close()` failures are isolated like
+other cleanup: they never abort the remaining cleanup, decode slots or
+reservations, and surface through `takeCleanupErrors()`.
+
+Integrity describes the file body the platform hands the application — after
+HTTP content decoding. `Content-Encoding` is never re-decoded in game code, and
+`Content-Length` is never used as size or verification evidence; actual network
+transfer can be smaller or larger than the buffered body.
+
 See `examples/asset-packs` in the repository for two build layouts and executable
 fault/lifetime tests. Adding this API does not make generated games depend on the
 sample or require remote hosting.

@@ -2,12 +2,25 @@ import type Phaser from 'phaser';
 
 import type { PhaserAtlasAsset, PhaserImageAsset, PhaserSpritesheetAsset } from './index.js';
 import { createPackBudget } from './pack-budget.js';
-import { fetchPackFile } from './pack-fetch.js';
-/** Optional verification of encoded file bytes, before browser decoding. */
-export interface PhaserPackFileIntegrity {
-  readonly bytes: number;
-  readonly sha256: string;
-}
+import {
+  createPackUrlFileSource,
+  type PhaserPackFileBody,
+  type PhaserPackFileContext,
+  type PhaserPackFileIntegrity,
+  type PhaserPackFileSource,
+  type PhaserPackOpenedFile,
+} from './pack-file-source.js';
+
+export type {
+  PhaserPackFileBody,
+  PhaserPackFileBudgets,
+  PhaserPackFileContext,
+  PhaserPackFileIntegrity,
+  PhaserPackFileRequest,
+  PhaserPackFileRole,
+  PhaserPackFileSource,
+  PhaserPackOpenedFile,
+} from './pack-file-source.js';
 /** Existing texture manifests can be used directly; integrity metadata is optional. */
 export type PhaserPackAsset = (PhaserImageAsset | PhaserSpritesheetAsset | PhaserAtlasAsset) & {
   readonly integrity?: {
@@ -22,30 +35,33 @@ export interface PhaserAssetPack {
   readonly assets: readonly PhaserPackAsset[];
 }
 export interface PhaserAssetPackOptions {
-  /** Receives the original manifest URL. Return an absolute or page-relative URL. */
+  /** Default URL source only: receives the original manifest URL. Return an absolute or page-relative URL. */
   readonly resolveURL?: (url: string, context: {
     readonly packId: string;
     readonly revision: string;
   }) => string;
   /** Deadline for each asset, including its files and image decoding. Default: 15 seconds. */
   readonly timeoutMs?: number;
-  /** Per HTTP attempt, including reading its body. Default: 10 seconds. */
+  /** Default URL source only: per HTTP attempt, including reading its body. Default: 10 seconds. */
   readonly requestTimeoutMs?: number;
-  /** Concurrent HTTP attempts. Default: 4. */
+  /** Concurrent file transfers, shared with the file source through its context. Default: 4. */
   readonly maxConcurrentDownloads?: number;
   /** Concurrent native decodes; an aborted decode retains its slot until it settles. Default: 1. */
   readonly maxConcurrentDecodes?: number;
   /** Reserved encoded bytes across downloading, queued and decoding assets. Default: 64 MiB.
    * Missing integrity reserves maxFileBytes per file. Oversized reservations reject before fetching. */
   readonly maxBufferedBytes?: number;
-  /** Retries per file for network errors, 429 and 5xx. Default: 1; maximum: 3. */
+  /** Default URL source only: retries per file for network errors, 429 and 5xx. Default: 1; maximum: 3. */
   readonly retries?: number;
-  /** Browser HTTP cache policy. Default no-store; use default for immutable URLs. */
+  /** Default URL source only: browser HTTP cache policy. Default no-store; use default for immutable URLs. */
   readonly requestCache?: 'default' | 'no-store' | 'reload';
-  /** Encoded bytes per file, enforced while streaming. Default: 32 MiB. */
+  /** Encoded bytes per file, enforced while streaming and after every source read. Default: 32 MiB. */
   readonly maxFileBytes?: number;
   /** Reject larger decoded images before registering a texture. Default: 16 million pixels. */
   readonly maxDecodedPixels?: number;
+  /** Supplies file bytes instead of the default manifest-URL HTTP transport.
+   * Integrity verification, byte reservations and decoding stay with the loader. */
+  readonly fileSource?: PhaserPackFileSource;
 }
 export interface PhaserAssetPackLease {
   /** Resolve a logical manifest key to the owned Phaser texture key. Throws after release. */
@@ -80,6 +96,11 @@ interface Planned {
   pack: PhaserAssetPack;
   asset: PhaserPackAsset;
   identity: string;
+}
+interface PlannedFile {
+  role: 'texture' | 'atlas';
+  url: string;
+  integrity?: PhaserPackFileIntegrity | undefined;
 }
 interface Resource {
   key: string;
@@ -193,6 +214,10 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
   const packs = new Map(
     definePhaserAssetPacks(structuredClone(catalog)).map((pack) => [pack.id, pack]),
   );
+  const customFileSource = options.fileSource;
+  if (customFileSource !== undefined && (!customFileSource || typeof customFileSource.open !== 'function')) {
+    throw new Error('Invalid asset pack file source');
+  }
   const timeoutMs = options.timeoutMs ?? 15000;
   const retries = options.retries ?? 1;
   const requestTimeoutMs = options.requestTimeoutMs ?? 10000;
@@ -200,21 +225,44 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
   const maxConcurrentDecodes = options.maxConcurrentDecodes ?? 1;
   const maxBufferedBytes = options.maxBufferedBytes ?? 64 * 1024 * 1024;
   const requestCache = options.requestCache ?? 'no-store';
-  if (!['default', 'no-store', 'reload'].includes(requestCache)) {
-    throw new Error('Invalid asset pack HTTP cache policy');
-  }
   const maxFileBytes = options.maxFileBytes ?? 32 * 1024 * 1024;
   const maxDecodedPixels = options.maxDecodedPixels ?? 16000000;
-  if (![timeoutMs, requestTimeoutMs, maxConcurrentDownloads, maxConcurrentDecodes, maxBufferedBytes, maxFileBytes, maxDecodedPixels].every(
+  if (![timeoutMs, maxConcurrentDownloads, maxConcurrentDecodes, maxBufferedBytes, maxFileBytes, maxDecodedPixels].every(
     (n) => Number.isSafeInteger(n) && n > 0,
-  ) || !Number.isInteger(retries) || retries < 0 || retries > 3) {
+  )) {
     throw new Error('Invalid asset pack limits');
+  }
+  // Transport-only limits govern the default URL source; an injected source
+  // owns its transport, so it must not be rejected for unused HTTP settings.
+  if (customFileSource === undefined) {
+    if (!['default', 'no-store', 'reload'].includes(requestCache)) {
+      throw new Error('Invalid asset pack HTTP cache policy');
+    }
+    if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs <= 0
+      || !Number.isInteger(retries) || retries < 0 || retries > 3) {
+      throw new Error('Invalid asset pack limits');
+    }
   }
   const resolveURL = options.resolveURL ?? ((url: string) => url);
   const entries = new Map<string, Entry>();
   const downloads = createPackBudget(maxConcurrentDownloads);
   const decodes = createPackBudget(maxConcurrentDecodes);
   const buffered = createPackBudget(maxBufferedBytes);
+  const fileSource = customFileSource ?? createPackUrlFileSource({
+    resolveURL,
+    retries,
+    requestTimeoutMs,
+    requestCache,
+    maxFileBytes,
+  });
+  const fileBudgets = {
+    transfers: {
+      acquire: (signal: AbortSignal) => downloads.acquire(1, signal),
+    },
+    bytes: {
+      acquire: (weight: number, signal: AbortSignal) => buffered.acquire(weight, signal),
+    },
+  };
   const cleanupErrors: {
     packId: string;
     assetKey: string;
@@ -277,6 +325,20 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
   };
   async function prepare(item: Planned, signal: AbortSignal): Promise<Resource> {
     const { asset, pack } = item;
+    const files: PlannedFile[] = [
+      {
+        role: 'texture',
+        url: asset.kind === 'atlas' ? asset.textureUrl : asset.url,
+        integrity: asset.integrity?.texture,
+      },
+    ];
+    if (asset.kind === 'atlas') {
+      files.push({
+        role: 'atlas',
+        url: asset.atlasUrl,
+        integrity: asset.integrity?.atlas,
+      });
+    }
     const reservation = (asset.integrity?.texture?.bytes ?? maxFileBytes)
       + (asset.kind === 'atlas' ? (asset.integrity?.atlas?.bytes ?? maxFileBytes) : 0);
     if (!Number.isSafeInteger(reservation) || reservation > maxBufferedBytes) {
@@ -284,37 +346,81 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         `Asset ${pack.id}/${asset.key} reservation ${reservation} exceeds buffered byte limit ${maxBufferedBytes}`,
       );
     }
-    const returnBytes = await buffered.acquire(reservation, signal);
+    // Final integrity verification is the loader's job for every file source;
+    // reject files it could not verify before any source work starts.
+    const assetLabel = `${pack.id}/${asset.key}`;
+    for (const file of files) {
+      if (!file.integrity) {
+        continue;
+      }
+      if (file.integrity.bytes > maxFileBytes) {
+        throw new Error(`Asset ${assetLabel} ${file.role} declared file exceeds byte limit`);
+      }
+      if (!globalThis.crypto?.subtle) {
+        throw new Error(`Asset ${assetLabel} ${file.role} integrity requires HTTPS or localhost`);
+      }
+    }
+    const context: PhaserPackFileContext = { signal, budgets: fileBudgets };
+    const openedFiles: PhaserPackOpenedFile[] = [];
+    const bodies: PhaserPackFileBody[] = [];
     let returnDecode: (() => void) | undefined;
-    try {
-      const file = async (url: string, integrity?: PhaserPackFileIntegrity): Promise<Blob> => {
-        const returnDownload = await downloads.acquire(1, signal);
-        try {
-          return await fetchPackFile(
-            resolveURL(url, {
-              packId: pack.id,
-              revision: pack.revision,
-            }),
-            {
-              signal,
-              retries,
-              requestTimeoutMs,
-              maxFileBytes,
-              cache: requestCache,
-              integrity,
-            },
-          );
-        } finally {
-          returnDownload();
+    let returnBytes: (() => void) | undefined;
+    const openFile = async (file: PlannedFile): Promise<PhaserPackOpenedFile> => {
+      const opened = await fileSource.open(
+        {
+          packId: pack.id,
+          revision: pack.revision,
+          assetKey: asset.key,
+          role: file.role,
+          url: file.url,
+          integrity: file.integrity,
+        },
+        context,
+      );
+      openedFiles.push(opened);
+      return opened;
+    };
+    const readFileBody = async (file: PlannedFile, opened: PhaserPackOpenedFile): Promise<PhaserPackFileBody> => {
+      const body = await opened.read();
+      bodies.push(body);
+      signal.throwIfAborted();
+      if (file.integrity) {
+        if (body.bytes.size !== file.integrity.bytes) {
+          throw new Error(`Asset ${assetLabel} ${file.role} size mismatch`);
         }
-      };
+        const digest = new Uint8Array(
+          await crypto.subtle.digest('SHA-256', await body.bytes.arrayBuffer()),
+        );
+        if ([...digest].map((n) => n.toString(16).padStart(2, '0')).join(
+          '',
+        ) !== file.integrity.sha256.toLowerCase()) {
+          throw new Error(`Asset ${assetLabel} ${file.role} digest mismatch`);
+        }
+      } else if (body.bytes.size > maxFileBytes) {
+        throw new Error(`Asset ${assetLabel} ${file.role} file exceeds byte limit`);
+      }
+      return body;
+    };
+    try {
+      // Every file acquires source-side ownership before byte admission, so
+      // shared source work (an archive, for example) survives admission
+      // batching; bodies still transfer only after the budget approves.
+      const openedResults = await Promise.allSettled(files.map((file) => openFile(file)));
+      const readyFiles: PhaserPackOpenedFile[] = [];
+      for (const result of openedResults) {
+        if (result.status === 'rejected') {
+          throw result.reason;
+        }
+        readyFiles.push(result.value);
+      }
+      returnBytes = await buffered.acquire(reservation, signal);
       // Keep the byte reservation until BOTH files settle, even when one fails.
       // Promise.all would release it early while its sibling still holds payloads.
       const results = await Promise.allSettled([
-        file(asset.kind === 'atlas' ? asset.textureUrl : asset.url, asset.integrity?.texture),
+        readFileBody(files[0]!, readyFiles[0]!),
         asset.kind === 'atlas'
-          ? file(asset.atlasUrl, asset.integrity?.atlas).then(
-              async (value) => JSON.parse(await value.text()) as unknown,
+          ? readFileBody(files[1]!, readyFiles[1]!).then(
+              async (body) => JSON.parse(await body.bytes.text()) as unknown,
             )
           : undefined,
       ]);
@@ -328,7 +434,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
       if (imageResult.status !== 'fulfilled' || atlasResult.status !== 'fulfilled') {
         throw new Error('Asset download failed');
       }
-      const blob = imageResult.value;
+      const blob = imageResult.value.bytes;
       const atlas = atlasResult.value;
       signal.throwIfAborted();
       returnDecode = await decodes.acquire(1, signal);
@@ -414,8 +520,17 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         URL.revokeObjectURL(url);
       }
     } finally {
+      // File bytes end with decoding/parsing; textures and their leases do not.
+      // Returning source bytes or ownership must never abort the remaining
+      // cleanup, the decode slot or the byte reservation.
+      for (const body of bodies) {
+        clean(item, () => body.release());
+      }
+      for (const opened of openedFiles) {
+        clean(item, () => opened.close());
+      }
       returnDecode?.();
-      returnBytes();
+      returnBytes?.();
     }
   }
   const claim = (item: Planned, owner: symbol): Entry => {
