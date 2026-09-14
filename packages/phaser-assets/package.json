@@ -18,21 +18,25 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
-    "./packs": {
-      "types": "./dist/packs.d.ts",
-      "default": "./dist/packs.js"
-    },
-    "./pack-format": {
-      "types": "./dist/pack-format.d.ts",
-      "default": "./dist/pack-format.js"
+    "./archive-worker": {
+      "types": "./dist/archive-worker.d.ts",
+      "default": "./dist/archive-worker.js"
     },
     "./archives": {
       "types": "./dist/archives.d.ts",
       "default": "./dist/archives.js"
     },
-    "./archive-worker": {
-      "types": "./dist/archive-worker.d.ts",
-      "default": "./dist/archive-worker.js"
+    "./pack-format": {
+      "types": "./dist/pack-format.d.ts",
+      "default": "./dist/pack-format.js"
+    },
+    "./packs": {
+      "types": "./dist/packs.d.ts",
+      "default": "./dist/packs.js"
+    },
+    "./test-utils": {
+      "types": "./dist/test-utils.d.ts",
+      "default": "./dist/test-utils.js"
     }
   },
   "files": [

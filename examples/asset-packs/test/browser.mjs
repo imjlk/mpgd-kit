@@ -229,7 +229,7 @@ try {
     const app = await staticServer(join(builds, 'bundled'));
     servers.push(app);
     await page.goto(app.url + '?zip-worker=1');
-    const result = await page.waitForFunction(() => window.__zip_worker_result !== undefined, { timeout: 20000 });
+    const result = await page.waitForFunction(() => window.__zip_worker_result !== undefined, undefined, { timeout: 20000 });
     const report = JSON.parse(await result.evaluate(() => window.__zip_worker_result()));
     assert.equal(report.status, 'passed', `worker self test failed: ${JSON.stringify(report)}`);
     assert.equal(report.entries, 2);

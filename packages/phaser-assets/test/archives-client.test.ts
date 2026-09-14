@@ -1,6 +1,5 @@
 import { createHash } from 'node:crypto';
 
-import { Deflate } from 'fflate';
 import { describe, expect, it, vi } from 'vitest';
 
 import type {
@@ -9,131 +8,41 @@ import type {
   ArchiveWorkerStats,
 } from '../src/archive-protocol.js';
 import { createArchiveWorkerDispatch } from '../src/archive-worker-impl.js';
-import { createBoundedZipDecoder, type ZipDecodeWorkerLike } from '../src/archives.js';
+import {
+  createBoundedZipDecoder,
+  type ArchiveWorkerExpected,
+  type ZipDecodeWorkerLike,
+} from '../src/archives.js';
+import { buildZipV1Fixture, type ZipV1FixtureEntry } from '../src/test-utils.js';
 
 const sha256 = (data: Uint8Array): string => createHash('sha256').update(data).digest('hex');
-const crcTable: readonly number[] = (() => {
-  const table = new Array<number>(256);
-  for (let index = 0; index < 256; index++) {
-    let value = index;
-    for (let bit = 0; bit < 8; bit++) {
-      value = (value & 1) !== 0 ? (0xedb88320 ^ (value >>> 1)) : value >>> 1;
-    }
-    table[index] = value >>> 0;
-  }
-  return table;
-})();
-const crc32Of = (data: Uint8Array): number => {
-  let crc = 0xffffffff;
-  for (const byte of data) {
-    crc = crcTable[(crc ^ byte) & 0xff]! ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-};
-const deflateRaw = (data: Uint8Array): Uint8Array => {
-  const chunks: Uint8Array[] = [];
-  const deflator = new Deflate({ level: 9 }, (chunk) => {
-    chunks.push(chunk);
-  });
-  deflator.push(data, true);
-  let length = 0;
-  for (const chunk of chunks) {
-    length += chunk.length;
-  }
-  const joined = new Uint8Array(length);
-  let position = 0;
-  for (const chunk of chunks) {
-    joined.set(chunk, position);
-    position += chunk.length;
-  }
-  return joined;
-};
-const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4, 5, 6, 7, 8]);
-const jsonBytes = new TextEncoder().encode('{"frames":{"ground":{}}}');
 
-function buildV1Zip(entries: readonly { path: string; data: Uint8Array; method: 'store' | 'deflate' }[]): {
-  archive: Uint8Array;
-  expected: {
-    formatVersion: number;
-    archive: { bytes: number; sha256: string };
-    entries: { path: string; method: 'store' | 'deflate'; bytes: number; sha256: string }[];
-  };
+/** Wrap the shared fixture builder with manifest-side digests. */
+function buildV1Zip(entries: readonly ZipV1FixtureEntry[]): {
+  readonly archive: Uint8Array;
+  readonly expected: ArchiveWorkerExpected;
 } {
-  const local: Buffer[] = [];
-  const central: Buffer[] = [];
-  const expectedEntries: {
-    path: string; method: 'store' | 'deflate'; bytes: number; sha256: string;
-  }[] = [];
-  let offset = 0;
-  for (const entry of entries) {
-    const name = Buffer.from(entry.path, 'utf8');
-    const stored = entry.method === 'deflate'
-      ? Buffer.from(deflateRaw(entry.data))
-      : Buffer.from(entry.data);
-    const crc = crc32Of(entry.data);
-    const localHeader = Buffer.alloc(30);
-    localHeader.writeUInt32LE(0x04034b50, 0);
-    localHeader.writeUInt16LE(20, 4);
-    localHeader.writeUInt16LE(0x0800, 6);
-    localHeader.writeUInt16LE(entry.method === 'deflate' ? 8 : 0, 8);
-    localHeader.writeUInt16LE(0, 10);
-    localHeader.writeUInt16LE(0x0021, 12);
-    localHeader.writeUInt32LE(crc, 14);
-    localHeader.writeUInt32LE(stored.length, 18);
-    localHeader.writeUInt32LE(entry.data.length, 22);
-    localHeader.writeUInt16LE(name.length, 26);
-    localHeader.writeUInt16LE(0, 28);
-    local.push(localHeader, name, stored);
-    const centralHeader = Buffer.alloc(46);
-    centralHeader.writeUInt32LE(0x02014b50, 0);
-    centralHeader.writeUInt16LE(0x0300, 4);
-    centralHeader.writeUInt16LE(20, 6);
-    centralHeader.writeUInt16LE(0x0800, 8);
-    centralHeader.writeUInt16LE(entry.method === 'deflate' ? 8 : 0, 10);
-    centralHeader.writeUInt16LE(0, 12);
-    centralHeader.writeUInt16LE(0x0021, 14);
-    centralHeader.writeUInt32LE(crc, 16);
-    centralHeader.writeUInt32LE(stored.length, 20);
-    centralHeader.writeUInt32LE(entry.data.length, 24);
-    centralHeader.writeUInt16LE(name.length, 28);
-    centralHeader.writeUInt16LE(0, 30);
-    centralHeader.writeUInt16LE(0, 32);
-    centralHeader.writeUInt16LE(0, 34);
-    centralHeader.writeUInt16LE(0, 36);
-    centralHeader.writeUInt32LE((0o100644 << 16) >>> 0, 38);
-    centralHeader.writeUInt32LE(offset, 42);
-    central.push(centralHeader, name);
-    expectedEntries.push({
-      path: entry.path,
-      method: entry.method,
-      bytes: entry.data.length,
-      sha256: sha256(entry.data),
-    });
-    offset += 30 + name.length + stored.length;
-  }
-  const centralDirectory = Buffer.concat(central);
-  const end = Buffer.alloc(22);
-  end.writeUInt32LE(0x06054b50, 0);
-  end.writeUInt16LE(0, 4);
-  end.writeUInt16LE(0, 6);
-  end.writeUInt16LE(entries.length, 8);
-  end.writeUInt16LE(entries.length, 10);
-  end.writeUInt32LE(centralDirectory.length, 12);
-  end.writeUInt32LE(offset, 16);
-  end.writeUInt16LE(0, 20);
-  const archive = new Uint8Array(Buffer.concat([...local, centralDirectory, end]));
+  const fixture = buildZipV1Fixture(entries);
   return {
-    archive,
+    archive: fixture.archive,
     expected: {
       formatVersion: 1,
       archive: {
-        bytes: archive.length,
-        sha256: sha256(archive),
+        bytes: fixture.archive.length,
+        sha256: sha256(fixture.archive),
       },
-      entries: expectedEntries,
+      entries: fixture.entries.map((entry) => ({
+        path: entry.path,
+        method: entry.method,
+        bytes: entry.bytes,
+        sha256: sha256(entry.data),
+      })),
     },
   };
 }
+
+const pngBytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4, 5, 6, 7, 8]);
+const jsonBytes = new TextEncoder().encode('{"frames":{"ground":{}}}');
 
 interface FakeWorker extends ZipDecodeWorkerLike {
   readonly requests: ArchiveWorkerRequest[];

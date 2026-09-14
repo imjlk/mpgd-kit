@@ -1,7 +1,6 @@
 import Phaser from 'phaser';
 
 import { createPhaserAssetPackLoader, type PhaserAssetPackLease as PackLease } from '@mpgd/phaser-assets/packs';
-import { runZipWorkerSelfTest } from './zipWorkerSelfTest.js';
 import type { DeliveryPack } from './packs.js';
 import './style.css';
 
@@ -138,9 +137,11 @@ const bootGame = (): void => {
   });
 };
 if (new URLSearchParams(location.search).has('zip-worker')) {
-  void runZipWorkerSelfTest();
+  void import('./zipWorkerSelfTest.js').then((module) => module.runZipWorkerSelfTest());
 } else {
   bootGame();
+  wireSampleControls();
+  wireWindowHooks();
 }
 
 function statusText(): string {
@@ -192,7 +193,8 @@ async function enter(theme: Theme): Promise<void> {
   }
 }
 
-controls.grove!.onclick = () => { void enter('grove'); };
+function wireSampleControls(): void {
+  controls.grove!.onclick = () => { void enter('grove'); };
 controls.dunes!.onclick = () => { void enter('dunes'); };
 controls.retry!.onclick = () => { if (model.requested) void enter(model.requested); };
 controls.cancel!.onclick = () => {
@@ -213,7 +215,11 @@ controls.unload!.onclick = () => {
   Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '' });
   renderStatus();
 };
+}
 
+declare global {
+  interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; shutdownSample: () => number; }
+}
 function state() {
   return { ...model, renderer: game.config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas', mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
     groundFrames: model.current ? board.frames(model.current, 'ground') : 0,
@@ -221,11 +227,9 @@ function state() {
     player: model.phase === 'booting' ? null : board.player(), resources: packs?.snapshot().map((entry) => ({ ...entry, pack: entry.packId, identity: entry.packId + '/' + entry.assetKey })) ?? [],
     textureCount: model.phase === 'booting' ? 0 : board.textureCount() };
 }
-declare global {
-  interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; shutdownSample: () => number; }
-}
-window.render_game_to_text = () => JSON.stringify(state());
-window.advanceTime = (milliseconds) => {
+function wireWindowHooks(): void {
+  window.render_game_to_text = () => JSON.stringify(state());
+  window.advanceTime = (milliseconds) => {
   game.loop.stop();
   virtualTime = Math.max(virtualTime, performance.now());
   for (let index = 0; index < Math.max(1, Math.round(milliseconds / (1000 / 60))); index++) {
@@ -234,6 +238,7 @@ window.advanceTime = (milliseconds) => {
   }
 };
 
-// SceneManager.stop emits shutdown synchronously; count after consumer and loader cleanup.
-// Keep this direct manager call rather than queuing a ScenePlugin operation.
-window.shutdownSample = () => { game.scene.stop('board'); return board.textureCount(); };
+  // SceneManager.stop emits shutdown synchronously; count after consumer and loader cleanup.
+  // Keep this direct manager call rather than queuing a ScenePlugin operation.
+  window.shutdownSample = () => { game.scene.stop('board'); return board.textureCount(); };
+}
