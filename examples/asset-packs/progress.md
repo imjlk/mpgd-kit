@@ -30,3 +30,17 @@ source formats while sharing the catalog MIME with the dev response. Validation
 CLI summaries use console.info per the repository contribution guide.
 The complete pre-PR validation list and final local/GitHub reviews are required
 submission checks; detailed run evidence is recorded in the PR.
+
+Follow-up prompt: 좀 활용도 높게 반영좀 해보는걸로 pr 진행해볼래?
+
+The reusable implementation now lives in @mpgd/phaser-assets/packs. The sample
+consumes that public API and replaces SVG fixtures with PNG, spritesheet and
+JSON atlas textures. Ownership, cancellation, deadlines and shutdown cleanup
+are package responsibilities; build inclusion stays explicit in the example.
+Validation in progress: public API tests, packed consumer import, Canvas/WebGL
+acceptance, repository checks, local OCR and GitHub review.
+
+Follow-up validation: 17 public-package tests, packed Node import and independent
+consumer TypeScript checks pass. Canvas/WebGL × bundled/hybrid browser checks pass,
+including named atlas frames, spritesheet frames and physical texture cleanup.
+The root typecheck passes; full contribution checks and OCR/PR review are running.

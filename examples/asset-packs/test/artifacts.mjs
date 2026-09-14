@@ -17,14 +17,14 @@ export async function auditArtifacts(outputRoot = join(root, 'dist')) {
     const report = JSON.parse(await readFile(join(directory, 'asset-pack-report.json'), 'utf8'));
     const payloadFiles = await files(join(directory, 'packs'));
     // Independently assert this fixture's intended policy, rather than trusting the emitted flags.
-    const expectedFiles = report.packs.filter((pack) => mode === 'bundled' || pack.id === 'shared').flatMap((pack) => pack.images.map((image) => join(directory, image.path)));
+    const expectedFiles = report.packs.filter((pack) => mode === 'bundled' || pack.id === 'shared').flatMap((pack) => pack.files.map((image) => join(directory, image.path)));
     assert.deepEqual(payloadFiles.sort(), expectedFiles.sort(), 'Actual packaged files must follow the selected policy');
     let packagedBytes = 0;
     const gameHashes = new Set(await Promise.all((await files(directory)).map(async (file) => createHash('sha256').update(await readFile(file)).digest('hex'))));
     for (const pack of report.packs) {
       const packaged = mode === 'bundled' || pack.id === 'shared';
       assert.equal(pack.packaged, packaged);
-      for (const image of pack.images) {
+      for (const image of pack.files) {
         const location = packaged ? join(directory, image.path) : join(root, 'artifacts/origin', image.path);
         const bytes = await readFile(location);
         assert.equal(bytes.length, image.bytes);

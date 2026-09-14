@@ -165,7 +165,8 @@ Settings action, or expose no replay action. See [Tutorial Engine](docs/TUTORIAL
   scripts; downstream games do not depend on it.
 - `examples/asset-packs` is a private [asset-pack design sample](docs/asset-packs-design.md)
   for staged bundled/static-origin loading, preparation and resident ownership.
-  It adds no public package API or generated-game dependency.
+  It consumes `@mpgd/phaser-assets/packs`; see the [reusable API guide](packages/phaser-assets/README.md).
+  Generated games do not depend on the example.
 - Generated games own their own `mpgd.targets.json`. The CLI resolves that file
   into a local generated target config before invoking the kit target tools.
 

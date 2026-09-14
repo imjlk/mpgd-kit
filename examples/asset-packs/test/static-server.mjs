@@ -11,7 +11,7 @@ export async function staticServer(directory, { cors = false, port = 0 } = {}) {
   const requests = [];
   const faults = new Map();
   const delays = new Map();
-  const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' };
+  const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
   const server = createServer(async (request, response) => {
     if (cors) response.setHeader('Access-Control-Allow-Origin', '*');
     if (!['GET', 'HEAD'].includes(request.method)) { response.writeHead(405).end(); return; }

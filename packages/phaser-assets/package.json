@@ -27,6 +27,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./packs": {
+      "types": "./dist/packs.d.ts",
+      "default": "./dist/packs.js"
     }
   },
   "files": [

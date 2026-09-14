@@ -1,8 +1,7 @@
 import Phaser from 'phaser';
 
-import { createPackLeases, type PackLease } from './leases.js';
+import { createPhaserAssetPackLoader, type PhaserAssetPackLease as PackLease } from '@mpgd/phaser-assets/packs';
 import type { DeliveryPack } from './packs.js';
-import { createImagePreparer, PACK_TEXTURE_PREFIX } from './phaser-images.js';
 import './style.css';
 
 declare const __ASSET_PACK_CATALOG__: readonly DeliveryPack[];
@@ -17,13 +16,14 @@ const element = <T extends HTMLElement>(id: string): T => {
 };
 const controls = Object.fromEntries(['grove', 'dunes', 'cancel', 'retry', 'unload'].map((id) => [id, element<HTMLButtonElement>(id)]));
 const model = { phase: 'booting', requested: null as Theme | null, current: null as Theme | null, ready: 0, total: 0, error: '' };
-let packs: ReturnType<typeof createPackLeases> | undefined;
+let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
 let pending: AbortController | undefined;
 let sequence = 0;
 let virtualTime = 0;
 
 class Board extends Phaser.Scene {
   private layer!: Phaser.GameObjects.Container;
+  private baselineTextures = new Set<string>();
   private hero: Phaser.GameObjects.Image | undefined;
   private lease: PackLease | undefined;
   private cursors!: Phaser.Types.Input.Keyboard.CursorKeys;
@@ -34,34 +34,41 @@ class Board extends Phaser.Scene {
     this.cursors = this.input.keyboard!.createCursorKeys();
     const localBase = new URL(import.meta.env.BASE_URL, window.location.href);
     const bundled = new Set(__ASSET_PACK_CATALOG__.filter((pack) => pack.packaged).map((pack) => pack.id));
-    packs = createPackLeases(__ASSET_PACK_CATALOG__, createImagePreparer(this, (image) =>
-      new URL(image.path, bundled.has(image.packId) ? localBase : __ASSET_PACK_ORIGIN__)));
+    packs = createPhaserAssetPackLoader(this, __ASSET_PACK_CATALOG__, {
+      resolveURL: (url, pack) => new URL(url, bundled.has(pack.packId) ? localBase : __ASSET_PACK_ORIGIN__).href,
+      timeoutMs: 5_000,
+    });
     model.phase = 'idle';
     this.showEmpty();
+    this.baselineTextures = new Set(this.textures.getTextureKeys());
     renderStatus();
   }
   enter(lease: PackLease, theme: Theme): void {
     let nextLayer: Phaser.GameObjects.Container | undefined;
     let nextHero: Phaser.GameObjects.Image;
     try {
-      const required = (id: string): string => {
-        const key = lease.textures.get(id);
+      const required = (pack: string, id: string): string => {
+        const key = lease.key(pack, id);
         if (!key || !this.textures.exists(key)) throw new Error(`Missing prepared image: ${id}`);
         return key;
       };
-      const ground = required(`${theme}/ground`);
-      const pilot = required('shared/pilot');
-      const frame = this.textures.get(ground).get();
+      const ground = required(theme, 'ground');
+      const pilot = required('shared', 'pilot');
+      const groundFrame = theme === 'grove' ? 'ground' : undefined;
+      if (theme === 'grove' && (!this.textures.get(ground).has('ground') || !this.textures.get(ground).has('stone'))) throw new Error('Missing required terrain frames');
+      if (![0, 1, 2, 3].every((frame) => this.textures.get(pilot).has(String(frame)))) throw new Error('Missing explorer frames');
+      const frame = this.textures.get(ground).get(groundFrame);
       if (frame.width <= 0 || frame.height <= 0) throw new Error('Invalid prepared ground dimensions');
       nextLayer = this.add.container().setVisible(false);
       // Construct the replacement before destroying any users of the old lease.
       // Prepared images avoid a first-frame TileSprite pattern cache.
       for (let y = 0; y < 540; y += frame.height) {
-        for (let x = 0; x < 960; x += frame.width) nextLayer.add(this.add.image(x, y, ground).setOrigin(0));
+        for (let x = 0; x < 960; x += frame.width) nextLayer.add(this.add.image(x, y, ground, groundFrame).setOrigin(0));
       }
+      if (theme === 'grove') nextLayer.add(this.add.image(210, 170, ground, 'stone').setDisplaySize(220, 120));
       nextLayer.add(this.add.rectangle(480, 488, 310, 42, 0x102226, .85));
       nextLayer.add(this.add.text(480, 488, theme === 'grove' ? 'THE GROVE' : 'THE DUNES', { fontFamily: 'monospace', fontSize: '16px', color: '#eef1d6' }).setOrigin(.5));
-      nextHero = this.add.image(480, 270, pilot).setScale(2);
+      nextHero = this.add.image(480, 270, pilot, 1).setScale(1.5);
       nextLayer.add(nextHero);
     } catch (error) {
       nextLayer?.destroy();
@@ -85,9 +92,19 @@ class Board extends Phaser.Scene {
   showEmpty(): void {
     this.layer.add(this.add.text(480, 270, 'Choose a landscape to begin', { fontFamily: 'monospace', fontSize: '20px', color: '#9ab6ab' }).setOrigin(.5));
   }
+  frames(pack: string, key: string): number {
+    if (!this.lease) return 0;
+    return this.textures.get(this.lease.key(pack, key)).getFrameNames().length;
+  }
+  textureCount(): number {
+    const ui = new Set(this.layer.list.filter((object) => object instanceof Phaser.GameObjects.Text).map((object) => object.texture.key));
+    return this.textures.getTextureKeys().filter((key) => !ui.has(key) && !this.baselineTextures.has(key)).length;
+  }
   player() { return this.hero ? { x: this.hero.x, y: this.hero.y } : null; }
   override update(_time: number, delta: number): void {
     if (model.phase !== 'playing' || !this.hero) return;
+    const moving = this.cursors.right.isDown || this.cursors.left.isDown || this.cursors.up.isDown || this.cursors.down.isDown;
+    this.hero.setFrame(moving ? Math.floor(_time / 140) % 4 : 1);
     const distance = Math.min(delta, 50) * .18;
     this.hero.x = Phaser.Math.Clamp(this.hero.x + (Number(this.cursors.right.isDown) - Number(this.cursors.left.isDown)) * distance, 32, 928);
     this.hero.y = Phaser.Math.Clamp(this.hero.y + (Number(this.cursors.down.isDown) - Number(this.cursors.up.isDown)) * distance, 32, 448);
@@ -96,7 +113,7 @@ class Board extends Phaser.Scene {
 
 const board = new Board();
 const game = new Phaser.Game({
-  type: Phaser.CANVAS, width: 960, height: 540, parent: 'game', backgroundColor: '#142c31',
+  type: new URLSearchParams(location.search).get('renderer') === 'canvas' ? Phaser.CANVAS : Phaser.WEBGL, width: 960, height: 540, parent: 'game', backgroundColor: '#142c31',
   pixelArt: true, scene: [board], audio: { noAudio: true },
   loader: { imageLoadType: 'HTMLImageElement' },
 });
@@ -119,8 +136,8 @@ function renderStatus(): void {
   progress.max = Math.max(1, model.total);
   progress.value = model.ready;
   const resources = packs?.snapshot() ?? [];
-  element('resident').textContent = String(resources.filter((resource) => resource.state === 'ready').length);
-  element('memory').textContent = `RGBA estimate: ${resources.filter((resource) => resource.state === 'ready').reduce((sum, resource) => sum + resource.rgbaEstimate, 0).toLocaleString()} bytes`;
+  element('resident').textContent = String(resources.filter((resource) => resource.ready).length);
+  element('memory').textContent = `RGBA estimate: ${resources.filter((resource) => resource.ready).reduce((sum, resource) => sum + resource.rgbaEstimate, 0).toLocaleString()} bytes`;
 }
 
 async function enter(theme: Theme): Promise<void> {
@@ -133,7 +150,7 @@ async function enter(theme: Theme): Promise<void> {
   Object.assign(model, { phase: 'preparing', requested: theme, ready: 0, total: 0, error: '' });
   renderStatus();
   try {
-    const lease = await packs.acquire(theme, { signal: controller.signal, progress(ready, total) {
+    const lease = await packs.acquire(theme, { signal: controller.signal, onProgress(ready, total) {
       if (ticket !== sequence) return;
       Object.assign(model, { ready, total });
       renderStatus();
@@ -172,9 +189,11 @@ controls.unload!.onclick = () => {
 };
 
 function state() {
-  return { ...model, mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
-    player: model.phase === 'booting' ? null : board.player(), resources: packs?.snapshot() ?? [],
-    textureCount: model.phase === 'booting' ? 0 : board.textures.getTextureKeys().filter((key) => key.startsWith(PACK_TEXTURE_PREFIX)).length };
+  return { ...model, renderer: game.config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas', mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
+    groundFrames: model.current ? board.frames(model.current, 'ground') : 0,
+    pilotFrames: model.current ? board.frames('shared', 'pilot') : 0,
+    player: model.phase === 'booting' ? null : board.player(), resources: packs?.snapshot().map((entry) => ({ ...entry, pack: entry.packId, identity: entry.packId + '/' + entry.assetKey })) ?? [],
+    textureCount: model.phase === 'booting' ? 0 : board.textureCount() };
 }
 declare global {
   interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; }
