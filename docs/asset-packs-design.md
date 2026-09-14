@@ -26,6 +26,14 @@ No new package, object-storage SDK, credentials, deployment service or automatic
 generated-game migration is introduced. A URL resolver separates gameplay keys
 from location policy. Ordinary static HTTPS with CORS/MIME headers is sufficient.
 
+File delivery is an explicit boundary of the public loader: each file is
+requested as a logical `{ packId, revision, assetKey, role }` with an
+`open` → `read` → `release`/`close` lifecycle, and the loader keeps integrity
+verification, byte admission, decoding, registration and lease ownership for
+every source. The default URL transport preserves existing behavior; archive or
+on-device delivery is follow-up work that reuses the same preparation path
+instead of adding per-file transport assumptions.
+
 ## Build and executable evidence
 
 The private example uses a shared PNG spritesheet, a PNG/JSON atlas and a separate
@@ -73,6 +81,7 @@ package README for fallback reservations when integrity sizes are absent.
 
 | Concern | Current behavior | Follow-up evidence needed |
 | --- | --- | --- |
+| Archive delivery | Individual verified files over HTTP or an injected file source | Archive packing/extraction through the file-source boundary with acceptance evidence |
 | Persistent storage | Resident leases; optional browser HTTP caching, no-store by default | Disk cache, quotas, eviction and offline cache hits |
 | Asset readiness | Image decode + texture/frame registration; Canvas/WebGL fixture | Audio unlock, context-loss recovery, measured shader/upload budgets |
 | Target configuration | Example build-time routing | Published per-target schema and installed/embedded target artifact tests |

@@ -1,4 +1,3 @@
-import type { PhaserPackFileIntegrity } from './packs.js';
 class FileFailure extends Error {
   constructor(
     message: string,
@@ -23,16 +22,11 @@ export async function fetchPackFile(url: string, options: {
   maxFileBytes: number;
   requestTimeoutMs?: number;
   cache?: RequestCache;
-  integrity?: PhaserPackFileIntegrity | undefined;
+  /** Declared encoded size; aborts the stream once the body exceeds it. */
+  declaredBytes?: number | undefined;
 }): Promise<Blob> {
-  const { signal, integrity } = options;
+  const { signal } = options;
   signal.throwIfAborted();
-  if (integrity && integrity.bytes > options.maxFileBytes) {
-    throw new FileFailure('Declared file exceeds byte limit');
-  }
-  if (integrity && !globalThis.crypto?.subtle) {
-    throw new FileFailure('Asset integrity requires HTTPS or localhost');
-  }
   for (let attempt = 0; ; attempt++) {
     let retryAfterMs = 0;
     const attemptController = new AbortController();
@@ -72,7 +66,7 @@ export async function fetchPackFile(url: string, options: {
             break;
           }
           size += value.value.byteLength;
-          if (integrity && size > integrity.bytes) {
+          if (options.declaredBytes !== undefined && size > options.declaredBytes) {
             throw new FileFailure('Asset size mismatch');
           }
           if (size > options.maxFileBytes) {
@@ -88,26 +82,13 @@ export async function fetchPackFile(url: string, options: {
           reader.releaseLock();
         }
       }
-      // The HTTP window ends with the body. Non-abortable hashing belongs to the
-      // outer preparation deadline, and must not cause a successful download retry.
+      // The HTTP window ends with the body. Final size/digest verification is
+      // the loader's job for every file source, never a download retry reason.
       clearTimeout(timer);
       attemptController.signal.throwIfAborted();
       const blob = new Blob(parts, {
         type: response.headers.get('content-type') ?? 'application/octet-stream',
       });
-      if (integrity) {
-        if (size !== integrity.bytes) {
-          throw new FileFailure('Asset size mismatch');
-        }
-        const digest = new Uint8Array(
-          await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()),
-        );
-        if ([...digest].map((n) => n.toString(16).padStart(2, '0')).join(
-          '',
-        ) !== integrity.sha256.toLowerCase()) {
-          throw new FileFailure('Asset digest mismatch');
-        }
-      }
       attemptController.signal.throwIfAborted();
       return blob;
     } catch (caught) {

@@ -1,18 +1,12 @@
-import { createHash } from 'node:crypto';
-
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { fetchPackFile } from '../src/pack-fetch.js';
 const bytes = new Uint8Array([1, 2, 3]);
-const integrity = {
-  bytes: 3,
-  sha256: createHash('sha256').update(bytes).digest('hex'),
-};
 const options = () => ({
   signal: new AbortController().signal,
   retries: 1,
   maxFileBytes: 8,
-  integrity,
+  declaredBytes: 3,
 });
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -42,15 +36,28 @@ it('retains retry classification if discarding an HTTP error body rejects', asyn
   expect(new Uint8Array(await (await fetchPackFile('/image.png', options())).arrayBuffer())).toEqual(bytes);
   expect(fetch).toHaveBeenCalledTimes(2);
 });
-it.each([
-  [new Uint8Array([1, 2]), 'size mismatch'],
-  [new Uint8Array([1, 2, 3, 4]), 'size mismatch'],
-  [new Uint8Array([3, 2, 1]), 'digest mismatch'],
-])('does not retry invalid encoded content', async (body, message) => {
-  const fetch = vi.fn(async () => new Response(body));
+it('aborts a stream once it exceeds the declared encoded size without retrying', async () => {
+  const fetch = vi.fn(async () => new Response(new Uint8Array([1, 2, 3, 4])));
   vi.stubGlobal('fetch', fetch);
-  await expect(fetchPackFile('/image.png', options())).rejects.toThrow(message);
+  await expect(fetchPackFile('/image.png', options())).rejects.toThrow('size mismatch');
   expect(fetch).toHaveBeenCalledOnce();
+});
+it('passes bodies of any other shape through; final verification is the loader\u2019s', async () => {
+  for (const body of [new Uint8Array([1, 2]), new Uint8Array([3, 2, 1])]) {
+    const fetch = vi.fn(async () => new Response(body));
+    vi.stubGlobal('fetch', fetch);
+    expect((await fetchPackFile('/image.png', options())).size).toBe(body.length);
+    expect(fetch).toHaveBeenCalledOnce();
+  }
+});
+it('returns as soon as the body completes without hashing it', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => new Response(bytes)));
+  vi.stubGlobal('crypto', {
+    subtle: {
+      digest: () => new Promise<ArrayBuffer>(() => { }),
+    },
+  });
+  expect((await fetchPackFile('/image.png', options())).size).toBe(3);
 });
 it('caps streaming bodies even without integrity metadata', async () => {
   vi.stubGlobal('fetch', vi.fn(async () => new Response(new Uint8Array(9))));
@@ -65,13 +72,6 @@ it('does not expose signed URLs in terminal network errors', async () => {
   );
   await expect(fetchPackFile('https://assets.example/file?secret=private', options())).rejects.toThrow('Asset network request failed');
   expect(fetch).toHaveBeenCalledTimes(2);
-});
-it('rejects unavailable integrity verification before downloading', async () => {
-  const fetch = vi.fn();
-  vi.stubGlobal('fetch', fetch);
-  vi.stubGlobal('crypto', undefined);
-  await expect(fetchPackFile('/image.png', options())).rejects.toThrow('requires HTTPS or localhost');
-  expect(fetch).not.toHaveBeenCalled();
 });
 
 it('aborts a stalled response body at the per-request deadline', async () => {
@@ -93,35 +93,6 @@ it('aborts a stalled response body at the per-request deadline', async () => {
   await failed;
   expect(requestSignal?.aborted).toBe(true);
   vi.useRealTimers();
-});
-
-it('ends the request deadline before non-abortable integrity hashing', async () => {
-  vi.useFakeTimers();
-  let finish!: (value: ArrayBuffer) => void;
-  let started!: () => void;
-  const hashing = new Promise<void>((resolve) => {
-    started = resolve; });
-  const digest = new Promise<ArrayBuffer>((resolve) => {
-    finish = resolve; });
-  const realDigest = await crypto.subtle.digest('SHA-256', bytes);
-  vi.stubGlobal('crypto', { subtle: { digest: () => {
-        started();
-        return digest; } } });
-  let requestSignal: AbortSignal | undefined;
-  vi.stubGlobal(
-    'fetch',
-    vi.fn(async (_url, init: RequestInit) => {
-      requestSignal = init.signal as AbortSignal;
-      return new Response(bytes);
-    }),
-  );
-  const work = fetchPackFile('/image.png', { ...options(), requestTimeoutMs: 10 });
-  await hashing;
-  await vi.advanceTimersByTimeAsync(20);
-  expect(requestSignal?.aborted).toBe(false);
-  finish(realDigest);
-  expect((await work).size).toBe(3);
-  expect(fetch).toHaveBeenCalledOnce();
 });
 
 it('honors Retry-After and still aborts an outstanding backoff', async () => {
