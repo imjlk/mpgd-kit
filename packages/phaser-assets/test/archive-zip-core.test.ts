@@ -269,6 +269,18 @@ describe('bounded ZIP decode core', () => {
     })).rejects.toMatchObject({ code: 'invalid-structure' });
   });
 
+  it('decodes multi-megabyte incompressible deflate entries promptly', async () => {
+    const payload = new Uint8Array(4 * 1024 * 1024);
+    for (let index = 0; index < payload.length; index++) {
+      payload[index] = (index * 131 + 7) & 0xff;
+    }
+    const fixture = buildV1Zip([{ path: 'big.bin', data: payload, method: 'deflate' }]);
+    const started = Date.now();
+    const output = await collect(fixture, {}, { decodeDeadlineMs: 15000 });
+    expect(output[0]!.bytes.length).toBe(payload.length);
+    expect(Date.now() - started).toBeLessThan(10000);
+  });
+
   it('rejects malformed numeric limits before decoding', async () => {
     const fixture = buildV1Zip(mixedEntries);
     for (const overrides of [

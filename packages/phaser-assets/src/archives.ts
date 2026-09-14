@@ -147,29 +147,28 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
     throw new Error('maxConcurrentDecodes must be a positive integer');
   }
   const graceMs = options.cancelGraceMs ?? 5000;
-  let active = 0;
+  let free = maxConcurrent;
   let nextJobId = 1;
   const pending: (() => void)[] = [];
   const acquire = async (): Promise<void> => {
-    while (active >= maxConcurrent) {
-      await new Promise<void>((resolve) => {
-        pending.push(resolve);
-      });
-    }
-    active++;
-  };
-  let releasing = false;
-  const releaseSlot = (): void => {
-    if (releasing) {
+    if (free > 0) {
+      free--;
       return;
     }
-    releasing = true;
-    try {
-      active--;
-      pending.shift()?.();
-    } finally {
-      releasing = false;
+    await new Promise<void>((resolve) => {
+      pending.push(resolve);
+    });
+    // The permit was handed off directly by releaseSlot.
+  };
+  const releaseSlot = (): void => {
+    const waiter = pending.shift();
+    if (waiter === undefined) {
+      free++;
+      return;
     }
+    // Hand the freed permit straight to the oldest waiter so a completion
+    // continuation starting a new job cannot steal it first.
+    waiter();
   };
   return {
     decode(request) {

@@ -52,6 +52,8 @@ const DOS_DATE = 0x0021;
 const EXTERNAL_ATTRIBUTES = (0o100644 << 16) >>> 0;
 const ENCRYPTED_FLAG = 0x0001;
 const DECODE_CHUNK_BYTES = 64 * 1024;
+const MIN_DECODE_STEP_BYTES = 64;
+const BREATHE_INPUT_BYTES = 256 * 1024;
 const digestOf = async (data: Uint8Array): Promise<string> => {
   // Hash exact-fit views directly; only sub-views need a bounded copy.
   const source = data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
@@ -120,7 +122,7 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     fail('invalid-structure', 'ZIP archive is truncated');
   }
   const endOffset = archive.length - 22;
-  if (zip.u32(endOffset) !== 0x06054b50) {
+  if (zip.u32(endOffset) !== 0x06054b50 || zip.u16(endOffset + 20) !== 0) {
     fail('invalid-structure', 'ZIP end record missing or has a comment');
   }
   const totalEntries = zip.u16(endOffset + 10);
@@ -330,18 +332,21 @@ async function inflateBounded(
   // declared entry size or the remaining total allowance.
   const ceiling = Math.min(declaredBytes, remainingTotalBytes);
   let allowance = ceiling;
-  let pushes = 0;
   let offset = 0;
+  let sinceBreathe = 0;
   while (offset < compressed.length) {
-    // Each push decodes before the counting callback can reject it, so the
-    // input slice is sized against the remaining output allowance at the
-    // worst-case 1032x expansion assumption.
+    // Each push decodes and allocates before the counting callback can
+    // reject it, so the input slice is sized against the remaining output
+    // allowance at DEFLATE's worst-case 1032x expansion; a small floor keeps
+    // low-compression streams progressing without per-byte pushes.
     const step = Math.min(
-      Math.max(1, Math.floor(allowance / 1032)),
+      Math.max(MIN_DECODE_STEP_BYTES, Math.floor(allowance / 1032)),
       DECODE_CHUNK_BYTES,
       compressed.length - offset,
     );
-    if (pushes++ % 8 === 0) {
+    sinceBreathe += step;
+    if (sinceBreathe >= BREATHE_INPUT_BYTES) {
+      sinceBreathe = 0;
       // Let the worker's message loop run so cancellation is observable
       // during long inflates.
       await new Promise((resolve) => {
