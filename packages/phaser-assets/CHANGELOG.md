@@ -1,5 +1,17 @@
 # @mpgd/phaser-assets
 
+## 0.5.0 — 2026-09-14
+
+### Minor changes
+
+- [832638b](https://github.com/imjlk/mpgd-kit/commit/832638b072639946b605a5794eae71b86b44a059) Add the opt-in `@mpgd/phaser-assets/packs` entrypoint for reusable image,
+  spritesheet and JSON atlas packs. Acquire shared dependency textures with
+  per-caller cancellation, preparation deadlines, bounded file retries and optional
+  size/SHA-256 verification; release them explicitly or on scene shutdown.
+  Existing manifest and enqueue helpers remain compatible.
+  
+  Isolate cleanup failures and bound acquisition with separate request deadlines, download/decode permits and encoded-byte reservations. — Thanks @imjlk!
+
 ## 0.4.1 — 2026-07-14
 
 ### Changed
