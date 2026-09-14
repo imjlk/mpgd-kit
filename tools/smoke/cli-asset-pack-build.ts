@@ -557,7 +557,7 @@ try {
   );
   rmSync(outLink, { force: true, recursive: true });
   const danglingLink = join(fixtureRoot, 'out-dangling');
-  symlinkSync(join(fixtureRoot, 'does-not-exist'), danglingLink);
+  symlinkSync(resolve(repoRoot, fixtureRoot, 'does-not-exist'), danglingLink);
   assert.throws(
     () => buildAssetPacks({ configPath: mainConfig, outDir: danglingLink, cwd: repoRoot }),
     /broken symlink/u,

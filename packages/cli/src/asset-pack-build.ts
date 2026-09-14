@@ -77,8 +77,8 @@ function realpathBestEffort(target: string): string {
   let real: string;
   try {
     real = realpathSync(existing);
-  } catch {
-    throw new Error(`Output path resolves through a broken symlink: ${target}`);
+  } catch (error) {
+    throw new Error(`Output path resolves through a broken symlink: ${target}`, { cause: error });
   }
   return existing === target ? real : resolve(real, relative(existing, target));
 }

@@ -102,7 +102,11 @@ export interface PhaserPackDeliveryArchive {
 const digestPattern = /^[0-9a-f]{64}$/u;
 /** Case-insensitive filesystems and extractors treat case-folded pack ids and
  * paths as the same file; NFC alone does not encode that equivalence. */
-function rejectFoldedDuplicate(seen: Set<string>, value: string, error: (input: string) => Error): void {
+function rejectFoldedDuplicate(
+  seen: Set<string>,
+  value: string,
+  error: (duplicate: string) => Error,
+): void {
   const folded = value.toLowerCase();
   if (seen.has(folded)) {
     throw error(value);
