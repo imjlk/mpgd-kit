@@ -167,6 +167,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       let decodePosted = false;
       let cancelRequested = false;
       let deadlineInitiated = false;
+      let firstCause: 'user' | 'deadline' | undefined;
       let settleResult: ((status: BoundedZipDecodeStatus) => void) | undefined;
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
       const result = new Promise<BoundedZipDecodeStatus>((resolve) => {
@@ -253,10 +254,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           }
           const messageType: unknown = (message as { type?: unknown }).type;
           if (messageType !== 'entry' && messageType !== 'done') {
+            const described = typeof messageType === 'string'
+              ? messageType
+              : Object.prototype.toString.call(messageType);
             finalize({
               status: 'worker-error',
               code: 'worker-error',
-              detail: `The archive decode worker posted an unknown message type ${JSON.stringify(messageType)}`,
+              detail: `The archive decode worker posted an unknown message type ${described}`,
             });
             return;
           }
@@ -331,6 +335,8 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           }
           if (message.type === 'done') {
             const doneShapeValid = typeof message.status === 'string'
+              && (!transfer || message.status !== 'completed'
+                || message.archive instanceof ArrayBuffer)
               && (message.status === 'completed'
                 || message.status === 'cancelled'
                 || message.status === 'deadline'
@@ -349,8 +355,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           // A cancellation answering this client's own deadline timer is a
           // deadline, unless the user asked to cancel first.
           const translated = message.status === 'cancelled'
-            && deadlineInitiated
-            && !cancelRequested
+            && (firstCause === 'deadline' || (deadlineInitiated && firstCause === undefined))
             ? {
               status: 'deadline' as const,
               code: 'deadline',
@@ -378,6 +383,9 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         worker.addEventListener('messageerror', onWorkerFailure);
         deadlineTimer = setTimeout(() => {
           deadlineInitiated = true;
+          if (firstCause === undefined) {
+            firstCause = 'deadline';
+          }
           worker?.postMessage({
             type: 'cancel',
             jobId,
@@ -479,6 +487,9 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             return result;
           }
           cancelRequested = true;
+          if (firstCause === undefined) {
+            firstCause = 'user';
+          }
           worker?.postMessage({
             type: 'cancel',
             jobId,

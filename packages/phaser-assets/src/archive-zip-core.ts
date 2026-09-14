@@ -405,6 +405,11 @@ export async function* decodeZipV1Entries(
     ['maxPathLength', 1],
     ['decodeDeadlineMs', 0],
   ] as const) {
+    // Values beyond the platform timer range would wrap the client's guard
+    // timer into firing early.
+    if (name === 'decodeDeadlineMs' && limits.decodeDeadlineMs > 2 ** 31 - 1) {
+      throw new ZipDecodeError('limit', 'ZIP decode deadline exceeds the timer range');
+    }
     const value: unknown = limits[name];
     if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum) {
       throw new ZipDecodeError(
@@ -449,7 +454,7 @@ export async function* decodeZipV1Entries(
     }
     const bytes = entry.method === 'store'
       ? archive.slice(entry.dataStart, entry.dataEnd)
-      : inflateBounded(
+      : await inflateBounded(
           archive,
           entry,
           entry.declaredBytes,
