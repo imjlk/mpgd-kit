@@ -73,25 +73,24 @@ export function createPackUrlFileSource(transport: {
   const { resolveURL, retries, requestTimeoutMs, requestCache, maxFileBytes } = transport;
   return {
     async open(request, context) {
-      // Ownership is just the resolved request; the body transfer waits for read().
-      // Closing revokes that ownership even if a caller left a read in flight.
-      const closeController = new AbortController();
-      const signal = AbortSignal.any([context.signal, closeController.signal]);
-      let readStarted = false;
+      // Ownership is just the resolved request; the body transfer waits for
+      // read(). A completed read is single-use; a failed one stays retryable.
+      let readLatched = false;
       return {
         async read() {
-          if (readStarted) {
+          if (readLatched) {
             throw new Error('Pack file body was already read');
           }
-          readStarted = true;
-          const releaseTransfer = await context.budgets.transfers.acquire(signal);
+          readLatched = true;
+          let releaseTransfer: (() => void) | undefined;
           try {
+            releaseTransfer = await context.budgets.transfers.acquire(context.signal);
             const blob = await fetchPackFile(
               resolveURL(request.url, {
                 packId: request.packId, revision: request.revision,
               }),
               {
-                signal,
+                signal: context.signal,
                 retries,
                 requestTimeoutMs,
                 maxFileBytes,
@@ -104,12 +103,14 @@ export function createPackUrlFileSource(transport: {
               bytes: blob, release() {
               },
             };
+          } catch (error) {
+            readLatched = false;
+            throw error;
           } finally {
-            releaseTransfer();
+            releaseTransfer?.();
           }
         },
         close() {
-          closeController.abort();
         },
       };
     },

@@ -340,19 +340,16 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
     }
     // Final integrity verification is the loader's job for every file source;
     // reject files it could not verify before any source work starts.
+    const assetLabel = `${pack.id}/${asset.key}`;
     for (const file of files) {
       if (!file.integrity) {
         continue;
       }
       if (file.integrity.bytes > maxFileBytes) {
-        throw new Error(
-          `Asset ${pack.id}/${asset.key} ${file.role} declared file exceeds byte limit`,
-        );
+        throw new Error(`Asset ${assetLabel} ${file.role} declared file exceeds byte limit`);
       }
       if (!globalThis.crypto?.subtle) {
-        throw new Error(
-          `Asset ${pack.id}/${asset.key} ${file.role} integrity requires HTTPS or localhost`,
-        );
+        throw new Error(`Asset ${assetLabel} ${file.role} integrity requires HTTPS or localhost`);
       }
     }
     const returnBytes = await buffered.acquire(reservation, signal);
@@ -379,7 +376,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         signal.throwIfAborted();
         if (file.integrity) {
           if (body.bytes.size !== file.integrity.bytes) {
-            throw new Error(`Asset ${pack.id}/${asset.key} ${file.role} size mismatch`);
+            throw new Error(`Asset ${assetLabel} ${file.role} size mismatch`);
           }
           const digest = new Uint8Array(
             await crypto.subtle.digest('SHA-256', await body.bytes.arrayBuffer()),
@@ -387,10 +384,10 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
           if ([...digest].map((n) => n.toString(16).padStart(2, '0')).join(
             '',
           ) !== file.integrity.sha256.toLowerCase()) {
-            throw new Error(`Asset ${pack.id}/${asset.key} ${file.role} digest mismatch`);
+            throw new Error(`Asset ${assetLabel} ${file.role} digest mismatch`);
           }
         } else if (body.bytes.size > maxFileBytes) {
-          throw new Error(`Asset ${pack.id}/${asset.key} ${file.role} file exceeds byte limit`);
+          throw new Error(`Asset ${assetLabel} ${file.role} file exceeds byte limit`);
         }
         return body;
       };

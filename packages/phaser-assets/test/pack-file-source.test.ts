@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import type Phaser from 'phaser';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { createPackUrlFileSource } from '../src/pack-file-source.js';
 import {
   createPhaserAssetPackLoader,
   type PhaserAssetPack,
@@ -444,6 +445,54 @@ describe('injected file sources', () => {
         kind: 'image', key: 'pilot', url: '/pilot.png',
       }]), { fileSource: invalid })).toThrow('Invalid asset pack file source');
     }
+  });
+});
+
+describe('default URL source ownership', () => {
+  const transport = {
+    resolveURL: (url: string) => url,
+    retries: 0,
+    requestTimeoutMs: 1000,
+    requestCache: 'no-store' as const,
+    maxFileBytes: 8,
+  };
+  const openFile = async () => {
+    const controller = new AbortController();
+    const noop = (): void => {
+    };
+    const context: PhaserPackFileContext = {
+      signal: controller.signal,
+      budgets: {
+        transfers: { acquire: async () => noop },
+        bytes: { acquire: async () => noop },
+      },
+    };
+    const opened = await createPackUrlFileSource(transport).open({
+      packId: 'shared', revision: '1', assetKey: 'pilot', role: 'texture', url: '/pilot.png',
+    }, context);
+    return { opened, controller };
+  };
+
+  it('rejects a second read of the same opened file', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(png)));
+    const { opened } = await openFile();
+    expect((await opened.read()).bytes.size).toBe(3);
+    await expect(opened.read()).rejects.toThrow('already read');
+    expect(fetch).toHaveBeenCalledOnce();
+    opened.close();
+  });
+
+  it('keeps a failed read retryable', async () => {
+    const fetch = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('offline'))
+      .mockResolvedValueOnce(new Response(png));
+    vi.stubGlobal('fetch', fetch);
+    const { opened } = await openFile();
+    await expect(opened.read()).rejects.toThrow('Asset network request failed');
+    expect((await opened.read()).bytes.size).toBe(3);
+    expect(fetch).toHaveBeenCalledTimes(2);
+    opened.close();
   });
 });
 
