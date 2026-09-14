@@ -113,6 +113,17 @@ describe('build config validation', () => {
     expect(validated.packs.map((pack) => pack.id)).toEqual(['shared', 'grove']);
     expect(validated.packs[1]!.assets[0]!.kind).toBe('atlas');
   });
+  it('accepts a spritesheet frame config with only a width', () => {
+    const config = buildConfig() as Record<string, unknown>;
+    const pack = (config.packs as Record<string, unknown>[])[0]!;
+    (pack.assets as Record<string, unknown>[])[0]!.frameConfig = { frameWidth: 16 };
+    const validated = validatePhaserPackBuildConfig(config);
+    expect(validated.packs[0]!.assets[0]!.kind).toBe('spritesheet');
+    if (validated.packs[0]!.assets[0]!.kind === 'spritesheet') {
+      expect(validated.packs[0]!.assets[0]!.frameConfig.frameHeight).toBe(16);
+    }
+  });
+
   it('accepts Phaser endFrame -1 sentinel and rejects negative values otherwise', () => {
     const config = buildConfig() as Record<string, unknown>;
     const pack = (config.packs as Record<string, unknown>[])[0]!;

@@ -53,6 +53,7 @@ export interface AssetPackBuildReport {
 }
 
 const manifestFileName = 'asset-pack-delivery.json';
+let stagingSequence = 0;
 const sha256Of = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
 
 /** Resolve symlinks for the longest existing ancestor, keeping the remainder. */
@@ -407,22 +408,43 @@ export function buildAssetPacks(options: {
     action: manifestUnchanged ? 'unchanged' : 'written',
     data: manifestBytes,
   });
+  // Every output path — including unchanged ones — must stay free of
+  // symlinks below the output root, so the unchanged shortcut can never
+  // bless a symlinked descendant.
   const outputPaths = new Set(outputRecords.map((record) => record.path));
+  for (const record of outputRecords) {
+    assertNoSymlinkUnder(outPath, record.path);
+  }
   for (const record of outputRecords) {
     if (record.action === 'unchanged') {
       continue;
     }
     const target = join(outPath, record.path);
-    const stagingPath = `${record.path}.mpgd-staging-${process.pid}`;
-    if (outputPaths.has(stagingPath)) {
-      throw new Error(`Staging path collides with an output path: ${stagingPath}`);
-    }
-    assertNoSymlinkUnder(outPath, record.path);
-    assertNoSymlinkUnder(outPath, stagingPath);
     mkdirSync(dirname(target), { recursive: true });
-    const staging = join(outPath, stagingPath);
+    // Exclusive creation with a per-process sequence keeps staging names
+    // unique even across builders that share a PID.
+    let stagingPath = '';
+    let staging = '';
     try {
-      writeFileSync(staging, record.data);
+      for (let attempt = 0; attempt < 64; attempt++) {
+        const candidate = `${record.path}.mpgd-staging-${process.pid}-${++stagingSequence}`;
+        if (outputPaths.has(candidate)) {
+          continue;
+        }
+        try {
+          staging = join(outPath, candidate);
+          writeFileSync(staging, record.data, { flag: 'wx' });
+          stagingPath = candidate;
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+            throw error;
+          }
+        }
+      }
+      if (stagingPath === '') {
+        throw new Error(`Cannot reserve a unique staging path for ${record.path}`);
+      }
       if (record.path === manifestFileName) {
         // The manifest is the replaceable summary of the latest build.
         renameSync(staging, target);

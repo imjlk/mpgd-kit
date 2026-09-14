@@ -581,6 +581,22 @@ try {
     'a dangling symlinked output path fails closed',
   );
   rmSync(danglingLink, { force: true, recursive: true });
+  // A pre-existing symlinked artifact must not be blessed as unchanged.
+  const blessedOut = join(fixtureRoot, 'out-blessed');
+  assert.equal(runBuildCli(mainConfig, blessedOut).status, 0, 'blessed initial');
+  const blessedArtifact = join(blessedOut, 'packs/shared@1/shared/pilot.png');
+  const twinFile = join(fixtureRoot, 'pilot-twin.png');
+  writeFileSync(twinFile, readFileSync(blessedArtifact));
+  rmSync(blessedArtifact);
+  symlinkSync(twinFile, blessedArtifact);
+  assert.throws(
+    () => buildAssetPacks({ configPath: mainConfig, outDir: blessedOut, cwd: repoRoot }),
+    /symbolic link below the output root/u,
+    'an unchanged symlinked artifact still fails closed',
+  );
+  rmSync(blessedOut, { force: true, recursive: true });
+  rmSync(twinFile, { force: true });
+
   const nestedOut = join(fixtureRoot, 'out-nested');
   mkdirSync(nestedOut, { recursive: true });
   symlinkSync(resolve(repoRoot, sourceRoot), join(nestedOut, 'packs'));

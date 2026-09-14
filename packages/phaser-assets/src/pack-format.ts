@@ -238,8 +238,14 @@ function parseFrameConfig(
   const source = value as Record<string, unknown>;
   const frameWidth: unknown = source.frameWidth;
   const frameHeight: unknown = source.frameHeight;
-  if (typeof frameWidth !== 'number' || !Number.isSafeInteger(frameWidth) || frameWidth <= 0
-    || typeof frameHeight !== 'number' || !Number.isSafeInteger(frameHeight) || frameHeight <= 0) {
+  if (typeof frameWidth !== 'number' || !Number.isSafeInteger(frameWidth) || frameWidth <= 0) {
+    throw new Error(`${context}: ${label} frame size must be positive integers`);
+  }
+  // The runtime contract defaults an omitted height to the width.
+  const resolvedHeight = frameHeight === undefined ? frameWidth : frameHeight;
+  if (typeof resolvedHeight !== 'number' || !Number.isSafeInteger(
+    resolvedHeight,
+  ) || resolvedHeight <= 0) {
     throw new Error(`${context}: ${label} frame size must be positive integers`);
   }
   const optional = (name: string): number | undefined => {
@@ -259,7 +265,7 @@ function parseFrameConfig(
   };
   return {
     frameWidth,
-    frameHeight,
+    frameHeight: resolvedHeight,
     startFrame: optional('startFrame'),
     endFrame: optional('endFrame'),
     margin: optional('margin'),
