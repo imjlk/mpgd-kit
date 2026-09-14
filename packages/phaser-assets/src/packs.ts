@@ -360,51 +360,68 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         throw new Error(`Asset ${assetLabel} ${file.role} integrity requires HTTPS or localhost`);
       }
     }
-    const returnBytes = await buffered.acquire(reservation, signal);
     const context: PhaserPackFileContext = { signal, budgets: fileBudgets };
     const openedFiles: PhaserPackOpenedFile[] = [];
     const bodies: PhaserPackFileBody[] = [];
     let returnDecode: (() => void) | undefined;
-    try {
-      const readFile = async (file: PlannedFile): Promise<PhaserPackFileBody> => {
-        const opened = await fileSource.open(
-          {
-            packId: pack.id,
-            revision: pack.revision,
-            assetKey: asset.key,
-            role: file.role,
-            url: file.url,
-            integrity: file.integrity,
-          },
-          context,
-        );
-        openedFiles.push(opened);
-        const body = await opened.read();
-        bodies.push(body);
-        signal.throwIfAborted();
-        if (file.integrity) {
-          if (body.bytes.size !== file.integrity.bytes) {
-            throw new Error(`Asset ${assetLabel} ${file.role} size mismatch`);
-          }
-          const digest = new Uint8Array(
-            await crypto.subtle.digest('SHA-256', await body.bytes.arrayBuffer()),
-          );
-          if ([...digest].map((n) => n.toString(16).padStart(2, '0')).join(
-            '',
-          ) !== file.integrity.sha256.toLowerCase()) {
-            throw new Error(`Asset ${assetLabel} ${file.role} digest mismatch`);
-          }
-        } else if (body.bytes.size > maxFileBytes) {
-          throw new Error(`Asset ${assetLabel} ${file.role} file exceeds byte limit`);
+    let returnBytes: (() => void) | undefined;
+    const openFile = async (file: PlannedFile): Promise<PhaserPackOpenedFile> => {
+      const opened = await fileSource.open(
+        {
+          packId: pack.id,
+          revision: pack.revision,
+          assetKey: asset.key,
+          role: file.role,
+          url: file.url,
+          integrity: file.integrity,
+        },
+        context,
+      );
+      openedFiles.push(opened);
+      return opened;
+    };
+    const readFileBody = async (file: PlannedFile, opened: PhaserPackOpenedFile): Promise<PhaserPackFileBody> => {
+      const body = await opened.read();
+      bodies.push(body);
+      signal.throwIfAborted();
+      if (file.integrity) {
+        if (body.bytes.size !== file.integrity.bytes) {
+          throw new Error(`Asset ${assetLabel} ${file.role} size mismatch`);
         }
-        return body;
-      };
+        const digest = new Uint8Array(
+          await crypto.subtle.digest('SHA-256', await body.bytes.arrayBuffer()),
+        );
+        if ([...digest].map((n) => n.toString(16).padStart(2, '0')).join(
+          '',
+        ) !== file.integrity.sha256.toLowerCase()) {
+          throw new Error(`Asset ${assetLabel} ${file.role} digest mismatch`);
+        }
+      } else if (body.bytes.size > maxFileBytes) {
+        throw new Error(`Asset ${assetLabel} ${file.role} file exceeds byte limit`);
+      }
+      return body;
+    };
+    try {
+      // Every file acquires source-side ownership before byte admission, so
+      // shared source work (an archive, for example) survives admission
+      // batching; bodies still transfer only after the budget approves.
+      const openedResults = await Promise.allSettled(files.map((file) => openFile(file)));
+      const readyFiles: PhaserPackOpenedFile[] = [];
+      for (const result of openedResults) {
+        if (result.status === 'rejected') {
+          throw result.reason;
+        }
+        readyFiles.push(result.value);
+      }
+      returnBytes = await buffered.acquire(reservation, signal);
       // Keep the byte reservation until BOTH files settle, even when one fails.
       // Promise.all would release it early while its sibling still holds payloads.
       const results = await Promise.allSettled([
-        readFile(files[0]!),
+        readFileBody(files[0]!, readyFiles[0]!),
         asset.kind === 'atlas'
-          ? readFile(files[1]!).then(async (body) => JSON.parse(await body.bytes.text()) as unknown)
+          ? readFileBody(files[1]!, readyFiles[1]!).then(
+              async (body) => JSON.parse(await body.bytes.text()) as unknown,
+            )
           : undefined,
       ]);
       for (const result of results) {
@@ -513,7 +530,7 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         clean(item, () => opened.close());
       }
       returnDecode?.();
-      returnBytes();
+      returnBytes?.();
     }
   }
   const claim = (item: Planned, owner: symbol): Entry => {

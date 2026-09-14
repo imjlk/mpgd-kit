@@ -179,6 +179,28 @@ describe('injected file sources', () => {
     loader.dispose();
   });
 
+  it('opens every file before byte admission gates the reads', async () => {
+    const f = fixture();
+    const source = memorySource();
+    // Default limits admit two maxFileBytes reservations; the third asset must
+    // still acquire source ownership while it waits for admission.
+    const loader = createPhaserAssetPackLoader(f.scene, [
+      { id: 'one', revision: '1', assets: [{ kind: 'image', key: 'a', url: '/a.png' }] },
+      { id: 'two', revision: '1', assets: [{ kind: 'image', key: 'b', url: '/b.png' }] },
+      { id: 'three', revision: '1', assets: [{ kind: 'image', key: 'c', url: '/c.png' }] },
+    ], { fileSource: source });
+    const all = Promise.all([loader.acquire('one'), loader.acquire('two'), loader.acquire('three')]);
+    await vi.waitFor(() => expect(source.opens).toHaveLength(3));
+    expect(source.reads.length).toBeLessThanOrEqual(2);
+    await serveAdmitted(source, 3);
+    const leases = await all;
+    expect(f.values.size).toBe(3);
+    for (const lease of leases) {
+      lease.release();
+    }
+    loader.dispose();
+  });
+
   it('shares dependencies and reads each file once for concurrent owners', async () => {
     const f = fixture();
     const source = memorySource();

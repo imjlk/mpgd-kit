@@ -129,9 +129,11 @@ store without touching decoding, texture registration, leases or rollback.
 Sources never initialize `scene.load` and never create textures.
 
 The contract is a small lifecycle per file. The loader first calls
-`open(request, context)` to acquire source-side ownership; `open` must not
-transfer the body. Once the loader's byte-budget admission approves the asset,
-it calls `read()` exactly once, which resolves with `{ bytes, release() }`. The
+`open(request, context)` to acquire source-side ownership — every file of the
+asset is opened before byte-budget admission, so shared source work survives
+admission batching; `open` must not transfer the body. Once admission approves
+the asset, the loader calls `read()` exactly once, which resolves with
+`{ bytes, release() }`. The
 loader verifies the returned body, decodes and registers the texture, then
 returns the bytes via `release()`; `close()` returns source-side ownership once
 `read()` has settled. Cancellation of an in-flight read flows through
