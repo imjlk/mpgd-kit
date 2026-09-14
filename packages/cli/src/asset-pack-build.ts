@@ -6,6 +6,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -55,8 +56,18 @@ const sha256Of = (data: Buffer): string => createHash('sha256').update(data).dig
 
 /** Resolve symlinks for the longest existing ancestor, keeping the remainder. */
 function realpathBestEffort(target: string): string {
+  // lstat-based existence stops the walk at dangling symlinks, so realpath
+  // fails closed on them instead of lexically skipping the link.
+  const exists = (path: string): boolean => {
+    try {
+      lstatSync(path);
+      return true;
+    } catch {
+      return false;
+    }
+  };
   let existing = target;
-  while (!existsSync(existing)) {
+  while (!exists(existing)) {
     const parent = dirname(existing);
     if (parent === existing) {
       return existing;
@@ -378,7 +389,12 @@ export function buildAssetPacks(options: {
     }
     const staging = join(outPath, stagingPath);
     writeFileSync(staging, record.data);
-    renameSync(staging, target);
+    try {
+      renameSync(staging, target);
+    } catch (error) {
+      rmSync(staging, { force: true });
+      throw error;
+    }
   }
   return {
     outDir: outPath,

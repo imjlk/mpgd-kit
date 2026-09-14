@@ -582,6 +582,24 @@ try {
     }),
     /case-colliding pack id/u,
   );
+  const casePathConfig = join(fixtureRoot, 'case-path.config.json');
+  writeJson(casePathConfig, {
+    root: 'src',
+    packs: [{
+      id: 'mixed', revision: '1', delivery: 'files', assets: [
+        { kind: 'image', key: 'upper', file: 'shared/Pilot.png' },
+        { kind: 'image', key: 'lower', file: 'shared/pilot.png' },
+      ],
+    }],
+  });
+  assert.throws(
+    () => buildAssetPacks({
+      configPath: casePathConfig,
+      outDir: join(fixtureRoot, 'out-case-path'),
+      cwd: repoRoot,
+    }),
+    /case-colliding file/u,
+  );
 
   // 11. The packaged CLI builds packs outside the kit checkout. The tarballs
   //     carry the built dist, so run pnpm build:packages before this smoke.

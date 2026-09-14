@@ -100,6 +100,15 @@ export interface PhaserPackDeliveryArchive {
   readonly entryCount: number;
 }
 const digestPattern = /^[0-9a-f]{64}$/u;
+/** Case-insensitive filesystems and extractors treat case-folded pack ids and
+ * paths as the same file; NFC alone does not encode that equivalence. */
+function rejectFoldedDuplicate(seen: Set<string>, value: string, error: (input: string) => Error): void {
+  const folded = value.toLowerCase();
+  if (seen.has(folded)) {
+    throw error(value);
+  }
+  seen.add(folded);
+}
 const knownMediaTypes: ReadonlyMap<string, { mediaType: string; defaultMethod: PhaserPackEntryMethod }> = new Map(
   [
     ['png', { mediaType: 'image/png', defaultMethod: 'store' }],
@@ -313,11 +322,11 @@ export function validatePhaserPackBuildConfig(input: unknown): PhaserPackBuildCo
     ids.add(pack.id);
     // Case-insensitive filesystems and extractors treat case-folded ids and
     // paths as the same file; NFC alone does not encode that equivalence.
-    const foldedId = pack.id.toLowerCase();
-    if (foldedIds.has(foldedId)) {
-      throw new Error(`Invalid asset pack build config: case-colliding pack id ${pack.id}`);
-    }
-    foldedIds.add(foldedId);
+    rejectFoldedDuplicate(
+      foldedIds,
+      pack.id,
+      (id) => new Error(`Invalid asset pack build config: case-colliding pack id ${id}`),
+    );
     const keys = new Set<string>();
     const paths = new Set<string>();
     const foldedPaths = new Set<string>();
@@ -333,14 +342,14 @@ export function validatePhaserPackBuildConfig(input: unknown): PhaserPackBuildCo
         if (paths.has(file)) {
           throw new Error(`Invalid asset pack build config: duplicate file ${pack.id}/${file}`);
         }
-        const folded = file.toLowerCase();
-        if (foldedPaths.has(folded)) {
-          throw new Error(
-            `Invalid asset pack build config: case-colliding file ${pack.id}/${file}`,
-          );
-        }
+        rejectFoldedDuplicate(
+          foldedPaths,
+          file,
+          (input) => new Error(
+            `Invalid asset pack build config: case-colliding file ${pack.id}/${input}`,
+          ),
+        );
         paths.add(file);
-        foldedPaths.add(folded);
       }
     }
   }
@@ -544,13 +553,11 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
       throw new Error(`Invalid asset pack delivery manifest: duplicate pack id ${pack.packId}`);
     }
     seenPackIds.add(pack.packId);
-    const foldedPackId = pack.packId.toLowerCase();
-    if (foldedPackIds.has(foldedPackId)) {
-      throw new Error(
-        `Invalid asset pack delivery manifest: case-colliding pack id ${pack.packId}`,
-      );
-    }
-    foldedPackIds.add(foldedPackId);
+    rejectFoldedDuplicate(
+      foldedPackIds,
+      pack.packId,
+      (id) => new Error(`Invalid asset pack delivery manifest: case-colliding pack id ${id}`),
+    );
     visit(pack.packId);
     const keys = new Set<string>();
     const paths = new Set<string>();
@@ -568,14 +575,14 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
             `Invalid asset pack delivery manifest: duplicate path ${pack.packId}/${file.path}`,
           );
         }
-        const folded = file.path.toLowerCase();
-        if (foldedPaths.has(folded)) {
-          throw new Error(
-            `Invalid asset pack delivery manifest: case-colliding path ${pack.packId}/${file.path}`,
-          );
-        }
+        rejectFoldedDuplicate(
+          foldedPaths,
+          file.path,
+          (input) => new Error(
+            `Invalid asset pack delivery manifest: case-colliding path ${pack.packId}/${input}`,
+          ),
+        );
         paths.add(file.path);
-        foldedPaths.add(folded);
       }
     }
     for (const dependency of pack.dependencies) {
@@ -597,14 +604,14 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
           `Invalid asset pack delivery manifest: duplicate archive path ${pack.archive.path}`,
         );
       }
-      const foldedArchive = pack.archive.path.toLowerCase();
-      if (foldedArchivePaths.has(foldedArchive)) {
-        throw new Error(
-          `Invalid asset pack delivery manifest: case-colliding archive path ${pack.archive.path}`,
-        );
-      }
+      rejectFoldedDuplicate(
+        foldedArchivePaths,
+        pack.archive.path,
+        (input) => new Error(
+          `Invalid asset pack delivery manifest: case-colliding archive path ${input}`,
+        ),
+      );
       archivePaths.add(pack.archive.path);
-      foldedArchivePaths.add(foldedArchive);
     }
   }
   return { format: PHASER_PACK_DELIVERY_FORMAT, version: PHASER_PACK_DELIVERY_VERSION, packs };
