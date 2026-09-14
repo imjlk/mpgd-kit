@@ -83,6 +83,25 @@ function realpathBestEffort(target: string): string {
   return existing === target ? real : resolve(real, relative(existing, target));
 }
 
+/** Artifact writes must never traverse symlinks below the output root. */
+function assertNoSymlinkUnder(base: string, relativePath: string): void {
+  let current = base;
+  for (const component of relativePath.split('/')) {
+    current = join(current, component);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      return;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `Output path traverses a symbolic link below the output root: ${join(base, relativePath)}`,
+      );
+    }
+  }
+}
+
 interface PlannedFile {
   readonly role: PhaserPackFormatFileRole;
   readonly entryPath: string;
@@ -387,11 +406,13 @@ export function buildAssetPacks(options: {
       continue;
     }
     const target = join(outPath, record.path);
-    mkdirSync(dirname(target), { recursive: true });
     const stagingPath = `${record.path}.mpgd-staging-${process.pid}`;
     if (outputPaths.has(stagingPath)) {
       throw new Error(`Staging path collides with an output path: ${stagingPath}`);
     }
+    assertNoSymlinkUnder(outPath, record.path);
+    assertNoSymlinkUnder(outPath, stagingPath);
+    mkdirSync(dirname(target), { recursive: true });
     const staging = join(outPath, stagingPath);
     try {
       writeFileSync(staging, record.data);

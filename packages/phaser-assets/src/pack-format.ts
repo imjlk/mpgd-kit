@@ -164,9 +164,11 @@ export function parsePhaserPackEntryPath(input: string): string {
   }
   return input;
 }
-function expectString(value: unknown, label: string): string {
+const buildConfigContext = 'Invalid asset pack build config';
+const deliveryManifestContext = 'Invalid asset pack delivery manifest';
+function expectString(value: unknown, label: string, context: string = buildConfigContext): string {
   if (typeof value !== 'string' || value.length === 0) {
-    throw new Error(`Invalid asset pack build config: ${label} must be a non-empty string`);
+    throw new Error(`${context}: ${label} must be a non-empty string`);
   }
   return value;
 }
@@ -180,9 +182,13 @@ function expectStringArray(value: unknown, label: string): string[] {
   }
   return [...value];
 }
-function expectEntryMethod(value: unknown, label: string): PhaserPackEntryMethod {
+function expectEntryMethod(
+  value: unknown,
+  label: string,
+  context: string = buildConfigContext,
+): PhaserPackEntryMethod {
   if (value !== 'store' && value !== 'deflate') {
-    throw new Error(`Invalid asset pack build config: ${label} must be 'store' or 'deflate'`);
+    throw new Error(`${context}: ${label} must be 'store' or 'deflate'`);
   }
   return value;
 }
@@ -204,9 +210,13 @@ function expectFileRole(value: unknown, label: string): PhaserPackFormatFileRole
   }
   return value;
 }
-function parseFrameConfig(value: unknown, label: string): PhaserPackFrameConfig {
+function parseFrameConfig(
+  value: unknown,
+  label: string,
+  context: string = buildConfigContext,
+): PhaserPackFrameConfig {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`Invalid asset pack build config: ${label} frameConfig must be an object`);
+    throw new Error(`${context}: ${label} frameConfig must be an object`);
   }
   const source = value as Record<string, unknown>;
   const frameWidth: unknown = source.frameWidth;
@@ -291,7 +301,7 @@ export function validatePhaserPackBuildConfig(input: unknown): PhaserPackBuildCo
     }
     const pack = value as Record<string, unknown>;
     const id = expectString(pack.id, `${label} id`);
-    const revision = expectString(pack.revision, `${label} revision`);
+    const revision = expectString(pack.revision, `${label} revision`, deliveryManifestContext);
     if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(id)) {
       throw new Error(`Invalid asset pack build config: ${label} id must match [A-Za-z0-9][A-Za-z0-9._-]*`);
     }
@@ -428,8 +438,8 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
       throw new Error(`Invalid asset pack delivery manifest: ${label} must be an object`);
     }
     const pack = value as Record<string, unknown>;
-    const packId = expectString(pack.packId, `${label} packId`);
-    const revision = expectString(pack.revision, `${label} revision`);
+    const packId = expectString(pack.packId, `${label} packId`, deliveryManifestContext);
+    const revision = expectString(pack.revision, `${label} revision`, deliveryManifestContext);
     const delivery = expectDeliveryKind(
       pack.delivery,
       `Invalid asset pack delivery manifest: ${label}`,
@@ -444,8 +454,8 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
       }
       const entry = dependency as Record<string, unknown>;
       return {
-        packId: expectString(entry.packId, `${dependencyLabel} packId`),
-        revision: expectString(entry.revision, `${dependencyLabel} revision`),
+        packId: expectString(entry.packId, `${dependencyLabel} packId`, deliveryManifestContext),
+        revision: expectString(entry.revision, `${dependencyLabel} revision`, deliveryManifestContext),
       };
     });
     if (!Array.isArray(pack.assets)) {
@@ -457,11 +467,11 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
         throw new Error(`Invalid asset pack delivery manifest: ${assetLabel} must be an object`);
       }
       const asset = assetValue as Record<string, unknown>;
-      const assetKey = expectString(asset.assetKey, `${assetLabel} assetKey`);
+      const assetKey = expectString(asset.assetKey, `${assetLabel} assetKey`, deliveryManifestContext);
       const kind = expectAssetKind(asset.kind, `Invalid asset pack delivery manifest: ${assetLabel}`);
       const frameConfig = asset.frameConfig === undefined
         ? undefined
-        : parseFrameConfig(asset.frameConfig, assetLabel);
+        : parseFrameConfig(asset.frameConfig, assetLabel, deliveryManifestContext);
       if (asset.kind === 'spritesheet' && frameConfig === undefined) {
         throw new Error(`Invalid asset pack delivery manifest: ${assetLabel} spritesheet requires frameConfig`);
       }
@@ -478,7 +488,7 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
         }
         const file = fileValue as Record<string, unknown>;
         const role = expectFileRole(file.role, `Invalid asset pack delivery manifest: ${fileLabel}`);
-        const method = file.method === undefined ? undefined : expectEntryMethod(file.method, fileLabel);
+        const method = file.method === undefined ? undefined : expectEntryMethod(file.method, fileLabel, deliveryManifestContext);
         if (pack.delivery === 'zip' && method === undefined) {
           throw new Error(`Invalid asset pack delivery manifest: ${fileLabel} requires an entry method for zip delivery`);
         }
@@ -487,10 +497,10 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
         }
         return {
           role,
-          mediaType: expectString(file.mediaType, `${fileLabel} mediaType`),
+          mediaType: expectString(file.mediaType, `${fileLabel} mediaType`, deliveryManifestContext),
           bytes: expectPositiveInteger(file.bytes, `${fileLabel} bytes`),
           sha256: expectDigest(file.sha256, `${fileLabel} sha256`),
-          path: parsePhaserPackEntryPath(expectString(file.path, `${fileLabel} path`)),
+          path: parsePhaserPackEntryPath(expectString(file.path, `${fileLabel} path`, deliveryManifestContext)),
           method,
         };
       });
@@ -513,7 +523,7 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
       }
       const archiveSource = pack.archive as Record<string, unknown>;
       archive = {
-        path: parsePhaserPackEntryPath(expectString(archiveSource.path, `${archiveLabel} path`)),
+        path: parsePhaserPackEntryPath(expectString(archiveSource.path, `${archiveLabel} path`, deliveryManifestContext)),
         bytes: expectPositiveInteger(archiveSource.bytes, `${archiveLabel} bytes`),
         sha256: expectDigest(archiveSource.sha256, `${archiveLabel} sha256`),
         entryCount: expectPositiveInteger(archiveSource.entryCount, `${archiveLabel} entryCount`),

@@ -564,6 +564,15 @@ try {
     'a dangling symlinked output path fails closed',
   );
   rmSync(danglingLink, { force: true, recursive: true });
+  const nestedOut = join(fixtureRoot, 'out-nested');
+  mkdirSync(nestedOut, { recursive: true });
+  symlinkSync(resolve(repoRoot, sourceRoot), join(nestedOut, 'packs'));
+  assert.throws(
+    () => buildAssetPacks({ configPath: mainConfig, outDir: nestedOut, cwd: repoRoot }),
+    /symbolic link below the output root/u,
+    'a symlinked output descendant pointing into the source root is rejected',
+  );
+  rmSync(nestedOut, { force: true, recursive: true });
 
   // 10c. Case-colliding ids and paths fail validation.
   const caseConfig = join(fixtureRoot, 'case.config.json');
