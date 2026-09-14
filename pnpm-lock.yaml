@@ -585,6 +585,9 @@ importers:
       '@gunshi/resources':
         specifier: ^0.35.1
         version: 0.35.1
+      '@mpgd/phaser-assets':
+        specifier: workspace:*
+        version: link:../phaser-assets
       entities:
         specifier: ^8.0.0
         version: 8.0.0
@@ -628,9 +631,6 @@ importers:
       '@mpgd/i18n':
         specifier: workspace:*
         version: link:../i18n
-      '@mpgd/phaser-assets':
-        specifier: workspace:*
-        version: link:../phaser-assets
       '@mpgd/platform':
         specifier: workspace:*
         version: link:../platform

@@ -189,6 +189,18 @@ HTTP content decoding. `Content-Encoding` is never re-decoded in game code, and
 `Content-Length` is never used as size or verification evidence; actual network
 transfer can be smaller or larger than the buffered body.
 
+## Pack delivery format
+
+The `/pack-format` entrypoint is the pure, dependency-free contract shared by
+pack producers and consumers: build config and versioned delivery manifest
+types, untrusted-input validators, normalized entry path rules (UTF-8 NFC
+relative paths only) and the supported media types with their default ZIP
+entry methods. It never touches Node, the DOM, Phaser or compression. The
+`mpgd assets build-packs` command in `@mpgd/cli` produces files or ZIP
+delivery artifacts against this contract; see
+[Asset pack delivery builds](../../docs/ASSET_PACK_DELIVERY.md) for the config
+schema, determinism guarantees and ZIP v1 scope.
+
 See `examples/asset-packs` in the repository for two build layouts and executable
 fault/lifetime tests. Adding this API does not make generated games depend on the
 sample or require remote hosting.

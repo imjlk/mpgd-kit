@@ -17,6 +17,7 @@ import i18n, { defineI18n } from '@gunshi/plugin-i18n';
 import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
 
+import { buildAssetPacks } from './asset-pack-build.js';
 import {
   normalizeConfiguredBuildTargets,
   normalizeBuildTarget as normalizeConfiguredTargetName,
@@ -265,6 +266,7 @@ export async function runMpgdCli(args: readonly string[]): Promise<void> {
     name: 'mpgd',
     version: cliVersion,
     subCommands: {
+      assets: assetsCommand,
       game: gameCommand,
       legal: legalCommand,
       target: targetCommand,
@@ -325,7 +327,7 @@ const entryCommand = defineI18n({
     ko: 'mpgd-kit 스타터와 타깃 워크플로우를 관리합니다.',
   }),
   run: () => {
-    console.info('Use a sub-command: game, target, kit.');
+    console.info('Use a sub-command: assets, game, legal, target, kit.');
     console.info('Run "pnpm mpgd --help" for available commands.');
   },
 });
@@ -1054,6 +1056,77 @@ function readPositiveInteger(value: string, label: string): number {
 
   return parsed;
 }
+
+function assetPackBuildArgs() {
+  return {
+    config: {
+      type: 'string',
+      required: true,
+      description: 'Path to the asset pack build config JSON file.',
+    },
+    out: {
+      type: 'string',
+      required: true,
+      description: 'Output directory for delivery artifacts, outside the source root.',
+    },
+  } as const;
+}
+
+const assetsCommand = defineI18n({
+  name: 'assets',
+  description: 'Build deterministic asset pack delivery artifacts.',
+  resource: commandResource({
+    en: 'Build deterministic asset pack delivery artifacts.',
+    ko: '결정적인 에셋 팩 전달 산출물을 빌드합니다.',
+  }),
+  subCommands: {
+    'build-packs': defineI18n({
+      name: 'build-packs',
+      description: 'Build files or ZIP delivery artifacts for configured packs.',
+      resource: commandResource(
+        {
+          en: 'Build files or ZIP delivery artifacts for configured packs.',
+          ko: '설정된 팩의 files 또는 ZIP 전달 산출물을 빌드합니다.',
+        },
+        {
+          config: {
+            en: 'Path to the asset pack build config JSON file.',
+            ko: '에셋 팩 빌드 설정 JSON 파일 경로.',
+          },
+          out: {
+            en: 'Output directory for delivery artifacts, outside the source root.',
+            ko: '전달 산출물 출력 디렉터리. 소스 루트 밖이어야 합니다.',
+          },
+        },
+      ),
+      args: assetPackBuildArgs(),
+      run: (ctx) => {
+        const report = buildAssetPacks({
+          configPath: ctx.values.config,
+          outDir: ctx.values.out,
+        });
+        for (const output of report.outputs) {
+          console.info(
+            `${output.action === 'written' ? 'wrote' : 'unchanged'} ${output.path} `
+              + `(${output.bytes} bytes, sha256:${output.sha256})`,
+          );
+        }
+        for (const archive of report.archives) {
+          console.info(
+            `archive ${archive.path}: ${archive.entryCount} entries `
+              + `(${archive.storeEntries} store, ${archive.deflateEntries} deflate), `
+              + `sources ${archive.sourceBytes} bytes, archive ${archive.archiveBytes} bytes, `
+              + `sha256:${archive.sha256}`,
+          );
+        }
+        console.info(`Asset pack delivery manifest: ${report.manifestPath}`);
+      },
+    }),
+  },
+  run: () => {
+    console.info('Use "mpgd assets build-packs".');
+  },
+});
 
 const legalCommand = defineI18n({
   name: 'legal',
