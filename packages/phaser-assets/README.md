@@ -201,6 +201,47 @@ delivery artifacts against this contract; see
 [Asset pack delivery builds](../../docs/ASSET_PACK_DELIVERY.md) for the config
 schema, determinism guarantees and ZIP v1 scope.
 
+## Archive decoding
+
+`@mpgd/phaser-assets/archives` decodes the ZIP v1 delivery profile produced by
+`mpgd assets build-packs` under explicit resource bounds. Decoding accepts only
+that profile — STORE and DEFLATE entries with the writer's fixed metadata — and
+rejects encrypted, ZIP64, split, symlinked, corrupt, truncated, duplicated,
+traversal-carrying or manifest-diverging archives instead of repairing them.
+Archive and per-entry integrity (lengths and SHA-256) is mandatory; there is no
+optional-integrity mode here, unlike the files loader. SHA-256 requires a
+secure context (HTTPS or localhost), mirroring file integrity.
+
+Output is bounded while inflating, not after the fact: each entry's produced
+bytes are counted against the per-entry and total-expanded limits as they come
+out of the inflater, using fflate's streaming `Inflate` (the DEFLATE algorithm
+itself is not reimplemented). These limits bound observable decoded output;
+they are not a proof of total process memory. Independent limits cover archive
+bytes, entry count, path length, a decode deadline and concurrent jobs.
+
+Decoding runs in a worker the application deploys: bundle
+`@mpgd/phaser-assets/archive-worker` as a module worker (the example re-exports
+it as its own worker entry and references it with
+`new Worker(new URL(...), { type: 'module' })`), then pass a factory to
+`createBoundedZipDecoder`. Importing the client module never creates workers,
+fetches or timers; environments that cannot create workers fail with a clear
+`unsupported` error — there is no silent main-thread fallback for large
+archives. The worker posts at most one decoded entry ahead: pulling the next
+entry releases the previous one, so a slow consumer never queues unbounded
+bytes. By default the archive buffer is cloned for transport (the caller's
+buffer is never detached); opting into `transferArchive` detaches the caller's
+view for the job's duration and returns the buffer with the final status.
+Transport copies are outside the output limits but part of the wall clock.
+
+Jobs are cancellable: a cancelled job stops producing entries, its iterator
+ends, and late worker messages cannot flip the completion state. Worker
+crashes, invalid messages and missed deadlines surface as distinct result
+statuses (`worker-error`, `deadline`) after best-effort termination. Each job
+uses one fresh worker; concurrency across jobs is capped by
+`maxConcurrentDecodes`. Loader-based `files` delivery is unaffected: nothing
+about the decoder or its worker is imported by `/packs` users.
+
 See `examples/asset-packs` in the repository for two build layouts and executable
-fault/lifetime tests. Adding this API does not make generated games depend on the
+fault/lifetime tests, including a real module-worker decode scenario. Adding
+this API does not make generated games depend on the
 sample or require remote hosting.

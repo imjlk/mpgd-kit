@@ -1,0 +1,321 @@
+import { ZipDecodeError, type ZipDecodeFailureCode } from './archive-errors.js';
+import {
+  defaultArchiveWorkerLimits,
+  type ArchiveWorkerExpected,
+  type ArchiveWorkerLimits,
+  type ArchiveWorkerRequest,
+  type ArchiveWorkerResponse,
+  type ArchiveWorkerStats,
+} from './archive-protocol.js';
+
+export { ZipDecodeError } from './archive-errors.js';
+export type { ZipDecodeFailureCode } from './archive-errors.js';
+export type {
+  ArchiveWorkerExpected,
+  ArchiveWorkerExpectedEntry,
+  ArchiveWorkerLimits,
+  ArchiveWorkerStats,
+  ArchiveWorkerStatus,
+} from './archive-protocol.js';
+export { defaultArchiveWorkerLimits } from './archive-protocol.js';
+export type {
+  ExpectedZipArchive,
+  ExpectedZipEntry,
+  ZipDecodeControl,
+  ZipDecodeEntry,
+  ZipDecodeLimits,
+} from './archive-zip-core.js';
+
+/**
+ * Worker surface the decoder drives. A real `Worker` satisfies it; tests can
+ * substitute an in-process port. The consumer decides how workers are
+ * created and deployed (bundled entry, CSP-compatible URL); importing this
+ * module never constructs workers, fetches or timers.
+ */
+export interface ZipDecodeWorkerLike {
+  postMessage(message: ArchiveWorkerRequest, transfer?: readonly Transferable[]): void;
+  addEventListener(type: 'message', listener: (event: MessageEvent<ArchiveWorkerResponse>) => void): void;
+  addEventListener(type: 'error' | 'messageerror', listener: (event: Event) => void): void;
+  terminate(): void;
+}
+export interface BoundedZipDecoderOptions {
+  /** Must throw when the environment cannot create workers (CSP, no Worker). */
+  createWorker(): ZipDecodeWorkerLike;
+  /** Concurrent decode jobs; further jobs queue. Default 2. */
+  readonly maxConcurrentDecodes?: number;
+  /** Wall clock in ms; defaults to performance.now. */
+  readonly now?: (() => number) | undefined;
+  /** Grace before a cancelled or timed-out worker is terminated. Default 5000. */
+  readonly cancelGraceMs?: number;
+}
+export interface BoundedZipDecodeRequest {
+  readonly archive: Uint8Array;
+  readonly expected: ArchiveWorkerExpected;
+  readonly limits?: ArchiveWorkerLimits;
+  /** Transfer the archive buffer instead of copying it: the caller's view
+   * detaches for the job's duration and the buffer returns via
+   * `status.archiveBuffer`. Default false clones the bytes, so the caller's
+   * buffer is never detached. Views into a larger buffer are always copied
+   * for transport. */
+  readonly transferArchive?: boolean;
+}
+export interface BoundedZipDecodeStatus {
+  readonly status:
+    | 'completed'
+    | 'cancelled'
+    | 'deadline'
+    | 'error'
+    | 'unsupported'
+    | 'worker-error';
+  readonly code?: string | undefined;
+  readonly detail?: string | undefined;
+  readonly stats?: ArchiveWorkerStats | undefined;
+  readonly archiveBuffer?: ArrayBuffer | undefined;
+}
+export interface BoundedZipDecodeEntry {
+  readonly path: string;
+  readonly method: 'store' | 'deflate';
+  readonly bytes: Uint8Array;
+}
+export interface BoundedZipDecodeJob {
+  /** Decoded entries, one outstanding at a time. Pulling the next entry
+   * releases the previous one's bytes back to the worker, so a slow consumer
+   * bounds queued output to a single entry. */
+  readonly entries: AsyncIterable<BoundedZipDecodeEntry>;
+  /** Stop the job. The worker gets a chance to finish cleanly; it is
+   * terminated after the grace period. */
+  cancel(): Promise<BoundedZipDecodeStatus>;
+  /** Final status; resolves exactly once, after cleanup. */
+  readonly result: Promise<BoundedZipDecodeStatus>;
+}
+export interface BoundedZipDecoder {
+  decode(request: BoundedZipDecodeRequest): BoundedZipDecodeJob;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
+  setTimeout(resolve, ms);
+});
+/** Workers read the posted buffer as a whole, so the payload must be an
+ * exact-fit buffer. Sub-views are copied; transport copies are outside the
+ * decode output limits but part of the job's wall clock. */
+const exactArchiveBuffer = (archive: Uint8Array, transfer: boolean): ArrayBuffer => {
+  const exact = archive.byteOffset === 0 && archive.byteLength === archive.buffer.byteLength;
+  if (exact) {
+    return archive.buffer as ArrayBuffer;
+  }
+  if (transfer) {
+    throw new ZipDecodeError(
+      'unsupported',
+      'transferArchive requires an exact-fit buffer; copy the view first',
+    );
+  }
+  return archive.slice().buffer as ArrayBuffer;
+};
+
+/** Create a bounded ZIP decoder over consumer-provided workers. Each decode
+ * job uses one fresh worker and terminates it when the job finishes; the
+ * decoder enforces the concurrency limit itself. */
+export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): BoundedZipDecoder {
+  const maxConcurrent = options.maxConcurrentDecodes ?? 2;
+  const graceMs = options.cancelGraceMs ?? 5000;
+  let active = 0;
+  let nextJobId = 1;
+  const pending: (() => void)[] = [];
+  const acquire = async (): Promise<void> => {
+    if (active >= maxConcurrent) {
+      await new Promise<void>((resolve) => {
+        pending.push(resolve);
+      });
+    }
+    active++;
+  };
+  const releaseSlot = (): void => {
+    active--;
+    pending.shift()?.();
+  };
+  return {
+    decode(request) {
+      const jobId = nextJobId++;
+      const transfer = request.transferArchive === true;
+      const payload = exactArchiveBuffer(request.archive, transfer);
+      const limits = request.limits ?? defaultArchiveWorkerLimits();
+      let worker: ZipDecodeWorkerLike | undefined;
+      let finished = false;
+      let releasedSeq = 0;
+      let outstandingSeq = 0;
+      let resolveEntry: ((value: IteratorResult<BoundedZipDecodeEntry>) => void) | undefined;
+      let rejectEntry: ((error: ZipDecodeError) => void) | undefined;
+      let settleResult: ((status: BoundedZipDecodeStatus) => void) | undefined;
+      let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      const result = new Promise<BoundedZipDecodeStatus>((resolve) => {
+        settleResult = resolve;
+      });
+      let failure: ZipDecodeError | undefined;
+      const finalize = (status: BoundedZipDecodeStatus): void => {
+        if (finished) {
+          return;
+        }
+        finished = true;
+        if (deadlineTimer !== undefined) {
+          clearTimeout(deadlineTimer);
+          deadlineTimer = undefined;
+        }
+        if (status.status === 'completed' || status.status === 'cancelled') {
+          resolveEntry?.({
+            done: true, value: undefined,
+          });
+        } else {
+          failure = new ZipDecodeError(
+            (status.code as ZipDecodeFailureCode | undefined) ?? 'worker-error',
+            status.detail ?? `Archive decode job failed with ${status.status}`,
+          );
+          rejectEntry?.(failure);
+        }
+        resolveEntry = undefined;
+        rejectEntry = undefined;
+        settleResult?.(status);
+        try {
+          worker?.terminate();
+        } catch {
+          // Termination is best effort; the job is finished either way.
+        }
+        releaseSlot();
+      };
+      const start = async (): Promise<void> => {
+        await acquire();
+        if (finished) {
+          releaseSlot();
+          return;
+        }
+        try {
+          worker = options.createWorker();
+        } catch (error) {
+          finalize({
+            status: 'unsupported',
+            code: 'unsupported',
+            detail: `Cannot create the archive decode worker: ${String(error)}`,
+          });
+          return;
+        }
+        worker.addEventListener('message', (event) => {
+          const message = event.data;
+          if (message.jobId !== jobId || finished) {
+            return;
+          }
+          if (message.type === 'entry') {
+            if (message.seq !== outstandingSeq + 1) {
+              return;
+            }
+            outstandingSeq = message.seq;
+            const resolve = resolveEntry;
+            resolveEntry = undefined;
+            resolve?.({
+              done: false,
+              value: {
+                path: message.path,
+                method: message.method,
+                bytes: new Uint8Array(message.bytes),
+              },
+            });
+            return;
+          }
+          finalize({
+            status: message.status,
+            code: message.code,
+            detail: message.detail,
+            stats: message.stats,
+            ...(transfer && message.archive !== undefined ? { archiveBuffer: message.archive } : {}),
+          });
+        });
+        const onWorkerFailure = (): void => {
+          finalize({
+            status: 'worker-error',
+            code: 'worker-error',
+            detail: 'The archive decode worker failed or received an invalid message',
+          });
+        };
+        worker.addEventListener('error', onWorkerFailure);
+        worker.addEventListener('messageerror', onWorkerFailure);
+        deadlineTimer = setTimeout(() => {
+          worker?.postMessage({
+            type: 'cancel',
+            jobId,
+          });
+          void sleep(graceMs).then(() => {
+            if (!finished) {
+              finalize({
+                status: 'deadline',
+                code: 'deadline',
+                detail: 'The archive decode worker missed its deadline',
+              });
+            }
+          });
+        }, limits.decodeDeadlineMs + 2000);
+        worker.postMessage({
+          type: 'decode',
+          jobId,
+          archive: payload,
+          transferArchive: transfer,
+          expected: request.expected,
+          limits,
+        }, transfer ? [payload] : []);
+      };
+      void start();
+      const iterator: AsyncIterator<BoundedZipDecodeEntry> = {
+        next: (): Promise<IteratorResult<BoundedZipDecodeEntry>> => {
+          if (finished) {
+            if (failure !== undefined) {
+              return Promise.reject(failure);
+            }
+            return Promise.resolve({
+              done: true, value: undefined,
+            });
+          }
+          if (outstandingSeq > releasedSeq) {
+            releasedSeq = outstandingSeq;
+            worker?.postMessage({
+              type: 'release',
+              jobId,
+              seq: releasedSeq,
+            });
+          }
+          return new Promise<IteratorResult<BoundedZipDecodeEntry>>((resolve, reject) => {
+            resolveEntry = resolve;
+            rejectEntry = reject;
+          });
+        },
+        return: (): Promise<IteratorResult<BoundedZipDecodeEntry>> => job.cancel().then(() => ({
+          done: true,
+          value: undefined,
+        })),
+      };
+      const job: BoundedZipDecodeJob = {
+        entries: {
+          [Symbol.asyncIterator]: (): AsyncIterator<BoundedZipDecodeEntry> => iterator,
+        },
+        cancel: async (): Promise<BoundedZipDecodeStatus> => {
+          if (finished) {
+            return result;
+          }
+          worker?.postMessage({
+            type: 'cancel',
+            jobId,
+          });
+          const forced = sleep(graceMs).then((): BoundedZipDecodeStatus => ({
+            status: 'cancelled',
+            code: 'cancelled',
+            detail: 'The archive decode worker was terminated after cancellation',
+          }));
+          return Promise.race([result, forced]).then((status) => {
+            if (!finished) {
+              finalize(status);
+            }
+            return result;
+          });
+        },
+        result,
+      };
+      return job;
+    },
+  };
+}

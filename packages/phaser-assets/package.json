@@ -1,28 +1,18 @@
 {
   "name": "@mpgd/phaser-assets",
-  "version": "0.5.0",
-  "description": "Target-portable Phaser asset manifest and loader helpers for mpgd games.",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/imjlk/mpgd-kit.git",
-    "directory": "packages/phaser-assets"
-  },
   "bugs": {
     "url": "https://github.com/imjlk/mpgd-kit/issues"
   },
-  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
-  "keywords": [
-    "mpgd",
-    "phaser",
-    "assets",
-    "vite",
-    "apps-in-toss",
-    "capacitor",
-    "devvit"
-  ],
-  "type": "module",
-  "sideEffects": false,
+  "dependencies": {
+    "fflate": "0.8.3"
+  },
+  "description": "Target-portable Phaser asset manifest and loader helpers for mpgd games.",
+  "devDependencies": {
+    "phaser": "4.2.0",
+    "ttsc": "0.18.4",
+    "typescript": "7.0.2",
+    "vitest": "^4.0.0"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -35,11 +25,42 @@
     "./pack-format": {
       "types": "./dist/pack-format.d.ts",
       "default": "./dist/pack-format.js"
+    },
+    "./archives": {
+      "types": "./dist/archives.d.ts",
+      "default": "./dist/archives.js"
+    },
+    "./archive-worker": {
+      "types": "./dist/archive-worker.d.ts",
+      "default": "./dist/archive-worker.js"
     }
   },
   "files": [
     "dist"
   ],
+  "homepage": "https://github.com/imjlk/mpgd-kit#readme",
+  "keywords": [
+    "mpgd",
+    "phaser",
+    "assets",
+    "vite",
+    "apps-in-toss",
+    "capacitor",
+    "devvit"
+  ],
+  "license": "MIT",
+  "main": "./dist/index.js",
+  "peerDependencies": {
+    "phaser": ">=4.0.0 <5"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imjlk/mpgd-kit.git",
+    "directory": "packages/phaser-assets"
+  },
   "scripts": {
     "check": "ttsc --noEmit",
     "lint": "ttsc --noEmit",
@@ -47,18 +68,10 @@
     "format": "ttsc format",
     "fix": "ttsc fix"
   },
-  "peerDependencies": {
-    "phaser": ">=4.0.0 <5"
-  },
-  "devDependencies": {
-    "phaser": "4.2.0",
-    "ttsc": "0.18.4",
-    "typescript": "7.0.2",
-    "vitest": "^4.0.0"
-  },
-  "main": "./dist/index.js",
+  "sideEffects": [
+    "./dist/archive-worker.js"
+  ],
+  "type": "module",
   "types": "./dist/index.d.ts",
-  "publishConfig": {
-    "access": "public"
-  }
+  "version": "0.5.0"
 }

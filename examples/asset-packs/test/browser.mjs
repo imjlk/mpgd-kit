@@ -217,6 +217,26 @@ try {
     }
     await context.close();
   }
+  // The packaged bounded ZIP decoder runs in a real module worker.
+  {
+    const context = await browser.newContext();
+    const page = await context.newPage();
+    const errors = [];
+    page.on('pageerror', (error) => errors.push(error.message));
+    page.on('console', (message) => {
+      if (message.type() === 'error') errors.push(message.text());
+    });
+    const app = await staticServer(join(builds, 'bundled'));
+    servers.push(app);
+    await page.goto(app.url + '?zip-worker=1');
+    const result = await page.waitForFunction(() => window.__zip_worker_result !== undefined, { timeout: 20000 });
+    const report = JSON.parse(await result.evaluate(() => window.__zip_worker_result()));
+    assert.equal(report.status, 'passed', `worker self test failed: ${JSON.stringify(report)}`);
+    assert.equal(report.entries, 2);
+    assert.deepEqual(errors, []);
+    await context.close();
+  }
+
   // Real Phaser must reject a prepared but incorrectly named theme image without
   // falling back to its missing texture or sacrificing the existing level's lease.
   const invalidCatalog = structuredClone(reports.find((report) => report.mode === 'bundled').packs);

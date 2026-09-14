@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 
 import { createPhaserAssetPackLoader, type PhaserAssetPackLease as PackLease } from '@mpgd/phaser-assets/packs';
+import { runZipWorkerSelfTest } from './zipWorkerSelfTest.js';
 import type { DeliveryPack } from './packs.js';
 import './style.css';
 
@@ -128,11 +129,19 @@ class Board extends Phaser.Scene {
 }
 
 const board = new Board();
-const game = new Phaser.Game({
-  type: new URLSearchParams(location.search).get('renderer') === 'canvas' ? Phaser.CANVAS : Phaser.WEBGL, width: 960, height: 540, parent: 'game', backgroundColor: '#142c31',
-  pixelArt: true, scene: [board], audio: { noAudio: true },
-  loader: { imageLoadType: 'HTMLImageElement' },
-});
+let game: Phaser.Game;
+const bootGame = (): void => {
+  game = new Phaser.Game({
+    type: new URLSearchParams(location.search).get('renderer') === 'canvas' ? Phaser.CANVAS : Phaser.WEBGL, width: 960, height: 540, parent: 'game', backgroundColor: '#142c31',
+    pixelArt: true, scene: [board], audio: { noAudio: true },
+    loader: { imageLoadType: 'HTMLImageElement' },
+  });
+};
+if (new URLSearchParams(location.search).has('zip-worker')) {
+  void runZipWorkerSelfTest();
+} else {
+  bootGame();
+}
 
 function statusText(): string {
   if (model.phase === 'error') return model.error;
