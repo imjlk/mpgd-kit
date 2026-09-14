@@ -150,7 +150,11 @@ if (new URLSearchParams(location.search).has('zip-worker')) {
         status: 'failed', error: `Could not load the worker self test: ${String(error)}`,
       });
     },
-  );
+  ).catch((error) => {
+    window.__zip_worker_result = (): string => JSON.stringify({
+      status: 'failed', error: `The worker self test rejected: ${String(error)}`,
+    });
+  });
 } else {
   bootGame();
   wireSampleControls();

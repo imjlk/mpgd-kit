@@ -446,7 +446,7 @@ describe('bounded ZIP decode client', () => {
     await tick(2);
     const done = posted.find((message) => message.type === 'done');
     expect(done).toMatchObject({
-      status: 'error', code: 'unsupported-zip', jobId: 7,
+      status: 'error', code: 'unsupported', jobId: 7,
     });
     expect((done as { archive?: ArrayBuffer }).archive?.byteLength).toBe(zip.archive.length);
     expect(transferred[0]).toHaveLength(1);

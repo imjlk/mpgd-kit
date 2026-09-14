@@ -94,6 +94,9 @@ export function createArchiveWorkerDispatch(port: ArchiveWorkerPort): (message: 
           break;
         }
         const seq = job.entries + 1;
+        // Capture before posting: transferring an exact-fit buffer detaches
+        // the view in a real worker, so later reads would observe 0 bytes.
+        const entryBytes = entry.bytes.byteLength;
         const exact = entry.bytes.byteOffset === 0
           && entry.bytes.byteLength === entry.bytes.buffer.byteLength;
         const buffer = (exact
@@ -114,7 +117,7 @@ export function createArchiveWorkerDispatch(port: ArchiveWorkerPort): (message: 
           [buffer],
         );
         job.entries = seq;
-        job.expandedBytes += entry.bytes.byteLength;
+        job.expandedBytes += entryBytes;
         const released = await new Promise<boolean>((resolve) => {
           job.awaitedSeq = seq;
           job.resolveRelease = (cancelled) => resolve(cancelled);
@@ -164,7 +167,7 @@ export function createArchiveWorkerDispatch(port: ArchiveWorkerPort): (message: 
             type: 'done',
             jobId: message.jobId,
             status: 'error',
-            code: 'unsupported-zip',
+            code: 'unsupported',
             detail: `Archive worker protocol ${message.protocol} is not ${ARCHIVE_WORKER_PROTOCOL}`,
             ...(message.transferArchive ? { archive: message.archive } : {}),
             stats: zeroedStats(),

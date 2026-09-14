@@ -81,9 +81,10 @@ export interface BoundedZipDecodeEntry {
   readonly bytes: Uint8Array;
 }
 export interface BoundedZipDecodeJob {
-  /** Decoded entries, one outstanding at a time. Pulling the next entry
-   * releases the previous one's bytes back to the worker, so a slow consumer
-   * bounds queued output to a single entry. */
+  /** Decoded entries under credit backpressure: the worker decodes at most
+   * one entry ahead of the consumer, so a stalled consumer keeps at most the
+   * held entry plus one buffered entry resident. Pulling the next entry
+   * releases the previous one's bytes back to the worker. */
   readonly entries: AsyncIterable<BoundedZipDecodeEntry>;
   /** Stop the job. The worker gets a chance to finish cleanly; it is
    * terminated after the grace period. */
@@ -155,6 +156,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       let resolveEntry: ((value: IteratorResult<BoundedZipDecodeEntry>) => void) | undefined;
       let rejectEntry: ((error: ZipDecodeError) => void) | undefined;
       let bufferedEntry: BoundedZipDecodeEntry | undefined;
+      let decodePosted = false;
       let settleResult: ((status: BoundedZipDecodeStatus) => void) | undefined;
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
       const result = new Promise<BoundedZipDecodeStatus>((resolve) => {
@@ -183,8 +185,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         }
         resolveEntry = undefined;
         rejectEntry = undefined;
-        if (transfer && status.archiveBuffer === undefined
-          && status.status !== 'completed' && status.status !== 'cancelled') {
+        if (
+          transfer && decodePosted && status.archiveBuffer === undefined
+          && status.status !== 'completed' && status.status !== 'cancelled'
+        ) {
           status = {
             ...status, archiveLost: true,
           };
@@ -240,6 +244,14 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
             } else if (bufferedEntry === undefined) {
               bufferedEntry = value;
+            } else {
+              // A worker delivering past the single-outstanding-entry credit
+              // is a protocol failure, not a data source.
+              finalize({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: 'The archive decode worker delivered more entries than credited',
+              });
             }
             return;
           }
@@ -284,6 +296,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           expected: request.expected,
           limits,
         }, transfer ? [payload] : []);
+        decodePosted = true;
       };
       void start();
       const iterator: AsyncIterator<BoundedZipDecodeEntry> = {
