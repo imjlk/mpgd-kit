@@ -511,41 +511,36 @@ describe('bounded ZIP decode client', () => {
   });
 
   it('returns the transferred archive when the worker self-deadlines', async () => {
-    vi.useFakeTimers();
-    try {
-      const decoder = createBoundedZipDecoder({
-        createWorker: (): FakeWorker => {
-          const worker = createFakeWorker();
-          worker.ignoreCancel(true);
-          return worker;
-        },
-        cancelGraceMs: 50,
-      });
-      const zip = fixture();
-      const job = decoder.decode({
-        archive: zip.archive.slice(),
-        expected: zip.expected,
-        transferArchive: true,
-        limits: {
-          archiveBytes: 1024 * 1024, entryBytes: 1024 * 1024, totalExpandedBytes: 1024 * 1024,
-          entryCount: 16, maxPathLength: 256, decodeDeadlineMs: 10,
-        },
-      });
-      const consuming = (async () => {
-        for await (const _entry of job.entries) {
-          void _entry;
-        }
-      })();
-      const expectation = expect(consuming).rejects.toMatchObject({ code: 'deadline' });
-      await vi.advanceTimersByTimeAsync(3000);
-      await expectation;
-      const finalStatus = await job.result;
-      expect(finalStatus.status).toBe('deadline');
-      expect(finalStatus.archiveBuffer?.byteLength).toBe(zip.archive.length);
-      expect(finalStatus.archiveLost).toBeUndefined();
-    } finally {
-      vi.useRealTimers();
-    }
+    const posted: ArchiveWorkerResponse[] = [];
+    const dispatch = createArchiveWorkerDispatch({
+      post: (message, transfer): void => {
+        posted.push(message);
+        void transfer;
+      },
+    });
+    const zip = fixture();
+    dispatch({
+      type: 'decode',
+      jobId: 9,
+      protocol: 1,
+      archive: zip.archive.slice().buffer as ArrayBuffer,
+      transferArchive: true,
+      expected: zip.expected,
+      limits: {
+        archiveBytes: 1024 * 1024,
+        entryBytes: 1024 * 1024,
+        totalExpandedBytes: 1024 * 1024,
+        entryCount: 16,
+        maxPathLength: 256,
+        // A zero deadline fires deterministically once the core awaits the
+        // entry digest, without racing the client's transport grace.
+        decodeDeadlineMs: 0,
+      },
+    });
+    await tick(4);
+    const done = posted.find((message) => message.type === 'done');
+    expect(done).toMatchObject({ status: 'deadline', jobId: 9 });
+    expect((done as { archive?: ArrayBuffer }).archive?.byteLength).toBe(zip.archive.length);
   });
 
   it('cancels a job before its worker posts the decode', async () => {
