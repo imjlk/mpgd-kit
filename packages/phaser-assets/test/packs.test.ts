@@ -497,3 +497,30 @@ describe('failure isolation and bounded preparation', () => {
     tiny.dispose();
   });
 });
+
+it('limits decode independently when all downloads fit in the byte budget', async () => {
+  const f = fixture();
+  const gates = [deferred<void>(), deferred<void>(), deferred<void>()];
+  const started = deferred<void>();
+  let calls = 0;
+  decode = () => {
+    const gate = gates[calls++];
+    started.resolve();
+    return gate?.promise ?? Promise.resolve();
+  };
+  const all = [...catalog, { id: 'all', revision: '1', dependsOn: ['grove', 'dunes'], assets: [] }];
+  const loader = createPhaserAssetPackLoader(f.scene, all, { maxFileBytes: 3, maxBufferedBytes: 9, maxConcurrentDownloads: 3, maxConcurrentDecodes: 1 });
+  const work = loader.acquire('all');
+  await started.promise;
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(fetch).toHaveBeenCalledTimes(3);
+  expect(calls).toBe(1);
+  gates[0]?.resolve();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(calls).toBe(2);
+  gates[1]?.resolve();
+  gates[2]?.resolve();
+  (await work).release();
+  expect(calls).toBe(3);
+  loader.dispose();
+});

@@ -46,3 +46,5 @@ including named atlas frames, spritesheet frames and physical texture cleanup.
 The root typecheck passes; full contribution checks and OCR/PR review are running.
 
 Follow-up review incorporated: cleanup failure isolation with drainable diagnostics, full download/decode shutdown coverage, consumer display cleanup before lease release, separate request deadlines and download/decode/encoded-byte budgets. Package tests: 37 passing. Browser matrix including stalled body, cache reuse and shutdown passing. Public API remains in the existing phaser-assets package.
+
+Final admission check: 38 package tests pass, including an independent decode limit with all downloads admitted. Active/pending real Phaser shutdown and 20 repeated 404/transient-500 recovery/unload cycles pass. OCR noted two low-severity diagnostic/documentation improvements; both applied.

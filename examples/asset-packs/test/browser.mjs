@@ -41,7 +41,9 @@ try {
       try {
         await page.waitForFunction((expected) => typeof window.render_game_to_text === 'function' && JSON.parse(window.render_game_to_text()).phase === expected, phase);
       } catch (error) {
-        console.error('Asset scenario failed', { mode: report.mode, renderer, expected: phase, actual: await state(), errors });
+        let actual;
+        try { actual = await state(); } catch { actual = 'unavailable'; }
+        console.error('Asset scenario failed', { mode: report.mode, renderer, expected: phase, actual, errors });
         throw error;
       }
     };

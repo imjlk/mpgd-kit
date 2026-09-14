@@ -225,4 +225,6 @@ window.advanceTime = (milliseconds) => {
   }
 };
 
+// SceneManager.stop emits shutdown synchronously; count after consumer and loader cleanup.
+// Keep this direct manager call rather than queuing a ScenePlugin operation.
 window.shutdownSample = () => { game.scene.stop('board'); return board.textureCount(); };
