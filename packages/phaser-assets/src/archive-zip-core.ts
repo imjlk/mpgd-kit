@@ -174,7 +174,7 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     const externalAttributes = zip.u32(cursor + 38);
     const localOffset = zip.u32(cursor + 42);
     const entryLength = 46 + nameLength + extraLength + commentLength;
-    if (versionNeeded > VERSION_NEEDED || diskStart !== 0) {
+    if (versionNeeded !== VERSION_NEEDED || diskStart !== 0) {
       fail(
         'unsupported-zip',
         `ZIP entry needs an unsupported reader (version ${versionNeeded}, disk ${diskStart})`,

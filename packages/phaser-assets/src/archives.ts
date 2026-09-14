@@ -408,10 +408,14 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           if (firstCause === undefined) {
             firstCause = 'deadline';
           }
-          worker?.postMessage({
-            type: 'cancel',
-            jobId,
-          });
+          try {
+            worker?.postMessage({
+              type: 'cancel',
+              jobId,
+            });
+          } catch {
+            // A throwing postMessage must not skip the forced deadline.
+          }
           void sleep(graceMs).then(() => {
             if (!finished) {
               finalize({
