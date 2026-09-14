@@ -187,11 +187,18 @@ try {
   const pinned = JSON.parse(
     readFileSync(join(repoRoot, 'packages/phaser-assets/package.json'), 'utf8'),
   ).dependencies.fflate;
-  const publishedManifest = packageJson.status === 0
-    ? JSON.parse(packageJson.stdout) as { dependencies?: { fflate?: unknown } }
-    : undefined;
+  assert.equal(packageJson.status, 0, `tar manifest read failed: ${packageJson.stderr}`);
+  const publishedManifest = JSON.parse(
+    packageJson.stdout,
+  ) as { dependencies?: { fflate?: unknown } };
+  assert.notEqual(pinned, undefined, 'the workspace package must pin an fflate version');
+  assert.notEqual(
+    publishedManifest.dependencies?.fflate,
+    undefined,
+    'published package declares fflate',
+  );
   assert.equal(
-    publishedManifest?.dependencies?.fflate,
+    publishedManifest.dependencies?.fflate,
     pinned,
     'published package pins the workspace fflate version',
   );
