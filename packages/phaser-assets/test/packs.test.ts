@@ -278,6 +278,7 @@ it('accepts explicitly undefined optional integrity and rejects malformed values
     ...catalog[0]!, assets: [{
       ...catalog[0]!.assets[0]!, integrity: {
         texture: undefined,
+        atlas: undefined,
       },
     }],
   }] as unknown as PhaserAssetPack[];
@@ -522,5 +523,21 @@ it('limits decode independently when all downloads fit in the byte budget', asyn
   gates[2]?.resolve();
   (await work).release();
   expect(calls).toBe(3);
+  loader.dispose();
+});
+
+it('rejects misspelled and inapplicable integrity fields before starting work', () => {
+  for (const field of ['textrue', 'atlas']) {
+    expect(() => definePhaserAssetPacks([{ id: 'bad', revision: '1', assets: [{
+      kind: 'image', key: 'image', url: '/image', integrity: { [field]: { bytes: 3, sha256: '0'.repeat(64) } },
+    }] }] as readonly PhaserAssetPack[])).toThrow('Unknown integrity entry');
+  }
+});
+
+it('identifies an atlas that cannot fit its reservation without rejecting smaller catalogs', async () => {
+  const f = fixture();
+  const loader = createPhaserAssetPackLoader(f.scene, [{ id: 'atlas-pack', revision: '1', assets: [{ kind: 'atlas', key: 'terrain', textureUrl: '/image', atlasUrl: '/json' }] }], { maxFileBytes: 8, maxBufferedBytes: 8 });
+  await expect(loader.acquire('atlas-pack')).rejects.toThrow('Asset atlas-pack/terrain reservation 16 exceeds buffered byte limit 8');
+  expect(fetch).not.toHaveBeenCalled();
   loader.dispose();
 });

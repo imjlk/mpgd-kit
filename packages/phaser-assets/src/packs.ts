@@ -138,6 +138,11 @@ export function definePhaserAssetPacks<const T extends readonly PhaserAssetPack[
       ))) {
         throw new Error(`Invalid integrity: ${asset.key}`);
       }
+      for (const name of Object.keys(asset.integrity ?? {})) {
+        if (name !== 'texture' && (name !== 'atlas' || asset.kind !== 'atlas' && asset.integrity?.atlas !== undefined)) {
+          throw new Error(`Unknown integrity entry '${name}': ${asset.key}`);
+        }
+      }
       for (const value of Object.values(asset.integrity ?? {})) {
         // Optional fields may be explicitly undefined in JavaScript consumers.
         if (value === undefined) {
@@ -273,6 +278,11 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
     const { asset, pack } = item;
     const reservation = (asset.integrity?.texture?.bytes ?? maxFileBytes)
       + (asset.kind === 'atlas' ? (asset.integrity?.atlas?.bytes ?? maxFileBytes) : 0);
+    if (!Number.isSafeInteger(reservation) || reservation > maxBufferedBytes) {
+      throw new Error(
+        `Asset ${pack.id}/${asset.key} reservation ${reservation} exceeds buffered byte limit ${maxBufferedBytes}`,
+      );
+    }
     const returnBytes = await buffered.acquire(reservation, signal);
     let returnDecode: (() => void) | undefined;
     try {
@@ -297,6 +307,8 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
           returnDownload();
         }
       };
+      // Keep the byte reservation until BOTH files settle, even when one fails.
+      // Promise.all would release it early while its sibling still holds payloads.
       const results = await Promise.allSettled([
         file(asset.kind === 'atlas' ? asset.textureUrl : asset.url, asset.integrity?.texture),
         asset.kind === 'atlas'

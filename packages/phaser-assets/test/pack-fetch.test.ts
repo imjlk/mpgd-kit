@@ -14,7 +14,10 @@ const options = () => ({
   maxFileBytes: 8,
   integrity,
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 it('preserves read errors and releases the reader lock when cancelling an errored stream fails', async () => {
   const failure = new Error('read failed');
   const releaseLock = vi.fn();
@@ -90,4 +93,56 @@ it('aborts a stalled response body at the per-request deadline', async () => {
   await failed;
   expect(requestSignal?.aborted).toBe(true);
   vi.useRealTimers();
+});
+
+it('ends the request deadline before non-abortable integrity hashing', async () => {
+  vi.useFakeTimers();
+  let finish!: (value: ArrayBuffer) => void;
+  let started!: () => void;
+  const hashing = new Promise<void>((resolve) => {
+    started = resolve; });
+  const digest = new Promise<ArrayBuffer>((resolve) => {
+    finish = resolve; });
+  const realDigest = await crypto.subtle.digest('SHA-256', bytes);
+  vi.stubGlobal('crypto', { subtle: { digest: () => {
+        started();
+        return digest; } } });
+  let requestSignal: AbortSignal | undefined;
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init: RequestInit) => {
+      requestSignal = init.signal as AbortSignal;
+      return new Response(bytes);
+    }),
+  );
+  const work = fetchPackFile('/image.png', { ...options(), requestTimeoutMs: 10 });
+  await hashing;
+  await vi.advanceTimersByTimeAsync(20);
+  expect(requestSignal?.aborted).toBe(false);
+  finish(realDigest);
+  expect((await work).size).toBe(3);
+  expect(fetch).toHaveBeenCalledOnce();
+});
+
+it('honors Retry-After and still aborts an outstanding backoff', async () => {
+  vi.useFakeTimers();
+  const serverBusy = () => new Response('', { status: 429, headers: { 'Retry-After': '1' } });
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValueOnce(serverBusy()).mockResolvedValueOnce(new Response(bytes)),
+  );
+  const first = fetchPackFile('/image.png', options());
+  await vi.advanceTimersByTimeAsync(999);
+  expect(fetch).toHaveBeenCalledOnce();
+  await vi.advanceTimersByTimeAsync(1);
+  await first;
+  expect(fetch).toHaveBeenCalledTimes(2);
+  vi.mocked(fetch).mockResolvedValueOnce(serverBusy());
+  const cancel = new AbortController();
+  const cancelled = expect(fetchPackFile('/image.png', { ...options(), signal: cancel.signal })).rejects.toMatchObject({ name: 'AbortError' });
+  await vi.advanceTimersByTimeAsync(100);
+  cancel.abort();
+  await cancelled;
+  await vi.advanceTimersByTimeAsync(1000);
+  expect(fetch).toHaveBeenCalledTimes(3);
 });

@@ -76,7 +76,7 @@ after context loss, or audio unlock. Progress counts prepared assets, not files 
 HTTP bytes. An atlas's image and JSON are one asset.
 
 Defaults are conservative starting limits, not performance targets: one retry for
-network errors/429/5xx, a 15-second per-asset deadline (including all queue waits),
+network errors/429/5xx (exponential backoff with jitter and `Retry-After`), a 15-second per-asset deadline (including all queue waits),
 a 10-second `requestTimeoutMs` for each HTTP attempt including its body,
 32 MiB encoded bytes per file and 16 million decoded pixels per image.
 `maxConcurrentDownloads` defaults to 4 and `maxConcurrentDecodes` to 1.

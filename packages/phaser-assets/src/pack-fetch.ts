@@ -3,6 +3,7 @@ class FileFailure extends Error {
   constructor(
     message: string,
     readonly retryable = false,
+    readonly retryAfterMs = 0,
   ) {
     super(message);
   }
@@ -25,6 +26,7 @@ export async function fetchPackFile(url: string, options: {
     throw new FileFailure('Asset integrity requires HTTPS or localhost');
   }
   for (let attempt = 0; ; attempt++) {
+    let retryAfterMs = 0;
     const attemptController = new AbortController();
     const cancelAttempt = (): void => attemptController.abort(signal.reason);
     signal.addEventListener('abort', cancelAttempt, {
@@ -43,9 +45,16 @@ export async function fetchPackFile(url: string, options: {
       });
       if (!response.ok) {
         await response.body?.cancel().catch(() => { });
+        const hint = response.headers?.get('retry-after');
+        const retryAfter = hint
+          ? /^\d+$/.test(hint)
+            ? Number(hint) * 1000
+            : Date.parse(hint) - Date.now()
+          : 0;
         throw new FileFailure(
           `Asset HTTP ${response.status}`,
           response.status === 429 || response.status >= 500,
+          Number.isFinite(retryAfter) ? Math.max(0, Math.min(retryAfter, 2147483647)) : 0,
         );
       }
       const reader = response.body?.getReader();
@@ -77,6 +86,10 @@ export async function fetchPackFile(url: string, options: {
           reader.releaseLock();
         }
       }
+      // The HTTP window ends with the body. Non-abortable hashing belongs to the
+      // outer preparation deadline, and must not cause a successful download retry.
+      clearTimeout(timer);
+      attemptController.signal.throwIfAborted();
       const blob = new Blob(parts, {
         type: response.headers.get('content-type') ?? 'application/octet-stream',
       });
@@ -102,6 +115,7 @@ export async function fetchPackFile(url: string, options: {
       if (signal.aborted) {
         throw signal.reason;
       }
+      retryAfterMs = error instanceof FileFailure ? error.retryAfterMs : 0;
       if (attempt >= options.retries || !(error instanceof TypeError || error instanceof FileFailure && error.retryable)) {
         // Browser URL errors may embed credentials or signed query strings.
         if (error instanceof TypeError) {
@@ -113,6 +127,8 @@ export async function fetchPackFile(url: string, options: {
       clearTimeout(timer);
       signal.removeEventListener('abort', cancelAttempt);
     }
+    const baseDelay = 100 * 2 ** attempt;
+    const backoff = Math.max(retryAfterMs, baseDelay + Math.random() * baseDelay);
     await new Promise<void>((resolve, reject) => {
       const cancel = (): void => {
         clearTimeout(delay);
@@ -121,7 +137,7 @@ export async function fetchPackFile(url: string, options: {
       const delay = setTimeout(() => {
         signal.removeEventListener('abort', cancel);
         resolve();
-      }, 100);
+      }, backoff);
       signal.addEventListener('abort', cancel, {
         once: true,
       });

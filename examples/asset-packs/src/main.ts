@@ -42,7 +42,7 @@ class Board extends Phaser.Scene {
       pending = undefined;
       this.clear();
       packs = undefined;
-      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0 });
+      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '' });
       renderStatus();
     });
     packs = createPhaserAssetPackLoader(this, __ASSET_PACK_CATALOG__, {
