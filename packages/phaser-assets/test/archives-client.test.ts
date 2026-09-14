@@ -500,6 +500,46 @@ describe('bounded ZIP decode client', () => {
     expect(status.archiveLost).toBeUndefined();
   });
 
+  it('cancels a job before its worker posts the decode', async () => {
+    let created = 0;
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): FakeWorker => {
+        created++;
+        return createFakeWorker();
+      },
+    });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(), expected: zip.expected, transferArchive: true,
+    });
+    const status = await job.cancel();
+    expect(status.status).toBe('cancelled');
+    expect(status.archiveLost).toBeUndefined();
+    const after = await job.result;
+    expect(after.status).toBe('cancelled');
+    const iteration: string[] = [];
+    for await (const entry of job.entries) {
+      iteration.push(entry.path);
+    }
+    expect(iteration).toEqual([]);
+    expect(created).toBeLessThanOrEqual(1);
+  });
+
+  it('fails workers that post unknown message types', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(2);
+    worker.emit({
+      type: 'surprise',
+      jobId: 1,
+    } as never);
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('unknown message type');
+  });
+
   it('reports cancelled stats from the worker', async () => {
     const decoder = createBoundedZipDecoder({ createWorker: createFakeWorker });
     const zip = fixture();

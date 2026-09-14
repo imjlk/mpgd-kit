@@ -245,6 +245,30 @@ describe('bounded ZIP decode core', () => {
     })).rejects.toMatchObject({ code: 'entry-mismatch' });
   });
 
+  it('rejects STORE entries whose stored size differs from the declared size', async () => {
+    const fixture = buildV1Zip(mixedEntries);
+    const mutated = fixture.archive.slice();
+    const view = new DataView(mutated.buffer);
+    // Entry 0 is STORE: lie about its uncompressed size in both headers while
+    // the expected manifest repeats the lie, so only the size check can fire.
+    view.setUint32(22, pngBytes.length + 1, true);
+    const centralOffset = fullOffset(fixture);
+    view.setUint32(centralOffset + 24, pngBytes.length + 1, true);
+    const lying: ExpectedZipArchive = {
+      ...fixture.expected,
+      archive: {
+        ...fixture.expected.archive,
+        sha256: sha256(mutated),
+      },
+      entries: fixture.expected.entries.map((entry, index) => index === 0
+        ? { ...entry, bytes: pngBytes.length + 1 }
+        : entry),
+    };
+    await expect(collect({
+      archive: mutated, expected: lying,
+    })).rejects.toMatchObject({ code: 'invalid-structure' });
+  });
+
   it('requires a secure context for SHA-256 verification', async () => {
     const subtle = crypto.subtle;
     vi.stubGlobal('crypto', { });

@@ -44,8 +44,6 @@ export interface BoundedZipDecoderOptions {
   createWorker(): ZipDecodeWorkerLike;
   /** Concurrent decode jobs; further jobs queue. Default 2. */
   readonly maxConcurrentDecodes?: number;
-  /** Wall clock in ms; defaults to performance.now. */
-  readonly now?: (() => number) | undefined;
   /** Grace before a cancelled or timed-out worker is terminated. Default 5000. */
   readonly cancelGraceMs?: number;
 }
@@ -157,6 +155,8 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       let rejectEntry: ((error: ZipDecodeError) => void) | undefined;
       let bufferedEntry: BoundedZipDecodeEntry | undefined;
       let decodePosted = false;
+      let cancelRequested = false;
+      let deadlineInitiated = false;
       let settleResult: ((status: BoundedZipDecodeStatus) => void) | undefined;
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
       const result = new Promise<BoundedZipDecodeStatus>((resolve) => {
@@ -168,6 +168,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           return;
         }
         finished = true;
+        bufferedEntry = undefined;
         if (deadlineTimer !== undefined) {
           clearTimeout(deadlineTimer);
           deadlineTimer = undefined;
@@ -187,7 +188,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         rejectEntry = undefined;
         if (
           transfer && decodePosted && status.archiveBuffer === undefined
-          && status.status !== 'completed' && status.status !== 'cancelled'
+          && status.status !== 'completed'
         ) {
           status = {
             ...status, archiveLost: true,
@@ -205,7 +206,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       };
       const start = async (): Promise<void> => {
         await acquire();
-        if (finished) {
+        if (finished || cancelRequested) {
+          if (!finished) {
+            finalize({
+              status: 'cancelled',
+              code: 'cancelled',
+            });
+          }
           releaseSlot();
           return;
         }
@@ -222,7 +229,24 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         }
         worker.addEventListener('message', (event) => {
           const message = event.data;
+          if (typeof message !== 'object' || message === null) {
+            finalize({
+              status: 'worker-error',
+              code: 'worker-error',
+              detail: 'The archive decode worker posted a malformed message',
+            });
+            return;
+          }
           if (message.jobId !== jobId || finished) {
+            return;
+          }
+          const messageType: unknown = (message as { type?: unknown }).type;
+          if (messageType !== 'entry' && messageType !== 'done') {
+            finalize({
+              status: 'worker-error',
+              code: 'worker-error',
+              detail: `The archive decode worker posted an unknown message type ${JSON.stringify(messageType)}`,
+            });
             return;
           }
           if (message.type === 'entry') {
@@ -255,10 +279,21 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             }
             return;
           }
+          // A cancellation answering this client's own deadline timer is a
+          // deadline, not a user cancellation.
+          const translated = message.status === 'cancelled' && deadlineInitiated
+            ? {
+              status: 'deadline' as const,
+              code: 'deadline',
+              detail: 'The archive decode worker missed its deadline',
+            }
+            : {
+              status: message.status,
+              code: message.code,
+              detail: message.detail,
+            };
           finalize({
-            status: message.status,
-            code: message.code,
-            detail: message.detail,
+            ...translated,
             stats: message.stats,
             ...(transfer && message.archive !== undefined ? { archiveBuffer: message.archive } : {}),
           });
@@ -273,6 +308,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         worker.addEventListener('error', onWorkerFailure);
         worker.addEventListener('messageerror', onWorkerFailure);
         deadlineTimer = setTimeout(() => {
+          deadlineInitiated = true;
           worker?.postMessage({
             type: 'cancel',
             jobId,
@@ -345,6 +381,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           if (finished) {
             return result;
           }
+          cancelRequested = true;
           worker?.postMessage({
             type: 'cancel',
             jobId,

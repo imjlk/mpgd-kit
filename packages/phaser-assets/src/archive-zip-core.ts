@@ -260,6 +260,12 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     if (dataEnd > centralDirectoryOffset || dataEnd < dataStart) {
       fail('invalid-structure', `ZIP entry data is out of bounds: ${name}`);
     }
+    if (methodCode === 0 && compressedSize !== uncompressedSize) {
+      fail(
+        'invalid-structure',
+        `ZIP STORE entry ${name} compressed size differs from its declared size`,
+      );
+    }
     dataLimit = dataEnd;
     planned.push({
       path: name,
