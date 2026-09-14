@@ -289,6 +289,8 @@ After `pending` or an invoked operation exception, new keys reject with
 existing provider/backend recovery to this coordinator. `getPendingOperation()`
 returns its frozen invocation identity. `reconcile()` joins concurrent calls into
 one recovery query; it never calls `purchase` or `claimRewardedAd` again.
+The recovery adapter must not await `coordinator.reconcile()` itself: that joins
+the same in-flight query and creates a wait cycle.
 
 ```ts
 const coordinator = createGameActionCoordinator({

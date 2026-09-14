@@ -76,7 +76,8 @@ export interface GameActionReconciliationPort {
   /** Must identify the same fixed player as the operation client. Recreate on account change. */
   readonly playerId: string;
   /** Read/recover an authoritative committed ledger grant; never open purchase/ad UI here.
-   * Return undefined while no committed grant can be confirmed. */
+   * Return undefined while no committed grant can be confirmed.
+   * Do not await coordinator.reconcile() here: it joins this query and would deadlock. */
   recover(operation: GameActionPendingOperation & { readonly playerId: string }): Promise<{
     readonly operationId: number;
     readonly transaction: GameActionRecoveredGrant;
