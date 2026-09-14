@@ -283,8 +283,9 @@ describe('bounded ZIP decode client', () => {
       });
       const zip = fixture();
       const job = decoder.decode({
-        archive: zip.archive,
+        archive: zip.archive.slice(),
         expected: zip.expected,
+        transferArchive: true,
         limits: {
           archiveBytes: 1024 * 1024,
           entryBytes: 1024 * 1024,
@@ -302,7 +303,9 @@ describe('bounded ZIP decode client', () => {
       const expectation = expect(consuming).rejects.toMatchObject({ code: 'deadline' });
       await vi.advanceTimersByTimeAsync(3000);
       await expectation;
-      expect((await job.result).status).toBe('deadline');
+      const finalStatus = await job.result;
+      expect(finalStatus.status).toBe('deadline');
+      expect(finalStatus.archiveLost).toBe(true);
     } finally {
       vi.useRealTimers();
     }
@@ -341,6 +344,112 @@ describe('bounded ZIP decode client', () => {
       void _entry;
     }
     expect((await secondJob.result).status).toBe('completed');
+  });
+
+  it('buffers the first entry until the first pull instead of dropping it', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(4);
+    expect(worker.postedEntries()).toBe(1);
+    const received: string[] = [];
+    for await (const entry of job.entries) {
+      received.push(entry.path);
+    }
+    expect(received).toEqual(['grove/grove.png', 'grove/grove.json']);
+    expect((await job.result).status).toBe('completed');
+  });
+
+  it('rejects a second pull while one is pending', async () => {
+    const worker = createFakeWorker();
+    worker.ignoreCancel(false);
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    await iterator.next();
+    const slowGate = createArchiveWorkerDispatch;
+    void slowGate;
+    const first = iterator.next();
+    const second = iterator.next();
+    await expect(second).rejects.toThrow('already pending');
+    await first;
+    await job.cancel();
+  });
+
+  it('ignores stale release acknowledgements in the worker dispatch', async () => {
+    const posted: ArchiveWorkerResponse[] = [];
+    const dispatch = createArchiveWorkerDispatch({
+      post: (message): void => {
+        posted.push(message);
+      },
+    });
+    const zip = fixture();
+    dispatch({
+      type: 'decode',
+      jobId: 1,
+      protocol: 1,
+      archive: zip.archive.slice().buffer as ArrayBuffer,
+      transferArchive: false,
+      expected: zip.expected,
+      limits: {
+        archiveBytes: 1024 * 1024,
+        entryBytes: 1024 * 1024,
+        totalExpandedBytes: 1024 * 1024,
+        entryCount: 16,
+        maxPathLength: 256,
+        decodeDeadlineMs: 5000,
+      },
+    });
+    await tick(3);
+    expect(posted.filter((message) => message.type === 'entry')).toHaveLength(1);
+    dispatch({ type: 'release', jobId: 1, seq: 41 });
+    await tick(3);
+    expect(posted.filter((message) => message.type === 'entry')).toHaveLength(1);
+    dispatch({ type: 'release', jobId: 1, seq: 1 });
+    await tick(3);
+    expect(posted.filter((message) => message.type === 'entry')).toHaveLength(2);
+    dispatch({ type: 'release', jobId: 1, seq: 2 });
+    await tick(3);
+    expect(posted.filter((message) => message.type === 'done')).toHaveLength(1);
+    expect(posted.find((message) => message.type === 'done')).toMatchObject({ status: 'completed' });
+  });
+
+  it('rejects protocol mismatches and returns a transferred archive untouched', async () => {
+    const posted: ArchiveWorkerResponse[] = [];
+    const transferred: unknown[][] = [];
+    const dispatch = createArchiveWorkerDispatch({
+      post: (message, transfer): void => {
+        posted.push(message);
+        transferred.push([...(transfer ?? [])]);
+      },
+    });
+    const zip = fixture();
+    const archive = zip.archive.slice();
+    dispatch({
+      type: 'decode',
+      jobId: 7,
+      protocol: 99,
+      archive: archive.buffer as ArrayBuffer,
+      transferArchive: true,
+      expected: zip.expected,
+      limits: {
+        archiveBytes: 1024 * 1024,
+        entryBytes: 1024 * 1024,
+        totalExpandedBytes: 1024 * 1024,
+        entryCount: 16,
+        maxPathLength: 256,
+        decodeDeadlineMs: 5000,
+      },
+    });
+    await tick(2);
+    const done = posted.find((message) => message.type === 'done');
+    expect(done).toMatchObject({
+      status: 'error', code: 'unsupported-zip', jobId: 7,
+    });
+    expect((done as { archive?: ArrayBuffer }).archive?.byteLength).toBe(zip.archive.length);
+    expect(transferred[0]).toHaveLength(1);
   });
 
   it('reports cancelled stats from the worker', async () => {

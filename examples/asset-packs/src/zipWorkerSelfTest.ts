@@ -76,7 +76,10 @@ export async function runZipWorkerSelfTest(): Promise<void> {
     if (received[0]!.path !== 'grove/grove.png' || !received[0]!.bytes.every((byte, index) => byte === texture[index])) {
       throw new Error('texture bytes differ');
     }
-    if (received[1]!.path !== 'grove/grove.json' || received[1]!.bytes.length !== atlas.length) {
+    if (
+      received[1]!.path !== 'grove/grove.json'
+      || !received[1]!.bytes.every((byte, index) => byte === atlas[index])
+    ) {
       throw new Error('atlas bytes differ');
     }
     finish({

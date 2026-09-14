@@ -1,5 +1,6 @@
 import { ZipDecodeError, type ZipDecodeFailureCode } from './archive-errors.js';
 import {
+  ARCHIVE_WORKER_PROTOCOL,
   defaultArchiveWorkerLimits,
   type ArchiveWorkerExpected,
   type ArchiveWorkerLimits,
@@ -71,6 +72,8 @@ export interface BoundedZipDecodeStatus {
   readonly detail?: string | undefined;
   readonly stats?: ArchiveWorkerStats | undefined;
   readonly archiveBuffer?: ArrayBuffer | undefined;
+  /** True when a transferred archive was not returned before a hard failure. */
+  readonly archiveLost?: boolean | undefined;
 }
 export interface BoundedZipDecodeEntry {
   readonly path: string;
@@ -95,6 +98,8 @@ export interface BoundedZipDecoder {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
   setTimeout(resolve, ms);
 });
+/** Extra wall-clock slack beyond the decode deadline for worker messaging. */
+const DEADLINE_TRANSPORT_GRACE_MS = 2000;
 /** Workers read the posted buffer as a whole, so the payload must be an
  * exact-fit buffer. Sub-views are copied; transport copies are outside the
  * decode output limits but part of the job's wall clock. */
@@ -117,12 +122,15 @@ const exactArchiveBuffer = (archive: Uint8Array, transfer: boolean): ArrayBuffer
  * decoder enforces the concurrency limit itself. */
 export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): BoundedZipDecoder {
   const maxConcurrent = options.maxConcurrentDecodes ?? 2;
+  if (!Number.isSafeInteger(maxConcurrent) || maxConcurrent <= 0) {
+    throw new Error('maxConcurrentDecodes must be a positive integer');
+  }
   const graceMs = options.cancelGraceMs ?? 5000;
   let active = 0;
   let nextJobId = 1;
   const pending: (() => void)[] = [];
   const acquire = async (): Promise<void> => {
-    if (active >= maxConcurrent) {
+    while (active >= maxConcurrent) {
       await new Promise<void>((resolve) => {
         pending.push(resolve);
       });
@@ -141,10 +149,12 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       const limits = request.limits ?? defaultArchiveWorkerLimits();
       let worker: ZipDecodeWorkerLike | undefined;
       let finished = false;
+      let slotAcquired = false;
       let releasedSeq = 0;
       let outstandingSeq = 0;
       let resolveEntry: ((value: IteratorResult<BoundedZipDecodeEntry>) => void) | undefined;
       let rejectEntry: ((error: ZipDecodeError) => void) | undefined;
+      let bufferedEntry: BoundedZipDecodeEntry | undefined;
       let settleResult: ((status: BoundedZipDecodeStatus) => void) | undefined;
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
       const result = new Promise<BoundedZipDecodeStatus>((resolve) => {
@@ -173,13 +183,21 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         }
         resolveEntry = undefined;
         rejectEntry = undefined;
+        if (transfer && status.archiveBuffer === undefined
+          && status.status !== 'completed' && status.status !== 'cancelled') {
+          status = {
+            ...status, archiveLost: true,
+          };
+        }
         settleResult?.(status);
         try {
           worker?.terminate();
         } catch {
           // Termination is best effort; the job is finished either way.
         }
-        releaseSlot();
+        if (slotAcquired) {
+          releaseSlot();
+        }
       };
       const start = async (): Promise<void> => {
         await acquire();
@@ -187,6 +205,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           releaseSlot();
           return;
         }
+        slotAcquired = true;
         try {
           worker = options.createWorker();
         } catch (error) {
@@ -207,16 +226,21 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               return;
             }
             outstandingSeq = message.seq;
+            const value: BoundedZipDecodeEntry = {
+              path: message.path,
+              method: message.method,
+              bytes: new Uint8Array(message.bytes),
+            };
             const resolve = resolveEntry;
-            resolveEntry = undefined;
-            resolve?.({
-              done: false,
-              value: {
-                path: message.path,
-                method: message.method,
-                bytes: new Uint8Array(message.bytes),
-              },
-            });
+            if (resolve !== undefined) {
+              resolveEntry = undefined;
+              rejectEntry = undefined;
+              resolve({
+                done: false, value,
+              });
+            } else if (bufferedEntry === undefined) {
+              bufferedEntry = value;
+            }
             return;
           }
           finalize({
@@ -250,10 +274,11 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
             }
           });
-        }, limits.decodeDeadlineMs + 2000);
+        }, limits.decodeDeadlineMs + DEADLINE_TRANSPORT_GRACE_MS);
         worker.postMessage({
           type: 'decode',
           jobId,
+          protocol: ARCHIVE_WORKER_PROTOCOL,
           archive: payload,
           transferArchive: transfer,
           expected: request.expected,
@@ -278,6 +303,16 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               jobId,
               seq: releasedSeq,
             });
+          }
+          const buffered = bufferedEntry;
+          if (buffered !== undefined) {
+            bufferedEntry = undefined;
+            return Promise.resolve({
+              done: false, value: buffered,
+            });
+          }
+          if (resolveEntry !== undefined) {
+            return Promise.reject(new Error('A decode entry pull is already pending'));
           }
           return new Promise<IteratorResult<BoundedZipDecodeEntry>>((resolve, reject) => {
             resolveEntry = resolve;

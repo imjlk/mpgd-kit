@@ -61,7 +61,6 @@ export const deflateRaw = (data: Uint8Array): Uint8Array => {
   }
   return joined;
 };
-export const zipV1Crc32 = crc32Of;
 export function buildZipV1Fixture(entries: readonly ZipV1FixtureEntry[]): ZipV1Fixture {
   const local: Uint8Array[] = [];
   const central: Uint8Array[] = [];

@@ -44,6 +44,7 @@ export type ArchiveWorkerRequest =
   | {
     readonly type: 'decode';
     readonly jobId: number;
+    readonly protocol: number;
     readonly archive: ArrayBuffer;
     readonly transferArchive: boolean;
     readonly expected: ArchiveWorkerExpected;

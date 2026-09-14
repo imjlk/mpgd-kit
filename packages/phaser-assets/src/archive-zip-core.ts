@@ -53,8 +53,11 @@ const EXTERNAL_ATTRIBUTES = (0o100644 << 16) >>> 0;
 const ENCRYPTED_FLAG = 0x0001;
 const DECODE_CHUNK_BYTES = 64 * 1024;
 const digestOf = async (data: Uint8Array): Promise<string> => {
-  const copy = data.slice();
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', copy.buffer as ArrayBuffer));
+  // Hash exact-fit views directly; only sub-views need a bounded copy.
+  const source = data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
+    ? data.buffer as ArrayBuffer
+    : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', source));
   return [...digest].map((n) => n.toString(16).padStart(2, '0')).join('');
 };
 const crcTable: readonly number[] = (() => {
@@ -170,7 +173,7 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     const externalAttributes = zip.u32(cursor + 38);
     const localOffset = zip.u32(cursor + 42);
     const entryLength = 46 + nameLength + extraLength + commentLength;
-    if (versionNeeded > VERSION_NEEDED || versionNeeded === 0xffff || diskStart !== 0) {
+    if (versionNeeded > VERSION_NEEDED || diskStart !== 0) {
       fail(
         'unsupported-zip',
         `ZIP entry needs an unsupported reader (version ${versionNeeded}, disk ${diskStart})`,
@@ -186,7 +189,10 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
       fail('unsupported-zip', `ZIP entry uses unsupported compression method ${methodCode}`);
     }
     if (time !== DOS_TIME || date !== DOS_DATE || externalAttributes !== EXTERNAL_ATTRIBUTES) {
-      fail('invalid-structure', 'ZIP entry metadata does not match the deterministic profile');
+      fail(
+        'invalid-structure',
+        'ZIP entry metadata does not match the deterministic profile (symlinks and unexpected file modes are rejected)',
+      );
     }
     if (extraLength !== 0 || commentLength !== 0) {
       fail('invalid-structure', 'ZIP entry carries extra fields or comments');
@@ -218,10 +224,6 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     }
     seenNames.add(name);
     foldedNames.add(foldedName);
-    const symlinkMode = (externalAttributes >>> 16) & 0o170000;
-    if (symlinkMode === 0o120000) {
-      fail('invalid-structure', `ZIP entry is a symbolic link: ${name}`);
-    }
     if (localOffset < dataLimit || localOffset + 30 > centralDirectoryOffset) {
       fail('invalid-structure', `ZIP local header offset is out of order: ${name}`);
     }

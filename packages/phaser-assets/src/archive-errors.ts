@@ -10,6 +10,7 @@ export type ZipDecodeFailureCode =
   | 'decode'
   | 'integrity'
   | 'worker-error'
+  | 'worker-busy'
   | 'unsupported';
 /** Error thrown by the pure decoder core and the client for failed jobs. */
 export class ZipDecodeError extends Error {

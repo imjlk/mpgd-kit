@@ -184,7 +184,14 @@ try {
   const packageJson = spawnSync('tar', ['-xOf', tarballPath, 'package/package.json'], {
     encoding: 'utf8',
   });
-  assert.match(packageJson.stdout, /"fflate": "0\.8\.3"/u, 'published package pins fflate');
+  const pinned = JSON.parse(
+    readFileSync(join(repoRoot, 'packages/phaser-assets/package.json'), 'utf8'),
+  ).dependencies.fflate;
+  assert.match(
+    packageJson.stdout,
+    new RegExp(`"fflate": "${pinned}"`, 'u'),
+    'published package pins fflate',
+  );
 
   console.info(
     'Bounded ZIP decode checks passed: PR2 artifact round-trip through the core and the worker protocol, and packaged subpath/worker presence in the tarball.',

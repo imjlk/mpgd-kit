@@ -13,8 +13,7 @@
   },
   "dependencies": {
     "@mpgd/phaser-assets": "workspace:*",
-    "phaser": "4.2.0",
-    "fflate": "0.8.3"
+    "phaser": "4.2.0"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

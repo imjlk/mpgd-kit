@@ -1,14 +1,11 @@
 import { ZipDecodeError } from './archive-errors.js';
-import type {
-  ArchiveWorkerRequest,
-  ArchiveWorkerResponse,
-  ArchiveWorkerStats,
-} from './archive-protocol.js';
 import {
-  decodeZipV1Entries,
-  type ExpectedZipArchive,
-  type ZipDecodeLimits,
-} from './archive-zip-core.js';
+  ARCHIVE_WORKER_PROTOCOL,
+  type ArchiveWorkerRequest,
+  type ArchiveWorkerResponse,
+  type ArchiveWorkerStats,
+} from './archive-protocol.js';
+import { decodeZipV1Entries, type ExpectedZipArchive } from './archive-zip-core.js';
 
 export interface ArchiveWorkerPort {
   post(message: ArchiveWorkerResponse, transfer?: readonly Transferable[]): void;
@@ -20,8 +17,14 @@ interface ActiveJob {
   cancelled: boolean;
   entries: number;
   expandedBytes: number;
-  resolveRelease: ((seq: number, cancelled: boolean) => void) | undefined;
+  resolveRelease: ((cancelled: boolean) => void) | undefined;
+  awaitedSeq: number;
 }
+const zeroedStats = (): ArchiveWorkerStats => ({
+  entries: 0,
+  expandedBytes: 0,
+  elapsedMs: 0,
+});
 const stats = (job: ActiveJob): ArchiveWorkerStats => ({
   entries: job.entries,
   expandedBytes: job.expandedBytes,
@@ -59,6 +62,7 @@ export function createArchiveWorkerDispatch(port: ArchiveWorkerPort): (message: 
       entries: 0,
       expandedBytes: 0,
       resolveRelease: undefined,
+      awaitedSeq: 0,
     };
     active = job;
     const archiveBytes = new Uint8Array(request.archive);
@@ -82,19 +86,22 @@ export function createArchiveWorkerDispatch(port: ArchiveWorkerPort): (message: 
       });
     };
     try {
-      const expected = request.expected as ExpectedZipArchive;
-      const limits = request.limits as ZipDecodeLimits;
-      for await (const entry of decodeZipV1Entries(archiveBytes, expected, limits, {
+      const expected: ExpectedZipArchive = request.expected;
+      for await (const entry of decodeZipV1Entries(archiveBytes, expected, request.limits, {
         shouldStop: (): boolean => job.cancelled,
       })) {
         if (job.cancelled) {
           break;
         }
         const seq = job.entries + 1;
-        const buffer = entry.bytes.buffer.slice(
-          entry.bytes.byteOffset,
-          entry.bytes.byteOffset + entry.bytes.byteLength,
-        ) as ArrayBuffer;
+        const exact = entry.bytes.byteOffset === 0
+          && entry.bytes.byteLength === entry.bytes.buffer.byteLength;
+        const buffer = (exact
+          ? entry.bytes.buffer
+          : entry.bytes.buffer.slice(
+              entry.bytes.byteOffset,
+              entry.bytes.byteOffset + entry.bytes.byteLength,
+            )) as ArrayBuffer;
         port.post(
           {
             type: 'entry',
@@ -109,9 +116,11 @@ export function createArchiveWorkerDispatch(port: ArchiveWorkerPort): (message: 
         job.entries = seq;
         job.expandedBytes += entry.bytes.byteLength;
         const released = await new Promise<boolean>((resolve) => {
-          job.resolveRelease = (ackSeq, cancelled) => resolve(ackSeq === seq ? cancelled : job.cancelled);
+          job.awaitedSeq = seq;
+          job.resolveRelease = (cancelled) => resolve(cancelled);
         });
         job.resolveRelease = undefined;
+        job.awaitedSeq = 0;
         if (released || job.cancelled) {
           break;
         }
@@ -149,15 +158,34 @@ export function createArchiveWorkerDispatch(port: ArchiveWorkerPort): (message: 
   };
   return (message: ArchiveWorkerRequest): void => {
     if (message.type === 'decode') {
+      if (message.protocol !== ARCHIVE_WORKER_PROTOCOL) {
+        port.post(
+          {
+            type: 'done',
+            jobId: message.jobId,
+            status: 'error',
+            code: 'unsupported-zip',
+            detail: `Archive worker protocol ${message.protocol} is not ${ARCHIVE_WORKER_PROTOCOL}`,
+            ...(message.transferArchive ? { archive: message.archive } : {}),
+            stats: zeroedStats(),
+          },
+          message.transferArchive ? [message.archive] : [],
+        );
+        return;
+      }
       if (active !== undefined) {
-        port.post({
-          type: 'done',
-          jobId: message.jobId,
-          status: 'error',
-          code: 'worker-busy',
-          detail: 'The archive worker already runs a decode job',
-          stats: stats(active),
-        });
+        port.post(
+          {
+            type: 'done',
+            jobId: message.jobId,
+            status: 'error',
+            code: 'worker-busy',
+            detail: 'The archive worker already runs a decode job',
+            ...(message.transferArchive ? { archive: message.archive } : {}),
+            stats: zeroedStats(),
+          },
+          message.transferArchive ? [message.archive] : [],
+        );
         return;
       }
       void runJob(message);
@@ -169,11 +197,14 @@ export function createArchiveWorkerDispatch(port: ArchiveWorkerPort): (message: 
     }
     if (message.type === 'cancel') {
       job.cancelled = true;
-      job.resolveRelease?.(0, true);
+      job.resolveRelease?.(true);
       return;
     }
     if (message.type === 'release' && job.resolveRelease !== undefined) {
-      job.resolveRelease(message.seq, false);
+      // Stale or duplicated releases must not acknowledge the current entry.
+      if (message.seq === job.awaitedSeq) {
+        job.resolveRelease(false);
+      }
     }
   };
 }

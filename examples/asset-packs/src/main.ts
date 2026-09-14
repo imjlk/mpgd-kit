@@ -128,7 +128,13 @@ class Board extends Phaser.Scene {
 }
 
 const board = new Board();
-let game: Phaser.Game;
+let game: Phaser.Game | undefined;
+const bootedGame = (): Phaser.Game => {
+  if (game === undefined) {
+    throw new Error('The sample game is not booted on this page');
+  }
+  return game;
+};
 const bootGame = (): void => {
   game = new Phaser.Game({
     type: new URLSearchParams(location.search).get('renderer') === 'canvas' ? Phaser.CANVAS : Phaser.WEBGL, width: 960, height: 540, parent: 'game', backgroundColor: '#142c31',
@@ -137,7 +143,14 @@ const bootGame = (): void => {
   });
 };
 if (new URLSearchParams(location.search).has('zip-worker')) {
-  void import('./zipWorkerSelfTest.js').then((module) => module.runZipWorkerSelfTest());
+  void import('./zipWorkerSelfTest.js').then(
+    (module) => module.runZipWorkerSelfTest(),
+    (error) => {
+      window.__zip_worker_result = (): string => JSON.stringify({
+        status: 'failed', error: `Could not load the worker self test: ${String(error)}`,
+      });
+    },
+  );
 } else {
   bootGame();
   wireSampleControls();
@@ -168,7 +181,8 @@ function renderStatus(): void {
 
 async function enter(theme: Theme): Promise<void> {
   if (!packs) return;
-  if (!game.loop.running) game.loop.start(game.step.bind(game));
+  const active = bootedGame();
+    if (!active.loop.running) active.loop.start(active.step.bind(active));
   const ticket = ++sequence;
   pending?.abort();
   const controller = new AbortController();
@@ -194,51 +208,51 @@ async function enter(theme: Theme): Promise<void> {
 }
 
 function wireSampleControls(): void {
-  controls.grove!.onclick = () => { void enter('grove'); };
-controls.dunes!.onclick = () => { void enter('dunes'); };
-controls.retry!.onclick = () => { if (model.requested) void enter(model.requested); };
-controls.cancel!.onclick = () => {
-  ++sequence;
-  pending?.abort();
-  pending = undefined;
-  model.phase = model.current ? 'playing' : 'idle';
-  model.ready = model.total = 0;
-  renderStatus();
-};
-controls.unload!.onclick = () => {
-  ++sequence;
-  pending?.abort();
-  pending = undefined;
-  if (!packs) return;
-  board.clear();
-  board.showEmpty();
-  Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '' });
-  renderStatus();
-};
+    controls.grove!.onclick = () => { void enter('grove'); };
+  controls.dunes!.onclick = () => { void enter('dunes'); };
+  controls.retry!.onclick = () => { if (model.requested) void enter(model.requested); };
+  controls.cancel!.onclick = () => {
+    ++sequence;
+    pending?.abort();
+    pending = undefined;
+    model.phase = model.current ? 'playing' : 'idle';
+    model.ready = model.total = 0;
+    renderStatus();
+  };
+  controls.unload!.onclick = () => {
+    ++sequence;
+    pending?.abort();
+    pending = undefined;
+    if (!packs) return;
+    board.clear();
+    board.showEmpty();
+    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '' });
+    renderStatus();
+  };
 }
 
-declare global {
-  interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; shutdownSample: () => number; }
+  declare global {
+    interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; shutdownSample: () => number; }
 }
-function state() {
-  return { ...model, renderer: game.config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas', mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
-    groundFrames: model.current ? board.frames(model.current, 'ground') : 0,
-    pilotFrames: model.current ? board.frames('shared', 'pilot') : 0,
-    player: model.phase === 'booting' ? null : board.player(), resources: packs?.snapshot().map((entry) => ({ ...entry, pack: entry.packId, identity: entry.packId + '/' + entry.assetKey })) ?? [],
-    textureCount: model.phase === 'booting' ? 0 : board.textureCount() };
+  function state() {
+    return { ...model, renderer: bootedGame().config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas', mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
+      groundFrames: model.current ? board.frames(model.current, 'ground') : 0,
+      pilotFrames: model.current ? board.frames('shared', 'pilot') : 0,
+      player: model.phase === 'booting' ? null : board.player(), resources: packs?.snapshot().map((entry) => ({ ...entry, pack: entry.packId, identity: entry.packId + '/' + entry.assetKey })) ?? [],
+      textureCount: model.phase === 'booting' ? 0 : board.textureCount() };
 }
 function wireWindowHooks(): void {
   window.render_game_to_text = () => JSON.stringify(state());
   window.advanceTime = (milliseconds) => {
-  game.loop.stop();
+  bootedGame().loop.stop();
   virtualTime = Math.max(virtualTime, performance.now());
   for (let index = 0; index < Math.max(1, Math.round(milliseconds / (1000 / 60))); index++) {
     virtualTime += 1000 / 60;
-    game.step(virtualTime, 1000 / 60);
+    bootedGame().step(virtualTime, 1000 / 60);
   }
 };
 
   // SceneManager.stop emits shutdown synchronously; count after consumer and loader cleanup.
   // Keep this direct manager call rather than queuing a ScenePlugin operation.
-  window.shutdownSample = () => { game.scene.stop('board'); return board.textureCount(); };
+  window.shutdownSample = () => { bootedGame().scene.stop('board'); return board.textureCount(); };
 }
