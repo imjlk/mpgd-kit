@@ -74,7 +74,12 @@ function realpathBestEffort(target: string): string {
     }
     existing = parent;
   }
-  const real = realpathSync(existing);
+  let real: string;
+  try {
+    real = realpathSync(existing);
+  } catch {
+    throw new Error(`Output path resolves through a broken symlink: ${target}`);
+  }
   return existing === target ? real : resolve(real, relative(existing, target));
 }
 
@@ -388,11 +393,17 @@ export function buildAssetPacks(options: {
       throw new Error(`Staging path collides with an output path: ${stagingPath}`);
     }
     const staging = join(outPath, stagingPath);
-    writeFileSync(staging, record.data);
     try {
+      writeFileSync(staging, record.data);
       renameSync(staging, target);
     } catch (error) {
-      rmSync(staging, { force: true });
+      // Best-effort cleanup: a locked or unreadable staging file must not
+      // mask the original write or rename failure.
+      try {
+        rmSync(staging, { force: true });
+      } catch {
+        // Ignore cleanup failures.
+      }
       throw error;
     }
   }

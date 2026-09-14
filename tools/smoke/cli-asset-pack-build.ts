@@ -556,6 +556,14 @@ try {
     'a symlinked output path into the source root is rejected',
   );
   rmSync(outLink, { force: true, recursive: true });
+  const danglingLink = join(fixtureRoot, 'out-dangling');
+  symlinkSync(join(fixtureRoot, 'does-not-exist'), danglingLink);
+  assert.throws(
+    () => buildAssetPacks({ configPath: mainConfig, outDir: danglingLink, cwd: repoRoot }),
+    /broken symlink/u,
+    'a dangling symlinked output path fails closed',
+  );
+  rmSync(danglingLink, { force: true, recursive: true });
 
   // 10c. Case-colliding ids and paths fail validation.
   const caseConfig = join(fixtureRoot, 'case.config.json');

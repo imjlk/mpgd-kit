@@ -578,8 +578,8 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
         rejectFoldedDuplicate(
           foldedPaths,
           file.path,
-          (input) => new Error(
-            `Invalid asset pack delivery manifest: case-colliding path ${pack.packId}/${input}`,
+          (duplicate) => new Error(
+            `Invalid asset pack delivery manifest: case-colliding path ${pack.packId}/${duplicate}`,
           ),
         );
         paths.add(file.path);
@@ -607,8 +607,8 @@ export function validatePhaserPackDeliveryManifest(input: unknown): PhaserPackDe
       rejectFoldedDuplicate(
         foldedArchivePaths,
         pack.archive.path,
-        (input) => new Error(
-          `Invalid asset pack delivery manifest: case-colliding archive path ${input}`,
+        (duplicate) => new Error(
+          `Invalid asset pack delivery manifest: case-colliding archive path ${duplicate}`,
         ),
       );
       archivePaths.add(pack.archive.path);
