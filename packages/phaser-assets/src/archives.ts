@@ -100,9 +100,17 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
 /** Extra wall-clock slack beyond the decode deadline for worker messaging. */
 const DEADLINE_TRANSPORT_GRACE_MS = 2000;
 /** Workers read the posted buffer as a whole, so the payload must be an
- * exact-fit buffer. Sub-views are copied; transport copies are outside the
- * decode output limits but part of the job's wall clock. */
-const exactArchiveBuffer = (archive: Uint8Array, transfer: boolean): ArrayBuffer => {
+ * exact-fit buffer. Sub-views are copied after the archive bound is known;
+ * transport copies are outside the decode output limits but part of the
+ * job's wall clock. */
+const exactArchiveBuffer = (
+  archive: Uint8Array,
+  transfer: boolean,
+  limits: ArchiveWorkerLimits,
+): ArrayBuffer => {
+  if (archive.byteLength > limits.archiveBytes) {
+    throw new ZipDecodeError('limit', 'ZIP archive exceeds the archive byte limit');
+  }
   const exact = archive.byteOffset === 0 && archive.byteLength === archive.buffer.byteLength;
   if (exact) {
     return archive.buffer as ArrayBuffer;
@@ -144,8 +152,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
     decode(request) {
       const jobId = nextJobId++;
       const transfer = request.transferArchive === true;
-      const payload = exactArchiveBuffer(request.archive, transfer);
       const limits = request.limits ?? defaultArchiveWorkerLimits();
+      // Reject oversized archives before any transport copy is made; the
+      // payload view is only materialized once the job acquires a slot.
+      const payload = (): ArrayBuffer => exactArchiveBuffer(request.archive, transfer, limits);
       let worker: ZipDecodeWorkerLike | undefined;
       let finished = false;
       let slotAcquired = false;
@@ -195,6 +205,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           };
         }
         settleResult?.(status);
+
         try {
           worker?.terminate();
         } catch {
@@ -250,6 +261,19 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             return;
           }
           if (message.type === 'entry') {
+            const entryShapeValid = typeof message.seq === 'number'
+              && Number.isSafeInteger(message.seq)
+              && typeof message.path === 'string'
+              && (message.method === 'store' || message.method === 'deflate')
+              && message.bytes instanceof ArrayBuffer;
+            if (!entryShapeValid) {
+              finalize({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: 'The archive decode worker posted a malformed entry message',
+              });
+              return;
+            }
             if (message.seq !== outstandingSeq + 1) {
               return;
             }
@@ -323,18 +347,46 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             }
           });
         }, limits.decodeDeadlineMs + DEADLINE_TRANSPORT_GRACE_MS);
-        worker.postMessage({
-          type: 'decode',
-          jobId,
-          protocol: ARCHIVE_WORKER_PROTOCOL,
-          archive: payload,
-          transferArchive: transfer,
-          expected: request.expected,
-          limits,
-        }, transfer ? [payload] : []);
+        let archivePayload: ArrayBuffer;
+        try {
+          archivePayload = payload();
+        } catch (error) {
+          finalize(error instanceof ZipDecodeError
+            ? {
+              status: 'error', code: error.code, detail: error.message,
+            }
+            : {
+              status: 'error', code: 'unsupported', detail: String(error),
+            });
+          return;
+        }
+        try {
+          worker.postMessage({
+            type: 'decode',
+            jobId,
+            protocol: ARCHIVE_WORKER_PROTOCOL,
+            archive: archivePayload,
+            transferArchive: transfer,
+            expected: request.expected,
+            limits,
+          }, transfer ? [archivePayload] : []);
+        } catch (error) {
+          finalize({
+            status: 'worker-error',
+            code: 'worker-error',
+            detail: `Could not post the decode request: ${String(error)}`,
+          });
+          return;
+        }
         decodePosted = true;
       };
-      void start();
+      void start().catch((error) => {
+        finalize({
+          status: 'worker-error',
+          code: 'worker-error',
+          detail: `Starting the decode job failed: ${String(error)}`,
+        });
+      });
       const iterator: AsyncIterator<BoundedZipDecodeEntry> = {
         next: (): Promise<IteratorResult<BoundedZipDecodeEntry>> => {
           if (finished) {

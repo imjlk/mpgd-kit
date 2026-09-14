@@ -128,7 +128,6 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     zip.u16(endOffset + 4) !== 0
     || zip.u16(endOffset + 6) !== 0
     || zip.u16(endOffset + 8) !== totalEntries
-    || totalEntries === 0xffff
     || zip.u32(endOffset + 12) === 0xffffffff
     || zip.u32(endOffset + 16) === 0xffffffff
   ) {
@@ -308,14 +307,19 @@ function inflateBounded(
   clock: () => number,
   deadlineAt: number,
   control: Required<Pick<ZipDecodeControl, 'shouldStop'>>,
+  remainingTotalBytes: number,
 ): Uint8Array {
   const chunks: Uint8Array[] = [];
   let produced = 0;
-  let overshot = false;
+  let overshot: 'declared' | 'total' | undefined;
   const inflate = new Inflate((chunk) => {
     produced += chunk.length;
     if (produced > declaredBytes) {
-      overshot = true;
+      overshot = 'declared';
+      return;
+    }
+    if (produced > remainingTotalBytes) {
+      overshot = 'total';
       return;
     }
     chunks.push(chunk);
@@ -339,10 +343,16 @@ function inflateBounded(
       break;
     }
   }
-  if (overshot) {
+  if (overshot === 'declared') {
     throw new ZipDecodeError(
       'integrity',
       `ZIP entry ${entry.path} expanded past its declared size`,
+    );
+  }
+  if (overshot === 'total') {
+    throw new ZipDecodeError(
+      'limit',
+      `ZIP entry ${entry.path} exhausted the total expanded byte limit while inflating`,
     );
   }
   if (produced !== declaredBytes) {
@@ -396,19 +406,37 @@ export async function* decodeZipV1Entries(
   if (archive.length > limits.archiveBytes) {
     throw new ZipDecodeError('limit', 'ZIP archive exceeds the archive byte limit');
   }
+  const deadlineAt = clock() + limits.decodeDeadlineMs;
+  assertControl(wrappedControl, clock, deadlineAt);
   const archiveDigest = await digestOf(archive);
   if (archiveDigest !== expected.archive.sha256) {
     throw new ZipDecodeError('archive-mismatch', 'ZIP archive digest does not match the manifest');
   }
+  assertControl(wrappedControl, clock, deadlineAt);
   const planned = parseZipV1Structure(archive, expected, limits);
-  const deadlineAt = clock() + limits.decodeDeadlineMs;
   let expandedTotal = 0;
   let delivered = 0;
   for (const entry of planned) {
     assertControl(wrappedControl, clock, deadlineAt);
+    const remainingTotal = limits.totalExpandedBytes - expandedTotal;
+    if (remainingTotal <= 0) {
+      throw new ZipDecodeError(
+        'limit',
+        `ZIP decode exhausted its total expanded byte limit ${limits.totalExpandedBytes}`,
+      );
+    }
     const bytes = entry.method === 'store'
       ? archive.slice(entry.dataStart, entry.dataEnd)
-      : inflateBounded(archive, entry, entry.declaredBytes, clock, deadlineAt, wrappedControl);
+      : inflateBounded(
+          archive,
+          entry,
+          entry.declaredBytes,
+          clock,
+          deadlineAt,
+          wrappedControl,
+          remainingTotal,
+        );
+    assertControl(wrappedControl, clock, deadlineAt);
     expandedTotal += bytes.length;
     delivered++;
     if (expandedTotal > limits.totalExpandedBytes) {
@@ -420,7 +448,9 @@ export async function* decodeZipV1Entries(
     if (crc32Of(bytes) !== entry.declaredCrc) {
       throw new ZipDecodeError('integrity', `ZIP entry ${entry.path} CRC-32 mismatch`);
     }
+    assertControl(wrappedControl, clock, deadlineAt);
     const entryDigest = await digestOf(bytes);
+    assertControl(wrappedControl, clock, deadlineAt);
     const expectedEntry = expected.entries[delivered - 1]!;
     if (entryDigest !== expectedEntry.sha256) {
       throw new ZipDecodeError(

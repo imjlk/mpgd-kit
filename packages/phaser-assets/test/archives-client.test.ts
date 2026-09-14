@@ -51,6 +51,7 @@ interface FakeWorker extends ZipDecodeWorkerLike {
   terminate(): void;
   crash(): void;
   ignoreCancel(value: boolean): void;
+  blackhole(): void;
 }
 
 /** In-process worker running the real dispatch logic over a fake port. */
@@ -61,9 +62,10 @@ function createFakeWorker(): FakeWorker {
   let terminated = false;
   let postedEntryCount = 0;
   let ignoreCancel = false;
+  let silent = false;
   const dispatch = createArchiveWorkerDispatch({
     post: (message): void => {
-      if (terminated) {
+      if (terminated || silent) {
         return;
       }
       if (message.type === 'entry') {
@@ -109,6 +111,9 @@ function createFakeWorker(): FakeWorker {
     },
     ignoreCancel(value: boolean): void {
       ignoreCancel = value;
+    },
+    blackhole(): void {
+      silent = true;
     },
   };
 }
@@ -263,15 +268,19 @@ describe('bounded ZIP decode client', () => {
     expect(status.archiveBuffer?.byteLength).toBe(zip.archive.length);
   });
 
-  it('rejects transfers of views into larger buffers', () => {
+  it('rejects transfers of views into larger buffers', async () => {
     const decoder = createBoundedZipDecoder({ createWorker: createFakeWorker });
     const zip = fixture();
     const padded = new Uint8Array(zip.archive.length + 16);
     padded.set(zip.archive, 8);
     const view = padded.subarray(8);
-    expect(() => decoder.decode({
+    const job = decoder.decode({
       archive: view, expected: zip.expected, transferArchive: true,
-    })).toThrow('exact-fit');
+    });
+    const status = await job.result;
+    expect(status.status).toBe('error');
+    expect(status.code).toBe('unsupported');
+    expect(status.detail).toContain('exact-fit');
   });
 
   it('terminates unresponsive workers after the deadline', async () => {
@@ -282,6 +291,7 @@ describe('bounded ZIP decode client', () => {
         createWorker: (): FakeWorker => {
           const worker = createFakeWorker();
           worker.ignoreCancel(true);
+          worker.blackhole();
           workers.push(worker);
           return worker;
         },
@@ -498,6 +508,44 @@ describe('bounded ZIP decode client', () => {
     const status = await job.result;
     expect(status.status).toBe('unsupported');
     expect(status.archiveLost).toBeUndefined();
+  });
+
+  it('returns the transferred archive when the worker self-deadlines', async () => {
+    vi.useFakeTimers();
+    try {
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => {
+          const worker = createFakeWorker();
+          worker.ignoreCancel(true);
+          return worker;
+        },
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive.slice(),
+        expected: zip.expected,
+        transferArchive: true,
+        limits: {
+          archiveBytes: 1024 * 1024, entryBytes: 1024 * 1024, totalExpandedBytes: 1024 * 1024,
+          entryCount: 16, maxPathLength: 256, decodeDeadlineMs: 10,
+        },
+      });
+      const consuming = (async () => {
+        for await (const _entry of job.entries) {
+          void _entry;
+        }
+      })();
+      const expectation = expect(consuming).rejects.toMatchObject({ code: 'deadline' });
+      await vi.advanceTimersByTimeAsync(3000);
+      await expectation;
+      const finalStatus = await job.result;
+      expect(finalStatus.status).toBe('deadline');
+      expect(finalStatus.archiveBuffer?.byteLength).toBe(zip.archive.length);
+      expect(finalStatus.archiveLost).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('cancels a job before its worker posts the decode', async () => {
