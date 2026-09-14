@@ -559,7 +559,9 @@ describe('bounded ZIP decode client', () => {
     });
     const status = await job.result;
     expect(status.status).toBe('worker-error');
-    expect(status.detail).toContain('skipped entry sequence 2');
+    // Depending on whether the first entry already arrived, the gap is at
+    // sequence 1 or 2 — either way the skip must fail the job.
+    expect(status.detail).toMatch(/skipped entry sequence [12]/u);
   });
 
   it('fails malformed done messages', async () => {
