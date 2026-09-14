@@ -285,12 +285,64 @@ restarting the process is outside this guarantee. Do not recreate it per screen 
 to bypass unresolved work, and do not generate a new key for each UI retry.
 
 After `pending` or an invoked operation exception, new keys reject with
-`reconciliation-required`. The current client has no recovery/requery port, so this
-version deliberately provides no reset/retry/polling API. Integrate the existing
-provider/backend recovery policy outside these UI actions before starting a new
-application coordination session. Do not treat a retryable hint as permission to
-repurchase. Input/preflight scheduling rejections occur before the service call and
-do not invent a business outcome.
+`reconciliation-required`. Configure an optional `reconciliation` port to connect
+existing provider/backend recovery to this coordinator. `getPendingOperation()`
+returns its frozen invocation identity. `reconcile()` joins concurrent calls into
+one recovery query; it never calls `purchase` or `claimRewardedAd` again.
+
+```ts
+const coordinator = createGameActionCoordinator({
+  execution,
+  client, // permanently bound to authenticatedPlayerId
+  reconciliation: {
+    playerId: authenticatedPlayerId,
+    async recover(operation) {
+      // Application port: query/recover the original operation using your existing
+      // authenticated backend and saved evidence. This is not a bundled HTTP API.
+      const transaction = await recoveryBackend.findCommittedGrant(operation);
+      if (!transaction || transaction.source === 'admin') return undefined;
+      return { operationId: operation.operationId, transaction };
+    },
+  },
+});
+const recovery = await coordinator.reconcile();
+if (recovery.status === 'reconciled') {
+  // Refresh authoritative entitlements. Do not grant locally from this notification.
+  await refreshEntitlements();
+}
+```
+
+The transaction shape is a structural subset of game-services
+`ProductGrantTransaction`: `playerId`, `source`, `grantId`, `idempotencyKey` and
+`ledgerEntryId`. The port is a trusted application integration boundary, like the
+operation client itself. It must return an authenticated, committed backend grant,
+not a platform callback or a receipt supplied by the UI. The coordinator checks
+player, local operation number, purchase/ad source, logical product/placement and
+original idempotency key before unlocking. It does not authenticate a server or
+verify receipt signatures itself. Keep the port and client bound to the same
+player and recreate the application runtime on account change; do not change a
+client's player behind an existing coordinator.
+
+`undefined` means still pending, a query error preserves the operation, and
+mismatched/malformed identity rejects with `invalid-reconciliation`. No port gives
+`reconciliation-unavailable`. With no unconfirmed operation, the result is
+`not-required`. Disposal or execution destruction prevents a late query result
+from being applied. Reconciliation owns no gameplay block.
+
+This first connection resolves **confirmed ledger grants only**. An empty lookup,
+a negative verification response, a timeout, cancellation or retryable provider
+hint cannot prove terminal non-grant and cannot unlock the coordinator. Such
+cases retain the conservative recovery requirement. There is no reset or automatic
+repurchase. This API does not add a recovery service or durable operation storage;
+those remain with the existing application/backend recovery policy.
+
+Successful reconciliation clears the unconfirmed operation but retains key
+history and the original Promise. That Promise still carries its original
+pending result/exception; controller snapshots and detached UI scopes are not
+rewritten by recovery. Use the reconciliation result to refresh the current UI.
+The same key never starts a second service call and `history-full` still applies.
+Input/preflight scheduling rejections occur before the service call and do not
+invent a business outcome.
 
 Packaging: `/actions` uses **type-only** imports from `@mpgd/game-services/operations`.
 The workspace dependency ensures declarations/build order; neither the basic
