@@ -277,6 +277,16 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             if (message.seq !== outstandingSeq + 1) {
               return;
             }
+            if (outstandingSeq > releasedSeq) {
+              // An entry delivered before the previous one was released
+              // exceeds the one-outstanding-entry credit.
+              finalize({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: 'The archive decode worker delivered an entry before its predecessor was released',
+              });
+              return;
+            }
             outstandingSeq = message.seq;
             const value: BoundedZipDecodeEntry = {
               path: message.path,

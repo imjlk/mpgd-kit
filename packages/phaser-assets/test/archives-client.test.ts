@@ -486,7 +486,7 @@ describe('bounded ZIP decode client', () => {
     });
     const status = await job.result;
     expect(status.status).toBe('worker-error');
-    expect(status.detail).toContain('more entries than credited');
+    expect(status.detail).toContain('before its predecessor was released');
   });
 
   it('does not flag archive loss when the worker was never created', async () => {

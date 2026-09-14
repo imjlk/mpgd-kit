@@ -269,6 +269,21 @@ describe('bounded ZIP decode core', () => {
     })).rejects.toMatchObject({ code: 'invalid-structure' });
   });
 
+  it('rejects malformed numeric limits before decoding', async () => {
+    const fixture = buildV1Zip(mixedEntries);
+    for (const overrides of [
+      { entryBytes: Number.NaN },
+      { totalExpandedBytes: Number.NaN },
+      { archiveBytes: Number.NaN },
+      { entryCount: 0 },
+      { maxPathLength: 0 },
+      { decodeDeadlineMs: -1 },
+      { archiveBytes: 1.5 },
+    ]) {
+      await expect(collect(fixture, {}, overrides)).rejects.toMatchObject({ code: 'limit' });
+    }
+  });
+
   it('requires a secure context for SHA-256 verification', async () => {
     const subtle = crypto.subtle;
     vi.stubGlobal('crypto', { });

@@ -391,6 +391,22 @@ export async function* decodeZipV1Entries(
   if (globalThis.crypto?.subtle === undefined) {
     throw new ZipDecodeError('unsupported', 'ZIP decode requires SHA-256 (HTTPS or localhost)');
   }
+  for (const [name, minimum] of [
+    ['archiveBytes', 1],
+    ['entryBytes', 1],
+    ['totalExpandedBytes', 1],
+    ['entryCount', 1],
+    ['maxPathLength', 1],
+    ['decodeDeadlineMs', 0],
+  ] as const) {
+    const value: unknown = limits[name];
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum) {
+      throw new ZipDecodeError(
+        'limit',
+        `ZIP decode limit ${name} must be an integer of at least ${minimum}`,
+      );
+    }
+  }
   if (expected.formatVersion !== PHASER_PACK_DELIVERY_VERSION) {
     throw new ZipDecodeError(
       'unsupported-zip',
@@ -463,5 +479,8 @@ export async function* decodeZipV1Entries(
       method: entry.method,
       bytes,
     };
+    // A consumer holding the final entry past the deadline must not let the
+    // generator report completion when it resumes.
+    assertControl(wrappedControl, clock, deadlineAt);
   }
 }
