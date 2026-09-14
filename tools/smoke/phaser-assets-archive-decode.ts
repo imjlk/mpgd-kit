@@ -187,8 +187,14 @@ try {
   const pinned = JSON.parse(
     readFileSync(join(repoRoot, 'packages/phaser-assets/package.json'), 'utf8'),
   ).dependencies.fflate;
-  const published = JSON.parse(packageJson.stdout).dependencies.fflate;
-  assert.equal(published, pinned, 'published package pins the workspace fflate version');
+  const publishedManifest = packageJson.status === 0
+    ? JSON.parse(packageJson.stdout) as { dependencies?: { fflate?: unknown } }
+    : undefined;
+  assert.equal(
+    publishedManifest?.dependencies?.fflate,
+    pinned,
+    'published package pins the workspace fflate version',
+  );
 
   console.info(
     'Bounded ZIP decode checks passed: PR2 artifact round-trip through the core and the worker protocol, and packaged subpath/worker presence in the tarball.',

@@ -142,19 +142,16 @@ const bootGame = (): void => {
     loader: { imageLoadType: 'HTMLImageElement' },
   });
 };
+const failSelfTest = (reason: string): void => {
+  window.__zip_worker_result = (): string => JSON.stringify({
+    status: 'failed', error: reason,
+  });
+};
 if (new URLSearchParams(location.search).has('zip-worker')) {
   void import('./zipWorkerSelfTest.js').then(
     (module) => module.runZipWorkerSelfTest(),
-    (error) => {
-      window.__zip_worker_result = (): string => JSON.stringify({
-        status: 'failed', error: `Could not load the worker self test: ${String(error)}`,
-      });
-    },
-  ).catch((error) => {
-    window.__zip_worker_result = (): string => JSON.stringify({
-      status: 'failed', error: `The worker self test rejected: ${String(error)}`,
-    });
-  });
+    (error) => failSelfTest(`Could not load the worker self test: ${String(error)}`),
+  ).catch((error) => failSelfTest(`The worker self test rejected: ${String(error)}`));
 } else {
   bootGame();
   wireSampleControls();

@@ -47,6 +47,7 @@ const jsonBytes = new TextEncoder().encode('{"frames":{"ground":{}}}');
 interface FakeWorker extends ZipDecodeWorkerLike {
   readonly requests: ArchiveWorkerRequest[];
   readonly postedEntries: () => number;
+  emit(message: ArchiveWorkerResponse): void;
   terminate(): void;
   crash(): void;
   ignoreCancel(value: boolean): void;
@@ -95,6 +96,11 @@ function createFakeWorker(): FakeWorker {
     },
     terminate(): void {
       terminated = true;
+    },
+    emit(message: ArchiveWorkerResponse): void {
+      for (const listener of [...messageListeners]) {
+        listener({ data: message } as MessageEvent<ArchiveWorkerResponse>);
+      }
     },
     crash(): void {
       for (const listener of errorListeners) {
@@ -450,6 +456,48 @@ describe('bounded ZIP decode client', () => {
     });
     expect((done as { archive?: ArrayBuffer }).archive?.byteLength).toBe(zip.archive.length);
     expect(transferred[0]).toHaveLength(1);
+  });
+
+  it('fails over-delivering workers as protocol errors', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(3);
+    expect(worker.postedEntries()).toBe(1);
+    // A misbehaving worker posts the next entry without any release credit.
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 2,
+      path: 'grove/rogue.json',
+      method: 'store',
+      bytes: new Uint8Array(4).slice().buffer as ArrayBuffer,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('more entries than credited');
+  });
+
+  it('does not flag archive loss when the worker was never created', async () => {
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): ZipDecodeWorkerLike => {
+        throw new Error('no workers here');
+      },
+    });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(), expected: zip.expected, transferArchive: true,
+    });
+    const consuming = (async () => {
+      for await (const _entry of job.entries) {
+        void _entry;
+      }
+    })();
+    await expect(consuming).rejects.toMatchObject({ code: 'unsupported' });
+    const status = await job.result;
+    expect(status.status).toBe('unsupported');
+    expect(status.archiveLost).toBeUndefined();
   });
 
   it('reports cancelled stats from the worker', async () => {
