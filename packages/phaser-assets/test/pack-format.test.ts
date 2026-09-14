@@ -37,7 +37,7 @@ const manifest = (): PhaserPackDeliveryManifest => ({
         assetKey: 'pilot', kind: 'spritesheet', frameConfig: {
           frameWidth: 64, frameHeight: 64,
         }, files: [{
-          role: 'texture', mediaType: 'image/png', bytes: 3, sha256: digest('a'), path: 'packs/shared/shared/pilot.png',
+          role: 'texture', mediaType: 'image/png', bytes: 3, sha256: digest('a'), path: 'packs/shared@1/shared/pilot.png',
         }],
       }],
     },
@@ -54,7 +54,7 @@ const manifest = (): PhaserPackDeliveryManifest => ({
         ],
       }],
       archive: {
-        path: 'packs/grove.zip', bytes: 9, sha256: digest('d'), entryCount: 2,
+        path: 'packs/grove@3.zip', bytes: 9, sha256: digest('d'), entryCount: 2,
       },
     },
   ],
@@ -170,6 +170,17 @@ describe('build config validation', () => {
       const pack = (config.packs as Record<string, unknown>[])[1]!;
       delete (pack.assets as Record<string, unknown>[])[0]!.atlas;
     }],
+    ['case-colliding pack ids', (config: Record<string, unknown>) => {
+      (config.packs as Record<string, unknown>[])[1]!.id = 'SHARED';
+    }],
+    ['case-colliding file paths in one pack', (config: Record<string, unknown>) => {
+      const pack = (config.packs as Record<string, unknown>[])[0]!;
+      pack.assets = [
+        ...(pack.assets as object[]),
+        { kind: 'image', key: 'upper', file: 'SHARED/other.png' },
+        { kind: 'image', key: 'lower', file: 'shared/other.png' },
+      ];
+    }],
   ])('rejects %s', (_name, mutate) => {
     const config = buildConfig() as Record<string, unknown>;
     mutate(config);
@@ -232,6 +243,35 @@ describe('delivery manifest validation', () => {
       const files = (pack.assets as Record<string, unknown>[])[0]!.files as Record<string, unknown>[];
       files[1]!.path = files[0]!.path as string;
     }],
+    ['case-colliding entry paths in one pack', (value: Record<string, unknown>) => {
+      const pack = (value.packs as Record<string, unknown>[])[1]!;
+      const files = (pack.assets as Record<string, unknown>[])[0]!.files as Record<string, unknown>[];
+      files[1]!.path = 'grove/GROVE.PNG';
+    }],
+    ['duplicate pack id', (value: Record<string, unknown>) => {
+      const pack = (value.packs as Record<string, unknown>[])[1]!;
+      pack.packId = 'shared';
+      (pack.dependencies as unknown[]).length = 0;
+    }],
+    ['case-colliding pack ids', (value: Record<string, unknown>) => {
+      const pack = (value.packs as Record<string, unknown>[])[1]!;
+      pack.packId = 'SHARED';
+      (pack.dependencies as unknown[]).length = 0;
+      (pack.archive as Record<string, unknown>).path = 'packs/SHARED@3.zip';
+    }],
+    ['cyclic dependencies', (value: Record<string, unknown>) => {
+      const pack = (value.packs as Record<string, unknown>[])[0]!;
+      pack.dependencies = [{ packId: 'grove', revision: '3' }];
+    }],
+    ['case-colliding archive paths', (value: Record<string, unknown>) => {
+      const pack = (value.packs as Record<string, unknown>[])[0]!;
+      pack.delivery = 'zip';
+      const files = (pack.assets as Record<string, unknown>[])[0]!.files as Record<string, unknown>[];
+      files[0]!.method = 'store';
+      pack.archive = {
+        path: 'packs/GROVE@3.zip', bytes: 1, sha256: digest('e'), entryCount: 1,
+      };
+    }],
     ['zip delivery without archive', (value: Record<string, unknown>) => {
       const pack = (value.packs as Record<string, unknown>[])[1]!;
       delete pack.archive;
@@ -248,7 +288,7 @@ describe('delivery manifest validation', () => {
       const files = (pack.assets as Record<string, unknown>[])[0]!.files as Record<string, unknown>[];
       files[0]!.method = 'store';
       pack.archive = {
-        path: 'packs/grove.zip', bytes: 1, sha256: digest('e'), entryCount: 1,
+        path: 'packs/grove@3.zip', bytes: 1, sha256: digest('e'), entryCount: 1,
       };
     }],
     ['spritesheet without frame config', (value: Record<string, unknown>) => {

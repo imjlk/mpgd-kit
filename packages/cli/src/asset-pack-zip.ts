@@ -14,6 +14,9 @@ export interface DeterministicZipEntry {
   /** Uncompressed entry bytes. */
   readonly data: Buffer;
   readonly method: 'store' | 'deflate';
+  /** Precomputed stored bytes for the entry method, when the builder already
+   * produced them (for example while choosing the method). */
+  readonly stored?: Buffer | undefined;
 }
 
 const DOS_TIME = 0;
@@ -34,11 +37,14 @@ export function createDeterministicZip(entries: readonly DeterministicZipEntry[]
   let offset = 0;
   for (const entry of entries) {
     const name = Buffer.from(entry.path, 'utf8');
+    if (name.length > MAX_ENTRIES) {
+      throw new Error(`Deterministic ZIP entry name exceeds 65535 bytes: ${entry.path}`);
+    }
     if (entry.data.length > MAX_ENTRY_BYTES) {
       throw new Error(`Deterministic ZIP entry exceeds 4 GiB: ${entry.path}`);
     }
     const compressed = entry.method === 'deflate'
-      ? deflateRawSync(entry.data, { level: 9 })
+      ? (entry.stored ?? deflateRawSync(entry.data, { level: 9 }))
       : entry.data;
     if (compressed.length > MAX_ENTRY_BYTES) {
       throw new Error(`Deterministic ZIP entry exceeds 4 GiB: ${entry.path}`);

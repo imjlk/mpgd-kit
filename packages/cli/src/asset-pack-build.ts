@@ -5,6 +5,7 @@ import {
   mkdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
@@ -52,12 +53,27 @@ export interface AssetPackBuildReport {
 const manifestFileName = 'asset-pack-delivery.json';
 const sha256Of = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
 
+/** Resolve symlinks for the longest existing ancestor, keeping the remainder. */
+function realpathBestEffort(target: string): string {
+  let existing = target;
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) {
+      return existing;
+    }
+    existing = parent;
+  }
+  const real = realpathSync(existing);
+  return existing === target ? real : resolve(real, relative(existing, target));
+}
+
 interface PlannedFile {
   readonly role: PhaserPackFormatFileRole;
   readonly entryPath: string;
   readonly data: Buffer;
   readonly mediaType: string;
   readonly method: PhaserPackEntryMethod;
+  readonly stored?: Buffer | undefined;
 }
 
 function readJsonConfig(configPath: string): PhaserPackBuildConfig {
@@ -98,10 +114,18 @@ function readSourceFile(rootPath: string, entryPath: string): Buffer {
   if (relativeToRoot.startsWith('..') || isAbsolute(relativeToRoot)) {
     throw new Error(`Pack source path escapes the source root: ${entryPath}`);
   }
-  return readFileSync(current);
+  const data = readFileSync(current);
+  if (data.length === 0) {
+    throw new Error(`Pack source file is empty: ${entryPath}`);
+  }
+  return data;
 }
 
-function planAssetFiles(asset: PhaserPackBuildAsset, rootPath: string): PlannedFile[] {
+function planAssetFiles(
+  asset: PhaserPackBuildAsset,
+  rootPath: string,
+  delivery: 'files' | 'zip',
+): PlannedFile[] {
   const sources: { role: PhaserPackFormatFileRole; entryPath: string }[] = asset.kind === 'atlas'
     ? [
         { role: 'texture', entryPath: asset.texture },
@@ -115,15 +139,20 @@ function planAssetFiles(asset: PhaserPackBuildAsset, rootPath: string): PlannedF
     }
     const data = readSourceFile(rootPath, entryPath);
     let method: PhaserPackEntryMethod = asset.compression ?? media.defaultMethod;
-    if (method === 'deflate' && asset.compression === undefined) {
+    let stored: Buffer | undefined;
+    if (delivery === 'zip' && method === 'deflate') {
+      const deflated = deflateRawSync(data, { level: 9 });
       // Default policy may fall back to STORE when DEFLATE is not smaller;
-      // an explicit per-asset override forces its method.
-      if (deflateRawSync(data, { level: 9 }).length >= data.length) {
+      // an explicit per-asset override forces its method. The trial result is
+      // reused by the ZIP writer instead of deflating the same bytes again.
+      if (asset.compression === undefined && deflated.length >= data.length) {
         method = 'store';
+      } else {
+        stored = deflated;
       }
     }
     return {
-      role, entryPath, data, mediaType: media.mediaType, method,
+      role, entryPath, data, mediaType: media.mediaType, method, stored,
     };
   });
 }
@@ -170,11 +199,17 @@ export function buildAssetPacks(options: {
     throw new Error(`Pack source root does not exist: ${rootPath}`);
   }
   const outPath = resolve(cwd, options.outDir);
-  const rootRelativeToOut = relative(outPath, rootPath);
-  const outRelativeToRoot = relative(rootPath, outPath);
+  // Compare resolved paths, not just lexical ones: an existing symlinked
+  // output ancestor could point back into the source root.
+  const realOutPath = realpathBestEffort(outPath);
+  const realRootPath = realpathSync(rootPath);
+  const rootRelativeToOut = relative(realOutPath, realRootPath);
+  const outRelativeToRoot = relative(realRootPath, realOutPath);
   if (
     rootRelativeToOut === ''
     || outRelativeToRoot === ''
+    || isAbsolute(rootRelativeToOut)
+    || isAbsolute(outRelativeToRoot)
     || !rootRelativeToOut.startsWith('..')
     || !outRelativeToRoot.startsWith('..')
   ) {
@@ -199,7 +234,7 @@ export function buildAssetPacks(options: {
     const packOutputPrefix = `packs/${pack.id}@${pack.revision}`;
     const planned: { asset: PhaserPackBuildAsset; files: PlannedFile[] }[] = [];
     for (const asset of pack.assets) {
-      const files = planAssetFiles(asset, rootPath);
+      const files = planAssetFiles(asset, rootPath, pack.delivery);
       if (pack.delivery === 'files') {
         for (const file of files) {
           outputs.set(`${packOutputPrefix}/${file.entryPath}`, file.data);
@@ -219,6 +254,7 @@ export function buildAssetPacks(options: {
             path: file.entryPath,
             data: file.data,
             method: file.method,
+            ...(file.stored === undefined ? {} : { stored: file.stored }),
           });
           sourceBytes += file.data.length;
           if (file.method === 'store') {
@@ -271,12 +307,15 @@ export function buildAssetPacks(options: {
   // Pack artifacts under packs/ are immutable: a rebuild refuses to overwrite
   // different bytes at an existing artifact path. The manifest at the output
   // root is the replaceable summary of the latest successful build; it is
-  // only written after every artifact is in place.
+  // only written after every artifact is in place. Each write lands through a
+  // staging file plus rename so a crash can never leave truncated bytes at a
+  // path later builds treat as immutable.
   const outputRecords: {
     path: string;
     bytes: number;
     sha256: string;
     action: 'written' | 'unchanged';
+    data: Buffer;
   }[] = [];
   for (const [path, data] of outputs) {
     const target = join(outPath, path);
@@ -286,6 +325,7 @@ export function buildAssetPacks(options: {
         bytes: data.length,
         sha256: sha256Of(data),
         action: 'written',
+        data,
       });
       continue;
     }
@@ -306,6 +346,7 @@ export function buildAssetPacks(options: {
       bytes: data.length,
       sha256: sha256Of(data),
       action: 'unchanged',
+      data,
     });
   }
   const manifestTarget = join(outPath, manifestFileName);
@@ -322,14 +363,22 @@ export function buildAssetPacks(options: {
     bytes: manifestBytes.length,
     sha256: sha256Of(manifestBytes),
     action: manifestUnchanged ? 'unchanged' : 'written',
+    data: manifestBytes,
   });
+  const outputPaths = new Set(outputRecords.map((record) => record.path));
   for (const record of outputRecords) {
     if (record.action === 'unchanged') {
       continue;
     }
     const target = join(outPath, record.path);
     mkdirSync(dirname(target), { recursive: true });
-    writeFileSync(target, outputs.get(record.path) ?? manifestBytes);
+    const stagingPath = `${record.path}.mpgd-staging-${process.pid}`;
+    if (outputPaths.has(stagingPath)) {
+      throw new Error(`Staging path collides with an output path: ${stagingPath}`);
+    }
+    const staging = join(outPath, stagingPath);
+    writeFileSync(staging, record.data);
+    renameSync(staging, target);
   }
   return {
     outDir: outPath,

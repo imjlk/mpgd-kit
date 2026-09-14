@@ -505,10 +505,10 @@ try {
   writeFileSync(outsideTarget, pilotPng);
   const linkPath = join(sourceRoot, 'shared/link.png');
   try {
-    symlinkSync(outsideTarget, linkPath);
+    symlinkSync(resolve(repoRoot, outsideTarget), linkPath);
   } catch {
     chmodSync(sourceRoot, 0o755);
-    symlinkSync(outsideTarget, linkPath);
+    symlinkSync(resolve(repoRoot, outsideTarget), linkPath);
   }
   const symlinkConfig = join(fixtureRoot, 'symlink.config.json');
   writeJson(symlinkConfig, {
@@ -529,19 +529,79 @@ try {
   );
   rmSync(linkPath, { force: true });
 
+  // 10b. Empty source files and symlinked output paths are rejected.
+  writeFileSync(join(sourceRoot, 'shared/empty.png'), Buffer.alloc(0));
+  const emptyConfig = join(fixtureRoot, 'empty.config.json');
+  writeJson(emptyConfig, {
+    root: 'src',
+    packs: [{
+      id: 'x', revision: '1', delivery: 'files', assets: [{
+        kind: 'image', key: 'k', file: 'shared/empty.png',
+      }],
+    }],
+  });
+  assert.throws(
+    () => buildAssetPacks({
+      configPath: emptyConfig,
+      outDir: join(fixtureRoot, 'out-empty'),
+      cwd: repoRoot,
+    }),
+    /Pack source file is empty/u,
+  );
+  const outLink = join(fixtureRoot, 'out-link');
+  symlinkSync(resolve(repoRoot, sourceRoot), resolve(repoRoot, outLink));
+  assert.throws(
+    () => buildAssetPacks({ configPath: mainConfig, outDir: outLink, cwd: repoRoot }),
+    /outside the pack source root/u,
+    'a symlinked output path into the source root is rejected',
+  );
+  rmSync(outLink, { force: true, recursive: true });
+
+  // 10c. Case-colliding ids and paths fail validation.
+  const caseConfig = join(fixtureRoot, 'case.config.json');
+  writeJson(caseConfig, {
+    root: 'src',
+    packs: [
+      {
+        id: 'Ui', revision: '1', delivery: 'files', assets: [{
+          kind: 'image', key: 'k', file: 'shared/pilot.png',
+        }],
+      },
+      {
+        id: 'UI', revision: '1', delivery: 'files', assets: [{
+          kind: 'image', key: 'k', file: 'dunes/dunes.png',
+        }],
+      },
+    ],
+  });
+  assert.throws(
+    () => buildAssetPacks({
+      configPath: caseConfig,
+      outDir: join(fixtureRoot, 'out-case'),
+      cwd: repoRoot,
+    }),
+    /case-colliding pack id/u,
+  );
+
   // 11. The packaged CLI builds packs outside the kit checkout. The tarballs
   //     carry the built dist, so run pnpm build:packages before this smoke.
+  const packDestination = resolve(repoRoot, fixtureRoot, 'packed');
+  mkdirSync(packDestination, { recursive: true });
   const packWorkspace = (directory: string): string => {
     if (!existsSync(join(repoRoot, directory, 'dist', 'index.js'))) {
       throw new Error(`Missing ${directory}/dist; run pnpm build:packages first`);
     }
-    const packed = spawnSync('pnpm', ['pack', '--silent'], {
+    const before = new Set(readdirSync(packDestination));
+    const packed = spawnSync('pnpm', ['pack', '--silent', '--pack-destination', packDestination], {
       cwd: join(repoRoot, directory),
       encoding: 'utf8',
     });
     assert.equal(packed.status, 0, `pnpm pack failed for ${directory}: ${packed.stderr}`);
-    const tarball = packed.stdout.trim().split('\n').pop()!;
-    return join(repoRoot, directory, tarball);
+    const added = readdirSync(packDestination).filter(
+      (name) => !before.has(name) && name.endsWith('.tgz'),
+    );
+    assert.equal(added.length, 1, `expected exactly one new tarball for ${directory}`);
+    return join(packDestination, added[0]!);
   };
   const cliTarball = packWorkspace('packages/cli');
   const assetsTarball = packWorkspace('packages/phaser-assets');
@@ -597,5 +657,5 @@ try {
     'Asset pack build CLI checks passed: determinism, idempotence, mtime independence, files/zip parity, STORE/DEFLATE round-trip, revision and digest movement, immutable conflicts, failure preservation, input/output rejections and packaged off-kit execution.',
   );
 } finally {
-  rmSync(join(fixtureRoot, 'out-first'), { force: true, recursive: true });
+  rmSync(fixtureRoot, { force: true, recursive: true });
 }
