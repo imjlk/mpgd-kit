@@ -160,7 +160,11 @@ export function parsePhaserPackEntryPath(input: string): string {
     const paired = high && index + 1 < input.length
       && input.charCodeAt(index + 1) >= 0xdc00
       && input.charCodeAt(index + 1) <= 0xdfff;
-    if (low || (high && !paired)) {
+    if (high && paired) {
+      index++;
+      continue;
+    }
+    if (low || high) {
       throw new Error(`Invalid pack file path (lone surrogate): ${JSON.stringify(input)}`);
     }
   }

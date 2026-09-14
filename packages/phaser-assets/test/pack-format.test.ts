@@ -73,6 +73,14 @@ describe('entry paths', () => {
   });
 });
 
+describe('entry paths', () => {
+  it('accepts valid surrogate pairs and rejects lone halves', () => {
+    expect(parsePhaserPackEntryPath('shared/\ud83d\ude80.png')).toBe('shared/\ud83d\ude80.png');
+    expect(() => parsePhaserPackEntryPath('shared/\ud83d.png')).toThrow('lone surrogate');
+    expect(() => parsePhaserPackEntryPath('shared/\ude80.png')).toThrow('lone surrogate');
+  });
+});
+
 describe('media types', () => {
   it('maps supported extensions to media types and default methods', () => {
     expect(phaserPackMediaTypeForPath('a/b.PNG')).toEqual({
