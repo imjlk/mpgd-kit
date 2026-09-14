@@ -237,6 +237,7 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     if (zip.u32(localOffset) !== 0x04034b50) {
       fail('invalid-structure', `ZIP local header missing for entry: ${name}`);
     }
+    const localVersionNeeded = zip.u16(localOffset + 4);
     const localFlags = zip.u16(localOffset + 6);
     const localMethod = zip.u16(localOffset + 8);
     const localTime = zip.u16(localOffset + 10);
@@ -247,7 +248,8 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     const localNameLength = zip.u16(localOffset + 26);
     const localExtraLength = zip.u16(localOffset + 28);
     if (
-      localFlags !== flags
+      localVersionNeeded !== versionNeeded
+      || localFlags !== flags
       || localMethod !== methodCode
       || localTime !== time
       || localDate !== date
