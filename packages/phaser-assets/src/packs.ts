@@ -214,6 +214,10 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
   const packs = new Map(
     definePhaserAssetPacks(structuredClone(catalog)).map((pack) => [pack.id, pack]),
   );
+  const customFileSource = options.fileSource;
+  if (customFileSource !== undefined && (!customFileSource || typeof customFileSource.open !== 'function')) {
+    throw new Error('Invalid asset pack file source');
+  }
   const timeoutMs = options.timeoutMs ?? 15000;
   const retries = options.retries ?? 1;
   const requestTimeoutMs = options.requestTimeoutMs ?? 10000;
@@ -221,19 +225,23 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
   const maxConcurrentDecodes = options.maxConcurrentDecodes ?? 1;
   const maxBufferedBytes = options.maxBufferedBytes ?? 64 * 1024 * 1024;
   const requestCache = options.requestCache ?? 'no-store';
-  if (!['default', 'no-store', 'reload'].includes(requestCache)) {
-    throw new Error('Invalid asset pack HTTP cache policy');
-  }
   const maxFileBytes = options.maxFileBytes ?? 32 * 1024 * 1024;
   const maxDecodedPixels = options.maxDecodedPixels ?? 16000000;
-  if (![timeoutMs, requestTimeoutMs, maxConcurrentDownloads, maxConcurrentDecodes, maxBufferedBytes, maxFileBytes, maxDecodedPixels].every(
+  if (![timeoutMs, maxConcurrentDownloads, maxConcurrentDecodes, maxBufferedBytes, maxFileBytes, maxDecodedPixels].every(
     (n) => Number.isSafeInteger(n) && n > 0,
-  ) || !Number.isInteger(retries) || retries < 0 || retries > 3) {
+  )) {
     throw new Error('Invalid asset pack limits');
   }
-  const customFileSource = options.fileSource;
-  if (customFileSource !== undefined && (!customFileSource || typeof customFileSource.open !== 'function')) {
-    throw new Error('Invalid asset pack file source');
+  // Transport-only limits govern the default URL source; an injected source
+  // owns its transport, so it must not be rejected for unused HTTP settings.
+  if (customFileSource === undefined) {
+    if (!['default', 'no-store', 'reload'].includes(requestCache)) {
+      throw new Error('Invalid asset pack HTTP cache policy');
+    }
+    if (!Number.isSafeInteger(requestTimeoutMs) || requestTimeoutMs <= 0
+      || !Number.isInteger(retries) || retries < 0 || retries > 3) {
+      throw new Error('Invalid asset pack limits');
+    }
   }
   const resolveURL = options.resolveURL ?? ((url: string) => url);
   const entries = new Map<string, Entry>();

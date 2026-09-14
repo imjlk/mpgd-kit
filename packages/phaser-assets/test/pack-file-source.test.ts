@@ -445,6 +445,20 @@ describe('injected file sources', () => {
         kind: 'image', key: 'pilot', url: '/pilot.png',
       }]), { fileSource: invalid })).toThrow('Invalid asset pack file source');
     }
+    // Unused HTTP settings must not reject an injected source...
+    for (const unusedTransport of [{ retries: 4 }, { requestTimeoutMs: 0 }, { requestCache: 'only-if-cached' as 'default' }]) {
+      const tolerant = createPhaserAssetPackLoader(f.scene, imageCatalog([{
+        kind: 'image', key: 'pilot', url: '/pilot.png',
+      }]), { fileSource: memorySource(), ...unusedTransport });
+      tolerant.dispose();
+    }
+    // ...while the default URL source still validates them.
+    expect(() => createPhaserAssetPackLoader(f.scene, imageCatalog([{
+      kind: 'image', key: 'pilot', url: '/pilot.png',
+    }]), { retries: 4 })).toThrow('Invalid asset pack limits');
+    expect(() => createPhaserAssetPackLoader(f.scene, imageCatalog([{
+      kind: 'image', key: 'pilot', url: '/pilot.png',
+    }]), { requestTimeoutMs: 0 })).toThrow('Invalid asset pack limits');
   });
 });
 
