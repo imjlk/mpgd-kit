@@ -11,7 +11,7 @@ export async function staticServer(directory, { cors = false, port = 0 } = {}) {
   const requests = [];
   const faults = new Map();
   const delays = new Map();
-  const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml' };
+  const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.svg': 'image/svg+xml', '.png': 'image/png' };
   const server = createServer(async (request, response) => {
     if (cors) response.setHeader('Access-Control-Allow-Origin', '*');
     if (!['GET', 'HEAD'].includes(request.method)) { response.writeHead(405).end(); return; }
@@ -34,6 +34,7 @@ export async function staticServer(directory, { cors = false, port = 0 } = {}) {
       response.setHeader('Content-Type', types[extname(file)] ?? 'application/octet-stream');
       response.setHeader('Content-Length', bytes.length);
       response.setHeader('Cache-Control', path.startsWith('/packs/') ? 'public, max-age=31536000, immutable' : 'no-store');
+      if (fault?.kind === 'stall') { response.write(bytes.subarray(0, 1)); return; }
       response.end(request.method === 'HEAD' ? undefined : bytes);
     } catch {
       if (!response.destroyed) response.writeHead(404).end('Not found');

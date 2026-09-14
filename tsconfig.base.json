@@ -38,6 +38,7 @@
       "@mpgd/game-runtime/ui": ["./packages/game-runtime/src/ui/index.ts"],
       "@mpgd/game-runtime/actions": ["./packages/game-runtime/src/actions/index.ts"],
       "@mpgd/game-services/*": ["./packages/game-services/src/*"],
+      "@mpgd/phaser-assets/packs": ["./packages/phaser-assets/src/packs.ts"],
       "@mpgd/platform/*": ["./packages/platform/src/*"],
       "@mpgd/tutorial": ["./packages/tutorial/src/index.ts"],
       "@mpgd/tutorial/driver.css": ["./packages/tutorial/driver.css"],

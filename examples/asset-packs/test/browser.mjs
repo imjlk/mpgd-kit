@@ -22,8 +22,8 @@ try {
   process.env.ASSET_PACK_REMOTE_ORIGIN = remote.url;
   for (const mode of ['bundled', 'hybrid']) await build({ root, configFile: join(root, 'vite.config.ts'), mode, build: { outDir: join(builds, mode) }, logLevel: 'warn' });
   const reports = await auditArtifacts(builds);
-  browser = await chromium.launch({ headless: true });
-  for (const report of reports) {
+  browser = await chromium.launch({ headless: true, args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
+  for (const report of reports) for (const renderer of ['webgl', 'canvas']) {
     const app = await staticServer(join(builds, report.mode));
     servers.push(app);
     const context = await browser.newContext({ viewport: { width: 1100, height: 1000 } });
@@ -37,8 +37,17 @@ try {
       errors.push(message.text());
     });
     const state = () => page.evaluate(() => JSON.parse(window.render_game_to_text()));
-    const wait = async (phase) => page.waitForFunction((expected) => typeof window.render_game_to_text === 'function' && JSON.parse(window.render_game_to_text()).phase === expected, phase);
-    const imagePath = (id) => '/' + report.packs.find((pack) => pack.id === id).images[0].path;
+    const wait = async (phase) => {
+      try {
+        await page.waitForFunction((expected) => typeof window.render_game_to_text === 'function' && JSON.parse(window.render_game_to_text()).phase === expected, phase);
+      } catch (error) {
+        let actual;
+        try { actual = await state(); } catch { actual = 'unavailable'; }
+        console.error('Asset scenario failed', { mode: report.mode, renderer, expected: phase, actual, errors });
+        throw error;
+      }
+    };
+    const imagePath = (id) => '/' + report.packs.find((pack) => pack.id === id).files.find((file) => file.mediaType === 'image/png').path;
     const target = (id) => report.packs.find((pack) => pack.id === id).packaged ? app : remote;
     const count = (id) => target(id).requests.filter((path) => path === imagePath(id)).length;
     const empty = async () => {
@@ -49,7 +58,7 @@ try {
       assert.equal(value.textureCount, 0);
       assert.deepEqual(value.resources, []);
     };
-    await page.goto(app.url);
+    await page.goto(app.url + '?renderer=' + renderer);
     await wait('idle');
     assert.equal(app.requests.filter((path) => path.startsWith('/packs/')).length, 0, 'No speculative asset fetches before selecting a level');
     const sharedBefore = count('shared');
@@ -58,6 +67,9 @@ try {
     await wait('playing');
     let current = await state();
     assert.equal(current.current, 'grove');
+    assert.equal(current.renderer, renderer);
+    assert.equal(current.groundFrames, 2, 'Atlas frames are available at entry');
+    assert.equal(current.pilotFrames, 4, 'Spritesheet frames are available at entry');
     assert.deepEqual([current.ready, current.total, current.textureCount], [2, 2, 2]);
     const sharedIdentity = current.resources.find((asset) => asset.pack === 'shared').identity;
     assert.equal(count('dunes'), dunesBefore, 'An unused theme stays unloaded');
@@ -77,11 +89,12 @@ try {
     assert.ok((await state()).player.x > beforeMove);
     await page.waitForTimeout(100);
     assert.equal(app.requests.length + remote.requests.length, requestsAtEntry, 'Gameplay must not start deferred asset loads');
-    await page.screenshot({ path: join(artifacts, `${report.mode}-dunes.png`), fullPage: true });
-    evidence.push({ mode: report.mode, ready: await state(), packagedAssetBytes: report.packagedAssetBytes });
+    await page.screenshot({ path: join(artifacts, `${report.mode}-${renderer}-dunes.png`), fullPage: true });
+    evidence.push({ mode: report.mode, renderer, ready: await state(), packagedAssetBytes: report.packagedAssetBytes });
     await empty();
 
-    if (report.mode === 'hybrid') {
+    // Transport failure handling is renderer-independent; exercise it once under WebGL.
+    if (report.mode === 'hybrid' && renderer === 'webgl') {
       const path = imagePath('grove');
       const url = new URL(path, remote.url).href;
       // No CORS proxy or custom asset service: a separate ordinary static HTTP origin.
@@ -114,7 +127,7 @@ try {
       assert.equal(count('grove') - beforePersistent, 2, 'Persistent failure stops after two attempts');
       remote.faults.clear();
       expectedFailures.clear();
-      for (const [kind, error] of [['corrupt', /Digest mismatch/], ['oversize', /Size mismatch/]]) {
+      for (const [kind, error] of [['corrupt', /digest mismatch/i], ['oversize', /exceeds byte limit|size mismatch/i]]) {
         remote.faults.set(path, { kind });
         await page.click('#retry');
         await wait('error');
@@ -122,6 +135,12 @@ try {
         assert.equal((await state()).current, null);
         assert.deepEqual((await state()).resources, []);
       }
+      remote.faults.set(path, { kind: 'stall' });
+      const stalledBefore = count('grove');
+      await page.click('#retry');
+      await wait('error');
+      assert.match((await state()).error, /request timed out/);
+      assert.equal(count('grove') - stalledBefore, 2, 'Body deadline aborts each stalled attempt');
       remote.faults.clear();
       await page.click('#retry');
       await wait('playing');
@@ -160,13 +179,48 @@ try {
       await empty();
       await page.screenshot({ path: join(artifacts, 'hybrid-unloaded.png'), fullPage: true });
     }
+    if (report.mode === 'hybrid' && renderer === 'webgl') {
+      // Opting into ordinary HTTP caching reuses immutable bytes after textures are released.
+      await page.goto(app.url + '?renderer=webgl&http-cache=1');
+      await wait('idle');
+      await page.click('#grove');
+      await wait('playing');
+      const warmRequests = app.requests.length + remote.requests.length;
+      await empty();
+      await page.click('#grove');
+      await wait('playing');
+      assert.equal(app.requests.length + remote.requests.length, warmRequests, 'HTTP cache should avoid repeated downloads after release');
+      assert.equal((await state()).textureCount, 2);
+      await empty();
+    }
+    await page.click('#grove');
+    await wait('playing');
+    assert.equal((await state()).textureCount, 2);
+    assert.equal(await page.evaluate(() => window.shutdownSample()), 0, 'Shutdown removes resident physical textures');
+    assert.equal((await state()).phase, 'booting');
+    assert.deepEqual((await state()).resources, []);
+    await page.waitForTimeout(50);
+    assert.equal((await state()).current, null);
     assert.deepEqual(errors, []);
+    if (report.mode === 'hybrid') {
+      await page.goto(app.url + '?renderer=' + renderer);
+      await wait('idle');
+      remote.delays.set(imagePath('grove'), 250);
+      await page.click('#grove');
+      await page.waitForTimeout(50);
+      assert.equal(await page.evaluate(() => window.shutdownSample()), 0);
+      await page.waitForTimeout(350);
+      assert.equal((await state()).phase, 'booting');
+      assert.equal((await state()).current, null);
+      assert.deepEqual(errors, []);
+      remote.delays.clear();
+    }
     await context.close();
   }
   // Real Phaser must reject a prepared but incorrectly named theme image without
   // falling back to its missing texture or sacrificing the existing level's lease.
   const invalidCatalog = structuredClone(reports.find((report) => report.mode === 'bundled').packs);
-  invalidCatalog.find((pack) => pack.id === 'dunes').images[0].id = 'wrong-ground';
+  invalidCatalog.find((pack) => pack.id === 'dunes').assets[0].key = 'wrong-ground';
   const invalidBuild = join(builds, 'invalid-theme');
   await build({ root, configFile: join(root, 'vite.config.ts'), mode: 'bundled',
     build: { outDir: invalidBuild }, define: { __ASSET_PACK_CATALOG__: JSON.stringify(invalidCatalog) }, logLevel: 'warn' });
@@ -186,7 +240,7 @@ try {
   await invalidPage.click('#dunes');
   await invalidPage.waitForFunction(() => JSON.parse(window.render_game_to_text()).phase === 'error');
   const afterInvalid = await invalidState();
-  assert.match(afterInvalid.error, /Missing prepared image: dunes\/ground/);
+  assert.match(afterInvalid.error, /Asset is not in this lease: dunes\/ground/);
   assert.equal(afterInvalid.current, 'grove');
   assert.deepEqual(afterInvalid.resources, beforeInvalid.resources);
   assert.deepEqual(afterInvalid.player, beforeInvalid.player);
