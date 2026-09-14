@@ -63,3 +63,31 @@ const invalidPurchase: PurchaseActionSnapshot = {
 void owner.execute({ placementId: 'revive', idempotencyKey: 'key' });
 void actionSnapshot;
 void invalidPurchase;
+
+const recoverable = createGameActionCoordinator({
+  execution: createGameExecutionController(),
+  client: servicePort,
+  reconciliation: {
+    playerId: 'player',
+    async recover(operation) {
+      const grantId = operation.kind === 'purchase'
+        ? operation.input.productId : operation.input.placementId;
+      return {
+        operationId: operation.operationId,
+        transaction: {
+          playerId: operation.playerId,
+          source: operation.kind === 'purchase' ? 'purchase' : 'ad_reward',
+          grantId,
+          idempotencyKey: operation.input.idempotencyKey,
+          ledgerEntryId: 'authoritative-ledger',
+        },
+      };
+    },
+  },
+});
+void recoverable.reconcile();
+const unresolved = recoverable.getPendingOperation();
+if (unresolved) {
+  // @ts-expect-error Recovery identity must stay immutable.
+  unresolved.input.idempotencyKey = 'different';
+}

@@ -30,7 +30,8 @@ export type GameActionSnapshot<K extends GameActionKind> = Readonly<{ kind: K } 
 export type PurchaseActionSnapshot = GameActionSnapshot<'purchase'>;
 export type RewardedAdActionSnapshot = GameActionSnapshot<'rewarded-ad'>;
 export type GameActionErrorCode = 'disposed' | 'busy' | 'key-conflict' | 'already-completed'
-  | 'reconciliation-required' | 'history-full' | 'invalid-input';
+  | 'reconciliation-required' | 'history-full' | 'invalid-input'
+  | 'reconciliation-unavailable' | 'invalid-reconciliation';
 
 /** Scheduling/preflight rejection, distinct from a service result or external exception. */
 export class GameActionExecutionError extends Error {
@@ -58,9 +59,42 @@ export interface GameActionController<K extends GameActionKind> extends GameActi
   }): GameActionView<K>;
 }
 
+/** Immutable invocation identity; no receipt, token or platform payload is retained. */
+type PendingOperation<K extends GameActionKind> = Readonly<{ kind: K; operationId: number; input: Inputs[K] }>;
+export type GameActionPendingOperation = PendingOperation<'purchase'> | PendingOperation<'rewarded-ad'>;
+
+/** Structural subset of game-services ProductGrantTransaction, returned by a trusted recovery port. */
+export interface GameActionRecoveredGrant {
+  readonly playerId: string;
+  readonly source: 'purchase' | 'ad_reward';
+  readonly grantId: string;
+  readonly idempotencyKey: string;
+  readonly ledgerEntryId: string;
+}
+
+export interface GameActionReconciliationPort {
+  /** Must identify the same fixed player as the operation client. Recreate on account change. */
+  readonly playerId: string;
+  /** Read/recover an authoritative committed ledger grant; never open purchase/ad UI here.
+   * Return undefined while no committed grant can be confirmed.
+   * Do not await coordinator.reconcile() here: it joins this query and would deadlock. */
+  recover(operation: GameActionPendingOperation & { readonly playerId: string }): Promise<{
+    readonly operationId: number;
+    readonly transaction: GameActionRecoveredGrant;
+  } | undefined>;
+}
+
+export type GameActionReconciliationResult =
+  | Readonly<{ status: 'not-required' }>
+  | Readonly<{ status: 'pending'; operation: GameActionPendingOperation }>
+  | Readonly<{ status: 'reconciled'; operation: GameActionPendingOperation; ledgerEntryId: string }>;
+
 export interface GameActionCoordinator {
   createPurchaseController(): GameActionController<'purchase'>;
   createRewardedAdController(): GameActionController<'rewarded-ad'>;
+  getPendingOperation(): GameActionPendingOperation | undefined;
+  /** Concurrent callers join one recovery query; only a matching committed grant unlocks new keys. */
+  reconcile(): Promise<GameActionReconciliationResult>;
   getAvailability(): 'ready' | 'busy' | 'reconciliation-required' | 'history-full' | 'disposed';
   /** Terminal for new calls; pending external work still settles and releases its own block. */
   dispose(): void;
@@ -89,19 +123,27 @@ export function createGameActionCoordinator(options: {
   readonly client: Pick<GameServicesOperationClient, 'purchase' | 'claimRewardedAd'>;
   /** Never evicts keys: once full, new keys are rejected until application teardown. Default 1024. */
   readonly maxRememberedKeys?: number;
+  readonly reconciliation?: GameActionReconciliationPort;
   readonly onObserverError?: ObserverErrorHandler;
 }): GameActionCoordinator {
   const { execution, client, onObserverError } = options;
   const capacity = options.maxRememberedKeys ?? 1024;
+  const recoveryPlayerId = options.reconciliation?.playerId;
+  const recoveryPort = options.reconciliation;
+  if (recoveryPort && (typeof recoveryPlayerId !== 'string' || recoveryPlayerId.trim() === '' || typeof recoveryPort.recover !== 'function')) {
+    throw new GameActionExecutionError('invalid-input');
+  }
   if (!Number.isSafeInteger(capacity) || capacity < 1 || capacity > 10000) {
     throw new RangeError('maxRememberedKeys must be an integer from 1 to 10000.');
   }
+  const recover = recoveryPort?.recover.bind(recoveryPort);
   const history = new Map<string, string>();
   let current: AnyFlight | undefined;
   let last: AnyFlight | undefined;
   let nextId = 0;
   let disposed = false;
-  let needsReconciliation = false;
+  let unconfirmed: GameActionPendingOperation | undefined;
+  let recoveryFlight: Promise<GameActionReconciliationResult> | undefined;
 
   function isDisposed(): boolean {
     return disposed || execution.getSnapshot().status === 'destroyed';
@@ -143,7 +185,7 @@ export function createGameActionCoordinator(options: {
     if (prior !== undefined) {
       throw new GameActionExecutionError('already-completed');
     }
-    if (needsReconciliation) {
+    if (unconfirmed !== undefined) {
       throw new GameActionExecutionError('reconciliation-required');
     }
     if (current !== undefined) {
@@ -173,7 +215,7 @@ export function createGameActionCoordinator(options: {
     function finish(status: Results[K]['status'] | 'exception'): void {
       flight.settled = true;
       if (invoked && (status === 'pending' || status === 'exception')) {
-        needsReconciliation = true;
+        unconfirmed = Object.freeze({ kind, operationId: id, input }) as GameActionPendingOperation;
       }
       current = undefined;
       if (invoked) {
@@ -261,6 +303,55 @@ export function createGameActionCoordinator(options: {
     history.set(key, fingerprint);
     current = flight as AnyFlight;
     return flight;
+  }
+
+  function reconcile(): Promise<GameActionReconciliationResult> {
+    if (isDisposed()) {
+      return Promise.reject(new GameActionExecutionError('disposed'));
+    }
+    if (recoveryFlight) {
+      return recoveryFlight;
+    }
+    const operation = unconfirmed;
+    if (!operation) {
+      return Promise.resolve(Object.freeze({ status: 'not-required' }));
+    }
+    if (!recover || recoveryPlayerId === undefined) {
+      return Promise.reject(new GameActionExecutionError('reconciliation-unavailable'));
+    }
+    // Queue invocation until the shared promise is installed, including reentrant port calls.
+    const work = Promise.resolve().then(async (): Promise<GameActionReconciliationResult> => {
+      if (isDisposed()) {
+        throw new GameActionExecutionError('disposed');
+      }
+      const recovered = await recover(Object.freeze({ ...operation, playerId: recoveryPlayerId }));
+      if (isDisposed()) {
+        throw new GameActionExecutionError('disposed');
+      }
+      if (recovered === undefined) {
+        return Object.freeze({ status: 'pending', operation });
+      }
+      const transaction = recovered?.transaction;
+      const grantId = operation.kind === 'purchase' ? operation.input.productId : operation.input.placementId;
+      const source = operation.kind === 'purchase' ? 'purchase' : 'ad_reward';
+      if (!recovered || unconfirmed !== operation || recovered.operationId !== operation.operationId
+        || !transaction || transaction.playerId !== recoveryPlayerId || transaction.source !== source
+        || transaction.grantId !== grantId || transaction.idempotencyKey !== operation.input.idempotencyKey
+        || typeof transaction.ledgerEntryId !== 'string' || transaction.ledgerEntryId.trim() === '') {
+        throw new GameActionExecutionError('invalid-reconciliation');
+      }
+      const result = Object.freeze({ status: 'reconciled' as const, operation, ledgerEntryId: transaction.ledgerEntryId });
+      // History and the original promise are retained: recovering never makes the same key executable again.
+      unconfirmed = undefined;
+      return result;
+    });
+    const joined = work.finally(() => {
+      if (recoveryFlight === joined) {
+        recoveryFlight = undefined;
+      }
+    });
+    void (recoveryFlight = joined);
+    return joined;
   }
 
   function makeController<K extends GameActionKind>(kind: K): GameActionController<K> {
@@ -383,6 +474,8 @@ export function createGameActionCoordinator(options: {
 
   return Object.freeze({
     createPurchaseController: () => makeController('purchase'),
+    getPendingOperation: () => unconfirmed,
+    reconcile,
     createRewardedAdController: () => makeController('rewarded-ad'),
     getAvailability() {
       if (isDisposed()) {
@@ -391,7 +484,7 @@ export function createGameActionCoordinator(options: {
       if (current !== undefined) {
         return 'busy';
       }
-      if (needsReconciliation) {
+      if (unconfirmed !== undefined) {
         return 'reconciliation-required';
       }
       return history.size >= capacity ? 'history-full' : 'ready';
