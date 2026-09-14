@@ -81,7 +81,7 @@ package README for fallback reservations when integrity sizes are absent.
 
 | Concern | Current behavior | Follow-up evidence needed |
 | --- | --- | --- |
-| Archive delivery | Individual verified files over HTTP or an injected file source | Archive packing/extraction through the file-source boundary with acceptance evidence |
+| Archive delivery | `mpgd assets build-packs` emits deterministic files/ZIP artifacts against the shared `@mpgd/phaser-assets/pack-format` contract; runtime loading still uses individual files | Client-side ZIP loading through the file-source boundary with acceptance evidence |
 | Persistent storage | Resident leases; optional browser HTTP caching, no-store by default | Disk cache, quotas, eviction and offline cache hits |
 | Asset readiness | Image decode + texture/frame registration; Canvas/WebGL fixture | Audio unlock, context-loss recovery, measured shader/upload budgets |
 | Target configuration | Example build-time routing | Published per-target schema and installed/embedded target artifact tests |

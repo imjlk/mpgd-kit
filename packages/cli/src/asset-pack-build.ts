@@ -1,0 +1,493 @@
+import { createHash } from 'node:crypto';
+import {
+  existsSync,
+  linkSync,
+  lstatSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
+import { deflateRawSync } from 'node:zlib';
+
+import {
+  PHASER_PACK_DELIVERY_FORMAT,
+  PHASER_PACK_DELIVERY_VERSION,
+  phaserPackMediaTypeForPath,
+  validatePhaserPackBuildConfig,
+  validatePhaserPackDeliveryManifest,
+  type PhaserPackBuildAsset,
+  type PhaserPackBuildConfig,
+  type PhaserPackDeliveryAsset,
+  type PhaserPackDeliveryFile,
+  type PhaserPackDeliveryManifest,
+  type PhaserPackDeliveryPack,
+  type PhaserPackEntryMethod,
+  type PhaserPackFormatFileRole,
+} from '@mpgd/phaser-assets/pack-format';
+
+import { createDeterministicZip, type DeterministicZipEntry } from './asset-pack-zip.js';
+
+export interface AssetPackBuildReport {
+  readonly outDir: string;
+  readonly manifestPath: string;
+  readonly outputs: readonly {
+    readonly path: string;
+    readonly bytes: number;
+    readonly sha256: string;
+    readonly action: 'written' | 'unchanged';
+  }[];
+  readonly archives: readonly {
+    readonly packId: string;
+    readonly path: string;
+    readonly entryCount: number;
+    readonly storeEntries: number;
+    readonly deflateEntries: number;
+    readonly sourceBytes: number;
+    readonly archiveBytes: number;
+    readonly sha256: string;
+  }[];
+}
+
+const manifestFileName = 'asset-pack-delivery.json';
+let stagingSequence = 0;
+const sha256Of = (data: Buffer): string => createHash('sha256').update(data).digest('hex');
+
+/** Resolve symlinks for the longest existing ancestor, keeping the remainder. */
+function realpathBestEffort(target: string): string {
+  // lstat-based existence stops the walk at dangling symlinks, so realpath
+  // fails closed on them instead of lexically skipping the link.
+  const exists = (path: string): boolean => {
+    try {
+      lstatSync(path);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  let existing = target;
+  while (!exists(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) {
+      return existing;
+    }
+    existing = parent;
+  }
+  let real: string;
+  try {
+    real = realpathSync(existing);
+  } catch (error) {
+    throw new Error(`Output path resolves through a broken symlink: ${target}`, { cause: error });
+  }
+  return existing === target ? real : resolve(real, relative(existing, target));
+}
+
+/** Artifact writes must never traverse symlinks below the output root. */
+function assertNoSymlinkUnder(base: string, relativePath: string): void {
+  let current = base;
+  for (const component of relativePath.split('/')) {
+    current = join(current, component);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      return;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `Output path traverses a symbolic link below the output root: ${join(base, relativePath)}`,
+      );
+    }
+  }
+}
+
+interface PlannedFile {
+  readonly role: PhaserPackFormatFileRole;
+  readonly entryPath: string;
+  readonly data: Buffer;
+  readonly mediaType: string;
+  readonly method: PhaserPackEntryMethod;
+  readonly stored?: Buffer | undefined;
+}
+
+function readJsonConfig(configPath: string): PhaserPackBuildConfig {
+  let raw: string;
+  try {
+    raw = readFileSync(configPath, 'utf8');
+  } catch {
+    throw new Error(`Cannot read asset pack build config: ${configPath}`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error(`Asset pack build config is not valid JSON (${configPath}): ${String(error)}`);
+  }
+  return validatePhaserPackBuildConfig(parsed);
+}
+
+/** Reject symlinks and any path component escaping the source root. */
+function readSourceFile(rootPath: string, entryPath: string): Buffer {
+  let current = rootPath;
+  for (const component of entryPath.split('/')) {
+    current = join(current, component);
+    let stat;
+    try {
+      stat = lstatSync(current);
+    } catch {
+      throw new Error(`Missing pack source file: ${entryPath}`);
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(`Pack source path must not contain symbolic links: ${entryPath}`);
+    }
+  }
+  if (!lstatSync(current).isFile()) {
+    throw new Error(`Pack source path is not a regular file: ${entryPath}`);
+  }
+  const relativeToRoot = relative(realpathSync(rootPath), realpathSync(current));
+  // Exact '..' components only: names like '..dots' stay inside the root.
+  if (relativeToRoot === '..' || relativeToRoot.startsWith('../') || isAbsolute(relativeToRoot)) {
+    throw new Error(`Pack source path escapes the source root: ${entryPath}`);
+  }
+  const data = readFileSync(current);
+  if (data.length === 0) {
+    throw new Error(`Pack source file is empty: ${entryPath}`);
+  }
+  return data;
+}
+
+function planAssetFiles(
+  asset: PhaserPackBuildAsset,
+  rootPath: string,
+  delivery: 'files' | 'zip',
+): PlannedFile[] {
+  const sources: { role: PhaserPackFormatFileRole; entryPath: string }[] = asset.kind === 'atlas'
+    ? [
+        { role: 'texture', entryPath: asset.texture },
+        { role: 'atlas', entryPath: asset.atlas },
+      ]
+    : [{ role: 'texture', entryPath: asset.file }];
+  return sources.map(({ role, entryPath }) => {
+    const media = phaserPackMediaTypeForPath(entryPath);
+    if (media === null) {
+      throw new Error(`Unsupported pack source extension: ${asset.key}/${entryPath}`);
+    }
+    if (role === 'texture' && !media.mediaType.startsWith('image/')) {
+      throw new Error(`Texture sources must be images: ${asset.key}/${entryPath}`);
+    }
+    if (role === 'atlas' && media.mediaType !== 'application/json') {
+      throw new Error(`Atlas metadata sources must be JSON: ${asset.key}/${entryPath}`);
+    }
+    const data = readSourceFile(rootPath, entryPath);
+    let method: PhaserPackEntryMethod = asset.compression ?? media.defaultMethod;
+    let stored: Buffer | undefined;
+    if (delivery === 'zip' && method === 'deflate') {
+      const deflated = deflateRawSync(data, { level: 9 });
+      // Default policy may fall back to STORE when DEFLATE is not smaller;
+      // an explicit per-asset override forces its method. The trial result is
+      // reused by the ZIP writer instead of deflating the same bytes again.
+      if (asset.compression === undefined && deflated.length >= data.length) {
+        method = 'store';
+      } else {
+        stored = deflated;
+      }
+    }
+    return {
+      role, entryPath, data, mediaType: media.mediaType, method, stored,
+    };
+  });
+}
+
+function deliveryAsset(
+  asset: PhaserPackBuildAsset,
+  files: readonly PlannedFile[],
+  pack: PhaserPackBuildConfig['packs'][number],
+): PhaserPackDeliveryAsset {
+  const outputPrefix = `packs/${pack.id}@${pack.revision}`;
+  const deliveryFiles: PhaserPackDeliveryFile[] = files.map((file) => ({
+    role: file.role,
+    mediaType: file.mediaType,
+    bytes: file.data.length,
+    sha256: sha256Of(file.data),
+    path: pack.delivery === 'files' ? `${outputPrefix}/${file.entryPath}` : file.entryPath,
+    ...(pack.delivery === 'zip' ? { method: file.method } : {}),
+  }));
+  return {
+    assetKey: asset.key,
+    kind: asset.kind,
+    ...(asset.kind === 'spritesheet' ? { frameConfig: asset.frameConfig } : {}),
+    files: deliveryFiles,
+  };
+}
+
+/**
+ * Build files or ZIP delivery artifacts for the configured packs. The same
+ * inputs, options and Node/zlib build produce byte-identical outputs; builds
+ * never modify sources, never delete existing output, reject different bytes
+ * at existing output paths, and write the manifest only after every artifact
+ * is in place.
+ */
+export function buildAssetPacks(options: {
+  readonly configPath: string;
+  readonly outDir: string;
+  readonly cwd?: string;
+}): AssetPackBuildReport {
+  const cwd = options.cwd ?? process.cwd();
+  const configPath = resolve(cwd, options.configPath);
+  const config = readJsonConfig(configPath);
+  const rootPath = resolve(dirname(configPath), config.root);
+  if (!existsSync(rootPath)) {
+    throw new Error(`Pack source root does not exist: ${rootPath}`);
+  }
+  const outPath = resolve(cwd, options.outDir);
+  // Compare resolved paths, not just lexical ones: an existing symlinked
+  // output ancestor could point back into the source root.
+  const realOutPath = realpathBestEffort(outPath);
+  const realRootPath = realpathSync(rootPath);
+  const overlaps = (from: string, to: string): boolean => {
+    const step = relative(from, to);
+    // Cross-volume paths are drive-qualified and can never be nested.
+    if (isAbsolute(step)) {
+      return false;
+    }
+    return step === '' || (step !== '..' && !step.startsWith('../'));
+  };
+  if (overlaps(realOutPath, realRootPath) || overlaps(realRootPath, realOutPath)) {
+    throw new Error(
+      `Output directory must be outside the pack source root: ${outPath} vs ${rootPath}`,
+    );
+  }
+  const revisions = new Map(config.packs.map((pack) => [pack.id, pack.revision]));
+  const outputs = new Map<string, Buffer>();
+  const archives: {
+    packId: string;
+    path: string;
+    entryCount: number;
+    storeEntries: number;
+    deflateEntries: number;
+    sourceBytes: number;
+    archiveBytes: number;
+    sha256: string;
+  }[] = [];
+  const deliveryPacks: PhaserPackDeliveryPack[] = [];
+  for (const pack of config.packs) {
+    const packOutputPrefix = `packs/${pack.id}@${pack.revision}`;
+    const planned: { asset: PhaserPackBuildAsset; files: PlannedFile[] }[] = [];
+    for (const asset of pack.assets) {
+      const files = planAssetFiles(asset, rootPath, pack.delivery);
+      if (pack.delivery === 'files') {
+        for (const file of files) {
+          outputs.set(`${packOutputPrefix}/${file.entryPath}`, file.data);
+        }
+      }
+      planned.push({ asset, files });
+    }
+    let archive: PhaserPackDeliveryPack['archive'];
+    if (pack.delivery === 'zip') {
+      const entries: DeterministicZipEntry[] = [];
+      let sourceBytes = 0;
+      let storeEntries = 0;
+      let deflateEntries = 0;
+      for (const { files } of planned) {
+        for (const file of files) {
+          entries.push({
+            path: file.entryPath,
+            data: file.data,
+            method: file.method,
+            ...(file.stored === undefined ? {} : { stored: file.stored }),
+          });
+          sourceBytes += file.data.length;
+          if (file.method === 'store') {
+            storeEntries++;
+          } else {
+            deflateEntries++;
+          }
+        }
+      }
+      const archiveBytes = createDeterministicZip(entries);
+      const archivePath = `${packOutputPrefix}.zip`;
+      outputs.set(archivePath, archiveBytes);
+      archive = {
+        path: archivePath,
+        bytes: archiveBytes.length,
+        sha256: sha256Of(archiveBytes),
+        entryCount: entries.length,
+      };
+      archives.push({
+        packId: pack.id,
+        path: archivePath,
+        entryCount: entries.length,
+        storeEntries,
+        deflateEntries,
+        sourceBytes,
+        archiveBytes: archiveBytes.length,
+        sha256: archive.sha256,
+      });
+    }
+    deliveryPacks.push({
+      packId: pack.id,
+      revision: pack.revision,
+      dependencies: (pack.dependsOn ?? []).map((dependency) => ({
+        packId: dependency, revision: revisions.get(dependency)!,
+      })),
+      delivery: pack.delivery,
+      assets: planned.map(({ asset, files }) => deliveryAsset(asset, files, pack)),
+      ...(archive === undefined ? {} : { archive }),
+    });
+  }
+  const manifest: PhaserPackDeliveryManifest = {
+    format: PHASER_PACK_DELIVERY_FORMAT,
+    version: PHASER_PACK_DELIVERY_VERSION,
+    packs: deliveryPacks,
+  };
+  const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  // The manifest describes the artifacts; it never travels inside them, and
+  // consumers verify archives and entries against these external digests.
+  validatePhaserPackDeliveryManifest(JSON.parse(manifestBytes.toString('utf8')));
+  // Pack artifacts under packs/ are immutable: a rebuild refuses to overwrite
+  // different bytes at an existing artifact path. The manifest at the output
+  // root is the replaceable summary of the latest successful build; it is
+  // only written after every artifact is in place. Each write lands through a
+  // staging file plus rename so a crash can never leave truncated bytes at a
+  // path later builds treat as immutable.
+  const outputRecords: {
+    path: string;
+    bytes: number;
+    sha256: string;
+    action: 'written' | 'unchanged';
+    data: Buffer;
+  }[] = [];
+  for (const [path, data] of outputs) {
+    const target = join(outPath, path);
+    if (!existsSync(target)) {
+      outputRecords.push({
+        path,
+        bytes: data.length,
+        sha256: sha256Of(data),
+        action: 'written',
+        data,
+      });
+      continue;
+    }
+    let existing: Buffer;
+    try {
+      existing = readFileSync(target);
+    } catch {
+      throw new Error(`Output path is not a readable file: ${path}`);
+    }
+    if (!existing.equals(data)) {
+      throw new Error(
+        `Output path already holds different bytes (immutable conflict): ${path}. `
+          + 'Change the pack content or revision, or build into a new directory.',
+      );
+    }
+    outputRecords.push({
+      path,
+      bytes: data.length,
+      sha256: sha256Of(data),
+      action: 'unchanged',
+      data,
+    });
+  }
+  const manifestTarget = join(outPath, manifestFileName);
+  const manifestUnchanged = existsSync(manifestTarget)
+    && (() => {
+      try {
+        return readFileSync(manifestTarget).equals(manifestBytes);
+      } catch {
+        return false;
+      }
+    })();
+  outputRecords.push({
+    path: manifestFileName,
+    bytes: manifestBytes.length,
+    sha256: sha256Of(manifestBytes),
+    action: manifestUnchanged ? 'unchanged' : 'written',
+    data: manifestBytes,
+  });
+  // Every output path — including unchanged ones — must stay free of
+  // symlinks below the output root, so the unchanged shortcut can never
+  // bless a symlinked descendant.
+  const outputPaths = new Set(outputRecords.map((record) => record.path));
+  for (const record of outputRecords) {
+    assertNoSymlinkUnder(outPath, record.path);
+  }
+  for (const record of outputRecords) {
+    if (record.action === 'unchanged') {
+      continue;
+    }
+    const target = join(outPath, record.path);
+    mkdirSync(dirname(target), { recursive: true });
+    // Exclusive creation with a per-process sequence keeps staging names
+    // unique even across builders that share a PID.
+    let stagingPath = '';
+    let staging = '';
+    try {
+      for (let attempt = 0; attempt < 64; attempt++) {
+        const candidate = `${record.path}.mpgd-staging-${process.pid}-${++stagingSequence}`;
+        if (outputPaths.has(candidate)) {
+          continue;
+        }
+        try {
+          staging = join(outPath, candidate);
+          writeFileSync(staging, record.data, { flag: 'wx' });
+          stagingPath = candidate;
+          break;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+            throw error;
+          }
+        }
+      }
+      if (stagingPath === '') {
+        throw new Error(`Cannot reserve a unique staging path for ${record.path}`);
+      }
+      if (record.path === manifestFileName) {
+        // The manifest is the replaceable summary of the latest build.
+        renameSync(staging, target);
+      } else {
+        // Pack artifacts are immutable: link fails atomically when another
+        // build already published this path, instead of replacing it.
+        try {
+          linkSync(staging, target);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'EEXIST') {
+            throw error;
+          }
+          let published: Buffer;
+          try {
+            published = readFileSync(target);
+          } catch {
+            throw new Error(`Output path is not a readable file: ${record.path}`);
+          }
+          if (!published.equals(record.data)) {
+            throw new Error(
+              `Output path already holds different bytes (immutable conflict): ${record.path}. `
+                + 'Change the pack content or revision, or build into a new directory.',
+            );
+          }
+        }
+        // The published artifact keeps the staging inode; drop the staging name.
+        rmSync(staging, { force: true });
+      }
+    } catch (error) {
+      // Best-effort cleanup: a locked or unreadable staging file must not
+      // mask the original write or rename failure.
+      try {
+        rmSync(staging, { force: true });
+      } catch {
+        // Ignore cleanup failures.
+      }
+      throw error;
+    }
+  }
+  return {
+    outDir: outPath,
+    manifestPath: manifestTarget,
+    outputs: outputRecords,
+    archives,
+  };
+}

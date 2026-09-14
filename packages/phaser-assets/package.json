@@ -31,6 +31,10 @@
     "./packs": {
       "types": "./dist/packs.d.ts",
       "default": "./dist/packs.js"
+    },
+    "./pack-format": {
+      "types": "./dist/pack-format.d.ts",
+      "default": "./dist/pack-format.js"
     }
   },
   "files": [
