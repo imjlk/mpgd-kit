@@ -4,7 +4,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defineConfig, type Plugin } from 'vite';
 import type { DeliveryPack } from './src/packs.js';
-import type { PhaserPackAsset } from '../../packages/phaser-assets/src/packs.js';
+import type { PhaserPackAsset } from '@mpgd/phaser-assets/packs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
 const sources = [
@@ -30,11 +30,18 @@ export default defineConfig(({ mode }) => {
       payloads.set(path, bytes);
       return { ...file, path, bytes: bytes.length };
     });
-    const texture = { bytes: files[0]!.bytes, sha256: files[0]!.sha256 };
+    const png = files.filter((file) => file.mediaType === 'image/png');
+    const json = files.filter((file) => file.mediaType === 'application/json');
+    const image = png[0];
+    if (png.length !== 1 || !image || (source.id === 'grove' && json.length !== 1)) throw new Error(`Pack ${source.id} requires one PNG and, for an atlas, one JSON file`);
+    const texture = { bytes: image.bytes, sha256: image.sha256 };
     let asset: PhaserPackAsset;
-    if (source.id === 'shared') asset = { kind: 'spritesheet', key: 'pilot', url: files[0]!.path, frameConfig: { frameWidth: 64, frameHeight: 64 }, integrity: { texture } };
-    else if (source.id === 'grove') asset = { kind: 'atlas', key: 'ground', textureUrl: files[0]!.path, atlasUrl: files[1]!.path, integrity: { texture, atlas: { bytes: files[1]!.bytes, sha256: files[1]!.sha256 } } };
-    else asset = { kind: 'image', key: 'ground', url: files[0]!.path, integrity: { texture } };
+    if (source.id === 'shared') asset = { kind: 'spritesheet', key: 'pilot', url: image.path, frameConfig: { frameWidth: 64, frameHeight: 64 }, integrity: { texture } };
+    else if (source.id === 'grove') {
+      const atlas = json[0];
+      if (!atlas) throw new Error('Missing grove atlas metadata');
+      asset = { kind: 'atlas', key: 'ground', textureUrl: image.path, atlasUrl: atlas.path, integrity: { texture, atlas: { bytes: atlas.bytes, sha256: atlas.sha256 } } };
+    } else asset = { kind: 'image', key: 'ground', url: image.path, integrity: { texture } };
     return { id: source.id, revision, dependsOn: source.dependsOn, packaged: !hybrid || source.id === 'shared', assets: [asset], files };
   });
   const report = {

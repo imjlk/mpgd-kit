@@ -44,3 +44,5 @@ Follow-up validation: 17 public-package tests, packed Node import and independen
 consumer TypeScript checks pass. Canvas/WebGL × bundled/hybrid browser checks pass,
 including named atlas frames, spritesheet frames and physical texture cleanup.
 The root typecheck passes; full contribution checks and OCR/PR review are running.
+
+Follow-up review incorporated: cleanup failure isolation with drainable diagnostics, full download/decode shutdown coverage, consumer display cleanup before lease release, separate request deadlines and download/decode/encoded-byte budgets. Package tests: 37 passing. Browser matrix including stalled body, cache reuse and shutdown passing. Public API remains in the existing phaser-assets package.

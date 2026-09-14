@@ -75,14 +75,43 @@ It does not promise shader warmup, arbitrary first-frame performance, GPU recove
 after context loss, or audio unlock. Progress counts prepared assets, not files or
 HTTP bytes. An atlas's image and JSON are one asset.
 
-Defaults: one retry for network errors/429/5xx, 15-second per-asset deadline,
-32 MiB encoded bytes per file, 16 million decoded pixels per image. Options can
-adjust these limits; cancellation and timeout also clean up a pending image decode.
+Defaults are conservative starting limits, not performance targets: one retry for
+network errors/429/5xx, a 15-second per-asset deadline (including all queue waits),
+a 10-second `requestTimeoutMs` for each HTTP attempt including its body,
+32 MiB encoded bytes per file and 16 million decoded pixels per image.
+`maxConcurrentDownloads` defaults to 4 and `maxConcurrentDecodes` to 1.
+`maxBufferedBytes` defaults to 64 MiB across downloading, queued and decoding
+assets. The loader reserves each asset's declared file sizes before downloading;
+files without integrity reserve `maxFileBytes` each. An atlas reserves both files.
+A reservation larger than the budget fails before any network request. This
+conservative admission policy prevents completed Blobs from accumulating behind
+slow decodes. Supply integrity sizes for better utilization and tune limits using
+your devices and catalog. The sample explicitly uses 2 downloads, 1 decode and an
+8 MiB encoded reservation budget.
+
+Timeout aborts actual fetch/body reads. A browser's native decode may keep running
+after cancellation: the caller rejects promptly, its image URL is revoked, and
+its decode slot and byte reservation remain occupied until native completion.
+Late completion cannot register a texture. A decoder that never settles can thus
+stall the decode queue; later callers still hit their own preparation deadlines.
+Encoded reservations are a logical payload bound, not an exact heap/GPU bound:
+stream chunks, Blob construction, parsed JSON and browser internals add overhead.
+
+All ownership returns complete even if a Phaser texture disposer throws.
+`release()` and `dispose()` do not throw cleanup failures; drain them with
+`takeCleanupErrors()` for diagnostics. Failed engine deletion is not retried:
+`snapshot()` shows ownership, so an empty snapshot does not prove that an engine
+which threw during deletion removed its physical texture. Image references are
+cleared regardless. Cancellation/failure keeps its original rejection reason.
 Optional `integrity: { texture: { bytes, sha256 }, atlas: { bytes, sha256 } }` verifies
 encoded content before decoding/parsing. SHA-256 verification requires HTTPS or
 localhost. Known size or integrity failures are not retried. Requests omit
-credentials and use `cache: 'no-store'`. A static host must provide CORS and MIME
-headers. `resolveURL` does not affect ordinary `scene.load` URL settings.
+credentials. `requestCache` defaults to `no-store`; choose `default` for ordinary
+browser HTTP caching of versioned immutable URLs, or `reload` to refresh that
+cache from the network. Integrity is checked even when bytes come from HTTP cache.
+Changing a bad immutable response requires a new revision or a fresh-cache policy. A static host must provide CORS and MIME
+headers. `resolveURL` does not affect ordinary `scene.load` URL settings. Pack URLs are
+page-relative by default; they do not inherit `scene.load.baseURL/path/prefix`.
 
 There is no managed disk cache, offline download storage, prefetch scheduler or
 upload service in this API. `snapshot()` reports owned textures and width × height

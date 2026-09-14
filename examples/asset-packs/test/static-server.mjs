@@ -34,6 +34,7 @@ export async function staticServer(directory, { cors = false, port = 0 } = {}) {
       response.setHeader('Content-Type', types[extname(file)] ?? 'application/octet-stream');
       response.setHeader('Content-Length', bytes.length);
       response.setHeader('Cache-Control', path.startsWith('/packs/') ? 'public, max-age=31536000, immutable' : 'no-store');
+      if (fault?.kind === 'stall') { response.write(bytes.subarray(0, 1)); return; }
       response.end(request.method === 'HEAD' ? undefined : bytes);
     } catch {
       if (!response.destroyed) response.writeHead(404).end('Not found');

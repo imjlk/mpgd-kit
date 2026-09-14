@@ -54,7 +54,7 @@ Unit tests cover deadlines, scene shutdown and progress callbacks that throw.
 
 | Concern | Current behavior | Follow-up evidence needed |
 | --- | --- | --- |
-| Persistent storage | Resident leases only; fetch uses no-store | Disk cache, quotas, eviction and offline cache hits |
+| Persistent storage | Resident leases; optional browser HTTP caching, no-store by default | Disk cache, quotas, eviction and offline cache hits |
 | Asset readiness | Image decode + texture/frame registration; Canvas/WebGL fixture | Audio unlock, context-loss recovery, measured shader/upload budgets |
 | Target configuration | Example build-time routing | Published per-target schema and installed/embedded target artifact tests |
 | Scheduling | Demand loading with bounded retry/deadline | Decode concurrency, prefetch priorities and gameplay contention measurements |
@@ -66,3 +66,20 @@ Public immutable assets do not require a service per game or pack. CORS, MIME,
 cache headers and immutable revision retention belong to deployment. Keep supported
 builds' revisions available. Promote additional API/storage features only with a
 concrete consumer and acceptance cases; issue #173 is not completed by this slice.
+
+### Follow-up lifetime and admission bounds
+
+The public helper isolates cleanup exceptions and exposes `takeCleanupErrors()`;
+owner returns and physical engine cleanup success are separate. The sample's
+shutdown handler cancels pending entry, invalidates late UI commits and destroys
+consuming display objects before releasing the current lease. Cross-scene users
+should share a dedicated long-lived asset scene and cancel/release only their
+own acquisitions on consumer shutdown. Disposing that store ends all ownership.
+
+Network attempts include a body deadline. Separate download/decode permits and
+encoded-byte reservations bound preparation, including queue wait in the total
+asset deadline. Native decode retains its reservation until it actually settles
+even if its caller has already cancelled. Defaults are configurable starting
+limits; there is no claim of measured production memory or frame-time bounds.
+The sample uses 2 downloads, 1 decode and 8 MiB of encoded reservations. See the
+package README for fallback reservations when integrity sizes are absent.

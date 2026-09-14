@@ -34,9 +34,25 @@ class Board extends Phaser.Scene {
     this.cursors = this.input.keyboard!.createCursorKeys();
     const localBase = new URL(import.meta.env.BASE_URL, window.location.href);
     const bundled = new Set(__ASSET_PACK_CATALOG__.filter((pack) => pack.packaged).map((pack) => pack.id));
+    // Register consumer cleanup before the store's shutdown hook. No display
+    // object may keep using a texture after its last owner returns the lease.
+    this.events.once('shutdown', () => {
+      ++sequence;
+      pending?.abort();
+      pending = undefined;
+      this.clear();
+      packs = undefined;
+      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0 });
+      renderStatus();
+    });
     packs = createPhaserAssetPackLoader(this, __ASSET_PACK_CATALOG__, {
       resolveURL: (url, pack) => new URL(url, bundled.has(pack.packId) ? localBase : __ASSET_PACK_ORIGIN__).href,
       timeoutMs: 5_000,
+      requestTimeoutMs: 2_000,
+      maxConcurrentDownloads: 2,
+      maxConcurrentDecodes: 1,
+      maxBufferedBytes: 8 * 1024 * 1024,
+      requestCache: new URLSearchParams(location.search).has('http-cache') ? 'default' : 'no-store',
     });
     model.phase = 'idle';
     this.showEmpty();
@@ -101,10 +117,10 @@ class Board extends Phaser.Scene {
     return this.textures.getTextureKeys().filter((key) => !ui.has(key) && !this.baselineTextures.has(key)).length;
   }
   player() { return this.hero ? { x: this.hero.x, y: this.hero.y } : null; }
-  override update(_time: number, delta: number): void {
+  override update(time: number, delta: number): void {
     if (model.phase !== 'playing' || !this.hero) return;
     const moving = this.cursors.right.isDown || this.cursors.left.isDown || this.cursors.up.isDown || this.cursors.down.isDown;
-    this.hero.setFrame(moving ? Math.floor(_time / 140) % 4 : 1);
+    this.hero.setFrame(moving ? Math.floor(time / 140) % 4 : 1);
     const distance = Math.min(delta, 50) * .18;
     this.hero.x = Phaser.Math.Clamp(this.hero.x + (Number(this.cursors.right.isDown) - Number(this.cursors.left.isDown)) * distance, 32, 928);
     this.hero.y = Phaser.Math.Clamp(this.hero.y + (Number(this.cursors.down.isDown) - Number(this.cursors.up.isDown)) * distance, 32, 448);
@@ -120,7 +136,7 @@ const game = new Phaser.Game({
 
 function statusText(): string {
   if (model.phase === 'error') return model.error;
-  if (model.phase === 'preparing') return `Preparing ${model.requested}: ${model.ready} / ${model.total} images`;
+  if (model.phase === 'preparing') return `Preparing ${model.requested}: ${model.ready} / ${model.total} textures`;
   if (model.phase === 'playing') return `${model.current} ready — explore with arrow keys`;
   return 'No level entered';
 }
@@ -182,6 +198,7 @@ controls.unload!.onclick = () => {
   ++sequence;
   pending?.abort();
   pending = undefined;
+  if (!packs) return;
   board.clear();
   board.showEmpty();
   Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '' });
@@ -196,7 +213,7 @@ function state() {
     textureCount: model.phase === 'booting' ? 0 : board.textureCount() };
 }
 declare global {
-  interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; }
+  interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; shutdownSample: () => void; }
 }
 window.render_game_to_text = () => JSON.stringify(state());
 window.advanceTime = (milliseconds) => {
@@ -207,3 +224,5 @@ window.advanceTime = (milliseconds) => {
     game.step(virtualTime, 1000 / 60);
   }
 };
+
+window.shutdownSample = () => game.scene.stop('board');

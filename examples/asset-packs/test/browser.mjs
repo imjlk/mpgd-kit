@@ -38,7 +38,7 @@ try {
     });
     const state = () => page.evaluate(() => JSON.parse(window.render_game_to_text()));
     const wait = async (phase) => page.waitForFunction((expected) => typeof window.render_game_to_text === 'function' && JSON.parse(window.render_game_to_text()).phase === expected, phase);
-    const imagePath = (id) => '/' + report.packs.find((pack) => pack.id === id).files[0].path;
+    const imagePath = (id) => '/' + report.packs.find((pack) => pack.id === id).files.find((file) => file.mediaType === 'image/png').path;
     const target = (id) => report.packs.find((pack) => pack.id === id).packaged ? app : remote;
     const count = (id) => target(id).requests.filter((path) => path === imagePath(id)).length;
     const empty = async () => {
@@ -84,6 +84,7 @@ try {
     evidence.push({ mode: report.mode, renderer, ready: await state(), packagedAssetBytes: report.packagedAssetBytes });
     await empty();
 
+    // Transport failure handling is renderer-independent; exercise it once under WebGL.
     if (report.mode === 'hybrid' && renderer === 'webgl') {
       const path = imagePath('grove');
       const url = new URL(path, remote.url).href;
@@ -125,6 +126,12 @@ try {
         assert.equal((await state()).current, null);
         assert.deepEqual((await state()).resources, []);
       }
+      remote.faults.set(path, { kind: 'stall' });
+      const stalledBefore = count('grove');
+      await page.click('#retry');
+      await wait('error');
+      assert.match((await state()).error, /request timed out/);
+      assert.equal(count('grove') - stalledBefore, 2, 'Body deadline aborts each stalled attempt');
       remote.faults.clear();
       await page.click('#retry');
       await wait('playing');
@@ -163,7 +170,26 @@ try {
       await empty();
       await page.screenshot({ path: join(artifacts, 'hybrid-unloaded.png'), fullPage: true });
     }
+    if (report.mode === 'hybrid' && renderer === 'webgl') {
+      // Opting into ordinary HTTP caching reuses immutable bytes after textures are released.
+      await page.goto(app.url + '?renderer=webgl&http-cache=1');
+      await wait('idle');
+      await page.click('#grove');
+      await wait('playing');
+      const warmRequests = app.requests.length + remote.requests.length;
+      await empty();
+      await page.click('#grove');
+      await wait('playing');
+      assert.equal(app.requests.length + remote.requests.length, warmRequests, 'HTTP cache should avoid repeated downloads after release');
+      assert.equal((await state()).textureCount, 2);
+      await empty();
+    }
     assert.deepEqual(errors, []);
+    await page.evaluate(() => window.shutdownSample());
+    assert.equal((await state()).phase, 'booting');
+    assert.deepEqual((await state()).resources, []);
+    await page.waitForTimeout(50);
+    assert.equal((await state()).current, null);
     await context.close();
   }
   // Real Phaser must reject a prepared but incorrectly named theme image without

@@ -1,24 +1,48 @@
 import type { PhaserPackFileIntegrity } from './packs.js';
-
 class FileFailure extends Error {
   constructor(
     message: string,
     readonly retryable = false,
   ) {
-    super(message); }
+    super(message);
+  }
 }
 /** Internal bounded transport. Never include URLs (possibly signed) in errors. */
-export async function fetchPackFile(url: string, options: { signal: AbortSignal; retries: number; maxFileBytes: number; integrity?: PhaserPackFileIntegrity | undefined }): Promise<Blob> {
+export async function fetchPackFile(url: string, options: {
+  signal: AbortSignal;
+  retries: number;
+  maxFileBytes: number;
+  requestTimeoutMs?: number;
+  cache?: RequestCache;
+  integrity?: PhaserPackFileIntegrity | undefined;
+}): Promise<Blob> {
   const { signal, integrity } = options;
+  signal.throwIfAborted();
   if (integrity && integrity.bytes > options.maxFileBytes) {
     throw new FileFailure('Declared file exceeds byte limit');
   }
+  if (integrity && !globalThis.crypto?.subtle) {
+    throw new FileFailure('Asset integrity requires HTTPS or localhost');
+  }
   for (let attempt = 0; ; attempt++) {
+    const attemptController = new AbortController();
+    const cancelAttempt = (): void => attemptController.abort(signal.reason);
+    signal.addEventListener('abort', cancelAttempt, {
+      once: true,
+    });
+    const timer = setTimeout(
+      () => attemptController.abort(new FileFailure('Asset request timed out', true)),
+      options.requestTimeoutMs ?? 10000,
+    );
     try {
       signal.throwIfAborted();
-      const response = await fetch(url, { signal, credentials: 'omit', cache: 'no-store' });
+      const response = await fetch(url, {
+        signal: attemptController.signal,
+        credentials: 'omit',
+        cache: options.cache ?? 'no-store',
+      });
       if (!response.ok) {
-        await response.body?.cancel().catch(() => {});
+        await response.body?.cancel().catch(() => { });
         throw new FileFailure(
           `Asset HTTP ${response.status}`,
           response.status === 429 || response.status >= 500,
@@ -37,24 +61,28 @@ export async function fetchPackFile(url: string, options: { signal: AbortSignal;
             break;
           }
           size += value.value.byteLength;
-          if (size > (integrity?.bytes ?? options.maxFileBytes)) {
+          if (integrity && size > integrity.bytes) {
+            throw new FileFailure('Asset size mismatch');
+          }
+          if (size > options.maxFileBytes) {
             throw new FileFailure('Asset exceeds byte limit');
           }
           parts.push(new Uint8Array(value.value));
         }
       } finally {
         try {
-          await reader.cancel(); } catch {} finally {
-          reader.releaseLock(); } }
+          await reader.cancel();
+        } catch {
+        } finally {
+          reader.releaseLock();
+        }
+      }
       const blob = new Blob(parts, {
         type: response.headers.get('content-type') ?? 'application/octet-stream',
       });
       if (integrity) {
         if (size !== integrity.bytes) {
           throw new FileFailure('Asset size mismatch');
-        }
-        if (!globalThis.crypto?.subtle) {
-          throw new FileFailure('Asset integrity requires HTTPS or localhost');
         }
         const digest = new Uint8Array(
           await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()),
@@ -65,9 +93,12 @@ export async function fetchPackFile(url: string, options: { signal: AbortSignal;
           throw new FileFailure('Asset digest mismatch');
         }
       }
-      signal.throwIfAborted();
+      attemptController.signal.throwIfAborted();
       return blob;
-    } catch (error) {
+    } catch (caught) {
+      const error: unknown = attemptController.signal.aborted
+        ? attemptController.signal.reason
+        : caught;
       if (signal.aborted) {
         throw signal.reason;
       }
@@ -78,7 +109,25 @@ export async function fetchPackFile(url: string, options: { signal: AbortSignal;
         }
         throw error;
       }
-      await new Promise((resolve) => setTimeout(resolve, 100));
+    } finally {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', cancelAttempt);
     }
+    await new Promise<void>((resolve, reject) => {
+      const cancel = (): void => {
+        clearTimeout(delay);
+        reject(signal.reason);
+      };
+      const delay = setTimeout(() => {
+        signal.removeEventListener('abort', cancel);
+        resolve();
+      }, 100);
+      signal.addEventListener('abort', cancel, {
+        once: true,
+      });
+      if (signal.aborted) {
+        cancel();
+      }
+    });
   }
 }

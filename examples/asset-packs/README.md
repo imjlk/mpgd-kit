@@ -14,7 +14,9 @@ pnpm --dir examples/asset-packs dev
 ```
 
 Choose Grove or Dunes, move with arrow keys, switch theme and unload. The default
-renderer is WebGL; append `?renderer=canvas` for Canvas. Run through Vite, not by
+renderer is WebGL; append `?renderer=canvas` for Canvas. Add `http-cache=1` to the
+query to opt into normal HTTP caching; the default no-store mode keeps failure
+experiments reproducible. Run through Vite, not by
 opening `index.html` as a local file. A shared spritesheet stays resident across
 successful transitions; old display users are destroyed before releasing textures.
 
@@ -51,9 +53,28 @@ Browser tests build isolated fixtures under `artifacts/browser-build`, use an
 ephemeral CORS origin, and cover both renderers/layouts, real atlas/spritesheet
 frames, artifact exclusion, sharing, 404/500, integrity/size errors, offline misses,
 cancellation, failed transitions and release. Screenshots/state are written under
-`artifacts/browser` and uploaded by CI. Public API tests additionally cover timeouts,
+`artifacts/browser` and uploaded by CI. The transport failure matrix runs once in WebGL/hybrid; normal transitions and
+release run in all four combinations. Another case checks HTTP cache reuse after
+release. Public API tests additionally cover timeouts,
 non-cooperative decode cleanup, shutdown, graph validation and observer failures.
 
 Persistent/offline caching, audio, prefetch scheduling, target-config integration
 and publication adapters remain follow-ups in issue #173. This PR has a changeset
 for the existing public package; the example itself remains private.
+
+### Follow-up lifetime and admission bounds
+
+The public helper isolates cleanup exceptions and exposes `takeCleanupErrors()`;
+owner returns and physical engine cleanup success are separate. The sample's
+shutdown handler cancels pending entry, invalidates late UI commits and destroys
+consuming display objects before releasing the current lease. Cross-scene users
+should share a dedicated long-lived asset scene and cancel/release only their
+own acquisitions on consumer shutdown. Disposing that store ends all ownership.
+
+Network attempts include a body deadline. Separate download/decode permits and
+encoded-byte reservations bound preparation, including queue wait in the total
+asset deadline. Native decode retains its reservation until it actually settles
+even if its caller has already cancelled. Defaults are configurable starting
+limits; there is no claim of measured production memory or frame-time bounds.
+The sample uses 2 downloads, 1 decode and 8 MiB of encoded reservations. See the
+package README for fallback reservations when integrity sizes are absent.
