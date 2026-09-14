@@ -1,5 +1,25 @@
 # @mpgd/cli
 
+## 0.32.0 — 2026-09-14
+
+### Minor changes
+
+- [66e572d](https://github.com/imjlk/mpgd-kit/commit/66e572dce7eb4a0bbbd097bf40a9ee47db44ec6b) Add `mpgd assets build-packs` for deterministic asset pack delivery builds.
+  A JSON build config (image, spritesheet and JSON atlas assets with pack ids,
+  logical revisions, dependencies and per-asset compression overrides) produces
+  individual files or per-pack ZIP artifacts plus an external versioned delivery
+  manifest: per-file media types, original bytes and SHA-256 digests, archive
+  digests, entry methods and counts. ZIP v1 uses STORE/DEFLATE only with fixed
+  metadata for reproducible bytes; pack artifacts are immutable per revision
+  while the manifest tracks the latest successful build. The new
+  `@mpgd/phaser-assets/pack-format` subpath publishes the shared pure contract
+  (types, untrusted-input validation, entry path rules) free of Node, DOM, Phaser
+  and compression concerns, and the CLI now depends on the package at runtime. — Thanks @imjlk!
+
+### Patch changes
+
+- Updated dependencies: phaser-assets@0.6.0
+
 ## 0.31.0 — 2026-09-14
 
 ### Patch changes
