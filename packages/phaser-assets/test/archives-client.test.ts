@@ -2430,6 +2430,77 @@ describe('bounded ZIP decode client', () => {
     expect(status.archiveLost).toBeUndefined();
   });
 
+  it('holds the buffered entry once the deadline elapses', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      const realNow = performance.now.bind(performance);
+      let nowMs: number | undefined;
+      vi.spyOn(performance, 'now').mockImplementation(() => nowMs ?? realNow());
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive,
+        expected: zip.expected,
+        limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 1000 },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await advanceUntilDecodePost(worker);
+      // The first entry verifies and buffers while no pull is pending.
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 1,
+        path: 'grove/grove.png',
+        method: 'store',
+        bytes: pngBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // The budget is spent while the caller's task still holds the
+      // thread, so the deadline timer has not run; the buffered entry
+      // must not surface past the elapsed clock.
+      nowMs = realNow() + 5000;
+      const pull = job.entries[Symbol.asyncIterator]().next();
+      const rejection = expect(pull).rejects.toMatchObject({ code: 'deadline' });
+      await vi.advanceTimersByTimeAsync(1000 + 50 + 1);
+      await rejection;
+      expect((await job.result).status).toBe('deadline');
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('settles cancellations of queued jobs immediately', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const busy = createFakeWorker();
+      busy.blackhole();
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => busy,
+        maxConcurrentDecodes: 1,
+        cancelGraceMs: 5000,
+      });
+      const zip = fixture();
+      const running = decoder.decode({ archive: zip.archive, expected: zip.expected });
+      const queued = decoder.decode({ archive: zip.archive, expected: zip.expected });
+      await vi.advanceTimersByTimeAsync(0);
+      // A queued job owns no worker or buffer, so its cancellation settles
+      // without any grace window — under fake timers a grace-based path
+      // would never resolve without advancing the clock.
+      const status = await queued.cancel();
+      expect(status.status).toBe('cancelled');
+      expect((await queued.result).status).toBe('cancelled');
+      void running;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {

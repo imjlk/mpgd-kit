@@ -240,6 +240,25 @@ describe('bounded ZIP decode core', () => {
     })()).rejects.toMatchObject({ code: 'deadline' });
   });
 
+  it('copies STORE entries out of Buffer-backed archives', async () => {
+    const fixture = buildV1Zip([
+      { path: 'a.bin', data: new Uint8Array([1, 2, 3, 4]), method: 'store' as const },
+    ]);
+    // A Node Buffer is a valid Uint8Array whose slice() returns a view;
+    // the yielded entry must be an independently owned copy either way.
+    const archive = Buffer.from(fixture.archive);
+    const original = archive.slice();
+    const decoded: Uint8Array[] = [];
+    for await (const entry of decodeZipV1Entries(archive, fixture.expected, limits())) {
+      decoded.push(entry.bytes);
+    }
+    expect(decoded).toHaveLength(1);
+    expect(decoded[0]!.buffer).not.toBe(archive.buffer);
+    expect(decoded[0]!.byteLength).toBe(4);
+    decoded[0]![0] = 0xff;
+    expect(archive.equals(original)).toBe(true);
+  });
+
   it('stops when the consumer cancels without publishing later entries as success', async () => {
     const fixture = buildV1Zip(mixedEntries);
     const seen: string[] = [];

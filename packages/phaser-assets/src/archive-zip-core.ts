@@ -507,8 +507,11 @@ export async function* decodeZipV1Entries(
         `ZIP entry ${entry.path} of ${entry.declaredBytes} bytes exceeds the remaining total expanded byte allowance ${remainingTotal}`,
       );
     }
+    // subarray is always a view; the constructor then makes exactly one
+    // copy, so a Buffer input's polymorphic slice cannot hand the consumer
+    // a view aliasing the archive or its larger backing buffer.
     const bytes = entry.method === 'store'
-      ? archive.slice(entry.dataStart, entry.dataEnd)
+      ? new Uint8Array(archive.subarray(entry.dataStart, entry.dataEnd))
       : await inflateBounded(
           archive,
           entry,

@@ -202,14 +202,14 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
   }
   let free = maxConcurrent;
   let nextJobId = 1;
-  const pending: (() => void)[] = [];
-  const acquire = async (): Promise<void> => {
+  const pending: { readonly job: number; readonly resolve: () => void }[] = [];
+  const acquire = async (job: number): Promise<void> => {
     if (free > 0) {
       free--;
       return;
     }
     await new Promise<void>((resolve) => {
-      pending.push(resolve);
+      pending.push({ job, resolve });
     });
     // The permit was handed off directly by releaseSlot.
   };
@@ -221,7 +221,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
     }
     // Hand the freed permit straight to the oldest waiter so a completion
     // continuation starting a new job cannot steal it first.
-    waiter();
+    waiter.resolve();
   };
   return {
     decode(request) {
@@ -499,7 +499,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         finalize(translateLateFailure(failure));
       };
       const start = async (): Promise<void> => {
-        await acquire();
+        await acquire(jobId);
         if (finished || cancelRequested) {
           if (!finished) {
             finalize({
@@ -1110,12 +1110,16 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           const bufferedCapturedSeq = bufferedSeq;
           bufferedEntry = undefined;
           bufferedSeq = 0;
-          if (buffered !== undefined && !cancelRequested && !deadlineInitiated) {
+          if (buffered !== undefined && !cancelRequested && !observeDeadline()) {
             // Release at handout: the consumer owns the bytes now, so the
             // credit is never spent on an unverified message while the
-            // worker may still decode one entry ahead. Once a cancellation
-            // or deadline settlement has begun, the settlement resolves the
-            // pull instead of surfacing more output.
+            // worker may still decode one entry ahead. The deadline is
+            // re-read from the clock here — the timer cannot fire while
+            // the caller's long-running task still holds the thread — so
+            // a buffered entry cannot surface past the elapsed budget.
+            // Once a cancellation or deadline settlement has begun, the
+            // settlement resolves the pull instead of surfacing more
+            // output.
             postRelease(bufferedCapturedSeq);
             return Promise.resolve({
               done: false, value: buffered,
@@ -1150,6 +1154,21 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             if (firstCause === undefined) {
               firstCause = 'user';
             }
+          }
+          if (!slotAcquired) {
+            // A queued or not-yet-started job owns no worker, buffer or
+            // timer: nothing needs the cooperative cleanup window, and
+            // leaving its waiter in the queue would retain the job until
+            // an unrelated job frees a slot.
+            const index = pending.findIndex((waiter) => waiter.job === jobId);
+            if (index !== -1) {
+              pending.splice(index, 1);
+            }
+            finalize({
+              status: 'cancelled',
+              code: 'cancelled',
+            });
+            return result;
           }
           postCancelToWorker();
           // The same cooperative-cleanup window the deadline uses: one
