@@ -220,6 +220,26 @@ describe('bounded ZIP decode core', () => {
     expect(output).toEqual([]);
   });
 
+  it('treats the deadline instant as expired', async () => {
+    const fixture = buildV1Zip([
+      { path: 'a.bin', data: new Uint8Array(4), method: 'store' as const },
+    ]);
+    // The deadline starts at the first clock read (10); the next read sits
+    // exactly at the deadline instant, which must count as expired —
+    // matching the client's absolute-deadline semantics.
+    let clock = 0;
+    await expect((async () => {
+      for await (const _entry of decodeZipV1Entries(
+        fixture.archive,
+        fixture.expected,
+        limits({ decodeDeadlineMs: 10 }),
+        { now: (): number => (clock += 10) },
+      )) {
+        void _entry;
+      }
+    })()).rejects.toMatchObject({ code: 'deadline' });
+  });
+
   it('stops when the consumer cancels without publishing later entries as success', async () => {
     const fixture = buildV1Zip(mixedEntries);
     const seen: string[] = [];

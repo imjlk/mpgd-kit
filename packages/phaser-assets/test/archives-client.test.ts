@@ -2122,6 +2122,244 @@ describe('bounded ZIP decode client', () => {
     }
   });
 
+  it('keeps the user cause when the returned archive is not the submission', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): FakeWorker => worker,
+      cancelGraceMs: 50,
+    });
+    const zip = fixture();
+    const submitted = zip.archive.slice();
+    const job = decoder.decode({
+      archive: submitted,
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await waitForDecodePost(worker);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await firstPull).done).toBe(false);
+    const secondPull = iterator.next();
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 2,
+      path: 'grove/grove.json',
+      method: 'deflate',
+      bytes: jsonBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await secondPull).done).toBe(false);
+    const thirdPull = iterator.next();
+    await tick(2);
+    // A same-length impostor archive cannot replace the submission, and
+    // the failed recovery must not replace the user's decided cause.
+    const cancelling = job.cancel();
+    const imposter = submitted.slice();
+    imposter[3] = (imposter[3] ?? 0) ^ 0xff;
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      archive: imposter.buffer as ArrayBuffer,
+      stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+    });
+    const status = await cancelling;
+    expect(status.status).toBe('cancelled');
+    expect(status.archiveBuffer).toBeUndefined();
+    expect(status.archiveLost).toBe(true);
+    await expect(thirdPull).resolves.toMatchObject({ done: true });
+  });
+
+  it('keeps the deadline cause when the returned archive is not the submission', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const submitted = zip.archive.slice();
+      const job = decoder.decode({
+        archive: submitted,
+        expected: zip.expected,
+        transferArchive: true,
+        limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 5000 },
+      });
+      const iterator = job.entries[Symbol.asyncIterator]();
+      const firstPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      await advanceUntilDecodePost(worker);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 1,
+        path: 'grove/grove.png',
+        method: 'store',
+        bytes: pngBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await firstPull).done).toBe(false);
+      const secondPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 2,
+        path: 'grove/grove.json',
+        method: 'deflate',
+        bytes: jsonBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await secondPull).done).toBe(false);
+      const thirdPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      // The deadline fires before the impostor archive arrives; the failed
+      // recovery settles as the decided deadline with the archive lost.
+      await vi.advanceTimersByTimeAsync(5001);
+      const imposter = submitted.slice();
+      imposter[3] = (imposter[3] ?? 0) ^ 0xff;
+      worker.emit({
+        type: 'done',
+        jobId: 1,
+        status: 'completed',
+        archive: imposter.buffer as ArrayBuffer,
+        stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+      });
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+      expect(status.archiveBuffer).toBeUndefined();
+      expect(status.archiveLost).toBe(true);
+      await expect(thirdPull).rejects.toMatchObject({ code: 'deadline' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the deadline cause over a late contradictory completion', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive,
+        expected: zip.expected,
+        limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 5000 },
+      });
+      const iterator = job.entries[Symbol.asyncIterator]();
+      const firstPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      await advanceUntilDecodePost(worker);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 1,
+        path: 'grove/grove.png',
+        method: 'store',
+        bytes: pngBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await firstPull).done).toBe(false);
+      const secondPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 2,
+        path: 'grove/grove.json',
+        method: 'deflate',
+        bytes: jsonBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await secondPull).done).toBe(false);
+      // The deadline fires, then a completion whose statistics contradict
+      // the delivered output must not replace the decided deadline.
+      await vi.advanceTimersByTimeAsync(5001);
+      worker.emit({
+        type: 'done',
+        jobId: 1,
+        status: 'completed',
+        stats: { entries: 99, expandedBytes: 4242, elapsedMs: 0 },
+      });
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+      expect(status.detail).toContain('statistics that do not match');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps the user cause when the worker crashes after cancellation', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): FakeWorker => worker,
+      cancelGraceMs: 50,
+    });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await waitForDecodePost(worker);
+    const cancelling = job.cancel();
+    worker.crash();
+    const status = await cancelling;
+    expect(status.status).toBe('cancelled');
+    expect(status.detail).toContain('failed or received an invalid message');
+    expect((await job.result).status).toBe('cancelled');
+  });
+
+  it('keeps the user cause when the submission hash fails after cancellation', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    let rejectHash: ((error: Error) => void) | undefined;
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: (): Promise<ArrayBuffer> => new Promise((_resolve, reject) => {
+          rejectHash = reject;
+        }),
+      },
+    });
+    try {
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive.slice(),
+        expected: zip.expected,
+        transferArchive: true,
+      });
+      await tick(3);
+      const cancelling = job.cancel();
+      rejectHash!(new Error('boom'));
+      const status = await cancelling;
+      expect(status.status).toBe('cancelled');
+      expect(status.detail).toContain('Could not hash the archive');
+      expect((await job.result).status).toBe('cancelled');
+      expect(worker.requests.some((request) => request.type === 'decode')).toBe(false);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {

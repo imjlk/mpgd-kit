@@ -105,6 +105,18 @@ export interface BoundedZipDecoder {
   decode(request: BoundedZipDecodeRequest): BoundedZipDecodeJob;
 }
 
+/** A worker-side failure report before cause translation. */
+type WorkerFailureStatus = {
+  readonly status: Exclude<BoundedZipDecodeStatus['status'], 'completed' | 'cancelled'>;
+  readonly code: string;
+  readonly detail: string;
+};
+/** The settlement a decided cause dictates, regardless of what the worker
+ * reports afterwards. */
+type DecidedCause =
+  | { readonly status: 'cancelled'; readonly code: 'cancelled' }
+  | { readonly status: 'deadline'; readonly code: 'deadline' };
+
 const validCounter = (value: unknown): boolean => typeof value === 'number'
   && Number.isSafeInteger(value) && value >= 0;
 const validElapsed = (value: unknown): boolean => typeof value === 'number'
@@ -441,6 +453,49 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         }
         return false;
       };
+      /** The status a settlement takes when a cause was already decided:
+       * the first cause wins over any later worker report — success,
+       * failure or echo. */
+      const decidedCauseStatus = (): DecidedCause | undefined => {
+        if (firstCause === 'deadline') {
+          return { status: 'deadline', code: 'deadline' };
+        }
+        if (firstCause === 'user') {
+          return { status: 'cancelled', code: 'cancelled' };
+        }
+        return undefined;
+      };
+      /** A late worker-side failure follows the decided cause: a
+       * cancellation or deadline chosen before the failure keeps its
+       * status instead of the failure replacing it; the detail is framed
+       * by the decided cause so the two cannot read as unrelated, captured
+       * worker statistics ride along, and whatever buffer the failure
+       * withheld is reported as lost by the settlement. */
+      const translateLateFailure = (
+        failure: WorkerFailureStatus,
+      ): WorkerFailureStatus
+      | (DecidedCause & {
+        readonly detail: string;
+        readonly stats?: ArchiveWorkerStats | undefined;
+      }) => {
+        observeDeadline();
+        const decided = decidedCauseStatus();
+        if (decided === undefined) {
+          return failure;
+        }
+        return {
+          ...decided,
+          detail: decided.status === 'cancelled'
+            ? `Cancellation was decided before the failure; ${failure.detail}`
+            : `The deadline was decided before the failure; ${failure.detail}`,
+          ...(terminalStats !== undefined ? { stats: terminalStats } : {}),
+        };
+      };
+      /** Settle a worker-side protocol failure (malformed message, violated
+       * check, crash) under the decided cause. */
+      const failWorker = (failure: WorkerFailureStatus): void => {
+        finalize(translateLateFailure(failure));
+      };
       const start = async (): Promise<void> => {
         await acquire();
         if (finished || cancelRequested) {
@@ -502,7 +557,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           }
           const message = event.data;
           if (typeof message !== 'object' || message === null) {
-            finalize({
+            failWorker({
               status: 'worker-error',
               code: 'worker-error',
               detail: 'The archive decode worker posted a malformed message',
@@ -517,7 +572,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             const described = typeof messageType === 'string'
               ? messageType
               : Object.prototype.toString.call(messageType);
-            finalize({
+            failWorker({
               status: 'worker-error',
               code: 'worker-error',
               detail: `The archive decode worker posted an unknown message type ${described}`,
@@ -531,7 +586,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               && (message.method === 'store' || message.method === 'deflate')
               && message.bytes instanceof ArrayBuffer;
             if (!entryShapeValid) {
-              finalize({
+              failWorker({
                 status: 'worker-error',
                 code: 'worker-error',
                 detail: 'The archive decode worker posted a malformed entry message',
@@ -543,7 +598,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             const seq = message.seq;
             const path = message.path;
             if (seq !== outstandingSeq + 1) {
-              finalize({
+              failWorker({
                 status: 'worker-error',
                 code: 'worker-error',
                 detail: `The archive decode worker skipped entry sequence ${outstandingSeq + 1}`,
@@ -553,7 +608,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             if (outstandingSeq > releasedSeq) {
               // An entry delivered before the previous one was released
               // exceeds the one-outstanding-entry credit.
-              finalize({
+              failWorker({
                 status: 'worker-error',
                 code: 'worker-error',
                 detail: 'The archive decode worker delivered an entry before its predecessor was released',
@@ -569,7 +624,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             ) {
               // A version-skewed or custom worker must not be able to swap
               // files under a decode that still reports success.
-              finalize({
+              failWorker({
                 status: 'worker-error',
                 code: 'worker-error',
                 detail: `The archive decode worker delivered entry ${seq} without matching the expected manifest entry`,
@@ -580,7 +635,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // runs no core: this boundary is the only remaining guard for
             // the decoder's public resource-limit contract.
             if (path.length > limits.maxPathLength) {
-              finalize({
+              failWorker({
                 status: 'error',
                 code: 'limit',
                 detail: `Delivered entry ${seq} path exceeds the length limit ${limits.maxPathLength}`,
@@ -588,7 +643,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               return;
             }
             if (message.bytes.byteLength > limits.entryBytes) {
-              finalize({
+              failWorker({
                 status: 'error',
                 code: 'limit',
                 detail: `Delivered entry ${seq} exceeds the per-entry byte limit ${limits.entryBytes}`,
@@ -596,7 +651,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               return;
             }
             if (seq > limits.entryCount) {
-              finalize({
+              failWorker({
                 status: 'error',
                 code: 'limit',
                 detail: `Delivered entry ${seq} exceeds the entry count limit ${limits.entryCount}`,
@@ -605,7 +660,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             }
             deliveredBytes += message.bytes.byteLength;
             if (deliveredBytes > limits.totalExpandedBytes) {
-              finalize({
+              failWorker({
                 status: 'error',
                 code: 'limit',
                 detail: `Delivered entries exceed the total expanded byte limit ${limits.totalExpandedBytes}`,
@@ -622,7 +677,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // listener.
               entryBytes = new Uint8Array(message.bytes.slice(0));
             } catch (error) {
-              finalize({
+              failWorker({
                 status: 'worker-error',
                 code: 'worker-error',
                 detail: `The archive decode worker delivered entry ${seq} with an undeliverable buffer: ${String(error)}`,
@@ -650,7 +705,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                   return;
                 }
                 if (digest !== expectedEntry.sha256) {
-                  finalize({
+                  failWorker({
                     status: 'worker-error',
                     code: 'worker-error',
                     detail: `The archive decode worker delivered entry ${seq} with bytes that do not match the expected manifest digest`,
@@ -675,7 +730,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 } else {
                   // A worker delivering past the single-outstanding-entry
                   // credit is a protocol failure, not a data source.
-                  finalize({
+                  failWorker({
                     status: 'worker-error',
                     code: 'worker-error',
                     detail: 'The archive decode worker delivered more entries than credited',
@@ -711,7 +766,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               && validCounter(message.stats.expandedBytes)
               && validElapsed(message.stats.elapsedMs);
             if (!doneShapeValid) {
-              finalize({
+              failWorker({
                 status: 'worker-error',
                 code: 'worker-error',
                 detail: 'The archive decode worker posted a malformed done message',
@@ -724,7 +779,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             ) {
               // A different-length buffer cannot be the caller's detached
               // archive, so ownership was not restored.
-              finalize({
+              failWorker({
                 status: 'worker-error',
                 code: 'worker-error',
                 detail: 'The archive decode worker returned an archive buffer that is not the transported archive',
@@ -733,7 +788,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             }
             if (message.status === 'completed') {
               if (outstandingSeq > releasedSeq) {
-                finalize({
+                failWorker({
                   status: 'worker-error',
                   code: 'worker-error',
                   detail: 'The archive decode worker completed with an unreleased entry outstanding',
@@ -741,7 +796,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 return;
               }
               if (verifiedEntries !== expected.entries.length) {
-                finalize({
+                failWorker({
                   status: 'worker-error',
                   code: 'worker-error',
                   detail: 'The archive decode worker completed without delivering every expected entry',
@@ -754,7 +809,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               ) {
                 // The client observed the real delivery; a completion must
                 // not report measurements it did not verify.
-                finalize({
+                failWorker({
                   status: 'worker-error',
                   code: 'worker-error',
                   detail: 'The archive decode worker completed with statistics that do not match the delivered output',
@@ -793,12 +848,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // decided the ending, any terminal response landing
               // afterwards — completion, failure or echo — settles as the
               // decided cause; a late worker status cannot replace it.
-              if (firstCause === 'deadline') {
+              const decided = decidedCauseStatus();
+              if (decided?.status === 'deadline') {
                 return deadlineTranslate(terminal.status === 'completed'
                   ? 'The archive decode worker completed after the decode deadline fired'
                   : DEADLINE_MISS_DETAIL);
               }
-              if (firstCause === 'user' && terminal.status !== 'cancelled') {
+              if (decided?.status === 'cancelled' && terminal.status !== 'cancelled') {
                 return {
                   status: 'cancelled',
                   code: 'cancelled',
@@ -846,7 +902,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                     submittedArchiveDigest === undefined
                     || digest !== submittedArchiveDigest
                   ) {
-                    finalize({
+                    failWorker({
                       status: 'worker-error',
                       code: 'worker-error',
                       detail: 'The archive decode worker returned an archive buffer that is not the transported archive',
@@ -865,7 +921,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                   if (finished) {
                     return;
                   }
-                  finalize(error instanceof ZipDecodeError
+                  failWorker(error instanceof ZipDecodeError
                     ? {
                       status: 'error', code: error.code, detail: error.message,
                     }
@@ -888,7 +944,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // change that settlement.
             return;
           }
-          finalize({
+          failWorker({
             status: 'worker-error',
             code: 'worker-error',
             detail: 'The archive decode worker failed or received an invalid message',
@@ -922,16 +978,19 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           try {
             submittedArchiveDigest = await digestOf(new Uint8Array(archivePayload));
           } catch (error) {
+            // A cause decided while the hash pended keeps its settlement:
+            // the hash failure follows the decided ending like any other
+            // late failure.
             if (error instanceof ZipDecodeError && error.code === 'unsupported') {
-              finalize({
+              failWorker({
                 status: 'unsupported', code: 'unsupported', detail: error.message,
               });
             } else if (error instanceof ZipDecodeError) {
-              finalize({
+              failWorker({
                 status: 'error', code: error.code, detail: error.message,
               });
             } else {
-              finalize({
+              failWorker({
                 status: 'worker-error',
                 code: 'worker-error',
                 detail: `Could not hash the archive for transfer: ${String(error)}`,

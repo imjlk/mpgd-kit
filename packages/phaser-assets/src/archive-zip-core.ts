@@ -91,7 +91,9 @@ const assertControl = (control: Required<Pick<ZipDecodeControl, 'shouldStop'>>, 
   if (control.shouldStop()) {
     throw new ZipDecodeError('cancelled', 'ZIP decode cancelled');
   }
-  if (clock() > deadlineAt) {
+  // The budget is exhausted at the deadline instant itself, matching the
+  // client's absolute-deadline semantics.
+  if (clock() >= deadlineAt) {
     throw new ZipDecodeError('deadline', 'ZIP decode exceeded its deadline');
   }
 };
