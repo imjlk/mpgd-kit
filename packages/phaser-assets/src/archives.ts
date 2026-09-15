@@ -476,23 +476,38 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               return;
             }
             outstandingSeq = message.seq;
+            let entryBytes: Uint8Array;
+            try {
+              // Copy into client-owned storage: a custom worker may retain
+              // and mutate the buffer it emitted, and verification plus the
+              // consumer must both observe the same immutable snapshot. A
+              // detached buffer throws here and must fail the job, not the
+              // listener.
+              entryBytes = new Uint8Array(message.bytes.slice(0));
+            } catch (error) {
+              finalize({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: `The archive decode worker delivered entry ${message.seq} with an undeliverable buffer: ${String(error)}`,
+              });
+              return;
+            }
             const value: BoundedZipDecodeEntry = {
               path: message.path,
               method: message.method,
-              // Copy into client-owned storage: a custom worker may retain
-              // and mutate the buffer it emitted, and verification plus the
-              // consumer must both observe the same immutable snapshot.
-              bytes: new Uint8Array(message.bytes.slice(0)),
+              bytes: entryBytes,
             };
             // The client verifies the digest itself: a custom worker runs no
             // core decoder, so this boundary is the only guarantee that the
             // bytes handed to the consumer are the manifest's bytes.
             void digestOf(value.bytes).then(
               (digest) => {
-                if (finished || terminalSeen) {
+                if (finished || terminalSeen || cancelRequested || deadlineInitiated) {
                   // A done message was accepted and only its archive digest
-                  // verification is pending; its settlement resolves any
-                  // pending pull, so this entry must not mutate state.
+                  // verification is pending, or a cancellation/deadline is
+                  // already settling the job; that settlement resolves any
+                  // pending pull, so this entry must not mutate state or
+                  // surface output after cancellation began.
                   return;
                 }
                 if (digest !== expectedEntry.sha256) {
@@ -529,6 +544,12 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 }
               },
               (error) => {
+                if (finished || terminalSeen || cancelRequested || deadlineInitiated) {
+                  // A settlement already in flight resolves the pending
+                  // pull; a verification-infrastructure failure must not
+                  // preempt it with an error status.
+                  return;
+                }
                 finalizeVerificationFailure(`the delivered entry ${message.seq}`, error);
               },
             );
@@ -727,7 +748,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         };
         worker.addEventListener('error', onWorkerFailure);
         worker.addEventListener('messageerror', onWorkerFailure);
-        deadlineTimer = setTimeout(() => {
+        const onDeadline = (): void => {
           deadlineInitiated = true;
           if (firstCause === undefined) {
             firstCause = 'deadline';
@@ -755,7 +776,14 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
             }
           });
-        }, limits.decodeDeadlineMs + DEADLINE_TRANSPORT_GRACE_MS);
+        };
+        // The absolute deadline starts before submission so client-side
+        // hashing counts against it; nothing between this arm and the
+        // decode post may clear it.
+        deadlineTimer = setTimeout(
+          onDeadline,
+          limits.decodeDeadlineMs + DEADLINE_TRANSPORT_GRACE_MS,
+        );
         let archivePayload: ArrayBuffer;
         try {
           archivePayload = payload();
@@ -873,10 +901,12 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           const bufferedCapturedSeq = bufferedSeq;
           bufferedEntry = undefined;
           bufferedSeq = 0;
-          if (buffered !== undefined) {
+          if (buffered !== undefined && !cancelRequested && !deadlineInitiated) {
             // Release at handout: the consumer owns the bytes now, so the
             // credit is never spent on an unverified message while the
-            // worker may still decode one entry ahead.
+            // worker may still decode one entry ahead. Once a cancellation
+            // or deadline settlement has begun, the settlement resolves the
+            // pull instead of surfacing more output.
             postRelease(bufferedCapturedSeq);
             return Promise.resolve({
               done: false, value: buffered,

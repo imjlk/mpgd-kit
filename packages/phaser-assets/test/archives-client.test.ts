@@ -1784,6 +1784,121 @@ describe('bounded ZIP decode client', () => {
     expect(status.archiveBuffer?.byteLength).toBe(zip.archive.length);
   });
 
+  it('rejects detached entry buffers instead of throwing in the listener', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = buildV1Zip([{ path: 'grove/empty.bin', data: new Uint8Array(0), method: 'store' }]);
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const detached = new Uint8Array(0).slice().buffer as ArrayBuffer;
+    structuredClone(detached, { transfer: [detached] });
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/empty.bin',
+      method: 'store',
+      bytes: detached,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('undeliverable buffer');
+  });
+
+  it('counts pre-transfer hashing against the decode deadline', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      let releasePreTransferHash: (() => void) | undefined;
+      vi.stubGlobal('crypto', {
+        subtle: {
+          digest: (): Promise<ArrayBuffer> => new Promise((resolve) => {
+            releasePreTransferHash = (): void => {
+              resolve(new ArrayBuffer(32));
+            };
+          }),
+        },
+      });
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const empty = buildV1Zip([]);
+      const job = decoder.decode({
+        archive: empty.archive.slice(),
+        expected: empty.expected,
+        transferArchive: true,
+        limits: {
+          ...defaultArchiveWorkerLimits(),
+          // Hashing is gated for 1500ms, past the 1000ms deadline but inside
+          // the 2000ms transport grace.
+          decodeDeadlineMs: 1000,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(worker.requests.some((request) => request.type === 'decode')).toBe(false);
+      releasePreTransferHash!();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worker.requests.some((request) => request.type === 'decode')).toBe(true);
+      // Only the unspent remainder of the absolute deadline remains: the
+      // guard fires 1500ms after submission, then the grace settles.
+      await vi.advanceTimersByTimeAsync(1000 + 2000 - 1500 + 1 + 50 + 1);
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not surface entries verified after a cancellation begins', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): FakeWorker => worker,
+      cancelGraceMs: 5,
+    });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await tick(2);
+    let releaseDigest: (() => void) | undefined;
+    const subtle = crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: (algorithm: AlgorithmIdentifier, data: BufferSource): Promise<ArrayBuffer> =>
+          new Promise((resolve) => {
+            releaseDigest = (): void => {
+              void realDigest(algorithm, data).then(resolve);
+            };
+          }),
+      },
+    });
+    try {
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 1,
+        path: 'grove/grove.png',
+        method: 'store',
+        bytes: pngBytes.slice().buffer as ArrayBuffer,
+      });
+      const cancelling = job.cancel();
+      releaseDigest!();
+      const pull = await firstPull;
+      expect(pull.done).toBe(true);
+      const status = await cancelling;
+      expect(status.status).toBe('cancelled');
+      expect((await job.result).status).toBe('cancelled');
+    } finally {
+      vi.stubGlobal('crypto', { subtle });
+    }
+  });
+
   it('reports cancelled stats from the worker', async () => {
     const decoder = createBoundedZipDecoder({ createWorker: createFakeWorker });
     const zip = fixture();
