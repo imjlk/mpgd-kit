@@ -170,6 +170,14 @@ const advanceUntilDecodePost = async (worker: FakeWorker): Promise<void> => {
     await vi.advanceTimersByTimeAsync(0);
   }
 };
+/** Wait until the real dispatch has posted the given number of entries;
+ * native digests settle on the event loop, so a fixed number of turns is
+ * not a guarantee. */
+const waitForPostedEntries = async (worker: FakeWorker, count: number): Promise<void> => {
+  for (let attempt = 0; attempt < 100 && worker.postedEntries() < count; attempt++) {
+    await tick(1);
+  }
+};
 
 describe('bounded ZIP decode client', () => {
   it('decodes entries through the real dispatch and terminates the worker', async () => {
@@ -212,11 +220,11 @@ describe('bounded ZIP decode client', () => {
     // Hold the first entry without pulling the next: the release returns
     // with the handout, so the worker may decode at most one entry ahead,
     // and the third entry must wait for the next release.
-    await tick(6);
+    await waitForPostedEntries(worker, 2);
     expect(worker.postedEntries()).toBe(2);
     const second = await iterator.next();
     expect(second.done).toBe(false);
-    await tick(6);
+    await waitForPostedEntries(worker, 3);
     expect(worker.postedEntries()).toBe(3);
     const third = await iterator.next();
     expect(third.done).toBe(false);
@@ -494,7 +502,7 @@ describe('bounded ZIP decode client', () => {
     const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
     const zip = fixture();
     const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
-    await tick(4);
+    await waitForPostedEntries(worker, 1);
     expect(worker.postedEntries()).toBe(1);
     const received: string[] = [];
     for await (const entry of job.entries) {
@@ -605,7 +613,9 @@ describe('bounded ZIP decode client', () => {
     const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
     const zip = fixture();
     const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
-    await tick(3);
+    // The real dispatch posts the first entry after its native digests
+    // settle; wait for it instead of assuming a fixed number of turns.
+    await waitForPostedEntries(worker, 1);
     expect(worker.postedEntries()).toBe(1);
     // A misbehaving worker posts the next entry without any release credit.
     worker.emit({
