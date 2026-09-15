@@ -1372,6 +1372,192 @@ describe('bounded ZIP decode client', () => {
     }
   });
 
+  it('re-evaluates the deadline over a pending returned-archive verification', async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      const subtle = crypto.subtle;
+      const realDigest = subtle.digest.bind(subtle);
+      let releaseArchiveDigest: (() => void) | undefined;
+      let archiveDigestPending = false;
+      vi.stubGlobal('crypto', {
+        subtle: {
+          digest: (algorithm: AlgorithmIdentifier, data: BufferSource): Promise<ArrayBuffer> => {
+            // Gate only the returned-archive verification: the largest
+            // input is the full archive, entry payloads are far smaller.
+            const size = data.byteLength;
+            if (!archiveDigestPending || size < 128) {
+              return realDigest(algorithm, data);
+            }
+            archiveDigestPending = false;
+            return new Promise((resolve) => {
+              releaseArchiveDigest = (): void => {
+                void realDigest(algorithm, data).then(resolve);
+              };
+            });
+          },
+        },
+      });
+      const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+      const zip = fixture();
+      const submitted = zip.archive.slice();
+      const job = decoder.decode({
+        archive: submitted,
+        expected: zip.expected,
+        transferArchive: true,
+        limits: {
+          ...defaultArchiveWorkerLimits(),
+          decodeDeadlineMs: 5000,
+        },
+      });
+      const iterator = job.entries[Symbol.asyncIterator]();
+      const firstPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 1,
+        path: 'grove/grove.png',
+        method: 'store',
+        bytes: pngBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await firstPull).done).toBe(false);
+      const secondPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 2,
+        path: 'grove/grove.json',
+        method: 'deflate',
+        bytes: jsonBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await secondPull).done).toBe(false);
+      const thirdPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      // The completion arrives before the deadline; its returned-archive
+      // verification pends while the deadline guard fires.
+      archiveDigestPending = true;
+      worker.emit({
+        type: 'done',
+        jobId: 1,
+        status: 'completed',
+        archive: submitted.buffer as ArrayBuffer,
+        stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+      });
+      await vi.advanceTimersByTimeAsync(5000 + 2000 + 1);
+      releaseArchiveDigest!();
+      await expect(thirdPull).rejects.toMatchObject({ code: 'deadline' });
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+      expect(status.archiveBuffer?.byteLength).toBe(zip.archive.length);
+      expect(status.archiveLost).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('bounds a returned-archive verification that never settles', async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      let releasePreTransferHash: (() => void) | undefined;
+      let digestCalls = 0;
+      vi.stubGlobal('crypto', {
+        subtle: {
+          digest: (): Promise<ArrayBuffer> => {
+            digestCalls++;
+            // The first call is the pre-transfer hash (released manually);
+            // every later call is the returned-archive verification, which
+            // never settles.
+            if (digestCalls === 1) {
+              return new Promise((resolve) => {
+                releasePreTransferHash = (): void => {
+                  resolve(new ArrayBuffer(32));
+                };
+              });
+            }
+            return new Promise<ArrayBuffer>(() => {});
+          },
+        },
+      });
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const empty = buildV1Zip([]);
+      const job = decoder.decode({
+        archive: empty.archive.slice(),
+        expected: empty.expected,
+        transferArchive: true,
+        limits: {
+          ...defaultArchiveWorkerLimits(),
+          decodeDeadlineMs: 10,
+        },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      releasePreTransferHash!();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(worker.requests.some((request) => request.type === 'decode')).toBe(true);
+      // The completion's archive verification pends forever; the deadline
+      // fallback must still reclaim the worker and permit.
+      worker.emit({
+        type: 'done',
+        jobId: 1,
+        status: 'completed',
+        archive: empty.archive.slice().buffer as ArrayBuffer,
+        stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+      });
+      await vi.advanceTimersByTimeAsync(3000);
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+      // Conservative: an unrestorable, unverified buffer counts as lost.
+      expect(status.archiveLost).toBe(true);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('rejects done messages with invalid numeric statistics', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(2);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'cancelled',
+      stats: { entries: 'two', expandedBytes: -1, elapsedMs: Number.NaN } as never,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('malformed done message');
+  });
+
+  it('rejects decode deadlines that leave no room for the transport grace', async () => {
+    const createWorker = vi.fn(createFakeWorker);
+    const decoder = createBoundedZipDecoder({ createWorker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive,
+      expected: zip.expected,
+      limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 2 ** 31 - 1 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('error');
+    expect(status.code).toBe('limit');
+    expect(status.archiveLost).toBeUndefined();
+    expect(createWorker).not.toHaveBeenCalled();
+  });
+
   it('reports cancelled stats from the worker', async () => {
     const decoder = createBoundedZipDecoder({ createWorker: createFakeWorker });
     const zip = fixture();

@@ -401,6 +401,29 @@ async function inflateBounded(
       `ZIP entry ${entry.path} size ${produced} differs from declared ${declaredBytes}`,
     );
   }
+  // fflate stops at the final DEFLATE block and silently ignores whatever
+  // follows, leaving the unconsumed tail in its pending buffer (the final
+  // byte's bit padding aside). The writer profile streams exactly the
+  // declared bytes, so leftover input is corruption, not payload. The
+  // internals are pinned with the exact fflate version; an unexpected
+  // layout fails closed instead of throwing a raw TypeError.
+  const tail = inflate as unknown as { p?: Uint8Array; s?: { p?: number } };
+  const pending = tail.p instanceof Uint8Array ? tail.p : undefined;
+  const state = typeof tail.s === 'object' && tail.s !== null ? tail.s : undefined;
+  const pendingBits = state !== undefined && typeof state.p === 'number' ? state.p : undefined;
+  if (pending === undefined || pendingBits === undefined) {
+    throw new ZipDecodeError(
+      'decode',
+      `ZIP entry ${entry.path} DEFLATE stream tail could not be inspected`,
+    );
+  }
+  const trailing = pending.length - (pendingBits !== 0 ? 1 : 0);
+  if (trailing !== 0) {
+    throw new ZipDecodeError(
+      'invalid-structure',
+      `ZIP entry ${entry.path} carries ${trailing} bytes after its DEFLATE stream`,
+    );
+  }
   return chunks.length === 1 ? chunks[0]! : (() => {
     const joined = new Uint8Array(produced);
     let position = 0;

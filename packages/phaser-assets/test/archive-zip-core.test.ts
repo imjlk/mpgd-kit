@@ -292,6 +292,34 @@ describe('bounded ZIP decode core', () => {
     })).rejects.toMatchObject({ code: 'invalid-structure' });
   });
 
+  it('rejects DEFLATE entries carrying trailing bytes after the final block', async () => {
+    const fixture = buildV1Zip([{ path: 'grove/grove.json', data: jsonBytes, method: 'deflate' }]);
+    const endOffset = fixture.archive.length - 22;
+    const centralDirectoryOffset = new DataView(fixture.archive.buffer).getUint32(endOffset + 16, true);
+    // Insert bytes after the compressed stream and mend every size, offset
+    // and digest the structure checks read, so only the unconsumed tail
+    // can fail the decode.
+    const withTrailing = new Uint8Array(fixture.archive.length + 3);
+    withTrailing.set(fixture.archive.subarray(0, centralDirectoryOffset));
+    withTrailing.set(new Uint8Array(3).fill(0xff), centralDirectoryOffset);
+    withTrailing.set(fixture.archive.subarray(centralDirectoryOffset), centralDirectoryOffset + 3);
+    const view = new DataView(withTrailing.buffer);
+    view.setUint32(18, view.getUint32(18, true) + 3, true);
+    view.setUint32(centralDirectoryOffset + 20, view.getUint32(centralDirectoryOffset + 20, true) + 3, true);
+    const mendedEnd = withTrailing.length - 22;
+    view.setUint32(mendedEnd + 16, centralDirectoryOffset + 3, true);
+    const lying: ExpectedZipArchive = {
+      ...fixture.expected,
+      archive: {
+        bytes: withTrailing.length,
+        sha256: sha256(withTrailing),
+      },
+    };
+    await expect(collect({ archive: withTrailing, expected: lying })).rejects.toMatchObject({
+      code: 'invalid-structure',
+    });
+  });
+
   it('decodes multi-megabyte incompressible deflate entries promptly', async () => {
     // A nonrepeating LCG stream so DEFLATE cannot shrink it.
     const payload = new Uint8Array(4 * 1024 * 1024);

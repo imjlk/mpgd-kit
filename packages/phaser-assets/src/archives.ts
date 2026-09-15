@@ -98,6 +98,10 @@ export interface BoundedZipDecoder {
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
   setTimeout(resolve, ms);
 });
+const validCounter = (value: unknown): boolean => typeof value === 'number'
+  && Number.isSafeInteger(value) && value >= 0;
+const validElapsed = (value: unknown): boolean => typeof value === 'number'
+  && Number.isFinite(value) && value >= 0;
 /** Extra wall-clock slack beyond the decode deadline for worker messaging. */
 const DEADLINE_TRANSPORT_GRACE_MS = 2000;
 /** Shared wording for settlements where the worker itself overran the deadline. */
@@ -195,6 +199,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       let archiveByteLength = -1;
       let submittedArchiveDigest: string | undefined;
       let terminalSeen = false;
+      let terminalStats: ArchiveWorkerStats | undefined;
       let resolveEntry: ((value: IteratorResult<BoundedZipDecodeEntry>) => void) | undefined;
       let rejectEntry: ((error: ZipDecodeError) => void) | undefined;
       let bufferedEntry: BoundedZipDecodeEntry | undefined;
@@ -307,6 +312,20 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           return;
         }
         slotAcquired = true;
+        if (
+          !Number.isSafeInteger(limits.decodeDeadlineMs)
+          || limits.decodeDeadlineMs > 2 ** 31 - 1 - DEADLINE_TRANSPORT_GRACE_MS
+        ) {
+          // A single setTimeout cannot cover the full core-accepted range:
+          // arming it past the platform maximum would wrap and fire early,
+          // and clamping would fire before the configured deadline.
+          finalize({
+            status: 'error',
+            code: 'limit',
+            detail: 'ZIP decode deadline leaves no room for the worker transport grace',
+          });
+          return;
+        }
         try {
           worker = options.createWorker();
         } catch (error) {
@@ -466,7 +485,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               && (message.code === undefined || typeof message.code === 'string')
               && (message.detail === undefined || typeof message.detail === 'string')
               && typeof message.stats === 'object'
-              && message.stats !== null;
+              && message.stats !== null
+              && validCounter(message.stats.entries)
+              && validCounter(message.stats.expandedBytes)
+              && validElapsed(message.stats.elapsedMs);
             if (!doneShapeValid) {
               finalize({
                 status: 'worker-error',
@@ -541,12 +563,14 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 status: message.status, code: message.code, detail: message.detail,
               };
             };
-            const translated = translateDone();
-            const settle = (): void => {
+            const settle = (archiveBuffer?: ArrayBuffer): void => {
               finalize({
-                ...translated,
+                // Evaluated at settlement: the deadline may have fired
+                // while an archive digest verification pended, and the
+                // translation must reflect that when it resolves.
+                ...translateDone(),
                 stats: message.stats,
-                ...(transfer && message.archive !== undefined ? { archiveBuffer: message.archive } : {}),
+                ...(archiveBuffer !== undefined ? { archiveBuffer } : {}),
               });
             };
             if (transfer && message.archive !== undefined) {
@@ -554,9 +578,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // caller's archive, so ownership is only restored after the
               // digest matches the bytes actually submitted (which may
               // legitimately differ from the manifest); done is terminal,
-              // so messages racing the hash are ignored.
+              // so messages racing the hash are ignored. The buffer is
+              // snapshotted so a worker retaining its storage cannot
+              // mutate it after verification.
+              const returned = message.archive.slice(0);
               terminalSeen = true;
-              void digestOf(new Uint8Array(message.archive)).then(
+              terminalStats = message.stats;
+              void digestOf(new Uint8Array(returned)).then(
                 (digest) => {
                   if (finished) {
                     return;
@@ -572,7 +600,11 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                     });
                     return;
                   }
-                  settle();
+                  // The settlement translation is re-evaluated here, so a
+                  // deadline that fired while this verification pended
+                  // cannot be reported as success, while the verified
+                  // buffer is still restored.
+                  settle(returned);
                 },
                 (error) => {
                   // This verification is the accepted terminal settlement,
@@ -625,11 +657,17 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // A throwing postMessage must not skip the forced deadline.
           }
           void sleep(graceMs).then(() => {
-            if (!finished && !terminalSeen) {
+            // Not gated on terminalSeen: a terminal response whose archive
+            // verification never settles must not retain the worker and
+            // concurrency permit forever; the conservative settlement
+            // reports the archive as lost. A user-initiated cancellation
+            // keeps its own settlement path.
+            if (!finished && firstCause !== 'user') {
               finalize({
                 status: 'deadline',
                 code: 'deadline',
                 detail: DEADLINE_MISS_DETAIL,
+                ...(terminalStats !== undefined ? { stats: terminalStats } : {}),
               });
             }
           });
@@ -796,10 +834,15 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             detail: 'The archive decode worker was terminated after cancellation',
           }));
           return Promise.race([result, forced]).then((status) => {
-            // A terminal response already accepted for digest verification
-            // settles on its own; a forced cancellation must not preempt it.
-            if (!finished && !terminalSeen) {
-              finalize(status);
+            // Not gated on terminalSeen: a terminal response whose archive
+            // verification never settles must not retain the worker and
+            // concurrency permit forever, so the conservative cancellation
+            // settles instead of waiting on `result`.
+            if (!finished) {
+              finalize({
+                ...status,
+                ...(terminalStats !== undefined ? { stats: terminalStats } : {}),
+              });
             }
             return result;
           });
