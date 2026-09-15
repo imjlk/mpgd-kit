@@ -1943,25 +1943,52 @@ describe('bounded ZIP decode client', () => {
 
   it('hands the worker copies of the manifest and limits', async () => {
     const worker = createFakeWorker();
+    worker.blackhole();
     const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
     const zip = fixture();
     const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
     await waitForDecodePost(worker);
     const decode = worker.requests.find((request) => request.type === 'decode') as unknown as {
       expected: { entries: { sha256: string }[] };
       limits: { entryBytes: number };
     };
     // An in-process port must not share the client's verification basis:
-    // mutating the posted request cannot defeat the boundary checks or the
-    // manifest digests the client judges entries against.
+    // mutating its own request copy cannot change the manifest digests or
+    // the limits the client judges responses against.
     decode.expected.entries[0]!.sha256 = '0'.repeat(64);
     decode.limits.entryBytes = 0;
-    const received: string[] = [];
-    for await (const entry of job.entries) {
-      received.push(entry.path);
-    }
-    expect(received).toEqual(['grove/grove.png', 'grove/grove.json']);
-    expect((await job.result).status).toBe('completed');
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await firstPull).done).toBe(false);
+    const secondPull = iterator.next();
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 2,
+      path: 'grove/grove.json',
+      method: 'deflate',
+      bytes: jsonBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await secondPull).done).toBe(false);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('completed');
   });
 
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
