@@ -471,6 +471,8 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
        * by the decided cause so the two cannot read as unrelated, captured
        * worker statistics ride along, and whatever buffer the failure
        * withheld is reported as lost by the settlement. */
+      const frameLateDetail = (detail: string | undefined, prefix: string, fallback: string): string =>
+        detail !== undefined ? `${prefix}; ${detail}` : fallback;
       const translateLateFailure = (
         failure: WorkerFailureStatus,
       ): WorkerFailureStatus
@@ -486,8 +488,8 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         return {
           ...decided,
           detail: decided.status === 'cancelled'
-            ? `Cancellation was decided before the failure; ${failure.detail}`
-            : `The deadline was decided before the failure; ${failure.detail}`,
+            ? frameLateDetail(failure.detail, 'Cancellation was decided first', failure.detail)
+            : frameLateDetail(failure.detail, 'The deadline was decided first', failure.detail),
           ...(terminalStats !== undefined ? { stats: terminalStats } : {}),
         };
       };
@@ -773,6 +775,18 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
               return;
             }
+            // An in-process worker can retain and mutate the response
+            // object after emit() returns; settlements must ride on the
+            // fields that were validated, not on whatever the object says
+            // later. Snapshotting before the archive checks also lets
+            // late-failure translations preserve the worker's statistics.
+            const terminal = {
+              status: message.status,
+              code: message.code,
+              detail: message.detail,
+              stats: { ...message.stats },
+            };
+            terminalStats = terminal.stats;
             if (
               transfer && message.archive !== undefined
               && message.archive.byteLength !== archiveByteLength
@@ -786,35 +800,35 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
               return;
             }
-            if (message.status === 'completed') {
+            // A completion is only accepted when its metadata matches the
+            // delivery the client actually verified. The rejection is
+            // settled after any returned archive is authenticated, so a
+            // recoverable snapshot is still restored alongside it.
+            let completionRejection: WorkerFailureStatus | undefined;
+            if (terminal.status === 'completed') {
               if (outstandingSeq > releasedSeq) {
-                failWorker({
+                completionRejection = {
                   status: 'worker-error',
                   code: 'worker-error',
                   detail: 'The archive decode worker completed with an unreleased entry outstanding',
-                });
-                return;
-              }
-              if (verifiedEntries !== expected.entries.length) {
-                failWorker({
+                };
+              } else if (verifiedEntries !== expected.entries.length) {
+                completionRejection = {
                   status: 'worker-error',
                   code: 'worker-error',
                   detail: 'The archive decode worker completed without delivering every expected entry',
-                });
-                return;
-              }
-              if (
-                message.stats.entries !== verifiedEntries
-                || message.stats.expandedBytes !== deliveredBytes
+                };
+              } else if (
+                terminal.stats.entries !== verifiedEntries
+                || terminal.stats.expandedBytes !== deliveredBytes
               ) {
                 // The client observed the real delivery; a completion must
                 // not report measurements it did not verify.
-                failWorker({
+                completionRejection = {
                   status: 'worker-error',
                   code: 'worker-error',
                   detail: 'The archive decode worker completed with statistics that do not match the delivered output',
-                });
-                return;
+                };
               }
             }
             // A cancellation answering this client's own deadline timer is a
@@ -822,16 +836,6 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // arriving after the deadline guard fired is one too. Worker
             // errors carrying the unsupported code keep the public status
             // callers use for unavailable platform capabilities.
-            // An in-process worker can retain and mutate the response
-            // object after emit() returns; the async archive verification
-            // must settle on the fields that were validated, not on
-            // whatever the object says later.
-            const terminal = {
-              status: message.status,
-              code: message.code,
-              detail: message.detail,
-              stats: { ...message.stats },
-            };
             const deadlineTranslate = (detail: string): {
               status: 'deadline'; code: 'deadline'; detail: string;
             } => ({
@@ -847,18 +851,26 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // First-cause priority: once a deadline or user cancellation
               // decided the ending, any terminal response landing
               // afterwards — completion, failure or echo — settles as the
-              // decided cause; a late worker status cannot replace it.
+              // decided cause; a late worker status cannot replace it, and
+              // a late failure's own detail is framed by the cause instead
+              // of being discarded.
               const decided = decidedCauseStatus();
               if (decided?.status === 'deadline') {
                 return deadlineTranslate(terminal.status === 'completed'
                   ? 'The archive decode worker completed after the decode deadline fired'
-                  : DEADLINE_MISS_DETAIL);
+                  : frameLateDetail(terminal.detail, 'The deadline was decided first', DEADLINE_MISS_DETAIL));
               }
               if (decided?.status === 'cancelled' && terminal.status !== 'cancelled') {
                 return {
                   status: 'cancelled',
                   code: 'cancelled',
-                  detail: `The archive decode worker reported ${terminal.status} after cancellation was requested`,
+                  detail: terminal.status === 'completed'
+                    ? 'The archive decode worker completed after cancellation was requested'
+                    : frameLateDetail(
+                      terminal.detail,
+                      'Cancellation was decided first',
+                      `The archive decode worker reported ${terminal.status} after cancellation was requested`,
+                    ),
                 };
               }
               if (terminal.status === 'error' && terminal.code === 'unsupported') {
@@ -892,7 +904,6 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // mutate it after verification.
               const returned = message.archive.slice(0);
               terminalSeen = true;
-              terminalStats = terminal.stats;
               void digestOf(new Uint8Array(returned)).then(
                 (digest) => {
                   if (finished) {
@@ -906,6 +917,17 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                       status: 'worker-error',
                       code: 'worker-error',
                       detail: 'The archive decode worker returned an archive buffer that is not the transported archive',
+                    });
+                    return;
+                  }
+                  if (completionRejection !== undefined) {
+                    // The buffer is authenticated as the caller's own
+                    // submission, so ownership is restored even though the
+                    // completion metadata was rejected.
+                    finalize({
+                      ...translateLateFailure(completionRejection),
+                      stats: terminal.stats,
+                      archiveBuffer: returned,
                     });
                     return;
                   }
@@ -932,6 +954,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                     });
                 },
               );
+              return;
+            }
+            if (completionRejection !== undefined) {
+              failWorker(completionRejection);
               return;
             }
             settle();

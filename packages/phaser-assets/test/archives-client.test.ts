@@ -2095,7 +2095,8 @@ describe('bounded ZIP decode client', () => {
     });
     const status = await cancelling;
     expect(status.status).toBe('cancelled');
-    expect(status.detail).toContain('after cancellation was requested');
+    expect(status.detail).toContain('Cancellation was decided first');
+    expect(status.detail).toContain('late failure');
     expect((await job.result).status).toBe('cancelled');
   });
 
@@ -2126,7 +2127,8 @@ describe('bounded ZIP decode client', () => {
       });
       const status = await job.result;
       expect(status.status).toBe('deadline');
-      expect(status.detail).toContain('missed its deadline');
+      expect(status.detail).toContain('The deadline was decided first');
+      expect(status.detail).toContain('late failure');
     } finally {
       vi.useRealTimers();
     }
@@ -2368,6 +2370,64 @@ describe('bounded ZIP decode client', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('keeps worker statistics when a decided cause meets a wrong-length archive', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): FakeWorker => worker,
+      cancelGraceMs: 50,
+    });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    await waitForDecodePost(worker);
+    const cancelling = job.cancel();
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      archive: new ArrayBuffer(3),
+      stats: { entries: 5, expandedBytes: 4242, elapsedMs: 7 },
+    });
+    const status = await cancelling;
+    expect(status.status).toBe('cancelled');
+    // The decided cause keeps the settlement, and the worker's statistics
+    // survive alongside it instead of being dropped.
+    expect(status.stats).toMatchObject({ entries: 5, expandedBytes: 4242 });
+    expect(status.archiveLost).toBe(true);
+  });
+
+  it('restores the submitted archive when completion metadata is rejected', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const submitted = zip.archive.slice();
+    const job = decoder.decode({
+      archive: submitted,
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    await waitForDecodePost(worker);
+    // A completion with no delivered entries is rejected, but the exact
+    // submitted bytes are still authenticated and restored.
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      archive: submitted.buffer as ArrayBuffer,
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('without delivering every expected entry');
+    expect(status.archiveBuffer?.byteLength).toBe(zip.archive.length);
+    expect(status.archiveLost).toBeUndefined();
   });
 
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
