@@ -355,6 +355,15 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             detail: `Could not verify ${scope}: ${String(error)}`,
           });
       };
+      /** The result a pull receives once the job has settled. */
+      const settledPull = (): Promise<IteratorResult<BoundedZipDecodeEntry>> => {
+        if (failure !== undefined) {
+          return Promise.reject(failure);
+        }
+        return Promise.resolve({
+          done: true, value: undefined,
+        });
+      };
       const postCancelToWorker = (): void => {
         try {
           worker?.postMessage({
@@ -878,8 +887,19 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                   status: 'unsupported', code: 'unsupported', detail: terminal.detail,
                 };
               }
+              // A worker-originated failure carries a code even when the
+              // optional field is missing, so the iterator's ZipDecodeError
+              // and job.result agree on the failure.
+              let normalizedCode = terminal.code;
+              if (normalizedCode === undefined && terminal.status === 'deadline') {
+                normalizedCode = 'deadline';
+              } else if (normalizedCode === undefined && terminal.status === 'error') {
+                normalizedCode = 'worker-error';
+              }
               return {
-                status: terminal.status, code: terminal.code, detail: terminal.detail,
+                status: terminal.status,
+                code: normalizedCode,
+                detail: terminal.detail,
               };
             };
             const settle = (archiveBuffer?: ArrayBuffer): void => {
@@ -1094,12 +1114,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       const iterator: AsyncIterator<BoundedZipDecodeEntry> = {
         next: (): Promise<IteratorResult<BoundedZipDecodeEntry>> => {
           if (finished) {
-            if (failure !== undefined) {
-              return Promise.reject(failure);
-            }
-            return Promise.resolve({
-              done: true, value: undefined,
-            });
+            return settledPull();
           }
           // Capture the buffered value before the release post: an
           // in-process worker can answer the release synchronously, and the
@@ -1124,6 +1139,12 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             return Promise.resolve({
               done: false, value: buffered,
             });
+          }
+          if (finished) {
+            // Observing the deadline can finalize reentrantly (an
+            // in-process worker may answer the cooperative cancel inside
+            // the post); a pull registered after that would never settle.
+            return settledPull();
           }
           if (resolveEntry !== undefined) {
             return Promise.reject(new Error('A decode entry pull is already pending'));
