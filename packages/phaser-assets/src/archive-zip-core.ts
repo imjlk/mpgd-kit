@@ -171,6 +171,7 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     const extraLength = zip.u16(cursor + 30);
     const commentLength = zip.u16(cursor + 32);
     const diskStart = zip.u16(cursor + 34);
+    const internalAttributes = zip.u16(cursor + 36);
     const externalAttributes = zip.u32(cursor + 38);
     const localOffset = zip.u32(cursor + 42);
     const entryLength = 46 + nameLength + extraLength + commentLength;
@@ -189,7 +190,12 @@ function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, 
     if (methodCode !== 0 && methodCode !== 8) {
       fail('unsupported-zip', `ZIP entry uses unsupported compression method ${methodCode}`);
     }
-    if (time !== DOS_TIME || date !== DOS_DATE || externalAttributes !== EXTERNAL_ATTRIBUTES) {
+    if (
+      time !== DOS_TIME
+      || date !== DOS_DATE
+      || internalAttributes !== 0
+      || externalAttributes !== EXTERNAL_ATTRIBUTES
+    ) {
       fail(
         'invalid-structure',
         'ZIP entry metadata does not match the deterministic profile (symlinks and unexpected file modes are rejected)',
@@ -485,6 +491,14 @@ export async function* decodeZipV1Entries(
       throw new ZipDecodeError(
         'limit',
         `ZIP decode exhausted its total expanded byte limit ${limits.totalExpandedBytes}`,
+      );
+    }
+    if (entry.method === 'store' && entry.declaredBytes > remainingTotal) {
+      // A STORE copy would allocate its full size up front, so the aggregate
+      // bound must reject before the slice instead of after it.
+      throw new ZipDecodeError(
+        'limit',
+        `ZIP entry ${entry.path} of ${entry.declaredBytes} bytes exceeds the remaining total expanded byte allowance ${remainingTotal}`,
       );
     }
     const bytes = entry.method === 'store'

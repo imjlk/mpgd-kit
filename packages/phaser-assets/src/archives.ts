@@ -521,10 +521,15 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           if (firstCause === undefined) {
             firstCause = 'user';
           }
-          worker?.postMessage({
-            type: 'cancel',
-            jobId,
-          });
+          try {
+            worker?.postMessage({
+              type: 'cancel',
+              jobId,
+            });
+          } catch {
+            // A throwing postMessage must not skip the cancellation grace
+            // fallback that reclaims the permit and settles the job.
+          }
           const forced = sleep(graceMs).then((): BoundedZipDecodeStatus => ({
             status: 'cancelled',
             code: 'cancelled',

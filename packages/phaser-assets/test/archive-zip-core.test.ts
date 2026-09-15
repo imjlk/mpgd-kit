@@ -245,6 +245,29 @@ describe('bounded ZIP decode core', () => {
     })).rejects.toMatchObject({ code: 'entry-mismatch' });
   });
 
+  it('rejects nonzero central directory internal attributes', async () => {
+    const fixture = buildV1Zip(mixedEntries);
+    const mutated = fixture.archive.slice();
+    mutated[fullOffset(fixture) + 36] = 1;
+    const refreshed: ExpectedZipArchive = {
+      ...fixture.expected,
+      archive: {
+        ...fixture.expected.archive,
+        sha256: sha256(mutated),
+      },
+    };
+    await expect(collect({
+      archive: mutated, expected: refreshed,
+    })).rejects.toMatchObject({ code: 'invalid-structure' });
+  });
+
+  it('rejects a STORE entry larger than the total allowance without copying it', async () => {
+    const fixture = buildV1Zip([
+      { path: 'big.bin', data: new Uint8Array(4096), method: 'store' as const },
+    ]);
+    await expect(collect(fixture, {}, { totalExpandedBytes: 100 })).rejects.toMatchObject({ code: 'limit' });
+  });
+
   it('rejects STORE entries whose stored size differs from the declared size', async () => {
     const fixture = buildV1Zip(mixedEntries);
     const mutated = fixture.archive.slice();

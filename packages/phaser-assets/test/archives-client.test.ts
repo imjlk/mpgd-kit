@@ -51,6 +51,7 @@ interface FakeWorker extends ZipDecodeWorkerLike {
   terminate(): void;
   crash(): void;
   ignoreCancel(value: boolean): void;
+  throwOnCancelPost(value: boolean): void;
   blackhole(): void;
 }
 
@@ -62,6 +63,7 @@ function createFakeWorker(): FakeWorker {
   let terminated = false;
   let postedEntryCount = 0;
   let ignoreCancel = false;
+  let throwCancelPost = false;
   let silent = false;
   const dispatch = createArchiveWorkerDispatch({
     post: (message): void => {
@@ -83,8 +85,13 @@ function createFakeWorker(): FakeWorker {
       if (terminated) {
         return;
       }
-      if (message.type === 'cancel' && ignoreCancel) {
-        return;
+      if (message.type === 'cancel') {
+        if (throwCancelPost) {
+          throw new Error('postMessage failed');
+        }
+        if (ignoreCancel) {
+          return;
+        }
       }
       requests.push(message);
       dispatch(message);
@@ -111,6 +118,9 @@ function createFakeWorker(): FakeWorker {
     },
     ignoreCancel(value: boolean): void {
       ignoreCancel = value;
+    },
+    throwOnCancelPost(value: boolean): void {
+      throwCancelPost = value;
     },
     blackhole(): void {
       silent = true;
@@ -192,6 +202,25 @@ describe('bounded ZIP decode client', () => {
       void listener;
     }
     expect(worker.requests.some((request) => request.type === 'cancel')).toBe(true);
+  });
+
+  it('settles cancellation from the grace fallback when the cancel post throws', async () => {
+    const worker = createFakeWorker();
+    worker.throwOnCancelPost(true);
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): FakeWorker => worker,
+      cancelGraceMs: 5,
+    });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    expect(first.done).toBe(false);
+    const status = await job.cancel();
+    expect(status.status).toBe('cancelled');
+    expect((await job.result).status).toBe('cancelled');
+    const afterCancel = await iterator.next();
+    expect(afterCancel.done).toBe(true);
   });
 
   it('reports worker errors to the consumer and the result', async () => {
