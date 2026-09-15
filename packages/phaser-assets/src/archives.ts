@@ -100,6 +100,11 @@ const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
 });
 /** Extra wall-clock slack beyond the decode deadline for worker messaging. */
 const DEADLINE_TRANSPORT_GRACE_MS = 2000;
+/** Shared wording for settlements where the worker itself overran the deadline. */
+const DEADLINE_MISS_DETAIL = 'The archive decode worker missed its deadline';
+/** The deadline expired client-side, before the job was even submitted. */
+const PRE_SUBMIT_DEADLINE_DETAIL
+  = 'The archive decode deadline expired before the job was submitted';
 /** Workers read the posted buffer as a whole, so the payload must be an
  * exact-fit buffer. Sub-views are copied after the archive bound is known;
  * transport copies are outside the decode output limits but part of the
@@ -188,6 +193,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       let outstandingSeq = 0;
       let verifiedEntries = 0;
       let archiveByteLength = -1;
+      let submittedArchiveDigest: string | undefined;
       let terminalSeen = false;
       let resolveEntry: ((value: IteratorResult<BoundedZipDecodeEntry>) => void) | undefined;
       let rejectEntry: ((error: ZipDecodeError) => void) | undefined;
@@ -393,7 +399,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             const value: BoundedZipDecodeEntry = {
               path: message.path,
               method: message.method,
-              bytes: new Uint8Array(message.bytes),
+              // Copy into client-owned storage: a custom worker may retain
+              // and mutate the buffer it emitted, and verification plus the
+              // consumer must both observe the same immutable snapshot.
+              bytes: new Uint8Array(message.bytes.slice(0)),
             };
             // The client verifies the digest itself: a custom worker runs no
             // core decoder, so this boundary is the only guarantee that the
@@ -454,6 +463,8 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 || message.status === 'error')
               && (message.status !== 'completed'
                 || transfer === (message.archive !== undefined))
+              && (message.code === undefined || typeof message.code === 'string')
+              && (message.detail === undefined || typeof message.detail === 'string')
               && typeof message.stats === 'object'
               && message.stats !== null;
             if (!doneShapeValid) {
@@ -496,19 +507,41 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               }
             }
             // A cancellation answering this client's own deadline timer is a
-            // deadline, unless the user asked to cancel first.
-            const translated = message.status === 'cancelled'
-              && (firstCause === 'deadline' || (deadlineInitiated && firstCause === undefined))
-              ? {
-                status: 'deadline' as const,
-                code: 'deadline',
-                detail: 'The archive decode worker missed its deadline',
+            // deadline, unless the user asked to cancel first; a completion
+            // arriving after the deadline guard fired is one too. Worker
+            // errors carrying the unsupported code keep the public status
+            // callers use for unavailable platform capabilities.
+            const deadlineTranslate = (detail: string): {
+              status: 'deadline'; code: 'deadline'; detail: string;
+            } => ({
+              status: 'deadline',
+              code: 'deadline',
+              detail,
+            });
+            const translateDone = (): {
+              status: BoundedZipDecodeStatus['status'];
+              code?: string | undefined;
+              detail?: string | undefined;
+            } => {
+              if (
+                message.status === 'cancelled'
+                && (firstCause === 'deadline' || (deadlineInitiated && firstCause === undefined))
+              ) {
+                return deadlineTranslate(DEADLINE_MISS_DETAIL);
               }
-              : {
-                status: message.status,
-                code: message.code,
-                detail: message.detail,
+              if (message.status === 'completed' && deadlineInitiated && firstCause !== 'user') {
+                return deadlineTranslate('The archive decode worker completed after the decode deadline fired');
+              }
+              if (message.status === 'error' && message.code === 'unsupported') {
+                return {
+                  status: 'unsupported', code: 'unsupported', detail: message.detail,
+                };
+              }
+              return {
+                status: message.status, code: message.code, detail: message.detail,
               };
+            };
+            const translated = translateDone();
             const settle = (): void => {
               finalize({
                 ...translated,
@@ -519,15 +552,19 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             if (transfer && message.archive !== undefined) {
               // A same-length substitute buffer would silently replace the
               // caller's archive, so ownership is only restored after the
-              // digest matches the manifest; done is terminal, so messages
-              // racing the hash are ignored.
+              // digest matches the bytes actually submitted (which may
+              // legitimately differ from the manifest); done is terminal,
+              // so messages racing the hash are ignored.
               terminalSeen = true;
               void digestOf(new Uint8Array(message.archive)).then(
                 (digest) => {
                   if (finished) {
                     return;
                   }
-                  if (digest !== request.expected.archive.sha256) {
+                  if (
+                    submittedArchiveDigest === undefined
+                    || digest !== submittedArchiveDigest
+                  ) {
                     finalize({
                       status: 'worker-error',
                       code: 'worker-error',
@@ -592,7 +629,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               finalize({
                 status: 'deadline',
                 code: 'deadline',
-                detail: 'The archive decode worker missed its deadline',
+                detail: DEADLINE_MISS_DETAIL,
               });
             }
           });
@@ -610,6 +647,54 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               status: 'error', code: 'unsupported', detail: String(error),
             });
           return;
+        }
+        if (transfer) {
+          // Digest the payload before the transfer detaches it, so a
+          // returned buffer is compared against the bytes actually
+          // submitted — not the manifest, which the submission itself may
+          // legitimately fail to match.
+          try {
+            submittedArchiveDigest = await digestOf(new Uint8Array(archivePayload));
+          } catch (error) {
+            if (error instanceof ZipDecodeError && error.code === 'unsupported') {
+              finalize({
+                status: 'unsupported', code: 'unsupported', detail: error.message,
+              });
+            } else if (error instanceof ZipDecodeError) {
+              finalize({
+                status: 'error', code: error.code, detail: error.message,
+              });
+            } else {
+              finalize({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: `Could not hash the archive for transfer: ${String(error)}`,
+              });
+            }
+            return;
+          }
+          // The hash await yields to the event loop: honour a cancellation
+          // or forced settlement that landed while hashing instead of
+          // transferring the caller's buffer anyway. The first cause wins,
+          // matching the terminal-response translation.
+          if (finished) {
+            return;
+          }
+          if (deadlineInitiated && firstCause !== 'user') {
+            finalize({
+              status: 'deadline',
+              code: 'deadline',
+              detail: PRE_SUBMIT_DEADLINE_DETAIL,
+            });
+            return;
+          }
+          if (cancelRequested) {
+            finalize({
+              status: 'cancelled',
+              code: 'cancelled',
+            });
+            return;
+          }
         }
         try {
           // Mark ownership before posting: an in-process worker may transfer

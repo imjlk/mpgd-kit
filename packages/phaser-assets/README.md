@@ -229,10 +229,19 @@ fetches or timers; environments that cannot create workers fail with a clear
 archives. The worker posts at most one decoded entry ahead: releasing the
 credit accompanies each handover once the entry's digest verifies, so a slow
 consumer never queues unbounded
-bytes. By default the archive buffer is cloned for transport (the caller's
+bytes. Each delivered entry is copied into client-owned storage and re-verified
+against the manifest digest before it reaches the consumer, so a custom worker
+cannot swap bytes under a success status. By default the archive buffer is
+cloned for transport (the caller's
 buffer is never detached); opting into `transferArchive` detaches the caller's
-view for the job's duration and returns the buffer with the final status.
-Transport copies are outside the output limits but part of the wall clock.
+view for the job's duration and returns the buffer with the final status. The
+returned buffer is verified to be the exact bytes submitted — which may
+legitimately differ from the manifest — so a completed job's `archiveBuffer` is
+not a manifest verification. Transferred jobs also hash the archive on the
+client before submission, and that time counts against the decode deadline;
+size `decodeDeadlineMs` accordingly for large archives. Transport copies and
+client-side verification hashes sit outside the decode output limits but
+within the job's wall clock.
 
 Jobs are cancellable: a cancelled job stops producing entries, its iterator
 ends, and late worker messages cannot flip the completion state. Worker

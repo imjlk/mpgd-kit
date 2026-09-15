@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto';
 
 import { describe, expect, it, vi } from 'vitest';
 
-import type {
-  ArchiveWorkerRequest,
-  ArchiveWorkerResponse,
-  ArchiveWorkerStats,
-  ArchiveZipEntryMethod,
+import {
+  defaultArchiveWorkerLimits,
+  type ArchiveWorkerRequest,
+  type ArchiveWorkerResponse,
+  type ArchiveWorkerStats,
+  type ArchiveZipEntryMethod,
 } from '../src/archive-protocol.js';
 import { createArchiveWorkerDispatch } from '../src/archive-worker-impl.js';
 import {
@@ -332,6 +333,16 @@ describe('bounded ZIP decode client', () => {
     vi.useFakeTimers();
     try {
       const workers: FakeWorker[] = [];
+      let releaseDigest: (() => void) | undefined;
+      vi.stubGlobal('crypto', {
+        subtle: {
+          digest: (): Promise<ArrayBuffer> => new Promise((resolve) => {
+            releaseDigest = (): void => {
+              resolve(new ArrayBuffer(32));
+            };
+          }),
+        },
+      });
       const decoder = createBoundedZipDecoder({
         createWorker: (): FakeWorker => {
           const worker = createFakeWorker();
@@ -362,6 +373,11 @@ describe('bounded ZIP decode client', () => {
         }
       })();
       const expectation = expect(consuming).rejects.toMatchObject({ code: 'deadline' });
+      // Complete the pre-transfer hash and submit the decode while the
+      // deadline has not yet fired.
+      await vi.advanceTimersByTimeAsync(0);
+      releaseDigest!();
+      await vi.advanceTimersByTimeAsync(0);
       await vi.advanceTimersByTimeAsync(3000);
       await expectation;
       const finalStatus = await job.result;
@@ -369,6 +385,48 @@ describe('bounded ZIP decode client', () => {
       expect(finalStatus.archiveLost).toBe(true);
     } finally {
       vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('does not transfer the archive when the deadline fires during hashing', async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      let releaseDigest: (() => void) | undefined;
+      vi.stubGlobal('crypto', {
+        subtle: {
+          digest: (): Promise<ArrayBuffer> => new Promise((resolve) => {
+            releaseDigest = (): void => {
+              resolve(new ArrayBuffer(32));
+            };
+          }),
+        },
+      });
+      const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive.slice(),
+        expected: zip.expected,
+        transferArchive: true,
+        limits: {
+          ...defaultArchiveWorkerLimits(),
+          decodeDeadlineMs: 10,
+        },
+      });
+      // The deadline guard fires while the pre-transfer hash pends.
+      await vi.advanceTimersByTimeAsync(3000);
+      releaseDigest!();
+      await vi.advanceTimersByTimeAsync(0);
+      const finalStatus = await job.result;
+      expect(finalStatus.status).toBe('deadline');
+      // The buffer was never submitted, so ownership never left the caller.
+      expect(finalStatus.archiveLost).toBeUndefined();
+      expect(worker.requests.some((request) => request.type === 'decode')).toBe(false);
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
     }
   });
 
@@ -1045,6 +1103,272 @@ describe('bounded ZIP decode client', () => {
       expect(status.archiveLost).toBe(true);
     } finally {
       vi.stubGlobal('crypto', { subtle });
+    }
+  });
+
+  it('preserves integrity failures and restores the submitted archive', async () => {
+    const decoder = createBoundedZipDecoder({ createWorker: createFakeWorker });
+    const zip = fixture();
+    // The submission fails the manifest digest, but the worker still hands
+    // the exact submitted bytes back with its integrity error.
+    const corrupted = zip.archive.slice();
+    corrupted[5] = corrupted[5]! ^ 0xff;
+    const job = decoder.decode({
+      archive: corrupted,
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('error');
+    expect(status.code).toBe('archive-mismatch');
+    expect(status.archiveBuffer?.byteLength).toBe(zip.archive.length);
+    expect(status.archiveLost).toBeUndefined();
+  });
+
+  it('copies entry bytes out of worker-owned storage', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await tick(2);
+    const emitted = pngBytes.slice().buffer as ArrayBuffer;
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: emitted,
+    });
+    // Mutate after emit: verification snapshots the original bytes, so the
+    // consumer must receive a copy that cannot follow the mutation.
+    new Uint8Array(emitted)[0] = new Uint8Array(emitted)[0]! ^ 0xff;
+    const first = await firstPull;
+    expect(first.done).toBe(false);
+    expect(Buffer.from(first.value!.bytes).equals(Buffer.from(pngBytes))).toBe(true);
+  });
+
+  it('rejects completion after the client deadline fires', async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+      const zip = fixture();
+      const limits = { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 0 };
+      const job = decoder.decode({ archive: zip.archive.slice(), expected: zip.expected, limits });
+      const iterator = job.entries[Symbol.asyncIterator]();
+      const firstPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 1,
+        path: 'grove/grove.png',
+        method: 'store',
+        bytes: pngBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await firstPull).done).toBe(false);
+      const secondPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 2,
+        path: 'grove/grove.json',
+        method: 'deflate',
+        bytes: jsonBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await secondPull).done).toBe(false);
+      const thirdPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      // The deadline guard fires while the worker stalls before its
+      // terminal response; a completion posted afterwards cannot succeed.
+      await vi.advanceTimersByTimeAsync(2001);
+      worker.emit({
+        type: 'done',
+        jobId: 1,
+        status: 'completed',
+        stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+      });
+      await expect(thirdPull).rejects.toMatchObject({ code: 'deadline' });
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('preserves unsupported status from worker failures', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(2);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'error',
+      code: 'unsupported',
+      detail: 'SHA-256 verification requires WebCrypto',
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('unsupported');
+    expect(status.code).toBe('unsupported');
+  });
+
+  it('rejects done messages with non-string detail fields', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(2);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'error',
+      code: 'integrity',
+      detail: Symbol('unstringifiable') as never,
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('malformed done message');
+  });
+
+  it('does not transfer the archive when cancellation lands during hashing', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const subtle = crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    let releaseDigest: (() => void) | undefined;
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: (algorithm: AlgorithmIdentifier, data: BufferSource): Promise<ArrayBuffer> =>
+          new Promise((resolve) => {
+            releaseDigest = (): void => {
+              void realDigest(algorithm, data).then(resolve);
+            };
+          }),
+      },
+    });
+    try {
+      const job = decoder.decode({
+        archive: zip.archive.slice(),
+        expected: zip.expected,
+        transferArchive: true,
+      });
+      // Let start() reach the pre-transfer hash, which now pends.
+      await tick(3);
+      const cancelPromise = job.cancel();
+      releaseDigest!();
+      const status = await cancelPromise;
+      expect(status.status).toBe('cancelled');
+      const after = await job.result;
+      expect(after.status).toBe('cancelled');
+      // The buffer was never submitted, so ownership never left the caller.
+      expect(after.archiveLost).toBeUndefined();
+      expect(worker.requests.some((request) => request.type === 'decode')).toBe(false);
+    } finally {
+      vi.stubGlobal('crypto', { subtle });
+    }
+  });
+
+  it('restores the transferred archive when completion lands after the deadline', async () => {
+    vi.useFakeTimers();
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      const subtle = crypto.subtle;
+      const realDigest = subtle.digest.bind(subtle);
+      let releaseDigest: (() => void) | undefined;
+      let firstDigest = true;
+      vi.stubGlobal('crypto', {
+        subtle: {
+          digest: (algorithm: AlgorithmIdentifier, data: BufferSource): Promise<ArrayBuffer> => {
+            // Gate only the pre-transfer archive hash; later digests
+            // (entry verification, the returned archive) run for real.
+            if (!firstDigest) {
+              return realDigest(algorithm, data);
+            }
+            firstDigest = false;
+            return new Promise((resolve) => {
+              releaseDigest = (): void => {
+                void realDigest(algorithm, data).then(resolve);
+              };
+            });
+          },
+        },
+      });
+      const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+      const zip = fixture();
+      const submitted = zip.archive.slice();
+      const job = decoder.decode({
+        archive: submitted,
+        expected: zip.expected,
+        transferArchive: true,
+        limits: {
+          ...defaultArchiveWorkerLimits(),
+          decodeDeadlineMs: 10,
+        },
+      });
+      const iterator = job.entries[Symbol.asyncIterator]();
+      const firstPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      releaseDigest!();
+      await vi.advanceTimersByTimeAsync(0);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 1,
+        path: 'grove/grove.png',
+        method: 'store',
+        bytes: pngBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await firstPull).done).toBe(false);
+      const secondPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 2,
+        path: 'grove/grove.json',
+        method: 'deflate',
+        bytes: jsonBytes.slice().buffer as ArrayBuffer,
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect((await secondPull).done).toBe(false);
+      const thirdPull = iterator.next();
+      await vi.advanceTimersByTimeAsync(0);
+      // The deadline fires, then the worker posts a completion with the
+      // submitted archive; the settlement stays a deadline but ownership is
+      // restored because the buffer is the caller's own submission.
+      await vi.advanceTimersByTimeAsync(3000);
+      worker.emit({
+        type: 'done',
+        jobId: 1,
+        status: 'completed',
+        archive: submitted.buffer as ArrayBuffer,
+        stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+      });
+      await expect(thirdPull).rejects.toMatchObject({ code: 'deadline' });
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+      expect(status.archiveBuffer?.byteLength).toBe(zip.archive.length);
+      expect(status.archiveLost).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
     }
   });
 
