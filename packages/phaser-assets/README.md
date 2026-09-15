@@ -260,9 +260,10 @@ are snapshotted when `decode` is called, so mutating the request objects
 afterwards cannot change an in-flight job's checks.
 
 Jobs are cancellable: a cancelled job stops producing entries, its iterator
-ends, and late worker messages cannot flip the completion state — including
-a fully verified completion, which stays a cancellation rather than turning
-the job successful. Cancelling again shares the same cleanup window and
+ends, and late worker messages cannot flip the decided outcome — a
+completion, failure or echo arriving after a cancellation or deadline
+settles as the decided cause rather than the late status. Cancelling again
+shares the same cleanup window and
 settlement. Worker
 crashes, invalid messages and missed deadlines surface as distinct result
 statuses (`worker-error`, `deadline`) after best-effort termination. Each job

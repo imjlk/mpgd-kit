@@ -130,8 +130,16 @@ const exactArchiveBuffer = (
     && archive.buffer instanceof SharedArrayBuffer;
   const exact = !shared && archive.byteOffset === 0
     && archive.byteLength === archive.buffer.byteLength;
-  if (exact) {
+  if (exact && transfer) {
     return archive.buffer as ArrayBuffer;
+  }
+  if (exact) {
+    // A real worker structured-clones a posted buffer, but an in-process
+    // port receives the reference itself; clone mode promises the caller's
+    // buffer is never shared, so exact-fit inputs are copied too. The
+    // constructor copies rather than calling the input's polymorphic slice,
+    // which Buffer subclasses override to return another view.
+    return new Uint8Array(archive).buffer;
   }
   if (shared) {
     if (transfer) {
@@ -141,9 +149,7 @@ const exactArchiveBuffer = (
       );
     }
     // Shared buffers cannot be digested or transferred as ordinary archives;
-    // the documented clone behavior requires a private copy anyway. The
-    // constructor copies rather than calling the input's polymorphic slice,
-    // which Buffer subclasses override to return another view.
+    // the documented clone behavior requires a private copy anyway.
     return new Uint8Array(archive).buffer;
   }
   if (transfer) {
@@ -412,6 +418,28 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             Math.max(deadlineAt - performance.now(), 0),
           );
         }
+      };
+      /** Pre-submission gate shared by both transport modes: the absolute
+       * deadline and any user cancellation are re-checked against the
+       * monotonic clock — not the pending timer callback — so preparation
+       * that outlasts the budget never posts the archive. */
+      const preSubmitGuard = (): boolean => {
+        if (observeDeadline() && firstCause !== 'user') {
+          finalize({
+            status: 'deadline',
+            code: 'deadline',
+            detail: PRE_SUBMIT_DEADLINE_DETAIL,
+          });
+          return true;
+        }
+        if (cancelRequested) {
+          finalize({
+            status: 'cancelled',
+            code: 'cancelled',
+          });
+          return true;
+        }
+        return false;
       };
       const start = async (): Promise<void> => {
         await acquire();
@@ -762,20 +790,19 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               detail?: string | undefined;
             } => {
               // First-cause priority: once a deadline or user cancellation
-              // decided the ending, a worker response landing afterwards —
-              // even a fully verified completion inside the cleanup grace —
-              // cannot claim the success for itself.
-              if (terminal.status === 'cancelled' && firstCause === 'deadline') {
-                return deadlineTranslate(DEADLINE_MISS_DETAIL);
+              // decided the ending, any terminal response landing
+              // afterwards — completion, failure or echo — settles as the
+              // decided cause; a late worker status cannot replace it.
+              if (firstCause === 'deadline') {
+                return deadlineTranslate(terminal.status === 'completed'
+                  ? 'The archive decode worker completed after the decode deadline fired'
+                  : DEADLINE_MISS_DETAIL);
               }
-              if (terminal.status === 'completed' && firstCause === 'deadline') {
-                return deadlineTranslate('The archive decode worker completed after the decode deadline fired');
-              }
-              if (terminal.status === 'completed' && firstCause === 'user') {
+              if (firstCause === 'user' && terminal.status !== 'cancelled') {
                 return {
                   status: 'cancelled',
                   code: 'cancelled',
-                  detail: 'The archive decode worker completed after cancellation was requested',
+                  detail: `The archive decode worker reported ${terminal.status} after cancellation was requested`,
                 };
               }
               if (terminal.status === 'error' && terminal.code === 'unsupported') {
@@ -920,14 +947,23 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             return;
           }
         }
-        // Re-check the absolute deadline before submission, for both modes:
-        // the transport copy is synchronous, and the hash continuation can
-        // run ahead of the queued timer callback — only the clock
-        // comparison catches either.
-        if (observeDeadline() && firstCause !== 'user') {
-          // The copy or the pre-transfer hash outlasted the budget; the
-          // archive is never submitted and the buffer never leaves the
-          // caller.
+        if (preSubmitGuard()) {
+          return;
+        }
+        // Copy the manifest and limits for the worker: an in-process port
+        // shares nothing with the client's verification basis, so it cannot
+        // mutate the checks its own responses are judged against.
+        const postedExpected = copyExpected(expected);
+        // Re-check after the copy construction: preparation work between
+        // the checks must not hand the archive off past the deadline.
+        if (preSubmitGuard()) {
+          return;
+        }
+        // The worker receives only the unspent remainder of the absolute
+        // deadline, measured on the client's clock; deadline authority stays
+        // with the client, whose timer and translations judge the result.
+        const remainingDeadlineMs = Math.ceil(deadlineAt - performance.now());
+        if (remainingDeadlineMs <= 0) {
           finalize({
             status: 'deadline',
             code: 'deadline',
@@ -935,19 +971,6 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           });
           return;
         }
-        if (cancelRequested) {
-          finalize({
-            status: 'cancelled',
-            code: 'cancelled',
-          });
-          return;
-        }
-        // The worker receives only the unspent remainder of the absolute
-        // deadline, measured on the client's clock; deadline authority stays
-        // with the client, whose timer and translations judge the result.
-        // The manifest and limits are posted as copies: an in-process port
-        // shares nothing with the client's verification basis, so it cannot
-        // mutate the checks its own responses are judged against.
         try {
           // Mark ownership before posting: an in-process worker may transfer
           // the buffer and reply synchronously from inside postMessage, and a
@@ -959,10 +982,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             protocol: ARCHIVE_WORKER_PROTOCOL,
             archive: archivePayload,
             transferArchive: transfer,
-            expected: copyExpected(expected),
+            expected: postedExpected,
             limits: {
               ...limits,
-              decodeDeadlineMs: Math.max(Math.ceil(deadlineAt - performance.now()), 0),
+              decodeDeadlineMs: remainingDeadlineMs,
             },
           }, transfer ? [archivePayload] : []);
         } catch (error) {
