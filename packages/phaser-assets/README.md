@@ -233,8 +233,11 @@ bytes. Each delivered entry is copied into client-owned storage and re-verified
 against the manifest digest before it reaches the consumer, so a custom worker
 cannot swap bytes under a success status. By default the archive buffer is
 cloned for transport (the caller's
-buffer is never detached); opting into `transferArchive` detaches the caller's
-view for the job's duration and returns the buffer with the final status. The
+buffer is never detached); opting into `transferArchive` freezes the
+submission once into a client-owned snapshot, transfers that snapshot
+without a second copy, and returns the exact submitted snapshot with the
+final status, so caller mutations during submission cannot desynchronize
+the verification digest. The
 returned buffer is verified to be the exact bytes submitted — which may
 legitimately differ from the manifest — so a completed job's `archiveBuffer` is
 not a manifest verification. Transferred jobs also hash the archive on the

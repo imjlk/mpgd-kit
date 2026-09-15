@@ -170,6 +170,7 @@ describe('bounded ZIP decode client', () => {
     expect(status.status).toBe('completed');
     expect(status.stats?.entries).toBe(2);
     expect(status.stats?.expandedBytes).toBe(pngBytes.length + jsonBytes.length);
+    expect(status.stats?.elapsedMs).toBeGreaterThanOrEqual(0);
     expect(workers).toHaveLength(1);
   });
 
@@ -1556,6 +1557,93 @@ describe('bounded ZIP decode client', () => {
     expect(status.code).toBe('limit');
     expect(status.archiveLost).toBeUndefined();
     expect(createWorker).not.toHaveBeenCalled();
+  });
+
+  it('transfers an immutable snapshot of the submitted archive', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const submitted = zip.archive.slice();
+    const subtle = crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    let releaseFreeze: (() => void) | undefined;
+    let firstDigest = true;
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: (algorithm: AlgorithmIdentifier, data: BufferSource): Promise<ArrayBuffer> => {
+          if (!firstDigest) {
+            return realDigest(algorithm, data);
+          }
+          firstDigest = false;
+          return new Promise((resolve) => {
+            releaseFreeze = (): void => {
+              void realDigest(algorithm, data).then(resolve);
+            };
+          });
+        },
+      },
+    });
+    try {
+      const job = decoder.decode({
+        archive: submitted,
+        expected: zip.expected,
+        transferArchive: true,
+      });
+      // The pre-transfer hash pends while the caller mutates its view.
+      await tick(2);
+      submitted[0] = submitted[0]! ^ 0xff;
+      releaseFreeze!();
+      for await (const _entry of job.entries) {
+        void _entry;
+      }
+      const status = await job.result;
+      expect(status.status).toBe('completed');
+      expect(status.archiveBuffer).toBeDefined();
+      // The caller's view was never detached or observed mid-mutation.
+      expect(submitted.byteLength).toBe(zip.archive.length);
+    } finally {
+      vi.stubGlobal('crypto', { subtle });
+    }
+  });
+
+  it.each([
+    Number.NaN,
+    Number.POSITIVE_INFINITY,
+    -1,
+    2 ** 31,
+  ])('rejects a cancelGraceMs of %s', (graceMs) => {
+    expect(() => createBoundedZipDecoder({
+      createWorker: createFakeWorker,
+      cancelGraceMs: graceMs,
+    })).toThrow(/cancelGraceMs/u);
+  });
+
+  it.each([
+    ['the per-entry byte limit', { entryBytes: pngBytes.length - 1 }],
+    ['the entry count limit', { entryCount: 0 }],
+    ['the total expanded byte limit', { totalExpandedBytes: 4 }],
+  ])('enforces %s even when the worker skips them', async (_name, override) => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive,
+      expected: zip.expected,
+      limits: { ...defaultArchiveWorkerLimits(), ...override },
+    });
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('error');
+    expect(status.code).toBe('limit');
   });
 
   it('reports cancelled stats from the worker', async () => {

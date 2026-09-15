@@ -25,10 +25,12 @@ const zeroedStats = (): ArchiveWorkerStats => ({
   expandedBytes: 0,
   elapsedMs: 0,
 });
+/** Elapsed time uses the monotonic clock so a backward wall-clock step
+ * cannot produce negative statistics. */
 const stats = (job: ActiveJob): ArchiveWorkerStats => ({
   entries: job.entries,
   expandedBytes: job.expandedBytes,
-  elapsedMs: Date.now() - job.startedAt,
+  elapsedMs: performance.now() - job.startedAt,
 });
 
 /**
@@ -57,7 +59,7 @@ export function createArchiveWorkerDispatch(port: ArchiveWorkerPort): (message: 
     const job: ActiveJob = {
       jobId: request.jobId,
       transferArchive: request.transferArchive,
-      startedAt: Date.now(),
+      startedAt: performance.now(),
       cancelled: false,
       entries: 0,
       expandedBytes: 0,

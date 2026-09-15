@@ -52,11 +52,14 @@ export interface BoundedZipDecodeRequest {
   readonly archive: Uint8Array;
   readonly expected: ArchiveWorkerExpected;
   readonly limits?: ArchiveWorkerLimits;
-  /** Transfer the archive buffer instead of copying it: the caller's view
-   * detaches for the job's duration and the buffer returns via
-   * `status.archiveBuffer`. Default false clones the bytes, so the caller's
-   * buffer is never detached. Views into a larger buffer are always copied
-   * for transport. */
+  /** Opt into ownership-handoff semantics: the submission is frozen once
+   * into a client-owned snapshot, that snapshot is transferred without a
+   * second transport copy, and the exact submitted snapshot returns via
+   * `status.archiveBuffer`, so caller mutations during submission cannot
+   * desynchronize the verification digest. The caller's buffer is never
+   * detached; the freeze costs one archive-sized copy of peak memory.
+   * Default false clones the bytes for transport. Views into a larger
+   * buffer are always copied for transport. */
   readonly transferArchive?: boolean;
 }
 export interface BoundedZipDecodeStatus {
@@ -71,7 +74,9 @@ export interface BoundedZipDecodeStatus {
   readonly detail?: string | undefined;
   readonly stats?: ArchiveWorkerStats | undefined;
   readonly archiveBuffer?: ArrayBuffer | undefined;
-  /** True when a transferred archive was not returned before a hard failure. */
+  /** True when a transferred submission snapshot was not returned before a
+   * hard failure. The caller's own buffer is unaffected either way; the
+   * flag reports that the job's snapshot copy was not handed back. */
   readonly archiveLost?: boolean | undefined;
 }
 export interface BoundedZipDecodeEntry {
@@ -159,6 +164,15 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
     throw new Error('maxConcurrentDecodes must be a positive integer');
   }
   const graceMs = options.cancelGraceMs ?? 5000;
+  if (
+    !Number.isSafeInteger(graceMs)
+    || graceMs < 0
+    || graceMs > 2 ** 31 - 1
+  ) {
+    // Oversized or non-finite graces wrap the platform timer into firing
+    // immediately instead of honoring the requested grace.
+    throw new Error('cancelGraceMs must be an integer between 0 and the timer range');
+  }
   let free = maxConcurrent;
   let nextJobId = 1;
   const pending: (() => void)[] = [];
@@ -196,6 +210,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       let releasedSeq = 0;
       let outstandingSeq = 0;
       let verifiedEntries = 0;
+      let deliveredBytes = 0;
       let archiveByteLength = -1;
       let submittedArchiveDigest: string | undefined;
       let terminalSeen = false;
@@ -411,6 +426,34 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 status: 'worker-error',
                 code: 'worker-error',
                 detail: `The archive decode worker delivered entry ${message.seq} without matching the expected manifest entry`,
+              });
+              return;
+            }
+            // The worker-side core enforces the limits, but a custom worker
+            // runs no core: this boundary is the only remaining guard for
+            // the decoder's public resource-limit contract.
+            if (message.bytes.byteLength > limits.entryBytes) {
+              finalize({
+                status: 'error',
+                code: 'limit',
+                detail: `Delivered entry ${message.seq} exceeds the per-entry byte limit ${limits.entryBytes}`,
+              });
+              return;
+            }
+            if (message.seq > limits.entryCount) {
+              finalize({
+                status: 'error',
+                code: 'limit',
+                detail: `Delivered entry ${message.seq} exceeds the entry count limit ${limits.entryCount}`,
+              });
+              return;
+            }
+            deliveredBytes += message.bytes.byteLength;
+            if (deliveredBytes > limits.totalExpandedBytes) {
+              finalize({
+                status: 'error',
+                code: 'limit',
+                detail: `Delivered entries exceed the total expanded byte limit ${limits.totalExpandedBytes}`,
               });
               return;
             }
@@ -687,10 +730,14 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           return;
         }
         if (transfer) {
-          // Digest the payload before the transfer detaches it, so a
-          // returned buffer is compared against the bytes actually
-          // submitted — not the manifest, which the submission itself may
-          // legitimately fail to match.
+          // Freeze the submission before the async hash: the digest and the
+          // transferred bytes must describe the same immutable snapshot
+          // even if the caller mutates its view while hashing runs. The
+          // frozen copy is what gets transferred and later returned.
+          archivePayload = archivePayload.slice(0);
+          // Digest the frozen submission so a returned buffer is compared
+          // against the bytes actually submitted — not the manifest, which
+          // the submission itself may legitimately fail to match.
           try {
             submittedArchiveDigest = await digestOf(new Uint8Array(archivePayload));
           } catch (error) {
