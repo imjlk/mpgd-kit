@@ -149,6 +149,16 @@ const tick = async (times = 4): Promise<void> => {
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
 };
+/** Wait until the client has posted the decode request, so a crafted
+ * terminal response observes a fully submitted job. */
+const waitForDecodePost = async (worker: FakeWorker): Promise<void> => {
+  for (let attempt = 0; attempt < 100; attempt++) {
+    if (worker.requests.some((request) => request.type === 'decode')) {
+      return;
+    }
+    await tick(1);
+  }
+};
 
 describe('bounded ZIP decode client', () => {
   it('decodes entries through the real dispatch and terminates the worker', async () => {
@@ -866,7 +876,7 @@ describe('bounded ZIP decode client', () => {
       expected: zip.expected,
       transferArchive: true,
     });
-    await tick(2);
+    await waitForDecodePost(worker);
     worker.emit({
       type: 'done',
       jobId: 1,
@@ -892,7 +902,7 @@ describe('bounded ZIP decode client', () => {
       expected: zip.expected,
       transferArchive: true,
     });
-    await tick(2);
+    await waitForDecodePost(worker);
     worker.emit({
       type: 'done',
       jobId: 1,
@@ -972,7 +982,7 @@ describe('bounded ZIP decode client', () => {
       expected: zip.expected,
       transferArchive: true,
     });
-    await tick(2);
+    await waitForDecodePost(worker);
     worker.emit({
       type: 'done',
       jobId: 1,
