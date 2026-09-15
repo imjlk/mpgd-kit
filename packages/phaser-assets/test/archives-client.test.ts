@@ -159,6 +159,17 @@ const waitForDecodePost = async (worker: FakeWorker): Promise<void> => {
     await tick(1);
   }
 };
+/** Advance fake time until the decode request lands: a gated digest that
+ * was just released resolves on the event loop, and crafted messages must
+ * not race the submission they claim to answer. */
+const advanceUntilDecodePost = async (worker: FakeWorker): Promise<void> => {
+  for (let attempt = 0; attempt < 50; attempt++) {
+    if (worker.requests.some((request) => request.type === 'decode')) {
+      return;
+    }
+    await vi.advanceTimersByTimeAsync(0);
+  }
+};
 
 describe('bounded ZIP decode client', () => {
   it('decodes entries through the real dispatch and terminates the worker', async () => {
@@ -1088,7 +1099,11 @@ describe('bounded ZIP decode client', () => {
   it('settles when the returned archive digest cannot be computed', async () => {
     const worker = createFakeWorker();
     worker.blackhole();
-    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): FakeWorker => worker,
+      cancelGraceMs: 5,
+    });
+    const zip = fixture();
     const empty = buildV1Zip([]);
     const job = decoder.decode({
       archive: empty.archive.slice(),
@@ -1096,13 +1111,15 @@ describe('bounded ZIP decode client', () => {
       transferArchive: true,
     });
     await tick(2);
-    const subtle = crypto.subtle;
     vi.stubGlobal('crypto', {
       subtle: {
         digest: (): Promise<ArrayBuffer> => Promise.reject(new Error('boom')),
       },
     });
     try {
+      // The submission (and its digest) must be complete before the
+      // crafted terminal response arrives.
+      await waitForDecodePost(worker);
       worker.emit({
         type: 'done',
         jobId: 1,
@@ -1115,7 +1132,7 @@ describe('bounded ZIP decode client', () => {
       expect(status.detail).toContain('Could not verify the returned archive');
       expect(status.archiveLost).toBe(true);
     } finally {
-      vi.stubGlobal('crypto', { subtle });
+      vi.unstubAllGlobals();
     }
   });
 
@@ -1262,7 +1279,10 @@ describe('bounded ZIP decode client', () => {
 
   it('does not transfer the archive when cancellation lands during hashing', async () => {
     const worker = createFakeWorker();
-    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): FakeWorker => worker,
+      cancelGraceMs: 5,
+    });
     const zip = fixture();
     const subtle = crypto.subtle;
     const realDigest = subtle.digest.bind(subtle);
@@ -1295,7 +1315,7 @@ describe('bounded ZIP decode client', () => {
       expect(after.archiveLost).toBeUndefined();
       expect(worker.requests.some((request) => request.type === 'decode')).toBe(false);
     } finally {
-      vi.stubGlobal('crypto', { subtle });
+      vi.unstubAllGlobals();
     }
   });
 
@@ -1341,7 +1361,9 @@ describe('bounded ZIP decode client', () => {
       const firstPull = iterator.next();
       await vi.advanceTimersByTimeAsync(0);
       releaseDigest!();
-      await vi.advanceTimersByTimeAsync(0);
+      // The released hash resolves on the event loop; wait for the
+      // submission it gates so the crafted messages answer a posted job.
+      await advanceUntilDecodePost(worker);
       worker.emit({
         type: 'entry',
         jobId: 1,
@@ -1430,6 +1452,9 @@ describe('bounded ZIP decode client', () => {
       const iterator = job.entries[Symbol.asyncIterator]();
       const firstPull = iterator.next();
       await vi.advanceTimersByTimeAsync(0);
+      // The real pre-transfer digest resolves on the event loop; wait for
+      // the submission it gates so the crafted messages answer a posted job.
+      await advanceUntilDecodePost(worker);
       worker.emit({
         type: 'entry',
         jobId: 1,
@@ -1518,7 +1543,9 @@ describe('bounded ZIP decode client', () => {
       });
       await vi.advanceTimersByTimeAsync(0);
       releasePreTransferHash!();
-      await vi.advanceTimersByTimeAsync(0);
+      // The released hash resolves on the event loop; wait for the
+      // submission it gates so the crafted completion answers a posted job.
+      await advanceUntilDecodePost(worker);
       expect(worker.requests.some((request) => request.type === 'decode')).toBe(true);
       // The completion's archive verification pends forever; the deadline
       // fallback must still reclaim the worker and permit.
@@ -1617,7 +1644,7 @@ describe('bounded ZIP decode client', () => {
       // The caller's view was never detached or observed mid-mutation.
       expect(submitted.byteLength).toBe(zip.archive.length);
     } finally {
-      vi.stubGlobal('crypto', { subtle });
+      vi.unstubAllGlobals();
     }
   });
 
@@ -1888,7 +1915,7 @@ describe('bounded ZIP decode client', () => {
       // the decode post; the worker may only spend what is left.
       await vi.advanceTimersByTimeAsync(700);
       releasePreTransferHash!();
-      await vi.advanceTimersByTimeAsync(0);
+      await advanceUntilDecodePost(worker);
       const decode = worker.requests.find((request) => request.type === 'decode');
       expect(decode).toBeDefined();
       expect((decode as { limits: ArchiveWorkerLimits }).limits.decodeDeadlineMs).toBe(300);
@@ -2298,7 +2325,7 @@ describe('bounded ZIP decode client', () => {
       expect(status.status).toBe('cancelled');
       expect((await job.result).status).toBe('cancelled');
     } finally {
-      vi.stubGlobal('crypto', { subtle });
+      vi.unstubAllGlobals();
     }
   });
 
