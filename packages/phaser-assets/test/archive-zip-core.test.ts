@@ -176,6 +176,16 @@ describe('bounded ZIP decode core', () => {
     await expect(collect(fixture, {}, { entryBytes: 1024, totalExpandedBytes: 4096 })).rejects.toMatchObject({ code: 'limit' });
   });
 
+  it('admits empty entries when the total allowance is exactly consumed', async () => {
+    const fixture = buildV1Zip([
+      { path: 'full.bin', data: new Uint8Array(4096), method: 'store' as const },
+      { path: 'empty.bin', data: new Uint8Array(0), method: 'store' as const },
+    ]);
+    const output = await collect(fixture, {}, { totalExpandedBytes: 4096 });
+    expect(output.map((entry) => entry.path)).toEqual(['full.bin', 'empty.bin']);
+    expect(output[1]!.bytes.byteLength).toBe(0);
+  });
+
   it('applies the total expanded limit across entries after partial output', async () => {
     const fixture = buildV1Zip([
       { path: 'a.bin', data: new Uint8Array(4096), method: 'store' as const },

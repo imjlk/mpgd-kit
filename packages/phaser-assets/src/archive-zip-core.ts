@@ -494,12 +494,9 @@ export async function* decodeZipV1Entries(
   for (const entry of planned) {
     assertControl(wrappedControl, clock, deadlineAt);
     const remainingTotal = limits.totalExpandedBytes - expandedTotal;
-    if (remainingTotal <= 0) {
-      throw new ZipDecodeError(
-        'limit',
-        `ZIP decode exhausted its total expanded byte limit ${limits.totalExpandedBytes}`,
-      );
-    }
+    // A remaining allowance of zero still admits empty entries, which the
+    // deterministic writer permits; nonempty output is rejected by the
+    // per-entry bounds below.
     if (entry.method === 'store' && entry.declaredBytes > remainingTotal) {
       // A STORE copy would allocate its full size up front, so the aggregate
       // bound must reject before the slice instead of after it.

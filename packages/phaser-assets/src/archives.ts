@@ -607,6 +607,16 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // arriving after the deadline guard fired is one too. Worker
             // errors carrying the unsupported code keep the public status
             // callers use for unavailable platform capabilities.
+            // An in-process worker can retain and mutate the response
+            // object after emit() returns; the async archive verification
+            // must settle on the fields that were validated, not on
+            // whatever the object says later.
+            const terminal = {
+              status: message.status,
+              code: message.code,
+              detail: message.detail,
+              stats: { ...message.stats },
+            };
             const deadlineTranslate = (detail: string): {
               status: 'deadline'; code: 'deadline'; detail: string;
             } => ({
@@ -620,21 +630,21 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               detail?: string | undefined;
             } => {
               if (
-                message.status === 'cancelled'
+                terminal.status === 'cancelled'
                 && (firstCause === 'deadline' || (deadlineInitiated && firstCause === undefined))
               ) {
                 return deadlineTranslate(DEADLINE_MISS_DETAIL);
               }
-              if (message.status === 'completed' && deadlineInitiated && firstCause !== 'user') {
+              if (terminal.status === 'completed' && deadlineInitiated && firstCause !== 'user') {
                 return deadlineTranslate('The archive decode worker completed after the decode deadline fired');
               }
-              if (message.status === 'error' && message.code === 'unsupported') {
+              if (terminal.status === 'error' && terminal.code === 'unsupported') {
                 return {
-                  status: 'unsupported', code: 'unsupported', detail: message.detail,
+                  status: 'unsupported', code: 'unsupported', detail: terminal.detail,
                 };
               }
               return {
-                status: message.status, code: message.code, detail: message.detail,
+                status: terminal.status, code: terminal.code, detail: terminal.detail,
               };
             };
             const settle = (archiveBuffer?: ArrayBuffer): void => {
@@ -643,7 +653,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 // while an archive digest verification pended, and the
                 // translation must reflect that when it resolves.
                 ...translateDone(),
-                stats: message.stats,
+                stats: terminal.stats,
                 ...(archiveBuffer !== undefined ? { archiveBuffer } : {}),
               });
             };
@@ -657,7 +667,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // mutate it after verification.
               const returned = message.archive.slice(0);
               terminalSeen = true;
-              terminalStats = message.stats;
+              terminalStats = terminal.stats;
               void digestOf(new Uint8Array(returned)).then(
                 (digest) => {
                   if (finished) {

@@ -8,6 +8,7 @@ import {
   type ArchiveWorkerRequest,
   type ArchiveWorkerResponse,
   type ArchiveWorkerStats,
+  type ArchiveWorkerStatus,
   type ArchiveZipEntryMethod,
 } from '../src/archive-protocol.js';
 import { createArchiveWorkerDispatch } from '../src/archive-worker-impl.js';
@@ -1736,6 +1737,41 @@ describe('bounded ZIP decode client', () => {
     const status = await job.result;
     expect(status.status).toBe('worker-error');
     expect(status.detail).toContain('statistics that do not match');
+  });
+
+  it('settles on the terminal fields validated before archive verification', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    await tick(2);
+    const response: {
+      type: 'done';
+      jobId: number;
+      status: ArchiveWorkerStatus;
+      code: string;
+      archive: ArrayBuffer;
+      stats: { entries: number; expandedBytes: number; elapsedMs: number };
+    } = {
+      type: 'done',
+      jobId: 1,
+      status: 'error',
+      code: 'archive-mismatch',
+      archive: zip.archive.slice().buffer as ArrayBuffer,
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    };
+    worker.emit(response);
+    // A worker retaining the response mutates it while verification pends.
+    response.status = 'completed';
+    const status = await job.result;
+    expect(status.status).toBe('error');
+    expect(status.code).toBe('archive-mismatch');
+    expect(status.archiveBuffer?.byteLength).toBe(zip.archive.length);
   });
 
   it('reports cancelled stats from the worker', async () => {
