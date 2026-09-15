@@ -126,8 +126,10 @@ const exactArchiveBuffer = (
       );
     }
     // Shared buffers cannot be digested or transferred as ordinary archives;
-    // the documented clone behavior requires a private copy anyway.
-    return archive.slice().buffer as ArrayBuffer;
+    // the documented clone behavior requires a private copy anyway. The
+    // constructor copies rather than calling the input's polymorphic slice,
+    // which Buffer subclasses override to return another view.
+    return new Uint8Array(archive).buffer;
   }
   if (transfer) {
     throw new ZipDecodeError(
@@ -135,7 +137,7 @@ const exactArchiveBuffer = (
       'transferArchive requires an exact-fit buffer; copy the view first',
     );
   }
-  return archive.slice().buffer as ArrayBuffer;
+  return new Uint8Array(archive).buffer;
 };
 
 /** Create a bounded ZIP decoder over consumer-provided workers. Each decode
@@ -318,6 +320,22 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
               return;
             }
+            const expectedEntry = request.expected.entries[message.seq - 1];
+            if (
+              expectedEntry === undefined
+              || message.path !== expectedEntry.path
+              || message.method !== expectedEntry.method
+              || message.bytes.byteLength !== expectedEntry.bytes
+            ) {
+              // A version-skewed or custom worker must not be able to swap
+              // files under a decode that still reports success.
+              finalize({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: `The archive decode worker delivered entry ${message.seq} without matching the expected manifest entry`,
+              });
+              return;
+            }
             outstandingSeq = message.seq;
             const value: BoundedZipDecodeEntry = {
               path: message.path,
@@ -357,12 +375,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           }
           if (message.type === 'done') {
             const doneShapeValid = typeof message.status === 'string'
-              && (!transfer || message.status !== 'completed'
-                || message.archive instanceof ArrayBuffer)
+              && (message.archive === undefined || message.archive instanceof ArrayBuffer)
               && (message.status === 'completed'
                 || message.status === 'cancelled'
                 || message.status === 'deadline'
                 || message.status === 'error')
+              && (message.status !== 'completed'
+                || transfer === (message.archive !== undefined))
               && typeof message.stats === 'object'
               && message.stats !== null;
             if (!doneShapeValid) {
@@ -481,19 +500,53 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               done: true, value: undefined,
             });
           }
+          // Capture the buffered value before the release post: an
+          // in-process worker can answer the release synchronously, and the
+          // reentrant handler must not see the still-buffered predecessor as
+          // over-delivery, nor lose it to a terminal response clearing the
+          // buffer while this pull still owes the caller that entry.
+          const buffered = bufferedEntry;
+          bufferedEntry = undefined;
           if (outstandingSeq > releasedSeq) {
             releasedSeq = outstandingSeq;
-            worker?.postMessage({
-              type: 'release',
-              jobId,
-              seq: releasedSeq,
-            });
+            try {
+              worker?.postMessage({
+                type: 'release',
+                jobId,
+                seq: releasedSeq,
+              });
+            } catch (error) {
+              // A worker that cannot accept the release would otherwise wait
+              // for an acknowledgement that never arrived.
+              if (!finished) {
+                finalize({
+                  status: 'worker-error',
+                  code: 'worker-error',
+                  detail: `Could not post the entry release: ${String(error)}`,
+                });
+              }
+            }
           }
-          const buffered = bufferedEntry;
           if (buffered !== undefined) {
-            bufferedEntry = undefined;
             return Promise.resolve({
               done: false, value: buffered,
+            });
+          }
+          if (finished) {
+            if (failure !== undefined) {
+              return Promise.reject(failure);
+            }
+            return Promise.resolve({
+              done: true, value: undefined,
+            });
+          }
+          if (bufferedEntry !== undefined) {
+            // A worker that answered the release synchronously may already
+            // have buffered the next entry for this very pull.
+            const replied = bufferedEntry;
+            bufferedEntry = undefined;
+            return Promise.resolve({
+              done: false, value: replied,
             });
           }
           if (resolveEntry !== undefined) {

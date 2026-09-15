@@ -6,6 +6,7 @@ import type {
   ArchiveWorkerRequest,
   ArchiveWorkerResponse,
   ArchiveWorkerStats,
+  ArchiveZipEntryMethod,
 } from '../src/archive-protocol.js';
 import { createArchiveWorkerDispatch } from '../src/archive-worker-impl.js';
 import {
@@ -52,6 +53,7 @@ interface FakeWorker extends ZipDecodeWorkerLike {
   crash(): void;
   ignoreCancel(value: boolean): void;
   throwOnCancelPost(value: boolean): void;
+  throwOnReleasePost(value: boolean): void;
   blackhole(): void;
 }
 
@@ -64,6 +66,7 @@ function createFakeWorker(): FakeWorker {
   let postedEntryCount = 0;
   let ignoreCancel = false;
   let throwCancelPost = false;
+  let throwReleasePost = false;
   let silent = false;
   const dispatch = createArchiveWorkerDispatch({
     post: (message): void => {
@@ -93,6 +96,9 @@ function createFakeWorker(): FakeWorker {
           return;
         }
       }
+      if (message.type === 'release' && throwReleasePost) {
+        throw new Error('postMessage failed');
+      }
       requests.push(message);
       dispatch(message);
     },
@@ -121,6 +127,9 @@ function createFakeWorker(): FakeWorker {
     },
     throwOnCancelPost(value: boolean): void {
       throwCancelPost = value;
+    },
+    throwOnReleasePost(value: boolean): void {
+      throwReleasePost = value;
     },
     blackhole(): void {
       silent = true;
@@ -652,6 +661,185 @@ describe('bounded ZIP decode client', () => {
     const status = await job.result;
     expect(status.status).toBe('worker-error');
     expect(status.detail).toContain('unknown message type');
+  });
+
+  it.each([
+    ['a swapped path', 'grove/other.png', 'store', pngBytes.length],
+    ['a swapped method', 'grove/grove.png', 'deflate', pngBytes.length],
+    ['a swapped byte length', 'grove/grove.png', 'store', 4],
+  ])('rejects worker entries with %s against the manifest', async (_name, path, method, length) => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path,
+      method: method as ArchiveZipEntryMethod,
+      bytes: new Uint8Array(length).slice().buffer as ArrayBuffer,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('expected manifest entry');
+  });
+
+  it.each([
+    true,
+    false,
+  ])('returns buffered entries when the worker replies to releases synchronously (buffered first: %s)', async (bufferedFirst) => {
+    const zip = fixture();
+    const createSyncReplyWorker = (): ZipDecodeWorkerLike => {
+      const listeners: ((event: MessageEvent<ArchiveWorkerResponse>) => void)[] = [];
+      const deliver = (data: ArchiveWorkerResponse): void => {
+        for (const listener of [...listeners]) {
+          listener({ data } as MessageEvent<ArchiveWorkerResponse>);
+        }
+      };
+      // An in-process worker that answers every post synchronously, including
+      // the entry released from inside next().
+      return {
+        postMessage(message: ArchiveWorkerRequest): void {
+          if (message.type === 'decode') {
+            deliver({
+              type: 'entry',
+              jobId: message.jobId,
+              seq: 1,
+              path: zip.expected.entries[0]!.path,
+              method: 'store',
+              bytes: pngBytes.slice().buffer as ArrayBuffer,
+            });
+            return;
+          }
+          if (message.type === 'release' && message.seq === 1) {
+            deliver({
+              type: 'entry',
+              jobId: message.jobId,
+              seq: 2,
+              path: zip.expected.entries[1]!.path,
+              method: 'deflate',
+              bytes: jsonBytes.slice().buffer as ArrayBuffer,
+            });
+          } else if (message.type === 'release') {
+            deliver({
+              type: 'done',
+              jobId: message.jobId,
+              status: 'completed',
+              stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+            });
+          }
+        },
+        addEventListener(
+          type: 'message' | 'error' | 'messageerror',
+          listener: ((event: MessageEvent<ArchiveWorkerResponse>) => void) | ((event: Event) => void),
+        ): void {
+          if (type === 'message') {
+            listeners.push(listener as (event: MessageEvent<ArchiveWorkerResponse>) => void);
+          }
+        },
+        terminate(): void {},
+      };
+    };
+    const decoder = createBoundedZipDecoder({ createWorker: createSyncReplyWorker });
+    const job = decoder.decode({ archive: zip.archive.slice(), expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    if (bufferedFirst) {
+      // Let the first entry buffer before any pull so the release post
+      // happens with a captured predecessor.
+      await tick(2);
+    }
+    const first = await iterator.next();
+    expect(first.done).toBe(false);
+    expect(first.value?.path).toBe('grove/grove.png');
+    const second = await iterator.next();
+    expect(second.done).toBe(false);
+    expect(second.value?.path).toBe('grove/grove.json');
+    const third = await iterator.next();
+    expect(third.done).toBe(true);
+    expect((await job.result).status).toBe('completed');
+  });
+
+  it('finalizes the job as a worker error when posting a release throws', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const first = await iterator.next();
+    expect(first.done).toBe(false);
+    worker.throwOnReleasePost(true);
+    await expect(iterator.next()).rejects.toMatchObject({ code: 'worker-error' });
+    expect((await job.result).status).toBe('worker-error');
+  });
+
+  it('rejects terminal responses carrying a non-buffer archive', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    await tick(2);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'error',
+      code: 'integrity',
+      archive: { not: 'a buffer' } as never,
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('malformed done message');
+    // The transferred archive was never returned as a real buffer.
+    expect(status.archiveLost).toBe(true);
+  });
+
+  it('rejects transferred completions that omit the archive', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    await tick(2);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('malformed done message');
+    // The detached caller buffer was not handed back.
+    expect(status.archiveLost).toBe(true);
+  });
+
+  it('copies view inputs without polymorphic slice for transport', async () => {
+    const decoder = createBoundedZipDecoder({ createWorker: createFakeWorker });
+    const zip = fixture();
+    const slab = Buffer.alloc(zip.archive.length + 64);
+    slab.set(zip.archive, 32);
+    // A Node Buffer view: slice() returns another view into the slab instead
+    // of a copy, so the transport must not go through it.
+    const view = slab.subarray(32, 32 + zip.archive.length);
+    const job = decoder.decode({ archive: view, expected: zip.expected });
+    const received: string[] = [];
+    for await (const entry of job.entries) {
+      received.push(entry.path);
+    }
+    expect(received).toEqual(['grove/grove.png', 'grove/grove.json']);
+    expect((await job.result).status).toBe('completed');
   });
 
   it('reports cancelled stats from the worker', async () => {
