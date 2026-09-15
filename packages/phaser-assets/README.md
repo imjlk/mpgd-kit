@@ -244,10 +244,26 @@ not a manifest verification. Transferred jobs also hash the archive on the
 client before submission, and that time counts against the decode deadline;
 size `decodeDeadlineMs` accordingly for large archives. Transport copies and
 client-side verification hashes sit outside the decode output limits but
-within the job's wall clock.
+within the job's wall clock. The deadline is one absolute budget over the
+job's execution: it starts when the job acquires a concurrency slot (queue
+wait is not counted) and is spent by worker creation, the transport copy,
+the client hash, the worker's decode, entry verification and the
+returned-archive verification. The worker receives only the unspent
+remainder of the budget, and the client keeps deadline authority — a
+completion landing after the deadline stays a `deadline` result even when
+it arrives inside the cleanup grace, and a submission preparation that
+outlasts the budget ends the job before the archive is ever posted.
+`cancelGraceMs` is the cooperative cleanup window after a cancellation or
+deadline has been decided (the worker gets that long to finish and return
+buffers); it never widens the deadline. Limits and the expected manifest
+are snapshotted when `decode` is called, so mutating the request objects
+afterwards cannot change an in-flight job's checks.
 
 Jobs are cancellable: a cancelled job stops producing entries, its iterator
-ends, and late worker messages cannot flip the completion state. Worker
+ends, and late worker messages cannot flip the completion state — including
+a fully verified completion, which stays a cancellation rather than turning
+the job successful. Cancelling again shares the same cleanup window and
+settlement. Worker
 crashes, invalid messages and missed deadlines surface as distinct result
 statuses (`worker-error`, `deadline`) after best-effort termination. Each job
 uses one fresh worker; concurrency across jobs is capped by

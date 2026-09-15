@@ -10,4 +10,9 @@ Archive and entry integrity is mandatory. The `archive-worker` subpath is an
 application-deployed module worker entry; the client enforces one-outstanding-
 entry backpressure, per-job cancellation with late-message protection and
 distinct worker-crash/deadline statuses, never silently falling back to
-main-thread decoding. Adds a pinned `fflate` dependency for DEFLATE.
+main-thread decoding. The decode deadline is one absolute budget from slot
+acquisition through returned-archive verification (queue wait excluded); the
+worker receives only the unspent remainder, completion inside the cleanup
+grace cannot turn a decided deadline into success, and cancellation shares a
+single cooperative cleanup window. Adds a pinned `fflate` dependency for
+DEFLATE.

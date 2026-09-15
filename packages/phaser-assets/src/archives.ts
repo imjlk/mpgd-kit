@@ -46,7 +46,11 @@ export interface BoundedZipDecoderOptions {
   createWorker(): ZipDecodeWorkerLike;
   /** Concurrent decode jobs; further jobs queue. Default 2. */
   readonly maxConcurrentDecodes?: number;
-  /** Grace before a cancelled or timed-out worker is terminated. Default 5000. */
+  /** Cooperative cleanup window after a cancellation or deadline is
+   * decided: the worker gets this long to finish and return buffers before
+   * it is terminated and the job settles. A response landing inside the
+   * window cannot turn a decided deadline into a completed job. Default
+   * 5000. */
   readonly cancelGraceMs?: number;
 }
 export interface BoundedZipDecodeRequest {
@@ -101,15 +105,10 @@ export interface BoundedZipDecoder {
   decode(request: BoundedZipDecodeRequest): BoundedZipDecodeJob;
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => {
-  setTimeout(resolve, ms);
-});
 const validCounter = (value: unknown): boolean => typeof value === 'number'
   && Number.isSafeInteger(value) && value >= 0;
 const validElapsed = (value: unknown): boolean => typeof value === 'number'
   && Number.isFinite(value) && value >= 0;
-/** Extra wall-clock slack beyond the decode deadline for worker messaging. */
-const DEADLINE_TRANSPORT_GRACE_MS = 2000;
 /** Shared wording for settlements where the worker itself overran the deadline. */
 const DEADLINE_MISS_DETAIL = 'The archive decode worker missed its deadline';
 /** The deadline expired client-side, before the job was even submitted. */
@@ -156,6 +155,15 @@ const exactArchiveBuffer = (
   return new Uint8Array(archive).buffer;
 };
 
+/** Copy the expected manifest so no side shares another's verification
+ * basis: the client freezes the caller's request at submission, and the
+ * posted request is a separate copy an in-process port cannot mutate. */
+const copyExpected = (source: ArchiveWorkerExpected): ArchiveWorkerExpected => ({
+  formatVersion: source.formatVersion,
+  archive: { ...source.archive },
+  entries: source.entries.map((entry) => ({ ...entry })),
+});
+
 /** Create a bounded ZIP decoder over consumer-provided workers. Each decode
  * job uses one fresh worker and terminates it when the job finishes; the
  * decoder enforces the concurrency limit itself. */
@@ -201,7 +209,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
     decode(request) {
       const jobId = nextJobId++;
       const transfer = request.transferArchive === true;
-      const limits = request.limits ?? defaultArchiveWorkerLimits();
+      // Freeze the verification basis at submission: limits and the expected
+      // manifest are shallow-copied so later caller mutations cannot change
+      // what an in-flight job checks against or hands to the worker.
+      const limits: ArchiveWorkerLimits = request.limits === undefined
+        ? defaultArchiveWorkerLimits()
+        : { ...request.limits };
+      const expected = copyExpected(request.expected);
       // Reject oversized archives before any transport copy is made; the
       // payload view is only materialized once the job acquires a slot.
       const payload = (): ArrayBuffer => exactArchiveBuffer(request.archive, transfer, limits);
@@ -224,8 +238,12 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       let cancelRequested = false;
       let deadlineInitiated = false;
       let firstCause: 'user' | 'deadline' | undefined;
+      /** Absolute deadline on the monotonic clock; Infinity until the job's
+       * execution budget starts when it acquires a slot. */
+      let deadlineAt = Number.POSITIVE_INFINITY;
       let settleResult: ((status: BoundedZipDecodeStatus) => void) | undefined;
       let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+      let forcedTimer: ReturnType<typeof setTimeout> | undefined;
       const result = new Promise<BoundedZipDecodeStatus>((resolve) => {
         settleResult = resolve;
       });
@@ -240,6 +258,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         if (deadlineTimer !== undefined) {
           clearTimeout(deadlineTimer);
           deadlineTimer = undefined;
+        }
+        if (forcedTimer !== undefined) {
+          clearTimeout(forcedTimer);
+          forcedTimer = undefined;
         }
         if (status.status === 'completed' || status.status === 'cancelled') {
           resolveEntry?.({
@@ -315,6 +337,82 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             detail: `Could not verify ${scope}: ${String(error)}`,
           });
       };
+      const postCancelToWorker = (): void => {
+        try {
+          worker?.postMessage({
+            type: 'cancel',
+            jobId,
+          });
+        } catch {
+          // A throwing postMessage must not skip the forced settlement.
+        }
+      };
+      /** The single cooperative-cleanup timer, shared by cancellation and
+       * deadline: whoever decides the cause first arms one grace window;
+       * later calls no-op, so repeated cancels or a deadline racing a cancel
+       * neither stack timers nor push the settlement further out. */
+      const beginForcedSettlement = (): void => {
+        if (forcedTimer !== undefined || finished) {
+          return;
+        }
+        forcedTimer = setTimeout((): void => {
+          forcedTimer = undefined;
+          // Not gated on terminalSeen: a terminal response whose archive
+          // verification never settles must not retain the worker and
+          // concurrency permit forever; the conservative settlement reports
+          // the archive as lost.
+          if (finished) {
+            return;
+          }
+          finalize(firstCause === 'deadline'
+            ? {
+              status: 'deadline',
+              code: 'deadline',
+              detail: decodePosted ? DEADLINE_MISS_DETAIL : PRE_SUBMIT_DEADLINE_DETAIL,
+              ...(terminalStats !== undefined ? { stats: terminalStats } : {}),
+            }
+            : {
+              status: 'cancelled',
+              code: 'cancelled',
+              detail: 'The archive decode worker was terminated after cancellation',
+              ...(terminalStats !== undefined ? { stats: terminalStats } : {}),
+            });
+        }, graceMs);
+      };
+      /** The timer callback is the deadline's notifier, the monotonic clock
+       * comparison is its authority: a callback that runs late, or a success
+       * that resolves while the callback is still queued, cannot stretch the
+       * budget. The budget is exhausted at the deadline instant itself.
+       * Whichever path observes the expiry first also starts the cooperative
+       * stop and the cleanup window, so every observation is equivalent to
+       * the timer firing. */
+      const observeDeadline = (): boolean => {
+        if (deadlineInitiated) {
+          return true;
+        }
+        if (!(performance.now() >= deadlineAt)) {
+          return false;
+        }
+        deadlineInitiated = true;
+        if (firstCause === undefined) {
+          firstCause = 'deadline';
+        }
+        postCancelToWorker();
+        beginForcedSettlement();
+        return true;
+      };
+      const onDeadline = (): void => {
+        if (!observeDeadline()) {
+          // The platform timer fired ahead of the monotonic comparison
+          // (coarsened clocks can disagree by a fraction); re-arm for the
+          // true remainder so the deadline's only scheduled notifier is
+          // not spent.
+          deadlineTimer = setTimeout(
+            onDeadline,
+            Math.max(deadlineAt - performance.now(), 0),
+          );
+        }
+      };
       const start = async (): Promise<void> => {
         await acquire();
         if (finished || cancelRequested) {
@@ -340,17 +438,24 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           });
           return;
         }
-        if (limits.decodeDeadlineMs > 2 ** 31 - 1 - DEADLINE_TRANSPORT_GRACE_MS) {
-          // A single setTimeout cannot cover the full core-accepted range:
-          // arming it past the platform maximum would wrap and fire early,
-          // and clamping would fire before the configured deadline.
+        if (limits.decodeDeadlineMs > 2 ** 31 - 1) {
+          // Arming the platform timer beyond its range would wrap it into
+          // firing immediately instead of honoring the configured deadline.
           finalize({
             status: 'error',
             code: 'limit',
-            detail: 'ZIP decode deadline leaves no room for the worker transport grace',
+            detail: 'ZIP decode deadline exceeds the platform timer range',
           });
           return;
         }
+        // The execution budget starts when the slot is acquired, before
+        // worker creation, the transport copy, the pre-transfer hash and the
+        // decode post; queue wait is not part of the budget, and everything
+        // from here through returned-archive verification spends the same
+        // absolute deadline. The timer fires exactly at the deadline — the
+        // cancel grace applies only to the cooperative cleanup afterwards.
+        deadlineAt = performance.now() + limits.decodeDeadlineMs;
+        deadlineTimer = setTimeout(onDeadline, limits.decodeDeadlineMs);
         try {
           worker = options.createWorker();
         } catch (error) {
@@ -405,7 +510,11 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
               return;
             }
-            if (message.seq !== outstandingSeq + 1) {
+            // Freeze the fields the async digest continuation reads: an
+            // in-process worker can mutate its response object after emit.
+            const seq = message.seq;
+            const path = message.path;
+            if (seq !== outstandingSeq + 1) {
               finalize({
                 status: 'worker-error',
                 code: 'worker-error',
@@ -423,10 +532,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
               return;
             }
-            const expectedEntry = request.expected.entries[message.seq - 1];
+            const expectedEntry = expected.entries[seq - 1];
             if (
               expectedEntry === undefined
-              || message.path !== expectedEntry.path
+              || path !== expectedEntry.path
               || message.method !== expectedEntry.method
               || message.bytes.byteLength !== expectedEntry.bytes
             ) {
@@ -435,18 +544,18 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               finalize({
                 status: 'worker-error',
                 code: 'worker-error',
-                detail: `The archive decode worker delivered entry ${message.seq} without matching the expected manifest entry`,
+                detail: `The archive decode worker delivered entry ${seq} without matching the expected manifest entry`,
               });
               return;
             }
             // The worker-side core enforces the limits, but a custom worker
             // runs no core: this boundary is the only remaining guard for
             // the decoder's public resource-limit contract.
-            if (message.path.length > limits.maxPathLength) {
+            if (path.length > limits.maxPathLength) {
               finalize({
                 status: 'error',
                 code: 'limit',
-                detail: `Delivered entry ${message.seq} path exceeds the length limit ${limits.maxPathLength}`,
+                detail: `Delivered entry ${seq} path exceeds the length limit ${limits.maxPathLength}`,
               });
               return;
             }
@@ -454,15 +563,15 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               finalize({
                 status: 'error',
                 code: 'limit',
-                detail: `Delivered entry ${message.seq} exceeds the per-entry byte limit ${limits.entryBytes}`,
+                detail: `Delivered entry ${seq} exceeds the per-entry byte limit ${limits.entryBytes}`,
               });
               return;
             }
-            if (message.seq > limits.entryCount) {
+            if (seq > limits.entryCount) {
               finalize({
                 status: 'error',
                 code: 'limit',
-                detail: `Delivered entry ${message.seq} exceeds the entry count limit ${limits.entryCount}`,
+                detail: `Delivered entry ${seq} exceeds the entry count limit ${limits.entryCount}`,
               });
               return;
             }
@@ -475,7 +584,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
               return;
             }
-            outstandingSeq = message.seq;
+            outstandingSeq = seq;
             let entryBytes: Uint8Array;
             try {
               // Copy into client-owned storage: a custom worker may retain
@@ -488,12 +597,12 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               finalize({
                 status: 'worker-error',
                 code: 'worker-error',
-                detail: `The archive decode worker delivered entry ${message.seq} with an undeliverable buffer: ${String(error)}`,
+                detail: `The archive decode worker delivered entry ${seq} with an undeliverable buffer: ${String(error)}`,
               });
               return;
             }
             const value: BoundedZipDecodeEntry = {
-              path: message.path,
+              path,
               method: message.method,
               bytes: entryBytes,
             };
@@ -502,19 +611,21 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // bytes handed to the consumer are the manifest's bytes.
             void digestOf(value.bytes).then(
               (digest) => {
-                if (finished || terminalSeen || cancelRequested || deadlineInitiated) {
+                if (finished || terminalSeen || cancelRequested || observeDeadline()) {
                   // A done message was accepted and only its archive digest
                   // verification is pending, or a cancellation/deadline is
                   // already settling the job; that settlement resolves any
                   // pending pull, so this entry must not mutate state or
-                  // surface output after cancellation began.
+                  // surface output after cancellation began. A success
+                  // resolving past the elapsed deadline is held the same
+                  // way until the deadline settlement resolves the pull.
                   return;
                 }
                 if (digest !== expectedEntry.sha256) {
                   finalize({
                     status: 'worker-error',
                     code: 'worker-error',
-                    detail: `The archive decode worker delivered entry ${message.seq} with bytes that do not match the expected manifest digest`,
+                    detail: `The archive decode worker delivered entry ${seq} with bytes that do not match the expected manifest digest`,
                   });
                   return;
                 }
@@ -529,10 +640,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                   // The consumer owns the bytes now, so the release credit
                   // returns with the handout and the worker may decode one
                   // entry ahead while the consumer processes this one.
-                  postRelease(message.seq);
+                  postRelease(seq);
                 } else if (bufferedEntry === undefined) {
                   bufferedEntry = value;
-                  bufferedSeq = message.seq;
+                  bufferedSeq = seq;
                 } else {
                   // A worker delivering past the single-outstanding-entry
                   // credit is a protocol failure, not a data source.
@@ -544,13 +655,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 }
               },
               (error) => {
-                if (finished || terminalSeen || cancelRequested || deadlineInitiated) {
+                if (finished || terminalSeen || cancelRequested || observeDeadline()) {
                   // A settlement already in flight resolves the pending
                   // pull; a verification-infrastructure failure must not
                   // preempt it with an error status.
                   return;
                 }
-                finalizeVerificationFailure(`the delivered entry ${message.seq}`, error);
+                finalizeVerificationFailure(`the delivered entry ${seq}`, error);
               },
             );
             return;
@@ -601,7 +712,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 });
                 return;
               }
-              if (verifiedEntries !== request.expected.entries.length) {
+              if (verifiedEntries !== expected.entries.length) {
                 finalize({
                   status: 'worker-error',
                   code: 'worker-error',
@@ -650,14 +761,22 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               code?: string | undefined;
               detail?: string | undefined;
             } => {
-              if (
-                terminal.status === 'cancelled'
-                && (firstCause === 'deadline' || (deadlineInitiated && firstCause === undefined))
-              ) {
+              // First-cause priority: once a deadline or user cancellation
+              // decided the ending, a worker response landing afterwards —
+              // even a fully verified completion inside the cleanup grace —
+              // cannot claim the success for itself.
+              if (terminal.status === 'cancelled' && firstCause === 'deadline') {
                 return deadlineTranslate(DEADLINE_MISS_DETAIL);
               }
-              if (terminal.status === 'completed' && deadlineInitiated && firstCause !== 'user') {
+              if (terminal.status === 'completed' && firstCause === 'deadline') {
                 return deadlineTranslate('The archive decode worker completed after the decode deadline fired');
+              }
+              if (terminal.status === 'completed' && firstCause === 'user') {
+                return {
+                  status: 'cancelled',
+                  code: 'cancelled',
+                  detail: 'The archive decode worker completed after cancellation was requested',
+                };
               }
               if (terminal.status === 'error' && terminal.code === 'unsupported') {
                 return {
@@ -669,10 +788,12 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               };
             };
             const settle = (archiveBuffer?: ArrayBuffer): void => {
+              // Re-checked at settlement: the budget covers returned-archive
+              // verification too, so a completion settling after the
+              // deadline elapsed cannot report success, while the verified
+              // buffer is still restored.
+              observeDeadline();
               finalize({
-                // Evaluated at settlement: the deadline may have fired
-                // while an archive digest verification pended, and the
-                // translation must reflect that when it resolves.
                 ...translateDone(),
                 stats: terminal.stats,
                 ...(archiveBuffer !== undefined ? { archiveBuffer } : {}),
@@ -748,42 +869,6 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         };
         worker.addEventListener('error', onWorkerFailure);
         worker.addEventListener('messageerror', onWorkerFailure);
-        const onDeadline = (): void => {
-          deadlineInitiated = true;
-          if (firstCause === undefined) {
-            firstCause = 'deadline';
-          }
-          try {
-            worker?.postMessage({
-              type: 'cancel',
-              jobId,
-            });
-          } catch {
-            // A throwing postMessage must not skip the forced deadline.
-          }
-          void sleep(graceMs).then(() => {
-            // Not gated on terminalSeen: a terminal response whose archive
-            // verification never settles must not retain the worker and
-            // concurrency permit forever; the conservative settlement
-            // reports the archive as lost. A user-initiated cancellation
-            // keeps its own settlement path.
-            if (!finished && firstCause !== 'user') {
-              finalize({
-                status: 'deadline',
-                code: 'deadline',
-                detail: DEADLINE_MISS_DETAIL,
-                ...(terminalStats !== undefined ? { stats: terminalStats } : {}),
-              });
-            }
-          });
-        };
-        // The absolute deadline starts before submission so client-side
-        // hashing counts against it; nothing between this arm and the
-        // decode post may clear it.
-        deadlineTimer = setTimeout(
-          onDeadline,
-          limits.decodeDeadlineMs + DEADLINE_TRANSPORT_GRACE_MS,
-        );
         let archivePayload: ArrayBuffer;
         try {
           archivePayload = payload();
@@ -827,29 +912,42 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             }
             return;
           }
-          // The hash await yields to the event loop: honour a cancellation
-          // or forced settlement that landed while hashing instead of
-          // transferring the caller's buffer anyway. The first cause wins,
-          // matching the terminal-response translation.
+          // The hash await yields to the event loop: honour a settlement
+          // that landed while hashing instead of transferring the caller's
+          // buffer anyway. The first cause wins, matching the
+          // terminal-response translation.
           if (finished) {
             return;
           }
-          if (deadlineInitiated && firstCause !== 'user') {
-            finalize({
-              status: 'deadline',
-              code: 'deadline',
-              detail: PRE_SUBMIT_DEADLINE_DETAIL,
-            });
-            return;
-          }
-          if (cancelRequested) {
-            finalize({
-              status: 'cancelled',
-              code: 'cancelled',
-            });
-            return;
-          }
         }
+        // Re-check the absolute deadline before submission, for both modes:
+        // the transport copy is synchronous, and the hash continuation can
+        // run ahead of the queued timer callback — only the clock
+        // comparison catches either.
+        if (observeDeadline() && firstCause !== 'user') {
+          // The copy or the pre-transfer hash outlasted the budget; the
+          // archive is never submitted and the buffer never leaves the
+          // caller.
+          finalize({
+            status: 'deadline',
+            code: 'deadline',
+            detail: PRE_SUBMIT_DEADLINE_DETAIL,
+          });
+          return;
+        }
+        if (cancelRequested) {
+          finalize({
+            status: 'cancelled',
+            code: 'cancelled',
+          });
+          return;
+        }
+        // The worker receives only the unspent remainder of the absolute
+        // deadline, measured on the client's clock; deadline authority stays
+        // with the client, whose timer and translations judge the result.
+        // The manifest and limits are posted as copies: an in-process port
+        // shares nothing with the client's verification basis, so it cannot
+        // mutate the checks its own responses are judged against.
         try {
           // Mark ownership before posting: an in-process worker may transfer
           // the buffer and reply synchronously from inside postMessage, and a
@@ -861,8 +959,11 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             protocol: ARCHIVE_WORKER_PROTOCOL,
             archive: archivePayload,
             transferArchive: transfer,
-            expected: request.expected,
-            limits,
+            expected: copyExpected(expected),
+            limits: {
+              ...limits,
+              decodeDeadlineMs: Math.max(Math.ceil(deadlineAt - performance.now()), 0),
+            },
           }, transfer ? [archivePayload] : []);
         } catch (error) {
           if (!finished) {
@@ -933,37 +1034,21 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           if (finished) {
             return result;
           }
-          cancelRequested = true;
-          if (firstCause === undefined) {
-            firstCause = 'user';
-          }
-          try {
-            worker?.postMessage({
-              type: 'cancel',
-              jobId,
-            });
-          } catch {
-            // A throwing postMessage must not skip the cancellation grace
-            // fallback that reclaims the permit and settles the job.
-          }
-          const forced = sleep(graceMs).then((): BoundedZipDecodeStatus => ({
-            status: 'cancelled',
-            code: 'cancelled',
-            detail: 'The archive decode worker was terminated after cancellation',
-          }));
-          return Promise.race([result, forced]).then((status) => {
-            // Not gated on terminalSeen: a terminal response whose archive
-            // verification never settles must not retain the worker and
-            // concurrency permit forever, so the conservative cancellation
-            // settles instead of waiting on `result`.
-            if (!finished) {
-              finalize({
-                ...status,
-                ...(terminalStats !== undefined ? { stats: terminalStats } : {}),
-              });
+          // A deadline that already elapsed keeps its cause even when this
+          // cancel lands before the timer callback runs; callback ordering
+          // must not decide between user and deadline.
+          if (!observeDeadline()) {
+            cancelRequested = true;
+            if (firstCause === undefined) {
+              firstCause = 'user';
             }
-            return result;
-          });
+          }
+          postCancelToWorker();
+          // The same cooperative-cleanup window the deadline uses: one
+          // shared timer settles the job if the worker never answers, and
+          // repeated cancels neither stack timers nor extend the wait.
+          beginForcedSettlement();
+          return result;
         },
         result,
       };

@@ -343,7 +343,7 @@ describe('bounded ZIP decode client', () => {
   });
 
   it('terminates unresponsive workers after the deadline', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     try {
       const workers: FakeWorker[] = [];
       let releaseDigest: (() => void) | undefined;
@@ -403,7 +403,7 @@ describe('bounded ZIP decode client', () => {
   });
 
   it('does not transfer the archive when the deadline fires during hashing', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     try {
       const worker = createFakeWorker();
       worker.blackhole();
@@ -1165,13 +1165,16 @@ describe('bounded ZIP decode client', () => {
   });
 
   it('rejects completion after the client deadline fires', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     try {
       const worker = createFakeWorker();
       worker.blackhole();
       const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
       const zip = fixture();
-      const limits = { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 0 };
+      // A zero deadline would now fire before the entries arrive; a
+      // positive one lets the entries verify while the worker stalls
+      // before its terminal response.
+      const limits = { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 2000 };
       const job = decoder.decode({ archive: zip.archive.slice(), expected: zip.expected, limits });
       const iterator = job.entries[Symbol.asyncIterator]();
       const firstPull = iterator.next();
@@ -1297,7 +1300,7 @@ describe('bounded ZIP decode client', () => {
   });
 
   it('restores the transferred archive when completion lands after the deadline', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     try {
       const worker = createFakeWorker();
       worker.blackhole();
@@ -1386,7 +1389,7 @@ describe('bounded ZIP decode client', () => {
   });
 
   it('re-evaluates the deadline over a pending returned-archive verification', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     try {
       const worker = createFakeWorker();
       worker.blackhole();
@@ -1475,7 +1478,7 @@ describe('bounded ZIP decode client', () => {
   });
 
   it('bounds a returned-archive verification that never settles', async () => {
-    vi.useFakeTimers();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     try {
       const worker = createFakeWorker();
       worker.blackhole();
@@ -1555,14 +1558,14 @@ describe('bounded ZIP decode client', () => {
     expect(status.detail).toContain('malformed done message');
   });
 
-  it('rejects decode deadlines that leave no room for the transport grace', async () => {
+  it('rejects decode deadlines beyond the platform timer range', async () => {
     const createWorker = vi.fn(createFakeWorker);
     const decoder = createBoundedZipDecoder({ createWorker });
     const zip = fixture();
     const job = decoder.decode({
       archive: zip.archive,
       expected: zip.expected,
-      limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 2 ** 31 - 1 },
+      limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 2 ** 31 },
     });
     const status = await job.result;
     expect(status.status).toBe('error');
@@ -1806,7 +1809,7 @@ describe('bounded ZIP decode client', () => {
     expect(status.detail).toContain('undeliverable buffer');
   });
 
-  it('counts pre-transfer hashing against the decode deadline', async () => {
+  it('ends at the deadline without submitting when pre-transfer hashing overruns it', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
     try {
       const worker = createFakeWorker();
@@ -1832,25 +1835,294 @@ describe('bounded ZIP decode client', () => {
         transferArchive: true,
         limits: {
           ...defaultArchiveWorkerLimits(),
-          // Hashing is gated for 1500ms, past the 1000ms deadline but inside
-          // the 2000ms transport grace.
           decodeDeadlineMs: 1000,
         },
       });
+      // Hashing pends 1500ms, past the 1000ms deadline: the job must end at
+      // the deadline without ever submitting the archive, not ride a grace
+      // window into a decode with a fresh budget.
       await vi.advanceTimersByTimeAsync(1500);
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+      expect(status.detail).toContain('before the job was submitted');
       expect(worker.requests.some((request) => request.type === 'decode')).toBe(false);
       releasePreTransferHash!();
       await vi.advanceTimersByTimeAsync(0);
-      expect(worker.requests.some((request) => request.type === 'decode')).toBe(true);
-      // Only the unspent remainder of the absolute deadline remains: the
-      // guard fires 1500ms after submission, then the grace settles.
-      await vi.advanceTimersByTimeAsync(1000 + 2000 - 1500 + 1 + 50 + 1);
+      expect(worker.requests.some((request) => request.type === 'decode')).toBe(false);
+      // The buffer was never submitted, so ownership never left the caller.
+      expect(status.archiveLost).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('submits only the unspent deadline budget to the worker', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      let releasePreTransferHash: (() => void) | undefined;
+      vi.stubGlobal('crypto', {
+        subtle: {
+          digest: (): Promise<ArrayBuffer> => new Promise((resolve) => {
+            releasePreTransferHash = (): void => {
+              resolve(new ArrayBuffer(32));
+            };
+          }),
+        },
+      });
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const limits = { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 1000 };
+      const job = decoder.decode({
+        archive: zip.archive.slice(),
+        expected: zip.expected,
+        transferArchive: true,
+        limits,
+      });
+      // Submission preparation spends 700ms of the 1000ms budget before
+      // the decode post; the worker may only spend what is left.
+      await vi.advanceTimersByTimeAsync(700);
+      releasePreTransferHash!();
+      await vi.advanceTimersByTimeAsync(0);
+      const decode = worker.requests.find((request) => request.type === 'decode');
+      expect(decode).toBeDefined();
+      expect((decode as { limits: ArchiveWorkerLimits }).limits.decodeDeadlineMs).toBe(300);
+      // The derived budget is a copy; the caller's limits are untouched.
+      expect(limits.decodeDeadlineMs).toBe(1000);
+      await vi.advanceTimersByTimeAsync(300 + 50 + 1);
       const status = await job.result;
       expect(status.status).toBe('deadline');
     } finally {
       vi.useRealTimers();
       vi.unstubAllGlobals();
     }
+  });
+
+  it('re-arms the deadline when the timer fires ahead of the clock', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      const realNow = performance.now.bind(performance);
+      let nowMs: number | undefined;
+      vi.spyOn(performance, 'now').mockImplementation(() => nowMs ?? realNow());
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive.slice(),
+        expected: zip.expected,
+        limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 1000 },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // The timer fires on schedule but the coarsened clock still reads
+      // before the deadline; the deadline must not be silently disarmed.
+      nowMs = realNow();
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(worker.requests.some((request) => request.type === 'cancel')).toBe(false);
+      const statusPending = job.result;
+      // The clock passes the deadline; the re-armed notifier enforces it.
+      nowMs = realNow() + 5000;
+      await vi.advanceTimersByTimeAsync(1000);
+      expect(worker.requests.some((request) => request.type === 'cancel')).toBe(true);
+      await vi.advanceTimersByTimeAsync(50 + 1);
+      const status = await statusPending;
+      expect(status.status).toBe('deadline');
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('hands the worker copies of the manifest and limits', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await waitForDecodePost(worker);
+    const decode = worker.requests.find((request) => request.type === 'decode') as unknown as {
+      expected: { entries: { sha256: string }[] };
+      limits: { entryBytes: number };
+    };
+    // An in-process port must not share the client's verification basis:
+    // mutating the posted request cannot defeat the boundary checks or the
+    // manifest digests the client judges entries against.
+    decode.expected.entries[0]!.sha256 = '0'.repeat(64);
+    decode.limits.entryBytes = 0;
+    const received: string[] = [];
+    for await (const entry of job.entries) {
+      received.push(entry.path);
+    }
+    expect(received).toEqual(['grove/grove.png', 'grove/grove.json']);
+    expect((await job.result).status).toBe('completed');
+  });
+
+  it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      const realNow = performance.now.bind(performance);
+      let nowMs: number | undefined;
+      vi.spyOn(performance, 'now').mockImplementation(() => nowMs ?? realNow());
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive.slice(),
+        expected: zip.expected,
+        limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 1000 },
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // The budget is spent but the deadline timer callback has not run;
+      // only the elapsed-clock check can see it, and a cancel landing now
+      // must not steal the cause by callback ordering.
+      nowMs = realNow() + 5000;
+      const cancelling = job.cancel();
+      await vi.advanceTimersByTimeAsync(1000 + 50 + 1);
+      const status = await cancelling;
+      expect(status.status).toBe('deadline');
+      expect(status.code).toBe('deadline');
+      expect((await job.result).status).toBe('deadline');
+    } finally {
+      vi.useRealTimers();
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('keeps the user cancellation when the deadline fires inside the cancel grace', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive.slice(),
+        expected: zip.expected,
+        limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 100 },
+      });
+      const consuming = (async () => {
+        for await (const _entry of job.entries) {
+          void _entry;
+        }
+      })();
+      const cancelled = job.cancel();
+      // The deadline timer fires mid-grace after the user cause was chosen
+      // first; the shared settlement must stay a cancellation.
+      await vi.advanceTimersByTimeAsync(200);
+      const status = await cancelled;
+      expect(status.status).toBe('cancelled');
+      expect((await job.result).status).toBe('cancelled');
+      await consuming;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('shares one settlement across repeated cancellations', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+      const first = job.cancel();
+      const second = job.cancel();
+      // One grace window settles both calls: no stacked timers, no
+      // extended wait past a single grace.
+      await vi.advanceTimersByTimeAsync(50 + 1);
+      const statuses = await Promise.all([first, second]);
+      expect(statuses[1]).toBe(statuses[0]);
+      expect(statuses[0]!.status).toBe('cancelled');
+      expect((await job.result).status).toBe('cancelled');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('freezes the expected manifest and limits for the job at submission', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const limits = { ...defaultArchiveWorkerLimits(), entryBytes: 1024 * 1024 };
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected, limits });
+    // Caller mutations after submission must not change what the in-flight
+    // job verifies against, on the client or on the worker.
+    const secondEntry: { path: string } = zip.expected.entries[1]!;
+    secondEntry.path = 'grove/rogue.json';
+    limits.entryBytes = 1;
+    const received: string[] = [];
+    for await (const entry of job.entries) {
+      received.push(entry.path);
+    }
+    expect(received).toEqual(['grove/grove.png', 'grove/grove.json']);
+    expect((await job.result).status).toBe('completed');
+  });
+
+  it('does not let a late completion claim success after cancellation', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await waitForDecodePost(worker);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await firstPull).done).toBe(false);
+    const secondPull = iterator.next();
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 2,
+      path: 'grove/grove.json',
+      method: 'deflate',
+      bytes: jsonBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await secondPull).done).toBe(false);
+    const thirdPull = iterator.next();
+    await tick(2);
+    // A fully verified completion arriving after the user chose to stop
+    // cannot flip the result to completed.
+    const cancelled = job.cancel();
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+    });
+    const status = await cancelled;
+    expect(status.status).toBe('cancelled');
+    expect(status.detail).toContain('after cancellation was requested');
+    expect((await job.result).status).toBe('cancelled');
+    await expect(thirdPull).resolves.toMatchObject({ done: true });
   });
 
   it('does not surface entries verified after a cancellation begins', async () => {
