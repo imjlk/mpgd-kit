@@ -2,7 +2,7 @@ import { Inflate } from 'fflate';
 
 import { digestOf } from './archive-digest.js';
 import { ZipDecodeError, type ZipDecodeFailureCode } from './archive-errors.js';
-import type { ArchiveWorkerLimits } from './archive-protocol.js';
+import { invalidArchiveLimit, type ArchiveWorkerLimits } from './archive-protocol.js';
 import { parsePhaserPackEntryPath, PHASER_PACK_DELIVERY_VERSION } from './pack-format.js';
 
 /**
@@ -454,26 +454,17 @@ export async function* decodeZipV1Entries(
   if (globalThis.crypto?.subtle === undefined) {
     throw new ZipDecodeError('unsupported', 'ZIP decode requires SHA-256 (HTTPS or localhost)');
   }
-  for (const [name, minimum] of [
-    ['archiveBytes', 1],
-    ['entryBytes', 1],
-    ['totalExpandedBytes', 1],
-    ['entryCount', 1],
-    ['maxPathLength', 1],
-    ['decodeDeadlineMs', 0],
-  ] as const) {
-    // Values beyond the platform timer range would wrap the client's guard
-    // timer into firing early.
-    if (name === 'decodeDeadlineMs' && limits.decodeDeadlineMs > 2 ** 31 - 1) {
-      throw new ZipDecodeError('limit', 'ZIP decode deadline exceeds the timer range');
-    }
-    const value: unknown = limits[name];
-    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum) {
-      throw new ZipDecodeError(
-        'limit',
-        `ZIP decode limit ${name} must be an integer of at least ${minimum}`,
-      );
-    }
+  // Values beyond the platform timer range would wrap the client's guard
+  // timer into firing early.
+  if (limits.decodeDeadlineMs > 2 ** 31 - 1) {
+    throw new ZipDecodeError('limit', 'ZIP decode deadline exceeds the timer range');
+  }
+  const invalidLimit = invalidArchiveLimit(limits);
+  if (invalidLimit !== undefined) {
+    throw new ZipDecodeError(
+      'limit',
+      `ZIP decode limit ${invalidLimit.name} must be an integer of at least ${invalidLimit.minimum}`,
+    );
   }
   if (expected.formatVersion !== PHASER_PACK_DELIVERY_VERSION) {
     throw new ZipDecodeError(

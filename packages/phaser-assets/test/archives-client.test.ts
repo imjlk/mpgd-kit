@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   defaultArchiveWorkerLimits,
+  type ArchiveWorkerLimits,
   type ArchiveWorkerRequest,
   type ArchiveWorkerResponse,
   type ArchiveWorkerStats,
@@ -1644,6 +1645,97 @@ describe('bounded ZIP decode client', () => {
     const status = await job.result;
     expect(status.status).toBe('error');
     expect(status.code).toBe('limit');
+  });
+
+  it.each([
+    ['archiveBytes', 1.5],
+    ['entryBytes', Number.NaN],
+    ['totalExpandedBytes', Number.POSITIVE_INFINITY],
+    ['entryCount', 0],
+    ['maxPathLength', -1],
+    ['decodeDeadlineMs', Number.NaN],
+  ])('validates a malformed %s limit client-side', async (name, value) => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive,
+      expected: zip.expected,
+      limits: { ...defaultArchiveWorkerLimits(), [name]: value } as ArchiveWorkerLimits,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('error');
+    expect(status.code).toBe('limit');
+    expect(status.detail).toContain(String(name));
+  });
+
+  it('enforces the path-length limit even when the worker skips it', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const longPath = `${'grove/'.repeat(12)}sprite.png`;
+    const zip = buildV1Zip([{ path: longPath, data: pngBytes, method: 'store' }]);
+    const job = decoder.decode({
+      archive: zip.archive,
+      expected: zip.expected,
+      limits: { ...defaultArchiveWorkerLimits(), maxPathLength: 16 },
+    });
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: longPath,
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('error');
+    expect(status.code).toBe('limit');
+    expect(status.detail).toContain('length limit');
+  });
+
+  it('rejects completions whose statistics contradict the delivered output', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    expect((await firstPull).done).toBe(false);
+    const secondPull = iterator.next();
+    await tick(1);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 2,
+      path: 'grove/grove.json',
+      method: 'deflate',
+      bytes: jsonBytes.slice().buffer as ArrayBuffer,
+    });
+    expect((await secondPull).done).toBe(false);
+    const thirdPull = iterator.next();
+    await tick(1);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      stats: { entries: 0, expandedBytes: 1, elapsedMs: 0 },
+    });
+    await expect(thirdPull).rejects.toMatchObject({ code: 'worker-error' });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('statistics that do not match');
   });
 
   it('reports cancelled stats from the worker', async () => {

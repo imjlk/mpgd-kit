@@ -24,6 +24,31 @@ export interface ArchiveWorkerLimits {
   readonly maxPathLength: number;
   readonly decodeDeadlineMs: number;
 }
+/** Numeric floors for every decode limit, shared by the worker core's
+ * validation and the client's boundary guard so the two cannot drift; the
+ * satisfies typing makes TypeScript reject a table that misses a newly
+ * added limit field. */
+export const ARCHIVE_LIMIT_MINIMUMS = {
+  archiveBytes: 1,
+  entryBytes: 1,
+  totalExpandedBytes: 1,
+  entryCount: 1,
+  maxPathLength: 1,
+  decodeDeadlineMs: 0,
+} as const satisfies Record<keyof ArchiveWorkerLimits, number>;
+/** First limit whose value is not a safe integer at or above its floor. */
+export const invalidArchiveLimit = (
+  limits: ArchiveWorkerLimits,
+): { readonly name: keyof ArchiveWorkerLimits; readonly minimum: number } | undefined => {
+  for (const name of Object.keys(ARCHIVE_LIMIT_MINIMUMS) as (keyof ArchiveWorkerLimits)[]) {
+    const minimum = ARCHIVE_LIMIT_MINIMUMS[name];
+    const value = limits[name];
+    if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < minimum) {
+      return { name, minimum };
+    }
+  }
+  return undefined;
+};
 /** Conservative starting bounds, not performance targets. */
 export function defaultArchiveWorkerLimits(): ArchiveWorkerLimits {
   return {

@@ -3,6 +3,7 @@ import { ZipDecodeError, type ZipDecodeFailureCode } from './archive-errors.js';
 import {
   ARCHIVE_WORKER_PROTOCOL,
   defaultArchiveWorkerLimits,
+  invalidArchiveLimit,
   type ArchiveWorkerExpected,
   type ArchiveWorkerLimits,
   type ArchiveWorkerRequest,
@@ -327,10 +328,19 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           return;
         }
         slotAcquired = true;
-        if (
-          !Number.isSafeInteger(limits.decodeDeadlineMs)
-          || limits.decodeDeadlineMs > 2 ** 31 - 1 - DEADLINE_TRANSPORT_GRACE_MS
-        ) {
+        // Mirror the core's numeric validation client-side: a custom worker
+        // runs no core, so NaN or Infinity limits would silently disable
+        // every boundary comparison relying on them.
+        const invalidLimit = invalidArchiveLimit(limits);
+        if (invalidLimit !== undefined) {
+          finalize({
+            status: 'error',
+            code: 'limit',
+            detail: `ZIP decode limit ${invalidLimit.name} must be an integer of at least ${invalidLimit.minimum}`,
+          });
+          return;
+        }
+        if (limits.decodeDeadlineMs > 2 ** 31 - 1 - DEADLINE_TRANSPORT_GRACE_MS) {
           // A single setTimeout cannot cover the full core-accepted range:
           // arming it past the platform maximum would wrap and fire early,
           // and clamping would fire before the configured deadline.
@@ -432,6 +442,14 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // The worker-side core enforces the limits, but a custom worker
             // runs no core: this boundary is the only remaining guard for
             // the decoder's public resource-limit contract.
+            if (message.path.length > limits.maxPathLength) {
+              finalize({
+                status: 'error',
+                code: 'limit',
+                detail: `Delivered entry ${message.seq} path exceeds the length limit ${limits.maxPathLength}`,
+              });
+              return;
+            }
             if (message.bytes.byteLength > limits.entryBytes) {
               finalize({
                 status: 'error',
@@ -567,6 +585,19 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                   status: 'worker-error',
                   code: 'worker-error',
                   detail: 'The archive decode worker completed without delivering every expected entry',
+                });
+                return;
+              }
+              if (
+                message.stats.entries !== verifiedEntries
+                || message.stats.expandedBytes !== deliveredBytes
+              ) {
+                // The client observed the real delivery; a completion must
+                // not report measurements it did not verify.
+                finalize({
+                  status: 'worker-error',
+                  code: 'worker-error',
+                  detail: 'The archive decode worker completed with statistics that do not match the delivered output',
                 });
                 return;
               }
