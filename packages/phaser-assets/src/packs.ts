@@ -1,5 +1,6 @@
 import type Phaser from 'phaser';
 
+import { digestOf } from './archive-digest.js';
 import type { PhaserAtlasAsset, PhaserImageAsset, PhaserSpritesheetAsset } from './index.js';
 import { createPackBudget } from './pack-budget.js';
 import {
@@ -388,12 +389,8 @@ export function createPhaserAssetPackLoader(scene: Phaser.Scene, catalog: readon
         if (body.bytes.size !== file.integrity.bytes) {
           throw new Error(`Asset ${assetLabel} ${file.role} size mismatch`);
         }
-        const digest = new Uint8Array(
-          await crypto.subtle.digest('SHA-256', await body.bytes.arrayBuffer()),
-        );
-        if ([...digest].map((n) => n.toString(16).padStart(2, '0')).join(
-          '',
-        ) !== file.integrity.sha256.toLowerCase()) {
+        const digest = await digestOf(new Uint8Array(await body.bytes.arrayBuffer()));
+        if (digest !== file.integrity.sha256.toLowerCase()) {
           throw new Error(`Asset ${assetLabel} ${file.role} digest mismatch`);
         }
       } else if (body.bytes.size > maxFileBytes) {

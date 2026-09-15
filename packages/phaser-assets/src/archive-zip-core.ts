@@ -1,5 +1,6 @@
 import { Inflate } from 'fflate';
 
+import { digestOf } from './archive-digest.js';
 import { ZipDecodeError, type ZipDecodeFailureCode } from './archive-errors.js';
 import type { ArchiveWorkerLimits } from './archive-protocol.js';
 import { parsePhaserPackEntryPath, PHASER_PACK_DELIVERY_VERSION } from './pack-format.js';
@@ -54,14 +55,6 @@ const ENCRYPTED_FLAG = 0x0001;
 const DECODE_CHUNK_BYTES = 64 * 1024;
 const MIN_DECODE_STEP_BYTES = 64;
 const BREATHE_INPUT_BYTES = 256 * 1024;
-const digestOf = async (data: Uint8Array): Promise<string> => {
-  // Hash exact-fit views directly; only sub-views need a bounded copy.
-  const source = data.byteOffset === 0 && data.byteLength === data.buffer.byteLength
-    ? data.buffer as ArrayBuffer
-    : data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer;
-  const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', source));
-  return [...digest].map((n) => n.toString(16).padStart(2, '0')).join('');
-};
 const crcTable: readonly number[] = (() => {
   const table = new Array<number>(256);
   for (let index = 0; index < 256; index++) {

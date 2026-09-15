@@ -1,3 +1,4 @@
+import { digestOf } from './archive-digest.js';
 import { ZipDecodeError, type ZipDecodeFailureCode } from './archive-errors.js';
 import {
   ARCHIVE_WORKER_PROTOCOL,
@@ -81,8 +82,8 @@ export interface BoundedZipDecodeEntry {
 export interface BoundedZipDecodeJob {
   /** Decoded entries under credit backpressure: the worker decodes at most
    * one entry ahead of the consumer, so a stalled consumer keeps at most the
-   * held entry plus one buffered entry resident. Pulling the next entry
-   * releases the previous one's bytes back to the worker. */
+   * held entry plus one buffered entry resident. The release credit returns
+   * when an entry is handed to the consumer and its digest has verified. */
   readonly entries: AsyncIterable<BoundedZipDecodeEntry>;
   /** Stop the job. The worker gets a chance to finish cleanly; it is
    * terminated after the grace period. */
@@ -185,9 +186,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       let slotAcquired = false;
       let releasedSeq = 0;
       let outstandingSeq = 0;
+      let verifiedEntries = 0;
+      let archiveByteLength = -1;
+      let terminalSeen = false;
       let resolveEntry: ((value: IteratorResult<BoundedZipDecodeEntry>) => void) | undefined;
       let rejectEntry: ((error: ZipDecodeError) => void) | undefined;
       let bufferedEntry: BoundedZipDecodeEntry | undefined;
+      let bufferedSeq = 0;
       let decodePosted = false;
       let cancelRequested = false;
       let deadlineInitiated = false;
@@ -204,6 +209,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         }
         finished = true;
         bufferedEntry = undefined;
+        bufferedSeq = 0;
         if (deadlineTimer !== undefined) {
           clearTimeout(deadlineTimer);
           deadlineTimer = undefined;
@@ -240,6 +246,48 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           releaseSlot();
         }
       };
+      /** Return the release credit for a handed-over entry. Shared by the
+       * digest-verification resolve path and the buffered pull path so the
+       * credit protocol cannot drift between them. */
+      const postRelease = (seq: number): void => {
+        if (seq <= releasedSeq) {
+          return;
+        }
+        releasedSeq = seq;
+        try {
+          worker?.postMessage({
+            type: 'release',
+            jobId,
+            seq,
+          });
+        } catch (error) {
+          // A worker that cannot accept the release would otherwise wait for
+          // an acknowledgement that never arrived.
+          if (!finished) {
+            finalize({
+              status: 'worker-error',
+              code: 'worker-error',
+              detail: `Could not post the entry release: ${String(error)}`,
+            });
+          }
+        }
+      };
+      /** Map an entry digest-verification failure to a terminal status
+       * without preempting an already-accepted terminal settlement. */
+      const finalizeVerificationFailure = (scope: string, error: unknown): void => {
+        if (finished || terminalSeen) {
+          return;
+        }
+        finalize(error instanceof ZipDecodeError
+          ? {
+            status: 'error', code: error.code, detail: error.message,
+          }
+          : {
+            status: 'worker-error',
+            code: 'worker-error',
+            detail: `Could not verify ${scope}: ${String(error)}`,
+          });
+      };
       const start = async (): Promise<void> => {
         await acquire();
         if (finished || cancelRequested) {
@@ -264,6 +312,11 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           return;
         }
         worker.addEventListener('message', (event) => {
+          if (terminalSeen) {
+            // A terminal response was accepted; everything racing its
+            // archive-digest verification is ignored, malformed or not.
+            return;
+          }
           const message = event.data;
           if (typeof message !== 'object' || message === null) {
             finalize({
@@ -342,35 +395,54 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               method: message.method,
               bytes: new Uint8Array(message.bytes),
             };
-            const resolve = resolveEntry;
-            if (resolve !== undefined) {
-              resolveEntry = undefined;
-              rejectEntry = undefined;
-              resolve({
-                done: false, value,
-              });
-            } else if (bufferedEntry === undefined) {
-              bufferedEntry = value;
-            } else {
-              // A worker delivering past the single-outstanding-entry credit
-              // is a protocol failure, not a data source.
-              finalize({
-                status: 'worker-error',
-                code: 'worker-error',
-                detail: 'The archive decode worker delivered more entries than credited',
-              });
-            }
-            return;
-          }
-          if (
-            message.type === 'done' && message.status === 'completed'
-            && outstandingSeq > releasedSeq
-          ) {
-            finalize({
-              status: 'worker-error',
-              code: 'worker-error',
-              detail: 'The archive decode worker completed with an unreleased entry outstanding',
-            });
+            // The client verifies the digest itself: a custom worker runs no
+            // core decoder, so this boundary is the only guarantee that the
+            // bytes handed to the consumer are the manifest's bytes.
+            void digestOf(value.bytes).then(
+              (digest) => {
+                if (finished || terminalSeen) {
+                  // A done message was accepted and only its archive digest
+                  // verification is pending; its settlement resolves any
+                  // pending pull, so this entry must not mutate state.
+                  return;
+                }
+                if (digest !== expectedEntry.sha256) {
+                  finalize({
+                    status: 'worker-error',
+                    code: 'worker-error',
+                    detail: `The archive decode worker delivered entry ${message.seq} with bytes that do not match the expected manifest digest`,
+                  });
+                  return;
+                }
+                verifiedEntries++;
+                const resolve = resolveEntry;
+                if (resolve !== undefined) {
+                  resolveEntry = undefined;
+                  rejectEntry = undefined;
+                  resolve({
+                    done: false, value,
+                  });
+                  // The consumer owns the bytes now, so the release credit
+                  // returns with the handout and the worker may decode one
+                  // entry ahead while the consumer processes this one.
+                  postRelease(message.seq);
+                } else if (bufferedEntry === undefined) {
+                  bufferedEntry = value;
+                  bufferedSeq = message.seq;
+                } else {
+                  // A worker delivering past the single-outstanding-entry
+                  // credit is a protocol failure, not a data source.
+                  finalize({
+                    status: 'worker-error',
+                    code: 'worker-error',
+                    detail: 'The archive decode worker delivered more entries than credited',
+                  });
+                }
+              },
+              (error) => {
+                finalizeVerificationFailure(`the delivered entry ${message.seq}`, error);
+              },
+            );
             return;
           }
           if (message.type === 'done') {
@@ -392,28 +464,108 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
               return;
             }
-          }
-          // A cancellation answering this client's own deadline timer is a
-          // deadline, unless the user asked to cancel first.
-          const translated = message.status === 'cancelled'
-            && (firstCause === 'deadline' || (deadlineInitiated && firstCause === undefined))
-            ? {
-              status: 'deadline' as const,
-              code: 'deadline',
-              detail: 'The archive decode worker missed its deadline',
+            if (
+              transfer && message.archive !== undefined
+              && message.archive.byteLength !== archiveByteLength
+            ) {
+              // A different-length buffer cannot be the caller's detached
+              // archive, so ownership was not restored.
+              finalize({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: 'The archive decode worker returned an archive buffer that is not the transported archive',
+              });
+              return;
             }
-            : {
-              status: message.status,
-              code: message.code,
-              detail: message.detail,
+            if (message.status === 'completed') {
+              if (outstandingSeq > releasedSeq) {
+                finalize({
+                  status: 'worker-error',
+                  code: 'worker-error',
+                  detail: 'The archive decode worker completed with an unreleased entry outstanding',
+                });
+                return;
+              }
+              if (verifiedEntries !== request.expected.entries.length) {
+                finalize({
+                  status: 'worker-error',
+                  code: 'worker-error',
+                  detail: 'The archive decode worker completed without delivering every expected entry',
+                });
+                return;
+              }
+            }
+            // A cancellation answering this client's own deadline timer is a
+            // deadline, unless the user asked to cancel first.
+            const translated = message.status === 'cancelled'
+              && (firstCause === 'deadline' || (deadlineInitiated && firstCause === undefined))
+              ? {
+                status: 'deadline' as const,
+                code: 'deadline',
+                detail: 'The archive decode worker missed its deadline',
+              }
+              : {
+                status: message.status,
+                code: message.code,
+                detail: message.detail,
+              };
+            const settle = (): void => {
+              finalize({
+                ...translated,
+                stats: message.stats,
+                ...(transfer && message.archive !== undefined ? { archiveBuffer: message.archive } : {}),
+              });
             };
-          finalize({
-            ...translated,
-            stats: message.stats,
-            ...(transfer && message.archive !== undefined ? { archiveBuffer: message.archive } : {}),
-          });
+            if (transfer && message.archive !== undefined) {
+              // A same-length substitute buffer would silently replace the
+              // caller's archive, so ownership is only restored after the
+              // digest matches the manifest; done is terminal, so messages
+              // racing the hash are ignored.
+              terminalSeen = true;
+              void digestOf(new Uint8Array(message.archive)).then(
+                (digest) => {
+                  if (finished) {
+                    return;
+                  }
+                  if (digest !== request.expected.archive.sha256) {
+                    finalize({
+                      status: 'worker-error',
+                      code: 'worker-error',
+                      detail: 'The archive decode worker returned an archive buffer that is not the transported archive',
+                    });
+                    return;
+                  }
+                  settle();
+                },
+                (error) => {
+                  // This verification is the accepted terminal settlement,
+                  // not a racer of one, so guard on `finished` only.
+                  if (finished) {
+                    return;
+                  }
+                  finalize(error instanceof ZipDecodeError
+                    ? {
+                      status: 'error', code: error.code, detail: error.message,
+                    }
+                    : {
+                      status: 'worker-error',
+                      code: 'worker-error',
+                      detail: `Could not verify the returned archive: ${String(error)}`,
+                    });
+                },
+              );
+              return;
+            }
+            settle();
+          }
         });
         const onWorkerFailure = (): void => {
+          if (terminalSeen) {
+            // A terminal response was accepted and only its archive digest
+            // verification is pending; later worker lifecycle events cannot
+            // change that settlement.
+            return;
+          }
           finalize({
             status: 'worker-error',
             code: 'worker-error',
@@ -436,7 +588,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // A throwing postMessage must not skip the forced deadline.
           }
           void sleep(graceMs).then(() => {
-            if (!finished) {
+            if (!finished && !terminalSeen) {
               finalize({
                 status: 'deadline',
                 code: 'deadline',
@@ -448,6 +600,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         let archivePayload: ArrayBuffer;
         try {
           archivePayload = payload();
+          archiveByteLength = archivePayload.byteLength;
         } catch (error) {
           finalize(error instanceof ZipDecodeError
             ? {
@@ -506,47 +659,16 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           // over-delivery, nor lose it to a terminal response clearing the
           // buffer while this pull still owes the caller that entry.
           const buffered = bufferedEntry;
+          const bufferedCapturedSeq = bufferedSeq;
           bufferedEntry = undefined;
-          if (outstandingSeq > releasedSeq) {
-            releasedSeq = outstandingSeq;
-            try {
-              worker?.postMessage({
-                type: 'release',
-                jobId,
-                seq: releasedSeq,
-              });
-            } catch (error) {
-              // A worker that cannot accept the release would otherwise wait
-              // for an acknowledgement that never arrived.
-              if (!finished) {
-                finalize({
-                  status: 'worker-error',
-                  code: 'worker-error',
-                  detail: `Could not post the entry release: ${String(error)}`,
-                });
-              }
-            }
-          }
+          bufferedSeq = 0;
           if (buffered !== undefined) {
+            // Release at handout: the consumer owns the bytes now, so the
+            // credit is never spent on an unverified message while the
+            // worker may still decode one entry ahead.
+            postRelease(bufferedCapturedSeq);
             return Promise.resolve({
               done: false, value: buffered,
-            });
-          }
-          if (finished) {
-            if (failure !== undefined) {
-              return Promise.reject(failure);
-            }
-            return Promise.resolve({
-              done: true, value: undefined,
-            });
-          }
-          if (bufferedEntry !== undefined) {
-            // A worker that answered the release synchronously may already
-            // have buffered the next entry for this very pull.
-            const replied = bufferedEntry;
-            bufferedEntry = undefined;
-            return Promise.resolve({
-              done: false, value: replied,
             });
           }
           if (resolveEntry !== undefined) {
@@ -589,7 +711,9 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             detail: 'The archive decode worker was terminated after cancellation',
           }));
           return Promise.race([result, forced]).then((status) => {
-            if (!finished) {
+            // A terminal response already accepted for digest verification
+            // settles on its own; a forced cancellation must not preempt it.
+            if (!finished && !terminalSeen) {
               finalize(status);
             }
             return result;

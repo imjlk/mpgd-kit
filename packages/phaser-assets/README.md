@@ -226,8 +226,9 @@ it as its own worker entry and references it with
 `createBoundedZipDecoder`. Importing the client module never creates workers,
 fetches or timers; environments that cannot create workers fail with a clear
 `unsupported` error — there is no silent main-thread fallback for large
-archives. The worker posts at most one decoded entry ahead: pulling the next
-entry releases the previous one, so a slow consumer never queues unbounded
+archives. The worker posts at most one decoded entry ahead: releasing the
+credit accompanies each handover once the entry's digest verifies, so a slow
+consumer never queues unbounded
 bytes. By default the archive buffer is cloned for transport (the caller's
 buffer is never detached); opting into `transferArchive` detaches the caller's
 view for the job's duration and returns the buffer with the final status.

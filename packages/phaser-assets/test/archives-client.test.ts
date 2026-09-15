@@ -172,24 +172,31 @@ describe('bounded ZIP decode client', () => {
     expect(workers).toHaveLength(1);
   });
 
-  it('bounds outstanding output to one entry for a slow consumer', async () => {
+  it('bounds outstanding output to one entry ahead for a slow consumer', async () => {
     const worker = createFakeWorker();
     const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
-    const zip = fixture();
+    const zip = buildV1Zip([
+      { path: 'grove/grove.png', data: pngBytes, method: 'store' },
+      { path: 'grove/grove.json', data: jsonBytes, method: 'deflate' },
+      { path: 'grove/extra.bin', data: new Uint8Array(8), method: 'store' },
+    ]);
     const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
     const iterator = job.entries[Symbol.asyncIterator]();
     const first = await iterator.next();
     expect(first.done).toBe(false);
-    // Hold the first entry without pulling the next: no further entries may
-    // be posted into the main-thread queue.
+    // Hold the first entry without pulling the next: the release returns
+    // with the handout, so the worker may decode at most one entry ahead,
+    // and the third entry must wait for the next release.
     await tick(6);
-    expect(worker.postedEntries()).toBe(1);
+    expect(worker.postedEntries()).toBe(2);
     const second = await iterator.next();
     expect(second.done).toBe(false);
     await tick(6);
-    expect(worker.postedEntries()).toBe(2);
+    expect(worker.postedEntries()).toBe(3);
     const third = await iterator.next();
-    expect(third.done).toBe(true);
+    expect(third.done).toBe(false);
+    const fourth = await iterator.next();
+    expect(fourth.done).toBe(true);
     expect(await job.result).toMatchObject({ status: 'completed' });
   });
 
@@ -764,15 +771,28 @@ describe('bounded ZIP decode client', () => {
 
   it('finalizes the job as a worker error when posting a release throws', async () => {
     const worker = createFakeWorker();
+    worker.blackhole();
+    worker.throwOnReleasePost(true);
     const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
     const zip = fixture();
     const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
     const iterator = job.entries[Symbol.asyncIterator]();
-    const first = await iterator.next();
+    const firstPull = iterator.next();
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    // The pull resolves at handout; the release that follows it throws and
+    // must finalize the job instead of wedging the protocol.
+    const first = await firstPull;
     expect(first.done).toBe(false);
-    worker.throwOnReleasePost(true);
-    await expect(iterator.next()).rejects.toMatchObject({ code: 'worker-error' });
     expect((await job.result).status).toBe('worker-error');
+    await expect(iterator.next()).rejects.toMatchObject({ code: 'worker-error' });
   });
 
   it('rejects terminal responses carrying a non-buffer archive', async () => {
@@ -840,6 +860,192 @@ describe('bounded ZIP decode client', () => {
     }
     expect(received).toEqual(['grove/grove.png', 'grove/grove.json']);
     expect((await job.result).status).toBe('completed');
+  });
+
+  it('rejects completions that do not deliver every expected entry', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(2);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('without delivering every expected entry');
+  });
+
+  it('rejects delivered entries whose bytes fail the manifest digest', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await tick(2);
+    // Same path, method and length as the manifest, but different bytes.
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: new Uint8Array(pngBytes.length).fill(7).slice().buffer as ArrayBuffer,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('expected manifest digest');
+  });
+
+  it('rejects returned archives with the wrong byte length', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    await tick(2);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'error',
+      code: 'integrity',
+      archive: new ArrayBuffer(4),
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('not the transported archive');
+    expect(status.archiveLost).toBe(true);
+  });
+
+  it('rejects returned archives replaced with a same-length substitute', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    expect((await firstPull).done).toBe(false);
+    const secondPull = iterator.next();
+    await tick(1);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 2,
+      path: 'grove/grove.json',
+      method: 'deflate',
+      bytes: jsonBytes.slice().buffer as ArrayBuffer,
+    });
+    expect((await secondPull).done).toBe(false);
+    const thirdPull = iterator.next();
+    await tick(1);
+    // Same length as the transported archive, but different bytes.
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      archive: new Uint8Array(zip.archive.length).fill(1).slice().buffer as ArrayBuffer,
+      stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+    });
+    await expect(thirdPull).rejects.toMatchObject({ code: 'worker-error' });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('not the transported archive');
+    expect(status.archiveLost).toBe(true);
+  });
+
+  it('does not let pending entry verification flip a terminal settlement', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await tick(2);
+    // The entry's digest verification is still pending when the terminal
+    // response arrives and defers settlement behind the archive hash.
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'cancelled',
+      archive: zip.archive.slice().buffer as ArrayBuffer,
+      stats: { entries: 1, expandedBytes: pngBytes.length, elapsedMs: 0 },
+    });
+    // The accepted cancellation settles the pull; the racing entry cannot.
+    expect((await firstPull).done).toBe(true);
+    const status = await job.result;
+    expect(status.status).toBe('cancelled');
+    expect(status.archiveBuffer?.byteLength).toBe(zip.archive.length);
+    expect(status.archiveLost).toBeUndefined();
+  });
+
+  it('settles when the returned archive digest cannot be computed', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const empty = buildV1Zip([]);
+    const job = decoder.decode({
+      archive: empty.archive.slice(),
+      expected: empty.expected,
+      transferArchive: true,
+    });
+    await tick(2);
+    const subtle = crypto.subtle;
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: (): Promise<ArrayBuffer> => Promise.reject(new Error('boom')),
+      },
+    });
+    try {
+      worker.emit({
+        type: 'done',
+        jobId: 1,
+        status: 'completed',
+        archive: empty.archive.slice().buffer as ArrayBuffer,
+        stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+      });
+      const status = await job.result;
+      expect(status.status).toBe('worker-error');
+      expect(status.detail).toContain('Could not verify the returned archive');
+      expect(status.archiveLost).toBe(true);
+    } finally {
+      vi.stubGlobal('crypto', { subtle });
+    }
   });
 
   it('reports cancelled stats from the worker', async () => {
