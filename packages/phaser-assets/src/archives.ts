@@ -592,7 +592,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         try {
           worker = options.createWorker();
         } catch (error) {
-          finalize({
+          // Worker creation spends the job budget: a factory that blocks
+          // past the deadline and then throws settles as the deadline, not
+          // as an environment failure.
+          failWorker({
             status: 'unsupported',
             code: 'unsupported',
             detail: `Cannot create the archive decode worker: ${String(error)}`,

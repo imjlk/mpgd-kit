@@ -2724,6 +2724,37 @@ describe('bounded ZIP decode client', () => {
     expect(createWorker).not.toHaveBeenCalled();
   });
 
+  it('settles as deadline when worker creation outlasts the budget', async () => {
+    const realNow = performance.now.bind(performance);
+    // The budget starts on the first clock read; every later read — here
+    // only the settlement's elapsed check — sits past the deadline, as if
+    // the factory blocked through the budget before throwing.
+    let calls = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => {
+      calls++;
+      return calls === 1 ? realNow() : realNow() + 5000;
+    });
+    try {
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): ZipDecodeWorkerLike => {
+          throw new Error('no workers');
+        },
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive,
+        expected: zip.expected,
+        limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 1000 },
+      });
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+      expect(status.detail).toContain('Cannot create the archive decode worker');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
