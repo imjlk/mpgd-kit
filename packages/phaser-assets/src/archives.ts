@@ -247,6 +247,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           code: 'limit',
           detail: `ZIP decode limit ${invalidLimit.name} must be an integer of at least ${invalidLimit.minimum}`,
         };
+      } else if (limits.decodeDeadlineMs > 2 ** 31 - 1) {
+        // Arming the platform timer beyond its range would wrap it into
+        // firing immediately instead of honoring the configured deadline.
+        preflight = {
+          code: 'limit',
+          detail: 'ZIP decode deadline exceeds the platform timer range',
+        };
       } else if (request.expected.formatVersion !== PHASER_PACK_DELIVERY_VERSION) {
         preflight = {
           code: 'unsupported-zip',
@@ -571,16 +578,6 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             status: 'error',
             code: preflight.code,
             detail: preflight.detail,
-          });
-          return;
-        }
-        if (limits.decodeDeadlineMs > 2 ** 31 - 1) {
-          // Arming the platform timer beyond its range would wrap it into
-          // firing immediately instead of honoring the configured deadline.
-          finalize({
-            status: 'error',
-            code: 'limit',
-            detail: 'ZIP decode deadline exceeds the platform timer range',
           });
           return;
         }

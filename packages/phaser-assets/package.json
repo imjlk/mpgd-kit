@@ -73,7 +73,8 @@
     "fix": "ttsc fix"
   },
   "sideEffects": [
-    "./dist/archive-worker.js"
+    "./dist/archive-worker.js",
+    "./src/archive-worker.ts"
   ],
   "type": "module",
   "types": "./dist/index.d.ts",
