@@ -445,7 +445,7 @@ async function inflateBounded(
  * the caller, which decides when to pull the next one.
  */
 export async function* decodeZipV1Entries(
-  archive: Uint8Array,
+  inputArchive: Uint8Array,
   expected: ExpectedZipArchive,
   limits: ZipDecodeLimits,
   control: ZipDecodeControl = {},
@@ -474,15 +474,20 @@ export async function* decodeZipV1Entries(
       `Unsupported archive format version ${JSON.stringify(expected.formatVersion)}`,
     );
   }
-  if (archive.length !== expected.archive.bytes) {
+  if (inputArchive.length !== expected.archive.bytes) {
     throw new ZipDecodeError(
       'archive-mismatch',
-      `ZIP archive is ${archive.length} bytes, expected ${expected.archive.bytes}`,
+      `ZIP archive is ${inputArchive.length} bytes, expected ${expected.archive.bytes}`,
     );
   }
-  if (archive.length > limits.archiveBytes) {
+  if (inputArchive.length > limits.archiveBytes) {
     throw new ZipDecodeError('limit', 'ZIP archive exceeds the archive byte limit');
   }
+  // One private snapshot, taken only after the size bounds passed:
+  // WebCrypto authenticates the bytes as of its call, so every later read
+  // must observe the same bytes even if the caller mutates its view while
+  // the archive digest pends.
+  const archive = new Uint8Array(inputArchive);
   const deadlineAt = clock() + limits.decodeDeadlineMs;
   assertControl(wrappedControl, clock, deadlineAt);
   const archiveDigest = await digestOf(archive);

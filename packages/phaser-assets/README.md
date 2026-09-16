@@ -233,7 +233,9 @@ bytes. Each delivered entry is copied into client-owned storage and re-verified
 against the manifest digest before it reaches the consumer, so a custom worker
 cannot swap bytes under a success status. By default the archive buffer is
 cloned for transport (the caller's
-buffer is never detached); opting into `transferArchive` freezes the
+buffer is never detached); opting into `transferArchive` requires an
+exact-fit, non-shared buffer — views into larger buffers or shared memory
+are rejected with `unsupported` — and freezes the
 submission once into a client-owned snapshot, transfers that snapshot
 without a second copy, and returns the exact submitted snapshot with the
 final status, so caller mutations during submission cannot desynchronize

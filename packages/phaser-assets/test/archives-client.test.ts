@@ -2678,14 +2678,49 @@ describe('bounded ZIP decode client', () => {
       limits: { ...defaultArchiveWorkerLimits(), entryCount: 1 },
     });
     expect((await oversizeCount.result).code).toBe('limit');
-    expect((await oversizeCount.result).detail).toContain('entry count or path length limit');
+    expect((await oversizeCount.result).detail).toContain('entry count limit 1');
     const oversizePath = decoder.decode({
       archive: zip.archive,
       expected: zip.expected,
       limits: { ...defaultArchiveWorkerLimits(), maxPathLength: 4 },
     });
     expect((await oversizePath.result).code).toBe('limit');
+    expect((await oversizePath.result).detail).toContain('length limit 4');
     // Both jobs failed before any worker was created or manifest copied.
+    expect(createWorker).not.toHaveBeenCalled();
+  });
+
+  it('rejects unsupported manifest versions before creating workers', async () => {
+    const createWorker = vi.fn(createFakeWorker);
+    const decoder = createBoundedZipDecoder({ createWorker });
+    const zip = fixture();
+    const skewed = { ...zip.expected, formatVersion: zip.expected.formatVersion + 1 };
+    const job = decoder.decode({ archive: zip.archive, expected: skewed });
+    const status = await job.result;
+    expect(status.status).toBe('error');
+    expect(status.code).toBe('unsupported-zip');
+    expect(status.detail).toContain('Unsupported archive format version');
+    expect(createWorker).not.toHaveBeenCalled();
+  });
+
+  it('bounds the manifest only after the limits validate', async () => {
+    const createWorker = vi.fn(createFakeWorker);
+    const decoder = createBoundedZipDecoder({ createWorker });
+    const zip = buildV1Zip(new Array(64).fill(0).map((_unused, index) => ({
+      path: `grove/entry-${index}.bin`,
+      data: new Uint8Array(2),
+      method: 'store' as const,
+    })));
+    // A malformed limit cannot bound anything: the manifest is not
+    // snapshotted and the job rejects on the limit itself.
+    const job = decoder.decode({
+      archive: zip.archive,
+      expected: zip.expected,
+      limits: { ...defaultArchiveWorkerLimits(), entryCount: Number.NaN },
+    });
+    const status = await job.result;
+    expect(status.code).toBe('limit');
+    expect(status.detail).toContain('entryCount');
     expect(createWorker).not.toHaveBeenCalled();
   });
 

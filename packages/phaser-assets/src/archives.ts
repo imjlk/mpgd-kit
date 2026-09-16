@@ -10,6 +10,7 @@ import {
   type ArchiveWorkerResponse,
   type ArchiveWorkerStats,
 } from './archive-protocol.js';
+import { PHASER_PACK_DELIVERY_VERSION } from './pack-format.js';
 
 export { ZipDecodeError } from './archive-errors.js';
 export type { ZipDecodeFailureCode } from './archive-errors.js';
@@ -63,8 +64,9 @@ export interface BoundedZipDecodeRequest {
    * `status.archiveBuffer`, so caller mutations during submission cannot
    * desynchronize the verification digest. The caller's buffer is never
    * detached; the freeze costs one archive-sized copy of peak memory.
-   * Default false clones the bytes for transport. Views into a larger
-   * buffer are always copied for transport. */
+   * Default false clones the bytes for transport; transfer mode instead
+   * requires an exact-fit, non-shared buffer and rejects views into
+   * larger buffers or shared memory with `unsupported`. */
   readonly transferArchive?: boolean;
 }
 export interface BoundedZipDecodeStatus {
@@ -233,30 +235,46 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       const limits: ArchiveWorkerLimits = request.limits === undefined
         ? defaultArchiveWorkerLimits()
         : { ...request.limits };
-      // Bound the manifest before snapshotting it: a manifest with more
-      // entries than the count limit, or paths beyond the length limit, can
-      // never validate, so the job fails on that bound instead of
-      // allocating a copied graph of the oversized manifest first. The
-      // placeholder is never posted — start() rejects the job before any
-      // transport work.
-      let manifestOversized = false;
-      if (request.expected.entries.length > limits.entryCount) {
-        manifestOversized = true;
+      // Preflight the configuration before snapshotting the manifest: the
+      // checks run on the caller's objects without allocating, and a
+      // request that can never validate fails before a copied manifest
+      // graph or a worker exists. The rejection is surfaced through
+      // job.result when the job starts, like every other config error.
+      let preflight: { readonly code: ZipDecodeFailureCode; readonly detail: string } | undefined;
+      const invalidLimit = invalidArchiveLimit(limits);
+      if (invalidLimit !== undefined) {
+        preflight = {
+          code: 'limit',
+          detail: `ZIP decode limit ${invalidLimit.name} must be an integer of at least ${invalidLimit.minimum}`,
+        };
+      } else if (request.expected.formatVersion !== PHASER_PACK_DELIVERY_VERSION) {
+        preflight = {
+          code: 'unsupported-zip',
+          detail: `Unsupported archive format version ${JSON.stringify(request.expected.formatVersion)}`,
+        };
+      } else if (request.expected.entries.length > limits.entryCount) {
+        preflight = {
+          code: 'limit',
+          detail: `ZIP decode expected manifest has more entries than the entry count limit ${limits.entryCount}`,
+        };
       } else {
         for (const entry of request.expected.entries) {
           if (entry.path.length > limits.maxPathLength) {
-            manifestOversized = true;
+            preflight = {
+              code: 'limit',
+              detail: `ZIP decode expected manifest has a path longer than the length limit ${limits.maxPathLength}`,
+            };
             break;
           }
         }
       }
-      const expected: ArchiveWorkerExpected = manifestOversized
-        ? {
+      const expected: ArchiveWorkerExpected = preflight === undefined
+        ? copyExpected(request.expected)
+        : {
           formatVersion: request.expected.formatVersion,
           archive: { ...request.expected.archive },
           entries: [],
-        }
-        : copyExpected(request.expected);
+        };
       // Reject oversized archives before any transport copy is made; the
       // payload view is only materialized once the job acquires a slot.
       const payload = (): ArrayBuffer => exactArchiveBuffer(request.archive, transfer, limits);
@@ -543,15 +561,16 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           return;
         }
         slotAcquired = true;
-        // Mirror the core's numeric validation client-side: a custom worker
-        // runs no core, so NaN or Infinity limits would silently disable
-        // every boundary comparison relying on them.
-        const invalidLimit = invalidArchiveLimit(limits);
-        if (invalidLimit !== undefined) {
+        // Configuration problems preflighted at decode() time — invalid
+        // limits, unsupported manifest versions, unvalidatable manifest
+        // bounds — surface here through job.result, like every other
+        // config error; a custom worker runs no core, so the client
+        // boundary performs the core's validation itself.
+        if (preflight !== undefined) {
           finalize({
             status: 'error',
-            code: 'limit',
-            detail: `ZIP decode limit ${invalidLimit.name} must be an integer of at least ${invalidLimit.minimum}`,
+            code: preflight.code,
+            detail: preflight.detail,
           });
           return;
         }
@@ -562,14 +581,6 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             status: 'error',
             code: 'limit',
             detail: 'ZIP decode deadline exceeds the platform timer range',
-          });
-          return;
-        }
-        if (manifestOversized) {
-          finalize({
-            status: 'error',
-            code: 'limit',
-            detail: 'ZIP decode expected manifest exceeds the entry count or path length limit',
           });
           return;
         }

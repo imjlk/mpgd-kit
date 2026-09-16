@@ -259,6 +259,63 @@ describe('bounded ZIP decode core', () => {
     expect(archive.equals(original)).toBe(true);
   });
 
+  it('snapshots the archive before asynchronous verification', async () => {
+    const first = buildV1Zip([
+      { path: 'a.bin', data: new Uint8Array([1, 2, 3, 4]), method: 'store' as const },
+    ]);
+    const second = buildV1Zip([
+      { path: 'a.bin', data: new Uint8Array([9, 9, 9, 9]), method: 'store' as const },
+    ]);
+    // The archive digest pends while the caller swaps the bytes of the same
+    // length; WebCrypto authenticates the invocation-time bytes, so the
+    // decode must observe that same snapshot instead of the swapped ones.
+    const archive = first.archive.slice();
+    const subtle = crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    let firstCall = true;
+    let releaseArchiveDigest: (() => void) | undefined;
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: (algorithm: AlgorithmIdentifier, data: BufferSource): Promise<ArrayBuffer> => {
+          if (!firstCall) {
+            return realDigest(algorithm, data);
+          }
+          firstCall = false;
+          const snapshot = new Uint8Array(
+            data instanceof ArrayBuffer ? data : data.buffer.slice(
+              data.byteOffset,
+              data.byteOffset + data.byteLength,
+            ),
+          );
+          return new Promise((resolve) => {
+            releaseArchiveDigest = (): void => {
+              void realDigest(algorithm, snapshot).then(resolve);
+            };
+          });
+        },
+      },
+    });
+    try {
+      const decoded: number[] = [];
+      const consuming = (async () => {
+        for await (const entry of decodeZipV1Entries(archive, first.expected, limits())) {
+          decoded.push(...entry.bytes);
+        }
+      })();
+      await vi.waitFor(() => {
+        if (releaseArchiveDigest === undefined) {
+          throw new Error('archive digest not reached');
+        }
+      });
+      archive.set(second.archive);
+      releaseArchiveDigest!();
+      await consuming;
+      expect(decoded).toEqual([1, 2, 3, 4]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('stops when the consumer cancels without publishing later entries as success', async () => {
     const fixture = buildV1Zip(mixedEntries);
     const seen: string[] = [];
