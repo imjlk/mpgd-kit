@@ -474,6 +474,14 @@ export async function* decodeZipV1Entries(
       `Unsupported archive format version ${JSON.stringify(expected.formatVersion)}`,
     );
   }
+  if (expected.entries.length === 0) {
+    // The deterministic writer requires 1-65535 entries; an empty pack is
+    // outside the ZIP v1 delivery profile this decoder accepts.
+    throw new ZipDecodeError(
+      'invalid-structure',
+      'ZIP v1 delivery archives require at least one expected entry',
+    );
+  }
   if (inputArchive.length !== expected.archive.bytes) {
     throw new ZipDecodeError(
       'archive-mismatch',

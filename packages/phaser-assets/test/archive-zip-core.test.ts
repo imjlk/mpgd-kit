@@ -316,6 +316,15 @@ describe('bounded ZIP decode core', () => {
     }
   });
 
+  it('rejects empty expected manifests', async () => {
+    const fixture = buildV1Zip([]);
+    await expect((async () => {
+      for await (const _entry of decodeZipV1Entries(fixture.archive, fixture.expected, limits())) {
+        void _entry;
+      }
+    })()).rejects.toMatchObject({ code: 'invalid-structure' });
+  });
+
   it('charges the snapshot copy to the decode budget', async () => {
     const fixture = buildV1Zip([
       { path: 'a.bin', data: new Uint8Array(4), method: 'store' as const },

@@ -5,6 +5,7 @@ import {
   defaultArchiveWorkerLimits,
   invalidArchiveLimit,
   type ArchiveWorkerExpected,
+  type ArchiveWorkerExpectedEntry,
   type ArchiveWorkerLimits,
   type ArchiveWorkerRequest,
   type ArchiveWorkerResponse,
@@ -196,11 +197,24 @@ const copyBufferBytes = (source: ArrayBuffer, expectedLength: number): ArrayBuff
 /** Copy the expected manifest so no side shares another's verification
  * basis: the client freezes the caller's request at submission, and the
  * posted request is a separate copy an in-process port cannot mutate. */
-const copyExpected = (source: ArchiveWorkerExpected): ArchiveWorkerExpected => ({
-  formatVersion: source.formatVersion,
-  archive: { ...source.archive },
-  entries: source.entries.map((entry) => ({ ...entry })),
-});
+const copyExpected = (source: ArchiveWorkerExpected): ArchiveWorkerExpected => {
+  // Build a plain array element by element: an Array subclass's
+  // overridden map() could return its own collection and defeat the
+  // submission freeze.
+  // Read the collection exactly once: an accessor returning a fresh
+  // array per read could otherwise split the loop bound from the copied
+  // elements.
+  const sourceEntries = source.entries;
+  const entries: ArchiveWorkerExpectedEntry[] = [];
+  for (let index = 0; index < sourceEntries.length; index++) {
+    entries.push({ ...sourceEntries[index]! });
+  }
+  return {
+    formatVersion: source.formatVersion,
+    archive: { ...source.archive },
+    entries,
+  };
+};
 
 /** Create a bounded ZIP decoder over consumer-provided workers. Each decode
  * job uses one fresh worker and terminates it when the job finishes; the
@@ -276,6 +290,11 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         preflight = {
           code: 'unsupported-zip',
           detail: `Unsupported archive format version ${JSON.stringify(request.expected.formatVersion)}`,
+        };
+      } else if (request.expected.entries.length === 0) {
+        preflight = {
+          code: 'invalid-structure',
+          detail: 'ZIP v1 delivery archives require at least one expected entry',
         };
       } else if (request.expected.entries.length > limits.entryCount) {
         preflight = {
@@ -1095,7 +1114,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           archivePayload = payload();
           archiveByteLength = archivePayload.byteLength;
         } catch (error) {
-          finalize(error instanceof ZipDecodeError
+          // Constructing the payload spends the job budget; a blocking
+          // subclass getter that throws past the deadline settles as the
+          // deadline like every other late startup failure.
+          failWorker(error instanceof ZipDecodeError
             ? {
               status: 'error', code: error.code, detail: error.message,
             }
