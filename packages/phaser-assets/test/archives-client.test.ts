@@ -3081,6 +3081,115 @@ describe('bounded ZIP decode client', () => {
     }
   });
 
+  it('delivers the method the manifest check validated', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await waitForDecodePost(worker);
+    let methodReads = 0;
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      get method(): 'store' | 'deflate' {
+        // Switches after the validated reads; the validated and delivered
+        // values must be one and the same.
+        methodReads++;
+        return methodReads <= 2 ? 'store' : 'deflate';
+      },
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    } as never);
+    const first = await firstPull;
+    expect(first.done).toBe(false);
+    expect(first.value.method).toBe('store');
+  });
+
+  it('settles the terminal status the shape check validated', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await waitForDecodePost(worker);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await firstPull).done).toBe(false);
+    const secondPull = iterator.next();
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 2,
+      path: 'grove/grove.json',
+      method: 'deflate',
+      bytes: jsonBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await secondPull).done).toBe(false);
+    let statusReads = 0;
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      get status(): 'cancelled' | 'completed' {
+        // Alternates between reads; the validated and settled values must
+        // be one and the same — and cannot combine the archive-free shape
+        // check with a completed settlement.
+        statusReads++;
+        return statusReads % 2 === 1 ? 'cancelled' : 'completed';
+      },
+      stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+    } as never);
+    const status = await job.result;
+    expect(status.status).toBe('cancelled');
+    expect(status.archiveBuffer).toBeUndefined();
+    expect(status.archiveLost).toBe(true);
+  });
+
+  it('recovers the submission when the decode post throws', async () => {
+    const workerLike: ZipDecodeWorkerLike = {
+      postMessage(message): void {
+        if (message.type === 'decode') {
+          throw new Error('post failed');
+        }
+      },
+      addEventListener(): void {},
+      terminate(): void {},
+    };
+    const decoder = createBoundedZipDecoder({ createWorker: (): ZipDecodeWorkerLike => workerLike });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('Could not post the decode request');
+    // The throwing post never consumed the transfer list: the client still
+    // owns the intact submission and returns it instead of reporting it
+    // lost.
+    expect(status.archiveBuffer?.byteLength).toBe(zip.archive.length);
+    expect(status.archiveLost).toBeUndefined();
+  });
+
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {

@@ -259,6 +259,73 @@ describe('bounded ZIP decode core', () => {
     expect(archive.equals(original)).toBe(true);
   });
 
+  it('bounds the manifest by the entry count before copying', async () => {
+    const fixture = buildV1Zip(mixedEntries);
+    await expect((async () => {
+      for await (const _entry of decodeZipV1Entries(
+        fixture.archive,
+        fixture.expected,
+        limits({ entryCount: 1 }),
+      )) {
+        void _entry;
+      }
+    })()).rejects.toMatchObject({ code: 'limit' });
+  });
+
+  it('snapshots the manifest before asynchronous verification', async () => {
+    const fixture = buildV1Zip([
+      { path: 'a.bin', data: new Uint8Array([1, 2, 3, 4]), method: 'store' as const },
+    ]);
+    // The archive digest pends while the caller rewrites an entry digest in
+    // the manifest; the decode must keep verifying against the snapshot
+    // taken before the hash, not the mutated basis.
+    const archive = fixture.archive.slice();
+    const subtle = crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    let firstCall = true;
+    let releaseArchiveDigest: (() => void) | undefined;
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: (algorithm: AlgorithmIdentifier, data: BufferSource): Promise<ArrayBuffer> => {
+          if (!firstCall) {
+            return realDigest(algorithm, data);
+          }
+          firstCall = false;
+          const snapshot = new Uint8Array(
+            data instanceof ArrayBuffer ? data : data.buffer.slice(
+              data.byteOffset,
+              data.byteOffset + data.byteLength,
+            ),
+          );
+          return new Promise((resolve) => {
+            releaseArchiveDigest = (): void => {
+              void realDigest(algorithm, snapshot).then(resolve);
+            };
+          });
+        },
+      },
+    });
+    try {
+      const decoded: number[] = [];
+      const consuming = (async () => {
+        for await (const entry of decodeZipV1Entries(archive, fixture.expected, limits())) {
+          decoded.push(...entry.bytes);
+        }
+      })();
+      await vi.waitFor(() => {
+        if (releaseArchiveDigest === undefined) {
+          throw new Error('archive digest not reached');
+        }
+      });
+      (fixture.expected.entries[0] as { sha256: string }).sha256 = '0'.repeat(64);
+      releaseArchiveDigest!();
+      await consuming;
+      expect(decoded).toEqual([1, 2, 3, 4]);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('snapshots the archive before asynchronous verification', async () => {
     const first = buildV1Zip([
       { path: 'a.bin', data: new Uint8Array([1, 2, 3, 4]), method: 'store' as const },
@@ -314,6 +381,30 @@ describe('bounded ZIP decode core', () => {
     } finally {
       vi.unstubAllGlobals();
     }
+  });
+
+  it('reports the deadline over a mismatch when hashing overruns', async () => {
+    const fixture = buildV1Zip([
+      { path: 'a.bin', data: new Uint8Array(4), method: 'store' as const },
+    ]);
+    const lying = {
+      ...fixture.expected,
+      archive: { ...fixture.expected.archive, sha256: '0'.repeat(64) },
+    };
+    // Each clock read advances 3ms against a 9ms budget: the snapshot
+    // checks pass, the archive hash completes, and the read after it sits
+    // exactly at the deadline — which must win over the digest mismatch.
+    let clock = 0;
+    await expect((async () => {
+      for await (const _entry of decodeZipV1Entries(
+        fixture.archive,
+        lying,
+        limits({ decodeDeadlineMs: 9 }),
+        { now: (): number => (clock += 3) },
+      )) {
+        void _entry;
+      }
+    })()).rejects.toMatchObject({ code: 'deadline' });
   });
 
   it('rejects empty expected manifests', async () => {

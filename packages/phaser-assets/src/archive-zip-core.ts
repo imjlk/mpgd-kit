@@ -447,9 +447,13 @@ async function inflateBounded(
 export async function* decodeZipV1Entries(
   inputArchive: Uint8Array,
   expected: ExpectedZipArchive,
-  limits: ZipDecodeLimits,
+  inputLimits: ZipDecodeLimits,
   control: ZipDecodeControl = {},
 ): AsyncGenerator<ZipDecodeEntry> {
+  // Snapshot the limits once: they are as caller-supplied as the manifest,
+  // and re-reading them across the async digest could split the bound
+  // checks from the enforcement loop.
+  const limits: ZipDecodeLimits = { ...inputLimits };
   const clock = control.now ?? ((): number => performance.now());
   const shouldStop = control.shouldStop ?? ((): boolean => false);
   const wrappedControl: Required<Pick<ZipDecodeControl, 'shouldStop'>> = { shouldStop };
@@ -474,7 +478,31 @@ export async function* decodeZipV1Entries(
       `Unsupported archive format version ${JSON.stringify(expected.formatVersion)}`,
     );
   }
-  if (expected.entries.length === 0) {
+  // Capture the manifest once: the archive digest is asynchronous, and a
+  // caller mutating its manifest mid-hash must not split the pre-checks,
+  // the verification basis or the entry loop across different reads.
+  const sourceEntries = expected.entries;
+  const entryTotal = sourceEntries.length;
+  if (entryTotal > limits.entryCount) {
+    // Bound the manifest before the per-entry copy allocation; the
+    // parse side re-checks the archive own count against the same limit.
+    throw new ZipDecodeError(
+      'limit',
+      `ZIP expected manifest has ${entryTotal} entries, exceeding the entry limit ${limits.entryCount}`,
+    );
+  }
+  const manifestEntries: ExpectedZipArchive['entries'][number][] = [];
+  for (let index = 0; index < entryTotal; index++) {
+    // Copy each entry so callers cannot mutate the verification basis
+    // across the asynchronous digest.
+    manifestEntries.push({ ...sourceEntries[index]! });
+  }
+  const manifest = {
+    formatVersion: expected.formatVersion,
+    archive: { ...expected.archive },
+    entries: manifestEntries,
+  };
+  if (manifest.entries.length === 0) {
     // The deterministic writer requires 1-65535 entries; an empty pack is
     // outside the ZIP v1 delivery profile this decoder accepts.
     throw new ZipDecodeError(
@@ -482,10 +510,10 @@ export async function* decodeZipV1Entries(
       'ZIP v1 delivery archives require at least one expected entry',
     );
   }
-  if (inputArchive.length !== expected.archive.bytes) {
+  if (inputArchive.length !== manifest.archive.bytes) {
     throw new ZipDecodeError(
       'archive-mismatch',
-      `ZIP archive is ${inputArchive.length} bytes, expected ${expected.archive.bytes}`,
+      `ZIP archive is ${inputArchive.length} bytes, expected ${manifest.archive.bytes}`,
     );
   }
   if (inputArchive.length > limits.archiveBytes) {
@@ -501,11 +529,13 @@ export async function* decodeZipV1Entries(
   const archive = new Uint8Array(inputArchive);
   assertControl(wrappedControl, clock, deadlineAt);
   const archiveDigest = await digestOf(archive);
-  if (archiveDigest !== expected.archive.sha256) {
+  // The elapsed check precedes interpreting the digest, so hashing that
+  // outlasts the budget reports the deadline, not a spurious mismatch.
+  assertControl(wrappedControl, clock, deadlineAt);
+  if (archiveDigest !== manifest.archive.sha256) {
     throw new ZipDecodeError('archive-mismatch', 'ZIP archive digest does not match the manifest');
   }
-  assertControl(wrappedControl, clock, deadlineAt);
-  const planned = parseZipV1Structure(archive, expected, limits);
+  const planned = parseZipV1Structure(archive, manifest, limits);
   let expandedTotal = 0;
   let delivered = 0;
   for (const entry of planned) {
@@ -551,7 +581,7 @@ export async function* decodeZipV1Entries(
     assertControl(wrappedControl, clock, deadlineAt);
     const entryDigest = await digestOf(bytes);
     assertControl(wrappedControl, clock, deadlineAt);
-    const expectedEntry = expected.entries[delivered - 1]!;
+    const expectedEntry = manifest.entries[delivered - 1]!;
     if (entryDigest !== expectedEntry.sha256) {
       throw new ZipDecodeError(
         'integrity',

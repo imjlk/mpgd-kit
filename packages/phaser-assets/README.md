@@ -207,7 +207,9 @@ schema, determinism guarantees and ZIP v1 scope.
 `mpgd assets build-packs` under explicit resource bounds. Decoding accepts only
 that profile — STORE and DEFLATE entries with the writer's fixed metadata — and
 rejects encrypted, ZIP64, split, symlinked, corrupt, truncated, duplicated,
-traversal-carrying or manifest-diverging archives instead of repairing them.
+traversal-carrying or manifest-diverging archives instead of repairing them;
+the writer requires 1–65,535 entries per archive, so empty manifests are
+rejected before any work starts.
 Archive and per-entry integrity (lengths and SHA-256) is mandatory; there is no
 optional-integrity mode here, unlike the files loader. SHA-256 requires a
 secure context (HTTPS or localhost), mirroring file integrity.

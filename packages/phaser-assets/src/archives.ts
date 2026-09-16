@@ -141,23 +141,29 @@ const exactArchiveBuffer = (
   transfer: boolean,
   limits: ArchiveWorkerLimits,
 ): ArrayBuffer => {
-  if (archive.byteLength > limits.archiveBytes) {
+  // Read every view property exactly once: a subclass with switching
+  // accessors must not let the bound check and the transport decision
+  // observe different views of the same nominal input.
+  const viewBytes = archive.byteLength;
+  const viewOffset = archive.byteOffset;
+  const viewBuffer = archive.buffer;
+  if (viewBytes > limits.archiveBytes) {
     throw new ZipDecodeError('limit', 'ZIP archive exceeds the archive byte limit');
   }
   const shared = typeof SharedArrayBuffer !== 'undefined'
-    && archive.buffer instanceof SharedArrayBuffer;
-  const exact = !shared && archive.byteOffset === 0
-    && archive.byteLength === archive.buffer.byteLength;
+    && viewBuffer instanceof SharedArrayBuffer;
+  const exact = !shared && viewOffset === 0
+    && viewBytes === viewBuffer.byteLength;
   if (exact && transfer) {
-    return archive.buffer as ArrayBuffer;
+    return viewBuffer as ArrayBuffer;
   }
   if (exact) {
     // A real worker structured-clones a posted buffer, but an in-process
     // port receives the reference itself; clone mode promises the caller's
-    // buffer is never shared, so exact-fit inputs are copied too. The
-    // constructor copies rather than calling the input's polymorphic slice,
-    // which Buffer subclasses override to return another view.
-    return new Uint8Array(archive).buffer;
+    // buffer is never shared, so exact-fit inputs are copied too. The copy
+    // is bounded by the captured view facts and never dispatches to the
+    // input's polymorphic slice.
+    return copyViewBytes(viewBuffer, viewOffset, viewBytes);
   }
   if (shared) {
     if (transfer) {
@@ -167,8 +173,10 @@ const exactArchiveBuffer = (
       );
     }
     // Shared buffers cannot be digested or transferred as ordinary archives;
-    // the documented clone behavior requires a private copy anyway.
-    return new Uint8Array(archive).buffer;
+    // the documented clone behavior requires a private copy anyway. The
+    // copy is bounded by the captured view facts, not the view's internal
+    // slots, so a lying accessor cannot smuggle a larger transport.
+    return copyViewBytes(viewBuffer, viewOffset, viewBytes);
   }
   if (transfer) {
     throw new ZipDecodeError(
@@ -176,7 +184,20 @@ const exactArchiveBuffer = (
       'transferArchive requires an exact-fit buffer; copy the view first',
     );
   }
-  return new Uint8Array(archive).buffer;
+  return copyViewBytes(viewBuffer, viewOffset, viewBytes);
+};
+
+/** Copy a view's bytes bounded by explicitly captured facts: the view's
+ * internal slots are only read through an explicitly sized window, so
+ * lying accessors cannot enlarge the transport. */
+const copyViewBytes = (
+  viewBuffer: ArrayBufferLike,
+  viewOffset: number,
+  viewBytes: number,
+): ArrayBuffer => {
+  const copy = new ArrayBuffer(viewBytes);
+  new Uint8Array(copy).set(new Uint8Array(viewBuffer, viewOffset, viewBytes));
+  return copy;
 };
 
 /** Copy buffer bytes by construction, never by dispatching to the
@@ -194,24 +215,32 @@ const copyBufferBytes = (source: ArrayBuffer, expectedLength: number): ArrayBuff
   return copy;
 };
 
+const copyArchiveMeta = (meta: ArchiveWorkerExpected['archive']): ArchiveWorkerExpected['archive'] => ({
+  bytes: meta.bytes,
+  sha256: meta.sha256,
+});
+
 /** Copy the expected manifest so no side shares another's verification
  * basis: the client freezes the caller's request at submission, and the
  * posted request is a separate copy an in-process port cannot mutate. */
-const copyExpected = (source: ArchiveWorkerExpected): ArchiveWorkerExpected => {
-  // Build a plain array element by element: an Array subclass's
-  // overridden map() could return its own collection and defeat the
-  // submission freeze.
-  // Read the collection exactly once: an accessor returning a fresh
-  // array per read could otherwise split the loop bound from the copied
-  // elements.
-  const sourceEntries = source.entries;
+const copyExpectedFrom = (
+  formatVersion: number,
+  archiveMeta: ArchiveWorkerExpected['archive'],
+  sourceEntries: readonly ArchiveWorkerExpectedEntry[],
+  entryTotal: number,
+): ArchiveWorkerExpected => {
+  // Every argument arrives pre-captured by the caller, so validation and
+  // this snapshot observe one collection and one set of scalars; each
+  // entry is copied element by element (an Array subclass's overridden
+  // map() could return its own collection), so no side shares another's
+  // verification basis.
   const entries: ArchiveWorkerExpectedEntry[] = [];
-  for (let index = 0; index < sourceEntries.length; index++) {
+  for (let index = 0; index < entryTotal; index++) {
     entries.push({ ...sourceEntries[index]! });
   }
   return {
-    formatVersion: source.formatVersion,
-    archive: { ...source.archive },
+    formatVersion,
+    archive: copyArchiveMeta(archiveMeta),
     entries,
   };
 };
@@ -267,6 +296,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       const limits: ArchiveWorkerLimits = request.limits === undefined
         ? defaultArchiveWorkerLimits()
         : { ...request.limits };
+      // Read the manifest reference exactly once: a switching accessor must
+      // not let the preflight validate one manifest while the snapshot
+      // copies another.
+      const sourceExpected = request.expected;
+      const sourceEntries = sourceExpected.entries;
+      const sourceEntryTotal = sourceEntries.length;
+      const sourceFormatVersion = sourceExpected.formatVersion;
       // Preflight the configuration before snapshotting the manifest: the
       // checks run on the caller's objects without allocating, and a
       // request that can never validate fails before a copied manifest
@@ -286,44 +322,61 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           code: 'limit',
           detail: 'ZIP decode deadline exceeds the platform timer range',
         };
-      } else if (request.expected.formatVersion !== PHASER_PACK_DELIVERY_VERSION) {
+      } else if (sourceFormatVersion !== PHASER_PACK_DELIVERY_VERSION) {
         preflight = {
           code: 'unsupported-zip',
-          detail: `Unsupported archive format version ${JSON.stringify(request.expected.formatVersion)}`,
+          detail: `Unsupported archive format version ${JSON.stringify(sourceFormatVersion)}`,
         };
-      } else if (request.expected.entries.length === 0) {
+      } else if (sourceEntryTotal === 0) {
         preflight = {
           code: 'invalid-structure',
           detail: 'ZIP v1 delivery archives require at least one expected entry',
         };
-      } else if (request.expected.entries.length > limits.entryCount) {
+      } else if (sourceEntryTotal > limits.entryCount) {
         preflight = {
           code: 'limit',
           detail: `ZIP decode expected manifest has more entries than the entry count limit ${limits.entryCount}`,
         };
-      } else if (request.expected.entries.length > ZIP_ENTRY_COUNT_CEILING) {
+      } else if (sourceEntryTotal > ZIP_ENTRY_COUNT_CEILING) {
         preflight = {
           code: 'limit',
-          detail: `ZIP decode expected manifest has ${request.expected.entries.length} entries, beyond the ZIP v1 entry count ceiling ${ZIP_ENTRY_COUNT_CEILING}`,
+          detail: `ZIP decode expected manifest has ${sourceEntryTotal} entries, beyond the ZIP v1 entry count ceiling ${ZIP_ENTRY_COUNT_CEILING}`,
         };
-      } else {
-        for (const entry of request.expected.entries) {
-          if (entry.path.length > limits.maxPathLength) {
+      }
+      const sourceArchiveMeta = sourceExpected.archive;
+      // Rejected requests keep an empty placeholder so nothing retains the
+      // copied manifest graph.
+      const rejectedManifest = (): ArchiveWorkerExpected => ({
+        formatVersion: sourceFormatVersion,
+        archive: copyArchiveMeta(sourceArchiveMeta),
+        entries: [],
+      });
+      let expected: ArchiveWorkerExpected = preflight === undefined
+        ? copyExpectedFrom(
+          sourceFormatVersion,
+          sourceArchiveMeta,
+          sourceEntries,
+          sourceEntryTotal,
+        )
+        : rejectedManifest();
+      // The path-bound scan runs on the snapshot itself, so exactly one
+      // read of each entry decides the bound — the count checks above
+      // have already guarded the allocation. A violation releases the
+      // copy back to the empty placeholder, matching every other
+      // preflight rejection; an already-rejected request skips the scan.
+      if (preflight === undefined) {
+        for (let index = 0; index < sourceEntryTotal; index++) {
+          const entryPath = expected.entries[index]!.path;
+          if (entryPath.length > limits.maxPathLength) {
             preflight = {
               code: 'limit',
               detail: `ZIP decode expected manifest has a path longer than the length limit ${limits.maxPathLength}`,
             };
+            expected = rejectedManifest();
             break;
           }
         }
       }
-      const expected: ArchiveWorkerExpected = preflight === undefined
-        ? copyExpected(request.expected)
-        : {
-          formatVersion: request.expected.formatVersion,
-          archive: { ...request.expected.archive },
-          entries: [],
-        };
       // Reject oversized archives before any transport copy is made; the
       // payload view is only materialized once the job acquires a slot.
       const payload = (): ArrayBuffer => exactArchiveBuffer(request.archive, transfer, limits);
@@ -677,11 +730,18 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             return;
           }
           if (message.type === 'entry') {
-            const entryShapeValid = typeof message.seq === 'number'
-              && Number.isSafeInteger(message.seq)
-              && typeof message.path === 'string'
-              && (message.method === 'store' || message.method === 'deflate')
-              && message.bytes instanceof ArrayBuffer;
+            // Read every field exactly once and validate the captured
+            // values: switching accessors must not let the shape check
+            // approve one value while later logic uses another.
+            const rawSeq: unknown = message.seq;
+            const rawPath: unknown = message.path;
+            const rawMethod: unknown = message.method;
+            const rawBytes: unknown = message.bytes;
+            const entryShapeValid = typeof rawSeq === 'number'
+              && Number.isSafeInteger(rawSeq)
+              && typeof rawPath === 'string'
+              && (rawMethod === 'store' || rawMethod === 'deflate')
+              && rawBytes instanceof ArrayBuffer;
             if (!entryShapeValid) {
               failWorker({
                 status: 'worker-error',
@@ -690,10 +750,14 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
               return;
             }
-            // Freeze the fields the async digest continuation reads: an
-            // in-process worker can mutate its response object after emit.
-            const seq = message.seq;
-            const path = message.path;
+            // Freeze the fields later reads use — the digest continuation
+            // and the delivered entry: an in-process worker can mutate its
+            // response object, or expose it through switching accessors.
+            const seq = rawSeq;
+            const path = rawPath;
+            const method = rawMethod;
+            const bytesBuffer = rawBytes;
+            const bytesLength = bytesBuffer.byteLength;
             if (seq !== outstandingSeq + 1) {
               failWorker({
                 status: 'worker-error',
@@ -716,8 +780,8 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             if (
               expectedEntry === undefined
               || path !== expectedEntry.path
-              || message.method !== expectedEntry.method
-              || message.bytes.byteLength !== expectedEntry.bytes
+              || method !== expectedEntry.method
+              || bytesLength !== expectedEntry.bytes
             ) {
               // A version-skewed or custom worker must not be able to swap
               // files under a decode that still reports success.
@@ -739,7 +803,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
               return;
             }
-            if (message.bytes.byteLength > limits.entryBytes) {
+            if (bytesLength > limits.entryBytes) {
               failWorker({
                 status: 'error',
                 code: 'limit',
@@ -755,7 +819,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               });
               return;
             }
-            deliveredBytes += message.bytes.byteLength;
+            deliveredBytes += bytesLength;
             if (deliveredBytes > limits.totalExpandedBytes) {
               failWorker({
                 status: 'error',
@@ -772,7 +836,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // consumer must both observe the same immutable snapshot. A
               // detached buffer throws here and must fail the job, not the
               // listener.
-              entryBytes = new Uint8Array(copyBufferBytes(message.bytes, expectedEntry.bytes));
+              entryBytes = new Uint8Array(copyBufferBytes(bytesBuffer, expectedEntry.bytes));
             } catch (error) {
               failWorker({
                 status: 'worker-error',
@@ -783,7 +847,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             }
             const value: BoundedZipDecodeEntry = {
               path,
-              method: message.method,
+              method,
               bytes: entryBytes,
             };
             // The client verifies the digest itself: a custom worker runs no
@@ -847,21 +911,31 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             return;
           }
           if (message.type === 'done') {
-            const doneShapeValid = typeof message.status === 'string'
-              && (message.archive === undefined || message.archive instanceof ArrayBuffer)
-              && (message.status === 'completed'
-                || message.status === 'cancelled'
-                || message.status === 'deadline'
-                || message.status === 'error')
-              && (message.status !== 'completed'
-                || transfer === (message.archive !== undefined))
-              && (message.code === undefined || typeof message.code === 'string')
-              && (message.detail === undefined || typeof message.detail === 'string')
-              && typeof message.stats === 'object'
-              && message.stats !== null
-              && validCounter(message.stats.entries)
-              && validCounter(message.stats.expandedBytes)
-              && validElapsed(message.stats.elapsedMs);
+            // Read every terminal field exactly once: a switching
+            // accessor must not let the shape check validate one status
+            // while the settlement snapshots another.
+            const doneStatus = message.status;
+            const doneArchive = message.archive;
+            const doneCode = message.code;
+            const doneDetail = message.detail;
+            const doneStats = message.stats;
+            const statsIsObject = typeof doneStats === 'object' && doneStats !== null;
+            const doneStatEntries = statsIsObject ? doneStats.entries : undefined;
+            const doneStatExpanded = statsIsObject ? doneStats.expandedBytes : undefined;
+            const doneStatElapsed = statsIsObject ? doneStats.elapsedMs : undefined;
+            const doneShapeValid = typeof doneStatus === 'string'
+              && (doneArchive === undefined || doneArchive instanceof ArrayBuffer)
+              && (doneStatus === 'completed'
+                || doneStatus === 'cancelled'
+                || doneStatus === 'deadline'
+                || doneStatus === 'error')
+              && (doneStatus !== 'completed'
+                || transfer === (doneArchive !== undefined))
+              && (doneCode === undefined || typeof doneCode === 'string')
+              && (doneDetail === undefined || typeof doneDetail === 'string')
+              && validCounter(doneStatEntries)
+              && validCounter(doneStatExpanded)
+              && validElapsed(doneStatElapsed);
             if (!doneShapeValid) {
               failWorker({
                 status: 'worker-error',
@@ -876,15 +950,21 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // later. Snapshotting before the archive checks also lets
             // late-failure translations preserve the worker's statistics.
             const terminal = {
-              status: message.status,
-              code: message.code,
-              detail: message.detail,
-              stats: { ...message.stats },
+              status: doneStatus,
+              code: doneCode,
+              detail: doneDetail,
+              // The shape check above validated each counter as a
+              // non-negative number; the casts only carry that fact.
+              stats: {
+                entries: doneStatEntries as number,
+                expandedBytes: doneStatExpanded as number,
+                elapsedMs: doneStatElapsed as number,
+              },
             };
             terminalStats = terminal.stats;
             if (
-              transfer && message.archive !== undefined
-              && message.archive.byteLength !== archiveByteLength
+              transfer && doneArchive !== undefined
+              && doneArchive.byteLength !== archiveByteLength
             ) {
               // A different-length buffer cannot be the caller's detached
               // archive, so ownership was not restored.
@@ -1013,7 +1093,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 ...(archiveBuffer !== undefined ? { archiveBuffer } : {}),
               });
             };
-            if (transfer && message.archive !== undefined) {
+            if (transfer && doneArchive !== undefined) {
               // A same-length substitute buffer would silently replace the
               // caller's archive, so ownership is only restored after the
               // digest matches the bytes actually submitted (which may
@@ -1023,7 +1103,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // mutate it after verification.
               let returned: ArrayBuffer;
               try {
-                returned = copyBufferBytes(message.archive, archiveByteLength);
+                returned = copyBufferBytes(doneArchive, archiveByteLength);
               } catch (error) {
                 // An unrecoverable buffer must settle the job instead of
                 // escaping the listener and stalling every pending pull.
@@ -1174,7 +1254,13 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         // Copy the manifest and limits for the worker: an in-process port
         // shares nothing with the client's verification basis, so it cannot
         // mutate the checks its own responses are judged against.
-        const postedExpected = copyExpected(expected);
+        const postedEntries = expected.entries;
+        const postedExpected = copyExpectedFrom(
+          expected.formatVersion,
+          expected.archive,
+          postedEntries,
+          postedEntries.length,
+        );
         // Re-check after the copy construction: preparation work between
         // the checks must not hand the archive off past the deadline.
         if (preSubmitGuard()) {
@@ -1210,14 +1296,50 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             },
           }, transfer ? [archivePayload] : []);
         } catch (error) {
+          // A throwing post does not consume the transfer list, so the
+          // submission may still be recoverable. Verify it like every
+          // other restoration path — the digest also catches an in-place
+          // mutation of a subclassed buffer between the pre-submit hash
+          // and the failed post — before returning it with the settlement.
+          let restored: ArrayBuffer | undefined;
+          let restoreFailure: string | undefined;
+          if (!finished && transfer && archivePayload.byteLength === archiveByteLength) {
+            try {
+              // Copy synchronously before any await: whatever verifies
+              // below is a client-owned snapshot an in-process port can
+              // no longer reach, even one that stashed the payload from
+              // the transfer list and still threw. The copy shares the
+              // try so an allocation failure settles the same way.
+              const candidate = copyBufferBytes(archivePayload, archiveByteLength);
+              const redigest = await digestOf(new Uint8Array(candidate));
+              if (redigest === submittedArchiveDigest) {
+                restored = candidate;
+              } else {
+                restoreFailure = 'the submission digest no longer matches';
+              }
+            } catch (restoreError) {
+              // An unverifiable buffer is reported as lost below, with the
+              // reason attached for debugging ownership loss.
+              restoreFailure = String(restoreError);
+            }
+          }
+          // A settlement landing while the re-digest pends has already
+          // reported the archive conservatively as lost; finalize is
+          // idempotent, so the verified snapshot is abandoned in that race
+          // instead of resurrecting a decided settlement.
           if (!finished) {
             // Posting the decode request spends the job budget: a post
             // that blocks past the deadline and then throws settles as
             // the deadline, like every other late failure.
-            failWorker({
-              status: 'worker-error',
-              code: 'worker-error',
-              detail: `Could not post the decode request: ${String(error)}`,
+            finalize({
+              ...translateLateFailure({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: restoreFailure === undefined
+                  ? `Could not post the decode request: ${String(error)}`
+                  : `Could not post the decode request: ${String(error)}; the submission could not be restored (${restoreFailure})`,
+              }),
+              ...(restored !== undefined ? { archiveBuffer: restored } : {}),
             });
           }
           return;
