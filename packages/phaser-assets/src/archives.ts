@@ -125,6 +125,9 @@ const validElapsed = (value: unknown): boolean => typeof value === 'number'
   && Number.isFinite(value) && value >= 0;
 /** Shared wording for settlements where the worker itself overran the deadline. */
 const DEADLINE_MISS_DETAIL = 'The archive decode worker missed its deadline';
+/** The ZIP end record counts entries in 16 bits; no supported archive
+ * can carry more, so larger manifests are rejected before any snapshot. */
+const ZIP_ENTRY_COUNT_CEILING = 0xffff;
 /** The deadline expired client-side, before the job was even submitted. */
 const PRE_SUBMIT_DEADLINE_DETAIL
   = 'The archive decode deadline expired before the job was submitted';
@@ -173,6 +176,21 @@ const exactArchiveBuffer = (
     );
   }
   return new Uint8Array(archive).buffer;
+};
+
+/** Copy buffer bytes by construction, never by dispatching to the
+ * untrusted buffer's polymorphic slice: an override returning `this`
+ * would hand the caller a view over storage another party can mutate. */
+const copyBufferBytes = (source: ArrayBuffer, expectedLength: number): ArrayBuffer => {
+  if (source.byteLength !== expectedLength) {
+    // A detached buffer reads as zero-length here; the mismatch is the
+    // detachment signal that a polymorphic slice used to provide as a
+    // TypeError, so the existing catches keep failing the job.
+    throw new TypeError('buffer is detached or has an unexpected length');
+  }
+  const copy = new ArrayBuffer(expectedLength);
+  new Uint8Array(copy).set(new Uint8Array(source));
+  return copy;
 };
 
 /** Copy the expected manifest so no side shares another's verification
@@ -263,6 +281,11 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         preflight = {
           code: 'limit',
           detail: `ZIP decode expected manifest has more entries than the entry count limit ${limits.entryCount}`,
+        };
+      } else if (request.expected.entries.length > ZIP_ENTRY_COUNT_CEILING) {
+        preflight = {
+          code: 'limit',
+          detail: `ZIP decode expected manifest has ${request.expected.entries.length} entries, beyond the ZIP v1 entry count ceiling ${ZIP_ENTRY_COUNT_CEILING}`,
         };
       } else {
         for (const entry of request.expected.entries) {
@@ -377,9 +400,11 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           });
         } catch (error) {
           // A worker that cannot accept the release would otherwise wait for
-          // an acknowledgement that never arrived.
+          // an acknowledgement that never arrived. Release posts spend the
+          // job budget, so one that blocks past the deadline settles as the
+          // deadline like every other late failure.
           if (!finished) {
-            finalize({
+            failWorker({
               status: 'worker-error',
               code: 'worker-error',
               detail: `Could not post the entry release: ${String(error)}`,
@@ -728,7 +753,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // consumer must both observe the same immutable snapshot. A
               // detached buffer throws here and must fail the job, not the
               // listener.
-              entryBytes = new Uint8Array(message.bytes.slice(0));
+              entryBytes = new Uint8Array(copyBufferBytes(message.bytes, expectedEntry.bytes));
             } catch (error) {
               failWorker({
                 status: 'worker-error',
@@ -979,7 +1004,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // mutate it after verification.
               let returned: ArrayBuffer;
               try {
-                returned = message.archive.slice(0);
+                returned = copyBufferBytes(message.archive, archiveByteLength);
               } catch (error) {
                 // An unrecoverable buffer must settle the job instead of
                 // escaping the listener and stalling every pending pull.
@@ -1084,7 +1109,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           // transferred bytes must describe the same immutable snapshot
           // even if the caller mutates its view while hashing runs. The
           // frozen copy is what gets transferred and later returned.
-          archivePayload = archivePayload.slice(0);
+          archivePayload = copyBufferBytes(archivePayload, archiveByteLength);
         }
         // Both transport modes digest the submission: transfer mode
         // authenticates the returned buffer with it, and every mode needs
@@ -1177,7 +1202,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         }
       };
       void start().catch((error) => {
-        finalize({
+        // Unexpected startup failures — a throwing transfer snapshot or
+        // listener registration — follow the decided cause when the budget
+        // already elapsed while they ran.
+        failWorker({
           status: 'worker-error',
           code: 'worker-error',
           detail: `Starting the decode job failed: ${String(error)}`,

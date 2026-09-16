@@ -2805,9 +2805,13 @@ describe('bounded ZIP decode client', () => {
       transferArchive: true,
     });
     await waitForDecodePost(worker);
-    class PoisonedBuffer extends ArrayBuffer {
-      override slice(): ArrayBuffer {
-        throw new Error('no slice for you');
+    // The length check reads the real size; the snapshot allocation then
+    // reads an unallocatable one, so the copy itself fails.
+    let lengthReads = 0;
+    class ErraticBuffer extends ArrayBuffer {
+      override get byteLength(): number {
+        lengthReads++;
+        return lengthReads === 1 ? zip.archive.length : 2 ** 53;
       }
     }
     const cancelling = job.cancel();
@@ -2815,13 +2819,236 @@ describe('bounded ZIP decode client', () => {
       type: 'done',
       jobId: 1,
       status: 'completed',
-      archive: new PoisonedBuffer(zip.archive.length),
+      archive: new ErraticBuffer(zip.archive.length),
       stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
     });
     const status = await cancelling;
     expect(status.status).toBe('cancelled');
     expect(status.detail).toContain('could not be recovered');
     expect(status.archiveLost).toBe(true);
+  });
+
+  it('copies returned archives out of aliased buffers', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    class AliasingBuffer extends ArrayBuffer {
+      override slice(): ArrayBuffer {
+        return this;
+      }
+    }
+    const aliased = new AliasingBuffer(zip.archive.length);
+    new Uint8Array(aliased).set(zip.archive);
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    await waitForDecodePost(worker);
+    const cancelling = job.cancel();
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'cancelled',
+      archive: aliased,
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    });
+    const status = await cancelling;
+    expect(status.status).toBe('cancelled');
+    // The settlement holds a client-owned copy: a slice() override
+    // returning the same buffer cannot leave worker-mutable bytes in the
+    // restored archive.
+    expect(status.archiveBuffer).not.toBe(aliased);
+    new Uint8Array(aliased)[0] = (new Uint8Array(aliased)[0] ?? 0) ^ 0xff;
+    expect(new Uint8Array(status.archiveBuffer!)[0]).toBe(zip.archive[0]);
+  });
+
+  it('preserves the deadline when release posting throws late', async () => {
+    const realNow = performance.now.bind(performance);
+    // The budget (60s) cannot be hit by the real timer during the test;
+    // the clock flips past it exactly when the release post is attempted,
+    // so its throwing settlement observes the expired budget.
+    let releaseAttempted = false;
+    vi.spyOn(performance, 'now').mockImplementation(() => {
+      return releaseAttempted ? realNow() + 120000 : realNow();
+    });
+    try {
+      const worker = createFakeWorker();
+      worker.blackhole();
+      worker.throwOnReleasePost(true);
+      const posted = worker.postMessage.bind(worker);
+      worker.postMessage = (message: ArchiveWorkerRequest): void => {
+        if (message.type === 'release') {
+          releaseAttempted = true;
+        }
+        posted(message);
+      };
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): FakeWorker => worker,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive,
+        expected: zip.expected,
+        limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 60000 },
+      });
+      const iterator = job.entries[Symbol.asyncIterator]();
+      const firstPull = iterator.next();
+      await waitForDecodePost(worker);
+      worker.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 1,
+        path: 'grove/grove.png',
+        method: 'store',
+        bytes: pngBytes.slice().buffer as ArrayBuffer,
+      });
+      const first = await firstPull;
+      expect(first.done).toBe(false);
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+      expect(status.detail).toContain('Could not post the entry release');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('preserves the deadline when startup work throws late', async () => {
+    const realNow = performance.now.bind(performance);
+    let calls = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => {
+      calls++;
+      return calls === 1 ? realNow() : realNow() + 5000;
+    });
+    try {
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): ZipDecodeWorkerLike => ({
+          postMessage(): void {},
+          addEventListener(): void {
+            // Listener registration blocks past the budget, then throws.
+            throw new Error('listener registration failed');
+          },
+          terminate(): void {},
+        }),
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive,
+        expected: zip.expected,
+        limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 1000 },
+      });
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+      expect(status.detail).toContain('Starting the decode job failed');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('rejects manifests beyond the ZIP entry count ceiling', async () => {
+    const createWorker = vi.fn(createFakeWorker);
+    const decoder = createBoundedZipDecoder({ createWorker });
+    const zip = fixture();
+    const huge = {
+      ...zip.expected,
+      entries: new Array(0xffff + 1).fill(zip.expected.entries[0]),
+    };
+    const job = decoder.decode({
+      archive: zip.archive,
+      expected: huge,
+      limits: { ...defaultArchiveWorkerLimits(), entryCount: 0xffff * 2 },
+    });
+    const status = await job.result;
+    expect(status.code).toBe('limit');
+    expect(status.detail).toContain('beyond the ZIP v1 entry count ceiling 65535');
+    expect(createWorker).not.toHaveBeenCalled();
+  });
+
+  it('copies entry bytes out of aliased buffers', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    class AliasingBuffer extends ArrayBuffer {
+      override slice(): ArrayBuffer {
+        return this;
+      }
+    }
+    const aliased = new AliasingBuffer(pngBytes.length);
+    new Uint8Array(aliased).set(pngBytes);
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await waitForDecodePost(worker);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: aliased,
+    });
+    const first = await firstPull;
+    expect(first.done).toBe(false);
+    // A slice() override returning the same buffer cannot leave the
+    // consumer holding worker-mutable bytes.
+    new Uint8Array(aliased)[0] = (new Uint8Array(aliased)[0] ?? 0) ^ 0xff;
+    expect(Buffer.from(first.value.bytes).equals(Buffer.from(pngBytes))).toBe(true);
+  });
+
+  it('freezes subclassed submissions before hashing', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    class AliasingBuffer extends ArrayBuffer {
+      override slice(): ArrayBuffer {
+        return this;
+      }
+    }
+    const aliased = new AliasingBuffer(zip.archive.length);
+    new Uint8Array(aliased).set(zip.archive);
+    const subtle = crypto.subtle;
+    const realDigest = subtle.digest.bind(subtle);
+    let releaseFreeze: (() => void) | undefined;
+    let firstDigest = true;
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: (algorithm: AlgorithmIdentifier, data: BufferSource): Promise<ArrayBuffer> => {
+          if (!firstDigest) {
+            return realDigest(algorithm, data);
+          }
+          firstDigest = false;
+          return new Promise((resolve) => {
+            releaseFreeze = (): void => {
+              void realDigest(algorithm, data).then(resolve);
+            };
+          });
+        },
+      },
+    });
+    try {
+      const job = decoder.decode({
+        archive: new Uint8Array(aliased),
+        expected: zip.expected,
+        transferArchive: true,
+      });
+      await tick(2);
+      // Mutate the caller's subclassed view while the pre-transfer hash
+      // pends; the submission must have been frozen to the original bytes.
+      new Uint8Array(aliased)[3] = (new Uint8Array(aliased)[3] ?? 0) ^ 0xff;
+      releaseFreeze!();
+      for await (const _entry of job.entries) {
+        void _entry;
+      }
+      const status = await job.result;
+      expect(status.status).toBe('completed');
+      expect(Buffer.from(status.archiveBuffer!)).toEqual(Buffer.from(zip.archive));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {

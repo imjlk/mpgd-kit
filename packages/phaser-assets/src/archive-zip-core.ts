@@ -483,12 +483,14 @@ export async function* decodeZipV1Entries(
   if (inputArchive.length > limits.archiveBytes) {
     throw new ZipDecodeError('limit', 'ZIP archive exceeds the archive byte limit');
   }
-  // One private snapshot, taken only after the size bounds passed:
-  // WebCrypto authenticates the bytes as of its call, so every later read
-  // must observe the same bytes even if the caller mutates its view while
-  // the archive digest pends.
-  const archive = new Uint8Array(inputArchive);
+  // The budget starts before the private snapshot: copying a large
+  // archive consumes wall clock, and that time is part of the decode
+  // deadline. WebCrypto then authenticates the bytes as of its call, so
+  // every later read observes the same snapshot even if the caller mutates
+  // its view while the archive digest pends.
   const deadlineAt = clock() + limits.decodeDeadlineMs;
+  assertControl(wrappedControl, clock, deadlineAt);
+  const archive = new Uint8Array(inputArchive);
   assertControl(wrappedControl, clock, deadlineAt);
   const archiveDigest = await digestOf(archive);
   if (archiveDigest !== expected.archive.sha256) {

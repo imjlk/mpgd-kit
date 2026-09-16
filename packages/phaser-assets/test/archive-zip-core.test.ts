@@ -316,6 +316,39 @@ describe('bounded ZIP decode core', () => {
     }
   });
 
+  it('charges the snapshot copy to the decode budget', async () => {
+    const fixture = buildV1Zip([
+      { path: 'a.bin', data: new Uint8Array(4), method: 'store' as const },
+    ]);
+    let digestCalls = 0;
+    const subtle = crypto.subtle;
+    vi.stubGlobal('crypto', {
+      subtle: {
+        digest: (...args: Parameters<typeof subtle.digest>): Promise<ArrayBuffer> => {
+          digestCalls++;
+          return subtle.digest(...args);
+        },
+      },
+    });
+    try {
+      let clock = 0;
+      await expect((async () => {
+        for await (const _entry of decodeZipV1Entries(
+          fixture.archive,
+          fixture.expected,
+          limits({ decodeDeadlineMs: 10 }),
+          { now: (): number => (clock += 6) },
+        )) {
+          void _entry;
+        }
+      })()).rejects.toMatchObject({ code: 'deadline' });
+      // The budget expired at the snapshot copy, before any digest work.
+      expect(digestCalls).toBe(0);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it('stops when the consumer cancels without publishing later entries as success', async () => {
     const fixture = buildV1Zip(mixedEntries);
     const seen: string[] = [];
