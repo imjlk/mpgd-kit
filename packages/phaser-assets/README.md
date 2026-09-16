@@ -240,9 +240,12 @@ final status, so caller mutations during submission cannot desynchronize
 the verification digest. The
 returned buffer is verified to be the exact bytes submitted — which may
 legitimately differ from the manifest — so a completed job's `archiveBuffer` is
-not a manifest verification. Transferred jobs also hash the archive on the
-client before submission, and that time counts against the decode deadline;
-size `decodeDeadlineMs` accordingly for large archives. Transport copies and
+not a manifest verification. Jobs hash the archive on the client before
+submission, and that time counts against the decode deadline;
+size `decodeDeadlineMs` accordingly for large archives. The submission digest
+also backs the completion boundary: a worker that skips the core's
+archive-integrity check cannot complete an archive the manifest rejects.
+Transport copies and
 client-side verification hashes sit outside the decode output limits but
 within the job's wall clock. The deadline is one absolute budget over the
 job's execution: it starts when the job acquires a concurrency slot (queue

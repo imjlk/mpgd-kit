@@ -233,7 +233,30 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       const limits: ArchiveWorkerLimits = request.limits === undefined
         ? defaultArchiveWorkerLimits()
         : { ...request.limits };
-      const expected = copyExpected(request.expected);
+      // Bound the manifest before snapshotting it: a manifest with more
+      // entries than the count limit, or paths beyond the length limit, can
+      // never validate, so the job fails on that bound instead of
+      // allocating a copied graph of the oversized manifest first. The
+      // placeholder is never posted — start() rejects the job before any
+      // transport work.
+      let manifestOversized = false;
+      if (request.expected.entries.length > limits.entryCount) {
+        manifestOversized = true;
+      } else {
+        for (const entry of request.expected.entries) {
+          if (entry.path.length > limits.maxPathLength) {
+            manifestOversized = true;
+            break;
+          }
+        }
+      }
+      const expected: ArchiveWorkerExpected = manifestOversized
+        ? {
+          formatVersion: request.expected.formatVersion,
+          archive: { ...request.expected.archive },
+          entries: [],
+        }
+        : copyExpected(request.expected);
       // Reject oversized archives before any transport copy is made; the
       // payload view is only materialized once the job acquires a slot.
       const payload = (): ArrayBuffer => exactArchiveBuffer(request.archive, transfer, limits);
@@ -542,6 +565,14 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           });
           return;
         }
+        if (manifestOversized) {
+          finalize({
+            status: 'error',
+            code: 'limit',
+            detail: 'ZIP decode expected manifest exceeds the entry count or path length limit',
+          });
+          return;
+        }
         // The execution budget starts when the slot is acquired, before
         // worker creation, the transport copy, the pre-transfer hash and the
         // decode post; queue wait is not part of the budget, and everything
@@ -828,6 +859,19 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                   detail: 'The archive decode worker completed without delivering every expected entry',
                 };
               } else if (
+                archiveByteLength !== expected.archive.bytes
+                || submittedArchiveDigest === undefined
+                || submittedArchiveDigest !== expected.archive.sha256
+              ) {
+                // A custom worker runs no core: without this check it could
+                // complete an archive the manifest rejects. Archive
+                // integrity is mandatory on every path.
+                completionRejection = {
+                  status: 'error',
+                  code: 'archive-mismatch',
+                  detail: 'The archive decode worker completed an archive that does not match the expected manifest archive',
+                };
+              } else if (
                 terminal.stats.entries !== verifiedEntries
                 || terminal.stats.expandedBytes !== deliveredBytes
               ) {
@@ -1018,39 +1062,41 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           // even if the caller mutates its view while hashing runs. The
           // frozen copy is what gets transferred and later returned.
           archivePayload = archivePayload.slice(0);
-          // Digest the frozen submission so a returned buffer is compared
-          // against the bytes actually submitted — not the manifest, which
-          // the submission itself may legitimately fail to match.
-          try {
-            submittedArchiveDigest = await digestOf(new Uint8Array(archivePayload));
-          } catch (error) {
-            // A cause decided while the hash pended keeps its settlement:
-            // the hash failure follows the decided ending like any other
-            // late failure.
-            if (error instanceof ZipDecodeError && error.code === 'unsupported') {
-              failWorker({
-                status: 'unsupported', code: 'unsupported', detail: error.message,
-              });
-            } else if (error instanceof ZipDecodeError) {
-              failWorker({
-                status: 'error', code: error.code, detail: error.message,
-              });
-            } else {
-              failWorker({
-                status: 'worker-error',
-                code: 'worker-error',
-                detail: `Could not hash the archive for transfer: ${String(error)}`,
-              });
-            }
-            return;
+        }
+        // Both transport modes digest the submission: transfer mode
+        // authenticates the returned buffer with it, and every mode needs
+        // it so a custom worker that skips the core's archive-integrity
+        // check cannot complete an archive the manifest rejects. The hash
+        // spends the same absolute deadline.
+        try {
+          submittedArchiveDigest = await digestOf(new Uint8Array(archivePayload));
+        } catch (error) {
+          // A cause decided while the hash pended keeps its settlement:
+          // the hash failure follows the decided ending like any other
+          // late failure.
+          if (error instanceof ZipDecodeError && error.code === 'unsupported') {
+            failWorker({
+              status: 'unsupported', code: 'unsupported', detail: error.message,
+            });
+          } else if (error instanceof ZipDecodeError) {
+            failWorker({
+              status: 'error', code: error.code, detail: error.message,
+            });
+          } else {
+            failWorker({
+              status: 'worker-error',
+              code: 'worker-error',
+              detail: `Could not hash the archive for submission: ${String(error)}`,
+            });
           }
-          // The hash await yields to the event loop: honour a settlement
-          // that landed while hashing instead of transferring the caller's
-          // buffer anyway. The first cause wins, matching the
-          // terminal-response translation.
-          if (finished) {
-            return;
-          }
+          return;
+        }
+        // The hash await yields to the event loop: honour a settlement
+        // that landed while hashing instead of submitting the buffer
+        // anyway. The first cause wins, matching the terminal-response
+        // translation.
+        if (finished) {
+          return;
         }
         if (preSubmitGuard()) {
           return;

@@ -1206,6 +1206,7 @@ describe('bounded ZIP decode client', () => {
       const iterator = job.entries[Symbol.asyncIterator]();
       const firstPull = iterator.next();
       await vi.advanceTimersByTimeAsync(0);
+      await advanceUntilDecodePost(worker);
       worker.emit({
         type: 'entry',
         jobId: 1,
@@ -2540,6 +2541,9 @@ describe('bounded ZIP decode client', () => {
       });
       const iterator = job.entries[Symbol.asyncIterator]();
       await vi.advanceTimersByTimeAsync(0);
+      for (let attempt = 0; attempt < 50 && !posted.some((request) => request.type === 'decode'); attempt++) {
+        await vi.advanceTimersByTimeAsync(0);
+      }
       expect(posted.some((request) => request.type === 'decode')).toBe(true);
       listener?.({
         data: {
@@ -2611,6 +2615,78 @@ describe('bounded ZIP decode client', () => {
     const status = await job.result;
     expect(status.status).toBe('error');
     expect(status.code).toBe('worker-error');
+  });
+
+  it('rejects completions of archives the manifest rejects', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const corrupted = zip.archive.slice();
+    corrupted[5] = (corrupted[5] ?? 0) ^ 0xff;
+    const job = decoder.decode({ archive: corrupted, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await waitForDecodePost(worker);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await firstPull).done).toBe(false);
+    const secondPull = iterator.next();
+    await tick(2);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 2,
+      path: 'grove/grove.json',
+      method: 'deflate',
+      bytes: jsonBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await secondPull).done).toBe(false);
+    // A custom worker can complete with consistent entries and statistics
+    // while skipping the core's archive check; the client's own submission
+    // digest still rejects the corrupt archive.
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      stats: { entries: 2, expandedBytes: pngBytes.length + jsonBytes.length, elapsedMs: 0 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('error');
+    expect(status.code).toBe('archive-mismatch');
+    expect(status.detail).toContain('does not match the expected manifest archive');
+  });
+
+  it('rejects manifests larger than the configured bounds', async () => {
+    const createWorker = vi.fn(createFakeWorker);
+    const decoder = createBoundedZipDecoder({ createWorker });
+    const zip = buildV1Zip([
+      { path: 'grove/one.png', data: pngBytes, method: 'store' },
+      { path: 'grove/two.json', data: jsonBytes, method: 'deflate' },
+    ]);
+    const oversizeCount = decoder.decode({
+      archive: zip.archive,
+      expected: zip.expected,
+      limits: { ...defaultArchiveWorkerLimits(), entryCount: 1 },
+    });
+    expect((await oversizeCount.result).code).toBe('limit');
+    expect((await oversizeCount.result).detail).toContain('entry count or path length limit');
+    const oversizePath = decoder.decode({
+      archive: zip.archive,
+      expected: zip.expected,
+      limits: { ...defaultArchiveWorkerLimits(), maxPathLength: 4 },
+    });
+    expect((await oversizePath.result).code).toBe('limit');
+    // Both jobs failed before any worker was created or manifest copied.
+    expect(createWorker).not.toHaveBeenCalled();
   });
 
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
