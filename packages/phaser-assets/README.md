@@ -201,6 +201,103 @@ delivery artifacts against this contract; see
 [Asset pack delivery builds](../../docs/ASSET_PACK_DELIVERY.md) for the config
 schema, determinism guarantees and ZIP v1 scope.
 
+## Archive decoding
+
+`@mpgd/phaser-assets/archives` decodes the ZIP v1 delivery profile produced by
+`mpgd assets build-packs` under explicit resource bounds. Decoding accepts only
+that profile — STORE and DEFLATE entries with the writer's fixed metadata — and
+rejects encrypted, ZIP64, split, symlinked, corrupt, truncated, duplicated,
+traversal-carrying or manifest-diverging archives instead of repairing them;
+the writer requires 1–65,535 entries per archive, so empty manifests are
+rejected before any work starts.
+Archive and per-entry integrity (lengths and SHA-256) is mandatory; there is no
+optional-integrity mode here, unlike the files loader. SHA-256 requires a
+secure context (HTTPS or localhost), mirroring file integrity.
+
+Output is bounded while inflating, not after the fact: each entry's produced
+bytes are counted against the per-entry and total-expanded limits as they come
+out of the inflater, using fflate's streaming `Inflate` (the DEFLATE algorithm
+itself is not reimplemented). These limits bound observable decoded output;
+they are not a proof of total process memory. Independent limits cover archive
+bytes, entry count, path length, a decode deadline and concurrent jobs.
+
+Decoding runs in a worker the application deploys: bundle
+`@mpgd/phaser-assets/archive-worker` as a module worker (the example re-exports
+it as its own worker entry and references it with
+`new Worker(new URL(...), { type: 'module' })`), then pass a factory to
+`createBoundedZipDecoder`. Importing the client module never creates workers,
+fetches or timers; environments that cannot create workers fail with a clear
+`unsupported` error — there is no silent main-thread fallback for large
+archives. The worker posts at most one decoded entry ahead: releasing the
+credit accompanies each handover once the entry's digest verifies, so a slow
+consumer never queues unbounded
+bytes. Each delivered entry is copied into client-owned storage and re-verified
+against the manifest digest before it reaches the consumer, so a custom worker
+cannot swap bytes under a success status. By default the archive buffer is
+cloned for transport (the caller's
+buffer is never detached); opting into `transferArchive` requires an
+exact-fit, non-shared buffer — views into larger buffers or shared memory
+are rejected with `unsupported` — and freezes the
+submission once into a client-owned snapshot, transfers that snapshot
+without a second copy, and returns the exact submitted snapshot with the
+final status, so caller mutations during submission cannot desynchronize
+the verification digest. The
+returned buffer is verified to be the exact bytes submitted — which may
+legitimately differ from the manifest — so a completed job's `archiveBuffer` is
+not a manifest verification. Jobs hash the archive on the client before
+submission, and that time counts against the decode deadline;
+size `decodeDeadlineMs` accordingly for large archives. The submission digest
+also backs the completion boundary: a worker that skips the core's
+archive-integrity check cannot complete an archive the manifest rejects.
+Transport copies and
+client-side verification hashes sit outside the decode output limits but
+within the job's wall clock. The deadline is one absolute budget over the
+job's execution: it starts when the job acquires a concurrency slot (queue
+wait is not counted) and is spent by worker creation, the transport copy,
+the client hash, the worker's decode, entry verification and the
+returned-archive verification. The worker receives only the unspent
+remainder of the budget, and the client keeps deadline authority — a
+completion landing after the deadline stays a `deadline` result even when
+it arrives inside the cleanup grace, and a submission preparation that
+outlasts the budget ends the job before the archive is ever posted.
+`cancelGraceMs` is the cooperative cleanup window after a cancellation or
+deadline has been decided (the worker gets that long to finish and return
+buffers); it never widens the deadline. Limits and the expected manifest
+are snapshotted when `decode` is called, so mutating the request objects
+afterwards cannot change an in-flight job's checks.
+
+Jobs are cancellable: a cancelled job stops producing entries, its iterator
+ends, and late worker messages cannot flip the decided outcome — a
+completion, failure or echo arriving after a cancellation or deadline
+settles as the decided cause rather than the late status. Cancelling again
+shares the same cleanup window and
+settlement. Worker
+crashes, invalid messages and missed deadlines surface as distinct result
+statuses (`worker-error`, `deadline`) after best-effort termination. Each job
+uses one fresh worker; concurrency across jobs is capped by
+`maxConcurrentDecodes`. Loader-based `files` delivery is unaffected: nothing
+about the decoder or its worker is imported by `/packs` users.
+
+### Supported scope
+
+This decoder supports exactly one product path: ZIP v1 archives produced by
+the kit builder (`mpgd assets build-packs`), decoded by an
+application-deployed module worker, against a valid manifest and limit
+options, with explicit handling of cancellation, deadlines, errors and
+malformed protocol messages. Behavior that was explicitly supported before
+remains supported.
+
+The client validates every worker message (shape, sequencing, digests,
+limits, statistics, buffer identity) and defends the decoded data against a
+misbehaving worker. It does not defend the JavaScript runtime itself:
+arbitrary hostile objects, Proxy traps, prototype tampering or adversarial
+worker implementations outside `ZipDecodeWorkerLike` are out of scope.
+Buffers supplied by the worker must be genuine `ArrayBuffer`s (any realm;
+shared, detached or forged buffers are rejected), and every message field
+is read through a guarded boundary that turns a throwing getter into a
+typed job failure. This boundary discipline is why the file digests, output
+limits and cleanup checks below are never weakened by it.
 See `examples/asset-packs` in the repository for two build layouts and executable
-fault/lifetime tests. Adding this API does not make generated games depend on the
+fault/lifetime tests, including a real module-worker decode scenario. Adding
+this API does not make generated games depend on the
 sample or require remote hosting.

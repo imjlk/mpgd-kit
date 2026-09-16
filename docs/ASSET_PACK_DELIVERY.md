@@ -120,6 +120,19 @@ The report lists written/unchanged files with sizes and digests, per-archive
 entry counts and methods, and source-versus-archive byte totals. It contains
 only measured or computed facts — no performance or memory conclusions.
 
+## Bounded decoding
+
+`@mpgd/phaser-assets/archives` consumes this same manifest and ZIP v1 profile —
+no second manifest or ZIP dialect. The pure core verifies the archive digest
+and structure first, then yields entries one at a time, counting actually
+inflated output against the configured limits (archive bytes, entry bytes,
+total expanded bytes, entry count, path length, decode deadline). The worker
+entry `@mpgd/phaser-assets/archive-worker` is deployed by the application
+(never extracted from an asset archive), and the client enforces one
+outstanding entry of backpressure, per-job cancellation with late-message
+protection, and distinct failure statuses for worker crashes and deadlines.
+See the package README for the exact contract and limitations.
+
 ## Format module
 
 `@mpgd/phaser-assets/pack-format` exports the shared pure contract: build

@@ -7,6 +7,9 @@ import type { DeliveryPack } from './src/packs.js';
 import type { PhaserPackAsset } from '@mpgd/phaser-assets/packs';
 
 const root = fileURLToPath(new URL('.', import.meta.url));
+/** Workspace subpaths the example consumes from package source, so a
+ * fresh checkout builds without a prior package build step. */
+const PHASER_ASSETS_SUBPATHS = ['packs', 'archives', 'test-utils', 'archive-worker'] as const;
 const sources = [
   { id: 'shared', dependsOn: [], files: [{ name: 'pilot.png', width: 256, height: 64, mediaType: 'image/png' }] },
   { id: 'grove', dependsOn: ['shared'], files: [{ name: 'grove.png', width: 2048, height: 1024, mediaType: 'image/png' }, { name: 'grove.json', width: 0, height: 0, mediaType: 'application/json' }] },
@@ -81,7 +84,10 @@ export default defineConfig(({ mode }) => {
     root, base: './', publicDir: false,
     server: { watch: { ignored: ['**/dist/**', '**/artifacts/**'] } },
     build: { outDir: join(root, 'dist', hybrid ? 'hybrid' : 'bundled'), emptyOutDir: true }, plugins: [plugin],
-    resolve: { alias: [{ find: /^@mpgd\/phaser-assets\/packs$/, replacement: fileURLToPath(new URL('../../packages/phaser-assets/src/packs.ts', import.meta.url)) }] },
+    resolve: { alias: PHASER_ASSETS_SUBPATHS.map((subpath) => ({
+      find: new RegExp(`^@mpgd/phaser-assets/${subpath}$`),
+      replacement: fileURLToPath(new URL(`../../packages/phaser-assets/src/${subpath}.ts`, import.meta.url)),
+    })) },
     define: { __ASSET_PACK_CATALOG__: JSON.stringify(catalog), __ASSET_PACK_MODE__: JSON.stringify(report.mode), __ASSET_PACK_ORIGIN__: JSON.stringify(origin.href) },
   };
 });

@@ -50,6 +50,11 @@ jobs:
 
       - if: inputs.target == 'android'
         uses: android-actions/setup-android@v4
+        # Google removed the legacy `tools` package from the SDK repository;
+        # the action's `tools platform-tools` default now fails. The explicit
+        # sdkmanager steps install what each build needs.
+        with:
+          packages: ''
 
       - if: inputs.target == 'android'
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0"
