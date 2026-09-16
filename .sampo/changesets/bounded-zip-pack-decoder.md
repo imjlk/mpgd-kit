@@ -14,5 +14,11 @@ main-thread decoding. The decode deadline is one absolute budget from slot
 acquisition through returned-archive verification (queue wait excluded); the
 worker receives only the unspent remainder, completion inside the cleanup
 grace cannot turn a decided deadline into success, and cancellation shares a
-single cooperative cleanup window. Adds a pinned `fflate` dependency for
+single cooperative cleanup window. The worker-message boundary is hardened end to
+end: worker buffers must be genuine ArrayBuffers in any realm (shared,
+detached and forged buffers are rejected), every message field is captured
+once through a guarded read that settles the job when a getter throws,
+terminal statuses fix their failure codes (detailed codes only accompany
+error statuses), and settled jobs release their worker reference after
+best-effort termination. Adds a pinned `fflate` dependency for
 DEFLATE.

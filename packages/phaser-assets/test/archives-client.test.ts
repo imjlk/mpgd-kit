@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import vm from 'node:vm';
 
 import { describe, expect, it, vi } from 'vitest';
 
@@ -51,6 +52,7 @@ const jsonBytes = new TextEncoder().encode('{"frames":{"ground":{}}}');
 interface FakeWorker extends ZipDecodeWorkerLike {
   readonly requests: ArchiveWorkerRequest[];
   readonly postedEntries: () => number;
+  readonly isTerminated: () => boolean;
   emit(message: ArchiveWorkerResponse): void;
   terminate(): void;
   crash(): void;
@@ -87,6 +89,7 @@ function createFakeWorker(): FakeWorker {
   return {
     requests,
     postedEntries: (): number => postedEntryCount,
+    isTerminated: (): boolean => terminated,
     postMessage(message): void {
       if (terminated) {
         return;
@@ -1862,7 +1865,9 @@ describe('bounded ZIP decode client', () => {
     });
     const status = await job.result;
     expect(status.status).toBe('worker-error');
-    expect(status.detail).toContain('undeliverable buffer');
+    // The probe rejects the detached buffer at the shape check (the spec's
+    // IsDetachedBuffer rule), before any copy is attempted.
+    expect(status.detail).toContain('malformed entry message');
   });
 
   it('ends at the deadline without submitting when pre-transfer hashing overruns it', async () => {
@@ -3246,7 +3251,10 @@ describe('bounded ZIP decode client', () => {
     // deadlines keep their code, and successes carry none.
     expect(await run({ status: 'error', code: 'not-a-real-code' })).toBe('worker-error');
     expect(await run({ status: 'deadline', code: 'not-a-real-code' })).toBe('deadline');
-    expect(await run({ status: 'cancelled', code: 'not-a-real-code' })).toBeUndefined();
+    // Cancelled fixes its code, so a contradictory worker code (even a
+    // recognized one) never surfaces.
+    expect(await run({ status: 'cancelled', code: 'archive-mismatch' })).toBe('cancelled');
+    expect(await run({ status: 'deadline', code: 'integrity' })).toBe('deadline');
     void worker;
     void decoder;
 
@@ -3336,6 +3344,311 @@ describe('bounded ZIP decode client', () => {
     expect(status.archiveLost).toBe(true);
   });
 
+  it('accepts cross-realm ArrayBuffer entry buffers', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await waitForDecodePost(worker);
+    // A genuine ArrayBuffer from another realm (here: a vm context) is a
+    // valid buffer even though realm-local instanceof rejects it.
+    const foreignBuffer = vm.runInContext('new ArrayBuffer(12)', vm.createContext({})) as ArrayBuffer;
+    new Uint8Array(foreignBuffer).set(pngBytes);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: foreignBuffer,
+    });
+    const first = await firstPull;
+    expect(first.done).toBe(false);
+    expect(Buffer.from(first.value.bytes).equals(Buffer.from(pngBytes))).toBe(true);
+  });
+
+  it('rejects tag-spoofed fake entry buffers', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const pull = iterator.next();
+    const rejection = expect(pull).rejects.toMatchObject({ code: 'worker-error' });
+    await waitForDecodePost(worker);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: { [Symbol.toStringTag]: 'ArrayBuffer', byteLength: 12 } as never,
+    });
+    await rejection;
+    expect((await job.result).detail).toContain('malformed entry message');
+  });
+
+  it('settles the job when message field access throws', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const pull = iterator.next();
+    const rejection = expect(pull).rejects.toMatchObject({ code: 'worker-error' });
+    await waitForDecodePost(worker);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      get path(): string {
+        throw new Error('no path for you');
+      },
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    } as never);
+    await rejection;
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('could not be read');
+  });
+
+  it('settles the job when terminal stats access throws', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const pull = iterator.next();
+    const rejection = expect(pull).rejects.toMatchObject({ code: 'worker-error' });
+    await waitForDecodePost(worker);
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'cancelled',
+      get stats(): ArchiveWorkerStats {
+        throw new Error('no stats for you');
+      },
+    } as never);
+    await rejection;
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    expect(status.detail).toContain('could not be read');
+  });
+
+  it('starts the next queued job after a capture failure', async () => {
+    const workers: FakeWorker[] = [];
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): FakeWorker => {
+        const worker = createFakeWorker();
+        workers.push(worker);
+        return worker;
+      },
+      maxConcurrentDecodes: 1,
+    });
+    const zip = fixture();
+    const failing = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const queued = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    // Reach the first decode post without fixed ticks.
+    for (let attempt = 0; attempt < 100 && workers.length < 1; attempt++) {
+      await tick(1);
+    }
+    expect(workers).toHaveLength(1);
+    workers[0]!.blackhole();
+    workers[0]!.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      get path(): string {
+        throw new Error('boom');
+      },
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    } as never);
+    expect((await failing.result).status).toBe('worker-error');
+    // The freed permit admits the queued job, which runs to completion.
+    const received: string[] = [];
+    for await (const entry of queued.entries) {
+      received.push(entry.path);
+    }
+    expect(received).toEqual(['grove/grove.png', 'grove/grove.json']);
+    expect((await queued.result).status).toBe('completed');
+    expect(workers).toHaveLength(2);
+  });
+
+  it('releases the worker reference after completion', async () => {
+    const worker = createFakeWorker();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const received: string[] = [];
+    for await (const entry of job.entries) {
+      received.push(entry.path);
+    }
+    expect((await job.result).status).toBe('completed');
+    // Best-effort termination happened and the reference is gone, so a
+    // later cancel() cannot post to the terminated worker.
+    expect(worker.isTerminated()).toBe(true);
+    const lateStatus = await job.cancel();
+    expect(lateStatus.status).toBe('completed');
+    expect(worker.requests.some((request) => request.type === 'cancel')).toBe(false);
+  });
+
+  it('returns the permit when terminate throws', async () => {
+    let terminated = 0;
+    const hostileWorker = (): ZipDecodeWorkerLike => ({
+      postMessage(): void {},
+      addEventListener(): void {},
+      terminate(): void {
+        terminated++;
+        throw new Error('terminate failed');
+      },
+    });
+    const workers: ZipDecodeWorkerLike[] = [];
+    const decoder = createBoundedZipDecoder({
+      createWorker: (): ZipDecodeWorkerLike => {
+        const worker = hostileWorker();
+        workers.push(worker);
+        return worker;
+      },
+      maxConcurrentDecodes: 1,
+      cancelGraceMs: 5,
+    });
+    const zip = fixture();
+    const first = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    // Phase gate: wait until the worker exists, so the cancel lands on a
+    // running job instead of racing its queued start.
+    for (let attempt = 0; attempt < 100 && workers.length < 1; attempt++) {
+      await tick(1);
+    }
+    expect(workers).toHaveLength(1);
+    // The silent worker never answers, so each cancelled job settles from
+    // the grace fallback; its throwing terminate must not block the
+    // settlement or the permit handoff to the next job.
+    expect((await first.cancel()).status).toBe('cancelled');
+    expect((await first.result).status).toBe('cancelled');
+    expect(terminated).toBe(1);
+    // The freed permit admits a fresh job whose worker is created despite
+    // the previous throwing terminate.
+    const third = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    for (let attempt = 0; attempt < 100 && workers.length < 2; attempt++) {
+      await tick(1);
+    }
+    expect((await third.cancel()).status).toBe('cancelled');
+    expect((await third.result).status).toBe('cancelled');
+
+  });
+  it('rejects shared entry buffers on both detection branches', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const runJob = async (bytes: unknown): Promise<string | undefined> => (
+      await (await startFailingJob(decoder, zip, bytes)).result
+    ).detail;
+    const startFailingJob = async (
+      decoderInstance: ReturnType<typeof createBoundedZipDecoder>,
+      fixtureZip: ReturnType<typeof fixture>,
+      bytes: unknown,
+    ) => {
+      const posted = createFakeWorker();
+      posted.blackhole();
+      void decoderInstance;
+      void fixtureZip;
+      const probe = createBoundedZipDecoder({ createWorker: (): FakeWorker => posted });
+      const job = probe.decode({ archive: zip.archive, expected: zip.expected });
+      await waitForDecodePost(posted);
+      posted.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 1,
+        path: 'grove/grove.png',
+        method: 'store',
+        bytes: bytes as ArrayBuffer,
+      } as never);
+      return job;
+    };
+    // A genuine SharedArrayBuffer is rejected by the instanceof branch.
+    if (typeof SharedArrayBuffer !== 'undefined') {
+      const shared = new SharedArrayBuffer(pngBytes.length);
+      new Uint8Array(shared).set(pngBytes);
+      expect(await runJob(shared)).toContain('malformed entry message');
+    }
+    // A plain object spoofing the SharedArrayBuffer tag is rejected by
+    // the toString branch.
+    expect(await runJob({ [Symbol.toStringTag]: 'SharedArrayBuffer' })).toContain(
+      'malformed entry message',
+    );
+  });
+
+  it('caps unreadable error renderings in settlement details', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const runDetail = async (thrown: unknown): Promise<string | undefined> => {
+      const posted = createFakeWorker();
+      posted.blackhole();
+      const probe = createBoundedZipDecoder({ createWorker: (): FakeWorker => posted });
+      const job = probe.decode({ archive: zip.archive, expected: zip.expected });
+      await waitForDecodePost(posted);
+      posted.emit({
+        type: 'entry',
+        jobId: 1,
+        seq: 1,
+        get path(): string {
+          throw thrown;
+        },
+        method: 'store',
+        bytes: pngBytes.slice().buffer as ArrayBuffer,
+      } as never);
+      return (await job.result).detail;
+    };
+    // A throwing toString falls back to the constant wording.
+    expect(await runDetail({ toString(): string {
+        throw new Error('no'); } })).toContain(
+      'an unreadable error value',
+    );
+    // An unbounded toString is truncated before it lands in the detail.
+    const detail = await runDetail({ toString: (): string => 'x'.repeat(10_000) });
+    expect(detail === undefined ? 0 : detail.length).toBeLessThan(1000);
+  });
+
+  it('settles when an entry buffer length getter throws', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    await waitForDecodePost(worker);
+    class UnmeasurableBuffer extends ArrayBuffer {
+      override get byteLength(): number {
+        throw new Error('no length for you');
+      }
+    }
+    const buffer = new UnmeasurableBuffer(pngBytes.length);
+    new Uint8Array(buffer).set(pngBytes);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: buffer,
+    });
+    const status = await job.result;
+    expect(status.status).toBe('worker-error');
+    // The length is captured at the shape check, so a throwing getter
+    // settles through the capture guard with its cause preserved.
+    expect(status.detail).toContain('could not be read');
+    expect(status.detail).toContain('no length for you');
+  });
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {

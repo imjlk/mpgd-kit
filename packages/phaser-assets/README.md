@@ -278,6 +278,25 @@ uses one fresh worker; concurrency across jobs is capped by
 `maxConcurrentDecodes`. Loader-based `files` delivery is unaffected: nothing
 about the decoder or its worker is imported by `/packs` users.
 
+### Supported scope
+
+This decoder supports exactly one product path: ZIP v1 archives produced by
+the kit builder (`mpgd assets build-packs`), decoded by an
+application-deployed module worker, against a valid manifest and limit
+options, with explicit handling of cancellation, deadlines, errors and
+malformed protocol messages. Behavior that was explicitly supported before
+remains supported.
+
+The client validates every worker message (shape, sequencing, digests,
+limits, statistics, buffer identity) and defends the decoded data against a
+misbehaving worker. It does not defend the JavaScript runtime itself:
+arbitrary hostile objects, Proxy traps, prototype tampering or adversarial
+worker implementations outside `ZipDecodeWorkerLike` are out of scope.
+Buffers supplied by the worker must be genuine `ArrayBuffer`s (any realm;
+shared, detached or forged buffers are rejected), and every message field
+is read through a guarded boundary that turns a throwing getter into a
+typed job failure. This boundary discipline is why the file digests, output
+limits and cleanup checks below are never weakened by it.
 See `examples/asset-packs` in the repository for two build layouts and executable
 fault/lifetime tests, including a real module-worker decode scenario. Adding
 this API does not make generated games depend on the

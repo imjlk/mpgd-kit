@@ -129,51 +129,67 @@ const validElapsed = (value: unknown): boolean => typeof value === 'number'
   && Number.isFinite(value) && value >= 0;
 /** Shared wording for settlements where the worker itself overran the deadline. */
 const DEADLINE_MISS_DETAIL = 'The archive decode worker missed its deadline';
-/** Failure codes a worker may legitimately report. The table is
- * compile-checked against the union (a missing member or an unknown key
- * fails the build) so legitimate codes can never drift into the
- * normalized fallback. */
-const WORKER_FAILURE_CODES = {
+/** Terminal statuses a done message may carry, plus the client
+ * settlements that surface through the same failure branch. */
+type TerminalFailureStatus = ArchiveWorkerStatus | 'unsupported' | 'worker-error';
+/** Detailed failure codes the error terminal status may carry (the
+ * unsupported capability signal included); every other status fixes its
+ * code in normalizeWorkerFailureCode (deadline/cancelled/worker-error are
+ * fixed by that switch, so they are excluded here). The constraint keeps
+ * the table compile-checked against the rest of the union: a newly added
+ * failure code the error status should carry must be added here or the
+ * build fails, not silently normalize. */
+const DETAILED_FAILURE_CODES = {
   'archive-mismatch': null,
   'unsupported-zip': null,
   'invalid-structure': null,
   'entry-mismatch': null,
   limit: null,
-  deadline: null,
-  cancelled: null,
   decode: null,
   integrity: null,
-  'worker-error': null,
   'worker-busy': null,
   unsupported: null,
-} as const satisfies Record<ZipDecodeFailureCode, null>;
-/** Terminal statuses a done message may carry, plus the client
- * settlements that surface through the same failure branch. */
-type TerminalFailureStatus = ArchiveWorkerStatus | 'unsupported' | 'worker-error';
-/** Normalize a worker-supplied code to the public union: known codes
- * pass through, and unknown or missing codes fall back by terminal
- * status (completed/cancelled carry no code, deadline keeps its code,
- * errors become 'worker-error') so result and iterator always agree. */
+} as const satisfies Omit<Record<ZipDecodeFailureCode, null>, 'deadline' | 'cancelled' | 'worker-error'>;
+
+/** Normalize a worker-supplied code to the public union: every status
+ * except error fixes its settlement code (completed carries none,
+ * cancelled/deadline/unsupported/worker-error carry their own), and only
+ * the error status may carry a detailed failure code from the table —
+ * anything else the worker reported becomes 'worker-error'. Result and
+ * iterator therefore always agree on the cause. */
 const normalizeWorkerFailureCode = (
   code: string | undefined,
   status: TerminalFailureStatus,
 ): ZipDecodeFailureCode | undefined => {
-  if (status === 'completed') {
-    // A success never carries a failure code, even when a worker attached
-    // one: consumers switching on code must not see a completed job
-    // reported as an integrity failure.
-    return undefined;
+  // Every status except error fixes its settlement code, so a recognized
+  // but status-incompatible worker code (deadline + integrity, cancelled +
+  // archive-mismatch) can never surface a contradictory pair.
+  switch (status) {
+    case 'completed':
+      return undefined;
+    case 'cancelled':
+      return 'cancelled';
+    case 'deadline':
+      return 'deadline';
+    case 'unsupported':
+      return 'unsupported';
+    case 'worker-error':
+      return 'worker-error';
+    case 'error':
+      break;
+    default: {
+      // Compile-checked exhaustiveness: a future status member must be
+      // classified here, never silently funneled into the error branch.
+      const unseen: never = status;
+      return unseen;
+    }
   }
-  if (code !== undefined && Object.hasOwn(WORKER_FAILURE_CODES, code)) {
+  // Only the error status carries detailed failure codes; anything else
+  // the worker reported normalizes to the generic failure.
+  if (code !== undefined && Object.hasOwn(DETAILED_FAILURE_CODES, code)) {
     return code as ZipDecodeFailureCode;
   }
-  if (status === 'deadline') {
-    return 'deadline';
-  }
-  if (status === 'error' || status === 'worker-error' || status === 'unsupported') {
-    return 'worker-error';
-  }
-  return undefined;
+  return 'worker-error';
 };
 /** The deadline expired client-side, before the job was even submitted. */
 const PRE_SUBMIT_DEADLINE_DETAIL
@@ -246,11 +262,69 @@ const copyViewBytes = (
   return copy;
 };
 
+/** Render any thrown value without the rendering itself throwing: a
+ * hostile toString (or a Proxy trap behind it) gets a constant fallback. */
+const ERROR_DETAIL_LIMIT = 512;
+const safeErrorDetail = (error: unknown): string => {
+  let rendered: string;
+  try {
+    rendered = String(error);
+  } catch {
+    return 'an unreadable error value';
+  }
+  // A hostile but non-throwing toString can still return an unbounded
+  // string; cap what any settlement detail retains.
+  return rendered.length > ERROR_DETAIL_LIMIT
+    ? `${rendered.slice(0, ERROR_DETAIL_LIMIT)}… (${rendered.length} chars)`
+    : rendered;
+};
+
+/** Accept a worker-supplied buffer candidate: genuine ArrayBuffers pass
+ * regardless of their originating realm (realm-local instanceof alone
+ * would reject cross-realm buffers), while shared memory, plain objects,
+ * iterables and @@toStringTag-spoofed fakes are rejected. A DataView
+ * probe validates the [[ArrayBufferData]] internal slot itself — it does
+ * NOT distinguish ArrayBuffer from SharedArrayBuffer, and no pure-JS
+ * probe reliably can: the exclusion above is best-effort (a same-realm
+ * @@toStringTag spoof on a genuine SharedArrayBuffer evades it), with the
+ * real containment downstream — copyBufferBytes copies bytes out before
+ * anything client-owned observes them. Detached buffers fail the DataView probe
+ * itself (the spec's IsDetachedBuffer check) and settle at the shape
+ * check; the length guard in copyBufferBytes remains as defense in depth. */
+const acceptWorkerBuffer = (candidate: unknown): candidate is ArrayBuffer => {
+  if (
+    typeof SharedArrayBuffer !== 'undefined'
+    && (candidate instanceof SharedArrayBuffer
+      || Object.prototype.toString.call(candidate) === '[object SharedArrayBuffer]')
+  ) {
+    // The toString tag is internal-slot-derived, so it also catches
+    // cross-realm shared buffers the realm-local instanceof misses.
+    return false;
+  }
+  // The DataView probe is the sole authority: an instanceof shortcut would
+  // accept same-realm prototype spoofs (Object.create(ArrayBuffer.prototype),
+  // Proxy getPrototypeOf traps), while the probe validates the internal
+  // slot itself and grants every genuine buffer of any realm.
+  try {
+    new DataView(candidate as ArrayBufferLike, 0, 0);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /** Copy buffer bytes by construction, never by dispatching to the
  * untrusted buffer's polymorphic slice: an override returning `this`
  * would hand the caller a view over storage another party can mutate. */
 const copyBufferBytes = (source: ArrayBuffer, expectedLength: number): ArrayBuffer => {
-  if (source.byteLength !== expectedLength) {
+  let actualLength: number;
+  try {
+    actualLength = source.byteLength;
+  } catch (error) {
+    // A subclass getter can throw on the length itself.
+    throw new TypeError(`buffer length could not be read: ${safeErrorDetail(error)}`);
+  }
+  if (actualLength !== expectedLength) {
     // A detached buffer reads as zero-length here; the mismatch is the
     // detachment signal that a polymorphic slice used to provide as a
     // TypeError, so the existing catches keep failing the job.
@@ -476,6 +550,9 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           });
         } else {
           failure = new ZipDecodeError(
+            // The normalizer always returns a code on the failure
+            // statuses that reach this branch; the fallback is kept as
+            // defensive future-proofing, not a reachable path.
             normalizeWorkerFailureCode(status.code, status.status) ?? 'worker-error',
             status.detail ?? `Archive decode job failed with ${status.status}`,
           );
@@ -493,8 +570,15 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         }
         settleResult?.(status);
 
+        // Release the reference before terminating: a retained completed
+        // job must not keep the terminated Worker (and the listener-closed
+        // job state) strongly reachable, and a throwing terminate must not
+        // block the permit return below. The interface exposes no listener
+        // removal, so the listeners die with the terminated worker itself.
+        const terminated = worker;
+        worker = undefined;
         try {
-          worker?.terminate();
+          terminated?.terminate();
         } catch {
           // Termination is best effort; the job is finished either way.
         }
@@ -525,7 +609,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             failWorker({
               status: 'worker-error',
               code: 'worker-error',
-              detail: `Could not post the entry release: ${String(error)}`,
+              detail: `Could not post the entry release: ${safeErrorDetail(error)}`,
             });
           }
         }
@@ -543,7 +627,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           : {
             status: 'worker-error',
             code: 'worker-error',
-            detail: `Could not verify ${scope}: ${String(error)}`,
+            detail: `Could not verify ${scope}: ${safeErrorDetail(error)}`,
           });
       };
       /** The result a pull receives once the job has settled. */
@@ -741,11 +825,11 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           failWorker({
             status: 'unsupported',
             code: 'unsupported',
-            detail: `Cannot create the archive decode worker: ${String(error)}`,
+            detail: `Cannot create the archive decode worker: ${safeErrorDetail(error)}`,
           });
           return;
         }
-        worker.addEventListener('message', (event) => {
+        const handleMessage = (event: MessageEvent<ArchiveWorkerResponse>): void => {
           if (terminalSeen) {
             // A terminal response was accepted; everything racing its
             // archive-digest verification is ignored, malformed or not.
@@ -788,7 +872,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               && Number.isSafeInteger(rawSeq)
               && typeof rawPath === 'string'
               && (rawMethod === 'store' || rawMethod === 'deflate')
-              && rawBytes instanceof ArrayBuffer;
+              && acceptWorkerBuffer(rawBytes);
             if (!entryShapeValid) {
               failWorker({
                 status: 'worker-error',
@@ -888,7 +972,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               failWorker({
                 status: 'worker-error',
                 code: 'worker-error',
-                detail: `The archive decode worker delivered entry ${seq} with an undeliverable buffer: ${String(error)}`,
+                detail: `The archive decode worker delivered entry ${seq} with an undeliverable buffer: ${safeErrorDetail(error)}`,
               });
               return;
             }
@@ -972,7 +1056,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             const doneStatExpanded = statsIsObject ? doneStats.expandedBytes : undefined;
             const doneStatElapsed = statsIsObject ? doneStats.elapsedMs : undefined;
             const doneShapeValid = typeof doneStatus === 'string'
-              && (doneArchive === undefined || doneArchive instanceof ArrayBuffer)
+              && (doneArchive === undefined || acceptWorkerBuffer(doneArchive))
               && (doneStatus === 'completed'
                 || doneStatus === 'cancelled'
                 || doneStatus === 'deadline'
@@ -1029,7 +1113,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               failWorker({
                 status: 'worker-error',
                 code: 'worker-error',
-                detail: `The archive decode worker returned an archive buffer whose length could not be read: ${String(error)}`,
+                detail: `The archive decode worker returned an archive buffer whose length could not be read: ${safeErrorDetail(error)}`,
               });
               return;
             }
@@ -1172,7 +1256,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 failWorker({
                   status: 'worker-error',
                   code: 'worker-error',
-                  detail: `The archive decode worker returned an archive buffer that could not be recovered: ${String(error)}`,
+                  detail: `The archive decode worker returned an archive buffer that could not be recovered: ${safeErrorDetail(error)}`,
                 });
                 return;
               }
@@ -1222,7 +1306,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                     : {
                       status: 'worker-error',
                       code: 'worker-error',
-                      detail: `Could not verify the returned archive: ${String(error)}`,
+                      detail: `Could not verify the returned archive: ${safeErrorDetail(error)}`,
                     });
                 },
               );
@@ -1234,7 +1318,30 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             }
             settle();
           }
+        };
+        worker.addEventListener('message', (event) => {
+          // The whole boundary is capture-guarded: a getter on event.data,
+          // a message field or a stats counter that throws must settle the
+          // job through the common failure path instead of escaping the
+          // listener and stalling pending pulls and the concurrency slot.
+          try {
+            handleMessage(event);
+          } catch (error) {
+            // A throw after a terminal was accepted is intentionally not
+            // settled here: every read between terminalSeen and settlement
+            // is individually guarded, and the accepted terminal's own
+            // verification (or the forced-settlement backstop) owns the
+            // job from that point.
+            if (!finished && !terminalSeen) {
+              failWorker({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: `The archive decode worker posted a message that could not be read: ${safeErrorDetail(error)}`,
+              });
+            }
+          }
         });
+
         const onWorkerFailure = (): void => {
           if (terminalSeen) {
             // A terminal response was accepted and only its archive digest
@@ -1263,7 +1370,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               status: 'error', code: error.code, detail: error.message,
             }
             : {
-              status: 'error', code: 'unsupported', detail: String(error),
+              status: 'error', code: 'unsupported', detail: safeErrorDetail(error),
             });
           return;
         }
@@ -1297,7 +1404,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             failWorker({
               status: 'worker-error',
               code: 'worker-error',
-              detail: `Could not hash the archive for submission: ${String(error)}`,
+              detail: `Could not hash the archive for submission: ${safeErrorDetail(error)}`,
             });
           }
           return;
@@ -1381,7 +1488,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             } catch (restoreError) {
               // An unverifiable buffer is reported as lost below, with the
               // reason attached for debugging ownership loss.
-              restoreFailure = String(restoreError);
+              restoreFailure = safeErrorDetail(restoreError);
             }
           }
           // A settlement landing while the re-digest pends has already
@@ -1397,8 +1504,8 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 status: 'worker-error',
                 code: 'worker-error',
                 detail: restoreFailure === undefined
-                  ? `Could not post the decode request: ${String(error)}`
-                  : `Could not post the decode request: ${String(error)}; the submission could not be restored (${restoreFailure})`,
+                  ? `Could not post the decode request: ${safeErrorDetail(error)}`
+                  : `Could not post the decode request: ${safeErrorDetail(error)}; the submission could not be restored (${restoreFailure})`,
               }),
               ...(restored !== undefined ? { archiveBuffer: restored } : {}),
             });
@@ -1413,7 +1520,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
         failWorker({
           status: 'worker-error',
           code: 'worker-error',
-          detail: `Starting the decode job failed: ${String(error)}`,
+          detail: `Starting the decode job failed: ${safeErrorDetail(error)}`,
         });
       });
       const iterator: AsyncIterator<BoundedZipDecodeEntry> = {
