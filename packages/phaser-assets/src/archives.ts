@@ -12,6 +12,7 @@ import {
   type ArchiveWorkerStats,
   type ArchiveWorkerStatus,
 } from './archive-protocol.js';
+import { ZIP_ENTRY_COUNT_CEILING } from './archive-zip-core.js';
 import { PHASER_PACK_DELIVERY_VERSION } from './pack-format.js';
 
 export { ZipDecodeError } from './archive-errors.js';
@@ -24,6 +25,7 @@ export type {
   ArchiveWorkerStatus,
 } from './archive-protocol.js';
 export { defaultArchiveWorkerLimits } from './archive-protocol.js';
+export { ZIP_ENTRY_COUNT_CEILING } from './archive-zip-core.js';
 export type {
   ExpectedZipArchive,
   ExpectedZipEntry,
@@ -173,9 +175,6 @@ const normalizeWorkerFailureCode = (
   }
   return undefined;
 };
-/** The ZIP end record counts entries in 16 bits; no supported archive
- * can carry more, so larger manifests are rejected before any snapshot. */
-const ZIP_ENTRY_COUNT_CEILING = 0xffff;
 /** The deadline expired client-side, before the job was even submitted. */
 const PRE_SUBMIT_DEADLINE_DETAIL
   = 'The archive decode deadline expired before the job was submitted';
@@ -382,7 +381,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
       } else if (sourceEntryTotal > limits.entryCount) {
         preflight = {
           code: 'limit',
-          detail: `ZIP decode expected manifest has more entries than the entry count limit ${limits.entryCount}`,
+          detail: `ZIP decode expected manifest has ${sourceEntryTotal} entries, exceeding the entry limit ${limits.entryCount}`,
         };
       } else if (sourceEntryTotal > ZIP_ENTRY_COUNT_CEILING) {
         preflight = {
@@ -1020,10 +1019,21 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // displace it, clone mode included.
             terminalSeen = true;
             terminalStats = terminal.stats;
-            if (
-              transfer && doneArchive !== undefined
-              && doneArchive.byteLength !== archiveByteLength
-            ) {
+            let returnedLength: number;
+            try {
+              returnedLength = doneArchive === undefined ? -1 : doneArchive.byteLength;
+            } catch (error) {
+              // A throwing byteLength getter must settle the job through
+              // the failure path instead of escaping the listener after
+              // the terminal was accepted.
+              failWorker({
+                status: 'worker-error',
+                code: 'worker-error',
+                detail: `The archive decode worker returned an archive buffer whose length could not be read: ${String(error)}`,
+              });
+              return;
+            }
+            if (transfer && doneArchive !== undefined && returnedLength !== archiveByteLength) {
               // A different-length buffer cannot be the caller's detached
               // archive, so ownership was not restored.
               failWorker({

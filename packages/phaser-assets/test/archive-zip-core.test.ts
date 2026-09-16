@@ -331,6 +331,23 @@ describe('bounded ZIP decode core', () => {
     })()).rejects.toMatchObject({ code: 'unsupported' });
   });
 
+  it('rejects manifests beyond the ZIP ceiling in the direct core', async () => {
+    const fixture = buildV1Zip(mixedEntries);
+    const huge = {
+      ...fixture.expected,
+      entries: new Array(0xffff + 1).fill(fixture.expected.entries[0]),
+    };
+    await expect((async () => {
+      for await (const _entry of decodeZipV1Entries(
+        fixture.archive,
+        huge,
+        limits({ entryCount: 0xffff * 2 }),
+      )) {
+        void _entry;
+      }
+    })()).rejects.toMatchObject({ code: 'limit' });
+  });
+
   it('bounds the archive snapshot by the captured length', async () => {
     const fixture = buildV1Zip([
       { path: 'a.bin', data: new Uint8Array([1, 2, 3, 4]), method: 'store' as const },

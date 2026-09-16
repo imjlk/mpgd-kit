@@ -2696,7 +2696,7 @@ describe('bounded ZIP decode client', () => {
       limits: { ...defaultArchiveWorkerLimits(), entryCount: 1 },
     });
     expect((await oversizeCount.result).code).toBe('limit');
-    expect((await oversizeCount.result).detail).toContain('entry count limit 1');
+    expect((await oversizeCount.result).detail).toContain('exceeding the entry limit 1');
     const oversizePath = decoder.decode({
       archive: zip.archive,
       expected: zip.expected,
@@ -3304,6 +3304,36 @@ describe('bounded ZIP decode client', () => {
     const status = await job.result;
     expect(status.status).toBe('completed');
     expect(status.code).toBeUndefined();
+  });
+
+  it('settles when a returned buffer length cannot be read', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    await waitForDecodePost(worker);
+    class UnreadableBuffer extends ArrayBuffer {
+      override get byteLength(): number {
+        throw new Error('no length for you');
+      }
+    }
+    const cancelling = job.cancel();
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      archive: new UnreadableBuffer(zip.archive.length),
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    });
+    const status = await cancelling;
+    expect(status.status).toBe('cancelled');
+    expect(status.detail).toContain('length could not be read');
+    expect(status.archiveLost).toBe(true);
   });
 
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {

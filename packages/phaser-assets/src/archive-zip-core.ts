@@ -107,6 +107,11 @@ interface PlannedEntry {
   readonly dataEnd: number;
 }
 
+/** The ZIP end record counts entries in 16 bits; no supported archive
+ * can carry more, so both the client boundary and this core reject
+ * larger manifests before copying. */
+export const ZIP_ENTRY_COUNT_CEILING = 0xffff;
+
 /** Parse and cross-check the archive structure without inflating anything. */
 function parseZipV1Structure(archive: Uint8Array, expected: ExpectedZipArchive, limits: ZipDecodeLimits): PlannedEntry[] {
   const zip = reader(archive);
@@ -472,10 +477,13 @@ export async function* decodeZipV1Entries(
       `ZIP decode limit ${invalidLimit.name} must be an integer of at least ${invalidLimit.minimum}`,
     );
   }
-  if (expected.formatVersion !== PHASER_PACK_DELIVERY_VERSION) {
+  // Read the version exactly once: a switching accessor must not let the
+  // check validate one version while the snapshot stores another.
+  const expectedFormatVersion = expected.formatVersion;
+  if (expectedFormatVersion !== PHASER_PACK_DELIVERY_VERSION) {
     throw new ZipDecodeError(
       'unsupported-zip',
-      `Unsupported archive format version ${JSON.stringify(expected.formatVersion)}`,
+      `Unsupported archive format version ${JSON.stringify(expectedFormatVersion)}`,
     );
   }
   // The budget starts before the manifest snapshot: copying a large or
@@ -490,10 +498,22 @@ export async function* decodeZipV1Entries(
   const entryTotal = sourceEntries.length;
   if (entryTotal > limits.entryCount) {
     // Bound the manifest before the per-entry copy allocation; the
-    // parse side re-checks the archive own count against the same limit.
+    // parse side re-checks the archive own count against the same
+    // limit. Precedence matches the client boundary: the configured
+    // limit is the actionable bound, the format ceiling only when the
+    // configuration alone would permit the count.
     throw new ZipDecodeError(
       'limit',
-      `ZIP expected manifest has ${entryTotal} entries, exceeding the entry limit ${limits.entryCount}`,
+      `ZIP decode expected manifest has ${entryTotal} entries, exceeding the entry limit ${limits.entryCount}`,
+    );
+  }
+  if (entryTotal > ZIP_ENTRY_COUNT_CEILING) {
+    // The ZIP end record counts entries in 16 bits; the client boundary
+    // mirrors this cap before any copy, and the direct core must not
+    // allocate a manifest no supported archive can represent.
+    throw new ZipDecodeError(
+      'limit',
+      `ZIP decode expected manifest has ${entryTotal} entries, beyond the ZIP v1 entry count ceiling ${ZIP_ENTRY_COUNT_CEILING}`,
     );
   }
   const manifestEntries: ExpectedZipArchive['entries'][number][] = [];
@@ -504,7 +524,7 @@ export async function* decodeZipV1Entries(
     assertControl(wrappedControl, clock, deadlineAt);
   }
   const manifest = {
-    formatVersion: expected.formatVersion,
+    formatVersion: expectedFormatVersion,
     archive: { ...expected.archive },
     entries: manifestEntries,
   };
@@ -547,16 +567,13 @@ export async function* decodeZipV1Entries(
   try {
     const inputBuffer = inputArchive.buffer;
     const inputOffset = inputArchive.byteOffset;
-    // Brand-check the backing store: the (buffer, offset, length) overload
-    // only applies the bounding length for genuine (Shared)ArrayBuffers, so
-    // a shadowed getter returning an array-like or iterable must fail
-    // typed rather than sizing the allocation itself.
-    if (
-      !(inputBuffer instanceof ArrayBuffer)
-      && !(typeof SharedArrayBuffer !== 'undefined' && inputBuffer instanceof SharedArrayBuffer)
-    ) {
-      throw new TypeError('archive view is not backed by an ArrayBuffer');
-    }
+    // Validate the [[ArrayBufferData]] internal slot itself with a
+    // DataView probe: it accepts genuine (Shared)ArrayBuffers across
+    // realms and throws for array-likes, iterables and tag-spoofed
+    // objects (Object.prototype.toString honors @@toStringTag), so the
+    // 3-arg constructor overload below can only be reached with a real
+    // backing store and the captured length keeps bounding the copy.
+    new DataView(inputBuffer, 0, 0);
     archive = new Uint8Array(new Uint8Array(inputBuffer, inputOffset, inputLength));
   } catch (error) {
     throw new ZipDecodeError(
