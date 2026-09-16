@@ -10,6 +10,7 @@ import {
   type ArchiveWorkerRequest,
   type ArchiveWorkerResponse,
   type ArchiveWorkerStats,
+  type ArchiveWorkerStatus,
 } from './archive-protocol.js';
 import { PHASER_PACK_DELIVERY_VERSION } from './pack-format.js';
 
@@ -126,6 +127,52 @@ const validElapsed = (value: unknown): boolean => typeof value === 'number'
   && Number.isFinite(value) && value >= 0;
 /** Shared wording for settlements where the worker itself overran the deadline. */
 const DEADLINE_MISS_DETAIL = 'The archive decode worker missed its deadline';
+/** Failure codes a worker may legitimately report. The table is
+ * compile-checked against the union (a missing member or an unknown key
+ * fails the build) so legitimate codes can never drift into the
+ * normalized fallback. */
+const WORKER_FAILURE_CODES = {
+  'archive-mismatch': null,
+  'unsupported-zip': null,
+  'invalid-structure': null,
+  'entry-mismatch': null,
+  limit: null,
+  deadline: null,
+  cancelled: null,
+  decode: null,
+  integrity: null,
+  'worker-error': null,
+  'worker-busy': null,
+  unsupported: null,
+} as const satisfies Record<ZipDecodeFailureCode, null>;
+/** Terminal statuses a done message may carry, plus the client
+ * settlements that surface through the same failure branch. */
+type TerminalFailureStatus = ArchiveWorkerStatus | 'unsupported' | 'worker-error';
+/** Normalize a worker-supplied code to the public union: known codes
+ * pass through, and unknown or missing codes fall back by terminal
+ * status (completed/cancelled carry no code, deadline keeps its code,
+ * errors become 'worker-error') so result and iterator always agree. */
+const normalizeWorkerFailureCode = (
+  code: string | undefined,
+  status: TerminalFailureStatus,
+): ZipDecodeFailureCode | undefined => {
+  if (status === 'completed') {
+    // A success never carries a failure code, even when a worker attached
+    // one: consumers switching on code must not see a completed job
+    // reported as an integrity failure.
+    return undefined;
+  }
+  if (code !== undefined && Object.hasOwn(WORKER_FAILURE_CODES, code)) {
+    return code as ZipDecodeFailureCode;
+  }
+  if (status === 'deadline') {
+    return 'deadline';
+  }
+  if (status === 'error' || status === 'worker-error' || status === 'unsupported') {
+    return 'worker-error';
+  }
+  return undefined;
+};
 /** The ZIP end record counts entries in 16 bits; no supported archive
  * can carry more, so larger manifests are rejected before any snapshot. */
 const ZIP_ENTRY_COUNT_CEILING = 0xffff;
@@ -430,7 +477,7 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           });
         } else {
           failure = new ZipDecodeError(
-            (status.code as ZipDecodeFailureCode | undefined) ?? 'worker-error',
+            normalizeWorkerFailureCode(status.code, status.status) ?? 'worker-error',
             status.detail ?? `Archive decode job failed with ${status.status}`,
           );
           rejectEntry?.(failure);
@@ -729,14 +776,15 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             });
             return;
           }
-          if (message.type === 'entry') {
+          if (messageType === 'entry') {
             // Read every field exactly once and validate the captured
             // values: switching accessors must not let the shape check
             // approve one value while later logic uses another.
-            const rawSeq: unknown = message.seq;
-            const rawPath: unknown = message.path;
-            const rawMethod: unknown = message.method;
-            const rawBytes: unknown = message.bytes;
+            const entryMessage = message as Extract<ArchiveWorkerResponse, { readonly type: 'entry' }>;
+            const rawSeq: unknown = entryMessage.seq;
+            const rawPath: unknown = entryMessage.path;
+            const rawMethod: unknown = entryMessage.method;
+            const rawBytes: unknown = entryMessage.bytes;
             const entryShapeValid = typeof rawSeq === 'number'
               && Number.isSafeInteger(rawSeq)
               && typeof rawPath === 'string'
@@ -910,15 +958,16 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             );
             return;
           }
-          if (message.type === 'done') {
+          if (messageType === 'done') {
             // Read every terminal field exactly once: a switching
             // accessor must not let the shape check validate one status
             // while the settlement snapshots another.
-            const doneStatus = message.status;
-            const doneArchive = message.archive;
-            const doneCode = message.code;
-            const doneDetail = message.detail;
-            const doneStats = message.stats;
+            const doneMessage = message as Extract<ArchiveWorkerResponse, { readonly type: 'done' }>;
+            const doneStatus = doneMessage.status;
+            const doneArchive = doneMessage.archive;
+            const doneCode = doneMessage.code;
+            const doneDetail = doneMessage.detail;
+            const doneStats = doneMessage.stats;
             const statsIsObject = typeof doneStats === 'object' && doneStats !== null;
             const doneStatEntries = statsIsObject ? doneStats.entries : undefined;
             const doneStatExpanded = statsIsObject ? doneStats.expandedBytes : undefined;
@@ -949,7 +998,12 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
             // fields that were validated, not on whatever the object says
             // later. Snapshotting before the archive checks also lets
             // late-failure translations preserve the worker's statistics.
-            const terminal = {
+            const terminal: {
+              status: ArchiveWorkerStatus;
+              code: string | undefined;
+              detail: string | undefined;
+              stats: ArchiveWorkerStats;
+            } = {
               status: doneStatus,
               code: doneCode,
               detail: doneDetail,
@@ -961,6 +1015,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 elapsedMs: doneStatElapsed as number,
               },
             };
+            // The terminal is accepted from here: any reentrant response to
+            // the deadline translation's cooperative cancel must not
+            // displace it, clone mode included.
+            terminalSeen = true;
             terminalStats = terminal.stats;
             if (
               transfer && doneArchive !== undefined
@@ -1069,15 +1127,9 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // A worker-originated failure carries a code even when the
               // optional field is missing, so the iterator's ZipDecodeError
               // and job.result agree on the failure.
-              let normalizedCode = terminal.code;
-              if (normalizedCode === undefined && terminal.status === 'deadline') {
-                normalizedCode = 'deadline';
-              } else if (normalizedCode === undefined && terminal.status === 'error') {
-                normalizedCode = 'worker-error';
-              }
               return {
                 status: terminal.status,
-                code: normalizedCode,
+                code: normalizeWorkerFailureCode(terminal.code, terminal.status),
                 detail: terminal.detail,
               };
             };
@@ -1114,7 +1166,6 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
                 });
                 return;
               }
-              terminalSeen = true;
               void digestOf(new Uint8Array(returned)).then(
                 (digest) => {
                   if (finished) {

@@ -3190,6 +3190,122 @@ describe('bounded ZIP decode client', () => {
     expect(status.archiveLost).toBeUndefined();
   });
 
+  it('dispatches on the captured message type', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await waitForDecodePost(worker);
+    let typeReads = 0;
+    worker.emit({
+      get type(): 'entry' | 'done' {
+        // The captured type governs dispatch; later reads must not flip
+        // the message into the opposite shape.
+        typeReads++;
+        return typeReads === 1 ? 'entry' : 'done';
+      },
+      jobId: 1,
+      seq: 1,
+      path: 'grove/grove.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    } as never);
+    const first = await firstPull;
+    expect(first.done).toBe(false);
+    expect(first.value.path).toBe('grove/grove.png');
+  });
+
+  it('normalizes unknown worker failure codes by terminal status', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = buildV1Zip([
+      { path: 'grove/one.png', data: pngBytes, method: 'store' },
+    ]);
+    const run = async (
+      done: { status: ArchiveWorkerStatus; code?: string },
+    ): Promise<string | undefined> => {
+      const posted = createFakeWorker();
+      posted.blackhole();
+      const probe = createBoundedZipDecoder({ createWorker: (): FakeWorker => posted });
+      const job = probe.decode({ archive: zip.archive, expected: zip.expected });
+      await waitForDecodePost(posted);
+      posted.emit({
+        type: 'done',
+        jobId: 1,
+        status: done.status,
+        code: done.code,
+        stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+      } as never);
+      return (await job.result).code;
+    };
+    // Unknown codes fall back by status: errors become worker-error,
+    // deadlines keep their code, and successes carry none.
+    expect(await run({ status: 'error', code: 'not-a-real-code' })).toBe('worker-error');
+    expect(await run({ status: 'deadline', code: 'not-a-real-code' })).toBe('deadline');
+    expect(await run({ status: 'cancelled', code: 'not-a-real-code' })).toBeUndefined();
+    void worker;
+    void decoder;
+
+    // The iterator's ZipDecodeError shares the normalized code.
+    const posted = createFakeWorker();
+    posted.blackhole();
+    const probe = createBoundedZipDecoder({ createWorker: (): FakeWorker => posted });
+    const job = probe.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const pull = iterator.next();
+    const rejection = expect(pull).rejects.toMatchObject({ code: 'worker-error' });
+    await waitForDecodePost(posted);
+    posted.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'error',
+      code: 'not-a-real-code',
+      detail: 'skewed worker',
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    });
+    await rejection;
+    expect((await job.result).code).toBe('worker-error');
+  });
+
+  it('never attaches a failure code to a completed job', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = buildV1Zip([
+      { path: 'grove/one.png', data: pngBytes, method: 'store' },
+    ]);
+    const job = decoder.decode({ archive: zip.archive, expected: zip.expected });
+    const iterator = job.entries[Symbol.asyncIterator]();
+    const firstPull = iterator.next();
+    await waitForDecodePost(worker);
+    worker.emit({
+      type: 'entry',
+      jobId: 1,
+      seq: 1,
+      path: 'grove/one.png',
+      method: 'store',
+      bytes: pngBytes.slice().buffer as ArrayBuffer,
+    });
+    await tick(2);
+    expect((await firstPull).done).toBe(false);
+    // A worker attaching a failure code to a completion must not leak it:
+    // consumers switching on code see a clean success.
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      code: 'integrity',
+      stats: { entries: 1, expandedBytes: pngBytes.length, elapsedMs: 0 },
+    });
+    const status = await job.result;
+    expect(status.status).toBe('completed');
+    expect(status.code).toBeUndefined();
+  });
+
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {

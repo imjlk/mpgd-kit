@@ -478,6 +478,11 @@ export async function* decodeZipV1Entries(
       `Unsupported archive format version ${JSON.stringify(expected.formatVersion)}`,
     );
   }
+  // The budget starts before the manifest snapshot: copying a large or
+  // getter-heavy manifest consumes wall clock that is part of the decode
+  // deadline, like the archive copy below.
+  const deadlineAt = clock() + limits.decodeDeadlineMs;
+  assertControl(wrappedControl, clock, deadlineAt);
   // Capture the manifest once: the archive digest is asynchronous, and a
   // caller mutating its manifest mid-hash must not split the pre-checks,
   // the verification basis or the entry loop across different reads.
@@ -496,6 +501,7 @@ export async function* decodeZipV1Entries(
     // Copy each entry so callers cannot mutate the verification basis
     // across the asynchronous digest.
     manifestEntries.push({ ...sourceEntries[index]! });
+    assertControl(wrappedControl, clock, deadlineAt);
   }
   const manifest = {
     formatVersion: expected.formatVersion,
@@ -510,23 +516,54 @@ export async function* decodeZipV1Entries(
       'ZIP v1 delivery archives require at least one expected entry',
     );
   }
-  if (inputArchive.length !== manifest.archive.bytes) {
+  let inputLength: number;
+  try {
+    inputLength = inputArchive.length;
+  } catch (error) {
     throw new ZipDecodeError(
-      'archive-mismatch',
-      `ZIP archive is ${inputArchive.length} bytes, expected ${manifest.archive.bytes}`,
+      'unsupported',
+      `ZIP archive view length cannot be read: ${String(error)}`,
     );
   }
-  if (inputArchive.length > limits.archiveBytes) {
+  if (inputLength !== manifest.archive.bytes) {
+    throw new ZipDecodeError(
+      'archive-mismatch',
+      `ZIP archive is ${inputLength} bytes, expected ${manifest.archive.bytes}`,
+    );
+  }
+  if (inputLength > limits.archiveBytes) {
     throw new ZipDecodeError('limit', 'ZIP archive exceeds the archive byte limit');
   }
-  // The budget starts before the private snapshot: copying a large
-  // archive consumes wall clock, and that time is part of the decode
-  // deadline. WebCrypto then authenticates the bytes as of its call, so
-  // every later read observes the same snapshot even if the caller mutates
-  // its view while the archive digest pends.
-  const deadlineAt = clock() + limits.decodeDeadlineMs;
-  assertControl(wrappedControl, clock, deadlineAt);
-  const archive = new Uint8Array(inputArchive);
+  // The private snapshot allocates exactly the captured, limit-checked
+  // length. The buffer and offset still come from ordinary prototype
+  // getters a subclass could shadow, but the construction is safe
+  // because the length bounds the allocation and the digest comparison
+  // below fails closed against any swapped (buffer, offset) pair. Any
+  // accessor that throws fails typed with its cause preserved.
+  // WebCrypto authenticates the bytes as of its call, so every later read
+  // observes the same snapshot even if the caller mutates its view while
+  // the archive digest pends.
+  let archive: Uint8Array;
+  try {
+    const inputBuffer = inputArchive.buffer;
+    const inputOffset = inputArchive.byteOffset;
+    // Brand-check the backing store: the (buffer, offset, length) overload
+    // only applies the bounding length for genuine (Shared)ArrayBuffers, so
+    // a shadowed getter returning an array-like or iterable must fail
+    // typed rather than sizing the allocation itself.
+    if (
+      !(inputBuffer instanceof ArrayBuffer)
+      && !(typeof SharedArrayBuffer !== 'undefined' && inputBuffer instanceof SharedArrayBuffer)
+    ) {
+      throw new TypeError('archive view is not backed by an ArrayBuffer');
+    }
+    archive = new Uint8Array(new Uint8Array(inputBuffer, inputOffset, inputLength));
+  } catch (error) {
+    throw new ZipDecodeError(
+      'unsupported',
+      `ZIP archive view cannot be snapshotted: ${String(error)}`,
+    );
+  }
   assertControl(wrappedControl, clock, deadlineAt);
   const archiveDigest = await digestOf(archive);
   // The elapsed check precedes interpreting the digest, so hashing that

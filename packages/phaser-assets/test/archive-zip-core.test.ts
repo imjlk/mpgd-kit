@@ -272,6 +272,89 @@ describe('bounded ZIP decode core', () => {
     })()).rejects.toMatchObject({ code: 'limit' });
   });
 
+  it('fails typed when archive view accessors throw', async () => {
+    const fixture = buildV1Zip([
+      { path: 'a.bin', data: new Uint8Array([1, 2, 3, 4]), method: 'store' as const },
+    ]);
+    class ThrowingLength extends Uint8Array {
+      override get length(): number {
+        throw new Error('no length for you');
+      }
+    }
+    await expect((async () => {
+      for await (const _entry of decodeZipV1Entries(
+        new ThrowingLength(fixture.archive.slice()),
+        fixture.expected,
+        limits(),
+      )) {
+        void _entry;
+      }
+    })()).rejects.toMatchObject({ code: 'unsupported' });
+
+    class ThrowingBuffer extends Uint8Array {
+      override get buffer(): ArrayBuffer {
+        throw new Error('no buffer for you');
+      }
+    }
+    await expect((async () => {
+      for await (const _entry of decodeZipV1Entries(
+        new ThrowingBuffer(fixture.archive.slice()),
+        fixture.expected,
+        limits(),
+      )) {
+        void _entry;
+      }
+    })()).rejects.toMatchObject({ code: 'unsupported' });
+  });
+
+  it('fails typed when the view is not backed by an ArrayBuffer', async () => {
+    const fixture = buildV1Zip([
+      { path: 'a.bin', data: new Uint8Array([1, 2, 3, 4]), method: 'store' as const },
+    ]);
+    // The shadowed getter returns an array-like whose length would size the
+    // allocation under the wrong constructor overload; the brand check
+    // rejects it before any allocation.
+    const arrayLike = { length: 2 ** 31 };
+    class ArrayLikeBacked extends Uint8Array {
+      override get buffer(): ArrayBuffer {
+        return arrayLike as unknown as ArrayBuffer;
+      }
+    }
+    await expect((async () => {
+      for await (const _entry of decodeZipV1Entries(
+        new ArrayLikeBacked(fixture.archive.slice()),
+        fixture.expected,
+        limits(),
+      )) {
+        void _entry;
+      }
+    })()).rejects.toMatchObject({ code: 'unsupported' });
+  });
+
+  it('bounds the archive snapshot by the captured length', async () => {
+    const fixture = buildV1Zip([
+      { path: 'a.bin', data: new Uint8Array([1, 2, 3, 4]), method: 'store' as const },
+    ]);
+    // The subclass reports the manifest's byte count while its storage
+    // carries four extra trailing bytes; the snapshot must copy exactly
+    // the captured length, so the digest matches the manifest and the
+    // trailing bytes never enter the decode.
+    const archiveLength = fixture.archive.length;
+    class LyingArchive extends Uint8Array {
+      override get length(): number {
+        return archiveLength;
+      }
+    }
+    const storage = new Uint8Array(archiveLength + 4);
+    storage.set(fixture.archive);
+    const lying = new LyingArchive(storage);
+    const decoded: number[] = [];
+    for await (const entry of decodeZipV1Entries(lying, fixture.expected, limits())) {
+      decoded.push(...entry.bytes);
+    }
+    expect(decoded).toEqual([1, 2, 3, 4]);
+  });
+
   it('snapshots the manifest before asynchronous verification', async () => {
     const fixture = buildV1Zip([
       { path: 'a.bin', data: new Uint8Array([1, 2, 3, 4]), method: 'store' as const },
