@@ -977,7 +977,19 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
               // so messages racing the hash are ignored. The buffer is
               // snapshotted so a worker retaining its storage cannot
               // mutate it after verification.
-              const returned = message.archive.slice(0);
+              let returned: ArrayBuffer;
+              try {
+                returned = message.archive.slice(0);
+              } catch (error) {
+                // An unrecoverable buffer must settle the job instead of
+                // escaping the listener and stalling every pending pull.
+                failWorker({
+                  status: 'worker-error',
+                  code: 'worker-error',
+                  detail: `The archive decode worker returned an archive buffer that could not be recovered: ${String(error)}`,
+                });
+                return;
+              }
               terminalSeen = true;
               void digestOf(new Uint8Array(returned)).then(
                 (digest) => {
@@ -1152,7 +1164,10 @@ export function createBoundedZipDecoder(options: BoundedZipDecoderOptions): Boun
           }, transfer ? [archivePayload] : []);
         } catch (error) {
           if (!finished) {
-            finalize({
+            // Posting the decode request spends the job budget: a post
+            // that blocks past the deadline and then throws settles as
+            // the deadline, like every other late failure.
+            failWorker({
               status: 'worker-error',
               code: 'worker-error',
               detail: `Could not post the decode request: ${String(error)}`,

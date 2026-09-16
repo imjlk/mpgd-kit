@@ -2755,6 +2755,75 @@ describe('bounded ZIP decode client', () => {
     }
   });
 
+  it('settles as deadline when the decode post outlasts the budget', async () => {
+    const realNow = performance.now.bind(performance);
+    // The budget starts on the first clock read; the post then blocks past
+    // the deadline and throws, and only the elapsed clock can see it.
+    let calls = 0;
+    vi.spyOn(performance, 'now').mockImplementation(() => {
+      calls++;
+      // Budget start and both pre-submit guards read within the budget;
+      // the failing post's settlement reads past it.
+      return calls <= 4 ? realNow() : realNow() + 5000;
+    });
+    try {
+      const workerLike: ZipDecodeWorkerLike = {
+        postMessage(message): void {
+          if (message.type === 'decode') {
+            throw new Error('post blocked then failed');
+          }
+        },
+        addEventListener(): void {},
+        terminate(): void {},
+      };
+      const decoder = createBoundedZipDecoder({
+        createWorker: (): ZipDecodeWorkerLike => workerLike,
+        cancelGraceMs: 50,
+      });
+      const zip = fixture();
+      const job = decoder.decode({
+        archive: zip.archive,
+        expected: zip.expected,
+        limits: { ...defaultArchiveWorkerLimits(), decodeDeadlineMs: 1000 },
+      });
+      const status = await job.result;
+      expect(status.status).toBe('deadline');
+      expect(status.detail).toContain('Could not post the decode request');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('settles when the returned archive cannot be snapshotted', async () => {
+    const worker = createFakeWorker();
+    worker.blackhole();
+    const decoder = createBoundedZipDecoder({ createWorker: (): FakeWorker => worker });
+    const zip = fixture();
+    const job = decoder.decode({
+      archive: zip.archive.slice(),
+      expected: zip.expected,
+      transferArchive: true,
+    });
+    await waitForDecodePost(worker);
+    class PoisonedBuffer extends ArrayBuffer {
+      override slice(): ArrayBuffer {
+        throw new Error('no slice for you');
+      }
+    }
+    const cancelling = job.cancel();
+    worker.emit({
+      type: 'done',
+      jobId: 1,
+      status: 'completed',
+      archive: new PoisonedBuffer(zip.archive.length),
+      stats: { entries: 0, expandedBytes: 0, elapsedMs: 0 },
+    });
+    const status = await cancelling;
+    expect(status.status).toBe('cancelled');
+    expect(status.detail).toContain('could not be recovered');
+    expect(status.archiveLost).toBe(true);
+  });
+
   it('keeps the deadline cause when cancellation lands after the deadline elapsed', async () => {
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     try {
