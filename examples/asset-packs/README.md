@@ -35,6 +35,26 @@ Copy `artifacts/origin/packs/` to that base path, and configure CORS plus PNG/JS
 MIME types. This server binds to loopback for development only. Restart dev/build
 when changing source assets; the session catalog is pinned.
 
+### ZIP delivery acceptance
+
+The same sample also runs the complete ZIP path end to end: real
+\`mpgd assets build-packs\` output (built by \`pnpm --dir examples/asset-packs
+build:delivery\` into \`artifacts/origin/delivery/\`) downloaded over plain
+HTTP, decoded and verified by the real application-deployed module worker
+(#191), staged once per pack, supplied to the very same Phaser loader
+through a prepared file source, then displayed, switched, cancelled and
+released. Append \`&delivery=zip\` (all packs as archives) or
+\`&delivery=mixed\` (shared pack as plain files, themes as archives) to the
+sample URL. \`&staging=<bytes>\` shrinks the staging budget to exercise the
+pre-network rejection. Preparation precedes \`loader.acquire\`; staging is
+returned as soon as the loader has consumed the files, and registered
+textures keep the level playable afterwards. Re-entering a level
+re-prepares from the network. The browser suite covers the happy path in
+WebGL and Canvas plus 404/corrupt archives, oversize and exact staging
+budgets, mid-preparation cancel, overlapping A→B→A transitions, shutdown
+during preparation, mixed files+ZIP manifests, and a files-vs-ZIP
+comparison recorded into \`artifacts/browser/evidence.json\`.
+
 `dist/bundled` includes all pack files; `dist/hybrid` includes only the shared pack.
 Remote theme revisions live separately under `artifacts/origin`. Each build's
 `asset-pack-report.json` records actual encoded asset bytes and labeled RGBA

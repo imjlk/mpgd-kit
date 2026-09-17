@@ -1,6 +1,7 @@
 import Phaser from 'phaser';
 
 import { createPhaserAssetPackLoader, type PhaserAssetPackLease as PackLease } from '@mpgd/phaser-assets/packs';
+import { createZipPackDelivery, type ZipPackDelivery } from './zipDelivery.js';
 import type { DeliveryPack } from './packs.js';
 import './style.css';
 
@@ -9,14 +10,42 @@ declare const __ASSET_PACK_MODE__: 'bundled' | 'hybrid';
 declare const __ASSET_PACK_ORIGIN__: string;
 
 type Theme = 'grove' | 'dunes';
+/** Delivery tuning next to the loader limits: the sample's staging
+ * contract — 32 MiB of archive+expanded bytes, a 15 s whole-prepare
+ * deadline, 4 s per HTTP attempt, 32 MiB per files-delivery file. */
+const DELIVERY_STAGING_BUDGET_BYTES = 32 * 1024 * 1024;
+const DELIVERY_PREPARE_TIMEOUT_MS = 15_000;
+const DELIVERY_REQUEST_TIMEOUT_MS = 4_000;
+const DELIVERY_MAX_FILE_BYTES = 32 * 1024 * 1024;
+
+/** Loader limits shared by both transports so files and ZIP delivery
+ * behave identically. */
+const loaderOptions = {
+  timeoutMs: 5_000,
+  maxConcurrentDownloads: 2,
+  maxConcurrentDecodes: 1,
+  maxBufferedBytes: 8 * 1024 * 1024,
+};
+
 const element = <T extends HTMLElement>(id: string): T => {
   const value = document.getElementById(id);
   if (!value) throw new Error(`Missing sample control: ${id}`);
   return value as T;
 };
 const controls = Object.fromEntries(['grove', 'dunes', 'cancel', 'retry', 'unload'].map((id) => [id, element<HTMLButtonElement>(id)]));
-const model = { phase: 'booting', requested: null as Theme | null, current: null as Theme | null, ready: 0, total: 0, error: '' };
+/** Artifact layout shared with test/build-delivery.ts and test/browser.mjs:
+ * <origin>/delivery/<variant>/asset-pack-delivery.json. */
+const DELIVERY_MANIFEST_PATH = (variant: string): string => `delivery/${variant}/asset-pack-delivery.json`;
+
+const params = new URLSearchParams(location.search);
+const deliveryParam = params.get('delivery');
+const deliveryMode: 'zip' | 'mixed' | null = deliveryParam === 'zip' || deliveryParam === 'mixed' ? deliveryParam : null;
+const model = {
+  phase: 'booting', requested: null as Theme | null, current: null as Theme | null, ready: 0, total: 0, error: '',
+  lastPrepareMs: null as number | null,
+};
 let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
+let delivery: ZipPackDelivery | undefined;
 let pending: AbortController | undefined;
 let sequence = 0;
 let virtualTime = 0;
@@ -38,25 +67,32 @@ class Board extends Phaser.Scene {
     // object may keep using a texture after its last owner returns the lease.
     this.events.once('shutdown', () => {
       ++sequence;
+      ++deliveryBootTicket;
       pending?.abort();
       pending = undefined;
       this.clear();
+      delivery?.dispose();
+      delivery = undefined;
       packs = undefined;
-      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '' });
+      Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
       renderStatus();
     });
-    packs = createPhaserAssetPackLoader(this, __ASSET_PACK_CATALOG__, {
-      resolveURL: (url, pack) => new URL(url, bundled.has(pack.packId) ? localBase : __ASSET_PACK_ORIGIN__).href,
-      timeoutMs: 5_000,
-      requestTimeoutMs: 2_000,
-      maxConcurrentDownloads: 2,
-      maxConcurrentDecodes: 1,
-      maxBufferedBytes: 8 * 1024 * 1024,
-      requestCache: new URLSearchParams(location.search).has('http-cache') ? 'default' : 'no-store',
-    });
-    model.phase = 'idle';
     this.showEmpty();
     this.baselineTextures = new Set(this.textures.getTextureKeys());
+    if (deliveryMode === null) {
+      packs = createPhaserAssetPackLoader(this, __ASSET_PACK_CATALOG__, {
+        ...loaderOptions,
+        resolveURL: (url, pack) => new URL(url, bundled.has(pack.packId) ? localBase : __ASSET_PACK_ORIGIN__).href,
+        requestTimeoutMs: 2_000,
+        requestCache: params.has('http-cache') ? 'default' : 'no-store',
+      });
+      model.phase = 'idle';
+    } else {
+      // ZIP delivery boots asynchronously: the CLI-built delivery manifest
+      // is fetched, validated and turned into the loader catalog + prepared
+      // file source before the sample becomes interactive.
+      void initDelivery(this);
+    }
     renderStatus();
   }
   enter(lease: PackLease, theme: Theme): void {
@@ -166,11 +202,16 @@ function statusText(): string {
 }
 
 function renderStatus(): void {
-  controls.grove!.disabled = controls.dunes!.disabled = model.phase === 'booting';
+  controls.grove!.disabled = controls.dunes!.disabled = model.phase === 'booting' || !packs;
   controls.cancel!.disabled = model.phase !== 'preparing';
   controls.retry!.disabled = model.phase !== 'error';
   controls.unload!.disabled = model.phase === 'booting' || (model.phase === 'idle' && !model.current);
-  element('delivery').textContent = __ASSET_PACK_MODE__ === 'bundled' ? 'ALL PACKS BUNDLED' : 'SHARED BUNDLED / THEMES ON STATIC ORIGIN';
+  const deliveryLabels: Record<string, string> = {
+    zip: 'ZIP DELIVERY / REAL MODULE WORKER',
+    mixed: 'MIXED FILES + ZIP DELIVERY',
+  };
+  element('delivery').textContent = deliveryLabels[deliveryMode ?? '']
+    ?? (__ASSET_PACK_MODE__ === 'bundled' ? 'ALL PACKS BUNDLED' : 'SHARED BUNDLED / THEMES ON STATIC ORIGIN');
   element('status').textContent = statusText();
   const progress = element<HTMLProgressElement>('progress');
   progress.max = Math.max(1, model.total);
@@ -180,7 +221,7 @@ function renderStatus(): void {
   element('memory').textContent = `RGBA estimate: ${resources.filter((resource) => resource.ready).reduce((sum, resource) => sum + resource.rgbaEstimate, 0).toLocaleString()} bytes`;
 }
 
-async function enter(theme: Theme): Promise<void> {
+function enter(theme: Theme): void {
   if (!packs) return;
   const active = bootedGame();
     if (!active.loop.running) active.loop.start(active.step.bind(active));
@@ -188,14 +229,49 @@ async function enter(theme: Theme): Promise<void> {
   pending?.abort();
   const controller = new AbortController();
   pending = controller;
-  Object.assign(model, { phase: 'preparing', requested: theme, ready: 0, total: 0, error: '' });
+  Object.assign(model, { phase: 'preparing', requested: theme, ready: 0, total: 0, error: '', lastPrepareMs: null });
   renderStatus();
-  try {
-    const lease = await packs.acquire(theme, { signal: controller.signal, onProgress(ready, total) {
-      if (ticket !== sequence) return;
-      Object.assign(model, { ready, total });
+  // Enters run one at a time: a superseded enter finishes (or aborts)
+  // before the next begins, so overlapping transitions never surface the
+  // delivery's single-flight busy error to the user.
+  enterChain = enterChain.then(() => runEnter(theme, ticket, controller)).catch((error) => {
+    // runEnter handles its own failures; reaching here is a real bug and
+    // must stay visible in the console the browser acceptance monitors.
+    console.error('Unexpected sample enter failure', error);
+    if (ticket === sequence) {
+      model.phase = 'error';
+      model.error = error instanceof Error ? error.message : String(error);
       renderStatus();
-    } });
+    }
+  });
+}
+
+let enterChain: Promise<void> = Promise.resolve();
+
+async function runEnter(theme: Theme, ticket: number, controller: AbortController): Promise<void> {
+  if (!packs || ticket !== sequence) return;
+  const acquireOptions = { signal: controller.signal, onProgress(ready: number, total: number) {
+    if (ticket !== sequence) return;
+    Object.assign(model, { ready, total });
+    renderStatus();
+  } };
+  try {
+    let lease: PackLease;
+    if (delivery === undefined) {
+      lease = await packs.acquire(theme, acquireOptions);
+    } else {
+      // Pack preparation precedes the loader: staging (download + worker
+      // decode) is returned as soon as the loader has decoded the files;
+      // registered textures survive the staging release.
+      const startedAt = performance.now();
+      const prepared = await delivery.prepare(theme, { signal: controller.signal });
+      model.lastPrepareMs = Math.round(performance.now() - startedAt);
+      try {
+        lease = await packs.acquire(theme, acquireOptions);
+      } finally {
+        prepared.release();
+      }
+    }
     if (ticket !== sequence) { lease.release(); return; }
     board.enter(lease, theme);
     Object.assign(model, { current: theme, phase: 'playing' });
@@ -208,10 +284,57 @@ async function enter(theme: Theme): Promise<void> {
   }
 }
 
+let deliveryBootTicket = 0;
+
+async function initDelivery(scene: Phaser.Scene): Promise<void> {
+  if (deliveryMode === null) throw new Error('Delivery boot requires a delivery mode');
+  const bootTicket = ++deliveryBootTicket;
+  const bootStillCurrent = (): boolean => bootTicket === deliveryBootTicket;
+  // Retry replaces a half-built or failed boot: any older instance is
+  // disposed before a new one is created, and the visible state returns to
+  // booting so stale error text and timings cannot leak into evidence.
+  delivery?.dispose();
+  delivery = undefined;
+  packs = undefined;
+  Object.assign(model, { phase: 'booting', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
+  renderStatus();
+  try {
+    const stagingParam = Number(params.get('staging') ?? DELIVERY_STAGING_BUDGET_BYTES);
+    const booted = await createZipPackDelivery({
+      manifestUrl: new URL(DELIVERY_MANIFEST_PATH(deliveryMode), __ASSET_PACK_ORIGIN__).href,
+      createWorker: (): Worker => new Worker(new URL('./archive-decode-worker.ts', import.meta.url), { type: 'module' }),
+      stagingBudgetBytes: stagingParam,
+      prepareTimeoutMs: DELIVERY_PREPARE_TIMEOUT_MS,
+      requestTimeoutMs: DELIVERY_REQUEST_TIMEOUT_MS,
+      maxFileBytes: DELIVERY_MAX_FILE_BYTES,
+    });
+    if (!bootStillCurrent()) {
+      booted.dispose();
+      return;
+    }
+    // createPhaserAssetPackLoader is synchronous: the ticket cannot change
+    // between the check above and the publish below.
+    delivery = booted;
+    packs = createPhaserAssetPackLoader(scene, booted.catalog, {
+      ...loaderOptions,
+      fileSource: booted.fileSource,
+    });
+    model.phase = 'idle';
+  } catch (error) {
+    if (!bootStillCurrent()) return;
+    model.phase = 'error';
+    model.error = error instanceof Error ? error.message : 'Delivery initialization failed';
+  }
+  renderStatus();
+}
+
 function wireSampleControls(): void {
-    controls.grove!.onclick = () => { void enter('grove'); };
-  controls.dunes!.onclick = () => { void enter('dunes'); };
-  controls.retry!.onclick = () => { if (model.requested) void enter(model.requested); };
+  controls.grove!.onclick = () => { enter('grove'); };
+  controls.dunes!.onclick = () => { enter('dunes'); };
+  controls.retry!.onclick = () => {
+    if (deliveryMode !== null && !packs) { void initDelivery(board); return; }
+    if (model.requested) enter(model.requested);
+  };
   controls.cancel!.onclick = () => {
     ++sequence;
     pending?.abort();
@@ -227,7 +350,7 @@ function wireSampleControls(): void {
     if (!packs) return;
     board.clear();
     board.showEmpty();
-    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '' });
+    Object.assign(model, { phase: 'idle', current: null, requested: null, ready: 0, total: 0, error: '', lastPrepareMs: null });
     renderStatus();
   };
 }
@@ -236,7 +359,7 @@ function wireSampleControls(): void {
     interface Window { render_game_to_text: () => string; advanceTime: (milliseconds: number) => void; shutdownSample: () => number; }
 }
   function state() {
-    return { ...model, renderer: bootedGame().config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas', mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
+    return { ...model, delivery: deliveryMode ?? 'files', staging: delivery?.snapshot() ?? null, renderer: bootedGame().config.renderType === Phaser.WEBGL ? 'webgl' : 'canvas', mode: __ASSET_PACK_MODE__, coordinateSystem: 'origin top-left; x right; y down',
       groundFrames: model.current ? board.frames(model.current, 'ground') : 0,
       pilotFrames: model.current ? board.frames('shared', 'pilot') : 0,
       player: model.phase === 'booting' ? null : board.player(), resources: packs?.snapshot().map((entry) => ({ ...entry, pack: entry.packId, identity: entry.packId + '/' + entry.assetKey })) ?? [],

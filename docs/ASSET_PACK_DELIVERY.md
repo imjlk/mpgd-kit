@@ -133,6 +133,21 @@ outstanding entry of backpressure, per-job cancellation with late-message
 protection, and distinct failure statuses for worker crashes and deadlines.
 See the package README for the exact contract and limitations.
 
+### Browser acceptance
+
+The private fixture in `examples/asset-packs` exercises the full product path
+with real artifacts: `mpgd assets build-packs` output (files, all-ZIP and
+mixed files+ZIP variants) served from an ordinary static origin, archives
+downloaded once per pack, decoded by the real application-deployed module
+worker, staged under an explicit byte budget, and supplied to the stock
+`createPhaserAssetPackLoader` through a prepared file source. The suite
+verifies display, theme switching with shared-pack reuse, cancellation
+mid-download, shutdown during preparation, staging release with surviving
+textures, re-preparation after release, HTTP 404 and corrupted archives,
+oversize (rejected before any request) and exact staging budgets, and a
+files-vs-ZIP entry comparison. It runs as part of
+`pnpm --dir examples/asset-packs test:browser`.
+
 ## Format module
 
 `@mpgd/phaser-assets/pack-format` exports the shared pure contract: build

@@ -1,0 +1,42 @@
+{
+  "root": "../asset-source",
+  "packs": [
+    {
+      "id": "shared",
+      "revision": "1",
+      "dependsOn": [],
+      "delivery": "files",
+      "assets": [
+        {
+          "kind": "spritesheet",
+          "key": "pilot",
+          "file": "pilot.png",
+          "frameConfig": { "frameWidth": 64, "frameHeight": 64 }
+        }
+      ]
+    },
+    {
+      "id": "grove",
+      "revision": "1",
+      "dependsOn": ["shared"],
+      "delivery": "zip",
+      "assets": [
+        {
+          "kind": "atlas",
+          "key": "ground",
+          "texture": "grove.png",
+          "atlas": "grove.json"
+        }
+      ]
+    },
+    {
+      "id": "dunes",
+      "revision": "1",
+      "dependsOn": ["shared"],
+      "delivery": "zip",
+      "assets": [
+        { "kind": "image", "key": "ground", "file": "dunes.png" }
+      ]
+    }
+  ]
+}

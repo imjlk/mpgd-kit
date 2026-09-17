@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { spawnSync } from 'node:child_process';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -20,6 +21,15 @@ const servers = [];
 const evidence = [];
 try {
   process.env.ASSET_PACK_REMOTE_ORIGIN = remote.url;
+  // The ZIP acceptance consumes real `mpgd assets build-packs` output: the
+  // all-ZIP and mixed files+ZIP variants are built into the static origin
+  // before the app builds, exactly as a consumer would produce them.
+  const deliveryBuild = spawnSync(process.execPath, [
+    join(root, '..', '..', 'tools', 'run-ttsx.mjs'),
+    '--project', 'tsconfig.delivery-build.json',
+    'test/build-delivery.ts',
+  ], { cwd: root, stdio: 'inherit' });
+  if (deliveryBuild.status !== 0) throw new Error('Delivery artifact build failed');
   for (const mode of ['bundled', 'hybrid']) await build({ root, configFile: join(root, 'vite.config.ts'), mode, build: { outDir: join(builds, mode) }, logLevel: 'warn' });
   const reports = await auditArtifacts(builds);
   browser = await chromium.launch({ headless: true, args: ['--use-gl=angle', '--use-angle=swiftshader', '--enable-unsafe-swiftshader'] });
@@ -235,6 +245,268 @@ try {
     assert.equal(report.entries, 2);
     assert.deepEqual(errors, []);
     await context.close();
+  }
+
+  // Real CLI-built ZIP packs decoded by the real module worker, supplied to
+  // the same Phaser loader through the prepared file source.
+  {
+    const packOf = (manifest, id) => {
+      const pack = manifest.packs.find((entry) => entry.packId === id);
+      assert.ok(pack, `Delivery manifest lacks the ${id} pack`);
+      return pack;
+    };
+    const archiveOf = (manifest, id) => {
+      const archive = packOf(manifest, id).archive;
+      assert.ok(archive, `Delivery manifest pack ${id} lacks an archive`);
+      return archive;
+    };
+    // The app resolves manifest artifact paths by URL-encoding each
+    // segment; expected-failure URLs must match that encoding exactly.
+    const encodedUrl = (artifactPath) => new URL(
+      artifactPath.split('/').map((segment) => encodeURIComponent(segment)).join('/'),
+      remote.url,
+    ).href;
+    const zipManifest = JSON.parse(await readFile(join(root, 'artifacts/origin/delivery/zip/asset-pack-delivery.json'), 'utf8'));
+    const archivePath = (id) => '/delivery/zip/' + archiveOf(zipManifest, id).path;
+    const needBytes = (packIds) => packIds.reduce((sum, id) => {
+      const pack = packOf(zipManifest, id);
+      return sum + archiveOf(zipManifest, id).bytes + pack.assets.flatMap((asset) => asset.files).reduce((n, file) => n + file.bytes, 0);
+    }, 0);
+    const groveClosureNeed = needBytes(['shared', 'grove']);
+    const zipArtifactBytes = zipManifest.packs.reduce((sum, pack) => sum + pack.archive.bytes, 0);
+    const zipExpandedBytes = zipManifest.packs.reduce((sum, pack) => sum + pack.assets.flatMap((asset) => asset.files).reduce((n, file) => n + file.bytes, 0), 0);
+    const zipApp = await staticServer(join(builds, 'bundled'));
+    servers.push(zipApp);
+
+    for (const renderer of ['webgl', 'canvas']) {
+      const context = await browser.newContext({ viewport: { width: 1100, height: 1000 } });
+      const page = await context.newPage();
+      const errors = [];
+      const expectedFailures = new Set();
+      page.on('pageerror', (error) => errors.push(error.message));
+      page.on('console', (message) => {
+        if (message.type() !== 'error') return;
+        if (expectedFailures.has(message.location().url) && message.text().startsWith('Failed to load resource:')) return;
+        errors.push(message.text());
+      });
+      const state = () => page.evaluate(() => JSON.parse(window.render_game_to_text()));
+      const wait = (phase) => page.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
+      const zipCount = (id) => remote.requests.filter((path) => path === archivePath(id)).length;
+
+      await page.goto(zipApp.url + '?renderer=' + renderer + '&delivery=zip');
+      await wait('idle');
+      let current = await state();
+      assert.equal(current.delivery, 'zip');
+      assert.equal(current.staging.stagingUsedBytes, 0);
+      // Entry never fetches per-file HTTP paths under ZIP delivery.
+      assert.equal(remote.requests.filter((path) => path.startsWith('/delivery/zip/packs/') && !path.endsWith('.zip')).length, 0);
+
+      const sharedBefore = zipCount('shared');
+      const groveBefore = zipCount('grove');
+      await page.click('#grove');
+      await wait('playing');
+      current = await state();
+      assert.equal(current.current, 'grove');
+      assert.equal(current.groundFrames, 2, 'Atlas frames arrive from the archive');
+      assert.equal(current.pilotFrames, 4, 'Spritesheet frames arrive from the archive');
+      assert.deepEqual([current.ready, current.total, current.textureCount], [2, 2, 2]);
+      assert.ok(Number.isFinite(current.lastPrepareMs) && current.lastPrepareMs >= 0);
+      // One archive request per pack in the closure — never one per file.
+      assert.equal(zipCount('shared') - sharedBefore, 1, 'The shared archive downloads once per preparation');
+      assert.equal(zipCount('grove') - groveBefore, 1, 'The theme archive downloads once per preparation');
+      assert.equal(remote.requests.filter((path) => path.startsWith('/delivery/zip/packs/') && !path.endsWith('.zip')).length, 0);
+      // Staging is returned after the loader consumed the files while the
+      // texture lease keeps the level on screen.
+      assert.equal(current.staging.stagingUsedBytes, 0);
+      assert.deepEqual(current.staging.staging, []);
+      await page.screenshot({ path: join(artifacts, `zip-${renderer}-grove.png`), fullPage: true });
+
+      await page.click('#dunes');
+      await wait('playing');
+      current = await state();
+      assert.equal(current.current, 'dunes');
+      assert.deepEqual(current.resources.map((asset) => asset.pack).sort(), ['dunes', 'shared']);
+      assert.equal(current.textureCount, 2);
+
+      await page.click('#unload');
+      await page.evaluate(() => window.advanceTime(17));
+      current = await state();
+      assert.equal(current.phase, 'idle');
+      assert.equal(current.textureCount, 0);
+      assert.deepEqual(current.resources, []);
+      // Re-entry after the staging was emptied re-prepares from the network.
+      const reentryShared = zipCount('shared');
+      await page.click('#grove');
+      await wait('playing');
+      assert.equal(zipCount('shared') - reentryShared, 1, 'Re-entry re-prepares the dependency closure');
+      assert.equal((await state()).textureCount, 2);
+      await page.click('#unload');
+
+      if (renderer === 'webgl') {
+        // A failed transition keeps the current level's screen and lease.
+        const dunesUrl = encodedUrl(archivePath('dunes'));
+        expectedFailures.add(dunesUrl);
+        await page.click('#grove');
+        await wait('playing');
+        remote.faults.set(archivePath('dunes'), { kind: 'status', status: 404 });
+        await page.click('#dunes');
+        await wait('error');
+        current = await state();
+        assert.match(current.error, /HTTP 404/);
+        assert.equal(current.current, 'grove');
+        assert.deepEqual(current.resources.map((asset) => asset.pack).sort(), ['grove', 'shared']);
+        assert.equal(current.textureCount, 2);
+        remote.faults.set(archivePath('dunes'), { kind: 'corrupt' });
+        await page.click('#retry');
+        await wait('error');
+        assert.match((await state()).error, /digest mismatch/i);
+        remote.faults.delete(archivePath('dunes'));
+        await page.click('#retry');
+        await wait('playing');
+        // Clear only after the successful retry: the failed attempt's
+        // console message can still be in flight when the error phase ends.
+        expectedFailures.clear();
+        await page.click('#unload');
+
+        // An oversized closure is rejected before any archive request.
+        await page.goto(zipApp.url + '?renderer=webgl&delivery=zip&staging=1000');
+        await wait('idle');
+        const oversizeBefore = zipCount('shared');
+        await page.click('#grove');
+        await wait('error');
+        assert.match((await state()).error, /staging budget/i);
+        assert.equal(zipCount('shared'), oversizeBefore, 'Oversized preparation must not hit the network');
+
+        // An exact budget admits the boundary without waiting.
+        await page.goto(zipApp.url + '?renderer=webgl&delivery=zip&staging=' + groveClosureNeed);
+        await wait('idle');
+        await page.click('#grove');
+        await wait('playing');
+        await page.click('#unload');
+
+        // Cancelling mid-preparation keeps the delivery consistent and the
+        // next transition starts clean.
+        await page.goto(zipApp.url + '?renderer=webgl&delivery=zip');
+        await wait('idle');
+        remote.delays.set(archivePath('shared'), 350);
+        await page.click('#grove');
+        await page.waitForFunction(() => JSON.parse(window.render_game_to_text()).phase === 'preparing');
+        await page.click('#cancel');
+        current = await state();
+        assert.equal(current.phase, 'idle');
+        assert.equal(current.staging.stagingUsedBytes, 0);
+        remote.delays.delete(archivePath('shared'));
+        await page.click('#dunes');
+        await wait('playing');
+        assert.equal((await state()).current, 'dunes');
+        await page.click('#unload');
+
+        // Overlapping A → B → A transitions commit the latest choice.
+        await page.click('#grove');
+        await page.click('#dunes');
+        await page.click('#grove');
+        await wait('playing');
+        current = await state();
+        assert.equal(current.current, 'grove');
+        assert.equal(current.groundFrames, 2);
+        assert.equal(current.pilotFrames, 4);
+        assert.equal(current.textureCount, 2);
+        assert.equal(current.staging.stagingUsedBytes, 0);
+        await page.click('#unload');
+
+        // Scene shutdown during preparation aborts the delivery cleanly.
+        remote.delays.set(archivePath('shared'), 300);
+        await page.click('#grove');
+        await page.waitForFunction(() => JSON.parse(window.render_game_to_text()).phase === 'preparing');
+        assert.equal(await page.evaluate(() => window.shutdownSample()), 0);
+        await page.waitForTimeout(400);
+        current = await state();
+        assert.equal(current.phase, 'booting');
+        assert.equal(current.current, null);
+        remote.delays.delete(archivePath('shared'));
+
+        // Shutdown while playing removes the resident physical textures.
+        await page.goto(zipApp.url + '?renderer=webgl&delivery=zip');
+        await wait('idle');
+        await page.click('#grove');
+        await wait('playing');
+        assert.equal(await page.evaluate(() => window.shutdownSample()), 0);
+      }
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+
+    // Mixed files + ZIP manifest: the shared pack stays plain HTTP while the
+    // themes arrive as archives, through one file source.
+    {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+      const state = () => page.evaluate(() => JSON.parse(window.render_game_to_text()));
+      const wait = (phase) => page.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
+      await page.goto(zipApp.url + '?renderer=webgl&delivery=mixed');
+      await wait('idle');
+      assert.equal((await state()).delivery, 'mixed');
+      await page.click('#grove');
+      await wait('playing');
+      const current = await state();
+      assert.equal(current.current, 'grove');
+      assert.equal(current.textureCount, 2);
+      assert.equal(current.groundFrames, 2);
+      assert.equal(current.pilotFrames, 4);
+      const mixedManifest = JSON.parse(await readFile(join(root, 'artifacts/origin/delivery/mixed/asset-pack-delivery.json'), 'utf8'));
+      const mixedShared = packOf(mixedManifest, 'shared');
+      const mixedTexture = mixedShared.assets[0]?.files.find((file) => file.role === 'texture');
+      assert.ok(mixedTexture, 'The mixed shared pack lacks a texture file');
+      assert.ok(remote.requests.includes('/delivery/mixed/' + mixedTexture.path), 'The files pack keeps plain HTTP delivery');
+      assert.ok(remote.requests.includes('/delivery/mixed/' + archiveOf(mixedManifest, 'grove').path), 'The theme pack arrives as an archive');
+      await page.click('#unload');
+      assert.equal((await state()).textureCount, 0);
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
+
+    // Files-vs-ZIP comparison on the same logical entry (renderer-independent).
+    {
+      const context = await browser.newContext();
+      const page = await context.newPage();
+      const errors = [];
+      page.on('pageerror', (error) => errors.push(error.message));
+      page.on('console', (message) => { if (message.type() === 'error') errors.push(message.text()); });
+      const wait = (phase) => page.waitForFunction((expected) => JSON.parse(window.render_game_to_text()).phase === expected, phase);
+      const state = () => page.evaluate(() => JSON.parse(window.render_game_to_text()));
+      const measure = async (url) => {
+        await page.goto(url);
+        await wait('idle');
+        const startedAt = Date.now();
+        await page.click('#grove');
+        await wait('playing');
+        return { elapsedMs: Date.now() - startedAt, state: await state() };
+      };
+      const filesRun = await measure(zipApp.url + '?renderer=webgl');
+      const zipRun = await measure(zipApp.url + '?renderer=webgl&delivery=zip');
+      // The same logical assets and frames must arrive either way.
+      assert.deepEqual(
+        [zipRun.state.groundFrames, zipRun.state.pilotFrames, zipRun.state.textureCount],
+        [filesRun.state.groundFrames, filesRun.state.pilotFrames, filesRun.state.textureCount],
+      );
+      const filesBytes = reports.find((report) => report.mode === 'bundled').packs
+        .reduce((sum, pack) => sum + pack.files.reduce((n, file) => n + file.bytes, 0), 0);
+      evidence.push({
+        deliveryComparison: {
+          filesEntryMs: filesRun.elapsedMs,
+          zipEntryMs: zipRun.elapsedMs,
+          filesBytes,
+          zipArtifactBytes: zipArtifactBytes,
+          zipExpandedBytes,
+          warmCache: false,
+        },
+      });
+      assert.deepEqual(errors, []);
+      await context.close();
+    }
   }
 
   // Real Phaser must reject a prepared but incorrectly named theme image without
