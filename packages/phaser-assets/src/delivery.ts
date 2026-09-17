@@ -195,6 +195,19 @@ const bridgeSignals = (
   };
 };
 
+/** Internal capped read keeping the declared-size error wording and the
+ * already-acquired reader; the loop itself lives once, in the exported
+ * helper. */
+const readCapped = async (
+  response: Response,
+  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
+  cap: number,
+  declaredBytes?: number | undefined,
+): Promise<Uint8Array> => readCappedDeliveryBody(response, cap, {
+  reader,
+  describeOverrun: (): string => declaredError(declaredBytes, cap),
+});
+
 const fail = (code: PhaserPackDeliveryErrorCode, message: string): never => {
   throw new PhaserPackDeliveryError(code, message);
 };
@@ -240,17 +253,14 @@ class DeliveryDisposedAbort extends Error {}
 
 /** Classify an aborted delivery operation from its abort reason: the
  * deadline sentinel maps to 'deadline', anything else to 'cancelled'. */
-const abortCategory = (reason: unknown, packId: string): PhaserPackDeliveryError => {
+const abortCategory = (reason: unknown, contextLabel: string): PhaserPackDeliveryError => {
   if (reason instanceof DeliveryDeadlineAbort) {
     return new PhaserPackDeliveryError('deadline', reason.message);
   }
   if (reason instanceof DeliveryDisposedAbort) {
     return new PhaserPackDeliveryError('disposed', 'Phaser pack delivery is disposed');
   }
-  return new PhaserPackDeliveryError(
-    'cancelled',
-    `Delivery preparation for ${packId} was cancelled`,
-  );
+  return new PhaserPackDeliveryError('cancelled', `Delivery ${contextLabel} was cancelled`);
 };
 
 /** Classify a prepare failure: delivery errors pass through, an aborted
@@ -265,7 +275,7 @@ const classifyPrepareFailure = (
     return thrown;
   }
   if (signal.aborted) {
-    return abortCategory(signal.reason, packId);
+    return abortCategory(signal.reason, `preparation for ${packId}`);
   }
   return new PhaserPackDeliveryError(
     'transport',
@@ -273,40 +283,60 @@ const classifyPrepareFailure = (
   );
 };
 
-const readCapped = async (
+/** Read a response body under an explicit byte cap, cancelling the
+ * stream as soon as the cap or any failure ends the read; exported for
+ * consumers that fetch their own manifest under the same discipline. */
+export const readCappedDeliveryBody = async (
   response: Response,
-  reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
   cap: number,
-  declaredBytes?: number | undefined,
+  options?: {
+    readonly reader?: ReadableStreamDefaultReader<Uint8Array> | undefined;
+    readonly describeOverrun?: () => string;
+  },
 ): Promise<Uint8Array> => {
+  const overrun = options?.describeOverrun ?? ((): string => `Delivery response exceeds ${cap} bytes`);
+  // Key-presence check: an explicit reader: undefined selects the
+  // no-stream path, unlike an omitted option which acquires the body's
+  // own reader.
+  const reader = 'reader' in (options ?? {}) ? options?.reader : response.body?.getReader();
   if (reader === undefined) {
-    // Pre-check the header where streaming is unavailable, so a clearly
-    // oversized response does not allocate first; the post-read check still
-    // covers chunked or lying headers.
-    const declaredLength = Number(response.headers.get('Content-Length') ?? '');
-    if (Number.isFinite(declaredLength) && declaredLength > cap) {
-      throw new Error(declaredError(declaredBytes, cap));
+    // No stream available: the cap is only enforceable against an honest
+    // Content-Length, so fail closed when the header is missing or already
+    // over the cap rather than buffering an unbounded body first.
+    // A missing header reads as null; map it to NaN so the guard fires
+    // instead of Number('') === 0 slipping through.
+    const header = response.headers.get('Content-Length');
+    const declaredLength = header === null ? Number.NaN : Number(header);
+    if (!Number.isFinite(declaredLength) || declaredLength < 0 || declaredLength > cap) {
+      throw new Error(overrun());
     }
     const buffer = await response.arrayBuffer();
     if (buffer.byteLength > cap) {
-      throw new Error(declaredError(declaredBytes, cap));
+      throw new Error(overrun());
     }
     return new Uint8Array(buffer);
   }
   const chunks: Uint8Array[] = [];
   let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) {
-      break;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      received += value.byteLength;
+      if (received > cap) {
+        throw new Error(overrun());
+      }
+      chunks.push(value);
     }
-    received += value.byteLength;
-    if (received > cap) {
-      await reader.cancel().catch(() => undefined);
-      reader.releaseLock();
-      throw new Error(declaredError(declaredBytes, cap));
-    }
-    chunks.push(value);
+  } catch (error) {
+    // Every failure path cancels the stream so its connection returns to
+    // the pool instead of waiting for GC.
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
   }
   const whole = new Uint8Array(received);
   let offset = 0;
@@ -563,7 +593,20 @@ export function createPhaserPackDelivery(
     readonly revision: string;
   }): string => {
     if (resolveURLOption !== undefined) {
-      return resolveURLOption(encodePath(path), context);
+      try {
+        return resolveURLOption(encodePath(path), context);
+      } catch (error) {
+        // A resolver that deliberately throws a delivery error keeps its
+        // category; anything else is a configuration failure, shared by
+        // the files and zip call sites alike.
+        if (error instanceof PhaserPackDeliveryError) {
+          throw error;
+        }
+        throw new PhaserPackDeliveryError(
+          'config',
+          `Delivery URL resolver failed for ${context.packId}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
     return new URL(encodePath(path), base).href;
   };
@@ -662,7 +705,7 @@ export function createPhaserPackDelivery(
         throw error;
       }
       if (signal.aborted) {
-        throw abortCategory(signal.reason, pack.packId);
+        throw abortCategory(signal.reason, `preparation for ${pack.packId}`);
       }
       throw new PhaserPackDeliveryError(
         'transport',
@@ -738,7 +781,7 @@ export function createPhaserPackDelivery(
         // deadline, and a superseded prepare delays its successor by that
         // much.
         if (signal.aborted) {
-          throw abortCategory(signal.reason, pack.packId);
+          throw abortCategory(signal.reason, `preparation for ${pack.packId}`);
         }
         if (!mediaByPath.has(entry.path)) {
           fail(
@@ -757,7 +800,7 @@ export function createPhaserPackDelivery(
         if (signal.aborted) {
           // The abort reason knows whether this was the deadline, a caller
           // cancel or a dispose — the status alone cannot.
-          const classified = abortCategory(signal.reason, pack.packId);
+          const classified = abortCategory(signal.reason, `preparation for ${pack.packId}`);
           if (classified.code !== 'cancelled' || status.status === 'cancelled') {
             code = classified.code;
           }
@@ -782,7 +825,7 @@ export function createPhaserPackDelivery(
       // signal keeps its deadline/cancelled/disposed category.
       if (!(error instanceof PhaserPackDeliveryError)) {
         if (signal.aborted) {
-          throw abortCategory(signal.reason, pack.packId);
+          throw abortCategory(signal.reason, `preparation for ${pack.packId}`);
         }
         // The entries iterator rejects with the decoder's failure before
         // job.result can settle, so worker-environment failures land here:
@@ -792,6 +835,14 @@ export function createPhaserPackDelivery(
           throw new PhaserPackDeliveryError(
             'config',
             `Delivery archive ${pack.packId} could not use its worker: ${error.message}`,
+          );
+        }
+        if (error instanceof ZipDecodeError && error.code === 'deadline') {
+          // The decoder observed its own deadline before the outer prepare
+          // timer aborted: the category stays 'deadline', not 'integrity'.
+          throw new PhaserPackDeliveryError(
+            'deadline',
+            `Delivery archive ${pack.packId}: ${error.message}`,
           );
         }
         throw new PhaserPackDeliveryError(
@@ -859,13 +910,15 @@ export function createPhaserPackDelivery(
               transfer = await context.budgets.transfers.acquire(combined).catch(
                 (error: unknown): never => {
                   if (combined.aborted) {
-                    if (context.signal.aborted) {
+                    // First-abort-wins: the combined reason remembers which
+                    // signal fired first even if both aborted in one turn.
+                    if (context.signal.aborted && combined.reason === context.signal.reason) {
                       throw new PhaserPackDeliveryError(
                         'cancelled',
                         `Delivery file request for ${request.packId} was cancelled`,
                       );
                     }
-                    throw abortCategory(combined.reason, request.packId);
+                    throw abortCategory(combined.reason, `file request for ${request.packId}`);
                   }
                   throw error;
                 },
@@ -894,17 +947,17 @@ export function createPhaserPackDelivery(
                 if (error instanceof PhaserPackDeliveryError) {
                   throw error;
                 }
-                if (context.signal.aborted) {
+                if (combined.aborted && combined.reason === context.signal.reason) {
                   throw new PhaserPackDeliveryError(
                     'cancelled',
                     `Delivery file request for ${request.packId} was cancelled`,
                   );
                 }
-                if (shutdown.signal.aborted) {
-                  throw new PhaserPackDeliveryError(
-                    'disposed',
-                    'Phaser pack delivery is disposed',
-                  );
+                if (combined.aborted) {
+                  // First-abort-wins: the combined reason remembers whether
+                  // the shutdown fired before the loader signal.
+                  const reason = combined.reason;
+                  throw abortCategory(reason, `file request for ${request.packId}`);
                 }
                 throw new PhaserPackDeliveryError(
                   'transport',

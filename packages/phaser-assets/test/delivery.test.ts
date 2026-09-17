@@ -5,7 +5,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ArchiveWorkerRequest, ArchiveWorkerResponse } from '../src/archive-protocol.js';
 import { createArchiveWorkerDispatch } from '../src/archive-worker-impl.js';
-import { createPhaserPackDelivery, PhaserPackDeliveryError } from '../src/delivery.js';
+import {
+  createPhaserPackDelivery,
+  PhaserPackDeliveryError,
+  readCappedDeliveryBody,
+} from '../src/delivery.js';
 import type { PhaserPackFileRequest } from '../src/pack-file-source.js';
 import { buildZipV1Fixture, type ZipV1FixtureEntry } from '../src/test-utils.js';
 
@@ -615,6 +619,94 @@ describe('phaser pack delivery', () => {
     expect(settled).toBeInstanceOf(PhaserPackDeliveryError);
     expect((settled as PhaserPackDeliveryError).code).toBe('disposed');
     void releasePermit;
+  });
+
+  it('enforces the byte cap while streaming and cancels on overrun', async () => {
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(new Uint8Array(1024));
+        controller.enqueue(new Uint8Array(1024));
+      },
+    });
+    const response = new Response(stream, { headers: { 'Content-Type': 'application/json' } });
+    await expect(readCappedDeliveryBody(response, 1024)).rejects.toThrow(/exceeds 1024/);
+  });
+
+  it('fails closed without a stream and an honest content length', async () => {
+    // An explicit reader: undefined selects the no-stream path by contract.
+    const bodyless = {
+      headers: new Headers(),
+      arrayBuffer: async (): Promise<ArrayBuffer> => new ArrayBuffer(64),
+    } as unknown as Response;
+    await expect(readCappedDeliveryBody(bodyless, 16, { reader: undefined })).rejects.toThrow(
+      /exceeds 16/,
+    );
+  });
+
+  it('wraps a throwing custom resolver as a config error for both modes', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    const zipManifest = buildManifest([{ id: 'zippy', delivery: 'zip', zip: zipFixture() }]);
+    const resolver = (): string => {
+      throw new Error('resolver exploded');
+    };
+    const filesDelivery = createPhaserPackDelivery(manifest, {
+      resolveURL: resolver,
+    });
+    const filesOpened = await filesDelivery.fileSource.open(openRequest('solo'), {
+      signal: new AbortController().signal, budgets: budgets(),
+    });
+    await expect(filesOpened.read()).rejects.toMatchObject({ code: 'config' });
+    const zipDelivery = createPhaserPackDelivery(zipManifest.manifest, {
+      resolveURL: resolver,
+      createWorker: createFakeWorkerFactory().factory,
+    });
+    await expect(zipDelivery.prepare('zippy')).rejects.toMatchObject({ code: 'config' });
+    filesDelivery.dispose();
+    zipDelivery.dispose();
+  });
+
+  it('classifies a decoder-side deadline from the entries iterator', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] });
+    try {
+      const origin = await startOrigin();
+      servers.push(origin);
+      const { manifest, packFiles } = buildManifest([
+        { id: 'solo', delivery: 'zip', zip: zipFixture() },
+      ]);
+      for (const [path, file] of packFiles) {
+        origin.files.set(path, file);
+      }
+      const stallingWorker = (): Worker => {
+        const listeners: ((event: { data: unknown }) => void)[] = [];
+        return {
+          postMessage(): void {
+            // Swallow the decode request: the worker never answers, so
+            // the decoder deadline inside the tiny prepare budget fires.
+          },
+          addEventListener(type: string, listener: (event: { data: unknown }) => void): void {
+            if (type === 'message') {
+              listeners.push(listener);
+            }
+          },
+          terminate(): void {
+          },
+        } as unknown as Worker;
+      };
+      const delivery = createPhaserPackDelivery(manifest, {
+        baseUrl: origin.url,
+        createWorker: stallingWorker,
+        prepareTimeoutMs: 10_000,
+      });
+      const preparing = delivery.prepare('solo');
+      const expectation = expect(preparing).rejects.toMatchObject({ code: 'deadline' });
+      await vi.advanceTimersByTimeAsync(10_000 + 50);
+      await expectation;
+      delivery.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('validates configuration before any work', () => {

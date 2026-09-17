@@ -4,6 +4,7 @@ import { createPhaserAssetPackLoader, type PhaserAssetPackLease as PackLease } f
 import {
   createPhaserPackDelivery,
   PhaserPackDeliveryError,
+  readCappedDeliveryBody,
   type PhaserPackDelivery,
 } from '@mpgd/phaser-assets/delivery';
 import type { DeliveryPack } from './packs.js';
@@ -21,6 +22,9 @@ const DELIVERY_STAGING_BUDGET_BYTES = 32 * 1024 * 1024;
 const DELIVERY_PREPARE_TIMEOUT_MS = 15_000;
 const DELIVERY_REQUEST_TIMEOUT_MS = 4_000;
 const DELIVERY_MAX_FILE_BYTES = 32 * 1024 * 1024;
+/** The manifest is application data, not an asset: a small explicit cap
+ * bounds what a misconfigured origin can push into the page. */
+const DELIVERY_MANIFEST_BYTE_CAP = 4 * 1024 * 1024;
 
 /** Loader limits shared by both transports so files and ZIP delivery
  * behave identically. */
@@ -37,8 +41,6 @@ const element = <T extends HTMLElement>(id: string): T => {
   return value as T;
 };
 const controls = Object.fromEntries(['grove', 'dunes', 'cancel', 'retry', 'unload'].map((id) => [id, element<HTMLButtonElement>(id)]));
-/** Render any thrown value for status text without the idiom repeating
- * at every wrap site. */
 const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
 
 /** Artifact layout shared with test/build-delivery.ts and test/browser.mjs:
@@ -329,11 +331,15 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
     if (!manifestResponse.ok) {
       throw new Error(`Delivery manifest request failed with HTTP ${manifestResponse.status}`);
     }
-    const manifestDocument: unknown = await manifestResponse.json().catch(
-      (error: unknown): never => {
-        throw new Error(`Delivery manifest is not valid JSON: ${errorText(error)}`);
-      },
-    );
+    const manifestBytes = await readCappedDeliveryBody(manifestResponse, DELIVERY_MANIFEST_BYTE_CAP, {
+      describeOverrun: (): string => `Delivery manifest exceeds ${DELIVERY_MANIFEST_BYTE_CAP} bytes`,
+    });
+    let manifestDocument: unknown;
+    try {
+      manifestDocument = JSON.parse(new TextDecoder().decode(manifestBytes));
+    } catch (error) {
+      throw new Error(`Delivery manifest is not valid JSON: ${errorText(error)}`);
+    }
     const booted = createPhaserPackDelivery(manifestDocument, {
       baseUrl: manifestUrl,
       createWorker: (): Worker => new Worker(new URL('./archive-decode-worker.ts', import.meta.url), { type: 'module' }),
