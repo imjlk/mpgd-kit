@@ -532,6 +532,91 @@ describe('phaser pack delivery', () => {
     delivery.dispose();
   });
 
+  it('requires WebCrypto for files-only manifests at creation', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    const subtle = crypto.subtle;
+    vi.stubGlobal('crypto', { subtle: undefined });
+    try {
+      expect(() => createPhaserPackDelivery(manifest, { baseUrl: origin.url })).toThrow(
+        /WebCrypto/,
+      );
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    void subtle;
+  });
+
+  it('classifies worker-environment failures as configuration errors', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'zip', zip: zipFixture() }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    const delivery = createPhaserPackDelivery(manifest, {
+      baseUrl: origin.url,
+      createWorker: (): Worker => {
+        throw new Error('no workers under this CSP');
+      },
+    });
+    const failure = await delivery.prepare('solo').catch((error: unknown): unknown => error);
+    expect(failure).toBeInstanceOf(PhaserPackDeliveryError);
+    expect((failure as PhaserPackDeliveryError).code).toBe('config');
+    expect((failure as PhaserPackDeliveryError).message).toContain('no workers under this CSP');
+    delivery.dispose();
+  });
+
+  it('settles a queued file read as disposed when dispose lands first', async () => {
+    const origin = await startOrigin();
+    servers.push(origin);
+    const { manifest, packFiles } = buildManifest([{ id: 'solo', delivery: 'files' }]);
+    for (const [path, file] of packFiles) {
+      origin.files.set(path, file);
+    }
+    const delivery = createPhaserPackDelivery(manifest, { baseUrl: origin.url });
+    const context = new AbortController();
+    let releasePermit: (() => void) | undefined;
+    const budgets = {
+      transfers: {
+        acquire: (signal: AbortSignal): Promise<() => void> => new Promise((resolve, reject) => {
+          const forward = (): void => reject(signal.reason);
+          if (signal.aborted) {
+            forward();
+            return;
+          }
+          signal.addEventListener('abort', forward, { once: true });
+          releasePermit = (): void => {
+            signal.removeEventListener('abort', forward);
+            resolve(() => undefined);
+          };
+        }),
+      },
+      bytes: {
+        acquire: async (): Promise<() => void> => () => undefined,
+      },
+    };
+    const opened = await delivery.fileSource.open(openRequest('solo'), {
+      signal: context.signal, budgets,
+    });
+    const reading = opened.read();
+    const failure = reading.catch((error: unknown): unknown => error);
+    // Dispose while the read still queues behind the transfer permit.
+    await new Promise<void>((resolve) => {
+      for (let attempt = 0; attempt < 100 && releasePermit === undefined; attempt++) {
+        setTimeout(resolve, 0);
+        break;
+      }
+      resolve();
+    });
+    delivery.dispose();
+    const settled = await failure;
+    expect(settled).toBeInstanceOf(PhaserPackDeliveryError);
+    expect((settled as PhaserPackDeliveryError).code).toBe('disposed');
+    void releasePermit;
+  });
+
   it('validates configuration before any work', () => {
     const { manifest } = buildManifest([{ id: 'solo', delivery: 'files' }]);
     expect(() => createPhaserPackDelivery(manifest, {})).toThrow(PhaserPackDeliveryError);

@@ -1,6 +1,7 @@
 import {
   createBoundedZipDecoder,
   defaultArchiveWorkerLimits,
+  ZipDecodeError,
   type ArchiveWorkerExpected,
   type ZipDecodeWorkerLike,
 } from './archives.js';
@@ -534,15 +535,19 @@ export function createPhaserPackDelivery(
   }
   const hasZipPacks = snapshot.packs.some((pack) => pack.delivery === 'zip');
   const createWorker = options.createWorker;
-  if (hasZipPacks) {
-    if (typeof createWorker !== 'function') {
-      fail('config', 'Delivery requires a createWorker factory for zip-delivery packs');
-    }
-    // Archive digests need WebCrypto: fail fast with the right category on
-    // insecure origins instead of a raw TypeError mid-prepare.
-    if (globalThis.crypto?.subtle === undefined) {
-      fail('config', 'Delivery requires WebCrypto (HTTPS or localhost) to verify zip archives');
-    }
+  if (hasZipPacks && typeof createWorker !== 'function') {
+    fail('config', 'Delivery requires a createWorker factory for zip-delivery packs');
+  }
+  // Every derived asset carries SHA-256 integrity — the loader verifies it
+  // for files packs and the decoder verifies zip archives — so WebCrypto is
+  // required for any non-empty manifest: fail fast with the right category
+  // on insecure origins instead of a raw TypeError or loader error later.
+  const totalFiles = snapshot.packs.reduce(
+    (sum, pack) => sum + pack.assets.reduce((n, asset) => n + asset.files.length, 0),
+    0,
+  );
+  if (totalFiles > 0 && globalThis.crypto?.subtle === undefined) {
+    fail('config', 'Delivery requires WebCrypto (HTTPS or localhost) to verify pack integrity');
   }
 
   // Manifest paths are archive/disk paths, not URLs: encode each segment
@@ -674,6 +679,15 @@ export function createPhaserPackDelivery(
     // the same manifest value; a client-side pre-hash would only double the
     // hashing cost and the prepare-deadline budget consumption.
     const expected = expectedFor(pack);
+    // The path bound is pack-local: only this job's ZIP entry names feed
+    // it, so an unrelated files pack's long path cannot loosen the cutoff
+    // for zip decodes. A loop keeps untrusted data out of spread limits.
+    let maxPathLength = defaultArchiveWorkerLimits().maxPathLength;
+    for (const entry of expected.entries) {
+      if (entry.path.length > maxPathLength) {
+        maxPathLength = entry.path.length;
+      }
+    }
     const expandedBytes = expandedBytesOf(pack);
     // The whole-prepare deadline is never restarted; the decoder only ever
     // receives the unspent remainder, exactly as #191 prescribes.
@@ -689,7 +703,10 @@ export function createPhaserPackDelivery(
         entryBytes: expected.entries.reduce((max, entry) => Math.max(max, entry.bytes), 0),
         totalExpandedBytes: expandedBytes,
         entryCount: expected.entries.length,
-        maxPathLength: defaultArchiveWorkerLimits().maxPathLength,
+        // The builder permits ZIP names beyond the decoder's conservative
+        // default; the bound follows the manifest's longest validated path
+        // so a legal generated pack is never rejected on path length.
+        maxPathLength,
         decodeDeadlineMs: remainingMs,
       },
     });
@@ -767,6 +784,16 @@ export function createPhaserPackDelivery(
         if (signal.aborted) {
           throw abortCategory(signal.reason, pack.packId);
         }
+        // The entries iterator rejects with the decoder's failure before
+        // job.result can settle, so worker-environment failures land here:
+        // a worker factory throwing under CSP/no-worker conditions is a
+        // configuration failure, not a corrupt archive.
+        if (error instanceof ZipDecodeError && error.code === 'unsupported') {
+          throw new PhaserPackDeliveryError(
+            'config',
+            `Delivery archive ${pack.packId} could not use its worker: ${error.message}`,
+          );
+        }
         throw new PhaserPackDeliveryError(
           'integrity',
           `Delivery archive ${pack.packId} failed to decode: ${error instanceof Error ? error.message : String(error)}`,
@@ -826,7 +853,23 @@ export function createPhaserPackDelivery(
             const bridge = bridgeSignals(context.signal, shutdown.signal);
             const combined = bridge.signal;
             try {
-              transfer = await context.budgets.transfers.acquire(context.signal);
+              // The permit wait hears the combined signal too: a dispose()
+              // while this read is queued behind the transfer budget must
+              // settle it with 'disposed', not leave it queued forever.
+              transfer = await context.budgets.transfers.acquire(combined).catch(
+                (error: unknown): never => {
+                  if (combined.aborted) {
+                    if (context.signal.aborted) {
+                      throw new PhaserPackDeliveryError(
+                        'cancelled',
+                        `Delivery file request for ${request.packId} was cancelled`,
+                      );
+                    }
+                    throw abortCategory(combined.reason, request.packId);
+                  }
+                  throw error;
+                },
+              );
               fileRequests++;
               const url = resolveArtifact(role.path, {
                 packId: request.packId, revision: request.revision,
