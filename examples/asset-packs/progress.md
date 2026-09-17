@@ -50,3 +50,17 @@ Follow-up review incorporated: cleanup failure isolation with drainable diagnost
 Final admission check: 38 package tests pass, including an independent decode limit with all downloads admitted. Active/pending real Phaser shutdown and 20 repeated 404/transient-500 recovery/unload cycles pass. OCR noted two low-severity diagnostic/documentation improvements; both applied.
 
 OCR implementation review: moved integrity hashing outside the HTTP/body deadline, added asset-specific reservation errors, rejected unknown integrity fields, and honored Retry-After with jittered backoff. All-settled download handling intentionally remains to retain bytes until both atlas files settle. Global atlas budget cross-validation is intentionally not added: small budgets remain valid for catalogs with known small integrity sizes. Package regression tests: 42 passing.
+
+ZIP acceptance round (PR: exercise built ZIP packs through the Phaser loader):
+extended the private sample with a prepared ZIP delivery path — real
+`mpgd assets build-packs` output (all-ZIP and mixed files+ZIP variants, built
+through the actual CLI code path into the static origin), fetched over plain
+HTTP, decoded by the real application-deployed module worker, staged under an
+explicit archive+expanded byte budget, and supplied to the existing loader via
+a prepared file source keyed by pack/revision/assetKey/role. Preparation
+precedes acquire; staging returns once the loader consumed the files and
+re-prepares on re-entry. Browser coverage adds both renderers for the happy
+path plus 404/corrupt archive failures, oversize (pre-network) and exact
+staging budgets, mid-preparation cancel, overlapping transitions, shutdown
+during preparation, mixed manifests, and a files-vs-ZIP comparison recorded
+in evidence.json. No public API, package or worker-protocol change.
