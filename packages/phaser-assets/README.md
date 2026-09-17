@@ -297,6 +297,45 @@ shared, detached or forged buffers are rejected), and every message field
 is read through a guarded boundary that turns a throwing getter into a
 typed job failure. This boundary discipline is why the file digests, output
 limits and cleanup checks below are never weakened by it.
+### Prepared pack delivery
+
+`@mpgd/phaser-assets/delivery` connects a CLI-built delivery manifest to
+the existing pack loader without exposing the ZIP internals or the worker
+protocol. `createPhaserPackDelivery(manifest, options)` validates and
+freezes the manifest, derives `delivery.catalog` for
+`createPhaserAssetPackLoader`, and supplies files through
+`delivery.fileSource`: zip packs are staged per dependency closure
+(downloaded once per archive, decoded and verified by the
+application-deployed worker, admitted only on a fully `completed`
+decode), while `files` packs keep plain HTTP through the same source and
+mixed manifests route each file by its pack's delivery kind.
+`delivery.prepare(packId)` must run before the loader reads zip files; a
+`files`-only closure is a light no-op that touches no network or worker.
+Artifact paths resolve against `baseUrl` (or a custom `resolveURL`)
+with each path segment URL-encoded exactly once, so revisions and names
+carrying `#`, `?`, spaces or non-ASCII address the resource the static
+host serves.
+
+Preparation precedes `loader.acquire`: `prepared.release()` returns the
+staging stake while registered textures stay alive under the loader lease,
+open readers keep their bytes, and re-entering re-prepares from the
+network. One finite `prepareTimeoutMs` budget covers the whole prepare
+(stages never restart it; the decoder receives only the unspent
+remainder); each HTTP attempt has its own `requestTimeoutMs` ending with
+the body; the staging budget (`stagingBudgetBytes`, independent of the
+loader's byte budget) is checked for the whole closure before any
+request. Failures throw `PhaserPackDeliveryError` with a stable
+`code` (`config`, `not-prepared`, `busy`, `budget`, `transport`,
+`integrity`, `cancelled`, `deadline`, `disposed`) and preserve the
+decoder's status and code in the message; there is no silent ZIP-to-files
+fallback. Preparations are single-flight — a concurrent `prepare`
+rejects with `busy` — and first-version ownership is one fixed manifest
+with one loader: no persistent cache, no prefetch, no cross-tab sharing.
+Importing the module performs no network request, spawns no worker and
+arms no timer; the worker comes from the application's `createWorker`
+factory and is only created when a zip pack is actually staged. Requires
+a browser-like environment (fetch, Blob, `crypto.subtle`).
+
 See `examples/asset-packs` in the repository for two build layouts and executable
 fault/lifetime tests, including a real module-worker decode scenario. Adding
 this API does not make generated games depend on the

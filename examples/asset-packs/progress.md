@@ -64,3 +64,19 @@ path plus 404/corrupt archive failures, oversize (pre-network) and exact
 staging budgets, mid-preparation cancel, overlapping transitions, shutdown
 during preparation, mixed manifests, and a files-vs-ZIP comparison recorded
 in evidence.json. No public API, package or worker-protocol change.
+
+Public delivery API round (PR: add prepared pack delivery): moved the
+validated preparation/supply rules into the package as
+`@mpgd/phaser-assets/delivery` (`createPhaserPackDelivery`): manifest
+frozen at creation, catalog + file source derived once, zip closure
+staging (pre-network budget check, whole-prepare deadline, worker decode
+gated on a completed result), files packs over plain HTTP, mixed
+routing, once-per-segment URL encoding, handle/reader lifetime
+separation, single-flight prepare with busy rejection, typed error codes
+preserving decoder statuses, import-safe module. The sample now consumes
+the public API only (`src/zipDelivery.ts` removed; the sample fetches
+the manifest itself). Package tests cover catalog derivation, snapshot
+invariance, files-only no-op, mixed routing, not-prepared/dispose/
+repeated release, reader lifetime, cancel/deadline cleanup, budget
+pre-rejection, read order independence, corrupt archives, URL encoding
+and config validation.

@@ -1,7 +1,11 @@
 import Phaser from 'phaser';
 
 import { createPhaserAssetPackLoader, type PhaserAssetPackLease as PackLease } from '@mpgd/phaser-assets/packs';
-import { createZipPackDelivery, type ZipPackDelivery } from './zipDelivery.js';
+import {
+  createPhaserPackDelivery,
+  PhaserPackDeliveryError,
+  type PhaserPackDelivery,
+} from '@mpgd/phaser-assets/delivery';
 import type { DeliveryPack } from './packs.js';
 import './style.css';
 
@@ -33,11 +37,18 @@ const element = <T extends HTMLElement>(id: string): T => {
   return value as T;
 };
 const controls = Object.fromEntries(['grove', 'dunes', 'cancel', 'retry', 'unload'].map((id) => [id, element<HTMLButtonElement>(id)]));
+/** Render any thrown value for status text without the idiom repeating
+ * at every wrap site. */
+const errorText = (error: unknown): string => error instanceof Error ? error.message : String(error);
+
 /** Artifact layout shared with test/build-delivery.ts and test/browser.mjs:
  * <origin>/delivery/<variant>/asset-pack-delivery.json. */
 const DELIVERY_MANIFEST_PATH = (variant: string): string => `delivery/${variant}/asset-pack-delivery.json`;
 
 const params = new URLSearchParams(location.search);
+/** One HTTP cache policy for the page: the documented http-cache=1 flag
+ * covers the files loader, the manifest fetch and delivery requests. */
+const requestCache: 'default' | 'no-store' = params.has('http-cache') ? 'default' : 'no-store';
 const deliveryParam = params.get('delivery');
 const deliveryMode: 'zip' | 'mixed' | null = deliveryParam === 'zip' || deliveryParam === 'mixed' ? deliveryParam : null;
 const model = {
@@ -45,7 +56,7 @@ const model = {
   lastPrepareMs: null as number | null,
 };
 let packs: ReturnType<typeof createPhaserAssetPackLoader> | undefined;
-let delivery: ZipPackDelivery | undefined;
+let delivery: PhaserPackDelivery | undefined;
 let pending: AbortController | undefined;
 let sequence = 0;
 let virtualTime = 0;
@@ -84,7 +95,7 @@ class Board extends Phaser.Scene {
         ...loaderOptions,
         resolveURL: (url, pack) => new URL(url, bundled.has(pack.packId) ? localBase : __ASSET_PACK_ORIGIN__).href,
         requestTimeoutMs: 2_000,
-        requestCache: params.has('http-cache') ? 'default' : 'no-store',
+        requestCache,
       });
       model.phase = 'idle';
     } else {
@@ -300,13 +311,37 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
   renderStatus();
   try {
     const stagingParam = Number(params.get('staging') ?? DELIVERY_STAGING_BUDGET_BYTES);
-    const booted = await createZipPackDelivery({
-      manifestUrl: new URL(DELIVERY_MANIFEST_PATH(deliveryMode), __ASSET_PACK_ORIGIN__).href,
+    // The delivery manifest is application data: the sample fetches it
+    // itself and hands the parsed document to the public delivery API,
+    // which validates and freezes it.
+    // The manifest fetch gets the same attempt deadline as every artifact
+    // request: a hung response must surface as a boot error, not an
+    // indefinite 'booting' phase.
+    const manifestUrl = new URL(DELIVERY_MANIFEST_PATH(deliveryMode), __ASSET_PACK_ORIGIN__).href;
+    // The documented http-cache=1 flag covers delivery mode too: the
+    // manifest fetch and artifact requests share the same policy.
+    const manifestResponse = await fetch(
+      manifestUrl,
+      { cache: requestCache, signal: AbortSignal.timeout(DELIVERY_REQUEST_TIMEOUT_MS) },
+    ).catch((error: unknown): never => {
+      throw new Error(`Delivery manifest request failed: ${errorText(error)}`);
+    });
+    if (!manifestResponse.ok) {
+      throw new Error(`Delivery manifest request failed with HTTP ${manifestResponse.status}`);
+    }
+    const manifestDocument: unknown = await manifestResponse.json().catch(
+      (error: unknown): never => {
+        throw new Error(`Delivery manifest is not valid JSON: ${errorText(error)}`);
+      },
+    );
+    const booted = createPhaserPackDelivery(manifestDocument, {
+      baseUrl: manifestUrl,
       createWorker: (): Worker => new Worker(new URL('./archive-decode-worker.ts', import.meta.url), { type: 'module' }),
       stagingBudgetBytes: stagingParam,
       prepareTimeoutMs: DELIVERY_PREPARE_TIMEOUT_MS,
       requestTimeoutMs: DELIVERY_REQUEST_TIMEOUT_MS,
       maxFileBytes: DELIVERY_MAX_FILE_BYTES,
+      requestCache,
     });
     if (!bootStillCurrent()) {
       booted.dispose();
@@ -323,7 +358,13 @@ async function initDelivery(scene: Phaser.Scene): Promise<void> {
   } catch (error) {
     if (!bootStillCurrent()) return;
     model.phase = 'error';
-    model.error = error instanceof Error ? error.message : 'Delivery initialization failed';
+    if (error instanceof PhaserPackDeliveryError) {
+      model.error = `${error.code}: ${error.message}`;
+    } else if (error instanceof Error) {
+      model.error = error.message;
+    } else {
+      model.error = 'Delivery initialization failed';
+    }
   }
   renderStatus();
 }
