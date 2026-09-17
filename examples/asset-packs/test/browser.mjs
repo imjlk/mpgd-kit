@@ -260,6 +260,12 @@ try {
       assert.ok(archive, `Delivery manifest pack ${id} lacks an archive`);
       return archive;
     };
+    // The app resolves manifest artifact paths by URL-encoding each
+    // segment; expected-failure URLs must match that encoding exactly.
+    const encodedUrl = (artifactPath) => new URL(
+      artifactPath.split('/').map((segment) => encodeURIComponent(segment)).join('/'),
+      remote.url,
+    ).href;
     const zipManifest = JSON.parse(await readFile(join(root, 'artifacts/origin/delivery/zip/asset-pack-delivery.json'), 'utf8'));
     const archivePath = (id) => '/delivery/zip/' + archiveOf(zipManifest, id).path;
     const needBytes = (packIds) => packIds.reduce((sum, id) => {
@@ -338,7 +344,7 @@ try {
 
       if (renderer === 'webgl') {
         // A failed transition keeps the current level's screen and lease.
-        const dunesUrl = new URL(archivePath('dunes'), remote.url).href;
+        const dunesUrl = encodedUrl(archivePath('dunes'));
         expectedFailures.add(dunesUrl);
         await page.click('#grove');
         await wait('playing');
@@ -355,9 +361,11 @@ try {
         await wait('error');
         assert.match((await state()).error, /digest mismatch/i);
         remote.faults.delete(archivePath('dunes'));
-        expectedFailures.clear();
         await page.click('#retry');
         await wait('playing');
+        // Clear only after the successful retry: the failed attempt's
+        // console message can still be in flight when the error phase ends.
+        expectedFailures.clear();
         await page.click('#unload');
 
         // An oversized closure is rejected before any archive request.

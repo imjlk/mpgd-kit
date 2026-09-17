@@ -100,6 +100,7 @@ const fetchDeliveryBytes = async (
   signal: AbortSignal,
   cap: number,
   describeFailure: (status: number) => string,
+  declaredBytes?: number | undefined,
 ): Promise<Uint8Array> => {
   const attempt = fetchWithin(url, timeoutMs, signal);
   try {
@@ -107,7 +108,7 @@ const fetchDeliveryBytes = async (
     if (!response.ok) {
       throw new Error(describeFailure(response.status));
     }
-    return await attempt.body(cap);
+    return await attempt.body(cap, declaredBytes);
   } finally {
     attempt.settle();
   }
@@ -145,7 +146,7 @@ const timerRangeInteger = (value: number, label: string): void => {
  * the whole-delivery shutdown) aborts it too. This fixture retries nothing. */
 const fetchWithin = (url: string, timeoutMs: number, signal: AbortSignal): {
   readonly response: Promise<Response>;
-  readonly body: (cap: number) => Promise<Uint8Array>;
+  readonly body: (cap: number, declaredBytes?: number | undefined) => Promise<Uint8Array>;
   readonly settle: () => void;
 } => {
   const controller = new AbortController();
@@ -180,10 +181,10 @@ const fetchWithin = (url: string, timeoutMs: number, signal: AbortSignal): {
   };
   return {
     response: attempt,
-    body: async (cap: number) => {
+    body: async (cap: number, declaredBytes?: number | undefined) => {
       try {
         const response = await attempt;
-        return await readCapped(url, response, reader, cap);
+        return await readCapped(url, response, reader, cap, declaredBytes);
       } finally {
         settle();
       }
@@ -192,16 +193,26 @@ const fetchWithin = (url: string, timeoutMs: number, signal: AbortSignal): {
   };
 };
 
+/** Distinguish a lying manifest declaration from a transport-cap trip so
+ * operators can tell which contract the response violated. */
+const declaredError = (declaredBytes: number | undefined, cap: number, url: string): string => {
+  if (declaredBytes !== undefined && declaredBytes > 0 && declaredBytes <= cap) {
+    return `Delivery response exceeds its declared size: ${url}`;
+  }
+  return `Delivery response exceeds the transport byte cap (${cap}): ${url}`;
+};
+
 const readCapped = async (
   url: string,
   response: Response,
   reader: ReadableStreamDefaultReader<Uint8Array> | undefined,
   cap: number,
+  declaredBytes?: number | undefined,
 ): Promise<Uint8Array> => {
   if (reader === undefined) {
     const buffer = await response.arrayBuffer();
     if (buffer.byteLength > cap) {
-      throw new Error(`Delivery response exceeds its declared size: ${url}`);
+      throw new Error(declaredError(declaredBytes, cap, url));
     }
     return new Uint8Array(buffer);
   }
@@ -213,7 +224,7 @@ const readCapped = async (
     received += value.byteLength;
     if (received > cap) {
       await reader.cancel().catch(() => undefined);
-      throw new Error(`Delivery response exceeds its declared size: ${url}`);
+      throw new Error(declaredError(declaredBytes, cap, url));
     }
     chunks.push(value);
   }
@@ -309,13 +320,29 @@ export async function createZipPackDelivery(options: ZipPackDeliveryOptions): Pr
   timerRangeInteger(options.prepareTimeoutMs, 'prepare timeout');
   timerRangeInteger(options.requestTimeoutMs, 'request timeout');
   positiveInteger(options.maxFileBytes, 'file byte cap');
+  // Snapshot the validated fields: later caller mutation of the options
+  // object must not change what an in-flight delivery enforces or uses.
+  const optionsSnapshot = {
+    createWorker: options.createWorker,
+    stagingBudgetBytes: options.stagingBudgetBytes,
+    prepareTimeoutMs: options.prepareTimeoutMs,
+    requestTimeoutMs: options.requestTimeoutMs,
+    maxFileBytes: options.maxFileBytes,
+  };
   const manifestUrl = new URL(options.manifestUrl, globalThis.location.href);
   const manifestRoot = new URL('./', manifestUrl);
+  // Manifest paths are archive/disk paths, not URLs: resolve them by
+  // encoding each segment exactly once, so revision or file names carrying
+  // '#', '?' or spaces address the same resource the static host serves.
+  const resolveArtifact = (path: string): string => new URL(
+    path.split('/').map((segment) => encodeURIComponent(segment)).join('/'),
+    manifestRoot,
+  ).href;
   const shutdown = new AbortController();
 
   const manifestBytes = await fetchDeliveryBytes(
     manifestUrl.href,
-    options.requestTimeoutMs,
+    optionsSnapshot.requestTimeoutMs,
     shutdown.signal,
     MANIFEST_BYTE_CAP,
     (status): string => `Delivery manifest request failed with HTTP ${status}`,
@@ -379,7 +406,7 @@ export async function createZipPackDelivery(options: ZipPackDeliveryOptions): Pr
     stagingUsedBytes -= pack.reservationBytes;
   };
 
-  const decoder = createBoundedZipDecoder({ createWorker: options.createWorker });
+  const decoder = createBoundedZipDecoder({ createWorker: optionsSnapshot.createWorker });
 
   const stagePack = async (
     pack: PhaserPackDeliveryPack,
@@ -390,14 +417,15 @@ export async function createZipPackDelivery(options: ZipPackDeliveryOptions): Pr
     if (archive === undefined) {
       throw new Error(`Delivery pack ${pack.packId} has no archive description`);
     }
-    const url = new URL(archive.path, manifestRoot);
+    const url = resolveArtifact(archive.path);
     archiveRequests++;
     const bytes = await fetchDeliveryBytes(
-      url.href,
-      options.requestTimeoutMs,
+      url,
+      optionsSnapshot.requestTimeoutMs,
       signal,
       archive.bytes,
       (status): string => `Delivery archive request failed with HTTP ${status} (${pack.packId})`,
+      archive.bytes,
     );
     if (bytes.byteLength !== archive.bytes) {
       throw new Error(`Delivery archive size mismatch for ${pack.packId}: ${bytes.byteLength} of ${archive.bytes}`);
@@ -427,6 +455,21 @@ export async function createZipPackDelivery(options: ZipPackDeliveryOptions): Pr
     });
     const mediaByPath = new Map(pack.assets.flatMap((asset) => asset.files.map((file) => [file.path, file.mediaType] as const)));
     const files = new Map<string, { readonly bytes: Uint8Array; readonly mediaType: string }>();
+    // While the loop pends on the next worker entry, an abort must cancel
+    // the job immediately instead of waiting for the decode deadline: a
+    // cancelled transition would otherwise block its serialized successor
+    // for the whole remaining budget.
+    const cancelWithJob = (): void => {
+      void job.cancel().catch(() => undefined);
+    };
+    // An AbortSignal never fires for listeners attached after the abort: a
+    // cancel that landed during the digest-verification window must cancel
+    // the job immediately instead of waiting for the first entry.
+    if (signal.aborted) {
+      cancelWithJob();
+    } else {
+      signal.addEventListener('abort', cancelWithJob, { once: true });
+    }
     try {
       for await (const entry of job.entries) {
         // Caller cancel and dispose() stop the decode promptly: without this
@@ -451,6 +494,8 @@ export async function createZipPackDelivery(options: ZipPackDeliveryOptions): Pr
     } catch (error) {
       void job.cancel().catch(() => undefined);
       throw error;
+    } finally {
+      signal.removeEventListener('abort', cancelWithJob);
     }
     const stagedPack: StagedPack = {
       pack,
@@ -486,13 +531,22 @@ export async function createZipPackDelivery(options: ZipPackDeliveryOptions): Pr
             try {
               transfer = await context.budgets.transfers.acquire(context.signal);
               fileRequests++;
-              const url = new URL(role.path, manifestRoot);
+              const url = resolveArtifact(role.path);
+              // The loader reserves only the declared size in the shared
+              // budget, so the streaming cap is the declared bytes (when
+              // known) rather than the transport maximum, and the failure
+              // distinguishes a lying manifest from a transport-cap trip.
+              const declared = request.integrity?.bytes;
+              const cap = declared === undefined || declared <= 0
+                ? optionsSnapshot.maxFileBytes
+                : Math.min(declared, optionsSnapshot.maxFileBytes);
               const bytes = await fetchDeliveryBytes(
-                url.href,
-                options.requestTimeoutMs,
+                url,
+                optionsSnapshot.requestTimeoutMs,
                 context.signal,
-                options.maxFileBytes,
+                cap,
                 (status): string => `Delivery file request failed with HTTP ${status} (${request.packId})`,
+                declared,
               );
               return {
                 bytes: new Blob([blobPart(bytes)], { type: role.mediaType }),
@@ -558,15 +612,15 @@ export async function createZipPackDelivery(options: ZipPackDeliveryOptions): Pr
       // for the whole closure before any network work: an oversized prepare
       // is rejected without a single request.
       const need = missing.reduce((sum, pack) => sum + pack.archive!.bytes + expandedBytesOf(pack), 0);
-      if (stagingUsedBytes + need > options.stagingBudgetBytes) {
-        throw new Error(`Zip staging budget exceeded: preparing ${packId} needs ${need} bytes with ${stagingUsedBytes} staged, over the ${options.stagingBudgetBytes} byte budget`);
+      if (stagingUsedBytes + need > optionsSnapshot.stagingBudgetBytes) {
+        throw new Error(`Zip staging budget exceeded: preparing ${packId} needs ${need} bytes with ${stagingUsedBytes} staged, over the ${optionsSnapshot.stagingBudgetBytes} byte budget`);
       }
       activePrepare = true;
       const controller = new AbortController();
-      const deadlineAt = Date.now() + options.prepareTimeoutMs;
+      const deadlineAt = Date.now() + optionsSnapshot.prepareTimeoutMs;
       const timer = setTimeout(
         (): void => controller.abort(new Error('Zip pack preparation exceeded its deadline')),
-        options.prepareTimeoutMs,
+        optionsSnapshot.prepareTimeoutMs,
       );
       // Caller cancel and delivery shutdown forward the triggering signal's
       // own reason (the event target is whichever of the two fired), so the
@@ -648,7 +702,7 @@ export async function createZipPackDelivery(options: ZipPackDeliveryOptions): Pr
     snapshot(): ZipDeliverySnapshot {
       return {
         stagingUsedBytes,
-        stagingBudgetBytes: options.stagingBudgetBytes,
+        stagingBudgetBytes: optionsSnapshot.stagingBudgetBytes,
         archiveRequests,
         fileRequests,
         staging: [...staged.values()].map((stagedPack) => ({
