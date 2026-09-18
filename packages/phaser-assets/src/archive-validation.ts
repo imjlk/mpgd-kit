@@ -5,6 +5,13 @@ import {
   type ZipDecodeLimits,
 } from './archive-zip-core.js';
 
+/** Realm-safe typed-array probe: Object.prototype.toString honors
+ * @@toStringTag from any realm, unlike instanceof, so genuine
+ * cross-realm Uint8Array inputs (an iframe's, for example) pass. Tag
+ * spoofs still fail closed later in the core's DataView snapshot probe. */
+const isUint8Array = (value: unknown): value is Uint8Array =>
+  Object.prototype.toString.call(value) === '[object Uint8Array]';
+
 /** Statistics a successful archive verification reports. */
 export interface ZipV1VerificationStats {
   /** Verified entries (STORE and DEFLATE) inside the archive. */
@@ -27,7 +34,7 @@ export async function verifyZipV1Archive(
   expected: ExpectedZipArchive,
   limits: ZipDecodeLimits,
 ): Promise<ZipV1VerificationStats> {
-  if (!(archive instanceof Uint8Array)) {
+  if (!isUint8Array(archive)) {
     throw new ZipDecodeError('invalid-structure', 'ZIP archive bytes must be a Uint8Array');
   }
   let entries = 0;

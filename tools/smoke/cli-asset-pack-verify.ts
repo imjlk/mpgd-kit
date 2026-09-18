@@ -519,6 +519,59 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   });
   assert.equal(withinCap.ok, true, JSON.stringify(withinCap.failures));
 }
+{
+  // Decompression bounds are independent of the manifest: over-cap
+  // declared expansion fails before any decoding, pass-range caps do not.
+  const expansionRoot = join(fixtureRoot, 'out-expansion');
+  cpSync(join(fixtureRoot, zipOut), expansionRoot, { recursive: true });
+  const expansionManifestPath = join(expansionRoot, 'asset-pack-delivery.json');
+  const expansionManifest = JSON.parse(
+    readFileSync(
+      expansionManifestPath,
+      'utf8',
+    ),
+  ) as { packs: { packId: string; assets: { files: { bytes: number }[] }[] }[] };
+  const firstFiles = expansionManifest.packs[0]!.assets[0]!.files;
+  const originalBytes = firstFiles[0]!.bytes;
+  firstFiles[0]!.bytes = 512 * 1024 * 1024;
+  writeJson(expansionManifestPath, expansionManifest);
+  const overEntry = await verify(expansionManifestPath, expansionRoot);
+  assert.equal(overEntry.ok, false);
+  assert.ok(overEntry.failures.some((failure) => failure.code === 'max-entry-bytes'));
+  // Caps apply per pack, so bound pack 0's own declared total.
+  const firstPackTotal = expansionManifest.packs[0]!.assets.reduce(
+    (sum, asset) => sum + asset.files.reduce((n, file) => n + file.bytes, 0),
+    0,
+  );
+  const overExpanded = await verify(expansionManifestPath, expansionRoot, {
+    maxEntryBytes: 1024 * 1024 * 1024,
+    maxExpandedBytes: firstPackTotal - 1,
+  });
+  assert.equal(overExpanded.ok, false);
+  assert.ok(overExpanded.failures.some((failure) => failure.code === 'max-expanded-bytes'));
+  // Restoring the declared size and using pass-range caps verifies fully.
+  firstFiles[0]!.bytes = originalBytes;
+  writeJson(expansionManifestPath, expansionManifest);
+  // Pass-range caps sit exactly at the largest entry and the largest
+  // single-pack expansion across the whole manifest.
+  let largestEntry = 0;
+  let largestPackTotal = 0;
+  for (const pack of expansionManifest.packs) {
+    let packTotal = 0;
+    for (const asset of pack.assets) {
+      for (const file of asset.files) {
+        largestEntry = Math.max(largestEntry, file.bytes);
+        packTotal += file.bytes;
+      }
+    }
+    largestPackTotal = Math.max(largestPackTotal, packTotal);
+  }
+  const withinExpansion = await verify(expansionManifestPath, expansionRoot, {
+    maxEntryBytes: largestEntry,
+    maxExpandedBytes: largestPackTotal,
+  });
+  assert.equal(withinExpansion.ok, true, JSON.stringify(withinExpansion.failures));
+}
 
 // ---- CLI behavior ---------------------------------------------------------
 {

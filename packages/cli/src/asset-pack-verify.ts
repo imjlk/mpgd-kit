@@ -79,11 +79,21 @@ export interface AssetPackVerifyOptions {
   /** Cap on a single zip archive materialized for decode; default 512 MiB.
    * Larger declared archives fail at the limits stage before buffering. */
   readonly maxArchiveBytes?: number | undefined;
+  /** Independent cap on one expanded zip entry, whatever the manifest
+   * declares; default 256 MiB. Larger declared entries fail at the limits
+   * stage before any decompression allocation. */
+  readonly maxEntryBytes?: number | undefined;
+  /** Independent cap on one archive's total expanded bytes, whatever the
+   * manifest declares; default 1 GiB. Larger declared totals fail at the
+   * limits stage before any decompression allocation. */
+  readonly maxExpandedBytes?: number | undefined;
 }
 
 const DEFAULT_MANIFEST_BYTE_CAP = 32 * 1024 * 1024;
 const DEFAULT_VERIFY_TIMEOUT_MS = 120_000;
 const DEFAULT_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
+const DEFAULT_MAX_ENTRY_BYTES = 256 * 1024 * 1024;
+const DEFAULT_MAX_EXPANDED_BYTES = 1024 * 1024 * 1024;
 const STREAM_CHUNK_BYTES = 1024 * 1024;
 /** Inventory walking stops beyond this many files so an accidental root
  * choice cannot turn verification into an unbounded traversal; the report
@@ -276,11 +286,22 @@ const inventoryRoot = async (
 const readManifestCapped = async (
   manifestPath: string,
   cap: number,
+  deadlineAt: number,
+  breachDeadline: () => boolean,
   onChunk?: () => void,
 ): Promise<Buffer> => {
   const stream: ReadStream = createReadStream(resolve(manifestPath), {
     highWaterMark: STREAM_CHUNK_BYTES,
   });
+  // A stalled source (a FIFO whose writer never writes, a hung network
+  // mount) delivers no chunk to sample, so a timer enforces the budget
+  // even while the read pends; the recorded failure travels on the
+  // destroy error.
+  const timer = setTimeout(() => {
+    if (breachDeadline()) {
+      stream.destroy(new VerifyDeadlineError());
+    }
+  }, Math.max(0, deadlineAt - Date.now()));
   const chunks: Buffer[] = [];
   let received = 0;
   try {
@@ -299,6 +320,8 @@ const readManifestCapped = async (
       throw error;
     }
     throw new Error(`Could not read the delivery manifest: ${errorText(error)}`);
+  } finally {
+    clearTimeout(timer);
   }
   return Buffer.concat(chunks);
 };
@@ -373,6 +396,8 @@ const longestDeclaredPathOf = (pack: PhaserPackDeliveryPack): number => {
  * the unspent remainder of the whole-verification budget. */
 const coreLimitsOf = (
   pack: PhaserPackDeliveryPack,
+  maxEntryBytes: number,
+  maxExpandedBytes: number,
   remainingMs: number,
 ): {
   archiveBytes: number;
@@ -388,14 +413,19 @@ const coreLimitsOf = (
   );
   return {
     archiveBytes: pack.archive?.bytes ?? 0,
-    entryBytes: Math.max(
-      1,
-      pack.assets.reduce(
-        (max, asset) => asset.files.reduce((inner, file) => Math.max(inner, file.bytes), max),
+    // Declared sizes remain the operative limits — tighter than the caps —
+    // but never exceed the independent bounds, whatever the manifest says.
+    entryBytes: Math.min(
+      maxEntryBytes,
+      Math.max(
         1,
+        pack.assets.reduce(
+          (max, asset) => asset.files.reduce((inner, file) => Math.max(inner, file.bytes), max),
+          1,
+        ),
       ),
     ),
-    totalExpandedBytes: Math.max(1, expanded),
+    totalExpandedBytes: Math.min(maxExpandedBytes, Math.max(1, expanded)),
     entryCount: Math.max(1, pack.archive?.entryCount ?? 0),
     maxPathLength: longestDeclaredPathOf(pack),
     decodeDeadlineMs: Math.max(1, remainingMs),
@@ -414,6 +444,8 @@ export async function verifyAssetPackDelivery(
   const manifestByteCap = options.manifestByteCap ?? DEFAULT_MANIFEST_BYTE_CAP;
   const verifyTimeoutMs = options.verifyTimeoutMs ?? DEFAULT_VERIFY_TIMEOUT_MS;
   const maxArchiveBytes = options.maxArchiveBytes ?? DEFAULT_MAX_ARCHIVE_BYTES;
+  const maxEntryBytes = options.maxEntryBytes ?? DEFAULT_MAX_ENTRY_BYTES;
+  const maxExpandedBytes = options.maxExpandedBytes ?? DEFAULT_MAX_EXPANDED_BYTES;
   const hostLimits = options.hostLimits;
   const usedLimits: AssetPackVerifyHostLimits = {
     ...(hostLimits?.maxObjectBytes === undefined ? {} : { maxObjectBytes: hostLimits.maxObjectBytes }),
@@ -424,6 +456,8 @@ export async function verifyAssetPackDelivery(
     positiveIntegerOption(failures, 'manifestByteCap', manifestByteCap),
     positiveIntegerOption(failures, 'verifyTimeoutMs', verifyTimeoutMs),
     positiveIntegerOption(failures, 'maxArchiveBytes', maxArchiveBytes),
+    positiveIntegerOption(failures, 'maxEntryBytes', maxEntryBytes),
+    positiveIntegerOption(failures, 'maxExpandedBytes', maxExpandedBytes),
     ...Object.entries(hostLimits ?? {}).map(([name, value]) =>
       positiveIntegerOption(
         failures,
@@ -460,7 +494,13 @@ export async function verifyAssetPackDelivery(
   let manifestBytes: Buffer | undefined;
   let manifest: PhaserPackDeliveryManifest | undefined;
   try {
-    manifestBytes = await readManifestCapped(options.manifestPath, manifestByteCap, sampleDeadline);
+    manifestBytes = await readManifestCapped(
+      options.manifestPath,
+      manifestByteCap,
+      startedAt + verifyTimeoutMs,
+      deadlineBreached,
+      sampleDeadline,
+    );
   } catch (error) {
     if (!(error instanceof VerifyDeadlineError)) {
       failWith(failures, 'manifest', 'manifest-unreadable', errorText(error));
@@ -564,6 +604,8 @@ export async function verifyAssetPackDelivery(
           archives,
           sampleDeadline,
           maxArchiveBytes,
+          maxEntryBytes,
+          maxExpandedBytes,
           startedAt,
           verifyTimeoutMs,
         );
@@ -807,6 +849,8 @@ const verifyZipPack = async (
   archives: { packId: string; entries: number; expandedBytes: number }[],
   sampleDeadline: () => void,
   maxArchiveBytes: number,
+  maxEntryBytes: number,
+  maxExpandedBytes: number,
   startedAt: number,
   verifyTimeoutMs: number,
 ): Promise<void> => {
@@ -840,6 +884,39 @@ const verifyZipPack = async (
       'limits',
       'max-archive-bytes',
       `Archive ${archivePath} declares ${declaredBytes} bytes, over the limit ${maxArchiveBytes}`,
+      pack.packId,
+    );
+    return;
+  }
+  // Decompression bounds are independent of the manifest's own numbers: a
+  // self-consistent manifest can still declare gigabytes of expansion, and
+  // these caps reject that before any allocation, not after.
+  const declaredEntryBytes = pack.assets.reduce(
+    (max, asset) => asset.files.reduce((inner, file) => Math.max(inner, file.bytes), max),
+    0,
+  );
+  const declaredExpandedBytes = pack.assets.reduce(
+    (sum, asset) => sum + asset.files.reduce((inner, file) => inner + file.bytes, 0),
+    0,
+  );
+  if (declaredEntryBytes > maxEntryBytes) {
+    failWith(
+      failures,
+      'limits',
+      'max-entry-bytes',
+      `Pack ${pack.packId} declares an entry of ${declaredEntryBytes} bytes, `
+        + `over the limit ${maxEntryBytes}`,
+      pack.packId,
+    );
+    return;
+  }
+  if (declaredExpandedBytes > maxExpandedBytes) {
+    failWith(
+      failures,
+      'limits',
+      'max-expanded-bytes',
+      `Pack ${pack.packId} declares ${declaredExpandedBytes} expanded bytes, `
+        + `over the limit ${maxExpandedBytes}`,
       pack.packId,
     );
     return;
@@ -937,7 +1014,12 @@ const verifyZipPack = async (
     const stats = await verifyZipV1Archive(
       archiveBytes,
       expectedOf(pack),
-      coreLimitsOf(pack, verifyTimeoutMs - (Date.now() - startedAt)),
+      coreLimitsOf(
+        pack,
+        maxEntryBytes,
+        maxExpandedBytes,
+        verifyTimeoutMs - (Date.now() - startedAt),
+      ),
     );
     archives.push({
       packId: pack.packId,

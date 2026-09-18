@@ -151,8 +151,12 @@ verification through the runtime decode core, and optional static-host object
 limits (`--max-object-bytes`, `--max-files`, `--max-total-bytes`) evaluated
 against the entire root inventory (old revisions included) rather than just
 the referenced set. `--max-archive-bytes` caps how many bytes a single zip
-archive may declare and occupy during verification (512 MiB by default);
-larger archives fail in the `limits` stage before being read. Roots with
+archive may declare and occupy during verification (512 MiB by default),
+and `--max-entry-bytes` (256 MiB) / `--max-expanded-bytes` (1 GiB) bound
+decompression independently of the manifest's own declared sizes — a
+self-consistent manifest cannot make verification allocate past them.
+Larger declarations fail in the `limits` stage before being read or
+decoded. Roots with
 more than a million files fail the inventory check as truncated rather
 than certifying limits that could not be fully walked. Use `--json`
 for automation; the report's `failures` list carries a stage and stable code

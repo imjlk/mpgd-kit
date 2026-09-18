@@ -1095,6 +1095,16 @@ function assetPackVerifyArgs() {
       required: false,
       description: 'Optional cap: largest zip archive read for verification, in bytes.',
     },
+    'max-entry-bytes': {
+      type: 'number',
+      required: false,
+      description: 'Optional cap: largest expanded zip entry allowed, in bytes.',
+    },
+    'max-expanded-bytes': {
+      type: 'number',
+      required: false,
+      description: 'Optional cap: total expanded bytes allowed per archive, in bytes.',
+    },
   } as const;
 }
 
@@ -1200,6 +1210,14 @@ const assetsCommand = defineI18n({
             en: 'Optional cap: largest zip archive read for verification, in bytes.',
             ko: '선택적 상한: 검증 시 읽는 zip 아카이브의 최대 바이트 수.',
           },
+          'max-entry-bytes': {
+            en: 'Optional cap: largest expanded zip entry allowed, in bytes.',
+            ko: '선택적 상한: 허용되는 확장(zip 해제) 엔트리 최대 바이트 수.',
+          },
+          'max-expanded-bytes': {
+            en: 'Optional cap: total expanded bytes allowed per archive, in bytes.',
+            ko: '선택적 상한: 아카이브별 허용되는 총 확장 바이트 수.',
+          },
         },
       ),
       args: assetPackVerifyArgs(),
@@ -1222,6 +1240,12 @@ const assetsCommand = defineI18n({
           ...(ctx.values['max-archive-bytes'] === undefined
             ? {}
             : { maxArchiveBytes: ctx.values['max-archive-bytes'] as number }),
+          ...(ctx.values['max-entry-bytes'] === undefined
+            ? {}
+            : { maxEntryBytes: ctx.values['max-entry-bytes'] as number }),
+          ...(ctx.values['max-expanded-bytes'] === undefined
+            ? {}
+            : { maxExpandedBytes: ctx.values['max-expanded-bytes'] as number }),
         });
         if (ctx.values.json === true) {
           console.info(JSON.stringify(report, null, 2));

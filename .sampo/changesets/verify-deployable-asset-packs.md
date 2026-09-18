@@ -15,7 +15,10 @@ optionally checks static-host object limits (`--max-object-bytes`,
 `--max-files`, `--max-total-bytes`) against the full root inventory —
 distinguishing referenced integrity from deployment budget — and caps the
 largest archive it will read with `--max-archive-bytes` (512 MiB by
-default), failing in the limits stage before reading oversized archives. Reports carry
+default) plus decompression bounds `--max-entry-bytes` (256 MiB) and
+`--max-expanded-bytes` (1 GiB) that are independent of the manifest's own
+declared sizes, failing in the limits stage before reading or decoding
+oversized declarations. Reports carry
 per-stage failure codes; `--json` emits a machine-readable report
 (followed by a trailing newline; the CLI framework prints a one-line
 program banner before it) and failures exit non-zero. The check never
