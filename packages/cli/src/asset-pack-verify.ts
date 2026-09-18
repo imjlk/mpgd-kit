@@ -103,7 +103,13 @@ const INVENTORY_FILE_CAP = 1_000_000;
  * is ambiguous on case-insensitive hosts. */
 /** Case-fold the collision key unconditionally: the verifier's host is not
  * the deployment's consumers, and case-duplicate artifacts are ambiguous
- * for any case-insensitive host or CDN regardless of where this runs. */
+ * for any case-insensitive host or CDN regardless of where this runs.
+ * The fold mirrors the upcase tables of the case-insensitive filesystems
+ * deployments actually target (NTFS, APFS): simple case mapping, under
+ * which "Straße.png" and "STRASSE.png" stay distinct. Full Unicode case
+ * folding (ext4/F2FS casefold directories) is a different equivalence —
+ * recorded in `notVerified` rather than approximated here, so valid
+ * NTFS/APFS deployments are not falsely rejected. */
 const caseKeyOf = (resolvedPath: string): string => resolvedPath.toLowerCase();
 
 const NOT_VERIFIED: readonly string[] = [
@@ -112,6 +118,9 @@ const NOT_VERIFIED: readonly string[] = [
   'Application image display and device compatibility',
   'Server access control',
   'Atomic multi-file deployment swaps',
+  'Full Unicode case-fold ambiguity (ext4/F2FS casefold directories): '
+    + 'collision detection folds like NTFS and APFS, under which '
+    + '"Straße.png" and "STRASSE.png" remain distinct files',
 ];
 
 type FailureSink = AssetPackVerifyFailure[];
@@ -344,7 +353,7 @@ const inventoryRoot = async (
       }
       throw error;
     } finally {
-      await closeBounded(() => dir.close(), stalled);
+      await closeBounded(() => dir.close(), stalled, deadline);
     }
   };
   await walk(root);
@@ -390,7 +399,7 @@ const readManifestCapped = async (
     throw new Error(`Could not read the delivery manifest: ${errorText(error)}`);
   } finally {
     clearTimeout(timer);
-    await closeBounded(() => handle.close(), stalled);
+    await closeBounded(() => handle.close(), stalled, deadline);
   }
   return Buffer.concat(chunks);
 };
@@ -706,6 +715,7 @@ export async function verifyAssetPackDelivery(
                 seenResolved,
                 verifiedArtifacts,
                 deadline,
+                hostLimits?.maxObjectBytes,
               );
             }
           }
@@ -723,6 +733,7 @@ export async function verifyAssetPackDelivery(
           maxArchiveBytes,
           maxEntryBytes,
           maxExpandedBytes,
+          hostLimits?.maxObjectBytes,
         );
       }
     } catch (error) {
@@ -858,16 +869,22 @@ const resolveAndRegister = async (
   return resolved;
 };
 
-/** Close a filesystem handle while unwinding: a stalled call queues
- * close() behind uncancellable work, and awaiting it would stop the
- * report from ever returning, so the deadline path fires and forgets
- * (the CLI's forced exit releases whatever the queue still holds). */
-const closeBounded = async (close: () => Promise<void>, stalled: boolean): Promise<void> => {
+/** Close a filesystem handle under the deadline: a close following an
+ * already-timed-out operation queues behind uncancellable work and is
+ * fired and forgotten (the CLI's forced exit releases whatever the queue
+ * still holds), while even a clean-path close is raced, because a stalled
+ * close on a network or FUSE mount would otherwise stop the report from
+ * ever returning. */
+const closeBounded = async (
+  close: () => Promise<void>,
+  stalled: boolean,
+  deadline: VerifyDeadline,
+): Promise<void> => {
   if (stalled) {
     void close().catch(() => {});
     return;
   }
-  await close();
+  await deadline.race(close());
 };
 
 /** Bind an opened descriptor to the identity the path checks validated:
@@ -892,6 +909,7 @@ const verifyReferencedFile = async (
   seenResolved: Map<string, string>,
   verifiedArtifacts: Map<string, { bytes: number; sha256: string }>,
   deadline: VerifyDeadline,
+  maxObjectBytes: number | undefined,
 ): Promise<void> => {
   const resolved = await resolveAndRegister(
     failures,
@@ -956,6 +974,19 @@ const verifyReferencedFile = async (
         );
         return;
       }
+      // The object cap applies before streaming too: a valid but oversized
+      // artifact must fail as max-object-bytes here rather than consuming
+      // the whole budget and surfacing only a deadline failure.
+      if (maxObjectBytes !== undefined && info.size > BigInt(maxObjectBytes)) {
+        failWith(
+          failures,
+          'limits',
+          'max-object-bytes',
+          `File ${file.path} is ${info.size} bytes, over the limit ${maxObjectBytes}`,
+          pack.packId,
+        );
+        return;
+      }
       hashed = await streamSha256(resolvedPath, handle, createHash('sha256'), deadline);
     } catch (error) {
       if (error instanceof VerifyDeadlineError) {
@@ -963,7 +994,7 @@ const verifyReferencedFile = async (
       }
       throw error;
     } finally {
-      await closeBounded(() => handle.close(), stalled);
+      await closeBounded(() => handle.close(), stalled, deadline);
     }
     if (hashed.bytes !== file.bytes) {
       failWith(
@@ -1006,6 +1037,7 @@ const verifyZipPack = async (
   maxArchiveBytes: number,
   maxEntryBytes: number,
   maxExpandedBytes: number,
+  maxObjectBytes: number | undefined,
 ): Promise<void> => {
   const archivePath = pack.archive?.path;
   if (archivePath === undefined) {
@@ -1115,6 +1147,16 @@ const verifyZipPack = async (
           );
           return;
         }
+        if (maxObjectBytes !== undefined && size > BigInt(maxObjectBytes)) {
+          failWith(
+            failures,
+            'limits',
+            'max-object-bytes',
+            `Archive ${archivePath} is ${size} bytes, over the limit ${maxObjectBytes}`,
+            pack.packId,
+          );
+          return;
+        }
         archiveBytes = await readExact(resolvedPath, handle, declaredBytes, deadline);
         const hasher = createHash('sha256');
         hasher.update(archiveBytes);
@@ -1161,7 +1203,7 @@ const verifyZipPack = async (
       }
       throw error;
     } finally {
-      await closeBounded(() => handle.close(), stalled);
+      await closeBounded(() => handle.close(), stalled, deadline);
     }
   } catch (error) {
     if (error instanceof VerifyDeadlineError) {
