@@ -630,6 +630,17 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   assert.equal(run.stdout.trim().endsWith('}'), true);
 }
 {
+  // A missing referenced file in JSON mode still prints one parseable
+  // report document and exits non-zero.
+  const holeRoot = join(fixtureRoot, 'out-hole-cli');
+  cpSync(join(fixtureRoot, filesOut), holeRoot, { recursive: true });
+  rmSync(join(holeRoot, 'packs', 'grove@1', 'grove.png'));
+  const run = runVerifyCli(join(holeRoot, 'asset-pack-delivery.json'), holeRoot, '--json');
+  assert.equal(run.status, 1);
+  const parsed = JSON.parse(run.stdout) as AssetPackVerifyReport;
+  assert.equal(parsed.ok, false);
+}
+{
   // Framework-level argument errors (rejected before the command handler)
   // keep stdout blank and report on stderr with a non-zero exit.
   const run = runVerifyCli(zipManifest, join(fixtureRoot, zipOut), '--json', '--max-files', 'abc');
