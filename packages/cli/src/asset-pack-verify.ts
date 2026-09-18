@@ -308,12 +308,16 @@ const inventoryRoot = async (
     // each batch read is raced against the deadline like every other
     // blocking wait.
     const dir = await deadline.race(opendir(directory));
+    // Child directories are visited only after this handle closes, so a
+    // deeply nested deployment holds exactly one directory handle at a
+    // time instead of one per ancestor level.
+    const subdirectories: string[] = [];
     let stalled = false;
     try {
       for (;;) {
         const entry = await deadline.race(dir.read());
         if (entry === null) {
-          return;
+          break;
         }
         deadline.sample();
         const child = join(directory, entry.name);
@@ -328,13 +332,7 @@ const inventoryRoot = async (
           continue;
         }
         if (stat.isDirectory()) {
-          await walk(child);
-          // A truncated descendant stops the entire walk, not just that
-          // subtree: ancestors must not keep scanning siblings once the
-          // cap verdict is known.
-          if (truncated) {
-            return;
-          }
+          subdirectories.push(child);
           continue;
         }
         if (!stat.isFile()) {
@@ -360,6 +358,15 @@ const inventoryRoot = async (
       throw error;
     } finally {
       await closeBounded(() => dir.close(), stalled, deadline);
+    }
+    for (const child of subdirectories) {
+      await walk(child);
+      // A truncated descendant stops the entire walk, not just that
+      // subtree: ancestors must not keep scanning siblings once the cap
+      // verdict is known.
+      if (truncated) {
+        return;
+      }
     }
   };
   await walk(root);
@@ -413,46 +420,29 @@ const readManifestCapped = async (
   return Buffer.concat(chunks);
 };
 
-/** Read exactly `bytes` bytes from the same descriptor the hash read —
- * a file changing size between the hash and this read fails instead of
- * verifying different bytes. */
+/** Read exactly `bytes` bytes into one pre-allocated buffer from the same
+ * descriptor the identity check validated — a file changing size between
+ * the stat and this read fails instead of verifying different bytes, and
+ * a valid archive near the cap never holds chunk copies beside the
+ * result. */
 const readExact = async (
   path: string,
   handle: FileHandle,
   bytes: number,
   deadline: VerifyDeadline,
 ): Promise<Buffer> => {
-  const chunks: Buffer[] = [];
+  const buffer = Buffer.alloc(bytes);
   let received = 0;
-  const stream = handle.createReadStream({
-    highWaterMark: STREAM_CHUNK_BYTES,
-    // closeBounded owns closure under the deadline; an implicit close
-    // after the read would not be raced and could stall the exit path.
-    autoClose: false,
-  });
-  const timer = deadline.armStream(stream);
-  try {
-    for await (const chunk of stream) {
-      const view = chunk as Buffer;
-      received += view.byteLength;
-      if (received > bytes) {
-        stream.destroy();
-        throw new Error(`Archive grew while being read: ${path}`);
-      }
-      chunks.push(view);
+  while (received < bytes) {
+    const { bytesRead } = await deadline.race(
+      handle.read(buffer, received, bytes - received, received),
+    );
+    if (bytesRead === 0) {
+      throw new Error(`Archive shrank while being read: ${path}`);
     }
-  } catch (error) {
-    if (error instanceof VerifyDeadlineError) {
-      throw error;
-    }
-    throw new Error(`Could not read the archive at ${path}: ${errorText(error)}`);
-  } finally {
-    clearTimeout(timer);
+    received += bytesRead;
   }
-  if (received !== bytes) {
-    throw new Error(`Archive shrank while being read: ${path}`);
-  }
-  return Buffer.concat(chunks);
+  return buffer;
 };
 
 const expectedOf = (pack: PhaserPackDeliveryPack): ExpectedZipArchive => ({

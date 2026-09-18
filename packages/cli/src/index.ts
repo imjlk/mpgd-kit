@@ -262,7 +262,17 @@ const acceptanceStepIds = {
   gameplayE2E: 'gameplay-e2e',
 } as const;
 
+/** Whether the last run reported a deadline failure that leaves
+ * uncancellable filesystem work pending: the standalone binary forces its
+ * exit (see bin.ts); in-process library callers handle it themselves. */
+let forcedExitPending = false;
+
+export function mpgdCliNeedsForcedExit(): boolean {
+  return forcedExitPending;
+}
+
 export async function runMpgdCli(args: readonly string[]): Promise<void> {
+  forcedExitPending = false;
   await cli([...args], entryCommand, {
     name: 'mpgd',
     version: cliVersion,
@@ -1277,7 +1287,7 @@ const assetsCommand = defineI18n({
         }
         if (report.failures.some((failure) => failure.code === 'deadline')) {
           // Piped console output is asynchronous; drain both streams so a
-          // large report is not truncated by the forced exit below.
+          // large report is not truncated by the binary's forced exit.
           await Promise.all([
             new Promise<void>((resolve) => {
               process.stdout.write('', () => resolve());
@@ -1287,10 +1297,11 @@ const assetsCommand = defineI18n({
             }),
           ]);
           // Stalled filesystem requests cannot be cancelled once the
-          // deadline fires; exit now so a pending threadpool call cannot
-          // keep the process (and its leaked handle) alive past the
-          // reported budget.
-          process.exit(1);
+          // deadline fires; the standalone binary forces its exit so a
+          // pending threadpool call cannot keep the process (and its
+          // leaked handle) alive past the reported budget. In-process
+          // callers of runMpgdCli observe mpgdCliNeedsForcedExit instead.
+          forcedExitPending = true;
         }
         if (!report.ok) {
           process.exitCode = 1;
