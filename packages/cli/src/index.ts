@@ -18,6 +18,7 @@ import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
 
 import { buildAssetPacks } from './asset-pack-build.js';
+import { verifyAssetPackDelivery } from './asset-pack-verify.js';
 import {
   normalizeConfiguredBuildTargets,
   normalizeBuildTarget as normalizeConfiguredTargetName,
@@ -261,10 +262,46 @@ const acceptanceStepIds = {
   gameplayE2E: 'gameplay-e2e',
 } as const;
 
+/** Whether the last run reported a deadline failure that leaves
+ * uncancellable filesystem work pending: the standalone binary forces its
+ * exit (see bin.ts); in-process library callers handle it themselves. */
+let forcedExitPending = false;
+
+export function mpgdCliNeedsForcedExit(): boolean {
+  return forcedExitPending;
+}
+
 export async function runMpgdCli(args: readonly string[]): Promise<void> {
+  forcedExitPending = false;
   await cli([...args], entryCommand, {
     name: 'mpgd',
     version: cliVersion,
+    // Machine-readable mode contract: `assets verify-delivery --json`
+    // owns stdout entirely — exactly one JSON document, parseable with
+    // JSON.parse(stdout) and nothing else. The framework's banner is
+    // suppressed for that command, and framework-level argument errors
+    // (bad value types, missing required arguments — rejected before the
+    // command handler runs) move to stderr so stdout never carries a
+    // partial document. Every other command keeps the default rendering.
+    renderHeader: async (ctx) => {
+      const values = ctx.values as Record<string, unknown>;
+      if (ctx.name === 'verify-delivery' && values.json === true) {
+        return '';
+      }
+      const title = ctx.env.description || ctx.env.name || '';
+      return title
+        ? `${title} (${ctx.env.name || ''}${ctx.env.version ? ` v${ctx.env.version}` : ''})`
+        : title;
+    },
+    renderValidationErrors: async (ctx, error) => {
+      const messages = error.errors.map((entry) => String((entry as Error).message)).join('\n');
+      const values = ctx.values as Record<string, unknown>;
+      if (ctx.name === 'verify-delivery' && values.json === true) {
+        process.stderr.write(`${messages}\n`);
+        return '';
+      }
+      return messages;
+    },
     subCommands: {
       assets: assetsCommand,
       game: gameCommand,
@@ -1057,6 +1094,56 @@ function readPositiveInteger(value: string, label: string): number {
   return parsed;
 }
 
+function assetPackVerifyArgs() {
+  return {
+    manifest: {
+      type: 'string',
+      required: true,
+      description: 'Path to the delivery manifest JSON document.',
+    },
+    root: {
+      type: 'string',
+      required: true,
+      description: 'Deployment root the manifest artifact paths resolve against.',
+    },
+    json: {
+      type: 'boolean',
+      required: false,
+      description: 'Print a single machine-readable JSON report to stdout.',
+    },
+    'max-object-bytes': {
+      type: 'number',
+      required: false,
+      description: 'Optional static-host limit: largest allowed deployed object in bytes.',
+    },
+    'max-files': {
+      type: 'number',
+      required: false,
+      description: 'Optional static-host limit: total regular files allowed under the root.',
+    },
+    'max-total-bytes': {
+      type: 'number',
+      required: false,
+      description: 'Optional static-host limit: total deployed bytes allowed under the root.',
+    },
+    'max-archive-bytes': {
+      type: 'number',
+      required: false,
+      description: 'Optional cap: largest zip archive read for verification, in bytes.',
+    },
+    'max-entry-bytes': {
+      type: 'number',
+      required: false,
+      description: 'Optional cap: largest expanded zip entry allowed, in bytes.',
+    },
+    'max-expanded-bytes': {
+      type: 'number',
+      required: false,
+      description: 'Optional cap: total expanded bytes allowed per archive, in bytes.',
+    },
+  } as const;
+}
+
 function assetPackBuildArgs() {
   return {
     config: {
@@ -1122,9 +1209,134 @@ const assetsCommand = defineI18n({
         console.info(`Asset pack delivery manifest: ${report.manifestPath}`);
       },
     }),
+    'verify-delivery': defineI18n({
+      name: 'verify-delivery',
+      description: 'Verify delivery artifacts read-only against the manifest.',
+      resource: commandResource(
+        {
+          en: 'Verify delivery artifacts read-only against the manifest.',
+          ko: '전달 산출물을 manifest 기준으로 읽기 전용으로 검증합니다.',
+        },
+        {
+          manifest: {
+            en: 'Path to the delivery manifest JSON document.',
+            ko: '전달 manifest JSON 문서 경로.',
+          },
+          root: {
+            en: 'Deployment root the manifest artifact paths resolve against.',
+            ko: 'manifest 산출물 경로의 기준이 되는 배포 루트 디렉터리.',
+          },
+          json: {
+            en: 'Print a single machine-readable JSON report to stdout.',
+            ko: '기계 판독 가능한 JSON 보고서 하나를 stdout에 출력합니다.',
+          },
+          'max-object-bytes': {
+            en: 'Optional static-host limit: largest allowed deployed object in bytes.',
+            ko: '선택적 정적 호스트 한도: 허용되는 최대 배포 object 바이트 수.',
+          },
+          'max-files': {
+            en: 'Optional static-host limit: total regular files allowed under the root.',
+            ko: '선택적 정적 호스트 한도: 루트 아래 허용되는 일반 파일 총 개수.',
+          },
+          'max-total-bytes': {
+            en: 'Optional static-host limit: total deployed bytes allowed under the root.',
+            ko: '선택적 정적 호스트 한도: 루트 아래 허용되는 총 배포 바이트 수.',
+          },
+          'max-archive-bytes': {
+            en: 'Optional cap: largest zip archive read for verification, in bytes.',
+            ko: '선택적 상한: 검증 시 읽는 zip 아카이브의 최대 바이트 수.',
+          },
+          'max-entry-bytes': {
+            en: 'Optional cap: largest expanded zip entry allowed, in bytes.',
+            ko: '선택적 상한: 허용되는 확장(zip 해제) 엔트리 최대 바이트 수.',
+          },
+          'max-expanded-bytes': {
+            en: 'Optional cap: total expanded bytes allowed per archive, in bytes.',
+            ko: '선택적 상한: 아카이브별 허용되는 총 확장 바이트 수.',
+          },
+        },
+      ),
+      args: assetPackVerifyArgs(),
+      run: async (ctx) => {
+        const hostLimits = {
+          ...(ctx.values['max-object-bytes'] === undefined
+            ? {}
+            : { maxObjectBytes: ctx.values['max-object-bytes'] as number }),
+          ...(ctx.values['max-files'] === undefined
+            ? {}
+            : { maxFiles: ctx.values['max-files'] as number }),
+          ...(ctx.values['max-total-bytes'] === undefined
+            ? {}
+            : { maxTotalBytes: ctx.values['max-total-bytes'] as number }),
+        };
+        const report = await verifyAssetPackDelivery({
+          manifestPath: ctx.values.manifest,
+          root: ctx.values.root,
+          ...(Object.keys(hostLimits).length > 0 ? { hostLimits } : {}),
+          ...(ctx.values['max-archive-bytes'] === undefined
+            ? {}
+            : { maxArchiveBytes: ctx.values['max-archive-bytes'] as number }),
+          ...(ctx.values['max-entry-bytes'] === undefined
+            ? {}
+            : { maxEntryBytes: ctx.values['max-entry-bytes'] as number }),
+          ...(ctx.values['max-expanded-bytes'] === undefined
+            ? {}
+            : { maxExpandedBytes: ctx.values['max-expanded-bytes'] as number }),
+        });
+        if (ctx.values.json === true) {
+          console.info(JSON.stringify(report, null, 2));
+        } else {
+          for (const archive of report.archives) {
+            console.info(
+              `verified archive ${archive.packId}: ${archive.entries} entries, ${archive.expandedBytes} expanded bytes`,
+            );
+          }
+          console.info(
+            `manifest ${report.manifest.sha256.slice(0, 12)}… (${report.manifest.bytes} bytes, ${report.manifest.packs} packs)`,
+          );
+          console.info(
+            `referenced objects: ${report.referenced.files} files, ${report.referenced.bytes} bytes`,
+          );
+          if (report.inventory !== undefined) {
+            console.info(
+              `root inventory: ${report.inventory.files} files, ${report.inventory.bytes} bytes${report.inventory.truncated ? ' (truncated)' : ''}`,
+            );
+          }
+          for (const failure of report.failures) {
+            console.error(`[${failure.stage}/${failure.code}] ${failure.message}`);
+          }
+          if (report.ok) {
+            console.info('Delivery verification passed.');
+          } else {
+            console.error('Delivery verification failed; see the failures above.');
+          }
+        }
+        if (report.failures.some((failure) => failure.code === 'deadline')) {
+          // Piped console output is asynchronous; drain both streams so a
+          // large report is not truncated by the binary's forced exit.
+          await Promise.all([
+            new Promise<void>((resolve) => {
+              process.stdout.write('', () => resolve());
+            }),
+            new Promise<void>((resolve) => {
+              process.stderr.write('', () => resolve());
+            }),
+          ]);
+          // Stalled filesystem requests cannot be cancelled once the
+          // deadline fires; the standalone binary forces its exit so a
+          // pending threadpool call cannot keep the process (and its
+          // leaked handle) alive past the reported budget. In-process
+          // callers of runMpgdCli observe mpgdCliNeedsForcedExit instead.
+          forcedExitPending = true;
+        }
+        if (!report.ok) {
+          process.exitCode = 1;
+        }
+      },
+    }),
   },
   run: () => {
-    console.info('Use "mpgd assets build-packs".');
+    console.info('Use "mpgd assets build-packs" or "mpgd assets verify-delivery".');
   },
 });
 
