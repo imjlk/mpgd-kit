@@ -91,6 +91,9 @@ export interface AssetPackVerifyOptions {
 
 const DEFAULT_MANIFEST_BYTE_CAP = 32 * 1024 * 1024;
 const DEFAULT_VERIFY_TIMEOUT_MS = 120_000;
+/** Delays beyond the platform timer range clamp to 1 ms, which would
+ * disarm the watchdog instead of arming it late. */
+const TIMER_RANGE_MS = 2 ** 31 - 1;
 const DEFAULT_MAX_ARCHIVE_BYTES = 512 * 1024 * 1024;
 const DEFAULT_MAX_ENTRY_BYTES = 256 * 1024 * 1024;
 const DEFAULT_MAX_EXPANDED_BYTES = 1024 * 1024 * 1024;
@@ -549,9 +552,18 @@ export async function verifyAssetPackDelivery(
     ...(hostLimits?.maxFiles === undefined ? {} : { maxFiles: hostLimits.maxFiles }),
     ...(hostLimits?.maxTotalBytes === undefined ? {} : { maxTotalBytes: hostLimits.maxTotalBytes }),
   };
+  if (verifyTimeoutMs > TIMER_RANGE_MS) {
+    failWith(
+      failures,
+      'args',
+      'invalid-option',
+      `verifyTimeoutMs must be at most ${TIMER_RANGE_MS} ms (the platform timer range)`,
+    );
+  }
   const argsValid = [
     positiveIntegerOption(failures, 'manifestByteCap', manifestByteCap),
     positiveIntegerOption(failures, 'verifyTimeoutMs', verifyTimeoutMs),
+    verifyTimeoutMs <= TIMER_RANGE_MS,
     positiveIntegerOption(failures, 'maxArchiveBytes', maxArchiveBytes),
     positiveIntegerOption(failures, 'maxEntryBytes', maxEntryBytes),
     positiveIntegerOption(failures, 'maxExpandedBytes', maxExpandedBytes),

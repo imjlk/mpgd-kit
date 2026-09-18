@@ -456,6 +456,11 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   assert.equal(report.ok, false);
   assert.equal(report.failures[0]!.stage, 'args');
   assert.equal(report.failures[0]!.code, 'invalid-option');
+  const overRange = await verify(zipManifest, join(fixtureRoot, zipOut), {
+    verifyTimeoutMs: 2 ** 31,
+  });
+  assert.equal(overRange.ok, false);
+  assert.ok(overRange.failures.some((failure) => failure.code === 'invalid-option'));
   // Invalid arguments short-circuit the artifact and inventory stages,
   // while referenced totals still describe the manifest's requirements.
   assert.equal(report.failures.length, 1);
