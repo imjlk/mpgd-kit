@@ -36,14 +36,27 @@ export async function verifyZipV1Archive(
   if (!ArrayBuffer.isView(archive)) {
     throw new ZipDecodeError('invalid-structure', 'ZIP archive bytes must be a typed array view');
   }
-  // Snapshot through the typed-array constructor: it reads the length and
-  // elements from the [[ArrayLength]] and indexed internal slots, while
-  // the length/buffer/byteOffset the core would read are prototype
-  // accessors a genuine view can shadow with own properties — a view
-  // holding a valid ZIP followed by trailing bytes could otherwise
-  // certify just its prefix. The copy also freezes the bytes against
-  // caller mutation while verification runs.
-  const bytes = new Uint8Array(archive);
+  // length/buffer/byteOffset/byteLength are prototype accessors a
+  // genuine view can shadow with own properties — a view holding a
+  // valid ZIP followed by trailing bytes could otherwise certify only
+  // its prefix. Only shadow-carrying views pay for a snapshot through
+  // the typed-array constructor, which reads the length and elements
+  // from the [[ArrayLength]] and indexed internal slots; clean views of
+  // any realm pass through untouched, and the core's own snapshot
+  // freezes the bytes against caller mutation during verification. A
+  // detached view fails the snapshot as a typed failure.
+  let bytes: Uint8Array;
+  try {
+    bytes = Object.hasOwn(archive, 'length') || Object.hasOwn(archive, 'buffer')
+      || Object.hasOwn(archive, 'byteOffset') || Object.hasOwn(archive, 'byteLength')
+      ? new Uint8Array(archive)
+      : archive;
+  } catch (error) {
+    throw new ZipDecodeError(
+      'invalid-structure',
+      `ZIP archive bytes cannot be snapshotted: ${String(error)}`,
+    );
+  }
   let entries = 0;
   let expandedBytes = 0;
   // Entry bytes are discarded as soon as the core verified them: the

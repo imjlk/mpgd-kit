@@ -55,6 +55,17 @@ describe('archive validation entry', () => {
     );
   });
 
+  it('rejects a detached shadowed view as a typed failure', async () => {
+    const { archive, expected } = buildFixture();
+    const view = new Uint8Array(archive);
+    Object.defineProperty(view, 'length', { value: view.length });
+    structuredClone(new ArrayBuffer(0), { transfer: [view.buffer] });
+    const failure = await verifyZipV1Archive(view, expected, limitsOf(expected.entries))
+      .catch((error: unknown): unknown => error);
+    expect(failure).toBeInstanceOf(ZipDecodeError);
+    expect((failure as ZipDecodeError).code).toBe('invalid-structure');
+  });
+
   it('accepts views whose @@toStringTag is overridden', async () => {
     // The brand probe must read the view's internal slot, not the
     // user-customizable tag.

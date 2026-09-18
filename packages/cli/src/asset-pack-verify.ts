@@ -678,6 +678,30 @@ export async function verifyAssetPackDelivery(
     }
   }
 
+  // Referenced objects are a subset of the root inventory, so declared
+  // totals are a lower bound: a manifest that already exceeds a host
+  // limit fails before any artifact I/O spends the budget.
+  if (manifest !== undefined && hostLimits?.maxFiles !== undefined
+    && declaredTotals.files > hostLimits.maxFiles) {
+    failWith(
+      failures,
+      'limits',
+      'max-files',
+      `Manifest already references ${declaredTotals.files} files, `
+        + `over the limit ${hostLimits.maxFiles}`,
+    );
+  }
+  if (manifest !== undefined && hostLimits?.maxTotalBytes !== undefined
+    && declaredTotals.bytes > hostLimits.maxTotalBytes) {
+    failWith(
+      failures,
+      'limits',
+      'max-total-bytes',
+      `Manifest already references ${declaredTotals.bytes} bytes, `
+        + `over the limit ${hostLimits.maxTotalBytes}`,
+    );
+  }
+
   const root = resolve(options.root);
   let rootIsDirectory = false;
   let rootMissing = false;
