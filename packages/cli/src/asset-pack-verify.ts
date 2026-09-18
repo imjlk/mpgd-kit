@@ -158,16 +158,16 @@ const streamSha256 = async (
   path: string,
   handle: FileHandle,
   hasher: Hash,
-  onChunk?: () => void,
+  armWatchdog: (stream: ReadStream) => NodeJS.Timeout,
 ): Promise<{ bytes: number; sha256: string }> => {
   let bytes = 0;
   const stream = handle.createReadStream({ highWaterMark: STREAM_CHUNK_BYTES });
+  const timer = armWatchdog(stream);
   try {
     for await (const chunk of stream) {
       const view = chunk as Buffer;
       bytes += view.byteLength;
       hasher.update(view);
-      onChunk?.();
     }
   } catch (error) {
     if (error instanceof VerifyDeadlineError) {
@@ -176,6 +176,8 @@ const streamSha256 = async (
     // A file changing mid-verification (size or content) surfaces as a
     // read failure rather than a digest mismatch.
     throw new Error(`Could not read ${path}: ${errorText(error)}`);
+  } finally {
+    clearTimeout(timer);
   }
   return { bytes, sha256: hasher.digest('hex') };
 };
@@ -268,10 +270,23 @@ const inventoryRoot = async (
         await walk(child);
         continue;
       }
-      if (!entry.isFile()) {
+      let stat;
+      if (entry.isFile()) {
+        stat = await lstat(child);
+      } else if (
+        entry.isBlockDevice() || entry.isCharacterDevice()
+        || entry.isFIFO() || entry.isSocket()
+      ) {
         continue;
+      } else {
+        // UV_DIRENT_UNKNOWN (some network and FUSE filesystems): every
+        // type predicate is false, so lstat decides instead of silently
+        // skipping a regular file.
+        stat = await lstat(child);
+        if (!stat.isFile()) {
+          continue;
+        }
       }
-      const stat = await lstat(child);
       files++;
       bytes += stat.size;
       if (stat.size > largest) {
@@ -286,22 +301,17 @@ const inventoryRoot = async (
 const readManifestCapped = async (
   manifestPath: string,
   cap: number,
-  deadlineAt: number,
-  breachDeadline: () => boolean,
+  armWatchdog: (stream: ReadStream) => NodeJS.Timeout,
   onChunk?: () => void,
 ): Promise<Buffer> => {
   const stream: ReadStream = createReadStream(resolve(manifestPath), {
     highWaterMark: STREAM_CHUNK_BYTES,
   });
   // A stalled source (a FIFO whose writer never writes, a hung network
-  // mount) delivers no chunk to sample, so a timer enforces the budget
-  // even while the read pends; the recorded failure travels on the
-  // destroy error.
-  const timer = setTimeout(() => {
-    if (breachDeadline()) {
-      stream.destroy(new VerifyDeadlineError());
-    }
-  }, Math.max(0, deadlineAt - Date.now()));
+  // mount) delivers no chunk to sample, so the watchdog enforces the
+  // budget even while the read pends; the recorded failure travels on
+  // the destroy error.
+  const timer = armWatchdog(stream);
   const chunks: Buffer[] = [];
   let received = 0;
   try {
@@ -333,11 +343,12 @@ const readExact = async (
   path: string,
   handle: FileHandle,
   bytes: number,
-  onChunk?: () => void,
+  armWatchdog: (stream: ReadStream) => NodeJS.Timeout,
 ): Promise<Buffer> => {
   const chunks: Buffer[] = [];
   let received = 0;
   const stream = handle.createReadStream({ highWaterMark: STREAM_CHUNK_BYTES });
+  const timer = armWatchdog(stream);
   try {
     for await (const chunk of stream) {
       const view = chunk as Buffer;
@@ -347,13 +358,14 @@ const readExact = async (
         throw new Error(`Archive grew while being read: ${path}`);
       }
       chunks.push(view);
-      onChunk?.();
     }
   } catch (error) {
     if (error instanceof VerifyDeadlineError) {
       throw error;
     }
     throw new Error(`Could not read the archive at ${path}: ${errorText(error)}`);
+  } finally {
+    clearTimeout(timer);
   }
   if (received !== bytes) {
     throw new Error(`Archive shrank while being read: ${path}`);
@@ -482,13 +494,24 @@ export async function verifyAssetPackDelivery(
     }
     return true;
   };
-  /** I/O-internal deadline sampler: long reads abort as soon as the
-   * whole-verification budget expires instead of running to completion. */
+  /** I/O-internal deadline sampler: inventory entries abort as soon as
+   * the whole-verification budget expires instead of running to completion. */
   const sampleDeadline = (): void => {
     if (deadlineBreached()) {
       throw new VerifyDeadlineError();
     }
   };
+  /** Stream watchdog shared by every read: fires one millisecond past the
+   * deadline instant — the breach predicate treats the deadline itself as
+   * still within budget — so a source that never delivers another chunk
+   * (FIFO, stalled mount) still cannot outlive the budget. The callback
+   * records the failure once and destroys the stream with a sentinel. */
+  const armWatchdog = (stream: ReadStream): NodeJS.Timeout =>
+    setTimeout(() => {
+      if (deadlineBreached()) {
+        stream.destroy(new VerifyDeadlineError());
+      }
+    }, Math.max(1, verifyTimeoutMs - (Date.now() - startedAt) + 1));
 
   // ---- Stage: manifest -------------------------------------------------
   let manifestBytes: Buffer | undefined;
@@ -497,8 +520,7 @@ export async function verifyAssetPackDelivery(
     manifestBytes = await readManifestCapped(
       options.manifestPath,
       manifestByteCap,
-      startedAt + verifyTimeoutMs,
-      deadlineBreached,
+      armWatchdog,
       sampleDeadline,
     );
   } catch (error) {
@@ -588,7 +610,7 @@ export async function verifyAssetPackDelivery(
                 realRoot,
                 seenResolved,
                 verifiedArtifacts,
-                sampleDeadline,
+                armWatchdog,
               );
             }
           }
@@ -602,7 +624,7 @@ export async function verifyAssetPackDelivery(
           seenResolved,
           verifiedArtifacts,
           archives,
-          sampleDeadline,
+          armWatchdog,
           maxArchiveBytes,
           maxEntryBytes,
           maxExpandedBytes,
@@ -757,7 +779,7 @@ const verifyReferencedFile = async (
   realRoot: string,
   seenResolved: Map<string, string>,
   verifiedArtifacts: Map<string, { bytes: number; sha256: string }>,
-  sampleDeadline: () => void,
+  armWatchdog: (stream: ReadStream) => NodeJS.Timeout,
 ): Promise<void> => {
   const resolved = await resolveAndRegister(
     failures,
@@ -806,7 +828,7 @@ const verifyReferencedFile = async (
         );
         return;
       }
-      hashed = await streamSha256(resolvedPath, handle, createHash('sha256'), sampleDeadline);
+      hashed = await streamSha256(resolvedPath, handle, createHash('sha256'), armWatchdog);
     } finally {
       await handle.close();
     }
@@ -847,7 +869,7 @@ const verifyZipPack = async (
   seenResolved: Map<string, string>,
   verifiedArtifacts: Map<string, { bytes: number; sha256: string }>,
   archives: { packId: string; entries: number; expandedBytes: number }[],
-  sampleDeadline: () => void,
+  armWatchdog: (stream: ReadStream) => NodeJS.Timeout,
   maxArchiveBytes: number,
   maxEntryBytes: number,
   maxExpandedBytes: number,
@@ -960,7 +982,7 @@ const verifyZipPack = async (
           );
           return;
         }
-        archiveBytes = await readExact(resolvedPath, handle, declaredBytes, sampleDeadline);
+        archiveBytes = await readExact(resolvedPath, handle, declaredBytes, armWatchdog);
         const hasher = createHash('sha256');
         hasher.update(archiveBytes);
         const actual = { bytes: archiveBytes.byteLength, sha256: hasher.digest('hex') };
@@ -998,7 +1020,7 @@ const verifyZipPack = async (
         }
         // The object is already verified and counted; re-read only what the
         // decode needs.
-        archiveBytes = await readExact(resolvedPath, handle, declaredBytes, sampleDeadline);
+        archiveBytes = await readExact(resolvedPath, handle, declaredBytes, armWatchdog);
       }
     } finally {
       await handle.close();

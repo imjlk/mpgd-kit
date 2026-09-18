@@ -364,6 +364,29 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   assert.ok(report.failures.some((failure) => failure.stage === 'paths'));
 }
 {
+  // A manifest FIFO whose writer never sends data never delivers a chunk
+  // to sample; the stream watchdog must abort it at the deadline instead
+  // of hanging forever.
+  const fifoPath = join(fixtureRoot, 'stalled-manifest.fifo');
+  spawnSync('mkfifo', [fifoPath]);
+  // A background writer holds the FIFO open without writing, so the read
+  // side pairs up and then pends without data or EOF.
+  // stdio ignore keeps spawnSync from waiting on the background writer's
+  // inherited pipes (its FIFO open blocks until the reader below pairs).
+  spawnSync('sh', ['-c', '(exec sleep 30 > "$1") &', 'sh', fifoPath], { stdio: 'ignore' });
+  const report = await verifyAssetPackDelivery({
+    manifestPath: fifoPath,
+    root: join(fixtureRoot, zipOut),
+    verifyTimeoutMs: 300,
+  });
+  assert.equal(report.ok, false);
+  assert.ok(
+    report.failures.some((failure) => failure.code === 'deadline'),
+    JSON.stringify(report.failures),
+  );
+  rmSync(fifoPath, { force: true });
+}
+{
   // Traversal: manifest path escaping the root.
   const escapeRoot = join(fixtureRoot, 'out-escape');
   cpSync(join(fixtureRoot, filesOut), escapeRoot, { recursive: true });
