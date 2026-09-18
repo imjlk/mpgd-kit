@@ -145,9 +145,31 @@ const positiveIntegerOption = (
 };
 
 /** Thrown by I/O helpers when the whole-verification budget expires
- * mid-read; the failure itself is recorded exactly once by
- * `deadlineBreached` before this sentinel propagates. */
+ * mid-read; the failure itself is recorded exactly once by the deadline
+ * control before this sentinel propagates. */
 class VerifyDeadlineError extends Error {}
+
+/** The single whole-verification budget, enforced at every blocking
+ * filesystem wait: entry sampling, stream watchdogs and raced promises
+ * all share one clock, and the deadline instant itself counts as still
+ * within budget (so enforcement arms one millisecond past it). */
+interface VerifyDeadline {
+  /** Elapsed time exceeds the budget; records the failure exactly once
+   * and reports whether the budget is spent. */
+  breach(): boolean;
+  /** Unspent budget in milliseconds; zero or less once spent. */
+  remainingMs(): number;
+  /** Throws once the budget is spent; for granular work like inventory
+   * entries and manifest chunks. */
+  sample(): void;
+  /** Destroys a read stream just past the deadline, so a source that
+   * stops delivering chunks (FIFO, stalled mount) cannot outlive the
+   * budget. Returns the armed timer for the caller to clear. */
+  armStream(stream: ReadStream): NodeJS.Timeout;
+  /** Bounds one filesystem promise (readdir, lstat, open, ...) by the
+   * same deadline; a stalled call rejects with the deadline sentinel. */
+  race<T>(operation: Promise<T>): Promise<T>;
+}
 
 /** Streaming SHA-256 over an already-opened descriptor: never buffers the
  * whole file, the hash reads every actual byte rather than trusting stat
@@ -158,11 +180,11 @@ const streamSha256 = async (
   path: string,
   handle: FileHandle,
   hasher: Hash,
-  armWatchdog: (stream: ReadStream) => NodeJS.Timeout,
+  deadline: VerifyDeadline,
 ): Promise<{ bytes: number; sha256: string }> => {
   let bytes = 0;
   const stream = handle.createReadStream({ highWaterMark: STREAM_CHUNK_BYTES });
-  const timer = armWatchdog(stream);
+  const timer = deadline.armStream(stream);
   try {
     for await (const chunk of stream) {
       const view = chunk as Buffer;
@@ -195,6 +217,7 @@ const resolveArtifactPath = async (
   root: string,
   realRoot: string,
   artifactPath: string,
+  deadline: VerifyDeadline,
 ): Promise<ResolvedArtifact> => {
   if (artifactPath.length === 0) {
     throw new Error('Artifact path is empty');
@@ -217,7 +240,7 @@ const resolveArtifactPath = async (
     current = join(current, segment);
     let stat;
     try {
-      stat = await lstat(current);
+      stat = await deadline.race(lstat(current));
     } catch {
       throw new Error(`Artifact path is missing: ${artifactPath}`);
     }
@@ -225,11 +248,11 @@ const resolveArtifactPath = async (
       throw new Error(`Artifact path must not contain symbolic links: ${artifactPath}`);
     }
   }
-  const stat = await lstat(current);
+  const stat = await deadline.race(lstat(current));
   if (!stat.isFile()) {
     throw new Error(`Artifact path is not a regular file: ${artifactPath}`);
   }
-  const rel = relative(realRoot, await realpath(current));
+  const rel = relative(realRoot, await deadline.race(realpath(current)));
   if (rel === '..' || rel.startsWith(`..${sep}`) || isAbsolute(rel)) {
     throw new Error(`Artifact path escapes the root: ${artifactPath}`);
   }
@@ -244,7 +267,7 @@ const resolveArtifactPath = async (
  * artifacts reject them independently. */
 const inventoryRoot = async (
   root: string,
-  onEntry?: () => void,
+  deadline: VerifyDeadline,
 ): Promise<{ files: number; bytes: number; largest: number; truncated: boolean }> => {
   let files = 0;
   let bytes = 0;
@@ -255,9 +278,9 @@ const inventoryRoot = async (
       truncated = true;
       return;
     }
-    const entries = await readdir(directory, { withFileTypes: true });
+    const entries = await deadline.race(readdir(directory, { withFileTypes: true }));
     for (const entry of entries) {
-      onEntry?.();
+      deadline.sample();
       if (files >= INVENTORY_FILE_CAP) {
         truncated = true;
         return;
@@ -272,7 +295,7 @@ const inventoryRoot = async (
       }
       let stat;
       if (entry.isFile()) {
-        stat = await lstat(child);
+        stat = await deadline.race(lstat(child));
       } else if (
         entry.isBlockDevice() || entry.isCharacterDevice()
         || entry.isFIFO() || entry.isSocket()
@@ -280,9 +303,14 @@ const inventoryRoot = async (
         continue;
       } else {
         // UV_DIRENT_UNKNOWN (some network and FUSE filesystems): every
-        // type predicate is false, so lstat decides instead of silently
-        // skipping a regular file.
-        stat = await lstat(child);
+        // type predicate is false, so lstat decides — recursing for an
+        // unknown directory, counting an unknown regular file — instead
+        // of silently skipping either.
+        stat = await deadline.race(lstat(child));
+        if (stat.isDirectory()) {
+          await walk(child);
+          continue;
+        }
         if (!stat.isFile()) {
           continue;
         }
@@ -301,8 +329,7 @@ const inventoryRoot = async (
 const readManifestCapped = async (
   manifestPath: string,
   cap: number,
-  armWatchdog: (stream: ReadStream) => NodeJS.Timeout,
-  onChunk?: () => void,
+  deadline: VerifyDeadline,
 ): Promise<Buffer> => {
   const stream: ReadStream = createReadStream(resolve(manifestPath), {
     highWaterMark: STREAM_CHUNK_BYTES,
@@ -311,7 +338,7 @@ const readManifestCapped = async (
   // mount) delivers no chunk to sample, so the watchdog enforces the
   // budget even while the read pends; the recorded failure travels on
   // the destroy error.
-  const timer = armWatchdog(stream);
+  const timer = deadline.armStream(stream);
   const chunks: Buffer[] = [];
   let received = 0;
   try {
@@ -323,7 +350,6 @@ const readManifestCapped = async (
         throw new Error(`Delivery manifest exceeds ${cap} bytes`);
       }
       chunks.push(view);
-      onChunk?.();
     }
   } catch (error) {
     if (error instanceof VerifyDeadlineError || received > cap) {
@@ -343,12 +369,12 @@ const readExact = async (
   path: string,
   handle: FileHandle,
   bytes: number,
-  armWatchdog: (stream: ReadStream) => NodeJS.Timeout,
+  deadline: VerifyDeadline,
 ): Promise<Buffer> => {
   const chunks: Buffer[] = [];
   let received = 0;
   const stream = handle.createReadStream({ highWaterMark: STREAM_CHUNK_BYTES });
-  const timer = armWatchdog(stream);
+  const timer = deadline.armStream(stream);
   try {
     for await (const chunk of stream) {
       const view = chunk as Buffer;
@@ -494,35 +520,51 @@ export async function verifyAssetPackDelivery(
     }
     return true;
   };
-  /** I/O-internal deadline sampler: inventory entries abort as soon as
-   * the whole-verification budget expires instead of running to completion. */
-  const sampleDeadline = (): void => {
-    if (deadlineBreached()) {
-      throw new VerifyDeadlineError();
-    }
-  };
-  /** Stream watchdog shared by every read: fires one millisecond past the
-   * deadline instant — the breach predicate treats the deadline itself as
-   * still within budget — so a source that never delivers another chunk
-   * (FIFO, stalled mount) still cannot outlive the budget. The callback
-   * records the failure once and destroys the stream with a sentinel. */
-  const armWatchdog = (stream: ReadStream): NodeJS.Timeout =>
-    setTimeout(() => {
+  /** The shared budget control: every blocking filesystem wait below goes
+   * through it, so no single stalled call can outlive the budget. */
+  const deadline: VerifyDeadline = {
+    breach: deadlineBreached,
+    remainingMs: (): number => verifyTimeoutMs - (Date.now() - startedAt),
+    sample: (): void => {
       if (deadlineBreached()) {
-        stream.destroy(new VerifyDeadlineError());
+        throw new VerifyDeadlineError();
       }
-    }, Math.max(1, verifyTimeoutMs - (Date.now() - startedAt) + 1));
+    },
+    // Fires one millisecond past the deadline instant — the breach
+    // predicate treats the deadline itself as still within budget — so a
+    // source that never delivers another chunk (FIFO, stalled mount)
+    // cannot outlive the budget; the recorded failure travels on the
+    // destroy error.
+    armStream: (stream: ReadStream): NodeJS.Timeout =>
+      setTimeout(() => {
+        if (deadlineBreached()) {
+          stream.destroy(new VerifyDeadlineError());
+        }
+      }, Math.max(1, verifyTimeoutMs - (Date.now() - startedAt) + 1)),
+    race: async <T,>(operation: Promise<T>): Promise<T> => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        return await Promise.race([
+          operation,
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => {
+              if (deadlineBreached()) {
+                reject(new VerifyDeadlineError());
+              }
+            }, Math.max(1, verifyTimeoutMs - (Date.now() - startedAt) + 1));
+          }),
+        ]);
+      } finally {
+        clearTimeout(timer);
+      }
+    },
+  };
 
   // ---- Stage: manifest -------------------------------------------------
   let manifestBytes: Buffer | undefined;
   let manifest: PhaserPackDeliveryManifest | undefined;
   try {
-    manifestBytes = await readManifestCapped(
-      options.manifestPath,
-      manifestByteCap,
-      armWatchdog,
-      sampleDeadline,
-    );
+    manifestBytes = await readManifestCapped(options.manifestPath, manifestByteCap, deadline);
   } catch (error) {
     if (!(error instanceof VerifyDeadlineError)) {
       failWith(failures, 'manifest', 'manifest-unreadable', errorText(error));
@@ -563,7 +605,7 @@ export async function verifyAssetPackDelivery(
   try {
     // The deployment root may itself be a symlink (release directories
     // often are); follow it, unlike the per-component artifact checks.
-    rootIsDirectory = (await stat(root)).isDirectory();
+    rootIsDirectory = (await deadline.race(stat(root))).isDirectory();
   } catch {
     rootIsDirectory = false;
   }
@@ -583,7 +625,7 @@ export async function verifyAssetPackDelivery(
   }[] = [];
   const seenResolved = new Map<string, string>();
 
-  const realRoot = rootIsDirectory ? await realpath(root) : root;
+  const realRoot = rootIsDirectory ? await deadline.race(realpath(root)) : root;
   /** Verified on-disk objects keyed by resolved path. The manifest
    * validator already rejects duplicate references, so this is
    * defense in depth for distinct manifest paths that alias the same
@@ -593,13 +635,13 @@ export async function verifyAssetPackDelivery(
   if (manifest !== undefined && rootIsDirectory && argsValid) {
     try {
       for (const pack of manifest.packs) {
-        if (deadlineBreached()) {
+        if (deadline.breach()) {
           break;
         }
         if (pack.delivery === 'files') {
           for (const asset of pack.assets) {
             for (const file of asset.files) {
-              if (deadlineBreached()) {
+              if (deadline.breach()) {
                 break;
               }
               await verifyReferencedFile(
@@ -610,7 +652,7 @@ export async function verifyAssetPackDelivery(
                 realRoot,
                 seenResolved,
                 verifiedArtifacts,
-                armWatchdog,
+                deadline,
               );
             }
           }
@@ -624,12 +666,10 @@ export async function verifyAssetPackDelivery(
           seenResolved,
           verifiedArtifacts,
           archives,
-          armWatchdog,
+          deadline,
           maxArchiveBytes,
           maxEntryBytes,
           maxExpandedBytes,
-          startedAt,
-          verifyTimeoutMs,
         );
       }
     } catch (error) {
@@ -645,9 +685,9 @@ export async function verifyAssetPackDelivery(
   let inventory: { files: number; bytes: number; largest: number; truncated: boolean } | undefined;
   const limitsRequested = hostLimits !== undefined
     && Object.values(hostLimits).some((value) => value !== undefined);
-  if (limitsRequested && rootIsDirectory && argsValid && !deadlineBreached()) {
+  if (limitsRequested && rootIsDirectory && argsValid && !deadline.breach()) {
     try {
-      inventory = await inventoryRoot(root, sampleDeadline);
+      inventory = await inventoryRoot(root, deadline);
     } catch (error) {
       if (!(error instanceof VerifyDeadlineError)) {
         failWith(failures, 'limits', 'inventory-unreadable', errorText(error));
@@ -729,10 +769,11 @@ const resolveAndRegister = async (
   realRoot: string,
   artifactPath: string,
   seenResolved: Map<string, string>,
+  deadline: VerifyDeadline,
 ): Promise<ResolvedArtifact | undefined> => {
   let resolved: ResolvedArtifact;
   try {
-    resolved = await resolveArtifactPath(root, realRoot, artifactPath);
+    resolved = await resolveArtifactPath(root, realRoot, artifactPath, deadline);
   } catch (error) {
     failWith(failures, 'paths', 'path-invalid', errorText(error), pack.packId);
     return undefined;
@@ -779,7 +820,7 @@ const verifyReferencedFile = async (
   realRoot: string,
   seenResolved: Map<string, string>,
   verifiedArtifacts: Map<string, { bytes: number; sha256: string }>,
-  armWatchdog: (stream: ReadStream) => NodeJS.Timeout,
+  deadline: VerifyDeadline,
 ): Promise<void> => {
   const resolved = await resolveAndRegister(
     failures,
@@ -788,6 +829,7 @@ const verifyReferencedFile = async (
     realRoot,
     file.path,
     seenResolved,
+    deadline,
   );
   if (resolved === undefined) {
     return;
@@ -815,10 +857,10 @@ const verifyReferencedFile = async (
       }
       return;
     }
-    const handle = await open(resolvedPath, 'r');
+    const handle = await deadline.race(open(resolvedPath, 'r'));
     let hashed: { bytes: number; sha256: string };
     try {
-      if (!bindsToValidated(await handle.stat(), resolved)) {
+      if (!bindsToValidated(await deadline.race(handle.stat()), resolved)) {
         failWith(
           failures,
           'paths',
@@ -828,7 +870,7 @@ const verifyReferencedFile = async (
         );
         return;
       }
-      hashed = await streamSha256(resolvedPath, handle, createHash('sha256'), armWatchdog);
+      hashed = await streamSha256(resolvedPath, handle, createHash('sha256'), deadline);
     } finally {
       await handle.close();
     }
@@ -869,12 +911,10 @@ const verifyZipPack = async (
   seenResolved: Map<string, string>,
   verifiedArtifacts: Map<string, { bytes: number; sha256: string }>,
   archives: { packId: string; entries: number; expandedBytes: number }[],
-  armWatchdog: (stream: ReadStream) => NodeJS.Timeout,
+  deadline: VerifyDeadline,
   maxArchiveBytes: number,
   maxEntryBytes: number,
   maxExpandedBytes: number,
-  startedAt: number,
-  verifyTimeoutMs: number,
 ): Promise<void> => {
   const archivePath = pack.archive?.path;
   if (archivePath === undefined) {
@@ -894,6 +934,7 @@ const verifyZipPack = async (
     realRoot,
     archivePath,
     seenResolved,
+    deadline,
   );
   if (resolved === undefined) {
     return;
@@ -947,11 +988,11 @@ const verifyZipPack = async (
   try {
     // One descriptor serves the size check, the digest and the decode, so
     // every check sees the same inode the path checks validated.
-    const handle = await open(resolvedPath, 'r');
+    const handle = await deadline.race(open(resolvedPath, 'r'));
     try {
       const cached = verifiedArtifacts.get(resolvedPath);
       if (cached === undefined) {
-        const { size, dev, ino } = await handle.stat();
+        const { size, dev, ino } = await deadline.race(handle.stat());
         if (!bindsToValidated({ dev, ino }, resolved)) {
           failWith(
             failures,
@@ -982,7 +1023,7 @@ const verifyZipPack = async (
           );
           return;
         }
-        archiveBytes = await readExact(resolvedPath, handle, declaredBytes, armWatchdog);
+        archiveBytes = await readExact(resolvedPath, handle, declaredBytes, deadline);
         const hasher = createHash('sha256');
         hasher.update(archiveBytes);
         const actual = { bytes: archiveBytes.byteLength, sha256: hasher.digest('hex') };
@@ -1020,7 +1061,7 @@ const verifyZipPack = async (
         }
         // The object is already verified and counted; re-read only what the
         // decode needs.
-        archiveBytes = await readExact(resolvedPath, handle, declaredBytes, armWatchdog);
+        archiveBytes = await readExact(resolvedPath, handle, declaredBytes, deadline);
       }
     } finally {
       await handle.close();
@@ -1036,12 +1077,7 @@ const verifyZipPack = async (
     const stats = await verifyZipV1Archive(
       archiveBytes,
       expectedOf(pack),
-      coreLimitsOf(
-        pack,
-        maxEntryBytes,
-        maxExpandedBytes,
-        verifyTimeoutMs - (Date.now() - startedAt),
-      ),
+      coreLimitsOf(pack, maxEntryBytes, maxExpandedBytes, deadline.remainingMs()),
     );
     archives.push({
       packId: pack.packId,
