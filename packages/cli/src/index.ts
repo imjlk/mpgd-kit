@@ -1275,6 +1275,13 @@ const assetsCommand = defineI18n({
             console.error('Delivery verification failed; see the failures above.');
           }
         }
+        if (report.failures.some((failure) => failure.code === 'deadline')) {
+          // Stalled filesystem requests cannot be cancelled once the
+          // deadline fires; exit now so a pending threadpool call cannot
+          // keep the process (and its leaked handle) alive past the
+          // reported budget.
+          process.exit(1);
+        }
         if (!report.ok) {
           process.exitCode = 1;
         }

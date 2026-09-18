@@ -1,6 +1,6 @@
 import { createHash, type Hash } from 'node:crypto';
 import { createReadStream, type ReadStream } from 'node:fs';
-import { lstat, open, readdir, realpath, stat, type FileHandle } from 'node:fs/promises';
+import { lstat, open, opendir, realpath, stat, type FileHandle } from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 
 import {
@@ -274,52 +274,60 @@ const inventoryRoot = async (
   let largest = 0;
   let truncated = false;
   const walk = async (directory: string): Promise<void> => {
-    if (files >= INVENTORY_FILE_CAP) {
-      truncated = true;
-      return;
-    }
-    const entries = await deadline.race(readdir(directory, { withFileTypes: true }));
-    for (const entry of entries) {
-      deadline.sample();
-      if (files >= INVENTORY_FILE_CAP) {
-        truncated = true;
-        return;
-      }
-      const child = join(directory, entry.name);
-      if (entry.isSymbolicLink()) {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        await walk(child);
-        continue;
-      }
-      let stat;
-      if (entry.isFile()) {
-        stat = await deadline.race(lstat(child));
-      } else if (
-        entry.isBlockDevice() || entry.isCharacterDevice()
-        || entry.isFIFO() || entry.isSocket()
-      ) {
-        continue;
-      } else {
-        // UV_DIRENT_UNKNOWN (some network and FUSE filesystems): every
-        // type predicate is false, so lstat decides — recursing for an
-        // unknown directory, counting an unknown regular file — instead
-        // of silently skipping either.
-        stat = await deadline.race(lstat(child));
-        if (stat.isDirectory()) {
+    // opendir streams entries in bounded batches, so a single directory
+    // holding more than the cap cannot materialize every dirent first;
+    // each batch read is raced against the deadline like every other
+    // blocking wait.
+    const dir = await deadline.race(opendir(directory));
+    try {
+      for (;;) {
+        if (files >= INVENTORY_FILE_CAP) {
+          truncated = true;
+          return;
+        }
+        const entry = await deadline.race(dir.read());
+        if (entry === null) {
+          return;
+        }
+        deadline.sample();
+        const child = join(directory, entry.name);
+        if (entry.isSymbolicLink()) {
+          continue;
+        }
+        if (entry.isDirectory()) {
           await walk(child);
           continue;
         }
-        if (!stat.isFile()) {
+        let stat;
+        if (entry.isFile()) {
+          stat = await deadline.race(lstat(child));
+        } else if (
+          entry.isBlockDevice() || entry.isCharacterDevice()
+          || entry.isFIFO() || entry.isSocket()
+        ) {
           continue;
+        } else {
+          // UV_DIRENT_UNKNOWN (some network and FUSE filesystems): every
+          // type predicate is false, so lstat decides — recursing for an
+          // unknown directory, counting an unknown regular file — instead
+          // of silently skipping either.
+          stat = await deadline.race(lstat(child));
+          if (stat.isDirectory()) {
+            await walk(child);
+            continue;
+          }
+          if (!stat.isFile()) {
+            continue;
+          }
+        }
+        files++;
+        bytes += stat.size;
+        if (stat.size > largest) {
+          largest = stat.size;
         }
       }
-      files++;
-      bytes += stat.size;
-      if (stat.size > largest) {
-        largest = stat.size;
-      }
+    } finally {
+      await dir.close();
     }
   };
   await walk(root);
@@ -625,14 +633,34 @@ export async function verifyAssetPackDelivery(
   }[] = [];
   const seenResolved = new Map<string, string>();
 
-  const realRoot = rootIsDirectory ? await deadline.race(realpath(root)) : root;
+  let realRoot = root;
+  let rootUsable = rootIsDirectory;
+  if (rootIsDirectory) {
+    try {
+      realRoot = await deadline.race(realpath(root));
+    } catch (error) {
+      // A root that stops resolving mid-verification (a release symlink
+      // swapped between the stat and this call, or the spent budget)
+      // becomes a structured failure — never an escaping rejection that
+      // would cost the caller its report.
+      rootUsable = false;
+      if (!(error instanceof VerifyDeadlineError)) {
+        failWith(
+          failures,
+          'paths',
+          'root-unresolvable',
+          `Could not resolve the verification root: ${errorText(error)}`,
+        );
+      }
+    }
+  }
   /** Verified on-disk objects keyed by resolved path. The manifest
    * validator already rejects duplicate references, so this is
    * defense in depth for distinct manifest paths that alias the same
    * file on case-insensitive filesystems: they re-check the new
    * declaration without re-reading or re-counting the object. */
   const verifiedArtifacts = new Map<string, { bytes: number; sha256: string }>();
-  if (manifest !== undefined && rootIsDirectory && argsValid) {
+  if (manifest !== undefined && rootUsable && argsValid) {
     try {
       for (const pack of manifest.packs) {
         if (deadline.breach()) {
@@ -685,7 +713,7 @@ export async function verifyAssetPackDelivery(
   let inventory: { files: number; bytes: number; largest: number; truncated: boolean } | undefined;
   const limitsRequested = hostLimits !== undefined
     && Object.values(hostLimits).some((value) => value !== undefined);
-  if (limitsRequested && rootIsDirectory && argsValid && !deadline.breach()) {
+  if (limitsRequested && rootUsable && argsValid && !deadline.breach()) {
     try {
       inventory = await inventoryRoot(root, deadline);
     } catch (error) {
