@@ -27,12 +27,15 @@ export async function verifyZipV1Archive(
   expected: ExpectedZipArchive,
   limits: ZipDecodeLimits,
 ): Promise<ZipV1VerificationStats> {
-  // No wrapper-level brand check: every property a probe could read
-  // (instanceof, @@toStringTag, BYTES_PER_ELEMENT) is either
-  // realm-sensitive or user-overridable and would reject genuine views.
-  // The core's DataView snapshot probe validates the real backing-buffer
-  // internal slot instead, failing closed as `unsupported` for anything
-  // that is not a snapshottable view.
+  // ArrayBuffer.isView reads the [[ViewedArrayBuffer]] internal slot:
+  // realm-independent and immune to property overrides (instanceof,
+  // @@toStringTag and BYTES_PER_ELEMENT are all spoofable or
+  // realm-sensitive), so plain objects shaped like a view — even with a
+  // genuine ArrayBuffer in `buffer` — cannot reach the core's snapshot.
+  // DataView inputs pass here and fail closed at the core's length gate.
+  if (!ArrayBuffer.isView(archive)) {
+    throw new ZipDecodeError('invalid-structure', 'ZIP archive bytes must be a typed array view');
+  }
   let entries = 0;
   let expandedBytes = 0;
   // Entry bytes are discarded as soon as the core verified them: the
