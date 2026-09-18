@@ -663,18 +663,22 @@ export async function verifyAssetPackDelivery(
 
   const root = resolve(options.root);
   let rootIsDirectory = false;
-  let rootStatFailed = false;
+  let rootMissing = false;
   try {
     // The deployment root may itself be a symlink (release directories
     // often are); follow it, unlike the per-component artifact checks.
     rootIsDirectory = (await deadline.race(stat(root))).isDirectory();
+    // An existing non-directory (a regular file, say) must fail like a
+    // missing root — skipping every stage without a failure would
+    // certify an unchecked deployment.
+    rootMissing = !rootIsDirectory;
   } catch (error) {
     // A stalled stat is a deadline problem, not a missing root: the
     // deadline failure is already recorded, so the report must not add
     // a false path diagnosis.
-    rootStatFailed = !(error instanceof VerifyDeadlineError);
+    rootMissing = !(error instanceof VerifyDeadlineError);
   }
-  if (rootStatFailed) {
+  if (rootMissing) {
     failWith(
       failures,
       'paths',

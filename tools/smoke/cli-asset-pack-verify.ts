@@ -364,6 +364,16 @@ const beforeSnapshot = new Map<string, Map<string, { bytes: number; sha256: stri
   assert.ok(report.failures.some((failure) => failure.stage === 'paths'));
 }
 {
+  // A root that is an existing regular file must fail, not silently
+  // skip every stage and pass.
+  const fileRoot = join(fixtureRoot, 'root-as-file.bin');
+  writeFileSync(fileRoot, 'not a directory');
+  const report = await verify(zipManifest, fileRoot);
+  assert.equal(report.ok, false);
+  assert.ok(report.failures.some((failure) => failure.code === 'root-missing'));
+  assert.equal(report.referenced.files, 2);
+}
+{
   // A manifest FIFO whose writer never sends data never delivers a chunk
   // to sample; the stream watchdog must abort it at the deadline instead
   // of hanging forever.
