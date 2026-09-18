@@ -143,6 +143,10 @@ const startGatedOrigin = async (): Promise<{
       }
       response.setHeader('Content-Type', file.mediaType);
       response.setHeader('Content-Length', file.bytes.byteLength);
+      // One connection per response: these tests phase-gate downloads,
+      // and a pooled socket reused across gates adds runner-dependent
+      // transport behavior they do not aim to measure.
+      response.setHeader('Connection', 'close');
       response.end(file.bytes);
     })();
   });
@@ -949,14 +953,23 @@ describe('phaser pack delivery', () => {
       const themePath = 'packs/theme@1.zip';
       origin.hold(sharedPath);
       origin.hold(themePath);
-      const preparing = delivery.prepare('theme');
+      // Always-handled settlement: a transport failure fails the final
+      // assertion loudly instead of floating as an unhandled rejection
+      // while a gate wait below still spins.
+      const settled = delivery.prepare('theme').then(
+        (result): { ok: true; release: () => void } => ({ ok: true, release: result.release }),
+        (error: unknown): { ok: false; error: unknown } => ({ ok: false, error }),
+      );
       await waitForRequest(origin.requests, sharedPath);
       clock.advance(6_000);
       origin.release(sharedPath);
       await waitForRequest(origin.requests, themePath);
       origin.release(themePath);
-      const handles = await preparing;
-      handles.release();
+      const outcome = await settled;
+      if (!outcome.ok) {
+        throw outcome.error;
+      }
+      outcome.release();
       // The first archive consumed six seconds of the one budget; the
       // second decode starts from the remainder, not a fresh budget.
       expect(decodeRequest(workers.posted, 0)?.limits.decodeDeadlineMs).toBe(4_000);
