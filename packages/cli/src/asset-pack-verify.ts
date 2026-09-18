@@ -117,7 +117,11 @@ const caseKeyOf = (resolvedPath: string): string => {
   let key = '';
   for (const character of resolvedPath) {
     const upper = character.toUpperCase();
-    key += upper.length === 1 ? upper : character;
+    // Code points, not UTF-16 units: an astral-plane letter whose
+    // uppercase form is also one code point (a surrogate pair of length
+    // two) folds like any other, while multi-code-point expansions such
+    // as ß to SS keep the original.
+    key += [...upper].length === 1 ? upper : character;
   }
   return key;
 };
@@ -302,16 +306,21 @@ const inventoryRoot = async (
   let bytes = 0;
   let largest = 0;
   let truncated = false;
-  const walk = async (directory: string): Promise<void> => {
+  // One shared, bounded pending set instead of recursion: a single
+  // directory handle is open at a time, and directory-heavy deployments
+  // (empty directories never reach the file cap) cannot queue without
+  // limit — the walk reports truncation instead of exhausting memory.
+  const pending: string[] = [root];
+  while (!truncated && pending.length > 0) {
+    const directory = pending.pop();
+    if (directory === undefined) {
+      break;
+    }
     // opendir streams entries in bounded batches, so a single directory
     // holding more than the cap cannot materialize every dirent first;
     // each batch read is raced against the deadline like every other
     // blocking wait.
     const dir = await deadline.race(opendir(directory));
-    // Child directories are visited only after this handle closes, so a
-    // deeply nested deployment holds exactly one directory handle at a
-    // time instead of one per ancestor level.
-    const subdirectories: string[] = [];
     let stalled = false;
     try {
       for (;;) {
@@ -332,7 +341,11 @@ const inventoryRoot = async (
           continue;
         }
         if (stat.isDirectory()) {
-          subdirectories.push(child);
+          pending.push(child);
+          if (pending.length > INVENTORY_FILE_CAP) {
+            truncated = true;
+            break;
+          }
           continue;
         }
         if (!stat.isFile()) {
@@ -343,7 +356,7 @@ const inventoryRoot = async (
         // symlink or device does not claim to be truncated.
         if (files >= INVENTORY_FILE_CAP) {
           truncated = true;
-          return;
+          break;
         }
         files++;
         bytes += stat.size;
@@ -359,17 +372,7 @@ const inventoryRoot = async (
     } finally {
       await closeBounded(() => dir.close(), stalled, deadline);
     }
-    for (const child of subdirectories) {
-      await walk(child);
-      // A truncated descendant stops the entire walk, not just that
-      // subtree: ancestors must not keep scanning siblings once the cap
-      // verdict is known.
-      if (truncated) {
-        return;
-      }
-    }
-  };
-  await walk(root);
+  }
   return { files, bytes, largest, truncated };
 };
 
