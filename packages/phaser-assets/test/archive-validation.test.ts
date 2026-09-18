@@ -55,6 +55,16 @@ describe('archive validation entry', () => {
     );
   });
 
+  it('accepts views whose @@toStringTag is overridden', async () => {
+    // The brand probe must read the view's internal slot, not the
+    // user-customizable tag.
+    const { archive, expected } = buildFixture();
+    const view = new Uint8Array(archive);
+    Object.defineProperty(view, Symbol.toStringTag, { value: 'DeliberatelyOpaque' });
+    const stats = await verifyZipV1Archive(view, expected, limitsOf(expected.entries));
+    expect(stats.entries).toBe(fixtureEntries.length);
+  });
+
   it('rejects non-Uint8Array input with a typed failure', async () => {
     const { expected } = buildFixture();
     const failure = await verifyZipV1Archive(

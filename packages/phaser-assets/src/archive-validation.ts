@@ -5,12 +5,15 @@ import {
   type ZipDecodeLimits,
 } from './archive-zip-core.js';
 
-/** Realm-safe typed-array probe: Object.prototype.toString honors
- * @@toStringTag from any realm, unlike instanceof, so genuine
- * cross-realm Uint8Array inputs (an iframe's, for example) pass. Tag
- * spoofs still fail closed later in the core's DataView snapshot probe. */
+/** Realm-safe typed-array brand probe: ArrayBuffer.isView reads the
+ * [[ViewedArrayBuffer]] internal slot — not instanceof, not
+ * @@toStringTag — so genuine cross-realm Uint8Array inputs (an iframe's,
+ * for example) and subclasses or instances that override their tag still
+ * pass, while plain tag-spoofed objects fail here. The element size
+ * excludes DataView and other view types; anything further fails closed
+ * in the core's DataView snapshot probe. */
 const isUint8Array = (value: unknown): value is Uint8Array =>
-  Object.prototype.toString.call(value) === '[object Uint8Array]';
+  ArrayBuffer.isView(value) && (value as Uint8Array).BYTES_PER_ELEMENT === 1;
 
 /** Statistics a successful archive verification reports. */
 export interface ZipV1VerificationStats {
