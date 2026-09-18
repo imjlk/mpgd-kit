@@ -1276,6 +1276,16 @@ const assetsCommand = defineI18n({
           }
         }
         if (report.failures.some((failure) => failure.code === 'deadline')) {
+          // Piped console output is asynchronous; drain both streams so a
+          // large report is not truncated by the forced exit below.
+          await Promise.all([
+            new Promise<void>((resolve) => {
+              process.stdout.write('', () => resolve());
+            }),
+            new Promise<void>((resolve) => {
+              process.stderr.write('', () => resolve());
+            }),
+          ]);
           // Stalled filesystem requests cannot be cancelled once the
           // deadline fires; exit now so a pending threadpool call cannot
           // keep the process (and its leaked handle) alive past the

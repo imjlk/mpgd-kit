@@ -209,8 +209,8 @@ const streamSha256 = async (
  * component by lstat so a symlink cannot hide mid-path. */
 interface ResolvedArtifact {
   readonly path: string;
-  readonly dev: number;
-  readonly ino: number;
+  readonly dev: bigint;
+  readonly ino: bigint;
 }
 
 const resolveArtifactPath = async (
@@ -240,15 +240,20 @@ const resolveArtifactPath = async (
     current = join(current, segment);
     let stat;
     try {
-      stat = await deadline.race(lstat(current));
-    } catch {
+      // bigint identity stays exact on filesystems whose device or inode
+      // numbers exceed Number.MAX_SAFE_INTEGER.
+      stat = await deadline.race(lstat(current, { bigint: true }));
+    } catch (error) {
+      if (error instanceof VerifyDeadlineError) {
+        throw error;
+      }
       throw new Error(`Artifact path is missing: ${artifactPath}`);
     }
     if (stat.isSymbolicLink()) {
       throw new Error(`Artifact path must not contain symbolic links: ${artifactPath}`);
     }
   }
-  const stat = await deadline.race(lstat(current));
+  const stat = await deadline.race(lstat(current, { bigint: true }));
   if (!stat.isFile()) {
     throw new Error(`Artifact path is not a regular file: ${artifactPath}`);
   }
@@ -281,12 +286,14 @@ const inventoryRoot = async (
     const dir = await deadline.race(opendir(directory));
     try {
       for (;;) {
-        if (files >= INVENTORY_FILE_CAP) {
-          truncated = true;
-          return;
-        }
         const entry = await deadline.race(dir.read());
         if (entry === null) {
+          return;
+        }
+        // Truncation is only marked once another countable entry exists:
+        // a root of exactly the cap does not claim to be truncated.
+        if (files >= INVENTORY_FILE_CAP) {
+          truncated = true;
           return;
         }
         deadline.sample();
@@ -339,9 +346,11 @@ const readManifestCapped = async (
   cap: number,
   deadline: VerifyDeadline,
 ): Promise<Buffer> => {
-  const stream: ReadStream = createReadStream(resolve(manifestPath), {
-    highWaterMark: STREAM_CHUNK_BYTES,
-  });
+  // Open through the deadline: a FIFO with no writer blocks inside
+  // open(2) before any stream event exists, and destroying a stream
+  // cannot cancel that pending open.
+  const handle = await deadline.race(open(resolve(manifestPath), 'r'));
+  const stream: ReadStream = handle.createReadStream({ highWaterMark: STREAM_CHUNK_BYTES });
   // A stalled source (a FIFO whose writer never writes, a hung network
   // mount) delivers no chunk to sample, so the watchdog enforces the
   // budget even while the read pends; the recorded failure travels on
@@ -366,6 +375,7 @@ const readManifestCapped = async (
     throw new Error(`Could not read the delivery manifest: ${errorText(error)}`);
   } finally {
     clearTimeout(timer);
+    await handle.close();
   }
   return Buffer.concat(chunks);
 };
@@ -803,6 +813,12 @@ const resolveAndRegister = async (
   try {
     resolved = await resolveArtifactPath(root, realRoot, artifactPath, deadline);
   } catch (error) {
+    if (error instanceof VerifyDeadlineError) {
+      // The budget expired mid-resolution; the deadline failure is
+      // already recorded, so propagate the sentinel instead of adding a
+      // misleading path failure.
+      throw error;
+    }
     failWith(failures, 'paths', 'path-invalid', errorText(error), pack.packId);
     return undefined;
   }
@@ -830,7 +846,7 @@ const resolveAndRegister = async (
 /** Bind an opened descriptor to the identity the path checks validated:
  * the same inode, or the component was swapped between check and open. */
 const bindsToValidated = (
-  info: { dev: number; ino: number },
+  info: { dev: bigint; ino: bigint },
   resolved: ResolvedArtifact,
 ): boolean => info.dev === resolved.dev && info.ino === resolved.ino;
 
@@ -888,12 +904,26 @@ const verifyReferencedFile = async (
     const handle = await deadline.race(open(resolvedPath, 'r'));
     let hashed: { bytes: number; sha256: string };
     try {
-      if (!bindsToValidated(await deadline.race(handle.stat()), resolved)) {
+      const info = await deadline.race(handle.stat({ bigint: true }));
+      if (!bindsToValidated(info, resolved)) {
         failWith(
           failures,
           'paths',
           'path-invalid',
           `Artifact path changed during verification: ${file.path}`,
+          pack.packId,
+        );
+        return;
+      }
+      // Size from the bound descriptor fails closed before the hash, so a
+      // huge replacement cannot consume the budget streaming bytes that
+      // were already known not to match.
+      if (info.size !== BigInt(file.bytes)) {
+        failWith(
+          failures,
+          'files',
+          'size-mismatch',
+          `File ${file.path} is ${info.size} bytes, manifest declares ${file.bytes}`,
           pack.packId,
         );
         return;
@@ -1018,20 +1048,20 @@ const verifyZipPack = async (
     // every check sees the same inode the path checks validated.
     const handle = await deadline.race(open(resolvedPath, 'r'));
     try {
+      const { size, dev, ino } = await deadline.race(handle.stat({ bigint: true }));
+      if (!bindsToValidated({ dev, ino }, resolved)) {
+        failWith(
+          failures,
+          'paths',
+          'path-invalid',
+          `Artifact path changed during verification: ${archivePath}`,
+          pack.packId,
+        );
+        return;
+      }
       const cached = verifiedArtifacts.get(resolvedPath);
       if (cached === undefined) {
-        const { size, dev, ino } = await deadline.race(handle.stat());
-        if (!bindsToValidated({ dev, ino }, resolved)) {
-          failWith(
-            failures,
-            'paths',
-            'path-invalid',
-            `Artifact path changed during verification: ${archivePath}`,
-            pack.packId,
-          );
-          return;
-        }
-        if (pack.archive !== undefined && size !== pack.archive.bytes) {
+        if (pack.archive !== undefined && size !== BigInt(pack.archive.bytes)) {
           failWith(
             failures,
             'archive',
@@ -1041,7 +1071,7 @@ const verifyZipPack = async (
           );
           return;
         }
-        if (size > maxArchiveBytes) {
+        if (size > BigInt(maxArchiveBytes)) {
           failWith(
             failures,
             'limits',
