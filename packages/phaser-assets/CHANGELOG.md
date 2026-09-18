@@ -1,5 +1,68 @@
 # @mpgd/phaser-assets
 
+## 0.6.0 — 2026-09-18
+
+### Minor changes
+
+- [5ff0813](https://github.com/imjlk/mpgd-kit/commit/5ff08137ab98e7ec02609207ba41f874918dc947) Separate pack file delivery from texture preparation. `createPhaserAssetPackLoader`
+  now accepts an optional `fileSource` implementing the public `PhaserPackFileSource`
+  contract: per-file `open` → `read` → body `release`/`close` lifecycles keyed on
+  `{ packId, revision, assetKey, role }`, with cancellation and shared transfer/byte
+  budgets through the file context. Integrity verification (declared size equality
+  and SHA-256), the `maxFileBytes` cap, byte admission, decoding, texture
+  registration and lease ownership remain loader responsibilities for every source.
+  The default URL transport keeps `resolveURL`, `requestCache`, deadlines, retries
+  and streaming caps unchanged; omitting `fileSource` preserves the existing API
+  and behavior. — Thanks @imjlk!
+- [eeefb60](https://github.com/imjlk/mpgd-kit/commit/eeefb60133f64e066fdc90465f581d6e0c483673) Add prepared pack delivery. The new `@mpgd/phaser-assets/delivery`
+  subpath turns a CLI-built delivery manifest into the existing pack
+  loader's catalog and file source: zip packs are staged per dependency
+  closure under an explicit archive+expanded byte budget (checked before
+  any request), decoded and verified by the application-deployed module
+  worker with a whole-prepare deadline that stages never restart, and
+  admitted only on a fully completed decode; `files` packs keep plain
+  HTTP through the same source and mixed manifests route each file by its
+  pack's delivery kind. Artifact paths URL-encode each segment exactly
+  once against a `baseUrl` or custom resolver. `prepared.release()`
+  returns staging while textures stay alive under the loader lease and
+  open readers keep their bytes; failures throw
+  `PhaserPackDeliveryError` with stable codes (config, not-prepared,
+  busy, budget, transport, integrity, cancelled, deadline, disposed) and
+  preserve decoder statuses in the message. No new codec, persistent
+  cache or prefetch; the module imports without network, worker or timer
+  side effects. — Thanks @imjlk!
+- [66e572d](https://github.com/imjlk/mpgd-kit/commit/66e572dce7eb4a0bbbd097bf40a9ee47db44ec6b) Add `mpgd assets build-packs` for deterministic asset pack delivery builds.
+  A JSON build config (image, spritesheet and JSON atlas assets with pack ids,
+  logical revisions, dependencies and per-asset compression overrides) produces
+  individual files or per-pack ZIP artifacts plus an external versioned delivery
+  manifest: per-file media types, original bytes and SHA-256 digests, archive
+  digests, entry methods and counts. ZIP v1 uses STORE/DEFLATE only with fixed
+  metadata for reproducible bytes; pack artifacts are immutable per revision
+  while the manifest tracks the latest successful build. The new
+  `@mpgd/phaser-assets/pack-format` subpath publishes the shared pure contract
+  (types, untrusted-input validation, entry path rules) free of Node, DOM, Phaser
+  and compression concerns, and the CLI now depends on the package at runtime. — Thanks @imjlk!
+- [2292040](https://github.com/imjlk/mpgd-kit/commit/22920400c6f418bc98b2f86bec041970b20ba34d) Add bounded ZIP pack decoding. The new `@mpgd/phaser-assets/archives` subpath
+  decodes the ZIP v1 delivery profile against the shared manifest contract under
+  explicit limits (archive/entry/total-expanded bytes, entry count, path length,
+  decode deadline, concurrency), counting inflated output while it is produced.
+  Archive and entry integrity is mandatory. The `archive-worker` subpath is an
+  application-deployed module worker entry; the client enforces one-outstanding-
+  entry backpressure, per-job cancellation with late-message protection and
+  distinct worker-crash/deadline statuses, never silently falling back to
+  main-thread decoding. The decode deadline is one absolute budget from slot
+  acquisition through returned-archive verification (queue wait excluded); the
+  worker receives only the unspent remainder, completion inside the cleanup
+  grace cannot turn a decided deadline into success, and cancellation shares a
+  single cooperative cleanup window. The worker-message boundary is hardened end to
+  end: worker buffers must be genuine ArrayBuffers in any realm (shared,
+  detached and forged buffers are rejected), every message field is captured
+  once through a guarded read that settles the job when a getter throws,
+  terminal statuses fix their failure codes (detailed codes only accompany
+  error statuses), and settled jobs release their worker reference after
+  best-effort termination. Adds a pinned `fflate` dependency for
+  DEFLATE. — Thanks @imjlk!
+
 ## 0.5.0 — 2026-09-14
 
 ### Minor changes
