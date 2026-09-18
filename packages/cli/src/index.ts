@@ -18,6 +18,7 @@ import resources from '@gunshi/resources';
 import { cli } from 'gunshi';
 
 import { buildAssetPacks } from './asset-pack-build.js';
+import { verifyAssetPackDelivery } from './asset-pack-verify.js';
 import {
   normalizeConfiguredBuildTargets,
   normalizeBuildTarget as normalizeConfiguredTargetName,
@@ -1057,6 +1058,46 @@ function readPositiveInteger(value: string, label: string): number {
   return parsed;
 }
 
+function assetPackVerifyArgs() {
+  return {
+    manifest: {
+      type: 'string',
+      required: true,
+      description: 'Path to the delivery manifest JSON document.',
+    },
+    root: {
+      type: 'string',
+      required: true,
+      description: 'Deployment root the manifest artifact paths resolve against.',
+    },
+    json: {
+      type: 'boolean',
+      required: false,
+      description: 'Print a single machine-readable JSON report to stdout.',
+    },
+    'max-object-bytes': {
+      type: 'number',
+      required: false,
+      description: 'Optional static-host limit: largest allowed deployed object in bytes.',
+    },
+    'max-files': {
+      type: 'number',
+      required: false,
+      description: 'Optional static-host limit: total regular files allowed under the root.',
+    },
+    'max-total-bytes': {
+      type: 'number',
+      required: false,
+      description: 'Optional static-host limit: total deployed bytes allowed under the root.',
+    },
+    'max-archive-bytes': {
+      type: 'number',
+      required: false,
+      description: 'Optional cap: largest zip archive read for verification, in bytes.',
+    },
+  } as const;
+}
+
 function assetPackBuildArgs() {
   return {
     config: {
@@ -1122,9 +1163,102 @@ const assetsCommand = defineI18n({
         console.info(`Asset pack delivery manifest: ${report.manifestPath}`);
       },
     }),
+    'verify-delivery': defineI18n({
+      name: 'verify-delivery',
+      description: 'Verify delivery artifacts read-only against the manifest.',
+      resource: commandResource(
+        {
+          en: 'Verify delivery artifacts read-only against the manifest.',
+          ko: '전달 산출물을 manifest 기준으로 읽기 전용으로 검증합니다.',
+        },
+        {
+          manifest: {
+            en: 'Path to the delivery manifest JSON document.',
+            ko: '전달 manifest JSON 문서 경로.',
+          },
+          root: {
+            en: 'Deployment root the manifest artifact paths resolve against.',
+            ko: 'manifest 산출물 경로의 기준이 되는 배포 루트 디렉터리.',
+          },
+          json: {
+            en: 'Print a single machine-readable JSON report to stdout.',
+            ko: '기계 판독 가능한 JSON 보고서 하나를 stdout에 출력합니다.',
+          },
+          'max-object-bytes': {
+            en: 'Optional static-host limit: largest allowed deployed object in bytes.',
+            ko: '선택적 정적 호스트 한도: 허용되는 최대 배포 object 바이트 수.',
+          },
+          'max-files': {
+            en: 'Optional static-host limit: total regular files allowed under the root.',
+            ko: '선택적 정적 호스트 한도: 루트 아래 허용되는 일반 파일 총 개수.',
+          },
+          'max-total-bytes': {
+            en: 'Optional static-host limit: total deployed bytes allowed under the root.',
+            ko: '선택적 정적 호스트 한도: 루트 아래 허용되는 총 배포 바이트 수.',
+          },
+          'max-archive-bytes': {
+            en: 'Optional cap: largest zip archive read for verification, in bytes.',
+            ko: '선택적 상한: 검증 시 읽는 zip 아카이브의 최대 바이트 수.',
+          },
+        },
+      ),
+      args: assetPackVerifyArgs(),
+      run: async (ctx) => {
+        const hostLimits = {
+          ...(ctx.values['max-object-bytes'] === undefined
+            ? {}
+            : { maxObjectBytes: ctx.values['max-object-bytes'] as number }),
+          ...(ctx.values['max-files'] === undefined
+            ? {}
+            : { maxFiles: ctx.values['max-files'] as number }),
+          ...(ctx.values['max-total-bytes'] === undefined
+            ? {}
+            : { maxTotalBytes: ctx.values['max-total-bytes'] as number }),
+        };
+        const report = await verifyAssetPackDelivery({
+          manifestPath: ctx.values.manifest,
+          root: ctx.values.root,
+          ...(Object.keys(hostLimits).length > 0 ? { hostLimits } : {}),
+          ...(ctx.values['max-archive-bytes'] === undefined
+            ? {}
+            : { maxArchiveBytes: ctx.values['max-archive-bytes'] as number }),
+        });
+        if (ctx.values.json === true) {
+          console.info(JSON.stringify(report, null, 2));
+        } else {
+          for (const archive of report.archives) {
+            console.info(
+              `verified archive ${archive.packId}: ${archive.entries} entries, ${archive.expandedBytes} expanded bytes`,
+            );
+          }
+          console.info(
+            `manifest ${report.manifest.sha256.slice(0, 12)}… (${report.manifest.bytes} bytes, ${report.manifest.packs} packs)`,
+          );
+          console.info(
+            `referenced objects: ${report.referenced.files} files, ${report.referenced.bytes} bytes`,
+          );
+          if (report.inventory !== undefined) {
+            console.info(
+              `root inventory: ${report.inventory.files} files, ${report.inventory.bytes} bytes${report.inventory.truncated ? ' (truncated)' : ''}`,
+            );
+          }
+          for (const failure of report.failures) {
+            console.error(`[${failure.stage}/${failure.code}] ${failure.message}`);
+          }
+          if (report.ok) {
+            console.info('Delivery verification passed.');
+          } else {
+            console.error('Delivery verification failed; see the failures above.');
+          }
+        }
+        if (!report.ok) {
+          process.exitCode = 1;
+        }
+      },
+    }),
   },
   run: () => {
-    console.info('Use "mpgd assets build-packs".');
+    console.info('Use "mpgd assets build-packs" or "mpgd assets verify-delivery".');
   },
 });
 

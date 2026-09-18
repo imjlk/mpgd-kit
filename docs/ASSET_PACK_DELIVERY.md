@@ -141,6 +141,24 @@ module worker, plain HTTP for `files` packs, mixed manifests routed per
 pack). See the package README's "Prepared pack delivery" section for the
 contract — budgets, deadlines, lifetimes and error codes.
 
+### Pre-deployment verification
+
+`mpgd assets verify-delivery --manifest <asset-pack-delivery.json> --root <dir>`
+checks the built output read-only before deployment: manifest validation,
+path safety (no absolute/traversal/symlink/non-regular artifacts), streaming
+size and SHA-256 verification of every referenced file, full ZIP v1 interior
+verification through the runtime decode core, and optional static-host object
+limits (`--max-object-bytes`, `--max-files`, `--max-total-bytes`) evaluated
+against the entire root inventory (old revisions included) rather than just
+the referenced set. `--max-archive-bytes` caps how many bytes a single zip
+archive may declare and occupy during verification (512 MiB by default);
+larger archives fail in the `limits` stage before being read. Use `--json`
+for automation; the report's `failures` list carries a stage and stable code
+per problem, and any failure exits non-zero. The command reads inputs only —
+it never extracts archives, modifies the manifest, or contacts a network. The
+`notVerified` field records what only the real host can confirm (CDN
+caching, CORS/Content-Type, device rendering).
+
 ### Browser acceptance
 
 The private fixture in `examples/asset-packs` exercises the full product path
