@@ -445,6 +445,14 @@ const readExact = async (
     }
     received += bytesRead;
   }
+  // One byte past the declared size must be EOF: an archive appended to
+  // after the descriptor stat cannot verify its prefix and silently
+  // pass while no longer matching its declared size.
+  const tail = Buffer.alloc(1);
+  const { bytesRead: tailBytes } = await deadline.race(handle.read(tail, 0, 1, bytes));
+  if (tailBytes !== 0) {
+    throw new Error(`Archive grew while being read: ${path}`);
+  }
   return buffer;
 };
 
@@ -655,14 +663,18 @@ export async function verifyAssetPackDelivery(
 
   const root = resolve(options.root);
   let rootIsDirectory = false;
+  let rootStatFailed = false;
   try {
     // The deployment root may itself be a symlink (release directories
     // often are); follow it, unlike the per-component artifact checks.
     rootIsDirectory = (await deadline.race(stat(root))).isDirectory();
-  } catch {
-    rootIsDirectory = false;
+  } catch (error) {
+    // A stalled stat is a deadline problem, not a missing root: the
+    // deadline failure is already recorded, so the report must not add
+    // a false path diagnosis.
+    rootStatFailed = !(error instanceof VerifyDeadlineError);
   }
-  if (!rootIsDirectory) {
+  if (rootStatFailed) {
     failWith(
       failures,
       'paths',
@@ -1224,17 +1236,24 @@ const verifyZipPack = async (
     return;
   }
   try {
-    const stats = await verifyZipV1Archive(
+    // The core only samples its budget around awaited digests, so a
+    // stalled one can outlive it; the shared deadline races the whole
+    // decode, letting the CLI report and take its forced-exit path.
+    const decode = verifyZipV1Archive(
       archiveBytes,
       expectedOf(pack),
       coreLimitsOf(pack, maxEntryBytes, maxExpandedBytes, deadline.remainingMs()),
     );
+    const stats = await deadline.race(decode);
     archives.push({
       packId: pack.packId,
       entries: stats.entries,
       expandedBytes: stats.expandedBytes,
     });
   } catch (error) {
+    if (error instanceof VerifyDeadlineError) {
+      throw error;
+    }
     const code = error instanceof ZipDecodeError ? error.code : 'decode';
     failWith(
       failures,
